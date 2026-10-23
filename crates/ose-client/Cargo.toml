@@ -16,7 +16,7 @@ web-sys = { workspace = true, features = [
   "Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "CanvasRenderingContext2d",
   "CssStyleDeclaration", "DomRect", "Location", "Performance",
   "WebSocket", "BinaryType", "MessageEvent", "CloseEvent", "Event", "ErrorEvent",
-  "MouseEvent", "WheelEvent", "KeyboardEvent", "EventTarget", "DomTokenList", "console", "HtmlInputElement",
+  "MouseEvent", "WheelEvent", "KeyboardEvent", "EventTarget", "DomTokenList", "console", "HtmlInputElement", "Storage",
 ] }
 ose-net = { workspace = true }
 ose-data = { workspace = true }

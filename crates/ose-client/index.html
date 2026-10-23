@@ -19,7 +19,7 @@
     #labels .vessel.mine { color: #9ef0c0; }
     #labels .node { position: absolute; transform: translate(-50%, -50%); width: 12px; height: 12px;
       border: 2px solid #96aaff; border-radius: 50%; background: #06080f; pointer-events: auto; cursor: pointer; }
-    #node-panel { position: fixed; top: 44px; left: 12px; width: 280px; padding: 8px 10px; border-radius: 6px;
+    #node-panel { position: fixed; top: 64px; left: 12px; width: 280px; padding: 8px 10px; border-radius: 6px;
       background: #0b1020e6; border: 1px solid #2c3d63; font-size: 12px; display: none; }
     #node-panel.open { display: block; }
     #node-panel label { display: grid; grid-template-columns: 70px 1fr 70px; gap: 6px; align-items: center; margin: 4px 0; }
@@ -29,7 +29,27 @@
       padding: 2px 8px; font: inherit; cursor: pointer; }
     #hud { position: fixed; top: 0; left: 0; right: 0; display: flex; gap: 16px; align-items: center;
       padding: 8px 12px; background: linear-gradient(#0b1020ee, #0b102000); pointer-events: none; }
-    #hud > * { pointer-events: auto; }
+    #hud > * { pointer-events: auto; white-space: nowrap; }
+    #campaign, #status { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+    #player { color: #9ef0c0; } #campaign { color: #9fb0cc; } #warp-holder { color: #f0a070; font-size: 12px; }
+    #crumbs { position: fixed; top: 40px; left: 12px; font-size: 12px; color: #6f7f9c; }
+    #crumbs span[data-ose-index], #crumbs span[data-ose-vessel] { color: #9fb0cc; cursor: pointer; }
+    #crumbs span[data-ose-index]:hover, #crumbs span[data-ose-vessel]:hover { color: #fff; }
+    #menu { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+      background: #06080fcc; }
+    #menu.hidden { display: none; }
+    #menu .card { width: 360px; padding: 24px 28px; border-radius: 8px; background: #0b1020f2;
+      border: 1px solid #2c3d63; }
+    #menu h1 { margin: 0 0 4px; font-size: 22px; font-weight: 600; color: #e6ecf7; letter-spacing: 0.5px; }
+    #menu .sub { color: #6f7f9c; font-size: 12px; margin-bottom: 18px; }
+    #menu label { display: block; font-size: 12px; color: #9fb0cc; margin: 10px 0 4px; }
+    #menu input[type=text] { width: 100%; box-sizing: border-box; padding: 6px 8px; font: inherit;
+      background: #06080f; color: #e6ecf7; border: 1px solid #2c3d63; border-radius: 4px; }
+    #menu button { margin-top: 16px; width: 100%; padding: 8px; font: inherit; font-size: 15px;
+      background: #1f3d6b; color: #fff; border: 1px solid #3b63a8; border-radius: 4px; cursor: pointer; }
+    #menu button:hover { background: #28508a; }
+    #menu .note { margin-top: 10px; min-height: 1.2em; font-size: 12px; color: #f0a070; }
+    #menu .info { margin-top: 12px; font-size: 12px; color: #9fb0cc; }
     #ut { font-variant-numeric: tabular-nums; font-size: 16px; color: #e6ecf7; }
     .warp { display: flex; align-items: center; gap: 4px; }
     .warp button { background: #16213a; color: #cfd6e6; border: 1px solid #2c3d63; border-radius: 4px;
@@ -50,12 +70,29 @@
       <button id="warp" data-ose="warp" title="Time warp; click to speed up">&times;--</button>
     </span>
     <span id="focus"></span>
+    <span id="warp-holder" data-ose="warp-holder"></span>
+    <span id="player" data-ose="player"></span>
+    <span id="campaign" data-ose="campaign"></span>
     <button id="add-node" data-ose="add-node" title="Plan a burn on your vessel's orbit">Add node</button>
     <span id="status">loading...</span>
+  </div>
+  <div id="crumbs" data-ose="breadcrumbs"></div>
+  <div id="menu" data-ose="menu">
+    <div class="card">
+      <h1>OpenSpaceExplorer</h1>
+      <div class="sub">a shared Kerbol system, played in the browser</div>
+      <label for="player-name">Your name</label>
+      <input id="player-name" data-ose="player-name" type="text" maxlength="32" autocomplete="nickname" value="Pilot" />
+      <button id="play" data-ose="play">Play</button>
+      <div class="note" id="menu-note"></div>
+      <div class="info" id="menu-info">Esc opens this menu again. Drag to pan, wheel to zoom, click a name to focus, F to frame.</div>
+    </div>
   </div>
   <div id="node-panel" data-ose="node-panel">
     <label>time <input id="node-dt" type="range" min="60" max="600" step="1" value="120" /><span id="node-dt-text">T-2:00</span></label>
     <label>prograde <input id="node-prograde" type="range" min="-1500" max="1500" step="1" value="0" /><span id="node-prograde-text">0 m/s</span></label>
+    <label>normal <input id="node-normal" type="range" min="-1500" max="1500" step="1" value="0" /><span id="node-normal-text">0 m/s</span></label>
+    <label>radial <input id="node-radial" type="range" min="-1500" max="1500" step="1" value="0" /><span id="node-radial-text">0 m/s</span></label>
     <div class="reason" id="node-reason"></div>
     <button id="clear-node" data-ose="clear-node">Clear node</button>
   </div>

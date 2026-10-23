@@ -29,6 +29,9 @@ to `Pass` in the same change.
 | hook | meaning |
 |---|---|
 | `#status` | text set by the WASM start function once the module runs |
+| `[data-ose="menu"]` | the main menu shown at start; `[data-ose="player-name"]` and `[data-ose="play"]` start the session |
+| `[data-ose="player"]`, `[data-ose="campaign"]`, `[data-ose="warp-holder"]` | header readouts: who you are, the campaign and its members, who holds warp |
+| `[data-ose="breadcrumbs"]` | star > body > vessel for what the camera looks at; each crumb is clickable |
 | `canvas` | the render surface |
 | `[data-ose="ut"]` | universal time readout, updated from server `TimeState` |
 | `[data-ose="body"]` with `data-ose-id` | one element per celestial body in the map view |

@@ -13,14 +13,16 @@ type Expect = "Pass" | "PassOrSkip" | "Blocked";
 const FRONTIER: [StepName, Expect][] = [
   ["page_loads", "Pass"],
   ["wasm_client_starts", "Pass"],
+  ["main_menu", "Pass"],
   ["clean_console", "Pass"],
   ["webgpu_adapter", "PassOrSkip"], // an environment fact: headless runners may have no adapter
   ["render_canvas", "Pass"],
   ["websocket_session", "Pass"],
   ["time_display", "Pass"],
   ["map_view_bodies", "Pass"],
-  ["time_warp_control", "Pass"],
+  ["time_warp_control", "PassOrSkip"], // skipped when another connected player holds warp (lowest wins)
   ["player_vessel", "Pass"],
+  ["breadcrumbs", "Pass"],
   ["maneuver_node", "Pass"],
 ];
 

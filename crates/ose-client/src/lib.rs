@@ -24,7 +24,7 @@ use web_sys::{
     MouseEvent, WebSocket, WheelEvent,
 };
 
-use ose_net::{ClientMessage, PatchEnd, ServerMessage, PROTOCOL_VERSION, WS_PATH};
+use ose_net::{CampaignMember, ClientMessage, PatchEnd, ServerMessage, PROTOCOL_VERSION, WS_PATH};
 
 const BODY_LABEL_CLASS: &str = "body";
 
@@ -41,6 +41,11 @@ struct App {
     /// The planned burn on the player's vessel, if any (ADR-0005).
     node: Option<Node>,
     node_el: Option<HtmlElement>,
+    player_name: String,
+    campaign: Option<(String, Vec<CampaignMember>)>,
+    warp_holder: Option<u64>,
+    /// Breadcrumb text last rendered, to rebuild the DOM only on change.
+    crumbs: String,
     ut_el: Element,
     warp_el: Element,
     focus_el: Element,
@@ -64,6 +69,22 @@ struct Node {
     anchor_ut: f64,
     ut: f64,
     prograde_mps: f64,
+    normal_mps: f64,
+    radial_mps: f64,
+}
+
+fn local_storage() -> Option<web_sys::Storage> {
+    web_sys::window()?.local_storage().ok()?
+}
+
+fn stored(key: &str) -> Option<String> {
+    local_storage()?.get_item(key).ok()?
+}
+
+fn store(key: &str, value: &str) {
+    if let Some(s) = local_storage() {
+        s.set_item(key, value).ok();
+    }
 }
 
 fn input_value(doc: &Document, id: &str) -> Option<f64> {
@@ -125,6 +146,10 @@ pub fn start() -> Result<(), JsValue> {
         follow: None,
         node: None,
         node_el: None,
+        player_name: String::new(),
+        campaign: None,
+        warp_holder: None,
+        crumbs: String::new(),
         ut_el: get("ut")?,
         warp_el: get("warp")?,
         focus_el: get("focus")?,
@@ -144,8 +169,70 @@ pub fn start() -> Result<(), JsValue> {
     app.borrow_mut().resize();
     install_input(&app)?;
     install_label_clicks(&app)?;
-    connect(&app)?;
+    install_menu(&app)?;
     animate(app);
+    Ok(())
+}
+
+/// The main menu: a name and Play. Play connects; Esc reopens the menu (then it only resumes).
+fn install_menu(app: &Shared) -> Result<(), JsValue> {
+    let doc = app.borrow().doc.clone();
+    if let Some(name) = stored("ose.name") {
+        if let Some(input) = doc
+            .get_element_by_id("player-name")
+            .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+        {
+            input.set_value(&name);
+        }
+    }
+    if let Some(btn) = doc.get_element_by_id("play") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut()>::new(move || {
+            let connected = a.borrow().ws.is_some();
+            if connected {
+                a.borrow().show_menu(false);
+                return;
+            }
+            let name = a
+                .borrow()
+                .doc
+                .get_element_by_id("player-name")
+                .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+                .map(|i| i.value().trim().to_string())
+                .filter(|n| !n.is_empty())
+                .unwrap_or_else(|| "Pilot".into());
+            store("ose.name", &name);
+            a.borrow_mut().player_name = name;
+            set_text(&a.borrow().doc, "menu-note", "connecting...");
+            if let Err(e) = connect(&a) {
+                set_text(
+                    &a.borrow().doc,
+                    "menu-note",
+                    &format!("could not connect: {e:?}"),
+                );
+            }
+        });
+        btn.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
+    if let Some(input) = doc.get_element_by_id("player-name") {
+        let a = app.clone();
+        let cb =
+            Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |ev: web_sys::KeyboardEvent| {
+                if ev.key() == "Enter" {
+                    if let Some(btn) = a
+                        .borrow()
+                        .doc
+                        .get_element_by_id("play")
+                        .and_then(|e| e.dyn_into::<HtmlElement>().ok())
+                    {
+                        btn.click();
+                    }
+                }
+            });
+        input.add_event_listener_with_callback("keydown", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
     Ok(())
 }
 
@@ -183,12 +270,13 @@ fn connect(app: &Shared) -> Result<(), JsValue> {
         let app = app.clone();
         let ws2 = ws.clone();
         let on_open = Closure::<dyn FnMut()>::new(move || {
+            let display_name = app.borrow().player_name.clone();
             send(
                 &ws2,
                 &ClientMessage::Hello {
                     protocol: PROTOCOL_VERSION,
-                    token: None,
-                    display_name: "browser".into(),
+                    token: stored("ose.token"),
+                    display_name,
                 },
             );
             app.borrow().set_status("connected, waiting for the server");
@@ -293,6 +381,14 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
             let mut app = a.borrow_mut();
             match ev.key().as_str() {
                 "f" | "F" => app.frame_focus(),
+                "Escape" => {
+                    let open = app
+                        .doc
+                        .get_element_by_id("menu")
+                        .map(|m| !m.class_list().contains("hidden"))
+                        .unwrap_or(false);
+                    app.show_menu(!open);
+                }
                 "." | ">" => {
                     let w = kerbin_time::next_warp(app.time.warp);
                     app.request_warp(w);
@@ -342,7 +438,7 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
         btn.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
         cb.forget();
     }
-    for id in ["node-dt", "node-prograde"] {
+    for id in ["node-dt", "node-prograde", "node-normal", "node-radial"] {
         if let Some(input) = doc.get_element_by_id(id) {
             let a = app.clone();
             let cb = Closure::<dyn FnMut()>::new(move || a.borrow_mut().node_inputs_changed());
@@ -423,14 +519,43 @@ impl App {
     fn on_server(&mut self, msg: ServerMessage) {
         match msg {
             ServerMessage::Welcome {
-                player_id, tick, ..
+                player_id,
+                tick,
+                token,
             } => {
                 self.player_id = Some(player_id);
+                store("ose.token", &token);
                 self.time.update(tick.seconds(), 1, now_ms());
                 self.set_status(&format!("player {player_id}"));
+                set_text(
+                    &self.doc,
+                    "player",
+                    &format!("{} (#{player_id})", self.player_name),
+                );
+                set_text(&self.doc, "menu-note", "");
+                self.show_menu(false);
+                if let Some(ws) = &self.ws {
+                    send(ws, &ClientMessage::JoinCampaign);
+                }
             }
             ServerMessage::Rejected { reason } => {
                 self.set_status(&format!("rejected: {reason}"));
+                set_text(&self.doc, "menu-note", &format!("rejected: {reason}"));
+                self.show_menu(true);
+            }
+            ServerMessage::CampaignState { name, members, .. } => {
+                let names: Vec<&str> = members.iter().map(|m| m.display_name.as_str()).collect();
+                set_text(
+                    &self.doc,
+                    "campaign",
+                    &format!(
+                        "{name}: {} in the campaign ({})",
+                        members.len(),
+                        names.join(", ")
+                    ),
+                );
+                self.campaign = Some((name, members));
+                self.update_warp_holder();
             }
             ServerMessage::BodyCatalog { bodies } => {
                 let scene = Scene::new(bodies);
@@ -444,8 +569,16 @@ impl App {
                 self.scene = Some(scene);
                 self.set_focus(root);
             }
-            ServerMessage::TimeState { tick, warp, .. } => {
+            ServerMessage::TimeState {
+                tick,
+                warp,
+                warp_limited_by,
+            } => {
                 self.time.update(tick.seconds(), warp, now_ms());
+                if warp_limited_by != self.warp_holder {
+                    self.warp_holder = warp_limited_by;
+                    self.update_warp_holder();
+                }
             }
             ServerMessage::Snapshot { bodies, .. } => {
                 if let Some(scene) = &mut self.scene {
@@ -571,6 +704,80 @@ impl App {
         }
     }
 
+    fn show_menu(&self, open: bool) {
+        if let Some(m) = self.doc.get_element_by_id("menu") {
+            if open {
+                m.class_list().remove_1("hidden").ok();
+            } else {
+                m.class_list().add_1("hidden").ok();
+            }
+        }
+        if let Some(btn) = self.doc.get_element_by_id("play") {
+            btn.set_text_content(Some(if self.ws.is_some() { "Resume" } else { "Play" }));
+        }
+    }
+
+    fn player_name_of(&self, id: u64) -> String {
+        self.campaign
+            .as_ref()
+            .and_then(|(_, m)| m.iter().find(|m| m.player_id == id))
+            .map(|m| m.display_name.clone())
+            .unwrap_or_else(|| format!("player #{id}"))
+    }
+
+    /// "warp held by X" when another player's lower warp request wins the lowest-wins arbitration.
+    fn update_warp_holder(&self) {
+        let text = match self.warp_holder {
+            Some(p) if Some(p) != self.player_id => {
+                format!("warp held by {}", self.player_name_of(p))
+            }
+            _ => String::new(),
+        };
+        set_text(&self.doc, "warp-holder", &text);
+    }
+
+    /// Breadcrumbs: star > body > ... > vessel for what the camera looks at; rebuilt only on change.
+    fn update_breadcrumbs(&mut self) {
+        let Some(scene) = &self.scene else {
+            return;
+        };
+        let (mut body, vessel) = match self.follow.and_then(|id| scene.vessel(id)) {
+            Some(v) => (v.reference_body as usize, Some((v.id, v.name.clone()))),
+            None => (self.camera.focus, None),
+        };
+        let mut chain = vec![body];
+        while let Some(p) = scene.bodies[body].parent {
+            body = p as usize;
+            chain.push(body);
+            if chain.len() > 32 {
+                break;
+            }
+        }
+        chain.reverse();
+        let mut html = String::new();
+        for (k, i) in chain.iter().enumerate() {
+            if k > 0 {
+                html.push_str(" \u{203a} ");
+            }
+            html.push_str(&format!(
+                "<span data-ose-index=\"{i}\">{}</span>",
+                scene.bodies[*i].id
+            ));
+        }
+        if let Some((id, name)) = vessel {
+            html.push_str(&format!(
+                " \u{203a} <span data-ose-vessel=\"{id}\">{}</span>",
+                name.replace('<', "&lt;")
+            ));
+        }
+        if html != self.crumbs {
+            if let Some(el) = self.doc.get_element_by_id("crumbs") {
+                el.set_inner_html(&html);
+            }
+            self.crumbs = html;
+        }
+    }
+
     /// The player's own vessel, if the server has sent one.
     fn my_vessel(&self) -> Option<(u64, usize)> {
         let scene = self.scene.as_ref()?;
@@ -593,9 +800,13 @@ impl App {
             anchor_ut: now,
             ut: now + dt,
             prograde_mps: 0.0,
+            normal_mps: 0.0,
+            radial_mps: 0.0,
         });
         set_input_value(&self.doc, "node-dt", dt);
         set_input_value(&self.doc, "node-prograde", 0.0);
+        set_input_value(&self.doc, "node-normal", 0.0);
+        set_input_value(&self.doc, "node-radial", 0.0);
         // Let the time slider span one orbit of the vessel.
         if let Some(scene) = &self.scene {
             if let Some(v) = scene.vessel(vessel) {
@@ -660,6 +871,12 @@ impl App {
         if let Some(p) = input_value(&self.doc, "node-prograde") {
             node.prograde_mps = p;
         }
+        if let Some(n) = input_value(&self.doc, "node-normal") {
+            node.normal_mps = n;
+        }
+        if let Some(r) = input_value(&self.doc, "node-radial") {
+            node.radial_mps = r;
+        }
         self.node = Some(node);
         self.send_node();
     }
@@ -675,8 +892,8 @@ impl App {
                     vessel: node.vessel,
                     ut: node.ut,
                     prograde_mps: node.prograde_mps,
-                    normal_mps: 0.0,
-                    radial_mps: 0.0,
+                    normal_mps: node.normal_mps,
+                    radial_mps: node.radial_mps,
                 },
             );
         }
@@ -685,6 +902,21 @@ impl App {
             "node-prograde-text",
             &format!("{:.0} m/s", node.prograde_mps),
         );
+        set_text(
+            &self.doc,
+            "node-normal-text",
+            &format!("{:.0} m/s", node.normal_mps),
+        );
+        set_text(
+            &self.doc,
+            "node-radial-text",
+            &format!("{:.0} m/s", node.radial_mps),
+        );
+        let dv =
+            (node.prograde_mps.powi(2) + node.normal_mps.powi(2) + node.radial_mps.powi(2)).sqrt();
+        if let Some(el) = &self.node_el {
+            el.set_attribute("data-ose-dv", &format!("{dv:.1}")).ok();
+        }
         if let Some(el) = &self.node_el {
             el.set_attribute("data-ose-ut", &format!("{:.1}", node.ut))
                 .ok();
@@ -863,6 +1095,7 @@ impl App {
         }
         self.draw_vessels(ut, &positions, centre);
         self.draw_node(ut, &positions, centre);
+        self.update_breadcrumbs();
     }
 
     /// Vessels: predicted trajectory patches, then a marker and label per vessel.
@@ -969,6 +1202,15 @@ fn body_colour(id: &str, is_star: bool) -> &'static str {
 /// Wire the label-click handler; called from `start` after the labels container exists.
 fn install_label_clicks(app: &Shared) -> Result<(), JsValue> {
     let labels = app.borrow().labels.clone();
+    install_focus_clicks(app, &labels)?;
+    if let Some(crumbs) = app.borrow().doc.get_element_by_id("crumbs") {
+        install_focus_clicks(app, &crumbs)?;
+    }
+    Ok(())
+}
+
+/// Clicking an element with `data-ose-index` focuses that body; `data-ose-vessel` follows that vessel.
+fn install_focus_clicks(app: &Shared, target: &Element) -> Result<(), JsValue> {
     let a = app.clone();
     let on_click = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
         if let Some(i) = App::label_click_target(&ev) {
@@ -985,7 +1227,7 @@ fn install_label_clicks(app: &Shared) -> Result<(), JsValue> {
             }
         }
     });
-    labels.add_event_listener_with_callback("click", on_click.as_ref().unchecked_ref())?;
+    target.add_event_listener_with_callback("click", on_click.as_ref().unchecked_ref())?;
     on_click.forget();
     Ok(())
 }

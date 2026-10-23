@@ -13,6 +13,8 @@
 //   [data-ose="body"]           one element per celestial body shown in the map view (data-ose-id = body id)
 //   [data-ose="warp"]           the time-warp control (clicking it raises the warp factor)
 //   [data-ose="vessel"]         the player's active vessel in the map view
+//   [data-ose="menu"]           the main menu, shown at start; [data-ose="player-name"] and [data-ose="play"]
+//   [data-ose="breadcrumbs"]    star > body > vessel for what the camera looks at
 //   [data-ose="add-node"]       adds a maneuver node on the player's vessel
 //   [data-ose="maneuver-node"]  a maneuver node on the player's trajectory (data-ose-ut = burn time)
 import type { ConsoleMessage, Page, WebSocket } from "@playwright/test";
@@ -21,6 +23,7 @@ import { blocked, failed, passed, skipped, type Outcome, type StepResult } from 
 export const STEP_NAMES = [
   "page_loads",
   "wasm_client_starts",
+  "main_menu",
   "clean_console",
   "webgpu_adapter",
   "render_canvas",
@@ -29,6 +32,7 @@ export const STEP_NAMES = [
   "map_view_bodies",
   "time_warp_control",
   "player_vessel",
+  "breadcrumbs",
   "maneuver_node",
 ] as const;
 export type StepName = (typeof STEP_NAMES)[number];
@@ -107,6 +111,27 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
         return failed(`#status stayed ${JSON.stringify(text)}${err ? `; ${err}` : ""}`);
       }
       return passed(`wasm ${probe.wasmBytes} bytes, status ${JSON.stringify(await status.textContent())}`);
+    }),
+  );
+
+  // 2b. The main menu: enter a name and press Play, which starts the session.
+  results.push(
+    await timed("main_menu", async () => {
+      if (!pageUp) return notLoaded;
+      const menu = page.locator('[data-ose="menu"]');
+      if ((await menu.count()) === 0) return blocked('main menu with name and Play ([data-ose="menu"]); Phase 3');
+      if (!(await menu.first().isVisible())) return failed("main menu exists but is not shown at start");
+      const name = page.locator('[data-ose="player-name"]');
+      if ((await name.count()) > 0) await name.first().fill("e2e pilot");
+      await page.locator('[data-ose="play"]').first().click();
+      try {
+        await menu.first().waitFor({ state: "hidden", timeout: 10_000 });
+      } catch {
+        const note = ((await page.locator("#menu-note").textContent().catch(() => "")) ?? "").trim();
+        return failed(`menu did not close after Play${note ? `: ${note}` : ""}`);
+      }
+      const player = ((await page.locator('[data-ose="player"]').first().textContent().catch(() => "")) ?? "").trim();
+      return passed(`played as ${JSON.stringify(player || "(no player readout)")}`);
     }),
   );
 
@@ -236,7 +261,13 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
       await warp.first().click();
       await sleep(500);
       const after = (await warp.first().textContent()) ?? "";
-      if (before === after) return failed(`warp control did not change (${JSON.stringify(before)})`);
+      if (before === after) {
+        // Lowest-wins warp arbitration: another connected player at a lower warp holds it. The client
+        // names the holder; that is the server working, not a client fault.
+        const holder = ((await page.locator('[data-ose="warp-holder"]').first().textContent().catch(() => "")) ?? "").trim();
+        if (holder) return skipped(`${holder} (another player is connected)`);
+        return failed(`warp control did not change (${JSON.stringify(before)})`);
+      }
       return passed(`warp ${before.trim()} -> ${after.trim()}`);
     }),
   );
@@ -250,6 +281,19 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
         return blocked('player vessel streamed and drawn in the map view ([data-ose="vessel"]); Phase 4');
       }
       return passed(`vessel shown: ${((await v.first().textContent()) ?? "").trim()}`);
+    }),
+  );
+
+  // 10b. Breadcrumbs name what the camera looks at: star > body > vessel once the probe is followed.
+  results.push(
+    await timed("breadcrumbs", async () => {
+      if (!pageUp) return notLoaded;
+      const crumbs = page.locator('[data-ose="breadcrumbs"]');
+      if ((await crumbs.count()) === 0) return blocked('breadcrumbs star > body > vessel ([data-ose="breadcrumbs"]); Phase 3');
+      await sleep(300);
+      const text = ((await crumbs.first().textContent()) ?? "").replace(/\s+/g, " ").trim();
+      if (!/kerbol/i.test(text) || !/kerbin/i.test(text)) return failed(`breadcrumbs read ${JSON.stringify(text)}`);
+      return passed(text);
     }),
   );
 
