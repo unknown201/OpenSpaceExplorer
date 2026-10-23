@@ -28,3 +28,5 @@ reference/
 assets/ksp2/
 .cache/
 *.log
+.venv/
+dist/
