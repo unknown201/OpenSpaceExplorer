@@ -29,7 +29,7 @@ to `Pass` in the same change.
 | hook | meaning |
 |---|---|
 | `#status` | text set by the WASM start function once the module runs |
-| `[data-ose="menu"]` | the main menu shown at start; `[data-ose="player-name"]` and `[data-ose="play"]` start the session |
+| `[data-ose="menu"]` | the main menu shown at start; `[data-ose="player-name"]` and `[data-ose="play"]` connect, then `[data-ose="session-list"]` lists sessions, each `[data-ose="session"]` with a `[data-ose="session-join"]` button; `[data-ose="create-session"]` holds the create form (`create-name`, `create-mode`, `create-preset`, `difficulty`, `create`), `[data-ose="agency"]` the flag and colours; `[data-ose="resume"]` and `[data-ose="leave"]` on the paused screen |
 | `[data-ose="player"]`, `[data-ose="campaign"]`, `[data-ose="warp-holder"]` | header readouts: who you are, the campaign and its members, who holds warp |
 | `[data-ose="breadcrumbs"]` | star > body > vessel for what the camera looks at; each crumb is clickable |
 | `canvas` | the render surface |

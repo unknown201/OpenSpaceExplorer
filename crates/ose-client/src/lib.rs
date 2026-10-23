@@ -24,7 +24,11 @@ use web_sys::{
     MouseEvent, WebSocket, WheelEvent,
 };
 
-use ose_net::{CampaignMember, ClientMessage, PatchEnd, ServerMessage, PROTOCOL_VERSION, WS_PATH};
+use ose_net::{
+    Agency, CampaignMember, ClientMessage, DifficultyDefinition, DifficultyOption,
+    DifficultyPreset, DifficultyValue, PatchEnd, ServerMessage, SessionInfo, SessionMode,
+    PROTOCOL_VERSION, WS_PATH,
+};
 
 const BODY_LABEL_CLASS: &str = "body";
 
@@ -42,7 +46,12 @@ struct App {
     node: Option<Node>,
     node_el: Option<HtmlElement>,
     player_name: String,
+    /// True once the server confirmed us as a campaign member (the map is "in session").
+    in_session: bool,
     campaign: Option<(String, Vec<CampaignMember>)>,
+    difficulty_defs: Vec<DifficultyDefinition>,
+    difficulty_presets: Vec<DifficultyPreset>,
+    agency_sent: bool,
     warp_holder: Option<u64>,
     /// Breadcrumb text last rendered, to rebuild the DOM only on change.
     crumbs: String,
@@ -105,6 +114,56 @@ fn set_input_value(doc: &Document, id: &str, v: f64) {
     }
 }
 
+fn esc(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+fn mode_name(m: SessionMode) -> &'static str {
+    match m {
+        SessionMode::Sandbox => "Sandbox",
+        SessionMode::Exploration => "Exploration",
+    }
+}
+
+fn input_string(doc: &Document, id: &str) -> Option<String> {
+    doc.get_element_by_id(id)?
+        .dyn_into::<web_sys::HtmlInputElement>()
+        .ok()
+        .map(|i| i.value())
+}
+
+fn select_value(doc: &Document, id: &str) -> Option<String> {
+    doc.get_element_by_id(id)?
+        .dyn_into::<web_sys::HtmlSelectElement>()
+        .ok()
+        .map(|s| s.value())
+}
+
+fn checkbox(doc: &Document, id: &str) -> Option<bool> {
+    doc.get_element_by_id(id)?
+        .dyn_into::<web_sys::HtmlInputElement>()
+        .ok()
+        .map(|i| i.checked())
+}
+
+/// "#rrggbb" to bytes; anything else is grey.
+fn parse_rgb(hex: &str) -> [u8; 3] {
+    let h = hex.trim_start_matches('#');
+    if h.len() == 6 {
+        if let Ok(v) = u32::from_str_radix(h, 16) {
+            return [(v >> 16) as u8, (v >> 8) as u8, v as u8];
+        }
+    }
+    [128, 128, 128]
+}
+
+fn rgb_css(c: [u8; 3]) -> String {
+    format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2])
+}
+
 fn set_text(doc: &Document, id: &str, text: &str) {
     if let Some(el) = doc.get_element_by_id(id) {
         el.set_text_content(Some(text));
@@ -147,7 +206,11 @@ pub fn start() -> Result<(), JsValue> {
         node: None,
         node_el: None,
         player_name: String::new(),
+        in_session: false,
         campaign: None,
+        difficulty_defs: Vec::new(),
+        difficulty_presets: Vec::new(),
+        agency_sent: false,
         warp_holder: None,
         crumbs: String::new(),
         ut_el: get("ut")?,
@@ -190,7 +253,7 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         let cb = Closure::<dyn FnMut()>::new(move || {
             let connected = a.borrow().ws.is_some();
             if connected {
-                a.borrow().show_menu(false);
+                a.borrow_mut().open_sessions_screen();
                 return;
             }
             let name = a
@@ -232,6 +295,85 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
             });
         input.add_event_listener_with_callback("keydown", cb.as_ref().unchecked_ref())?;
         cb.forget();
+    }
+    let wire = |id: &str, f: Box<dyn Fn(&Shared)>| -> Result<(), JsValue> {
+        if let Some(el) = doc.get_element_by_id(id) {
+            let a = app.clone();
+            let cb = Closure::<dyn FnMut()>::new(move || f(&a));
+            el.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+            cb.forget();
+        }
+        Ok(())
+    };
+    wire(
+        "sessions-refresh",
+        Box::new(|a| a.borrow_mut().open_sessions_screen()),
+    )?;
+    wire(
+        "sessions-back",
+        Box::new(|a| a.borrow().menu_screen("name")),
+    )?;
+    wire(
+        "to-sessions",
+        Box::new(|a| a.borrow_mut().open_sessions_screen()),
+    )?;
+    wire("resume", Box::new(|a| a.borrow().show_menu(false)))?;
+    wire("create", Box::new(|a| a.borrow_mut().create_session()))?;
+    wire("agency-apply", Box::new(|a| a.borrow_mut().send_agency()))?;
+    wire(
+        "leave",
+        Box::new(|_a| {
+            // Leaving is a reload: the socket closes and the name screen comes back.
+            if let Some(w) = web_sys::window() {
+                w.location().reload().ok();
+            }
+        }),
+    )?;
+    // Join buttons are created per session; one delegated handler on the list.
+    if let Some(list) = doc.get_element_by_id("sessions") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let id = ev
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .and_then(|e| e.get_attribute("data-ose-session"));
+            if let Some(id) = id {
+                a.borrow_mut().join_session(&id);
+            }
+        });
+        list.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
+    if let Some(sel) = doc.get_element_by_id("create-preset") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut()>::new(move || a.borrow().apply_preset());
+        sel.add_event_listener_with_callback("change", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
+    if let Some(sel) = doc.get_element_by_id("create-mode") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut()>::new(move || a.borrow().render_difficulty_form());
+        sel.add_event_listener_with_callback("change", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
+    if let Some(grid) = doc.get_element_by_id("difficulty") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut()>::new(move || a.borrow().refresh_difficulty_outputs());
+        grid.add_event_listener_with_callback("input", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
+    for (id, key) in [
+        ("agency-flag", "ose.flag"),
+        ("agency-primary", "ose.primary"),
+        ("agency-secondary", "ose.secondary"),
+    ] {
+        if let (Some(v), Some(input)) = (
+            stored(key),
+            doc.get_element_by_id(id)
+                .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok()),
+        ) {
+            input.set_value(&v);
+        }
     }
     Ok(())
 }
@@ -303,7 +445,17 @@ fn connect(app: &Shared) -> Result<(), JsValue> {
         let on_close = Closure::<dyn FnMut()>::new(move || {
             let mut a = app.borrow_mut();
             a.ws = None;
+            a.in_session = false;
             a.set_status("disconnected; reload to reconnect");
+            set_text(
+                &a.doc,
+                "menu-note",
+                "disconnected; reload the page to reconnect",
+            );
+            if let Some(m) = a.doc.get_element_by_id("menu") {
+                m.class_list().remove_1("hidden").ok();
+            }
+            a.menu_screen("name");
         });
         ws.set_onclose(Some(on_close.as_ref().unchecked_ref()));
         on_close.forget();
@@ -533,29 +685,88 @@ impl App {
                     &format!("{} (#{player_id})", self.player_name),
                 );
                 set_text(&self.doc, "menu-note", "");
-                self.show_menu(false);
-                if let Some(ws) = &self.ws {
-                    send(ws, &ClientMessage::JoinCampaign);
-                }
+                self.open_sessions_screen();
             }
             ServerMessage::Rejected { reason } => {
                 self.set_status(&format!("rejected: {reason}"));
                 set_text(&self.doc, "menu-note", &format!("rejected: {reason}"));
-                self.show_menu(true);
+                if let Some(m) = self.doc.get_element_by_id("menu") {
+                    m.class_list().remove_1("hidden").ok();
+                }
             }
-            ServerMessage::CampaignState { name, members, .. } => {
+            ServerMessage::SessionList { sessions } => {
+                self.render_sessions(&sessions);
+            }
+            ServerMessage::DifficultyOptions {
+                definitions,
+                presets,
+            } => {
+                self.difficulty_defs = definitions;
+                self.difficulty_presets = presets;
+                self.render_presets();
+                self.render_difficulty_form();
+                self.apply_preset();
+            }
+            ServerMessage::CampaignState {
+                name,
+                mode,
+                members,
+                you_are_member,
+                created,
+                ..
+            } => {
                 let names: Vec<&str> = members.iter().map(|m| m.display_name.as_str()).collect();
                 set_text(
                     &self.doc,
                     "campaign",
                     &format!(
-                        "{name}: {} in the campaign ({})",
+                        "{name} ({}): {} in the campaign ({})",
+                        mode_name(mode),
                         members.len(),
                         names.join(", ")
                     ),
                 );
+                if let Some(me) = self
+                    .player_id
+                    .and_then(|id| members.iter().find(|m| m.player_id == id))
+                {
+                    let swatch = me
+                        .agency
+                        .as_ref()
+                        .map(|a| {
+                            format!(
+                                "<span class=\"swatch\" style=\"background:{}\"></span>",
+                                rgb_css(a.primary_rgb)
+                            )
+                        })
+                        .unwrap_or_default();
+                    if let Some(el) = self.doc.get_element_by_id("player") {
+                        el.set_inner_html(&format!(
+                            "{swatch}{} (#{})",
+                            esc(&me.display_name),
+                            me.player_id
+                        ));
+                    }
+                }
                 self.campaign = Some((name, members));
                 self.update_warp_holder();
+                if created {
+                    set_text(&self.doc, "menu-note", "session created");
+                }
+                if you_are_member {
+                    if !self.in_session {
+                        self.in_session = true;
+                        self.show_menu(false);
+                    }
+                    if !self.agency_sent {
+                        self.send_agency();
+                    }
+                } else {
+                    // A listing or a create answer: refresh the list so the entry shows the new name.
+                    if let Some(ws) = &self.ws {
+                        send(ws, &ClientMessage::ListSessions);
+                    }
+                }
             }
             ServerMessage::BodyCatalog { bodies } => {
                 let scene = Scene::new(bodies);
@@ -712,8 +923,259 @@ impl App {
                 m.class_list().add_1("hidden").ok();
             }
         }
-        if let Some(btn) = self.doc.get_element_by_id("play") {
-            btn.set_text_content(Some(if self.ws.is_some() { "Resume" } else { "Play" }));
+        if open {
+            self.menu_screen(if self.in_session {
+                "paused"
+            } else if self.ws.is_some() {
+                "sessions"
+            } else {
+                "name"
+            });
+        }
+    }
+
+    /// Show one of the menu screens: "name", "sessions" or "paused".
+    fn menu_screen(&self, which: &str) {
+        for id in ["name", "sessions", "paused"] {
+            if let Some(el) = self.doc.get_element_by_id(&format!("screen-{id}")) {
+                if id == which {
+                    el.class_list().add_1("open").ok();
+                } else {
+                    el.class_list().remove_1("open").ok();
+                }
+            }
+        }
+        if let Some(card) = self.doc.get_element_by_id("menu-card") {
+            if which == "sessions" {
+                card.class_list().add_1("wide").ok();
+            } else {
+                card.class_list().remove_1("wide").ok();
+            }
+        }
+    }
+
+    /// Ask the server what can be joined and show the sessions screen.
+    fn open_sessions_screen(&mut self) {
+        if let Some(m) = self.doc.get_element_by_id("menu") {
+            m.class_list().remove_1("hidden").ok();
+        }
+        self.menu_screen("sessions");
+        if let Some(ws) = &self.ws {
+            send(ws, &ClientMessage::ListSessions);
+        }
+    }
+
+    fn render_sessions(&self, sessions: &[SessionInfo]) {
+        let Some(list) = self.doc.get_element_by_id("sessions") else {
+            return;
+        };
+        let mut html = String::new();
+        for s in sessions {
+            html.push_str(&format!(
+                "<li data-ose=\"session\" data-ose-id=\"{id}\"><div><div class=\"name\">{name}</div>\
+                 <div class=\"meta\">{mode} \u{b7} {ut} \u{b7} {players} {pl}</div></div>\
+                 <button data-ose=\"session-join\" data-ose-session=\"{id}\">Join</button></li>",
+                id = esc(&s.id),
+                name = esc(&s.name),
+                mode = mode_name(s.mode),
+                ut = kerbin_time::format_ut(s.ut_s),
+                players = s.players,
+                pl = if s.players == 1 { "player" } else { "players" },
+            ));
+        }
+        if html.is_empty() {
+            html = "<li class=\"empty\">no sessions yet; create one below</li>".into();
+        }
+        list.set_inner_html(&html);
+    }
+
+    fn join_session(&mut self, id: &str) {
+        set_text(&self.doc, "menu-note", &format!("joining {id}..."));
+        if let Some(ws) = &self.ws {
+            send(ws, &ClientMessage::SelectSession { id: id.to_string() });
+        }
+    }
+
+    fn render_presets(&self) {
+        let Some(sel) = self.doc.get_element_by_id("create-preset") else {
+            return;
+        };
+        let mut html = String::new();
+        for (i, p) in self.difficulty_presets.iter().enumerate() {
+            let selected = if p.name.eq_ignore_ascii_case("normal") {
+                " selected"
+            } else {
+                ""
+            };
+            html.push_str(&format!(
+                "<option value=\"{i}\"{selected}>{}</option>",
+                esc(&p.name)
+            ));
+        }
+        html.push_str("<option value=\"custom\">Custom</option>");
+        sel.set_inner_html(&html);
+    }
+
+    /// One row per definition: a checkbox for Bool, a slider for Percentage; exploration rows only in
+    /// Exploration mode.
+    fn render_difficulty_form(&self) {
+        let Some(grid) = self.doc.get_element_by_id("difficulty") else {
+            return;
+        };
+        let mode = select_value(&self.doc, "create-mode").unwrap_or_default();
+        let mut html = String::new();
+        let mut section = String::new();
+        for d in &self.difficulty_defs {
+            if d.group == "exploration" && mode != "Exploration" {
+                continue;
+            }
+            if d.section != section {
+                section = d.section.clone();
+                html.push_str(&format!("<div class=\"section\">{}</div>", esc(&section)));
+            }
+            let id = format!("diff-{}", esc(&d.id));
+            let label = d.id.replace('_', " ");
+            if d.kind == "Bool" {
+                html.push_str(&format!(
+                    "<span>{label}</span><input id=\"{id}\" type=\"checkbox\" data-ose-diff=\"{did}\" />",
+                    did = esc(&d.id)
+                ));
+            } else {
+                let (min, max, step) = (
+                    d.min.unwrap_or(0.0),
+                    d.max.unwrap_or(2.0),
+                    d.step.unwrap_or(0.1),
+                );
+                html.push_str(&format!(
+                    "<span>{label}</span><span><input id=\"{id}\" type=\"range\" min=\"{min}\" max=\"{max}\" step=\"{step}\" data-ose-diff=\"{did}\" /> <output for=\"{id}\"></output></span>",
+                    did = esc(&d.id)
+                ));
+            }
+        }
+        grid.set_inner_html(&html);
+        self.apply_preset();
+    }
+
+    /// Copy the chosen preset's values into the form.
+    fn apply_preset(&self) {
+        let Some(v) = select_value(&self.doc, "create-preset") else {
+            return;
+        };
+        let Some(preset) = v
+            .parse::<usize>()
+            .ok()
+            .and_then(|i| self.difficulty_presets.get(i))
+        else {
+            self.refresh_difficulty_outputs();
+            return;
+        };
+        for o in &preset.options {
+            let id = format!("diff-{}", o.id);
+            match &o.value {
+                DifficultyValue::Bool(b) => {
+                    if let Some(el) = self
+                        .doc
+                        .get_element_by_id(&id)
+                        .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+                    {
+                        el.set_checked(*b);
+                    }
+                }
+                DifficultyValue::Number(n) => set_input_value(&self.doc, &id, *n),
+                DifficultyValue::Choice(c) => {
+                    if let Some(el) = self
+                        .doc
+                        .get_element_by_id(&id)
+                        .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+                    {
+                        el.set_value(c);
+                    }
+                }
+            }
+        }
+        self.refresh_difficulty_outputs();
+    }
+
+    fn refresh_difficulty_outputs(&self) {
+        for d in &self.difficulty_defs {
+            if d.kind != "Bool" {
+                let id = format!("diff-{}", d.id);
+                if let Some(v) = input_value(&self.doc, &id) {
+                    if let Ok(Some(out)) = self.doc.query_selector(&format!("output[for=\"{id}\"]"))
+                    {
+                        out.set_text_content(Some(&format!("{:.0}%", v * 100.0)));
+                    }
+                }
+            }
+        }
+    }
+
+    fn difficulty_from_form(&self) -> Vec<DifficultyOption> {
+        let mode = select_value(&self.doc, "create-mode").unwrap_or_default();
+        self.difficulty_defs
+            .iter()
+            .filter(|d| d.group != "exploration" || mode == "Exploration")
+            .filter_map(|d| {
+                let id = format!("diff-{}", d.id);
+                let value = if d.kind == "Bool" {
+                    DifficultyValue::Bool(checkbox(&self.doc, &id)?)
+                } else {
+                    DifficultyValue::Number(input_value(&self.doc, &id)?)
+                };
+                Some(DifficultyOption {
+                    id: d.id.clone(),
+                    value,
+                })
+            })
+            .collect()
+    }
+
+    fn create_session(&mut self) {
+        let name = input_string(&self.doc, "create-name")
+            .map(|n| n.trim().to_string())
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| "Shared campaign".into());
+        let mode = match select_value(&self.doc, "create-mode").as_deref() {
+            Some("Sandbox") => SessionMode::Sandbox,
+            _ => SessionMode::Exploration,
+        };
+        let difficulty = self.difficulty_from_form();
+        set_text(&self.doc, "menu-note", "creating...");
+        if let Some(ws) = &self.ws {
+            send(
+                ws,
+                &ClientMessage::CreateSession {
+                    name,
+                    mode,
+                    difficulty,
+                },
+            );
+        }
+    }
+
+    fn send_agency(&mut self) {
+        let flag_id = input_string(&self.doc, "agency-flag")
+            .map(|f| f.trim().to_string())
+            .filter(|f| !f.is_empty())
+            .unwrap_or_else(|| "default".into());
+        let primary = input_string(&self.doc, "agency-primary").unwrap_or_else(|| "#4aa3ff".into());
+        let secondary =
+            input_string(&self.doc, "agency-secondary").unwrap_or_else(|| "#ffd87a".into());
+        store("ose.flag", &flag_id);
+        store("ose.primary", &primary);
+        store("ose.secondary", &secondary);
+        if let Some(ws) = &self.ws {
+            send(
+                ws,
+                &ClientMessage::SetAgency {
+                    agency: Agency {
+                        flag_id,
+                        primary_rgb: parse_rgb(&primary),
+                        secondary_rgb: parse_rgb(&secondary),
+                    },
+                },
+            );
+            self.agency_sent = true;
         }
     }
 

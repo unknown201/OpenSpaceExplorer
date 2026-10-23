@@ -50,6 +50,28 @@
     #menu button:hover { background: #28508a; }
     #menu .note { margin-top: 10px; min-height: 1.2em; font-size: 12px; color: #f0a070; }
     #menu .info { margin-top: 12px; font-size: 12px; color: #9fb0cc; }
+    #menu .screen { display: none; } #menu .screen.open { display: block; }
+    #menu .card.wide { width: 640px; max-height: 90vh; overflow: auto; }
+    #sessions { margin: 8px 0 0; padding: 0; list-style: none; }
+    #sessions li { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center;
+      padding: 8px 10px; margin-bottom: 6px; border: 1px solid #2c3d63; border-radius: 6px; background: #06080f; }
+    #sessions .name { color: #e6ecf7; font-size: 14px; }
+    #sessions .meta { color: #6f7f9c; font-size: 12px; margin-top: 2px; }
+    #sessions button { margin: 0; width: auto; padding: 6px 14px; font-size: 13px; }
+    #sessions .empty { color: #6f7f9c; font-size: 12px; padding: 8px 0; }
+    #menu .row { display: flex; gap: 8px; } #menu .row button { flex: 1; }
+    #menu button.secondary { background: #16213a; border-color: #2c3d63; color: #cfd6e6; }
+    #menu details { margin-top: 14px; border-top: 1px solid #2c3d63; padding-top: 8px; }
+    #menu summary { cursor: pointer; color: #cfd6e6; font-size: 13px; }
+    #menu select { width: 100%; box-sizing: border-box; padding: 6px 8px; font: inherit; background: #06080f;
+      color: #e6ecf7; border: 1px solid #2c3d63; border-radius: 4px; }
+    #difficulty { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; align-items: center; margin-top: 6px; }
+    #difficulty .section { grid-column: 1 / -1; color: #6f7f9c; font-size: 11px; text-transform: uppercase; margin-top: 6px; }
+    #difficulty span { font-size: 12px; color: #9fb0cc; } #difficulty output { font-size: 12px; color: #cfd6e6; min-width: 40px; display: inline-block; text-align: right; }
+    #difficulty input[type=range] { width: 120px; vertical-align: middle; }
+    #agency { display: grid; grid-template-columns: auto 1fr auto 1fr; gap: 6px 10px; align-items: center; }
+    #agency input[type=color] { width: 44px; height: 24px; padding: 0; border: 1px solid #2c3d63; background: #06080f; }
+    #player .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
     #ut { font-variant-numeric: tabular-nums; font-size: 16px; color: #e6ecf7; }
     .warp { display: flex; align-items: center; gap: 4px; }
     .warp button { background: #16213a; color: #cfd6e6; border: 1px solid #2c3d63; border-radius: 4px;
@@ -78,12 +100,47 @@
   </div>
   <div id="crumbs" data-ose="breadcrumbs"></div>
   <div id="menu" data-ose="menu">
-    <div class="card">
+    <div class="card" id="menu-card">
       <h1>OpenSpaceExplorer</h1>
       <div class="sub">a shared Kerbol system, played in the browser</div>
-      <label for="player-name">Your name</label>
-      <input id="player-name" data-ose="player-name" type="text" maxlength="32" autocomplete="nickname" value="Pilot" />
-      <button id="play" data-ose="play">Play</button>
+      <div class="screen open" id="screen-name" data-ose="menu-name">
+        <label for="player-name">Your name</label>
+        <input id="player-name" data-ose="player-name" type="text" maxlength="32" autocomplete="nickname" value="Pilot" />
+        <button id="play" data-ose="play">Play</button>
+      </div>
+      <div class="screen" id="screen-sessions" data-ose="menu-sessions">
+        <label>Sessions on this server</label>
+        <ul id="sessions" data-ose="session-list"><li class="empty">asking the server...</li></ul>
+        <div class="row">
+          <button id="sessions-refresh" class="secondary" data-ose="session-refresh">Refresh</button>
+          <button id="sessions-back" class="secondary" data-ose="session-back">Change name</button>
+        </div>
+        <details id="create-details" data-ose="create-session">
+          <summary>Create a session</summary>
+          <label for="create-name">Session name</label>
+          <input id="create-name" data-ose="create-name" type="text" maxlength="48" value="Shared campaign" />
+          <label for="create-mode">Mode</label>
+          <select id="create-mode" data-ose="create-mode"><option value="Sandbox">Sandbox</option><option value="Exploration" selected>Exploration</option></select>
+          <label for="create-preset">Difficulty preset</label>
+          <select id="create-preset" data-ose="create-preset"></select>
+          <div id="difficulty" data-ose="difficulty"></div>
+          <button id="create" data-ose="create">Create</button>
+          <div class="info">Only works while nobody has joined the shared campaign yet; otherwise the existing one is returned.</div>
+        </details>
+        <details id="agency-details" data-ose="agency">
+          <summary>Your agency</summary>
+          <div id="agency">
+            <span>Flag</span><input id="agency-flag" data-ose="agency-flag" type="text" maxlength="32" value="default" />
+            <span>Colours</span><span><input id="agency-primary" type="color" value="#4aa3ff" /> <input id="agency-secondary" type="color" value="#ffd87a" /></span>
+          </div>
+          <button id="agency-apply" class="secondary" data-ose="agency-apply">Apply</button>
+        </details>
+      </div>
+      <div class="screen" id="screen-paused" data-ose="menu-paused">
+        <button id="resume" data-ose="resume">Resume</button>
+        <button id="to-sessions" class="secondary" data-ose="to-sessions">Sessions and agency</button>
+        <button id="leave" class="secondary" data-ose="leave">Leave session</button>
+      </div>
       <div class="note" id="menu-note"></div>
       <div class="info" id="menu-info">Esc opens this menu again. Drag to pan, wheel to zoom, click a name to focus, F to frame.</div>
     </div>

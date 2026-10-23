@@ -13,7 +13,8 @@
 //   [data-ose="body"]           one element per celestial body shown in the map view (data-ose-id = body id)
 //   [data-ose="warp"]           the time-warp control (clicking it raises the warp factor)
 //   [data-ose="vessel"]         the player's active vessel in the map view
-//   [data-ose="menu"]           the main menu, shown at start; [data-ose="player-name"] and [data-ose="play"]
+//   [data-ose="menu"]           the main menu, shown at start; [data-ose="player-name"] and [data-ose="play"],
+//                               then [data-ose="session-list"] with a [data-ose="session-join"] per session
 //   [data-ose="breadcrumbs"]    star > body > vessel for what the camera looks at
 //   [data-ose="add-node"]       adds a maneuver node on the player's vessel
 //   [data-ose="maneuver-node"]  a maneuver node on the player's trajectory (data-ose-ut = burn time)
@@ -124,14 +125,26 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
       const name = page.locator('[data-ose="player-name"]');
       if ((await name.count()) > 0) await name.first().fill("e2e pilot");
       await page.locator('[data-ose="play"]').first().click();
+      // The sessions screen lists what can be joined; join the first entry.
+      const join = page.locator('[data-ose="session-join"]');
+      let joined = "";
+      try {
+        await join.first().waitFor({ timeout: 10_000 });
+        const entry = page.locator('[data-ose="session"]').first();
+        joined = ((await entry.locator(".name").textContent().catch(() => "")) ?? "").trim();
+        await join.first().click();
+      } catch {
+        const note = ((await page.locator("#menu-note").textContent().catch(() => "")) ?? "").trim();
+        return failed(`no session to join after Play${note ? `: ${note}` : ""}`);
+      }
       try {
         await menu.first().waitFor({ state: "hidden", timeout: 10_000 });
       } catch {
         const note = ((await page.locator("#menu-note").textContent().catch(() => "")) ?? "").trim();
-        return failed(`menu did not close after Play${note ? `: ${note}` : ""}`);
+        return failed(`menu did not close after Join${note ? `: ${note}` : ""}`);
       }
       const player = ((await page.locator('[data-ose="player"]').first().textContent().catch(() => "")) ?? "").trim();
-      return passed(`played as ${JSON.stringify(player || "(no player readout)")}`);
+      return passed(`played as ${JSON.stringify(player || "(no player readout)")}, joined ${JSON.stringify(joined)}`);
     }),
   );
 
