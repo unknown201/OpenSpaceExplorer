@@ -24,6 +24,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tokio = { version = "1", features = ["full"] }
 axum = { version = "0.8", features = ["ws"] }
+tower-http = { version = "0.6", features = ["fs"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 clap = { version = "4", features = ["derive"] }
 wasm-bindgen = "0.2"

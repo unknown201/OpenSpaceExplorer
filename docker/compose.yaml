@@ -1,0 +1,33 @@
+# OpenSpaceExplorer on docker.lan (docs/DEPLOY.md). The image is built by GitHub Actions on every push
+# to main and published to GHCR; watchtower here pulls the new image and restarts the service, so a
+# push to main is a deploy. One-time, as josh on docker.lan:
+#   mkdir -p /opt/openspaceexplorer && cd /opt/openspaceexplorer   # put this file there
+#   docker compose up -d
+# then nginx on prod-prox proxies https://ose.jfly.dev/ to http://docker.lan:8800/.
+name: openspaceexplorer
+services:
+  ose:
+    image: ghcr.io/unknown201/openspaceexplorer:latest
+    container_name: openspaceexplorer
+    restart: unless-stopped
+    ports:
+      # 7777 and 8790-8794 on this host belong to lostintime-stream (host network), so 8800
+      - "8800:7777"
+    volumes:
+      - ose-data:/data
+    labels:
+      com.centurylinklabs.watchtower.scope: openspaceexplorer
+
+  # pull-based deploy: checks GHCR every 5 minutes and replaces the container when :latest moved
+  watchtower:
+    image: containrrr/watchtower:1.7.1
+    container_name: openspaceexplorer-watchtower
+    restart: unless-stopped
+    command: --scope openspaceexplorer --interval 300 --cleanup
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    labels:
+      com.centurylinklabs.watchtower.scope: openspaceexplorer
+
+volumes:
+  ose-data:

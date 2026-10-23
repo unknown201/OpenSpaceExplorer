@@ -27,8 +27,13 @@ cd crates/ose-client && trunk serve
 
 Tooling installed locally: rust 1.99 with `wasm32-unknown-unknown`, trunk 0.22, wasm-bindgen-cli, dotnet 9, ilspycmd 11.1, Python venv in `.venv` with UnityPy.
 
+## Deploy
+
+A push to `main` builds a Linux image (server + WASM client) in GitHub Actions and publishes it to GHCR; docker.lan pulls it and nginx on prod-prox serves it as https://ose.jfly.dev/ once the one-time setup in `docs/DEPLOY.md` is done. `ose-server --static-dir DIR` serves the built client.
+
 ## Documents
 
+- `docs/DEPLOY.md`: how ose.jfly.dev is built and hosted, and the one-time setup on docker.lan, prod-prox and Cloudflare.
 - `docs/01-ksp2-install-survey.md`: what is in the Steam install and how to read it.
 - `docs/02-architecture-and-plan.md`: architecture and nine-phase roadmap.
 - `docs/ADR-0001-initial-decisions.md`: scope decisions.
