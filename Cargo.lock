@@ -1045,6 +1045,7 @@ dependencies = [
  "ose-data",
  "ose-math",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

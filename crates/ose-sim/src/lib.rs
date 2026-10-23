@@ -5,6 +5,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod bodies;
+
 use bevy_ecs::prelude::*;
 use serde::{Deserialize, Serialize};
 

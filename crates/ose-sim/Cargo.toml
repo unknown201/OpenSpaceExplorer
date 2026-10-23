@@ -10,3 +10,6 @@ bevy_ecs = { workspace = true }
 serde = { workspace = true }
 ose-math = { workspace = true }
 ose-data = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
