@@ -81,6 +81,35 @@ Each phase ends with something runnable and a `docs/STATUS.md` update. Phases 1 
 
 **Phase 9: Own assets.** Replace placeholders with generated parts, textures and planets (reusing the LostInTime generation pipeline), so the game no longer depends on the Steam install at runtime.
 
+## Screens and user flows per phase
+
+The original game is mostly menus, buildings, an editor and HUDs before any space navigation happens.
+`03-ui-screens-and-flows.md` (survey of the decompiled UI, 2026-10-23) is the inventory: its 20 game
+states, every screen with the data it binds, ten player journeys, about 45 experiences sized S/M/L, and a
+side-by-side checklist. The phases above gain these UI deliverables, in the order a player meets them:
+
+- **Phase 3 (map client, in progress):** main menu and loading curtain (A1, A6), global header with UT,
+  warp and player (B3), breadcrumbs (B4), map view with body focus, orbit info and the maneuver gizmo
+  with all three axes (E1-E6). The map, time and warp parts exist today; the rest of the map group is the
+  next client work.
+- **Phase 4 (server and multiplayer):** session browser, create session with game mode and difficulty
+  rules, player and agency setup, join lobby (A2-A5), escape menu, save and load dialogs with quicksave
+  (B5, B6), settings pages, notification center and message boxes (section 4.7 of the survey).
+- **Phase 5 (vessels and assembly):** KSC hub with building buttons, 2D first (B1), launchpad dialog (B2),
+  the whole editor group (C1-C8): parts picker, 3D assembly with symmetry and attach modes, staging
+  stack, engineer report and delta-v tool, parts manager and action groups, workspaces, crew assignment.
+- **Phase 6 (local physics):** flight HUD instrument by instrument (D1-D13): navball and SAS modes,
+  telemetry, staging, resources, throttle, action bar and app bar, part action windows, flight report
+  and recovery, EVA.
+- **Phase 7 (planets):** 3D KSC fly-over and tracking station visuals.
+- **Phase 8 (content):** R&D tech tree and science, mission control with objectives and rewards,
+  training center and the first-time user experience, kerbal and agency management (G1-G7).
+
+Each screen is accepted the same way as the map view: a `data-ose` hook, a Playwright step in the
+gameplay session (ADR-0004), and a row in the comparison checklist moved from "none" to "done". The
+checklist is also the script for running the original and OSE side by side: walk the same ten journeys
+in both and note where the experience differs.
+
 ## Decisions
 
 The open questions were settled on 2026-10-23, see `ADR-0001-initial-decisions.md` and `ADR-0002-thin-wasm-client.md`: shared co-op save, LAN hosting with lightweight accounts, WebGPU only, full decompile for reference with physics and vessel interaction as parity targets, routine pushes, ECS for sim data.
