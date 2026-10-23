@@ -31,17 +31,43 @@ pub struct SavedBurn {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CampaignMember {
+    pub player_id: u64,
+    pub display_name: String,
+    pub joined_tick: Tick,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Campaign {
+    pub name: String,
+    pub started_tick: Tick,
+    pub members: Vec<CampaignMember>,
+}
+
+impl Default for Campaign {
+    fn default() -> Self {
+        Campaign {
+            name: "Shared campaign".into(),
+            started_tick: Tick(0),
+            members: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SaveFile {
     pub version: u32,
     pub tick: Tick,
     pub warp: u32,
     pub vessels: Vec<SavedVessel>,
+    #[serde(default)]
+    pub campaign: Campaign,
 }
 
 /// Vessel registry entry as the server keeps it: entity, vessel id, owner.
 pub type VesselEntry = (bevy_ecs::entity::Entity, u64, Option<u64>);
 
-pub fn capture(u: &Universe, vessels: &[VesselEntry]) -> SaveFile {
+pub fn capture(u: &Universe, vessels: &[VesselEntry], campaign: &Campaign) -> SaveFile {
     let saved = vessels
         .iter()
         .filter_map(|&(e, id, owner)| {
@@ -66,6 +92,7 @@ pub fn capture(u: &Universe, vessels: &[VesselEntry]) -> SaveFile {
         tick: u.tick(),
         warp: u.warp(),
         vessels: saved,
+        campaign: campaign.clone(),
     }
 }
 

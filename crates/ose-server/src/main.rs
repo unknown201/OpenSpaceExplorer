@@ -68,6 +68,9 @@ struct Shared {
     accounts: Mutex<accounts::Accounts>,
     /// Vessel entity -> (vessel id, owner player id).
     vessels: Mutex<Vec<(bevy_ecs::entity::Entity, u64, Option<u64>)>>,
+    campaign: Mutex<save::Campaign>,
+    /// Display names by player id for this process lifetime.
+    names: Mutex<std::collections::HashMap<u64, String>>,
     /// Warp each connected player is willing to run at; the universe runs at the minimum (lowest wins).
     warp_requests: Mutex<std::collections::HashMap<u64, u32>>,
 }
@@ -144,10 +147,12 @@ async fn main() -> anyhow::Result<()> {
     let mut universe = Universe::with_bodies(&defs);
     let save_path = (args.save.to_string_lossy() != "none").then(|| args.save.clone());
     let mut registry: Vec<save::VesselEntry> = Vec::new();
+    let mut campaign = save::Campaign::default();
     if let Some(p) = &save_path {
         match save::read(p) {
             Ok(Some(file)) => {
                 registry = save::restore(&mut universe, &file);
+                campaign = file.campaign.clone();
                 tracing::info!(path = %p.display(), tick = file.tick.0, vessels = registry.len(), "save loaded");
             }
             Ok(None) => tracing::info!(path = %p.display(), "no save file, starting fresh"),
@@ -168,6 +173,8 @@ async fn main() -> anyhow::Result<()> {
             acc
         }),
         vessels: Mutex::new(registry),
+        campaign: Mutex::new(campaign),
+        names: Mutex::new(std::collections::HashMap::new()),
         warp_requests: Mutex::new(std::collections::HashMap::new()),
     });
 
@@ -194,7 +201,8 @@ async fn main() -> anyhow::Result<()> {
                 let file = {
                     let u = saver.universe.lock().expect("sim lock");
                     let v = saver.vessels.lock().expect("vessels lock");
-                    save::capture(&u, &v)
+                    let c = saver.campaign.lock().expect("campaign lock");
+                    save::capture(&u, &v, &c)
                 };
                 match save::write(&p, &file) {
                     Ok(()) => {
@@ -344,6 +352,48 @@ fn has_vessel(s: &Shared, player: u64) -> bool {
         .expect("vessels lock")
         .iter()
         .any(|&(_, _, owner)| owner == Some(player))
+}
+
+/// Display name a player used at Hello.
+fn display_name_for(s: &Shared, player_id: u64) -> String {
+    s.names
+        .lock()
+        .expect("names lock")
+        .get(&player_id)
+        .cloned()
+        .unwrap_or_else(|| format!("player {player_id}"))
+}
+
+/// Campaign state; with `join = Some(name)` the player is added as a member first (idempotent).
+fn campaign_state(s: &Shared, player_id: u64, join: Option<&String>) -> ServerMessage {
+    let tick = s.universe.lock().expect("sim lock").tick();
+    let mut c = s.campaign.lock().expect("campaign lock");
+    if let Some(name) = join {
+        if !c.members.iter().any(|m| m.player_id == player_id) {
+            c.members.push(save::CampaignMember {
+                player_id,
+                display_name: name.clone(),
+                joined_tick: tick,
+            });
+            tracing::info!(player = player_id, "joined the campaign");
+        }
+    }
+    let vessels = s.vessels.lock().expect("vessels lock").len() as u32;
+    ServerMessage::CampaignState {
+        name: c.name.clone(),
+        started_tick: c.started_tick,
+        members: c
+            .members
+            .iter()
+            .map(|m| ose_net::CampaignMember {
+                player_id: m.player_id,
+                display_name: m.display_name.clone(),
+                joined_tick: m.joined_tick,
+            })
+            .collect(),
+        you_are_member: c.members.iter().any(|m| m.player_id == player_id),
+        vessels,
+    }
 }
 
 /// Validate an uploaded craft against the part catalog and spawn it as a vessel in a circular orbit.
@@ -502,6 +552,10 @@ async fn session(mut socket: WebSocket, s: AppState) {
                             spawn_player_probe(&s, id, &display_name);
                         }
                         s.warp_requests.lock().expect("warp lock").insert(id, 1);
+                        s.names
+                            .lock()
+                            .expect("names lock")
+                            .insert(id, display_name.clone());
                         break id;
                     }
                     Ok(_) => {
@@ -589,6 +643,15 @@ async fn session(mut socket: WebSocket, s: AppState) {
                                 }
                                 None => ServerMessage::BurnState { vessel, scheduled: false, reason: Some("not your vessel".into()) },
                             };
+                            if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::JoinCampaign) => {
+                            let name = display_name_for(&s, player_id);
+                            let reply = campaign_state(&s, player_id, Some(&name));
+                            if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::CampaignInfo) => {
+                            let reply = campaign_state(&s, player_id, None);
                             if !send(&mut socket, &reply).await { break; }
                         }
                         Ok(ClientMessage::LaunchCraft { craft, altitude_m }) => {

@@ -205,6 +205,36 @@ async fn hello_catalog_and_snapshots() {
         "burn {burn_ok} maneuver {maneuver_seen}"
     );
 
+    // Join the shared campaign; the state lists us as a member and is idempotent.
+    for _ in 0..2 {
+        ws.send(Message::Binary(
+            ose_net::encode(&ClientMessage::JoinCampaign)
+                .unwrap()
+                .into(),
+        ))
+        .await
+        .unwrap();
+        let mut seen = false;
+        for _ in 0..40 {
+            if let ServerMessage::CampaignState {
+                members,
+                you_are_member,
+                name,
+                ..
+            } = recv(&mut ws).await
+            {
+                assert!(you_are_member);
+                assert_eq!(members.len(), 1, "{members:?}");
+                assert_eq!(members[0].player_id, player_id);
+                assert_eq!(members[0].display_name, "test");
+                assert!(!name.is_empty());
+                seen = true;
+                break;
+            }
+        }
+        assert!(seen, "no CampaignState");
+    }
+
     // Launch a tiny craft: a pod with charge and a Terrier; it appears as a second owned vessel.
     let craft = ose_data::craft::Craft {
         name: "Tiny".into(),

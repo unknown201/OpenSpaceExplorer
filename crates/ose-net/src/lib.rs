@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 4;
+pub const PROTOCOL_VERSION: u16 = 5;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -42,6 +42,10 @@ pub enum ClientMessage {
     ClearBurn {
         vessel: u64,
     },
+    /// Join the shared campaign (ADR-0001: one co-op save). Idempotent; answers `CampaignState`.
+    JoinCampaign,
+    /// Ask for the campaign state without joining.
+    CampaignInfo,
     /// Upload a craft and put it in a circular orbit (Phase 6 replaces this with a launch pad).
     LaunchCraft {
         craft: ose_data::craft::Craft,
@@ -120,6 +124,13 @@ pub struct TrajectoryPatch {
     pub end: PatchEnd,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CampaignMember {
+    pub player_id: u64,
+    pub display_name: String,
+    pub joined_tick: Tick,
+}
+
 /// One stage of a craft's delta-v readout.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StageReadout {
@@ -165,6 +176,14 @@ pub enum ServerMessage {
         tick: Tick,
         vessel: u64,
         patches: Vec<TrajectoryPatch>,
+    },
+    /// The shared campaign: its name, when it started, who is in it, and whether you are a member.
+    CampaignState {
+        name: String,
+        started_tick: Tick,
+        members: Vec<CampaignMember>,
+        you_are_member: bool,
+        vessels: u32,
     },
     /// Answer to `LaunchCraft`. `stages` is the per-stage vacuum delta-v readout, first-firing stage first.
     CraftLaunched {

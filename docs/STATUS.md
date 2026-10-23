@@ -11,6 +11,7 @@ Updated 2026-10-23.
 - `ose-sim::vessels`: vessels on rails as entities; `update_reference_body` re-expresses the orbit around whichever body's SOI contains the vessel (escape and encounter), with tests showing the handoff keeps the star-space position continuous.
 - `ose-server` streams the universe: `/ws` session (`Hello` -> `Welcome` + `BodyCatalog`, then `TimeState` + `Snapshot` at 10 Hz with star-space position and velocity of every body, `RequestWarp` sets the warp). The Kerbol system (17 bodies, `assets/own/kerbol-system.json`) is embedded in the binary; `--bodies PATH` overrides. `crates/ose-server/tests/ws_session.rs` spawns the binary and checks the whole session. Protocol version 2 in `ose-net`.
 - `ose-sim::Universe` drives vessels: each step advances up to `warp` ticks but never past a vessel's next predicted SOI transition (the original's timescale override), then runs the SOI handoff for every vessel. `spawn_vessel`, `spawn_vessel_in_circular_orbit`, `vessel`, `predict`.
+- Campaign (protocol v5): `JoinCampaign` adds the player to the one shared campaign (idempotent) and `CampaignInfo` reads it; `CampaignState` returns name, start tick, members with join ticks, membership flag and vessel count. Membership lives in the save file.
 - Per-stage delta-v (`ose_data::staging::delta_v_by_stage`): stages fire highest id first, decouplers jettison their subtree, engines keep running until jettisoned, each stage burns until the first propellant its engines can reach over crossfeed runs out; Tsiolkovsky with thrust-weighted Isp per stage. Kerbal K2 reads 1375 + 1744 + 3081 = 6200 m/s vacuum over its three burning stages. `CraftLaunched` carries the readout (protocol v4).
 - Craft launch: `ClientMessage::LaunchCraft { craft, altitude_m }` validates the craft against the embedded part catalog (`assets/own/parts-catalog.json`, 400 parts without drag cubes and raw modules, plus `resources.json`), answers `CraftLaunched` with part count, dry and wet mass and a whole-craft vacuum delta-v estimate, and spawns the craft as an owned vessel in a circular orbit (a launch pad replaces this in Phase 6). Session test launches a pod plus Terrier.
 - Universe save: time, warp and every vessel (owner, orbit elements, scheduled burn) are written to `--save ose-save.json` every `--save-interval-s` (30 s) and restored at startup, so a server restart keeps the campaign; `--save none` disables. Tested: restart with the same db and save file keeps the player, their single probe, the advanced time and the scheduled burn.
@@ -57,6 +58,7 @@ Live at https://ose.jfly.dev/ (home network and Tailscale). A push to `main` bui
 ## Next (Phase 1, remaining)
 
 - Extract the shipped `PhysicsSettings` asset (drag curves, joint constants) so the sim loads them from data.
+- Campaign content: missions and the tech tree from the imported JSON, science.
 - Phase 5/6 server side: vessels built from the craft tree in the sim (parts, containers, flow graph per `docs/reference-notes/resource-flow.md`), finite burns consuming propellant with staging, then the rapier physics bubble.
 - Convert the scaled-space planet meshes and textures to glTF/KTX2 for Phase 3.
 
