@@ -32,3 +32,4 @@ assets/ksp2/
 dist/
 ose.db*
 ose-save.json*
+ose-accounts.json*

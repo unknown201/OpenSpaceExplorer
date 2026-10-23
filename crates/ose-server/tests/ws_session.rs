@@ -312,7 +312,7 @@ async fn hello(ws: &mut Ws, token: Option<String>, name: &str) -> (u64, String) 
 async fn restart_keeps_time_vessels_and_burns() {
     let dir = std::env::temp_dir().join(format!("ose-save-test-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let db = dir.join("ose.db");
+    let db = dir.join("accounts.json");
     let save = dir.join("save.json");
     let args = [
         "--db",

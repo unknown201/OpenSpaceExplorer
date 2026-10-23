@@ -47,8 +47,8 @@ struct Args {
     /// JSON array of `ose_data::CelestialBody` to use instead of the embedded Kerbol system.
     #[arg(long)]
     bodies: Option<PathBuf>,
-    /// SQLite file for player accounts (resume tokens); `:memory:` keeps nothing.
-    #[arg(long, default_value = "ose.db")]
+    /// JSON file for player accounts (resume tokens); `:memory:` keeps nothing.
+    #[arg(long, default_value = "ose-accounts.json")]
     db: PathBuf,
     /// Universe save file (time, warp, vessels); loaded at start, written periodically. `none` disables.
     #[arg(long, default_value = "ose-save.json")]
