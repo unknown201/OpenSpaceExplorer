@@ -53,6 +53,21 @@ struct Shared {
     next_player: AtomicU64,
     /// Vessel entity -> (vessel id, owner player id).
     vessels: Mutex<Vec<(bevy_ecs::entity::Entity, u64, Option<u64>)>>,
+    /// Warp each connected player is willing to run at; the universe runs at the minimum (lowest wins).
+    warp_requests: Mutex<std::collections::HashMap<u64, u32>>,
+}
+
+/// Apply lowest-wins warp arbitration. Returns (effective warp, the player holding it down, if any).
+fn apply_warp(s: &Shared) -> (u32, Option<u64>) {
+    let reqs = s.warp_requests.lock().expect("warp lock");
+    let (warp, holder) = match reqs.iter().min_by_key(|(_, &w)| w) {
+        Some((&p, &w)) => (w, Some(p)),
+        None => (1, None),
+    };
+    let max = reqs.values().copied().max().unwrap_or(1);
+    drop(reqs);
+    s.universe.lock().expect("sim lock").set_warp(warp);
+    (warp, if max > warp { holder } else { None })
 }
 
 fn elements(o: &ose_math::Orbit) -> OrbitElements {
@@ -116,6 +131,7 @@ async fn main() -> anyhow::Result<()> {
         catalog,
         next_player: AtomicU64::new(1),
         vessels: Mutex::new(Vec::new()),
+        warp_requests: Mutex::new(std::collections::HashMap::new()),
     });
 
     let sim = shared.clone();
@@ -226,9 +242,9 @@ fn trajectories(s: &Shared) -> Vec<ServerMessage> {
 }
 
 fn snapshot(s: &Shared) -> (ServerMessage, ServerMessage, ServerMessage) {
+    let (warp, warp_limited_by) = apply_warp(s);
     let u = s.universe.lock().expect("sim lock");
     let tick = u.tick();
-    let warp = u.warp();
     let ut = tick.seconds();
     let bodies = s
         .catalog
@@ -245,7 +261,7 @@ fn snapshot(s: &Shared) -> (ServerMessage, ServerMessage, ServerMessage) {
         ServerMessage::TimeState {
             tick,
             warp,
-            warp_limited_by: None,
+            warp_limited_by,
         },
         ServerMessage::Snapshot { tick, bodies },
         vessels_message(s, &u, tick),
@@ -316,6 +332,7 @@ async fn session(mut socket: WebSocket, s: AppState) {
                             return;
                         }
                         spawn_player_probe(&s, id, &display_name);
+                        s.warp_requests.lock().expect("warp lock").insert(id, 1);
                         break id;
                     }
                     Ok(_) => {
@@ -374,8 +391,9 @@ async fn session(mut socket: WebSocket, s: AppState) {
                     Some(Ok(Message::Binary(b))) => match ose_net::decode::<ClientMessage>(&b) {
                         Ok(ClientMessage::RequestWarp { factor }) => {
                             let f = factor.clamp(1, 10_000_000);
-                            s.universe.lock().expect("sim lock").set_warp(f);
-                            tracing::info!(player = player_id, warp = f, "warp set");
+                            s.warp_requests.lock().expect("warp lock").insert(player_id, f);
+                            let (eff, _) = apply_warp(&s);
+                            tracing::info!(player = player_id, requested = f, effective = eff, "warp request");
                         }
                         Ok(ClientMessage::Ping { sent_tick }) => {
                             if !send(&mut socket, &ServerMessage::Pong { sent_tick }).await { break; }
@@ -413,5 +431,10 @@ async fn session(mut socket: WebSocket, s: AppState) {
             }
         }
     }
+    s.warp_requests
+        .lock()
+        .expect("warp lock")
+        .remove(&player_id);
+    apply_warp(&s);
     tracing::info!(player = player_id, "player left");
 }

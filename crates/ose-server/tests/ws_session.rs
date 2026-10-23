@@ -201,4 +201,55 @@ async fn hello_catalog_and_snapshots() {
         }
     }
     assert!(seen, "warp 100 never streamed");
+
+    // A second player who has not asked for warp holds it at 1 (lowest wins) and is named as the limiter;
+    // when they leave, warp returns to 100.
+    let (mut ws2, _) = tokio_tungstenite::connect_async(format!("ws://{addr}{WS_PATH}"))
+        .await
+        .expect("connect 2");
+    let hello2 = ClientMessage::Hello {
+        protocol: PROTOCOL_VERSION,
+        token: None,
+        display_name: "second".into(),
+    };
+    ws2.send(Message::Binary(ose_net::encode(&hello2).unwrap().into()))
+        .await
+        .unwrap();
+    let ServerMessage::Welcome { player_id: p2, .. } = recv(&mut ws2).await else {
+        panic!("expected Welcome 2")
+    };
+    let mut limited = false;
+    for _ in 0..40 {
+        if let ServerMessage::TimeState {
+            warp,
+            warp_limited_by,
+            ..
+        } = recv(&mut ws).await
+        {
+            if warp == 1 && warp_limited_by == Some(p2) {
+                limited = true;
+                break;
+            }
+        }
+    }
+    assert!(limited, "second player did not hold warp down");
+    drop(ws2);
+    let mut restored = false;
+    for _ in 0..60 {
+        if let ServerMessage::TimeState {
+            warp,
+            warp_limited_by,
+            ..
+        } = recv(&mut ws).await
+        {
+            if warp == 100 && warp_limited_by.is_none() {
+                restored = true;
+                break;
+            }
+        }
+    }
+    assert!(
+        restored,
+        "warp did not return to 100 after the second player left"
+    );
 }
