@@ -6,7 +6,7 @@
 
 use crate::DVec3;
 use serde::{Deserialize, Serialize};
-use std::f64::consts::{PI, TAU};
+use std::f64::consts::TAU;
 
 /// Classical elements plus the epoch they are valid at.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -365,6 +365,7 @@ fn solve_hyperbolic(m: f64, e: f64, max_error: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::f64::consts::PI;
 
     const KERBIN_MU: f64 = 3.5316e12;
 
