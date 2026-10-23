@@ -21,7 +21,9 @@ points `/opt/ose/current` at it, installs the unit the first time, restarts the 
 `/health`. The last five releases are kept.
 
 `ose-server --listen 0.0.0.0:7777 --static-dir /opt/ose/current/web` runs as the system user `ose`
-with `/var/lib/ose` as its only writable path (game state goes there).
+with `/var/lib/ose` as its working directory and only writable path. The server's state files,
+`ose-accounts.json` (accounts) and `ose-save.json` (the universe, saved every 30 s and restored on
+start), live there, outside the release folders, so they survive redeploys and rollbacks.
 
 ## The container (CT 120 `ose`, hostname `ose.lan`)
 
