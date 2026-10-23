@@ -11,3 +11,6 @@ clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 ose-data = { workspace = true }
+ose-math = { workspace = true }
+json5 = { workspace = true }
+

@@ -1,31 +1,46 @@
-//! Imports data and placeholder assets from the local KSP2 install into `assets/ksp2/`.
+//! Imports data from the extracted KSP2 JSON (`tools/extract_bundles.py`) into our own schema.
 //!
-//! Phase 0: reads the Addressables catalog and reports what it finds. Extraction of bundle contents is done by
-//! `tools/extract_bundles.py` (UnityPy), which this binary will drive in Phase 1.
+//! ```text
+//! cargo run -p ose-importer -- --data assets/ksp2/data --out assets/ksp2/converted
+//! ```
+//! Writes `game_data.json` and `coverage.txt` (unmapped source fields) into `--out`.
 
 use anyhow::Context;
 use clap::Parser;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
+#[command(name = "ose-importer")]
 struct Args {
-    /// Root of the KSP2 install.
-    #[arg(
-        long,
-        default_value = r"C:\Program Files (x86)\Steam\steamapps\common\Kerbal Space Program 2"
-    )]
-    install: PathBuf,
+    /// Extracted data directory (output of tools/extract_bundles.py).
+    #[arg(long, default_value = "assets/ksp2/data")]
+    data: PathBuf,
+    /// Where to write the converted data.
+    #[arg(long, default_value = "assets/ksp2/converted")]
+    out: PathBuf,
 }
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    let catalog = args
-        .install
-        .join("KSP2_x64_Data/StreamingAssets/aa/catalog.json");
-    let text = std::fs::read_to_string(&catalog)
-        .with_context(|| format!("reading {}", catalog.display()))?;
-    let v: serde_json::Value = serde_json::from_str(&text)?;
-    let ids = v["m_InternalIds"].as_array().map(|a| a.len()).unwrap_or(0);
-    println!("catalog: {} internal ids", ids);
+    let mut cov = ose_importer::Coverage::default();
+    let game = ose_importer::import_dir(&args.data, &mut cov)
+        .with_context(|| format!("importing {}", args.data.display()))?;
+    std::fs::create_dir_all(&args.out)?;
+    std::fs::write(
+        args.out.join("game_data.json"),
+        serde_json::to_string_pretty(&game)?,
+    )?;
+    std::fs::write(args.out.join("coverage.txt"), cov.report())?;
+    println!(
+        "bodies={} resources={} parts={} engines={} -> {}",
+        game.bodies.len(),
+        game.resources.len(),
+        game.parts.len(),
+        game.parts.iter().map(|p| p.engines.len()).sum::<usize>(),
+        args.out.display()
+    );
+    for w in &cov.warnings {
+        println!("warning: {w}");
+    }
     Ok(())
 }

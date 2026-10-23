@@ -51,10 +51,13 @@ def main() -> int:
             d = obj.read()
             name = d.m_Name
             fname = name if name.lower().endswith(".json") else name + ".json"
-            if fname.lower() not in keyset:
+            hashed = len(bundle) == 39 and bundle[:32].isalnum() and "_" not in bundle
+            if hashed and fname.lower() not in keyset:
                 continue
             raw = d.m_Script
             text = raw if isinstance(raw, str) else bytes(raw).decode("utf-8", "replace")
+            if not text.lstrip().startswith(("{", "[")):
+                continue
             dest = out / group_for(fname, bundle) / fname
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(text, encoding="utf-8")
