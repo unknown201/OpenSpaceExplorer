@@ -44,9 +44,31 @@ impl Universe {
         let mut world = World::new();
         world.insert_resource(UniverseTime::default());
         world.insert_resource(WarpFactor::default());
+        world.insert_resource(bodies::BodyIndex::default());
         let mut schedule = Schedule::default();
         schedule.add_systems(advance_tick);
         Self { world, schedule }
+    }
+
+    /// A universe with the given celestial bodies spawned.
+    pub fn with_bodies(defs: &[ose_data::CelestialBody]) -> Self {
+        let mut u = Self::new();
+        bodies::spawn_bodies(&mut u.world, defs);
+        u
+    }
+
+    pub fn warp(&self) -> u32 {
+        self.world.resource::<WarpFactor>().0
+    }
+
+    pub fn set_warp(&mut self, factor: u32) {
+        self.world.resource_mut::<WarpFactor>().0 = factor.max(1);
+    }
+
+    /// Star-space position and velocity of the body with `id` at universal time `ut` (seconds).
+    pub fn body_state(&self, id: &str, ut: f64) -> Option<(ose_math::DVec3, ose_math::DVec3)> {
+        let e = *self.world.resource::<bodies::BodyIndex>().by_id.get(id)?;
+        Some(bodies::star_space_state(&self.world, e, ut))
     }
 
     /// Advance by one simulation step (which covers `WarpFactor` ticks of universal time).

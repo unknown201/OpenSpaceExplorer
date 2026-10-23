@@ -1,0 +1,1109 @@
+[
+ {
+  "id": "Bop",
+  "display_name": "#autoLOC_910023",
+  "parent": "Jool",
+  "is_star": false,
+  "is_home_world": false,
+  "radius_m": 65000.0,
+  "gravity_asl": 0.0600204949543182,
+  "mu": 2486834944.414905,
+  "mass_kg": 3.725986162466334e+19,
+  "soi_radius_m": 1221060.862842528,
+  "rotation_period_s": 544507.43,
+  "initial_rotation_deg": 230.0,
+  "is_tidally_locked": false,
+  "has_solid_surface": true,
+  "ocean": null,
+  "orbit": {
+   "semi_major_axis_m": 128500000.0,
+   "eccentricity": 0.0235,
+   "inclination_deg": 15.0,
+   "longitude_of_ascending_node_deg": 10.0,
+   "argument_of_periapsis_deg": 25.0,
+   "mean_anomaly_at_epoch_rad": 0.9,
+   "epoch_s": 0.0
+  },
+  "atmosphere": null,
+  "star_luminosity": null
+ },
+ {
+  "id": "Dres",
+  "display_name": "#autoLOC_910043",
+  "parent": "Kerbol",
+  "is_star": false,
+  "is_home_world": false,
+  "radius_m": 138000.0,
+  "gravity_asl": 0.115039284567105,
+  "mu": 21484488600.000004,
+  "mass_kg": 3.218987549256103e+20,
+  "soi_radius_m": 32832839.57677619,
+  "rotation_period_s": 34800.0,
+  "initial_rotation_deg": 25.0,
+  "is_tidally_locked": false,
+  "has_solid_surface": true,
+  "ocean": null,
+  "orbit": {
+   "semi_major_axis_m": 40839348203.0,
+   "eccentricity": 0.145,
+   "inclination_deg": 5.0,
+   "longitude_of_ascending_node_deg": 280.0,
+   "argument_of_periapsis_deg": 90.0,
+   "mean_anomaly_at_epoch_rad": 3.14,
+   "epoch_s": 0.0
+  },
+  "atmosphere": null,
+  "star_luminosity": null
+ },
+ {
+  "id": "Duna",
+  "display_name": "#autoLOC_910045",
+  "parent": "Kerbol",
+  "is_star": false,
+  "is_home_world": false,
+  "radius_m": 320000.0,
+  "gravity_asl": 0.300102493404406,
+  "mu": 301363211975.09814,
+  "mass_kg": 4.5152781861033843e+21,
+  "soi_radius_m": 47921949.36973804,
+  "rotation_period_s": 65517.859375,
+  "initial_rotation_deg": 90.0,
+  "is_tidally_locked": false,
+  "has_solid_surface": true,
+  "ocean": null,
+  "orbit": {
+   "semi_major_axis_m": 20726155264.0,
+   "eccentricity": 0.051,
+   "inclination_deg": 0.06,
+   "longitude_of_ascending_node_deg": 135.5,
+   "argument_of_periapsis_deg": 0.0,
+   "mean_anomaly_at_epoch_rad": 3.14,
+   "epoch_s": 0.0
+  },
+  "atmosphere": {
+   "depth_m": 50000.0,
+   "contains_oxygen": false,
+   "sea_level_pressure_kpa": 6.755,
+   "sea_level_temperature_k": 250.0,
+   "molar_mass_kg_per_mol": 0.043,
+   "adiabatic_index": 1.20000004768372,
+   "pressure_curve": {
+    "keys": [
+     {
+      "t": 0.0,
+      "v": 6.755000114440918,
+      "in_tangent": 0.0,
+      "out_tangent": -0.000699999975040555
+     },
+     {
+      "t": 12000.0,
+      "v": 1.2760000228881836,
+      "in_tangent": -0.0002229999954579398,
+      "out_tangent": -0.0002229999954579398
+     },
+     {
+      "t": 20000.0,
+      "v": 0.2409999966621399,
+      "in_tangent": -4.220000118948519e-05,
+      "out_tangent": -4.220000118948519e-05
+     },
+     {
+      "t": 35000.0,
+      "v": 0.014999999664723873,
+      "in_tangent": -2.787074890875374e-06,
+      "out_tangent": -2.787074890875374e-06
+     },
+     {
+      "t": 50000.0,
+      "v": 0.0,
+      "in_tangent": 0.0,
+      "out_tangent": 0.0
+     }
+    ]
+   },
+   "temperature_curve": {
+    "keys": [
+     {
+      "t": 0.0,
+      "v": 233.0,
+      "in_tangent": 0.0,
+      "out_tangent": -0.0004261125868652016
+     },
+     {
+      "t": 1000.0,
+      "v": 232.8000030517578,
+      "in_tangent": -0.0005733249709010124,
+      "out_tangent": -0.0005733249709010124
+     },
+     {
+      "t": 25000.0,
+      "v": 153.6999969482422,
+      "in_tangent": -0.0018770829774439337,
+      "out_tangent": -0.0018770829774439337
+     },
+     {
+      "t": 30000.0,
+      "v": 150.0,
+      "in_tangent": 0.0,
+      "out_tangent": 0.0
+     },
+     {
+      "t": 45000.0,
+      "v": 150.0,
+      "in_tangent": 0.0,
+      "out_tangent": 0.0
+     },
+     {
+      "t": 50000.0,
+      "v": 160.0,
+      "in_tangent": 0.00374691397882998,
+      "out_tangent": 0.0
+     },
+     {
+      "t": 750000.0,
+      "v": 2.900000095367432,
+      "in_tangent": 0.0,
+      "out_tangent": 0.0
+     }
+    ]
+   }
+  },
+  "star_luminosity": null
+ },
+ {
+  "id": "Eeloo",
+  "display_name": "#autoLOC_910039",
+  "parent": "Kerbol",
+  "is_star": false,
+  "is_home_world": false,
+  "radius_m": 210000.0,
+  "gravity_asl": 0.172058761891442,
+  "mu": 74410814527.04948,
+  "mass_kg": 1.1148856738092308e+21,
+  "soi_radius_m": 119082941.64781179,
+  "rotation_period_s": 19460.0,
+  "initial_rotation_deg": 25.0,
+  "is_tidally_locked": false,
+  "has_solid_surface": true,
+  "ocean": null,
+  "orbit": {
+   "semi_major_axis_m": 90118820000.0,
+   "eccentricity": 0.26,
+   "inclination_deg": 6.15,
+   "longitude_of_ascending_node_deg": 50.0,
+   "argument_of_periapsis_deg": 260.0,
+   "mean_anomaly_at_epoch_rad": 3.14,
+   "epoch_s": 0.0
+  },
+  "atmosphere": null,
+  "star_luminosity": null
+ },
+ {
+  "id": "Eve",
+  "display_name": "#autoLOC_910049",
+  "parent": "Kerbol",
+  "is_star": false,
+  "is_home_world": false,
+  "radius_m": 700000.0,
+  "gravity_asl": 1.7005807760833,
+  "mu": 8171730229210.874,
+  "mass_kg": 1.2243576448782456e+23,
+  "soi_radius_m": 85109364.73824406,
+  "rotation_period_s": 80500.0,
+  "initial_rotation_deg": 0.0,
+  "is_tidally_locked": false,
+  "has_solid_surface": true,
+  "ocean": {
+   "altitude_m": 2450.0,
+   "density": 1.0
+  },
+  "orbit": {
+   "semi_major_axis_m": 9832684544.0,
+   "eccentricity": 0.01,
+   "inclination_deg": 2.1,
+   "longitude_of_ascending_node_deg": 15.0,
+   "argument_of_periapsis_deg": 0.0,
+   "mean_anomaly_at_epoch_rad": 3.14,
+   "epoch_s": 0.0
+  },
+  "atmosphere": {
+   "depth_m": 90000.0,
+   "contains_oxygen": false,
+   "sea_level_pressure_kpa": 506.625,
+   "sea_level_temperature_k": 408.0,
+   "molar_mass_kg_per_mol": 0.0430000014603138,
+   "adiabatic_index": 1.20000004768372,
+   "pressure_curve": {
+    "keys": [
+     {
+      "t": 0.0,
+      "v": 506.625,
+      "in_tangent": 0.0,
+      "out_tangent": -0.04423851892352104
+     },
+     {
+      "t": 15000.0,
+      "v": 95.68910217285156,
+      "in_tangent": -0.013049259781837463,
+      "out_tangent": -0.013049259781837463
+     },
+     {
+      "t": 25000.0,
+      "v": 18.073339462280277,
+      "in_tangent": -0.0030122229363769297,
+      "out_tangent": -0.0030122229363769297
+     },
+     {
+      "t": 40000.0,
+      "v": 3.5,
+      "in_tangent": -0.000568935414776206,
+      "out_tangent": -0.000568935414776206
+     },
+     {
+      "t": 50000.0,
+      "v": 0.12177719920873642,
+      "in_tangent": -2.0296200091252103e-05,
+      "out_tangent": -2.0296200091252103e-05
+     },
+     {
+      "t": 60000.0,
+      "v": 0.02300073951482773,
+      "in_tangent": -3.8335001590894535e-06,
+      "out_tangent": -3.8335001590894535e-06
+     },
+     {
+      "t": 70000.0,
+      "v": 0.004344278015196323,
+      "in_tangent": -7.240000172714645e-07,
+      "out_tangent": -7.240000172714645e-07
+     },
+     {
+      "t": 80000.0,
+      "v": 0.0008205283083952963,
+      "in_tangent": -1.3679999710802806e-07,
+      "out_tangent": -1.3679999710802806e-07
+     },
+     {
+      "t": 90000.0,
+      "v": 0.0,
+      "in_tangent": -2.5800000358344736e-08,
+      "out_tangent": 0.0
+     }
+    ]
+   },
+   "temperature_curve": {
+    "keys": [
+     {
+      "t": 0.0,
+      "v": 420.0,
+      "in_tangent": 0.0,
+      "out_tangent": -0.010293380357325075
+     },
+     {
+      "t": 15000.0,
+      "v": 280.0,
+      "in_tangent": -0.004705438856035471,
+      "out_tangent": -0.004705438856035471
+     },
+     {
+      "t": 50000.0,
+      "v": 180.0,
+      "in_tangent": 0.0,
+      "out_tangent": 0.0
+     },
+     {
+      "t": 60000.0,
+      "v": 190.0,
+      "in_tangent": 0.0,
+      "out_tangent": 0.0
+     },
+     {
+      "t": 70000.0,
+      "v": 160.0,
+      "in_tangent": 0.0,
+      "out_tangent": 0.0
+     },
+     {
+      "t": 90000.0,
+      "v": 250.0,
+      "in_tangent": 0.005894588772207499,
+      "out_tangent": 0.0
+     },
+     {
+      "t": 11137180.0,
+      "v": 2.900000095367432,
+      "in_tangent": 0.0,
+      "out_tangent": 0.0
+     }
+    ]
+   }
+  },
+  "star_luminosity": null
+ },
+ {
+  "id": "Gilly",
+  "display_name": "",
+  "parent": "Eve",
+  "is_star": false,
+  "is_home_world": false,
+  "radius_m": 13000.0,
+  "gravity_asl": 0.004995,
+  "mu": 8278332.63075,
+  "mass_kg": 1.240329717086436e+17,
+  "soi_radius_m": 126055.58566118951,
+  "rotation_period_s": 28255.0,
+  "initial_rotation_deg": 0.0,
+  "is_tidally_locked": false,
+  "has_solid_surface": true,
+  "ocean": {
+   "altitude_m": 0.0,
+   "density": 1.0
+  },
+  "orbit": {
+   "semi_major_axis_m": 31500000.0,
+   "eccentricity": 0.55,
+   "inclination_deg": 12.0,
+   "longitude_of_ascending_node_deg": 80.0,
+   "argument_of_periapsis_deg": 10.0,
+   "mean_anomaly_at_epoch_rad": 0.9,
+   "epoch_s": 0.0
+  },
+  "atmosphere": null,
+  "star_luminosity": null
+ },
+ {
+  "id": "Ike",
+  "display_name": "",
+  "parent": "Duna",
+  "is_star": false,
+  "is_home_world": false,
+  "radius_m": 130000.0,
+  "gravity_asl": 0.1121305,
+  "mu": 18583655196.2425,
+  "mass_kg": 2.7843601870222347e+20,
+  "soi_radius_m": 1049944.4917459097,
+  "rotation_period_s": 65517.862,
+  "initial_rotation_deg": 0.0,
+  "is_tidally_locked": false,
+  "has_solid_surface": true,
+  "ocean": {
+   "altitude_m": 0.0,
+   "density": 1.0
+  },
+  "orbit": {
+   "semi_major_axis_m": 3200000.0,
+   "eccentricity": 0.03,
+   "inclination_deg": 0.2,
+   "longitude_of_ascending_node_deg": 0.0,
+   "argument_of_periapsis_deg": 0.0,
+   "mean_anomaly_at_epoch_rad": 1.7,
+   "epoch_s": 0.0
+  },
+  "atmosphere": null,
+  "star_luminosity": null
+ },
+ {
+  "id": "Jool",
+  "display_name": "#autoLOC_910041",
+  "parent": "Kerbol",
+  "is_star": false,
+  "is_home_world": false,
+  "radius_m": 6000000.0,
+  "gravity_asl": 0.800273295870079,
+  "mu": 282528004209995.2,
+  "mass_kg": 4.233073194342406e+24,
+  "soi_radius_m": 2455985185.4234676,
+  "rotation_period_s": 36000.0,
+  "initial_rotation_deg": 0.0,
+  "is_tidally_locked": false,
+  "has_solid_surface": false,
+  "ocean": null,
+  "orbit": {
+   "semi_major_axis_m": 68773560320.0,
+   "eccentricity": 0.05,
+   "inclination_deg": 1.304,
+   "longitude_of_ascending_node_deg": 52.0,
+   "argument_of_periapsis_deg": 0.0,
+   "mean_anomaly_at_epoch_rad": 0.1,
+   "epoch_s": 0.0
+  },
+  "atmosphere": {
+   "depth_m": 200000.0,
+   "contains_oxygen": false,
+   "sea_level_pressure_kpa": 1519.875,
+   "sea_level_temperature_k": 200.0,
+   "molar_mass_kg_per_mol": 0.0022,
+   "adiabatic_index": 1.43,
+   "pressure_curve": {
+    "keys": [
+     {
+      "t": 0.0,
+      "v": 5066.25,
+      "in_tangent": 0.0,
+      "out_tangent": -0.6723967790603638
+     },
+     {
+      "t": 10000.0,
+      "v": 1519.875,
+      "in_tangent": -0.13465869426727295,
+      "out_tangent": -0.13465869426727295
+     },
+     {
+      "t": 29000.0,
+      "v": 628.0435791015625,
+      "in_tangent": -0.014492549933493137,
+      "out_tangent": -0.014492549933493137
+     },
+     {
+      "t": 123450.0,
+      "v": 22.260000228881836,
+      "in_tangent": -0.0015621630009263754,
+      "out_tangent": -0.0015621630009263754
+     },
+     {
+      "t": 150000.0,
+      "v": 2.0,
+      "in_tangent": -0.00013614649651572108,
+      "out_tangent": -0.00013614649651572108
+     },
+     {
+      "t": 170000.0,
+      "v": 0.10000000149011612,
+      "in_tangent": -1.0012769962486344e-05,
+      "out_tangent": -1.0012769962486344e-05
+     },
+     {
+      "t": 200000.0,
+      "v": 0.0,
+      "in_tangent": 0.0,
+      "out_tangent": 0.0
+     }
+    ]
+   },
+   "temperature_curve": {
+    "keys": [
+     {
+      "t": 0.0,
+      "v": 200.0,
+      "in_tangent": 0.0,
+      "out_tangent": -0.001182922045700252
+     },
+     {
+      "t": 29000.0,
+      "v": 165.0,
+      "in_tangent": -0.001207277993671596,
+      "out_tangent": -0.001207277993671596
+     },
+     {
+      "t": 123450.0,
+      "v": 120.0,
+      "in_tangent": 0.0,
+      "out_tangent": 0.0
+     },
+     {
+      "t": 168000.0,
+      "v": 160.0,
+      "in_tangent": 0.0009967944351956248,
+      "out_tangent": 0.0009967944351956248
+     },
+     {
+      "t": 187500.0,
+      "v": 175.0,
+      "in_tangent": 0.0,
+      "out_tangent": 0.0
+     },
+     {
+      "t": 194000.0,
+      "v": 167.0,
+      "in_tangent": 0.0,
+      "out_tangent": 0.0
+     },
+     {
+      "t": 200000.0,
+      "v": 350.0,
+      "in_tangent": 0.08717471361160278,
+      "out_tangent": 0.0
+     },
+     {
+      "t": 10000000.0,
+      "v": 2.900000095367432,
+      "in_tangent": 0.0,
+      "out_tangent": 0.0
+     }
+    ]
+   }
+  },
+  "star_luminosity": null
+ },
+ {
+  "id": "Kerbin",
+  "display_name": "#autoLOC_910048",
+  "parent": "Kerbol",
+  "is_star": false,
+  "is_home_world": true,
+  "radius_m": 600000.0,
+  "gravity_asl": 1.00034160493135,
+  "mu": 3531600000000.0083,
+  "mass_kg": 5.291341414080891e+22,
+  "soi_radius_m": 84159286.47963054,
+  "rotation_period_s": 21549.425,
+  "initial_rotation_deg": 90.0,
+  "is_tidally_locked": false,
+  "has_solid_surface": true,
+  "ocean": {
+   "altitude_m": 4270.0,
+   "density": 1.0
+  },
+  "orbit": {
+   "semi_major_axis_m": 13599840256.0,
+   "eccentricity": 0.0,
+   "inclination_deg": 0.0,
+   "longitude_of_ascending_node_deg": 0.0,
+   "argument_of_periapsis_deg": 0.0,
+   "mean_anomaly_at_epoch_rad": 3.14,
+   "epoch_s": 0.0
+  },
+  "atmosphere": {
+   "depth_m": 70000.0,
+   "contains_oxygen": true,
+   "sea_level_pressure_kpa": 101.324996948242,
+   "sea_level_temperature_k": 287.0,
+   "molar_mass_kg_per_mol": 0.0289644002914429,
+   "adiabatic_index": 1.39999997615814,
+   "pressure_curve": {
+    "keys": [
+     {
+      "t": 0.0,
+      "v": 101.3249969482422,
+      "in_tangent": 0.0,
+      "out_tangent": -0.015016309916973114
+     },
+     {
+      "t": 1241.0250244140625,
+      "v": 84.02915954589844,
+      "in_tangent": -0.012898460030555723,
+      "out_tangent": -0.012898259796202185
+     },
+     {
+      "t": 2439.593017578125,
+      "v": 69.68138122558594,
+      "in_tangent": -0.011078760027885435,
+      "out_tangent": -0.011078589595854284
+     },
+     {
+      "t": 3597.110107421875,
+      "v": 57.78001022338867,
+      "in_tangent": -0.009515482932329178,
+      "out_tangent": -0.009515337646007538
+     },
+     {
+      "t": 4714.94189453125,
+      "v": 47.90861892700195,
+      "in_tangent": -0.008172539994120598,
+      "out_tangent": -0.0081724151968956
+     },
+     {
+      "t": 5794.4091796875,
+      "v": 39.72148132324219,
+      "in_tangent": -0.007018920034170151,
+      "out_tangent": -0.00701881293207407
+     },
+     {
+      "t": 6836.791015625,
+      "v": 32.93169021606445,
+      "in_tangent": -0.006027969066053629,
+      "out_tangent": -0.006027876865118742
+     },
+     {
+      "t": 7843.328125,
+      "v": 27.301090240478516,
+      "in_tangent": -0.0051767779514193535,
+      "out_tangent": -0.005176700185984373
+     },
+     {
+      "t": 8815.2197265625,
+      "v": 22.63205909729004,
+      "in_tangent": -0.004445661790668964,
+      "out_tangent": -0.004445577971637249
+     },
+     {
+      "t": 10786.419921875,
+      "v": 15.368399620056152,
+      "in_tangent": -0.0030165279749780898,
+      "out_tangent": -0.0030164599884301424
+     },
+     {
+      "t": 12101.400390625,
+      "v": 11.873129844665527,
+      "in_tangent": -0.0023292729165405035,
+      "out_tangent": -0.002329220063984394
+     },
+     {
+      "t": 13417.0498046875,
+      "v": 9.172798156738281,
+      "in_tangent": -0.0017985940212383868,
+      "out_tangent": -0.0017985539743676782
+     },
+     {
+      "t": 16678.470703125,
+      "v": 4.842260837554932,
+      "in_tangent": -0.000944853702094406,
+      "out_tangent": -0.0009448318742215632
+     },
+     {
+      "t": 21143.099609375,
+      "v": 2.050096988677979,
+      "in_tangent": -0.00038940951344557106,
+      "out_tangent": -0.0003894004912581295
+     },
+     {
+      "t": 26977.919921875,
+      "v": 0.690592885017395,
+      "in_tangent": -0.0001252564979949966,
+      "out_tangent": -0.00012525339843705297
+     },
+     {
+      "t": 33593.8203125,
+      "v": 0.2201734036207199,
+      "in_tangent": -3.626877878559753e-05,
+      "out_tangent": -3.626788020483218e-05
+     },
+     {
+      "t": 42081.87109375,
+      "v": 0.05768468976020813,
+      "in_tangent": -9.063159268407617e-06,
+      "out_tangent": -9.062974640983155e-06
+     },
+     {
+      "t": 49312.12890625,
+      "v": 0.01753794029355049,
+      "in_tangent": -3.029397021236946e-06,
+      "out_tangent": -3.02933494822355e-06
+     },
+     {
+      "t": 56669.94921875,
+      "v": 0.004591824021190405,
+      "in_tangent": -8.827174724501674e-07,
+      "out_tangent": -8.826996236166451e-07
+     },
+     {
+      "t": 62300.83984375,
+      "v": 0.0014970720512792468,
+      "in_tangent": -3.0770908665545e-07,
+      "out_tangent": -3.077030896747601e-07
+     },
+     {
+      "t": 70000.0,
+      "v": 0.0,
+      "in_tangent": 0.0,
+      "out_tangent": 0.0
+     }
+    ]
+   },
+   "temperature_curve": {
+    "keys": [
+     {
+      "t": 0.0,
+      "v": 288.1499938964844,
+      "in_tangent": 0.0,
+      "out_tangent": -0.008124999701976776
+     },
+     {
+      "t": 8815.2197265625,
+      "v": 216.6499938964844,
+      "in_tangent": -0.008096967823803425,
+      "out_tangent": 0.0
+     },
+     {
+      "t": 10001.0,
+      "v": 186.9459991455078,
+      "in_tangent": 0.0,
+      "out_tangent": 0.0
+     },
+     {
+      "t": 16050.3896484375,
+      "v": 216.6499938964844,
+      "in_tangent": 0.0,
+      "out_tangent": 0.0012421640567481518
+     },
+     {
+      "t": 25729.23046875,
+      "v": 228.6499938964844,
+      "in_tangent": 0.0012374749640002849,
+      "out_tangent": 0.00346492906101048
+     },
+     {
+      "t": 37879.44140625,
+      "v": 270.6499938964844,
+      "in_tangent": 0.0034485498908907175,
+      "out_tangent": 0.0
+     },
+     {
+      "t": 41129.23828125,
+      "v": 270.6499938964844,
+      "in_tangent": 0.0,
+      "out_tangent": -0.003444188972935081
+     },
+     {
+      "t": 57440.12890625,
+      "v": 214.6499938964844,
+      "in_tangent": -0.0034224248956888914,
+      "out_tangent": -0.002444589044898749
+     },
+     {
+      "t": 68797.8828125,
+      "v": 186.9459991455078,
+      "in_tangent": -0.002433850895613432,
+      "out_tangent": 0.0
+     },
+     {
+      "t": 140001.0,
+      "v": 2.900000095367432,
+      "in_tangent": 0.0,
+      "out_tangent": 0.0
+     }
+    ]
+   }
+  },
+  "star_luminosity": null
+ },
+ {
+  "id": "Kerbol",
+  "display_name": "#autoLOC_910053",
+  "parent": null,
+  "is_star": true,
+  "is_home_world": false,
+  "radius_m": 261600000.0,
+  "gravity_asl": 1.74684656100137,
+  "mu": 1.1723327948324918e+18,
+  "mass_kg": 1.7564880134733108e+28,
+  "soi_radius_m": null,
+  "rotation_period_s": 432000.0,
+  "initial_rotation_deg": 0.0,
+  "is_tidally_locked": false,
+  "has_solid_surface": false,
+  "ocean": null,
+  "orbit": null,
+  "atmosphere": null,
+  "star_luminosity": 3.06e+24
+ },
+ {
+  "id": "Laythe",
+  "display_name": "#autoLOC_910029",
+  "parent": "Jool",
+  "is_star": false,
+  "is_home_world": false,
+  "radius_m": 500000.0,
+  "gravity_asl": 0.800273295870079,
+  "mu": 1962000029236.0776,
+  "mass_kg": 2.939634162737782e+22,
+  "soi_radius_m": 3723645.8111330215,
+  "rotation_period_s": 52980.879,
+  "initial_rotation_deg": 90.0,
+  "is_tidally_locked": true,
+  "has_solid_surface": true,
+  "ocean": {
+   "altitude_m": 14986.0,
+   "density": 1.0
+  },
+  "orbit": {
+   "semi_major_axis_m": 27184000.0,
+   "eccentricity": 0.0,
+   "inclination_deg": 0.0,
+   "longitude_of_ascending_node_deg": 0.0,
+   "argument_of_periapsis_deg": 0.0,
+   "mean_anomaly_at_epoch_rad": 3.14,
+   "epoch_s": 0.0
+  },
+  "atmosphere": {
+   "depth_m": 50000.0,
+   "contains_oxygen": true,
+   "sea_level_pressure_kpa": 60.795,
+   "sea_level_temperature_k": 282.0,
+   "molar_mass_kg_per_mol": 0.0289644002914429,
+   "adiabatic_index": 1.39999997615814,
+   "pressure_curve": {
+    "keys": [
+     {
+      "t": 0.0,
+      "v": 60.79499816894531,
+      "in_tangent": 0.0,
+      "out_tangent": -0.005216383840888739
+     },
+     {
+      "t": 5250.0,
+      "v": 33.40898132324219,
+      "in_tangent": -0.004252710845321417,
+      "out_tangent": -0.004252710845321417
+     },
+     {
+      "t": 10000.0,
+      "v": 17.78605079650879,
+      "in_tangent": -0.002407767111435533,
+      "out_tangent": -0.002407767111435533
+     },
+     {
+      "t": 17000.0,
+      "v": 7.100576877593994,
+      "in_tangent": -0.0010920639615505934,
+      "out_tangent": -0.0010920639615505934
+     },
+     {
+      "t": 22000.0,
+      "v": 3.8124210834503174,
+      "in_tangent": -0.0004677010874729603,
+      "out_tangent": -0.0004677010874729603
+     },
+     {
+      "t": 31000.0,
+      "v": 1.312481999397278,
+      "in_tangent": -0.00019617669750005007,
+      "out_tangent": -0.00019617669750005007
+     },
+     {
+      "t": 38000.0,
+      "v": 0.5104054808616638,
+      "in_tangent": -7.85580778028816e-05,
+      "out_tangent": -7.85580778028816e-05
+     },
+     {
+      "t": 50000.0,
+      "v": 0.0,
+      "in_tangent": 0.0,
+      "out_tangent": 0.0
+     }
+    ]
+   },
+   "temperature_curve": {
+    "keys": [
+     {
+      "t": 0.0,
+      "v": 277.0,
+      "in_tangent": 0.0,
+      "out_tangent": -0.00928571354597807
+     },
+     {
+      "t": 5250.0,
+      "v": 206.0,
+      "in_tangent": -0.009253676980733871,
+      "out_tangent": 0.0
+     },
+     {
+      "t": 10000.0,
+      "v": 206.0,
+      "in_tangent": 0.0,
+      "out_tangent": 0.0014196160482242703
+     },
+     {
+      "t": 17000.0,
+      "v": 217.8000030517578,
+      "in_tangent": 0.0014142569852992892,
+      "out_tangent": 0.003959918860346079
+     },
+     {
+      "t": 22000.0,
+      "v": 235.5,
+      "in_tangent": 0.003941200207918882,
+      "out_tangent": -0.00025815420667640865
+     },
+     {
+      "t": 31000.0,
+      "v": 203.0,
+      "in_tangent": -0.003911342937499285,
+      "out_tangent": -0.0007623208803124726
+     },
+     {
+      "t": 38000.0,
+      "v": 199.0,
+      "in_tangent": 0.0,
+      "out_tangent": 0.001478428952395916
+     },
+     {
+      "t": 50000.0,
+      "v": 214.0,
+      "in_tangent": 0.0,
+      "out_tangent": 0.0
+     },
+     {
+      "t": 7955129.0,
+      "v": 2.900000095367432,
+      "in_tangent": 0.0,
+      "out_tangent": 0.0
+     }
+    ]
+   }
+  },
+  "star_luminosity": null
+ },
+ {
+  "id": "Minmus",
+  "display_name": "#autoLOC_910033",
+  "parent": "Kerbin",
+  "is_star": false,
+  "is_home_world": false,
+  "radius_m": 60000.0,
+  "gravity_asl": 0.05001708099188,
+  "mu": 1765800026.3124719,
+  "mass_kg": 2.645670746464007e+19,
+  "soi_radius_m": 2247428.387902302,
+  "rotation_period_s": 40400.0,
+  "initial_rotation_deg": 230.0,
+  "is_tidally_locked": false,
+  "has_solid_surface": true,
+  "ocean": null,
+  "orbit": {
+   "semi_major_axis_m": 47000000.0,
+   "eccentricity": 0.0,
+   "inclination_deg": 6.0,
+   "longitude_of_ascending_node_deg": 78.0,
+   "argument_of_periapsis_deg": 38.0,
+   "mean_anomaly_at_epoch_rad": 0.9,
+   "epoch_s": 0.0
+  },
+  "atmosphere": null,
+  "star_luminosity": null
+ },
+ {
+  "id": "Moho",
+  "display_name": "",
+  "parent": "Kerbol",
+  "is_star": false,
+  "is_home_world": false,
+  "radius_m": 250000.0,
+  "gravity_asl": 0.27523,
+  "mu": 168692767468.74997,
+  "mass_kg": 2.52749752736242e+21,
+  "soi_radius_m": 9648571.112845033,
+  "rotation_period_s": 1210000.0,
+  "initial_rotation_deg": 0.0,
+  "is_tidally_locked": false,
+  "has_solid_surface": true,
+  "ocean": {
+   "altitude_m": 0.0,
+   "density": 1.0
+  },
+  "orbit": {
+   "semi_major_axis_m": 5263138304.0,
+   "eccentricity": 0.2,
+   "inclination_deg": 7.0,
+   "longitude_of_ascending_node_deg": 70.0,
+   "argument_of_periapsis_deg": 15.0,
+   "mean_anomaly_at_epoch_rad": 3.14,
+   "epoch_s": 0.0
+  },
+  "atmosphere": null,
+  "star_luminosity": null
+ },
+ {
+  "id": "Mun",
+  "display_name": "#autoLOC_910035",
+  "parent": "Kerbin",
+  "is_star": false,
+  "is_home_world": false,
+  "radius_m": 200000.0,
+  "gravity_asl": 0.166056700098353,
+  "mu": 65138397520.780525,
+  "mass_kg": 9.759584903402683e+20,
+  "soi_radius_m": 2429559.116564742,
+  "rotation_period_s": 100.0,
+  "initial_rotation_deg": 230.0,
+  "is_tidally_locked": true,
+  "has_solid_surface": true,
+  "ocean": null,
+  "orbit": {
+   "semi_major_axis_m": 12000000.0,
+   "eccentricity": 0.0,
+   "inclination_deg": 0.0,
+   "longitude_of_ascending_node_deg": 0.0,
+   "argument_of_periapsis_deg": 0.0,
+   "mean_anomaly_at_epoch_rad": 1.7,
+   "epoch_s": 0.0
+  },
+  "atmosphere": null,
+  "star_luminosity": null
+ },
+ {
+  "id": "Pol",
+  "display_name": "#autoLOC_910021",
+  "parent": "Jool",
+  "is_star": false,
+  "is_home_world": false,
+  "radius_m": 44000.0,
+  "gravity_asl": 0.0380129809873912,
+  "mu": 721702079.9999999,
+  "mass_kg": 1.0813150143086166e+19,
+  "soi_radius_m": 1042138.8923017806,
+  "rotation_period_s": 901902.62,
+  "initial_rotation_deg": 0.0,
+  "is_tidally_locked": false,
+  "has_solid_surface": true,
+  "ocean": null,
+  "orbit": {
+   "semi_major_axis_m": 179890000.0,
+   "eccentricity": 0.17085,
+   "inclination_deg": 4.25,
+   "longitude_of_ascending_node_deg": 2.0,
+   "argument_of_periapsis_deg": 15.0,
+   "mean_anomaly_at_epoch_rad": 0.9,
+   "epoch_s": 0.0
+  },
+  "atmosphere": null,
+  "star_luminosity": null
+ },
+ {
+  "id": "Tylo",
+  "display_name": "#autoLOC_910025",
+  "parent": "Jool",
+  "is_star": false,
+  "is_home_world": false,
+  "radius_m": 600000.0,
+  "gravity_asl": 0.800273295870079,
+  "mu": 2825280042099.9517,
+  "mass_kg": 4.233073194342406e+22,
+  "soi_radius_m": 10856518.368358627,
+  "rotation_period_s": 100.0,
+  "initial_rotation_deg": 0.0,
+  "is_tidally_locked": true,
+  "has_solid_surface": true,
+  "ocean": null,
+  "orbit": {
+   "semi_major_axis_m": 68500000.0,
+   "eccentricity": 0.0,
+   "inclination_deg": 0.025,
+   "longitude_of_ascending_node_deg": 0.0,
+   "argument_of_periapsis_deg": 0.0,
+   "mean_anomaly_at_epoch_rad": 3.14,
+   "epoch_s": 0.0
+  },
+  "atmosphere": null,
+  "star_luminosity": null
+ },
+ {
+  "id": "Vall",
+  "display_name": "#autoLOC_910027",
+  "parent": "Jool",
+  "is_star": false,
+  "is_home_world": false,
+  "radius_m": 300000.0,
+  "gravity_asl": 0.235080276562617,
+  "mu": 207481499473.75095,
+  "mass_kg": 3.108663072887808e+21,
+  "soi_radius_m": 2406401.4447940406,
+  "rotation_period_s": 100.0,
+  "initial_rotation_deg": 0.0,
+  "is_tidally_locked": true,
+  "has_solid_surface": true,
+  "ocean": null,
+  "orbit": {
+   "semi_major_axis_m": 43152000.0,
+   "eccentricity": 0.0,
+   "inclination_deg": 0.0,
+   "longitude_of_ascending_node_deg": 0.0,
+   "argument_of_periapsis_deg": 0.0,
+   "mean_anomaly_at_epoch_rad": 0.9,
+   "epoch_s": 0.0
+  },
+  "atmosphere": null,
+  "star_luminosity": null
+ }
+]
