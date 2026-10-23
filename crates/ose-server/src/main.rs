@@ -9,6 +9,8 @@
 //! The Kerbol system is embedded from `assets/own/kerbol-system.json` (bodies only) and can be overridden
 //! with `--bodies PATH`.
 
+mod accounts;
+
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -27,7 +29,6 @@ use ose_net::{
 use ose_sim::trajectory::Transition;
 use ose_sim::Universe;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tower_http::services::{ServeDir, ServeFile};
 
@@ -45,12 +46,15 @@ struct Args {
     /// JSON array of `ose_data::CelestialBody` to use instead of the embedded Kerbol system.
     #[arg(long)]
     bodies: Option<PathBuf>,
+    /// SQLite file for player accounts (resume tokens); `:memory:` keeps nothing.
+    #[arg(long, default_value = "ose.db")]
+    db: PathBuf,
 }
 
 struct Shared {
     universe: Mutex<Universe>,
     catalog: Vec<BodyInfo>,
-    next_player: AtomicU64,
+    accounts: Mutex<accounts::Accounts>,
     /// Vessel entity -> (vessel id, owner player id).
     vessels: Mutex<Vec<(bevy_ecs::entity::Entity, u64, Option<u64>)>>,
     /// Warp each connected player is willing to run at; the universe runs at the minimum (lowest wins).
@@ -129,7 +133,11 @@ async fn main() -> anyhow::Result<()> {
     let shared: AppState = Arc::new(Shared {
         universe: Mutex::new(Universe::with_bodies(&defs)),
         catalog,
-        next_player: AtomicU64::new(1),
+        accounts: Mutex::new({
+            let acc = accounts::Accounts::open(&args.db)?;
+            tracing::info!(db = %args.db.display(), players = acc.count()?, "accounts opened");
+            acc
+        }),
         vessels: Mutex::new(Vec::new()),
         warp_requests: Mutex::new(std::collections::HashMap::new()),
     });
@@ -278,6 +286,14 @@ fn owned_vessel(s: &Shared, id: u64, player: u64) -> Option<bevy_ecs::entity::En
         .map(|&(e, _, _)| e)
 }
 
+fn has_vessel(s: &Shared, player: u64) -> bool {
+    s.vessels
+        .lock()
+        .expect("vessels lock")
+        .iter()
+        .any(|&(_, _, owner)| owner == Some(player))
+}
+
 /// Every player gets a probe in a 100 km circular orbit around the home world on joining.
 fn spawn_player_probe(s: &Shared, player_id: u64, name: &str) -> Option<u64> {
     let mut u = s.universe.lock().expect("sim lock");
@@ -303,19 +319,39 @@ async fn session(mut socket: WebSocket, s: AppState) {
                     Ok(ClientMessage::Hello {
                         protocol,
                         display_name,
-                        ..
+                        token,
                     }) => {
                         if protocol != PROTOCOL_VERSION {
                             let reason = format!("protocol {protocol} not supported, server speaks {PROTOCOL_VERSION}");
                             send(&mut socket, &ServerMessage::Rejected { reason }).await;
                             return;
                         }
-                        let id = s.next_player.fetch_add(1, Ordering::Relaxed);
-                        tracing::info!(player = id, name = %display_name, "player joined");
+                        let outcome: Result<(u64, String, bool), String> = {
+                            let mut acc = s.accounts.lock().expect("accounts lock");
+                            let resumed = match token.as_deref() {
+                                Some(t) => acc.resume(t, &display_name).ok().flatten(),
+                                None => None,
+                            };
+                            match resumed {
+                                Some(p) => Ok((p.id, token.clone().unwrap_or_default(), true)),
+                                None => acc
+                                    .create(&display_name)
+                                    .map(|(p, t)| (p.id, t, false))
+                                    .map_err(|e| format!("account error: {e}")),
+                            }
+                        };
+                        let (id, token_out, resumed) = match outcome {
+                            Ok(v) => v,
+                            Err(reason) => {
+                                send(&mut socket, &ServerMessage::Rejected { reason }).await;
+                                return;
+                            }
+                        };
+                        tracing::info!(player = id, name = %display_name, resumed, "player joined");
                         let tick: Tick = s.universe.lock().expect("sim lock").tick();
                         let welcome = ServerMessage::Welcome {
                             player_id: id,
-                            token: format!("t{id}"),
+                            token: token_out,
                             tick,
                         };
                         if !send(&mut socket, &welcome).await {
@@ -331,7 +367,9 @@ async fn session(mut socket: WebSocket, s: AppState) {
                         {
                             return;
                         }
-                        spawn_player_probe(&s, id, &display_name);
+                        if !has_vessel(&s, id) {
+                            spawn_player_probe(&s, id, &display_name);
+                        }
                         s.warp_requests.lock().expect("warp lock").insert(id, 1);
                         break id;
                     }

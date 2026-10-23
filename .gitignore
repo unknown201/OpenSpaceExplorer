@@ -30,3 +30,4 @@ assets/ksp2/
 *.log
 .venv/
 dist/
+ose.db*

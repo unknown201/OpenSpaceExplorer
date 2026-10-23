@@ -21,7 +21,7 @@ async fn spawn_server() -> (Server, String) {
     };
     let addr = format!("127.0.0.1:{port}");
     let child = Command::new(env!("CARGO_BIN_EXE_ose-server"))
-        .args(["--listen", &addr])
+        .args(["--listen", &addr, "--db", ":memory:"])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
@@ -73,10 +73,14 @@ async fn hello_catalog_and_snapshots() {
         .await
         .unwrap();
 
-    let ServerMessage::Welcome { player_id, .. } = recv(&mut ws).await else {
+    let ServerMessage::Welcome {
+        player_id, token, ..
+    } = recv(&mut ws).await
+    else {
         panic!("expected Welcome")
     };
     assert_eq!(player_id, 1);
+    assert!(!token.is_empty());
     let ServerMessage::BodyCatalog { bodies } = recv(&mut ws).await else {
         panic!("expected BodyCatalog")
     };
@@ -252,4 +256,32 @@ async fn hello_catalog_and_snapshots() {
         restored,
         "warp did not return to 100 after the second player left"
     );
+
+    // Resume: a new connection with the token is the same player and keeps the same single probe.
+    drop(ws);
+    let (mut ws3, _) = tokio_tungstenite::connect_async(format!("ws://{addr}{WS_PATH}"))
+        .await
+        .expect("connect 3");
+    let hello3 = ClientMessage::Hello {
+        protocol: PROTOCOL_VERSION,
+        token: Some(token),
+        display_name: "test again".into(),
+    };
+    ws3.send(Message::Binary(ose_net::encode(&hello3).unwrap().into()))
+        .await
+        .unwrap();
+    let ServerMessage::Welcome { player_id: p3, .. } = recv(&mut ws3).await else {
+        panic!("expected Welcome 3")
+    };
+    assert_eq!(p3, player_id, "token resumes the same player");
+    let mut checked = false;
+    for _ in 0..40 {
+        if let ServerMessage::Vessels { vessels, .. } = recv(&mut ws3).await {
+            let mine: Vec<_> = vessels.iter().filter(|v| v.owner == Some(p3)).collect();
+            assert_eq!(mine.len(), 1, "resumed player keeps one probe: {vessels:?}");
+            checked = true;
+            break;
+        }
+    }
+    assert!(checked);
 }
