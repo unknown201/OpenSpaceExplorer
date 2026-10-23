@@ -155,6 +155,36 @@ impl Accounts {
         Ok(Some(p))
     }
 
+    /// Players not seen for `ttl_s` seconds whose id is not in `keep` (campaign members are never swept).
+    pub fn stale(&self, ttl_s: u64, keep: &[u64]) -> Vec<u64> {
+        let now = now_unix();
+        self.store
+            .players
+            .iter()
+            .filter(|r| !keep.contains(&r.id) && now.saturating_sub(r.last_seen_unix) >= ttl_s)
+            .map(|r| r.id)
+            .collect()
+    }
+
+    /// Mark a player as seen now (on connect and disconnect).
+    pub fn touch(&mut self, id: u64) -> anyhow::Result<()> {
+        if let Some(r) = self.store.players.iter_mut().find(|r| r.id == id) {
+            r.last_seen_unix = now_unix();
+            self.flush()?;
+        }
+        Ok(())
+    }
+
+    pub fn remove(&mut self, id: u64) -> anyhow::Result<bool> {
+        let before = self.store.players.len();
+        self.store.players.retain(|r| r.id != id);
+        let removed = self.store.players.len() != before;
+        if removed {
+            self.flush()?;
+        }
+        Ok(removed)
+    }
+
     pub fn count(&self) -> anyhow::Result<u64> {
         Ok(self.store.players.len() as u64)
     }

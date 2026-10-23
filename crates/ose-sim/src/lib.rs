@@ -144,6 +144,13 @@ impl Universe {
         self.spawn_vessel(name, body, DVec3::new(r, 0.0, 0.0), DVec3::new(0.0, v, 0.0))
     }
 
+    /// Remove a vessel entity (no-op for unknown entities).
+    pub fn despawn_vessel(&mut self, e: Entity) {
+        if self.world.get::<vessels::Vessel>(e).is_some() {
+            self.world.despawn(e);
+        }
+    }
+
     pub fn vessels(&mut self) -> Vec<Entity> {
         let mut q = self.world.query_filtered::<Entity, With<vessels::Vessel>>();
         q.iter(&self.world).collect()

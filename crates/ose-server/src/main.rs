@@ -105,6 +105,13 @@ struct Args {
     /// Seconds between periodic saves.
     #[arg(long, default_value_t = 30.0)]
     save_interval_s: f64,
+    /// Players who never joined the campaign are removed, with their vessels, after this many seconds
+    /// without a connection (e2e pilots and one-off visitors). 0 disables.
+    #[arg(long, default_value_t = 86_400)]
+    guest_ttl_s: u64,
+    /// Seconds between guest sweeps.
+    #[arg(long, default_value_t = 60.0)]
+    guest_sweep_s: f64,
 }
 
 struct Shared {
@@ -270,6 +277,20 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    if args.guest_ttl_s > 0 {
+        let sweeper = shared.clone();
+        let ttl = args.guest_ttl_s;
+        let every = std::time::Duration::from_secs_f64(args.guest_sweep_s.max(0.2));
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(every);
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                sweep_guests(&sweeper, ttl);
+            }
+        });
+    }
+
     let mut app = Router::new()
         .route(
             "/health",
@@ -408,6 +429,62 @@ fn has_vessel(s: &Shared, player: u64) -> bool {
         .expect("vessels lock")
         .iter()
         .any(|&(_, _, owner)| owner == Some(player))
+}
+
+/// Remove players who never joined the campaign and have been away for `ttl_s`, with their vessels and
+/// saved crafts. Connected players are always kept.
+fn sweep_guests(s: &Shared, ttl_s: u64) {
+    let members: Vec<u64> = s
+        .campaign
+        .lock()
+        .expect("campaign lock")
+        .members
+        .iter()
+        .map(|m| m.player_id)
+        .collect();
+    let connected: Vec<u64> = s
+        .warp_requests
+        .lock()
+        .expect("warp lock")
+        .keys()
+        .copied()
+        .collect();
+    let mut keep = members;
+    keep.extend(connected);
+    let stale = s
+        .accounts
+        .lock()
+        .expect("accounts lock")
+        .stale(ttl_s, &keep);
+    if stale.is_empty() {
+        return;
+    }
+    let mut u = s.universe.lock().expect("sim lock");
+    let mut vessels = s.vessels.lock().expect("vessels lock");
+    let mut removed_vessels = 0;
+    vessels.retain(|&(e, _, owner)| {
+        let gone = owner.is_some_and(|o| stale.contains(&o));
+        if gone {
+            u.despawn_vessel(e);
+            removed_vessels += 1;
+        }
+        !gone
+    });
+    drop(vessels);
+    drop(u);
+    s.crafts
+        .lock()
+        .expect("crafts lock")
+        .retain(|c| !stale.contains(&c.owner));
+    let mut acc = s.accounts.lock().expect("accounts lock");
+    for id in &stale {
+        let _ = acc.remove(*id);
+    }
+    tracing::info!(
+        players = stale.len(),
+        vessels = removed_vessels,
+        "swept stale guests"
+    );
 }
 
 /// Display name a player used at Hello.
@@ -925,5 +1002,6 @@ async fn session(mut socket: WebSocket, s: AppState) {
         .expect("warp lock")
         .remove(&player_id);
     apply_warp(&s);
+    let _ = s.accounts.lock().expect("accounts lock").touch(player_id);
     tracing::info!(player = player_id, "player left");
 }

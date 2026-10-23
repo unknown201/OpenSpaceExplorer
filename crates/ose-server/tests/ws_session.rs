@@ -582,6 +582,49 @@ async fn hello_catalog_and_snapshots() {
     assert!(checked);
 }
 
+#[tokio::test]
+async fn stale_guests_are_swept_but_members_stay() {
+    let args = [
+        "--db",
+        ":memory:",
+        "--save",
+        "none",
+        "--guest-ttl-s",
+        "1",
+        "--guest-sweep-s",
+        "0.3",
+    ];
+    let (_server, addr) = spawn_server_with(&args, None).await;
+    let (mut g, _) = tokio_tungstenite::connect_async(format!("ws://{addr}{WS_PATH}"))
+        .await
+        .unwrap();
+    let (guest_id, _) = hello(&mut g, None, "e2e pilot").await;
+    drop(g);
+    let (mut m, _) = tokio_tungstenite::connect_async(format!("ws://{addr}{WS_PATH}"))
+        .await
+        .unwrap();
+    let (member_id, _) = hello(&mut m, None, "josh").await;
+    m.send(Message::Binary(
+        ose_net::encode(&ClientMessage::JoinCampaign)
+            .unwrap()
+            .into(),
+    ))
+    .await
+    .unwrap();
+    tokio::time::sleep(Duration::from_millis(1800)).await;
+    let mut checked = false;
+    for _ in 0..60 {
+        if let ServerMessage::Vessels { vessels, .. } = recv(&mut m).await {
+            if vessels.iter().all(|v| v.owner != Some(guest_id)) {
+                assert!(vessels.iter().any(|v| v.owner == Some(member_id)));
+                checked = true;
+                break;
+            }
+        }
+    }
+    assert!(checked, "guest probe was not swept");
+}
+
 async fn hello(ws: &mut Ws, token: Option<String>, name: &str) -> (u64, String) {
     let hello = ClientMessage::Hello {
         protocol: PROTOCOL_VERSION,
