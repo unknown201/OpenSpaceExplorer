@@ -18,6 +18,7 @@ pub mod harness;
 pub mod plan;
 pub mod rails;
 pub mod report;
+pub mod server_flight;
 pub mod steps;
 
 pub use report::{print_report, Mode, Outcome, StepResult};

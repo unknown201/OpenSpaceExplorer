@@ -32,7 +32,19 @@ pub async fn spawn_server(timeout: Duration) -> Result<ServerProcess> {
     let addr = format!("127.0.0.1:{port}");
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
     let child = Command::new(cargo)
-        .args(["run", "-q", "-p", "ose-server", "--", "--listen", &addr])
+        .args([
+            "run",
+            "-q",
+            "-p",
+            "ose-server",
+            "--",
+            "--listen",
+            &addr,
+            "--save",
+            "none",
+            "--db",
+            ":memory:",
+        ])
         .current_dir(crate::data::repo_root())
         .stdin(Stdio::null())
         .stdout(Stdio::null())

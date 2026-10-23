@@ -11,6 +11,7 @@ ose-math = { workspace = true }
 ose-data = { workspace = true }
 ose-sim = { workspace = true }
 ose-net = { workspace = true }
+ose-importer = { path = "../ose-importer" }
 bevy_ecs = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
