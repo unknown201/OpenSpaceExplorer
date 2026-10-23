@@ -11,6 +11,19 @@ struct Server(std::process::Child);
 impl Drop for Server {
     fn drop(&mut self) {
         let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// Wait until nothing accepts on `addr` any more (the killed server has released the port).
+async fn wait_port_free(addr: &str) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    while tokio::net::TcpStream::connect(addr).await.is_ok() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "port {addr} never freed"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
 
@@ -454,6 +467,7 @@ async fn restart_keeps_time_vessels_and_burns() {
     assert!(before.vessels[0].burn_ut.is_some());
     drop(ws);
     drop(server);
+    wait_port_free(&addr).await;
 
     let (_server2, addr2) = spawn_server_with(&args, Some(port)).await;
     let (mut ws2, _) = tokio_tungstenite::connect_async(format!("ws://{addr2}{WS_PATH}"))
