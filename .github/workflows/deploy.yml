@@ -32,7 +32,13 @@ jobs:
         run: |
           curl -fsSL "https://github.com/trunk-rs/trunk/releases/download/v${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz" \
             | sudo tar -xz -C /usr/local/bin trunk
+      # ose-server bundles SQLite (rusqlite "bundled"), C code that the musl target needs a musl C
+      # compiler for; Ubuntu's musl-tools provides musl-gcc and cc-rs is pointed at it.
+      - name: Install musl C toolchain
+        run: sudo apt-get update -q && sudo apt-get install -y -q musl-tools
       - name: Build server (static Linux binary)
+        env:
+          CC_x86_64_unknown_linux_musl: musl-gcc
         run: cargo build --release -p ose-server --target x86_64-unknown-linux-musl
       - name: Build web client
         run: cd crates/ose-client && trunk build --release --dist ../../target/web
