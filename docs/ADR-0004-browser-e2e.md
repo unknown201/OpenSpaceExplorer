@@ -52,13 +52,14 @@ browser, so the step runs on the served `http://127.0.0.1` page. With that:
 | Firefox 142, default prefs | headless or headed | `navigator.gpu` undefined |
 | Firefox 142, `dom.webgpu.enabled` + `gfx.webgpu.ignore-blocklist` | headless | null |
 | Firefox 142, same prefs | headed | adapter, 11 features |
+| Chromium full, Linux `ubuntu-latest` runner, no GPU, `--enable-features=Vulkan --use-vulkan=swiftshader --use-angle=vulkan --disable-vulkan-surface` | headless | adapter `google swiftshader`, 19 features (CI run 39997611201) |
+| Firefox 142, Linux runner, prefs set | headless | `NotSupportedError: WebGPU is only available on Windows, and in Nightly and Early Beta builds on other platforms` |
 
-Consequences: the Chromium project uses the full browser channel and the two flags; the Firefox
-project sets the prefs and gets WebGPU only with `OSE_E2E_HEADED=1` (a window; `xvfb-run` on Linux).
-On Linux the config adds Chromium's software path (`--enable-features=Vulkan --use-vulkan=swiftshader
---use-angle=vulkan --disable-vulkan-surface`); whether the GitHub runner yields an adapter is read off
-the first CI run's gameplay table. `webgpu_adapter` is therefore `PassOrSkip` in the frontier: a
-missing adapter is an environment fact, not a game failure. When the renderer lands, `render_canvas`
+Consequences: the Chromium project uses the full browser channel and the two flags, plus the Vulkan
+over SwiftShader software path on Linux, so CI exercises WebGPU in Chromium without a GPU. The Firefox
+project sets the prefs and gets WebGPU only on Windows with `OSE_E2E_HEADED=1` (a window); the
+Playwright Firefox build on Linux refuses WebGPU outright until Mozilla ships it there. `webgpu_adapter`
+is therefore `PassOrSkip` in the frontier: a missing adapter is an environment fact, not a game failure. When the renderer lands, `render_canvas`
 should pass wherever an adapter exists and the client should fall back to a visible "no WebGPU" message
 elsewhere, which the step can then check for instead of failing.
 
