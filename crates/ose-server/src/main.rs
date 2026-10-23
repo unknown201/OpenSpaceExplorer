@@ -21,9 +21,10 @@ use axum::{
 use clap::Parser;
 use ose_data::{CelestialBody, Tick};
 use ose_net::{
-    BodyInfo, BodyState, ClientMessage, OrbitElements, ServerMessage, PROTOCOL_VERSION,
-    SNAPSHOT_HZ, WS_PATH,
+    BodyInfo, BodyState, ClientMessage, OrbitElements, PatchEnd, ServerMessage, TrajectoryPatch,
+    VesselState, PROTOCOL_VERSION, SNAPSHOT_HZ, TRAJECTORY_HZ, WS_PATH,
 };
+use ose_sim::trajectory::Transition;
 use ose_sim::Universe;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -50,6 +51,21 @@ struct Shared {
     universe: Mutex<Universe>,
     catalog: Vec<BodyInfo>,
     next_player: AtomicU64,
+    /// Vessel entity -> (vessel id, owner player id).
+    vessels: Mutex<Vec<(bevy_ecs::entity::Entity, u64, Option<u64>)>>,
+}
+
+fn elements(o: &ose_math::Orbit) -> OrbitElements {
+    let e = &o.elements;
+    OrbitElements {
+        semi_major_axis_m: e.semi_major_axis,
+        eccentricity: e.eccentricity,
+        inclination_deg: e.inclination_deg,
+        longitude_of_ascending_node_deg: e.longitude_of_ascending_node_deg,
+        argument_of_periapsis_deg: e.argument_of_periapsis_deg,
+        mean_anomaly_at_epoch_rad: e.mean_anomaly_at_epoch,
+        epoch_s: e.epoch,
+    }
 }
 
 type AppState = Arc<Shared>;
@@ -99,6 +115,7 @@ async fn main() -> anyhow::Result<()> {
         universe: Mutex::new(Universe::with_bodies(&defs)),
         catalog,
         next_player: AtomicU64::new(1),
+        vessels: Mutex::new(Vec::new()),
     });
 
     let sim = shared.clone();
@@ -148,7 +165,66 @@ async fn send(socket: &mut WebSocket, msg: &ServerMessage) -> bool {
     }
 }
 
-fn snapshot(s: &Shared) -> (ServerMessage, ServerMessage) {
+fn catalog_index(s: &Shared, u: &Universe, body: bevy_ecs::entity::Entity) -> u16 {
+    let id = u.body_id(body).unwrap_or("");
+    s.catalog.iter().position(|b| b.id == id).unwrap_or(0) as u16
+}
+
+fn vessels_message(s: &Shared, u: &Universe, tick: Tick) -> ServerMessage {
+    let ut = tick.seconds();
+    let list = s.vessels.lock().expect("vessels lock");
+    let vessels = list
+        .iter()
+        .filter_map(|&(e, id, owner)| {
+            let (v, body, orbit) = u.vessel(e)?;
+            let (bp, bv) = ose_sim::bodies::star_space_state(&u.world, body, ut);
+            let (rp, rv) = orbit.state_at(ut);
+            Some(VesselState {
+                id,
+                name: v.name.clone(),
+                owner,
+                reference_body: catalog_index(s, u, body),
+                position_m: bp + rp,
+                velocity_mps: bv + rv,
+                orbit: elements(&orbit),
+            })
+        })
+        .collect();
+    ServerMessage::Vessels { tick, vessels }
+}
+
+fn trajectories(s: &Shared) -> Vec<ServerMessage> {
+    let u = s.universe.lock().expect("sim lock");
+    let tick = u.tick();
+    let list = s.vessels.lock().expect("vessels lock");
+    list.iter()
+        .map(|&(e, id, _)| {
+            let patches = u
+                .predict(e)
+                .iter()
+                .map(|p| TrajectoryPatch {
+                    body: catalog_index(s, &u, p.body),
+                    orbit: elements(&p.orbit),
+                    start_ut: p.start_ut,
+                    end_ut: p.end_ut,
+                    end: match p.end {
+                        Transition::Encounter => PatchEnd::Encounter,
+                        Transition::Escape => PatchEnd::Escape,
+                        Transition::Collision => PatchEnd::Collision,
+                        Transition::Initial | Transition::Final => PatchEnd::Final,
+                    },
+                })
+                .collect();
+            ServerMessage::Trajectory {
+                tick,
+                vessel: id,
+                patches,
+            }
+        })
+        .collect()
+}
+
+fn snapshot(s: &Shared) -> (ServerMessage, ServerMessage, ServerMessage) {
     let u = s.universe.lock().expect("sim lock");
     let tick = u.tick();
     let warp = u.warp();
@@ -171,7 +247,24 @@ fn snapshot(s: &Shared) -> (ServerMessage, ServerMessage) {
             warp_limited_by: None,
         },
         ServerMessage::Snapshot { tick, bodies },
+        vessels_message(s, &u, tick),
     )
+}
+
+/// Every player gets a probe in a 100 km circular orbit around the home world on joining.
+fn spawn_player_probe(s: &Shared, player_id: u64, name: &str) -> Option<u64> {
+    let mut u = s.universe.lock().expect("sim lock");
+    let home = s
+        .catalog
+        .iter()
+        .find(|b| b.id == "Kerbin")
+        .or_else(|| s.catalog.first())?;
+    let body = u.body_entity(&home.id)?;
+    let e = u.spawn_vessel_in_circular_orbit(&format!("{name} probe"), body, 100_000.0);
+    let mut list = s.vessels.lock().expect("vessels lock");
+    let id = list.len() as u64 + 1;
+    list.push((e, id, Some(player_id)));
+    Some(id)
 }
 
 async fn session(mut socket: WebSocket, s: AppState) {
@@ -211,6 +304,7 @@ async fn session(mut socket: WebSocket, s: AppState) {
                         {
                             return;
                         }
+                        spawn_player_probe(&s, id, &display_name);
                         break id;
                     }
                     Ok(_) => {
@@ -243,12 +337,25 @@ async fn session(mut socket: WebSocket, s: AppState) {
     // Stream.
     let mut interval =
         tokio::time::interval(std::time::Duration::from_millis(1000 / SNAPSHOT_HZ as u64));
+    let mut traj_interval = tokio::time::interval(std::time::Duration::from_millis(
+        1000 / TRAJECTORY_HZ as u64,
+    ));
     loop {
         tokio::select! {
             _ = interval.tick() => {
-                let (time, snap) = snapshot(&s);
-                if !send(&mut socket, &time).await || !send(&mut socket, &snap).await {
+                let (time, snap, vessels) = snapshot(&s);
+                if !send(&mut socket, &time).await
+                    || !send(&mut socket, &snap).await
+                    || !send(&mut socket, &vessels).await
+                {
                     break;
+                }
+            }
+            _ = traj_interval.tick() => {
+                for msg in trajectories(&s) {
+                    if !send(&mut socket, &msg).await {
+                        break;
+                    }
                 }
             }
             incoming = socket.recv() => {

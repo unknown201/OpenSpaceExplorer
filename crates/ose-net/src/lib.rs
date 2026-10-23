@@ -11,7 +11,9 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 2;
+pub const PROTOCOL_VERSION: u16 = 3;
+/// Trajectory messages per second the server streams for each vessel.
+pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
 pub const SNAPSHOT_HZ: u32 = 10;
 /// WebSocket path on the server.
@@ -67,6 +69,39 @@ pub struct BodyState {
     pub velocity_mps: DVec3,
 }
 
+/// A vessel as streamed in `Vessels`. `position_m` / `velocity_mps` are star space like `BodyState`;
+/// `orbit` is around the body at catalog index `reference_body`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct VesselState {
+    pub id: u64,
+    pub name: String,
+    /// Player who owns the vessel, if any.
+    pub owner: Option<u64>,
+    pub reference_body: u16,
+    pub position_m: DVec3,
+    pub velocity_mps: DVec3,
+    pub orbit: OrbitElements,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PatchEnd {
+    Encounter,
+    Escape,
+    Collision,
+    Final,
+}
+
+/// One conic of a predicted trajectory, around the body at catalog index `body`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TrajectoryPatch {
+    pub body: u16,
+    pub orbit: OrbitElements,
+    pub start_ut: f64,
+    /// Seconds; infinity is sent as `f64::INFINITY` (postcard encodes it fine).
+    pub end_ut: f64,
+    pub end: PatchEnd,
+}
+
 /// Server to client.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ServerMessage {
@@ -90,6 +125,17 @@ pub enum ServerMessage {
     Snapshot {
         tick: Tick,
         bodies: Vec<BodyState>,
+    },
+    /// Every vessel the client can see, sent with each `Snapshot`.
+    Vessels {
+        tick: Tick,
+        vessels: Vec<VesselState>,
+    },
+    /// Predicted patched-conic trajectory of one vessel from `tick`, sent at `TRAJECTORY_HZ`.
+    Trajectory {
+        tick: Tick,
+        vessel: u64,
+        patches: Vec<TrajectoryPatch>,
     },
     Pong {
         sent_tick: Tick,

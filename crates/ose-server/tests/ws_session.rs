@@ -94,7 +94,9 @@ async fn hello_catalog_and_snapshots() {
 
     let mut saw_time = None;
     let mut saw_snap = None;
-    for _ in 0..6 {
+    let mut saw_vessel = false;
+    let mut saw_traj = false;
+    for _ in 0..40 {
         match recv(&mut ws).await {
             ServerMessage::TimeState { tick, warp, .. } => saw_time = Some((tick, warp)),
             ServerMessage::Snapshot {
@@ -106,12 +108,31 @@ async fn hello_catalog_and_snapshots() {
                 assert!((d - 12_000_000.0).abs() < 1.0, "Mun distance {d}");
                 saw_snap = Some(tick);
             }
+            ServerMessage::Vessels { vessels, .. } => {
+                let probe = vessels
+                    .iter()
+                    .find(|v| v.owner == Some(player_id))
+                    .expect("my probe");
+                assert_eq!(probe.reference_body, kerbin as u16);
+                let alt = (probe.orbit.semi_major_axis_m - bodies[kerbin].radius_m).abs();
+                assert!((alt - 100_000.0).abs() < 1.0, "probe altitude {alt}");
+                saw_vessel = true;
+            }
+            ServerMessage::Trajectory { patches, .. } => {
+                assert_eq!(patches.len(), 1, "{patches:?}");
+                assert_eq!(patches[0].end, ose_net::PatchEnd::Final);
+                saw_traj = true;
+            }
             other => panic!("unexpected {other:?}"),
         }
-        if saw_time.is_some() && saw_snap.is_some() {
+        if saw_time.is_some() && saw_snap.is_some() && saw_vessel && saw_traj {
             break;
         }
     }
+    assert!(
+        saw_vessel && saw_traj,
+        "vessel {saw_vessel} trajectory {saw_traj}"
+    );
     let (_, warp) = saw_time.expect("TimeState");
     assert_eq!(warp, 1);
     saw_snap.expect("Snapshot");
@@ -125,7 +146,7 @@ async fn hello_catalog_and_snapshots() {
     .await
     .unwrap();
     let mut seen = false;
-    for _ in 0..10 {
+    for _ in 0..40 {
         if let ServerMessage::TimeState { warp, .. } = recv(&mut ws).await {
             if warp == 100 {
                 seen = true;

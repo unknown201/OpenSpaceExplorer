@@ -17,6 +17,8 @@ ose-sim = { workspace = true }
 ose-net = { workspace = true }
 ose-data = { workspace = true }
 serde_json = { workspace = true }
+ose-math = { workspace = true }
+bevy_ecs = { workspace = true }
 
 [dev-dependencies]
 futures-util = "0.3"
