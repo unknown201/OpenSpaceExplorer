@@ -1,9 +1,0 @@
-# What the image build (docker/Dockerfile) does not need from the repository
-.git
-target
-**/dist
-reference
-assets/ksp2
-.cache
-.venv
-*.log

@@ -1,95 +1,64 @@
 # Deploying OpenSpaceExplorer to https://ose.jfly.dev/
 
-Mirrors how Lost In Time is hosted (`LostInTime/docs/stream/DEPLOY.md`): a Docker container on VM 150
-`docker.lan` (10.205.25.14), nginx with certbot on prod-prox (CT 100, 10.205.25.118) in front, and a
-DNS-only Cloudflare record for the `jfly.dev` name pointing at prod-prox's LAN address, so the site is
-reachable on the home network and over Tailscale.
-
-The one difference: Lost In Time's image is built on docker.lan from a `git archive`. Here GitHub
-Actions builds it, because the build needs no GPU, and a push to `main` is the deploy.
+Live since 2026-10-23. The same shape as Lost In Time and PrivateCoPilot: a build is shipped by scp
+to a container on the house Proxmox host (piper) and runs there under systemd; nginx with certbot on
+prod-prox fronts it as `ose.jfly.dev`; the DNS record is DNS-only and points at prod-prox's LAN
+address, so the site is reachable on the home network and over Tailscale. No Docker, no registry.
 
 ```
- push to main ──► .github/workflows/deploy.yml ──► ghcr.io/unknown201/openspaceexplorer:latest
-                                                            │ pulled every 5 min by watchtower
- browser ──► ose.jfly.dev (nginx, prod-prox) ──► docker.lan:8800 ──► ose-server (docker/compose.yaml)
-                                                                       serves / (WASM client), /health
+ push to main ──► .github/workflows/deploy.yml (build on GitHub) ──scp──► ose container (CT 120 on piper)
+                                                                              /opt/ose/current, ose.service
+ browser ──► https://ose.jfly.dev (nginx, prod-prox) ──► ose.lan:7777 ──► ose-server
+                                                                      serves / (WASM client), /health
 ```
 
-## What is built
+## What is built and shipped
 
-`docker/Dockerfile`, two stages:
-- `rust:1-bookworm`: `cargo build --release -p ose-server`, then `trunk build --release` of
-  `crates/ose-client` (trunk 0.21.14 pinned by `TRUNK_VERSION`; it downloads the wasm-bindgen-cli that
-  matches `Cargo.lock`).
-- `debian:bookworm-slim`, user `ose` (uid 10001), `/data` as the working directory and volume.
-  `ose-server --listen 0.0.0.0:7777 --static-dir /app/web`: the client at `/` (unknown paths get
-  `index.html`), `/health` beside it. Port 7777 inside the container.
+A release tarball: `ose-server` (release build for `x86_64-unknown-linux-musl`, a static binary that
+runs on any Linux), `web/` (`trunk build --release` of `crates/ose-client`), and `deploy/ose.service`
+and `deploy/install.sh`. On the container, `install.sh` unpacks it into `/opt/ose/releases/<commit>`,
+points `/opt/ose/current` at it, installs the unit the first time, restarts the service and checks
+`/health`. The last five releases are kept.
 
-`.github/workflows/deploy.yml` pushes it to GHCR as `:latest` and `:sha-<commit>` with the workflow's
-own `GITHUB_TOKEN`; no secret to add. Build layers are cached in GitHub's action cache.
+`ose-server --listen 0.0.0.0:7777 --static-dir /opt/ose/current/web` runs as the system user `ose`
+with `/var/lib/ose` as its only writable path (game state goes there).
 
-## One-time setup (Josh)
+## The container (CT 120 `ose`, hostname `ose.lan`)
 
-1. **GHCR package public**, once the first `deploy` run has pushed it: GitHub > unknown201 > Packages >
-   `openspaceexplorer` > Package settings > Change visibility > Public (the repository is public, and
-   this lets docker.lan pull with no credentials). Also "Manage Actions access": the repository with
-   write role, so later pushes keep working (GitHub sets this on the first push from the workflow).
+Provisioned 2026-10-23 as the house runbook says (Debian 13, 2 cores, 2 GB, 10 GB on local-lvm,
+unprivileged, nesting on, starts on boot). Inside: `curl` and `ca-certificates`, the user `ose`,
+`/opt/ose` and `/var/lib/ose`. Nothing else is installed there; builds happen elsewhere.
 
-2. **docker.lan** (as `josh`, beside Frigate and `lostintime-stream`):
-   ```sh
-   sudo mkdir -p /opt/openspaceexplorer && sudo chown josh /opt/openspaceexplorer
-   cd /opt/openspaceexplorer
-   curl -fsSLo compose.yaml https://raw.githubusercontent.com/unknown201/OpenSpaceExplorer/main/docker/compose.yaml
-   docker compose up -d
-   curl -s http://127.0.0.1:8800/health      # ok tick=...
-   ```
-   Host port 8800 (7777 and 8790-8794 there are Lost In Time's, on the host network). The watchtower
-   service in the same compose file is scoped to this project only: it never touches Frigate or
-   Lost In Time's containers.
+Useful, from piper as root:
+```sh
+pct exec 120 -- systemctl status ose --no-pager
+pct exec 120 -- journalctl -u ose -n 50 --no-pager
+pct exec 120 -- curl -s http://127.0.0.1:7777/health
+pct exec 120 -- ls -l /opt/ose/releases          # rollback: ln -sfn <one of these> /opt/ose/current && systemctl restart ose
+```
 
-3. **prod-prox** (CT 100), a new site `/etc/nginx/sites-available/ose`, linked into `sites-enabled`:
-   ```nginx
-   server {
-       listen 80;
-       listen [::]:80;
-       server_name ose.jfly.dev;
-       location / {
-           proxy_pass http://docker.lan:8800/;
-           proxy_http_version 1.1;
-           proxy_set_header Host $host;
-           proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-           proxy_set_header X-Forwarded-Proto $scheme;
-           # WebSocket (the game connection, Phase 3)
-           proxy_set_header Upgrade $http_upgrade;
-           proxy_set_header Connection "upgrade";
-           proxy_read_timeout 1h;
-       }
-   }
-   ```
-   `nginx -t && systemctl reload nginx`, then `certbot --nginx -d ose.jfly.dev` (adds the 443 server
-   and the redirect, as it did for lostintime.jfly.dev). certbot's HTTP-01 challenge needs port 80
-   reachable from the internet; if lostintime.jfly.dev was issued with the Cloudflare DNS plugin
-   instead, use the same: `certbot -d ose.jfly.dev --dns-cloudflare ...`.
-   Where the LostInTime site uses `include /etc/nginx/snippets/proxy-no-auth.conf;`, that snippet can
-   replace the `proxy_set_header` lines above.
+## prod-prox
 
-4. **Cloudflare DNS** for `jfly.dev`: an `A` record `ose` -> `10.205.25.118`, proxy status **DNS only**
-   (grey cloud), like `lostintime`.
+Made with the house helper (`/root/proxy.sh ose ose.lan:7777`): `/etc/nginx/sites-enabled/ose`,
+certbot certificate for `ose.jfly.dev` (auto-renewed), the default SSO-or-LAN gate
+(`whitelist-auth.conf`). To open it to people outside the house, swap that include for
+`proxy-no-auth.conf` as the Lost In Time `/play/` site does.
 
-5. Open https://ose.jfly.dev/ and https://ose.jfly.dev/health.
+## How a deploy happens
 
-## Day to day
+- **From GitHub**: `.github/workflows/deploy.yml` on every push to `main`. It needs four repository
+  secrets, `OSE_DEPLOY_HOST`, `OSE_DEPLOY_PORT`, `OSE_DEPLOY_USER`, `OSE_DEPLOY_KEY`: the address and
+  forwarded SSH port GitHub's runners reach the house on (PrivateCoPilot's workflow uses the same
+  kind of endpoint), a user that can run `install.sh` as root on the ose container, and its key.
+  The workflow stores nothing on GitHub (no artifacts, no packages).
+- **From a developer machine**: `python tools/deploy.py`, with `git config ose.piper` and
+  `git config ose.piperKey` set (see its docstring). It cross-compiles with `rust-lld`
+  (`rustup target add x86_64-unknown-linux-musl`), builds the client with trunk, and pushes the
+  tarball through piper (`pct push`, `pct exec`). This is how the first release went out.
 
-- Push to `main`; the `deploy` workflow takes a few minutes, watchtower picks the image up within five
-  more. `docker logs -f openspaceexplorer` on docker.lan shows the new container start.
-- Deploy a specific commit: edit the image tag in `compose.yaml` to `:sha-<commit>`, then
-  `docker compose pull && docker compose up -d`; set it back to `:latest` to follow main again.
-- Rollback: the same, with the previous commit's tag (every push keeps its `:sha-...` tag in GHCR).
-- Game state lives in the `ose-data` volume (`/data` in the container); the image is stateless.
-
-## Local check without Docker
+## Local check
 
 ```
-cd crates/ose-client && trunk build --release && cd ../..
-cargo run -p ose-server -- --listen 127.0.0.1:7777 --static-dir crates/ose-client/dist
+cd crates/ose-client && trunk build --release --dist ../../target/web && cd ../..
+cargo run -p ose-server -- --listen 127.0.0.1:7777 --static-dir target/web
 ```

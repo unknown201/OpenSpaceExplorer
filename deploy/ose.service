@@ -1,0 +1,21 @@
+[Unit]
+Description=OpenSpaceExplorer server (serves the web client and the game)
+After=network.target
+
+[Service]
+Type=simple
+User=ose
+Group=ose
+WorkingDirectory=/var/lib/ose
+ExecStart=/opt/ose/current/ose-server --listen 0.0.0.0:7777 --static-dir /opt/ose/current/web
+Restart=on-failure
+RestartSec=5
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/ose
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

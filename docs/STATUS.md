@@ -29,7 +29,7 @@ Tooling installed locally: rust 1.99 with `wasm32-unknown-unknown`, trunk 0.22, 
 
 ## Deploy
 
-A push to `main` builds a Linux image (server + WASM client) in GitHub Actions and publishes it to GHCR; docker.lan pulls it and nginx on prod-prox serves it as https://ose.jfly.dev/ once the one-time setup in `docs/DEPLOY.md` is done. `ose-server --static-dir DIR` serves the built client.
+Live at https://ose.jfly.dev/ (home network and Tailscale). A push to `main` builds the static Linux server and the WASM client in GitHub Actions and ships them by scp to the `ose` container on piper, where `ose.service` runs them (`docs/DEPLOY.md`); `python tools/deploy.py` does the same from a developer machine. `ose-server --static-dir DIR` serves the built client.
 
 ## Documents
 

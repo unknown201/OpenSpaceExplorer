@@ -1,6 +1,12 @@
-# On every push to main: build the Linux image (ose-server + the WASM client, docker/Dockerfile) and
-# publish it to GHCR as ghcr.io/unknown201/openspaceexplorer:latest (plus a tag per commit).
-# docker.lan pulls :latest and restarts the service by itself (docker/compose.yaml, docs/DEPLOY.md).
+# On every push to main: build the Linux server (static musl binary) and the WASM client, then scp the
+# release tarball to the ose container on the house Proxmox host (docs/DEPLOY.md) and install it there
+# with deploy/install.sh. Nothing is stored on GitHub: no artifacts, no packages.
+#
+# Repository secrets (Settings > Secrets and variables > Actions):
+#   OSE_DEPLOY_HOST  address GitHub's runners reach the house on (the one PrivateCoPilot uses)
+#   OSE_DEPLOY_PORT  its forwarded SSH port
+#   OSE_DEPLOY_USER  user on the ose container (deploy/install.sh needs root)
+#   OSE_DEPLOY_KEY   that user's private key (OpenSSH format)
 name: deploy
 on:
   push:
@@ -11,31 +17,46 @@ concurrency:
   cancel-in-progress: true
 permissions:
   contents: read
-  packages: write
 jobs:
-  image:
+  build-and-deploy:
     runs-on: ubuntu-latest
+    env:
+      TRUNK_VERSION: 0.21.14
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/metadata-action@v5
-        id: meta
-        with:
-          images: ghcr.io/${{ github.repository_owner }}/openspaceexplorer
-          tags: |
-            type=raw,value=latest
-            type=sha,format=long
-      - uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: docker/Dockerfile
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          targets: wasm32-unknown-unknown, x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+      - name: Install trunk
+        run: |
+          curl -fsSL "https://github.com/trunk-rs/trunk/releases/download/v${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin trunk
+      - name: Build server (static Linux binary)
+        run: cargo build --release -p ose-server --target x86_64-unknown-linux-musl
+      - name: Build web client
+        run: cd crates/ose-client && trunk build --release --dist ../../target/web
+      - name: Package release
+        run: |
+          rel=target/release-pkg
+          mkdir -p "$rel/web"
+          cp target/x86_64-unknown-linux-musl/release/ose-server "$rel/"
+          cp target/web/index.html target/web/*.wasm target/web/*.js "$rel/web/"
+          cp deploy/ose.service deploy/install.sh "$rel/"
+          tar --owner=0 --group=0 -czf ose-release.tar.gz -C "$rel" .
+          ls -la ose-release.tar.gz
+      - name: Deploy to the ose container
+        env:
+          HOST: ${{ secrets.OSE_DEPLOY_HOST }}
+          PORT: ${{ secrets.OSE_DEPLOY_PORT }}
+          USER: ${{ secrets.OSE_DEPLOY_USER }}
+          KEY: ${{ secrets.OSE_DEPLOY_KEY }}
+        run: |
+          key="$RUNNER_TEMP/deploy_key"
+          printf '%s\n' "$KEY" > "$key"
+          chmod 600 "$key"
+          opts="-i $key -o StrictHostKeyChecking=accept-new -o BatchMode=yes"
+          id="${GITHUB_SHA::7}"
+          scp $opts -P "$PORT" ose-release.tar.gz "$USER@$HOST:/tmp/ose-release.tar.gz"
+          ssh $opts -p "$PORT" "$USER@$HOST" \
+            "mkdir -p /tmp/ose-r && tar --no-same-owner -xzf /tmp/ose-release.tar.gz -C /tmp/ose-r ./install.sh && sh /tmp/ose-r/install.sh /tmp/ose-release.tar.gz $id"
