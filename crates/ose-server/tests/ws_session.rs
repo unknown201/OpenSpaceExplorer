@@ -375,7 +375,13 @@ async fn hello_catalog_and_snapshots() {
     for _ in 0..40 {
         if let ServerMessage::Vessels { vessels, .. } = recv(&mut ws3).await {
             let mine: Vec<_> = vessels.iter().filter(|v| v.owner == Some(p3)).collect();
-            assert_eq!(mine.len(), 1, "resumed player keeps one probe: {vessels:?}");
+            // the probe and the launched craft, and no second probe on resume
+            assert_eq!(
+                mine.len(),
+                2,
+                "resumed player keeps probe + Tiny: {vessels:?}"
+            );
+            assert_eq!(mine.iter().filter(|v| v.name.ends_with("probe")).count(), 1);
             checked = true;
             break;
         }
