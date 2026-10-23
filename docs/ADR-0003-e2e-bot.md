@@ -68,8 +68,8 @@ With protocol v4 (`LaunchCraft`, `ScheduleBurn`, `Trajectory`, `BurnState`) the 
   server predicts a bound post-burn patch, warps past it and verifies the resulting orbit (e below 0.05).
 
 `ascend_to_orbit` stays `Blocked`: the server places launched craft straight into a circular orbit, which
-is a stand-in, not an ascent. `mun_landing` stays `Blocked` on terrain. `start_campaign` stays `Blocked`;
-joining drops the player into the one shared universe.
+is a stand-in, not an ascent. `mun_landing` stays `Blocked` on terrain. With protocol v5, `start_campaign` sends
+`JoinCampaign` and passes once `CampaignState` lists the player as a member.
 
 The test harness starts the server with `--save none --db :memory:` so runs never read or write the
 developer's save and account files.

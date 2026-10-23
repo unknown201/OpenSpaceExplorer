@@ -21,7 +21,7 @@ enum Expect {
 const FRONTIER: [(&str, Expect); 11] = [
     ("server_health", Expect::Pass),
     ("connect_hello", Expect::Pass),
-    ("start_campaign", Expect::Blocked),
+    ("start_campaign", Expect::Pass),
     ("load_stock_craft", Expect::PassOrSkip),
     ("upload_and_launch_craft", Expect::PassOrSkip),
     ("ascend_to_orbit", Expect::Blocked),

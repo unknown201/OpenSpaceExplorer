@@ -161,10 +161,21 @@ pub async fn run_mun_campaign(cfg: &BotConfig) -> Vec<StepResult> {
     // 3. Start or join the shared campaign.
     results.push(
         timed("start_campaign", Mode::Server, async {
-            Outcome::blocked(
-                "campaign/save protocol (no ClientMessage to start or join a campaign; joining drops the \
-                 player into the one shared universe); Phase 4",
-            )
+            let Some(c) = flight.client.as_mut() else {
+                return Outcome::skipped("no server session");
+            };
+            match c.join_campaign().await {
+                Ok(cs) => Outcome::passed(format!(
+                    "JoinCampaign: member of {:?} (started tick {}, {} member{}, {} vessel{})",
+                    cs.name,
+                    cs.started_tick.0,
+                    cs.members.len(),
+                    if cs.members.len() == 1 { "" } else { "s" },
+                    cs.vessels,
+                    if cs.vessels == 1 { "" } else { "s" }
+                )),
+                Err(e) => Outcome::failed(e),
+            }
         })
         .await,
     );

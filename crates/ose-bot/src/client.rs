@@ -368,6 +368,45 @@ impl Client {
     }
 }
 
+/// What the server said to `JoinCampaign` / `CampaignInfo`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Campaign {
+    pub name: String,
+    pub started_tick: Tick,
+    pub members: Vec<ose_net::CampaignMember>,
+    pub you_are_member: bool,
+    pub vessels: u32,
+}
+
+impl Client {
+    /// Join the shared campaign (idempotent) and return its state.
+    pub async fn join_campaign(&mut self) -> Result<Campaign> {
+        self.send(&ClientMessage::JoinCampaign).await?;
+        let c = self
+            .wait_for(Duration::from_secs(10), "CampaignState", |_, m| match m {
+                ServerMessage::CampaignState {
+                    name,
+                    started_tick,
+                    members,
+                    you_are_member,
+                    vessels,
+                } => Some(Campaign {
+                    name: name.clone(),
+                    started_tick: *started_tick,
+                    members: members.clone(),
+                    you_are_member: *you_are_member,
+                    vessels: *vessels,
+                }),
+                _ => None,
+            })
+            .await?;
+        if !c.you_are_member {
+            bail!("server answered JoinCampaign but did not list this player as a member");
+        }
+        Ok(c)
+    }
+}
+
 /// What the server said to `LaunchCraft`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Launched {
