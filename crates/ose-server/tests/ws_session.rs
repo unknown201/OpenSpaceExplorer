@@ -369,7 +369,7 @@ async fn hello_catalog_and_snapshots() {
     };
     ws.send(Message::Binary(
         ose_net::encode(&ClientMessage::LaunchCraft {
-            craft,
+            craft: craft.clone(),
             altitude_m: 120_000.0,
         })
         .unwrap()
@@ -395,6 +395,66 @@ async fn hello_catalog_and_snapshots() {
         }
     }
     let launched = launched.expect("CraftLaunched");
+
+    // Craft library: stock crafts are listed; saving adds ours; a saved id launches.
+    ws.send(Message::Binary(
+        ose_net::encode(&ClientMessage::CraftList).unwrap().into(),
+    ))
+    .await
+    .unwrap();
+    let mut stock_count = 0;
+    for _ in 0..40 {
+        if let ServerMessage::CraftList { crafts } = recv(&mut ws).await {
+            stock_count = crafts.iter().filter(|c| c.stock).count();
+            assert!(
+                crafts
+                    .iter()
+                    .any(|c| c.name.contains("Kerbal") && c.parts >= 40),
+                "{crafts:?}"
+            );
+            break;
+        }
+    }
+    assert!(stock_count >= 5, "stock crafts {stock_count}");
+    ws.send(Message::Binary(
+        ose_net::encode(&ClientMessage::SaveCraft {
+            craft: craft.clone(),
+        })
+        .unwrap()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let mut saved_id = None;
+    for _ in 0..40 {
+        if let ServerMessage::CraftSaved { id, reason, .. } = recv(&mut ws).await {
+            assert!(reason.is_none(), "{reason:?}");
+            saved_id = id;
+            break;
+        }
+    }
+    let saved_id = saved_id.expect("CraftSaved");
+    assert!(saved_id >= 1000);
+    ws.send(Message::Binary(
+        ose_net::encode(&ClientMessage::LaunchSavedCraft {
+            id: saved_id,
+            altitude_m: 150_000.0,
+        })
+        .unwrap()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let mut launched2 = false;
+    for _ in 0..40 {
+        if let ServerMessage::CraftLaunched { vessel, reason, .. } = recv(&mut ws).await {
+            assert!(reason.is_none(), "{reason:?}");
+            assert!(vessel.is_some());
+            launched2 = true;
+            break;
+        }
+    }
+    assert!(launched2, "saved craft did not launch");
     let mut seen_two = false;
     for _ in 0..40 {
         if let ServerMessage::Vessels { vessels, .. } = recv(&mut ws).await {
@@ -402,7 +462,7 @@ async fn hello_catalog_and_snapshots() {
                 .iter()
                 .filter(|v| v.owner == Some(player_id))
                 .collect();
-            if mine.len() == 2 {
+            if mine.len() >= 2 {
                 let tiny = mine
                     .iter()
                     .find(|v| v.id == launched)
@@ -511,8 +571,8 @@ async fn hello_catalog_and_snapshots() {
             // the probe and the launched craft, and no second probe on resume
             assert_eq!(
                 mine.len(),
-                2,
-                "resumed player keeps probe + Tiny: {vessels:?}"
+                3,
+                "resumed player keeps probe + two Tiny launches: {vessels:?}"
             );
             assert_eq!(mine.iter().filter(|v| v.name.ends_with("probe")).count(), 1);
             checked = true;

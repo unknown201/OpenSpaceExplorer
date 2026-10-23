@@ -31,12 +31,38 @@ fn main() -> anyhow::Result<()> {
         serde_json::to_string_pretty(&game)?,
     )?;
     std::fs::write(args.out.join("coverage.txt"), cov.report())?;
+    // stock craft, as our Craft schema
+    let stock_dir = args.data.join("stockassemblies");
+    let mut crafts = Vec::new();
+    if stock_dir.is_dir() {
+        let mut files: Vec<_> = std::fs::read_dir(&stock_dir)?
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|x| x == "json"))
+            .collect();
+        files.sort();
+        for f in files {
+            let text = std::fs::read_to_string(&f)?;
+            let v: serde_json::Value = match serde_json::from_str(&text) {
+                Ok(v) => v,
+                Err(_) => json5::from_str(&text)?,
+            };
+            match ose_importer::craft::craft_from_value(&v) {
+                Ok(c) => crafts.push(c),
+                Err(e) => println!("warning: stock craft {}: {e}", f.display()),
+            }
+        }
+        std::fs::write(
+            args.out.join("stock-craft.json"),
+            serde_json::to_string(&crafts)?,
+        )?;
+    }
     println!(
-        "bodies={} resources={} parts={} engines={} -> {}",
+        "bodies={} resources={} parts={} engines={} stock_craft={} -> {}",
         game.bodies.len(),
         game.resources.len(),
         game.parts.len(),
         game.parts.iter().map(|p| p.engines.len()).sum::<usize>(),
+        crafts.len(),
         args.out.display()
     );
     for w in &cov.warnings {

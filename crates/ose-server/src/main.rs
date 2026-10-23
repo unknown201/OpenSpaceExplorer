@@ -37,6 +37,9 @@ const EMBEDDED_BODIES: &str = include_str!("../../../assets/own/kerbol-system.js
 const EMBEDDED_PARTS: &str = include_str!("../../../assets/own/parts-catalog.json");
 const EMBEDDED_RESOURCES: &str = include_str!("../../../assets/own/resources.json");
 const EMBEDDED_DIFFICULTY: &str = include_str!("../../../assets/own/difficulty.json");
+const EMBEDDED_STOCK_CRAFT: &str = include_str!("../../../assets/own/stock-craft.json");
+/// Saved craft ids start here; stock crafts use 1..=999.
+const FIRST_SAVED_CRAFT_ID: u64 = 1000;
 pub const SHARED_SESSION_ID: &str = "shared";
 
 #[derive(serde::Deserialize)]
@@ -114,6 +117,8 @@ struct Shared {
     vessels: Mutex<Vec<(bevy_ecs::entity::Entity, u64, Option<u64>)>>,
     campaign: Mutex<save::Campaign>,
     difficulty: ServerMessage,
+    stock_crafts: Vec<ose_data::craft::Craft>,
+    crafts: Mutex<Vec<save::SavedCraft>>,
     /// Display names by player id for this process lifetime.
     names: Mutex<std::collections::HashMap<u64, String>>,
     /// Warp each connected player is willing to run at; the universe runs at the minimum (lowest wins).
@@ -193,11 +198,13 @@ async fn main() -> anyhow::Result<()> {
     let save_path = (args.save.to_string_lossy() != "none").then(|| args.save.clone());
     let mut registry: Vec<save::VesselEntry> = Vec::new();
     let mut campaign = save::Campaign::default();
+    let mut crafts: Vec<save::SavedCraft> = Vec::new();
     if let Some(p) = &save_path {
         match save::read(p) {
             Ok(Some(file)) => {
                 registry = save::restore(&mut universe, &file);
                 campaign = file.campaign.clone();
+                crafts = file.crafts.clone();
                 tracing::info!(path = %p.display(), tick = file.tick.0, vessels = registry.len(), "save loaded");
             }
             Ok(None) => tracing::info!(path = %p.display(), "no save file, starting fresh"),
@@ -220,6 +227,8 @@ async fn main() -> anyhow::Result<()> {
         vessels: Mutex::new(registry),
         campaign: Mutex::new(campaign),
         difficulty: difficulty_message()?,
+        stock_crafts: serde_json::from_str(EMBEDDED_STOCK_CRAFT)?,
+        crafts: Mutex::new(crafts),
         names: Mutex::new(std::collections::HashMap::new()),
         warp_requests: Mutex::new(std::collections::HashMap::new()),
     });
@@ -248,7 +257,8 @@ async fn main() -> anyhow::Result<()> {
                     let u = saver.universe.lock().expect("sim lock");
                     let v = saver.vessels.lock().expect("vessels lock");
                     let c = saver.campaign.lock().expect("campaign lock");
-                    save::capture(&u, &v, &c)
+                    let k = saver.crafts.lock().expect("crafts lock");
+                    save::capture(&u, &v, &c, &k)
                 };
                 match save::write(&p, &file) {
                     Ok(()) => {
@@ -461,6 +471,94 @@ fn session_list(s: &Shared) -> ServerMessage {
             last_played_unix: c.last_played_unix,
             players: c.members.len() as u32,
         }],
+    }
+}
+
+fn craft_summary(
+    s: &Shared,
+    id: u64,
+    owner: Option<u64>,
+    craft: &ose_data::craft::Craft,
+) -> ose_net::CraftSummary {
+    let m = craft.mass(&s.parts, &s.resources);
+    let report = ose_data::staging::delta_v_by_stage(craft, &s.parts, &s.resources);
+    ose_net::CraftSummary {
+        id,
+        name: craft.name.clone(),
+        description: craft.description.clone(),
+        parts: craft.parts.len() as u32,
+        stages: craft.stages.len() as u32,
+        dry_mass_t: m.dry_t,
+        wet_mass_t: m.wet_t(),
+        delta_v_vacuum_mps: report.total_vacuum_mps,
+        owner,
+        stock: owner.is_none(),
+    }
+}
+
+/// Stock crafts (ids 1..) plus the player's own saved crafts.
+fn craft_list(s: &Shared, player_id: u64) -> ServerMessage {
+    let mut crafts: Vec<ose_net::CraftSummary> = s
+        .stock_crafts
+        .iter()
+        .enumerate()
+        .map(|(i, c)| craft_summary(s, i as u64 + 1, None, c))
+        .collect();
+    let mine = s.crafts.lock().expect("crafts lock");
+    crafts.extend(
+        mine.iter()
+            .filter(|c| c.owner == player_id)
+            .map(|c| craft_summary(s, c.id, Some(c.owner), &c.craft)),
+    );
+    ServerMessage::CraftList { crafts }
+}
+
+fn find_craft(s: &Shared, id: u64, player_id: u64) -> Option<ose_data::craft::Craft> {
+    if (1..FIRST_SAVED_CRAFT_ID).contains(&id) {
+        return s.stock_crafts.get(id as usize - 1).cloned();
+    }
+    s.crafts
+        .lock()
+        .expect("crafts lock")
+        .iter()
+        .find(|c| c.id == id && c.owner == player_id)
+        .map(|c| c.craft.clone())
+}
+
+fn save_craft(s: &Shared, player_id: u64, craft: ose_data::craft::Craft) -> ServerMessage {
+    if craft.parts.is_empty() || !craft.is_tree() {
+        return ServerMessage::CraftSaved {
+            id: None,
+            summary: None,
+            reason: Some("craft must be a non-empty single tree".into()),
+        };
+    }
+    let m = craft.mass(&s.parts, &s.resources);
+    if !m.unknown_parts.is_empty() {
+        return ServerMessage::CraftSaved {
+            id: None,
+            summary: None,
+            reason: Some(format!("unknown parts: {:?}", m.unknown_parts)),
+        };
+    }
+    let mut list = s.crafts.lock().expect("crafts lock");
+    let id = list
+        .iter()
+        .map(|c| c.id)
+        .max()
+        .map(|m| m + 1)
+        .unwrap_or(FIRST_SAVED_CRAFT_ID);
+    let summary = craft_summary(s, id, Some(player_id), &craft);
+    list.push(save::SavedCraft {
+        id,
+        owner: player_id,
+        craft,
+    });
+    tracing::info!(player = player_id, craft = id, "craft saved");
+    ServerMessage::CraftSaved {
+        id: Some(id),
+        summary: Some(summary),
+        reason: None,
     }
 }
 
@@ -778,6 +876,39 @@ async fn session(mut socket: WebSocket, s: AppState) {
                         }
                         Ok(ClientMessage::LaunchCraft { craft, altitude_m }) => {
                             let reply = launch_craft(&s, player_id, &craft, altitude_m);
+                            if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::SaveCraft { craft }) => {
+                            let reply = save_craft(&s, player_id, craft);
+                            if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::DeleteCraft { id }) => {
+                            s.crafts.lock().expect("crafts lock").retain(|c| !(c.id == id && c.owner == player_id));
+                            let reply = craft_list(&s, player_id);
+                            if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::CraftList) => {
+                            let reply = craft_list(&s, player_id);
+                            if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::GetCraft { id }) => {
+                            let craft = find_craft(&s, id, player_id);
+                            if !send(&mut socket, &ServerMessage::CraftDocument { id, craft }).await { break; }
+                        }
+                        Ok(ClientMessage::LaunchSavedCraft { id, altitude_m }) => {
+                            let reply = match find_craft(&s, id, player_id) {
+                                Some(c) => launch_craft(&s, player_id, &c, altitude_m),
+                                None => ServerMessage::CraftLaunched {
+                                    vessel: None,
+                                    name: String::new(),
+                                    parts: 0,
+                                    wet_mass_t: 0.0,
+                                    dry_mass_t: 0.0,
+                                    delta_v_vacuum_mps: 0.0,
+                                    stages: Vec::new(),
+                                    reason: Some(format!("no craft {id} in your library")),
+                                },
+                            };
                             if !send(&mut socket, &reply).await { break; }
                         }
                         Ok(ClientMessage::Hello { .. }) => {}

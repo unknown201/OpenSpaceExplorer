@@ -70,6 +70,13 @@ impl Default for Campaign {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SavedCraft {
+    pub id: u64,
+    pub owner: u64,
+    pub craft: ose_data::craft::Craft,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SaveFile {
     pub version: u32,
     pub tick: Tick,
@@ -77,12 +84,19 @@ pub struct SaveFile {
     pub vessels: Vec<SavedVessel>,
     #[serde(default)]
     pub campaign: Campaign,
+    #[serde(default)]
+    pub crafts: Vec<SavedCraft>,
 }
 
 /// Vessel registry entry as the server keeps it: entity, vessel id, owner.
 pub type VesselEntry = (bevy_ecs::entity::Entity, u64, Option<u64>);
 
-pub fn capture(u: &Universe, vessels: &[VesselEntry], campaign: &Campaign) -> SaveFile {
+pub fn capture(
+    u: &Universe,
+    vessels: &[VesselEntry],
+    campaign: &Campaign,
+    crafts: &[SavedCraft],
+) -> SaveFile {
     let saved = vessels
         .iter()
         .filter_map(|&(e, id, owner)| {
@@ -108,6 +122,7 @@ pub fn capture(u: &Universe, vessels: &[VesselEntry], campaign: &Campaign) -> Sa
         warp: u.warp(),
         vessels: saved,
         campaign: campaign.clone(),
+        crafts: crafts.to_vec(),
     }
 }
 

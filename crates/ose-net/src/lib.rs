@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 6;
+pub const PROTOCOL_VERSION: u16 = 7;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -66,6 +66,25 @@ pub enum ClientMessage {
     /// Upload a craft and put it in a circular orbit (Phase 6 replaces this with a launch pad).
     LaunchCraft {
         craft: ose_data::craft::Craft,
+        altitude_m: f64,
+    },
+    /// Store a craft in the player library; answers `CraftSaved`.
+    SaveCraft {
+        craft: ose_data::craft::Craft,
+    },
+    /// Remove one of the player's saved crafts; answers `CraftList`.
+    DeleteCraft {
+        id: u64,
+    },
+    /// List stock crafts and the player's saved crafts; answers `CraftList`.
+    CraftList,
+    /// Fetch a listed craft document (stock or own); answers `CraftDocument`.
+    GetCraft {
+        id: u64,
+    },
+    /// Launch a listed craft like `LaunchCraft`; answers `CraftLaunched`.
+    LaunchSavedCraft {
+        id: u64,
         altitude_m: f64,
     },
     Ping {
@@ -207,6 +226,21 @@ pub struct CampaignMember {
     pub agency: Option<Agency>,
 }
 
+/// A craft in the library listing. Stock crafts have ids below 1000 and no owner.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CraftSummary {
+    pub id: u64,
+    pub name: String,
+    pub description: String,
+    pub parts: u32,
+    pub stages: u32,
+    pub dry_mass_t: f64,
+    pub wet_mass_t: f64,
+    pub delta_v_vacuum_mps: f64,
+    pub owner: Option<u64>,
+    pub stock: bool,
+}
+
 /// One stage of a craft's delta-v readout.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StageReadout {
@@ -285,6 +319,21 @@ pub enum ServerMessage {
         delta_v_vacuum_mps: f64,
         stages: Vec<StageReadout>,
         reason: Option<String>,
+    },
+    /// Answer to `CraftList` / `DeleteCraft`.
+    CraftList {
+        crafts: Vec<CraftSummary>,
+    },
+    /// Answer to `SaveCraft`.
+    CraftSaved {
+        id: Option<u64>,
+        summary: Option<CraftSummary>,
+        reason: Option<String>,
+    },
+    /// Answer to `GetCraft`.
+    CraftDocument {
+        id: u64,
+        craft: Option<ose_data::craft::Craft>,
     },
     /// Answer to `ScheduleBurn` / `ClearBurn`.
     BurnState {
