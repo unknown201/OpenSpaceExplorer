@@ -32,7 +32,7 @@ pub struct ReferenceBody(pub Entity);
 pub struct OnRails(pub Orbit);
 
 /// Index of bodies by id, kept as a resource for lookups.
-#[derive(Resource, Default, Debug)]
+#[derive(Resource, Default, Debug, Clone)]
 pub struct BodyIndex {
     pub by_id: HashMap<String, Entity>,
     pub root: Option<Entity>,

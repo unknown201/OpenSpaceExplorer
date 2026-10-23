@@ -233,3 +233,40 @@ mod tests {
         assert_eq!(o.mu, mu_mun);
     }
 }
+
+/// Universal time of the vessel's next predicted SOI transition (escape or encounter), used by
+/// `Universe::step` to clamp warp so the crossing lands on a step boundary.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct NextTransition {
+    pub ut: f64,
+}
+
+/// Recompute [`NextTransition`] for `vessel` from a fresh trajectory prediction at `ut`.
+pub fn refresh_next_transition(
+    world: &mut World,
+    index: &BodyIndex,
+    vessel: Entity,
+    ut: f64,
+    params: &crate::trajectory::SolverParams,
+) {
+    let Some((body, orbit)) = world
+        .get::<ReferenceBody>(vessel)
+        .map(|r| r.0)
+        .zip(world.get::<OnRails>(vessel).map(|o| o.0))
+    else {
+        return;
+    };
+    let patches = crate::trajectory::predict(world, index, body, orbit, ut, params);
+    let next = patches.first().and_then(|p| {
+        use crate::trajectory::Transition::*;
+        matches!(p.end, Encounter | Escape).then_some(p.end_ut)
+    });
+    match next {
+        Some(t) => {
+            world.entity_mut(vessel).insert(NextTransition { ut: t });
+        }
+        None => {
+            world.entity_mut(vessel).remove::<NextTransition>();
+        }
+    }
+}
