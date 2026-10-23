@@ -9,6 +9,7 @@ Updated 2026-10-23.
 - `tools/ksp2_catalog.py` parses the Addressables catalog (keys, buckets, entries) and resolves any key to its bundle.
 - `tools/extract_bundles.py` extracts every JSON data asset from the install into `assets/ksp2/data/` (gitignored): 798 files, including 400 part definitions, 22 celestial bodies, 14 resources, 87 tech nodes, 9 stock assemblies, missions and tutorials. Format is `{version, useExternal, data: {...}}`.
 - `ose-importer` converts the extracted JSON into our `ose-data` schema: 22 bodies (mu from `gravityASL * g0 * r^2`, SOI from `a * (m/M)^0.4`, orbits from `GalaxyDefinition_Default`, atmosphere pressure/temperature curves), 14 resources (basic and recipe), 400 parts (mass, attach rules/nodes, containers, 41 engine modes with Isp curves and gimbal, drag cubes, remaining modules kept raw). `cargo run -p ose-importer` writes `assets/ksp2/converted/game_data.json` (2.9 MB) and `coverage.txt` listing every source field not yet mapped. The real-data test runs when the extracted data is present and skips otherwise.
+- `docs/reference-notes/orbits.md`: our notes on the original orbit math (frames, anomaly solvers with their tolerances, state vectors both ways, SOI handoff, patched-conic transitions, warp clamping at SOI crossings). This is the spec for Phase 2.
 - `reference/ksp2/` (gitignored) holds the ILSpy decompile of `Assembly-CSharp` (6414 files) and the in-house support assemblies.
 
 ## How to run
@@ -31,7 +32,8 @@ Tooling installed locally: rust 1.99 with `wasm32-unknown-unknown`, trunk 0.22, 
 
 ## Next (Phase 1, remaining)
 
-- Write `docs/reference-notes/` from reading `KSP.Sim` and `KSP.Navigation` in the decompile: orbit propagation, SOI handling, resource flow, part joints, drag.
+- Reference notes still to write: resource flow (`PartFlowGraph`, `ResourceFlowRequestManager`), part joints (`ConfigurableJointInfo`, `JointOptimization`), drag (`PartComponentModule_Drag`, drag cubes).
+- Phase 2: implement `ose-math::Orbit` and the patched-conic solver per `docs/reference-notes/orbits.md`, with parity tests.
 - Convert the scaled-space planet meshes and textures to glTF/KTX2 for Phase 3.
 
 ## Known problems
