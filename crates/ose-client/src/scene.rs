@@ -7,12 +7,33 @@
 
 use ose_math::orbit::{Elements, Orbit};
 use ose_math::DVec3;
-use ose_net::{BodyInfo, BodyState};
+use ose_net::{BodyInfo, BodyState, OrbitElements, TrajectoryPatch, VesselState};
+use std::collections::HashMap;
 
 pub struct Scene {
     pub bodies: Vec<BodyInfo>,
     orbits: Vec<Option<Orbit>>,
     pub snapshot: Vec<BodyState>,
+    /// Vessels from the last `Vessels` message, in the order sent.
+    pub vessels: Vec<VesselState>,
+    /// Predicted patched-conic trajectory per vessel id, from the last `Trajectory` message.
+    pub trajectories: HashMap<u64, Vec<TrajectoryPatch>>,
+}
+
+/// `ose-math` orbit from wire elements around a body with gravitational parameter `mu`.
+pub fn orbit_from(mu: f64, o: &OrbitElements) -> Orbit {
+    Orbit::from_elements(
+        mu,
+        Elements {
+            semi_major_axis: o.semi_major_axis_m,
+            eccentricity: o.eccentricity,
+            inclination_deg: o.inclination_deg,
+            longitude_of_ascending_node_deg: o.longitude_of_ascending_node_deg,
+            argument_of_periapsis_deg: o.argument_of_periapsis_deg,
+            mean_anomaly_at_epoch: o.mean_anomaly_at_epoch_rad,
+            epoch: o.epoch_s,
+        },
+    )
 }
 
 impl Scene {
@@ -22,25 +43,32 @@ impl Scene {
             .map(|b| {
                 let parent = b.parent.map(|p| &bodies[p as usize])?;
                 let o = b.orbit?;
-                Some(Orbit::from_elements(
-                    parent.mu,
-                    Elements {
-                        semi_major_axis: o.semi_major_axis_m,
-                        eccentricity: o.eccentricity,
-                        inclination_deg: o.inclination_deg,
-                        longitude_of_ascending_node_deg: o.longitude_of_ascending_node_deg,
-                        argument_of_periapsis_deg: o.argument_of_periapsis_deg,
-                        mean_anomaly_at_epoch: o.mean_anomaly_at_epoch_rad,
-                        epoch: o.epoch_s,
-                    },
-                ))
+                Some(orbit_from(parent.mu, &o))
             })
             .collect();
         Scene {
             bodies,
             orbits,
             snapshot: Vec::new(),
+            vessels: Vec::new(),
+            trajectories: HashMap::new(),
         }
+    }
+
+    /// Star-space position of a vessel at `ut`: its reference body plus its orbit, so it moves smoothly
+    /// between `Vessels` messages. Falls back to the sent position if the reference body is unknown.
+    pub fn vessel_position(&self, v: &VesselState, ut: f64) -> DVec3 {
+        match self.bodies.get(v.reference_body as usize) {
+            Some(body) => {
+                self.position(v.reference_body as usize, ut)
+                    + orbit_from(body.mu, &v.orbit).position_at(ut)
+            }
+            None => v.position_m,
+        }
+    }
+
+    pub fn vessel(&self, id: u64) -> Option<&VesselState> {
+        self.vessels.iter().find(|v| v.id == id)
     }
 
     pub fn len(&self) -> usize {
@@ -245,6 +273,31 @@ mod tests {
         assert_eq!(s.root(), Some(0));
         assert_eq!(s.index_of("kerbin"), Some(1));
         assert!(s.system_extent(0) > 13.0e9);
+    }
+
+    #[test]
+    fn vessel_rides_its_reference_body() {
+        let s = Scene::new(kerbol_kerbin_mun());
+        let v = VesselState {
+            id: 7,
+            name: "probe".into(),
+            owner: Some(1),
+            reference_body: 1,
+            position_m: DVec3::ZERO,
+            velocity_mps: DVec3::ZERO,
+            orbit: OrbitElements {
+                semi_major_axis_m: 700_000.0,
+                eccentricity: 0.0,
+                inclination_deg: 0.0,
+                longitude_of_ascending_node_deg: 0.0,
+                argument_of_periapsis_deg: 0.0,
+                mean_anomaly_at_epoch_rad: 0.0,
+                epoch_s: 0.0,
+            },
+        };
+        let kerbin = s.position(1, 0.0);
+        let p = s.vessel_position(&v, 0.0);
+        assert!(((p - kerbin).length() - 700_000.0).abs() < 1.0);
     }
 
     #[test]

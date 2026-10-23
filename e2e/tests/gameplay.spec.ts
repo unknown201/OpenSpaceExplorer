@@ -20,7 +20,7 @@ const FRONTIER: [StepName, Expect][] = [
   ["time_display", "Pass"],
   ["map_view_bodies", "Pass"],
   ["time_warp_control", "Pass"],
-  ["player_vessel", "Blocked"],
+  ["player_vessel", "Pass"],
   ["maneuver_node", "Blocked"],
 ];
 

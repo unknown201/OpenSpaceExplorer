@@ -36,5 +36,6 @@ to `Pass` in the same change.
 | `[data-ose="vessel"]` | the player's active vessel in the map view |
 | `[data-ose="maneuver-node"]` | a maneuver node on the player's trajectory |
 | `[data-ose="warp-down"]` | lowers the warp factor one step |
+| `[data-ose="vessel"]` also carries `data-ose-id` (vessel id); the player's own vessel has class `mine` and the camera follows it; a click follows that vessel |
 | `canvas[data-ose-scale]` | metres per CSS pixel of the map camera, refreshed every frame |
 | `canvas[data-ose-focus]` | id and star-space x y of the focused body, refreshed every frame |

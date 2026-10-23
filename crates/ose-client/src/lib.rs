@@ -24,7 +24,7 @@ use web_sys::{
     MouseEvent, WebSocket, WheelEvent,
 };
 
-use ose_net::{ClientMessage, ServerMessage, PROTOCOL_VERSION, WS_PATH};
+use ose_net::{ClientMessage, PatchEnd, ServerMessage, PROTOCOL_VERSION, WS_PATH};
 
 const BODY_LABEL_CLASS: &str = "body";
 
@@ -34,6 +34,10 @@ struct App {
     ctx: CanvasRenderingContext2d,
     labels: Element,
     label_els: Vec<HtmlElement>,
+    /// One label per vessel, keyed by vessel id, rebuilt when the vessel list changes.
+    vessel_els: Vec<(u64, HtmlElement)>,
+    /// Vessel the camera follows instead of the focus body, if any.
+    follow: Option<u64>,
     ut_el: Element,
     warp_el: Element,
     focus_el: Element,
@@ -80,6 +84,8 @@ pub fn start() -> Result<(), JsValue> {
     let app: Shared = Rc::new(RefCell::new(App {
         labels: get("labels")?,
         label_els: Vec::new(),
+        vessel_els: Vec::new(),
+        follow: None,
         ut_el: get("ut")?,
         warp_el: get("warp")?,
         focus_el: get("focus")?,
@@ -344,6 +350,7 @@ impl App {
     }
 
     fn set_focus(&mut self, i: usize) {
+        self.follow = None;
         self.camera.focus = i;
         self.frame_focus();
         if let Some(scene) = &self.scene {
@@ -384,8 +391,36 @@ impl App {
                     scene.snapshot = bodies;
                 }
             }
+            ServerMessage::Vessels { vessels, .. } => {
+                let ids: Vec<u64> = vessels.iter().map(|v| v.id).collect();
+                let known: Vec<u64> = self.vessel_els.iter().map(|(id, _)| *id).collect();
+                let changed = ids != known;
+                if changed {
+                    self.build_vessel_labels(&vessels);
+                }
+                let mine = vessels
+                    .iter()
+                    .find(|v| v.owner.is_some() && v.owner == self.player_id)
+                    .map(|v| (v.id, v.reference_body as usize));
+                if let Some(scene) = &mut self.scene {
+                    scene.vessels = vessels;
+                }
+                // Follow the player's own vessel the first time it appears.
+                if changed && self.follow.is_none() {
+                    if let Some((id, rb)) = mine {
+                        self.follow_vessel(id, rb);
+                    }
+                }
+            }
+            ServerMessage::Trajectory {
+                vessel, patches, ..
+            } => {
+                if let Some(scene) = &mut self.scene {
+                    scene.trajectories.insert(vessel, patches);
+                }
+            }
             ServerMessage::Pong { .. } => {}
-            // Messages for features this client does not draw yet (vessels, trajectories) are ignored.
+            // Messages for features this client does not draw yet are ignored.
             #[allow(unreachable_patterns)]
             _ => {}
         }
@@ -419,6 +454,53 @@ impl App {
         }
     }
 
+    fn build_vessel_labels(&mut self, vessels: &[ose_net::VesselState]) {
+        for (_, el) in self.vessel_els.drain(..) {
+            el.remove();
+        }
+        for v in vessels {
+            let Some(el) = self
+                .doc
+                .create_element("div")
+                .ok()
+                .and_then(|e| e.dyn_into::<HtmlElement>().ok())
+            else {
+                continue;
+            };
+            let mine = v.owner.is_some() && v.owner == self.player_id;
+            el.set_class_name(if mine { "vessel mine" } else { "vessel" });
+            el.set_attribute("data-ose", "vessel").ok();
+            el.set_attribute("data-ose-id", &v.id.to_string()).ok();
+            el.set_attribute("data-ose-vessel", &v.id.to_string()).ok();
+            el.set_text_content(Some(&v.name));
+            self.labels.append_child(&el).ok();
+            self.vessel_els.push((v.id, el));
+        }
+    }
+
+    /// Centre the camera on a vessel: focus its reference body (so orbits draw around it) and follow.
+    fn follow_vessel(&mut self, id: u64, reference_body: usize) {
+        self.follow = Some(id);
+        self.camera.focus = reference_body;
+        if let Some(scene) = &self.scene {
+            if let Some(v) = scene.vessel(id) {
+                let body = &scene.bodies[reference_body];
+                let a = scene::orbit_from(body.mu, &v.orbit)
+                    .apoapsis()
+                    .abs()
+                    .max(body.radius_m * 1.5);
+                self.camera.frame(a * 1.3);
+                self.focus_el
+                    .set_text_content(Some(&format!("following: {}", v.name)));
+            }
+        }
+    }
+
+    fn vessel_click_target(ev: &MouseEvent) -> Option<u64> {
+        let t: Element = ev.target()?.dyn_into().ok()?;
+        t.get_attribute("data-ose-vessel")?.parse().ok()
+    }
+
     fn label_click_target(ev: &MouseEvent) -> Option<usize> {
         let t: Element = ev.target()?.dyn_into().ok()?;
         t.get_attribute("data-ose-index")?.parse().ok()
@@ -449,7 +531,11 @@ impl App {
         };
         let cam = self.camera;
         let positions: Vec<_> = (0..scene.len()).map(|i| scene.position(i, ut)).collect();
-        let centre = positions[cam.focus];
+        let followed = self
+            .follow
+            .and_then(|id| scene.vessel(id))
+            .map(|v| scene.vessel_position(v, ut));
+        let centre = followed.unwrap_or(positions[cam.focus]);
         // Exposed for tests and debugging: current scale and the star-space position of the focus body.
         self.canvas
             .set_attribute("data-ose-scale", &format!("{:.3e}", cam.m_per_px))
@@ -544,6 +630,82 @@ impl App {
                 }
             }
         }
+        self.draw_vessels(ut, &positions, centre);
+    }
+
+    /// Vessels: predicted trajectory patches, then a marker and label per vessel.
+    fn draw_vessels(&self, ut: f64, positions: &[ose_math::DVec3], centre: ose_math::DVec3) {
+        let Some(scene) = &self.scene else {
+            return;
+        };
+        let cam = self.camera;
+        let ctx = &self.ctx;
+        for v in &scene.vessels {
+            let mine = v.owner.is_some() && v.owner == self.player_id;
+            if let Some(patches) = scene.trajectories.get(&v.id) {
+                for patch in patches {
+                    let Some(body) = scene.bodies.get(patch.body as usize) else {
+                        continue;
+                    };
+                    let orbit = scene::orbit_from(body.mu, &patch.orbit);
+                    let origin = positions[patch.body as usize];
+                    let end_ut = if patch.end_ut.is_finite() {
+                        patch.end_ut
+                    } else if orbit.period.is_finite() {
+                        patch.start_ut + orbit.period
+                    } else {
+                        // Hyperbolic with no end: draw out to the body's SOI or a few hours.
+                        patch.start_ut + 6.0 * 3600.0
+                    };
+                    let soi = body.soi_radius_m.unwrap_or(f64::INFINITY);
+                    let n = 240;
+                    ctx.set_line_width(if mine { 1.5 } else { 1.0 });
+                    let colour = match patch.end {
+                        PatchEnd::Final => "rgba(120,220,160,0.9)",
+                        PatchEnd::Encounter => "rgba(240,200,90,0.9)",
+                        PatchEnd::Escape => "rgba(240,130,90,0.9)",
+                        PatchEnd::Collision => "rgba(240,90,90,0.9)",
+                        PatchEnd::Maneuver => "rgba(150,170,255,0.9)",
+                        #[allow(unreachable_patterns)]
+                        _ => "rgba(200,200,200,0.7)",
+                    };
+                    ctx.set_stroke_style_str(colour);
+                    ctx.begin_path();
+                    let mut started = false;
+                    for k in 0..=n {
+                        let t = patch.start_ut + (end_ut - patch.start_ut) * k as f64 / n as f64;
+                        let rel = orbit.position_at(t);
+                        if rel.length() > soi * 1.02 {
+                            break;
+                        }
+                        let (x, y) = cam.to_screen(origin + rel, centre);
+                        if started {
+                            ctx.line_to(x, y);
+                        } else {
+                            ctx.move_to(x, y);
+                            started = true;
+                        }
+                    }
+                    ctx.stroke();
+                }
+            }
+            let p = scene.vessel_position(v, ut);
+            let (x, y) = cam.to_screen(p, centre);
+            ctx.set_fill_style_str(if mine { "#9ef0c0" } else { "#d0d8e8" });
+            ctx.begin_path();
+            ctx.move_to(x, y - 6.0);
+            ctx.line_to(x + 5.0, y + 4.0);
+            ctx.line_to(x - 5.0, y + 4.0);
+            ctx.close_path();
+            ctx.fill();
+            if let Some((_, el)) = self.vessel_els.iter().find(|(id, _)| *id == v.id) {
+                let style = el.style();
+                style
+                    .set_property("left", &format!("{:.1}px", x + 8.0))
+                    .ok();
+                style.set_property("top", &format!("{y:.1}px")).ok();
+            }
+        }
     }
 }
 
@@ -579,6 +741,16 @@ fn install_label_clicks(app: &Shared) -> Result<(), JsValue> {
     let on_click = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
         if let Some(i) = App::label_click_target(&ev) {
             a.borrow_mut().set_focus(i);
+        } else if let Some(id) = App::vessel_click_target(&ev) {
+            let mut app = a.borrow_mut();
+            let rb = app
+                .scene
+                .as_ref()
+                .and_then(|s| s.vessel(id))
+                .map(|v| v.reference_body as usize);
+            if let Some(rb) = rb {
+                app.follow_vessel(id, rb);
+            }
         }
     });
     labels.add_event_listener_with_callback("click", on_click.as_ref().unchecked_ref())?;

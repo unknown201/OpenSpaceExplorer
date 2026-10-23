@@ -26,6 +26,10 @@ untestable in CI.
 - The HUD shows UT in Kerbin calendar time (6 h days, 426 d years, both 1-based) and the warp ladder
   1, 2, 3, 4, 5, 10, 50, 100, 1000, 10000, 100000. The warp button sends `RequestWarp` and shows the
   requested value at once; the next `TimeState` confirms or corrects it.
+- Vessels (protocol v3 `Vessels`) are drawn as triangles with a label, placed from their orbit around the
+  reference body so they move smoothly between messages; the player's own vessel is followed by the camera
+  until a body label is clicked. Each vessel's `Trajectory` patches are drawn as time-sampled conics around
+  their body, coloured by how the patch ends (final, encounter, escape, collision, maneuver).
 - WebGPU stays the plan for the flight view (3D vessel, terrain, scaled space), where Canvas 2D cannot
   go. The map can move to the same pipeline later; its scene model and camera do not depend on how it is
   drawn.
@@ -33,7 +37,7 @@ untestable in CI.
 ## Consequences
 
 - The e2e frontier moves: `render_canvas`, `websocket_session`, `time_display`, `map_view_bodies` and
-  `time_warp_control` pass in Chromium and Firefox; `player_vessel` and `maneuver_node` stay blocked on the
-  server streaming vessels (Phase 4) and trajectory patches (Phase 5).
+  `time_warp_control` and `player_vessel` pass in Chromium and Firefox; `maneuver_node` stays blocked on a
+  maneuver-node UI over `ScheduleBurn` (Phase 5).
 - The canvas exposes `data-ose-scale` and `data-ose-focus` for tests and debugging.
 - No new dependencies beyond `js-sys` and more `web-sys` features; the client stays about 100 KB of WASM.
