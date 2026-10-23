@@ -17,6 +17,8 @@ pub enum Transition {
     Encounter,
     Escape,
     Collision,
+    /// A scheduled burn cuts the patch here; the next patch starts on the post-burn orbit.
+    Maneuver,
     Final,
 }
 

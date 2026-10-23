@@ -30,6 +30,18 @@ pub enum ClientMessage {
     RequestWarp {
         factor: u32,
     },
+    /// Schedule an impulsive burn on a vessel the player owns, in its orbital frame at `ut`.
+    ScheduleBurn {
+        vessel: u64,
+        ut: f64,
+        prograde_mps: f64,
+        normal_mps: f64,
+        radial_mps: f64,
+    },
+    /// Remove the scheduled burn from a vessel the player owns.
+    ClearBurn {
+        vessel: u64,
+    },
     Ping {
         sent_tick: Tick,
     },
@@ -88,6 +100,7 @@ pub enum PatchEnd {
     Encounter,
     Escape,
     Collision,
+    Maneuver,
     Final,
 }
 
@@ -136,6 +149,12 @@ pub enum ServerMessage {
         tick: Tick,
         vessel: u64,
         patches: Vec<TrajectoryPatch>,
+    },
+    /// Answer to `ScheduleBurn` / `ClearBurn`.
+    BurnState {
+        vessel: u64,
+        scheduled: bool,
+        reason: Option<String>,
     },
     Pong {
         sent_tick: Tick,

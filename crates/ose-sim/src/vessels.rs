@@ -270,3 +270,46 @@ pub fn refresh_next_transition(
         }
     }
 }
+
+/// An impulsive burn scheduled on rails, expressed in the vessel's orbital frame at `ut`:
+/// prograde (along velocity), normal (along the orbit normal), radial (outward).
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct ScheduledBurn {
+    pub ut: f64,
+    pub prograde_mps: f64,
+    pub normal_mps: f64,
+    pub radial_mps: f64,
+}
+
+/// The delta-v vector in body-relative coordinates for a burn applied to `orbit` at `burn.ut`.
+pub fn burn_delta_v(orbit: &Orbit, burn: &ScheduledBurn) -> DVec3 {
+    let (r, v) = orbit.state_at(burn.ut);
+    let prograde = v.normalized();
+    let normal = r.cross(v).normalized();
+    let radial = normal.cross(prograde).normalized();
+    prograde * burn.prograde_mps + normal * burn.normal_mps + radial * burn.radial_mps
+}
+
+/// The orbit after applying `burn` to `orbit` (same reference body, elements re-derived at `burn.ut`).
+pub fn orbit_after_burn(orbit: &Orbit, burn: &ScheduledBurn) -> Orbit {
+    let (r, v) = orbit.state_at(burn.ut);
+    Orbit::from_state_vectors(orbit.mu, r, v + burn_delta_v(orbit, burn), burn.ut)
+}
+
+/// Apply a due burn to `vessel` (its orbit is replaced, the burn removed). Returns true if applied.
+pub fn apply_due_burn(world: &mut World, vessel: Entity, ut: f64) -> bool {
+    let Some(burn) = world.get::<ScheduledBurn>(vessel).copied() else {
+        return false;
+    };
+    if burn.ut > ut {
+        return false;
+    }
+    let Some(orbit) = world.get::<OnRails>(vessel).map(|o| o.0) else {
+        return false;
+    };
+    let new_orbit = orbit_after_burn(&orbit, &burn);
+    let mut e = world.entity_mut(vessel);
+    e.insert(OnRails(new_orbit));
+    e.remove::<ScheduledBurn>();
+    true
+}

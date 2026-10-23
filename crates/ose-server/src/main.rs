@@ -211,6 +211,7 @@ fn trajectories(s: &Shared) -> Vec<ServerMessage> {
                         Transition::Encounter => PatchEnd::Encounter,
                         Transition::Escape => PatchEnd::Escape,
                         Transition::Collision => PatchEnd::Collision,
+                        Transition::Maneuver => PatchEnd::Maneuver,
                         Transition::Initial | Transition::Final => PatchEnd::Final,
                     },
                 })
@@ -249,6 +250,16 @@ fn snapshot(s: &Shared) -> (ServerMessage, ServerMessage, ServerMessage) {
         ServerMessage::Snapshot { tick, bodies },
         vessels_message(s, &u, tick),
     )
+}
+
+/// The entity of vessel `id` if `player` owns it.
+fn owned_vessel(s: &Shared, id: u64, player: u64) -> Option<bevy_ecs::entity::Entity> {
+    s.vessels
+        .lock()
+        .expect("vessels lock")
+        .iter()
+        .find(|&&(_, vid, owner)| vid == id && owner == Some(player))
+        .map(|&(e, _, _)| e)
 }
 
 /// Every player gets a probe in a 100 km circular orbit around the home world on joining.
@@ -368,6 +379,30 @@ async fn session(mut socket: WebSocket, s: AppState) {
                         }
                         Ok(ClientMessage::Ping { sent_tick }) => {
                             if !send(&mut socket, &ServerMessage::Pong { sent_tick }).await { break; }
+                        }
+                        Ok(ClientMessage::ScheduleBurn { vessel, ut, prograde_mps, normal_mps, radial_mps }) => {
+                            let reply = match owned_vessel(&s, vessel, player_id) {
+                                Some(e) => {
+                                    let burn = ose_sim::vessels::ScheduledBurn { ut, prograde_mps, normal_mps, radial_mps };
+                                    let ok = s.universe.lock().expect("sim lock").schedule_burn(e, burn);
+                                    ServerMessage::BurnState { vessel, scheduled: ok, reason: (!ok).then(|| "burn time is in the past".to_string()) }
+                                }
+                                None => ServerMessage::BurnState { vessel, scheduled: false, reason: Some("not your vessel".into()) },
+                            };
+                            if !send(&mut socket, &reply).await { break; }
+                            for msg in trajectories(&s) {
+                                if !send(&mut socket, &msg).await { break; }
+                            }
+                        }
+                        Ok(ClientMessage::ClearBurn { vessel }) => {
+                            let reply = match owned_vessel(&s, vessel, player_id) {
+                                Some(e) => {
+                                    s.universe.lock().expect("sim lock").world.entity_mut(e).remove::<ose_sim::vessels::ScheduledBurn>();
+                                    ServerMessage::BurnState { vessel, scheduled: false, reason: None }
+                                }
+                                None => ServerMessage::BurnState { vessel, scheduled: false, reason: Some("not your vessel".into()) },
+                            };
+                            if !send(&mut socket, &reply).await { break; }
                         }
                         Ok(ClientMessage::Hello { .. }) => {}
                         Err(e) => tracing::warn!(player = player_id, error = %e, "bad client message"),

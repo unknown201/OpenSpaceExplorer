@@ -137,6 +137,52 @@ async fn hello_catalog_and_snapshots() {
     assert_eq!(warp, 1);
     saw_snap.expect("Snapshot");
 
+    // Schedule a prograde burn on the probe; the trajectory shows the maneuver and a 12,000 km apoapsis.
+    let probe_id = 1;
+    ws.send(Message::Binary(
+        ose_net::encode(&ClientMessage::ScheduleBurn {
+            vessel: probe_id,
+            ut: 1.0e6,
+            prograde_mps: 841.6,
+            normal_mps: 0.0,
+            radial_mps: 0.0,
+        })
+        .unwrap()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let mut burn_ok = false;
+    let mut maneuver_seen = false;
+    for _ in 0..60 {
+        match recv(&mut ws).await {
+            ServerMessage::BurnState {
+                vessel,
+                scheduled,
+                reason,
+            } => {
+                assert_eq!(vessel, probe_id);
+                assert!(scheduled, "{reason:?}");
+                burn_ok = true;
+            }
+            ServerMessage::Trajectory { patches, .. } if patches.len() >= 2 => {
+                assert_eq!(patches[0].end, ose_net::PatchEnd::Maneuver);
+                let o = &patches[1].orbit;
+                let ap = o.semi_major_axis_m * (1.0 + o.eccentricity);
+                assert!((ap - 12_000_000.0).abs() < 100_000.0, "apoapsis {ap}");
+                maneuver_seen = true;
+            }
+            _ => {}
+        }
+        if burn_ok && maneuver_seen {
+            break;
+        }
+    }
+    assert!(
+        burn_ok && maneuver_seen,
+        "burn {burn_ok} maneuver {maneuver_seen}"
+    );
+
     // Raise warp and see it reflected.
     ws.send(Message::Binary(
         ose_net::encode(&ClientMessage::RequestWarp { factor: 100 })
