@@ -35,6 +35,8 @@ pub struct CampaignMember {
     pub player_id: u64,
     pub display_name: String,
     pub joined_tick: Tick,
+    #[serde(default)]
+    pub agency: Option<ose_net::Agency>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -42,6 +44,16 @@ pub struct Campaign {
     pub name: String,
     pub started_tick: Tick,
     pub members: Vec<CampaignMember>,
+    #[serde(default = "default_mode")]
+    pub mode: ose_net::SessionMode,
+    #[serde(default)]
+    pub difficulty: Vec<ose_net::DifficultyOption>,
+    #[serde(default)]
+    pub last_played_unix: u64,
+}
+
+fn default_mode() -> ose_net::SessionMode {
+    ose_net::SessionMode::Exploration
 }
 
 impl Default for Campaign {
@@ -50,6 +62,9 @@ impl Default for Campaign {
             name: "Shared campaign".into(),
             started_tick: Tick(0),
             members: Vec::new(),
+            mode: default_mode(),
+            difficulty: Vec::new(),
+            last_played_unix: 0,
         }
     }
 }

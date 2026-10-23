@@ -1,0 +1,157 @@
+{
+ "definitions": [
+  {
+   "id": "AllowRevert",
+   "section": "General",
+   "group": "base",
+   "kind": "Bool",
+   "min": null,
+   "max": null,
+   "step": null
+  },
+  {
+   "id": "AllowQuickLoad",
+   "section": "General",
+   "group": "base",
+   "kind": "Bool",
+   "min": null,
+   "max": null,
+   "step": null
+  },
+  {
+   "id": "IncludeStockVessels",
+   "section": "General",
+   "group": "base",
+   "kind": "Bool",
+   "min": null,
+   "max": null,
+   "step": null
+  },
+  {
+   "id": "InfiniteFuel",
+   "section": "Resource",
+   "group": "base",
+   "kind": "Bool",
+   "min": null,
+   "max": null,
+   "step": null
+  },
+  {
+   "id": "InfinitePower",
+   "section": "Resource",
+   "group": "base",
+   "kind": "Bool",
+   "min": null,
+   "max": null,
+   "step": null
+  },
+  {
+   "id": "DockingTolerance",
+   "section": "Flight",
+   "group": "base",
+   "kind": "Percentage",
+   "min": 0.5,
+   "max": 2,
+   "step": 0.01
+  },
+  {
+   "id": "CommNetRequired",
+   "section": "Flight",
+   "group": "base",
+   "kind": "Bool",
+   "min": null,
+   "max": null,
+   "step": null
+  },
+  {
+   "id": "UnbreakableJoints",
+   "section": "Flight",
+   "group": "base",
+   "kind": "Bool",
+   "min": null,
+   "max": null,
+   "step": null
+  },
+  {
+   "id": "HeatEnabled",
+   "section": "General",
+   "group": "exploration",
+   "kind": "Bool",
+   "min": null,
+   "max": null,
+   "step": null
+  },
+  {
+   "id": "HeatScaling",
+   "section": "General",
+   "group": "exploration",
+   "kind": "Percentage",
+   "min": 0.5,
+   "max": 2,
+   "step": 0.1
+  },
+  {
+   "id": "HeatPartDestruction",
+   "section": "General",
+   "group": "exploration",
+   "kind": "Bool",
+   "min": null,
+   "max": null,
+   "step": null
+  }
+ ],
+ "presets": {
+  "Easy": {
+   "AllowRevert": true,
+   "AllowQuickLoad": true,
+   "IncludeStockVessels": true,
+   "DockingTolerance": 2,
+   "CommNetRequired": true,
+   "UnbreakableJoints": false,
+   "InfiniteFuel": false,
+   "InfinitePower": false,
+   "HeatEnabled": true,
+   "HeatScaling": 0.5,
+   "HeatPartDestruction": true
+  },
+  "Normal": {
+   "AllowRevert": true,
+   "AllowQuickLoad": true,
+   "IncludeStockVessels": true,
+   "DockingTolerance": 1.5,
+   "CommNetRequired": true,
+   "UnbreakableJoints": false,
+   "InfiniteFuel": false,
+   "InfinitePower": false,
+   "HeatEnabled": true,
+   "HeatScaling": 1,
+   "HeatPartDestruction": true
+  },
+  "Hard": {
+   "AllowRevert": false,
+   "AllowQuickLoad": false,
+   "IncludeStockVessels": false,
+   "DockingTolerance": 1,
+   "CommNetRequired": true,
+   "UnbreakableJoints": false,
+   "InfiniteFuel": false,
+   "InfinitePower": false,
+   "HeatEnabled": true,
+   "HeatScaling": 1,
+   "HeatPartDestruction": true
+  },
+  "RocketScientist": {
+   "AllowRevert": false,
+   "AllowQuickLoad": false,
+   "IncludeStockVessels": false,
+   "DockingTolerance": 0.5,
+   "CommNetRequired": true,
+   "UnbreakableJoints": false,
+   "InfiniteFuel": false,
+   "InfinitePower": false,
+   "HeatEnabled": true,
+   "HeatScaling": 1,
+   "HeatPartDestruction": true
+  }
+ }
+}

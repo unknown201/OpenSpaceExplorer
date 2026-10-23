@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 5;
+pub const PROTOCOL_VERSION: u16 = 6;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -46,6 +46,23 @@ pub enum ClientMessage {
     JoinCampaign,
     /// Ask for the campaign state without joining.
     CampaignInfo,
+    /// Session browser: answers `SessionList` (one entry per server, ADR-0001).
+    ListSessions,
+    /// Join the session with this id (same as `JoinCampaign` for the shared one); answers `CampaignState`.
+    SelectSession {
+        id: String,
+    },
+    /// Configure the shared campaign when nobody has joined it yet (name, mode, difficulty); otherwise the
+    /// existing campaign is returned unchanged with `created: false`. Answers `CampaignState`.
+    CreateSession {
+        name: String,
+        mode: SessionMode,
+        difficulty: Vec<DifficultyOption>,
+    },
+    /// Set the player agency (flag and colours), echoed in `CampaignMember::agency`. Answers `CampaignState`.
+    SetAgency {
+        agency: Agency,
+    },
     /// Upload a craft and put it in a circular orbit (Phase 6 replaces this with a launch pad).
     LaunchCraft {
         craft: ose_data::craft::Craft,
@@ -124,11 +141,70 @@ pub struct TrajectoryPatch {
     pub end: PatchEnd,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SessionMode {
+    Sandbox,
+    Exploration,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum DifficultyValue {
+    Bool(bool),
+    Number(f64),
+    Choice(String),
+}
+
+/// One difficulty setting as chosen for a campaign.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DifficultyOption {
+    pub id: String,
+    pub value: DifficultyValue,
+}
+
+/// How a difficulty setting is presented: from the imported `DifficultyOptionDefinitions`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DifficultyDefinition {
+    pub id: String,
+    pub section: String,
+    /// "base" (always shown) or "exploration" (exploration mode only).
+    pub group: String,
+    /// "Bool" or "Percentage".
+    pub kind: String,
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+    pub step: Option<f64>,
+}
+
+/// A difficulty preset (Easy, Normal, Hard, RocketScientist) as a full option list.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DifficultyPreset {
+    pub name: String,
+    pub options: Vec<DifficultyOption>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Agency {
+    pub flag_id: String,
+    pub primary_rgb: [u8; 3],
+    pub secondary_rgb: [u8; 3],
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SessionInfo {
+    pub id: String,
+    pub name: String,
+    pub mode: SessionMode,
+    pub ut_s: f64,
+    pub last_played_unix: u64,
+    pub players: u32,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CampaignMember {
     pub player_id: u64,
     pub display_name: String,
     pub joined_tick: Tick,
+    pub agency: Option<Agency>,
 }
 
 /// One stage of a craft's delta-v readout.
@@ -179,11 +255,25 @@ pub enum ServerMessage {
     },
     /// The shared campaign: its name, when it started, who is in it, and whether you are a member.
     CampaignState {
+        id: String,
         name: String,
+        mode: SessionMode,
+        difficulty: Vec<DifficultyOption>,
         started_tick: Tick,
         members: Vec<CampaignMember>,
         you_are_member: bool,
         vessels: u32,
+        /// True when this answer is to a `CreateSession` that configured the campaign.
+        created: bool,
+    },
+    /// Answer to `ListSessions`.
+    SessionList {
+        sessions: Vec<SessionInfo>,
+    },
+    /// Difficulty option definitions and presets, sent once after `BodyCatalog`.
+    DifficultyOptions {
+        definitions: Vec<DifficultyDefinition>,
+        presets: Vec<DifficultyPreset>,
     },
     /// Answer to `LaunchCraft`. `stages` is the per-stage vacuum delta-v readout, first-firing stage first.
     CraftLaunched {

@@ -36,6 +36,50 @@ use tower_http::services::{ServeDir, ServeFile};
 const EMBEDDED_BODIES: &str = include_str!("../../../assets/own/kerbol-system.json");
 const EMBEDDED_PARTS: &str = include_str!("../../../assets/own/parts-catalog.json");
 const EMBEDDED_RESOURCES: &str = include_str!("../../../assets/own/resources.json");
+const EMBEDDED_DIFFICULTY: &str = include_str!("../../../assets/own/difficulty.json");
+pub const SHARED_SESSION_ID: &str = "shared";
+
+#[derive(serde::Deserialize)]
+struct DifficultyFile {
+    definitions: Vec<ose_net::DifficultyDefinition>,
+    presets:
+        std::collections::BTreeMap<String, std::collections::BTreeMap<String, serde_json::Value>>,
+}
+
+fn difficulty_message() -> anyhow::Result<ServerMessage> {
+    let f: DifficultyFile = serde_json::from_str(EMBEDDED_DIFFICULTY)?;
+    let presets = f
+        .presets
+        .into_iter()
+        .map(|(name, opts)| ose_net::DifficultyPreset {
+            name,
+            options: opts
+                .into_iter()
+                .map(|(id, v)| ose_net::DifficultyOption {
+                    id,
+                    value: match v {
+                        serde_json::Value::Bool(b) => ose_net::DifficultyValue::Bool(b),
+                        serde_json::Value::Number(n) => {
+                            ose_net::DifficultyValue::Number(n.as_f64().unwrap_or(0.0))
+                        }
+                        other => ose_net::DifficultyValue::Choice(other.to_string()),
+                    },
+                })
+                .collect(),
+        })
+        .collect();
+    Ok(ServerMessage::DifficultyOptions {
+        definitions: f.definitions,
+        presets,
+    })
+}
+
+fn now_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
 
 #[derive(Parser, Debug)]
 #[command(name = "ose-server")]
@@ -69,6 +113,7 @@ struct Shared {
     /// Vessel entity -> (vessel id, owner player id).
     vessels: Mutex<Vec<(bevy_ecs::entity::Entity, u64, Option<u64>)>>,
     campaign: Mutex<save::Campaign>,
+    difficulty: ServerMessage,
     /// Display names by player id for this process lifetime.
     names: Mutex<std::collections::HashMap<u64, String>>,
     /// Warp each connected player is willing to run at; the universe runs at the minimum (lowest wins).
@@ -174,6 +219,7 @@ async fn main() -> anyhow::Result<()> {
         }),
         vessels: Mutex::new(registry),
         campaign: Mutex::new(campaign),
+        difficulty: difficulty_message()?,
         names: Mutex::new(std::collections::HashMap::new()),
         warp_requests: Mutex::new(std::collections::HashMap::new()),
     });
@@ -374,13 +420,18 @@ fn campaign_state(s: &Shared, player_id: u64, join: Option<&String>) -> ServerMe
                 player_id,
                 display_name: name.clone(),
                 joined_tick: tick,
+                agency: None,
             });
             tracing::info!(player = player_id, "joined the campaign");
         }
+        c.last_played_unix = now_unix();
     }
     let vessels = s.vessels.lock().expect("vessels lock").len() as u32;
     ServerMessage::CampaignState {
+        id: SHARED_SESSION_ID.into(),
         name: c.name.clone(),
+        mode: c.mode,
+        difficulty: c.difficulty.clone(),
         started_tick: c.started_tick,
         members: c
             .members
@@ -389,10 +440,27 @@ fn campaign_state(s: &Shared, player_id: u64, join: Option<&String>) -> ServerMe
                 player_id: m.player_id,
                 display_name: m.display_name.clone(),
                 joined_tick: m.joined_tick,
+                agency: m.agency.clone(),
             })
             .collect(),
         you_are_member: c.members.iter().any(|m| m.player_id == player_id),
         vessels,
+        created: false,
+    }
+}
+
+fn session_list(s: &Shared) -> ServerMessage {
+    let ut_s = s.universe.lock().expect("sim lock").ut();
+    let c = s.campaign.lock().expect("campaign lock");
+    ServerMessage::SessionList {
+        sessions: vec![ose_net::SessionInfo {
+            id: SHARED_SESSION_ID.into(),
+            name: c.name.clone(),
+            mode: c.mode,
+            ut_s,
+            last_played_unix: c.last_played_unix,
+            players: c.members.len() as u32,
+        }],
     }
 }
 
@@ -549,6 +617,9 @@ async fn session(mut socket: WebSocket, s: AppState) {
                             return;
                         }
                         if !has_vessel(&s, id) {
+                            if !send(&mut socket, &s.difficulty).await {
+                                return;
+                            }
                             spawn_player_probe(&s, id, &display_name);
                         }
                         s.warp_requests.lock().expect("warp lock").insert(id, 1);
@@ -651,6 +722,57 @@ async fn session(mut socket: WebSocket, s: AppState) {
                             if !send(&mut socket, &reply).await { break; }
                         }
                         Ok(ClientMessage::CampaignInfo) => {
+                            let reply = campaign_state(&s, player_id, None);
+                            if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::ListSessions) => {
+                            let reply = session_list(&s);
+                            if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::SelectSession { id }) => {
+                            let reply = if id == SHARED_SESSION_ID {
+                                let name = display_name_for(&s, player_id);
+                                campaign_state(&s, player_id, Some(&name))
+                            } else {
+                                ServerMessage::Rejected { reason: format!("no session {id}") }
+                            };
+                            if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::CreateSession { name, mode, difficulty }) => {
+                            let created = {
+                                let mut c = s.campaign.lock().expect("campaign lock");
+                                if c.members.is_empty() {
+                                    c.name = if name.trim().is_empty() { c.name.clone() } else { name.trim().to_string() };
+                                    c.mode = mode;
+                                    c.difficulty = difficulty;
+                                    c.started_tick = s.universe.lock().expect("sim lock").tick();
+                                    true
+                                } else {
+                                    false
+                                }
+                            };
+                            let pname = display_name_for(&s, player_id);
+                            let mut reply = campaign_state(&s, player_id, Some(&pname));
+                            if let ServerMessage::CampaignState { created: c, .. } = &mut reply {
+                                *c = created;
+                            }
+                            if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::SetAgency { agency }) => {
+                            {
+                                let mut c = s.campaign.lock().expect("campaign lock");
+                                if let Some(m) = c.members.iter_mut().find(|m| m.player_id == player_id) {
+                                    m.agency = Some(agency.clone());
+                                } else {
+                                    let tick = s.universe.lock().expect("sim lock").tick();
+                                    c.members.push(save::CampaignMember {
+                                        player_id,
+                                        display_name: display_name_for(&s, player_id),
+                                        joined_tick: tick,
+                                        agency: Some(agency.clone()),
+                                    });
+                                }
+                            }
                             let reply = campaign_state(&s, player_id, None);
                             if !send(&mut socket, &reply).await { break; }
                         }

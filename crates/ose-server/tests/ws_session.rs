@@ -102,6 +102,15 @@ async fn hello_catalog_and_snapshots() {
     let ServerMessage::BodyCatalog { bodies } = recv(&mut ws).await else {
         panic!("expected BodyCatalog")
     };
+    let ServerMessage::DifficultyOptions {
+        definitions,
+        presets,
+    } = recv(&mut ws).await
+    else {
+        panic!("expected DifficultyOptions")
+    };
+    assert!(definitions.iter().any(|d| d.id == "InfiniteFuel"));
+    assert!(presets.iter().any(|p| p.name == "Normal"));
     assert!(bodies.len() >= 17, "catalog has {} bodies", bodies.len());
     let kerbin = bodies
         .iter()
@@ -204,6 +213,87 @@ async fn hello_catalog_and_snapshots() {
         burn_ok && maneuver_seen,
         "burn {burn_ok} maneuver {maneuver_seen}"
     );
+
+    // Session browser: one shared session; creating configures it before anyone joined; agency is echoed.
+    ws.send(Message::Binary(
+        ose_net::encode(&ClientMessage::ListSessions)
+            .unwrap()
+            .into(),
+    ))
+    .await
+    .unwrap();
+    let mut listed = false;
+    for _ in 0..40 {
+        if let ServerMessage::SessionList { sessions } = recv(&mut ws).await {
+            assert_eq!(sessions.len(), 1);
+            assert_eq!(sessions[0].id, "shared");
+            assert_eq!(sessions[0].players, 0);
+            listed = true;
+            break;
+        }
+    }
+    assert!(listed, "no SessionList");
+    ws.send(Message::Binary(
+        ose_net::encode(&ClientMessage::CreateSession {
+            name: "Mun or bust".into(),
+            mode: ose_net::SessionMode::Exploration,
+            difficulty: vec![ose_net::DifficultyOption {
+                id: "InfiniteFuel".into(),
+                value: ose_net::DifficultyValue::Bool(false),
+            }],
+        })
+        .unwrap()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let mut created_ok = false;
+    for _ in 0..40 {
+        if let ServerMessage::CampaignState {
+            name,
+            created,
+            mode,
+            difficulty,
+            you_are_member,
+            ..
+        } = recv(&mut ws).await
+        {
+            assert!(created);
+            assert_eq!(name, "Mun or bust");
+            assert_eq!(mode, ose_net::SessionMode::Exploration);
+            assert_eq!(difficulty.len(), 1);
+            assert!(you_are_member);
+            created_ok = true;
+            break;
+        }
+    }
+    assert!(created_ok, "no CampaignState after CreateSession");
+    ws.send(Message::Binary(
+        ose_net::encode(&ClientMessage::SetAgency {
+            agency: ose_net::Agency {
+                flag_id: "flag_AGY_orbit".into(),
+                primary_rgb: [10, 20, 30],
+                secondary_rgb: [200, 210, 220],
+            },
+        })
+        .unwrap()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let mut agency_ok = false;
+    for _ in 0..40 {
+        if let ServerMessage::CampaignState { members, .. } = recv(&mut ws).await {
+            let me = members.iter().find(|m| m.player_id == player_id).unwrap();
+            assert_eq!(
+                me.agency.as_ref().map(|a| a.flag_id.as_str()),
+                Some("flag_AGY_orbit")
+            );
+            agency_ok = true;
+            break;
+        }
+    }
+    assert!(agency_ok, "agency not echoed");
 
     // Join the shared campaign; the state lists us as a member and is idempotent.
     for _ in 0..2 {
