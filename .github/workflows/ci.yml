@@ -14,3 +14,45 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
       - run: cargo check -p ose-client --target wasm32-unknown-unknown
+
+  # Browser end-to-end: the trunk-built WASM client served by ose-server, driven by Playwright in Chromium
+  # and Firefox (e2e/, docs/ADR-0004-browser-e2e.md). The gameplay report for each browser is in the job log.
+  browser-e2e:
+    runs-on: ubuntu-latest
+    env:
+      TRUNK_VERSION: 0.21.14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Install trunk
+        run: |
+          curl -fsSL "https://github.com/trunk-rs/trunk/releases/download/v${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin trunk
+      - name: Build web client
+        run: cd crates/ose-client && trunk build --release --dist ../../target/web
+      - name: Build server
+        run: cargo build -p ose-server
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+      - name: Install Playwright
+        working-directory: e2e
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium firefox
+      - name: Gameplay session in Chromium and Firefox
+        working-directory: e2e
+        run: npx playwright test
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            e2e/playwright-report
+            e2e/test-results
+          retention-days: 7
