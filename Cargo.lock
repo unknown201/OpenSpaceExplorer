@@ -1025,7 +1025,9 @@ version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
  "getrandom 0.3.4",
+ "js-sys",
  "ose-data",
+ "ose-math",
  "ose-net",
  "wasm-bindgen",
  "web-sys",

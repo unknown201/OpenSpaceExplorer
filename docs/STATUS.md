@@ -7,6 +7,7 @@ Updated 2026-10-23.
 - Cargo workspace with seven crates (`ose-math`, `ose-data`, `ose-sim`, `ose-net`, `ose-server`, `ose-client`, `ose-importer`). `cargo test --workspace`, `cargo clippy -D warnings` and the wasm check all pass. `trunk build` in `crates/ose-client` produces a loadable page (no game logic in the client, see ADR-0002).
 - `ose-math::Orbit`: Keplerian elements <-> state vectors, the original's anomaly solvers and tolerances, propagation, time to true anomaly, true anomaly at radius; 7 tests including elliptic/hyperbolic round trips.
 - `ose-sim::bodies`: bodies as ECS entities with `OnRails` orbits, star-space position by walking the parent chain, `main_body_at` (SOI containment). `cargo run -p ose-sim --example kerbol` loads the converted data and prints every body; Kerbin comes out at 13,599,840 km and 9284.5 m/s, Mun at 12,000 km, Minmus at 47,000 km.
+- `ose-sim::trajectory`: patched-conic predictor (`predict`): collision, encounter (sampled closest approach refined with the original's halving-step and SOI bisection solvers, 0.01 s tolerance), escape and final patches with handoff via state vectors. Parity: a 100 km Hohmann transfer to the Mun enters its SOI 19,941 s after the burn (the bot's independent estimate: 19,950 s) and, with no lead error, impacts the Mun as the bot predicted.
 - `ose-sim::vessels`: vessels on rails as entities; `update_reference_body` re-expresses the orbit around whichever body's SOI contains the vessel (escape and encounter), with tests showing the handoff keeps the star-space position continuous.
 - `ose-server` streams the universe: `/ws` session (`Hello` -> `Welcome` + `BodyCatalog`, then `TimeState` + `Snapshot` at 10 Hz with star-space position and velocity of every body, `RequestWarp` sets the warp). The Kerbol system (17 bodies, `assets/own/kerbol-system.json`) is embedded in the binary; `--bodies PATH` overrides. `crates/ose-server/tests/ws_session.rs` spawns the binary and checks the whole session. Protocol version 2 in `ose-net`.
 - `ose-sim` has an ECS `Universe` with integer `Tick` time, a `WarpFactor` resource, `with_bodies`, `set_warp` and `body_state`.
@@ -47,7 +48,7 @@ Live at https://ose.jfly.dev/ (home network and Tailscale). A push to `main` bui
 ## Next (Phase 1, remaining)
 
 - Extract the shipped `PhysicsSettings` asset (drag curves, joint constants) so the sim loads them from data.
-- Phase 2 remaining: the patched-conic trajectory predictor (collision, encounter, escape patches), driving vessels from the `Universe` schedule, warp clamping at SOI crossings, and a Kerbin to Mun transfer parity test.
+- Phase 2 remaining: drive vessels from the `Universe` schedule (rails update + SOI handoff each tick), warp clamping at SOI crossings, stream vessels and predicted patches to clients.
 - Convert the scaled-space planet meshes and textures to glTF/KTX2 for Phase 3.
 
 ## Known problems

@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 pub mod bodies;
+pub mod trajectory;
 pub mod vessels;
 
 use bevy_ecs::prelude::*;
