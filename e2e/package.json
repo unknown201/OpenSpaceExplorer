@@ -1,0 +1,18 @@
+{
+  "name": "ose-e2e",
+  "private": true,
+  "description": "Browser end-to-end tests: load the WASM client in Chromium and Firefox against ose-server",
+  "type": "module",
+  "scripts": {
+    "build-client": "node scripts/build-client.mjs",
+    "test": "playwright test",
+    "test:chromium": "playwright test --project=chromium",
+    "test:firefox": "playwright test --project=firefox",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1",
+    "@types/node": "24.9.1",
+    "typescript": "5.9.3"
+  }
+}
