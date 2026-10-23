@@ -11,6 +11,21 @@ use std::collections::BTreeMap;
 /// Schema version written into every data file and save.
 pub const SCHEMA_VERSION: u32 = 1;
 
+/// Simulation ticks per second of universal time.
+pub const TICKS_PER_SECOND: u64 = 50;
+
+/// Universal time in ticks since the start of the save. Shared by the sim, the protocol and the client.
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+pub struct Tick(pub u64);
+
+impl Tick {
+    pub fn seconds(self) -> f64 {
+        self.0 as f64 / TICKS_PER_SECOND as f64
+    }
+}
+
 /// Standard gravity used by the original game to turn `gravityASL` into a gravitational parameter.
 pub const G0: f64 = 9.80665;
 /// Newtonian constant of gravitation used by the original game.

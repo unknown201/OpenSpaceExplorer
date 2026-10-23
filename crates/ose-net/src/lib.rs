@@ -2,7 +2,7 @@
 
 #![forbid(unsafe_code)]
 
-use ose_sim::Tick;
+use ose_data::Tick;
 use serde::{Deserialize, Serialize};
 
 pub const PROTOCOL_VERSION: u16 = 1;

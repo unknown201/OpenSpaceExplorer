@@ -4,7 +4,7 @@ Updated 2026-10-23.
 
 ## What works
 
-- Cargo workspace with seven crates (`ose-math`, `ose-data`, `ose-sim`, `ose-net`, `ose-server`, `ose-client`, `ose-importer`). `cargo test --workspace`, `cargo clippy -D warnings` and the wasm check all pass. `trunk build` in `crates/ose-client` produces a loadable page that ticks the shared sim.
+- Cargo workspace with seven crates (`ose-math`, `ose-data`, `ose-sim`, `ose-net`, `ose-server`, `ose-client`, `ose-importer`). `cargo test --workspace`, `cargo clippy -D warnings` and the wasm check all pass. `trunk build` in `crates/ose-client` produces a loadable page (no game logic in the client, see ADR-0002).
 - `ose-math::Orbit`: Keplerian elements <-> state vectors, the original's anomaly solvers and tolerances, propagation, time to true anomaly, true anomaly at radius; 7 tests including elliptic/hyperbolic round trips.
 - `ose-sim::bodies`: bodies as ECS entities with `OnRails` orbits, star-space position by walking the parent chain, `main_body_at` (SOI containment). `cargo run -p ose-sim --example kerbol` loads the converted data and prints every body; Kerbin comes out at 13,599,840 km and 9284.5 m/s, Mun at 12,000 km, Minmus at 47,000 km.
 - `ose-sim::vessels`: vessels on rails as entities; `update_reference_body` re-expresses the orbit around whichever body's SOI contains the vessel (escape and encounter), with tests showing the handoff keeps the star-space position continuous.
@@ -32,6 +32,7 @@ Tooling installed locally: rust 1.99 with `wasm32-unknown-unknown`, trunk 0.22, 
 - `docs/01-ksp2-install-survey.md`: what is in the Steam install and how to read it.
 - `docs/02-architecture-and-plan.md`: architecture and nine-phase roadmap.
 - `docs/ADR-0001-initial-decisions.md`: scope decisions.
+- `docs/ADR-0002-thin-wasm-client.md`: logic stays native, the WASM client only renders, interpolates and predicts its own vessel.
 
 ## Next (Phase 1, remaining)
 

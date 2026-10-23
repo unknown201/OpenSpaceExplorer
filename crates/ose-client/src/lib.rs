@@ -1,4 +1,4 @@
-//! Browser client. Phase 0: proves the WASM toolchain by ticking the shared sim in the page.
+//! Browser client: rendering, input, UI and snapshot interpolation only (ADR-0002). Game logic is native.
 
 #![forbid(unsafe_code)]
 
@@ -6,7 +6,8 @@ use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 pub struct Client {
-    universe: ose_sim::Universe,
+    /// Latest server tick we have a snapshot for.
+    server_tick: ose_data::Tick,
 }
 
 #[wasm_bindgen]
@@ -15,13 +16,14 @@ impl Client {
     pub fn new() -> Client {
         console_error_panic_hook::set_once();
         Client {
-            universe: ose_sim::Universe::new(),
+            server_tick: ose_data::Tick::default(),
         }
     }
 
-    pub fn step(&mut self) -> f64 {
-        self.universe.step();
-        self.universe.tick().seconds()
+    /// Record a server time update; returns universal time in seconds.
+    pub fn on_time_state(&mut self, tick: u64) -> f64 {
+        self.server_tick = ose_data::Tick(tick);
+        self.server_tick.seconds()
     }
 }
 

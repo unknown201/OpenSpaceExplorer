@@ -11,19 +11,11 @@ pub mod vessels;
 use bevy_ecs::prelude::*;
 use serde::{Deserialize, Serialize};
 
-pub const TICKS_PER_SECOND: u64 = 50;
+pub use ose_data::{Tick, TICKS_PER_SECOND};
 
-/// Universal time in ticks since the start of the save.
-#[derive(
-    Resource, Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize,
-)]
-pub struct Tick(pub u64);
-
-impl Tick {
-    pub fn seconds(self) -> f64 {
-        self.0 as f64 / TICKS_PER_SECOND as f64
-    }
-}
+/// ECS resource wrapper around the shared [`Tick`].
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UniverseTime(pub Tick);
 
 /// Time warp factor granted by the server (1 = real time).
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,7 +42,7 @@ impl Default for Universe {
 impl Universe {
     pub fn new() -> Self {
         let mut world = World::new();
-        world.insert_resource(Tick::default());
+        world.insert_resource(UniverseTime::default());
         world.insert_resource(WarpFactor::default());
         let mut schedule = Schedule::default();
         schedule.add_systems(advance_tick);
@@ -63,12 +55,12 @@ impl Universe {
     }
 
     pub fn tick(&self) -> Tick {
-        *self.world.resource::<Tick>()
+        self.world.resource::<UniverseTime>().0
     }
 }
 
-fn advance_tick(mut tick: ResMut<Tick>, warp: Res<WarpFactor>) {
-    tick.0 += warp.0 as u64;
+fn advance_tick(mut time: ResMut<UniverseTime>, warp: Res<WarpFactor>) {
+    time.0 .0 += warp.0 as u64;
 }
 
 #[cfg(test)]

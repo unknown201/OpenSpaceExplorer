@@ -8,4 +8,5 @@ publish.workspace = true
 [dependencies]
 serde = { workspace = true }
 postcard = { workspace = true }
-ose-sim = { workspace = true }
+ose-data = { workspace = true }
+ose-math = { workspace = true }

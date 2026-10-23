@@ -4,7 +4,7 @@ Goal: a personal, multiplayer rebuild of Kerbal Space Program 2 with a Rust auth
 
 ## Guiding decisions
 
-1. **One simulation crate, two hosts.** All game rules live in `ose-sim`, a deterministic, allocation-light Rust crate with no I/O. The server runs it natively; the client compiles the same crate to WASM for prediction and for single-player. One codebase, one source of truth, no drift between "server rules" and "client rules".
+1. **Logic is native, the client is thin (ADR-0002).** All game rules live in `ose-sim`, a deterministic Rust crate run only by the native server. The WASM client holds rendering, input, UI and the minimum needed for smooth play: snapshot interpolation and short-horizon prediction of the player's own vessel over `ose-math`. Single-player runs a local `ose-server` process.
 2. **Server authoritative.** The server owns time, vessel state, resources, staging and the save. Clients send intents (throttle, attitude, stage, build, warp request) and receive snapshots plus deltas. This is what makes multiplayer tractable.
 3. **Integer time, analytic orbits.** Universal time is an integer tick count (for example 1/50 s). On-rails vessels are Keplerian elements evaluated analytically at any tick, so warp is free. Only vessels inside a physics bubble get integrated rigid-body dynamics.
 4. **Shared time warp, lowest wins.** Everyone is in the same universe at the same UT. Warp is a request; the server grants the minimum of all players' acceptable warp (a player in atmosphere or under thrust caps it at physics warp). This is simpler and more co-op than per-player subspaces and avoids the time-travel paradoxes of the KSP1 multiplayer mods. Subspaces can be revisited later.
@@ -18,11 +18,12 @@ Goal: a personal, multiplayer rebuild of Kerbal Space Program 2 with a Rust auth
 crates/
   ose-math        f64 vectors, quaternions, Kepler solvers, reference frames
   ose-data        Our schemas: Part, PartModule, Resource, CelestialBody, Craft, Mission (serde, versioned)
-  ose-sim         Universe: bodies, vessels, part graph, resource flow, staging, patched conics, physics bubble
-                  (rapier3d for rigid bodies and joints, feature-gated so headless tests stay fast)
-  ose-net         Protocol: messages, snapshot/delta encoding, interest management
+  ose-sim         (native only) Universe: bodies, vessels, part graph, resource flow, staging, patched conics,
+                  physics bubble (rapier3d for rigid bodies and joints)
+  ose-net         Protocol: messages, snapshot/delta encoding, interest management, and `predict`
+                  (interpolation / Keplerian extrapolation shared by server and client)
   ose-server      tokio + axum: WebSocket sessions, lobby, save/load, warp arbitration, serves the client
-  ose-client      WASM: wgpu renderer, egui UI, input, prediction, asset streaming (wasm-bindgen + trunk)
+  ose-client      WASM: wgpu renderer, egui UI, input, asset streaming (wasm-bindgen + trunk); no ose-sim
   ose-importer    Reads the Steam install: Addressables catalog, bundle extraction, JSON -> ose-data,
                   meshes -> glTF, textures -> KTX2, Wwise -> ogg (drives UnityPy/AssetRipper where needed)
 tools/            Python helpers (UnityPy scripts), dev scripts, CI
@@ -51,7 +52,7 @@ Technology choices:
 - A **session** is one universe (one save). The server loads it, ticks it, autosaves it.
 - Each player has a **focus**: a vessel, a building, or the map. The server sends full fidelity for the player's physics bubble and a coarse feed (orbital elements only) for everything else.
 - **Physics bubbles**: any vessel within a few km of a focused vessel is simulated with rigid bodies on the server. Everything else is on rails. Two players near each other share one bubble.
-- **Client prediction** runs ose-sim locally for the player's own vessel between snapshots and reconciles on each snapshot. Other players' vessels are interpolated.
+- **Client prediction** extrapolates the player's own vessel between snapshots (Keplerian on rails, dead reckoning in a physics bubble) and reconciles on each snapshot. Other players' vessels are interpolated. The client never runs game rules.
 - **Warp arbitration**: server-granted, lowest wins, with a HUD showing who is holding warp down.
 - **Building**: the editor is client-side; a finished craft is uploaded as a Craft document and spawned by the server at a launch site. Shared editing is out of scope.
 - **Persistence**: one JSON save per session, versioned by the ose-data schema version, plus periodic snapshots.
@@ -66,7 +67,7 @@ Each phase ends with something runnable and a `docs/STATUS.md` update. Phases 1 
 
 **Phase 2: Orbital core.** ose-math and the on-rails half of ose-sim: body hierarchy from imported data, Kepler propagation, SOI transitions, patched-conic prediction, maneuver nodes, time warp. A headless CLI loads the Kerbol system and propagates a vessel. Done when a Kerbin to Mun transfer matches the original game's numbers within tolerance.
 
-**Phase 3: Map view client.** ose-client renders scaled space: bodies as spheres with placeholder textures from the scaled bundles, orbit lines, time and warp HUD, camera. Single-player, local sim. Done when the Kerbol system runs in a browser.
+**Phase 3: Map view client.** ose-server streams body and vessel states over WebSocket; ose-client renders scaled space: bodies as spheres with placeholder textures from the scaled bundles, orbit lines, time and warp HUD, camera. Done when the Kerbol system runs in a browser fed by a local server.
 
 **Phase 4: Server and first multiplayer.** ose-server hosts a session, two browser tabs join, both see the same UT and vessels, warp arbitration works. Snapshot/delta protocol and prediction land here. Done when two players each place a probe in orbit and see each other's.
 
@@ -82,7 +83,7 @@ Each phase ends with something runnable and a `docs/STATUS.md` update. Phases 1 
 
 ## Decisions
 
-The open questions were settled on 2026-10-23, see `ADR-0001-initial-decisions.md`: shared co-op save, LAN hosting with lightweight accounts, WebGPU only, full decompile for reference with physics and vessel interaction as parity targets, routine pushes, ECS for sim data.
+The open questions were settled on 2026-10-23, see `ADR-0001-initial-decisions.md` and `ADR-0002-thin-wasm-client.md`: shared co-op save, LAN hosting with lightweight accounts, WebGPU only, full decompile for reference with physics and vessel interaction as parity targets, routine pushes, ECS for sim data.
 
 ## Immediate next steps
 
