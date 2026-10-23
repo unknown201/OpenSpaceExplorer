@@ -5,6 +5,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod craft;
+
 use ose_data::{
     Atmosphere, AttachNode, AttachRules, CelestialBody, Curve, CurveKey, DragCube, EngineMode,
     FlowMode, GameData, Ocean, Orbit, PartDef, RecipeIngredient, ResourceContainer, ResourceDef,

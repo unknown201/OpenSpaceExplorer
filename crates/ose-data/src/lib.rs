@@ -5,6 +5,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod craft;
+
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 

@@ -76,5 +76,23 @@ fn imports_the_whole_kerbol_system_and_all_parts() {
     assert!(!terrier.drag_cubes.is_empty());
     let engines: usize = game.parts.iter().map(|p| p.engines.len()).sum();
     assert!(engines >= 36, "engine modes {engines}");
+
+    // Stock craft: Kerbal K2 is a 48-part tree whose dry+wet mass matches the file's own metadata (111.69 t).
+    let k2 = dir.join("stockassemblies/Stock Kerbal-K2.json");
+    let text = std::fs::read_to_string(&k2).expect("K2 file");
+    let v: serde_json::Value = serde_json::from_str(&text).expect("K2 json");
+    let craft = ose_importer::craft::craft_from_value(&v).expect("craft");
+    assert_eq!(craft.parts.len(), 48);
+    assert!(craft.is_tree());
+    assert_eq!(craft.parts[0].parent, None);
+    assert!(craft.stages.len() >= 5, "stages {:?}", craft.stages.len());
+    let m = craft.mass(&game.parts, &game.resources);
+    assert!(m.unknown_parts.is_empty(), "{:?}", m.unknown_parts);
+    let meta_mass = v["Metadata"]["Mass"].as_f64().unwrap();
+    assert!(
+        (m.wet_t() - meta_mass).abs() / meta_mass < 0.02,
+        "wet {} vs metadata {meta_mass}",
+        m.wet_t()
+    );
     assert!(cov.warnings.is_empty(), "{:?}", cov.warnings);
 }
