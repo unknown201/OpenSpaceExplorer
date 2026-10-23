@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 pub mod craft;
+pub mod staging;
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

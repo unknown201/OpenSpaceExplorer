@@ -356,7 +356,24 @@ fn launch_craft(
     let name = craft.name.clone();
     let parts = craft.parts.len() as u32;
     let m = craft.mass(&s.parts, &s.resources);
-    let dv = ose_data::craft::delta_v_vacuum_mps(craft, &s.parts, &s.resources);
+    let report = ose_data::staging::delta_v_by_stage(craft, &s.parts, &s.resources);
+    let stages: Vec<ose_net::StageReadout> = report
+        .stages
+        .iter()
+        .map(|st| ose_net::StageReadout {
+            stage_id: st.stage_id as u32,
+            start_mass_t: st.start_mass_t,
+            end_mass_t: st.end_mass_t,
+            delta_v_vacuum_mps: st.delta_v_vacuum_mps,
+            burn_time_s: st.burn_time_s,
+            thrust_kn: st.thrust_kn,
+        })
+        .collect();
+    let dv = if report.total_vacuum_mps > 0.0 {
+        report.total_vacuum_mps
+    } else {
+        ose_data::craft::delta_v_vacuum_mps(craft, &s.parts, &s.resources)
+    };
     let fail = |reason: String| ServerMessage::CraftLaunched {
         vessel: None,
         name: name.clone(),
@@ -364,6 +381,7 @@ fn launch_craft(
         wet_mass_t: m.wet_t(),
         dry_mass_t: m.dry_t,
         delta_v_vacuum_mps: dv,
+        stages: stages.clone(),
         reason: Some(reason),
     };
     if craft.parts.is_empty() {
@@ -402,6 +420,7 @@ fn launch_craft(
         wet_mass_t: m.wet_t(),
         dry_mass_t: m.dry_t,
         delta_v_vacuum_mps: dv,
+        stages,
         reason: None,
     }
 }

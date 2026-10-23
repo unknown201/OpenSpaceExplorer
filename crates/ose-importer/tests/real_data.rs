@@ -94,5 +94,37 @@ fn imports_the_whole_kerbol_system_and_all_parts() {
         "wet {} vs metadata {meta_mass}",
         m.wet_t()
     );
+    let report = ose_data::staging::delta_v_by_stage(&craft, &game.parts, &game.resources);
+    assert_eq!(report.stages.len(), 5);
+    let first = &report.stages[0];
+    assert_eq!(first.stage_id, 4, "highest stage fires first");
+    assert_eq!(
+        first.engines.len(),
+        5,
+        "boosters + mainsail: {:?}",
+        first.engines
+    );
+    assert!(
+        first.delta_v_vacuum_mps > 500.0,
+        "first stage dv {}",
+        first.delta_v_vacuum_mps
+    );
+    assert!(
+        report.total_vacuum_mps > 2_000.0 && report.total_vacuum_mps < 10_000.0,
+        "K2 total dv {}",
+        report.total_vacuum_mps
+    );
+    eprintln!(
+        "K2 stages: {:?}",
+        report
+            .stages
+            .iter()
+            .map(|s| (
+                s.stage_id,
+                s.delta_v_vacuum_mps.round(),
+                s.burn_time_s.round()
+            ))
+            .collect::<Vec<_>>()
+    );
     assert!(cov.warnings.is_empty(), "{:?}", cov.warnings);
 }

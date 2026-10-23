@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 3;
+pub const PROTOCOL_VERSION: u16 = 4;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -120,6 +120,17 @@ pub struct TrajectoryPatch {
     pub end: PatchEnd,
 }
 
+/// One stage of a craft's delta-v readout.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StageReadout {
+    pub stage_id: u32,
+    pub start_mass_t: f64,
+    pub end_mass_t: f64,
+    pub delta_v_vacuum_mps: f64,
+    pub burn_time_s: f64,
+    pub thrust_kn: f64,
+}
+
 /// Server to client.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ServerMessage {
@@ -155,7 +166,7 @@ pub enum ServerMessage {
         vessel: u64,
         patches: Vec<TrajectoryPatch>,
     },
-    /// Answer to `LaunchCraft`.
+    /// Answer to `LaunchCraft`. `stages` is the per-stage vacuum delta-v readout, first-firing stage first.
     CraftLaunched {
         vessel: Option<u64>,
         name: String,
@@ -163,6 +174,7 @@ pub enum ServerMessage {
         wet_mass_t: f64,
         dry_mass_t: f64,
         delta_v_vacuum_mps: f64,
+        stages: Vec<StageReadout>,
         reason: Option<String>,
     },
     /// Answer to `ScheduleBurn` / `ClearBurn`.
