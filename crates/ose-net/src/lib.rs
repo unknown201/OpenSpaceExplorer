@@ -42,6 +42,11 @@ pub enum ClientMessage {
     ClearBurn {
         vessel: u64,
     },
+    /// Upload a craft and put it in a circular orbit (Phase 6 replaces this with a launch pad).
+    LaunchCraft {
+        craft: ose_data::craft::Craft,
+        altitude_m: f64,
+    },
     Ping {
         sent_tick: Tick,
     },
@@ -149,6 +154,16 @@ pub enum ServerMessage {
         tick: Tick,
         vessel: u64,
         patches: Vec<TrajectoryPatch>,
+    },
+    /// Answer to `LaunchCraft`.
+    CraftLaunched {
+        vessel: Option<u64>,
+        name: String,
+        parts: u32,
+        wet_mass_t: f64,
+        dry_mass_t: f64,
+        delta_v_vacuum_mps: f64,
+        reason: Option<String>,
     },
     /// Answer to `ScheduleBurn` / `ClearBurn`.
     BurnState {

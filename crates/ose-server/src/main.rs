@@ -34,6 +34,8 @@ use std::sync::{Arc, Mutex};
 use tower_http::services::{ServeDir, ServeFile};
 
 const EMBEDDED_BODIES: &str = include_str!("../../../assets/own/kerbol-system.json");
+const EMBEDDED_PARTS: &str = include_str!("../../../assets/own/parts-catalog.json");
+const EMBEDDED_RESOURCES: &str = include_str!("../../../assets/own/resources.json");
 
 #[derive(Parser, Debug)]
 #[command(name = "ose-server")]
@@ -61,6 +63,8 @@ struct Args {
 struct Shared {
     universe: Mutex<Universe>,
     catalog: Vec<BodyInfo>,
+    parts: Vec<ose_data::PartDef>,
+    resources: Vec<ose_data::ResourceDef>,
     accounts: Mutex<accounts::Accounts>,
     /// Vessel entity -> (vessel id, owner player id).
     vessels: Mutex<Vec<(bevy_ecs::entity::Entity, u64, Option<u64>)>>,
@@ -156,6 +160,8 @@ async fn main() -> anyhow::Result<()> {
     let shared: AppState = Arc::new(Shared {
         universe: Mutex::new(universe),
         catalog,
+        parts: serde_json::from_str(EMBEDDED_PARTS)?,
+        resources: serde_json::from_str(EMBEDDED_RESOURCES)?,
         accounts: Mutex::new({
             let acc = accounts::Accounts::open(&args.db)?;
             tracing::info!(db = %args.db.display(), players = acc.count()?, "accounts opened");
@@ -340,6 +346,66 @@ fn has_vessel(s: &Shared, player: u64) -> bool {
         .any(|&(_, _, owner)| owner == Some(player))
 }
 
+/// Validate an uploaded craft against the part catalog and spawn it as a vessel in a circular orbit.
+fn launch_craft(
+    s: &Shared,
+    player_id: u64,
+    craft: &ose_data::craft::Craft,
+    altitude_m: f64,
+) -> ServerMessage {
+    let name = craft.name.clone();
+    let parts = craft.parts.len() as u32;
+    let m = craft.mass(&s.parts, &s.resources);
+    let dv = ose_data::craft::delta_v_vacuum_mps(craft, &s.parts, &s.resources);
+    let fail = |reason: String| ServerMessage::CraftLaunched {
+        vessel: None,
+        name: name.clone(),
+        parts,
+        wet_mass_t: m.wet_t(),
+        dry_mass_t: m.dry_t,
+        delta_v_vacuum_mps: dv,
+        reason: Some(reason),
+    };
+    if craft.parts.is_empty() {
+        return fail("craft has no parts".into());
+    }
+    if !craft.is_tree() {
+        return fail("craft parts do not form a single tree".into());
+    }
+    if !m.unknown_parts.is_empty() {
+        return fail(format!("unknown parts: {:?}", m.unknown_parts));
+    }
+    if !(altitude_m.is_finite() && (70_000.0..=1.0e9).contains(&altitude_m)) {
+        return fail("altitude must be between 70 km and 1,000,000 km".into());
+    }
+    let mut u = s.universe.lock().expect("sim lock");
+    let Some(home) = s
+        .catalog
+        .iter()
+        .find(|b| b.id == "Kerbin")
+        .or_else(|| s.catalog.first())
+    else {
+        return fail("no home body".into());
+    };
+    let Some(body) = u.body_entity(&home.id) else {
+        return fail("home body missing".into());
+    };
+    let e = u.spawn_vessel_in_circular_orbit(&name, body, altitude_m);
+    let mut list = s.vessels.lock().expect("vessels lock");
+    let id = list.iter().map(|&(_, id, _)| id).max().unwrap_or(0) + 1;
+    list.push((e, id, Some(player_id)));
+    tracing::info!(player = player_id, vessel = id, craft = %name, parts, wet_t = m.wet_t(), dv, "craft launched");
+    ServerMessage::CraftLaunched {
+        vessel: Some(id),
+        name,
+        parts,
+        wet_mass_t: m.wet_t(),
+        dry_mass_t: m.dry_t,
+        delta_v_vacuum_mps: dv,
+        reason: None,
+    }
+}
+
 /// Every player gets a probe in a 100 km circular orbit around the home world on joining.
 fn spawn_player_probe(s: &Shared, player_id: u64, name: &str) -> Option<u64> {
     let mut u = s.universe.lock().expect("sim lock");
@@ -504,6 +570,10 @@ async fn session(mut socket: WebSocket, s: AppState) {
                                 }
                                 None => ServerMessage::BurnState { vessel, scheduled: false, reason: Some("not your vessel".into()) },
                             };
+                            if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::LaunchCraft { craft, altitude_m }) => {
+                            let reply = launch_craft(&s, player_id, &craft, altitude_m);
                             if !send(&mut socket, &reply).await { break; }
                         }
                         Ok(ClientMessage::Hello { .. }) => {}

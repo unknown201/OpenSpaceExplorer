@@ -65,6 +65,29 @@ impl MassSummary {
     }
 }
 
+/// Vacuum delta-v estimate for a craft: Tsiolkovsky over the whole craft using the mass-weighted best
+/// vacuum Isp of its engines, with every stored propellant counted as burnable. A per-stage model comes
+/// with the resource flow graph; this is the number for a first readout.
+pub fn delta_v_vacuum_mps(craft: &Craft, parts: &[PartDef], resources: &[ResourceDef]) -> f64 {
+    let m = craft.mass(parts, resources);
+    if m.resources_t <= 0.0 || m.wet_t() <= 0.0 {
+        return 0.0;
+    }
+    let by_id: HashMap<&str, &PartDef> = parts.iter().map(|p| (p.id.as_str(), p)).collect();
+    let mut best_isp: f64 = 0.0;
+    for p in &craft.parts {
+        if let Some(def) = by_id.get(p.part_id.as_str()) {
+            for e in &def.engines {
+                best_isp = best_isp.max(e.isp_curve.evaluate(0.0));
+            }
+        }
+    }
+    if best_isp <= 0.0 {
+        return 0.0;
+    }
+    best_isp * crate::G0 * (m.wet_t() / m.dry_t).ln()
+}
+
 impl Craft {
     /// Children of part `i`.
     pub fn children(&self, i: usize) -> impl Iterator<Item = usize> + '_ {

@@ -192,6 +192,98 @@ async fn hello_catalog_and_snapshots() {
         "burn {burn_ok} maneuver {maneuver_seen}"
     );
 
+    // Launch a tiny craft: a pod with charge and a Terrier; it appears as a second owned vessel.
+    let craft = ose_data::craft::Craft {
+        name: "Tiny".into(),
+        description: String::new(),
+        parts: vec![
+            ose_data::craft::CraftPart {
+                guid: "a".into(),
+                part_id: "pod_1v_conical_crew".into(),
+                parent: None,
+                own_node: None,
+                parent_node: None,
+                local_position: ose_math::DVec3::ZERO,
+                local_rotation: ose_data::craft::Quat {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                    w: 1.0,
+                },
+                stage_index: -1,
+                fuel_crossfeed: true,
+                resources: vec![],
+            },
+            ose_data::craft::CraftPart {
+                guid: "b".into(),
+                part_id: "engine_1v_methalox_terrier".into(),
+                parent: Some(0),
+                own_node: Some("top".into()),
+                parent_node: Some("bottom".into()),
+                local_position: ose_math::DVec3::ZERO,
+                local_rotation: ose_data::craft::Quat {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                    w: 1.0,
+                },
+                stage_index: 0,
+                fuel_crossfeed: true,
+                resources: vec![],
+            },
+        ],
+        stages: vec![vec![1]],
+    };
+    ws.send(Message::Binary(
+        ose_net::encode(&ClientMessage::LaunchCraft {
+            craft,
+            altitude_m: 120_000.0,
+        })
+        .unwrap()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let mut launched = None;
+    for _ in 0..60 {
+        if let ServerMessage::CraftLaunched {
+            vessel,
+            reason,
+            parts,
+            dry_mass_t,
+            ..
+        } = recv(&mut ws).await
+        {
+            assert_eq!(parts, 2);
+            assert!(dry_mass_t > 0.5, "dry {dry_mass_t}");
+            assert!(reason.is_none(), "{reason:?}");
+            launched = vessel;
+            break;
+        }
+    }
+    let launched = launched.expect("CraftLaunched");
+    let mut seen_two = false;
+    for _ in 0..40 {
+        if let ServerMessage::Vessels { vessels, .. } = recv(&mut ws).await {
+            let mine: Vec<_> = vessels
+                .iter()
+                .filter(|v| v.owner == Some(player_id))
+                .collect();
+            if mine.len() == 2 {
+                let tiny = mine
+                    .iter()
+                    .find(|v| v.id == launched)
+                    .expect("launched vessel streamed");
+                assert_eq!(tiny.name, "Tiny");
+                let alt = tiny.orbit.semi_major_axis_m - bodies[kerbin].radius_m;
+                assert!((alt - 120_000.0).abs() < 1.0, "alt {alt}");
+                seen_two = true;
+                break;
+            }
+        }
+    }
+    assert!(seen_two, "launched craft not streamed");
+
     // Raise warp and see it reflected.
     ws.send(Message::Binary(
         ose_net::encode(&ClientMessage::RequestWarp { factor: 100 })

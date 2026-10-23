@@ -22,5 +22,7 @@ bevy_ecs = { workspace = true }
 serde = { workspace = true }
 
 [dev-dependencies]
+ose-math = { workspace = true }
+ose-data = { workspace = true }
 futures-util = "0.3"
 tokio-tungstenite = "0.26"
