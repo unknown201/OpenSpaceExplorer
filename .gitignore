@@ -31,3 +31,4 @@ assets/ksp2/
 .venv/
 dist/
 ose.db*
+ose-save.json*

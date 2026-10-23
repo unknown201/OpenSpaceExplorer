@@ -20,6 +20,7 @@ serde_json = { workspace = true }
 ose-math = { workspace = true }
 bevy_ecs = { workspace = true }
 rusqlite = { workspace = true }
+serde = { workspace = true }
 
 [dev-dependencies]
 futures-util = "0.3"

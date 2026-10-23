@@ -10,6 +10,7 @@
 //! with `--bodies PATH`.
 
 mod accounts;
+mod save;
 
 use axum::{
     extract::{
@@ -49,6 +50,12 @@ struct Args {
     /// SQLite file for player accounts (resume tokens); `:memory:` keeps nothing.
     #[arg(long, default_value = "ose.db")]
     db: PathBuf,
+    /// Universe save file (time, warp, vessels); loaded at start, written periodically. `none` disables.
+    #[arg(long, default_value = "ose-save.json")]
+    save: PathBuf,
+    /// Seconds between periodic saves.
+    #[arg(long, default_value_t = 30.0)]
+    save_interval_s: f64,
 }
 
 struct Shared {
@@ -130,15 +137,31 @@ async fn main() -> anyhow::Result<()> {
     let catalog = catalog_from(&defs);
     tracing::info!(bodies = defs.len(), "loaded celestial bodies");
 
+    let mut universe = Universe::with_bodies(&defs);
+    let save_path = (args.save.to_string_lossy() != "none").then(|| args.save.clone());
+    let mut registry: Vec<save::VesselEntry> = Vec::new();
+    if let Some(p) = &save_path {
+        match save::read(p) {
+            Ok(Some(file)) => {
+                registry = save::restore(&mut universe, &file);
+                tracing::info!(path = %p.display(), tick = file.tick.0, vessels = registry.len(), "save loaded");
+            }
+            Ok(None) => tracing::info!(path = %p.display(), "no save file, starting fresh"),
+            Err(e) => {
+                tracing::error!(path = %p.display(), error = %e, "save file unreadable; refusing to start");
+                return Err(e);
+            }
+        }
+    }
     let shared: AppState = Arc::new(Shared {
-        universe: Mutex::new(Universe::with_bodies(&defs)),
+        universe: Mutex::new(universe),
         catalog,
         accounts: Mutex::new({
             let acc = accounts::Accounts::open(&args.db)?;
             tracing::info!(db = %args.db.display(), players = acc.count()?, "accounts opened");
             acc
         }),
-        vessels: Mutex::new(Vec::new()),
+        vessels: Mutex::new(registry),
         warp_requests: Mutex::new(std::collections::HashMap::new()),
     });
 
@@ -153,6 +176,29 @@ async fn main() -> anyhow::Result<()> {
             sim.universe.lock().expect("sim lock").step();
         }
     });
+
+    if let Some(p) = save_path.clone() {
+        let saver = shared.clone();
+        let every = std::time::Duration::from_secs_f64(args.save_interval_s.max(0.2));
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(every);
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                let file = {
+                    let u = saver.universe.lock().expect("sim lock");
+                    let v = saver.vessels.lock().expect("vessels lock");
+                    save::capture(&u, &v)
+                };
+                match save::write(&p, &file) {
+                    Ok(()) => {
+                        tracing::debug!(tick = file.tick.0, vessels = file.vessels.len(), "saved")
+                    }
+                    Err(e) => tracing::error!(error = %e, "save failed"),
+                }
+            }
+        });
+    }
 
     let mut app = Router::new()
         .route(
@@ -305,7 +351,7 @@ fn spawn_player_probe(s: &Shared, player_id: u64, name: &str) -> Option<u64> {
     let body = u.body_entity(&home.id)?;
     let e = u.spawn_vessel_in_circular_orbit(&format!("{name} probe"), body, 100_000.0);
     let mut list = s.vessels.lock().expect("vessels lock");
-    let id = list.len() as u64 + 1;
+    let id = list.iter().map(|&(_, id, _)| id).max().unwrap_or(0) + 1;
     list.push((e, id, Some(player_id)));
     Some(id)
 }

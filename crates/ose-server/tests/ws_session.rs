@@ -15,13 +15,18 @@ impl Drop for Server {
 }
 
 async fn spawn_server() -> (Server, String) {
-    let port = {
+    spawn_server_with(&["--db", ":memory:", "--save", "none"], None).await
+}
+
+async fn spawn_server_with(extra: &[&str], port: Option<u16>) -> (Server, String) {
+    let port = port.unwrap_or_else(|| {
         let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         l.local_addr().unwrap().port()
-    };
+    });
     let addr = format!("127.0.0.1:{port}");
     let child = Command::new(env!("CARGO_BIN_EXE_ose-server"))
-        .args(["--listen", &addr, "--db", ":memory:"])
+        .args(["--listen", &addr])
+        .args(extra)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
@@ -284,4 +289,146 @@ async fn hello_catalog_and_snapshots() {
         }
     }
     assert!(checked);
+}
+
+async fn hello(ws: &mut Ws, token: Option<String>, name: &str) -> (u64, String) {
+    let hello = ClientMessage::Hello {
+        protocol: PROTOCOL_VERSION,
+        token,
+        display_name: name.into(),
+    };
+    ws.send(Message::Binary(ose_net::encode(&hello).unwrap().into()))
+        .await
+        .unwrap();
+    match recv(ws).await {
+        ServerMessage::Welcome {
+            player_id, token, ..
+        } => (player_id, token),
+        other => panic!("expected Welcome, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn restart_keeps_time_vessels_and_burns() {
+    let dir = std::env::temp_dir().join(format!("ose-save-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let db = dir.join("ose.db");
+    let save = dir.join("save.json");
+    let args = [
+        "--db",
+        db.to_str().unwrap(),
+        "--save",
+        save.to_str().unwrap(),
+        "--save-interval-s",
+        "0.3",
+    ];
+    let (server, addr) = spawn_server_with(&args, None).await;
+    let port: u16 = addr.rsplit(':').next().unwrap().parse().unwrap();
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}{WS_PATH}"))
+        .await
+        .unwrap();
+    let (pid, token) = hello(&mut ws, None, "saver").await;
+    ws.send(Message::Binary(
+        ose_net::encode(&ClientMessage::ScheduleBurn {
+            vessel: 1,
+            ut: 5.0e5,
+            prograde_mps: 100.0,
+            normal_mps: 0.0,
+            radial_mps: 0.0,
+        })
+        .unwrap()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    ws.send(Message::Binary(
+        ose_net::encode(&ClientMessage::RequestWarp { factor: 1000 })
+            .unwrap()
+            .into(),
+    ))
+    .await
+    .unwrap();
+    // let a couple of saves happen at warp 1000
+    tokio::time::sleep(Duration::from_millis(900)).await;
+    let before = save::read_for_test(&save);
+    assert!(before.tick > 0, "save has advanced time: {}", before.tick);
+    assert_eq!(before.vessels.len(), 1);
+    assert!(before.vessels[0].burn_ut.is_some());
+    drop(ws);
+    drop(server);
+
+    let (_server2, addr2) = spawn_server_with(&args, Some(port)).await;
+    let (mut ws2, _) = tokio_tungstenite::connect_async(format!("ws://{addr2}{WS_PATH}"))
+        .await
+        .unwrap();
+    let (pid2, _) = hello(&mut ws2, Some(token), "saver").await;
+    assert_eq!(pid2, pid, "account survives restart");
+    let mut ok = false;
+    for _ in 0..40 {
+        match recv(&mut ws2).await {
+            ServerMessage::TimeState { tick, .. } => {
+                assert!(
+                    tick.0 >= before.tick,
+                    "time went backwards: {} < {}",
+                    tick.0,
+                    before.tick
+                );
+            }
+            ServerMessage::Vessels { vessels, .. } => {
+                let mine: Vec<_> = vessels.iter().filter(|v| v.owner == Some(pid2)).collect();
+                assert_eq!(mine.len(), 1, "one restored probe, no new one: {vessels:?}");
+                assert_eq!(mine[0].id, 1);
+            }
+            ServerMessage::Trajectory { patches, .. } => {
+                assert!(
+                    patches.iter().any(|p| p.end == ose_net::PatchEnd::Maneuver),
+                    "burn restored: {patches:?}"
+                );
+                ok = true;
+                break;
+            }
+            _ => {}
+        }
+    }
+    assert!(ok, "no trajectory with the restored burn");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+mod save {
+    //! Minimal reader for the save file so the test does not depend on server internals.
+    use serde::Deserialize;
+    #[derive(Deserialize)]
+    struct Burn {
+        ut: f64,
+    }
+    #[derive(Deserialize)]
+    struct Vessel {
+        burn: Option<Burn>,
+    }
+    #[derive(Deserialize)]
+    struct File {
+        tick: u64,
+        vessels: Vec<Vessel>,
+    }
+    pub struct Seen {
+        pub tick: u64,
+        pub vessels: Vec<SeenVessel>,
+    }
+    pub struct SeenVessel {
+        pub burn_ut: Option<f64>,
+    }
+    pub fn read_for_test(p: &std::path::Path) -> Seen {
+        let f: File =
+            serde_json::from_str(&std::fs::read_to_string(p).expect("save file")).expect("parse");
+        Seen {
+            tick: f.tick,
+            vessels: f
+                .vessels
+                .into_iter()
+                .map(|v| SeenVessel {
+                    burn_ut: v.burn.map(|b| b.ut),
+                })
+                .collect(),
+        }
+    }
 }

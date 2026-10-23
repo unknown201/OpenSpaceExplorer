@@ -76,6 +76,34 @@ impl Universe {
         self.tick().seconds()
     }
 
+    /// Set universal time (used when restoring a save).
+    pub fn set_tick(&mut self, tick: Tick) {
+        self.world.resource_mut::<UniverseTime>().0 = tick;
+    }
+
+    /// Spawn a vessel on rails from orbital elements around `body`.
+    pub fn spawn_vessel_with_elements(
+        &mut self,
+        name: &str,
+        body: Entity,
+        elements: ose_math::Elements,
+    ) -> Entity {
+        let mu = self.world.get::<bodies::Body>(body).expect("body").mu;
+        let orbit = Orbit::from_elements(mu, elements);
+        let e = self
+            .world
+            .spawn((
+                vessels::Vessel { name: name.into() },
+                bodies::ReferenceBody(body),
+                bodies::OnRails(orbit),
+            ))
+            .id();
+        let ut = self.ut();
+        let index = self.world.resource::<bodies::BodyIndex>().clone();
+        vessels::refresh_next_transition(&mut self.world, &index, e, ut, &self.params);
+        e
+    }
+
     pub fn body_entity(&self, id: &str) -> Option<Entity> {
         self.world
             .resource::<bodies::BodyIndex>()

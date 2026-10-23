@@ -11,6 +11,7 @@ Updated 2026-10-23.
 - `ose-sim::vessels`: vessels on rails as entities; `update_reference_body` re-expresses the orbit around whichever body's SOI contains the vessel (escape and encounter), with tests showing the handoff keeps the star-space position continuous.
 - `ose-server` streams the universe: `/ws` session (`Hello` -> `Welcome` + `BodyCatalog`, then `TimeState` + `Snapshot` at 10 Hz with star-space position and velocity of every body, `RequestWarp` sets the warp). The Kerbol system (17 bodies, `assets/own/kerbol-system.json`) is embedded in the binary; `--bodies PATH` overrides. `crates/ose-server/tests/ws_session.rs` spawns the binary and checks the whole session. Protocol version 2 in `ose-net`.
 - `ose-sim::Universe` drives vessels: each step advances up to `warp` ticks but never past a vessel's next predicted SOI transition (the original's timescale override), then runs the SOI handoff for every vessel. `spawn_vessel`, `spawn_vessel_in_circular_orbit`, `vessel`, `predict`.
+- Universe save: time, warp and every vessel (owner, orbit elements, scheduled burn) are written to `--save ose-save.json` every `--save-interval-s` (30 s) and restored at startup, so a server restart keeps the campaign; `--save none` disables. Tested: restart with the same db and save file keeps the player, their single probe, the advanced time and the scheduled burn.
 - Accounts for resume continuity: `Welcome.token` identifies the player; a later `Hello` with that token resumes the same player id and keeps their vessels (no duplicate probe). Stored hashed in SQLite (`--db ose.db`, `:memory:` for tests). Session test covers resume.
 - Warp arbitration: each player's `RequestWarp` is a request; the universe runs at the lowest request among connected players, and `TimeState.warp_limited_by` names the player holding it down. Leaving releases the hold. Tested with two clients.
 - Burns on rails: `ClientMessage::ScheduleBurn { vessel, ut, prograde, normal, radial }` schedules an impulsive burn in the vessel's orbital frame (`ClearBurn` removes it; `BurnState` answers). The step clamps warp so the burn lands exactly on its tick, applies it, and the streamed `Trajectory` shows the pre-burn patch ending in `Maneuver` followed by the post-burn patches. Test: 841.6 m/s prograde from 100 km gives a 12,000 km apoapsis.
@@ -53,7 +54,7 @@ Live at https://ose.jfly.dev/ (home network and Tailscale). A push to `main` bui
 ## Next (Phase 1, remaining)
 
 - Extract the shipped `PhysicsSettings` asset (drag curves, joint constants) so the sim loads them from data.
-- Phase 4 server side: periodic universe save/load (vessels and orbits) so a server restart keeps the campaign; craft schema and upload (Phase 5).
+- Phase 5 server side: craft schema (parts graph from the stock assembly JSON), upload and spawn at a launch site, delta-v from part data.
 - Convert the scaled-space planet meshes and textures to glTF/KTX2 for Phase 3.
 
 ## Known problems
