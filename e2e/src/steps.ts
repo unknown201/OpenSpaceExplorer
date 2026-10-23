@@ -13,7 +13,8 @@
 //   [data-ose="body"]           one element per celestial body shown in the map view (data-ose-id = body id)
 //   [data-ose="warp"]           the time-warp control (clicking it raises the warp factor)
 //   [data-ose="vessel"]         the player's active vessel in the map view
-//   [data-ose="maneuver-node"]  a maneuver node on the player's trajectory
+//   [data-ose="add-node"]       adds a maneuver node on the player's vessel
+//   [data-ose="maneuver-node"]  a maneuver node on the player's trajectory (data-ose-ut = burn time)
 import type { ConsoleMessage, Page, WebSocket } from "@playwright/test";
 import { blocked, failed, passed, skipped, type Outcome, type StepResult } from "./report.js";
 
@@ -252,15 +253,28 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
     }),
   );
 
-  // 11. A maneuver node can be placed on the vessel's trajectory.
+  // 11. A maneuver node can be placed on the vessel's trajectory: click "add node", then the node marker
+  // exists and carries the burn time it was scheduled for.
   results.push(
     await timed("maneuver_node", async () => {
       if (!pageUp) return notLoaded;
-      const node = page.locator('[data-ose="maneuver-node"]');
-      if ((await node.count()) === 0) {
-        return blocked('maneuver-node editing in the map view ([data-ose="maneuver-node"]); Phase 5');
+      const add = page.locator('[data-ose="add-node"]');
+      if ((await add.count()) === 0) {
+        return blocked('maneuver-node editing in the map view ([data-ose="add-node"], [data-ose="maneuver-node"]); Phase 5');
       }
-      return passed("maneuver node present");
+      await add.first().click();
+      const node = page.locator('[data-ose="maneuver-node"]');
+      try {
+        await node.first().waitFor({ timeout: 3000 });
+      } catch {
+        return failed("clicking add-node produced no maneuver node");
+      }
+      const ut = await node.first().getAttribute("data-ose-ut");
+      if (!ut || !Number.isFinite(Number(ut))) return failed(`node has no burn time (data-ose-ut=${ut})`);
+      await sleep(700);
+      const reason = ((await page.locator("#node-reason").textContent().catch(() => "")) ?? "").trim();
+      if (reason) return failed(`server refused the burn: ${reason}`);
+      return passed(`node scheduled at UT ${Number(ut).toFixed(1)}`);
     }),
   );
 

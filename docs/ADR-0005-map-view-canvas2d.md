@@ -30,6 +30,10 @@ untestable in CI.
   reference body so they move smoothly between messages; the player's own vessel is followed by the camera
   until a body label is clicked. Each vessel's `Trajectory` patches are drawn as time-sampled conics around
   their body, coloured by how the patch ends (final, encounter, escape, collision, maneuver).
+- A maneuver node is one planned impulsive burn on the player's vessel: `Add node` creates it two minutes
+  ahead, sliders set the burn time (up to one orbit ahead) and prograde delta-v, every change sends
+  `ScheduleBurn`, and the marker sits on the current orbit at the burn time. The server's `BurnState`
+  reason shows in the panel; its `Trajectory` with `Maneuver` patches is what draws the result.
 - WebGPU stays the plan for the flight view (3D vessel, terrain, scaled space), where Canvas 2D cannot
   go. The map can move to the same pipeline later; its scene model and camera do not depend on how it is
   drawn.
@@ -37,7 +41,7 @@ untestable in CI.
 ## Consequences
 
 - The e2e frontier moves: `render_canvas`, `websocket_session`, `time_display`, `map_view_bodies` and
-  `time_warp_control` and `player_vessel` pass in Chromium and Firefox; `maneuver_node` stays blocked on a
-  maneuver-node UI over `ScheduleBurn` (Phase 5).
+  `time_warp_control`, `player_vessel` and `maneuver_node` pass in Chromium and Firefox; only the WebGPU
+  adapter step is skipped where the browser has none.
 - The canvas exposes `data-ose-scale` and `data-ose-focus` for tests and debugging.
 - No new dependencies beyond `js-sys` and more `web-sys` features; the client stays about 100 KB of WASM.

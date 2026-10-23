@@ -17,6 +17,16 @@
     #labels .vessel { position: absolute; transform: translate(0, -50%); white-space: nowrap; font-size: 12px;
       color: #d0d8e8; text-shadow: 0 0 3px #000; pointer-events: auto; cursor: pointer; }
     #labels .vessel.mine { color: #9ef0c0; }
+    #labels .node { position: absolute; transform: translate(-50%, -50%); width: 12px; height: 12px;
+      border: 2px solid #96aaff; border-radius: 50%; background: #06080f; pointer-events: auto; cursor: pointer; }
+    #node-panel { position: fixed; top: 44px; left: 12px; width: 280px; padding: 8px 10px; border-radius: 6px;
+      background: #0b1020e6; border: 1px solid #2c3d63; font-size: 12px; display: none; }
+    #node-panel.open { display: block; }
+    #node-panel label { display: grid; grid-template-columns: 70px 1fr 70px; gap: 6px; align-items: center; margin: 4px 0; }
+    #node-panel input[type=range] { width: 100%; }
+    #node-panel .reason { color: #f0a070; min-height: 1em; }
+    #node-panel button { background: #16213a; color: #cfd6e6; border: 1px solid #2c3d63; border-radius: 4px;
+      padding: 2px 8px; font: inherit; cursor: pointer; }
     #hud { position: fixed; top: 0; left: 0; right: 0; display: flex; gap: 16px; align-items: center;
       padding: 8px 12px; background: linear-gradient(#0b1020ee, #0b102000); pointer-events: none; }
     #hud > * { pointer-events: auto; }
@@ -40,7 +50,14 @@
       <button id="warp" data-ose="warp" title="Time warp; click to speed up">&times;--</button>
     </span>
     <span id="focus"></span>
+    <button id="add-node" data-ose="add-node" title="Plan a burn on your vessel's orbit">Add node</button>
     <span id="status">loading...</span>
+  </div>
+  <div id="node-panel" data-ose="node-panel">
+    <label>time <input id="node-dt" type="range" min="60" max="600" step="1" value="120" /><span id="node-dt-text">T-2:00</span></label>
+    <label>prograde <input id="node-prograde" type="range" min="-1500" max="1500" step="1" value="0" /><span id="node-prograde-text">0 m/s</span></label>
+    <div class="reason" id="node-reason"></div>
+    <button id="clear-node" data-ose="clear-node">Clear node</button>
   </div>
   <div id="help">drag to pan, wheel to zoom, click a name to focus, F to frame the system</div>
 </body>

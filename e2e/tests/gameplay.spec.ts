@@ -21,7 +21,7 @@ const FRONTIER: [StepName, Expect][] = [
   ["map_view_bodies", "Pass"],
   ["time_warp_control", "Pass"],
   ["player_vessel", "Pass"],
-  ["maneuver_node", "Blocked"],
+  ["maneuver_node", "Pass"],
 ];
 
 test("frontier names every step in order", () => {

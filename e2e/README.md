@@ -34,7 +34,9 @@ to `Pass` in the same change.
 | `[data-ose="body"]` with `data-ose-id` | one element per celestial body in the map view |
 | `[data-ose="warp"]` | the time-warp control; a click raises the warp factor |
 | `[data-ose="vessel"]` | the player's active vessel in the map view |
-| `[data-ose="maneuver-node"]` | a maneuver node on the player's trajectory |
+| `[data-ose="add-node"]` | adds a maneuver node on the player's vessel (sends `ScheduleBurn`) |
+| `[data-ose="maneuver-node"]` | the maneuver node on the player's trajectory; `data-ose-ut` is the burn time, `data-ose-prograde` the delta-v |
+| `[data-ose="clear-node"]` | removes the node (`ClearBurn`) |
 | `[data-ose="warp-down"]` | lowers the warp factor one step |
 | `[data-ose="vessel"]` also carries `data-ose-id` (vessel id); the player's own vessel has class `mine` and the camera follows it; a click follows that vessel |
 | `canvas[data-ose-scale]` | metres per CSS pixel of the map camera, refreshed every frame |

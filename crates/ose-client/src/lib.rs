@@ -38,6 +38,9 @@ struct App {
     vessel_els: Vec<(u64, HtmlElement)>,
     /// Vessel the camera follows instead of the focus body, if any.
     follow: Option<u64>,
+    /// The planned burn on the player's vessel, if any (ADR-0005).
+    node: Option<Node>,
+    node_el: Option<HtmlElement>,
     ut_el: Element,
     warp_el: Element,
     focus_el: Element,
@@ -52,6 +55,40 @@ struct App {
 }
 
 type Shared = Rc<RefCell<App>>;
+
+/// A maneuver node: an impulsive burn the player is planning. `anchor_ut` is UT when the node was added;
+/// the time slider sets `ut = anchor_ut + dt`.
+#[derive(Clone, Copy, Debug)]
+struct Node {
+    vessel: u64,
+    anchor_ut: f64,
+    ut: f64,
+    prograde_mps: f64,
+}
+
+fn input_value(doc: &Document, id: &str) -> Option<f64> {
+    doc.get_element_by_id(id)?
+        .dyn_into::<web_sys::HtmlInputElement>()
+        .ok()?
+        .value()
+        .parse()
+        .ok()
+}
+
+fn set_input_value(doc: &Document, id: &str, v: f64) {
+    if let Some(el) = doc
+        .get_element_by_id(id)
+        .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+    {
+        el.set_value(&format!("{v}"));
+    }
+}
+
+fn set_text(doc: &Document, id: &str, text: &str) {
+    if let Some(el) = doc.get_element_by_id(id) {
+        el.set_text_content(Some(text));
+    }
+}
 
 fn now_ms() -> f64 {
     web_sys::window()
@@ -86,6 +123,8 @@ pub fn start() -> Result<(), JsValue> {
         label_els: Vec::new(),
         vessel_els: Vec::new(),
         follow: None,
+        node: None,
+        node_el: None,
         ut_el: get("ut")?,
         warp_el: get("warp")?,
         focus_el: get("focus")?,
@@ -289,6 +328,28 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
         down.add_event_listener_with_callback("click", on_down.as_ref().unchecked_ref())?;
         on_down.forget();
     }
+
+    let doc = app.borrow().doc.clone();
+    if let Some(btn) = doc.get_element_by_id("add-node") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut()>::new(move || a.borrow_mut().add_node());
+        btn.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
+    if let Some(btn) = doc.get_element_by_id("clear-node") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut()>::new(move || a.borrow_mut().clear_node());
+        btn.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
+    for id in ["node-dt", "node-prograde"] {
+        if let Some(input) = doc.get_element_by_id(id) {
+            let a = app.clone();
+            let cb = Closure::<dyn FnMut()>::new(move || a.borrow_mut().node_inputs_changed());
+            input.add_event_listener_with_callback("input", cb.as_ref().unchecked_ref())?;
+            cb.forget();
+        }
+    }
     Ok(())
 }
 
@@ -419,6 +480,20 @@ impl App {
                     scene.trajectories.insert(vessel, patches);
                 }
             }
+            ServerMessage::BurnState {
+                vessel,
+                scheduled,
+                reason,
+            } => {
+                if self.node.map(|n| n.vessel) == Some(vessel) {
+                    let text = match (scheduled, reason) {
+                        (true, _) => String::new(),
+                        (false, Some(r)) => r,
+                        (false, None) => "no burn scheduled".into(),
+                    };
+                    set_text(&self.doc, "node-reason", &text);
+                }
+            }
             ServerMessage::Pong { .. } => {}
             // Messages for features this client does not draw yet are ignored.
             #[allow(unreachable_patterns)]
@@ -494,6 +569,162 @@ impl App {
                     .set_text_content(Some(&format!("following: {}", v.name)));
             }
         }
+    }
+
+    /// The player's own vessel, if the server has sent one.
+    fn my_vessel(&self) -> Option<(u64, usize)> {
+        let scene = self.scene.as_ref()?;
+        scene
+            .vessels
+            .iter()
+            .find(|v| v.owner.is_some() && v.owner == self.player_id)
+            .map(|v| (v.id, v.reference_body as usize))
+    }
+
+    fn add_node(&mut self) {
+        let Some((vessel, rb)) = self.my_vessel() else {
+            set_text(&self.doc, "node-reason", "no vessel to plan for yet");
+            return;
+        };
+        let now = self.time.ut_at(now_ms());
+        let dt = 120.0;
+        self.node = Some(Node {
+            vessel,
+            anchor_ut: now,
+            ut: now + dt,
+            prograde_mps: 0.0,
+        });
+        set_input_value(&self.doc, "node-dt", dt);
+        set_input_value(&self.doc, "node-prograde", 0.0);
+        // Let the time slider span one orbit of the vessel.
+        if let Some(scene) = &self.scene {
+            if let Some(v) = scene.vessel(vessel) {
+                let period = scene::orbit_from(scene.bodies[rb].mu, &v.orbit).period;
+                if period.is_finite() {
+                    if let Some(el) = self
+                        .doc
+                        .get_element_by_id("node-dt")
+                        .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+                    {
+                        el.set_max(&format!("{:.0}", period.max(600.0)));
+                    }
+                }
+            }
+        }
+        if let Some(panel) = self.doc.get_element_by_id("node-panel") {
+            panel.class_list().add_1("open").ok();
+        }
+        if self.node_el.is_none() {
+            if let Some(el) = self
+                .doc
+                .create_element("div")
+                .ok()
+                .and_then(|e| e.dyn_into::<HtmlElement>().ok())
+            {
+                el.set_class_name("node");
+                el.set_attribute("data-ose", "maneuver-node").ok();
+                el.set_attribute("title", "maneuver node").ok();
+                self.labels.append_child(&el).ok();
+                self.node_el = Some(el);
+            }
+        }
+        self.follow_vessel(vessel, rb);
+        self.send_node();
+    }
+
+    fn clear_node(&mut self) {
+        if let (Some(node), Some(ws)) = (self.node.take(), &self.ws) {
+            send(
+                ws,
+                &ClientMessage::ClearBurn {
+                    vessel: node.vessel,
+                },
+            );
+        }
+        if let Some(el) = self.node_el.take() {
+            el.remove();
+        }
+        if let Some(panel) = self.doc.get_element_by_id("node-panel") {
+            panel.class_list().remove_1("open").ok();
+        }
+        set_text(&self.doc, "node-reason", "");
+    }
+
+    fn node_inputs_changed(&mut self) {
+        let Some(mut node) = self.node else {
+            return;
+        };
+        if let Some(dt) = input_value(&self.doc, "node-dt") {
+            node.ut = node.anchor_ut + dt;
+        }
+        if let Some(p) = input_value(&self.doc, "node-prograde") {
+            node.prograde_mps = p;
+        }
+        self.node = Some(node);
+        self.send_node();
+    }
+
+    fn send_node(&mut self) {
+        let Some(node) = self.node else {
+            return;
+        };
+        if let Some(ws) = &self.ws {
+            send(
+                ws,
+                &ClientMessage::ScheduleBurn {
+                    vessel: node.vessel,
+                    ut: node.ut,
+                    prograde_mps: node.prograde_mps,
+                    normal_mps: 0.0,
+                    radial_mps: 0.0,
+                },
+            );
+        }
+        set_text(
+            &self.doc,
+            "node-prograde-text",
+            &format!("{:.0} m/s", node.prograde_mps),
+        );
+        if let Some(el) = &self.node_el {
+            el.set_attribute("data-ose-ut", &format!("{:.1}", node.ut))
+                .ok();
+            el.set_attribute("data-ose-prograde", &format!("{:.1}", node.prograde_mps))
+                .ok();
+        }
+    }
+
+    /// Place the node marker on the vessel's current orbit at the burn time and refresh its countdown.
+    fn draw_node(&self, ut: f64, positions: &[ose_math::DVec3], centre: ose_math::DVec3) {
+        let (Some(node), Some(el), Some(scene)) = (self.node, &self.node_el, &self.scene) else {
+            return;
+        };
+        let Some(v) = scene.vessel(node.vessel) else {
+            return;
+        };
+        let rb = v.reference_body as usize;
+        let rel = scene::orbit_from(scene.bodies[rb].mu, &v.orbit).position_at(node.ut);
+        let (x, y) = self.camera.to_screen(positions[rb] + rel, centre);
+        let style = el.style();
+        style.set_property("left", &format!("{x:.1}px")).ok();
+        style.set_property("top", &format!("{y:.1}px")).ok();
+        let remaining = node.ut - ut;
+        let sign = if remaining < 0.0 { "+" } else { "-" };
+        let r = remaining.abs();
+        set_text(
+            &self.doc,
+            "node-dt-text",
+            &format!(
+                "T{sign}{}:{:02}",
+                (r / 60.0).floor() as u64,
+                (r % 60.0) as u64
+            ),
+        );
+        let ctx = &self.ctx;
+        ctx.set_stroke_style_str("rgba(150,170,255,0.9)");
+        ctx.set_line_width(1.0);
+        ctx.begin_path();
+        ctx.arc(x, y, 9.0, 0.0, std::f64::consts::TAU).ok();
+        ctx.stroke();
     }
 
     fn vessel_click_target(ev: &MouseEvent) -> Option<u64> {
@@ -631,6 +862,7 @@ impl App {
             }
         }
         self.draw_vessels(ut, &positions, centre);
+        self.draw_node(ut, &positions, centre);
     }
 
     /// Vessels: predicted trajectory patches, then a marker and label per vessel.
