@@ -35,3 +35,6 @@ to `Pass` in the same change.
 | `[data-ose="warp"]` | the time-warp control; a click raises the warp factor |
 | `[data-ose="vessel"]` | the player's active vessel in the map view |
 | `[data-ose="maneuver-node"]` | a maneuver node on the player's trajectory |
+| `[data-ose="warp-down"]` | lowers the warp factor one step |
+| `canvas[data-ose-scale]` | metres per CSS pixel of the map camera, refreshed every frame |
+| `canvas[data-ose-focus]` | id and star-space x y of the focused body, refreshed every frame |

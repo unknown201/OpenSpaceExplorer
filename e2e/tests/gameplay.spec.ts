@@ -15,11 +15,11 @@ const FRONTIER: [StepName, Expect][] = [
   ["wasm_client_starts", "Pass"],
   ["clean_console", "Pass"],
   ["webgpu_adapter", "PassOrSkip"], // an environment fact: headless runners may have no adapter
-  ["render_canvas", "Blocked"],
-  ["websocket_session", "Blocked"],
-  ["time_display", "Blocked"],
-  ["map_view_bodies", "Blocked"],
-  ["time_warp_control", "Blocked"],
+  ["render_canvas", "Pass"],
+  ["websocket_session", "Pass"],
+  ["time_display", "Pass"],
+  ["map_view_bodies", "Pass"],
+  ["time_warp_control", "Pass"],
   ["player_vessel", "Blocked"],
   ["maneuver_node", "Blocked"],
 ];
