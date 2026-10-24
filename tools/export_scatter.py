@@ -135,6 +135,55 @@ def export_prefab(ex: Exporter, node, glb_path: Path) -> dict | None:
     return {"meshes": len(nodes)}
 
 
+def rules(v: dict) -> dict:
+    return {
+        "height_rule": [v["MinHeight"], v["MaxHeight"]] if v.get("UseHeightRule") else None,
+        "steepness_rule": [v["MinSteepness"], v["MaxSteepness"]] if v.get("UseSteepnessRule") else None,
+        "noise_density": [v["NoiseDensityScale"], bool(v.get("NoiseDensityInverse"))]
+        if v.get("UseNoiseDensity") else None,
+        "noise_cutoff": [v["NoiseCutoffScale"], v["NoiseCutoffValue"], bool(v.get("NoiseCutoffInverse"))]
+        if v.get("UseNoiseCutoff") else None,
+    }
+
+
+def grass_item(ex: Exporter, env, v: dict, distance: float) -> dict | None:
+    """A grass item: Vegetation Studio draws a textured patch (its `VegetationTexture`) tinted between the
+    shader controller's dry and healthy colours over `TintAreaScale` metres."""
+    pid = (v.get("VegetationTexture") or {}).get("m_PathID")
+    tex = next((o.read() for o in env.objects if o.path_id == pid), None) if pid else None
+    if tex is None or tex.__class__.__name__ != "Texture2D":
+        return None
+    # every grass texture at one size, so the client can stack them in one texture array
+    uri = f"scatter/grass_{tex.m_Name}.png"
+    try:
+        tex.image.convert("RGBA").resize((256, 256)).save(ex.out / uri)
+    except Exception:  # noqa: BLE001
+        return None
+    props = {p["PropertyName"]: p for p in (v.get("ShaderControllerSettings") or {}).get("ControlerPropertyList", [])}
+
+    def col(k, d):
+        c = props.get(k, {}).get("ColorValue")
+        return [c["r"], c["g"], c["b"]] if c else d
+
+    sm = v.get("ScaleMultiplier", {"x": 1, "y": 1, "z": 1})
+    return {
+        "name": v.get("Name") or tex.m_Name,
+        "model": "",
+        "texture": uri,
+        "kind": "grass",
+        "size_m": 1.0 * sm["y"] * v.get("MaxScale", 1.0),
+        "spacing_m": v["SampleDistance"],
+        "density": v.get("Density", 1.0),
+        "scale": [v.get("MinScale", 1.0) * sm["y"], v.get("MaxScale", 1.0) * sm["y"]],
+        "y_offset": [0.0, 0.0],
+        "seed": v.get("Seed", 0),
+        "render_distance_m": distance * v.get("RenderDistanceFactor", 1.0),
+        "tint": [col("TintColor1", [1.0, 1.0, 1.0]), col("TintColor2", [1.0, 1.0, 1.0])],
+        "tint_scale_m": props.get("TintAreaScale", {}).get("FloatValue", 100.0),
+        **rules(v),
+    }
+
+
 def export_body(ex: Exporter, bid: str, out: Path) -> dict | None:
     bundle = f"celestialbody-simulation-{bid.lower()}_assets_all.bundle"
     if not (ex.bdir / bundle).exists():
@@ -187,7 +236,12 @@ def export_body(ex: Exporter, bid: str, out: Path) -> dict | None:
         for v in pk["VegetationInfoList"]:
             kind = TYPE_NAMES.get(v.get("VegetationType"), "object")
             pid = (v.get("VegetationPrefab") or {}).get("m_PathID")
-            if not pid or not v.get("RenderItem", 1) or kind == "grass":
+            if kind == "grass":
+                g = grass_item(ex, env, v, base_distance["grass"])
+                if g:
+                    items.append(g)
+                continue
+            if not pid or not v.get("RenderItem", 1):
                 continue
             if v.get("SampleDistance", 0.0) < MIN_SPACING_M:
                 continue

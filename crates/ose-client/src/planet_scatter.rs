@@ -54,7 +54,31 @@ pub struct Item {
     pub noise_density: Option<(f64, bool)>,
     /// (scale m, cutoff, inverse)
     pub noise_cutoff: Option<(f64, f64, bool)>,
+    /// Grass: the patch texture, the dry and healthy tints and the size of the tint pattern (m).
+    #[serde(default)]
+    pub texture: Option<String>,
+    #[serde(default)]
+    pub tint: Option<[[f64; 3]; 2]>,
+    #[serde(default)]
+    pub tint_scale_m: Option<f64>,
 }
+
+/// One grass patch, relative to the placement origin.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Grass {
+    pub pos: [f32; 3],
+    pub up: [f32; 3],
+    pub scale: f32,
+    pub yaw: f32,
+    /// Index into `ScatterFile::grass_textures()`.
+    pub layer: f32,
+    /// 0 dry .. 1 healthy
+    pub tint: f32,
+}
+
+/// Grass is drawn this far out at most (m), and at most this many patches.
+pub const GRASS_RANGE_M: f64 = 55.0;
+pub const MAX_GRASS: usize = 14_000;
 
 /// One placed prop.
 #[derive(Clone, Debug, PartialEq)]
@@ -131,6 +155,9 @@ impl ScatterFile {
             for (item_i, item) in pk.items.iter().enumerate() {
                 let this_model = model;
                 model += 1;
+                if item.kind == "grass" {
+                    continue;
+                }
                 let range = item
                     .render_distance_m
                     .min(item.spacing_m * MAX_CELLS_ACROSS as f64 / 2.0)
@@ -253,6 +280,174 @@ impl ScatterFile {
     }
 }
 
+impl ScatterFile {
+    /// The grass items' textures, in order (the `layer` of a patch).
+    pub fn grass_textures(&self) -> Vec<&str> {
+        let mut out: Vec<&str> = Vec::new();
+        for i in self.packages.iter().flat_map(|p| &p.items) {
+            if let Some(t) = i.texture.as_deref() {
+                if !out.contains(&t) {
+                    out.push(t);
+                }
+            }
+        }
+        out
+    }
+
+    /// Grass patches within `GRASS_RANGE_M` of the camera's ground point, positions relative to `origin` (the
+    /// camera position the placement is for). Heights come from a small grid of terrain samples around the
+    /// camera, bilinearly interpolated: thousands of exact samples would cost too much per placement.
+    pub fn place_grass(&self, map: &TerrainMap, radius: f64, cam: V3) -> Vec<Grass> {
+        let textures = self.grass_textures();
+        let cam_dir = normalize(cam);
+        let height = |d: V3| planet_lod::map_height(Some(map), d);
+        let ground = height(cam_dir);
+        if length(cam) - radius - ground > GRASS_RANGE_M * 0.8 || textures.is_empty() {
+            return Vec::new();
+        }
+        let range = GRASS_RANGE_M;
+        // local tangent frame and height grid
+        let east = normalize(planet_lod::cross([0.0, 1.0, 0.0], cam_dir));
+        let north = planet_lod::cross(cam_dir, east);
+        const N: usize = 24;
+        let step = 2.0 * range / N as f64;
+        let mut grid = vec![0.0f64; (N + 1) * (N + 1)];
+        for j in 0..=N {
+            for i in 0..=N {
+                let x = -range + i as f64 * step;
+                let y = -range + j as f64 * step;
+                let d = normalize(planet_lod::add(
+                    scale(cam_dir, radius),
+                    planet_lod::add(scale(east, x), scale(north, y)),
+                ));
+                grid[j * (N + 1) + i] = height(d);
+            }
+        }
+        let grid_h = |x: f64, y: f64| {
+            let fx = ((x + range) / step).clamp(0.0, N as f64 - 1e-9);
+            let fy = ((y + range) / step).clamp(0.0, N as f64 - 1e-9);
+            let (i, j) = (fx as usize, fy as usize);
+            let (tx, ty) = (fx - i as f64, fy - j as f64);
+            let g = |a: usize, b: usize| grid[b * (N + 1) + a];
+            let h0 = g(i, j) + (g(i + 1, j) - g(i, j)) * tx;
+            let h1 = g(i, j + 1) + (g(i + 1, j + 1) - g(i, j + 1)) * tx;
+            let h = h0 + (h1 - h0) * ty;
+            // slope from the grid cell
+            let dx = ((g(i + 1, j) - g(i, j)) + (g(i + 1, j + 1) - g(i, j + 1))) * 0.5 / step;
+            let dy = ((g(i, j + 1) - g(i, j)) + (g(i + 1, j + 1) - g(i + 1, j))) * 0.5 / step;
+            (h, dx, dy)
+        };
+        let (face, ca, cb) = planet_lod::face_ab(cam_dir);
+        let metres_per_unit = radius * std::f64::consts::FRAC_PI_4;
+        let mut out = Vec::new();
+        for (ci, pk) in self.packages.iter().enumerate() {
+            let ch = match pk.channel.as_str() {
+                "R" => 0,
+                "G" => 1,
+                "B" => 2,
+                _ => 3,
+            };
+            for (item_i, item) in pk.items.iter().enumerate() {
+                let Some(tex) = item.texture.as_deref() else {
+                    continue;
+                };
+                let layer = textures.iter().position(|t| *t == tex).unwrap_or(0) as f32;
+                let spacing = item.spacing_m.max(0.8);
+                let step_u = spacing / metres_per_unit;
+                let n = (range / spacing).ceil() as i64 + 1;
+                let (ic, jc) = ((ca / step_u).round() as i64, (cb / step_u).round() as i64);
+                let seed = item.seed + item_i as i64 * 1009 + ci as i64 * 7919 + 31;
+                let tint_scale = item.tint_scale_m.unwrap_or(100.0).max(1.0);
+                for i in ic - n..=ic + n {
+                    for j in jc - n..=jc + n {
+                        let h = hash(face as i64, i, j, seed);
+                        if unit(h, 1) > item.density {
+                            continue;
+                        }
+                        let a = (i as f64 + unit(h, 2) - 0.5) * step_u;
+                        let b = (j as f64 + unit(h, 3) - 0.5) * step_u;
+                        if a.abs() > 1.0 || b.abs() > 1.0 {
+                            continue;
+                        }
+                        let d = planet_lod::dir_from_ab(face, a, b);
+                        let rel = scale(sub(d, cam_dir), radius);
+                        let (x, y) = (dot(rel, east), dot(rel, north));
+                        if x * x + y * y > range * range {
+                            continue;
+                        }
+                        let (lat, lon) = planet_lod::lat_lon(d);
+                        let w = map
+                            .biome_weights(lat, lon)
+                            .map(|w| {
+                                let s = w[0] + w[1] + w[2] + w[3];
+                                if s < 0.05 {
+                                    let mut f = w;
+                                    f[0] += 1.0 - s / 0.05;
+                                    f[ch]
+                                } else {
+                                    w[ch] / s
+                                }
+                            })
+                            .unwrap_or(if ch == 0 { 1.0 } else { 0.0 });
+                        if w <= pk.cutoff || unit(h, 4) > w {
+                            continue;
+                        }
+                        let (hgt, dx, dy) = grid_h(x, y);
+                        if map.has_ocean && hgt < self.sea_level + 0.5 {
+                            continue;
+                        }
+                        if let Some([lo, hi]) = item.height_rule {
+                            if hgt < lo || hgt > hi {
+                                continue;
+                            }
+                        }
+                        let slope = (dx * dx + dy * dy).sqrt().atan().to_degrees();
+                        if slope > 35.0 {
+                            continue;
+                        }
+                        if let Some([lo, hi]) = item.steepness_rule {
+                            if slope < lo || slope > hi {
+                                continue;
+                            }
+                        }
+                        let (nx, ny) = (a * metres_per_unit, b * metres_per_unit);
+                        if let Some((sc, inverse)) = item.noise_density {
+                            let v = noise(nx / sc.max(1.0), ny / sc.max(1.0), seed);
+                            let v = if inverse { 1.0 - v } else { v };
+                            if unit(h, 5) > v {
+                                continue;
+                            }
+                        }
+                        let up = normalize(planet_lod::add(
+                            d,
+                            planet_lod::add(scale(east, -dx), scale(north, -dy)),
+                        ));
+                        let pos = sub(scale(d, radius + hgt), cam);
+                        let s = item.scale[0] + (item.scale[1] - item.scale[0]) * unit(h, 6);
+                        out.push(Grass {
+                            pos: [pos[0] as f32, pos[1] as f32, pos[2] as f32],
+                            up: [up[0] as f32, up[1] as f32, up[2] as f32],
+                            scale: s as f32,
+                            yaw: (unit(h, 8) * std::f64::consts::TAU) as f32,
+                            layer,
+                            tint: noise(nx / tint_scale, ny / tint_scale, seed + 5) as f32,
+                        });
+                    }
+                }
+            }
+        }
+        if out.len() > MAX_GRASS {
+            out.sort_by(|p, q| {
+                let dp = p.pos[0] * p.pos[0] + p.pos[1] * p.pos[1] + p.pos[2] * p.pos[2];
+                let dq = q.pos[0] * q.pos[0] + q.pos[1] * q.pos[1] + q.pos[2] * q.pos[2];
+                dp.partial_cmp(&dq).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            out.truncate(MAX_GRASS);
+        }
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,5 +506,29 @@ mod tests {
         // too high above the ground: nothing
         let high = scale(planet_lod::direction(10.0, 20.0), r + 500.0);
         assert!(f.place(&map, r, high).is_empty());
+    }
+
+    #[test]
+    fn grass_covers_the_ground_around_the_camera() {
+        let r = 600_000.0;
+        let map = flat_map(r);
+        let f: ScatterFile = serde_json::from_str(
+            r#"{"id":"T","packages":[{"name":"p","channel":"R","items":[
+                {"name":"grass","model":"","texture":"textures/g.png","kind":"grass","spacing_m":1.4,
+                 "density":1,"scale":[0.8,1.5],"render_distance_m":150,"height_rule":null,
+                 "steepness_rule":null,"noise_density":null,"noise_cutoff":null,
+                 "tint":[[1,1,1],[0.5,0.5,0.5]],"tint_scale_m":100}]}]}"#,
+        )
+        .unwrap();
+        let cam = scale(planet_lod::direction(-0.7, -74.8), r + 2.0);
+        let g = f.place_grass(&map, r, cam);
+        // pi 55^2 / 1.4^2: about 4,800 patches
+        assert!(g.len() > 3_500 && g.len() < 6_500, "{}", g.len());
+        for p in &g {
+            let d = (p.pos[0] * p.pos[0] + p.pos[1] * p.pos[1] + p.pos[2] * p.pos[2]).sqrt();
+            assert!(d < 60.0);
+        }
+        // props skip grass items
+        assert!(f.place(&map, r, cam).is_empty());
     }
 }

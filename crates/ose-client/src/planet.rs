@@ -7,7 +7,7 @@
 //! built a few per frame, nearest first; until a quad's children exist the quad itself is drawn.
 
 use crate::planet_lod::{self, QuadKey, TerrainVertex};
-use crate::planet_scatter::{Instance, ScatterFile};
+use crate::planet_scatter::{Grass, Instance, ScatterFile};
 use crate::render::{fetch_bitmap, fetch_bytes, DrawItem, ExtraPass, Renderer};
 use glam::{DMat4, DVec3};
 use ose_data::terrain::{TerrainIndex, TerrainMap, TerrainPack};
@@ -47,6 +47,10 @@ struct FrameU {
     rayleigh: [f32; 4],
     mie: [f32; 4],
     solar: [f32; 4],
+    /// x: camera height above the sea surface (m), y: 1 on ocean worlds
+    water: [f32; 4],
+    /// the water's colour under the surface
+    water_col: [f32; 4],
 }
 
 #[repr(C)]
@@ -107,6 +111,7 @@ enum Tex {
     DetailN,
     Clouds,
     Foam,
+    Grass,
 }
 
 enum Loaded {
@@ -142,6 +147,10 @@ struct Body {
     /// Placed props and the camera position they were placed for.
     placed: Vec<Instance>,
     placed_at: Option<DVec3>,
+    /// Grass patches (instance buffer, count) and the camera position they were placed around.
+    grass: Option<(wgpu::Buffer, u32)>,
+    grass_at: Option<DVec3>,
+    grass_bind: Option<wgpu::BindGroup>,
     min_h: f64,
     max_h: f64,
     quads: HashMap<QuadKey, GpuQuad>,
@@ -164,6 +173,11 @@ pub struct PlanetRenderer {
     terrain_pipeline: wgpu::RenderPipeline,
     ocean_pipeline: wgpu::RenderPipeline,
     cloud_pipeline: wgpu::RenderPipeline,
+    grass_pipeline: wgpu::RenderPipeline,
+    grass_layout: wgpu::BindGroupLayout,
+    /// Grass placement origin minus camera (a chunk uniform of its own).
+    grass_chunk_buf: wgpu::Buffer,
+    grass_chunk_bind: wgpu::BindGroup,
     frame_layout: wgpu::BindGroupLayout,
     surface_layout: wgpu::BindGroupLayout,
     chunk_layout: wgpu::BindGroupLayout,
@@ -344,14 +358,76 @@ impl PlanetRenderer {
             true,
             Some(wgpu::Face::Back),
         );
-        let ocean_pipeline = quad_pipeline(
-            "planet ocean",
-            "fs_ocean",
-            true,
-            true,
-            Some(wgpu::Face::Back),
-        );
+        // no culling: the sea is seen from below when the camera is under water
+        let ocean_pipeline = quad_pipeline("planet ocean", "fs_ocean", true, true, None);
         let cloud_pipeline = quad_pipeline("planet clouds", "fs_clouds", true, false, None);
+        let grass_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("planet grass"),
+            entries: &[tex_entry(0, D::D2Array), samp_entry(1)],
+        });
+        let grass_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("planet grass"),
+                bind_group_layouts: &[
+                    Some(&frame_layout),
+                    Some(&chunk_layout),
+                    Some(&surface_layout),
+                    Some(&grass_layout),
+                ],
+                immediate_size: 0,
+            });
+        let grass_attrs = [
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x3,
+                offset: 0,
+                shader_location: 0,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x3,
+                offset: 12,
+                shader_location: 1,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x4,
+                offset: 24,
+                shader_location: 2,
+            },
+        ];
+        let grass_vbl = [Some(wgpu::VertexBufferLayout {
+            array_stride: 40,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &grass_attrs,
+        })];
+        let grass_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("planet grass"),
+            layout: Some(&grass_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_grass"),
+                compilation_options: Default::default(),
+                buffers: &grass_vbl,
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_grass"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(depth(true, wgpu::CompareFunction::Greater)),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+        let (grass_chunk_buf, grass_chunk_bind) = Self::make_chunks(&device, &chunk_layout, 1);
         let sky_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("planet sky"),
             layout: Some(&sky_layout),
@@ -497,6 +573,10 @@ impl PlanetRenderer {
             terrain_pipeline,
             ocean_pipeline,
             cloud_pipeline,
+            grass_pipeline,
+            grass_layout,
+            grass_chunk_buf,
+            grass_chunk_bind,
             frame_layout,
             surface_layout,
             chunk_layout,
@@ -614,6 +694,9 @@ impl PlanetRenderer {
                 scatter: None,
                 placed: Vec::new(),
                 placed_at: None,
+                grass: None,
+                grass_at: None,
+                grass_bind: None,
                 min_h: 0.0,
                 max_h: 0.0,
                 quads: HashMap::new(),
@@ -827,7 +910,13 @@ impl PlanetRenderer {
                     b.dirty = true;
                 }
                 Loaded::Layer(tex, i, bitmap) => {
-                    let count = {
+                    let count = if tex == Tex::Grass {
+                        self.bodies[id]
+                            .scatter
+                            .as_ref()
+                            .map(|f| f.grass_textures().len())
+                            .unwrap_or(1) as u32
+                    } else {
                         let key = if tex == Tex::DetailA {
                             "detail_a_count"
                         } else {
@@ -844,7 +933,7 @@ impl PlanetRenderer {
                             bitmap.width(),
                             bitmap.height(),
                             count.max(1),
-                            tex == Tex::DetailA,
+                            tex == Tex::DetailA || tex == Tex::Grass,
                         );
                         self.bodies
                             .get_mut(id)
@@ -857,10 +946,11 @@ impl PlanetRenderer {
                         (t.clone(), *layers)
                     };
                     if bitmap.width() != t.width() || bitmap.height() != t.height() {
+                        // the slice stays empty, but it still counts so the array completes
                         log(&format!("planet {tex:?} layer {i}: size differs"));
-                        continue;
+                    } else {
+                        self.copy_bitmap(&bitmap, &t, i);
                     }
-                    self.copy_bitmap(&bitmap, &t, i);
                     let done = {
                         let b = self.bodies.get_mut(id).unwrap();
                         let e = b.arrays.get_mut(&tex).unwrap();
@@ -885,6 +975,17 @@ impl PlanetRenderer {
                     }
                 }
                 Loaded::Scatter(f) => {
+                    for (i, t) in f.grass_textures().iter().enumerate() {
+                        let url = format!("assets/{t}");
+                        let inbox = inbox.clone();
+                        let i = i as u32;
+                        wasm_bindgen_futures::spawn_local(async move {
+                            match fetch_bitmap(&url).await {
+                                Ok(b) => inbox.borrow_mut().push(Loaded::Layer(Tex::Grass, i, b)),
+                                Err(e) => log(&format!("planet {url}: {e}")),
+                            }
+                        });
+                    }
                     self.bodies.get_mut(id).unwrap().scatter = Some(f);
                 }
                 Loaded::Pack(p) => {
@@ -1265,6 +1366,21 @@ impl PlanetRenderer {
                 (solar[2] * 2.0) as f32,
                 radius as f32,
             ],
+            water: [
+                (view.cam.length() - radius) as f32,
+                if has_ocean { 1.0 } else { 0.0 },
+                0.0,
+                0.0,
+            ],
+            water_col: {
+                let s = surface_uniform(b, 0.0);
+                [
+                    s.shallow[0] * 0.6 + s.deep[0] * 0.4,
+                    s.shallow[1] * 0.6 + s.deep[1] * 0.4,
+                    s.shallow[2] * 0.6 + s.deep[2] * 0.4,
+                    1.0,
+                ]
+            },
         };
         self.queue
             .write_buffer(&self.frame_buf, 0, bytemuck::bytes_of(&fu));
@@ -1299,6 +1415,74 @@ impl PlanetRenderer {
             b.placed = f.place(map, view.radius_m, [view.cam.x, view.cam.y, view.cam.z]);
 
             b.placed_at = Some(view.cam);
+        }
+        // Grass: re-placed around the camera when it has moved a few metres.
+        let gmoved = b
+            .grass_at
+            .map(|p| (p - view.cam).length())
+            .unwrap_or(f64::INFINITY);
+        if gmoved > 3.0 {
+            let g = f.place_grass(map, view.radius_m, [view.cam.x, view.cam.y, view.cam.z]);
+            b.grass_at = Some(view.cam);
+            b.grass = (!g.is_empty()).then(|| {
+                let floats: Vec<f32> = g
+                    .iter()
+                    .flat_map(|p: &Grass| {
+                        [
+                            p.pos[0], p.pos[1], p.pos[2], p.up[0], p.up[1], p.up[2], p.scale,
+                            p.yaw, p.layer, p.tint,
+                        ]
+                    })
+                    .collect();
+                let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("planet grass"),
+                    size: (floats.len() * 4) as u64,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                self.queue
+                    .write_buffer(&buf, 0, bytemuck::cast_slice(&floats));
+                (buf, g.len() as u32)
+            });
+        }
+        if let Some(origin) = b.grass_at {
+            let off = origin - view.cam;
+            let tint = |k: usize| -> [f32; 4] {
+                // the first grass item's dry and healthy tints (Kerbin's grasses share a look)
+                let t = f
+                    .packages
+                    .iter()
+                    .flat_map(|p| &p.items)
+                    .find_map(|i| i.tint)
+                    .map(|t| t[k])
+                    .unwrap_or([1.0; 3]);
+                [t[0] as f32, t[1] as f32, t[2] as f32, 1.0]
+            };
+            let u = ChunkU {
+                offset: [off.x as f32, off.y as f32, off.z as f32, 0.0],
+                center: tint(0),
+                tile: tint(1),
+            };
+            self.queue
+                .write_buffer(&self.grass_chunk_buf, 0, bytemuck::bytes_of(&u));
+        }
+        if b.grass_bind.is_none() {
+            if let Some(view_tex) = b.tex.get(&Tex::Grass) {
+                b.grass_bind = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("planet grass"),
+                    layout: &self.grass_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(view_tex),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&self.wrap_sampler),
+                        },
+                    ],
+                }));
+            }
         }
         let models = f.models();
         let mut out = Vec::with_capacity(b.placed.len());
@@ -1447,6 +1631,15 @@ impl ExtraPass for PlanetRenderer {
             pass.set_bind_group(1, &self.chunk_bind, &[(*slot as u64 * SLOT) as u32]);
             pass.set_vertex_buffer(0, q.terrain.slice(..));
             pass.draw_indexed(0..self.index_count, 0, 0..1);
+        }
+        if let (Some((buf, n)), Some(gb)) = (&b.grass, &b.grass_bind) {
+            pass.set_pipeline(&self.grass_pipeline);
+            pass.set_bind_group(0, fb, &[]);
+            pass.set_bind_group(1, &self.grass_chunk_bind, &[0]);
+            pass.set_bind_group(2, sb, &[]);
+            pass.set_bind_group(3, gb, &[]);
+            pass.set_vertex_buffer(0, buf.slice(..));
+            pass.draw(0..12, 0..*n);
         }
     }
 

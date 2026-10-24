@@ -19,6 +19,10 @@ struct Frame {
     mie: vec4<f32>,
     // solar irradiance, w: body radius (m)
     solar: vec4<f32>,
+    // x: camera height above the sea surface (m), y: 1 on ocean worlds
+    water: vec4<f32>,
+    // the water's colour under the surface (shallow and deep mixed)
+    water_col: vec4<f32>,
 };
 
 struct Chunk {
@@ -326,6 +330,23 @@ fn ambient(up: vec3<f32>, sun: vec3<f32>) -> vec3<f32> {
     return mix(surface.ambient_night.rgb, d, day) * (2.0 / PI);
 }
 
+fn under_water() -> bool {
+    return frame.water.y > 0.5 && frame.water.x < 0.0;
+}
+
+// Light under the sea (the original's _UnderWaterDiffuseColor, darker with depth) and the fog it puts between
+// the camera and what it sees (_UnderWaterMaxVisibleDistance-like, 60 m).
+fn water_light(depth_m: f32) -> vec3<f32> {
+    let sun_up = max(dot(normalize(frame.cam_km.xyz), frame.sun.xyz), 0.0);
+    let col = frame.water_col.rgb;
+    return col * (0.08 + 0.6 * sun_up) * exp(-max(depth_m, 0.0) / 60.0);
+}
+
+fn water_fog(radiance: vec3<f32>, dist: f32) -> vec3<f32> {
+    let f = 1.0 - exp(-dist / 60.0);
+    return mix(radiance, water_light(-frame.water.x) / PI * frame.solar.xyz, f);
+}
+
 fn tonemap(radiance: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(1.0) - exp(-radiance * frame.sun.w);
 }
@@ -358,6 +379,12 @@ fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
     let p = frame.inv_view_proj * vec4<f32>(in.ndc, 0.5, 1.0);
     let view = normalize(p.xyz / p.w);
     let sun = frame.sun.xyz;
+    if under_water() {
+        let up = normalize(frame.cam_km.xyz);
+        let looking_up = clamp(dot(view, up), 0.0, 1.0);
+        let c = water_light(-frame.water.x) / PI * frame.solar.xyz * (0.5 + 1.5 * looking_up);
+        return vec4<f32>(tonemap(c), 1.0);
+    }
     var radiance = vec3<f32>(0.0);
     var t = vec3<f32>(1.0);
     if frame.rayleigh.w > 0.5 {
@@ -623,7 +650,11 @@ fn fs_terrain(in: VOut) -> @location(0) vec4<f32> {
         return vec4<f32>(n * 0.5 + 0.5, 1.0);
     }
     var radiance = albedo / PI * (light.sun * shade + light.sky) + albedo * ambient(up, frame.sun.xyz);
-    radiance = through_air(radiance, p_km);
+    if under_water() {
+        radiance = water_fog(radiance * exp(-max(-in.height, 0.0) / 80.0), dist);
+    } else {
+        radiance = through_air(radiance, p_km);
+    }
     return vec4<f32>(tonemap(radiance), 1.0);
 }
 
@@ -657,6 +688,16 @@ fn fs_ocean(in: VOut) -> @location(0) vec4<f32> {
     let dist = length(in.rel);
     let n = wave_normal(in.tile, up, frame.cam_km.w, dist);
     let view = normalize(in.rel);
+    if under_water() {
+        // The surface from below: Snell's window (bright, the sky through the waves) inside 48.6 degrees of
+        // straight up, the water's own colour reflected outside it.
+        let window = smoothstep(0.6, 0.7, dot(view, normalize(mix(up, n, 0.3))));
+        let sky = frame.solar.xyz * 0.25 * (0.6 + 0.4 * dot(frame.sun.xyz, up));
+        let below = water_light(0.0) / PI * frame.solar.xyz;
+        var c = mix(below, sky, window);
+        c = water_fog(c, dist);
+        return vec4<f32>(tonemap(c), 1.0);
+    }
     let p_km = frame.cam_km.xyz + in.rel * 0.001;
     let sun = frame.sun.xyz;
     var light = sun_and_sky(p_km, up, sun);
@@ -755,4 +796,80 @@ fn fs_clouds(in: VOut) -> @location(0) vec4<f32> {
     // Fade the shell when the camera is close to its altitude (it would read as a flat sheet).
     let fade = smoothstep(300.0, 2500.0, abs(cam_alt - surface.clouds.x));
     return vec4<f32>(tonemap(radiance), cover * fade);
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Grass: two crossed textured cards per patch (Vegetation Studio's grass patches), alpha-tested, swaying.
+// The chunk uniform carries the placement origin minus the camera (offset), the dry tint (center) and the
+// healthy tint (tile).
+
+@group(3) @binding(0) var grass_tex: texture_2d_array<f32>;
+@group(3) @binding(1) var grass_samp: sampler;
+
+struct GIn {
+    @location(0) pos: vec3<f32>,
+    @location(1) up: vec3<f32>,
+    // scale, yaw, texture layer, tint (0 dry .. 1 healthy)
+    @location(2) params: vec4<f32>,
+};
+
+struct GOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) rel: vec3<f32>,
+    @location(1) uv: vec2<f32>,
+    @location(2) up: vec3<f32>,
+    @location(3) params: vec4<f32>,
+};
+
+@vertex
+fn vs_grass(@builtin(vertex_index) vi: u32, g: GIn) -> GOut {
+    var out: GOut;
+    let card = f32(vi / 6u);
+    var corners = array<vec2<f32>, 6>(vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0),
+                                      vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 1.0), vec2<f32>(0.0, 1.0));
+    let c = corners[vi % 6u];
+    let up = normalize(g.up);
+    var side = cross(up, vec3<f32>(0.0, 1.0, 0.0));
+    if dot(side, side) < 1e-6 {
+        side = cross(up, vec3<f32>(1.0, 0.0, 0.0));
+    }
+    side = normalize(side);
+    let fwd = cross(up, side);
+    let a = g.params.y + card * 1.5707963;
+    let dir = side * cos(a) + fwd * sin(a);
+    let s = g.params.x;
+    let w = 1.1 * s;
+    let h = 0.7 * s;
+    let t = frame.cam_km.w;
+    let sway = sin(t * 1.7 + g.pos.x * 0.35 + g.pos.z * 0.27) * 0.08 * h * c.y;
+    let p = g.pos + dir * ((c.x - 0.5) * w + sway) + up * (c.y * h);
+    let rel = chunk.offset.xyz + p;
+    out.clip = frame.view_proj * vec4<f32>(rel, 1.0);
+    out.rel = rel;
+    out.uv = vec2<f32>(c.x, 1.0 - c.y);
+    out.up = up;
+    out.params = g.params;
+    return out;
+}
+
+@fragment
+fn fs_grass(in: GOut) -> @location(0) vec4<f32> {
+    let dist = length(in.rel);
+    let tex = textureSample(grass_tex, grass_samp, in.uv, i32(in.params.z + 0.5));
+    // thin out towards the edge of the patch field (dithered) so there is no hard line
+    let fade = 1.0 - smoothstep(35.0, 55.0, dist);
+    let dither = fract(sin(dot(in.clip.xy, vec2<f32>(12.9898, 78.233))) * 43758.547);
+    if tex.a < 0.45 || dither > fade {
+        discard;
+    }
+    let tint = mix(chunk.center.rgb, chunk.tile.rgb, in.params.w);
+    let albedo = tex.rgb * tint;
+    let p_km = frame.cam_km.xyz + in.rel * 0.001;
+    let model = normalize(p_km);
+    let light = sun_and_sky(p_km, in.up, frame.sun.xyz);
+    let shade = cloud_shadow(model * frame.solar.w, frame.sun.xyz);
+    // cards are thin: let some light through from behind
+    var radiance = albedo / PI * (light.sun * shade * 0.85 + light.sky) + albedo * ambient(in.up, frame.sun.xyz);
+    radiance = through_air(radiance, p_km);
+    return vec4<f32>(tonemap(radiance), 1.0);
 }
