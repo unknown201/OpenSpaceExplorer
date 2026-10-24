@@ -18,6 +18,7 @@ pub mod kerbin_time;
 pub mod ksc3d;
 #[cfg(target_arch = "wasm32")]
 pub mod menu3d;
+pub mod missions;
 #[cfg(target_arch = "wasm32")]
 pub mod navball;
 #[cfg(target_arch = "wasm32")]
@@ -134,6 +135,10 @@ struct App {
     loc: std::collections::HashMap<String, String>,
     researched: std::collections::HashSet<String>,
     rd_selected: Option<String>,
+    /// Missions, the Mission Control tab (primary or secondary) and the mission shown.
+    missions: Vec<missions::Mission>,
+    mc_primary: bool,
+    mc_selected: Option<String>,
     /// Controls as last sent.
     throttle: f64,
     attitude: ose_net::AttitudeMode,
@@ -335,6 +340,9 @@ pub fn start() -> Result<(), JsValue> {
         loc: std::collections::HashMap::new(),
         researched: ["tNode_1v_start".to_string()].into_iter().collect(),
         rd_selected: None,
+        missions: missions::all(),
+        mc_primary: true,
+        mc_selected: None,
         throttle: 0.0,
         attitude: ose_net::AttitudeMode::Up,
         gpu_canvas: get("gpu")?.dyn_into()?,
@@ -419,6 +427,9 @@ fn load_localization(app: Shared) {
             a.loc = map;
             if a.rd_selected.is_some() {
                 a.render_rnd();
+            }
+            if a.mc_selected.is_some() {
+                a.render_missions();
             }
         }
     });
@@ -614,6 +625,41 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
     wire("ksc-vab", Box::new(|a| a.borrow_mut().open_vab(None)))?;
     wire("ksc-rnd", Box::new(|a| a.borrow_mut().open_rnd()))?;
     wire("rnd-back", Box::new(|a| a.borrow().open_ksc()))?;
+    wire("ksc-mission", Box::new(|a| a.borrow_mut().open_missions()))?;
+    wire("mc-back", Box::new(|a| a.borrow().open_ksc()))?;
+    wire(
+        "mc-tab-primary",
+        Box::new(|a| {
+            let mut app = a.borrow_mut();
+            app.mc_primary = true;
+            app.render_missions();
+        }),
+    )?;
+    wire(
+        "mc-tab-secondary",
+        Box::new(|a| {
+            let mut app = a.borrow_mut();
+            app.mc_primary = false;
+            app.render_missions();
+        }),
+    )?;
+    if let Some(list) = doc.get_element_by_id("mc-list") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let mut t = ev.target().and_then(|t| t.dyn_into::<Element>().ok());
+            while let Some(el) = t.clone() {
+                if let Some(id) = el.get_attribute("data-ose-mission") {
+                    let mut app = a.borrow_mut();
+                    app.mc_selected = Some(id);
+                    app.render_missions();
+                    break;
+                }
+                t = el.parent_element();
+            }
+        });
+        list.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
     if let Some(tree) = doc.get_element_by_id("rd-tree") {
         let a = app.clone();
         let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
@@ -1435,6 +1481,7 @@ impl App {
         match facility {
             "VAB" => self.open_vab(None),
             "ResearchCenter" => self.open_rnd(),
+            "AstronautComplex" => self.open_missions(),
             "TrackingCenter" => self.show_menu(false),
             f if f.starts_with("Launchpad") => self.open_launchpad(),
             _ => {}
@@ -1852,6 +1899,7 @@ impl App {
             "launchpad",
             "vab",
             "rnd",
+            "mission",
             "paused",
         ] {
             if let Some(el) = self.doc.get_element_by_id(&format!("screen-{id}")) {
@@ -1893,6 +1941,50 @@ impl App {
         }
         set_text(&self.doc, "menu-note", "");
         self.menu_screen("ksc");
+    }
+
+    // ---- Mission Control
+
+    fn open_missions(&mut self) {
+        if let Some(m) = self.doc.get_element_by_id("menu") {
+            m.class_list().remove_1("hidden").ok();
+        }
+        set_text(&self.doc, "menu-note", "");
+        if self.mc_selected.is_none() {
+            self.mc_selected = self
+                .missions
+                .iter()
+                .find(|m| m.primary == self.mc_primary)
+                .map(|m| m.id.clone());
+        }
+        self.menu_screen("mission");
+        self.render_missions();
+    }
+
+    fn render_missions(&self) {
+        let sel = self.mc_selected.as_deref();
+        if let Some(el) = self.doc.get_element_by_id("mc-list") {
+            el.set_inner_html(&missions::render_list(
+                &self.missions,
+                &self.loc,
+                self.mc_primary,
+                sel,
+            ));
+        }
+        for (id, on) in [
+            ("mc-tab-primary", self.mc_primary),
+            ("mc-tab-secondary", !self.mc_primary),
+        ] {
+            if let Some(el) = self.doc.get_element_by_id(id) {
+                el.class_list().toggle_with_force("on", on).ok();
+            }
+        }
+        if let (Some(el), Some(m)) = (
+            self.doc.get_element_by_id("mc-briefing"),
+            sel.and_then(|id| self.missions.iter().find(|m| m.id == id)),
+        ) {
+            el.set_inner_html(&missions::render_briefing(m, &self.loc));
+        }
     }
 
     // ---- Research and Development

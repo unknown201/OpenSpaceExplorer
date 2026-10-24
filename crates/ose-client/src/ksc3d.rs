@@ -74,6 +74,7 @@ impl Building {
             self.facility.as_str(),
             "VAB"
                 | "ResearchCenter"
+                | "AstronautComplex"
                 | "TrackingCenter"
                 | "Launchpad_1"
                 | "Launchpad_2"
