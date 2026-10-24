@@ -7,6 +7,7 @@
 
 pub mod bodies;
 pub mod flight;
+pub mod rigid;
 pub mod trajectory;
 pub mod vessels;
 

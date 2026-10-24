@@ -18,6 +18,7 @@ serde_json = "1"
 json5 = "0.4"
 postcard = { version = "1", features = ["alloc"] }
 bevy_ecs = "0.15"
+rapier3d-f64 = "0.36"
 thiserror = "2"
 anyhow = "1"
 tracing = "0.1"
