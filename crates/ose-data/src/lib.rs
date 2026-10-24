@@ -235,10 +235,32 @@ pub struct PartDef {
     /// Reaction wheel torque (the larger of pitch and yaw), kN*m; 0 for parts without a wheel.
     #[serde(default)]
     pub reaction_wheel_torque_knm: f64,
+    /// Electric charge use and production of the part's modules.
+    #[serde(default)]
+    pub electric: Electric,
     /// Names of every module on the part, in order, so the sim knows what else to implement.
     pub module_names: Vec<String>,
     /// Module data not yet mapped into typed fields, keyed by module name.
     pub raw_modules: BTreeMap<String, serde_json::Value>,
+}
+
+/// Electric charge (units per second) used and made by a part's modules, from their `RequiredResources` /
+/// `ResourceSettings` in the part data.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Electric {
+    /// A probe core's draw while it holds control (`Data_Command.requiredResources`; crewed pods draw none).
+    pub command_use: f64,
+    /// Reaction wheel draw at full input per kN*m of the |(pitch, yaw, roll)| torque.
+    pub wheel_use_per_knm: f64,
+    /// Reaction wheel |(pitch, yaw, roll)| torque, kN*m.
+    pub wheel_torque_vec_knm: f64,
+    /// Solar panel output in full sun at the home world's distance (`Data_SolarPanel.ResourceSettings.Rate`).
+    pub solar_output: f64,
+    /// Whether the panel turns to track the sun (`Data_Deployable.isTracking`).
+    pub solar_tracking: bool,
+    /// Generator output (`Data_ModuleGenerator.ResourceSetting.Rate`): an engine's alternator while it runs,
+    /// otherwise always on (RTGs).
+    pub generator_output: f64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

@@ -652,6 +652,7 @@ async fn hello_catalog_and_snapshots() {
             assert!((f.facing.length() - 1.0).abs() < 1e-6, "{:?}", f.facing);
             assert!((f.roll_ref.length() - 1.0).abs() < 1e-6);
             assert!(f.facing.dot(f.roll_ref).abs() < 1e-6);
+            assert!(f.has_control);
             landed_seen = true;
             break;
         }

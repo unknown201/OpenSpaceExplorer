@@ -35,7 +35,8 @@ struct Edge {
     boundary: bool,
 }
 
-/// One resource the request moves out of the tanks, units per second.
+/// One resource the request moves out of the tanks (positive, units per second) or into them (negative:
+/// producers such as solar panels).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Instruction {
     pub resource: usize,
@@ -291,6 +292,13 @@ impl FlowNet {
                 if want > 0.0 {
                     let have: f64 = groups.iter().flatten().map(|&t| self.tanks[t].stored).sum();
                     fraction = fraction.min(have / want);
+                } else if want < 0.0 {
+                    let room: f64 = groups
+                        .iter()
+                        .flatten()
+                        .map(|&t| (self.tanks[t].capacity - self.tanks[t].stored).max(0.0))
+                        .sum();
+                    fraction = fraction.min(room / -want);
                 }
                 plans.push((want, groups));
             }
@@ -300,6 +308,30 @@ impl FlowNet {
                 continue;
             }
             for (want, groups) in plans {
+                if want < 0.0 {
+                    // filling goes the other way round the groups, each tank by its free room
+                    let mut left = -want * fraction;
+                    for g in groups.into_iter().rev() {
+                        if left <= 0.0 {
+                            break;
+                        }
+                        let room: f64 = g
+                            .iter()
+                            .map(|&t| (self.tanks[t].capacity - self.tanks[t].stored).max(0.0))
+                            .sum();
+                        if room <= 0.0 {
+                            continue;
+                        }
+                        let put = left.min(room);
+                        let share = put / room;
+                        for &t in &g {
+                            let tank = &mut self.tanks[t];
+                            tank.stored += (tank.capacity - tank.stored).max(0.0) * share;
+                        }
+                        left -= put;
+                    }
+                    continue;
+                }
                 let mut left = want * fraction;
                 for g in groups {
                     if left <= 0.0 {
@@ -445,6 +477,44 @@ mod tests {
             "methane draw cut to the same fraction"
         );
         let _ = me;
+    }
+
+    #[test]
+    fn producers_fill_the_tanks_up_to_capacity() {
+        let (_, mut net) = k1();
+        let ec = net.resource("ElectricCharge").unwrap();
+        for t in net.tanks.iter_mut().filter(|t| t.resource == ec) {
+            t.stored = 0.0;
+        }
+        let cap: f64 = net
+            .tanks
+            .iter()
+            .filter(|t| t.resource == ec)
+            .map(|t| t.capacity)
+            .sum();
+        let charge = Request {
+            part: 0,
+            instructions: vec![Instruction {
+                resource: ec,
+                units_per_s: -1.0,
+            }],
+            priority: 0,
+        };
+        let f = net.process(std::slice::from_ref(&charge), 10.0);
+        assert_eq!(f, vec![1.0]);
+        let groups = net.groups(0, ec);
+        let reachable: f64 = groups.iter().flatten().map(|&t| net.tanks[t].stored).sum();
+        assert!((reachable - 10.0).abs() < 1e-9, "{reachable}");
+        // far more than fits: fills to capacity and reports the fraction taken
+        let f = net.process(&[charge], 1.0e6);
+        assert!(f[0] < 1.0);
+        let full: f64 = groups.iter().flatten().map(|&t| net.tanks[t].stored).sum();
+        let room: f64 = groups
+            .iter()
+            .flatten()
+            .map(|&t| net.tanks[t].capacity)
+            .sum();
+        assert!((full - room).abs() < 1e-6 && room <= cap);
     }
 
     #[test]

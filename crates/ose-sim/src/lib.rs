@@ -24,6 +24,10 @@ pub use ose_data::{Tick, TICKS_PER_SECOND};
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct UniverseTime(pub Tick);
 
+/// Distance of the home world from the star, m: solar panels are rated there.
+#[derive(Resource, Clone, Copy, Debug, PartialEq)]
+pub struct HomeDistance(pub f64);
+
 /// Time warp factor granted by the server (1 = real time).
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WarpFactor(pub u32);
@@ -73,7 +77,49 @@ impl Universe {
     pub fn with_bodies(defs: &[ose_data::CelestialBody]) -> Self {
         let mut u = Self::new();
         bodies::spawn_bodies(&mut u.world, defs);
+        if let Some(a) = defs
+            .iter()
+            .find(|d| d.is_home_world)
+            .and_then(|d| d.orbit.as_ref())
+            .map(|o| o.semi_major_axis_m)
+        {
+            u.world.insert_resource(HomeDistance(a));
+        }
         u
+    }
+
+    /// Starlight at a point `r` from `body` (body-centred inertial) relative to the home world's: inverse
+    /// square from the star, 0 when `body` (or the planet it orbits) is in the way.
+    pub fn sunlight(&self, body: Entity, r: DVec3, ut: f64) -> f64 {
+        let Some(root) = self.world.resource::<bodies::BodyIndex>().root else {
+            return 1.0;
+        };
+        let p = bodies::star_space_state(&self.world, body, ut).0 + r;
+        let d = p.length();
+        if d <= 0.0 || body == root && r.length() <= 0.0 {
+            return 0.0;
+        }
+        let mut blockers = vec![body];
+        if let Some(parent) = self.world.get::<bodies::ReferenceBody>(body).map(|b| b.0) {
+            if parent != root {
+                blockers.push(parent);
+            }
+        }
+        for b in blockers.into_iter().filter(|&b| b != root) {
+            let Some(radius) = self.world.get::<bodies::Body>(b).map(|x| x.radius_m) else {
+                continue;
+            };
+            let c = bodies::star_space_state(&self.world, b, ut).0;
+            // closest point of the segment from the vessel to the star (at the origin)
+            let s = (c.dot(p) / (d * d)).clamp(0.0, 1.0);
+            if s < 1.0 && (c - p * s).length() < radius {
+                return 0.0;
+            }
+        }
+        match self.world.get_resource::<HomeDistance>() {
+            Some(h) => (h.0 / d).powi(2),
+            None => 1.0,
+        }
     }
 
     pub fn warp(&self) -> u32 {
@@ -294,7 +340,7 @@ impl Universe {
         }
         match self.world.get_mut::<flight::Powered>(e) {
             Some(mut p) => {
-                if p.crashed {
+                if p.crashed || !p.controlled {
                     return false;
                 }
                 p.throttle = throttle;
@@ -557,6 +603,11 @@ impl Universe {
                 .expect("powered")
                 .clone();
             let mut structure = self.world.entity_mut(e).take::<structure::Structure>();
+            let sun = if structure.is_some() {
+                self.sunlight(body_e, p.r, ut)
+            } else {
+                0.0
+            };
             let mut pieces = Vec::new();
             for i in 0..ticks.max(1) {
                 if let Some(st) = &mut structure {
@@ -592,6 +643,9 @@ impl Universe {
                     // the propellant burned comes out of the tanks through the flow graph
                     let burned = (mass_before - p.mass_t).max(0.0);
                     st.burn(&mut p, burned, dt);
+                    // wheels work in proportion to how fast the vessel is being turned
+                    let turning = (p.angvel.length() / 0.2).clamp(0.0, 1.0);
+                    st.electric(&mut p, sun, turning, dt);
                     for piece in st.apply(&p, &out, dt) {
                         pieces.push((piece, p.r, p.v, p.facing));
                     }
@@ -942,6 +996,31 @@ mod tests {
         let u = Universe::with_bodies(&[kerbin]);
         let body = u.body_entity("Kerbin").unwrap();
         (u, body, spec, st)
+    }
+
+    #[test]
+    fn sunlight_falls_off_with_distance_and_planets_cast_shadows() {
+        let bodies: Vec<ose_data::CelestialBody> =
+            serde_json::from_str(include_str!("../../../assets/own/kerbol-system.json")).unwrap();
+        let u = Universe::with_bodies(&bodies);
+        let kerbin = u.body_entity("Kerbin").unwrap();
+        let ut = 0.0;
+        let k = bodies::star_space_state(&u.world, kerbin, ut).0;
+        let to_sun = (k * -1.0).normalized();
+        let day = u.sunlight(kerbin, to_sun * 700_000.0, ut);
+        assert!(
+            (day - 1.0).abs() < 0.05,
+            "at home the panels give their rating ({day})"
+        );
+        assert_eq!(
+            u.sunlight(kerbin, to_sun * -700_000.0, ut),
+            0.0,
+            "night side"
+        );
+        let moho = u.body_entity("Moho").unwrap();
+        let m = bodies::star_space_state(&u.world, moho, ut).0;
+        let near = u.sunlight(moho, (m * -1.0).normalized() * 300_000.0, ut);
+        assert!(near > 3.0, "Moho is bright ({near})");
     }
 
     #[test]

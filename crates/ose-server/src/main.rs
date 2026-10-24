@@ -640,6 +640,19 @@ fn flight_readout(
         Situation::Crashed => ose_net::FlightSituation::Crashed,
     };
     let stage_prop = p.current_stage().map(|s| s.propellant_t).unwrap_or(0.0);
+    let ec = u
+        .structure(e)
+        .and_then(|st| {
+            let r = st.net.resource("ElectricCharge")?;
+            Some(
+                st.net
+                    .tanks
+                    .iter()
+                    .filter(|t| t.resource == r && st.net.present[t.part])
+                    .fold((0.0, 0.0), |a, t| (a.0 + t.stored, a.1 + t.capacity)),
+            )
+        })
+        .unwrap_or((0.0, 0.0));
     Some(ose_net::FlightReadout {
         situation: sit,
         altitude_m: alt,
@@ -665,6 +678,9 @@ fn flight_readout(
         dynamic_pressure_kpa: 0.0005 * rho * v_surf.length_squared(),
         facing: p.facing,
         roll_ref: roll_reference(p.facing, up),
+        electric_charge: ec.0,
+        electric_capacity: ec.1,
+        has_control: p.controlled,
     })
 }
 
@@ -1585,7 +1601,7 @@ async fn session(mut socket: WebSocket, s: AppState) {
                             let reply = match owned_vessel(&s, vessel, player_id) {
                                 Some(e) => {
                                     let ok = s.universe.lock().expect("sim lock").set_controls(e, throttle, from_net_attitude(attitude));
-                                    ServerMessage::FlightAck { vessel, accepted: ok, reason: (!ok).then(|| "vessel has no flight state (bare probe) or has crashed".to_string()) }
+                                    ServerMessage::FlightAck { vessel, accepted: ok, reason: (!ok).then(|| "vessel has no flight state (bare probe), has crashed, or has no power for its probe core".to_string()) }
                                 }
                                 None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
                             };

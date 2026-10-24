@@ -186,6 +186,16 @@ pub struct Powered {
     /// reference area and coefficient.
     #[serde(default)]
     pub drag_cda_m2: Option<f64>,
+    /// Fraction of the reaction wheel torque that has power.
+    #[serde(default = "one")]
+    pub wheel_scale: f64,
+    /// False for an uncrewed vessel whose probe cores have no power: no steering, no throttle.
+    #[serde(default = "yes")]
+    pub controlled: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 fn one() -> f64 {
@@ -315,6 +325,8 @@ impl Powered {
             angvel: DVec3::ZERO,
             thrust_scale: 1.0,
             drag_cda_m2: None,
+            wheel_scale: 1.0,
+            controlled: true,
         }
     }
 
@@ -481,7 +493,12 @@ pub fn steer(p: &mut Powered, target: DVec3, thrust_fraction: f64, dt: f64) {
         1.0
     };
     let moi = s.moi_tm2 * mass_ratio;
-    let torque = s.wheel_torque_knm + s.gimbal_torque_knm * thrust_fraction.clamp(0.0, 1.0);
+    let torque = if p.controlled {
+        s.wheel_torque_knm * p.wheel_scale.clamp(0.0, 1.0)
+            + s.gimbal_torque_knm * thrust_fraction.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
     // drop roll: only the component of the angular velocity that moves the thrust axis matters here
     let w = p.angvel - p.facing * p.angvel.dot(p.facing);
     if torque > 0.0 {

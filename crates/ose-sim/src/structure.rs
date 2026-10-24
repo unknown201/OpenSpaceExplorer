@@ -40,6 +40,9 @@ pub struct Structure {
     pub net: FlowNet,
     /// Each part's engine mixture (`None` for parts without an engine).
     pub engine_mixture: Vec<Option<String>>,
+    /// Each part's electric charge use and production, and crew capacity.
+    pub electric: Vec<ose_data::Electric>,
+    pub crew: Vec<u32>,
     /// Flight stage the structure was last trimmed to.
     staged_to: usize,
 }
@@ -152,6 +155,12 @@ impl Structure {
                     .map(|e| e.propellant_mixture.clone())
             })
             .collect();
+        let electric = (0..n)
+            .map(|i| def_of(i).map(|d| d.electric).unwrap_or_default())
+            .collect();
+        let crew = (0..n)
+            .map(|i| def_of(i).map(|d| d.crew_capacity).unwrap_or(0))
+            .collect();
         let mut s = Structure {
             rigid,
             root,
@@ -164,6 +173,8 @@ impl Structure {
             curves: DragCurves::default(),
             net: FlowNet::build(craft, defs, resources),
             engine_mixture,
+            electric,
+            crew,
             staged_to: 0,
         };
         s.trim_to(0);
@@ -254,6 +265,96 @@ impl Structure {
             }
             None => 1.0,
         };
+    }
+
+    /// One step of electric charge: solar panels (`sun` is the starlight relative to the home world, 0 in
+    /// shadow; fixed panels are taken at half their rating since roll is not simulated), generators (engine
+    /// alternators while their engine runs) and RTGs fill the batteries; probe cores and reaction wheels (at
+    /// `wheel_input` 0..1 of full torque) draw from them. Sets the vessel's wheel power and, for an uncrewed
+    /// vessel, whether its probe cores still have control.
+    pub fn electric(&mut self, p: &mut Powered, sun: f64, wheel_input: f64, dt: f64) {
+        let Some(ec) = self.net.resource("ElectricCharge") else {
+            return;
+        };
+        let live = self.live_engines(p.stage);
+        let running = p.throttle * p.thrust_scale;
+        let mut requests = Vec::new();
+        let mut wheels = Vec::new();
+        let mut cores = Vec::new();
+        let instruction = |units_per_s: f64| Instruction {
+            resource: ec,
+            units_per_s,
+        };
+        for i in 0..self.rigid.len() {
+            if !self.rigid.present[i] {
+                continue;
+            }
+            let e = self.electric[i];
+            let mut made = 0.0;
+            if e.solar_output > 0.0 {
+                made += e.solar_output * sun * if e.solar_tracking { 1.0 } else { 0.5 };
+            }
+            if e.generator_output > 0.0 {
+                if self.engine_thrust_kn[i] > 0.0 {
+                    if live.contains(&i) && self.fed(i) {
+                        made += e.generator_output * running;
+                    }
+                } else {
+                    made += e.generator_output;
+                }
+            }
+            if made > 0.0 {
+                requests.push(Request {
+                    part: i,
+                    instructions: vec![instruction(-made)],
+                    priority: 10,
+                });
+            }
+            if e.command_use > 0.0 {
+                cores.push(requests.len());
+                requests.push(Request {
+                    part: i,
+                    instructions: vec![instruction(e.command_use)],
+                    priority: 5,
+                });
+            }
+            if e.wheel_use_per_knm > 0.0 && e.wheel_torque_vec_knm > 0.0 {
+                wheels.push((requests.len(), e.wheel_torque_vec_knm, i));
+                requests.push(Request {
+                    part: i,
+                    instructions: vec![instruction(
+                        e.wheel_use_per_knm * e.wheel_torque_vec_knm * wheel_input.clamp(0.0, 1.0),
+                    )],
+                    priority: 4,
+                });
+            }
+        }
+        let fractions = self.net.process(&requests, dt);
+        // a wheel idling draws nothing but still needs charge to turn
+        let total: f64 = wheels.iter().map(|w| w.1).sum();
+        p.wheel_scale = if total > 0.0 {
+            wheels
+                .iter()
+                .map(|&(r, torque, part)| {
+                    let powered = if requests[r].instructions[0].units_per_s > 0.0 {
+                        fractions[r]
+                    } else if self.net.available(part, ec) > 1e-9 {
+                        1.0
+                    } else {
+                        0.0
+                    };
+                    torque * powered
+                })
+                .sum::<f64>()
+                / total
+        } else {
+            1.0
+        };
+        let crewed = (0..self.rigid.len()).any(|i| self.rigid.present[i] && self.crew[i] > 0);
+        p.controlled = crewed || cores.is_empty() || cores.iter().any(|&r| fractions[r] > 0.0);
+        if !p.controlled {
+            p.throttle = 0.0;
+        }
     }
 
     /// Draw `burned_t` of propellant (what the flight step burned) through the flow graph, split over the
@@ -479,6 +580,60 @@ mod tests {
         let mut p = Powered::new(spec, DVec3::new(700_000.0, 0.0, 0.0), DVec3::ZERO, false);
         p.facing = facing;
         p
+    }
+
+    fn ec_stored(s: &Structure) -> f64 {
+        let ec = s.net.resource("ElectricCharge").unwrap();
+        s.net
+            .tanks
+            .iter()
+            .filter(|t| t.resource == ec && s.net.present[t.part])
+            .map(|t| t.stored)
+            .sum()
+    }
+
+    #[test]
+    fn a_probe_without_charge_loses_control_and_the_sun_brings_it_back() {
+        let (crafts, defs, res) = assets();
+        // a probe core, a battery and a reaction wheel, no panels
+        let drone = crafts.iter().find(|c| c.name == "Stock03_Drone").unwrap();
+        let mut s = Structure::build(drone, &defs, &res);
+        let mut p = flying(DVec3::new(1.0, 0.0, 0.0));
+        let start = ec_stored(&s);
+        assert!(start > 0.0);
+        // turning hard in the dark
+        let mut steps = 0;
+        while p.controlled && steps < 1_000_000 {
+            s.electric(&mut p, 0.0, 1.0, 1.0);
+            steps += 1;
+        }
+        assert!(!p.controlled, "battery never ran out");
+        assert_eq!(p.wheel_scale, 0.0);
+        assert_eq!(p.throttle, 0.0);
+        assert!(ec_stored(&s) < 1e-9);
+        // the drone has no panels: sunlight changes nothing
+        s.electric(&mut p, 1.0, 0.0, 10.0);
+        assert!(!p.controlled);
+    }
+
+    #[test]
+    fn kerbal_k1_panels_charge_its_batteries_in_sunlight_only() {
+        let (crafts, defs, res) = assets();
+        let k1 = crafts.iter().find(|c| c.name == "Kerbal K1").unwrap();
+        let mut s = Structure::build(k1, &defs, &res);
+        let mut p = flying(DVec3::new(1.0, 0.0, 0.0));
+        let ec = s.net.resource("ElectricCharge").unwrap();
+        for t in s.net.tanks.iter_mut().filter(|t| t.resource == ec) {
+            t.stored *= 0.5;
+        }
+        let half = ec_stored(&s);
+        s.electric(&mut p, 0.0, 0.0, 10.0);
+        assert!(ec_stored(&s) <= half, "no sun, no charge");
+        s.electric(&mut p, 1.0, 0.0, 10.0);
+        let gained = ec_stored(&s) - half;
+        // eight fixed 0.15/s panels at half rating: 0.6 per second
+        assert!((gained - 6.0).abs() < 0.5, "gained {gained}");
+        assert!(p.controlled, "a crewed pod always has control");
     }
 
     #[test]

@@ -330,8 +330,10 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
     let mut raw_modules = BTreeMap::new();
     let mut gimbal_range = None;
     let mut wheel_torque: f64 = 0.0;
+    let mut electric = ose_data::Electric::default();
     if let Some(mods) = d["serializedPartModules"].as_array() {
         for m in mods {
+            electric_from_module(m, &mut electric);
             let name = s(m, "Name");
             let data = module_data(m);
             match name.as_str() {
@@ -451,9 +453,53 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
         engines,
         bounds,
         reaction_wheel_torque_knm: wheel_torque,
+        electric,
         drag_cubes,
         module_names,
         raw_modules,
+    }
+}
+
+/// Electric charge rate of a module resource setting (`{ResourceName, Rate}`), 0 for other resources.
+fn ec_rate(setting: &Value) -> f64 {
+    if setting["ResourceName"].as_str() == Some("ElectricCharge") {
+        f(setting, "Rate")
+    } else {
+        0.0
+    }
+}
+
+/// Pick the electric charge figures out of every data entry of one serialized module.
+fn electric_from_module(m: &Value, e: &mut ose_data::Electric) {
+    let Some(entries) = m["ModuleData"].as_array() else {
+        return;
+    };
+    for entry in entries {
+        let o = &entry["DataObject"];
+        match entry["Name"].as_str().unwrap_or("") {
+            "Data_Command" => {
+                if let Some(r) = o["requiredResources"].as_array() {
+                    e.command_use += r.iter().map(ec_rate).sum::<f64>();
+                }
+            }
+            "Data_ReactionWheel" => {
+                if let Some(r) = o["RequiredResources"].as_array() {
+                    e.wheel_use_per_knm = r.iter().map(ec_rate).sum::<f64>();
+                }
+                let t = |k: &str| f(o, k);
+                e.wheel_torque_vec_knm =
+                    (t("PitchTorque").powi(2) + t("YawTorque").powi(2) + t("RollTorque").powi(2))
+                        .sqrt();
+            }
+            "Data_SolarPanel" => e.solar_output += ec_rate(&o["ResourceSettings"]),
+            "Data_Deployable" => {
+                if o["isTracking"].as_bool() == Some(true) {
+                    e.solar_tracking = true;
+                }
+            }
+            "Data_ModuleGenerator" => e.generator_output += ec_rate(&o["ResourceSetting"]),
+            _ => {}
+        }
     }
 }
 
