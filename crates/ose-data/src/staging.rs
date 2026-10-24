@@ -398,6 +398,7 @@ mod tests {
             electric: Default::default(),
             experiments: vec![],
             docking: None,
+            parachute: None,
             module_names: vec![],
             raw_modules: Default::default(),
         }

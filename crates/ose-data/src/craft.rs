@@ -34,6 +34,7 @@ pub struct CraftPart {
     /// Stored resource units by resource id.
     pub resources: Vec<StoredResource>,
     /// A fuel line (compound part) hanging on its parent tank feeds this part (index in `Craft::parts`).
+    // (no skip_serializing_if: crafts also travel in postcard, which needs every field)
     #[serde(default)]
     pub fuel_line_target: Option<usize>,
 }

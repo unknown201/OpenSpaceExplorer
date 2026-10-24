@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 18;
+pub const PROTOCOL_VERSION: u16 = 19;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -154,6 +154,10 @@ pub enum ClientMessage {
     DeployPanels {
         vessel: u64,
         deploy: bool,
+    },
+    /// Arm every packed parachute (they open when the air is thick enough); answers `FlightAck`.
+    DeployParachutes {
+        vessel: u64,
     },
     /// Take on an offered mission at Mission Control; answers `MissionAck` and `ScienceState`.
     AcceptMission {
@@ -433,6 +437,17 @@ pub struct FlightReadout {
     pub panels_deployed: bool,
     /// Fell over on landing and lies on its side.
     pub tipped: bool,
+    /// Parachutes: (craft part index, state, how far open 0..1).
+    pub parachutes: Vec<(u16, ChuteState, f32)>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ChuteState {
+    Stowed,
+    Armed,
+    SemiDeployed,
+    Deployed,
+    Cut,
 }
 
 /// One part's pose away from rest: rotate the part by `rotation` (rotation vector, rad, craft frame) about its

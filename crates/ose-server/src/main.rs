@@ -826,6 +826,25 @@ fn flight_readout(
         comm_range_m: u.comm_link(e).range_m,
         panels_deployed: u.panels_deployed(e),
         tipped: p.tipped,
+        parachutes: u
+            .structure(e)
+            .map(|st| {
+                (0..st.chutes.len())
+                    .filter(|&i| st.chute_defs[i].is_some() && st.rigid.present[i])
+                    .map(|i| {
+                        use ose_sim::structure::Chute;
+                        let state = match st.chutes[i] {
+                            Chute::Stowed => ose_net::ChuteState::Stowed,
+                            Chute::Armed => ose_net::ChuteState::Armed,
+                            Chute::SemiDeployed => ose_net::ChuteState::SemiDeployed,
+                            Chute::Deployed => ose_net::ChuteState::Deployed,
+                            Chute::Cut => ose_net::ChuteState::Cut,
+                        };
+                        (i as u16, state, st.chute_open[i] as f32)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
     })
 }
 
@@ -2144,6 +2163,16 @@ async fn session(mut socket: WebSocket, s: AppState) {
                                 ok = ok && send(&mut socket, r).await;
                             }
                             if !ok { break; }
+                        }
+                        Ok(ClientMessage::DeployParachutes { vessel }) => {
+                            let reply = match owned_vessel(&s, vessel, player_id) {
+                                Some(e) => match s.universe.lock().expect("sim lock").arm_parachutes(e) {
+                                    Some(n) if n > 0 => ServerMessage::FlightAck { vessel, accepted: true, reason: None },
+                                    _ => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("no packed parachutes".into()) },
+                                },
+                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
+                            };
+                            if !send(&mut socket, &reply).await { break; }
                         }
                         Ok(ClientMessage::DeployPanels { vessel, deploy }) => {
                             let reply = match owned_vessel(&s, vessel, player_id) {

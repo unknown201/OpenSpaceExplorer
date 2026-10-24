@@ -247,6 +247,9 @@ pub struct PartDef {
     /// A docking port (`Data_DockingNode`).
     #[serde(default)]
     pub docking: Option<DockingPort>,
+    /// A parachute (`Data_Parachute`), with its semi-deployed and deployed drag shapes.
+    #[serde(default)]
+    pub parachute: Option<Parachute>,
     /// Names of every module on the part, in order, so the sim knows what else to implement.
     pub module_names: Vec<String>,
     /// Module data not yet mapped into typed fields, keyed by module name.
@@ -279,6 +282,22 @@ pub struct Electric {
     /// Generator output (`Data_ModuleGenerator.ResourceSetting.Rate`): an engine's alternator while it runs,
     /// otherwise always on (RTGs).
     pub generator_output: f64,
+}
+
+/// A parachute as the original defines it (`Data_Parachute`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Parachute {
+    /// Opens partly once the air is this thick, atm (`defaultMinAirPressureToOpen`).
+    pub min_pressure_atm: f64,
+    /// Opens fully this high above the ground, m (`defaultDeployAltitude`).
+    pub deploy_altitude_m: f64,
+    /// Cut away once landed slower than this, m/s.
+    pub auto_cut_speed_mps: f64,
+    /// Seconds to open partly and fully (`semiDeploymentSpeed`, `deploymentSpeed` as animation rates).
+    pub semi_deploy_rate: f64,
+    pub deploy_rate: f64,
+    pub semi_cube: Option<DragCube>,
+    pub deployed_cube: Option<DragCube>,
 }
 
 /// A docking port as the original defines it (`Data_DockingNode`).

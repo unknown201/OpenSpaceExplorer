@@ -292,6 +292,13 @@ impl Universe {
         }
     }
 
+    /// Arm a vessel's packed parachutes; how many, `None` without a structure.
+    pub fn arm_parachutes(&mut self, e: Entity) -> Option<usize> {
+        self.world
+            .get_mut::<structure::Structure>(e)
+            .map(|mut st| st.arm_all_chutes())
+    }
+
     /// Whether any deployable panel of the vessel is out.
     pub fn panels_deployed(&self, e: Entity) -> bool {
         self.world
@@ -416,6 +423,9 @@ impl Universe {
                 .is_some_and(|mut d| ignite(&mut d.0)),
         };
         if first {
+            if let Some(mut st) = self.world.get_mut::<structure::Structure>(e) {
+                st.activate_stage(0);
+            }
             return StageResult {
                 fired: true,
                 debris: None,
@@ -453,6 +463,15 @@ impl Universe {
                     st.sync(&mut d.0);
                 }
                 outcome.dropped_t = (before - st.net.mass_t()).max(0.0);
+                // the new stage's parts fire (parachutes arm)
+                let stage = self
+                    .world
+                    .get::<flight::Powered>(e)
+                    .map(|p| p.stage)
+                    .or_else(|| self.world.get::<flight::Dormant>(e).map(|d| d.0.stage));
+                if let Some(stage) = stage {
+                    st.activate_stage(stage);
+                }
             }
             if let Some(st) = st {
                 self.world.entity_mut(e).insert(st);
@@ -701,6 +720,15 @@ impl Universe {
                         } else {
                             0.0
                         };
+                        let ground = flight::ground_radius(&body, terrain.as_deref(), p.r, ut);
+                        st.update_chutes(
+                            a.pressure_kpa(alt) / 101.325,
+                            p.r.length() - ground,
+                            mach,
+                            p.landed,
+                            v_air.length(),
+                            step_dt,
+                        );
                         st.aero(p.stage, p.facing, v_air, a.density(alt), mach)
                     });
                 }
@@ -1329,6 +1357,65 @@ mod tests {
         assert!(
             fast.crashed,
             "faster than its bottom parts' {tolerance} m/s"
+        );
+    }
+
+    #[test]
+    fn the_starter_rocket_flies_up_and_comes_down_on_its_parachute() {
+        let (mut u, body, _, _) = k1_on_real_kerbin();
+        let crafts: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let defs: Vec<ose_data::PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let res: Vec<ose_data::ResourceDef> =
+            serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
+        let c = crafts
+            .iter()
+            .find(|c| c.name == "Stock12_StartRocket")
+            .unwrap();
+        let report = ose_data::staging::delta_v_by_stage(c, &defs, &res);
+        let spec = flight::FlightSpec::from_report(&report, &[], &[], 1.5);
+        let v = u.spawn_powered_on_surface("Start", body, spec, 0.0, 0.0);
+        u.set_structure(v, structure::Structure::build(c, &defs, &res));
+        assert!(u.set_controls(v, 1.0, flight::Attitude::Up));
+        u.stage(v);
+        // burn out, drop the tank and engine, then arm the chute
+        for _ in 0..(200 * TICKS_PER_SECOND) {
+            u.step();
+            if u.powered(v).is_some_and(|p| p.propellant_t <= 1e-6) {
+                break;
+            }
+        }
+        assert!(u.stage(v).debris.is_some(), "tank and engine drop");
+        u.stage(v);
+        let mut top: f64 = 0.0;
+        let mut landing_speed = 0.0;
+        for _ in 0..(1_200 * TICKS_PER_SECOND) {
+            let before = u.powered(v).unwrap().clone();
+            u.step();
+            let p = u.powered(v).unwrap();
+            top = top.max(p.r.length() - 600_000.0);
+            if p.landed {
+                landing_speed = (before.v
+                    - DVec3::new(0.0, 0.0, 2.0 * std::f64::consts::PI / 21_549.425)
+                        .cross(before.r))
+                .length();
+                break;
+            }
+        }
+        u.step();
+        let p = u.powered(v).unwrap();
+        let st = u.structure(v).unwrap();
+        assert!(top > 1_000.0, "flew to {top} m");
+        assert!(p.landed, "came down");
+        assert!(
+            !p.crashed,
+            "the parachute saved it ({landing_speed:.1} m/s)"
+        );
+        assert!(landing_speed < 12.0, "{landing_speed}");
+        assert!(
+            st.chutes.contains(&structure::Chute::Cut),
+            "cut away after landing"
         );
     }
 

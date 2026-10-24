@@ -350,9 +350,22 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
     let mut electric = ose_data::Electric::default();
     let mut experiments = Vec::new();
     let mut docking = None;
+    let mut chute: Option<ose_data::Parachute> = None;
     if let Some(mods) = d["serializedPartModules"].as_array() {
         for m in mods {
             if let Some(entries) = m["ModuleData"].as_array() {
+                for entry in entries.iter().filter(|x| x["Name"] == "Data_Parachute") {
+                    let o = &entry["DataObject"];
+                    chute = Some(ose_data::Parachute {
+                        min_pressure_atm: f(o, "defaultMinAirPressureToOpen"),
+                        deploy_altitude_m: f(o, "defaultDeployAltitude"),
+                        auto_cut_speed_mps: f(o, "autoCutSpeed"),
+                        semi_deploy_rate: f(o, "semiDeploymentSpeed"),
+                        deploy_rate: f(o, "deploymentSpeed"),
+                        semi_cube: None,
+                        deployed_cube: None,
+                    });
+                }
                 for entry in entries.iter().filter(|x| x["Name"] == "Data_DockingNode") {
                     let o = &entry["DataObject"];
                     docking = Some(ose_data::DockingPort {
@@ -473,6 +486,14 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
         let stowed = drag_cubes.remove(i);
         drag_cubes.insert(0, stowed);
     }
+    if let Some(c) = chute.as_mut() {
+        c.semi_cube = drag_cubes
+            .iter()
+            .find(|d| d.name == "SEMIDEPLOYED")
+            .cloned();
+        c.deployed_cube = drag_cubes.iter().find(|d| d.name == "DEPLOYED").cloned();
+    }
+    let parachute = chute;
     let bounds = part_bounds(&drag_cubes, &attach_nodes);
     PartDef {
         id: s(d, "partName"),
@@ -499,6 +520,7 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
         electric,
         experiments,
         docking,
+        parachute,
         drag_cubes,
         module_names,
         raw_modules,

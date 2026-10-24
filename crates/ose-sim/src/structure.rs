@@ -56,8 +56,27 @@ pub struct Structure {
     /// target.
     engine_load_kn: Vec<f64>,
     engine_load_target_kn: Vec<f64>,
+    /// Parts each flight stage activates (the craft's staging list for it).
+    pub stage_activations: Vec<Vec<usize>>,
+    /// Parachutes: definition, state and how far open (0..1).
+    pub chute_defs: Vec<Option<ose_data::Parachute>>,
+    pub chutes: Vec<Chute>,
+    pub chute_open: Vec<f64>,
     /// Flight stage the structure was last trimmed to.
     staged_to: usize,
+}
+
+/// A parachute's state (`DeploymentStates`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Chute {
+    #[default]
+    Stowed,
+    /// Waiting for the air to thicken.
+    Armed,
+    SemiDeployed,
+    Deployed,
+    /// Cut away (after landing) or torn off (opened too fast).
+    Cut,
 }
 
 /// Time constant of engine thrust reaching the structure, s.
@@ -95,12 +114,14 @@ impl Structure {
         let mut stage_parts = Vec::new();
         let mut stage_engines = Vec::new();
         // the same stage filter as `FlightSpec::from_report`
+        let mut stage_activations = Vec::new();
         for s in &report.stages {
             if s.thrust_kn <= 0.0 && s.start_mass_t <= 0.0 {
                 continue;
             }
             stage_parts.push(s.alive.clone());
             stage_engines.push(s.engines.clone());
+            stage_activations.push(craft.stages.get(s.stage_id).cloned().unwrap_or_default());
         }
         let engine_thrust_kn = craft
             .parts
@@ -209,6 +230,12 @@ impl Structure {
             families: (0..n)
                 .map(|i| def_of(i).map(|d| d.family.clone()).unwrap_or_default())
                 .collect(),
+            stage_activations,
+            chute_defs: (0..n)
+                .map(|i| def_of(i).and_then(|d| d.parachute.clone()))
+                .collect(),
+            chutes: vec![Chute::Stowed; n],
+            chute_open: vec![0.0; n],
             engine_load_kn: vec![0.0; n],
             engine_load_target_kn: vec![0.0; n],
             staged_to: 0,
@@ -470,6 +497,86 @@ impl Structure {
         }
     }
 
+    /// Fire flight stage `stage`'s activations: parachutes in it arm.
+    pub fn activate_stage(&mut self, stage: usize) {
+        let parts = self
+            .stage_activations
+            .get(stage)
+            .cloned()
+            .unwrap_or_default();
+        for i in parts {
+            self.arm_chute(i);
+        }
+    }
+
+    fn arm_chute(&mut self, i: usize) {
+        if self.chute_defs.get(i).is_some_and(|c| c.is_some())
+            && self.rigid.present[i]
+            && self.chutes[i] == Chute::Stowed
+        {
+            self.chutes[i] = Chute::Armed;
+        }
+    }
+
+    /// Arm every packed parachute (the original's deploy action); returns how many.
+    pub fn arm_all_chutes(&mut self) -> usize {
+        let before = self.chutes.iter().filter(|c| **c == Chute::Armed).count();
+        for i in 0..self.chutes.len() {
+            self.arm_chute(i);
+        }
+        self.chutes.iter().filter(|c| **c == Chute::Armed).count() - before
+    }
+
+    /// Advance the parachutes: an armed one opens partly once the air is thick enough, fully below its deploy
+    /// altitude above the ground, opening at its animation rate; it is cut away once landed and nearly
+    /// still, and torn off if it opens fully faster than about Mach 1 (`MachSafetyScalar` 0.95).
+    pub fn update_chutes(
+        &mut self,
+        pressure_atm: f64,
+        height_m: f64,
+        mach: f64,
+        landed: bool,
+        speed: f64,
+        dt: f64,
+    ) {
+        for i in 0..self.chutes.len() {
+            let Some(c) = self.chute_defs[i].clone() else {
+                continue;
+            };
+            if !self.rigid.present[i] {
+                continue;
+            }
+            match self.chutes[i] {
+                Chute::Armed if pressure_atm >= c.min_pressure_atm && !landed => {
+                    self.chutes[i] = Chute::SemiDeployed;
+                    self.chute_open[i] = 0.0;
+                }
+                Chute::SemiDeployed => {
+                    self.chute_open[i] =
+                        (self.chute_open[i] + c.semi_deploy_rate.max(0.05) * dt).min(1.0);
+                    if height_m <= c.deploy_altitude_m && self.chute_open[i] >= 1.0 {
+                        self.chutes[i] = Chute::Deployed;
+                        self.chute_open[i] = 0.0;
+                    }
+                }
+                Chute::Deployed => {
+                    self.chute_open[i] =
+                        (self.chute_open[i] + c.deploy_rate.max(0.05) * dt).min(1.0);
+                    if mach > 0.95 {
+                        self.chutes[i] = Chute::Cut;
+                    }
+                }
+                _ => {}
+            }
+            if landed
+                && speed < c.auto_cut_speed_mps.max(0.5)
+                && matches!(self.chutes[i], Chute::SemiDeployed | Chute::Deployed)
+            {
+                self.chutes[i] = Chute::Cut;
+            }
+        }
+    }
+
     /// Fold all deployable solar panels out (or back in); returns how many changed.
     pub fn deploy_panels(&mut self, out: bool) -> usize {
         let mut n = 0;
@@ -559,14 +666,28 @@ impl Structure {
             if !self.rigid.present[i] {
                 continue;
             }
-            let area_drag = match &self.faces[i] {
-                Some(f) => f.area_drag(
-                    &self.curves,
-                    aero::rotate_inverse(self.part_rot[i], du),
-                    mach,
-                ),
+            let local = aero::rotate_inverse(self.part_rot[i], du);
+            let mut area_drag = match &self.faces[i] {
+                Some(f) => f.area_drag(&self.curves, local, mach),
                 None => 0.0,
             };
+            // an opening parachute blends from its packed shape to its semi-deployed and deployed shapes
+            if let Some(c) = &self.chute_defs[i] {
+                let shape = |cube: &Option<ose_data::DragCube>| {
+                    cube.as_ref()
+                        .map(|q| Faces::from_cube(q).area_drag(&self.curves, local, mach))
+                        .unwrap_or(area_drag)
+                };
+                let t = self.chute_open[i];
+                area_drag = match self.chutes[i] {
+                    Chute::SemiDeployed => area_drag + (shape(&c.semi_cube) - area_drag) * t,
+                    Chute::Deployed => {
+                        let semi = shape(&c.semi_cube);
+                        semi + (shape(&c.deployed_cube) - semi) * t
+                    }
+                    _ => area_drag,
+                };
+            }
             let cda = aero::cda_m2(&self.curves, area_drag, rho * speed);
             self.part_cda_m2[i] = cda;
             total += cda;
@@ -920,6 +1041,47 @@ mod tests {
         let open = ec_stored(&s) - before - folded;
         assert!(open > folded + 1.0, "folded {folded} open {open}");
         assert!(s.deploy_panels(true) == 0, "already out");
+    }
+
+    #[test]
+    fn a_parachute_opens_in_thick_air_and_drags_hard_when_fully_open() {
+        let (crafts, defs, res) = assets();
+        let c = crafts
+            .iter()
+            .find(|c| c.name == "Stock12_StartRocket")
+            .unwrap();
+        let mut s = Structure::build(c, &defs, &res);
+        let chute = (0..c.parts.len())
+            .find(|&i| s.chute_defs[i].is_some())
+            .unwrap();
+        // falling nose up at 100 m/s
+        let fall = DVec3::new(-100.0, 0.0, 0.0);
+        let facing = DVec3::new(1.0, 0.0, 0.0);
+        let packed = s.aero(0, facing, fall, 1.0, 0.3);
+        // its stage arms it; thin air keeps it packed
+        let last = s.stage_activations.len() - 1;
+        s.activate_stage(last);
+        assert_eq!(s.chutes[chute], Chute::Armed);
+        s.update_chutes(0.01, 5_000.0, 0.3, false, 100.0, 1.0);
+        assert_eq!(s.chutes[chute], Chute::Armed);
+        // thick air: opens partly, then fully below 1 km
+        for _ in 0..20 {
+            s.update_chutes(0.8, 3_000.0, 0.3, false, 100.0, 0.5);
+        }
+        assert_eq!(s.chutes[chute], Chute::SemiDeployed);
+        let semi = s.aero(0, facing, fall, 1.0, 0.3);
+        for _ in 0..40 {
+            s.update_chutes(0.9, 800.0, 0.3, false, 100.0, 0.5);
+        }
+        assert_eq!(s.chutes[chute], Chute::Deployed);
+        let open = s.aero(0, facing, fall, 1.0, 0.3);
+        assert!(
+            semi > packed && open > 5.0 * semi,
+            "packed {packed} semi {semi} open {open}"
+        );
+        // landed and still: cut away
+        s.update_chutes(1.0, 0.0, 0.0, true, 0.1, 0.1);
+        assert_eq!(s.chutes[chute], Chute::Cut);
     }
 
     #[test]
