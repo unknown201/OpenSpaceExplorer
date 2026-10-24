@@ -49,6 +49,7 @@ struct App {
     /// True once the server confirmed us as a campaign member (the map is "in session").
     in_session: bool,
     campaign: Option<(String, Vec<CampaignMember>)>,
+    crafts: Vec<ose_net::CraftSummary>,
     difficulty_defs: Vec<DifficultyDefinition>,
     difficulty_presets: Vec<DifficultyPreset>,
     agency_sent: bool,
@@ -208,6 +209,7 @@ pub fn start() -> Result<(), JsValue> {
         player_name: String::new(),
         in_session: false,
         campaign: None,
+        crafts: Vec::new(),
         difficulty_defs: Vec::new(),
         difficulty_presets: Vec::new(),
         agency_sent: false,
@@ -318,6 +320,43 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         Box::new(|a| a.borrow_mut().open_sessions_screen()),
     )?;
     wire("resume", Box::new(|a| a.borrow().show_menu(false)))?;
+    wire(
+        "ksc-sessions",
+        Box::new(|a| a.borrow_mut().open_sessions_screen()),
+    )?;
+    wire("to-ksc", Box::new(|a| a.borrow().open_ksc()))?;
+    wire("ksc-button", Box::new(|a| a.borrow().open_ksc()))?;
+    wire("ksc-tracking", Box::new(|a| a.borrow().show_menu(false)))?;
+    wire(
+        "ksc-launchpad",
+        Box::new(|a| a.borrow_mut().open_launchpad()),
+    )?;
+    wire(
+        "launchpad-refresh",
+        Box::new(|a| a.borrow_mut().open_launchpad()),
+    )?;
+    wire("launchpad-back", Box::new(|a| a.borrow().open_ksc()))?;
+    if let Some(cb_el) = doc.get_element_by_id("launch-stock") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut()>::new(move || a.borrow().render_crafts());
+        cb_el.add_event_listener_with_callback("change", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
+    if let Some(list) = doc.get_element_by_id("crafts") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let id = ev
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .and_then(|e| e.get_attribute("data-ose-craft-launch"))
+                .and_then(|s| s.parse::<u64>().ok());
+            if let Some(id) = id {
+                a.borrow_mut().launch_craft(id);
+            }
+        });
+        list.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
     wire("create", Box::new(|a| a.borrow_mut().create_session()))?;
     wire("agency-apply", Box::new(|a| a.borrow_mut().send_agency()))?;
     wire(
@@ -697,6 +736,44 @@ impl App {
             ServerMessage::SessionList { sessions } => {
                 self.render_sessions(&sessions);
             }
+            ServerMessage::CraftList { crafts } => {
+                self.crafts = crafts;
+                self.render_crafts();
+            }
+            ServerMessage::CraftLaunched {
+                vessel,
+                name,
+                parts,
+                wet_mass_t,
+                delta_v_vacuum_mps,
+                stages,
+                reason,
+                ..
+            } => match (vessel, reason) {
+                (Some(id), _) => {
+                    set_text(
+                        &self.doc,
+                        "menu-note",
+                        &format!(
+                            "launched {name}: {parts} parts, {wet_mass_t:.1} t, {delta_v_vacuum_mps:.0} m/s over {} stages",
+                            stages.len()
+                        ),
+                    );
+                    self.set_status(&format!("launched {name}"));
+                    self.follow = Some(id);
+                    self.show_menu(false);
+                }
+                (None, reason) => {
+                    set_text(
+                        &self.doc,
+                        "menu-note",
+                        &format!(
+                            "launch refused: {}",
+                            reason.unwrap_or_else(|| "unknown reason".into())
+                        ),
+                    );
+                }
+            },
             ServerMessage::DifficultyOptions {
                 definitions,
                 presets,
@@ -756,7 +833,7 @@ impl App {
                 if you_are_member {
                     if !self.in_session {
                         self.in_session = true;
-                        self.show_menu(false);
+                        self.open_ksc();
                     }
                     if !self.agency_sent {
                         self.send_agency();
@@ -936,7 +1013,7 @@ impl App {
 
     /// Show one of the menu screens: "name", "sessions" or "paused".
     fn menu_screen(&self, which: &str) {
-        for id in ["name", "sessions", "paused"] {
+        for id in ["name", "sessions", "ksc", "launchpad", "paused"] {
             if let Some(el) = self.doc.get_element_by_id(&format!("screen-{id}")) {
                 if id == which {
                     el.class_list().add_1("open").ok();
@@ -946,7 +1023,7 @@ impl App {
             }
         }
         if let Some(card) = self.doc.get_element_by_id("menu-card") {
-            if which == "sessions" {
+            if matches!(which, "sessions" | "ksc" | "launchpad") {
                 card.class_list().add_1("wide").ok();
             } else {
                 card.class_list().remove_1("wide").ok();
@@ -962,6 +1039,73 @@ impl App {
         self.menu_screen("sessions");
         if let Some(ws) = &self.ws {
             send(ws, &ClientMessage::ListSessions);
+        }
+    }
+
+    fn open_ksc(&self) {
+        if let Some(m) = self.doc.get_element_by_id("menu") {
+            m.class_list().remove_1("hidden").ok();
+        }
+        set_text(&self.doc, "menu-note", "");
+        self.menu_screen("ksc");
+    }
+
+    fn open_launchpad(&mut self) {
+        self.menu_screen("launchpad");
+        if let Some(ws) = &self.ws {
+            send(ws, &ClientMessage::CraftList);
+        }
+    }
+
+    fn render_crafts(&self) {
+        let Some(list) = self.doc.get_element_by_id("crafts") else {
+            return;
+        };
+        let show_stock = checkbox(&self.doc, "launch-stock").unwrap_or(true);
+        let mut crafts: Vec<&ose_net::CraftSummary> = self
+            .crafts
+            .iter()
+            .filter(|c| show_stock || !c.stock)
+            .collect();
+        crafts.sort_by(|a, b| (a.stock, &a.name).cmp(&(b.stock, &b.name)));
+        let mut html = String::new();
+        for c in crafts {
+            let badge = if c.stock {
+                "<span class=\"badge\">stock</span>"
+            } else if c.owner == self.player_id {
+                "<span class=\"badge\">yours</span>"
+            } else {
+                ""
+            };
+            html.push_str(&format!(
+                "<li data-ose=\"craft\" data-ose-id=\"{id}\"><div><div class=\"name\">{name}{badge}</div>\
+                 <div class=\"meta\">{parts} parts \u{b7} {stages} {st} \u{b7} {wet:.1} t \u{b7} {dv:.0} m/s vacuum</div>\
+                 {desc}</div><button data-ose=\"craft-launch\" data-ose-craft-launch=\"{id}\">Launch</button></li>",
+                id = c.id,
+                name = esc(&c.name),
+                parts = c.parts,
+                stages = c.stages,
+                st = if c.stages == 1 { "stage" } else { "stages" },
+                wet = c.wet_mass_t,
+                dv = c.delta_v_vacuum_mps,
+                desc = if c.description.is_empty() {
+                    String::new()
+                } else {
+                    format!("<div class=\"desc\">{}</div>", esc(&c.description))
+                },
+            ));
+        }
+        if html.is_empty() {
+            html = "<li class=\"empty\">no crafts in the library</li>".into();
+        }
+        list.set_inner_html(&html);
+    }
+
+    fn launch_craft(&mut self, id: u64) {
+        let altitude_m = input_value(&self.doc, "launch-altitude").unwrap_or(100.0) * 1000.0;
+        set_text(&self.doc, "menu-note", "launching...");
+        if let Some(ws) = &self.ws {
+            send(ws, &ClientMessage::LaunchSavedCraft { id, altitude_m });
         }
     }
 

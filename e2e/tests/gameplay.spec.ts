@@ -14,6 +14,7 @@ const FRONTIER: [StepName, Expect][] = [
   ["page_loads", "Pass"],
   ["wasm_client_starts", "Pass"],
   ["main_menu", "Pass"],
+  ["ksc_hub", "Pass"],
   ["clean_console", "Pass"],
   ["webgpu_adapter", "PassOrSkip"], // an environment fact: headless runners may have no adapter
   ["render_canvas", "Pass"],
@@ -24,6 +25,7 @@ const FRONTIER: [StepName, Expect][] = [
   ["player_vessel", "Pass"],
   ["breadcrumbs", "Pass"],
   ["maneuver_node", "Pass"],
+  ["launchpad", "Pass"],
 ];
 
 test("frontier names every step in order", () => {

@@ -16,6 +16,9 @@
 //   [data-ose="menu"]           the main menu, shown at start; [data-ose="player-name"] and [data-ose="play"],
 //                               then [data-ose="session-list"] with a [data-ose="session-join"] per session
 //   [data-ose="breadcrumbs"]    star > body > vessel for what the camera looks at
+//   [data-ose="ksc"]            the KSC hub screen; [data-ose="ksc-tracking"] opens the map, [data-ose="ksc-launchpad"]
+//                               the launch pad ([data-ose="craft"] entries with [data-ose="craft-launch"]);
+//                               [data-ose="ksc-button"] in the HUD reopens the hub
 //   [data-ose="add-node"]       adds a maneuver node on the player's vessel
 //   [data-ose="maneuver-node"]  a maneuver node on the player's trajectory (data-ose-ut = burn time)
 import type { ConsoleMessage, Page, WebSocket } from "@playwright/test";
@@ -25,6 +28,7 @@ export const STEP_NAMES = [
   "page_loads",
   "wasm_client_starts",
   "main_menu",
+  "ksc_hub",
   "clean_console",
   "webgpu_adapter",
   "render_canvas",
@@ -35,6 +39,7 @@ export const STEP_NAMES = [
   "player_vessel",
   "breadcrumbs",
   "maneuver_node",
+  "launchpad",
 ] as const;
 export type StepName = (typeof STEP_NAMES)[number];
 
@@ -138,13 +143,36 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
         return failed(`no session to join after Play${note ? `: ${note}` : ""}`);
       }
       try {
-        await menu.first().waitFor({ state: "hidden", timeout: 10_000 });
+        await Promise.race([
+          page.locator('[data-ose="ksc"]').first().waitFor({ state: "visible", timeout: 10_000 }),
+          menu.first().waitFor({ state: "hidden", timeout: 10_000 }),
+        ]);
       } catch {
         const note = ((await page.locator("#menu-note").textContent().catch(() => "")) ?? "").trim();
-        return failed(`menu did not close after Join${note ? `: ${note}` : ""}`);
+        return failed(`nothing happened after Join${note ? `: ${note}` : ""}`);
       }
       const player = ((await page.locator('[data-ose="player"]').first().textContent().catch(() => "")) ?? "").trim();
       return passed(`played as ${JSON.stringify(player || "(no player readout)")}, joined ${JSON.stringify(joined)}`);
+    }),
+  );
+
+  // 2c. The Kerbal Space Center hub: building buttons; the Tracking Station opens the map.
+  results.push(
+    await timed("ksc_hub", async () => {
+      if (!pageUp) return notLoaded;
+      const ksc = page.locator('[data-ose="ksc"]');
+      if ((await ksc.count()) === 0) return blocked('KSC hub with building buttons ([data-ose="ksc"]); Phase 5');
+      if (!(await ksc.first().isVisible())) return failed("KSC hub exists but is not shown after joining");
+      const buttons = await ksc.locator("button[data-ose^='ksc-']").evaluateAll((els) =>
+        els.map((e) => `${e.getAttribute("data-ose")}${(e as HTMLButtonElement).disabled ? "(off)" : ""}`),
+      );
+      await page.locator('[data-ose="ksc-tracking"]').first().click();
+      try {
+        await page.locator('[data-ose="menu"]').first().waitFor({ state: "hidden", timeout: 5000 });
+      } catch {
+        return failed("Tracking Station did not open the map");
+      }
+      return passed(`buildings: ${buttons.join(", ")}`);
     }),
   );
 
@@ -332,6 +360,38 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
       const reason = ((await page.locator("#node-reason").textContent().catch(() => "")) ?? "").trim();
       if (reason) return failed(`server refused the burn: ${reason}`);
       return passed(`node scheduled at UT ${Number(ut).toFixed(1)}`);
+    }),
+  );
+
+  // 12. The launch pad lists the craft library and launches a stock craft into orbit.
+  results.push(
+    await timed("launchpad", async () => {
+      if (!pageUp) return notLoaded;
+      const open = page.locator('[data-ose="ksc-button"]');
+      if ((await open.count()) === 0) return blocked('launchpad dialog over the craft library ([data-ose="launchpad"]); Phase 5');
+      await open.first().click();
+      await page.locator('[data-ose="ksc-launchpad"]').first().click();
+      const launch = page.locator('[data-ose="craft-launch"]');
+      try {
+        await launch.first().waitFor({ timeout: 10_000 });
+      } catch {
+        return failed("launch pad showed no crafts");
+      }
+      const n = await launch.count();
+      const first = page.locator('[data-ose="craft"]').first();
+      const craft = ((await first.locator(".name").textContent()) ?? "").trim();
+      const vesselsBefore = await page.locator('[data-ose="vessel"]').count();
+      await launch.first().click();
+      try {
+        await page.locator('[data-ose="menu"]').first().waitFor({ state: "hidden", timeout: 10_000 });
+      } catch {
+        const note = ((await page.locator("#menu-note").textContent().catch(() => "")) ?? "").trim();
+        return failed(`launch did not complete${note ? `: ${note}` : ""}`);
+      }
+      await sleep(700);
+      const vesselsAfter = await page.locator('[data-ose="vessel"]').count();
+      if (vesselsAfter <= vesselsBefore) return failed(`launched but no new vessel (${vesselsBefore} -> ${vesselsAfter})`);
+      return passed(`${n} crafts listed; launched ${JSON.stringify(craft)}, vessels ${vesselsBefore} -> ${vesselsAfter}`);
     }),
   );
 

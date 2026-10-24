@@ -71,6 +71,20 @@
     #difficulty input[type=range] { width: 120px; vertical-align: middle; }
     #agency { display: grid; grid-template-columns: auto 1fr auto 1fr; gap: 6px 10px; align-items: center; }
     #agency input[type=color] { width: 44px; height: 24px; padding: 0; border: 1px solid #2c3d63; background: #06080f; }
+    #ksc-buildings { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+    #ksc-buildings button { margin: 0; padding: 14px 10px; text-align: left; background: #0f1a30; border-color: #2c3d63; }
+    #ksc-buildings button small { display: block; color: #6f7f9c; font-size: 11px; font-weight: 400; margin-top: 2px; }
+    #ksc-buildings button:disabled { opacity: 0.45; cursor: default; }
+    #ksc-buildings button:disabled:hover { background: #0f1a30; }
+    #crafts { margin: 8px 0 0; padding: 0; list-style: none; max-height: 40vh; overflow: auto; }
+    #crafts li { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; padding: 8px 10px;
+      margin-bottom: 6px; border: 1px solid #2c3d63; border-radius: 6px; background: #06080f; }
+    #crafts .name { color: #e6ecf7; font-size: 14px; } #crafts .badge { font-size: 10px; color: #06080f; background: #9fb0cc;
+      border-radius: 3px; padding: 1px 5px; margin-left: 6px; vertical-align: middle; }
+    #crafts .meta { color: #6f7f9c; font-size: 12px; margin-top: 2px; } #crafts .desc { color: #9fb0cc; font-size: 12px; margin-top: 2px; }
+    #crafts button { margin: 0; width: auto; padding: 6px 14px; font-size: 13px; }
+    #launch-opts { display: grid; grid-template-columns: auto 1fr auto auto; gap: 8px; align-items: center; margin-top: 8px; font-size: 12px; color: #9fb0cc; }
+    #launch-opts input[type=number] { width: 90px; padding: 4px 6px; font: inherit; background: #06080f; color: #e6ecf7; border: 1px solid #2c3d63; border-radius: 4px; }
     #player .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
     #ut { font-variant-numeric: tabular-nums; font-size: 16px; color: #e6ecf7; }
     .warp { display: flex; align-items: center; gap: 4px; }
@@ -96,6 +110,7 @@
     <span id="player" data-ose="player"></span>
     <span id="campaign" data-ose="campaign"></span>
     <button id="add-node" data-ose="add-node" title="Plan a burn on your vessel's orbit">Add node</button>
+    <button id="ksc-button" data-ose="ksc-button" title="Kerbal Space Center">KSC</button>
     <span id="status">loading...</span>
   </div>
   <div id="crumbs" data-ose="breadcrumbs"></div>
@@ -136,8 +151,33 @@
           <button id="agency-apply" class="secondary" data-ose="agency-apply">Apply</button>
         </details>
       </div>
+      <div class="screen" id="screen-ksc" data-ose="ksc">
+        <label>Kerbal Space Center</label>
+        <div id="ksc-buildings">
+          <button id="ksc-launchpad" data-ose="ksc-launchpad">Launch pad<small>pick a craft and launch it</small></button>
+          <button id="ksc-tracking" data-ose="ksc-tracking">Tracking Station<small>the map view: bodies, vessels, nodes</small></button>
+          <button id="ksc-vab" data-ose="ksc-vab" disabled title="Phase 5">Vehicle Assembly Building<small>build crafts; not yet (Phase 5)</small></button>
+          <button id="ksc-rnd" data-ose="ksc-rnd" disabled title="Phase 8">Research and Development<small>tech tree; not yet (Phase 8)</small></button>
+          <button id="ksc-mission" data-ose="ksc-mission" disabled title="Phase 8">Mission Control<small>missions; not yet (Phase 8)</small></button>
+          <button id="ksc-training" data-ose="ksc-training" disabled title="Phase 8">Training Center<small>tutorials; not yet (Phase 8)</small></button>
+        </div>
+        <div class="row"><button id="ksc-sessions" class="secondary" data-ose="ksc-sessions">Sessions and agency</button></div>
+      </div>
+      <div class="screen" id="screen-launchpad" data-ose="launchpad">
+        <label>Launch pad: your craft library</label>
+        <div id="launch-opts">
+          <span>Orbit altitude</span><input id="launch-altitude" data-ose="launch-altitude" type="number" min="70" max="100000" step="10" value="100" /><span>km</span>
+          <label style="margin:0"><input id="launch-stock" type="checkbox" checked /> show stock crafts</label>
+        </div>
+        <ul id="crafts" data-ose="craft-list"><li class="empty">asking the server...</li></ul>
+        <div class="row">
+          <button id="launchpad-refresh" class="secondary" data-ose="craft-refresh">Refresh</button>
+          <button id="launchpad-back" class="secondary" data-ose="launchpad-back">Back to KSC</button>
+        </div>
+      </div>
       <div class="screen" id="screen-paused" data-ose="menu-paused">
         <button id="resume" data-ose="resume">Resume</button>
+        <button id="to-ksc" class="secondary" data-ose="to-ksc">Kerbal Space Center</button>
         <button id="to-sessions" class="secondary" data-ose="to-sessions">Sessions and agency</button>
         <button id="leave" class="secondary" data-ose="leave">Leave session</button>
       </div>

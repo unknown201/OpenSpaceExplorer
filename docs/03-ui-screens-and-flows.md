@@ -357,15 +357,15 @@ OSE status today: map view with bodies and orbits, UT and warp HUD, the player's
 | Screen / flow | KSP2 behaviour (one line) | Where in the decompile (`Assembly-CSharp/`) | OSE status |
 |---|---|---|---|
 | Splash and legal | skippable splash, versioned EULA/PP/TOS/photosensitivity acceptance | `KSP.game/GameManager.cs`, `KSP.Game.StartupFlow/LegalMenu.cs` | none |
-| Main menu | Single Player, Settings, Extras, Credits, Exit; login hidden | `KSP.Game.StartupFlow/LandingHUD.cs` | partial (name + Play, Esc resumes) |
-| Campaign tiles | list campaigns with thumbnails, delete | `KSP.game/CampaignMenu.cs` | none |
-| Create campaign | mode, difficulty, name, agency name, flag/colours, FTUE | `KSP.game/CreateCampaignMenu.cs`, `GameModePicker.cs`, `DifficultyOptionsMenu.cs`, `AgencyFlagManager.cs` | none |
+| Main menu | Single Player, Settings, Extras, Credits, Exit; login hidden | `KSP.Game.StartupFlow/LandingHUD.cs` | partial (name + Play, Esc pauses) |
+| Campaign tiles | list campaigns with thumbnails, delete | `KSP.game/CampaignMenu.cs` | partial (session list with Join; no thumbnails or delete) |
+| Create campaign | mode, difficulty, name, agency name, flag/colours, FTUE | `KSP.game/CreateCampaignMenu.cs`, `GameModePicker.cs`, `DifficultyOptionsMenu.cs`, `AgencyFlagManager.cs` | partial (name, mode, difficulty presets and options, flag id and colours; no FTUE toggle) |
 | Load campaign | save list, sort, details, load/delete | `KSP.game/CampaignLoadMenu.cs` | none |
 | Multiplayer menu | empty prefab, compiled out | `KSP.Game.StartupFlow/MultiplayerMenu.cs`, `KSP.Networking.MP/MultiplayerCompileFlagsUtil.cs` | none (OSE design) |
 | Loading curtain | context images, fades, progress bar | `KSP.game/UIManager.cs`, `data/loadingscreens/LoadingScreens.json` | none |
 | Game state machine | 20 states, enter/exit effects, 3 messages per change | `KSP.game/GameStateMachine.cs`, `GameState.cs`, `UIStateViews.cs` | none |
-| KSC hub | 3D KSC with building buttons and launch-site flyout | `KSP.UI/KSCMenuManager.cs`, `KSCNavEnum.cs` | none |
-| Launchpad dialog | saved craft, crew, launch, recover pad | `KSP.game/LaunchpadDialog.cs` | none |
+| KSC hub | 3D KSC with building buttons and launch-site flyout | `KSP.UI/KSCMenuManager.cs`, `KSCNavEnum.cs` | partial (2D hub: launch pad and tracking station live, other buildings disabled) |
+| Launchpad dialog | saved craft, crew, launch, recover pad | `KSP.game/LaunchpadDialog.cs` | partial (craft library with stock filter and altitude; no crew, no recover) |
 | Global header | escape, contextual menu, warp, UT, player/science | `KSP.game/GlobalHeaderManager.cs`, `GlobalHeaderTimewarpManager.cs`, `UniverseDataProvider.cs` | partial (UT, warp and holder, player, campaign members) |
 | Breadcrumbs | star > body > vessel, clickable | `KSP.game/BreadcrumbsController.cs` | done |
 | Escape menu | resume/save/load/revert/recover/buildings/settings/quit | `KSP.game/GlobalEscapeMenu.cs`, `KSP.UI/ESCMenu*.cs` | none |

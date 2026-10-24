@@ -37,6 +37,8 @@ to `Pass` in the same change.
 | `[data-ose="body"]` with `data-ose-id` | one element per celestial body in the map view |
 | `[data-ose="warp"]` | the time-warp control; a click raises the warp factor |
 | `[data-ose="vessel"]` | the player's active vessel in the map view |
+| `[data-ose="ksc"]` | the Kerbal Space Center hub shown after joining; buttons `ksc-launchpad`, `ksc-tracking` (map), `ksc-vab`, `ksc-rnd`, `ksc-mission`, `ksc-training` (disabled until their phase); `[data-ose="ksc-button"]` in the HUD reopens it |
+| `[data-ose="launchpad"]` | the launch pad: `[data-ose="craft-list"]` with one `[data-ose="craft"]` per library entry and a `[data-ose="craft-launch"]` button; `[data-ose="launch-altitude"]` in km |
 | `[data-ose="add-node"]` | adds a maneuver node on the player's vessel (sends `ScheduleBurn`) |
 | `[data-ose="maneuver-node"]` | the maneuver node on the player's trajectory; `data-ose-ut` is the burn time, `data-ose-prograde` the delta-v |
 | `[data-ose="clear-node"]` | removes the node (`ClearBurn`) |
