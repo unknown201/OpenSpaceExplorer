@@ -104,6 +104,9 @@ pub struct KscView {
     cam_pos: DVec3,
     /// Facility index under the pointer.
     pub hovered: Option<usize>,
+    /// Where the camera glides to (look-at point and distance): a facility, or back to the scene's own view.
+    goal: Option<(DVec3, f64)>,
+    home: Option<(DVec3, f64)>,
 }
 
 impl Default for KscView {
@@ -126,6 +129,8 @@ impl KscView {
             fov_rad: 60f64.to_radians(),
             cam_pos: DVec3::ZERO,
             hovered: None,
+            goal: None,
+            home: None,
         }
     }
 
@@ -168,6 +173,7 @@ impl KscView {
                         self.pitch = (d.y / self.distance).clamp(-1.0, 1.0).asin();
                         self.fov_rad = c.fov_deg.to_radians();
                     }
+                    self.home = Some((self.look_at, self.distance));
                     self.scene = Some(scene);
                 }
                 Err(e) => {
@@ -178,6 +184,17 @@ impl KscView {
                 }
             }
         }
+    }
+
+    /// Glide the camera to a facility (its id, as `Launchpad_1`), or back to the overview with `None`.
+    pub fn focus(&mut self, facility: Option<&str>) {
+        self.goal = match facility {
+            None => self.home,
+            Some(f) => self.buildings().iter().find(|b| b.facility == f).map(|b| {
+                let (lo, hi) = (v3(b.min), v3(b.max));
+                ((lo + hi) * 0.5, ((hi - lo).length() * 1.6).max(150.0))
+            }),
+        };
     }
 
     pub fn orbit(&mut self, dx_px: f64, dy_px: f64) {
@@ -240,6 +257,18 @@ impl KscView {
             self.start_fetch();
         }
         self.take_inbox();
+        if self.scene.is_none() {
+            return false;
+        }
+        if let Some((at, dist)) = self.goal {
+            // About a second to settle at 60 fps.
+            let k = 0.06;
+            self.look_at += (at - self.look_at) * k;
+            self.distance += (dist - self.distance) * k;
+            if (at - self.look_at).length() < 0.5 && (dist - self.distance).abs() < 0.5 {
+                self.goal = None;
+            }
+        }
         let Some(scene) = &self.scene else {
             return false;
         };

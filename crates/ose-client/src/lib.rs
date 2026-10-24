@@ -146,9 +146,16 @@ struct App {
     /// staging and decoupling sounds once.
     audio: audio::Audio,
     last_stage: Option<(u64, u32, usize)>,
+    /// The flown vessel's last situation, to play the explosion once when it crashes.
+    last_situation: Option<(u64, ose_net::FlightSituation)>,
     /// Timed experiments running on the flown vessel and when the server reported them (ms), for the countdown.
     running: Vec<ose_net::RunningExperiment>,
     running_since_ms: f64,
+    /// The vehicle selected on the launch pad.
+    lp_selected: Option<u64>,
+    /// Whether the KSC camera is on the launch pad (glides there while the pad dialog is open).
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    ksc_on_pad: bool,
     /// Controls as last sent.
     throttle: f64,
     attitude: ose_net::AttitudeMode,
@@ -365,8 +372,11 @@ pub fn start() -> Result<(), JsValue> {
         mc_selected: None,
         audio: audio::Audio::new(stored("ose.sound").as_deref() == Some("off")),
         last_stage: None,
+        last_situation: None,
         running: Vec::new(),
         running_since_ms: 0.0,
+        lp_selected: None,
+        ksc_on_pad: false,
         throttle: 0.0,
         attitude: ose_net::AttitudeMode::Up,
         gpu_canvas: get("gpu")?.dyn_into()?,
@@ -935,7 +945,10 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         cb_el.add_event_listener_with_callback("change", cb.as_ref().unchecked_ref())?;
         cb.forget();
     }
-    if let Some(list) = doc.get_element_by_id("crafts") {
+    for list in ["crafts", "lp-info"]
+        .iter()
+        .filter_map(|id| doc.get_element_by_id(id))
+    {
         let a = app.clone();
         let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
             let id = ev
@@ -963,6 +976,18 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                 .and_then(|s| s.parse::<u64>().ok());
             if let Some(id) = edit {
                 a.borrow_mut().open_vab(Some(id));
+                return;
+            }
+            let picked = ev
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .and_then(|e| e.closest("li[data-ose=\"craft\"]").ok().flatten())
+                .and_then(|li| li.get_attribute("data-ose-id"))
+                .and_then(|s| s.parse::<u64>().ok());
+            if let Some(id) = picked {
+                let mut app = a.borrow_mut();
+                app.lp_selected = Some(id);
+                app.render_crafts();
             }
         });
         list.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
@@ -1581,6 +1606,16 @@ impl App {
     fn vab_active(&self) -> bool {
         self.doc
             .query_selector("#menu:not(.hidden) #screen-vab.open")
+            .ok()
+            .flatten()
+            .is_some()
+    }
+
+    /// True while the launch pad dialog is open (the KSC stays in 3D behind it).
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    fn launchpad_active(&self) -> bool {
+        self.doc
+            .query_selector("#menu:not(.hidden) #screen-launchpad.open")
             .ok()
             .flatten()
             .is_some()
@@ -2736,8 +2771,13 @@ impl App {
             } else {
                 ""
             };
+            let sel = if self.lp_selected == Some(c.id) {
+                " class=\"selected\""
+            } else {
+                ""
+            };
             html.push_str(&format!(
-                "<li data-ose=\"craft\" data-ose-id=\"{id}\" data-ose-dv=\"{dv:.0}\" data-ose-stock=\"{stock}\"><canvas class=\"thumb\" width=\"128\" height=\"168\" data-ose-thumb=\"{id}\"></canvas><div><div class=\"name\">{name}{badge}</div>\
+                "<li{sel} data-ose=\"craft\" data-ose-id=\"{id}\" data-ose-dv=\"{dv:.0}\" data-ose-stock=\"{stock}\"><canvas class=\"thumb\" width=\"128\" height=\"168\" data-ose-thumb=\"{id}\"></canvas><div><div class=\"name\">{name}{badge}</div>\
                  <div class=\"meta\">{parts} parts \u{b7} {stages} {st} \u{b7} {wet:.1} t \u{b7} {dv:.0} m/s vacuum</div>\
                  {desc}</div><span><button class=\"secondary\" data-ose=\"craft-edit\" data-ose-craft-edit=\"{id}\">Edit</button> \
                  <button class=\"secondary\" data-ose=\"craft-orbit\" data-ose-craft-orbit=\"{id}\" title=\"skip the ascent: put it straight into orbit\">Orbit</button> \
@@ -2761,10 +2801,85 @@ impl App {
             html = "<li class=\"empty\">no crafts in the library</li>".into();
         }
         list.set_inner_html(&html);
+        self.render_launchpad_info();
         self.draw_thumbnails();
         for c in &self.crafts {
             self.mark_craft_research(c.id);
         }
+    }
+
+    /// The selected vehicle on the launch pad: blueprint, name, description and engineering report, with Edit,
+    /// Orbit and Launch.
+    fn render_launchpad_info(&self) {
+        let Some(el) = self.doc.get_element_by_id("lp-info") else {
+            return;
+        };
+        let Some(c) = self
+            .lp_selected
+            .and_then(|id| self.crafts.iter().find(|c| c.id == id))
+        else {
+            el.set_inner_html("<div class=\"lp-empty\">Select a vehicle</div>");
+            return;
+        };
+        let locked = self.locked_parts();
+        let missing = self
+            .craft_docs
+            .get(&c.id)
+            .map(|d| {
+                d.parts
+                    .iter()
+                    .filter(|p| locked.contains(p.part_id.as_str()))
+                    .count()
+            })
+            .unwrap_or(0);
+        let control = self
+            .craft_docs
+            .get(&c.id)
+            .map(|d| {
+                d.parts.iter().any(|p| {
+                    self.catalog
+                        .get(&p.part_id)
+                        .map(|cp| cp.crew_capacity > 0 || cp.category == "Pods")
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(true);
+        let mut warn = String::new();
+        if !control {
+            warn.push_str(
+                "<div class=\"warn\">Warning: no control. This vessel has no command module.</div>",
+            );
+        }
+        if missing > 0 {
+            warn.push_str(&format!(
+                "<div class=\"warn\">Not researched yet: {missing} part{}.</div>",
+                if missing == 1 { "" } else { "s" }
+            ));
+        }
+        el.set_inner_html(&format!(
+            "<div class=\"lp-blueprint\"><canvas width=\"388\" height=\"220\" data-ose-thumb=\"{id}\"></canvas></div>\
+             <h3>{name}</h3><div class=\"lp-at\">At Launchpad 1</div>{desc}\
+             <div class=\"lp-report\"><b>Engineering Report</b><dl>\
+             <dt>Parts</dt><dd>{parts}</dd><dt>Stages</dt><dd>{stages}</dd><dt>Mass</dt><dd>{wet:.1} t</dd>\
+             <dt>Delta-v (vacuum)</dt><dd>{dv:.0} m/s</dd></dl>{warn}</div>\
+             <div class=\"lp-actions\"><button data-ose=\"lp-edit\" data-ose-craft-edit=\"{id}\">Edit Vehicle</button>\
+             <button data-ose=\"lp-orbit\" data-ose-craft-orbit=\"{id}\" title=\"skip the ascent: put it straight into orbit\">Orbit</button>\
+             <button class=\"go\" data-ose=\"lp-launch\" data-ose-craft-launch=\"{id}\">Launch</button></div>",
+            id = c.id,
+            name = esc(&c.name),
+            // Some stock crafts carry the original's untranslated placeholder.
+            desc = if c.description.is_empty()
+                || c.description == "This should be a localized string"
+            {
+                String::new()
+            } else {
+                format!("<p>{}</p>", esc(&c.description))
+            },
+            parts = c.parts,
+            stages = c.stages,
+            wet = c.wet_mass_t,
+            dv = c.delta_v_vacuum_mps.max(0.0),
+        ));
     }
 
     fn draw_thumbnails(&self) {
@@ -2779,15 +2894,23 @@ impl App {
         let Some(craft) = self.craft_docs.get(&id) else {
             return;
         };
-        let Ok(Some(el)) = self
+        let Ok(all) = self
             .doc
-            .query_selector(&format!("canvas[data-ose-thumb=\"{id}\"]"))
+            .query_selector_all(&format!("canvas[data-ose-thumb=\"{id}\"]"))
         else {
             return;
         };
-        let Ok(canvas) = el.dyn_into::<HtmlCanvasElement>() else {
-            return;
-        };
+        for i in 0..all.length() {
+            if let Some(canvas) = all
+                .item(i)
+                .and_then(|n| n.dyn_into::<HtmlCanvasElement>().ok())
+            {
+                self.paint_thumbnail(craft, &canvas);
+            }
+        }
+    }
+
+    fn paint_thumbnail(&self, craft: &ose_data::craft::Craft, canvas: &HtmlCanvasElement) {
         let Ok(Some(ctx)) = canvas.get_context("2d") else {
             return;
         };
@@ -3026,6 +3149,12 @@ impl App {
             _ => audio::Scene::Ksc,
         };
         self.audio.music(Some(audio::scene_music(scene)));
+        // Ambience under the music: the launch pad emitter around the KSC, the hall in the VAB.
+        self.audio.ambience(match scene {
+            audio::Scene::Ksc if menu_open => Some("ksc_launchpad"),
+            audio::Scene::Vab => Some("vab_ambience"),
+            _ => None,
+        });
         let mut level = 0.0;
         let mut solid = false;
         if let Some((id, _, Some(f))) = &flight {
@@ -3059,6 +3188,15 @@ impl App {
                 }
             }
             self.last_stage = Some((*id, f.stage, gone));
+            if f.situation == ose_net::FlightSituation::Crashed
+                && self
+                    .last_situation
+                    .as_ref()
+                    .is_some_and(|(v, s)| *v == *id && *s != ose_net::FlightSituation::Crashed)
+            {
+                self.audio.play("explosion");
+            }
+            self.last_situation = Some((*id, f.situation));
         } else {
             self.last_stage = None;
         }
@@ -3720,7 +3858,13 @@ impl App {
             }
         }
         #[cfg(target_arch = "wasm32")]
-        if self.in_session && self.ksc_active() {
+        if self.in_session && (self.ksc_active() || self.launchpad_active()) {
+            let on_pad = self.launchpad_active();
+            if on_pad != self.ksc_on_pad {
+                self.ksc_on_pad = on_pad;
+                self.ksc3d
+                    .focus(if on_pad { Some("Launchpad_1") } else { None });
+            }
             if let Some(gpu) = &mut self.gpu {
                 let was_ready = self.ksc3d.is_ready();
                 // The real sun over the KSC at the server's time.

@@ -348,6 +348,55 @@
     .mc-objectives { padding-left: calc(22 * var(--u)); font-size: calc(16 * var(--u)); line-height: 1.6; }
     .mc-reward { margin-top: calc(18 * var(--u)); font-size: calc(16 * var(--u)); } .mc-reward b { color: #8fd08f; }
     .mc-state { margin-top: calc(8 * var(--u)); font-size: calc(13 * var(--u)); color: #9fb0cc; }
+    /* Launch pad after the original's LaunchpadDialog: a window at the top left over the KSC in 3D, flag and
+       title, the vehicle list on the left and the selected vehicle's blueprint and engineering report on the
+       right, light panels as the KSC menu. */
+    #menu:has(#screen-launchpad.open) { background: transparent; pointer-events: none; align-items: flex-start; justify-content: flex-start; }
+    #menu-card:has(#screen-launchpad.open) { pointer-events: auto; width: auto; max-height: none; margin: calc(36 * var(--u)) 0 0 calc(48 * var(--u)); padding: 0; background: none; border: 0; }
+    #menu-card:has(#screen-launchpad.open) > h1, #menu-card:has(#screen-launchpad.open) > .sub, #menu-card:has(#screen-launchpad.open) > .info { display: none; }
+    #menu-card:has(#screen-launchpad.open) > .note { color: #f0a070; font-size: calc(14 * var(--u)); margin: calc(8 * var(--u)) 0 0 calc(16 * var(--u)); }
+    body:has(#menu:not(.hidden) #screen-launchpad.open) #hud { opacity: 0; pointer-events: none; }
+    body:has(#menu:not(.hidden) #screen-launchpad.open) #crumbs, body:has(#menu:not(.hidden) #screen-launchpad.open) #help, body:has(#menu:not(.hidden) #screen-launchpad.open) #labels { display: none; }
+    #lp-window { width: calc(900 * var(--u)); box-sizing: border-box; padding: calc(16 * var(--u)) calc(16 * var(--u)) calc(20 * var(--u)); border-radius: calc(6 * var(--u));
+      background: #ebf0ff96; border-bottom: calc(6 * var(--u)) solid #ebf0ff; color: #0a0a0a; font-family: var(--ui-font); }
+    .lp-head { display: flex; align-items: center; gap: calc(10 * var(--u)); margin-bottom: calc(10 * var(--u)); }
+    .lp-head .flag { width: calc(56 * var(--u)); height: calc(56 * var(--u)); background: #f23d4d; clip-path: polygon(0 0, 100% 0, 100% 75%, 50% 100%, 0 75%); display: flex; align-items: center; justify-content: center; }
+    .lp-head .flag img { width: calc(36 * var(--u)); height: calc(36 * var(--u)); filter: brightness(10); }
+    .lp-head h2 { margin: 0; font-size: calc(30 * var(--u)); font-weight: 500; color: #000; }
+    #screen-launchpad .lp-stock { display: flex; align-items: center; gap: calc(6 * var(--u)); margin: 0 0 0 auto; padding: calc(4 * var(--u)) calc(10 * var(--u)); background: #ebf0ff99; border: 1px solid #6a718f; border-radius: calc(4 * var(--u)); font-size: calc(13 * var(--u)); color: #2b2b2b; }
+    #screen-launchpad .lp-close { margin: 0; width: calc(32 * var(--u)); height: calc(32 * var(--u)); padding: 0; background: #ffffffb0; border: 1px solid #6a718f; color: #0a0a0a; font-size: calc(14 * var(--u)); }
+    .lp-body { display: grid; grid-template-columns: 1fr calc(388 * var(--u)); gap: calc(16 * var(--u)); padding: calc(16 * var(--u)); background: #ebf0ffcc; border: 1px solid #6a718f; }
+    #screen-launchpad #crafts { margin: 0; max-height: calc(62vh); }
+    #screen-launchpad #crafts li { grid-template-columns: auto 1fr auto; margin: 0 0 calc(8 * var(--u)); padding: calc(6 * var(--u)) calc(10 * var(--u)); background: #fff; border: 0; border-left: calc(6 * var(--u)) solid #fff; border-radius: 0; cursor: pointer; }
+    #screen-launchpad #crafts li:hover { background: #e3eeff; }
+    #screen-launchpad #crafts li.selected { background: #cde6ff; border-left-color: #2f8fff; }
+    #screen-launchpad #crafts .name { color: #0a0a0a; font-size: calc(16 * var(--u)); font-weight: 700; }
+    #screen-launchpad #crafts .meta { color: #4a5068; font-size: calc(12 * var(--u)); }
+    #screen-launchpad #crafts .desc { display: none; }
+    #screen-launchpad #crafts li.locked { opacity: 0.7; } #screen-launchpad #crafts li.locked .name::after { display: block; content: "needs research"; font-size: calc(11 * var(--u)); font-weight: 600; color: #c0502a; }
+    #screen-launchpad #crafts .badge { background: #6a718f; color: #fff; }
+    #screen-launchpad #crafts canvas.thumb { width: calc(40 * var(--u)); height: calc(52 * var(--u)); background: #1a3a7a; border-color: #6a718f; }
+    #screen-launchpad #crafts li > span button.secondary { display: none; }
+    #screen-launchpad #crafts li > span button { background: #4f8f1f; border-color: #3d7016; color: #fff; padding: calc(4 * var(--u)) calc(12 * var(--u)); font-size: calc(13 * var(--u)); }
+    #lp-info { display: flex; flex-direction: column; gap: calc(10 * var(--u)); color: #0a0a0a; }
+    #lp-info .lp-empty { margin: auto; color: #6a718f; font-size: calc(16 * var(--u)); }
+    #lp-info .lp-blueprint { position: relative; height: calc(220 * var(--u)); border: 1px solid #6a718f;
+      background: linear-gradient(#ffffff14 1px, transparent 1px) 0 0 / calc(16 * var(--u)) calc(16 * var(--u)), linear-gradient(90deg, #ffffff14 1px, transparent 1px) 0 0 / calc(16 * var(--u)) calc(16 * var(--u)), #1a3a7a; }
+    #lp-info .lp-blueprint canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+    #lp-info h3 { margin: 0; font-size: calc(24 * var(--u)); font-weight: 600; }
+    #lp-info .lp-at { font-size: calc(14 * var(--u)); color: #4a5068; }
+    #lp-info p { margin: 0; font-size: calc(15 * var(--u)); line-height: 1.4; color: #1b1b1b; max-height: calc(90 * var(--u)); overflow: auto; }
+    #lp-info .lp-report { padding: calc(10 * var(--u)) calc(12 * var(--u)); background: #10161fe6; color: #e6ecf7; border-radius: calc(4 * var(--u)); font-size: calc(14 * var(--u)); }
+    #lp-info .lp-report b { display: block; margin-bottom: calc(6 * var(--u)); font-size: calc(16 * var(--u)); }
+    #lp-info .lp-report dl { display: grid; grid-template-columns: auto 1fr; gap: calc(2 * var(--u)) calc(12 * var(--u)); margin: 0; }
+    #lp-info .lp-report dt { color: #9fb0cc; } #lp-info .lp-report dd { margin: 0; text-align: right; }
+    #lp-info .lp-report .warn { margin-top: calc(6 * var(--u)); color: #ff8a7a; }
+    #lp-info .lp-actions { display: flex; gap: calc(8 * var(--u)); }
+    #lp-info .lp-actions button { margin: 0; flex: 1; padding: calc(8 * var(--u)); font-size: calc(15 * var(--u)); background: #ffffffb0; border: 1px solid #6a718f; color: #0a0a0a; }
+    #lp-info .lp-actions button.go { background: #4f8f1f; border-color: #3d7016; color: #fff; font-weight: 700; }
+    #screen-launchpad #launch-opts { grid-template-columns: auto auto auto 1fr; margin-top: calc(10 * var(--u)); color: #2b2b2b; font-size: calc(13 * var(--u)); }
+    #screen-launchpad #launch-opts input[type=number] { background: #fff; color: #0a0a0a; border-color: #6a718f; }
+    #screen-launchpad #launch-opts button { margin: 0 0 0 auto; width: auto; background: #ffffffb0; border: 1px solid #6a718f; color: #0a0a0a; font-size: calc(13 * var(--u)); }
   </style>
 </head>
 <body>
@@ -445,15 +494,20 @@
         </div>
       </div>
       <div class="screen" id="screen-launchpad" data-ose="launchpad">
-        <label>Launch pad: your craft library</label>
-        <div id="launch-opts">
-          <span>Orbit altitude</span><input id="launch-altitude" data-ose="launch-altitude" type="number" min="70" max="100000" step="10" value="100" /><span>km</span>
-          <label style="margin:0"><input id="launch-stock" type="checkbox" checked /> show stock crafts</label>
-        </div>
-        <ul id="crafts" data-ose="craft-list"><li class="empty">asking the server...</li></ul>
-        <div class="row">
-          <button id="launchpad-refresh" class="secondary" data-ose="craft-refresh">Refresh</button>
-          <button id="launchpad-back" class="secondary" data-ose="launchpad-back">Back to KSC</button>
+        <div id="lp-window">
+          <div class="lp-head">
+            <span class="flag"><img src="assets/ui/ICO-Launchpad-Med.png" alt="" /></span><h2>Launchpad 1</h2>
+            <label class="lp-stock"><input id="launch-stock" type="checkbox" checked /> Show stock</label>
+            <button id="launchpad-back" class="lp-close" data-ose="launchpad-back" title="back to the KSC">&#10005;</button>
+          </div>
+          <div class="lp-body">
+            <ul id="crafts" data-ose="craft-list"><li class="empty">asking the server...</li></ul>
+            <div id="lp-info" data-ose="launchpad-info"><div class="lp-empty">Select a vehicle</div></div>
+          </div>
+          <div id="launch-opts">
+            <span>Orbit altitude</span><input id="launch-altitude" data-ose="launch-altitude" type="number" min="70" max="100000" step="10" value="100" /><span>km</span>
+            <button id="launchpad-refresh" class="secondary" data-ose="craft-refresh">Refresh</button>
+          </div>
         </div>
       </div>
       <div class="screen" id="screen-vab" data-ose="vab">

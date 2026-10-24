@@ -61,6 +61,9 @@ pub struct Audio {
     fading: Vec<Track>,
     engine: Option<(AudioBufferSourceNode, GainNode)>,
     engine_level: f64,
+    /// The scene's ambience bed (the KSC's launch pad emitter, the VAB hall) and which one it is.
+    ambience: Option<(String, AudioBufferSourceNode, GainNode)>,
+    want_ambience: Option<String>,
     sfx_count: u32,
     pub muted: bool,
     last_ms: f64,
@@ -289,6 +292,40 @@ impl Audio {
         }
     }
 
+    /// The scene's ambience loop, quietly under the music; `None` stops it.
+    pub fn ambience(&mut self, key: Option<&str>) {
+        self.want_ambience = key.map(str::to_string);
+        if self.ambience.as_ref().map(|a| a.0.as_str()) == key {
+            return;
+        }
+        if let Some((_, src, _)) = self.ambience.take() {
+            AsRef::<web_sys::AudioScheduledSourceNode>::as_ref(&src)
+                .stop()
+                .ok();
+        }
+        let Some(key) = key else { return };
+        let (Some(ctx), Some(master)) = (&self.ctx, &self.master) else {
+            return;
+        };
+        let Some(buf) = self.buffers.borrow().get(key).cloned() else {
+            return;
+        };
+        let (Ok(src), Ok(g)) = (ctx.create_buffer_source(), ctx.create_gain()) else {
+            return;
+        };
+        src.set_buffer(Some(&buf));
+        src.set_loop(true);
+        let gain = self.sounds.get(key).map(|s| s.gain).unwrap_or(0.5);
+        g.gain().set_value(0.0);
+        g.gain()
+            .set_target_at_time(gain as f32, ctx.current_time(), 1.0)
+            .ok();
+        src.connect_with_audio_node(&g).ok();
+        g.connect_with_audio_node(master).ok();
+        src.start().ok();
+        self.ambience = Some((key.to_string(), src, g));
+    }
+
     /// Advance crossfades and refresh the test hooks; call once per frame.
     pub fn tick(&mut self, now_ms: f64, doc: &Document) {
         let dt = if self.last_ms > 0.0 {
@@ -322,6 +359,11 @@ impl Audio {
                 .ok();
             el.set_attribute("data-ose-muted", if self.muted { "1" } else { "0" })
                 .ok();
+            el.set_attribute(
+                "data-ose-ambience",
+                self.want_ambience.as_deref().unwrap_or(""),
+            )
+            .ok();
             el.set_attribute(
                 "data-ose-playing",
                 self.current.as_ref().map(|t| t.key.as_str()).unwrap_or(""),
