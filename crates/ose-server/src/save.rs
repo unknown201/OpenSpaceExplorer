@@ -28,6 +28,9 @@ pub struct SavedVessel {
     /// Science reports the vessel carries.
     #[serde(default)]
     pub science: Vec<ose_data::science::ResearchReport>,
+    /// Experiments still running.
+    #[serde(default)]
+    pub experiments: Vec<ose_sim::science::Run>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -122,6 +125,7 @@ pub fn capture(
                 flight: u.powered(e).cloned(),
                 dormant: u.dormant(e).cloned(),
                 science: u.science_carried(e),
+                experiments: u.running_experiments(e),
                 burn: u.scheduled_burn(e).map(|b| SavedBurn {
                     ut: b.ut,
                     prograde_mps: b.prograde_mps,
@@ -159,6 +163,9 @@ pub fn restore(u: &mut Universe, save: &SaveFile) -> Vec<VesselEntry> {
         }
         if !v.science.is_empty() {
             u.set_science_carried(e, v.science.clone());
+        }
+        if !v.experiments.is_empty() {
+            u.set_running_experiments(e, v.experiments.clone());
         }
         if let Some(b) = v.burn {
             u.schedule_burn(

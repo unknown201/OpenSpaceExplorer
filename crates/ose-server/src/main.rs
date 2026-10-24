@@ -262,6 +262,8 @@ async fn json_route(body: Arc<String>) -> impl IntoResponse {
 
 struct Shared {
     universe: Mutex<Universe>,
+    /// Messages for one player's connections (finished experiments), picked up by their stream.
+    pending: Mutex<Vec<(u64, ServerMessage)>>,
     science: science::ScienceData,
     catalog: Vec<BodyInfo>,
     /// Body rotation, index-aligned with `catalog`.
@@ -405,6 +407,7 @@ async fn main() -> anyhow::Result<()> {
     );
     let shared: AppState = Arc::new(Shared {
         universe: Mutex::new(universe),
+        pending: Mutex::new(Vec::new()),
         science: science::ScienceData {
             tech: serde_json::from_str(EMBEDDED_TECH_TREE)?,
             missions: serde_json::from_str(EMBEDDED_MISSIONS)?,
@@ -441,6 +444,7 @@ async fn main() -> anyhow::Result<()> {
             // missions look at the agency's vessels once a second
             if ticks.is_multiple_of(ose_sim::TICKS_PER_SECOND) {
                 science::evaluate_missions(&sim);
+                science::deliver_experiment_events(&sim);
             }
         }
     });
@@ -1050,6 +1054,7 @@ fn science_request(s: &Shared, player_id: u64, msg: ClientMessage) -> Vec<Server
                     skipped: vec![],
                     carried: vec![],
                     reason: Some("not your vessel".into()),
+                    running: vec![],
                 }];
             };
             let mut u = s.universe.lock().expect("sim lock");
@@ -1073,6 +1078,15 @@ fn science_request(s: &Shared, player_id: u64, msg: ClientMessage) -> Vec<Server
                     .map(science::report_info)
                     .collect(),
                 reason: (!located).then(|| "no science here".to_string()),
+                running: u
+                    .running_experiments(e)
+                    .iter()
+                    .map(|r| ose_net::RunningExperiment {
+                        part: r.part as u16,
+                        experiment: r.experiment.clone(),
+                        remaining_s: r.remaining_s,
+                    })
+                    .collect(),
             }]
         }
         ClientMessage::TransmitScience { vessel } | ClientMessage::RecoverVessel { vessel } => {
@@ -1653,6 +1667,19 @@ async fn session(mut socket: WebSocket, s: AppState) {
                     || !send(&mut socket, &snap).await
                     || !send(&mut socket, &vessels).await
                 {
+                    break;
+                }
+                let mine: Vec<ServerMessage> = {
+                    let mut q = s.pending.lock().expect("pending lock");
+                    let (m, rest): (Vec<_>, Vec<_>) = q.drain(..).partition(|(p, _)| *p == player_id);
+                    *q = rest;
+                    m.into_iter().map(|(_, msg)| msg).collect()
+                };
+                let mut ok = true;
+                for m in &mine {
+                    ok = ok && send(&mut socket, m).await;
+                }
+                if !ok {
                     break;
                 }
                 let changed = {

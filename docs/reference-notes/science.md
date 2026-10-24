@@ -33,12 +33,15 @@ From reading `KSP.Game.Science` (`ScienceManager`, `ScienceRegionsDataProvider`,
   x region scalar when the matching valid location requires the region.
 - Report key: `{ExperimentID}_{DataType|SampleType}_{ResearchLocationId}`, location id `{Body}_{Situation}`
   plus `_{Region}` when the region is required. A key already submitted is worth 0 (`GetPotentialReportValueBase`).
-  The original always builds the location with the region for a part's current location; we include it only
-  when the experiment needs it, so an orbital report counts once per body and situation.
+  The original always builds the location with the region the vessel is over (`RefreshLocationsValidity` uses
+  `requiresRegion: true`), so orbital and atmospheric reports count once per region; we do the same.
 - Science points: capacity is the sum of submitted reports rounded, times the `ScienceRewards` difficulty
   option, plus turned-in missions' science rewards (`MissionRewards`); allocated is the sum of unlocked nodes'
   `RequiredSciencePoints`; a node can be unlocked when every `RequiredTechNodeIDs` entry is unlocked and the
   free points cover it. Nodes with no cost and no requirements are always unlocked.
 
-Not modelled yet: experiment run times and deploy animations, transmission time and antennas (CommNet), EVA
+Run times: an experiment with `TimeToComplete` runs that long where it started, drawing its `ResourcesCost`
+per second (waiting without it) and is interrupted if the vessel's situation or region changes.
+
+Not modelled yet: deploy animations, transmission time and antennas (CommNet), EVA
 experiments, `TierToUnlock` gating, the original's flavour texts.

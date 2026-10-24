@@ -751,6 +751,7 @@ impl Universe {
             }
             vessels::refresh_next_transition(&mut self.world, &index, e, ut, &self.params);
         }
+        self.advance_experiments(ticks.max(1) as f64 * dt);
         // crashed debris is gone
         let wrecks: Vec<Entity> = {
             let mut q = self

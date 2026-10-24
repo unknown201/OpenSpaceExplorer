@@ -266,6 +266,59 @@ pub fn submit(
     (out, earned)
 }
 
+/// Hand finished and interrupted experiments to their vessel owners' connections.
+pub fn deliver_experiment_events(s: &Shared) {
+    let ev = s
+        .universe
+        .lock()
+        .expect("sim lock")
+        .take_experiment_events();
+    if ev.finished.is_empty() && ev.interrupted.is_empty() {
+        return;
+    }
+    let vessels = s.vessels.lock().expect("vessels lock").clone();
+    let owner_of = |e| {
+        vessels
+            .iter()
+            .find(|v| v.0 == e)
+            .and_then(|v| v.2.map(|o| (v.1, o)))
+    };
+    let mut pending = s.pending.lock().expect("pending lock");
+    for (e, run, reports) in ev.finished {
+        if let Some((vessel, owner)) = owner_of(e) {
+            pending.push((
+                owner,
+                ServerMessage::ExperimentFinished {
+                    vessel,
+                    part: run.part as u16,
+                    experiment: run.experiment,
+                    reports: reports.iter().map(report_info).collect(),
+                    interrupted: false,
+                },
+            ));
+        }
+    }
+    for (e, run) in ev.interrupted {
+        if let Some((vessel, owner)) = owner_of(e) {
+            pending.push((
+                owner,
+                ServerMessage::ExperimentFinished {
+                    vessel,
+                    part: run.part as u16,
+                    experiment: run.experiment,
+                    reports: vec![],
+                    interrupted: true,
+                },
+            ));
+        }
+    }
+    // a player who is not connected does not collect them forever
+    let n = pending.len();
+    if n > 256 {
+        pending.drain(..n - 256);
+    }
+}
+
 /// Advance every offered mission against the agency's vessels; true when anything changed.
 pub fn evaluate_missions(s: &Shared) -> bool {
     let u = s.universe.lock().expect("sim lock");

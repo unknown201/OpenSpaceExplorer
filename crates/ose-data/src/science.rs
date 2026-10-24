@@ -221,7 +221,7 @@ impl BodyScience {
 pub struct ResearchReport {
     pub experiment: String,
     pub sample: bool,
-    /// `"{Body}_{Situation}"` plus `"_{Region}"` when the experiment wants the region (`ResearchLocationId`).
+    /// `"{Body}_{Situation}"` plus `"_{Region}"` when the vessel is over a region (`ResearchLocationId`).
     pub location: String,
     pub value: f64,
 }
@@ -263,7 +263,9 @@ pub fn run_experiment(
     if requires_region {
         scale *= region_scalar;
     }
-    let location = if requires_region && !region_id.is_empty() {
+    // the original builds the report's location with the region whenever the vessel is over one, even for
+    // experiments whose value ignores it, so orbital reports count once per region
+    let location = if !region_id.is_empty() {
         format!("{}_{}_{}", body.body, situation.name(), region_id)
     } else {
         format!("{}_{}", body.body, situation.name())
@@ -429,7 +431,13 @@ mod tests {
         );
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].value, 24.0);
-        assert_eq!(r[0].key(), "CrewObservation_DataType_Kerbin_LowOrbit");
+        // the region does not scale an orbital report but is part of its location
+        assert_eq!(
+            r[0].key(),
+            "CrewObservation_DataType_Kerbin_LowOrbit_KerbinGrasslands"
+        );
+        let r = run_experiment(&exp, &k, ScienceSituation::LowOrbit, 6.0, None);
+        assert_eq!(r[0].location, "Kerbin_LowOrbit");
         // landed at the landmark: its region and its x2
         let here = Some(ose_math::DVec3::new(1050.0, 0.0, 0.0));
         let reg = k.region_at(&blob, 0.0, 0.0, here);

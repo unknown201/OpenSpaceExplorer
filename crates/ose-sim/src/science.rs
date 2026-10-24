@@ -44,6 +44,39 @@ pub struct Skipped {
 pub struct RunOutcome {
     pub reports: Vec<ResearchReport>,
     pub skipped: Vec<Skipped>,
+    /// Experiments that take time and are now running.
+    pub started: Vec<Run>,
+}
+
+/// An experiment taking its time (`TimeToComplete`): it finishes where it started, drawing its charge while it
+/// runs; moving to another situation or region interrupts it, and without charge it waits.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Run {
+    pub part: usize,
+    pub experiment: String,
+    /// Where it started (`{Body}_{Situation}` plus region).
+    pub location: String,
+    pub remaining_s: f64,
+    pub electric_rate: f64,
+}
+
+#[derive(Component, Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RunningExperiments {
+    pub runs: Vec<Run>,
+}
+
+/// Experiments that finished or were interrupted since the last `take_experiment_events`.
+#[derive(Resource, Clone, Debug, Default)]
+pub struct ExperimentEvents {
+    pub finished: Vec<(Entity, Run, Vec<ResearchReport>)>,
+    pub interrupted: Vec<(Entity, Run)>,
+}
+
+fn location_id(loc: &ScienceLocation) -> String {
+    match &loc.region {
+        Some(r) => format!("{}_{}_{}", loc.body, loc.situation.name(), r),
+        None => format!("{}_{}", loc.body, loc.situation.name()),
+    }
 }
 
 /// A body-fixed position in the original's body frame (Unity Y-up): x towards longitude 0, z towards 90 E.
@@ -158,8 +191,35 @@ impl Universe {
                 out.skipped.push(skip("already stored"));
                 continue;
             }
+            if pe.time_to_complete_s > 0.0 {
+                let mut runs = self
+                    .world
+                    .get::<RunningExperiments>(e)
+                    .cloned()
+                    .unwrap_or_default();
+                if runs
+                    .runs
+                    .iter()
+                    .any(|r| r.part == part && r.experiment == pe.experiment)
+                {
+                    out.skipped.push(skip("running"));
+                    continue;
+                }
+                let run = Run {
+                    part,
+                    experiment: pe.experiment.clone(),
+                    location: location_id(&loc),
+                    remaining_s: pe.time_to_complete_s,
+                    electric_rate: pe.electric_rate,
+                };
+                runs.runs.push(run.clone());
+                self.world.entity_mut(e).insert(runs);
+                out.started.push(run);
+                activated.push(st.part_ids[part].clone());
+                continue;
+            }
             if pe.electric_rate > 0.0 {
-                let need = pe.electric_rate * pe.time_to_complete_s.max(1.0);
+                let need = pe.electric_rate;
                 let have = ec.map(|r| st.net.available(part, r)).unwrap_or(0.0);
                 if have < need {
                     out.skipped.push(skip("not enough charge"));
@@ -193,6 +253,140 @@ impl Universe {
             }
         }
         out
+    }
+
+    /// Advance running experiments by `dt` seconds: charge drawn, interrupted on leaving their location,
+    /// stored when done.
+    pub fn advance_experiments(&mut self, dt: f64) {
+        let vessels: Vec<Entity> = {
+            let mut q = self
+                .world
+                .query_filtered::<Entity, With<RunningExperiments>>();
+            q.iter(&self.world).collect()
+        };
+        for e in vessels {
+            let Some(mut runs) = self.world.get::<RunningExperiments>(e).cloned() else {
+                continue;
+            };
+            if runs.runs.is_empty() {
+                continue;
+            }
+            let here = self.science_location(e);
+            let mut st = self.world.entity_mut(e).take::<structure::Structure>();
+            let mut done = Vec::new();
+            let mut interrupted = Vec::new();
+            runs.runs.retain_mut(|run| {
+                let Some(loc) = &here else {
+                    interrupted.push(run.clone());
+                    return false;
+                };
+                if location_id(loc) != run.location
+                    || st.as_ref().is_some_and(|s| !s.rigid.present[run.part])
+                {
+                    interrupted.push(run.clone());
+                    return false;
+                }
+                // without the charge it needs it waits
+                let mut powered = true;
+                if run.electric_rate > 0.0 {
+                    powered = false;
+                    if let Some(s) = &mut st {
+                        if let Some(ec) = s.net.resource("ElectricCharge") {
+                            let need = run.electric_rate * dt;
+                            if s.net.available(run.part, ec) >= need {
+                                s.net.process(
+                                    &[crate::resources::Request {
+                                        part: run.part,
+                                        instructions: vec![crate::resources::Instruction {
+                                            resource: ec,
+                                            units_per_s: run.electric_rate,
+                                        }],
+                                        priority: 3,
+                                    }],
+                                    dt,
+                                );
+                                powered = true;
+                            }
+                        }
+                    }
+                }
+                if powered {
+                    run.remaining_s -= dt;
+                }
+                if run.remaining_s <= 0.0 {
+                    done.push(run.clone());
+                    return false;
+                }
+                true
+            });
+            if let Some(s) = st {
+                self.world.entity_mut(e).insert(s);
+            }
+            self.world.entity_mut(e).insert(runs);
+            let mut finished = Vec::new();
+            if let (Some(loc), false) = (&here, done.is_empty()) {
+                let sci = self.world.resource::<Science>().clone();
+                let Some(bs) = sci.catalog.body(&loc.body) else {
+                    continue;
+                };
+                let region = loc
+                    .region
+                    .as_deref()
+                    .and_then(|id| bs.regions.iter().find(|r| r.id == id));
+                let mut storage = self
+                    .world
+                    .get::<ScienceStorage>(e)
+                    .cloned()
+                    .unwrap_or_default();
+                for run in done {
+                    let Some(def) = sci.catalog.experiment(&run.experiment) else {
+                        continue;
+                    };
+                    let fresh: Vec<ResearchReport> =
+                        run_experiment(def, bs, loc.situation, loc.situation_scalar, region)
+                            .into_iter()
+                            .filter(|r| storage.reports.iter().all(|s| s.key() != r.key()))
+                            .collect();
+                    storage.reports.extend(fresh.iter().cloned());
+                    finished.push((run, fresh));
+                }
+                self.world.entity_mut(e).insert(storage);
+            }
+            let tick = self.tick().0;
+            if finished.iter().any(|(_, r)| !r.is_empty()) {
+                if let Some(mut log) = self.log_mut(e) {
+                    log.event(tick, ose_data::missions::MissionEvent::ReportAcquired);
+                }
+            }
+            let mut ev = self
+                .world
+                .get_resource_or_insert_with::<ExperimentEvents>(Default::default);
+            for (run, reports) in finished {
+                ev.finished.push((e, run, reports));
+            }
+            for run in interrupted {
+                ev.interrupted.push((e, run));
+            }
+        }
+    }
+
+    /// Experiments that finished or were interrupted since the last call.
+    pub fn take_experiment_events(&mut self) -> ExperimentEvents {
+        self.world
+            .get_resource_mut::<ExperimentEvents>()
+            .map(|mut e| std::mem::take(&mut *e))
+            .unwrap_or_default()
+    }
+
+    pub fn set_running_experiments(&mut self, e: Entity, runs: Vec<Run>) {
+        self.world.entity_mut(e).insert(RunningExperiments { runs });
+    }
+
+    pub fn running_experiments(&self, e: Entity) -> Vec<Run> {
+        self.world
+            .get::<RunningExperiments>(e)
+            .map(|r| r.runs.clone())
+            .unwrap_or_default()
     }
 
     /// Reports a vessel carries.
@@ -299,6 +493,51 @@ mod tests {
     }
 
     #[test]
+    fn a_timed_experiment_runs_for_its_time_on_charge_and_stops_if_moved() {
+        let (mut u, v, _) = k1_universe();
+        // give the K1 the original's 60 s, 6 charge/s radiation experiment on its pod
+        let mut st = u
+            .world
+            .entity_mut(v)
+            .take::<structure::Structure>()
+            .unwrap();
+        st.experiments = vec![(
+            0,
+            ose_data::science::PartExperiment {
+                experiment: "CrewObservation".into(),
+                crew_required: 0,
+                time_to_complete_s: 60.0,
+                electric_rate: 0.5,
+            },
+        )];
+        u.world.entity_mut(v).insert(st);
+        let out = u.run_experiments(v);
+        assert!(out.reports.is_empty());
+        assert_eq!(out.started.len(), 1);
+        assert_eq!(u.run_experiments(v).skipped[0].reason, "running");
+        for _ in 0..59 {
+            u.advance_experiments(1.0);
+        }
+        assert!(u.science_carried(v).is_empty(), "not done before its time");
+        u.advance_experiments(1.0);
+        let ev = u.take_experiment_events();
+        assert_eq!(ev.finished.len(), 1);
+        assert_eq!(ev.finished[0].2[0].location, "Kerbin_Landed_KerbinKSC");
+        assert_eq!(u.science_carried(v).len(), 1);
+        // a second run, then the vessel leaves the pad: interrupted
+        u.take_science(v);
+        u.run_experiments(v);
+        let mut p = u.powered(v).unwrap().clone();
+        p.landed = false;
+        p.r = p.r * (1.0 + 20_000.0 / p.r.length());
+        u.set_powered(v, p);
+        u.advance_experiments(1.0);
+        let ev = u.take_experiment_events();
+        assert_eq!(ev.interrupted.len(), 1);
+        assert!(u.running_experiments(v).is_empty());
+    }
+
+    #[test]
     fn orbit_is_low_orbit_and_worth_more() {
         let (mut u, v, _) = k1_universe();
         let landed = u.run_experiments(v);
@@ -328,7 +567,11 @@ mod tests {
             .iter()
             .find(|r| r.experiment == "CrewObservation")
             .unwrap();
-        assert_eq!(obs.location, "Kerbin_LowOrbit");
+        assert!(
+            obs.location.starts_with("Kerbin_LowOrbit_"),
+            "{}",
+            obs.location
+        );
         assert!(obs.value > landed_obs, "{} vs {landed_obs}", obs.value);
     }
 }

@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 13;
+pub const PROTOCOL_VERSION: u16 = 14;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -142,6 +142,14 @@ pub struct ReportInfo {
     pub location: String,
     /// Science points it is worth (before the campaign's science reward multiplier).
     pub value: f64,
+}
+
+/// An experiment taking its time (`TimeToComplete`, drawing charge while it runs).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RunningExperiment {
+    pub part: u16,
+    pub experiment: String,
+    pub remaining_s: f64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -523,6 +531,17 @@ pub enum ServerMessage {
         skipped: Vec<SkippedExperiment>,
         carried: Vec<ReportInfo>,
         reason: Option<String>,
+        /// Experiments that take time and are running now (including ones this request started).
+        running: Vec<RunningExperiment>,
+    },
+    /// A running experiment finished (its new reports are now carried) or was interrupted by the vessel
+    /// leaving the situation or region it started in. Sent to the vessel's owner.
+    ExperimentFinished {
+        vessel: u64,
+        part: u16,
+        experiment: String,
+        reports: Vec<ReportInfo>,
+        interrupted: bool,
     },
     /// Answer to `TransmitScience` / `RecoverVessel`: what was submitted and the points it earned (0 for a
     /// report the campaign already had).
