@@ -54,6 +54,16 @@ pub fn spawn_bodies(world: &mut World, defs: &[BodyDef]) -> BodyIndex {
                 is_star: d.is_star,
             })
             .id();
+        if let Some(a) = &d.atmosphere {
+            world
+                .entity_mut(e)
+                .insert(crate::flight::Atmosphere(crate::flight::Atmo {
+                    depth_m: a.depth_m,
+                    pressure_kpa: a.pressure_curve.clone(),
+                    temperature_k: a.temperature_curve.clone(),
+                    molar_mass: a.molar_mass_kg_per_mol,
+                }));
+        }
         index.by_id.insert(d.id.clone(), e);
     }
     for d in defs {

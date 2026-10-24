@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 7;
+pub const PROTOCOL_VERSION: u16 = 8;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -87,6 +87,25 @@ pub enum ClientMessage {
         id: u64,
         altitude_m: f64,
     },
+    /// Put an uploaded craft on the launch pad (KSC), landed and under powered-flight control; answers
+    /// `CraftLaunched`.
+    LaunchOnPad {
+        craft: ose_data::craft::Craft,
+    },
+    /// Put a listed craft on the launch pad; answers `CraftLaunched`.
+    LaunchSavedOnPad {
+        id: u64,
+    },
+    /// Throttle (0..1) and attitude for one of the player's powered vessels; answers `FlightAck`.
+    SetControls {
+        vessel: u64,
+        throttle: f64,
+        attitude: AttitudeMode,
+    },
+    /// Fire the next stage of a powered vessel; answers `FlightAck`.
+    Stage {
+        vessel: u64,
+    },
     Ping {
         sent_tick: Tick,
     },
@@ -138,6 +157,8 @@ pub struct VesselState {
     pub position_m: DVec3,
     pub velocity_mps: DVec3,
     pub orbit: OrbitElements,
+    /// Present while the vessel is under powered flight (landed, ascending, descending).
+    pub flight: Option<FlightReadout>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -224,6 +245,57 @@ pub struct CampaignMember {
     pub display_name: String,
     pub joined_tick: Tick,
     pub agency: Option<Agency>,
+}
+
+/// Attitude hold modes for powered flight (mirrors `ose_sim::flight::Attitude`).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum AttitudeMode {
+    Up,
+    SurfacePrograde,
+    SurfaceRetrograde,
+    OrbitPrograde,
+    OrbitRetrograde,
+    Normal,
+    AntiNormal,
+    RadialOut,
+    RadialIn,
+    /// Pitch above the horizon and compass heading (90 = east), degrees.
+    PitchHeading {
+        pitch_deg: f64,
+        heading_deg: f64,
+    },
+    /// Fixed direction in the reference body's inertial frame.
+    Fixed(DVec3),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FlightSituation {
+    Landed,
+    Flying,
+    SubOrbital,
+    Orbit,
+    Escaping,
+    Crashed,
+}
+
+/// Powered-flight readout, present on a `VesselState` while the vessel is under the flight model.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FlightReadout {
+    pub situation: FlightSituation,
+    pub altitude_m: f64,
+    pub surface_speed_mps: f64,
+    pub vertical_speed_mps: f64,
+    pub throttle: f64,
+    pub attitude: AttitudeMode,
+    /// Current stage index (0 = first to fire) and total stages.
+    pub stage: u32,
+    pub stages: u32,
+    pub propellant_t: f64,
+    pub propellant_fraction: f64,
+    pub mass_t: f64,
+    pub thrust_kn: f64,
+    pub twr: f64,
+    pub dynamic_pressure_kpa: f64,
 }
 
 /// A craft in the library listing. Stock crafts have ids below 1000 and no owner.
@@ -334,6 +406,12 @@ pub enum ServerMessage {
     CraftDocument {
         id: u64,
         craft: Option<ose_data::craft::Craft>,
+    },
+    /// Answer to `SetControls` / `Stage`.
+    FlightAck {
+        vessel: u64,
+        accepted: bool,
+        reason: Option<String>,
     },
     /// Answer to `ScheduleBurn` / `ClearBurn`.
     BurnState {

@@ -20,6 +20,8 @@ pub struct SavedVessel {
     pub body: String,
     pub elements: Elements,
     pub burn: Option<SavedBurn>,
+    #[serde(default)]
+    pub flight: Option<ose_sim::flight::Powered>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -107,6 +109,7 @@ pub fn capture(
                 owner,
                 body: u.body_id(body)?.to_string(),
                 elements: orbit.elements,
+                flight: u.powered(e).cloned(),
                 burn: u.scheduled_burn(e).map(|b| SavedBurn {
                     ut: b.ut,
                     prograde_mps: b.prograde_mps,
@@ -137,6 +140,9 @@ pub fn restore(u: &mut Universe, save: &SaveFile) -> Vec<VesselEntry> {
             continue;
         };
         let e = u.spawn_vessel_with_elements(&v.name, body, v.elements);
+        if let Some(f) = &v.flight {
+            u.set_powered(e, f.clone());
+        }
         if let Some(b) = v.burn {
             u.schedule_burn(
                 e,

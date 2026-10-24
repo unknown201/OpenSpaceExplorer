@@ -27,6 +27,7 @@ use ose_net::{
     BodyInfo, BodyState, ClientMessage, OrbitElements, PatchEnd, ServerMessage, TrajectoryPatch,
     VesselState, PROTOCOL_VERSION, SNAPSHOT_HZ, TRAJECTORY_HZ, WS_PATH,
 };
+use ose_sim::flight::{Attitude, Situation};
 use ose_sim::trajectory::Transition;
 use ose_sim::Universe;
 use std::path::PathBuf;
@@ -277,8 +278,16 @@ fn apply_warp(s: &Shared) -> (u32, Option<u64>) {
     };
     let max = reqs.values().copied().max().unwrap_or(1);
     drop(reqs);
-    s.universe.lock().expect("sim lock").set_warp(warp);
-    (warp, if max > warp { holder } else { None })
+    let requested = warp;
+    let mut u = s.universe.lock().expect("sim lock");
+    let warp = if u.has_powered() {
+        warp.min(ose_sim::flight::MAX_PHYSICS_WARP)
+    } else {
+        warp
+    };
+    u.set_warp(warp);
+    // only another player's lower request counts as "holding warp down"; the physics cap does not
+    (warp, if max > requested { holder } else { None })
 }
 
 fn elements(o: &ose_math::Orbit) -> OrbitElements {
@@ -513,10 +522,228 @@ fn vessels_message(s: &Shared, u: &Universe, tick: Tick) -> ServerMessage {
                 position_m: bp + rp,
                 velocity_mps: bv + rv,
                 orbit: elements(&orbit),
+                flight: flight_readout(u, e, body),
             })
         })
         .collect();
     ServerMessage::Vessels { tick, vessels }
+}
+
+fn to_net_attitude(a: Attitude) -> ose_net::AttitudeMode {
+    use ose_net::AttitudeMode as M;
+    match a {
+        Attitude::Up => M::Up,
+        Attitude::SurfacePrograde => M::SurfacePrograde,
+        Attitude::SurfaceRetrograde => M::SurfaceRetrograde,
+        Attitude::OrbitPrograde => M::OrbitPrograde,
+        Attitude::OrbitRetrograde => M::OrbitRetrograde,
+        Attitude::Normal => M::Normal,
+        Attitude::AntiNormal => M::AntiNormal,
+        Attitude::RadialOut => M::RadialOut,
+        Attitude::RadialIn => M::RadialIn,
+        Attitude::PitchHeading {
+            pitch_deg,
+            heading_deg,
+        } => M::PitchHeading {
+            pitch_deg,
+            heading_deg,
+        },
+        Attitude::Fixed(d) => M::Fixed(d),
+    }
+}
+
+fn from_net_attitude(a: ose_net::AttitudeMode) -> Attitude {
+    use ose_net::AttitudeMode as M;
+    match a {
+        M::Up => Attitude::Up,
+        M::SurfacePrograde => Attitude::SurfacePrograde,
+        M::SurfaceRetrograde => Attitude::SurfaceRetrograde,
+        M::OrbitPrograde => Attitude::OrbitPrograde,
+        M::OrbitRetrograde => Attitude::OrbitRetrograde,
+        M::Normal => Attitude::Normal,
+        M::AntiNormal => Attitude::AntiNormal,
+        M::RadialOut => Attitude::RadialOut,
+        M::RadialIn => Attitude::RadialIn,
+        M::PitchHeading {
+            pitch_deg,
+            heading_deg,
+        } => Attitude::PitchHeading {
+            pitch_deg,
+            heading_deg,
+        },
+        M::Fixed(d) => Attitude::Fixed(d),
+    }
+}
+
+fn flight_readout(
+    u: &Universe,
+    e: bevy_ecs::entity::Entity,
+    body_e: bevy_ecs::entity::Entity,
+) -> Option<ose_net::FlightReadout> {
+    let p = u.powered(e)?;
+    let body = u.world.get::<ose_sim::bodies::Body>(body_e)?;
+    let atmo = u.atmosphere(body_e);
+    let r_mag = p.r.length();
+    let alt = r_mag - body.radius_m;
+    let omega = if body.rotation_period_s > 0.0 {
+        std::f64::consts::TAU / body.rotation_period_s
+    } else {
+        0.0
+    };
+    let v_surf = p.v - ose_math::DVec3::new(0.0, 0.0, omega).cross(p.r);
+    let up = p.r.normalized();
+    let pressure_kpa = atmo.map(|a| a.pressure_kpa(alt)).unwrap_or(0.0);
+    let rho = atmo.map(|a| a.density(alt)).unwrap_or(0.0);
+    let thrust = p.thrust_kn(pressure_kpa / 101.325);
+    let g = body.mu / (r_mag * r_mag);
+    let max_thrust = p
+        .current_stage()
+        .map(|s| {
+            s.thrust_vac_kn
+                + (s.thrust_asl_kn - s.thrust_vac_kn) * (pressure_kpa / 101.325).clamp(0.0, 1.0)
+        })
+        .unwrap_or(0.0);
+    let sit = match ose_sim::flight::situation(p, body, atmo) {
+        Situation::Landed => ose_net::FlightSituation::Landed,
+        Situation::Flying => ose_net::FlightSituation::Flying,
+        Situation::SubOrbital => ose_net::FlightSituation::SubOrbital,
+        Situation::Orbit => ose_net::FlightSituation::Orbit,
+        Situation::Escaping => ose_net::FlightSituation::Escaping,
+        Situation::Crashed => ose_net::FlightSituation::Crashed,
+    };
+    let stage_prop = p.current_stage().map(|s| s.propellant_t).unwrap_or(0.0);
+    Some(ose_net::FlightReadout {
+        situation: sit,
+        altitude_m: alt,
+        surface_speed_mps: v_surf.length(),
+        vertical_speed_mps: v_surf.dot(up),
+        throttle: p.throttle,
+        attitude: to_net_attitude(p.attitude),
+        stage: p.stage as u32,
+        stages: p.spec.stages.len() as u32,
+        propellant_t: p.propellant_t,
+        propellant_fraction: if stage_prop > 0.0 {
+            p.propellant_t / stage_prop
+        } else {
+            0.0
+        },
+        mass_t: p.mass_t,
+        thrust_kn: thrust,
+        twr: if p.mass_t > 0.0 && g > 0.0 {
+            max_thrust / (p.mass_t * g)
+        } else {
+            0.0
+        },
+        dynamic_pressure_kpa: 0.0005 * rho * v_surf.length_squared(),
+    })
+}
+
+/// KSC launch pad (Kerbin), degrees.
+const KSC_LAT_DEG: f64 = -0.097;
+const KSC_LON_DEG: f64 = -74.557;
+
+/// Reduce a craft to a flight spec: per-stage thrust/Isp/propellant from the staging report, sea-level Isp
+/// thrust-weighted over the stage engines, drag area as the largest part cross-section.
+fn flight_spec_for(s: &Shared, craft: &ose_data::craft::Craft) -> ose_sim::flight::FlightSpec {
+    let report = ose_data::staging::delta_v_by_stage(craft, &s.parts, &s.resources);
+    let mut isp_asl = Vec::new();
+    for st in &report.stages {
+        let mut num = 0.0;
+        let mut den = 0.0;
+        for &pi in &st.engines {
+            let Some(def) = s.parts.iter().find(|d| d.id == craft.parts[pi].part_id) else {
+                continue;
+            };
+            for e in def.engines.iter().take(1) {
+                num += e.max_thrust_kn * e.isp_curve.evaluate(1.0);
+                den += e.max_thrust_kn;
+            }
+        }
+        isp_asl.push(if den > 0.0 { num / den } else { 0.0 });
+    }
+    let mut area: f64 = 0.0;
+    for p in &craft.parts {
+        if let Some(def) = s.parts.iter().find(|d| d.id == p.part_id) {
+            if let Some(b) = def.bounds {
+                area = area.max(
+                    b.size_m.x.max(b.size_m.z)
+                        * b.size_m.x.min(b.size_m.z)
+                        * std::f64::consts::FRAC_PI_4,
+                );
+            }
+        }
+    }
+    ose_sim::flight::FlightSpec::from_report(&report, &isp_asl, area)
+}
+
+/// Put a craft on the KSC pad as a landed, powered vessel.
+fn launch_on_pad(s: &Shared, player_id: u64, craft: &ose_data::craft::Craft) -> ServerMessage {
+    let mut filled = craft.clone();
+    fill_default_resources(s, &mut filled);
+    let craft = &filled;
+    let name = craft.name.clone();
+    let parts = craft.parts.len() as u32;
+    let m = craft.mass(&s.parts, &s.resources);
+    let report = ose_data::staging::delta_v_by_stage(craft, &s.parts, &s.resources);
+    let stages: Vec<ose_net::StageReadout> = report
+        .stages
+        .iter()
+        .map(|st| ose_net::StageReadout {
+            stage_id: st.stage_id as u32,
+            start_mass_t: st.start_mass_t,
+            end_mass_t: st.end_mass_t,
+            delta_v_vacuum_mps: st.delta_v_vacuum_mps,
+            burn_time_s: st.burn_time_s,
+            thrust_kn: st.thrust_kn,
+        })
+        .collect();
+    let fail = |reason: String| ServerMessage::CraftLaunched {
+        vessel: None,
+        name: name.clone(),
+        parts,
+        wet_mass_t: m.wet_t(),
+        dry_mass_t: m.dry_t,
+        delta_v_vacuum_mps: report.total_vacuum_mps,
+        stages: stages.clone(),
+        reason: Some(reason),
+    };
+    if craft.parts.is_empty() || !craft.is_tree() {
+        return fail("craft must be a non-empty single tree".into());
+    }
+    if !m.unknown_parts.is_empty() {
+        return fail(format!("unknown parts: {:?}", m.unknown_parts));
+    }
+    let spec = flight_spec_for(s, craft);
+    if spec.stages.is_empty() {
+        return fail("craft has no stages".into());
+    }
+    let mut u = s.universe.lock().expect("sim lock");
+    let Some(home) = s
+        .catalog
+        .iter()
+        .find(|b| b.id == "Kerbin")
+        .or_else(|| s.catalog.first())
+    else {
+        return fail("no home body".into());
+    };
+    let Some(body) = u.body_entity(&home.id) else {
+        return fail("home body missing".into());
+    };
+    let e = u.spawn_powered_on_surface(&name, body, spec, KSC_LAT_DEG, KSC_LON_DEG);
+    let mut list = s.vessels.lock().expect("vessels lock");
+    let id = list.iter().map(|&(_, id, _)| id).max().unwrap_or(0) + 1;
+    list.push((e, id, Some(player_id)));
+    tracing::info!(player = player_id, vessel = id, craft = %name, parts, "craft on the pad");
+    ServerMessage::CraftLaunched {
+        vessel: Some(id),
+        name,
+        parts,
+        wet_mass_t: m.wet_t(),
+        dry_mass_t: m.dry_t,
+        delta_v_vacuum_mps: report.total_vacuum_mps,
+        stages,
+        reason: None,
+    }
 }
 
 fn trajectories(s: &Shared) -> Vec<ServerMessage> {
@@ -1161,6 +1388,46 @@ async fn session(mut socket: WebSocket, s: AppState) {
                         Ok(ClientMessage::GetCraft { id }) => {
                             let craft = find_craft(&s, id, player_id);
                             if !send(&mut socket, &ServerMessage::CraftDocument { id, craft }).await { break; }
+                        }
+                        Ok(ClientMessage::LaunchOnPad { craft }) => {
+                            let reply = launch_on_pad(&s, player_id, &craft);
+                            if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::LaunchSavedOnPad { id }) => {
+                            let reply = match find_craft(&s, id, player_id) {
+                                Some(c) => launch_on_pad(&s, player_id, &c),
+                                None => ServerMessage::CraftLaunched {
+                                    vessel: None,
+                                    name: String::new(),
+                                    parts: 0,
+                                    wet_mass_t: 0.0,
+                                    dry_mass_t: 0.0,
+                                    delta_v_vacuum_mps: 0.0,
+                                    stages: Vec::new(),
+                                    reason: Some(format!("no craft {id} in your library")),
+                                },
+                            };
+                            if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::SetControls { vessel, throttle, attitude }) => {
+                            let reply = match owned_vessel(&s, vessel, player_id) {
+                                Some(e) => {
+                                    let ok = s.universe.lock().expect("sim lock").set_controls(e, throttle, from_net_attitude(attitude));
+                                    ServerMessage::FlightAck { vessel, accepted: ok, reason: (!ok).then(|| "vessel is not under powered flight".to_string()) }
+                                }
+                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
+                            };
+                            if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::Stage { vessel }) => {
+                            let reply = match owned_vessel(&s, vessel, player_id) {
+                                Some(e) => {
+                                    let ok = s.universe.lock().expect("sim lock").stage(e);
+                                    ServerMessage::FlightAck { vessel, accepted: ok, reason: (!ok).then(|| "no further stage".to_string()) }
+                                }
+                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
+                            };
+                            if !send(&mut socket, &reply).await { break; }
                         }
                         Ok(ClientMessage::LaunchSavedCraft { id, altitude_m }) => {
                             let reply = match find_craft(&s, id, player_id) {

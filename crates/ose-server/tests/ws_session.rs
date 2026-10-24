@@ -522,6 +522,89 @@ async fn hello_catalog_and_snapshots() {
     }
     assert!(seen_two, "launched craft not streamed");
 
+    // Launch pad: a stock craft on the pad is landed; full throttle straight up lifts it off.
+    let k2 = {
+        ws.send(Message::Binary(
+            ose_net::encode(&ClientMessage::CraftList).unwrap().into(),
+        ))
+        .await
+        .unwrap();
+        let mut id = None;
+        for _ in 0..40 {
+            if let ServerMessage::CraftList { crafts } = recv(&mut ws).await {
+                id = crafts
+                    .iter()
+                    .find(|c| c.name.contains("Kerbal") && c.stock)
+                    .map(|c| c.id);
+                break;
+            }
+        }
+        id.expect("a stock Kerbal craft")
+    };
+    ws.send(Message::Binary(
+        ose_net::encode(&ClientMessage::LaunchSavedOnPad { id: k2 })
+            .unwrap()
+            .into(),
+    ))
+    .await
+    .unwrap();
+    let mut pad_vessel = None;
+    for _ in 0..40 {
+        if let ServerMessage::CraftLaunched { vessel, reason, .. } = recv(&mut ws).await {
+            assert!(reason.is_none(), "{reason:?}");
+            pad_vessel = vessel;
+            break;
+        }
+    }
+    let pad_vessel = pad_vessel.expect("pad vessel");
+    let mut landed_seen = false;
+    for _ in 0..40 {
+        if let ServerMessage::Vessels { vessels, .. } = recv(&mut ws).await {
+            let v = vessels
+                .iter()
+                .find(|v| v.id == pad_vessel)
+                .expect("pad vessel streamed");
+            let f = v.flight.as_ref().expect("flight readout");
+            assert_eq!(f.situation, ose_net::FlightSituation::Landed);
+            assert!(f.altitude_m.abs() < 1.0, "alt {}", f.altitude_m);
+            assert!(f.twr > 1.0, "twr {}", f.twr);
+            landed_seen = true;
+            break;
+        }
+    }
+    assert!(landed_seen);
+    ws.send(Message::Binary(
+        ose_net::encode(&ClientMessage::SetControls {
+            vessel: pad_vessel,
+            throttle: 1.0,
+            attitude: ose_net::AttitudeMode::Up,
+        })
+        .unwrap()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let mut flying = false;
+    for _ in 0..200 {
+        match recv(&mut ws).await {
+            ServerMessage::FlightAck {
+                accepted, reason, ..
+            } => assert!(accepted, "{reason:?}"),
+            ServerMessage::Vessels { vessels, .. } => {
+                let v = vessels.iter().find(|v| v.id == pad_vessel).unwrap();
+                let f = v.flight.as_ref().unwrap();
+                if f.situation == ose_net::FlightSituation::Flying && f.altitude_m > 5.0 {
+                    assert!(f.vertical_speed_mps > 0.0);
+                    assert!(f.throttle == 1.0);
+                    flying = true;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    assert!(flying, "the craft did not lift off");
+
     // Raise warp and see it reflected.
     ws.send(Message::Binary(
         ose_net::encode(&ClientMessage::RequestWarp { factor: 100 })
@@ -533,13 +616,14 @@ async fn hello_catalog_and_snapshots() {
     let mut seen = false;
     for _ in 0..40 {
         if let ServerMessage::TimeState { warp, .. } = recv(&mut ws).await {
-            if warp == 100 {
+            // a vessel is under powered flight, so warp is capped at physics warp
+            if warp == 4 {
                 seen = true;
                 break;
             }
         }
     }
-    assert!(seen, "warp 100 never streamed");
+    assert!(seen, "physics-warp cap never streamed");
 
     // A second player who has not asked for warp holds it at 1 (lowest wins) and is named as the limiter;
     // when they leave, warp returns to 100.
@@ -579,7 +663,7 @@ async fn hello_catalog_and_snapshots() {
             ..
         } = recv(&mut ws).await
         {
-            if warp == 100 && warp_limited_by.is_none() {
+            if warp == 4 && warp_limited_by.is_none() {
                 restored = true;
                 break;
             }
@@ -587,7 +671,7 @@ async fn hello_catalog_and_snapshots() {
     }
     assert!(
         restored,
-        "warp did not return to 100 after the second player left"
+        "warp did not return to the physics cap after the second player left"
     );
 
     // Resume: a new connection with the token is the same player and keeps the same single probe.
@@ -612,8 +696,8 @@ async fn hello_catalog_and_snapshots() {
             // the probe and the launched craft, and no second probe on resume
             assert_eq!(
                 mine.len(),
-                3,
-                "resumed player keeps probe + two Tiny launches: {vessels:?}"
+                4,
+                "resumed player keeps probe, two Tiny launches and the pad craft: {vessels:?}"
             );
             assert_eq!(mine.iter().filter(|v| v.name.ends_with("probe")).count(), 1);
             checked = true;

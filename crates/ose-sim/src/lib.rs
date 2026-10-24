@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 pub mod bodies;
+pub mod flight;
 pub mod trajectory;
 pub mod vessels;
 
@@ -144,6 +145,79 @@ impl Universe {
         self.spawn_vessel(name, body, DVec3::new(r, 0.0, 0.0), DVec3::new(0.0, v, 0.0))
     }
 
+    /// Spawn a powered vessel standing on the surface of `body` at the given latitude/longitude.
+    pub fn spawn_powered_on_surface(
+        &mut self,
+        name: &str,
+        body: Entity,
+        spec: flight::FlightSpec,
+        lat_deg: f64,
+        lon_deg: f64,
+    ) -> Entity {
+        let ut = self.ut();
+        let b = self.world.get::<bodies::Body>(body).expect("body").clone();
+        let (r, v) = flight::surface_state(&b, lat_deg, lon_deg, ut);
+        let orbit = Orbit::from_state_vectors(b.mu, r, v, ut);
+        let powered = flight::Powered::new(spec, r, v, true);
+        self.world
+            .spawn((
+                vessels::Vessel { name: name.into() },
+                bodies::ReferenceBody(body),
+                bodies::OnRails(orbit),
+                powered,
+            ))
+            .id()
+    }
+
+    /// Attach a saved powered-flight state to an existing vessel (restore).
+    pub fn set_powered(&mut self, e: Entity, p: flight::Powered) {
+        self.world.entity_mut(e).insert(p);
+    }
+
+    pub fn powered(&self, e: Entity) -> Option<&flight::Powered> {
+        self.world.get::<flight::Powered>(e)
+    }
+
+    pub fn has_powered(&mut self) -> bool {
+        let mut q = self.world.query_filtered::<Entity, With<flight::Powered>>();
+        q.iter(&self.world).next().is_some()
+    }
+
+    /// Throttle (0..1) and attitude for a powered vessel. False when the vessel is on rails.
+    pub fn set_controls(&mut self, e: Entity, throttle: f64, attitude: flight::Attitude) -> bool {
+        match self.world.get_mut::<flight::Powered>(e) {
+            Some(mut p) => {
+                if p.crashed {
+                    return false;
+                }
+                p.throttle = throttle.clamp(0.0, 1.0);
+                p.attitude = attitude;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Fire the next stage of a powered vessel.
+    pub fn stage(&mut self, e: Entity) -> bool {
+        match self.world.get_mut::<flight::Powered>(e) {
+            Some(mut p) => p.stage_next(),
+            None => false,
+        }
+    }
+
+    /// Atmosphere of a body, if any.
+    pub fn atmosphere(&self, body: Entity) -> Option<&flight::Atmo> {
+        self.world.get::<flight::Atmosphere>(body).map(|a| &a.0)
+    }
+
+    pub fn situation(&self, e: Entity) -> Option<flight::Situation> {
+        let p = self.powered(e)?;
+        let body_e = self.world.get::<bodies::ReferenceBody>(e)?.0;
+        let body = self.world.get::<bodies::Body>(body_e)?;
+        Some(flight::situation(p, body, self.atmosphere(body_e)))
+    }
+
     /// Remove a vessel entity (no-op for unknown entities).
     pub fn despawn_vessel(&mut self, e: Entity) {
         if self.world.get::<vessels::Vessel>(e).is_some() {
@@ -226,7 +300,10 @@ impl Universe {
     /// vessel skips over its next SOI transition (the original's timescale override at SOI crossings); the
     /// crossing then lands on the step boundary and the handoff happens exactly there.
     pub fn step(&mut self) {
-        let warp = self.warp() as u64;
+        let mut warp = self.warp() as u64;
+        if self.has_powered() {
+            warp = warp.min(flight::MAX_PHYSICS_WARP as u64);
+        }
         let now = self.tick().0;
         let mut ticks = warp;
         for e in self.vessels() {
@@ -247,7 +324,54 @@ impl Universe {
         self.world.resource_mut::<UniverseTime>().0 = Tick(now + ticks.max(1));
         let ut = self.ut();
         let index = self.world.resource::<bodies::BodyIndex>().clone();
+        // powered flight: integrate every tick of this step
+        let dt = 1.0 / TICKS_PER_SECOND as f64;
+        let start_ut = now as f64 * dt;
+        let mut powered_vessels: Vec<Entity> = {
+            let mut q = self.world.query_filtered::<Entity, With<flight::Powered>>();
+            q.iter(&self.world).collect()
+        };
+        let mut to_rails = Vec::new();
+        for e in powered_vessels.drain(..) {
+            let Some(body_e) = self.world.get::<bodies::ReferenceBody>(e).map(|r| r.0) else {
+                continue;
+            };
+            let body = self
+                .world
+                .get::<bodies::Body>(body_e)
+                .expect("body")
+                .clone();
+            let atmo = self
+                .world
+                .get::<flight::Atmosphere>(body_e)
+                .map(|a| a.0.clone());
+            let mut p = self
+                .world
+                .get::<flight::Powered>(e)
+                .expect("powered")
+                .clone();
+            for i in 0..ticks.max(1) {
+                flight::integrate(&mut p, &body, atmo.as_ref(), start_ut + i as f64 * dt, dt);
+            }
+            let orbit = Orbit::from_state_vectors(body.mu, p.r, p.v, ut);
+            let hand_off =
+                p.coasting_since.is_some_and(|t| ut - t >= 10.0) && !p.landed && !p.crashed;
+            self.world
+                .entity_mut(e)
+                .insert(bodies::OnRails(orbit))
+                .insert(p);
+            if hand_off {
+                to_rails.push(e);
+            }
+        }
+        for e in to_rails {
+            self.world.entity_mut(e).remove::<flight::Powered>();
+            vessels::refresh_next_transition(&mut self.world, &index, e, ut, &self.params);
+        }
         for e in self.vessels() {
+            if self.world.get::<flight::Powered>(e).is_some() {
+                continue;
+            }
             let burned = vessels::apply_due_burn(&mut self.world, e, ut);
             let t = vessels::update_reference_body(&mut self.world, &index, e, ut);
             let due = self
