@@ -6,12 +6,15 @@
 //! the bot's in-process rails model (`Mode::Local`) when no server is given. When a feature lands, replace
 //! the `Blocked` body with the real protocol exchange and update the frontier in `tests/mun_run.rs`.
 
+use crate::ascent::{self, AscentParams};
 use crate::client::{Client, ConnectError};
 use crate::data::{self, BodySource};
+use crate::landing;
 use crate::plan::TransferPlan;
 use crate::rails::{fly_to_mun_encounter, park_in_kerbin_orbit, plan_mun_transfer, RailsWorld};
 use crate::report::{Mode, Outcome, StepResult};
 use crate::server_flight::{self, Bodies, TunedBurn};
+use ose_net::SessionMode;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -30,6 +33,10 @@ pub const STEP_NAMES: [&str; 11] = [
     "mun_landing",
 ];
 
+/// Wall-clock allowance for the powered descent.
+const LANDING_TIMEOUT: Duration = Duration::from_secs(600);
+/// Name the bot gives the campaign it sets up on a fresh server.
+const SESSION_NAME: &str = "ose-bot Mun run";
 /// Seconds of universal time between planning and the earliest allowed burn.
 const BURN_MARGIN_S: f64 = 30.0;
 /// Target Mun periapsis band for the tuned transfer burn, m above the surface.
@@ -44,8 +51,10 @@ pub struct BotConfig {
     pub server: Option<String>,
     pub game_data: PathBuf,
     pub stock_dir: PathBuf,
-    /// Stock craft to fly, by file stem, in order of preference.
+    /// Stock craft to cross-check in the install's assemblies, by file stem, in order of preference.
     pub craft_preference: Vec<String>,
+    /// Stock craft to fly from the server's library, by name, in order of preference.
+    pub server_craft: Vec<String>,
     /// Parking orbit altitude above Kerbin for the local model, m (the server picks its own).
     pub parking_altitude_m: f64,
     pub display_name: String,
@@ -58,6 +67,7 @@ impl Default for BotConfig {
             game_data: data::default_game_data_path(),
             stock_dir: data::default_stock_dir(),
             craft_preference: vec!["Stock Kerbal-K2".into(), "Stock Kerbal-K1".into()],
+            server_craft: vec!["Kerbal K2".into()],
             parking_altitude_m: 100_000.0,
             display_name: "ose-bot".into(),
         }
@@ -73,8 +83,14 @@ struct Flight {
     plan: Option<TransferPlan>,
     tuned: Option<TunedBurn>,
     rails: Option<RailsWorld>,
-    /// The stock craft file chosen in `load_stock_craft`, parsed.
-    craft_json: Option<serde_json::Value>,
+    /// Library id of the craft being flown.
+    craft_id: Option<u64>,
+    /// The craft stands on the pad (the ascent step flies it from there).
+    on_pad: bool,
+    /// The campaign is a Sandbox (no tech gating).
+    sandbox: bool,
+    /// The craft is in orbit around the Mun.
+    captured: bool,
 }
 
 async fn timed<F>(name: &'static str, mode: Mode, f: F) -> StepResult
@@ -158,46 +174,53 @@ pub async fn run_mun_campaign(cfg: &BotConfig) -> Vec<StepResult> {
         .await,
     );
 
-    // 3. Start or join the shared campaign.
+    // 3. Start the campaign: a Sandbox session (the run flies the stock K2, whose parts an Exploration
+    // campaign would have to research first), then join it.
     results.push(
         timed("start_campaign", Mode::Server, async {
             let Some(c) = flight.client.as_mut() else {
                 return Outcome::skipped("no server session");
             };
-            match c.join_campaign().await {
-                Ok(cs) => Outcome::passed(format!(
-                    "JoinCampaign: member of {:?} (started tick {}, {} member{}, {} vessel{})",
-                    cs.name,
-                    cs.started_tick.0,
-                    cs.members.len(),
-                    if cs.members.len() == 1 { "" } else { "s" },
-                    cs.vessels,
-                    if cs.vessels == 1 { "" } else { "s" }
-                )),
+            let created = match c.create_session(SESSION_NAME, SessionMode::Sandbox).await {
+                Ok(s) => s.created,
+                Err(e) => return Outcome::failed(e),
+            };
+            match c.join_session().await {
+                Ok(s) => {
+                    flight.sandbox = s.mode == SessionMode::Sandbox;
+                    Outcome::passed(format!(
+                        "{} {:?} as a {:?} campaign and joined it ({} member{})",
+                        if created {
+                            "CreateSession set up"
+                        } else {
+                            "joined the existing"
+                        },
+                        s.name,
+                        s.mode,
+                        s.members,
+                        if s.members == 1 { "" } else { "s" }
+                    ))
+                }
                 Err(e) => Outcome::failed(e),
             }
         })
         .await,
     );
 
-    // 4. Pick a Mun-capable stock craft from the install's assemblies.
+    // 4. Read the stock craft from the install's assemblies (the same file the server's library is built
+    // from), as a cross-check on this machine.
     results.push(
         timed("load_stock_craft", Mode::Local, async {
             let prefs: Vec<&str> = cfg.craft_preference.iter().map(String::as_str).collect();
             match data::find_stock_craft(&cfg.stock_dir, &prefs) {
-                Ok(Some(c)) => {
-                    flight.craft_json = std::fs::read_to_string(&c.file)
-                        .ok()
-                        .and_then(|t| serde_json::from_str(&t).ok());
-                    Outcome::passed(format!(
-                        "{} ({} parts, {} stages, {:.2} t) from {}",
-                        c.name,
-                        c.part_names.len(),
-                        c.stages,
-                        c.mass_t,
-                        c.file.file_name().unwrap_or_default().to_string_lossy()
-                    ))
-                }
+                Ok(Some(c)) => Outcome::passed(format!(
+                    "{} ({} parts, {} stages, {:.2} t) from {}",
+                    c.name,
+                    c.part_names.len(),
+                    c.stages,
+                    c.mass_t,
+                    c.file.file_name().unwrap_or_default().to_string_lossy()
+                )),
                 Ok(None) => Outcome::skipped(format!(
                     "no stock assemblies at {} (run tools/extract_bundles.py)",
                     cfg.stock_dir.display()
@@ -208,33 +231,49 @@ pub async fn run_mun_campaign(cfg: &BotConfig) -> Vec<StepResult> {
         .await,
     );
 
-    // 5. Upload the craft and put it on the pad.
+    // 5. Pick the stock craft from the server's library and roll it out to the launch pad.
     results.push(
         timed("upload_and_launch_craft", Mode::Server, async {
             let Some(c) = flight.client.as_mut() else {
                 return Outcome::skipped("no server session");
             };
-            let Some(json) = &flight.craft_json else {
-                return Outcome::skipped("no stock craft loaded on this machine");
-            };
-            let craft = match ose_importer::craft::craft_from_value(json) {
-                Ok(c) => c,
+            let list = match c.craft_list().await {
+                Ok(l) => l,
                 Err(e) => return Outcome::failed(e),
             };
-            match c.launch_craft(craft, cfg.parking_altitude_m).await {
+            let Some(craft) = cfg
+                .server_craft
+                .iter()
+                .find_map(|want| list.iter().find(|s| s.stock && s.name == *want))
+            else {
+                return Outcome::failed(format!(
+                    "none of {:?} in the server's stock library ({:?})",
+                    cfg.server_craft,
+                    list.iter().map(|s| s.name.as_str()).collect::<Vec<_>>()
+                ));
+            };
+            flight.craft_id = Some(craft.id);
+            match c.launch_saved_on_pad(craft.id).await {
                 Ok(l) => {
-                    // From here on the bot flies the launched craft, not the welcome probe.
+                    let pad = c.vessel_state(l.vessel, Duration::from_secs(10)).await;
+                    let where_ = match pad.as_ref().ok().and_then(|v| v.flight.clone()) {
+                        Some(f) => format!(
+                            "{:?} at {:.0} m, TWR {:.2}",
+                            f.situation, f.altitude_m, f.twr
+                        ),
+                        None => "no flight readout".into(),
+                    };
                     flight.vessel_id = Some(l.vessel);
+                    flight.on_pad = true;
                     Outcome::passed(format!(
-                        "LaunchCraft {:?}: vessel {} with {} parts, {:.2} t wet / {:.2} t dry, {:.0} m/s \
-                         vacuum delta-v, placed in a {:.0} km circular orbit (no pad ascent yet)",
+                        "LaunchSavedOnPad {:?}: vessel {} with {} parts, {:.2} t wet / {:.2} t dry, {:.0} m/s \
+                         vacuum delta-v; on the pad: {where_}",
                         l.name,
                         l.vessel,
                         l.parts,
                         l.wet_mass_t,
                         l.dry_mass_t,
-                        l.delta_v_vacuum_mps,
-                        cfg.parking_altitude_m / 1000.0
+                        l.delta_v_vacuum_mps
                     ))
                 }
                 Err(e) => Outcome::failed(e),
@@ -243,13 +282,91 @@ pub async fn run_mun_campaign(cfg: &BotConfig) -> Vec<StepResult> {
         .await,
     );
 
-    // 6. Fly the ascent under thrust.
+    // 6. Fly the ascent under thrust: gravity turn, staging, coast, circularise. If it fails, put the craft
+    // straight into orbit so the rest of the run still reports.
     results.push(
         timed("ascend_to_orbit", Mode::Server, async {
-            Outcome::blocked(
-                "physics bubble, engines and attitude/throttle intents; Phase 6. Stand-in: the server \
-                 spawns the probe already in a 100 km Kerbin orbit",
-            )
+            let (Some(c), Some(b), Some(id)) =
+                (flight.client.as_mut(), &flight.bodies, flight.vessel_id)
+            else {
+                return Outcome::skipped("no server session");
+            };
+            if !flight.on_pad {
+                return Outcome::skipped("no craft on the pad");
+            }
+            let params = AscentParams {
+                target_apoapsis_m: cfg.parking_altitude_m.max(75_000.0),
+                ..AscentParams::default()
+            };
+            // Stage 0 must not be able to reach later stages' tanks: the staging readout assumes the
+            // decouplers block crossfeed, and the ascent profile is planned stage by stage.
+            let pad = match c.vessel_state(id, Duration::from_secs(10)).await {
+                Ok(v) => v,
+                Err(e) => return Outcome::failed(e),
+            };
+            let reach = pad
+                .flight
+                .as_ref()
+                .map(|f| f.propellant_fraction)
+                .unwrap_or(1.0);
+            let outcome = if reach > 1.02 {
+                Outcome::blocked(format!(
+                    "resource flow: stage 0 engines on the pad reach {:.0}% of their own stage's propellant, \
+                     so they drain the upper stages' tanks through the decouplers and the K2 cannot make \
+                     orbit (the server's staging readout assumes no crossfeed)",
+                    reach * 100.0
+                ))
+            } else {
+                match ascent::fly_ascent(c, id, b.kerbin, &params).await {
+                Ok(r) => {
+                    // let the server put the craft back on rails before any burn is scheduled
+                    let rails = ascent::wait_for_rails(c, id, Duration::from_secs(90)).await;
+                    match rails {
+                        Ok(()) => Outcome::passed(format!(
+                            "pad to a {:.1} x {:.1} km orbit (e {:.4}) in {:.0} s of flight ({:.0} s wall), \
+                             {} stage{} fired, now stage {}/{} with {:.1} t propellant; max Q {:.1} kPa",
+                            r.periapsis_alt_m / 1000.0,
+                            r.apoapsis_alt_m / 1000.0,
+                            r.eccentricity,
+                            r.game_time_s,
+                            r.wall_time_s,
+                            r.stages_fired,
+                            if r.stages_fired == 1 { "" } else { "s" },
+                            r.stage + 1,
+                            r.stages,
+                            r.propellant_t,
+                            r.max_q_kpa
+                        )),
+                        Err(e) => Outcome::failed(e.context(format!(
+                            "reached a {:.1} x {:.1} km orbit but",
+                            r.periapsis_alt_m / 1000.0,
+                            r.apoapsis_alt_m / 1000.0
+                        ))),
+                    }
+                }
+                Err(e) => Outcome::failed(e),
+            }
+            };
+            if !outcome.is_passed() {
+                // fallback: same craft straight to orbit, so planning and the transfer still run; a craft
+                // left on the pad holds warp at the physics cap, so recover it first
+                c.request_warp(1).await.ok();
+                let landed = c
+                    .vessel_state(id, Duration::from_secs(10))
+                    .await
+                    .ok()
+                    .and_then(|v| v.flight)
+                    .is_some_and(|f| f.situation == ose_net::FlightSituation::Landed);
+                if landed {
+                    c.recover_vessel(id).await.ok();
+                }
+                if let Some(craft) = flight.craft_id {
+                    if let Ok(l) = c.launch_saved_to_orbit(craft, cfg.parking_altitude_m).await {
+                        flight.vessel_id = Some(l.vessel);
+                    }
+                }
+            }
+            outcome
         })
         .await,
     );
@@ -466,6 +583,7 @@ pub async fn run_mun_campaign(cfg: &BotConfig) -> Vec<StepResult> {
                     apo / 1000.0
                 ));
             }
+            flight.captured = true;
             Outcome::passed(format!(
                 "ScheduleBurn {:.1} m/s retrograde at Mun periapsis (UT {:.0}, arriving at {:.0} m/s); \
                  now in a {:.0} x {:.0} km Mun orbit, e {e:.4}",
@@ -482,7 +600,36 @@ pub async fn run_mun_campaign(cfg: &BotConfig) -> Vec<StepResult> {
     // 11. Land (stretch goal).
     results.push(
         timed("mun_landing", Mode::Server, async {
-            Outcome::blocked("terrain, surface collision and powered descent; Phase 7")
+            let (Some(c), Some(b), Some(id)) =
+                (flight.client.as_mut(), &flight.bodies, flight.vessel_id)
+            else {
+                return Outcome::skipped("no server session");
+            };
+            if !flight.captured {
+                return Outcome::skipped("the craft is not in Mun orbit");
+            }
+            let Some(spin) = c.latest.spins.get(b.mun as usize).cloned() else {
+                return Outcome::failed("the server sent no BodyRotation for the Mun");
+            };
+            if let Some(why) = landing::landing_precondition(b.mu_mun, b.mun_radius_m, &spin) {
+                return Outcome::blocked(format!(
+                    "Mun rotation in the server's body data: {why} (assets/own/kerbol-system.json)"
+                ));
+            }
+            match landing::land(c, id, b.mun, LANDING_TIMEOUT).await {
+                Ok(l) => Outcome::passed(format!(
+                    "landed on the Mun at lat {:.3} lon {:.3}, {:.0} m above the datum, touching down at \
+                     {:.1} m/s after {:.0} s of powered descent ({:.0} s wall); {:.1} t propellant left",
+                    l.lat_deg,
+                    l.lon_deg,
+                    l.altitude_m,
+                    l.touchdown_speed_mps,
+                    l.game_time_s,
+                    l.wall_time_s,
+                    l.propellant_t
+                )),
+                Err(e) => Outcome::failed(e),
+            }
         })
         .await,
     );

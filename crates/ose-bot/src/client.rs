@@ -113,6 +113,8 @@ pub struct Latest {
     pub vessels: Vec<VesselState>,
     /// Latest trajectory per vessel id, with the tick it was computed at.
     pub trajectories: HashMap<u64, (Tick, Vec<TrajectoryPatch>)>,
+    /// Body rotation, index-aligned with the catalog (sent once after `BodyCatalog`).
+    pub spins: Vec<ose_net::BodySpin>,
     /// Latest `BurnState` per vessel id: (scheduled, reason).
     pub burn_states: HashMap<u64, (bool, Option<String>)>,
 }
@@ -250,6 +252,7 @@ impl Client {
                     .trajectories
                     .insert(*vessel, (*tick, patches.clone()));
             }
+            ServerMessage::BodyRotation { bodies } => self.latest.spins = bodies.clone(),
             ServerMessage::BurnState {
                 vessel,
                 scheduled,

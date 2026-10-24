@@ -23,13 +23,13 @@ const FRONTIER: [(&str, Expect); 11] = [
     ("connect_hello", Expect::Pass),
     ("start_campaign", Expect::Pass),
     ("load_stock_craft", Expect::PassOrSkip),
-    ("upload_and_launch_craft", Expect::PassOrSkip),
+    ("upload_and_launch_craft", Expect::Pass),
     ("ascend_to_orbit", Expect::Blocked),
     ("plan_mun_transfer", Expect::Pass),
     ("execute_transfer_burn", Expect::Pass),
     ("coast_to_mun_encounter", Expect::Pass),
     ("mun_capture_burn", Expect::Pass),
-    ("mun_landing", Expect::Blocked),
+    ("mun_landing", Expect::Pass),
 ];
 
 #[test]

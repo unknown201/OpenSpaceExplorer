@@ -12,9 +12,12 @@
 
 #![forbid(unsafe_code)]
 
+pub mod ascent;
 pub mod client;
 pub mod data;
+pub mod flight_client;
 pub mod harness;
+pub mod landing;
 pub mod plan;
 pub mod rails;
 pub mod report;

@@ -73,3 +73,30 @@ is a stand-in, not an ascent. `mun_landing` stays `Blocked` on terrain. With pro
 
 The test harness starts the server with `--save none --db :memory:` so runs never read or write the
 developer's save and account files.
+
+## Update 2026-10-24: powered flight, pad launch and the Mun landing (protocol 13)
+
+- `start_campaign` sends `CreateSession` for a Sandbox campaign (a fresh server has no members yet), then
+  `JoinCampaign`. Sandbox avoids the Exploration tech gate, since the run flies the stock K2.
+- `upload_and_launch_craft` takes the Kerbal K2 from the server's own stock library (`CraftList`) and sends
+  `LaunchSavedOnPad`. It no longer needs the KSP2 extraction, so it must pass everywhere.
+- `ascend_to_orbit` flies a closed loop over the 10 Hz `Vessels` stream (`ose-bot::ascent`). It runs a
+  square-root gravity turn from 90 degrees at 1 km to 0 at 45 km heading east, throttles back above 25 kPa,
+  stages when the current stage is dry, cuts at the target apoapsis, coasts, and circularises prograde
+  until periapsis clears 72 km. It then waits for the server to put the craft back on rails. Before
+  lifting off it checks the pad readout. If stage 0 can reach more than its own stage's propellant, the
+  step reports `Blocked`, because the server's resource flow feeds the first-stage engines from the upper
+  stages' tanks. The K2 then cannot reach orbit, while the staging readout assumes no crossfeed. A traced
+  attempt reached an 80 km apoapsis and ran every stage dry. On any non-pass the bot recovers the pad
+  craft, since a landed powered craft caps warp at 4 for everyone. It then launches the same craft into a
+  100 km orbit so the rest of the run reports.
+- `mun_landing` flies from the 41 km Mun orbit (`ose-bot::landing`). It brakes surface-retrograde at full
+  throttle, then follows a descent-speed profile `v = sqrt(2 a h)` capped at 200 m/s. Here `h` is the height
+  above the terrain under the craft, sampled from `assets/own/terrain` with the server's longitude
+  convention. Below 3 km of height it drops to real time, and it settles at 1.5 m/s for the last 8 m. It
+  refuses (`Blocked`) when the body's equator moves faster than orbital speed at its surface, which caught
+  the 100 s placeholder Mun day fixed in 279d1ec. First landing: lat 0.000, lon 83.9, touchdown at 1.8 m/s
+  on ground 2551 m above the datum, 347 s of powered descent, 34 t of propellant left.
+- `OSE_BOT_LANDING_TRACE=file.csv` writes a descent trace. `cargo run -p ose-bot --example ascent -- file.csv`
+  flies only the ascent with a trace.
+- A failed run now stops its spawned server before exiting.

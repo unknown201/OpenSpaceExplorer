@@ -48,7 +48,7 @@ async fn main() -> anyhow::Result<()> {
     if let Some(p) = args.stock_dir {
         cfg.stock_dir = p;
     }
-    let _server = if args.spawn_server {
+    let server = if args.spawn_server {
         let s = ose_bot::harness::spawn_server(Duration::from_secs(300)).await?;
         eprintln!("ose-server listening on {}", s.addr);
         cfg.server = Some(s.addr.clone());
@@ -64,6 +64,8 @@ async fn main() -> anyhow::Result<()> {
         print_report(&results);
     }
     if results.iter().any(|r| r.outcome.is_failed()) {
+        // process::exit skips destructors: stop the spawned server first
+        drop(server);
         std::process::exit(1);
     }
     Ok(())

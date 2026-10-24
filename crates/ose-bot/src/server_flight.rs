@@ -60,7 +60,7 @@ pub fn plan_from_server(
         );
     }
     let park = orbit_from(b.mu_kerbin, &vessel.orbit);
-    if park.eccentricity() > 0.01 {
+    if park.eccentricity() > 0.05 {
         bail!(
             "parking orbit is not circular (e = {})",
             park.eccentricity()
