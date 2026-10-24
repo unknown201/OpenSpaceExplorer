@@ -360,6 +360,22 @@ impl Universe {
     /// vessel that keeps the vessel's position and velocity, pushed 3 m back along the thrust axis at 1.5 m/s.
     pub fn stage(&mut self, e: Entity) -> StageResult {
         let ut = self.ut();
+        // The first stage press ignites the first stage, as in the original, unless its engines have already
+        // been run on the throttle: nothing is dropped.
+        let ignite = |p: &mut flight::Powered| !std::mem::replace(&mut p.ignited, true);
+        let first = match self.world.get_mut::<flight::Powered>(e) {
+            Some(mut p) => ignite(&mut p),
+            None => self
+                .world
+                .get_mut::<flight::Dormant>(e)
+                .is_some_and(|mut d| ignite(&mut d.0)),
+        };
+        if first {
+            return StageResult {
+                fired: true,
+                debris: None,
+            };
+        }
         let (outcome, r, v, facing, area) =
             if let Some(mut p) = self.world.get_mut::<flight::Powered>(e) {
                 let o = p.stage_next();
@@ -1134,6 +1150,62 @@ mod tests {
             p.mass_t
         );
         assert!(u.structure(v).unwrap().net.mass_t() - after < 1e-9);
+    }
+
+    #[test]
+    fn the_first_stage_press_on_the_pad_ignites_the_engine() {
+        let (mut u, body, _, _) = k1_on_real_kerbin();
+        let crafts: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let defs: Vec<ose_data::PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let res: Vec<ose_data::ResourceDef> =
+            serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
+        let c = crafts
+            .iter()
+            .find(|c| c.name == "Stock12_StartRocket")
+            .unwrap();
+        let report = ose_data::staging::delta_v_by_stage(c, &defs, &res);
+        let spec = flight::FlightSpec::from_report(&report, &[], &[], 1.5);
+        let v = u.spawn_powered_on_surface("Start", body, spec, 0.0, 0.0);
+        u.set_structure(v, structure::Structure::build(c, &defs, &res));
+        // full throttle and one stage press, as a player launches: the engine lights, nothing drops
+        assert!(u.set_controls(v, 1.0, flight::Attitude::Up));
+        let r = u.stage(v);
+        assert!(r.fired && r.debris.is_none());
+        assert_eq!(u.powered(v).unwrap().stage, 0);
+        assert!(u.powered(v).unwrap().propellant_t > 0.5);
+        for _ in 0..(5 * TICKS_PER_SECOND) {
+            u.step();
+        }
+        let p = u.powered(v).unwrap();
+        assert!(!p.landed && p.v.dot(p.r.normalized()) > 10.0, "lifted off");
+        // a second craft that drops its engine stage on the pad just sits there
+        let spec2 = flight::FlightSpec::from_report(&report, &[], &[], 1.5);
+        let w = u.spawn_powered_on_surface("Start2", body, spec2, 0.0, 1.0);
+        u.set_structure(w, structure::Structure::build(c, &defs, &res));
+        u.set_controls(w, 1.0, flight::Attitude::Up);
+        u.stage(w);
+        u.stage(w);
+        for _ in 0..(5 * TICKS_PER_SECOND) {
+            u.step();
+        }
+        let q = u.powered(w).unwrap();
+        assert!(
+            q.landed && !q.crashed,
+            "landed {} crashed {}",
+            q.landed,
+            q.crashed
+        );
+        // the next press drops the spent stage as before
+        for _ in 0..(120 * TICKS_PER_SECOND) {
+            u.step();
+            if u.powered(v).is_some_and(|p| p.propellant_t <= 1e-6) {
+                break;
+            }
+        }
+        let r = u.stage(v);
+        assert!(r.fired && r.debris.is_some());
     }
 
     #[test]

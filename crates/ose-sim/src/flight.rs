@@ -192,6 +192,10 @@ pub struct Powered {
     /// False for an uncrewed vessel whose probe cores have no power: no steering, no throttle.
     #[serde(default = "yes")]
     pub controlled: bool,
+    /// The first stage has been fired (by the first stage press, or by burning on the throttle). Until then
+    /// a stage press ignites rather than drops anything.
+    #[serde(default = "yes")]
+    pub ignited: bool,
 }
 
 fn yes() -> bool {
@@ -327,6 +331,7 @@ impl Powered {
             drag_cda_m2: None,
             wheel_scale: 1.0,
             controlled: true,
+            ignited: false,
         }
     }
 
@@ -632,6 +637,7 @@ pub fn integrate(
         };
         thrust_acc = dir * (thrust_kn * frac / p.mass_t); // kN / t = m/s^2
         out.thrust_kn = thrust_kn * frac;
+        p.ignited = true;
         p.propellant_t -= burn;
         p.mass_t -= burn;
     }
