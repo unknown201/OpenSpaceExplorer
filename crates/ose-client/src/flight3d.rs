@@ -385,6 +385,26 @@ impl FlightView {
         self.ksc
     }
 
+    /// Direction to the sun in the KSC campus frame (glTF, Y up) at `ut`, given the inertial direction from
+    /// Kerbin to the sun. `None` until the campus placement is known.
+    pub fn ksc_sun(
+        &mut self,
+        body_radius: f64,
+        to_sun: DVec3,
+        spin: Option<Spin>,
+        ut: f64,
+    ) -> Option<DVec3> {
+        let spin = spin.or_else(|| self.spins.get("Kerbin").copied())?;
+        let (_, krot) = self.ksc_pose(body_radius)?;
+        // An inertial point on the pad: body-fixed latitude and longitude turned back by the spin.
+        let (lat, lon, alt) = KSC_PADS[0];
+        let ang = (lon.to_radians()) + spin.angle(ut);
+        let (la, rr) = (lat.to_radians(), body_radius + alt);
+        let r = DVec3::new(la.cos() * ang.cos(), la.cos() * ang.sin(), la.sin()) * rr;
+        let d = dir_to_model(r, to_sun.normalize_or_zero(), spin, ut);
+        Some((krot.inverse() * d).normalize_or_zero())
+    }
+
     /// Draw the flight scene; returns the vessel's altitude above the sphere for the HUD.
     pub fn frame(&mut self, gpu: &mut Renderer, inp: &FlightInput) -> bool {
         let spin = inp.spin.unwrap_or_else(|| {

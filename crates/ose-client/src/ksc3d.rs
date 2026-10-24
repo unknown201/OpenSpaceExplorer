@@ -231,7 +231,9 @@ impl KscView {
     }
 
     /// Draw the campus. Returns false while the scene is not loaded yet.
-    pub fn frame(&mut self, gpu: &mut Renderer) -> bool {
+    /// Draw the campus lit from `sun` (direction to the sun in the campus frame; `None` keeps a fixed
+    /// afternoon light).
+    pub fn frame(&mut self, gpu: &mut Renderer, sun: Option<DVec3>) -> bool {
         if !self.requested {
             self.start_fetch();
         }
@@ -243,13 +245,33 @@ impl KscView {
         self.cam_pos = pos;
         gpu.set_camera(forward, up, self.fov_rad, 1.0, 80_000.0);
         gpu.request_model("ksc", &format!("assets/{}", scene.file));
-        let sun = DVec3::new(0.45, 0.8, 0.35);
+        // Day and night as the original's time-of-day: the sun's height sets the sky and the ambient light;
+        // at night a dim moonlight from overhead keeps the campus readable.
+        let sun = sun.unwrap_or(DVec3::new(0.45, 0.8, 0.35));
+        let elev = sun.y.clamp(-1.0, 1.0);
+        let day = ((elev + 0.08) / 0.3).clamp(0.0, 1.0);
+        let light = if elev > -0.05 {
+            sun
+        } else {
+            DVec3::new(0.2, 1.0, 0.1)
+        };
         let mut items = Vec::new();
         if gpu.has_model("ksc") {
-            let mut item = DrawItem::lit("ksc".into(), -pos, DQuat::IDENTITY, 1.0, sun);
-            item.ambient = 0.38;
+            let mut item = DrawItem::lit("ksc".into(), -pos, DQuat::IDENTITY, 1.0, light);
+            item.ambient = (0.12 + 0.26 * day) as f32;
+            if day < 1.0 {
+                let k = (0.35 + 0.65 * day) as f32;
+                item.color = [k * 0.85, k * 0.9, k, 1.0];
+            }
             items.push(item);
         }
+        // Dawn and dusk tint the sky orange near the horizon, night is deep blue.
+        let dusk = (1.0 - (elev.abs() / 0.25)).clamp(0.0, 1.0) * day.max(0.3);
+        let sky = [
+            0.04 + 0.49 * day + 0.25 * dusk,
+            0.06 + 0.66 * day + 0.08 * dusk,
+            0.14 + 0.78 * day - 0.10 * dusk,
+        ];
         let mut lines = Vec::new();
         if let Some(i) = self.hovered {
             if let Some(b) = scene.buildings.get(i) {
@@ -285,7 +307,7 @@ impl KscView {
                 }
             }
         }
-        gpu.frame("assets/ksc/", &items, &lines, [0.53, 0.72, 0.92]);
+        gpu.frame("assets/ksc/", &items, &lines, sky);
         true
     }
 }

@@ -2995,7 +2995,24 @@ impl App {
         if self.in_session && self.ksc_active() {
             if let Some(gpu) = &mut self.gpu {
                 let was_ready = self.ksc3d.is_ready();
-                if self.ksc3d.frame(gpu) {
+                // The real sun over the KSC at the server's time.
+                let sun = self.scene.as_ref().and_then(|scene| {
+                    let k = scene.index_of("Kerbin")?;
+                    let star = scene.root()?;
+                    let ut = self.time.ut_at(now_ms());
+                    let d = scene.position(star, ut) - scene.position(k, ut);
+                    let spin = self.body_spins.get(k).map(|b| flight3d::Spin {
+                        period_s: b.rotation_period_s,
+                        initial_deg: b.initial_rotation_deg,
+                    });
+                    self.flight3d.ksc_sun(
+                        scene.bodies[k].radius_m,
+                        glam::DVec3::new(d.x, d.y, d.z),
+                        spin,
+                        ut,
+                    )
+                });
+                if self.ksc3d.frame(gpu, sun) {
                     if !was_ready {
                         self.gpu_canvas
                             .set_attribute("data-ose-ksc-scene", "ready")
