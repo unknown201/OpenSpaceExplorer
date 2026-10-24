@@ -1,0 +1,250 @@
+{
+ "version": 1,
+ "bodies": [
+  {
+   "id": "Bop",
+   "has_ocean": false,
+   "sites": [],
+   "map": {
+    "offset": 0,
+    "width": 512,
+    "height": 256,
+    "scale_m": 32500.0,
+    "offset_m": -0.0,
+    "source": "bop_scaled_h 4096x4096"
+   }
+  },
+  {
+   "id": "Dres",
+   "has_ocean": false,
+   "sites": [],
+   "map": {
+    "offset": 262144,
+    "width": 512,
+    "height": 256,
+    "scale_m": 1500.0,
+    "offset_m": -0.0,
+    "source": "dres_scaled_h 4096x4096"
+   }
+  },
+  {
+   "id": "Duna",
+   "has_ocean": false,
+   "sites": [],
+   "map": {
+    "offset": 524288,
+    "width": 512,
+    "height": 256,
+    "scale_m": 1000.0,
+    "offset_m": -0.0,
+    "source": "duna_scaled_h 4096x4096"
+   }
+  },
+  {
+   "id": "Eeloo",
+   "has_ocean": false,
+   "sites": [],
+   "map": {
+    "offset": 786432,
+    "width": 512,
+    "height": 256,
+    "scale_m": 22000.0,
+    "offset_m": -0.0,
+    "source": "eeloo_scaled_h 4096x4096"
+   }
+  },
+  {
+   "id": "Eve",
+   "has_ocean": true,
+   "sites": [],
+   "map": {
+    "offset": 1048576,
+    "width": 512,
+    "height": 256,
+    "scale_m": 5000.0,
+    "offset_m": -2450.0,
+    "source": "eve_scaled_h 4096x4096"
+   }
+  },
+  {
+   "id": "Gilly",
+   "has_ocean": true,
+   "sites": [],
+   "map": {
+    "offset": 1310720,
+    "width": 512,
+    "height": 256,
+    "scale_m": 6000.0,
+    "offset_m": -0.0,
+    "source": "gilly_scaled_h 4096x4096"
+   }
+  },
+  {
+   "id": "Ike",
+   "has_ocean": true,
+   "sites": [],
+   "map": {
+    "offset": 1572864,
+    "width": 512,
+    "height": 256,
+    "scale_m": 10000.0,
+    "offset_m": -0.0,
+    "source": "ike_scaled_h 4096x4096"
+   }
+  },
+  {
+   "id": "Jool",
+   "has_ocean": false,
+   "sites": [],
+   "map": {
+    "offset": 1835008,
+    "width": 512,
+    "height": 256,
+    "scale_m": 0.0,
+    "offset_m": -0.0,
+    "source": "jool_scaled_h 4096x4096"
+   }
+  },
+  {
+   "id": "Kerbin",
+   "has_ocean": true,
+   "sites": [
+    {
+     "name": "kerbin_KSC_Object",
+     "lat_deg": -0.6273996241568289,
+     "lon_deg": -74.8304931832244,
+     "altitude_m": 221.73166169621982
+    },
+    {
+     "name": "kerbin_KSCLaunchpad_spawn_01",
+     "lat_deg": -0.6835551937084844,
+     "lon_deg": -74.81977902107154,
+     "altitude_m": 115.20121196669061
+    },
+    {
+     "name": "kerbin_KSCLaunchpad_spawn_02",
+     "lat_deg": -0.43599576659832184,
+     "lon_deg": -75.02696528328093,
+     "altitude_m": 111.0179979428649
+    },
+    {
+     "name": "kerbin_KSCLaunchpad_spawn_03",
+     "lat_deg": -0.6211281458601722,
+     "lon_deg": -75.18533298883574,
+     "altitude_m": 115.7521629538387
+    },
+    {
+     "name": "kerbin_KSCLaunchpad_spawn_04",
+     "lat_deg": -0.4361562346469534,
+     "lon_deg": -75.34799892336478,
+     "altitude_m": 131.960510274861
+    }
+   ],
+   "map": {
+    "offset": 2097152,
+    "width": 512,
+    "height": 256,
+    "scale_m": 5000.0,
+    "offset_m": -4270.0,
+    "source": "kerbin_scaled_h 4096x4096"
+   }
+  },
+  {
+   "id": "Kerbol",
+   "has_ocean": false,
+   "sites": [],
+   "map": null
+  },
+  {
+   "id": "Laythe",
+   "has_ocean": true,
+   "sites": [],
+   "map": {
+    "offset": 2359296,
+    "width": 512,
+    "height": 256,
+    "scale_m": 28600.0,
+    "offset_m": -14986.0,
+    "source": "laythe_scaled_h 4096x4096"
+   }
+  },
+  {
+   "id": "Minmus",
+   "has_ocean": false,
+   "sites": [],
+   "map": {
+    "offset": 2621440,
+    "width": 512,
+    "height": 256,
+    "scale_m": 6276.0,
+    "offset_m": -0.0,
+    "source": "minmus_scaled_h 4096x4096"
+   }
+  },
+  {
+   "id": "Moho",
+   "has_ocean": true,
+   "sites": [],
+   "map": {
+    "offset": 2883584,
+    "width": 512,
+    "height": 256,
+    "scale_m": 7500.0,
+    "offset_m": -0.0,
+    "source": "moho_scaled_h 4096x4096"
+   }
+  },
+  {
+   "id": "Mun",
+   "has_ocean": false,
+   "sites": [],
+   "map": {
+    "offset": 3145728,
+    "width": 512,
+    "height": 256,
+    "scale_m": 5000.0,
+    "offset_m": -0.0,
+    "source": "mun_scaled_h 4096x4096"
+   }
+  },
+  {
+   "id": "Pol",
+   "has_ocean": false,
+   "sites": [],
+   "map": {
+    "offset": 3407872,
+    "width": 512,
+    "height": 256,
+    "scale_m": 4000.0,
+    "offset_m": -0.0,
+    "source": "pol_scaled_h 4096x4096"
+   }
+  },
+  {
+   "id": "Tylo",
+   "has_ocean": false,
+   "sites": [],
+   "map": {
+    "offset": 3670016,
+    "width": 512,
+    "height": 256,
+    "scale_m": 30000.0,
+    "offset_m": -0.0,
+    "source": "tylo_scaled_h 4096x4096"
+   }
+  },
+  {
+   "id": "Vall",
+   "has_ocean": false,
+   "sites": [],
+   "map": {
+    "offset": 3932160,
+    "width": 512,
+    "height": 256,
+    "scale_m": 9000.0,
+    "offset_m": -4000.0,
+    "source": "vall_scaled_h 4096x4096"
+   }
+  }
+ ]
+}

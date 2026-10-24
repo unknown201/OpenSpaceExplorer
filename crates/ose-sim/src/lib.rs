@@ -156,7 +156,12 @@ impl Universe {
     ) -> Entity {
         let ut = self.ut();
         let b = self.world.get::<bodies::Body>(body).expect("body").clone();
-        let (r, v) = flight::surface_state(&b, lat_deg, lon_deg, ut);
+        let ground = self
+            .world
+            .get::<flight::Terrain>(body)
+            .map(|t| t.0.ground_m(lat_deg, lon_deg))
+            .unwrap_or(0.0);
+        let (r, v) = flight::surface_state_at(&b, lat_deg, lon_deg, ground, ut);
         let orbit = Orbit::from_state_vectors(b.mu, r, v, ut);
         let powered = flight::Powered::new(spec, r, v, true);
         self.world
@@ -167,6 +172,25 @@ impl Universe {
                 powered,
             ))
             .id()
+    }
+
+    /// Attach a terrain height map to the body with `id`. False when the body is unknown.
+    pub fn set_terrain(&mut self, id: &str, map: ose_data::terrain::TerrainMap) -> bool {
+        let Some(e) = self.body_entity(id) else {
+            return false;
+        };
+        self.world
+            .entity_mut(e)
+            .insert(flight::Terrain(std::sync::Arc::new(map)));
+        true
+    }
+
+    /// Ground height (terrain or sea) above the nominal radius at a body-fixed latitude/longitude.
+    pub fn ground_height(&self, body: Entity, lat_deg: f64, lon_deg: f64) -> f64 {
+        self.world
+            .get::<flight::Terrain>(body)
+            .map(|t| t.0.ground_m(lat_deg, lon_deg))
+            .unwrap_or(0.0)
     }
 
     /// Attach a saved powered-flight state to an existing vessel (restore).
@@ -397,13 +421,24 @@ impl Universe {
                 .world
                 .get::<flight::Atmosphere>(body_e)
                 .map(|a| a.0.clone());
+            let terrain = self
+                .world
+                .get::<flight::Terrain>(body_e)
+                .map(|t| t.0.clone());
             let mut p = self
                 .world
                 .get::<flight::Powered>(e)
                 .expect("powered")
                 .clone();
             for i in 0..ticks.max(1) {
-                flight::integrate(&mut p, &body, atmo.as_ref(), start_ut + i as f64 * dt, dt);
+                flight::integrate(
+                    &mut p,
+                    &body,
+                    atmo.as_ref(),
+                    terrain.as_deref(),
+                    start_ut + i as f64 * dt,
+                    dt,
+                );
             }
             let orbit = Orbit::from_state_vectors(body.mu, p.r, p.v, ut);
             let hand_off =

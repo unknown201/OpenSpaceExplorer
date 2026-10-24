@@ -631,7 +631,12 @@ async fn hello_catalog_and_snapshots() {
                 .expect("pad vessel streamed");
             let f = v.flight.as_ref().expect("flight readout");
             assert_eq!(f.situation, ose_net::FlightSituation::Landed);
-            assert!(f.altitude_m.abs() < 1.0, "alt {}", f.altitude_m);
+            // KSP2's launch pad 1 stands 115.2 m above sea level (Kerbin LocalSimObjectsData)
+            assert!(
+                (f.altitude_m - 115.2).abs() < 1.0,
+                "pad alt {}",
+                f.altitude_m
+            );
             assert!(f.twr > 1.0, "twr {}", f.twr);
             landed_seen = true;
             break;
@@ -658,7 +663,7 @@ async fn hello_catalog_and_snapshots() {
             ServerMessage::Vessels { vessels, .. } => {
                 let v = vessels.iter().find(|v| v.id == pad_vessel).unwrap();
                 let f = v.flight.as_ref().unwrap();
-                if f.situation == ose_net::FlightSituation::Flying && f.altitude_m > 5.0 {
+                if f.situation == ose_net::FlightSituation::Flying && f.altitude_m > 120.0 {
                     assert!(f.vertical_speed_mps > 0.0);
                     assert!(f.throttle == 1.0);
                     flying = true;

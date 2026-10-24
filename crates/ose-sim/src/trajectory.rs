@@ -209,9 +209,14 @@ fn next_patch(
     };
 
     // 1. Collision with the reference body.
-    if orbit.periapsis() < b.radius_m {
+    // like the original's WillCollideWithParent: test against the highest terrain, not the nominal radius
+    let surface = b.radius_m
+        + world
+            .get::<crate::flight::Terrain>(body)
+            .map(|t| t.0.max_m.max(0.0))
+            .unwrap_or(0.0);
+    if orbit.periapsis() < surface {
         let tpe = orbit.time_to_periapsis(start_ut);
-        let surface = b.radius_m;
         let mut lo = start_ut;
         let mut hi = start_ut + tpe.max(0.0);
         // only if we are currently above the surface and will go below it before periapsis

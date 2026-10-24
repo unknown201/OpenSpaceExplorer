@@ -7,6 +7,7 @@
 
 pub mod craft;
 pub mod staging;
+pub mod terrain;
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

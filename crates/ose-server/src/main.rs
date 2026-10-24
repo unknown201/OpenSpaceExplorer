@@ -39,6 +39,10 @@ const EMBEDDED_PARTS: &str = include_str!("../../../assets/own/parts-catalog.jso
 const EMBEDDED_RESOURCES: &str = include_str!("../../../assets/own/resources.json");
 const EMBEDDED_DIFFICULTY: &str = include_str!("../../../assets/own/difficulty.json");
 const EMBEDDED_STOCK_CRAFT: &str = include_str!("../../../assets/own/stock-craft.json");
+const EMBEDDED_TERRAIN_INDEX: &str = include_str!("../../../assets/own/terrain/index.json");
+const EMBEDDED_TERRAIN: &[u8] = include_bytes!("../../../assets/own/terrain/terrain.bin");
+/// The launch pad craft are placed on (from the Kerbin body data's LocalSimObjectsData).
+const LAUNCH_PAD_SITE: &str = "kerbin_KSCLaunchpad_spawn_01";
 /// Saved craft ids start here; stock crafts use 1..=999.
 const FIRST_SAVED_CRAFT_ID: u64 = 1000;
 pub const SHARED_SESSION_ID: &str = "shared";
@@ -347,6 +351,20 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(bodies = defs.len(), "loaded celestial bodies");
 
     let mut universe = Universe::with_bodies(&defs);
+    let mut terrains = 0;
+    for entry in &terrain_index().bodies {
+        let Some(def) = defs.iter().find(|d| d.id == entry.id) else {
+            continue;
+        };
+        if let Some(map) =
+            ose_data::terrain::TerrainMap::from_entry(entry, EMBEDDED_TERRAIN, def.radius_m)
+        {
+            if universe.set_terrain(&entry.id, map) {
+                terrains += 1;
+            }
+        }
+    }
+    tracing::info!(bodies = terrains, "terrain height maps loaded");
     let save_path = (args.save.to_string_lossy() != "none").then(|| args.save.clone());
     let mut registry: Vec<save::VesselEntry> = Vec::new();
     let mut campaign = save::Campaign::default();
@@ -638,9 +656,24 @@ fn flight_readout(
     })
 }
 
-/// KSC launch pad (Kerbin), degrees.
-const KSC_LAT_DEG: f64 = -0.097;
-const KSC_LON_DEG: f64 = -74.557;
+/// Fallback launch pad (Kerbin) when the terrain index has no pad site, degrees.
+const KSC_LAT_DEG: f64 = -0.6836;
+const KSC_LON_DEG: f64 = -74.8198;
+
+fn terrain_index() -> ose_data::terrain::TerrainIndex {
+    serde_json::from_str(EMBEDDED_TERRAIN_INDEX).expect("embedded terrain index")
+}
+
+/// Latitude and longitude of the launch pad site on the home world.
+fn launch_pad(home: &str) -> (f64, f64) {
+    terrain_index()
+        .bodies
+        .iter()
+        .find(|b| b.id == home)
+        .and_then(|b| ose_data::terrain::TerrainMap::site(b, LAUNCH_PAD_SITE))
+        .map(|s| (s.lat_deg, s.lon_deg))
+        .unwrap_or((KSC_LAT_DEG, KSC_LON_DEG))
+}
 
 /// Reduce a craft to a flight spec: per-stage thrust/Isp/propellant from the staging report, sea-level Isp
 /// thrust-weighted over the stage engines, drag area as the largest part cross-section.
@@ -729,7 +762,8 @@ fn launch_on_pad(s: &Shared, player_id: u64, craft: &ose_data::craft::Craft) -> 
     let Some(body) = u.body_entity(&home.id) else {
         return fail("home body missing".into());
     };
-    let e = u.spawn_powered_on_surface(&name, body, spec, KSC_LAT_DEG, KSC_LON_DEG);
+    let (pad_lat, pad_lon) = launch_pad(&home.id);
+    let e = u.spawn_powered_on_surface(&name, body, spec, pad_lat, pad_lon);
     let mut list = s.vessels.lock().expect("vessels lock");
     let id = list.iter().map(|&(_, id, _)| id).max().unwrap_or(0) + 1;
     list.push((e, id, Some(player_id)));

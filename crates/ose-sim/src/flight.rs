@@ -177,6 +177,45 @@ impl Atmo {
     }
 }
 
+/// Terrain height model attached to bodies that have a height map.
+#[derive(Component, Clone, Debug)]
+pub struct Terrain(pub std::sync::Arc<ose_data::terrain::TerrainMap>);
+
+/// Rotation angle of a body at `ut`, radians (body-fixed longitude 0 is at this inertial angle).
+pub fn rotation_angle(body: &Body, ut: f64) -> f64 {
+    let omega = if body.rotation_period_s > 0.0 {
+        std::f64::consts::TAU / body.rotation_period_s
+    } else {
+        0.0
+    };
+    body.initial_rotation_deg.to_radians() + omega * ut
+}
+
+/// Body-fixed latitude and longitude (degrees) of a body-centred inertial position at `ut`.
+pub fn lat_lon(body: &Body, r: DVec3, ut: f64) -> (f64, f64) {
+    let m = r.length().max(1e-9);
+    let lat = (r.z / m).clamp(-1.0, 1.0).asin().to_degrees();
+    let lon = (r.y.atan2(r.x) - rotation_angle(body, ut)).to_degrees();
+    let lon = (lon + 180.0).rem_euclid(360.0) - 180.0;
+    (lat, lon)
+}
+
+/// Radius of the ground (terrain or sea) under `r` at `ut`, m from the body centre.
+pub fn ground_radius(
+    body: &Body,
+    terrain: Option<&ose_data::terrain::TerrainMap>,
+    r: DVec3,
+    ut: f64,
+) -> f64 {
+    match terrain {
+        Some(t) => {
+            let (lat, lon) = lat_lon(body, r, ut);
+            body.radius_m + t.ground_m(lat, lon)
+        }
+        None => body.radius_m,
+    }
+}
+
 /// Atmosphere model attached to bodies that have one.
 #[derive(Component, Clone, Debug, PartialEq)]
 pub struct Atmosphere(pub Atmo);
@@ -314,6 +353,7 @@ pub fn integrate(
     p: &mut Powered,
     body: &Body,
     atmo: Option<&Atmo>,
+    terrain: Option<&ose_data::terrain::TerrainMap>,
     ut: f64,
     dt: f64,
 ) -> StepOutcome {
@@ -390,13 +430,14 @@ pub fn integrate(
     p.v = p.v + acc * dt;
     p.r = p.r + p.v * dt;
 
-    // surface contact
+    // surface contact against the terrain (or sea) under the vessel
     let new_r = p.r.length();
-    if new_r <= body.radius_m {
+    let ground = ground_radius(body, terrain, p.r, ut + dt);
+    if new_r <= ground {
         let v_surf = p.v - omega_v.cross(p.r);
         let (up, _, _) = surface_frame(p.r);
         let speed = v_surf.length();
-        p.r = up * body.radius_m;
+        p.r = up * ground;
         p.v = omega_v.cross(p.r);
         p.landed = true;
         out.touched_down = true;
@@ -448,14 +489,25 @@ pub fn situation(p: &Powered, body: &Body, atmo: Option<&Atmo>) -> Situation {
 /// Position on the surface at geographic latitude/longitude (degrees) at time `ut`, and its co-rotating
 /// velocity. Longitude 0 is the body's +X axis at `initial_rotation_deg = 0`, `ut = 0`.
 pub fn surface_state(body: &Body, lat_deg: f64, lon_deg: f64, ut: f64) -> (DVec3, DVec3) {
+    surface_state_at(body, lat_deg, lon_deg, 0.0, ut)
+}
+
+/// Like [`surface_state`] but `altitude_m` above the nominal radius.
+pub fn surface_state_at(
+    body: &Body,
+    lat_deg: f64,
+    lon_deg: f64,
+    altitude_m: f64,
+    ut: f64,
+) -> (DVec3, DVec3) {
     let omega = if body.rotation_period_s > 0.0 {
         std::f64::consts::TAU / body.rotation_period_s
     } else {
         0.0
     };
-    let theta = body.initial_rotation_deg.to_radians() + omega * ut + lon_deg.to_radians();
+    let theta = rotation_angle(body, ut) + lon_deg.to_radians();
     let (sl, cl) = lat_deg.to_radians().sin_cos();
-    let r = DVec3::new(cl * theta.cos(), cl * theta.sin(), sl) * body.radius_m;
+    let r = DVec3::new(cl * theta.cos(), cl * theta.sin(), sl) * (body.radius_m + altitude_m);
     let v = DVec3::new(0.0, 0.0, omega).cross(r);
     (r, v)
 }
@@ -542,7 +594,7 @@ mod tests {
         let (r, v) = surface_state(&body, -0.1, -74.5, 0.0);
         let mut p = Powered::new(rocket(), r, v, true);
         for i in 0..50 {
-            integrate(&mut p, &body, Some(&atmo), i as f64 * 0.02, 0.02);
+            integrate(&mut p, &body, Some(&atmo), None, i as f64 * 0.02, 0.02);
         }
         assert!(p.landed, "no thrust: stays landed");
         assert!((p.r.length() - body.radius_m).abs() < 1e-6);
@@ -550,7 +602,7 @@ mod tests {
         p.attitude = Attitude::Up;
         let mut ut = 1.0;
         for _ in 0..(10 * 50) {
-            integrate(&mut p, &body, Some(&atmo), ut, 0.02);
+            integrate(&mut p, &body, Some(&atmo), None, ut, 0.02);
             ut += 0.02;
         }
         let alt = p.r.length() - body.radius_m;
@@ -614,7 +666,7 @@ mod tests {
                     p.throttle = 0.0;
                 }
             }
-            let out = integrate(&mut p, &body, Some(&atmo), ut, dt);
+            let out = integrate(&mut p, &body, Some(&atmo), None, ut, dt);
             assert!(!out.crashed, "crashed at ut {ut}");
             ut += dt;
         }
@@ -632,6 +684,53 @@ mod tests {
     }
 
     #[test]
+    fn touches_down_on_terrain_not_the_nominal_radius() {
+        use ose_data::terrain::{BodyTerrain, MapRef, TerrainMap};
+        let body = kerbin();
+        // flat map 2 km above the nominal radius
+        let w = 32;
+        let h = 16;
+        let mut blob = Vec::new();
+        for _ in 0..w * h {
+            blob.extend_from_slice(&(65535u16 / 2).to_le_bytes());
+        }
+        let entry = BodyTerrain {
+            id: "Kerbin".into(),
+            has_ocean: false,
+            sites: vec![],
+            map: Some(MapRef {
+                offset: 0,
+                width: w,
+                height: h,
+                scale_m: 4000.0,
+                offset_m: 0.0,
+                source: String::new(),
+            }),
+        };
+        let t = TerrainMap::from_entry(&entry, &blob, body.radius_m).unwrap();
+        let ground = t.ground_m(0.0, 0.0);
+        assert!((ground - 2000.0).abs() < 1.0, "ground {ground}");
+        let (r, v) = surface_state_at(&body, 0.0, 0.0, 2050.0, 0.0);
+        let up = r.normalized();
+        let mut p = Powered::new(rocket(), r, v - up * 3.0, false);
+        let mut landed_at = None;
+        for i in 0..2000 {
+            let ut = i as f64 * 0.02;
+            if integrate(&mut p, &body, None, Some(&t), ut, 0.02).touched_down {
+                landed_at = Some(p.r.length() - body.radius_m);
+                break;
+            }
+        }
+        let alt = landed_at.expect("touched down");
+        assert!(
+            (alt - 2000.0).abs() < 1.0,
+            "landed at {alt} m, terrain at 2000 m"
+        );
+        let (lat, lon) = lat_lon(&body, p.r, 0.0);
+        assert!(lat.abs() < 0.1 && lon.abs() < 1.0, "lat {lat} lon {lon}");
+    }
+
+    #[test]
     fn hard_landing_crashes_soft_landing_does_not() {
         let body = kerbin();
         let (r0, _) = surface_state(&body, 0.0, 0.0, 0.0);
@@ -646,7 +745,7 @@ mod tests {
         );
         let mut crashed = false;
         for i in 0..1000 {
-            if integrate(&mut p, &body, None, i as f64 * 0.02, 0.02).crashed {
+            if integrate(&mut p, &body, None, None, i as f64 * 0.02, 0.02).crashed {
                 crashed = true;
                 break;
             }
@@ -669,7 +768,7 @@ mod tests {
         q.throttle = (0.9 * q.mass_t * g / q.spec.stages[1].thrust_vac_kn).min(1.0);
         let mut landed = false;
         for i in 0..5000 {
-            let out = integrate(&mut q, &body, None, i as f64 * 0.02, 0.02);
+            let out = integrate(&mut q, &body, None, None, i as f64 * 0.02, 0.02);
             assert!(!out.crashed, "soft descent crashed at step {i}");
             if out.touched_down {
                 landed = true;
