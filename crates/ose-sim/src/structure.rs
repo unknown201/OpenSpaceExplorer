@@ -13,6 +13,7 @@ use ose_math::DVec3;
 
 use crate::aero::{self, DragCurves, Faces};
 use crate::flight::{Powered, StepOutcome};
+use crate::resources::{FlowNet, Instruction, Request};
 use crate::rigid::{PartForce, RigidVessel};
 
 /// Loads below this (kN) leave the structure as it is rather than stepping it.
@@ -35,6 +36,10 @@ pub struct Structure {
     /// Each part's `Cd * A` at the last `aero` call, m^2.
     pub part_cda_m2: Vec<f64>,
     curves: DragCurves,
+    /// Tanks and the flow graph engines draw through.
+    pub net: FlowNet,
+    /// Each part's engine mixture (`None` for parts without an engine).
+    pub engine_mixture: Vec<Option<String>>,
     /// Flight stage the structure was last trimmed to.
     staged_to: usize,
 }
@@ -140,6 +145,13 @@ impl Structure {
             })
             .collect();
         let n = craft.parts.len();
+        let engine_mixture = (0..n)
+            .map(|i| {
+                def_of(i)
+                    .and_then(|d| d.engines.first())
+                    .map(|e| e.propellant_mixture.clone())
+            })
+            .collect();
         let mut s = Structure {
             rigid,
             root,
@@ -150,6 +162,8 @@ impl Structure {
             part_rot,
             part_cda_m2: vec![0.0; n],
             curves: DragCurves::default(),
+            net: FlowNet::build(craft, defs, resources),
+            engine_mixture,
             staged_to: 0,
         };
         s.trim_to(0);
@@ -166,6 +180,119 @@ impl Structure {
             .filter(|i| self.rigid.present[*i] && !alive.contains(i))
             .collect();
         self.rigid.remove_parts(&gone);
+        self.net.remove_parts(&gone);
+    }
+
+    /// Engines of `stage` still attached, with their rated thrust.
+    fn live_engines(&self, stage: usize) -> Vec<usize> {
+        self.stage_engines
+            .get(stage)
+            .map(|e| {
+                e.iter()
+                    .copied()
+                    .filter(|&i| self.rigid.present[i] && self.engine_thrust_kn[i] > 0.0)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Whether an engine can reach every ingredient of its mixture.
+    fn fed(&self, engine: usize) -> bool {
+        let Some(mix) = &self.engine_mixture[engine] else {
+            return false;
+        };
+        let ing = self.net.ingredients(mix);
+        !ing.is_empty()
+            && ing
+                .iter()
+                .all(|&(r, _)| self.net.available(engine, r) > 1e-9)
+    }
+
+    /// Propellant the burning stage's engines can reach, t (each tank counted once).
+    pub fn reachable_propellant_t(&self, stage: usize) -> f64 {
+        let mut seen = vec![false; self.net.tanks.len()];
+        let mut total = 0.0;
+        for e in self.live_engines(stage) {
+            let Some(mix) = &self.engine_mixture[e] else {
+                continue;
+            };
+            for (r, _) in self.net.ingredients(mix) {
+                for t in self.net.groups(e, r).into_iter().flatten() {
+                    if !seen[t] {
+                        seen[t] = true;
+                        let tank = &self.net.tanks[t];
+                        total += tank.stored * self.net.unit_mass_t[tank.resource];
+                    }
+                }
+            }
+        }
+        total
+    }
+
+    /// Bring a flight state in line with the structure: trimmed to its stage, mass from what the tanks hold,
+    /// propellant the engines can reach, thrust from the engines that are attached and fed.
+    pub fn sync(&mut self, p: &mut Powered) {
+        if p.stage != self.staged_to {
+            self.trim_to(p.stage);
+        }
+        p.mass_t = self.net.mass_t().max(0.001);
+        p.propellant_t = self.reachable_propellant_t(p.stage);
+        p.thrust_scale = match self.stage_engines.get(p.stage) {
+            Some(all) => {
+                let rated: f64 = all.iter().map(|&i| self.engine_thrust_kn[i]).sum();
+                let running: f64 = self
+                    .live_engines(p.stage)
+                    .into_iter()
+                    .filter(|&i| self.fed(i))
+                    .map(|i| self.engine_thrust_kn[i])
+                    .sum();
+                if rated > 0.0 {
+                    running / rated
+                } else {
+                    1.0
+                }
+            }
+            None => 1.0,
+        };
+    }
+
+    /// Draw `burned_t` of propellant (what the flight step burned) through the flow graph, split over the
+    /// running engines by rated thrust, then `sync`.
+    pub fn burn(&mut self, p: &mut Powered, burned_t: f64, dt: f64) {
+        if burned_t > 0.0 && dt > 0.0 {
+            let engines: Vec<usize> = self
+                .live_engines(p.stage)
+                .into_iter()
+                .filter(|&i| self.fed(i))
+                .collect();
+            let rated: f64 = engines.iter().map(|&i| self.engine_thrust_kn[i]).sum();
+            let mut requests = Vec::new();
+            for &e in &engines {
+                let Some(mix) = &self.engine_mixture[e] else {
+                    continue;
+                };
+                let unit = self.net.mixture_unit_mass_t(mix);
+                if unit <= 0.0 || rated <= 0.0 {
+                    continue;
+                }
+                let units_per_s = burned_t * self.engine_thrust_kn[e] / rated / dt / unit;
+                requests.push(Request {
+                    part: e,
+                    instructions: self
+                        .net
+                        .ingredients(mix)
+                        .into_iter()
+                        .map(|(resource, u)| Instruction {
+                            resource,
+                            units_per_s: u * units_per_s,
+                        })
+                        .collect(),
+                    priority: 0,
+                });
+            }
+            self.net.process(&requests, dt);
+        }
+        self.sync(p);
     }
 
     /// Fraction of `stage`'s rated thrust whose engines are still attached.
@@ -303,30 +430,15 @@ impl Structure {
             return Vec::new();
         };
         let (keep_c, keep_v) = self.rigid.centre_of(&keep);
-        // propellant still in the stage's tanks, as a fraction of what they held at launch
-        let fuel_frac = p
-            .current_stage()
-            .map(|s| {
-                if s.propellant_t > 0.0 {
-                    (p.propellant_t / s.propellant_t).clamp(0.0, 1.0)
-                } else {
-                    0.0
-                }
-            })
-            .unwrap_or(0.0);
         let to_inertial = |v: DVec3| bx * v.x + by * v.y + bz * v.z;
         let mut pieces = Vec::new();
         for g in groups.into_iter().filter(|g| !g.contains(&self.root)) {
             let (c, v) = self.rigid.centre_of(&g);
-            let dry: f64 = g.iter().map(|&i| self.rigid.dry_masses_t[i]).sum();
-            let stored: f64 = g
-                .iter()
-                .map(|&i| self.rigid.masses_t[i] - self.rigid.dry_masses_t[i])
-                .sum();
-            let prop = stored * fuel_frac;
+            let mass = self.net.mass_of(&g);
+            let dry: f64 = g.iter().map(|&i| self.net.dry_t[i]).sum();
             pieces.push(Piece {
-                mass_t: dry + prop,
-                propellant_t: prop,
+                mass_t: mass,
+                propellant_t: mass - dry,
                 offset_m: to_inertial(c - keep_c),
                 dv_mps: to_inertial(v - keep_v),
                 parts: g,
@@ -334,6 +446,7 @@ impl Structure {
         }
         for piece in &pieces {
             self.rigid.remove_parts(&piece.parts);
+            self.net.remove_parts(&piece.parts);
         }
         pieces
     }

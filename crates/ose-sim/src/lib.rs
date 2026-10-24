@@ -8,6 +8,7 @@
 pub mod aero;
 pub mod bodies;
 pub mod flight;
+pub mod resources;
 pub mod rigid;
 pub mod structure;
 pub mod trajectory;
@@ -222,7 +223,12 @@ impl Universe {
     }
 
     /// Give a vessel a part structure so flight loads its joints and pieces can break off.
-    pub fn set_structure(&mut self, e: Entity, s: structure::Structure) {
+    pub fn set_structure(&mut self, e: Entity, mut s: structure::Structure) {
+        if let Some(mut p) = self.world.get_mut::<flight::Powered>(e) {
+            s.sync(&mut p);
+        } else if let Some(mut d) = self.world.get_mut::<flight::Dormant>(e) {
+            s.sync(&mut d.0);
+        }
         self.world.entity_mut(e).insert(s);
     }
 
@@ -324,6 +330,22 @@ impl Universe {
                     debris: None,
                 };
             };
+        let mut outcome = outcome;
+        if outcome.fired {
+            let mut st = self.world.entity_mut(e).take::<structure::Structure>();
+            if let Some(st) = &mut st {
+                let before = st.net.mass_t();
+                if let Some(mut p) = self.world.get_mut::<flight::Powered>(e) {
+                    st.sync(&mut p);
+                } else if let Some(mut d) = self.world.get_mut::<flight::Dormant>(e) {
+                    st.sync(&mut d.0);
+                }
+                outcome.dropped_t = (before - st.net.mass_t()).max(0.0);
+            }
+            if let Some(st) = st {
+                self.world.entity_mut(e).insert(st);
+            }
+        }
         let debris = if outcome.fired && outcome.dropped_t > 0.01 {
             self.spawn_debris(
                 e,
@@ -538,7 +560,7 @@ impl Universe {
             let mut pieces = Vec::new();
             for i in 0..ticks.max(1) {
                 if let Some(st) = &mut structure {
-                    p.thrust_scale = st.thrust_scale(p.stage);
+                    st.sync(&mut p);
                     // part drag for the airflow now
                     p.drag_cda_m2 = atmo.as_ref().map(|a| {
                         let omega = if body.rotation_period_s > 0.0 {
@@ -557,6 +579,7 @@ impl Universe {
                         st.aero(p.stage, p.facing, v_air, a.density(alt), mach)
                     });
                 }
+                let mass_before = p.mass_t;
                 let out = flight::integrate(
                     &mut p,
                     &body,
@@ -566,10 +589,14 @@ impl Universe {
                     dt,
                 );
                 if let Some(st) = &mut structure {
+                    // the propellant burned comes out of the tanks through the flow graph
+                    let burned = (mass_before - p.mass_t).max(0.0);
+                    st.burn(&mut p, burned, dt);
                     for piece in st.apply(&p, &out, dt) {
-                        p.propellant_t = (p.propellant_t - piece.propellant_t).max(0.0);
-                        p.mass_t = (p.mass_t - piece.mass_t).max(0.001);
                         pieces.push((piece, p.r, p.v, p.facing));
+                    }
+                    if !pieces.is_empty() {
+                        st.sync(&mut p);
                     }
                 }
             }
@@ -930,6 +957,64 @@ mod tests {
         assert!(!p.landed && p.v.length() > 100.0, "climbing");
         assert!(u.take_broken_off().is_empty());
         assert_eq!(u.structure(v).unwrap().rigid.groups().len(), 1);
+    }
+
+    #[test]
+    fn kerbal_k1_burns_its_tanks_through_the_flow_graph_and_stages_off_the_boosters() {
+        let (mut u, body, spec, st) = k1_on_real_kerbin();
+        let spec_mass = spec.stages[0].start_mass_t;
+        let v = u.spawn_powered_on_surface("K1", body, spec, 0.0, 0.0);
+        u.set_structure(v, st);
+        let m0 = u.powered(v).unwrap().mass_t;
+        assert!(
+            (m0 - spec_mass).abs() < 1e-6,
+            "tank mass {m0} matches the staging report {spec_mass}"
+        );
+        let sf = |u: &Universe| {
+            let s = u.structure(v).unwrap();
+            let r = s.net.resource("SolidFuel").unwrap();
+            s.net
+                .tanks
+                .iter()
+                .filter(|t| t.resource == r && s.net.present[t.part])
+                .map(|t| t.stored)
+                .sum::<f64>()
+        };
+        let lf = |u: &Universe| {
+            let s = u.structure(v).unwrap();
+            let r = s.net.resource("Oxidizer").unwrap();
+            s.net
+                .tanks
+                .iter()
+                .filter(|t| t.resource == r && s.net.present[t.part])
+                .map(|t| t.stored)
+                .sum::<f64>()
+        };
+        let (sf0, ox0) = (sf(&u), lf(&u));
+        assert!(u.set_controls(v, 1.0, flight::Attitude::Up));
+        for _ in 0..(5 * TICKS_PER_SECOND) {
+            u.step();
+        }
+        let p = u.powered(v).unwrap().clone();
+        let s = u.structure(v).unwrap();
+        assert!(sf(&u) < sf0 && lf(&u) < ox0, "boosters and core both burn");
+        assert!(
+            (p.mass_t - s.net.mass_t()).abs() < 1e-9,
+            "vessel mass is the tank mass"
+        );
+        assert!(m0 - p.mass_t > 1.0, "burned {} t", m0 - p.mass_t);
+        // staging drops the boosters with their leftover solid fuel
+        let res = u.stage(v);
+        assert!(res.fired);
+        let d = res.debris.expect("boosters become debris");
+        let dm = u.powered(d).unwrap().mass_t;
+        let after = u.powered(v).unwrap().mass_t;
+        assert!(
+            (dm + after - p.mass_t).abs() < 1e-6,
+            "{dm} + {after} vs {}",
+            p.mass_t
+        );
+        assert!(u.structure(v).unwrap().net.mass_t() - after < 1e-9);
     }
 
     #[test]
