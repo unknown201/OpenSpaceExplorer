@@ -26,6 +26,8 @@ pub mod navball;
 pub mod planet;
 pub mod planet_lod;
 #[cfg(target_arch = "wasm32")]
+pub mod planet_preview;
+#[cfg(target_arch = "wasm32")]
 pub mod render;
 pub mod rnd;
 pub mod scene;
@@ -104,6 +106,9 @@ struct App {
     /// The WebGPU renderer when the browser has an adapter; the 2D canvas is the fallback.
     #[cfg(target_arch = "wasm32")]
     gpu: Option<render::Renderer>,
+    /// `?planet=<Body>`: draw only that body from a fixed viewpoint (planet_preview.rs).
+    #[cfg(target_arch = "wasm32")]
+    planet_preview: Option<planet_preview::Preview>,
     /// The main menu's 3D backdrop (the original's menu scene), drawn while no session is joined.
     #[cfg(target_arch = "wasm32")]
     menu3d: menu3d::MenuBackdrop,
@@ -347,6 +352,12 @@ pub fn start() -> Result<(), JsValue> {
         dpr: window.device_pixel_ratio().max(1.0),
         #[cfg(target_arch = "wasm32")]
         gpu: None,
+        #[cfg(target_arch = "wasm32")]
+        planet_preview: window
+            .location()
+            .search()
+            .ok()
+            .and_then(|q| planet_preview::Preview::from_query(&q)),
         #[cfg(target_arch = "wasm32")]
         menu3d: menu3d::MenuBackdrop::new(),
         #[cfg(target_arch = "wasm32")]
@@ -3826,6 +3837,17 @@ impl App {
             self.update_hud(ut);
         }
         self.update_flight_hud();
+        #[cfg(target_arch = "wasm32")]
+        if let (Some(p), Some(gpu)) = (self.planet_preview.as_mut(), self.gpu.as_mut()) {
+            if let Some(menu) = self.doc.get_element_by_id("menu") {
+                menu.class_list().add_1("hidden").ok();
+            }
+            if let Some(gc) = self.doc.get_element_by_id("gpu") {
+                gc.set_attribute("data-ose-planet-preview", &p.body).ok();
+            }
+            p.frame(gpu, now);
+            return;
+        }
         #[cfg(target_arch = "wasm32")]
         if self.flight_active() && self.frame_flight(ut) {
             return;

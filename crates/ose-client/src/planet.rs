@@ -17,7 +17,7 @@ use std::rc::Rc;
 const SHADER: &str = include_str!("planet.wgsl");
 const BASE: &str = "assets/planets";
 /// Tiling period of detail textures and waves (m), as `TILE_PERIOD` in the shader.
-const TILE_PERIOD: f64 = 512.0;
+const TILE_PERIOD: f64 = 4096.0;
 /// Quad builds allowed per frame, in milliseconds of CPU time.
 const BUILD_BUDGET_MS: f64 = 6.0;
 const SLOT: u64 = 256;
@@ -71,6 +71,18 @@ struct SurfaceU {
     shallow: [f32; 4],
     clouds: [f32; 4],
     flags: [f32; 4],
+    ambient_day: [f32; 4],
+    ambient_night: [f32; 4],
+    /// Shoreline foam: max depth (m), tiling (m), has foam texture.
+    foam: [f32; 4],
+}
+
+fn flag_f(x: bool) -> f32 {
+    if x {
+        1.0
+    } else {
+        0.0
+    }
 }
 
 /// What the flight view tells the planet each frame.
@@ -93,6 +105,7 @@ enum Tex {
     DetailA,
     DetailN,
     Clouds,
+    Foam,
 }
 
 enum Loaded {
@@ -121,6 +134,8 @@ struct Body {
     pack: Option<Box<(TerrainPack, Vec<u8>)>>,
     pack_done: bool,
     map: Option<TerrainMap>,
+    /// No height map exists for this body: draw the plain sphere.
+    no_terrain: bool,
     min_h: f64,
     max_h: f64,
     quads: HashMap<QuadKey, GpuQuad>,
@@ -167,6 +182,8 @@ pub struct PlanetRenderer {
     draws: Vec<(QuadKey, u32)>,
     cloud_draws: Vec<(QuadKey, u32)>,
     active: bool,
+    /// Shader debug view (preview `debug=`): 0 off, 1 biome mask, 2 detail ratio, 3 detail inputs.
+    pub debug: f32,
 }
 
 impl PlanetRenderer {
@@ -231,6 +248,7 @@ impl PlanetRenderer {
                 tex_entry(6, D::D2),
                 samp_entry(7),
                 samp_entry(8),
+                tex_entry(9, D::D2),
             ],
         });
         let sky_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -440,6 +458,7 @@ impl PlanetRenderer {
         defaults.insert(Tex::DetailA, solid([128, 128, 128, 128], true, true));
         defaults.insert(Tex::DetailN, solid([128, 128, 255, 128], false, true));
         defaults.insert(Tex::Clouds, solid([255, 255, 255, 0], true, false));
+        defaults.insert(Tex::Foam, solid([0, 0, 0, 255], false, false));
         let lut = |w, h, d| {
             let t = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("planet lut default"),
@@ -495,6 +514,7 @@ impl PlanetRenderer {
             draws: Vec::new(),
             cloud_draws: Vec::new(),
             active: false,
+            debug: 0.0,
         }
     }
 
@@ -584,6 +604,7 @@ impl PlanetRenderer {
                 pack: None,
                 pack_done: false,
                 map: None,
+                no_terrain: false,
                 min_h: 0.0,
                 max_h: 0.0,
                 quads: HashMap::new(),
@@ -631,6 +652,9 @@ impl PlanetRenderer {
         }
         if info.get("clouds").is_some() {
             images.push((Tex::Clouds, format!("{base}/clouds.png")));
+        }
+        if info["ocean"].get("foam").is_some() {
+            images.push((Tex::Foam, format!("{base}/foam.png")));
         }
         for (tex, url) in images {
             let inbox = inbox.clone();
@@ -870,14 +894,16 @@ impl PlanetRenderer {
                         .and_then(|v| v["surface"]["Radius"].as_f64())
                         .unwrap_or(1.0);
                     b.map = TerrainMap::from_entry(entry, blob, radius);
-                    if let Some(m) = &b.map {
-                        let lo = m.data.iter().copied().min().unwrap_or(0) as f64 / 65535.0
-                            * m.scale_m
-                            + m.offset_m;
-                        b.min_h = lo;
-                        b.max_h = m.max_m;
-                    }
                 }
+                // A body without any height map (Jool) is drawn as the sphere.
+                b.no_terrain = b.map.is_none();
+            }
+            if let Some(m) = &b.map {
+                // Lowest point from the global map less the tiled layers' and decals' reach; highest from the map.
+                let lo = m.data.iter().copied().min().unwrap_or(0) as f64 / 65535.0 * m.scale_m
+                    + m.offset_m;
+                b.min_h = lo - if m.detail.is_some() { 1_500.0 } else { 0.0 };
+                b.max_h = m.max_m;
             }
         }
     }
@@ -915,6 +941,7 @@ impl PlanetRenderer {
                     binding: 8,
                     resource: wgpu::BindingResource::Sampler(&self.equi_sampler),
                 },
+                tv(9, Tex::Foam),
             ],
         });
         let atmo = Self::atmosphere_ready(b);
@@ -948,7 +975,7 @@ impl PlanetRenderer {
                 },
             ],
         });
-        let surf = surface_uniform(b);
+        let surf = surface_uniform(b, self.debug);
         self.queue
             .write_buffer(&b.surface_buf, 0, bytemuck::bytes_of(&surf));
         let b = self.bodies.get_mut(id).unwrap();
@@ -1014,7 +1041,10 @@ impl PlanetRenderer {
         }
         {
             let b = &self.bodies[&id];
-            if !b.info_done || b.map.is_none() || !b.tex.contains_key(&Tex::Albedo) {
+            if !b.info_done
+                || (b.map.is_none() && !b.no_terrain)
+                || !b.tex.contains_key(&Tex::Albedo)
+            {
                 return false;
             }
         }
@@ -1157,10 +1187,21 @@ impl PlanetRenderer {
         let mie = v3("MieScattering", [0.0; 3]);
         let ms = f("MieScatteringScale", 1.0) * 0.01;
         let solar = v3("SolarIrradiance", [1.0; 3]);
-        let exposure = a
-            .and_then(|a| a["Exposure"][0].as_f64())
-            .map(|e| e * 0.1)
-            .unwrap_or(4.0);
+        // Exposure stands in for the original's post-process auto exposure: a fixed value that puts the body's
+        // mean albedo in sunlight where Kerbin's sits (Kerbin: albedo 0.1, solar irradiance 2, its atmosphere
+        // model's exposure 4.12). Bodies with an atmosphere keep their model's exposure when it is brighter
+        // (Laythe's own 0.9 renders near black with this tone map).
+        let mean_albedo = b
+            .info
+            .as_ref()
+            .and_then(|v| v["surface"]["mean_albedo"].as_f64())
+            .unwrap_or(0.1);
+        let solar_mean = solar.iter().sum::<f64>() / 3.0 * 2.0;
+        let auto = 4.12 * (0.1 / mean_albedo.max(0.01)) * (2.0 / solar_mean.max(0.1));
+        let exposure = match a.and_then(|a| a["Exposure"][0].as_f64()) {
+            Some(e) => (e * 0.1).max((auto * 0.75).min(6.0)),
+            None => auto.clamp(4.0, 20.0),
+        };
         let cam_km = view.cam / 1000.0;
         let sun = view.sun.normalize_or_zero();
         let fu = FrameU {
@@ -1219,7 +1260,7 @@ impl PlanetRenderer {
     }
 }
 
-fn surface_uniform(b: &Body) -> SurfaceU {
+fn surface_uniform(b: &Body, debug: f32) -> SurfaceU {
     let mut u: SurfaceU = bytemuck::Zeroable::zeroed();
     let info = b.info.as_ref();
     let v4 = |v: Option<&serde_json::Value>, d: [f32; 4]| -> [f32; 4] {
@@ -1271,6 +1312,14 @@ fn surface_uniform(b: &Body) -> SurfaceU {
         .unwrap_or(343.0) as f32;
     let smooth = o.and_then(|o| o["Smoothness"].as_f64()).unwrap_or(0.86) as f32;
     u.deep = [deep[0], deep[1], deep[2], max_depth];
+    u.foam = [
+        o.and_then(|o| o["ShorelineFoamMaxDepth"].as_f64())
+            .unwrap_or(4.0) as f32,
+        o.and_then(|o| o["FoamShapeTilingSize"].as_f64())
+            .unwrap_or(10.0) as f32,
+        flag_f(b.tex.contains_key(&Tex::Foam)),
+        0.0,
+    ];
     u.shallow = [shallow[0], shallow[1], shallow[2], smooth];
     let c = info.and_then(|v| v.get("clouds"));
     let slices = b
@@ -1288,10 +1337,19 @@ fn surface_uniform(b: &Body) -> SurfaceU {
         slices as f32,
     ];
     let flag = |x: bool| if x { 1.0 } else { 0.0 };
+    // The original's CelestialBodyLighting ambient colours; w: 1 when the body has no atmosphere (the ambient
+    // then lights the day side too, the sky does it otherwise).
+    let l = info.and_then(|v| v.get("lighting"));
+    let airless = info.map(|v| v.get("atmosphere").is_none()).unwrap_or(true);
+    let a3 = |k: &str, d: [f32; 4]| v4(l.and_then(|l| l.get(k)), d);
+    let day = a3("ambient_day", [0.05, 0.05, 0.06, 0.0]);
+    let night = a3("ambient_night", [0.02, 0.02, 0.025, 0.0]);
+    u.ambient_day = [day[0], day[1], day[2], flag(airless)];
+    u.ambient_night = [night[0], night[1], night[2], 0.0];
     u.flags = [
         flag(slices > 0 && b.tex.contains_key(&Tex::Biome)),
         flag(b.tex.contains_key(&Tex::Normal)),
-        0.0,
+        debug,
         0.0,
     ];
     u

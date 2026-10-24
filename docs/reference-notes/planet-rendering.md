@@ -91,12 +91,16 @@ in the renderer).
 | 1 | Planet surface you can descend to without popping | PQS quadtree, levels 3..12, thresholds above | Cube-sphere quadtree with the same thresholds; 33 x 33 vertices per quad with skirts, built on the CPU over frames |
 | 2 | Ground where the physics puts it | `GetSurfaceHeight` | Vertex heights from `ose_data::terrain::TerrainMap::height_m`, the server's own function: the terrain pack's global map, tiled layers and decals (terrain.md), or the embedded global map without a pack |
 | 3 | Planet colour from orbit to ground | scaled albedo + biome detail | Scaled albedo (no-water version) everywhere, faded to 30 % at the ground under biome detail |
-| 4 | Ground texture up close | biome mask, small arrays, rules | Biome mask picks the four small slices; height and slope windows weight them; tiled in world space at two scales; detail modulates the albedo's brightness so large-scale colour stays the original's |
-| 5 | Water | ocean sphere, waves, colours, Fresnel, glint | Sea-level shell where terrain is below it; depth colour from the material's shallow/deep colours; Fresnel sky reflection; sun glint; animated normal waves |
+| 4 | Ground texture up close | biome mask, small arrays, rules, distance resampling | Biome mask picks the four small slices (land with no biome weight takes the first biome); height and slope windows weight them; tiled at 8, 64 and 512 m like the distance resampling; the slices' normal maps within 600 m; detail modulates the albedo so large-scale colour stays the original's |
+| 5 | Water | ocean sphere, waves, colours, Fresnel, glint, shoreline foam | Sea-level shell where terrain is below it; depth colour from the material's shallow/deep colours; Fresnel sky reflection; sun glint; twelve animated wave trains from swell to ripples; the material's foam texture where the sea is shallower than `_ShorelineFoamMaxDepth` |
 | 6 | Sky and aerial perspective | Bruneton LUTs | The body's own LUTs, Bruneton's `GetSkyRadiance` / `GetSkyRadianceToPoint` in WGSL, exposure tone map |
-| 7 | Clouds | volumetric + scaled shell | The scaled shell at the layer's base height with the baked coverage cubemap, lit by the sun; no volumetrics |
-| 8 | Sunlight | light + transmittance | Sun colour through the transmittance LUT, ambient from the irradiance LUT, night side dark |
+| 7 | Clouds | volumetric + scaled shell, cloud shadows | The scaled shell at the layer's base height with the baked coverage cubemap, broken into puffs up close by drifting noise, darker underneath; the cover along the sun ray shades the ground and sea; no volumetrics |
+| 8 | Sunlight and exposure | light + transmittance, CelestialBodyLighting ambient, post-process auto exposure | Sun colour through the transmittance LUT, sky light from the irradiance LUT; the body's own ambient colours (day on airless bodies, night everywhere); a fixed exposure per body that puts its mean albedo where Kerbin's sits, standing in for the auto exposure |
 | 9 | Scaled vs local | swap at 5,000 km | One path: the quadtree at low levels is the scaled body |
+
+Checking: `?planet=<Body>&lat=..&lon=..&alt=..&heading=..&pitch=..&sunaz=..&sunel=..` opens the client on a planet
+preview (planet_preview.rs) that draws only that body from the viewpoint, the way flight would; `debug=1..6` shows
+the biome mask, detail ratio, detail inputs, albedo, sunlight or normals.
 
 Deviations: quads split below 2.5 x radius / 2^level instead of 10 x (about 1.6 quad edges, so a browser builds
 a few hundred quads, not a thousand), and the shallowest level drawn is 2, not 3. The KSC hub scene's flat 60 km

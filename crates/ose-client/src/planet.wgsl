@@ -47,8 +47,13 @@ struct Surface {
     shallow: vec4<f32>,
     // cloud base height (m), cloud density, has clouds, detail slices
     clouds: vec4<f32>,
-    // has detail (biome) textures, has scaled normal, 0, 0
+    // has detail (biome) textures, has scaled normal, debug view, 0
     flags: vec4<f32>,
+    // the original's ambient colour by day, w: 1 for airless bodies
+    ambient_day: vec4<f32>,
+    ambient_night: vec4<f32>,
+    // shoreline foam: max depth (m), tiling (m), has foam texture, 0
+    foam: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> frame: Frame;
@@ -68,6 +73,7 @@ struct Surface {
 @group(2) @binding(6) var clouds_tex: texture_2d<f32>;
 @group(2) @binding(7) var wrap_samp: sampler;
 @group(2) @binding(8) var equi_samp: sampler;
+@group(2) @binding(9) var foam_tex: texture_2d<f32>;
 
 const PI: f32 = 3.14159265;
 const TRANSMITTANCE_W: f32 = 1024.0;
@@ -79,7 +85,7 @@ const SCATTERING_NU: f32 = 8.0;
 const IRRADIANCE_W: f32 = 64.0;
 const IRRADIANCE_H: f32 = 16.0;
 // Tiling period of the detail textures and waves (m); the CPU passes each quad's centre modulo this.
-const TILE_PERIOD: f32 = 512.0;
+const TILE_PERIOD: f32 = 4096.0;
 
 // ---------------------------------------------------------------------------------------------------------
 // Bruneton atmosphere
@@ -287,6 +293,39 @@ fn sun_and_sky(p: vec3<f32>, n: vec3<f32>, sun: vec3<f32>) -> Light {
     return out;
 }
 
+// Shade of the cloud layer on a point (model frame, m): where the ray towards the sun crosses the cloud base,
+// the cloud cover there dims the direct sunlight (the original's cloud shadows, without the volume).
+fn cloud_shadow(model: vec3<f32>, sun: vec3<f32>) -> f32 {
+    if surface.clouds.z < 0.5 {
+        return 1.0;
+    }
+    let up = normalize(model);
+    let r_cloud = frame.solar.w + surface.clouds.x;
+    let r = length(model);
+    if r > r_cloud {
+        return 1.0;
+    }
+    let cos_s = dot(up, sun);
+    if cos_s <= 0.02 {
+        return 1.0;
+    }
+    // distance along the sun ray to the cloud sphere
+    let b = dot(model, sun);
+    let t = -b + sqrt(max(b * b - r * r + r_cloud * r_cloud, 0.0));
+    let hit = normalize(model + sun * t);
+    let c = textureSampleLevel(clouds_tex, equi_samp, equi_uv(hit), 3.0);
+    let cover = clamp(c.a * surface.clouds.y, 0.0, 1.0);
+    return 1.0 - 0.75 * cover;
+}
+
+// Ambient light (the original's CelestialBodyLighting): by day on airless bodies (the sky lights the others),
+// at night everywhere, blended over the terminator like its dayBlendRange.
+fn ambient(up: vec3<f32>, sun: vec3<f32>) -> vec3<f32> {
+    let day = smoothstep(-0.01, 0.2, dot(up, sun));
+    let d = surface.ambient_day.rgb * surface.ambient_day.w;
+    return mix(surface.ambient_night.rgb, d, day) * (2.0 / PI);
+}
+
 fn tonemap(radiance: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(1.0) - exp(-radiance * frame.sun.w);
 }
@@ -421,6 +460,21 @@ fn tri_sample(slot: i32, p: vec3<f32>, dpx: vec3<f32>, dpy: vec3<f32>, w: vec3<f
     return a * w.x + b * w.y + c * w.z;
 }
 
+// Detail normal (the normSAO slices: x in alpha, y in green) projected like `tri_sample`, as a perturbation
+// of the surface normal in the model frame.
+fn tri_normal(slot: i32, p: vec3<f32>, dpx: vec3<f32>, dpy: vec3<f32>, w: vec3<f32>, period: f32) -> vec3<f32> {
+    let q = p / period;
+    let qx = dpx / period;
+    let qy = dpy / period;
+    let a = textureSampleGrad(detail_n, wrap_samp, q.yz, slot, qx.yz, qy.yz);
+    let b = textureSampleGrad(detail_n, wrap_samp, q.zx, slot, qx.zx, qy.zx);
+    let c = textureSampleGrad(detail_n, wrap_samp, q.xy, slot, qx.xy, qy.xy);
+    let na = vec2<f32>(a.a, a.g) * 2.0 - 1.0;
+    let nb = vec2<f32>(b.a, b.g) * 2.0 - 1.0;
+    let nc = vec2<f32>(c.a, c.g) * 2.0 - 1.0;
+    return vec3<f32>(0.0, na.x, na.y) * w.x + vec3<f32>(nb.y, 0.0, nb.x) * w.y + vec3<f32>(nc.x, nc.y, 0.0) * w.z;
+}
+
 fn slot_mean(slot: i32) -> vec3<f32> {
     let levels = f32(textureNumLevels(detail_a));
     return textureSampleLevel(detail_a, wrap_samp, vec2<f32>(0.5), slot, levels - 1.0).rgb;
@@ -453,12 +507,22 @@ fn fs_terrain(in: VOut) -> @location(0) vec4<f32> {
 
     // Biome detail (near): the biome mask's four channels each name four slices; their height and slope rules
     // weight them, and the result modulates the scaled albedo so the large-scale colour stays the original's.
+    var dbg = vec3<f32>(0.0);
+    if surface.flags.z > 0.5 && surface.flags.z < 1.5 {
+        return vec4<f32>(sample_equi(biome_tex, uv, eg).rgb, 1.0);
+    }
     if surface.flags.x > 0.5 {
         let f = surface.albedo_fade;
         let scaled = mix(f.z, f.w, smoothstep(f.x, f.y, dist));
         let k = 1.0 - scaled;
         if k > 0.01 {
-            let biome = sample_equi(biome_tex, uv, eg);
+            var biome = sample_equi(biome_tex, uv, eg);
+            // Much of the land has no biome weight at all (Kerbin around the KSC); there the first biome is the
+            // base, as the mask's R channel is on most bodies.
+            let bsum = biome.r + biome.g + biome.b + biome.a;
+            if bsum < 0.05 {
+                biome = biome + vec4<f32>(1.0 - bsum / 0.05, 0.0, 0.0, 0.0);
+            }
             let slope = degrees(acos(clamp(dot(normalize(in.normal), up), -1.0, 1.0)));
             var best = array<f32, 16>();
             for (var c = 0; c < 4; c = c + 1) {
@@ -503,6 +567,7 @@ fn fs_terrain(in: VOut) -> @location(0) vec4<f32> {
             if s0 >= 0 && s0 < slices {
                 let tw = tri_weights(up);
                 var ratio = vec3<f32>(0.0);
+                var bump = vec3<f32>(0.0);
                 var total = 0.0;
                 for (var i = 0; i < 2; i = i + 1) {
                     var s = s0;
@@ -514,24 +579,50 @@ fn fs_terrain(in: VOut) -> @location(0) vec4<f32> {
                     if s < 0 || s >= slices || w <= 0.0 {
                         continue;
                     }
+                    // Three tilings, like the original's distance resampling (8 m, 64 m, 512 m), so the ground
+                    // keeps texture from the pad out to tens of kilometres.
                     let near = tri_sample(s, in.tile, dpx, dpy, tw, 8.0);
-                    let far = tri_sample(s, in.tile, dpx, dpy, tw, 64.0);
+                    let mid = tri_sample(s, in.tile, dpx, dpy, tw, 64.0);
+                    let far = tri_sample(s, in.tile, dpx, dpy, tw, 512.0);
                     let mean = max(slot_mean(s), vec3<f32>(0.02));
-                    let blend = smoothstep(30.0, 400.0, dist);
-                    ratio = ratio + w * mix(near.rgb, far.rgb, blend) / mean;
+                    let c0 = mix(near.rgb, mid.rgb, smoothstep(30.0, 400.0, dist));
+                    let c1 = mix(c0, far.rgb, smoothstep(400.0, 4000.0, dist));
+                    ratio = ratio + w * c1 / mean;
+                    if dist < 600.0 {
+                        bump = bump + w * tri_normal(s, in.tile, dpx, dpy, tw, 8.0);
+                    }
                     total = total + w;
                 }
                 if total > 0.0 {
                     let r = clamp(ratio / total, vec3<f32>(0.0), vec3<f32>(3.0));
+                    dbg = r * 0.5;
                     albedo = albedo * mix(vec3<f32>(1.0), r, k);
+                    let nk = k * (1.0 - smoothstep(150.0, 600.0, dist));
+                    n = normalize(n + bump / total * nk);
                 }
             }
         }
     }
 
+    if surface.flags.z > 1.5 && surface.flags.z < 2.5 {
+        return vec4<f32>(dbg, 1.0);
+    }
+    if surface.flags.z > 2.5 && surface.flags.z < 3.5 {
+        return vec4<f32>(surface.flags.x, surface.clouds.w / 16.0, f32(surface.slots[0].x) / 16.0, 1.0);
+    }
     let p_km = frame.cam_km.xyz + in.rel * 0.001;
     let light = sun_and_sky(p_km, n, frame.sun.xyz);
-    var radiance = albedo / PI * (light.sun + light.sky + frame.solar.xyz * 0.002);
+    let shade = cloud_shadow(in.model, frame.sun.xyz);
+    if surface.flags.z > 3.5 && surface.flags.z < 4.5 {
+        return vec4<f32>(albedo, 1.0);
+    }
+    if surface.flags.z > 4.5 && surface.flags.z < 5.5 {
+        return vec4<f32>(light.sun * 0.25, 1.0);
+    }
+    if surface.flags.z > 5.5 {
+        return vec4<f32>(n * 0.5 + 0.5, 1.0);
+    }
+    var radiance = albedo / PI * (light.sun * shade + light.sky) + albedo * ambient(up, frame.sun.xyz);
     radiance = through_air(radiance, p_km);
     return vec4<f32>(tonemap(radiance), 1.0);
 }
@@ -539,13 +630,16 @@ fn fs_terrain(in: VOut) -> @location(0) vec4<f32> {
 // Waves: plane waves in 3D tile coordinates, periodic in TILE_PERIOD, projected onto the surface.
 fn wave_normal(p: vec3<f32>, up: vec3<f32>, t: f32, dist: f32) -> vec3<f32> {
     var g = vec3<f32>(0.0);
-    var ks = array<vec3<f32>, 5>(
+    // twelve directions from long swell (140 m) to ripples (4 m), integer multiples of 2 pi / 512 m
+    var ks = array<vec3<f32>, 12>(
         vec3<f32>(3.0, 1.0, 2.0), vec3<f32>(-2.0, 3.0, 4.0), vec3<f32>(7.0, -4.0, 5.0),
-        vec3<f32>(-11.0, 6.0, -9.0), vec3<f32>(23.0, -14.0, 17.0));
-    for (var i = 0; i < 5; i = i + 1) {
-        let k = ks[i] * (2.0 * PI / TILE_PERIOD);
+        vec3<f32>(-11.0, 6.0, -9.0), vec3<f32>(5.0, 13.0, -8.0), vec3<f32>(23.0, -14.0, 17.0),
+        vec3<f32>(-19.0, -21.0, 11.0), vec3<f32>(31.0, 9.0, -27.0), vec3<f32>(-44.0, 37.0, 20.0),
+        vec3<f32>(58.0, -23.0, -49.0), vec3<f32>(-71.0, -66.0, 35.0), vec3<f32>(97.0, 54.0, 81.0));
+    for (var i = 0; i < 12; i = i + 1) {
+        let k = ks[i] * (16.0 * PI / TILE_PERIOD);
         let wl = 2.0 * PI / length(k);
-        let amp = 0.012 * wl * exp(-dist / (wl * 60.0));
+        let amp = 0.007 * wl * exp(-dist / (wl * 40.0));
         let omega = sqrt(9.81 * length(k));
         g = g + k * amp * cos(dot(k, p) - omega * t);
     }
@@ -565,10 +659,24 @@ fn fs_ocean(in: VOut) -> @location(0) vec4<f32> {
     let view = normalize(in.rel);
     let p_km = frame.cam_km.xyz + in.rel * 0.001;
     let sun = frame.sun.xyz;
-    let light = sun_and_sky(p_km, up, sun);
+    var light = sun_and_sky(p_km, up, sun);
+    light.sun = light.sun * cloud_shadow(in.model, sun);
     let max_depth = max(surface.deep.w, 1.0);
     let body_col = mix(surface.shallow.rgb, surface.deep.rgb, smoothstep(0.0, 1.0, depth / max_depth));
     var radiance = body_col / PI * (light.sun + light.sky) * 0.6;
+    // Shoreline foam (the original's _ShorelineFoamMaxDepth): the foam texture, drifting, where the sea is
+    // shallow, faded out with distance.
+    if surface.foam.z > 0.5 && dist < 4000.0 {
+        let tiling = max(surface.foam.y, 1.0);
+        let t = frame.cam_km.w;
+        let fuv = vec2<f32>(dot(in.tile, vec3<f32>(1.0, 0.0, 0.0)) + dot(in.tile, vec3<f32>(0.0, 0.0, 1.0)) * 0.3,
+                            dot(in.tile, vec3<f32>(0.0, 1.0, 0.0)) + dot(in.tile, vec3<f32>(0.0, 0.0, 1.0)) * 0.7) / tiling;
+        let f1 = textureSampleLevel(foam_tex, wrap_samp, fuv + vec2<f32>(t * 0.01, 0.0), 0.0).r;
+        let f2 = textureSampleLevel(foam_tex, wrap_samp, fuv * 0.37 - vec2<f32>(0.0, t * 0.006), 0.0).r;
+        let shallow = 1.0 - smoothstep(0.0, max(surface.foam.x, 0.5), depth);
+        let foam = clamp((f1 * f2 * 2.0) * shallow * (1.0 - smoothstep(1500.0, 4000.0, dist)), 0.0, 1.0);
+        radiance = mix(radiance, vec3<f32>(0.85) / PI * (light.sun + light.sky), foam);
+    }
     // Fresnel reflection of the sky (rays that would point into the sea are bent back to the horizon).
     let cos_v = max(dot(-view, n), 0.0);
     let fres = 0.02 + 0.98 * pow(1.0 - cos_v, 5.0);
@@ -592,25 +700,59 @@ fn fs_ocean(in: VOut) -> @location(0) vec4<f32> {
     return vec4<f32>(tonemap(radiance), alpha);
 }
 
+// Value noise on a lattice that wraps every `cells` cells, so quads that share an edge agree (tile coordinates
+// are each quad's centre modulo TILE_PERIOD plus the offset within the quad).
+fn hash3(c: vec3<i32>) -> f32 {
+    var h = (u32(c.x) * 73856093u) ^ (u32(c.y) * 19349663u) ^ (u32(c.z) * 83492791u);
+    h = (h ^ (h >> 13u)) * 1274126177u;
+    return f32(h & 0xffffu) / 65535.0;
+}
+
+fn vnoise(p: vec3<f32>, cells: i32) -> f32 {
+    let i = vec3<i32>(floor(p));
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    let w = vec3<i32>(cells);
+    var acc = 0.0;
+    for (var k = 0; k < 8; k = k + 1) {
+        let o = vec3<i32>(k & 1, (k >> 1) & 1, (k >> 2) & 1);
+        let c = ((i + o) % w + w) % w;
+        let wt = mix(1.0 - u.x, u.x, f32(o.x)) * mix(1.0 - u.y, u.y, f32(o.y)) * mix(1.0 - u.z, u.z, f32(o.z));
+        acc = acc + hash3(c) * wt;
+    }
+    return acc;
+}
+
 @fragment
 fn fs_clouds(in: VOut) -> @location(0) vec4<f32> {
     let up = normalize(in.model);
     let uv = equi_uv(up);
     let c = sample_equi(clouds_tex, uv, equi_grad(uv));
-    let cover = clamp(c.a * surface.clouds.y, 0.0, 1.0);
-    if cover < 0.01 {
+    let base = clamp(c.a * surface.clouds.y, 0.0, 1.0);
+    if base < 0.01 {
         discard;
     }
+    let dist = length(in.rel);
+    // Break the baked coverage (1.8 km texels on Kerbin) into puffs up close: noise at 512, 256 and 128 m that
+    // erodes the edges, faded out with distance where the texture alone reads right.
+    let near = 1.0 - smoothstep(8000.0, 40000.0, dist);
+    let drift = vec3<f32>(frame.cam_km.w * 2.0, 0.0, frame.cam_km.w * 1.3);
+    let q = in.tile + drift;
+    let n = vnoise(q / 512.0, 8) * 0.55 + vnoise(q / 256.0, 16) * 0.3 + vnoise(q / 128.0, 32) * 0.15;
+    let cover = clamp(mix(base, smoothstep(0.35, 0.75, base + (n - 0.5) * 0.9), near), 0.0, 1.0);
     let p_km = frame.cam_km.xyz + in.rel * 0.001;
     let sun = frame.sun.xyz;
-    // Thin layer lit from either side: wrap the sun term so the edge of the day side is soft.
+    // Thin layer lit from either side: wrap the sun term so the edge of the day side is soft; seen from below
+    // the thick middle is in its own shadow.
     let light = sun_and_sky(p_km, up, sun);
     let wrap = smoothstep(-0.15, 0.3, dot(up, sun));
-    let lit = light.sun / max(dot(up, sun), 0.05) * wrap * 0.8 + light.sky * 2.0;
+    let cam_alt = length(frame.cam_km.xyz) * 1000.0 - frame.solar.w;
+    let below = select(0.0, 1.0, cam_alt < surface.clouds.x);
+    let self_shadow = mix(1.0, mix(1.0, 0.45, cover), below);
+    let lit = light.sun / max(dot(up, sun), 0.05) * wrap * 0.8 * self_shadow + light.sky * 2.0;
     var radiance = vec3<f32>(0.9) / PI * lit;
     radiance = through_air(radiance, p_km);
     // Fade the shell when the camera is close to its altitude (it would read as a flat sheet).
-    let cam_alt = length(frame.cam_km.xyz) * 1000.0 - frame.solar.w;
     let fade = smoothstep(300.0, 2500.0, abs(cam_alt - surface.clouds.x));
     return vec4<f32>(tonemap(radiance), cover * fade);
 }

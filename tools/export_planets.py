@@ -190,7 +190,8 @@ OCEAN_COLORS = ["_DeepWaterColor", "_ShallowColor", "_DiffuseColor", "_MainColor
 OCEAN_FLOATS = ["_ShallowMaxDepth", "_ShallowColorDistribution", "_Smoothness", "_SpecularStrength", "_FresnelPower",
                 "_TransparentVisibleDepth", "_DetailNormalTilingSize", "_LargeNormalMapTilingSize_1",
                 "_LargeNormalMapTilingSize_2", "_LargeNormalMoveSpeed_1", "_LargeNormalStrength_1",
-                "_LargeNormalStrength_2", "_DetailNormalMoveSpeed", "_DetailNormalStrength"]
+                "_LargeNormalStrength_2", "_DetailNormalMoveSpeed", "_DetailNormalStrength",
+                "_ShorelineFoamMaxDepth", "_FoamShapeTilingSize", "_FoamSpeed", "_FoamVisibility"]
 
 
 def export_body(bid: str, bundles: Path, out_root: Path, args) -> dict | None:
@@ -256,7 +257,15 @@ def export_body(bid: str, bundles: Path, out_root: Path, args) -> dict | None:
 
         alb = tex_obj("_AlbedoScaledTex")
         if alb is not None:
-            save_image(alb.read().image, out / "albedo.jpg", (args.albedo, args.albedo // 2), "RGB")
+            img = alb.read().image
+            save_image(img, out / "albedo.jpg", (args.albedo, args.albedo // 2), "RGB")
+            # mean linear albedo, area-weighted (equirectangular rows shrink with cos(latitude)), for exposure
+            import numpy as np
+
+            small = np.asarray(img.convert("RGB").resize((256, 128))).astype(np.float64) / 255.0
+            lin = np.where(small <= 0.04045, small / 12.92, ((small + 0.055) / 1.055) ** 2.4).mean(axis=2)
+            wts = np.cos((0.5 - (np.arange(128) + 0.5) / 128) * np.pi)[:, None] * np.ones((1, 256))
+            surf["mean_albedo"] = float((lin * wts).sum() / wts.sum())
             surf["albedo_source"] = alb.read().m_Name
         nrm = tex_obj("_NormalScaledTex")
         if nrm is not None:
@@ -313,8 +322,12 @@ def export_body(bid: str, bundles: Path, out_root: Path, args) -> dict | None:
             continue
         tt = o.read_typetree()
         if "ocean" in tt["m_Name"] and "_DeepWaterColor" in {k for k, _ in tt["m_SavedProperties"]["m_Colors"]}:
-            _, floats, colors = material_props(tt)
+            tex, floats, colors = material_props(tt)
             ocean = {"material": tt["m_Name"]}
+            foam = a.get(tex.get("_FoamShapeTexture"))
+            if foam is not None:
+                save_image(foam.read().image, out / "foam.png", (1024, 1024), "L")
+                ocean["foam"] = foam.read().m_Name
             for k in OCEAN_COLORS:
                 if k in colors:
                     ocean[k.strip("_")] = colors[k]
@@ -323,6 +336,23 @@ def export_body(bid: str, bundles: Path, out_root: Path, args) -> dict | None:
                     ocean[k.strip("_")] = floats[k]
             info["ocean"] = ocean
             break
+    # The original's per-body lighting (scaled bundle: CelestialBodyLighting ambient colours, the
+    # post-process auto exposure range)
+    scaled = bundles / f"celestialbody-scaled-{low}_assets_all.bundle"
+    if scaled.exists():
+        sa = Assets([scaled])
+        light = {}
+        for tt in sa.find_mono("data"):
+            d = tt["data"]
+            if isinstance(d, dict) and "ambientDay" in d:
+                light["ambient_day"] = vec(d["ambientDay"])[:3]
+                light["ambient_night"] = vec(d["ambientNight"])[:3]
+        for tt in sa.find_mono("autoExposurePropertiesDay"):
+            day = tt["autoExposurePropertiesDay"]
+            light["auto_exposure"] = bool(tt.get("autoExposureEnabled"))
+            light["exposure_day_ev"] = [day["minLuminance"], day["maxLuminance"], day["keyValue"]]
+        if light:
+            info["lighting"] = light
     (out / "planet.json").write_text(json.dumps(info, indent=1), encoding="utf-8")
     print(f"{bid}: surface={'surface' in info} atmosphere={'atmosphere' in info} clouds={'clouds' in info} "
           f"ocean={'ocean' in info}")
