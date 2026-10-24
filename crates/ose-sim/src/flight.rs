@@ -196,7 +196,25 @@ pub struct Powered {
     /// throttle does nothing until the first stage press lights it (and that press drops nothing).
     #[serde(default = "yes")]
     pub ignited: bool,
+    /// How the craft meets the ground, from its parts (0 without a part structure: a point at the centre of
+    /// mass, crashing above `CRASH_SPEED_MPS`): centre of mass height above the lowest point standing upright,
+    /// the radius of what it stands on, and the crash tolerance of the parts it lands on.
+    #[serde(default)]
+    pub ground_clearance_m: f64,
+    #[serde(default)]
+    pub footprint_m: f64,
+    #[serde(default)]
+    pub crash_tolerance_mps: f64,
+    /// Fell over on landing: lying on its side, it cannot lift off.
+    #[serde(default)]
+    pub tipped: bool,
+    /// A Kerbal on EVA: on the ground, the throttle with a level attitude walks instead of firing the pack.
+    #[serde(default)]
+    pub walker: bool,
 }
+
+/// A Kerbal's walking speed at full throttle, m/s (the original's run is about this).
+pub const WALK_SPEED_MPS: f64 = 2.5;
 
 fn yes() -> bool {
     true
@@ -332,6 +350,11 @@ impl Powered {
             wheel_scale: 1.0,
             controlled: true,
             ignited: !landed,
+            ground_clearance_m: 0.0,
+            footprint_m: 0.0,
+            crash_tolerance_mps: 0.0,
+            tipped: false,
+            walker: false,
         }
     }
 
@@ -580,10 +603,25 @@ pub fn integrate(
     };
     let pressure_atm = pressure_kpa / 101.325;
 
+    // a Kerbal standing on the ground with a level attitude walks that way rather than firing the jetpack
+    let walk_dir = if p.walker && p.landed && !p.crashed && p.throttle > 0.0 {
+        let (up, _, _) = surface_frame(p.r);
+        let d = attitude_direction(p.attitude, p.r, p.v, omega);
+        let level = d - up * d.dot(up);
+        (d.dot(up) < 0.7 && level.length() > 1e-6).then(|| level.normalized())
+    } else {
+        None
+    };
     // attitude: landed vessels stand upright; otherwise turn toward the commanded attitude with torque
-    let thrust_kn = p.thrust_kn(pressure_atm);
+    let thrust_kn = if walk_dir.is_some() {
+        0.0
+    } else {
+        p.thrust_kn(pressure_atm)
+    };
     if p.landed {
-        p.facing = p.r.normalized();
+        if !p.tipped {
+            p.facing = p.r.normalized();
+        }
         p.angvel = DVec3::ZERO;
     } else {
         let target = attitude_direction(p.attitude, p.r, p.v, omega);
@@ -648,9 +686,15 @@ pub fn integrate(
         if thrust_acc.dot(up) > g {
             p.landed = false;
         } else {
+            if let Some(dir) = walk_dir {
+                p.r = p.r + dir * (WALK_SPEED_MPS * p.throttle * dt);
+            }
             let ang = omega * dt;
             let (s, c) = ang.sin_cos();
             p.r = DVec3::new(p.r.x * c - p.r.y * s, p.r.x * s + p.r.y * c, p.r.z);
+            // standing on its lowest point (or its side once tipped over)
+            let ground = ground_radius(body, terrain, p.r, ut + dt) + stand_height(p);
+            p.r = p.r.normalized() * ground;
             p.v = omega_v.cross(p.r);
             return out;
         }
@@ -677,17 +721,37 @@ pub fn integrate(
     // surface contact against the terrain (or sea) under the vessel
     let new_r = p.r.length();
     let ground = ground_radius(body, terrain, p.r, ut + dt);
-    if new_r <= ground {
+    if new_r <= ground + p.ground_clearance_m {
         let v_surf = p.v - omega_v.cross(p.r);
         let (up, _, _) = surface_frame(p.r);
         let speed = v_surf.length();
-        p.r = up * ground;
+        // it falls over when the lean (its own plus the slope's) puts its centre of mass outside its footprint
+        let slope = terrain
+            .map(|t| slope_rad(body, t, p.r, ut + dt))
+            .unwrap_or(0.0);
+        let lean = p.facing.dot(up).clamp(-1.0, 1.0).acos() + slope;
+        if p.ground_clearance_m > 0.0 && lean.tan() > p.footprint_m / p.ground_clearance_m {
+            p.tipped = true;
+            let side = p.facing - up * p.facing.dot(up);
+            p.facing = if side.length() > 1e-6 {
+                side.normalized()
+            } else {
+                surface_frame(p.r).1
+            };
+        } else {
+            p.facing = up;
+        }
+        p.r = up * (ground + stand_height(p));
         p.v = omega_v.cross(p.r);
         p.landed = true;
-        p.facing = up;
         p.angvel = DVec3::ZERO;
         out.touched_down = true;
-        if speed > CRASH_SPEED_MPS {
+        let tolerance = if p.crash_tolerance_mps > 0.0 {
+            p.crash_tolerance_mps
+        } else {
+            CRASH_SPEED_MPS
+        };
+        if speed > tolerance {
             p.crashed = true;
             p.throttle = 0.0;
             out.crashed = true;
@@ -704,6 +768,27 @@ pub fn integrate(
         p.coasting_since = None;
     }
     out
+}
+
+/// How high a landed craft's centre of mass stands: on its lowest point, or on its side (its footprint)
+/// once tipped over.
+fn stand_height(p: &Powered) -> f64 {
+    if p.tipped {
+        p.footprint_m
+    } else {
+        p.ground_clearance_m
+    }
+}
+
+/// Steepness of the terrain under `r`, radians, from the height map's gradient over about 100 m.
+pub fn slope_rad(body: &Body, t: &ose_data::terrain::TerrainMap, r: DVec3, ut: f64) -> f64 {
+    let (lat, lon) = lat_lon(body, r, ut);
+    let step_m = 100.0;
+    let dlat = (step_m / body.radius_m).to_degrees();
+    let dlon = dlat / lat.to_radians().cos().max(0.05);
+    let dn = t.height_m(lat + dlat, lon) - t.height_m(lat - dlat, lon);
+    let de = t.height_m(lat, lon + dlon) - t.height_m(lat, lon - dlon);
+    ((dn * dn + de * de).sqrt() / (2.0 * step_m)).atan()
 }
 
 /// Classify the flight state.

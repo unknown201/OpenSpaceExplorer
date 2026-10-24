@@ -1283,6 +1283,56 @@ mod tests {
     }
 
     #[test]
+    fn a_craft_stands_on_its_lowest_part_and_tips_over_when_it_lands_leaning() {
+        let (mut u, body, spec, st) = k1_on_real_kerbin();
+        let v = u.spawn_powered_on_surface("K1", body, spec.clone(), 0.0, 0.0);
+        u.set_structure(v, st);
+        u.step();
+        let p = u.powered(v).unwrap().clone();
+        assert!(p.ground_clearance_m > 2.0, "{}", p.ground_clearance_m);
+        let alt = p.r.length() - 600_000.0;
+        assert!(
+            (alt - p.ground_clearance_m).abs() < 0.5,
+            "stands on its engine bell: {alt}"
+        );
+        let tolerance = p.crash_tolerance_mps;
+        assert!(tolerance > 0.0);
+        // drop it from 20 m: upright and slow it stands, leaning 45 degrees it falls over, fast it breaks
+        let drop = |u: &mut Universe, lean: f64, speed: f64| {
+            let mut q = p.clone();
+            let up = p.r.normalized();
+            let east = DVec3::new(0.0, 0.0, 1.0).cross(up).normalized();
+            q.landed = false;
+            q.crashed = false;
+            q.tipped = false;
+            q.r = up * (p.r.length() + 0.5);
+            q.v = DVec3::new(0.0, 0.0, 2.0 * std::f64::consts::PI / 21_549.425).cross(q.r)
+                - up * speed;
+            q.facing = (up * lean.cos() + east * lean.sin()).normalized();
+            q.attitude = flight::Attitude::Fixed(q.facing);
+            q.throttle = 0.0;
+            u.set_powered(v, q);
+            for _ in 0..TICKS_PER_SECOND {
+                u.step();
+            }
+            u.powered(v).unwrap().clone()
+        };
+        let upright = drop(&mut u, 0.05, 2.0);
+        assert!(upright.landed && !upright.tipped && !upright.crashed);
+        let leaning = drop(&mut u, 0.8, 2.0);
+        assert!(leaning.landed && leaning.tipped, "falls over");
+        assert!(
+            leaning.r.length() - 600_000.0 < upright.r.length() - 600_000.0,
+            "lying lower"
+        );
+        let fast = drop(&mut u, 0.0, tolerance + 5.0);
+        assert!(
+            fast.crashed,
+            "faster than its bottom parts' {tolerance} m/s"
+        );
+    }
+
+    #[test]
     fn kerbal_k2_climbs_in_one_piece_and_each_stage_has_its_own_fuel() {
         let (mut u, body, _, _) = k1_on_real_kerbin();
         let crafts: Vec<ose_data::craft::Craft> =

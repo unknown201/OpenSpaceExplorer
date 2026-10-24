@@ -43,6 +43,8 @@ pub struct Structure {
     /// Each part's electric charge use and production, and crew capacity.
     pub electric: Vec<ose_data::Electric>,
     pub crew: Vec<u32>,
+    /// Each part's crash tolerance, m/s.
+    pub crash_tolerance: Vec<f64>,
     /// Deployable solar panels folded out.
     pub deployed: Vec<bool>,
     /// Each part's id and family (like "0010-Probe").
@@ -197,6 +199,9 @@ impl Structure {
             net: FlowNet::build(craft, defs, resources),
             engine_mixture,
             deployed: vec![false; n],
+            crash_tolerance: (0..n)
+                .map(|i| def_of(i).map(|d| d.crash_tolerance).unwrap_or(0.0))
+                .collect(),
             electric,
             crew,
             experiments,
@@ -299,6 +304,51 @@ impl Structure {
         total
     }
 
+    /// How the attached parts meet the ground standing upright: (centre of mass height above the lowest
+    /// point, radius of the parts it stands on, lowest crash tolerance among them).
+    pub fn ground_profile(&self) -> (f64, f64, f64) {
+        let present: Vec<usize> = (0..self.rigid.len())
+            .filter(|&i| self.rigid.present[i])
+            .collect();
+        if present.is_empty() {
+            return (0.0, 0.0, 0.0);
+        }
+        let c = self.rigid.rest_centre();
+        let bottom = |i: usize| self.rigid.rest_position(i).y - self.rigid.sizes_m[i].y * 0.5;
+        let lowest = present
+            .iter()
+            .map(|&i| bottom(i))
+            .fold(f64::INFINITY, f64::min);
+        // the parts within half a metre of the lowest point carry it
+        let feet: Vec<usize> = present
+            .iter()
+            .copied()
+            .filter(|&i| bottom(i) < lowest + 0.5)
+            .collect();
+        let footprint = feet
+            .iter()
+            .map(|&i| {
+                let p = self.rigid.rest_position(i) - c;
+                let s = self.rigid.sizes_m[i];
+                (p.x * p.x + p.z * p.z).sqrt() + s.x.max(s.z) * 0.5
+            })
+            .fold(0.0, f64::max);
+        let tolerance = feet
+            .iter()
+            .map(|&i| self.crash_tolerance[i])
+            .filter(|t| *t > 0.0)
+            .fold(f64::INFINITY, f64::min);
+        (
+            (c.y - lowest).max(0.0),
+            footprint,
+            if tolerance.is_finite() {
+                tolerance
+            } else {
+                0.0
+            },
+        )
+    }
+
     /// Bring a flight state in line with the structure: trimmed to its stage, mass from what the tanks hold,
     /// propellant the engines can reach, thrust from the engines that are attached and fed.
     pub fn sync(&mut self, p: &mut Powered) {
@@ -306,6 +356,10 @@ impl Structure {
             self.trim_to(p.stage);
         }
         p.mass_t = self.net.mass_t().max(0.001);
+        let (clearance, footprint, tolerance) = self.ground_profile();
+        p.ground_clearance_m = clearance;
+        p.footprint_m = footprint;
+        p.crash_tolerance_mps = tolerance;
         p.propellant_t = self.reachable_propellant_t(p.stage);
         p.thrust_scale = match self.stage_engines.get(p.stage) {
             Some(all) => {

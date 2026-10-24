@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 16;
+pub const PROTOCOL_VERSION: u16 = 17;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -419,6 +419,8 @@ pub struct FlightReadout {
     pub comm_range_m: f64,
     /// Deployable solar panels folded out.
     pub panels_deployed: bool,
+    /// Fell over on landing and lies on its side.
+    pub tipped: bool,
 }
 
 /// One part's pose away from rest: rotate the part by `rotation` (rotation vector, rad, craft frame) about its

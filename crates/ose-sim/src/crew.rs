@@ -186,8 +186,12 @@ impl Universe {
                 .id()
         };
         if let Some(mut p) = self.world.get_mut::<flight::Powered>(kerbal) {
-            // a jetpack fires on the throttle without staging
+            // a jetpack fires on the throttle without staging; on the ground the Kerbal walks
             p.ignited = true;
+            p.walker = true;
+            p.ground_clearance_m = 0.55;
+            p.footprint_m = 0.3;
+            p.crash_tolerance_mps = 50.0;
         }
         let experiments = self
             .world
@@ -408,6 +412,37 @@ mod tests {
         u.board(jeb, v).unwrap();
         assert_eq!(u.crew(v).len(), 1);
         assert!(u.vessel(jeb).is_none());
+    }
+
+    #[test]
+    fn a_kerbal_walks_across_the_ground() {
+        let (mut u, v) = k1_on_pad();
+        let jeb = u.go_eva(v, None).unwrap();
+        let body = u.body_entity("Kerbin").unwrap();
+        let b = u.world.get::<bodies::Body>(body).unwrap().clone();
+        let here = |u: &Universe| flight::lat_lon(&b, u.position_of(jeb).unwrap(), u.ut());
+        let start = here(&u);
+        // heading north at a level pitch, full throttle: walking, no propellant used
+        u.set_controls(
+            jeb,
+            1.0,
+            flight::Attitude::PitchHeading {
+                pitch_deg: 0.0,
+                heading_deg: 0.0,
+            },
+        );
+        for _ in 0..(4 * crate::TICKS_PER_SECOND) {
+            u.step();
+        }
+        let p = u.powered(jeb).unwrap();
+        assert!(p.landed);
+        assert_eq!(p.propellant_t, JETPACK_PROPELLANT_T);
+        // across the surface (the body turns under it too): about 10 m north
+        let end = here(&u);
+        let north_m = (end.0 - start.0).to_radians() * b.radius_m;
+        let east_m = (end.1 - start.1).to_radians() * b.radius_m;
+        assert!((7.0..12.0).contains(&north_m), "walked {north_m} m north");
+        assert!(east_m.abs() < 1.0, "{east_m} m east");
     }
 
     #[test]

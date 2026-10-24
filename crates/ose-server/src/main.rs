@@ -822,6 +822,7 @@ fn flight_readout(
         comm_hops: u.comm_link(e).hops,
         comm_range_m: u.comm_link(e).range_m,
         panels_deployed: u.panels_deployed(e),
+        tipped: p.tipped,
     })
 }
 
