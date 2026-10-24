@@ -46,7 +46,7 @@ async fn spawn_server_with(extra: &[&str], port: Option<u16>) -> (Server, String
         .expect("spawn ose-server");
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     loop {
-        if tokio::net::TcpStream::connect(&addr).await.is_ok() {
+        if health_ok(&addr).await {
             break;
         }
         assert!(
@@ -56,6 +56,53 @@ async fn spawn_server_with(extra: &[&str], port: Option<u16>) -> (Server, String
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     (Server(child), addr)
+}
+
+/// True when `GET /health` answers 200 (the listener is bound and the router is serving).
+async fn health_ok(addr: &str) -> bool {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let Ok(Ok(mut s)) = tokio::time::timeout(
+        Duration::from_millis(500),
+        tokio::net::TcpStream::connect(addr),
+    )
+    .await
+    else {
+        return false;
+    };
+    if s.write_all(
+        format!(
+            "GET /health HTTP/1.0
+Host: {addr}
+
+"
+        )
+        .as_bytes(),
+    )
+    .await
+    .is_err()
+    {
+        return false;
+    }
+    let mut buf = Vec::new();
+    let _ = tokio::time::timeout(Duration::from_millis(500), s.read_to_end(&mut buf)).await;
+    String::from_utf8_lossy(&buf).contains(" 200 ")
+}
+
+/// Open the protocol WebSocket, retrying briefly: right after a (re)start the first connect can still be
+/// refused on some hosts even though `/health` already answered.
+async fn connect_ws(addr: &str) -> Ws {
+    let url = format!("ws://{addr}{WS_PATH}");
+    let mut last = None;
+    for _ in 0..50 {
+        match tokio_tungstenite::connect_async(&url).await {
+            Ok((ws, _)) => return ws,
+            Err(e) => {
+                last = Some(e);
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }
+    }
+    panic!("could not connect to {url}: {last:?}");
 }
 
 type Ws =
@@ -79,9 +126,7 @@ async fn recv(ws: &mut Ws) -> ServerMessage {
 #[tokio::test]
 async fn hello_catalog_and_snapshots() {
     let (_server, addr) = spawn_server().await;
-    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}{WS_PATH}"))
-        .await
-        .expect("connect");
+    let mut ws = connect_ws(&addr).await;
     let hello = ClientMessage::Hello {
         protocol: PROTOCOL_VERSION,
         token: None,
@@ -498,9 +543,7 @@ async fn hello_catalog_and_snapshots() {
 
     // A second player who has not asked for warp holds it at 1 (lowest wins) and is named as the limiter;
     // when they leave, warp returns to 100.
-    let (mut ws2, _) = tokio_tungstenite::connect_async(format!("ws://{addr}{WS_PATH}"))
-        .await
-        .expect("connect 2");
+    let mut ws2 = connect_ws(&addr).await;
     let hello2 = ClientMessage::Hello {
         protocol: PROTOCOL_VERSION,
         token: None,
@@ -549,9 +592,7 @@ async fn hello_catalog_and_snapshots() {
 
     // Resume: a new connection with the token is the same player and keeps the same single probe.
     drop(ws);
-    let (mut ws3, _) = tokio_tungstenite::connect_async(format!("ws://{addr}{WS_PATH}"))
-        .await
-        .expect("connect 3");
+    let mut ws3 = connect_ws(&addr).await;
     let hello3 = ClientMessage::Hello {
         protocol: PROTOCOL_VERSION,
         token: Some(token),
@@ -639,14 +680,10 @@ async fn stale_guests_are_swept_but_members_stay() {
         "0.3",
     ];
     let (_server, addr) = spawn_server_with(&args, None).await;
-    let (mut g, _) = tokio_tungstenite::connect_async(format!("ws://{addr}{WS_PATH}"))
-        .await
-        .unwrap();
+    let mut g = connect_ws(&addr).await;
     let (guest_id, _) = hello(&mut g, None, "e2e pilot").await;
     drop(g);
-    let (mut m, _) = tokio_tungstenite::connect_async(format!("ws://{addr}{WS_PATH}"))
-        .await
-        .unwrap();
+    let mut m = connect_ws(&addr).await;
     let (member_id, _) = hello(&mut m, None, "josh").await;
     m.send(Message::Binary(
         ose_net::encode(&ClientMessage::JoinCampaign)
@@ -702,9 +739,7 @@ async fn restart_keeps_time_vessels_and_burns() {
     ];
     let (server, addr) = spawn_server_with(&args, None).await;
     let port: u16 = addr.rsplit(':').next().unwrap().parse().unwrap();
-    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}{WS_PATH}"))
-        .await
-        .unwrap();
+    let mut ws = connect_ws(&addr).await;
     let (pid, token) = hello(&mut ws, None, "saver").await;
     ws.send(Message::Binary(
         ose_net::encode(&ClientMessage::ScheduleBurn {
@@ -737,9 +772,7 @@ async fn restart_keeps_time_vessels_and_burns() {
     wait_port_free(&addr).await;
 
     let (_server2, addr2) = spawn_server_with(&args, Some(port)).await;
-    let (mut ws2, _) = tokio_tungstenite::connect_async(format!("ws://{addr2}{WS_PATH}"))
-        .await
-        .unwrap();
+    let mut ws2 = connect_ws(&addr2).await;
     let (pid2, _) = hello(&mut ws2, Some(token), "saver").await;
     assert_eq!(pid2, pid, "account survives restart");
     let mut ok = false;
