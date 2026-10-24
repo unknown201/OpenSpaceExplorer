@@ -265,9 +265,12 @@ impl Universe {
         self.world.get::<flight::Powered>(e)
     }
 
+    /// Whether any vessel is flying under power (time warp is then capped at physics warp). Vessels standing
+    /// on the ground with the throttle at zero, and wrecks, do not count.
     pub fn has_powered(&mut self) -> bool {
-        let mut q = self.world.query_filtered::<Entity, With<flight::Powered>>();
-        q.iter(&self.world).next().is_some()
+        let mut q = self.world.query::<&flight::Powered>();
+        q.iter(&self.world)
+            .any(|p| !p.crashed && (!p.landed || p.throttle > 0.0))
     }
 
     /// Give a vessel a part structure so flight loads its joints and pieces can break off.
@@ -611,7 +614,14 @@ impl Universe {
                 0.0
             };
             let mut pieces = Vec::new();
-            for i in 0..ticks.max(1) {
+            // a vessel standing on the ground with its engines off just turns with the body: one long step
+            let parked = p.landed && !p.crashed && p.throttle <= 0.0;
+            let (steps, step_dt) = if parked {
+                (1, dt * ticks.max(1) as f64)
+            } else {
+                (ticks.max(1), dt)
+            };
+            for i in 0..steps {
                 if let Some(st) = &mut structure {
                     st.sync(&mut p);
                     // part drag for the airflow now
@@ -639,8 +649,8 @@ impl Universe {
                     &body,
                     atmo.as_ref(),
                     terrain.as_deref(),
-                    start_ut + i as f64 * dt,
-                    dt,
+                    start_ut + i as f64 * step_dt,
+                    step_dt,
                 );
                 self.log_flight_step(
                     e,
@@ -648,7 +658,7 @@ impl Universe {
                     terrain.as_deref(),
                     &p,
                     was_landed,
-                    start_ut + (i + 1) as f64 * dt,
+                    start_ut + (i + 1) as f64 * step_dt,
                 );
                 if let (Some(st), true) = (&structure, out.thrust_kn > 0.0) {
                     let ids: Vec<String> = st
@@ -665,11 +675,11 @@ impl Universe {
                 if let Some(st) = &mut structure {
                     // the propellant burned comes out of the tanks through the flow graph
                     let burned = (mass_before - p.mass_t).max(0.0);
-                    st.burn(&mut p, burned, dt);
+                    st.burn(&mut p, burned, step_dt);
                     // wheels work in proportion to how fast the vessel is being turned
                     let turning = (p.angvel.length() / 0.2).clamp(0.0, 1.0);
-                    st.electric(&mut p, sun, turning, dt);
-                    for piece in st.apply(&p, &out, dt) {
+                    st.electric(&mut p, sun, turning, step_dt);
+                    for piece in st.apply(&p, &out, step_dt) {
                         pieces.push((piece, p.r, p.v, p.facing));
                     }
                     if !pieces.is_empty() {
@@ -1126,12 +1136,52 @@ mod tests {
     }
 
     #[test]
+    fn kerbal_k2_climbs_in_one_piece_and_each_stage_has_its_own_fuel() {
+        let (mut u, body, _, _) = k1_on_real_kerbin();
+        let crafts: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let defs: Vec<ose_data::PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let res: Vec<ose_data::ResourceDef> =
+            serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
+        let k2 = crafts.iter().find(|c| c.name == "Kerbal K2").unwrap();
+        let report = ose_data::staging::delta_v_by_stage(k2, &defs, &res);
+        let spec = flight::FlightSpec::from_report(&report, &[], &[], 1.5);
+        let v = u.spawn_powered_on_surface("K2", body, spec, 0.0, 0.0);
+        u.set_structure(v, structure::Structure::build(k2, &defs, &res));
+        // parked on the pad it does not hold time warp down for everyone
+        assert!(!u.has_powered());
+        assert!(u.set_controls(v, 1.0, flight::Attitude::Up));
+        assert!(u.has_powered());
+        // boosters and core burn, the boosters drop, the core burns out, the upper stage still has its tanks
+        let mut upper = 0.0;
+        for _ in 0..3 {
+            for _ in 0..(300 * TICKS_PER_SECOND) {
+                u.step();
+                assert!(u.take_broken_off().is_empty(), "the K2 comes apart");
+                if u.powered(v).is_some_and(|p| p.propellant_t <= 1e-6) {
+                    break;
+                }
+            }
+            assert!(u.stage(v).fired);
+            upper = u.powered(v).unwrap().propellant_t;
+            if u.powered(v).unwrap().stage == 2 {
+                break;
+            }
+        }
+        let p = u.powered(v).unwrap();
+        assert_eq!(p.stage, 2);
+        assert!(upper > 10.0, "the Poodle stage kept its {upper} t");
+        assert!(p.r.length() - 600_000.0 > 40_000.0, "climbing");
+    }
+
+    #[test]
     fn flying_broadside_through_thick_air_tears_parts_off_as_debris() {
         let (mut u, body, spec, st) = k1_on_real_kerbin();
         let v = u.spawn_vessel_in_circular_orbit("K1", body, 100_000.0);
-        // 3 km up, 900 m/s across the stack, nose held straight up
-        let r = DVec3::new(600_000.0 + 3_000.0, 0.0, 0.0);
-        let mut p = flight::Powered::new(spec, r, DVec3::new(0.0, 900.0, 0.0), false);
+        // 1 km up, 3 km/s across the stack (dynamic pressure near 5 MPa), nose held straight up
+        let r = DVec3::new(600_000.0 + 1_000.0, 0.0, 0.0);
+        let mut p = flight::Powered::new(spec, r, DVec3::new(0.0, 3_000.0, 0.0), false);
         p.attitude = flight::Attitude::Fixed(DVec3::new(1.0, 0.0, 0.0));
         p.facing = DVec3::new(1.0, 0.0, 0.0);
         u.set_powered(v, p);

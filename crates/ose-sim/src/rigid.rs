@@ -40,7 +40,11 @@ pub const JOINT_DAMPING_FACTOR: f64 = 0.01;
 pub const JOINT_BREAK_FORCE_FACTOR: f64 = 50.0;
 pub const JOINT_BREAK_TORQUE_FACTOR: f64 = 50.0;
 /// Spring substeps per step for the wobble layer.
-const WOBBLE_SUBSTEPS: usize = 8;
+const WOBBLE_SUBSTEPS: usize = 32;
+/// How quickly the attitude hold takes out the structure's own spin, s.
+const HOLD_TIME_S: f64 = 0.5;
+/// Steps without breaking after the structure changes.
+const SETTLE_STEPS: u32 = 3;
 
 /// Spring and break limits of one part joint.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -245,6 +249,9 @@ pub struct RigidVessel {
     impulse: ImpulseJointSet,
     joints: MultibodyJointSet,
     prev_vel: Vec<DVec3>,
+    /// Steps left in which joints do not break: right after a split the solver rebuilds the multibody and
+    /// the velocities jump, which would read as huge loads.
+    settle: u32,
     soft: SoftBodySet,
     islands: IslandManager,
     broad: DefaultBroadPhase,
@@ -404,6 +411,7 @@ impl RigidVessel {
             impulse: ImpulseJointSet::new(),
             joints,
             prev_vel: vec![DVec3::ZERO; n],
+            settle: 0,
             soft: SoftBodySet::new(),
             islands: IslandManager::new(),
             broad: DefaultBroadPhase::new(),
@@ -511,11 +519,46 @@ impl RigidVessel {
             }
             let rb = &mut self.bodies[h];
             let at = rb.translation() + v(f.offset_m);
-            rb.add_force_at_point(v(f.force_kn), at, true);
+            // the force through the part's centre plus the moment of its offset: rapier's point form measures
+            // the offset from a centre of mass it does not refresh for multibody links
+            rb.add_force(v(f.force_kn), true);
+            rb.add_torque(v(f.offset_m.cross(f.force_kn)), true);
             ext[f.part].0 = ext[f.part].0 + f.force_kn;
             ext[f.part].1 = ext[f.part].1 + d(at).cross(f.force_kn);
         }
         let present: Vec<usize> = (0..n).filter(|&i| self.present[i]).collect();
+        // Hold the structure's attitude the way the vessel's own control does: an angular acceleration about
+        // the centre of mass that cancels the forces' net torque and damps any spin, applied as each part's
+        // share (m alpha x r) so it turns the structure as a whole without loading its joints. Otherwise small
+        // unbalanced torques spin it up and the spin itself loads the joints.
+        if !present.is_empty() {
+            let (com, vcom) = self.centre_of(&present);
+            let mut inertia = 0.0;
+            let mut ang_mom = DVec3::ZERO;
+            let mut net = DVec3::ZERO;
+            for &i in &present {
+                let m = self.masses_t[i];
+                let r = self.position(i) - com;
+                let sz = self.sizes_m[i];
+                inertia +=
+                    m * r.length_squared() + m * (sz.x * sz.x + sz.y * sz.y + sz.z * sz.z) / 18.0;
+                ang_mom = ang_mom + r.cross(self.velocity(i) - vcom) * m;
+                net = net + ext[i].1 - com.cross(ext[i].0);
+            }
+            if inertia > 0.0 {
+                let spin = ang_mom * (1.0 / inertia);
+                let alpha = (net * -1.0) * (1.0 / inertia) - spin * (1.0 / HOLD_TIME_S.max(dt));
+                for &i in &present {
+                    let r = self.position(i) - com;
+                    let f = alpha.cross(r) * self.masses_t[i];
+                    let rb = &mut self.bodies[self.bodies_of[i]];
+                    let at = rb.translation();
+                    rb.add_force(v(f), true);
+                    ext[i].0 = ext[i].0 + f;
+                    ext[i].1 = ext[i].1 + d(at).cross(f);
+                }
+            }
+        }
         for i in (0..n).filter(|&i| self.present[i]) {
             self.prev_vel[i] = self.velocity(i);
         }
@@ -592,6 +635,8 @@ impl RigidVessel {
                 smr2[p] += smr2[c];
             }
         }
+        let settling = self.settle > 0;
+        self.settle = self.settle.saturating_sub(1);
         let mut broken = Vec::new();
         for l in &mut self.links {
             let Some(h) = l.handle else { continue };
@@ -612,7 +657,9 @@ impl RigidVessel {
                 .max(1e-6);
                 let (k, damp) = (l.limits.stiffness, l.limits.damping);
                 let h = dt / WOBBLE_SUBSTEPS as f64;
-                for _ in 0..WOBBLE_SUBSTEPS {
+                // while the solver settles after a split its loads are not to be trusted
+                let substeps = if settling { 0 } else { WOBBLE_SUBSTEPS };
+                for _ in 0..substeps {
                     let accel = (tau * -1.0 - l.bend * k) * (1.0 / inertia);
                     l.bend_rate = (l.bend_rate + accel * h)
                         * (1.0 / (1.0 + h * damp / inertia + h * h * k / inertia));
@@ -620,7 +667,10 @@ impl RigidVessel {
                 }
                 k * l.bend.length()
             };
-            if l.force_kn > l.limits.break_force_kn || l.torque_knm > l.limits.break_torque_knm {
+            if !settling
+                && (l.force_kn > l.limits.break_force_kn
+                    || l.torque_knm > l.limits.break_torque_knm)
+            {
                 self.joints.remove(h, true);
                 l.handle = None;
                 broken.push(Broken {
@@ -630,6 +680,9 @@ impl RigidVessel {
                     torque_knm: l.torque_knm,
                 });
             }
+        }
+        if !broken.is_empty() {
+            self.settle = SETTLE_STEPS;
         }
         broken
     }
@@ -799,6 +852,7 @@ impl RigidVessel {
                 true,
             );
             self.present[i] = false;
+            self.settle = SETTLE_STEPS;
         }
     }
 
@@ -934,6 +988,28 @@ mod tests {
     #[test]
     fn kerbal_k1_holds_together_under_thrust() {
         holds_under_thrust("Kerbal K1");
+    }
+
+    #[test]
+    fn a_bent_joint_rings_and_dies_away() {
+        let (crafts, defs, res) = assets();
+        let craft = crafts.iter().find(|c| c.name == "Kerbal K1").unwrap();
+        let mut rv = RigidVessel::build(craft, &defs, &res);
+        // pluck the booster on its radial decoupler (child 21) and let go
+        let l = rv.links.iter_mut().find(|l| l.child == 21).unwrap();
+        l.bend = DVec3::new(0.02, 0.0, 0.0);
+        let mut crossed = false;
+        let mut last: f64 = 0.02;
+        for _ in 0..200 {
+            rv.relax(0.02);
+            let b = rv.links.iter().find(|l| l.child == 21).unwrap().bend.x;
+            if b.signum() != last.signum() {
+                crossed = true;
+            }
+            last = b;
+        }
+        assert!(crossed, "it swings through rest");
+        assert!(last.abs() < 0.002, "and dies away ({last})");
     }
 
     #[test]

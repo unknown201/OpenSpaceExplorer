@@ -697,10 +697,12 @@ fn flight_readout(
         stage: p.stage as u32,
         stages: p.spec.stages.len() as u32,
         propellant_t: p.propellant_t,
-        propellant_fraction: if stage_prop > 0.0 {
-            p.propellant_t / stage_prop
-        } else {
-            0.0
+        // of what the burning engines' tanks hold when full (the staging report's stage share otherwise)
+        propellant_fraction: match u.structure(e).map(|st| st.reachable_capacity_t(p.stage)) {
+            Some(cap) if cap > 0.0 => (p.propellant_t / cap).clamp(0.0, 1.0),
+            Some(_) => 0.0,
+            None if stage_prop > 0.0 => p.propellant_t / stage_prop,
+            None => 0.0,
         },
         mass_t: p.mass_t,
         thrust_kn: thrust,
