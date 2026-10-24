@@ -80,6 +80,11 @@ the order a new player meets it, using the original's assets).
   (the stock K1 descends monotonically down its 38-part tree), so the client reads stored poses as
   craft-frame poses and the editor now stores root-relative positions too. Crafts saved by the editor
   before 2026-10-24 were parent-relative and draw stacked too closely.
+- R&D Center: the original's tech tree (`assets/own/tech-tree.json`, embedded) on a scrolling canvas with
+  nodes at their authored positions, connectors to prerequisites, and an info panel (name, description,
+  science cost, parts by catalog title). Text is the original's English localization, exported by
+  `tools/export_localization.py` to `assets/web/loc/en.json` with the node icons in `ui/tech/`. Until the
+  protocol carries the player's tech, only the start node counts as researched.
 
 ## Consequences
 

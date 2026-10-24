@@ -45,6 +45,7 @@ export const STEP_NAMES = [
   "vab",
   "launchpad",
   "flight",
+  "rnd",
 ] as const;
 export type StepName = (typeof STEP_NAMES)[number];
 
@@ -497,6 +498,34 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
         return failed(`the craft did not climb after full throttle and stage (${before.toFixed(0)} m -> ${after.toFixed(0)} m, ${situation}${note ? `; ${note}` : ""})`);
       }
       return passed(`lifted off: ${before.toFixed(0)} m -> ${after.toFixed(0)} m, ${situation}`);
+    }),
+  );
+
+  // 14. Research and Development: back to the KSC through the pause menu, open the R&D Center, pick a node
+  // and read its info panel.
+  results.push(
+    await timed("rnd", async () => {
+      if (!pageUp) return notLoaded;
+      const open = page.locator('[data-ose="ksc-rnd"]');
+      if ((await open.count()) === 0) return blocked('R&D Center with the tech tree ([data-ose="rnd"]); Phase 8');
+      if (!(await page.locator('[data-ose="ksc"]').first().isVisible())) {
+        await page.keyboard.press("Escape");
+        await page.locator('[data-ose="to-ksc"]').first().click();
+      }
+      await open.first().click();
+      const nodes = page.locator('[data-ose="rd-node"]');
+      try {
+        await nodes.first().waitFor({ timeout: 5_000 });
+      } catch {
+        return failed("the R&D Center showed no tech nodes");
+      }
+      const n = await nodes.count();
+      const available = page.locator('[data-ose="rd-node"].available');
+      if ((await available.count()) === 0) return failed(`${n} tech nodes but none available after the start node`);
+      await available.first().click();
+      const title = ((await page.locator('[data-ose="rd-info"] h3').first().textContent()) ?? "").trim();
+      if (!title) return failed("clicking a tech node showed no info");
+      return passed(`${n} tech nodes; selected ${JSON.stringify(title)}`);
     }),
   );
 

@@ -276,6 +276,44 @@
     body:has(#flight-hud.open:not(.map)) #hud { opacity: 0; pointer-events: none; }
     body:has(#flight-hud.open:not(.map)) #crumbs, body:has(#flight-hud.open:not(.map)) #labels { display: none; }
     #flight-hud.map .fh-top, #flight-hud.map .fh-staging { opacity: 0.85; }
+    /* R&D Center after RDCenterUI.prefab: the tech tree on a dark blueprint canvas that scrolls, nodes at
+       their authored positions with curved connectors, the selected node's info on the right. */
+    #menu:has(#screen-rnd.open) { background: #070b12; align-items: stretch; justify-content: stretch; }
+    #menu-card:has(#screen-rnd.open) { position: fixed; inset: 0; width: auto; max-height: none; padding: 0; background: none; border: 0; border-radius: 0; }
+    #menu-card:has(#screen-rnd.open) > h1, #menu-card:has(#screen-rnd.open) > .sub, #menu-card:has(#screen-rnd.open) > .info, #menu-card:has(#screen-rnd.open) > .note { display: none; }
+    body:has(#menu:not(.hidden) #screen-rnd.open) #hud { opacity: 0; pointer-events: none; }
+    #rd { display: flex; flex-direction: column; height: 100vh; font-family: var(--ui-font); }
+    #rd-head { display: flex; align-items: center; gap: calc(24 * var(--u)); padding: calc(14 * var(--u)) calc(24 * var(--u)); background: #0d1320; border-bottom: 1px solid #2c3d63; }
+    #rd-head h2 { margin: 0; font-size: calc(26 * var(--u)); font-weight: 600; color: #e6ecf7; }
+    #rd-summary { color: #9fb0cc; font-size: calc(15 * var(--u)); }
+    #rd-head button { margin: 0 0 0 auto; width: auto; padding: calc(6 * var(--u)) calc(14 * var(--u)); }
+    #rd-body { flex: 1; min-height: 0; display: flex; }
+    #rd-tree { flex: 1; overflow: auto; background: #0a1220 repeating-linear-gradient(0deg, #ffffff07 0 1px, transparent 1px 40px), repeating-linear-gradient(90deg, #ffffff07 0 1px, transparent 1px 40px); }
+    .rd-canvas { position: relative; }
+    .rd-lines { position: absolute; left: 0; top: 0; pointer-events: none; }
+    .rd-lines path { fill: none; stroke: #3a4a68; stroke-width: 2; }
+    .rd-lines path.open { stroke: #6a8fd0; }
+    .rd-lines path.done { stroke: #7bd07b; }
+    #rd .rd-node { position: absolute; width: 128px; height: 54px; margin: 0; padding: 4px 6px 4px 40px; display: flex; flex-direction: column; justify-content: center; align-items: flex-start; text-align: left;
+      background: #141c2c; border: 2px solid #34445f; border-radius: 6px; color: #9fb0cc; font: 600 11px/1.15 var(--ui-font); cursor: pointer; }
+    #rd .rd-node img { position: absolute; left: 6px; top: 50%; width: 28px; height: 28px; transform: translateY(-50%); opacity: 0.7; }
+    #rd .rd-node .name { line-height: 1.15; }
+    #rd .rd-node .cost { font-weight: 400; font-size: 11px; color: #6f7f9c; }
+    #rd .rd-node .cost::before { content: "\2697 "; }
+    #rd .rd-node.available { border-color: #5b80c4; color: #e6ecf7; background: #182641; }
+    #rd .rd-node.available img { opacity: 1; }
+    #rd .rd-node.researched { border-color: #63b863; color: #e6f7e6; background: #18301f; }
+    #rd .rd-node.researched img { opacity: 1; }
+    #rd .rd-node.selected { box-shadow: 0 0 0 3px #ffd87a; }
+    #rd-info { width: calc(380 * var(--u)); flex: none; background: #0d1320; border-left: 1px solid #2c3d63; padding: calc(18 * var(--u)); overflow: auto; color: #cfd6e6; }
+    #rd-info h3 { margin: 0 0 calc(6 * var(--u)); font-size: calc(22 * var(--u)); color: #fff; }
+    #rd-info p { font-size: calc(14 * var(--u)); line-height: 1.45; color: #b8c4da; }
+    .rd-status { font-size: calc(13 * var(--u)); font-weight: 600; }
+    .rd-status.researched { color: #7bd07b; } .rd-status.available { color: #8fb0ff; } .rd-status.locked { color: #8a94a8; }
+    .rd-cost { margin: calc(10 * var(--u)) 0; font-size: calc(14 * var(--u)); }
+    .rd-sub { margin-top: calc(12 * var(--u)); font-size: calc(12 * var(--u)); text-transform: uppercase; letter-spacing: 0.08em; color: #6f7f9c; }
+    .rd-parts { list-style: none; margin: calc(6 * var(--u)) 0 0; padding: 0; }
+    .rd-parts li { padding: calc(6 * var(--u)) calc(8 * var(--u)); margin-bottom: calc(4 * var(--u)); background: #141c2c; border: 1px solid #2c3d63; border-radius: 4px; font-size: calc(13 * var(--u)); }
   </style>
 </head>
 <body>
@@ -363,7 +401,7 @@
           <div id="ksc-buildings">
             <button id="ksc-vab" data-ose="ksc-vab"><img src="assets/ui/ICO-VAB-Med.png" alt="" />VAB</button>
             <button id="ksc-training" data-ose="ksc-training" disabled title="not yet"><img src="assets/ui/ICO-Training-Center-Med.png" alt="" />Training Center</button>
-            <button id="ksc-rnd" data-ose="ksc-rnd" disabled title="not yet"><img src="assets/ui/ICO-RDCenter-Med.png" alt="" />R&amp;D Center</button>
+            <button id="ksc-rnd" data-ose="ksc-rnd"><img src="assets/ui/ICO-RDCenter-Med.png" alt="" />R&amp;D Center</button>
             <button id="ksc-tracking" data-ose="ksc-tracking"><img src="assets/ui/ICO-Tracking-Station-Med.png" alt="" />Tracking Station</button>
             <button id="ksc-mission" data-ose="ksc-mission" disabled title="not yet"><img src="assets/ui/ICO-Mission-Control-Med.png" alt="" />Mission Control</button>
             <button id="ksc-launchpad" data-ose="ksc-launchpad" class="launch"><img src="assets/ui/ICO-Launchpad-Med.png" alt="" />Launchpad<span class="arrow"></span></button>
@@ -403,6 +441,16 @@
             <div class="row"><button id="vab-save" data-ose="vab-save">Save</button><button id="vab-launch" data-ose="vab-launch">Save and launch</button></div>
             <div id="vab-report" data-ose="vab-report"></div>
             <div class="row"><button id="vab-back" class="secondary" data-ose="vab-back">Back to KSC</button></div>
+          </div>
+        </div>
+      </div>
+      <div class="screen" id="screen-rnd" data-ose="rnd">
+        <div id="rd">
+          <div id="rd-head"><h2>Research &amp; Development</h2><span id="rd-summary" data-ose="rd-summary"></span>
+            <button id="rnd-back" class="secondary" data-ose="rnd-back">Back to KSC</button></div>
+          <div id="rd-body">
+            <div id="rd-tree" data-ose="rd-tree"></div>
+            <div id="rd-info" data-ose="rd-info"></div>
           </div>
         </div>
       </div>

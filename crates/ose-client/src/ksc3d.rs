@@ -73,6 +73,7 @@ impl Building {
         matches!(
             self.facility.as_str(),
             "VAB"
+                | "ResearchCenter"
                 | "TrackingCenter"
                 | "Launchpad_1"
                 | "Launchpad_2"

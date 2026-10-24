@@ -22,6 +22,7 @@ pub mod menu3d;
 pub mod navball;
 #[cfg(target_arch = "wasm32")]
 pub mod render;
+pub mod rnd;
 pub mod scene;
 pub mod thumb;
 pub mod vab;
@@ -127,6 +128,12 @@ struct App {
     pending_launch: Option<u64>,
     /// Body spin from `BodyRotation`, index-aligned with the catalog (empty until it arrives).
     body_spins: Vec<ose_net::BodySpin>,
+    /// The tech tree, the original's English text (loaded from assets/loc/en.json), the researched nodes
+    /// and the node shown in the R&D info panel.
+    tech: Vec<rnd::TechNode>,
+    loc: std::collections::HashMap<String, String>,
+    researched: std::collections::HashSet<String>,
+    rd_selected: Option<String>,
     /// Controls as last sent.
     throttle: f64,
     attitude: ose_net::AttitudeMode,
@@ -324,6 +331,10 @@ pub fn start() -> Result<(), JsValue> {
         map_mode: false,
         pending_launch: None,
         body_spins: Vec::new(),
+        tech: rnd::tree(),
+        loc: std::collections::HashMap::new(),
+        researched: ["tNode_1v_start".to_string()].into_iter().collect(),
+        rd_selected: None,
         throttle: 0.0,
         attitude: ose_net::AttitudeMode::Up,
         gpu_canvas: get("gpu")?.dyn_into()?,
@@ -341,6 +352,7 @@ pub fn start() -> Result<(), JsValue> {
     install_label_clicks(&app)?;
     install_menu(&app)?;
     load_part_sizes(app.clone());
+    load_localization(app.clone());
     #[cfg(target_arch = "wasm32")]
     start_webgpu(app.clone());
     animate(app);
@@ -379,6 +391,39 @@ fn start_webgpu(app: Shared) {
 
 /// Fetch the part catalog (GET /parts.json) in the background: sizes for thumbnails, everything for the
 /// editor. A missing route leaves the default cubes in place and the VAB picker empty.
+/// Fetch the original's English text (assets/loc/en.json, exported by tools/export_localization.py); screens
+/// fall back to the localization term when it is missing.
+fn load_localization(app: Shared) {
+    wasm_bindgen_futures::spawn_local(async move {
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let Ok(resp) =
+            wasm_bindgen_futures::JsFuture::from(window.fetch_with_str("assets/loc/en.json")).await
+        else {
+            return;
+        };
+        let Ok(resp) = resp.dyn_into::<web_sys::Response>() else {
+            return;
+        };
+        if !resp.ok() {
+            return;
+        }
+        let Ok(text) = resp.text() else { return };
+        let Ok(text) = wasm_bindgen_futures::JsFuture::from(text).await else {
+            return;
+        };
+        let Some(text) = text.as_string() else { return };
+        if let Ok(map) = serde_json::from_str::<std::collections::HashMap<String, String>>(&text) {
+            let mut a = app.borrow_mut();
+            a.loc = map;
+            if a.rd_selected.is_some() {
+                a.render_rnd();
+            }
+        }
+    });
+}
+
 fn load_part_sizes(app: Shared) {
     wasm_bindgen_futures::spawn_local(async move {
         let Some(window) = web_sys::window() else {
@@ -567,6 +612,25 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
     )?;
     wire("launchpad-back", Box::new(|a| a.borrow().open_ksc()))?;
     wire("ksc-vab", Box::new(|a| a.borrow_mut().open_vab(None)))?;
+    wire("ksc-rnd", Box::new(|a| a.borrow_mut().open_rnd()))?;
+    wire("rnd-back", Box::new(|a| a.borrow().open_ksc()))?;
+    if let Some(tree) = doc.get_element_by_id("rd-tree") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let mut t = ev.target().and_then(|t| t.dyn_into::<Element>().ok());
+            while let Some(el) = t.clone() {
+                if let Some(id) = el.get_attribute("data-ose-node") {
+                    let mut app = a.borrow_mut();
+                    app.rd_selected = Some(id);
+                    app.render_rnd();
+                    break;
+                }
+                t = el.parent_element();
+            }
+        });
+        tree.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
     wire("vab-back", Box::new(|a| a.borrow().open_ksc()))?;
     wire("vab-remove", Box::new(|a| a.borrow_mut().vab_remove()))?;
     wire("vab-clear", Box::new(|a| a.borrow_mut().vab_clear()))?;
@@ -1370,6 +1434,7 @@ impl App {
     fn open_facility(&mut self, facility: &str) {
         match facility {
             "VAB" => self.open_vab(None),
+            "ResearchCenter" => self.open_rnd(),
             "TrackingCenter" => self.show_menu(false),
             f if f.starts_with("Launchpad") => self.open_launchpad(),
             _ => {}
@@ -1780,7 +1845,15 @@ impl App {
 
     /// Show one of the menu screens: "name", "sessions" or "paused".
     fn menu_screen(&self, which: &str) {
-        for id in ["name", "sessions", "ksc", "launchpad", "vab", "paused"] {
+        for id in [
+            "name",
+            "sessions",
+            "ksc",
+            "launchpad",
+            "vab",
+            "rnd",
+            "paused",
+        ] {
             if let Some(el) = self.doc.get_element_by_id(&format!("screen-{id}")) {
                 if id == which {
                     el.class_list().add_1("open").ok();
@@ -1820,6 +1893,67 @@ impl App {
         }
         set_text(&self.doc, "menu-note", "");
         self.menu_screen("ksc");
+    }
+
+    // ---- Research and Development
+
+    fn open_rnd(&mut self) {
+        if let Some(m) = self.doc.get_element_by_id("menu") {
+            m.class_list().remove_1("hidden").ok();
+        }
+        set_text(&self.doc, "menu-note", "");
+        if self.rd_selected.is_none() {
+            self.rd_selected = self
+                .tech
+                .iter()
+                .find(|n| n.requires.is_empty())
+                .map(|n| n.id.clone());
+        }
+        self.menu_screen("rnd");
+        self.render_rnd();
+        if let Ok(Some(el)) = self.doc.query_selector("#rd-tree .rd-node.selected") {
+            el.scroll_into_view_with_bool(false);
+        }
+    }
+
+    fn render_rnd(&self) {
+        let sel = self.rd_selected.as_deref();
+        if let Some(el) = self.doc.get_element_by_id("rd-tree") {
+            el.set_inner_html(&rnd::render_tree(
+                &self.tech,
+                &self.loc,
+                &self.researched,
+                sel,
+            ));
+        }
+        if let (Some(el), Some(node)) = (
+            self.doc.get_element_by_id("rd-info"),
+            sel.and_then(|id| self.tech.iter().find(|n| n.id == id)),
+        ) {
+            let title = |pid: &str| {
+                self.catalog
+                    .get(pid)
+                    .map(|p| p.display_title().to_string())
+                    .unwrap_or_else(|| pid.to_string())
+            };
+            el.set_inner_html(&rnd::render_info(node, &self.loc, &self.researched, &title));
+        }
+        let total: f64 = self
+            .tech
+            .iter()
+            .filter(|n| self.researched.contains(&n.id))
+            .map(|n| n.required_science)
+            .sum();
+        set_text(
+            &self.doc,
+            "rd-summary",
+            &format!(
+                "{} of {} technologies researched \u{b7} {:.0} science spent",
+                self.researched.len(),
+                self.tech.len(),
+                total
+            ),
+        );
     }
 
     // ---- Vehicle Assembly Building
