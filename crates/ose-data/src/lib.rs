@@ -250,6 +250,12 @@ pub struct PartDef {
     /// A parachute (`Data_Parachute`), with its semi-deployed and deployed drag shapes.
     #[serde(default)]
     pub parachute: Option<Parachute>,
+    /// Scales the part's thermal mass (`thermalMassModifier`).
+    #[serde(default = "one")]
+    pub thermal_mass_modifier: f64,
+    /// A heat shield (`Data_Heatshield`).
+    #[serde(default)]
+    pub heatshield: Option<Heatshield>,
     /// Names of every module on the part, in order, so the sim knows what else to implement.
     pub module_names: Vec<String>,
     /// Module data not yet mapped into typed fields, keyed by module name.
@@ -282,6 +288,26 @@ pub struct Electric {
     /// Generator output (`Data_ModuleGenerator.ResourceSetting.Rate`): an engine's alternator while it runs,
     /// otherwise always on (RTGs).
     pub generator_output: f64,
+}
+
+fn one() -> f64 {
+    1.0
+}
+
+/// A heat shield as the original defines it (`Data_Heatshield`): above its ablation temperature it burns its
+/// ablator and turns away re-entry heat when it faces the airflow.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Heatshield {
+    /// Ablates above this temperature, K, shielding fully this far above it.
+    pub ablation_temp_k: f64,
+    pub ablation_max_over_k: f64,
+    pub pyrolysis_loss_factor: f64,
+    pub shielding_scale: f64,
+    /// The way the shield faces, part space (Unity axes).
+    pub shielding_direction: ose_math::DVec3,
+    /// The ablator resource and its use per unit of heat removed.
+    pub ablator: String,
+    pub ablator_rate: f64,
 }
 
 /// A parachute as the original defines it (`Data_Parachute`).

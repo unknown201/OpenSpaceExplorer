@@ -15,6 +15,7 @@ use crate::aero::{self, DragCurves, Faces};
 use crate::flight::{Powered, StepOutcome};
 use crate::resources::{FlowNet, Instruction, Request};
 use crate::rigid::{PartForce, RigidVessel, Turning};
+use crate::thermal;
 
 /// Loads below this (kN) leave the structure as it is rather than stepping it.
 const QUIET_KN: f64 = 0.01;
@@ -62,6 +63,16 @@ pub struct Structure {
     pub chute_defs: Vec<Option<ose_data::Parachute>>,
     pub chutes: Vec<Chute>,
     pub chute_open: Vec<f64>,
+    /// Part temperatures and limits, K, thermal masses, and the re-entry heat each took last step, kW.
+    pub temperature_k: Vec<f64>,
+    pub max_temp_k: Vec<f64>,
+    pub thermal_mass: Vec<f64>,
+    pub reentry_flux_kw: Vec<f64>,
+    /// Heat shields on the parts, and whether each is ablating.
+    pub heatshields: Vec<Option<ose_data::Heatshield>>,
+    pub ablating: Vec<bool>,
+    /// Each part's bounds centre relative to its origin, vessel frame.
+    bounds_offset: Vec<DVec3>,
     /// Flight stage the structure was last trimmed to.
     staged_to: usize,
 }
@@ -132,6 +143,17 @@ impl Structure {
                     .and_then(|d| d.engines.first())
                     .map(|e| e.max_thrust_kn)
                     .unwrap_or(0.0)
+            })
+            .collect();
+        let thermal_mass: Vec<f64> = (0..craft.parts.len())
+            .map(|i| {
+                let modifier = defs
+                    .iter()
+                    .find(|d| d.id == craft.parts[i].part_id)
+                    .map(|d| d.thermal_mass_modifier)
+                    .unwrap_or(1.0);
+                (rigid.dry_masses_t[i] * thermal::SPECIFIC_HEAT * modifier)
+                    .max(thermal::MIN_THERMAL_MASS)
             })
             .collect();
         let root = craft
@@ -236,6 +258,27 @@ impl Structure {
                 .collect(),
             chutes: vec![Chute::Stowed; n],
             chute_open: vec![0.0; n],
+            temperature_k: vec![thermal::INITIAL_TEMPERATURE_K; n],
+            max_temp_k: (0..n)
+                .map(|i| def_of(i).map(|d| d.max_temp_k).unwrap_or(0.0))
+                .collect(),
+            thermal_mass,
+            reentry_flux_kw: vec![0.0; n],
+            heatshields: (0..n)
+                .map(|i| def_of(i).and_then(|d| d.heatshield.clone()))
+                .collect(),
+            ablating: vec![false; n],
+            bounds_offset: (0..n)
+                .map(|i| {
+                    let c = def_of(i)
+                        .and_then(|d| d.bounds)
+                        .map(|b| b.center_m)
+                        .unwrap_or(DVec3::ZERO);
+                    let q = craft.parts[i].local_rotation;
+                    let u = aero::rotate([q.x, q.y, q.z, q.w], c);
+                    DVec3::new(u.x, u.y, -u.z)
+                })
+                .collect(),
             engine_load_kn: vec![0.0; n],
             engine_load_target_kn: vec![0.0; n],
             staged_to: 0,
@@ -495,6 +538,151 @@ impl Structure {
         if !p.controlled {
             p.throttle = 0.0;
         }
+    }
+
+    /// Heat the parts for one step (see `thermal`): `v_air` is the velocity through the air (inertial), the
+    /// air at the vessel has `density`, `mach`, `ambient_k` and `conductivity`. Returns the parts that went
+    /// past their maximum temperature (when parts may burn up).
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_heat(
+        &mut self,
+        facing: DVec3,
+        v_air: DVec3,
+        density: f64,
+        mach: f64,
+        ambient_k: f64,
+        conductivity: f64,
+        settings: &thermal::HeatSettings,
+        dt: f64,
+    ) -> Vec<usize> {
+        let present: Vec<usize> = (0..self.rigid.len())
+            .filter(|&i| self.rigid.present[i])
+            .collect();
+        let (bx, by, bz) = basis(facing);
+        let speed = v_air.length();
+        let d = if speed > 0.0 {
+            DVec3::new(v_air.dot(bx), v_air.dot(by), v_air.dot(bz)) * (1.0 / speed)
+        } else {
+            DVec3::ZERO
+        };
+        let du = DVec3::new(d.x, d.y, -d.z);
+        let exposed = if speed > 0.0 {
+            let boxes: Vec<(DVec3, DVec3)> = present
+                .iter()
+                .map(|&i| {
+                    (
+                        self.rigid.rest_position(i) + self.bounds_offset[i],
+                        self.rigid.sizes_m[i] * 0.5,
+                    )
+                })
+                .collect();
+            thermal::exposed_proportions(&boxes, d, mach)
+        } else {
+            vec![0.0; present.len()]
+        };
+        let mut burned = Vec::new();
+        for (k, &i) in present.iter().enumerate() {
+            let local = aero::rotate_inverse(self.part_rot[i], du);
+            let (airstream, cd, wetted) = match &self.faces[i] {
+                Some(f) => {
+                    let (a, cd) = f.airstream(&self.curves, local, mach);
+                    (a, cd, f.wetted())
+                }
+                None => {
+                    let s = self.rigid.sizes_m[i];
+                    (0.0, 0.0, 2.0 * (s.x * s.y + s.y * s.z + s.x * s.z))
+                }
+            };
+            let mut flux = thermal::reentry_flux(mach, exposed[k], airstream, density, cd);
+            // a heat shield above its ablation temperature turns the heat away while it faces the flow
+            // (`Module_Heatshield.ThermalUpdate`) and burns ablator for the heat it takes
+            // (`PartComponentModule_Heatshield`)
+            self.ablating[i] = false;
+            if let Some(h) = self.heatshields[i].clone() {
+                let left = self.resource_fraction(i, &h.ablator);
+                if self.temperature_k[i] > h.ablation_temp_k && left > 0.001 {
+                    self.ablating[i] = true;
+                    let over = ((self.temperature_k[i] - h.ablation_temp_k)
+                        / h.ablation_max_over_k.max(1e-6))
+                    .clamp(0.0, 1.0);
+                    let dir = aero::rotate(self.part_rot[i], h.shielding_direction);
+                    let dir = DVec3::new(dir.x, dir.y, -dir.z);
+                    let facing_flow = (d * speed).dot(dir).clamp(0.0, 1.0);
+                    flux -= flux * over * facing_flow * h.shielding_scale;
+                    let removed = if facing_flow < 1.0 {
+                        flux / (1.0 - facing_flow)
+                    } else {
+                        flux
+                    };
+                    let units = removed.max(0.0) * h.pyrolysis_loss_factor * h.ablator_rate * dt;
+                    self.drain_part(i, &h.ablator, units);
+                }
+            }
+            self.reentry_flux_kw[i] = flux;
+            self.temperature_k[i] = thermal::step_temperature(
+                self.temperature_k[i],
+                self.thermal_mass[i],
+                wetted,
+                ambient_k,
+                conductivity,
+                flux,
+                settings.scale,
+                dt,
+            );
+            if settings.part_destruction
+                && self.max_temp_k[i] > 0.0
+                && self.temperature_k[i] > self.max_temp_k[i]
+            {
+                burned.push(i);
+            }
+        }
+        burned
+    }
+
+    /// How full a part's own tanks of `resource` are, 0..1.
+    fn resource_fraction(&self, part: usize, resource: &str) -> f64 {
+        let Some(r) = self.net.resource(resource) else {
+            return 0.0;
+        };
+        let (stored, capacity) = self
+            .net
+            .tanks
+            .iter()
+            .filter(|t| t.part == part && t.resource == r)
+            .fold((0.0, 0.0), |(s, c), t| (s + t.stored, c + t.capacity));
+        if capacity > 0.0 {
+            stored / capacity
+        } else {
+            0.0
+        }
+    }
+
+    fn drain_part(&mut self, part: usize, resource: &str, mut units: f64) {
+        let Some(r) = self.net.resource(resource) else {
+            return;
+        };
+        for t in self
+            .net
+            .tanks
+            .iter_mut()
+            .filter(|t| t.part == part && t.resource == r)
+        {
+            let take = units.min(t.stored);
+            t.stored -= take;
+            units -= take;
+        }
+    }
+
+    /// Destroy parts that burned up: they leave the structure, and whatever only they held on breaks off
+    /// as pieces. `None` when the root burned (the vessel is lost).
+    pub fn burn_up(&mut self, parts: &[usize], facing: DVec3) -> Option<Vec<Piece>> {
+        if parts.contains(&self.root) {
+            return None;
+        }
+        self.rigid.remove_parts(parts);
+        self.net.remove_parts(parts);
+        let (bx, by, bz) = basis(facing);
+        Some(self.split_off(bx, by, bz))
     }
 
     /// Fire flight stage `stage`'s activations: parachutes in it arm.
@@ -823,6 +1011,12 @@ impl Structure {
         if broken.is_empty() {
             return Vec::new();
         }
+        self.split_off(bx, by, bz)
+    }
+
+    /// Take the groups no longer joined to the root out of the structure as pieces (`bx`..`bz`: the vessel
+    /// frame in inertial axes).
+    fn split_off(&mut self, bx: DVec3, by: DVec3, bz: DVec3) -> Vec<Piece> {
         let groups = self.rigid.groups();
         let Some(keep) = groups.iter().find(|g| g.contains(&self.root)).cloned() else {
             return Vec::new();
@@ -850,10 +1044,110 @@ impl Structure {
     }
 }
 
+/// A Mk1 pod with its parachute on top and, if `shield`, a 1.25 m heat shield under it, with the stock part
+/// catalog (for heat tests).
+#[cfg(test)]
+pub(crate) fn test_capsule(shield: bool) -> (Craft, Vec<PartDef>, Vec<ResourceDef>) {
+    let crafts: Vec<Craft> =
+        serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+    let defs: Vec<PartDef> =
+        serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+    let res: Vec<ResourceDef> =
+        serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
+    let c = crafts
+        .iter()
+        .find(|c| c.name == "Stock12_StartRocket")
+        .unwrap();
+    let mut parts = vec![c.parts[0].clone()];
+    if shield {
+        let mut h = c.parts[1].clone();
+        h.part_id = "heatshield_1v".into();
+        h.local_position.y = -0.392;
+        h.resources = vec![ose_data::craft::StoredResource {
+            resource: "Ablator".into(),
+            stored_units: 0.2,
+            capacity_units: 0.2,
+        }];
+        parts.push(h);
+    }
+    let mut chute = c.parts[4].clone();
+    chute.parent = Some(0);
+    parts.push(chute);
+    let craft = Craft {
+        name: "Capsule".into(),
+        description: String::new(),
+        stages: vec![vec![parts.len() - 1]],
+        parts,
+    };
+    (craft, defs, res)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::flight::{FlightSpec, StageSpec};
+
+    #[test]
+    fn re_entry_burns_a_bare_pod_and_a_heat_shield_ablates_to_save_it() {
+        let facing = DVec3::new(1.0, 0.0, 0.0);
+        // falling bottom first at Mach 7 through thin upper air
+        let v_air = DVec3::new(-2_300.0, 0.0, 0.0);
+        let (rho, mach, ambient, k) = (0.01, 7.0, 220.0, 0.026);
+        let settings = thermal::HeatSettings::default();
+        let fly = |s: &mut Structure, seconds: f64| -> Option<f64> {
+            let steps = (seconds / 0.02) as usize;
+            for n in 0..steps {
+                let burned = s.update_heat(facing, v_air, rho, mach, ambient, k, &settings, 0.02);
+                if burned.contains(&s.root) {
+                    return Some(n as f64 * 0.02);
+                }
+            }
+            None
+        };
+        let (bare, defs, res) = test_capsule(false);
+        let mut s = Structure::build(&bare, &defs, &res);
+        let burned_at = fly(&mut s, 60.0).expect("the bare pod burns up");
+        assert!(
+            burned_at > 2.0,
+            "heats over a few seconds, not at once: {burned_at} s"
+        );
+        // the parachute on top sits in the pod's shadow
+        assert_eq!(s.reentry_flux_kw[1], 0.0);
+
+        let (shielded, defs, res) = test_capsule(true);
+        let mut s = Structure::build(&shielded, &defs, &res);
+        assert_eq!(fly(&mut s, 60.0), None, "the shield saves it");
+        let (pod, shield) = (0, 1);
+        assert!(s.ablating[shield], "{:?} K", s.temperature_k);
+        let t = s.temperature_k[shield];
+        assert!(
+            (1_000.0..1_100.0).contains(&t),
+            "the shield holds near its ablation point: {t} K"
+        );
+        assert!(
+            s.temperature_k[pod] < 400.0,
+            "the pod stays cool: {} K",
+            s.temperature_k[pod]
+        );
+        let left = s.resource_fraction(shield, "Ablator");
+        assert!(left < 1.0 && left > 0.0, "ablator used: {left}");
+        // flying the other way round the shield is in the pod's shadow and the pod burns
+        let mut s = Structure::build(&shielded, &defs, &res);
+        let nose_first = -v_air;
+        for _ in 0..3_000 {
+            s.update_heat(facing, nose_first, rho, mach, ambient, k, &settings, 0.02);
+        }
+        assert!(
+            s.temperature_k[pod] > 400.0 && !s.ablating[shield],
+            "a capsule flying nose first is not protected: pod at {} K",
+            s.temperature_k[pod]
+        );
+        // subsonic air only cools
+        let mut s = Structure::build(&bare, &defs, &res);
+        s.temperature_k[0] = 600.0;
+        s.update_heat(facing, v_air * 0.1, 1.0, 0.7, 288.0, k, &settings, 1.0);
+        assert!(s.temperature_k[0] < 600.0 && s.reentry_flux_kw[0] == 0.0);
+    }
 
     fn assets() -> (Vec<Craft>, Vec<PartDef>, Vec<ResourceDef>) {
         (

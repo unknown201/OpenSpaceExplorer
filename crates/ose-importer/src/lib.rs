@@ -351,9 +351,23 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
     let mut experiments = Vec::new();
     let mut docking = None;
     let mut chute: Option<ose_data::Parachute> = None;
+    let mut heatshield: Option<ose_data::Heatshield> = None;
     if let Some(mods) = d["serializedPartModules"].as_array() {
         for m in mods {
             if let Some(entries) = m["ModuleData"].as_array() {
+                for entry in entries.iter().filter(|x| x["Name"] == "Data_Heatshield") {
+                    let o = &entry["DataObject"];
+                    let res = &o["requiredResources"][0];
+                    heatshield = Some(ose_data::Heatshield {
+                        ablation_temp_k: f(o, "AblationTempThreshold"),
+                        ablation_max_over_k: f(o, "AblationMaximumOverThreshold"),
+                        pyrolysis_loss_factor: f(o, "PyrolysisLossFactor"),
+                        shielding_scale: f(o, "ShieldingScale"),
+                        shielding_direction: vec3(&o["ShieldingDirection"]),
+                        ablator: s(res, "ResourceName"),
+                        ablator_rate: f(res, "Rate"),
+                    });
+                }
                 for entry in entries.iter().filter(|x| x["Name"] == "Data_Parachute") {
                     let o = &entry["DataObject"];
                     chute = Some(ose_data::Parachute {
@@ -466,6 +480,7 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
             "cost",
             "crewCapacity",
             "maxTemp",
+            "thermalMassModifier",
             "crashTolerance",
             "breakingForce",
             "breakingTorque",
@@ -521,6 +536,11 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
         experiments,
         docking,
         parachute,
+        thermal_mass_modifier: match f(d, "thermalMassModifier") {
+            m if m > 0.0 => m,
+            _ => 1.0,
+        },
+        heatshield,
         drag_cubes,
         module_names,
         raw_modules,

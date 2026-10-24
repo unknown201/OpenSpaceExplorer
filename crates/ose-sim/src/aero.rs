@@ -185,6 +185,48 @@ impl Faces {
     }
 }
 
+impl Faces {
+    /// The part's area facing travel direction `d` (part space) and its drag coefficient there
+    /// (`GetAeroDataForDirection`: `AreaAirstream`, `DragCoeff = AreaDrag / Area`).
+    pub fn airstream(&self, curves: &DragCurves, d: DVec3, mach: f64) -> (f64, f64) {
+        let mult = curves.multiplier.evaluate(mach);
+        let (tip, surface, tail) = (
+            curves.tip.evaluate(mach),
+            curves.surface.evaluate(mach),
+            curves.tail.evaluate(mach),
+        );
+        let mut airstream = 0.0;
+        let mut area = 0.0;
+        for (i, n) in NORMALS.iter().enumerate() {
+            let dot = n.0 * d.x + n.1 * d.y + n.2 * d.z;
+            let dot_n = (dot + 1.0) * 0.5;
+            let curve_val = if dot_n <= 0.5 {
+                tail + (surface - tail) * (dot_n * 2.0)
+            } else {
+                surface + (tip - surface) * ((dot_n - 0.5) * 2.0)
+            } * mult;
+            airstream += self.area[i] * dot.clamp(0.0, 1.0);
+            area += self.area[i] * curve_val;
+        }
+        let cd = if area > 0.0 {
+            self.area_drag(curves, d, mach) / area
+        } else {
+            0.0
+        };
+        (airstream, cd)
+    }
+
+    /// Area open to the air, m^2 (`WettedArea`: the exposed faces summed).
+    pub fn wetted(&self) -> f64 {
+        self.area.iter().sum()
+    }
+}
+
+/// Rotate `v` by a unit quaternion (x, y, z, w).
+pub fn rotate(q: [f64; 4], v: DVec3) -> DVec3 {
+    rotate_inverse([-q[0], -q[1], -q[2], q[3]], v)
+}
+
 /// Equivalent `Cd * A`, m^2, for an `AreaDrag` at `density * speed` (kg/m^3 * m/s).
 pub fn cda_m2(curves: &DragCurves, area_drag: f64, rho_v: f64) -> f64 {
     0.8 * area_drag * curves.pseudo_reynolds.evaluate(rho_v)

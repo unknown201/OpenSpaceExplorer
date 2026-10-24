@@ -484,19 +484,26 @@ async fn main() -> anyhow::Result<()> {
             if ticks.is_multiple_of(ose_sim::TICKS_PER_SECOND) {
                 science::evaluate_missions(&sim);
                 science::deliver_experiment_events(&sim);
-                let required = sim
-                    .campaign
-                    .lock()
-                    .expect("campaign lock")
-                    .difficulty
-                    .iter()
-                    .any(|d| {
-                        d.id == "CommNetRequired" && d.value == ose_net::DifficultyValue::Bool(true)
-                    });
-                sim.universe
-                    .lock()
-                    .expect("sim lock")
-                    .set_commnet_required(required);
+                let (required, heat) = {
+                    let c = sim.campaign.lock().expect("campaign lock");
+                    let get = |id: &str| c.difficulty.iter().find(|d| d.id == id).map(|d| &d.value);
+                    let on = |id: &str, default: bool| match get(id) {
+                        Some(ose_net::DifficultyValue::Bool(b)) => *b,
+                        _ => default,
+                    };
+                    let heat = ose_sim::thermal::HeatSettings {
+                        enabled: on("HeatEnabled", true),
+                        scale: match get("HeatScaling") {
+                            Some(ose_net::DifficultyValue::Number(x)) => *x,
+                            _ => 1.0,
+                        },
+                        part_destruction: on("HeatPartDestruction", true),
+                    };
+                    (on("CommNetRequired", false), heat)
+                };
+                let mut u = sim.universe.lock().expect("sim lock");
+                u.set_commnet_required(required);
+                u.set_heat_settings(heat);
             }
         }
     });
@@ -841,6 +848,27 @@ fn flight_readout(
                             Chute::Cut => ose_net::ChuteState::Cut,
                         };
                         (i as u16, state, st.chute_open[i] as f32)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        heat: u
+            .structure(e)
+            .map(|st| {
+                (0..st.temperature_k.len())
+                    .filter(|&i| {
+                        st.rigid.present[i]
+                            && (st.reentry_flux_kw[i] > 0.0
+                                || (st.max_temp_k[i] > 0.0
+                                    && st.temperature_k[i] > 0.4 * st.max_temp_k[i]))
+                    })
+                    .map(|i| {
+                        (
+                            i as u16,
+                            st.temperature_k[i] as f32,
+                            st.max_temp_k[i] as f32,
+                            st.reentry_flux_kw[i] as f32,
+                        )
                     })
                     .collect()
             })

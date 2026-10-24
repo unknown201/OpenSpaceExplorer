@@ -16,6 +16,7 @@ pub mod resources;
 pub mod rigid;
 pub mod science;
 pub mod structure;
+pub mod thermal;
 pub mod trajectory;
 pub mod vessels;
 
@@ -290,6 +291,11 @@ impl Universe {
             }
             self.world.entity_mut(e).insert(st);
         }
+    }
+
+    /// Set the heat difficulty options.
+    pub fn set_heat_settings(&mut self, settings: thermal::HeatSettings) {
+        self.world.insert_resource(settings);
     }
 
     /// Arm a vessel's packed parachutes; how many, `None` without a structure.
@@ -665,6 +671,11 @@ impl Universe {
             q.iter(&self.world).collect()
         };
         let mut to_rails = Vec::new();
+        let heat = self
+            .world
+            .get_resource::<thermal::HeatSettings>()
+            .copied()
+            .unwrap_or_default();
         for e in powered_vessels.drain(..) {
             let Some(body_e) = self.world.get::<bodies::ReferenceBody>(e).map(|r| r.0) else {
                 continue;
@@ -705,7 +716,8 @@ impl Universe {
             for i in 0..steps {
                 if let Some(st) = &mut structure {
                     st.sync(&mut p);
-                    // part drag for the airflow now
+                    let mut burned = Vec::new();
+                    // part drag (and heating) for the airflow now
                     p.drag_cda_m2 = atmo.as_ref().map(|a| {
                         let omega = if body.rotation_period_s > 0.0 {
                             std::f64::consts::TAU / body.rotation_period_s
@@ -729,8 +741,36 @@ impl Universe {
                             v_air.length(),
                             step_dt,
                         );
-                        st.aero(p.stage, p.facing, v_air, a.density(alt), mach)
+                        let cda = st.aero(p.stage, p.facing, v_air, a.density(alt), mach);
+                        if heat.enabled {
+                            burned = st.update_heat(
+                                p.facing,
+                                v_air,
+                                a.density(alt),
+                                mach,
+                                a.temperature_k.evaluate(alt),
+                                thermal::conductivity(alt, a.depth_m),
+                                &heat,
+                                step_dt,
+                            );
+                        }
+                        cda
                     });
+                    if !burned.is_empty() {
+                        match st.burn_up(&burned, p.facing) {
+                            Some(off) => {
+                                for piece in off {
+                                    pieces.push((piece, p.r, p.v, p.facing));
+                                }
+                                st.sync(&mut p);
+                            }
+                            // the root burned up: the vessel is lost
+                            None => {
+                                p.crashed = true;
+                                p.throttle = 0.0;
+                            }
+                        }
+                    }
                 }
                 let mass_before = p.mass_t;
                 let was_landed = p.landed;
@@ -1361,6 +1401,52 @@ mod tests {
     }
 
     #[test]
+    fn a_steep_re_entry_burns_up_a_bare_pod_but_not_a_shielded_one() {
+        let run = |shield: bool| -> (bool, f64, f64) {
+            let (mut u, body, _, _) = k1_on_real_kerbin();
+            let (c, defs, res) = structure::test_capsule(shield);
+            let report = ose_data::staging::delta_v_by_stage(&c, &defs, &res);
+            let spec = flight::FlightSpec::from_report(&report, &[], &[], 1.5);
+            let v = u.spawn_powered_on_surface("Capsule", body, spec, 0.0, 0.0);
+            u.set_structure(v, structure::Structure::build(&c, &defs, &res));
+            {
+                let mut p = u.world.get_mut::<flight::Powered>(v).unwrap();
+                p.r = DVec3::new(645_000.0, 0.0, 0.0);
+                p.v = DVec3::new(-1_800.0, 2_600.0, 0.0);
+                p.facing = -p.v.normalized();
+                p.landed = false;
+                p.throttle = 0.0;
+                p.attitude = flight::Attitude::SurfaceRetrograde;
+            }
+            let mut hottest: f64 = 0.0;
+            for _ in 0..(120 * TICKS_PER_SECOND) {
+                u.step();
+                let p = u.powered(v).unwrap();
+                let alt = p.r.length() - 600_000.0;
+                if let Some(st) = u.structure(v) {
+                    hottest = hottest.max(st.temperature_k[0]);
+                }
+                if p.crashed || alt < 15_000.0 {
+                    return (p.crashed, alt, hottest);
+                }
+            }
+            let p = u.powered(v).unwrap();
+            (p.crashed, p.r.length() - 600_000.0, hottest)
+        };
+        let (lost, alt, hottest) = run(false);
+        assert!(
+            lost && alt > 15_000.0,
+            "the bare pod burns up high: {alt} m, pod at {hottest} K"
+        );
+        let (lost, alt, hottest) = run(true);
+        assert!(
+            !lost,
+            "the shielded pod comes through: {alt} m, pod at {hottest} K"
+        );
+        assert!(hottest < 850.0, "{hottest} K");
+    }
+
+    #[test]
     fn the_starter_rocket_flies_up_and_comes_down_on_its_parachute() {
         let (mut u, body, _, _) = k1_on_real_kerbin();
         let crafts: Vec<ose_data::craft::Craft> =
@@ -1467,6 +1553,11 @@ mod tests {
     fn flying_broadside_through_thick_air_tears_parts_off_as_debris() {
         let (mut u, body, spec, st) = k1_on_real_kerbin();
         let v = u.spawn_vessel_in_circular_orbit("K1", body, 100_000.0);
+        // (at Mach 9 this low everything would burn up first)
+        u.set_heat_settings(thermal::HeatSettings {
+            enabled: false,
+            ..Default::default()
+        });
         // 1 km up, 3 km/s across the stack (dynamic pressure near 5 MPa), nose held straight up
         let r = DVec3::new(600_000.0 + 1_000.0, 0.0, 0.0);
         let mut p = flight::Powered::new(spec, r, DVec3::new(0.0, 3_000.0, 0.0), false);

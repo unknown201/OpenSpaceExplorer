@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 19;
+pub const PROTOCOL_VERSION: u16 = 20;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -439,6 +439,9 @@ pub struct FlightReadout {
     pub tipped: bool,
     /// Parachutes: (craft part index, state, how far open 0..1).
     pub parachutes: Vec<(u16, ChuteState, f32)>,
+    /// Parts that are heating up or warm: (craft part index, temperature K, maximum K, re-entry heat kW).
+    /// Listed when re-entry heat reaches them or they are above 40% of their maximum.
+    pub heat: Vec<(u16, f32, f32, f32)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
