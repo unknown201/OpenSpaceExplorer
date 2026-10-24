@@ -96,11 +96,22 @@ impl Preview {
                 time_s: now_ms / 1000.0,
             },
         );
+        let view = PlanetView {
+            body_id: &self.body,
+            radius_m: self.radius_m,
+            cam,
+            sun,
+            time_s: now_ms / 1000.0,
+        };
+        let items = match (&mut self.planet, ready) {
+            (Some(p), true) => p.scatter_items(gpu, &view),
+            _ => Vec::new(),
+        };
         let extra = self
             .planet
             .as_ref()
             .filter(|_| ready)
             .map(|p| p as &dyn crate::render::ExtraPass);
-        gpu.frame_with("assets/parts/", &[], &[], [0.0, 0.0, 0.0], extra);
+        gpu.frame_with("assets/parts/", &items, &[], [0.0, 0.0, 0.0], extra);
     }
 }

@@ -47,7 +47,7 @@ struct Surface {
     shallow: vec4<f32>,
     // cloud base height (m), cloud density, has clouds, detail slices
     clouds: vec4<f32>,
-    // has detail (biome) textures, has scaled normal, debug view, 0
+    // has detail (biome) textures, has scaled normal, debug view, ocean altitude (m)
     flags: vec4<f32>,
     // the original's ambient colour by day, w: 1 for airless bodies
     ambient_day: vec4<f32>,
@@ -534,7 +534,7 @@ fn fs_terrain(in: VOut) -> @location(0) vec4<f32> {
                     var w = 1.0;
                     if surface.height_enable[c][l] > 0.5 {
                         let hp = surface.height_params[c * 4 + l];
-                        w = w * window(in.height, hp.x, hp.y, hp.z);
+                        w = w * window(in.height + surface.flags.w, hp.x, hp.y, hp.z);
                     }
                     if surface.slope_enable[c][l] > 0.5 {
                         let sp = surface.slope_params[c * 4 + l];

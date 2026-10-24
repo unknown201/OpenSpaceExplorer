@@ -682,6 +682,18 @@ impl FlightView {
         if planet_ready {
             // The planet's terrain replaces the hub scene's flat 60 km ground plane.
             gpu.hide_meshes("ksc", &["ground"]);
+            if let Some(p) = self.planet.as_mut() {
+                items.extend(p.scatter_items(
+                    gpu,
+                    &crate::planet::PlanetView {
+                        body_id: inp.body_id,
+                        radius_m: inp.body_radius,
+                        cam,
+                        sun,
+                        time_s: inp.now_ms / 1000.0,
+                    },
+                ));
+            }
         }
         let extra = self
             .planet

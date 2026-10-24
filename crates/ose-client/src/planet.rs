@@ -7,7 +7,8 @@
 //! built a few per frame, nearest first; until a quad's children exist the quad itself is drawn.
 
 use crate::planet_lod::{self, QuadKey, TerrainVertex};
-use crate::render::{fetch_bitmap, fetch_bytes, ExtraPass, Renderer};
+use crate::planet_scatter::{Instance, ScatterFile};
+use crate::render::{fetch_bitmap, fetch_bytes, DrawItem, ExtraPass, Renderer};
 use glam::{DMat4, DVec3};
 use ose_data::terrain::{TerrainIndex, TerrainMap, TerrainPack};
 use std::cell::RefCell;
@@ -116,6 +117,7 @@ enum Loaded {
     Lut(usize, Vec<u8>),
     /// The body's terrain pack (`assets/terrain/<Body>`, the server's own heights), or `None` without one.
     Pack(Option<Box<(TerrainPack, Vec<u8>)>>),
+    Scatter(ScatterFile),
 }
 
 /// The shared height maps (index and blob) once fetched.
@@ -136,6 +138,10 @@ struct Body {
     map: Option<TerrainMap>,
     /// No height map exists for this body: draw the plain sphere.
     no_terrain: bool,
+    scatter: Option<ScatterFile>,
+    /// Placed props and the camera position they were placed for.
+    placed: Vec<Instance>,
+    placed_at: Option<DVec3>,
     min_h: f64,
     max_h: f64,
     quads: HashMap<QuadKey, GpuQuad>,
@@ -605,6 +611,9 @@ impl PlanetRenderer {
                 pack_done: false,
                 map: None,
                 no_terrain: false,
+                scatter: None,
+                placed: Vec::new(),
+                placed_at: None,
                 min_h: 0.0,
                 max_h: 0.0,
                 quads: HashMap::new(),
@@ -662,6 +671,18 @@ impl PlanetRenderer {
                 match fetch_bitmap(&url).await {
                     Ok(b) => inbox.borrow_mut().push(Loaded::Image(tex, b)),
                     Err(e) => log(&format!("planet {url}: {e}")),
+                }
+            });
+        }
+        {
+            let url = format!("{base}/scatter.json");
+            let inbox = inbox.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                if let Ok(b) = fetch_bytes(&url).await {
+                    match serde_json::from_slice::<ScatterFile>(&b) {
+                        Ok(f) => inbox.borrow_mut().push(Loaded::Scatter(f)),
+                        Err(e) => log(&format!("planet {url}: {e}")),
+                    }
                 }
             });
         }
@@ -863,6 +884,9 @@ impl PlanetRenderer {
                         b.dirty = true;
                     }
                 }
+                Loaded::Scatter(f) => {
+                    self.bodies.get_mut(id).unwrap().scatter = Some(f);
+                }
                 Loaded::Pack(p) => {
                     let b = self.bodies.get_mut(id).unwrap();
                     b.pack = p;
@@ -879,33 +903,36 @@ impl PlanetRenderer {
         // The terrain map, once the shared maps and the body's description are in.
         let terrain = self.terrain.borrow();
         let b = self.bodies.get_mut(id).unwrap();
-        if b.map.is_none() && b.info_done && b.pack_done {
-            if let Some(pack) = b.pack.take() {
-                let (pack, blob) = *pack;
-                b.map = TerrainMap::from_pack(&pack, &blob);
-            }
+        if b.map.is_some() || b.no_terrain || !b.info_done || !b.pack_done {
+            return;
         }
-        if b.map.is_none() && b.info_done && b.pack_done {
-            if let Some((index, blob)) = terrain.as_ref() {
-                if let Some(entry) = index.bodies.iter().find(|e| e.id == id) {
-                    let radius = b
-                        .info
-                        .as_ref()
-                        .and_then(|v| v["surface"]["Radius"].as_f64())
-                        .unwrap_or(1.0);
-                    b.map = TerrainMap::from_entry(entry, blob, radius);
-                }
-                // A body without any height map (Jool) is drawn as the sphere.
-                b.no_terrain = b.map.is_none();
-            }
-            if let Some(m) = &b.map {
-                // Lowest point from the global map less the tiled layers' and decals' reach; highest from the map.
-                let lo = m.data.iter().copied().min().unwrap_or(0) as f64 / 65535.0 * m.scale_m
-                    + m.offset_m;
-                b.min_h = lo - if m.detail.is_some() { 1_500.0 } else { 0.0 };
-                b.max_h = m.max_m;
-            }
+        if let Some(pack) = b.pack.take() {
+            let (pack, blob) = *pack;
+            b.map = TerrainMap::from_pack(&pack, &blob);
         }
+        if b.map.is_none() {
+            let Some((index, blob)) = terrain.as_ref() else {
+                return;
+            };
+            if let Some(entry) = index.bodies.iter().find(|e| e.id == id) {
+                let radius = b
+                    .info
+                    .as_ref()
+                    .and_then(|v| v["surface"]["Radius"].as_f64())
+                    .unwrap_or(1.0);
+                b.map = TerrainMap::from_entry(entry, blob, radius);
+            }
+            // A body without any height map (Jool) is drawn as the sphere.
+            b.no_terrain = b.map.is_none();
+        }
+        if let Some(m) = &b.map {
+            // Lowest point from the global map less the tiled layers' and decals' reach; highest from the map.
+            let lo =
+                m.data.iter().copied().min().unwrap_or(0) as f64 / 65535.0 * m.scale_m + m.offset_m;
+            b.min_h = lo - if m.detail.is_some() { 1_500.0 } else { 0.0 };
+            b.max_h = m.max_m;
+        }
+        b.dirty = true;
     }
 
     fn atmosphere_ready(b: &Body) -> bool {
@@ -1255,6 +1282,49 @@ impl PlanetRenderer {
         Some(m.ground_m(lat, lon))
     }
 
+    /// Props (rocks, plants, trees) around the camera as draw items for the renderer, after the original's
+    /// vegetation packages (planet_scatter.rs). Re-placed when the camera has moved a few metres.
+    pub fn scatter_items(&mut self, gpu: &mut Renderer, view: &PlanetView) -> Vec<DrawItem> {
+        let Some(b) = self.bodies.get_mut(view.body_id) else {
+            return Vec::new();
+        };
+        let (Some(f), Some(map)) = (&b.scatter, &b.map) else {
+            return Vec::new();
+        };
+        let moved = b
+            .placed_at
+            .map(|p| (p - view.cam).length())
+            .unwrap_or(f64::INFINITY);
+        if moved > 4.0 {
+            b.placed = f.place(map, view.radius_m, [view.cam.x, view.cam.y, view.cam.z]);
+
+            b.placed_at = Some(view.cam);
+        }
+        let models = f.models();
+        let mut out = Vec::with_capacity(b.placed.len());
+        for inst in &b.placed {
+            let path = models[inst.model];
+            let key = format!("scatter:{path}");
+            gpu.request_model(&key, &format!("assets/{path}"));
+            if !gpu.has_model(&key) {
+                continue;
+            }
+            let up = DVec3::from_array(inst.up);
+            let rot = glam::DQuat::from_rotation_arc(DVec3::Y, up)
+                * glam::DQuat::from_rotation_y(inst.yaw);
+            let mut it = DrawItem::lit(
+                key,
+                DVec3::from_array(inst.pos) - view.cam,
+                rot,
+                inst.scale,
+                view.sun,
+            );
+            it.ambient = 0.3;
+            out.push(it);
+        }
+        out
+    }
+
     fn body(&self) -> Option<&Body> {
         self.bodies.get(self.current.as_deref()?)
     }
@@ -1350,7 +1420,8 @@ fn surface_uniform(b: &Body, debug: f32) -> SurfaceU {
         flag(slices > 0 && b.tex.contains_key(&Tex::Biome)),
         flag(b.tex.contains_key(&Tex::Normal)),
         debug,
-        0.0,
+        // the original's biome height rules count from the PQS radius, below the sea by its ocean altitude
+        b.map.as_ref().map(|m| -m.offset_m).unwrap_or(0.0) as f32,
     ];
     u
 }

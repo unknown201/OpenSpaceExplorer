@@ -381,6 +381,16 @@ impl Detail {
 }
 
 impl TerrainMap {
+    /// The biome mask's four weights at a latitude/longitude (bilinear, as the original samples it), or `None`
+    /// without a pack mask. Not normalised.
+    pub fn biome_weights(&self, lat_deg: f64, lon_deg: f64) -> Option<[f64; 4]> {
+        let d = self.detail.as_ref()?;
+        d.mask.as_ref()?;
+        let u = (lon_deg / 360.0 + 0.5).rem_euclid(1.0);
+        let v = (lat_deg / 180.0 + 0.5).clamp(0.0, 1.0);
+        Some(d.mask_at(u, v))
+    }
+
     /// A map with the pack's finer global map, tiled layers and decals; `None` if the blob is short.
     pub fn from_pack(pack: &TerrainPack, blob: &[u8]) -> Option<TerrainMap> {
         let entry = BodyTerrain {

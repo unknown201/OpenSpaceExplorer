@@ -81,6 +81,31 @@ const FACES: [(V3, V3, V3); 6] = [
     ([0.0, 0.0, -1.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]),
 ];
 
+/// The cube face a direction falls on and its face coordinates `a`, `b` in [-1, 1] (the tangent-warped
+/// parameters `QuadKey::dir_at` uses).
+pub fn face_ab(d: V3) -> (u8, f64, f64) {
+    let mut best = (0u8, f64::MIN);
+    for (i, (n, _, _)) in FACES.iter().enumerate() {
+        let c = dot(d, *n);
+        if c > best.1 {
+            best = (i as u8, c);
+        }
+    }
+    let (n, sa, ta) = FACES[best.0 as usize];
+    let dn = dot(d, n).max(1e-12);
+    let a = (dot(d, sa) / dn).atan() / std::f64::consts::FRAC_PI_4;
+    let b = (dot(d, ta) / dn).atan() / std::f64::consts::FRAC_PI_4;
+    (best.0, a, b)
+}
+
+/// Unit direction of face coordinates (inverse of `face_ab`).
+pub fn dir_from_ab(face: u8, a: f64, b: f64) -> V3 {
+    let (n, sa, ta) = FACES[face as usize % 6];
+    let wa = (a * std::f64::consts::FRAC_PI_4).tan();
+    let wb = (b * std::f64::consts::FRAC_PI_4).tan();
+    normalize(add(n, add(scale(sa, wa), scale(ta, wb))))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct QuadKey {
     pub face: u8,
@@ -407,6 +432,16 @@ mod tests {
                 (a - lat).abs() < 1e-9 && (b - lon).abs() < 1e-9,
                 "{lat} {lon} -> {a} {b}"
             );
+        }
+    }
+
+    #[test]
+    fn face_coordinates_round_trip() {
+        for &(lat, lon) in &[(0.0, 0.0), (44.0, 91.0), (-80.0, -170.0), (10.0, -74.8)] {
+            let d = direction(lat, lon);
+            let (f, a, b) = face_ab(d);
+            assert!(a.abs() <= 1.0 + 1e-9 && b.abs() <= 1.0 + 1e-9);
+            assert!(length(sub(dir_from_ab(f, a, b), d)) < 1e-12);
         }
     }
 

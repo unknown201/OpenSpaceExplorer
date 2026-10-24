@@ -97,6 +97,7 @@ in the renderer).
 | 7 | Clouds | volumetric + scaled shell, cloud shadows | The scaled shell at the layer's base height with the baked coverage cubemap, broken into puffs up close by drifting noise, darker underneath; the cover along the sun ray shades the ground and sea; no volumetrics |
 | 8 | Sunlight and exposure | light + transmittance, CelestialBodyLighting ambient, post-process auto exposure | Sun colour through the transmittance LUT, sky light from the irradiance LUT; the body's own ambient colours (day on airless bodies, night everywhere); a fixed exposure per body that puts its mean albedo where Kerbin's sits, standing in for the auto exposure |
 | 9 | Scaled vs local | swap at 5,000 km | One path: the quadtree at low levels is the scaled body |
+| 10 | Rocks, plants, trees | Vegetation Studio Pro packages per biome | The packages' prefabs placed by their spacing, density, scale, height, steepness and noise rules near the camera (section 7) |
 
 Checking: `?planet=<Body>&lat=..&lon=..&alt=..&heading=..&pitch=..&sunaz=..&sunel=..` opens the client on a planet
 preview (planet_preview.rs) that draws only that body from the viewpoint, the way flight would; `debug=1..6` shows
@@ -106,5 +107,18 @@ Deviations: quads split below 2.5 x radius / 2^level instead of 10 x (about 1.6 
 a few hundred quads, not a thousand), and the shallowest level drawn is 2, not 3. The KSC hub scene's flat 60 km
 ground plane (`ksc.glb` mesh `ground`) is hidden in flight once the terrain draws.
 
-Not in v1: FFT waves, foam, caustics and under-water, volumetric clouds and cloud shadows, scatter
-(rocks, trees), eclipses, gas giant mode.
+## 7. Scatter (Vegetation Studio Pro)
+
+Rocks, boulders, plants and trees come from `VegetationPackagePro` assets in each body's simulation bundle, one per
+biome mask channel (`VegetationSystemPro.BiomeTextureMask<C>ChannelType` names the package's `BiomeType`). Each
+`VegetationInfo` has a prefab, `SampleDistance` (grid spacing), `Density`, a scale range, `UseHeightRule`
+(`MinHeight`/`MaxHeight`), `UseSteepnessRule` (degrees), noise density/cutoff rules and a render distance from the
+system's `VegetationSettings` (plants 150 m, trees +200 m, medium and large objects half of 2500 m) times the
+item's `RenderDistanceFactor`. `tools/export_scatter.py` writes the prefabs (LOD0, one mesh per submesh so bark and
+leaves keep their materials; foliage blended instead of alpha-tested) and `scatter.json`; `planet_scatter.rs`
+places them on a planet-fixed grid on the camera's cube face with hashed jitter, density, scale and turn, the biome
+weight as probability, and the rules; at most 120 per item and 900 in all, nearest first, props under 0.4 m left
+to the ground texture. Grass is not drawn. The original's PQS texture sample rules are unused on the stock bodies.
+
+Not in v1: FFT waves, caustics and under-water, volumetric clouds, grass, eclipses, the gas giant mode of the
+atmosphere.
