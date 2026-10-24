@@ -533,6 +533,7 @@ pub fn steer(p: &mut Powered, target: DVec3, thrust_fraction: f64, dt: f64) {
     p.facing = rotate(p.facing, p.angvel, dt);
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct StepOutcome {
     pub crashed: bool,
     pub touched_down: bool,
@@ -540,6 +541,11 @@ pub struct StepOutcome {
     pub thrust_kn: f64,
     /// Aerodynamic drag this step, kN, inertial.
     pub drag_kn: DVec3,
+    /// Angular acceleration the controller applied and the angular velocity after it, inertial.
+    pub angular_accel: DVec3,
+    pub angvel: DVec3,
+    /// Share of that control torque from reaction wheels (the rest from engine gimbals).
+    pub wheel_share: f64,
 }
 
 /// Integrate one `dt` of powered flight around `body`.
@@ -551,12 +557,7 @@ pub fn integrate(
     ut: f64,
     dt: f64,
 ) -> StepOutcome {
-    let mut out = StepOutcome {
-        crashed: false,
-        touched_down: false,
-        thrust_kn: 0.0,
-        drag_kn: DVec3::ZERO,
-    };
+    let mut out = StepOutcome::default();
     if p.crashed {
         return out;
     }
@@ -590,7 +591,22 @@ pub fn integrate(
         } else {
             0.0
         };
+        let w0 = p.angvel;
         steer(p, target, frac, dt);
+        out.angular_accel = (p.angvel - w0) * (1.0 / dt);
+        out.angvel = p.angvel;
+        out.wheel_share = p
+            .rotation_stage()
+            .map(|s| {
+                let wheel = s.wheel_torque_knm * p.wheel_scale.clamp(0.0, 1.0);
+                let gimbal = s.gimbal_torque_knm * frac.clamp(0.0, 1.0);
+                if wheel + gimbal > 0.0 {
+                    wheel / (wheel + gimbal)
+                } else {
+                    1.0
+                }
+            })
+            .unwrap_or(1.0);
     }
 
     // thrust and propellant

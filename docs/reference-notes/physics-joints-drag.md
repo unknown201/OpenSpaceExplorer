@@ -72,9 +72,11 @@ Example, two size-1 parts with `breakingForce = 50`, `breakingTorque = 50` (the 
 
 Our mapping (`ose_sim::rigid`): one rapier multibody joint per parent link, fixed, so a craft is one
 reduced-coordinate tree (exact across the 100:1 mass ratios of radial decouplers; impulse joints with angular
-springs sagged there). The angular spring is not simulated: rapier's multibody motors for three free rotations
-track integrated angular velocity, not the true relative rotation, and wandered. Joint loads come from
-Newton-Euler over each joint's subtree and are checked against `joint_limits` (the formulas above) every step.
+springs sagged there). Rapier's multibody motors for three free rotations track integrated angular velocity, not the
+true relative rotation, and wandered, so the angular spring is our own layer: each joint's bend obeys
+`I theta'' = -tau - k theta - c theta'` with `tau` from Newton-Euler over the joint's subtree, `I` the subtree's
+moment of inertia about the anchor and `k`, `c` from the table above, integrated semi-implicitly in 8 substeps.
+Breaks are checked against `joint_limits` on the joint force and the spring torque `k |theta|`.
 
 ## Atmosphere properties used by flight (`CelestialBodyComponent`, `PartComponent`)
 

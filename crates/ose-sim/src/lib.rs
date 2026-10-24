@@ -1029,9 +1029,15 @@ mod tests {
         let v = u.spawn_powered_on_surface("K1", body, spec, 0.0, 0.0);
         u.set_structure(v, st);
         assert!(u.set_controls(v, 1.0, flight::Attitude::Up));
+        let mut peak_stress: f64 = 0.0;
         for _ in 0..(15 * TICKS_PER_SECOND) {
             u.step();
+            peak_stress = peak_stress.max(u.structure(v).unwrap().rigid.max_stress());
         }
+        assert!(
+            peak_stress > 0.0 && peak_stress < 1.0,
+            "loaded but within limits ({peak_stress})"
+        );
         let p = u.powered(v).unwrap();
         assert!(!p.landed && p.v.length() > 100.0, "climbing");
         assert!(u.take_broken_off().is_empty());

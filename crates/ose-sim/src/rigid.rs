@@ -3,11 +3,18 @@
 //! One rapier body per part, one joint per parent link. Units follow the original's PhysX setup: tonnes, metres,
 //! seconds, so forces are kN and torques kN*m. Joints are fixed, reduced-coordinate (multibody) links: a craft
 //! is a tree, and a multibody stays exact across the 100:1 mass ratios of radial decouplers between tanks and
-//! boosters, which an iterative solver cannot hold. The original's angular spring (`JointLimits::stiffness`)
-//! only adds wobble, so it is kept as data but not simulated; rapier's multibody motors for joints with three
-//! free rotations integrate angular velocity rather than track the true relative rotation, and wander.
-//! Each joint's load comes from Newton-Euler over the subtree it carries; it breaks when the force or the
-//! torque exceeds the original's limits, and the craft splits into the connected groups that remain.
+//! boosters, which an iterative solver cannot hold. Each joint's load comes from Newton-Euler over the subtree
+//! it carries.
+//!
+//! Wobble is a layer on top: every non-rigid joint bends by a rotation `theta` driven by the torque the rigid
+//! solution says it carries, with the original's angular spring (`JointLimits::stiffness`, damping
+//! `stiffness * JointDampingFactor`) and the subtree's moment of inertia about the anchor:
+//! `I theta'' = -tau - k theta - c theta'`, integrated semi-implicitly in substeps so it stays stable at any
+//! stiffness. Statically a joint bends by `tau / k`, so a tall stack under thrust or a booster on a radial
+//! decoupler visibly flexes, and a sudden load rings. A joint breaks when its force, or its spring torque
+//! `k |theta|` (the load itself for rigid joints), exceeds the original's limits; the craft then splits into
+//! the connected groups that remain. (Rapier's own multibody motors for three free rotations track integrated
+//! angular velocity rather than the true rotation, and wander, so the spring is ours.)
 //!
 //! The vessel frame is the craft frame made right-handed: Unity Y-up with Z negated, so engines push along +Y.
 
@@ -32,6 +39,8 @@ pub const JOINT_ATTACH_STIFFNESS: f64 = 10.0;
 pub const JOINT_DAMPING_FACTOR: f64 = 0.01;
 pub const JOINT_BREAK_FORCE_FACTOR: f64 = 50.0;
 pub const JOINT_BREAK_TORQUE_FACTOR: f64 = 50.0;
+/// Spring substeps per step for the wobble layer.
+const WOBBLE_SUBSTEPS: usize = 8;
 
 /// Spring and break limits of one part joint.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -120,9 +129,77 @@ pub struct Link {
     /// Last step's load, for readouts and break checks.
     pub force_kn: f64,
     pub torque_knm: f64,
+    /// Torque the joint carries (vessel frame), kN*m.
+    pub torque_vec_knm: DVec3,
+    /// Bend of the child away from the parent (rotation vector, vessel frame, about the anchor), rad, and
+    /// its rate.
+    pub bend: DVec3,
+    pub bend_rate: DVec3,
     handle: Option<MultibodyJointHandle>,
-    /// The joint anchor in the child's frame.
+    /// The joint anchor in the child's frame, and in the vessel frame at rest.
     anchor_child: Vector,
+    anchor_rest: DVec3,
+}
+
+/// Turning loads the rigid bodies do not feel themselves: the vessel's angular acceleration and rate (vessel
+/// frame) about its centre of mass, and the control torques (at parts) and forces that drive it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Turning {
+    pub alpha: DVec3,
+    pub omega: DVec3,
+    pub torques: Vec<(usize, DVec3)>,
+    pub forces: Vec<PartForce>,
+}
+
+/// Unit quaternion (x, y, z, w) helpers for the bend chain.
+fn q_from_rotvec(r: DVec3) -> [f64; 4] {
+    let a = r.length();
+    if a < 1e-12 {
+        return [r.x * 0.5, r.y * 0.5, r.z * 0.5, 1.0];
+    }
+    let (s, c) = (a * 0.5).sin_cos();
+    let u = r * (s / a);
+    [u.x, u.y, u.z, c]
+}
+
+fn q_mul(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
+    [
+        a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+        a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+        a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+        a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
+    ]
+}
+
+fn q_conj(q: [f64; 4]) -> [f64; 4] {
+    [-q[0], -q[1], -q[2], q[3]]
+}
+
+fn q_rotate(q: [f64; 4], v: DVec3) -> DVec3 {
+    let u = DVec3::new(q[0], q[1], q[2]);
+    let t = u.cross(v) * 2.0;
+    v + t * q[3] + u.cross(t)
+}
+
+fn q_to_rotvec(q: [f64; 4]) -> DVec3 {
+    let (q, sign) = if q[3] < 0.0 { (q, -1.0) } else { (q, 1.0) };
+    let u = DVec3::new(q[0], q[1], q[2]) * sign;
+    let s = u.length();
+    if s < 1e-12 {
+        return u * 2.0;
+    }
+    let angle = 2.0 * s.atan2(q[3] * sign);
+    u * (angle / s)
+}
+
+/// How a part sits away from its rest pose because of the bends between it and the root.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PartFlex {
+    pub part: usize,
+    /// Rotation vector (vessel frame), rad.
+    pub rotation: DVec3,
+    /// Displacement of the part's origin (vessel frame), m.
+    pub offset_m: DVec3,
 }
 
 impl Link {
@@ -157,6 +234,11 @@ pub struct RigidVessel {
     /// Parts still simulated (removed ones were staged away or broke off).
     pub present: Vec<bool>,
     pub links: Vec<Link>,
+    /// Part origins at rest, vessel frame.
+    rest_pos: Vec<DVec3>,
+    /// The root body's rotation at build: the vessel frame is the root's rotation since then.
+    root_rot0: [f64; 4],
+    root: usize,
     bodies_of: Vec<RigidBodyHandle>,
     bodies: RigidBodySet,
     colliders: ColliderSet,
@@ -280,18 +362,42 @@ impl RigidVessel {
                 limits,
                 force_kn: 0.0,
                 torque_knm: 0.0,
+                torque_vec_knm: DVec3::ZERO,
+                bend: DVec3::ZERO,
+                bend_rate: DVec3::ZERO,
                 handle: h,
                 anchor_child: a2,
+                anchor_rest: anchor,
             });
         }
         let params = IntegrationParameters::default();
         let n = masses_t.len();
+        let rest_pos = craft
+            .parts
+            .iter()
+            .map(|p| to_vessel(p.local_position))
+            .collect();
         RigidVessel {
             masses_t,
             dry_masses_t,
             sizes_m,
             present: vec![true; n],
             links,
+            rest_pos,
+            root_rot0: {
+                let r = craft
+                    .parts
+                    .iter()
+                    .position(|p| p.parent.is_none())
+                    .unwrap_or(0);
+                let q = rots.get(r).copied().unwrap_or(Rotation::IDENTITY);
+                [q.x, q.y, q.z, q.w]
+            },
+            root: craft
+                .parts
+                .iter()
+                .position(|p| p.parent.is_none())
+                .unwrap_or(0),
             bodies_of,
             bodies,
             colliders: ColliderSet::new(),
@@ -305,6 +411,18 @@ impl RigidVessel {
             ccd: CCDSolver::new(),
             pipeline: PhysicsPipeline::new(),
             params,
+        }
+    }
+
+    /// How far the structure has turned since it was built (rotation from the vessel frame to the solver's
+    /// world): the root's rotation now against its rotation then.
+    pub fn frame(&self) -> [f64; 4] {
+        match self.bodies.get(self.bodies_of[self.root]) {
+            Some(b) if self.present[self.root] => {
+                let r = b.rotation();
+                q_mul([r.x, r.y, r.z, r.w], q_conj(self.root_rot0))
+            }
+            _ => [0.0, 0.0, 0.0, 1.0],
         }
     }
 
@@ -354,8 +472,20 @@ impl RigidVessel {
     }
 
     /// Advance by `dt` under a uniform gravitational acceleration and the given part forces; returns the
-    /// joints that broke (already removed).
+    /// joints that broke (already removed). Forces and `turning` are in the vessel frame, which turns with
+    /// the structure (it may drift slowly under unbalanced loads); `turning` adds the loads of the vessel
+    /// being turned.
     pub fn step(&mut self, dt: f64, gravity: DVec3, forces: &[PartForce]) -> Vec<Broken> {
+        self.step_turning(dt, gravity, forces, None)
+    }
+
+    pub fn step_turning(
+        &mut self,
+        dt: f64,
+        gravity: DVec3,
+        forces: &[PartForce],
+        turning: Option<&Turning>,
+    ) -> Vec<Broken> {
         let n = self.len();
         for &h in &self.bodies_of {
             if let Some(b) = self.bodies.get_mut(h) {
@@ -363,8 +493,16 @@ impl RigidVessel {
             }
         }
         // external force and its moment about the origin, per part, for the joint loads below
+        let frame = self.frame();
+        let to_world = |x: DVec3| q_rotate(frame, x);
+        let gravity = to_world(gravity);
         let mut ext = vec![(DVec3::ZERO, DVec3::ZERO); n];
         for f in forces {
+            let f = PartForce {
+                part: f.part,
+                force_kn: to_world(f.force_kn),
+                offset_m: to_world(f.offset_m),
+            };
             let Some(&h) = self.bodies_of.get(f.part) else {
                 continue;
             };
@@ -377,6 +515,7 @@ impl RigidVessel {
             ext[f.part].0 = ext[f.part].0 + f.force_kn;
             ext[f.part].1 = ext[f.part].1 + d(at).cross(f.force_kn);
         }
+        let present: Vec<usize> = (0..n).filter(|&i| self.present[i]).collect();
         for i in (0..n).filter(|&i| self.present[i]) {
             self.prev_vel[i] = self.velocity(i);
         }
@@ -400,17 +539,57 @@ impl RigidVessel {
         // motion needs beyond gravity and the external forces on it (rotational inertia neglected).
         let mut sum_f = vec![DVec3::ZERO; n];
         let mut sum_m = vec![DVec3::ZERO; n];
-        for i in (0..n).filter(|&i| self.present[i]) {
+        // subtree mass moments for each joint's moment of inertia: sum m, sum m r, sum m |r|^2 + own boxes
+        let mut sm = vec![0.0; n];
+        let mut smr = vec![DVec3::ZERO; n];
+        let mut smr2 = vec![0.0; n];
+        let com = if present.is_empty() {
+            DVec3::ZERO
+        } else {
+            self.centre_of(&present).0
+        };
+        for &i in &present {
             let a = (self.velocity(i) - self.prev_vel[i]) * (1.0 / dt);
-            let need = (a - gravity) * self.masses_t[i];
+            let m = self.masses_t[i];
+            let r = self.position(i);
+            let mut need = (a - gravity) * m;
+            if let Some(t) = turning {
+                // the part is carried round the centre of mass: tangential and centripetal acceleration
+                let rel = r - com;
+                let (alpha, omega) = (to_world(t.alpha), to_world(t.omega));
+                need = need + (alpha.cross(rel) + omega.cross(omega.cross(rel))) * m;
+            }
             sum_f[i] = need - ext[i].0;
-            sum_m[i] = self.position(i).cross(need) - ext[i].1;
+            sum_m[i] = r.cross(need) - ext[i].1;
+            let s = self.sizes_m[i];
+            sm[i] = m;
+            smr[i] = r * m;
+            smr2[i] = m * r.length_squared() + m * (s.x * s.x + s.y * s.y + s.z * s.z) / 24.0;
+        }
+        if let Some(t) = turning {
+            // the control that turns the vessel: wheel torques and gimbal forces
+            for &(part, tq) in &t.torques {
+                if self.present.get(part).copied().unwrap_or(false) {
+                    sum_m[part] = sum_m[part] - to_world(tq);
+                }
+            }
+            for f in &t.forces {
+                if self.present.get(f.part).copied().unwrap_or(false) {
+                    let at = self.position(f.part) + to_world(f.offset_m);
+                    let fw = to_world(f.force_kn);
+                    sum_f[f.part] = sum_f[f.part] - fw;
+                    sum_m[f.part] = sum_m[f.part] - at.cross(fw);
+                }
+            }
         }
         for &c in self.subtree_order().iter().rev() {
             if let Some(l) = self.links.iter().find(|l| l.intact() && l.child == c) {
                 let p = l.parent;
                 sum_f[p] = sum_f[p] + sum_f[c];
                 sum_m[p] = sum_m[p] + sum_m[c];
+                sm[p] += sm[c];
+                smr[p] = smr[p] + smr[c];
+                smr2[p] += smr2[c];
             }
         }
         let mut broken = Vec::new();
@@ -419,7 +598,28 @@ impl RigidVessel {
             let body = &self.bodies[self.bodies_of[l.child]];
             let anchor = d(body.position().transform_point(l.anchor_child));
             l.force_kn = sum_f[l.child].length();
-            l.torque_knm = (sum_m[l.child] - anchor.cross(sum_f[l.child])).length();
+            let tau_world = sum_m[l.child] - anchor.cross(sum_f[l.child]);
+            // bends live in the vessel frame
+            let tau = q_rotate(q_conj(frame), tau_world);
+            l.torque_vec_knm = tau;
+            l.torque_knm = if l.limits.rigid {
+                tau.length()
+            } else {
+                // the subtree's moment of inertia about the anchor, then the spring
+                let c = l.child;
+                let inertia = (smr2[c] - 2.0 * anchor.dot(smr[c])
+                    + sm[c] * anchor.length_squared())
+                .max(1e-6);
+                let (k, damp) = (l.limits.stiffness, l.limits.damping);
+                let h = dt / WOBBLE_SUBSTEPS as f64;
+                for _ in 0..WOBBLE_SUBSTEPS {
+                    let accel = (tau * -1.0 - l.bend * k) * (1.0 / inertia);
+                    l.bend_rate = (l.bend_rate + accel * h)
+                        * (1.0 / (1.0 + h * damp / inertia + h * h * k / inertia));
+                    l.bend = l.bend + l.bend_rate * h;
+                }
+                k * l.bend.length()
+            };
             if l.force_kn > l.limits.break_force_kn || l.torque_knm > l.limits.break_torque_knm {
                 self.joints.remove(h, true);
                 l.handle = None;
@@ -432,6 +632,128 @@ impl RigidVessel {
             }
         }
         broken
+    }
+
+    /// Let the joints ring down with no load (a coast: nothing pushes the structure).
+    pub fn relax(&mut self, dt: f64) {
+        let n = self.len();
+        let present: Vec<usize> = (0..n).filter(|&i| self.present[i]).collect();
+        if self
+            .links
+            .iter()
+            .all(|l| l.bend.length() < 1e-7 && l.bend_rate.length() < 1e-6)
+        {
+            return;
+        }
+        let mut inertia = vec![0.0; n];
+        for &i in &present {
+            let s = self.sizes_m[i];
+            inertia[i] = self.masses_t[i] * (s.x * s.x + s.y * s.y + s.z * s.z) / 24.0;
+        }
+        for l in self
+            .links
+            .iter_mut()
+            .filter(|l| l.intact() && !l.limits.rigid)
+        {
+            // a rough subtree inertia is enough to ring down
+            let i = (inertia[l.child] + self.masses_t[l.child]).max(1e-6);
+            let (k, damp) = (l.limits.stiffness, l.limits.damping);
+            let h = dt / WOBBLE_SUBSTEPS as f64;
+            for _ in 0..WOBBLE_SUBSTEPS {
+                let accel = (l.bend * -k) * (1.0 / i);
+                l.bend_rate =
+                    (l.bend_rate + accel * h) * (1.0 / (1.0 + h * damp / i + h * h * k / i));
+                l.bend = l.bend + l.bend_rate * h;
+            }
+            l.torque_knm = k * l.bend.length();
+            l.torque_vec_knm = DVec3::ZERO;
+        }
+    }
+
+    /// Rest position of a part (vessel frame) and the attached parts' centre of mass at rest.
+    pub fn rest_position(&self, part: usize) -> DVec3 {
+        self.rest_pos[part]
+    }
+
+    pub fn rest_centre(&self) -> DVec3 {
+        let (mut m, mut c) = (0.0, DVec3::ZERO);
+        for i in (0..self.len()).filter(|&i| self.present[i]) {
+            m += self.masses_t[i];
+            c = c + self.rest_pos[i] * self.masses_t[i];
+        }
+        if m > 0.0 {
+            c * (1.0 / m)
+        } else {
+            c
+        }
+    }
+
+    /// Torque (vessel frame, kN*m) that gives the attached parts angular acceleration `alpha` about their
+    /// centre of mass: the point masses' `sum m (|r|^2 alpha - (r . alpha) r)` plus their own boxes.
+    pub fn torque_for(&self, alpha: DVec3) -> DVec3 {
+        let c = self.rest_centre();
+        let mut t = DVec3::ZERO;
+        for i in (0..self.len()).filter(|&i| self.present[i]) {
+            let m = self.masses_t[i];
+            let r = self.rest_pos[i] - c;
+            let s = self.sizes_m[i];
+            let own = m * (s.x * s.x + s.y * s.y + s.z * s.z) / 18.0;
+            t = t + (alpha * r.length_squared() - r * r.dot(alpha)) * m + alpha * own;
+        }
+        t
+    }
+
+    /// Worst joint load as a fraction of its break limit (force or torque), 0 when unloaded.
+    pub fn max_stress(&self) -> f64 {
+        self.links
+            .iter()
+            .filter(|l| l.intact())
+            .map(|l| {
+                let f = if l.limits.break_force_kn.is_finite() {
+                    l.force_kn / l.limits.break_force_kn
+                } else {
+                    0.0
+                };
+                let t = if l.limits.break_torque_knm.is_finite() {
+                    l.torque_knm / l.limits.break_torque_knm
+                } else {
+                    0.0
+                };
+                f.max(t)
+            })
+            .fold(0.0, f64::max)
+    }
+
+    /// Each attached part's pose away from rest from the bends between it and the root; parts that moved
+    /// less than `min_rad` / `min_m` are left out.
+    pub fn flex(&self, min_rad: f64, min_m: f64) -> Vec<PartFlex> {
+        let n = self.len();
+        let mut rot = vec![[0.0, 0.0, 0.0, 1.0]; n];
+        let mut off = vec![DVec3::ZERO; n];
+        let mut out = Vec::new();
+        for i in self.subtree_order() {
+            let Some(l) = self.links.iter().find(|l| l.intact() && l.child == i) else {
+                continue;
+            };
+            let p = l.parent;
+            // the anchor rides on the parent, then the child turns about it by its bend
+            let anchor =
+                l.anchor_rest + off[p] + q_rotate(rot[p], l.anchor_rest - self.rest_pos[p])
+                    - (l.anchor_rest - self.rest_pos[p]);
+            let q = q_mul(q_from_rotvec(l.bend), rot[p]);
+            let pos = anchor + q_rotate(q, self.rest_pos[i] - l.anchor_rest);
+            rot[i] = q;
+            off[i] = pos - self.rest_pos[i];
+            let rv = q_to_rotvec(q);
+            if rv.length() >= min_rad || off[i].length() >= min_m {
+                out.push(PartFlex {
+                    part: i,
+                    rotation: rv,
+                    offset_m: off[i],
+                });
+            }
+        }
+        out
     }
 
     /// Parts in depth-first order over the intact joints, parents before children.

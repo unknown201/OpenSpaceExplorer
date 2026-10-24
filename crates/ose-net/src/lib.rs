@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 10;
+pub const PROTOCOL_VERSION: u16 = 11;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -309,6 +309,20 @@ pub struct FlightReadout {
     pub electric_capacity: f64,
     /// False for an uncrewed vessel whose probe cores have run out of charge: it cannot steer or throttle.
     pub has_control: bool,
+    /// Worst joint load as a fraction of its break limit (1 breaks), 0 without a part structure.
+    pub joint_stress: f64,
+    /// Parts bent away from their rest pose by joint flex (wobble); parts within 0.1 mrad and 2 mm are left
+    /// out. Craft part indices, in the craft's own frame (Unity Y-up, as `local_position`).
+    pub flex: Vec<PartFlex>,
+}
+
+/// One part's pose away from rest: rotate the part by `rotation` (rotation vector, rad, craft frame) about its
+/// origin, then move it by `offset_m`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PartFlex {
+    pub part: u16,
+    pub rotation: [f32; 3],
+    pub offset_m: [f32; 3],
 }
 
 /// How a body spins, index-aligned with `BodyCatalog::bodies`. Body-fixed longitude 0 is at inertial angle

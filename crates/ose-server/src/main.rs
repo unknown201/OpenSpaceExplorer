@@ -681,6 +681,34 @@ fn flight_readout(
         electric_charge: ec.0,
         electric_capacity: ec.1,
         has_control: p.controlled,
+        joint_stress: u
+            .structure(e)
+            .map(|st| st.rigid.max_stress())
+            .unwrap_or(0.0),
+        flex: u
+            .structure(e)
+            .map(|st| {
+                st.rigid
+                    .flex(1e-4, 2e-3)
+                    .into_iter()
+                    .map(|f| ose_net::PartFlex {
+                        part: f.part as u16,
+                        // the vessel frame is the craft frame with Z negated; a rotation vector is an
+                        // axial vector, so it flips the other two components
+                        rotation: [
+                            -f.rotation.x as f32,
+                            -f.rotation.y as f32,
+                            f.rotation.z as f32,
+                        ],
+                        offset_m: [
+                            f.offset_m.x as f32,
+                            f.offset_m.y as f32,
+                            -f.offset_m.z as f32,
+                        ],
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
     })
 }
 

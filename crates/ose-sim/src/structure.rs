@@ -14,7 +14,7 @@ use ose_math::DVec3;
 use crate::aero::{self, DragCurves, Faces};
 use crate::flight::{Powered, StepOutcome};
 use crate::resources::{FlowNet, Instruction, Request};
-use crate::rigid::{PartForce, RigidVessel};
+use crate::rigid::{PartForce, RigidVessel, Turning};
 
 /// Loads below this (kN) leave the structure as it is rather than stepping it.
 const QUIET_KN: f64 = 0.01;
@@ -454,13 +454,18 @@ impl Structure {
         if p.stage != self.staged_to {
             self.trim_to(p.stage);
         }
-        if p.landed || p.crashed {
-            return Vec::new();
-        }
-        if out.thrust_kn < QUIET_KN && out.drag_kn.length() < QUIET_KN {
-            return Vec::new();
-        }
         let (bx, by, bz) = basis(p.facing);
+        let to_vessel = |v: DVec3| DVec3::new(v.dot(bx), v.dot(by), v.dot(bz));
+        let alpha = to_vessel(out.angular_accel);
+        let turning = alpha.length() > 1e-4 || out.angvel.length() > 1e-3;
+        if p.landed
+            || p.crashed
+            || (out.thrust_kn < QUIET_KN && out.drag_kn.length() < QUIET_KN && !turning)
+        {
+            // nothing pushes the structure: let it ring down
+            self.rigid.relax(dt);
+            return Vec::new();
+        }
         let present: Vec<usize> = (0..self.rigid.len())
             .filter(|&i| self.rigid.present[i])
             .collect();
@@ -522,7 +527,39 @@ impl Structure {
                 });
             }
         }
-        let broken = self.rigid.step(dt, DVec3::ZERO, &forces);
+        // turning the vessel: the wheels twist it at the root, the gimbals push sideways at the engines
+        let turn = turning.then(|| {
+            let need = self.rigid.torque_for(alpha);
+            let share = out.wheel_share.clamp(0.0, 1.0);
+            let mut t = Turning {
+                alpha,
+                omega: to_vessel(out.angvel),
+                torques: vec![(self.root, need * share)],
+                forces: Vec::new(),
+            };
+            let engines = self.live_engines(p.stage);
+            let c = self.rigid.rest_centre();
+            let gimbal = need * (1.0 - share);
+            if gimbal.length() > 0.0 && !engines.is_empty() {
+                let each = gimbal * (1.0 / engines.len() as f64);
+                for &e in &engines {
+                    let r = self.rigid.rest_position(e) - c;
+                    if r.length_squared() > 1e-6 {
+                        t.forces.push(PartForce {
+                            part: e,
+                            force_kn: each.cross(r) * (1.0 / r.length_squared()),
+                            offset_m: DVec3::ZERO,
+                        });
+                    }
+                }
+            } else if gimbal.length() > 0.0 {
+                t.torques[0].1 = need;
+            }
+            t
+        });
+        let broken = self
+            .rigid
+            .step_turning(dt, DVec3::ZERO, &forces, turn.as_ref());
         if broken.is_empty() {
             return Vec::new();
         }
@@ -637,6 +674,80 @@ mod tests {
     }
 
     #[test]
+    fn a_sudden_load_makes_the_boosters_wobble_and_ring_down() {
+        let (crafts, defs, res) = assets();
+        let k1 = crafts.iter().find(|c| c.name == "Kerbal K1").unwrap();
+        let report = ose_data::staging::delta_v_by_stage(k1, &defs, &res);
+        let mut s = Structure::build(k1, &defs, &res);
+        let p = flying(DVec3::new(1.0, 0.0, 0.0));
+        let out = StepOutcome {
+            thrust_kn: report.stages[0].thrust_kn,
+            ..Default::default()
+        };
+        let booster = |s: &Structure| {
+            s.rigid
+                .links
+                .iter()
+                .find(|l| l.child == 21)
+                .map(|l| l.bend.length())
+                .unwrap()
+        };
+        let mut peak: f64 = 0.0;
+        let mut settled = 0.0;
+        for i in 0..100 {
+            s.apply(&p, &out, 0.02);
+            peak = peak.max(booster(&s));
+            if i == 99 {
+                settled = booster(&s);
+            }
+        }
+        // the booster on its radial decoupler bends under the thrust, overshooting before it settles
+        assert!(settled > 1e-3, "settled bend {settled}");
+        assert!(peak > settled * 1.2, "peak {peak} settled {settled}");
+        let flex = s.rigid.flex(1e-4, 1e-3);
+        assert!(
+            flex.iter().any(|f| f.part == 21),
+            "the booster is reported as flexed"
+        );
+        assert!(s.rigid.max_stress() > 0.0 && s.rigid.max_stress() < 1.0);
+        // thrust off: it rings down to nothing
+        let quiet = StepOutcome::default();
+        for _ in 0..500 {
+            s.apply(&p, &quiet, 0.02);
+        }
+        assert!(booster(&s) < 0.1 * settled, "{}", booster(&s));
+    }
+
+    #[test]
+    fn turning_hard_bends_the_stack() {
+        let (crafts, defs, res) = assets();
+        let k1 = crafts.iter().find(|c| c.name == "Kerbal K1").unwrap();
+        let mut s = Structure::build(k1, &defs, &res);
+        let p = flying(DVec3::new(1.0, 0.0, 0.0));
+        // a hard pitch: 0.5 rad/s^2 across the vessel axis, from the wheels alone
+        let out = StepOutcome {
+            angular_accel: DVec3::new(0.0, 0.0, 0.5),
+            angvel: DVec3::new(0.0, 0.0, 0.3),
+            wheel_share: 1.0,
+            ..Default::default()
+        };
+        for _ in 0..50 {
+            s.apply(&p, &out, 0.02);
+        }
+        let worst = s
+            .rigid
+            .links
+            .iter()
+            .map(|l| l.torque_knm)
+            .fold(0.0, f64::max);
+        assert!(worst > 10.0, "turning loads the joints ({worst} kN*m)");
+        assert!(
+            !s.rigid.flex(1e-4, 1e-3).is_empty(),
+            "something visibly bends"
+        );
+    }
+
+    #[test]
     fn stages_line_up_with_the_flight_spec_and_staging_trims_parts() {
         let (crafts, defs, res) = assets();
         let k1 = crafts.iter().find(|c| c.name == "Kerbal K1").unwrap();
@@ -660,10 +771,9 @@ mod tests {
         let mut s = Structure::build(k1, &defs, &res);
         let p = flying(DVec3::new(1.0, 0.0, 0.0));
         let out = StepOutcome {
-            crashed: false,
-            touched_down: false,
             thrust_kn: report.stages[0].thrust_kn,
             drag_kn: DVec3::new(-20.0, 0.0, 0.0),
+            ..Default::default()
         };
         for _ in 0..150 {
             let broken = s.apply(&p, &out, 0.02);
@@ -679,10 +789,9 @@ mod tests {
         let p = flying(DVec3::new(1.0, 0.0, 0.0));
         // flying sideways through dense air: the drag is across the stack
         let out = StepOutcome {
-            crashed: false,
-            touched_down: false,
             thrust_kn: 0.0,
             drag_kn: DVec3::new(0.0, 0.0, -3_000.0),
+            ..Default::default()
         };
         let mut pieces = Vec::new();
         for _ in 0..100 {
