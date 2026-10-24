@@ -267,82 +267,181 @@ class Exporter:
 
     # -- parts
 
-    def export_part(self, part_id: str) -> dict | None:
-        prefab_bundle = self.bundle(f"{part_id}.fbx") or self.bundle(f"{part_id}.prefab")
-        if not prefab_bundle:
-            return None
-        env = self.env(prefab_bundle)
-        glb = Glb()
-        # Material: the part's own .mat lists which textures go where; fall back to the suffix convention.
-        textures: dict[str, int] = {}
-        for suffix, slot in TEXTURE_SUFFIXES.items():
-            uri = None
-            for ext in ("png", "tga"):
-                uri = self.export_texture(f"{part_id}{suffix}.{ext}")
-                if uri:
-                    break
-            if uri:
-                textures[slot] = glb.image_uri("../" + uri, Path(uri).stem)
-        material = glb.material(part_id, textures) if textures else None
+    def env_for_key(self, key: str):
+        """One UnityPy environment holding the key's bundle and every dependency bundle, so cross-bundle
+        references (prefab -> mesh in the fbx bundle, material -> textures) resolve."""
+        import UnityPy
+        from ksp2_catalog import PREFIX
 
-        # Build the transform hierarchy from the bundle's GameObjects.
-        transforms = {}
+        res = self.cat.resolve(key)
+        deps = list(dict.fromkeys(d.replace(PREFIX, "") for r in res for d in r[2] if d.endswith(".bundle")))
+        main = self.cat.bundle_for(key)
+        if not deps and main:
+            deps = [main]
+        if not deps:
+            return None, None
+        tag = "|".join(deps)
+        if tag not in self._envs:
+            env = UnityPy.Environment()
+            for d in deps:
+                path = self.bdir / d
+                if path.exists():
+                    env.load_file(str(path))
+            self._envs[tag] = env
+            if len(self._envs) > 64:
+                # Environments hold decompressed bundles; keep the cache bounded.
+                for k in list(self._envs)[:32]:
+                    del self._envs[k]
+        return self._envs[tag], main
+
+    def export_texture_object(self, tex) -> str | None:
+        """Export a Texture2D object as PNG under textures/<name>.png (once); returns the relative uri."""
+        name = tex.m_Name
+        if name in self.texture_files:
+            return self.texture_files[name]
+        try:
+            img = tex.image
+        except Exception as e:  # noqa: BLE001
+            if self.verbose:
+                print(f"  texture {name}: cannot decode ({e})")
+            return None
+        if img.width > self.max_texture or img.height > self.max_texture:
+            sc = self.max_texture / max(img.width, img.height)
+            img = img.resize((max(1, int(img.width * sc)), max(1, int(img.height * sc))))
+        if img.mode not in ("RGB", "RGBA"):
+            img = img.convert("RGBA")
+        rel = f"textures/{name}.png"
+        if not (self.out / rel).exists():
+            img.save(self.out / rel, optimize=False)
+        self.texture_files[name] = rel
+        return rel
+
+    MATERIAL_SLOTS = {"_MainTex": "baseColor", "_BumpMap": "normal", "_EmissionMap": "emissive", "_MetallicGlossMap": "metallicRoughness", "_OcclusionMap": "occlusion"}
+    SKIP_MATERIALS = ("ReentryShockwave", "Default-Material")
+
+    def export_part(self, part_id: str) -> dict | None:
+        env, main = self.env_for_key(f"{part_id}.prefab")
+        if env is None:
+            return None
+        glb = Glb()
+        materials: dict[int, int | None] = {}  # material path_id -> glTF material index
+        texture_slots_used: set[str] = set()
+
+        def material_index(mat_pptr) -> int | None:
+            key = mat_pptr.path_id
+            if key in materials:
+                return materials[key]
+            idx: int | None = None
+            try:
+                m = mat_pptr.read()
+            except Exception:  # noqa: BLE001
+                materials[key] = None
+                return None
+            if m.m_Name in self.SKIP_MATERIALS:
+                materials[key] = -1
+                return -1
+            textures: dict[str, int] = {}
+            for name, te in m.m_SavedProperties.m_TexEnvs:
+                slot = self.MATERIAL_SLOTS.get(name)
+                pp = te.m_Texture
+                if not slot or not pp.path_id:
+                    continue
+                try:
+                    tex = pp.read()
+                except Exception:  # noqa: BLE001
+                    continue
+                if tex.__class__.__name__ != "Texture2D":
+                    continue
+                uri = self.export_texture_object(tex)
+                if uri:
+                    textures[slot] = glb.image_uri("../" + uri, Path(uri).stem)
+                    texture_slots_used.add(slot)
+            idx = glb.material(m.m_Name, textures)
+            materials[key] = idx
+            return idx
+
+        # Transforms of the whole environment, keyed by path id; the prefab's roots are those whose father
+        # is missing. Collision ("col_*") and reentry LOD objects are skipped.
+        transforms = {o.path_id: o.read() for o in env.objects if o.type.name == "Transform"}
+        go_name = {}
         for o in env.objects:
-            if o.type.name == "Transform":
-                transforms[o.path_id] = o.read()
-        gltf_node_of: dict[int, int] = {}
+            if o.type.name == "GameObject":
+                try:
+                    go_name[o.path_id] = o.read().m_Name
+                except Exception:  # noqa: BLE001
+                    pass
         meshes_by_tf: dict[int, int] = {}
+        renderer_material: dict[int, int | None] = {}  # GameObject path id -> material index
+        for o in env.objects:
+            if o.type.name != "MeshRenderer":
+                continue
+            try:
+                mr = o.read()
+                mats = [material_index(mp) for mp in mr.m_Materials]
+            except Exception:  # noqa: BLE001
+                continue
+            mat = next((m for m in mats if m is not None and m >= 0), None)
+            if mats and all(m == -1 for m in mats if m is not None):
+                renderer_material[mr.m_GameObject.path_id] = -1
+            else:
+                renderer_material[mr.m_GameObject.path_id] = mat
         mesh_count = 0
         for o in env.objects:
             if o.type.name != "MeshFilter":
                 continue
-            mf = o.read()
-            if not mf.m_Mesh or not mf.m_Mesh.path_id:
-                continue
             try:
+                mf = o.read()
+                if not mf.m_Mesh or not mf.m_Mesh.path_id:
+                    continue
+                go_id = mf.m_GameObject.path_id
+                name = go_name.get(go_id, "")
+                if name.startswith("col_") or renderer_material.get(go_id) == -1:
+                    continue
                 mesh = mf.m_Mesh.read()
             except Exception:  # noqa: BLE001
                 continue
-            go = mf.m_GameObject.read()
-            tf_id = None
-            for c in go.m_Components:
-                try:
-                    comp = c.read() if hasattr(c, "read") else c.component.read()
-                except Exception:  # noqa: BLE001
-                    continue
-                if comp.__class__.__name__ == "Transform":
-                    tf_id = next((k for k, v in transforms.items() if v is comp or getattr(v, "m_GameObject", None) and v.m_GameObject.path_id == go.object_reader.path_id), None)
-                    break
+            tf_id = next((k for k, v in transforms.items() if v.m_GameObject.path_id == go_id), None)
             if tf_id is None:
-                tf_id = next((k for k, v in transforms.items() if v.m_GameObject.path_id == go.object_reader.path_id), None)
+                continue
             positions, normals, uvs, tris = self.mesh_arrays(mesh)
             if not positions or not tris:
                 continue
-            m = glb.mesh(mesh.m_Name, positions, normals, uvs, tris, material)
+            mat = renderer_material.get(go_id)
+            meshes_by_tf[tf_id] = glb.mesh(mesh.m_Name, positions, normals, uvs, tris, mat if mat is not None and mat >= 0 else None)
             mesh_count += 1
-            if tf_id is not None:
-                meshes_by_tf[tf_id] = m
+        if mesh_count == 0:
+            return None
+
+        # Only transforms that lead to a mesh are written, so the GLB stays small.
+        keep: set[int] = set()
+        for tf_id in meshes_by_tf:
+            cur = tf_id
+            hops = 0
+            while cur in transforms and hops < 64:
+                keep.add(cur)
+                father = transforms[cur].m_Father.path_id if transforms[cur].m_Father else 0
+                cur = father
+                hops += 1
 
         def build(tf_id: int) -> int:
             tf = transforms[tf_id]
-            children = [build(c.path_id) for c in tf.m_Children if c.path_id in transforms]
-            name = tf.m_GameObject.read().m_Name if tf.m_GameObject.path_id else "node"
+            children = [build(c.path_id) for c in tf.m_Children if c.path_id in keep]
+            name = go_name.get(tf.m_GameObject.path_id, "node")
             t = to_gltf_pos((tf.m_LocalPosition.x, tf.m_LocalPosition.y, tf.m_LocalPosition.z))
             r = to_gltf_quat(normalize((tf.m_LocalRotation.x, tf.m_LocalRotation.y, tf.m_LocalRotation.z, tf.m_LocalRotation.w)))
-            s = (float(tf.m_LocalScale.x), float(tf.m_LocalScale.y), float(tf.m_LocalScale.z))
-            idx = glb.node(name, t, r, s, meshes_by_tf.get(tf_id), children)
-            gltf_node_of[tf_id] = idx
-            return idx
+            sc = (float(tf.m_LocalScale.x), float(tf.m_LocalScale.y), float(tf.m_LocalScale.z))
+            return glb.node(name, t, r, sc, meshes_by_tf.get(tf_id), children)
 
-        for tf_id, tf in transforms.items():
+        for tf_id in keep:
+            tf = transforms[tf_id]
             father = tf.m_Father.path_id if tf.m_Father else 0
             if not father or father not in transforms:
                 glb.roots.append(build(tf_id))
-        if mesh_count == 0:
+        if not glb.roots:
             return None
         path = self.out / "parts" / f"{part_id}.glb"
-        size = glb.write(path, {"part_id": part_id, "source": prefab_bundle})
-        return {"id": part_id, "file": f"parts/{part_id}.glb", "bytes": size, "meshes": mesh_count, "textures": sorted(textures)}
+        size = glb.write(path, {"part_id": part_id, "source": main})
+        return {"id": part_id, "file": f"parts/{part_id}.glb", "bytes": size, "meshes": mesh_count, "textures": sorted(texture_slots_used)}
 
     # -- bodies
 
@@ -358,12 +457,23 @@ class Exporter:
         for suffix, slot in (("_scaled_d", "baseColor"), ("_scaled_n", "normal"), ("_scaled_e", "emissive")):
             uri = None
             for k in self.cat.string_keys():
-                if k.lower().endswith(f"/{low}{suffix}.png") or k.lower().endswith(f"/{low}{suffix}.tga") or k.lower() == f"{low}{suffix}.png":
+                kl = k.lower()
+                if kl.endswith(f"/{low}{suffix}.png") or kl.endswith(f"/{low}{suffix}.tga") or kl == f"{low}{suffix}.png":
                     uri = self.export_texture(k)
                     if uri:
                         break
             if uri:
                 textures[slot] = glb.image_uri("../" + uri, Path(uri).stem)
+        if "baseColor" not in textures:
+            # Stars and bodies with differently named maps: take the first big texture in the scaled bundle.
+            for o in env.objects:
+                if o.type.name == "Texture2D":
+                    t = o.read()
+                    if t.m_Width >= 1024:
+                        uri = self.export_texture_object(t)
+                        if uri:
+                            textures["baseColor"] = glb.image_uri("../" + uri, Path(uri).stem)
+                            break
         material = glb.material(body_id, textures) if textures else None
         done = None
         for o in env.objects:
