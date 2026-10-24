@@ -390,6 +390,24 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     tracing::info!(bodies = terrains, "terrain height maps loaded");
+    // the KSC is the CommNet source
+    if let Some(kerbin) = universe.body_entity("Kerbin") {
+        let site = terrain_index()
+            .bodies
+            .iter()
+            .find(|b| b.id == "Kerbin")
+            .and_then(|b| ose_data::terrain::TerrainMap::site(b, "kerbin_KSC_Object").cloned());
+        let (lat, lon, alt) = site
+            .map(|s| (s.lat_deg, s.lon_deg, s.altitude_m))
+            .unwrap_or((KSC_LAT_DEG, KSC_LON_DEG, 100.0));
+        universe.set_ground_station(ose_sim::commnet::GroundStation {
+            body: kerbin,
+            lat_deg: lat,
+            lon_deg: lon,
+            altitude_m: alt,
+            range_m: ose_sim::commnet::KSC_RANGE_M,
+        });
+    }
     let part_defs: Vec<ose_data::PartDef> = serde_json::from_str(EMBEDDED_PARTS)?;
     if let Some(k) = part_defs.iter().find(|d| d.id == "eva_kerbal") {
         universe.set_kerbal_part(k.experiments.clone());
@@ -466,6 +484,19 @@ async fn main() -> anyhow::Result<()> {
             if ticks.is_multiple_of(ose_sim::TICKS_PER_SECOND) {
                 science::evaluate_missions(&sim);
                 science::deliver_experiment_events(&sim);
+                let required = sim
+                    .campaign
+                    .lock()
+                    .expect("campaign lock")
+                    .difficulty
+                    .iter()
+                    .any(|d| {
+                        d.id == "CommNetRequired" && d.value == ose_net::DifficultyValue::Bool(true)
+                    });
+                sim.universe
+                    .lock()
+                    .expect("sim lock")
+                    .set_commnet_required(required);
             }
         }
     });
@@ -787,6 +818,10 @@ fn flight_readout(
             .into_iter()
             .map(|(a, b)| (a as u16, b as u16))
             .collect(),
+        comm_connected: u.comm_link(e).connected,
+        comm_hops: u.comm_link(e).hops,
+        comm_range_m: u.comm_link(e).range_m,
+        panels_deployed: u.panels_deployed(e),
     })
 }
 
@@ -1280,6 +1315,12 @@ fn science_request(s: &Shared, player_id: u64, msg: ClientMessage) -> Vec<Server
                     if !(on_home && landed) {
                         return fail("only a vessel standing on Kerbin can be recovered");
                     }
+                }
+                if !recover {
+                    u.update_commnet();
+                }
+                if !recover && !u.comm_link(e).connected {
+                    return fail("no CommNet connection to the KSC");
                 }
                 let r = u.take_science(e);
                 if recover {
@@ -2072,6 +2113,17 @@ async fn session(mut socket: WebSocket, s: AppState) {
                                 ok = ok && send(&mut socket, r).await;
                             }
                             if !ok { break; }
+                        }
+                        Ok(ClientMessage::DeployPanels { vessel, deploy }) => {
+                            let reply = match owned_vessel(&s, vessel, player_id) {
+                                Some(e) => match s.universe.lock().expect("sim lock").deploy_panels(e, deploy) {
+                                    Some(n) if n > 0 => ServerMessage::FlightAck { vessel, accepted: true, reason: None },
+                                    Some(_) => ServerMessage::FlightAck { vessel, accepted: false, reason: Some(if deploy { "no folded panels" } else { "no panels out" }.into()) },
+                                    None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("vessel has no parts".into()) },
+                                },
+                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
+                            };
+                            if !send(&mut socket, &reply).await { break; }
                         }
                         Ok(msg @ (ClientMessage::GoEva { .. }
                         | ClientMessage::Board { .. }

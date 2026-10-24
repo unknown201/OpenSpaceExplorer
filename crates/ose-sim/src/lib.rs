@@ -7,6 +7,7 @@
 
 pub mod aero;
 pub mod bodies;
+pub mod commnet;
 pub mod crew;
 pub mod docking;
 pub mod flight;
@@ -265,6 +266,44 @@ impl Universe {
 
     pub fn powered(&self, e: Entity) -> Option<&flight::Powered> {
         self.world.get::<flight::Powered>(e)
+    }
+
+    /// Electric charge for vessels on rails: panels in the sun, generators and probe cores keep running
+    /// through time warp (wheels idle).
+    fn charge_on_rails(&mut self, dt: f64, ut: f64) {
+        let on_rails: Vec<Entity> = {
+            let mut q = self
+                .world
+                .query_filtered::<Entity, (With<structure::Structure>, With<flight::Dormant>)>();
+            q.iter(&self.world).collect()
+        };
+        for e in on_rails {
+            let (Some(body), Some(r)) = (self.body_of(e), self.position_of(e)) else {
+                continue;
+            };
+            let sun = self.sunlight(body, r, ut);
+            let Some(mut st) = self.world.entity_mut(e).take::<structure::Structure>() else {
+                continue;
+            };
+            if let Some(mut d) = self.world.get_mut::<flight::Dormant>(e) {
+                st.electric(&mut d.0, sun, 0.0, dt);
+            }
+            self.world.entity_mut(e).insert(st);
+        }
+    }
+
+    /// Whether any deployable panel of the vessel is out.
+    pub fn panels_deployed(&self, e: Entity) -> bool {
+        self.world
+            .get::<structure::Structure>(e)
+            .is_some_and(|st| st.deployed.iter().any(|d| *d))
+    }
+
+    /// Fold a vessel's deployable solar panels out or in; how many moved, `None` without a structure.
+    pub fn deploy_panels(&mut self, e: Entity, out: bool) -> Option<usize> {
+        self.world
+            .get_mut::<structure::Structure>(e)
+            .map(|mut st| st.deploy_panels(out))
     }
 
     /// Whether any vessel is flying under power (time warp is then capped at physics warp). Vessels standing
@@ -629,6 +668,7 @@ impl Universe {
                 .get::<flight::Powered>(e)
                 .expect("powered")
                 .clone();
+            let comm_blocked = self.commnet_blocks_control(e);
             let mut structure = self.world.entity_mut(e).take::<structure::Structure>();
             let sun = if structure.is_some() {
                 self.sunlight(body_e, p.r, ut)
@@ -701,6 +741,11 @@ impl Universe {
                     // wheels work in proportion to how fast the vessel is being turned
                     let turning = (p.angvel.length() / 0.2).clamp(0.0, 1.0);
                     st.electric(&mut p, sun, turning, step_dt);
+                    if comm_blocked {
+                        // a probe out of contact cannot be flown (CommNetRequired)
+                        p.controlled = false;
+                        p.throttle = 0.0;
+                    }
                     for piece in st.apply(&p, &out, step_dt) {
                         pieces.push((piece, p.r, p.v, p.facing));
                     }
@@ -774,6 +819,11 @@ impl Universe {
             vessels::refresh_next_transition(&mut self.world, &index, e, ut, &self.params);
         }
         self.advance_experiments(ticks.max(1) as f64 * dt);
+        // the network once a simulated second
+        if now / TICKS_PER_SECOND != (now + ticks.max(1)) / TICKS_PER_SECOND {
+            self.update_commnet();
+        }
+        self.charge_on_rails(ticks.max(1) as f64 * dt, ut);
         // crashed debris is gone
         let wrecks: Vec<Entity> = {
             let mut q = self

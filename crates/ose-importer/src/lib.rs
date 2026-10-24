@@ -526,6 +526,12 @@ fn electric_from_module(m: &Value, e: &mut ose_data::Electric) {
                 if let Some(r) = o["requiredResources"].as_array() {
                     e.command_use += r.iter().map(ec_rate).sum::<f64>();
                 }
+                if o["requiresCommNet"].as_bool() == Some(true) {
+                    e.command_requires_commnet = true;
+                }
+            }
+            "Data_Transmitter" => {
+                e.comm_range_m = e.comm_range_m.max(f(o, "CommunicationRange"));
             }
             "Data_ReactionWheel" => {
                 if let Some(r) = o["RequiredResources"].as_array() {
@@ -540,6 +546,11 @@ fn electric_from_module(m: &Value, e: &mut ose_data::Electric) {
             "Data_Deployable" => {
                 if o["isTracking"].as_bool() == Some(true) {
                     e.solar_tracking = true;
+                }
+                if o["extendable"].as_bool() == Some(true)
+                    && o["IsExtended"].as_bool() != Some(true)
+                {
+                    e.solar_deployable = true;
                 }
             }
             "Data_ModuleGenerator" => e.generator_output += ec_rate(&o["ResourceSetting"]),

@@ -267,6 +267,15 @@ pub struct Electric {
     pub solar_output: f64,
     /// Whether the panel turns to track the sun (`Data_Deployable.isTracking`).
     pub solar_tracking: bool,
+    /// The panel folds out (`Data_Deployable.extendable`) and starts folded: it makes nothing until deployed.
+    #[serde(default)]
+    pub solar_deployable: bool,
+    /// Antenna range (`Data_Transmitter.CommunicationRange`), m; 0 without one.
+    #[serde(default)]
+    pub comm_range_m: f64,
+    /// A probe core that needs a CommNet connection to be flown (`Data_Command.requiresCommNet`).
+    #[serde(default)]
+    pub command_requires_commnet: bool,
     /// Generator output (`Data_ModuleGenerator.ResourceSetting.Rate`): an engine's alternator while it runs,
     /// otherwise always on (RTGs).
     pub generator_output: f64,

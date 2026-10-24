@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 15;
+pub const PROTOCOL_VERSION: u16 = 16;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -149,6 +149,11 @@ pub enum ClientMessage {
     Undock {
         vessel: u64,
         port: Option<u16>,
+    },
+    /// Fold the vessel's deployable solar panels out (`deploy`) or in; answers `FlightAck`.
+    DeployPanels {
+        vessel: u64,
+        deploy: bool,
     },
 }
 
@@ -407,6 +412,13 @@ pub struct FlightReadout {
     /// Free docking ports (craft part indices) and docked joints (part docked to, part that docked).
     pub docking_ports: Vec<u16>,
     pub docked: Vec<(u16, u16)>,
+    /// CommNet: linked to the KSC (directly or through relays) and over how many links; the vessel's best
+    /// antenna range, m (0 without one). Transmitting needs the link.
+    pub comm_connected: bool,
+    pub comm_hops: u32,
+    pub comm_range_m: f64,
+    /// Deployable solar panels folded out.
+    pub panels_deployed: bool,
 }
 
 /// One part's pose away from rest: rotate the part by `rotation` (rotation vector, rad, craft frame) about its

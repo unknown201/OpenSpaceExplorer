@@ -43,6 +43,8 @@ pub struct Structure {
     /// Each part's electric charge use and production, and crew capacity.
     pub electric: Vec<ose_data::Electric>,
     pub crew: Vec<u32>,
+    /// Deployable solar panels folded out.
+    pub deployed: Vec<bool>,
     /// Each part's id and family (like "0010-Probe").
     pub part_ids: Vec<String>,
     pub families: Vec<String>,
@@ -194,6 +196,7 @@ impl Structure {
             curves: DragCurves::default(),
             net: FlowNet::build(craft, defs, resources),
             engine_mixture,
+            deployed: vec![false; n],
             electric,
             crew,
             experiments,
@@ -347,7 +350,7 @@ impl Structure {
             }
             let e = self.electric[i];
             let mut made = 0.0;
-            if e.solar_output > 0.0 {
+            if e.solar_output > 0.0 && (!e.solar_deployable || self.deployed[i]) {
                 made += e.solar_output * sun * if e.solar_tracking { 1.0 } else { 0.5 };
             }
             if e.generator_output > 0.0 {
@@ -411,6 +414,19 @@ impl Structure {
         if !p.controlled {
             p.throttle = 0.0;
         }
+    }
+
+    /// Fold all deployable solar panels out (or back in); returns how many changed.
+    pub fn deploy_panels(&mut self, out: bool) -> usize {
+        let mut n = 0;
+        for i in 0..self.electric.len() {
+            if self.electric[i].solar_deployable && self.rigid.present[i] && self.deployed[i] != out
+            {
+                self.deployed[i] = out;
+                n += 1;
+            }
+        }
+        n
     }
 
     /// Draw `burned_t` of propellant (what the flight step burned) through the flow graph, split over the
@@ -829,6 +845,27 @@ mod tests {
             !s.rigid.flex(1e-4, 1e-3).is_empty(),
             "something visibly bends"
         );
+    }
+
+    #[test]
+    fn folded_panels_make_nothing_until_deployed() {
+        let (crafts, defs, res) = assets();
+        // the K2 carries folding 1x6 panels
+        let k2 = crafts.iter().find(|c| c.name == "Kerbal K2").unwrap();
+        let mut s = Structure::build(k2, &defs, &res);
+        let mut p = flying(DVec3::new(1.0, 0.0, 0.0));
+        let ec = s.net.resource("ElectricCharge").unwrap();
+        for t in s.net.tanks.iter_mut().filter(|t| t.resource == ec) {
+            t.stored *= 0.5;
+        }
+        let before = ec_stored(&s);
+        s.electric(&mut p, 1.0, 0.0, 10.0);
+        let folded = ec_stored(&s) - before;
+        assert!(s.deploy_panels(true) > 0);
+        s.electric(&mut p, 1.0, 0.0, 10.0);
+        let open = ec_stored(&s) - before - folded;
+        assert!(open > folded + 1.0, "folded {folded} open {open}");
+        assert!(s.deploy_panels(true) == 0, "already out");
     }
 
     #[test]
