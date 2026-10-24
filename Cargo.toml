@@ -35,3 +35,16 @@ console_error_panic_hook = "0.1"
 [profile.release]
 opt-level = 3
 lto = "thin"
+
+# The physics solver is unusably slow unoptimised (a debug server ran 5 vessels at a third of real time), so
+# debug builds still optimise it and the math crates under it.
+[profile.dev.package.rapier3d-f64]
+opt-level = 3
+[profile.dev.package.parry3d-f64]
+opt-level = 3
+[profile.dev.package.nalgebra]
+opt-level = 3
+[profile.dev.package.simba]
+opt-level = 3
+[profile.dev.package.glamx]
+opt-level = 3
