@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 pub mod craft;
+pub mod science;
 pub mod staging;
 pub mod terrain;
 
@@ -238,6 +239,9 @@ pub struct PartDef {
     /// Electric charge use and production of the part's modules.
     #[serde(default)]
     pub electric: Electric,
+    /// Experiments the part can run.
+    #[serde(default)]
+    pub experiments: Vec<science::PartExperiment>,
     /// Names of every module on the part, in order, so the sim knows what else to implement.
     pub module_names: Vec<String>,
     /// Module data not yet mapped into typed fields, keyed by module name.

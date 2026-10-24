@@ -10,6 +10,7 @@ pub mod bodies;
 pub mod flight;
 pub mod resources;
 pub mod rigid;
+pub mod science;
 pub mod structure;
 pub mod trajectory;
 pub mod vessels;

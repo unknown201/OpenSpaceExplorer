@@ -85,6 +85,25 @@ fn main() -> anyhow::Result<()> {
             args.own_out.join("parts-catalog.json"),
             serde_json::to_string(&slim)?,
         )?;
+        let (science, regions) = ose_importer::science::import_science(&args.data.join("science"))?;
+        let tech = ose_importer::science::import_tech_tree(&args.data.join("technodedata"))?;
+        std::fs::create_dir_all(args.own_out.join("science"))?;
+        std::fs::write(
+            args.own_out.join("science/index.json"),
+            serde_json::to_string_pretty(&science)?,
+        )?;
+        std::fs::write(args.own_out.join("science/regions.bin"), &regions)?;
+        std::fs::write(
+            args.own_out.join("tech-tree.json"),
+            serde_json::to_string_pretty(&tech)?,
+        )?;
+        println!(
+            "science: {} experiments, {} bodies, {} KB of region maps; tech tree: {} nodes",
+            science.experiments.len(),
+            science.bodies.len(),
+            regions.len() / 1024,
+            tech.len()
+        );
         std::fs::write(
             args.own_out.join("resources.json"),
             serde_json::to_string_pretty(&game.resources)?,

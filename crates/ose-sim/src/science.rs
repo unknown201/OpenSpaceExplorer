@@ -1,0 +1,323 @@
+//! Science on vessels: where a vessel is for science, running the experiments on its parts and the reports
+//! it carries until they are transmitted or recovered (see `ose_data::science` for the rules).
+
+use bevy_ecs::prelude::*;
+use ose_data::science::{
+    run_experiment, BodyScience, ResearchReport, ScienceCatalog, ScienceSituation,
+};
+use ose_math::DVec3;
+use serde::{Deserialize, Serialize};
+
+use crate::{bodies, flight, structure, Universe};
+
+/// The science definitions and region maps, as a world resource.
+#[derive(Resource, Clone, Debug, Default)]
+pub struct Science {
+    pub catalog: ScienceCatalog,
+    pub regions: Vec<u8>,
+}
+
+/// Reports a vessel carries.
+#[derive(Component, Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ScienceStorage {
+    pub reports: Vec<ResearchReport>,
+}
+
+/// Where a vessel is for science.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ScienceLocation {
+    pub body: String,
+    pub situation: ScienceSituation,
+    pub situation_scalar: f64,
+    pub region: Option<String>,
+}
+
+/// Why an experiment on a part did not give a report.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Skipped {
+    pub part: usize,
+    pub experiment: String,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RunOutcome {
+    pub reports: Vec<ResearchReport>,
+    pub skipped: Vec<Skipped>,
+}
+
+/// A body-fixed position in the original's body frame (Unity Y-up): x towards longitude 0, z towards 90 E.
+pub fn body_frame_position(lat_deg: f64, lon_deg: f64, radius_m: f64) -> DVec3 {
+    let (lat, lon) = (lat_deg.to_radians(), lon_deg.to_radians());
+    DVec3::new(
+        radius_m * lat.cos() * lon.cos(),
+        radius_m * lat.sin(),
+        radius_m * lat.cos() * lon.sin(),
+    )
+}
+
+impl Universe {
+    pub fn set_science(&mut self, catalog: ScienceCatalog, regions: Vec<u8>) {
+        self.world.insert_resource(Science { catalog, regions });
+    }
+
+    pub fn science(&self) -> Option<&Science> {
+        self.world.get_resource::<Science>()
+    }
+
+    /// Where a vessel is for science, from its flight state when it has one, else its orbit.
+    pub fn science_location(&self, e: Entity) -> Option<ScienceLocation> {
+        let sci = self.world.get_resource::<Science>()?;
+        let body_e = self.world.get::<bodies::ReferenceBody>(e)?.0;
+        let body = self.world.get::<bodies::Body>(body_e)?;
+        let bs: &BodyScience = sci.catalog.body(&body.id)?;
+        let ut = self.ut();
+        let (r, landed) = match self.world.get::<flight::Powered>(e) {
+            Some(p) => (p.r, p.landed && !p.crashed),
+            None => (
+                self.world.get::<bodies::OnRails>(e)?.0.state_at(ut).0,
+                false,
+            ),
+        };
+        let alt = r.length() - body.radius_m;
+        let (lat, lon) = flight::lat_lon(body, r, ut);
+        // on the sea rather than the ground
+        let splashed = landed
+            && self
+                .world
+                .get::<flight::Terrain>(body_e)
+                .is_some_and(|t| t.0.has_ocean && t.0.height_m(lat, lon) < 0.0);
+        let (situation, situation_scalar) = bs.situation(alt, landed, splashed)?;
+        let at = landed.then(|| body_frame_position(lat, lon, r.length()));
+        let region = bs
+            .region_at(&sci.regions, lat, lon, at)
+            .map(|r| r.id.clone());
+        Some(ScienceLocation {
+            body: body.id.clone(),
+            situation,
+            situation_scalar,
+            region,
+        })
+    }
+
+    /// Run every experiment on the vessel's attached parts here. New reports (not already carried) are
+    /// stored on the vessel and returned; experiments that need crew or charge it lacks, or that do not
+    /// work here, are listed as skipped. Experiment run times are not waited for yet.
+    pub fn run_experiments(&mut self, e: Entity) -> RunOutcome {
+        let mut out = RunOutcome::default();
+        let Some(loc) = self.science_location(e) else {
+            return out;
+        };
+        let Some(mut st) = self.world.entity_mut(e).take::<structure::Structure>() else {
+            return out;
+        };
+        let sci = self.world.resource::<Science>().clone();
+        let mut storage = self
+            .world
+            .get::<ScienceStorage>(e)
+            .cloned()
+            .unwrap_or_default();
+        let bs = sci
+            .catalog
+            .body(&loc.body)
+            .expect("located on a body with science");
+        let region = loc
+            .region
+            .as_deref()
+            .and_then(|id| bs.regions.iter().find(|r| r.id == id));
+        let crewed = (0..st.rigid.len()).any(|i| st.rigid.present[i] && st.crew[i] > 0);
+        let ec = st.net.resource("ElectricCharge");
+        for (part, pe) in st.experiments.clone() {
+            if !st.rigid.present[part] {
+                continue;
+            }
+            let skip = |reason: &str| Skipped {
+                part,
+                experiment: pe.experiment.clone(),
+                reason: reason.to_string(),
+            };
+            let Some(def) = sci.catalog.experiment(&pe.experiment) else {
+                out.skipped.push(skip("unknown experiment"));
+                continue;
+            };
+            if pe.crew_required > 0 && !crewed {
+                out.skipped.push(skip("needs crew"));
+                continue;
+            }
+            let reports = run_experiment(def, bs, loc.situation, loc.situation_scalar, region);
+            if reports.is_empty() {
+                out.skipped.push(skip("not here"));
+                continue;
+            }
+            let fresh: Vec<ResearchReport> = reports
+                .into_iter()
+                .filter(|r| storage.reports.iter().all(|s| s.key() != r.key()))
+                .collect();
+            if fresh.is_empty() {
+                out.skipped.push(skip("already stored"));
+                continue;
+            }
+            if pe.electric_rate > 0.0 {
+                let need = pe.electric_rate * pe.time_to_complete_s.max(1.0);
+                let have = ec.map(|r| st.net.available(part, r)).unwrap_or(0.0);
+                if have < need {
+                    out.skipped.push(skip("not enough charge"));
+                    continue;
+                }
+                let r = ec.expect("charge");
+                st.net.process(
+                    &[crate::resources::Request {
+                        part,
+                        instructions: vec![crate::resources::Instruction {
+                            resource: r,
+                            units_per_s: need,
+                        }],
+                        priority: 0,
+                    }],
+                    1.0,
+                );
+            }
+            storage.reports.extend(fresh.iter().cloned());
+            out.reports.extend(fresh);
+        }
+        self.world.entity_mut(e).insert((st, storage));
+        out
+    }
+
+    /// Reports a vessel carries.
+    pub fn science_carried(&self, e: Entity) -> Vec<ResearchReport> {
+        self.world
+            .get::<ScienceStorage>(e)
+            .map(|s| s.reports.clone())
+            .unwrap_or_default()
+    }
+
+    /// Take every report off the vessel (transmitted or recovered).
+    pub fn take_science(&mut self, e: Entity) -> Vec<ResearchReport> {
+        match self.world.get_mut::<ScienceStorage>(e) {
+            Some(mut s) => std::mem::take(&mut s.reports),
+            None => Vec::new(),
+        }
+    }
+
+    /// Put reports back on a vessel (a restored save).
+    pub fn set_science_carried(&mut self, e: Entity, reports: Vec<ResearchReport>) {
+        self.world.entity_mut(e).insert(ScienceStorage { reports });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn science() -> (ScienceCatalog, Vec<u8>) {
+        (
+            serde_json::from_str(include_str!("../../../assets/own/science/index.json")).unwrap(),
+            include_bytes!("../../../assets/own/science/regions.bin").to_vec(),
+        )
+    }
+
+    #[test]
+    fn the_body_frame_matches_the_original_landmarks() {
+        // KSC's landmark centre (kerbin discoverables) sits at the pad's latitude/longitude
+        let (cat, _) = science();
+        let ksc = cat
+            .body("Kerbin")
+            .unwrap()
+            .discoverables
+            .iter()
+            .find(|d| d.region == "KerbinKSC")
+            .unwrap()
+            .clone();
+        let pad = body_frame_position(-0.6836, -74.8198, 600_115.0);
+        assert!(
+            (pad - ksc.position).length() < ksc.radius_m,
+            "pad {pad:?} vs KSC {:?} r {}",
+            ksc.position,
+            ksc.radius_m
+        );
+    }
+
+    fn k1_universe() -> (Universe, Entity, Entity) {
+        let bodies: Vec<ose_data::CelestialBody> =
+            serde_json::from_str(include_str!("../../../assets/own/kerbol-system.json")).unwrap();
+        let mut kerbin = bodies.into_iter().find(|b| b.id == "Kerbin").unwrap();
+        kerbin.parent = None;
+        kerbin.orbit = None;
+        kerbin.soi_radius_m = None;
+        let crafts: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let defs: Vec<ose_data::PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let res: Vec<ose_data::ResourceDef> =
+            serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
+        let k1 = crafts.iter().find(|c| c.name == "Kerbal K1").unwrap();
+        let report = ose_data::staging::delta_v_by_stage(k1, &defs, &res);
+        let spec = flight::FlightSpec::from_report(&report, &[], &[], 1.5);
+        let mut u = Universe::with_bodies(&[kerbin]);
+        let (cat, regions) = science();
+        u.set_science(cat, regions);
+        let body = u.body_entity("Kerbin").unwrap();
+        let v = u.spawn_powered_on_surface("K1", body, spec, -0.6836, -74.8198);
+        u.set_structure(v, structure::Structure::build(k1, &defs, &res));
+        (u, v, body)
+    }
+
+    #[test]
+    fn a_crewed_pod_on_the_pad_observes_the_ksc_once() {
+        let (mut u, v, _) = k1_universe();
+        let loc = u.science_location(v).unwrap();
+        assert_eq!(loc.situation, ScienceSituation::Landed);
+        assert_eq!(loc.region.as_deref(), Some("KerbinKSC"));
+        let first = u.run_experiments(v);
+        let obs = first
+            .reports
+            .iter()
+            .find(|r| r.experiment == "CrewObservation")
+            .expect("the pod's crew observation");
+        assert_eq!(obs.location, "Kerbin_Landed_KerbinKSC");
+        assert!(obs.value > 0.0);
+        assert_eq!(u.science_carried(v).len(), first.reports.len());
+        // a second run here adds nothing
+        let again = u.run_experiments(v);
+        assert!(again.reports.is_empty());
+        assert!(again.skipped.iter().any(|s| s.reason == "already stored"));
+        // transmitting empties the storage
+        assert_eq!(u.take_science(v).len(), first.reports.len());
+        assert!(u.science_carried(v).is_empty());
+    }
+
+    #[test]
+    fn orbit_is_low_orbit_and_worth_more() {
+        let (mut u, v, _) = k1_universe();
+        let landed = u.run_experiments(v);
+        let landed_obs = landed
+            .reports
+            .iter()
+            .find(|r| r.experiment == "CrewObservation")
+            .unwrap()
+            .value;
+        // put it in a 100 km orbit
+        let mut p = u.powered(v).unwrap().clone();
+        let r = 700_000.0;
+        let mu = u
+            .world
+            .get::<bodies::Body>(u.body_entity("Kerbin").unwrap())
+            .unwrap()
+            .mu;
+        p.r = DVec3::new(r, 0.0, 0.0);
+        p.v = DVec3::new(0.0, (mu / r).sqrt(), 0.0);
+        p.landed = false;
+        u.set_powered(v, p);
+        let loc = u.science_location(v).unwrap();
+        assert_eq!(loc.situation, ScienceSituation::LowOrbit);
+        let orbit = u.run_experiments(v);
+        let obs = orbit
+            .reports
+            .iter()
+            .find(|r| r.experiment == "CrewObservation")
+            .unwrap();
+        assert_eq!(obs.location, "Kerbin_LowOrbit");
+        assert!(obs.value > landed_obs, "{} vs {landed_obs}", obs.value);
+    }
+}

@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 pub mod craft;
+pub mod science;
 
 use ose_data::{
     Atmosphere, AttachNode, AttachRules, CelestialBody, Curve, CurveKey, DragCube, EngineMode,
@@ -55,20 +56,20 @@ impl Coverage {
     }
 }
 
-fn f(v: &Value, key: &str) -> f64 {
+pub(crate) fn f(v: &Value, key: &str) -> f64 {
     match &v[key] {
         Value::Number(n) => n.as_f64().unwrap_or(0.0),
         Value::String(s) => s.trim().parse().unwrap_or(0.0),
         _ => 0.0,
     }
 }
-fn b(v: &Value, key: &str) -> bool {
+pub(crate) fn b(v: &Value, key: &str) -> bool {
     v[key].as_bool().unwrap_or(false)
 }
-fn s(v: &Value, key: &str) -> String {
+pub(crate) fn s(v: &Value, key: &str) -> String {
     v[key].as_str().unwrap_or("").to_string()
 }
-fn vec3(v: &Value) -> DVec3 {
+pub(crate) fn vec3(v: &Value) -> DVec3 {
     DVec3::new(f(v, "x"), f(v, "y"), f(v, "z"))
 }
 
@@ -331,9 +332,11 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
     let mut gimbal_range = None;
     let mut wheel_torque: f64 = 0.0;
     let mut electric = ose_data::Electric::default();
+    let mut experiments = Vec::new();
     if let Some(mods) = d["serializedPartModules"].as_array() {
         for m in mods {
             electric_from_module(m, &mut electric);
+            science::part_experiments(m, &mut experiments);
             let name = s(m, "Name");
             let data = module_data(m);
             match name.as_str() {
@@ -454,6 +457,7 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
         bounds,
         reaction_wheel_torque_knm: wheel_torque,
         electric,
+        experiments,
         drag_cubes,
         module_names,
         raw_modules,
@@ -542,7 +546,7 @@ fn part_bounds(cubes: &[DragCube], nodes: &[AttachNode]) -> Option<ose_data::Par
 }
 
 /// The original files were written for Newtonsoft and sometimes carry trailing commas; fall back to json5.
-fn read_json(path: &Path) -> anyhow::Result<Value> {
+pub(crate) fn read_json(path: &Path) -> anyhow::Result<Value> {
     let text = std::fs::read_to_string(path)?;
     match serde_json::from_str(&text) {
         Ok(v) => Ok(v),
@@ -551,7 +555,7 @@ fn read_json(path: &Path) -> anyhow::Result<Value> {
     }
 }
 
-fn json_files(dir: &Path) -> anyhow::Result<Vec<std::path::PathBuf>> {
+pub(crate) fn json_files(dir: &Path) -> anyhow::Result<Vec<std::path::PathBuf>> {
     let mut out = Vec::new();
     if dir.is_dir() {
         for e in std::fs::read_dir(dir)? {

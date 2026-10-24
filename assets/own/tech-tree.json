@@ -1,0 +1,1974 @@
+[
+  {
+    "id": "tNode_0v_aero",
+    "name_key": "Science/TechNodes/Names/tNode_0v_aero",
+    "description_key": "Science/TechNodes/Descriptions/tNode_0v_aero",
+    "icon": "ICO-RDCenter-Plane-24x",
+    "required_science": 400,
+    "parts": [
+      "engine_0v_methane_whittle",
+      "intake_0v_circular",
+      "fueltank_0v_m0_inline_methane",
+      "landinggear_0v_steerable"
+    ],
+    "requires": [
+      "tNode_2v_aero_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      2160.0,
+      -20.0
+    ]
+  },
+  {
+    "id": "tNode_0v_electronics",
+    "name_key": "Science/TechNodes/Names/tNode_0v_electronics",
+    "description_key": "Science/TechNodes/Descriptions/tNode_0v_electronics",
+    "icon": "ICO-RDCenter-Probe-24x",
+    "required_science": 10,
+    "parts": [
+      "probe_0v_spherical_electricity",
+      "solararray_0v_flat",
+      "storage_0v_battery_electricity_radial",
+      "antenna_0v_16",
+      "antenna_0v_16s"
+    ],
+    "requires": [
+      "tNode_1v_rockets_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      360.0,
+      530.0
+    ]
+  },
+  {
+    "id": "tNode_0v_fuelLines",
+    "name_key": "Science/TechNodes/Names/tNode_0v_fuelLines",
+    "description_key": "Science/TechNodes/Descriptions/tNode_0v_fuelLines",
+    "icon": "ICO-RDCenter-Fuel-Line-24x",
+    "required_science": 300,
+    "parts": [
+      "fuelline_0v_external"
+    ],
+    "requires": [
+      "tNode_2v_rockets_02"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      1800.0,
+      640.0
+    ]
+  },
+  {
+    "id": "tNode_0v_rcs",
+    "name_key": "Science/TechNodes/Names/tNode_0v_rcs",
+    "description_key": "Science/TechNodes/Descriptions/tNode_0v_rcs",
+    "icon": "ICO-RDCenter-Tier1Rocket-24x",
+    "required_science": 50,
+    "parts": [
+      "rcs_0v_block_monoprop",
+      "rcs_0v_linear_monoprop",
+      "fueltank_1v_inline_monoprop"
+    ],
+    "requires": [
+      "tNode_1v_rockets_03"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      720.0,
+      640.0
+    ]
+  },
+  {
+    "id": "tNode_0v_rockets_01",
+    "name_key": "Science/TechNodes/Names/tNode_0v_rockets_01",
+    "description_key": "Science/TechNodes/Descriptions/tNode_0v_rockets_01",
+    "icon": "ICO-RDCenter-Tier1Rocket-24x",
+    "required_science": 120,
+    "parts": [
+      "engine_0v_methalox_spark",
+      "engine_0v_methalox_ant",
+      "fueltank_0v_inline_methalox",
+      "fueltank_1v_radial_methalox_capsular",
+      "fueltank_0v_inline_methalox_doughnut",
+      "fueltank_0v_radial_methalox_spherical",
+      "heatshield_0v"
+    ],
+    "requires": [
+      "tNode_1v_monoprop"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      1080.0,
+      640.0
+    ]
+  },
+  {
+    "id": "tNode_0v_rockets_02",
+    "name_key": "Science/TechNodes/Names/tNode_0v_rockets_02",
+    "description_key": "Science/TechNodes/Descriptions/tNode_0v_rockets_02",
+    "icon": "ICO-RDCenter-Tier1Rocket-24x",
+    "required_science": 400,
+    "parts": [
+      "engine_0v_methalox_spider",
+      "engine_0v_methalox_twitch",
+      "rcs_0v_linear_methalox",
+      "fueltank_1v_radial_monoprop_1x3",
+      "engine_1v_methalox_thud"
+    ],
+    "requires": [
+      "tNode_0v_fuelLines"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      1980.0,
+      640.0
+    ]
+  },
+  {
+    "id": "tNode_0v_science_01",
+    "name_key": "Science/TechNodes/Names/tNode_0v_science_01",
+    "description_key": "Science/TechNodes/Descriptions/tNode_0v_science_01",
+    "icon": "ICO-RDCenter-Science-24x",
+    "required_science": 50,
+    "parts": [
+      "collector_0v_radial_science_general"
+    ],
+    "requires": [
+      "tNode_1v_electronics_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      900.0,
+      420.0
+    ]
+  },
+  {
+    "id": "tNode_0v_science_02",
+    "name_key": "Science/TechNodes/Names/tNode_0v_science_02",
+    "description_key": "Science/TechNodes/Descriptions/tNode_0v_science_02",
+    "icon": "ICO-RDCenter-Science-24x",
+    "required_science": 1800,
+    "parts": [
+      "collector_0v_science_radiation"
+    ],
+    "requires": [
+      "tNode_3v_electronics_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      3420.0,
+      420.0
+    ]
+  },
+  {
+    "id": "tNode_0v_struts",
+    "name_key": "Science/TechNodes/Names/tNode_0v_struts",
+    "description_key": "Science/TechNodes/Descriptions/tNode_0v_struts",
+    "icon": "ICO-RDCenter-Fuel-Line-24x",
+    "required_science": 35,
+    "parts": [
+      "strut_1v_extensible"
+    ],
+    "requires": [
+      "tNode_1v_rockets_02"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      540.0,
+      640.0
+    ]
+  },
+  {
+    "id": "tNode_0v_trusses",
+    "name_key": "Science/TechNodes/Names/tNode_0v_trusses",
+    "description_key": "Science/TechNodes/Descriptions/tNode_0v_trusses",
+    "icon": "ICO-RDCenter-Trusses-24x",
+    "required_science": 35,
+    "parts": [
+      "truss_0v_square_1x1_0-31m",
+      "truss_0v_square_1x4",
+      "truss_0v_square_1x4_0-31m",
+      "junction_0v_square_0-31m",
+      "junction_0v_square",
+      "resizer_0v_square_0v-0v_0-31m",
+      "resizer_1v_square_1v-0v",
+      "truss_0v_square_1x1"
+    ],
+    "requires": [
+      "tNode_1v_trusses"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      720.0,
+      200.0
+    ]
+  },
+  {
+    "id": "tNode_0v_utility",
+    "name_key": "Science/TechNodes/Names/tNode_0v_utility",
+    "description_key": "Science/TechNodes/Descriptions/tNode_0v_utility",
+    "icon": "ICO-RDCenter-Chute-24x",
+    "required_science": 15,
+    "parts": [
+      "landingleg_0v",
+      "ladder_0v_fixed_pegasus",
+      "light_0v_bulb",
+      "light_0v_broad",
+      "light_0v_dome"
+    ],
+    "requires": [
+      "tNode_0v_electronics"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      540.0,
+      530.0
+    ]
+  },
+  {
+    "id": "tNode_1v_aero_01",
+    "name_key": "Science/TechNodes/Names/tNode_1v_aero_01",
+    "description_key": "Science/TechNodes/Descriptions/tNode_1v_aero_01",
+    "icon": "ICO-RDCenter-Aero-24x",
+    "required_science": 10,
+    "parts": [
+      "controlsurface_1v_procedural_light",
+      "stabilizer_1v_reactionwheel",
+      "stabilizer_1v_procedural_light"
+    ],
+    "requires": [
+      "tNode_1v_rockets_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      360.0,
+      90.0
+    ]
+  },
+  {
+    "id": "tNode_1v_aero_02",
+    "name_key": "Science/TechNodes/Names/tNode_1v_aero_02",
+    "description_key": "Science/TechNodes/Descriptions/tNode_1v_aero_02",
+    "icon": "ICO-RDCenter-Plane-24x",
+    "required_science": 50,
+    "parts": [
+      "cockpit_1v_m1_crew",
+      "cockpit_1v_m1_inline_crew",
+      "fueltank_1v_m1_inline_methane",
+      "engine_1v_turbofan_methane_wheesley",
+      "landinggear_1v",
+      "landinggear_1v_fixed",
+      "intake_1v_circular",
+      "wing_1v_procedural_light",
+      "stabilizer_2v_procedural_heavy"
+    ],
+    "requires": [
+      "tNode_1v_utility_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      720.0,
+      90.0
+    ]
+  },
+  {
+    "id": "tNode_1v_aero_03",
+    "name_key": "Science/TechNodes/Names/tNode_1v_aero_03",
+    "description_key": "Science/TechNodes/Descriptions/tNode_1v_aero_03",
+    "icon": "ICO-RDCenter-Aero-24x",
+    "required_science": 230,
+    "parts": [
+      "nosecone_1v_advanced_conical",
+      "nosecone_1v_advanced_rightcone",
+      "stabilizer_0v_flybywire_aircraft",
+      "nosecone_0v",
+      "stabilizer_0v_reactionwheel",
+      "gridfin_1v_radial",
+      "controlsurface_2v_procedural_heavy"
+    ],
+    "requires": [
+      "tNode_2v_rockets_02"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      1800.0,
+      90.0
+    ]
+  },
+  {
+    "id": "tNode_1v_construction_01",
+    "name_key": "Science/TechNodes/Names/tNode_1v_construction_01",
+    "description_key": "Science/TechNodes/Descriptions/tNode_1v_construction_01",
+    "icon": "ICO-RDCenter-Construction-24x",
+    "required_science": 10,
+    "parts": [
+      "coupler_1v_inline_2point",
+      "ibeam_1v_1x5",
+      "panel_1v_square",
+      "panel_1v_triangle_equilateral",
+      "panel_1v_triangle_right",
+      "tube_0v_procedural",
+      "tube_1v_procedural",
+      "fuselage_1v_m1_structural",
+      "launchclamp_3v_ground"
+    ],
+    "requires": [
+      "tNode_1v_rockets_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      360.0,
+      310.0
+    ]
+  },
+  {
+    "id": "tNode_1v_decouplers_01",
+    "name_key": "Science/TechNodes/Names/tNode_1v_decouplers_01",
+    "description_key": "Science/TechNodes/Descriptions/tNode_1v_decouplers_01",
+    "icon": "ICO-RDCenter-Coupling-24x",
+    "required_science": 15,
+    "parts": [
+      "decoupler_2v_radial",
+      "separator_1v_inline",
+      "booster_0v_solid_sepratron"
+    ],
+    "requires": [
+      "tNode_1v_construction_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      540.0,
+      310.0
+    ]
+  },
+  {
+    "id": "tNode_1v_docking_01",
+    "name_key": "Science/TechNodes/Names/tNode_1v_docking_01",
+    "description_key": "Science/TechNodes/Descriptions/tNode_1v_docking_01",
+    "icon": "ICO-RDCenter-Docking-24x",
+    "required_science": 50,
+    "parts": [
+      "dockingport_1v_inline"
+    ],
+    "requires": [
+      "tNode_1v_decouplers_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      900.0,
+      310.0
+    ]
+  },
+  {
+    "id": "tNode_1v_electronics_01",
+    "name_key": "Science/TechNodes/Names/tNode_1v_electronics_01",
+    "description_key": "Science/TechNodes/Descriptions/tNode_1v_electronics_01",
+    "icon": "ICO-RDCenter-SolarPanel-24x",
+    "required_science": 35,
+    "parts": [
+      "solararray_1v_flat",
+      "storage_0v_battery_electricity"
+    ],
+    "requires": [
+      "tNode_0v_utility"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      720.0,
+      530.0
+    ]
+  },
+  {
+    "id": "tNode_1v_electronics_02",
+    "name_key": "Science/TechNodes/Names/tNode_1v_electronics_02",
+    "description_key": "Science/TechNodes/Descriptions/tNode_1v_electronics_02",
+    "icon": "ICO-RDCenter-RadarDish-24x",
+    "required_science": 50,
+    "parts": [
+      "probe_0v_hexagonal_electricity",
+      "probe_0v_octagonal_electricity_1x3",
+      "antenna_0v_dish_ra-2",
+      "antenna_1v_dish_hg5"
+    ],
+    "requires": [
+      "tNode_1v_electronics_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      900.0,
+      530.0
+    ]
+  },
+  {
+    "id": "tNode_1v_electronics_03",
+    "name_key": "Science/TechNodes/Names/tNode_1v_electronics_03",
+    "description_key": "Science/TechNodes/Descriptions/tNode_1v_electronics_03",
+    "icon": "ICO-RDCenter-Probe-24x",
+    "required_science": 230,
+    "parts": [
+      "probe_0v_octagonal_electricity_1x1",
+      "probe_1v_hexagonal_electricity",
+      "probe_0v_rectangular_electricity",
+      "antenna_1v_parabolic_dts-m1",
+      "solararray_1v_1x6",
+      "solararray_1v_3x2",
+      "solararray_1v_circular"
+    ],
+    "requires": [
+      "tNode_2v_rockets_02"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      1800.0,
+      530.0
+    ]
+  },
+  {
+    "id": "tNode_1v_electronics_04",
+    "name_key": "Science/TechNodes/Names/tNode_1v_electronics_04",
+    "description_key": "Science/TechNodes/Descriptions/tNode_1v_electronics_04",
+    "icon": "ICO-RDCenter-SolarPanel-24x",
+    "required_science": 300,
+    "parts": [
+      "solararray_1v_shielded_1x6",
+      "solararray_1v_shielded_3x2",
+      "solararray_1v_circular_shielded",
+      "storage_1v_battery_electricity_radial",
+      "antenna_0v_dish_ra-15",
+      "stabilizer_2v_reactionwheel"
+    ],
+    "requires": [
+      "tNode_1v_electronics_03"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      1980.0,
+      530.0
+    ]
+  },
+  {
+    "id": "tNode_1v_monoprop",
+    "name_key": "Science/TechNodes/Names/tNode_1v_monoprop",
+    "description_key": "Science/TechNodes/Descriptions/tNode_1v_monoprop",
+    "icon": "ICO-RDCenter-Tier1Rocket-24x",
+    "required_science": 80,
+    "parts": [
+      "engine_0v_monoprop_puff",
+      "fueltank_0v_radial_monoprop_1x1",
+      "fueltank_0v_radial_monoprop_sphere",
+      "fueltank_0v_inline_monoprop"
+    ],
+    "requires": [
+      "tNode_0v_rcs"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      900.0,
+      640.0
+    ]
+  },
+  {
+    "id": "tNode_1v_payload",
+    "name_key": "Science/TechNodes/Names/tNode_1v_payload",
+    "description_key": "Science/TechNodes/Descriptions/tNode_1v_payload",
+    "icon": "ICO-RDCenter-Payload-24x",
+    "required_science": 35,
+    "parts": [
+      "cargobay_1v_1x1",
+      "cargobay_1v_1x8",
+      "fairing_0v_procedural",
+      "fairing_1v_procedural",
+      "enginemount_1v_procedural"
+    ],
+    "requires": [
+      "tNode_1v_construction_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      720.0,
+      420.0
+    ]
+  },
+  {
+    "id": "tNode_1v_rockets_01",
+    "name_key": "Science/TechNodes/Names/tNode_1v_rockets_01",
+    "description_key": "Science/TechNodes/Descriptions/tNode_1v_rockets_01",
+    "icon": "ICO-RDCenter-Tier1Rocket-24x",
+    "required_science": 10,
+    "parts": [
+      "engine_1v_methalox_reliant",
+      "fueltank_1v_inline_methalox_1x4",
+      "decoupler_1v_radial",
+      "nosecone_1v_hemisphere"
+    ],
+    "requires": [
+      "tNode_1v_start"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      180.0,
+      750.0
+    ]
+  },
+  {
+    "id": "tNode_1v_rockets_02",
+    "name_key": "Science/TechNodes/Names/tNode_1v_rockets_02",
+    "description_key": "Science/TechNodes/Descriptions/tNode_1v_rockets_02",
+    "icon": "ICO-RDCenter-Tier1Rocket-24x",
+    "required_science": 15,
+    "parts": [
+      "booster_1v_solid_flea",
+      "booster_1v_solid_hammer"
+    ],
+    "requires": [
+      "tNode_1v_rockets_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      360.0,
+      750.0
+    ]
+  },
+  {
+    "id": "tNode_1v_rockets_03",
+    "name_key": "Science/TechNodes/Names/tNode_1v_rockets_03",
+    "description_key": "Science/TechNodes/Descriptions/tNode_1v_rockets_03",
+    "icon": "ICO-RDCenter-Tier1Rocket-24x",
+    "required_science": 25,
+    "parts": [
+      "engine_1v_methalox_terrier",
+      "booster_1v_solid_thumper"
+    ],
+    "requires": [
+      "tNode_1v_rockets_02"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      540.0,
+      750.0
+    ]
+  },
+  {
+    "id": "tNode_1v_rockets_04",
+    "name_key": "Science/TechNodes/Names/tNode_1v_rockets_04",
+    "description_key": "Science/TechNodes/Descriptions/tNode_1v_rockets_04",
+    "icon": "ICO-RDCenter-MoonLander-24x",
+    "required_science": 80,
+    "parts": [
+      "pod_1v_lander_crew",
+      "fueltank_1v_inline_methalox_1x8",
+      "landingleg_1v"
+    ],
+    "requires": [
+      "tNode_1v_rockets_03"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      900.0,
+      750.0
+    ]
+  },
+  {
+    "id": "tNode_1v_rover",
+    "name_key": "Science/TechNodes/Names/tNode_1v_rover",
+    "description_key": "Science/TechNodes/Descriptions/tNode_1v_rover",
+    "icon": "ICO-RDCenter-Rover-24x",
+    "required_science": 400,
+    "parts": [
+      "seat_0v_external_crew",
+      "probe_1v_rover_electricity",
+      "wheel_0v_rover",
+      "wheel_1v_rover"
+    ],
+    "requires": [
+      "tNode_1v_electronics_04"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      2160.0,
+      530.0
+    ]
+  },
+  {
+    "id": "tNode_1v_science_01",
+    "name_key": "Science/TechNodes/Names/tNode_1v_science_01",
+    "description_key": "Science/TechNodes/Descriptions/tNode_1v_science_01",
+    "icon": "ICO-RDCenter-Science-24x",
+    "required_science": 10,
+    "parts": [
+      "collector_1v_science_general"
+    ],
+    "requires": [
+      "tNode_1v_rockets_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      360.0,
+      640.0
+    ]
+  },
+  {
+    "id": "tNode_1v_science_02",
+    "name_key": "Science/TechNodes/Names/tNode_1v_science_02",
+    "description_key": "Science/TechNodes/Descriptions/tNode_1v_science_02",
+    "icon": "ICO-RDCenter-Science-24x",
+    "required_science": 7000,
+    "parts": [
+      "collector_1v_radial_science_orbital"
+    ],
+    "requires": [
+      "tNode_2v_science_02"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      5220.0,
+      640.0
+    ]
+  },
+  {
+    "id": "tNode_1v_start",
+    "name_key": "Science/TechNodes/Names/tNode_1v_start",
+    "description_key": "Science/TechNodes/Descriptions/tNode_1v_start",
+    "icon": "ICO-RDCenter-Kerbal-24x",
+    "required_science": 0,
+    "parts": [
+      "pod_1v_conical_crew",
+      "engine_1v_methalox_swivel",
+      "fueltank_1v_inline_methalox_1x1",
+      "fueltank_1v_inline_methalox_1x2",
+      "decoupler_1v_inline",
+      "fin_0v_procedural",
+      "parachute_0v"
+    ],
+    "requires": [],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      0.0,
+      750.0
+    ]
+  },
+  {
+    "id": "tNode_1v_trusses",
+    "name_key": "Science/TechNodes/Names/tNode_1v_trusses",
+    "description_key": "Science/TechNodes/Descriptions/tNode_1v_trusses",
+    "icon": "ICO-RDCenter-Trusses-24x",
+    "required_science": 25,
+    "parts": [
+      "truss_1v_square_1x1",
+      "truss_1v_square_1x4",
+      "truss_1v_circular_1x1",
+      "truss_1v_circular_1x4",
+      "truss_1v_triangular_1x1",
+      "truss_1v_triangular_1x4",
+      "junction_1v_circular",
+      "junction_1v_square",
+      "adapter_1v_cir-sqr",
+      "adapter_1v_cir-tri"
+    ],
+    "requires": [
+      "tNode_1v_construction_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      540.0,
+      200.0
+    ]
+  },
+  {
+    "id": "tNode_1v_utility_01",
+    "name_key": "Science/TechNodes/Names/tNode_1v_utility_01",
+    "description_key": "Science/TechNodes/Descriptions/tNode_1v_utility_01",
+    "icon": "ICO-RDCenter-Chute-24x",
+    "required_science": 15,
+    "parts": [
+      "heatshield_1v",
+      "parachute_0v_radial_drogue",
+      "parachute_1v_radial"
+    ],
+    "requires": [
+      "tNode_1v_aero_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      540.0,
+      90.0
+    ]
+  },
+  {
+    "id": "tNode_1v_utility_02",
+    "name_key": "Science/TechNodes/Names/tNode_1v_utility_02",
+    "description_key": "Science/TechNodes/Descriptions/tNode_1v_utility_02",
+    "icon": "ICO-RDCenter-Chute-24x",
+    "required_science": 400,
+    "parts": [
+      "escapesystem_1v_launch",
+      "ladder_1v_telescoping_kelus",
+      "light_0v_navigation",
+      "light_0v_strip",
+      "parachute_1v_drogue",
+      "light_0v_spot_narrow",
+      "light_0v_spot"
+    ],
+    "requires": [
+      "tNode_2v_construction_02"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      2160.0,
+      420.0
+    ]
+  },
+  {
+    "id": "tNode_1v_xenon",
+    "name_key": "Science/TechNodes/Names/tNode_1v_xenon",
+    "description_key": "Science/TechNodes/Descriptions/tNode_1v_xenon",
+    "icon": "ICO-RDCenter-Tier1Rocket-24x",
+    "required_science": 850,
+    "parts": [
+      "engine_0v_xenon_dawn",
+      "fueltank_0v_inline_xenon",
+      "fueltank_0v_radial_xenon",
+      "fueltank_1v_inline_xenon_1x1",
+      "fueltank_1v_inline_xenon_1x4"
+    ],
+    "requires": [
+      "tNode_2v_hydrogen"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      2520.0,
+      640.0
+    ]
+  },
+  {
+    "id": "tNode_2v_aero_01",
+    "name_key": "Science/TechNodes/Names/tNode_2v_aero_01",
+    "description_key": "Science/TechNodes/Descriptions/tNode_2v_aero_01",
+    "icon": "ICO-RDCenter-Plane-24x",
+    "required_science": 300,
+    "parts": [
+      "cockpit_2v_m2_crew",
+      "cockpit_2v_m2_inline_crew",
+      "engine_1v_turbofan_methane_panther",
+      "landinggear_2v",
+      "airbrake_1v",
+      "intake_1v_m1_nacelle_methane",
+      "fueltank_2v_m2_inline_methane_1x1",
+      "fueltank_2v_m2_inline_methane_1x2",
+      "wing_2v_procedural_heavy"
+    ],
+    "requires": [
+      "tNode_1v_aero_03"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      1980.0,
+      90.0
+    ]
+  },
+  {
+    "id": "tNode_2v_aero_02",
+    "name_key": "Science/TechNodes/Names/tNode_2v_aero_02",
+    "description_key": "Science/TechNodes/Descriptions/tNode_2v_aero_02",
+    "icon": "ICO-RDCenter-Plane-24x",
+    "required_science": 400,
+    "parts": [
+      "fueltank_2v_m2_inline_methalox_1x1",
+      "fueltank_2v_m2_inline_methalox_1x2",
+      "fueltank_2v_m2_inline_monoprop",
+      "intake_1v_m1_adjustable",
+      "intake_1v_ramp_radial_adjustable",
+      "intake_1v_radial",
+      "nosecone_2v_mk2"
+    ],
+    "requires": [
+      "tNode_2v_aero_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      2160.0,
+      90.0
+    ]
+  },
+  {
+    "id": "tNode_2v_aero_03",
+    "name_key": "Science/TechNodes/Names/tNode_2v_aero_03",
+    "description_key": "Science/TechNodes/Descriptions/tNode_2v_aero_03",
+    "icon": "ICO-RDCenter-Plane-24x",
+    "required_science": 500,
+    "parts": [
+      "adapter_2v_m2_1x1_methalox_1v-m2",
+      "adapter_2v_m2_1x2_methalox_1v-m2",
+      "adapter_2v_m2_methalox_2v-m2",
+      "adapter_3v_m3_methalox_m2-m3",
+      "adapter_2v_m2_2point_methalox_1v-m2",
+      "cabin_1v_m1_crew",
+      "cabin_2v_m2_crew",
+      "cargobay_2v_m2_1x1",
+      "cargobay_2v_m2_1x2"
+    ],
+    "requires": [
+      "tNode_2v_aero_02"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      2340.0,
+      90.0
+    ]
+  },
+  {
+    "id": "tNode_2v_construction_01",
+    "name_key": "Science/TechNodes/Names/tNode_2v_construction_01",
+    "description_key": "Science/TechNodes/Descriptions/tNode_2v_construction_01",
+    "icon": "ICO-RDCenter-Construction-24x",
+    "required_science": 230,
+    "parts": [
+      "adapter_2v_conical_methalox_1v-2v",
+      "adapter_2v_rightcone_methalox_1v-2v",
+      "coupler_1v_inline_3point",
+      "coupler_1v_inline_4point",
+      "ibeam_2v_1x10",
+      "ibeam_2v_2x3",
+      "panel_2v_square",
+      "panel_2v_triangle_equilateral",
+      "panel_2v_triangle_right",
+      "panel_2v_square_crossbrace",
+      "attachpoint_1v_radial"
+    ],
+    "requires": [
+      "tNode_2v_rockets_02"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      1800.0,
+      310.0
+    ]
+  },
+  {
+    "id": "tNode_2v_construction_02",
+    "name_key": "Science/TechNodes/Names/tNode_2v_construction_02",
+    "description_key": "Science/TechNodes/Descriptions/tNode_2v_construction_02",
+    "icon": "ICO-RDCenter-Construction-24x",
+    "required_science": 300,
+    "parts": [
+      "adapter_1v_conical_0v-1v",
+      "adapter_1v_flat_0v-1v",
+      "adapter_1v_bullet_methalox_0v-1v",
+      "connector_1v_6point",
+      "connector_0v_6point",
+      "panel_0v_square",
+      "panel_0v_triangle_equilateral",
+      "panel_0v_triangle_right",
+      "tube_2v_procedural",
+      "adapter_2v_2point_1v-2v",
+      "adapter_2v_3point_1v-2v",
+      "adapter_2v_4point_1v-2v",
+      "adapter_2v_flat_1v-2v"
+    ],
+    "requires": [
+      "tNode_2v_construction_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      1980.0,
+      310.0
+    ]
+  },
+  {
+    "id": "tNode_2v_decouplers_01",
+    "name_key": "Science/TechNodes/Names/tNode_2v_decouplers_01",
+    "description_key": "Science/TechNodes/Descriptions/tNode_2v_decouplers_01",
+    "icon": "ICO-RDCenter-Coupling-24x",
+    "required_science": 300,
+    "parts": [
+      "decoupler_0v_inline",
+      "separator_0v_inline",
+      "decoupler_1v_aerodynamic",
+      "decoupler_2v_aerodynamic",
+      "separator_2v_inline"
+    ],
+    "requires": [
+      "tNode_2v_construction_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      1980.0,
+      200.0
+    ]
+  },
+  {
+    "id": "tNode_2v_docking",
+    "name_key": "Science/TechNodes/Names/tNode_2v_docking",
+    "description_key": "Science/TechNodes/Descriptions/tNode_2v_docking",
+    "icon": "ICO-RDCenter-Docking-24x",
+    "required_science": 400,
+    "parts": [
+      "dockingport_0v_inline",
+      "dockingport_2v_inline"
+    ],
+    "requires": [
+      "tNode_2v_decouplers_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      2160.0,
+      200.0
+    ]
+  },
+  {
+    "id": "tNode_2v_electronics_01",
+    "name_key": "Science/TechNodes/Names/tNode_2v_electronics_01",
+    "description_key": "Science/TechNodes/Descriptions/tNode_2v_electronics_01",
+    "icon": "ICO-RDCenter-SolarPanel-24x",
+    "required_science": 1800,
+    "parts": [
+      "solararray_2v_accordion",
+      "fuelcell_0v",
+      "storage_1v_battery_electricity"
+    ],
+    "requires": [
+      "tNode_3v_electronics_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      3420.0,
+      530.0
+    ]
+  },
+  {
+    "id": "tNode_2v_electronics_02",
+    "name_key": "Science/TechNodes/Names/tNode_2v_electronics_02",
+    "description_key": "Science/TechNodes/Descriptions/tNode_2v_electronics_02",
+    "icon": "ICO-RDCenter-Power-24x",
+    "required_science": 2300,
+    "parts": [
+      "generator_0v_thermoelectric_radioisotope",
+      "storage_2v_battery_electricity",
+      "antenna_1v_dish_ra-100",
+      "antenna_1v_dish_88-88",
+      "fuelcell_1v_array"
+    ],
+    "requires": [
+      "tNode_2v_electronics_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      3600.0,
+      530.0
+    ]
+  },
+  {
+    "id": "tNode_2v_hydrogen",
+    "name_key": "Science/TechNodes/Names/tNode_2v_hydrogen",
+    "description_key": "Science/TechNodes/Descriptions/tNode_2v_hydrogen",
+    "icon": "ICO-RDCenter-Atomic-24x",
+    "required_science": 650,
+    "parts": [
+      "fueltank_1v_inline_hydrogen_long",
+      "fueltank_2v_inline_hydrogen_short",
+      "fueltank_2v_inline_hydrogen_long",
+      "engine_1v_hydrogen_nerv"
+    ],
+    "requires": [
+      "tNode_2v_rockets_03"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      2340.0,
+      750.0
+    ]
+  },
+  {
+    "id": "tNode_2v_payload",
+    "name_key": "Science/TechNodes/Names/tNode_2v_payload",
+    "description_key": "Science/TechNodes/Descriptions/tNode_2v_payload",
+    "icon": "ICO-RDCenter-Payload-24x",
+    "required_science": 400,
+    "parts": [
+      "truss_2v_saddle_1x1",
+      "truss_2v_saddle_1x4",
+      "cabin_2v_crew_hitchhiker",
+      "cargobay_2v_1x1",
+      "cargobay_2v_1x8",
+      "cargobay_2v_nose",
+      "fairing_2v_procedural",
+      "enginemount_2v_procedural"
+    ],
+    "requires": [
+      "tNode_2v_construction_02"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      2160.0,
+      310.0
+    ]
+  },
+  {
+    "id": "tNode_2v_rockets_01",
+    "name_key": "Science/TechNodes/Names/tNode_2v_rockets_01",
+    "description_key": "Science/TechNodes/Descriptions/tNode_2v_rockets_01",
+    "icon": "ICO-RDCenter-Tier2Rocket-24x",
+    "required_science": 180,
+    "parts": [
+      "engine_2v_methalox_skipper",
+      "fueltank_2v_inline_methalox_1x1",
+      "fueltank_2v_inline_methalox_1x2",
+      "adapter_2v_conical_1v-2v",
+      "booster_1v_solid_kickback"
+    ],
+    "requires": [
+      "tNode_1v_rockets_04"
+    ],
+    "hidden_by": "",
+    "tier": 2,
+    "position": [
+      1260.0,
+      750.0
+    ]
+  },
+  {
+    "id": "tNode_2v_rockets_02",
+    "name_key": "Science/TechNodes/Names/tNode_2v_rockets_02",
+    "description_key": "Science/TechNodes/Descriptions/tNode_2v_rockets_02",
+    "icon": "ICO-RDCenter-Tier2Rocket-24x",
+    "required_science": 230,
+    "parts": [
+      "pod_2v_conical_crew",
+      "pod_2v_cupola_crew",
+      "engine_2v_methalox_poodle",
+      "fueltank_2v_inline_methalox_1x4",
+      "heatshield_2v",
+      "pod_2v_lander_crew",
+      "decoupler_2v_inline"
+    ],
+    "requires": [
+      "tNode_2v_rockets_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      1600.0,
+      750.0
+    ]
+  },
+  {
+    "id": "tNode_2v_rockets_03",
+    "name_key": "Science/TechNodes/Names/tNode_2v_rockets_03",
+    "description_key": "Science/TechNodes/Descriptions/tNode_2v_rockets_03",
+    "icon": "ICO-RDCenter-Tier2Rocket-24x",
+    "required_science": 400,
+    "parts": [
+      "engine_2v_methalox_mainsail",
+      "fueltank_2v_inline_methalox_1x8",
+      "fueltank_2v_inline_monoprop"
+    ],
+    "requires": [
+      "tNode_2v_rockets_02"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      1980.0,
+      750.0
+    ]
+  },
+  {
+    "id": "tNode_2v_rockets_04",
+    "name_key": "Science/TechNodes/Names/tNode_2v_rockets_04",
+    "description_key": "Science/TechNodes/Descriptions/tNode_2v_rockets_04",
+    "icon": "ICO-RDCenter-Tier2Rocket-24x",
+    "required_science": 1100,
+    "parts": [
+      "engine_1v_methalox_vector",
+      "booster_2v_solid_clydesdale"
+    ],
+    "requires": [
+      "tNode_2v_hydrogen"
+    ],
+    "hidden_by": "",
+    "tier": 3,
+    "position": [
+      2700.0,
+      750.0
+    ]
+  },
+  {
+    "id": "tNode_2v_rover",
+    "name_key": "Science/TechNodes/Names/tNode_2v_rover",
+    "description_key": "Science/TechNodes/Descriptions/tNode_2v_rover",
+    "icon": "ICO-RDCenter-Science-24x",
+    "required_science": 500,
+    "parts": [
+      "wheel_2v_rover_ruggedized",
+      "collector_0v_radial_science_sampler"
+    ],
+    "requires": [
+      "tNode_1v_rover"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      2340.0,
+      530.0
+    ]
+  },
+  {
+    "id": "tNode_2v_science_01",
+    "name_key": "Science/TechNodes/Names/tNode_2v_science_01",
+    "description_key": "Science/TechNodes/Descriptions/tNode_2v_science_01",
+    "icon": "ICO-RDCenter-Science-24x",
+    "required_science": 300,
+    "parts": [
+      "collector_0v_science_atmospheric",
+      "collector_0v_radial_science_atmospheric"
+    ],
+    "requires": [
+      "tNode_1v_electronics_03"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      1980.0,
+      420.0
+    ]
+  },
+  {
+    "id": "tNode_2v_science_02",
+    "name_key": "Science/TechNodes/Names/tNode_2v_science_02",
+    "description_key": "Science/TechNodes/Descriptions/tNode_2v_science_02",
+    "icon": "ICO-RDCenter-Science-24x",
+    "required_science": 6000,
+    "parts": [
+      "lab_2v_science_marine"
+    ],
+    "requires": [
+      "tNode_4v_electronics_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      5040.0,
+      640.0
+    ]
+  },
+  {
+    "id": "tNode_2v_science_03",
+    "name_key": "Science/TechNodes/Names/tNode_2v_science_03",
+    "description_key": "Science/TechNodes/Descriptions/tNode_2v_science_03",
+    "icon": "ICO-RDCenter-Science-24x",
+    "required_science": 2900,
+    "parts": [
+      "lab_2v_science_orbital"
+    ],
+    "requires": [
+      "tNode_0v_science_02"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      3780.0,
+      420.0
+    ]
+  },
+  {
+    "id": "tNode_2v_trusses_01",
+    "name_key": "Science/TechNodes/Names/tNode_2v_trusses_01",
+    "description_key": "Science/TechNodes/Descriptions/tNode_2v_trusses_01",
+    "icon": "ICO-RDCenter-Trusses-24x",
+    "required_science": 500,
+    "parts": [
+      "truss_2v_circular_1x1",
+      "truss_2v_circular_1x4",
+      "truss_2v_square_1x1",
+      "truss_2v_square_1x4",
+      "truss_2v_triangular_1x1",
+      "truss_2v_triangular_1x4"
+    ],
+    "requires": [
+      "tNode_2v_payload"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      2340.0,
+      310.0
+    ]
+  },
+  {
+    "id": "tNode_2v_trusses_02",
+    "name_key": "Science/TechNodes/Names/tNode_2v_trusses_02",
+    "description_key": "Science/TechNodes/Descriptions/tNode_2v_trusses_02",
+    "icon": "ICO-RDCenter-Trusses-24x",
+    "required_science": 650,
+    "parts": [
+      "junction_2v_circular",
+      "junction_2v_square",
+      "adapter_2v_cir-sqr",
+      "adapter_2v_cir-tri",
+      "resizer_2v_circular_2v-1v",
+      "resizer_2v_square_2v-1v",
+      "resizer_2v_triangular_2v-1v"
+    ],
+    "requires": [
+      "tNode_2v_trusses_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      2520.0,
+      310.0
+    ]
+  },
+  {
+    "id": "tNode_2v_utility",
+    "name_key": "Science/TechNodes/Names/tNode_2v_utility",
+    "description_key": "Science/TechNodes/Descriptions/tNode_2v_utility",
+    "icon": "ICO-RDCenter-MoonLander-24x",
+    "required_science": 500,
+    "parts": [
+      "landingleg_2v",
+      "ladder_2v_telescoping_kelus",
+      "parachute_1v"
+    ],
+    "requires": [
+      "tNode_1v_utility_02"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      2340.0,
+      420.0
+    ]
+  },
+  {
+    "id": "tNode_3v_aero_01",
+    "name_key": "Science/TechNodes/Names/tNode_3v_aero_01",
+    "description_key": "Science/TechNodes/Descriptions/tNode_3v_aero_01",
+    "icon": "ICO-RDCenter-Aero-24x",
+    "required_science": 1400,
+    "parts": [
+      "nosecone_2v_protective",
+      "tailsection_1v_tapered_conical",
+      "tailsection_1v_tapered_rightcone",
+      "stabilizer_3v_reactionwheel",
+      "nosecone_3v",
+      "gridfin_2v_radial"
+    ],
+    "requires": [
+      "tNode_3v_rockets_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      3240.0,
+      90.0
+    ]
+  },
+  {
+    "id": "tNode_3v_aero_02",
+    "name_key": "Science/TechNodes/Names/tNode_3v_aero_02",
+    "description_key": "Science/TechNodes/Descriptions/tNode_3v_aero_02",
+    "icon": "ICO-RDCenter-BigPlane-24x",
+    "required_science": 1800,
+    "parts": [
+      "engine_1v_turboramjet_methane_whiplash",
+      "intake_1v_m1_shockcone",
+      "fueltank_3v_m3_inline_methane_1x1",
+      "fueltank_3v_m3_inline_methane_1x2",
+      "engine_1v_methalox_dart",
+      "landinggear_3v",
+      "intake_1v_m1_supersonic_diverterless"
+    ],
+    "requires": [
+      "tNode_3v_aero_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      3420.0,
+      90.0
+    ]
+  },
+  {
+    "id": "tNode_3v_aero_03",
+    "name_key": "Science/TechNodes/Names/tNode_3v_aero_03",
+    "description_key": "Science/TechNodes/Descriptions/tNode_3v_aero_03",
+    "icon": "ICO-RDCenter-BigPlane-24x",
+    "required_science": 2300,
+    "parts": [
+      "cockpit_3v_m3_crew",
+      "landinggear_4v",
+      "intake_1v_m1_precooler_methane",
+      "fueltank_3v_m3_inline_methane_1x4",
+      "wing_3v_procedural_heavy",
+      "stabilizer_3v_procedural_heavy",
+      "engine_2v_turbofan_methane_goliath"
+    ],
+    "requires": [
+      "tNode_3v_aero_02"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      3600.0,
+      90.0
+    ]
+  },
+  {
+    "id": "tNode_3v_aero_04",
+    "name_key": "Science/TechNodes/Names/tNode_3v_aero_04",
+    "description_key": "Science/TechNodes/Descriptions/tNode_3v_aero_04",
+    "icon": "ICO-RDCenter-BigPlane-24x",
+    "required_science": 5000,
+    "parts": [
+      "engine_1v_methane-methalox_rapier",
+      "wing_3v_procedural_spaceplane",
+      "stabilizer_3v_procedural_spaceplane",
+      "controlsurface_3v_procedural_spaceplane"
+    ],
+    "requires": [
+      "tNode_4v_rockets_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      4860.0,
+      90.0
+    ]
+  },
+  {
+    "id": "tNode_3v_aero_05",
+    "name_key": "Science/TechNodes/Names/tNode_3v_aero_05",
+    "description_key": "Science/TechNodes/Descriptions/tNode_3v_aero_05",
+    "icon": "ICO-RDCenter-BigPlane-24x",
+    "required_science": 6000,
+    "parts": [
+      "fueltank_3v_m3_inline_methalox_1x1",
+      "fueltank_3v_m3_inline_methalox_1x2",
+      "fueltank_3v_m3_inline_methalox_1x4",
+      "fueltank_3v_m3_inline_monoprop",
+      "adapter_3v_m3_conical_methalox_2v-m3",
+      "adapter_3v_m3_methalox_3v-m3",
+      "adapter_3v_m3_rightcone_methalox_2v-m3",
+      "enginemount_3v_m3"
+    ],
+    "requires": [
+      "tNode_3v_aero_04"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      5040.0,
+      90.0
+    ]
+  },
+  {
+    "id": "tNode_3v_construction_01",
+    "name_key": "Science/TechNodes/Names/tNode_3v_construction_01",
+    "description_key": "Science/TechNodes/Descriptions/tNode_3v_construction_01",
+    "icon": "ICO-RDCenter-Construction-24x",
+    "required_science": 1400,
+    "parts": [
+      "tube_3v_procedural",
+      "truss_3v_circular_1x1",
+      "truss_3v_circular_1x4",
+      "truss_3v_square_1x1",
+      "truss_3v_square_1x4",
+      "truss_3v_triangular_1x1",
+      "truss_3v_triangular_1x4",
+      "adapter_3v_conical_2v-3v"
+    ],
+    "requires": [
+      "tNode_3v_rockets_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      3240.0,
+      310.0
+    ]
+  },
+  {
+    "id": "tNode_3v_decouplers_01",
+    "name_key": "Science/TechNodes/Names/tNode_3v_decouplers_01",
+    "description_key": "Science/TechNodes/Descriptions/tNode_3v_decouplers_01",
+    "icon": "ICO-RDCenter-Coupling-24x",
+    "required_science": 1800,
+    "parts": [
+      "decoupler_3v_radial",
+      "separator_3v_inline"
+    ],
+    "requires": [
+      "tNode_3v_construction_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      3420.0,
+      200.0
+    ]
+  },
+  {
+    "id": "tNode_3v_docking_01",
+    "name_key": "Science/TechNodes/Names/tNode_3v_docking_01",
+    "description_key": "Science/TechNodes/Descriptions/tNode_3v_docking_01",
+    "icon": "ICO-RDCenter-Docking-24x",
+    "required_science": 2300,
+    "parts": [
+      "dockingport_1v_inline_shielded",
+      "dockingport_1v_inline_sideport",
+      "dockingport_2v_m2_inline_sideport"
+    ],
+    "requires": [
+      "tNode_3v_decouplers_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      3600.0,
+      200.0
+    ]
+  },
+  {
+    "id": "tNode_3v_electronics_01",
+    "name_key": "Science/TechNodes/Names/tNode_3v_electronics_01",
+    "description_key": "Science/TechNodes/Descriptions/tNode_3v_electronics_01",
+    "icon": "ICO-RDCenter-RadarDish-24x",
+    "required_science": 1400,
+    "parts": [
+      "probe_1v_disk_electricity",
+      "probe_2v_disk_electricity",
+      "probe_3v_disk_electricity",
+      "probe_2v_m2_electricity",
+      "antenna_1v_dish_hg55"
+    ],
+    "requires": [
+      "tNode_3v_rockets_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      3240.0,
+      530.0
+    ]
+  },
+  {
+    "id": "tNode_3v_electronics_02",
+    "name_key": "Science/TechNodes/Names/tNode_3v_electronics_02",
+    "description_key": "Science/TechNodes/Descriptions/tNode_3v_electronics_02",
+    "icon": "ICO-RDCenter-Atomic-24x",
+    "required_science": 2900,
+    "parts": [
+      "storage_3v_battery_electricity",
+      "solararray_3v_large",
+      "generator_1v_fission_reactor"
+    ],
+    "requires": [
+      "tNode_2v_electronics_02"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      3780.0,
+      530.0
+    ]
+  },
+  {
+    "id": "tNode_3v_hydrogen_01",
+    "name_key": "Science/TechNodes/Names/tNode_3v_hydrogen_01",
+    "description_key": "Science/TechNodes/Descriptions/tNode_3v_hydrogen_01",
+    "icon": "ICO-RDCenter-Atomic-24x",
+    "required_science": 4500,
+    "parts": [
+      "engine_3v_hydrogen_swerv",
+      "fueltank_3v_inline_hydrogen_short",
+      "fueltank_3v_inline_hydrogen_long"
+    ],
+    "requires": [
+      "tNode_3v_rockets_03"
+    ],
+    "hidden_by": "",
+    "tier": 4,
+    "position": [
+      3960.0,
+      750.0
+    ]
+  },
+  {
+    "id": "tNode_3v_payload_01",
+    "name_key": "Science/TechNodes/Names/tNode_3v_payload_01",
+    "description_key": "Science/TechNodes/Descriptions/tNode_3v_payload_01",
+    "icon": "ICO-RDCenter-Payload-24x",
+    "required_science": 2300,
+    "parts": [
+      "truss_3v_saddle_1x1",
+      "truss_3v_saddle_1x4",
+      "cabin_3v_crew",
+      "cargobay_3v_nose",
+      "cargobay_3v_1x1",
+      "cargobay_3v_1x8",
+      "fairing_3v_procedural",
+      "enginemount_3v_procedural"
+    ],
+    "requires": [
+      "tNode_3v_trusses_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      3600.0,
+      310.0
+    ]
+  },
+  {
+    "id": "tNode_3v_payload_02",
+    "name_key": "Science/TechNodes/Names/tNode_3v_payload_02",
+    "description_key": "Science/TechNodes/Descriptions/tNode_3v_payload_02",
+    "icon": "ICO-RDCenter-BigPlane-24x",
+    "required_science": 6000,
+    "parts": [
+      "cabin_3v_m3_crew",
+      "cargobay_3v_m3_1x1",
+      "cargobay_3v_m3_1x2",
+      "cargobay_3v_m3_1x4",
+      "cargobay_3v_m3_ramp_1x3"
+    ],
+    "requires": [
+      "tNode_3v_aero_04"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      5040.0,
+      200.0
+    ]
+  },
+  {
+    "id": "tNode_3v_rockets_01",
+    "name_key": "Science/TechNodes/Names/tNode_3v_rockets_01",
+    "description_key": "Science/TechNodes/Descriptions/tNode_3v_rockets_01",
+    "icon": "ICO-RDCenter-Tier3Rocket-24x",
+    "required_science": 1400,
+    "parts": [
+      "engine_3v_methalox_rhino",
+      "fueltank_3v_inline_methalox_1x2",
+      "adapter_3v_methalox_2v-3v",
+      "decoupler_3v_inline"
+    ],
+    "requires": [
+      "tNode_2v_rockets_04"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      3060.0,
+      750.0
+    ]
+  },
+  {
+    "id": "tNode_3v_rockets_02",
+    "name_key": "Science/TechNodes/Names/tNode_3v_rockets_02",
+    "description_key": "Science/TechNodes/Descriptions/tNode_3v_rockets_02",
+    "icon": "ICO-RDCenter-Tier3Rocket-24x",
+    "required_science": 1800,
+    "parts": [
+      "engine_3v_methalox_mammoth",
+      "fueltank_3v_inline_methalox_1x4",
+      "fueltank_3v_inline_methalox_1x8"
+    ],
+    "requires": [
+      "tNode_3v_rockets_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      3240.0,
+      750.0
+    ]
+  },
+  {
+    "id": "tNode_3v_rockets_03",
+    "name_key": "Science/TechNodes/Names/tNode_3v_rockets_03",
+    "description_key": "Science/TechNodes/Descriptions/tNode_3v_rockets_03",
+    "icon": "ICO-RDCenter-Tier3Rocket-24x",
+    "required_science": 2900,
+    "parts": [
+      "engine_1v_methalox_cornet",
+      "engine_2v_methalox_trumpet",
+      "engine_3v_methalox_tuba"
+    ],
+    "requires": [
+      "tNode_3v_rockets_02"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      3600.0,
+      750.0
+    ]
+  },
+  {
+    "id": "tNode_3v_rockets_04",
+    "name_key": "Science/TechNodes/Names/tNode_3v_rockets_04",
+    "description_key": "Science/TechNodes/Descriptions/tNode_3v_rockets_04",
+    "icon": "ICO-RDCenter-MoonLander-24x",
+    "required_science": 2300,
+    "parts": [
+      "engine_3v_methalox_labradoodle",
+      "fueltank_3v_inline_methalox_1x1",
+      "pod_3v_conical_crew",
+      "pod_3v_lander_crew",
+      "heatshield_3v"
+    ],
+    "requires": [
+      "tNode_3v_rockets_02"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      3420.0,
+      640.0
+    ]
+  },
+  {
+    "id": "tNode_3v_trusses_01",
+    "name_key": "Science/TechNodes/Names/tNode_3v_trusses_01",
+    "description_key": "Science/TechNodes/Descriptions/tNode_3v_trusses_01",
+    "icon": "ICO-RDCenter-Trusses-24x",
+    "required_science": 1800,
+    "parts": [
+      "resizer_3v_circular_3v-2v",
+      "resizer_3v_square_3v-2v",
+      "resizer_3v_triangular_3v-2v",
+      "junction_3v_circular",
+      "junction_3v_square",
+      "adapter_3v_cir-sqr",
+      "adapter_3v_cir-tri"
+    ],
+    "requires": [
+      "tNode_3v_construction_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      3420.0,
+      310.0
+    ]
+  },
+  {
+    "id": "tNode_4v_construction_01",
+    "name_key": "Science/TechNodes/Names/tNode_4v_construction_01",
+    "description_key": "Science/TechNodes/Descriptions/tNode_4v_construction_01",
+    "icon": "ICO-RDCenter-Construction-24x",
+    "required_science": 5000,
+    "parts": [
+      "adapter_4v_3v-4v",
+      "tube_4v_procedural",
+      "nosecone_4v"
+    ],
+    "requires": [
+      "tNode_4v_rockets_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      4860.0,
+      420.0
+    ]
+  },
+  {
+    "id": "tNode_4v_decouplers_01",
+    "name_key": "Science/TechNodes/Names/tNode_4v_decouplers_01",
+    "description_key": "Science/TechNodes/Descriptions/tNode_4v_decouplers_01",
+    "icon": "ICO-RDCenter-Coupling-24x",
+    "required_science": 6000,
+    "parts": [
+      "decoupler_4v_inline",
+      "decoupler_4v_radial",
+      "separator_4v_inline"
+    ],
+    "requires": [
+      "tNode_4v_construction_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      5040.0,
+      310.0
+    ]
+  },
+  {
+    "id": "tNode_4v_docking_01",
+    "name_key": "Science/TechNodes/Names/tNode_4v_docking_01",
+    "description_key": "Science/TechNodes/Descriptions/tNode_4v_docking_01",
+    "icon": "ICO-RDCenter-Docking-24x",
+    "required_science": 7000,
+    "parts": [
+      "dockingring_4v_inline",
+      "dockingport_3v_inline"
+    ],
+    "requires": [
+      "tNode_4v_decouplers_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      5220.0,
+      310.0
+    ]
+  },
+  {
+    "id": "tNode_4v_electronics_01",
+    "name_key": "Science/TechNodes/Names/tNode_4v_electronics_01",
+    "description_key": "Science/TechNodes/Descriptions/tNode_4v_electronics_01",
+    "icon": "ICO-RDCenter-Power-24x",
+    "required_science": 5000,
+    "parts": [
+      "storage_4v_battery_electricity",
+      "probe_4v_disk_electricity",
+      "generator_3v_thermoelectric_radioisotope"
+    ],
+    "requires": [
+      "tNode_4v_rockets_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      4860.0,
+      640.0
+    ]
+  },
+  {
+    "id": "tNode_4v_hydrogen_01",
+    "name_key": "Science/TechNodes/Names/tNode_4v_hydrogen_01",
+    "description_key": "Science/TechNodes/Descriptions/tNode_4v_hydrogen_01",
+    "icon": "ICO-RDCenter-Tier4Rocket-24x",
+    "required_science": 6000,
+    "parts": [
+      "fueltank_4v_inline_hydrogen_short",
+      "fueltank_4v_inline_hydrogen_long",
+      "fueltank_5v_inline_hydrogen_sphere"
+    ],
+    "requires": [
+      "tNode_4v_rockets_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      4860.0,
+      750.0
+    ]
+  },
+  {
+    "id": "tNode_4v_monoprop_01",
+    "name_key": "Science/TechNodes/Names/tNode_4v_monoprop_01",
+    "description_key": "Science/TechNodes/Descriptions/tNode_4v_monoprop_01",
+    "icon": "ICO-RDCenter-Tier3Rocket-24x",
+    "required_science": 1800,
+    "parts": [
+      "fueltank_3v_inline_monoprop",
+      "fueltank_4v_radial_monoprop"
+    ],
+    "requires": [
+      "tNode_3v_rockets_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      3240.0,
+      640.0
+    ]
+  },
+  {
+    "id": "tNode_4v_payload_01",
+    "name_key": "Science/TechNodes/Names/tNode_4v_payload_01",
+    "description_key": "Science/TechNodes/Descriptions/tNode_4v_payload_01",
+    "icon": "ICO-RDCenter-Payload-24x",
+    "required_science": 8000,
+    "parts": [
+      "truss_4v_saddle_1x1",
+      "truss_4v_saddle_1x4",
+      "cargobay_4v_nose",
+      "cargobay_4v_1x1",
+      "cargobay_4v_1x4",
+      "fairing_4v_procedural",
+      "enginemount_4v_procedural"
+    ],
+    "requires": [
+      "tNode_4v_trusses_02"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      5400.0,
+      420.0
+    ]
+  },
+  {
+    "id": "tNode_4v_rockets_01",
+    "name_key": "Science/TechNodes/Names/tNode_4v_rockets_01",
+    "description_key": "Science/TechNodes/Descriptions/tNode_4v_rockets_01",
+    "icon": "ICO-RDCenter-Tier4Rocket-24x",
+    "required_science": 5000,
+    "parts": [
+      "fueltank_4v_inline_methalox_s1",
+      "fueltank_4v_inline_methalox_s2",
+      "fueltank_4v_inline_methalox_s3",
+      "fueltank_4v_inline_methalox_s4",
+      "adapter_4v_methalox_3v-4v"
+    ],
+    "requires": [
+      "tNode_3v_hydrogen_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      4680.0,
+      750.0
+    ]
+  },
+  {
+    "id": "tNode_4v_rover_01",
+    "name_key": "Science/TechNodes/Names/tNode_4v_rover_01",
+    "description_key": "Science/TechNodes/Descriptions/tNode_4v_rover_01",
+    "icon": "ICO-RDCenter-Rover-24x",
+    "required_science": 7000,
+    "parts": [
+      "cockpit_3v_truck_crew",
+      "chassis_3v_truck",
+      "wheel_2v_truck",
+      "wheel_3v_rover"
+    ],
+    "requires": [
+      "tNode_4v_trusses_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      5220.0,
+      530.0
+    ]
+  },
+  {
+    "id": "tNode_4v_trusses_01",
+    "name_key": "Science/TechNodes/Names/tNode_4v_trusses_01",
+    "description_key": "Science/TechNodes/Descriptions/tNode_4v_trusses_01",
+    "icon": "ICO-RDCenter-Trusses-24x",
+    "required_science": 6000,
+    "parts": [
+      "truss_4v_square_1x1",
+      "truss_4v_square_1x4",
+      "truss_4v_triangular_1x1",
+      "truss_4v_triangular_1x4",
+      "truss_4v_circular_1x1",
+      "truss_4v_circular_1x4"
+    ],
+    "requires": [
+      "tNode_4v_construction_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      5040.0,
+      420.0
+    ]
+  },
+  {
+    "id": "tNode_4v_trusses_02",
+    "name_key": "Science/TechNodes/Names/tNode_4v_trusses_02",
+    "description_key": "Science/TechNodes/Descriptions/tNode_4v_trusses_02",
+    "icon": "ICO-RDCenter-Trusses-24x",
+    "required_science": 7000,
+    "parts": [
+      "resizer_4v_circular_4v-2v",
+      "resizer_4v_circular_4v-3v",
+      "resizer_4v_square_4v-2v",
+      "resizer_4v_square_4v-3v",
+      "resizer_4v_triangular_4v-2v",
+      "resizer_4v_triangular_4v-3v",
+      "junction_4v_circular",
+      "junction_4v_square",
+      "adapter_4v_cir-sqr",
+      "adapter_4v_cir-tri"
+    ],
+    "requires": [
+      "tNode_4v_trusses_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      5220.0,
+      420.0
+    ]
+  },
+  {
+    "id": "tNode_4v_utility_01",
+    "name_key": "Science/TechNodes/Names/tNode_4v_utility_01",
+    "description_key": "Science/TechNodes/Descriptions/tNode_4v_utility_01",
+    "icon": "ICO-RDCenter-MoonLander-24x",
+    "required_science": 5000,
+    "parts": [
+      "landingleg_3v",
+      "ladder_3v_telescoping_verylong",
+      "heatshield_4v",
+      "heatshield_2v_inflatable"
+    ],
+    "requires": [
+      "tNode_4v_rockets_01"
+    ],
+    "hidden_by": "",
+    "tier": 0,
+    "position": [
+      4860.0,
+      530.0
+    ]
+  }
+]

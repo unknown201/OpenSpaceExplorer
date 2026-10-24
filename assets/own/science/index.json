@@ -1,0 +1,2142 @@
+{
+  "experiments": [
+    {
+      "id": "AtmosphereSurvey",
+      "display_name_key": "Science/Experiments/AtmosphereSurvey",
+      "kind": "Both",
+      "valid": [
+        {
+          "body": "",
+          "situation": "Atmosphere",
+          "region": "",
+          "requires_region": true
+        }
+      ],
+      "data_value": 12.0,
+      "sample_value": 28.0,
+      "transmission_size": 75.0,
+      "requires_eva": false
+    },
+    {
+      "id": "CrewObservation",
+      "display_name_key": "Science/Experiments/CrewObservation",
+      "kind": "Data",
+      "valid": [
+        {
+          "body": "",
+          "situation": "HighOrbit",
+          "region": "",
+          "requires_region": false
+        },
+        {
+          "body": "",
+          "situation": "LowOrbit",
+          "region": "",
+          "requires_region": false
+        },
+        {
+          "body": "",
+          "situation": "Atmosphere",
+          "region": "",
+          "requires_region": false
+        },
+        {
+          "body": "",
+          "situation": "Landed",
+          "region": "",
+          "requires_region": true
+        },
+        {
+          "body": "",
+          "situation": "Splashed",
+          "region": "",
+          "requires_region": true
+        }
+      ],
+      "data_value": 4.0,
+      "sample_value": 0.0,
+      "transmission_size": 5.0,
+      "requires_eva": false
+    },
+    {
+      "id": "CrewReport",
+      "display_name_key": "Crew Report",
+      "kind": "Data",
+      "valid": [
+        {
+          "body": "Kerbin",
+          "situation": "Landed",
+          "region": "",
+          "requires_region": true
+        }
+      ],
+      "data_value": 1.0,
+      "sample_value": 2.0,
+      "transmission_size": 5.0,
+      "requires_eva": false
+    },
+    {
+      "id": "EnvironmentSurvey",
+      "display_name_key": "Science/Experiments/EnvironmentSurvey",
+      "kind": "Both",
+      "valid": [
+        {
+          "body": "",
+          "situation": "HighOrbit",
+          "region": "",
+          "requires_region": false
+        },
+        {
+          "body": "",
+          "situation": "LowOrbit",
+          "region": "",
+          "requires_region": false
+        },
+        {
+          "body": "",
+          "situation": "Atmosphere",
+          "region": "",
+          "requires_region": false
+        },
+        {
+          "body": "",
+          "situation": "Landed",
+          "region": "",
+          "requires_region": true
+        },
+        {
+          "body": "",
+          "situation": "Splashed",
+          "region": "",
+          "requires_region": true
+        }
+      ],
+      "data_value": 5.0,
+      "sample_value": 5.0,
+      "transmission_size": 10.0,
+      "requires_eva": false
+    },
+    {
+      "id": "MarineSurvey",
+      "display_name_key": "Science/Experiments/MarineSurvey",
+      "kind": "Both",
+      "valid": [
+        {
+          "body": "",
+          "situation": "Landed",
+          "region": "KerbinWater",
+          "requires_region": true
+        },
+        {
+          "body": "",
+          "situation": "Landed",
+          "region": "KerbinBeach",
+          "requires_region": true
+        },
+        {
+          "body": "",
+          "situation": "Landed",
+          "region": "EveSeas",
+          "requires_region": true
+        },
+        {
+          "body": "",
+          "situation": "Landed",
+          "region": "EveShallows",
+          "requires_region": true
+        },
+        {
+          "body": "",
+          "situation": "Landed",
+          "region": "LaytheHeartLake",
+          "requires_region": true
+        },
+        {
+          "body": "",
+          "situation": "Landed",
+          "region": "LaytheLakes",
+          "requires_region": true
+        },
+        {
+          "body": "",
+          "situation": "Landed",
+          "region": "LaytheOcean",
+          "requires_region": true
+        },
+        {
+          "body": "",
+          "situation": "Landed",
+          "region": "LaytheShallows",
+          "requires_region": true
+        },
+        {
+          "body": "",
+          "situation": "Splashed",
+          "region": "",
+          "requires_region": true
+        },
+        {
+          "body": "",
+          "situation": "Landed",
+          "region": "VallWell",
+          "requires_region": true
+        }
+      ],
+      "data_value": 12.0,
+      "sample_value": 28.0,
+      "transmission_size": 150.0,
+      "requires_eva": false
+    },
+    {
+      "id": "OrbitalSurvey",
+      "display_name_key": "Science/Experiments/OrbitalSurvey",
+      "kind": "Both",
+      "valid": [
+        {
+          "body": "",
+          "situation": "HighOrbit",
+          "region": "",
+          "requires_region": false
+        },
+        {
+          "body": "",
+          "situation": "LowOrbit",
+          "region": "",
+          "requires_region": true
+        }
+      ],
+      "data_value": 6.0,
+      "sample_value": 14.0,
+      "transmission_size": 150.0,
+      "requires_eva": false
+    },
+    {
+      "id": "RadiationReport",
+      "display_name_key": "Science/Experiments/RadiationObservation",
+      "kind": "Data",
+      "valid": [
+        {
+          "body": "",
+          "situation": "HighOrbit",
+          "region": "",
+          "requires_region": false
+        },
+        {
+          "body": "",
+          "situation": "LowOrbit",
+          "region": "",
+          "requires_region": false
+        },
+        {
+          "body": "",
+          "situation": "Atmosphere",
+          "region": "",
+          "requires_region": false
+        },
+        {
+          "body": "",
+          "situation": "Landed",
+          "region": "",
+          "requires_region": true
+        },
+        {
+          "body": "",
+          "situation": "Splashed",
+          "region": "",
+          "requires_region": true
+        }
+      ],
+      "data_value": 16.0,
+      "sample_value": 0.0,
+      "transmission_size": 25.0,
+      "requires_eva": false
+    },
+    {
+      "id": "SurfaceSurvey",
+      "display_name_key": "Science/Experiments/SurfaceSurvey",
+      "kind": "Both",
+      "valid": [
+        {
+          "body": "",
+          "situation": "Landed",
+          "region": "",
+          "requires_region": true
+        },
+        {
+          "body": "",
+          "situation": "Splashed",
+          "region": "",
+          "requires_region": true
+        }
+      ],
+      "data_value": 6.0,
+      "sample_value": 18.0,
+      "transmission_size": 20.0,
+      "requires_eva": true
+    }
+  ],
+  "bodies": [
+    {
+      "body": "Bop",
+      "situations": {
+        "high_orbit_max_m": 1221060.862842528,
+        "low_orbit_max_m": 25000.0,
+        "atmosphere_max_m": 0.0,
+        "body_scalar": 1.0,
+        "high_orbit_scalar": 20.0,
+        "low_orbit_scalar": 24.0,
+        "atmosphere_scalar": -1.0,
+        "splashed_scalar": 1.0,
+        "landed_scalar": 1.0
+      },
+      "regions": [
+        {
+          "id": "BopCraters",
+          "map_id": 2,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 24.0
+        },
+        {
+          "id": "BopHighlands",
+          "map_id": 0,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 24.0
+        },
+        {
+          "id": "BopLargestImpactSite",
+          "map_id": 1,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 24.0
+        },
+        {
+          "id": "BopBalancingRock",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 32.0
+        },
+        {
+          "id": "BopCarcass",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 32.0
+        },
+        {
+          "id": "BopSailingStones",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 32.0
+        }
+      ],
+      "discoverables": [
+        {
+          "region": "BopBalancingRock",
+          "position": {
+            "x": 26722.71271068855,
+            "y": -87176.10445147178,
+            "z": -31712.110163510417
+          },
+          "radius_m": 29.40000343322754
+        },
+        {
+          "region": "BopSailingStones",
+          "position": {
+            "x": -7054.4504488686225,
+            "y": -41974.422685034064,
+            "z": -66744.037531365
+          },
+          "radius_m": 330.780029296875
+        },
+        {
+          "region": "BopCarcass",
+          "position": {
+            "x": 8136.432862944484,
+            "y": -51705.25584065262,
+            "z": -65908.34161981936
+          },
+          "radius_m": 442.31298828125
+        }
+      ],
+      "map": {
+        "offset": 0,
+        "width": 512,
+        "height": 256
+      }
+    },
+    {
+      "body": "Dres",
+      "situations": {
+        "high_orbit_max_m": 32832839.57677619,
+        "low_orbit_max_m": 25000.0,
+        "atmosphere_max_m": 0.0,
+        "body_scalar": 1.0,
+        "high_orbit_scalar": 50.0,
+        "low_orbit_scalar": 70.0,
+        "atmosphere_scalar": -1.0,
+        "splashed_scalar": 1.0,
+        "landed_scalar": 1.0
+      },
+      "regions": [
+        {
+          "id": "DresLowlands",
+          "map_id": 1,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 180.0
+        },
+        {
+          "id": "DresHighlands",
+          "map_id": 0,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 180.0
+        },
+        {
+          "id": "DresEquatorialRidge",
+          "map_id": 2,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 180.0
+        },
+        {
+          "id": "DresCraters",
+          "map_id": 4,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 180.0
+        },
+        {
+          "id": "DresEyeOfDres",
+          "map_id": 3,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 180.0
+        },
+        {
+          "id": "DresDoubleArch",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 240.0
+        },
+        {
+          "id": "DresFinRock",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 240.0
+        },
+        {
+          "id": "DresRamp",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 1.0
+        }
+      ],
+      "discoverables": [
+        {
+          "region": "DresDoubleArch",
+          "position": {
+            "x": -64027.56255300274,
+            "y": -25056.493533135177,
+            "z": 118993.32019555384
+          },
+          "radius_m": 1034.9998779296875
+        },
+        {
+          "region": "DresFinRock",
+          "position": {
+            "x": -115073.43763089778,
+            "y": -77058.63671356767,
+            "z": -18126.636401871983
+          },
+          "radius_m": 156.65000915527344
+        },
+        {
+          "region": "DresFinRock",
+          "position": {
+            "x": 33636.862706838125,
+            "y": -356.97847919521587,
+            "z": 136801.86654097287
+          },
+          "radius_m": 156.6499786376953
+        },
+        {
+          "region": "DresFinRock",
+          "position": {
+            "x": 34023.08905472455,
+            "y": -130.20958979121656,
+            "z": 136651.89820080492
+          },
+          "radius_m": 156.65000915527344
+        },
+        {
+          "region": "DresFinRock",
+          "position": {
+            "x": 34620.84234499861,
+            "y": -377.75869154707374,
+            "z": 136324.81302722296
+          },
+          "radius_m": 156.6499786376953
+        },
+        {
+          "region": "DresFinRock",
+          "position": {
+            "x": 34822.64983122327,
+            "y": -377.8360387543137,
+            "z": 136132.02645740492
+          },
+          "radius_m": 156.65005493164065
+        },
+        {
+          "region": "DresFinRock",
+          "position": {
+            "x": 34839.62857079689,
+            "y": -949.5179617306007,
+            "z": 136052.67779141187
+          },
+          "radius_m": 156.65000915527344
+        },
+        {
+          "region": "DresFinRock",
+          "position": {
+            "x": 34349.35669469342,
+            "y": -1463.7132938892496,
+            "z": 136452.1566050137
+          },
+          "radius_m": 156.65000915527344
+        },
+        {
+          "region": "DresFinRock",
+          "position": {
+            "x": 33930.135623984715,
+            "y": -1645.487584159574,
+            "z": 136712.00531413994
+          },
+          "radius_m": 156.65000915527344
+        },
+        {
+          "region": "DresFinRock",
+          "position": {
+            "x": 33337.15463493662,
+            "y": -1139.8223777188914,
+            "z": 137205.5941791549
+          },
+          "radius_m": 156.6500244140625
+        },
+        {
+          "region": "DresFinRock",
+          "position": {
+            "x": 33483.76475639601,
+            "y": -678.6142606922792,
+            "z": 137053.88222448618
+          },
+          "radius_m": 156.65000915527344
+        },
+        {
+          "region": "DresFinRock",
+          "position": {
+            "x": 33396.196784315856,
+            "y": -1040.343071338356,
+            "z": 136678.2239409223
+          },
+          "radius_m": 156.65000915527344
+        },
+        {
+          "region": "DresFinRock",
+          "position": {
+            "x": 73286.18806900851,
+            "y": 1731.2918171093577,
+            "z": 120142.10937783086
+          },
+          "radius_m": 156.6500244140625
+        },
+        {
+          "region": "DresFinRock",
+          "position": {
+            "x": 73033.57753577964,
+            "y": 1250.0845672895475,
+            "z": 120125.45795004624
+          },
+          "radius_m": 156.6500244140625
+        },
+        {
+          "region": "DresFinRock",
+          "position": {
+            "x": 73774.17592561842,
+            "y": 1988.6062082556944,
+            "z": 119929.61512191674
+          },
+          "radius_m": 156.65000915527344
+        },
+        {
+          "region": "DresFinRock",
+          "position": {
+            "x": 72913.60743804404,
+            "y": 366.36179672134904,
+            "z": 120456.67541326478
+          },
+          "radius_m": 156.64999389648438
+        },
+        {
+          "region": "DresFinRock",
+          "position": {
+            "x": 73589.01136753945,
+            "y": 481.774413464198,
+            "z": 120159.60995954808
+          },
+          "radius_m": 156.6500244140625
+        },
+        {
+          "region": "DresFinRock",
+          "position": {
+            "x": 74311.75496345581,
+            "y": 479.42948827083546,
+            "z": 120034.37894245732
+          },
+          "radius_m": 156.6500244140625
+        },
+        {
+          "region": "DresFinRock",
+          "position": {
+            "x": 74358.76747331668,
+            "y": 753.2280145556165,
+            "z": 119684.87667624812
+          },
+          "radius_m": 156.65000915527344
+        },
+        {
+          "region": "DresFinRock",
+          "position": {
+            "x": 74374.93476463124,
+            "y": 1878.422564140042,
+            "z": 119879.0263657974
+          },
+          "radius_m": 156.65000915527344
+        },
+        {
+          "region": "DresFinRock",
+          "position": {
+            "x": 74799.37797606052,
+            "y": 1751.0774974318713,
+            "z": 120139.28830183468
+          },
+          "radius_m": 156.64999389648438
+        },
+        {
+          "region": "DresFinRock",
+          "position": {
+            "x": 74784.77420681225,
+            "y": 1381.9966255753325,
+            "z": 120326.40666338232
+          },
+          "radius_m": 156.64999389648438
+        },
+        {
+          "region": "DresFinRock",
+          "position": {
+            "x": 74909.44170006458,
+            "y": 931.8336665275582,
+            "z": 120266.52077679626
+          },
+          "radius_m": 156.64999389648438
+        },
+        {
+          "region": "DresRamp",
+          "position": {
+            "x": 33973.32397956807,
+            "y": -785.9473742744831,
+            "z": 136582.13536425677
+          },
+          "radius_m": 1800.00048828125
+        },
+        {
+          "region": "DresRamp",
+          "position": {
+            "x": 73813.55757776568,
+            "y": 1197.865323657863,
+            "z": 120194.1632814216
+          },
+          "radius_m": 1676.6546630859375
+        }
+      ],
+      "map": {
+        "offset": 131072,
+        "width": 512,
+        "height": 256
+      }
+    },
+    {
+      "body": "Duna",
+      "situations": {
+        "high_orbit_max_m": 47921949.36973804,
+        "low_orbit_max_m": 70000.0,
+        "atmosphere_max_m": 50000.0,
+        "body_scalar": 1.0,
+        "high_orbit_scalar": 16.0,
+        "low_orbit_scalar": 24.0,
+        "atmosphere_scalar": 8.0,
+        "splashed_scalar": 1.0,
+        "landed_scalar": 1.0
+      },
+      "regions": [
+        {
+          "id": "DunaHighlands",
+          "map_id": 5,
+          "atmosphere_scalar": 1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 20.0
+        },
+        {
+          "id": "DunaLowlands",
+          "map_id": 4,
+          "atmosphere_scalar": 1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 20.0
+        },
+        {
+          "id": "DunaMidlands",
+          "map_id": 0,
+          "atmosphere_scalar": 1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 20.0
+        },
+        {
+          "id": "DunaNorthPole",
+          "map_id": 3,
+          "atmosphere_scalar": 1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 20.0
+        },
+        {
+          "id": "DunaPolarDeserts",
+          "map_id": 2,
+          "atmosphere_scalar": 1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 20.0
+        },
+        {
+          "id": "DunaSouthPole",
+          "map_id": 1,
+          "atmosphere_scalar": 1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 20.0
+        },
+        {
+          "id": "DunaMonument",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 28.0
+        },
+        {
+          "id": "DunaFace",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 28.0
+        },
+        {
+          "id": "DunaGiantRock",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 28.0
+        },
+        {
+          "id": "DunaMushroomSpire",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 28.0
+        },
+        {
+          "id": "DunaBrocktonFormation",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 28.0
+        }
+      ],
+      "discoverables": [
+        {
+          "region": "DunaMonument",
+          "position": {
+            "x": 124672.12027993573,
+            "y": 251372.53237171957,
+            "z": -156008.49155912714
+          },
+          "radius_m": 57.491844177246094
+        },
+        {
+          "region": "DunaFace",
+          "position": {
+            "x": 24251.855468853904,
+            "y": 94086.48437504246,
+            "z": -305814.7397460282
+          },
+          "radius_m": 56.40665817260742
+        },
+        {
+          "region": "DunaGiantRock",
+          "position": {
+            "x": 271253.4532859042,
+            "y": 22937.570804583524,
+            "z": -170240.78272022653
+          },
+          "radius_m": 72.47688293457033
+        },
+        {
+          "region": "DunaMushroomSpire",
+          "position": {
+            "x": -74805.21679693466,
+            "y": -203748.03125000373,
+            "z": -236401.41162107265
+          },
+          "radius_m": 49.80849838256836
+        },
+        {
+          "region": "DunaBrocktonFormation",
+          "position": {
+            "x": 20291.132429763333,
+            "y": -66433.93706669282,
+            "z": 313353.7873039713
+          },
+          "radius_m": 296.2001037597656
+        }
+      ],
+      "map": {
+        "offset": 262144,
+        "width": 512,
+        "height": 256
+      }
+    },
+    {
+      "body": "Eeloo",
+      "situations": {
+        "high_orbit_max_m": 119082941.6478118,
+        "low_orbit_max_m": 60000.0,
+        "atmosphere_max_m": 0.0,
+        "body_scalar": 1.0,
+        "high_orbit_scalar": 50.0,
+        "low_orbit_scalar": 70.0,
+        "atmosphere_scalar": -1.0,
+        "splashed_scalar": 1.0,
+        "landed_scalar": 1.0
+      },
+      "regions": [
+        {
+          "id": "EelooCanyons",
+          "map_id": 2,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 200.0
+        },
+        {
+          "id": "EelooCraters",
+          "map_id": 3,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 200.0
+        },
+        {
+          "id": "EelooGreatRift",
+          "map_id": 1,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 200.0
+        },
+        {
+          "id": "EelooIceFields",
+          "map_id": 0,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 200.0
+        },
+        {
+          "id": "EelooCaptiveRock",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 270.0
+        },
+        {
+          "id": "EelooWaveIce",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 270.0
+        }
+      ],
+      "discoverables": [
+        {
+          "region": "EelooCaptiveRock",
+          "position": {
+            "x": 157915.07829431476,
+            "y": 151975.22447284847,
+            "z": -178.71482550290511
+          },
+          "radius_m": 2038.3087158203125
+        },
+        {
+          "region": "EelooWaveIce",
+          "position": {
+            "x": -66700.92346563643,
+            "y": -93864.20155657968,
+            "z": -189097.56943470033
+          },
+          "radius_m": 291.6729431152344
+        }
+      ],
+      "map": {
+        "offset": 393216,
+        "width": 512,
+        "height": 256
+      }
+    },
+    {
+      "body": "Eve",
+      "situations": {
+        "high_orbit_max_m": 85109364.73824406,
+        "low_orbit_max_m": 400000.0,
+        "atmosphere_max_m": 90000.0,
+        "body_scalar": 1.0,
+        "high_orbit_scalar": 50.0,
+        "low_orbit_scalar": 70.0,
+        "atmosphere_scalar": 50.0,
+        "splashed_scalar": 1.0,
+        "landed_scalar": 1.0
+      },
+      "regions": [
+        {
+          "id": "EveFoothills",
+          "map_id": 0,
+          "atmosphere_scalar": 1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 200.0
+        },
+        {
+          "id": "EveImpactSites",
+          "map_id": 3,
+          "atmosphere_scalar": 1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 200.0
+        },
+        {
+          "id": "EveOlympus",
+          "map_id": 4,
+          "atmosphere_scalar": 1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 200.0
+        },
+        {
+          "id": "EveSeas",
+          "map_id": 1,
+          "atmosphere_scalar": 1.0,
+          "splashed_scalar": 1.0,
+          "landed_scalar": 200.0
+        },
+        {
+          "id": "EveShallows",
+          "map_id": 2,
+          "atmosphere_scalar": 1.0,
+          "splashed_scalar": 1.0,
+          "landed_scalar": 200.0
+        },
+        {
+          "id": "EvePavement",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 270.0
+        },
+        {
+          "id": "EveGiantRock",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 270.0
+        },
+        {
+          "id": "EveHeartIsland",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 270.0
+        },
+        {
+          "id": "EveTor",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 270.0
+        }
+      ],
+      "discoverables": [
+        {
+          "region": "EveHeartIsland",
+          "position": {
+            "x": -149501.07427597046,
+            "y": 553353.1438302994,
+            "z": -401629.9506793022
+          },
+          "radius_m": 1571.800048828125
+        },
+        {
+          "region": "EvePavement",
+          "position": {
+            "x": 556899.0168845096,
+            "y": 175557.39270873467,
+            "z": -386068.4068757313
+          },
+          "radius_m": 100.00001525878906
+        },
+        {
+          "region": "EveGiantRock",
+          "position": {
+            "x": 333259.9582348584,
+            "y": -227998.5500493041,
+            "z": -573129.5599386338
+          },
+          "radius_m": 37.684776306152344
+        },
+        {
+          "region": "EveTor",
+          "position": {
+            "x": 686682.2163288208,
+            "y": -110725.15920662937,
+            "z": -90965.88432295666
+          },
+          "radius_m": 81.04200744628906
+        }
+      ],
+      "map": {
+        "offset": 524288,
+        "width": 512,
+        "height": 256
+      }
+    },
+    {
+      "body": "Gilly",
+      "situations": {
+        "high_orbit_max_m": 126123.27,
+        "low_orbit_max_m": 6000.0,
+        "atmosphere_max_m": 0.0,
+        "body_scalar": 1.0,
+        "high_orbit_scalar": 20.0,
+        "low_orbit_scalar": 26.0,
+        "atmosphere_scalar": -1.0,
+        "splashed_scalar": 1.0,
+        "landed_scalar": 1.0
+      },
+      "regions": [
+        {
+          "id": "GillyHighlands",
+          "map_id": 0,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 24.0
+        },
+        {
+          "id": "GillyLowlands",
+          "map_id": 1,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 24.0
+        },
+        {
+          "id": "GillyMidlands",
+          "map_id": 3,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 24.0
+        },
+        {
+          "id": "GillyObliqueImpact",
+          "map_id": 2,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 24.0
+        },
+        {
+          "id": "GillySilicateFields",
+          "map_id": 4,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 24.0
+        },
+        {
+          "id": "GillyGiantRock",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 32.0
+        },
+        {
+          "id": "GillyPrecariousStack",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 32.0
+        }
+      ],
+      "discoverables": [
+        {
+          "region": "GillyGiantRock",
+          "position": {
+            "x": 9881.827147972133,
+            "y": 7885.598632194866,
+            "z": -10461.138671627834
+          },
+          "radius_m": 23.999998092651367
+        },
+        {
+          "region": "GillyPrecariousStack",
+          "position": {
+            "x": 10604.398436852442,
+            "y": 4514.390136051038,
+            "z": -9976.269530806796
+          },
+          "radius_m": 104.20001983642578
+        }
+      ],
+      "map": {
+        "offset": 655360,
+        "width": 512,
+        "height": 256
+      }
+    },
+    {
+      "body": "Ike",
+      "situations": {
+        "high_orbit_max_m": 1049944.4917459097,
+        "low_orbit_max_m": 50000.0,
+        "atmosphere_max_m": 0.0,
+        "body_scalar": 1.0,
+        "high_orbit_scalar": 14.0,
+        "low_orbit_scalar": 16.0,
+        "atmosphere_scalar": -1.0,
+        "splashed_scalar": 1.0,
+        "landed_scalar": 1.0
+      },
+      "regions": [
+        {
+          "id": "IkeCaldera",
+          "map_id": 3,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 8.0
+        },
+        {
+          "id": "IkeLavaFields",
+          "map_id": 0,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 8.0
+        },
+        {
+          "id": "IkeVolcanicFields",
+          "map_id": 2,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 8.0
+        },
+        {
+          "id": "IkeVolcanoes",
+          "map_id": 1,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 8.0
+        },
+        {
+          "id": "IkeGiantsCauseway",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 12.0
+        },
+        {
+          "id": "IkeGiantRock",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 12.0
+        }
+      ],
+      "discoverables": [
+        {
+          "region": "IkeGiantRock",
+          "position": {
+            "x": -1067.4628172081766,
+            "y": -55431.65911754939,
+            "z": -124329.94193478853
+          },
+          "radius_m": 33.21012496948242
+        },
+        {
+          "region": "IkeGiantsCauseway",
+          "position": {
+            "x": -110045.92373626334,
+            "y": 27514.91963671935,
+            "z": -73059.41867556062
+          },
+          "radius_m": 31.454084396362305
+        }
+      ],
+      "map": {
+        "offset": 786432,
+        "width": 512,
+        "height": 256
+      }
+    },
+    {
+      "body": "Jool",
+      "situations": {
+        "high_orbit_max_m": 2455985185.4234676,
+        "low_orbit_max_m": 4000000.0,
+        "atmosphere_max_m": 200000.0,
+        "body_scalar": 1.0,
+        "high_orbit_scalar": 40.0,
+        "low_orbit_scalar": 50.0,
+        "atmosphere_scalar": 180.0,
+        "splashed_scalar": 1.0,
+        "landed_scalar": 1.0
+      },
+      "regions": [
+        {
+          "id": "JoolNorthernCircle",
+          "map_id": 4,
+          "atmosphere_scalar": 1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": -1.0
+        },
+        {
+          "id": "JoolNorthernTropic",
+          "map_id": 0,
+          "atmosphere_scalar": 1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": -1.0
+        },
+        {
+          "id": "JoolEquator",
+          "map_id": 3,
+          "atmosphere_scalar": 1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": -1.0
+        },
+        {
+          "id": "JoolSouthernTropic",
+          "map_id": 2,
+          "atmosphere_scalar": 1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": -1.0
+        },
+        {
+          "id": "JoolSouthernCircle",
+          "map_id": 1,
+          "atmosphere_scalar": 1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": -1.0
+        }
+      ],
+      "discoverables": [],
+      "map": {
+        "offset": 917504,
+        "width": 512,
+        "height": 256
+      }
+    },
+    {
+      "body": "Kerbin",
+      "situations": {
+        "high_orbit_max_m": 84159286.0,
+        "low_orbit_max_m": 150000.0,
+        "atmosphere_max_m": 70000.0,
+        "body_scalar": 1.0,
+        "high_orbit_scalar": 12.0,
+        "low_orbit_scalar": 6.0,
+        "atmosphere_scalar": 1.0,
+        "splashed_scalar": 1.0,
+        "landed_scalar": 1.0
+      },
+      "regions": [
+        {
+          "id": "KerbinGrasslands",
+          "map_id": 0,
+          "atmosphere_scalar": 1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 1.0
+        },
+        {
+          "id": "KerbinHighlands",
+          "map_id": 5,
+          "atmosphere_scalar": 1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 1.0
+        },
+        {
+          "id": "KerbinMountain",
+          "map_id": 3,
+          "atmosphere_scalar": 1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 1.0
+        },
+        {
+          "id": "KerbinDesert",
+          "map_id": 4,
+          "atmosphere_scalar": 1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 1.0
+        },
+        {
+          "id": "KerbinIce",
+          "map_id": 2,
+          "atmosphere_scalar": 1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 1.0
+        },
+        {
+          "id": "KerbinWater",
+          "map_id": 1,
+          "atmosphere_scalar": 1.0,
+          "splashed_scalar": 1.0,
+          "landed_scalar": 1.0
+        },
+        {
+          "id": "KerbinDevilsTower",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 2.0
+        },
+        {
+          "id": "KerbinCamelRock",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 2.0
+        },
+        {
+          "id": "KerbinKSC",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 1.0
+        },
+        {
+          "id": "KerbinBeach",
+          "map_id": 6,
+          "atmosphere_scalar": 1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 1.0
+        },
+        {
+          "id": "KerbinGlacier",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 2.0
+        },
+        {
+          "id": "KerbinKerb2Summit",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 2.0
+        },
+        {
+          "id": "KerbinPyramid",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 2.0
+        }
+      ],
+      "discoverables": [
+        {
+          "region": "KerbinCamelRock",
+          "position": {
+            "x": 205444.5468716325,
+            "y": -451689.91405955487,
+            "z": 338111.6562482782
+          },
+          "radius_m": 84.99999237060547
+        },
+        {
+          "region": "KerbinDevilsTower",
+          "position": {
+            "x": -262554.84375319065,
+            "y": -468131.6640662161,
+            "z": -269979.40624987334
+          },
+          "radius_m": 155.40000915527344
+        },
+        {
+          "region": "KerbinKSC",
+          "position": {
+            "x": 155428.5,
+            "y": -4246.03125,
+            "z": -578946.40625
+          },
+          "radius_m": 4817.00048828125
+        },
+        {
+          "region": "KerbinKerb2Summit",
+          "position": {
+            "x": -265841.71875,
+            "y": 451054.7734375,
+            "z": 295283.5
+          },
+          "radius_m": 1580.0
+        },
+        {
+          "region": "KerbinPyramid",
+          "position": {
+            "x": 394191.89360714325,
+            "y": 63013.05341560654,
+            "z": 448077.7956794375
+          },
+          "radius_m": 89.9000015258789
+        }
+      ],
+      "map": {
+        "offset": 1048576,
+        "width": 512,
+        "height": 256
+      }
+    },
+    {
+      "body": "Kerbol",
+      "situations": {
+        "high_orbit_max_m": 9460730472580800.0,
+        "low_orbit_max_m": 1000000000.0,
+        "atmosphere_max_m": 0.0,
+        "body_scalar": 1.0,
+        "high_orbit_scalar": 20.0,
+        "low_orbit_scalar": 100.0,
+        "atmosphere_scalar": 1.0,
+        "splashed_scalar": 1.0,
+        "landed_scalar": 1.0
+      },
+      "regions": [],
+      "discoverables": [],
+      "map": null
+    },
+    {
+      "body": "Laythe",
+      "situations": {
+        "high_orbit_max_m": 3723645.8111330215,
+        "low_orbit_max_m": 200000.0,
+        "atmosphere_max_m": 50000.0,
+        "body_scalar": 1.0,
+        "high_orbit_scalar": 20.0,
+        "low_orbit_scalar": 24.0,
+        "atmosphere_scalar": 10.0,
+        "splashed_scalar": 1.0,
+        "landed_scalar": 1.0
+      },
+      "regions": [
+        {
+          "id": "LaytheHeartLake",
+          "map_id": 6,
+          "atmosphere_scalar": 1.0,
+          "splashed_scalar": 30.0,
+          "landed_scalar": 30.0
+        },
+        {
+          "id": "LaytheHills",
+          "map_id": 2,
+          "atmosphere_scalar": 1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 30.0
+        },
+        {
+          "id": "LaytheLakes",
+          "map_id": 3,
+          "atmosphere_scalar": 1.0,
+          "splashed_scalar": 30.0,
+          "landed_scalar": 30.0
+        },
+        {
+          "id": "LaytheOcean",
+          "map_id": 0,
+          "atmosphere_scalar": 1.0,
+          "splashed_scalar": 30.0,
+          "landed_scalar": 30.0
+        },
+        {
+          "id": "LaythePoles",
+          "map_id": 1,
+          "atmosphere_scalar": 1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 30.0
+        },
+        {
+          "id": "LaytheShallows",
+          "map_id": 4,
+          "atmosphere_scalar": 1.0,
+          "splashed_scalar": 30.0,
+          "landed_scalar": 30.0
+        },
+        {
+          "id": "LaytheShores",
+          "map_id": 5,
+          "atmosphere_scalar": 1.0,
+          "splashed_scalar": 30.0,
+          "landed_scalar": 30.0
+        },
+        {
+          "id": "LaytheBallRocks",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 40.0
+        },
+        {
+          "id": "LaytheFossil",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 40.0
+        },
+        {
+          "id": "LaytheBullseyeLake",
+          "map_id": 7,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 40.0
+        }
+      ],
+      "discoverables": [
+        {
+          "region": "LaytheBallRocks",
+          "position": {
+            "x": -336705.34045671177,
+            "y": 9013.911090781328,
+            "z": -369524.4366555126
+          },
+          "radius_m": 123.30001831054688
+        },
+        {
+          "region": "LaytheFossil",
+          "position": {
+            "x": 5078.675800649329,
+            "y": -382266.4082075057,
+            "z": -322178.5312368423
+          },
+          "radius_m": 507.0000305175782
+        }
+      ],
+      "map": {
+        "offset": 1179648,
+        "width": 512,
+        "height": 256
+      }
+    },
+    {
+      "body": "Minmus",
+      "situations": {
+        "high_orbit_max_m": 2247428.4,
+        "low_orbit_max_m": 30000.0,
+        "atmosphere_max_m": 0.0,
+        "body_scalar": 1.0,
+        "high_orbit_scalar": 14.0,
+        "low_orbit_scalar": 16.0,
+        "atmosphere_scalar": -1.0,
+        "splashed_scalar": 1.0,
+        "landed_scalar": 1.0
+      },
+      "regions": [
+        {
+          "id": "MinmusArcticIce",
+          "map_id": 3,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 8.0
+        },
+        {
+          "id": "MinmusCraters",
+          "map_id": 2,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 8.0
+        },
+        {
+          "id": "MinmusSheetIce",
+          "map_id": 1,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 8.0
+        },
+        {
+          "id": "MinmusSnowdrifts",
+          "map_id": 0,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 8.0
+        },
+        {
+          "id": "MinmusMonument",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 12.0
+        },
+        {
+          "id": "MinmusBalancingRock",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 12.0
+        }
+      ],
+      "discoverables": [
+        {
+          "region": "MinmusMonument",
+          "position": {
+            "x": 15734.87402403618,
+            "y": 57877.04687260443,
+            "z": -23923.13671675249
+          },
+          "radius_m": 408.2838745117187
+        },
+        {
+          "region": "MinmusBalancingRock",
+          "position": {
+            "x": 53932.1640626197,
+            "y": 29359.0703125935,
+            "z": -22672.73437495322
+          },
+          "radius_m": 12.752016067504885
+        }
+      ],
+      "map": {
+        "offset": 1310720,
+        "width": 512,
+        "height": 256
+      }
+    },
+    {
+      "body": "Moho",
+      "situations": {
+        "high_orbit_max_m": 9646663.0,
+        "low_orbit_max_m": 80000.0,
+        "atmosphere_max_m": 0.0,
+        "body_scalar": 1.0,
+        "high_orbit_scalar": 24.0,
+        "low_orbit_scalar": 30.0,
+        "atmosphere_scalar": -1.0,
+        "splashed_scalar": 1.0,
+        "landed_scalar": 1.0
+      },
+      "regions": [
+        {
+          "id": "MohoLowlands",
+          "map_id": 1,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 28.0
+        },
+        {
+          "id": "MohoHighlands",
+          "map_id": 0,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 28.0
+        },
+        {
+          "id": "MohoCrater",
+          "map_id": 2,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 28.0
+        },
+        {
+          "id": "MohoTwoRingCrater",
+          "map_id": 3,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 28.0
+        },
+        {
+          "id": "MohoGiantRock",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 38.0
+        },
+        {
+          "id": "MohoMoholeCore",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 38.0
+        },
+        {
+          "id": "MohoPrecariousStack",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 38.0
+        }
+      ],
+      "discoverables": [
+        {
+          "region": "MohoGiantRock",
+          "position": {
+            "x": 122574.51349768753,
+            "y": 211947.32812425192,
+            "z": -69161.21031258538
+          },
+          "radius_m": 275.0999755859375
+        },
+        {
+          "region": "MohoPrecariousStack",
+          "position": {
+            "x": 249088.84943799305,
+            "y": -44885.91015603063,
+            "z": -41939.98374949774
+          },
+          "radius_m": 15.0
+        },
+        {
+          "region": "MohoMoholeCore",
+          "position": {
+            "x": -5362.426929473877,
+            "y": 253616.9375,
+            "z": -3454.4622650146484
+          },
+          "radius_m": 324.75
+        }
+      ],
+      "map": {
+        "offset": 1441792,
+        "width": 512,
+        "height": 256
+      }
+    },
+    {
+      "body": "Mun",
+      "situations": {
+        "high_orbit_max_m": 2429559.1,
+        "low_orbit_max_m": 60000.0,
+        "atmosphere_max_m": 0.0,
+        "body_scalar": 1.0,
+        "high_orbit_scalar": 10.0,
+        "low_orbit_scalar": 14.0,
+        "atmosphere_scalar": -1.0,
+        "splashed_scalar": 1.0,
+        "landed_scalar": 1.0
+      },
+      "regions": [
+        {
+          "id": "MunBiggestCrater",
+          "map_id": 4,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 6.0
+        },
+        {
+          "id": "MunCraters",
+          "map_id": 3,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 6.0
+        },
+        {
+          "id": "MunHighlands",
+          "map_id": 0,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 6.0
+        },
+        {
+          "id": "MunMare",
+          "map_id": 2,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 6.0
+        },
+        {
+          "id": "MunMareEyes",
+          "map_id": 1,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 6.0
+        },
+        {
+          "id": "MunMonument",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 8.0
+        },
+        {
+          "id": "MunGiantRock",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 8.0
+        },
+        {
+          "id": "MunArches",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 8.0
+        },
+        {
+          "id": "MunMunOrBust",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 8.0
+        }
+      ],
+      "discoverables": [
+        {
+          "region": "MunMonument",
+          "position": {
+            "x": 153345.78320647596,
+            "y": 43683.56542731462,
+            "z": 125041.69531865833
+          },
+          "radius_m": 226.60009765625
+        },
+        {
+          "region": "MunArches",
+          "position": {
+            "x": 29873.45682689684,
+            "y": 8724.547475331297,
+            "z": 200633.0678125227
+          },
+          "radius_m": 198.46279907226565
+        },
+        {
+          "region": "MunArches",
+          "position": {
+            "x": -153948.78202268647,
+            "y": -43832.53312176996,
+            "z": -124841.65738058268
+          },
+          "radius_m": 202.66668701171875
+        },
+        {
+          "region": "MunGiantRock",
+          "position": {
+            "x": 146005.36132819336,
+            "y": 116072.6162108956,
+            "z": -79276.81250007697
+          },
+          "radius_m": 111.28571319580078
+        },
+        {
+          "region": "MunMunOrBust",
+          "position": {
+            "x": 67702.314453125,
+            "y": -47031.3056640625,
+            "z": -185379.265625
+          },
+          "radius_m": 18.186552047729492
+        }
+      ],
+      "map": {
+        "offset": 1572864,
+        "width": 512,
+        "height": 256
+      }
+    },
+    {
+      "body": "Pol",
+      "situations": {
+        "high_orbit_max_m": 1042138.8923017804,
+        "low_orbit_max_m": 22000.0,
+        "atmosphere_max_m": 0.0,
+        "body_scalar": 1.0,
+        "high_orbit_scalar": 20.0,
+        "low_orbit_scalar": 24.0,
+        "atmosphere_scalar": -1.0,
+        "splashed_scalar": 1.0,
+        "landed_scalar": 1.0
+      },
+      "regions": [
+        {
+          "id": "PolHighlands",
+          "map_id": 0,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 26.0
+        },
+        {
+          "id": "PolLowlands",
+          "map_id": 3,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 26.0
+        },
+        {
+          "id": "PolMountains",
+          "map_id": 1,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 26.0
+        },
+        {
+          "id": "PolVolcanoes",
+          "map_id": 4,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 26.0
+        },
+        {
+          "id": "PolIceTower",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 36.0
+        },
+        {
+          "id": "PolMineralFormation",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 36.0
+        },
+        {
+          "id": "PolMidlands",
+          "map_id": 2,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 26.0
+        }
+      ],
+      "discoverables": [
+        {
+          "region": "PolIceTower",
+          "position": {
+            "x": -12640.068367350432,
+            "y": 14603.51563185414,
+            "z": 43009.886738694935
+          },
+          "radius_m": 133.00003051757812
+        },
+        {
+          "region": "PolMineralFormation",
+          "position": {
+            "x": -38136.94531804829,
+            "y": 4797.270509941427,
+            "z": -25125.61328245185
+          },
+          "radius_m": 100.9800033569336
+        }
+      ],
+      "map": {
+        "offset": 1703936,
+        "width": 512,
+        "height": 256
+      }
+    },
+    {
+      "body": "Tylo",
+      "situations": {
+        "high_orbit_max_m": 10856518.368358629,
+        "low_orbit_max_m": 250000.0,
+        "atmosphere_max_m": 0.0,
+        "body_scalar": 1.0,
+        "high_orbit_scalar": 24.0,
+        "low_orbit_scalar": 30.0,
+        "atmosphere_scalar": -1.0,
+        "splashed_scalar": 1.0,
+        "landed_scalar": 1.0
+      },
+      "regions": [
+        {
+          "id": "TyloCraters",
+          "map_id": 3,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 80.0
+        },
+        {
+          "id": "TyloDimple",
+          "map_id": 2,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 80.0
+        },
+        {
+          "id": "TyloHighlands",
+          "map_id": 1,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 80.0
+        },
+        {
+          "id": "TyloLowlands",
+          "map_id": 0,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 80.0
+        },
+        {
+          "id": "TyloMonument",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 110.0
+        },
+        {
+          "id": "TyloRampRock",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 110.0
+        },
+        {
+          "id": "TyloBalancingRock",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 110.0
+        }
+      ],
+      "discoverables": [
+        {
+          "region": "TyloMonument",
+          "position": {
+            "x": -218012.85936727363,
+            "y": -16309.320308892706,
+            "z": -581979.3124928907
+          },
+          "radius_m": 449.99996948242193
+        },
+        {
+          "region": "TyloRampRock",
+          "position": {
+            "x": 263087.6562521204,
+            "y": -119753.01171521924,
+            "z": -550937.7500001576
+          },
+          "radius_m": 150.0
+        },
+        {
+          "region": "TyloBalancingRock",
+          "position": {
+            "x": 281653.41934833373,
+            "y": 350326.1135806279,
+            "z": 431270.51096602704
+          },
+          "radius_m": 45.198360443115234
+        }
+      ],
+      "map": {
+        "offset": 1835008,
+        "width": 512,
+        "height": 256
+      }
+    },
+    {
+      "body": "Vall",
+      "situations": {
+        "high_orbit_max_m": 2406401.4447940406,
+        "low_orbit_max_m": 90000.0,
+        "atmosphere_max_m": 0.0,
+        "body_scalar": 1.0,
+        "high_orbit_scalar": 20.0,
+        "low_orbit_scalar": 24.0,
+        "atmosphere_scalar": -1.0,
+        "splashed_scalar": 1.0,
+        "landed_scalar": 1.0
+      },
+      "regions": [
+        {
+          "id": "VallHighlands",
+          "map_id": 1,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 20.0
+        },
+        {
+          "id": "VallLowlands",
+          "map_id": 0,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 20.0
+        },
+        {
+          "id": "VallMountains",
+          "map_id": 2,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 20.0
+        },
+        {
+          "id": "VallWell",
+          "map_id": 3,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": 1.0,
+          "landed_scalar": 20.0
+        },
+        {
+          "id": "VallMineralFormation",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 32.0
+        },
+        {
+          "id": "VallPenitente",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 32.0
+        },
+        {
+          "id": "VallTor",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 32.0
+        },
+        {
+          "id": "VallBalancingRock",
+          "map_id": 255,
+          "atmosphere_scalar": -1.0,
+          "splashed_scalar": -1.0,
+          "landed_scalar": 32.0
+        }
+      ],
+      "discoverables": [
+        {
+          "region": "VallPenitente",
+          "position": {
+            "x": 120275.45312692404,
+            "y": -187702.31249956953,
+            "z": 202545.79687491216
+          },
+          "radius_m": 82.15153503417967
+        },
+        {
+          "region": "VallBalancingRock",
+          "position": {
+            "x": -236469.68581620516,
+            "y": 150584.6418981463,
+            "z": 118178.02651943389
+          },
+          "radius_m": 56.7287483215332
+        }
+      ],
+      "map": {
+        "offset": 1966080,
+        "width": 512,
+        "height": 256
+      }
+    }
+  ]
+}

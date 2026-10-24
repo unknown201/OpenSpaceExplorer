@@ -43,6 +43,8 @@ pub struct Structure {
     /// Each part's electric charge use and production, and crew capacity.
     pub electric: Vec<ose_data::Electric>,
     pub crew: Vec<u32>,
+    /// Experiments on the parts: (part, experiment).
+    pub experiments: Vec<(usize, ose_data::science::PartExperiment)>,
     /// Flight stage the structure was last trimmed to.
     staged_to: usize,
 }
@@ -161,6 +163,15 @@ impl Structure {
         let crew = (0..n)
             .map(|i| def_of(i).map(|d| d.crew_capacity).unwrap_or(0))
             .collect();
+        let experiments = (0..n)
+            .flat_map(|i| {
+                def_of(i)
+                    .map(|d| d.experiments.clone())
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(move |e| (i, e))
+            })
+            .collect();
         let mut s = Structure {
             rigid,
             root,
@@ -175,6 +186,7 @@ impl Structure {
             engine_mixture,
             electric,
             crew,
+            experiments,
             staged_to: 0,
         };
         s.trim_to(0);
@@ -205,6 +217,14 @@ impl Structure {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// Engines eligible to produce thrust in this stage (attached and supplied with all propellants).
+    pub fn fed_engines(&self, stage: usize) -> Vec<usize> {
+        self.live_engines(stage)
+            .into_iter()
+            .filter(|&i| self.fed(i))
+            .collect()
     }
 
     /// Whether an engine can reach every ingredient of its mixture.
@@ -627,6 +647,21 @@ mod tests {
             .filter(|t| t.resource == ec && s.net.present[t.part])
             .map(|t| t.stored)
             .sum()
+    }
+
+    #[test]
+    fn effect_engines_require_fuel_and_attachment() {
+        let (crafts, defs, res) = assets();
+        let craft = crafts.iter().find(|c| c.name == "Kerbal K1").unwrap();
+        let mut s = Structure::build(craft, &defs, &res);
+        let engines = s.fed_engines(0);
+        assert!(!engines.is_empty());
+        s.rigid.remove_parts(&[engines[0]]);
+        assert!(!s.fed_engines(0).contains(&engines[0]));
+        for tank in &mut s.net.tanks {
+            tank.stored = 0.0;
+        }
+        assert!(s.fed_engines(0).is_empty());
     }
 
     #[test]
