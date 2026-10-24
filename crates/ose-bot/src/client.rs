@@ -390,6 +390,7 @@ impl Client {
                     members,
                     you_are_member,
                     vessels,
+                    ..
                 } => Some(Campaign {
                     name: name.clone(),
                     started_tick: *started_tick,
