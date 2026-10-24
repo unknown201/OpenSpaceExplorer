@@ -447,10 +447,12 @@ class Exporter:
 
     def export_body(self, body_id: str) -> dict | None:
         key = f"Celestial.{body_id}.Scaled.prefab"
-        bundle = self.bundle(key) or next((p.name for p in self.bdir.glob(f"celestialbody-scaled-{body_id.lower()}_assets_all*.bundle")), None)
-        if not bundle:
-            return None
-        env = self.env(bundle)
+        env, bundle = self.env_for_key(key)
+        if env is None:
+            bundle = next((p.name for p in self.bdir.glob(f"celestialbody-scaled-{body_id.lower()}_assets_all*.bundle")), None)
+            if not bundle:
+                return None
+            env = self.env(bundle)
         glb = Glb()
         textures: dict[str, int] = {}
         low = body_id.lower()
@@ -476,12 +478,22 @@ class Exporter:
                             break
         material = glb.material(body_id, textures) if textures else None
         done = None
+        # The scaled sphere is the mesh behind the MeshFilter of the "Celestial.<Body>.Scaled" object; it may
+        # live in a dependency bundle (shared spheres), so go through the filter rather than the bundle's meshes.
+        candidates = []
         for o in env.objects:
-            if o.type.name != "Mesh":
+            if o.type.name != "MeshFilter":
                 continue
-            mesh = o.read()
-            if "Scaled" not in mesh.m_Name and done is not None:
+            try:
+                mf = o.read()
+                name = mf.m_GameObject.read().m_Name
+                if mf.m_Mesh and mf.m_Mesh.path_id and name.startswith("Celestial."):
+                    candidates.append(mf.m_Mesh.read())
+            except Exception:  # noqa: BLE001
                 continue
+        if not candidates:
+            candidates = [o.read() for o in env.objects if o.type.name == "Mesh"]
+        for mesh in candidates:
             positions, normals, uvs, tris = self.mesh_arrays(mesh)
             if not positions:
                 continue
