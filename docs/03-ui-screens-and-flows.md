@@ -365,7 +365,7 @@ OSE status today: map view with bodies and orbits, UT and warp HUD, the player's
 | Loading curtain | context images, fades, progress bar | `KSP.game/UIManager.cs`, `data/loadingscreens/LoadingScreens.json` | none |
 | Game state machine | 20 states, enter/exit effects, 3 messages per change | `KSP.game/GameStateMachine.cs`, `GameState.cs`, `UIStateViews.cs` | none |
 | KSC hub | 3D KSC with building buttons and launch-site flyout | `KSP.UI/KSCMenuManager.cs`, `KSCNavEnum.cs` | partial (2D hub: launch pad and tracking station live, other buildings disabled) |
-| Launchpad dialog | saved craft, crew, launch, recover pad | `KSP.game/LaunchpadDialog.cs` | partial (craft library with stock filter and altitude; no crew, no recover) |
+| Launchpad dialog | saved craft, crew, launch, recover pad | `KSP.game/LaunchpadDialog.cs` | partial (craft library with side-view thumbnails from `/parts.json` geometry, stock filter and altitude; no crew, no recover) |
 | Global header | escape, contextual menu, warp, UT, player/science | `KSP.game/GlobalHeaderManager.cs`, `GlobalHeaderTimewarpManager.cs`, `UniverseDataProvider.cs` | partial (UT, warp and holder, player, campaign members) |
 | Breadcrumbs | star > body > vessel, clickable | `KSP.game/BreadcrumbsController.cs` | done |
 | Escape menu | resume/save/load/revert/recover/buildings/settings/quit | `KSP.game/GlobalEscapeMenu.cs`, `KSP.UI/ESCMenu*.cs` | none |

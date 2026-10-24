@@ -13,6 +13,7 @@
 
 pub mod kerbin_time;
 pub mod scene;
+pub mod thumb;
 
 use scene::{Camera, Scene, TimeSync};
 use std::cell::RefCell;
@@ -50,6 +51,10 @@ struct App {
     in_session: bool,
     campaign: Option<(String, Vec<CampaignMember>)>,
     crafts: Vec<ose_net::CraftSummary>,
+    /// Craft documents fetched for thumbnails, by library id.
+    craft_docs: std::collections::HashMap<u64, ose_data::craft::Craft>,
+    /// Part geometry from GET /parts.json, by part id: (size_m, center_m). Empty until it loads.
+    part_sizes: std::collections::HashMap<String, (ose_math::DVec3, ose_math::DVec3)>,
     difficulty_defs: Vec<DifficultyDefinition>,
     difficulty_presets: Vec<DifficultyPreset>,
     agency_sent: bool,
@@ -210,6 +215,8 @@ pub fn start() -> Result<(), JsValue> {
         in_session: false,
         campaign: None,
         crafts: Vec::new(),
+        craft_docs: std::collections::HashMap::new(),
+        part_sizes: std::collections::HashMap::new(),
         difficulty_defs: Vec::new(),
         difficulty_presets: Vec::new(),
         agency_sent: false,
@@ -235,8 +242,73 @@ pub fn start() -> Result<(), JsValue> {
     install_input(&app)?;
     install_label_clicks(&app)?;
     install_menu(&app)?;
+    load_part_sizes(app.clone());
     animate(app);
     Ok(())
+}
+
+/// One entry of GET /parts.json (the server's part geometry route); only what thumbnails need is read.
+#[derive(serde::Deserialize)]
+struct PartInfoJson {
+    id: String,
+    #[serde(default)]
+    size_m: Option<ose_math::DVec3>,
+    #[serde(default)]
+    center_m: Option<ose_math::DVec3>,
+}
+
+/// Fetch part sizes in the background; a missing route leaves the default cubes in place.
+fn load_part_sizes(app: Shared) {
+    wasm_bindgen_futures::spawn_local(async move {
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let Ok(resp) =
+            wasm_bindgen_futures::JsFuture::from(window.fetch_with_str("parts.json")).await
+        else {
+            return;
+        };
+        let Ok(resp) = resp.dyn_into::<web_sys::Response>() else {
+            return;
+        };
+        // Until the server has the route, the static fallback answers with the index page.
+        let is_json = resp
+            .headers()
+            .get("content-type")
+            .ok()
+            .flatten()
+            .map(|t| t.contains("json"))
+            .unwrap_or(false);
+        if !resp.ok() || !is_json {
+            return;
+        }
+        let Ok(text) = resp.text() else {
+            return;
+        };
+        let Ok(text) = wasm_bindgen_futures::JsFuture::from(text).await else {
+            return;
+        };
+        let Some(text) = text.as_string() else {
+            return;
+        };
+        match serde_json::from_str::<Vec<PartInfoJson>>(&text) {
+            Ok(parts) => {
+                let mut a = app.borrow_mut();
+                for p in parts {
+                    if let Some(size) = p.size_m {
+                        a.part_sizes
+                            .insert(p.id, (size, p.center_m.unwrap_or(ose_math::DVec3::ZERO)));
+                    }
+                }
+                log(&format!(
+                    "part geometry loaded for {} parts",
+                    a.part_sizes.len()
+                ));
+                a.draw_thumbnails();
+            }
+            Err(e) => log(&format!("parts.json: {e}")),
+        }
+    });
 }
 
 /// The main menu: a name and Play. Play connects; Esc reopens the menu (then it only resumes).
@@ -737,9 +809,24 @@ impl App {
                 self.render_sessions(&sessions);
             }
             ServerMessage::CraftList { crafts } => {
+                if let Some(ws) = &self.ws {
+                    for c in &crafts {
+                        if !self.craft_docs.contains_key(&c.id) {
+                            send(ws, &ClientMessage::GetCraft { id: c.id });
+                        }
+                    }
+                }
                 self.crafts = crafts;
                 self.render_crafts();
             }
+            ServerMessage::CraftDocument {
+                id,
+                craft: Some(craft),
+            } => {
+                self.craft_docs.insert(id, craft);
+                self.draw_thumbnail(id);
+            }
+            ServerMessage::CraftDocument { craft: None, .. } => {}
             ServerMessage::CraftLaunched {
                 vessel,
                 name,
@@ -1078,7 +1165,7 @@ impl App {
                 ""
             };
             html.push_str(&format!(
-                "<li data-ose=\"craft\" data-ose-id=\"{id}\"><div><div class=\"name\">{name}{badge}</div>\
+                "<li data-ose=\"craft\" data-ose-id=\"{id}\"><canvas class=\"thumb\" width=\"128\" height=\"168\" data-ose-thumb=\"{id}\"></canvas><div><div class=\"name\">{name}{badge}</div>\
                  <div class=\"meta\">{parts} parts \u{b7} {stages} {st} \u{b7} {wet:.1} t \u{b7} {dv:.0} m/s vacuum</div>\
                  {desc}</div><button data-ose=\"craft-launch\" data-ose-craft-launch=\"{id}\">Launch</button></li>",
                 id = c.id,
@@ -1099,6 +1186,67 @@ impl App {
             html = "<li class=\"empty\">no crafts in the library</li>".into();
         }
         list.set_inner_html(&html);
+        self.draw_thumbnails();
+    }
+
+    fn draw_thumbnails(&self) {
+        let ids: Vec<u64> = self.craft_docs.keys().copied().collect();
+        for id in ids {
+            self.draw_thumbnail(id);
+        }
+    }
+
+    /// Paint the side-view silhouette of a library craft into its list canvas, if that canvas is on screen.
+    fn draw_thumbnail(&self, id: u64) {
+        let Some(craft) = self.craft_docs.get(&id) else {
+            return;
+        };
+        let Ok(Some(el)) = self
+            .doc
+            .query_selector(&format!("canvas[data-ose-thumb=\"{id}\"]"))
+        else {
+            return;
+        };
+        let Ok(canvas) = el.dyn_into::<HtmlCanvasElement>() else {
+            return;
+        };
+        let Ok(Some(ctx)) = canvas.get_context("2d") else {
+            return;
+        };
+        let Ok(ctx) = ctx.dyn_into::<CanvasRenderingContext2d>() else {
+            return;
+        };
+        let sizes = &self.part_sizes;
+        let size_of = |pid: &str| sizes.get(pid).copied();
+        let Some((boxes, bounds)) = thumb::layout(craft, &size_of) else {
+            return;
+        };
+        let (w, h) = (canvas.width() as f64, canvas.height() as f64);
+        ctx.clear_rect(0.0, 0.0, w, h);
+        let to_px = thumb::fit(&bounds, w, h, 6.0);
+        let stages = craft.stages.len().max(1) as f64;
+        for b in &boxes {
+            let (x0, y0) = to_px(b.min.x, b.max.y);
+            let (x1, y1) = to_px(b.max.x, b.min.y);
+            // Later stages (fired first) darker, so the stack reads top to bottom.
+            let t = if b.stage < 0 {
+                1.0
+            } else {
+                1.0 - 0.5 * (b.stage as f64 / stages).min(1.0)
+            };
+            let c = (120.0 + 100.0 * t) as u32;
+            ctx.set_fill_style_str(&format!(
+                "rgb({c},{},{})",
+                (c as f64 * 0.95) as u32,
+                (c as f64 * 1.05).min(255.0) as u32
+            ));
+            ctx.set_stroke_style_str("#2c3d63");
+            ctx.fill_rect(x0, y0, (x1 - x0).max(1.0), (y1 - y0).max(1.0));
+            ctx.stroke_rect(x0, y0, (x1 - x0).max(1.0), (y1 - y0).max(1.0));
+        }
+        canvas
+            .set_attribute("data-ose-thumb-parts", &boxes.len().to_string())
+            .ok();
     }
 
     fn launch_craft(&mut self, id: u64) {
