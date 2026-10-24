@@ -706,7 +706,85 @@ fn flight_spec_for(s: &Shared, craft: &ose_data::craft::Craft) -> ose_sim::fligh
             }
         }
     }
-    ose_sim::flight::FlightSpec::from_report(&report, &isp_asl, area)
+    let inertia: Vec<ose_sim::flight::StageInertia> = report
+        .stages
+        .iter()
+        .map(|st| stage_inertia(s, craft, st))
+        .collect();
+    ose_sim::flight::FlightSpec::from_report(&report, &isp_asl, &inertia, area)
+}
+
+/// Transverse moment of inertia (largest of the two axes across the thrust axis, Unity Y up in craft space),
+/// reaction wheel torque and gimbal torque for the parts attached during one stage. Each part is a point mass
+/// at its craft-space position plus its own box inertia from its bounds; propellant is counted full.
+fn stage_inertia(
+    s: &Shared,
+    craft: &ose_data::craft::Craft,
+    st: &ose_data::staging::StageDeltaV,
+) -> ose_sim::flight::StageInertia {
+    let unit_mass = |res: &str| {
+        s.resources
+            .iter()
+            .find(|r| r.id.eq_ignore_ascii_case(res))
+            .and_then(|r| match r.kind {
+                ose_data::ResourceKind::Basic {
+                    mass_per_unit_t, ..
+                } => Some(mass_per_unit_t),
+                ose_data::ResourceKind::Recipe { .. } => None,
+            })
+            .unwrap_or(0.0)
+    };
+    let mut items = Vec::new(); // (mass t, position, size)
+    let mut wheel = 0.0;
+    for &i in &st.alive {
+        let p = &craft.parts[i];
+        let Some(def) = s.parts.iter().find(|d| d.id == p.part_id) else {
+            continue;
+        };
+        let m = def.mass_t
+            + p.resources
+                .iter()
+                .map(|r| r.stored_units * unit_mass(&r.resource))
+                .sum::<f64>();
+        let size = def
+            .bounds
+            .map(|b| b.size_m)
+            .unwrap_or(ose_math::DVec3::new(1.0, 1.0, 1.0));
+        items.push((m, p.local_position, size));
+        wheel += def.reaction_wheel_torque_knm;
+    }
+    let total: f64 = items.iter().map(|x| x.0).sum();
+    if total <= 0.0 {
+        return ose_sim::flight::StageInertia::default();
+    }
+    let c = items
+        .iter()
+        .fold(ose_math::DVec3::ZERO, |acc, x| acc + x.1 * x.0)
+        * (1.0 / total);
+    let (mut ix, mut iz) = (0.0, 0.0);
+    for (m, pos, size) in &items {
+        let d = *pos - c;
+        // about the X axis: y and z distances; about the Z axis: x and y distances
+        ix += m * (d.y * d.y + d.z * d.z) + m * (size.y * size.y + size.z * size.z) / 12.0;
+        iz += m * (d.x * d.x + d.y * d.y) + m * (size.x * size.x + size.y * size.y) / 12.0;
+    }
+    let mut gimbal = 0.0;
+    for &ei in &st.engines {
+        let p = &craft.parts[ei];
+        let Some(def) = s.parts.iter().find(|d| d.id == p.part_id) else {
+            continue;
+        };
+        if let Some(e) = def.engines.first() {
+            let range = e.gimbal_range_deg.unwrap_or(0.0).to_radians();
+            let arm = (p.local_position.y - c.y).abs();
+            gimbal += e.max_thrust_kn * range.sin() * arm;
+        }
+    }
+    ose_sim::flight::StageInertia {
+        moi_tm2: ix.max(iz),
+        wheel_torque_knm: wheel,
+        gimbal_torque_knm: gimbal,
+    }
 }
 
 /// Put a craft on the KSC pad as a landed, powered vessel.
@@ -1298,6 +1376,10 @@ async fn session(mut socket: WebSocket, s: AppState) {
     loop {
         tokio::select! {
             _ = interval.tick() => {
+                {
+                    let u = s.universe.lock().expect("sim lock");
+                    s.vessels.lock().expect("vessels lock").retain(|&(e, _, _)| u.vessel(e).is_some());
+                }
                 let (time, snap, vessels) = snapshot(&s);
                 if !send(&mut socket, &time).await
                     || !send(&mut socket, &snap).await
@@ -1463,7 +1545,13 @@ async fn session(mut socket: WebSocket, s: AppState) {
                         Ok(ClientMessage::Stage { vessel }) => {
                             let reply = match owned_vessel(&s, vessel, player_id) {
                                 Some(e) => {
-                                    let ok = s.universe.lock().expect("sim lock").stage(e);
+                                    let res = s.universe.lock().expect("sim lock").stage(e);
+                                    if let Some(d) = res.debris {
+                                        let mut list = s.vessels.lock().expect("vessels lock");
+                                        let id = list.iter().map(|&(_, id, _)| id).max().unwrap_or(0) + 1;
+                                        list.push((d, id, Some(player_id)));
+                                    }
+                                    let ok = res.fired;
                                     ServerMessage::FlightAck { vessel, accepted: ok, reason: (!ok).then(|| "no further stage".to_string()) }
                                 }
                                 None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },

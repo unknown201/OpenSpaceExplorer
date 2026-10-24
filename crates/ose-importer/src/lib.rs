@@ -329,6 +329,7 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
     let mut module_names = Vec::new();
     let mut raw_modules = BTreeMap::new();
     let mut gimbal_range = None;
+    let mut wheel_torque: f64 = 0.0;
     if let Some(mods) = d["serializedPartModules"].as_array() {
         for m in mods {
             let name = s(m, "Name");
@@ -353,6 +354,9 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
                     }
                 }
                 "PartComponentModule_Gimbal" => gimbal_range = Some(f(data, "gimbalRange")),
+                "PartComponentModule_ReactionWheel" => {
+                    wheel_torque = f(data, "PitchTorque").max(f(data, "YawTorque"));
+                }
                 "PartComponentModule_Drag" => {
                     if let Some(cubes) = data["cubes"].as_array() {
                         for c in cubes {
@@ -437,6 +441,7 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
         resource_containers,
         engines,
         bounds,
+        reaction_wheel_torque_knm: wheel_torque,
         drag_cubes,
         module_names,
         raw_modules,

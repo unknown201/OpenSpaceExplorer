@@ -22,8 +22,11 @@ pub const MAX_PHYSICS_WARP: u32 = 4;
 /// Drag coefficient for the single reference area of a craft (tuned later against drag cubes).
 pub const DEFAULT_CD: f64 = 0.35;
 
+/// Fastest turn rate the attitude controller commands, rad/s.
+pub const MAX_TURN_RATE: f64 = 1.0;
+
 /// One stage of a craft as the flight model sees it.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct StageSpec {
     pub stage_id: u32,
     /// Vacuum thrust of the engines running in this stage, kN.
@@ -36,6 +39,24 @@ pub struct StageSpec {
     pub propellant_t: f64,
     /// Total mass at the start of the stage with full propellant, t.
     pub start_mass_t: f64,
+    /// Transverse moment of inertia about the centre of mass at the start of the stage, t*m^2.
+    /// 0 means "no rotation model": the vessel snaps to its commanded attitude.
+    #[serde(default)]
+    pub moi_tm2: f64,
+    /// Control torque from reaction wheels, kN*m (available whenever the vessel is controlled).
+    #[serde(default)]
+    pub wheel_torque_knm: f64,
+    /// Control torque from engine gimbals at full thrust, kN*m (scales with throttle).
+    #[serde(default)]
+    pub gimbal_torque_knm: f64,
+}
+
+/// Rotation properties of one stage, computed from the craft geometry (see the server's flight spec builder).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct StageInertia {
+    pub moi_tm2: f64,
+    pub wheel_torque_knm: f64,
+    pub gimbal_torque_knm: f64,
 }
 
 /// The craft reduced to what the point-mass model needs.
@@ -53,6 +74,7 @@ impl FlightSpec {
     pub fn from_report(
         report: &ose_data::staging::DeltaVReport,
         isp_asl_by_stage: &[f64],
+        inertia_by_stage: &[StageInertia],
         drag_area_m2: f64,
     ) -> FlightSpec {
         let mut stages = Vec::new();
@@ -83,6 +105,15 @@ impl FlightSpec {
                 isp_asl_s: isp_asl,
                 propellant_t: prop,
                 start_mass_t: s.start_mass_t,
+                moi_tm2: inertia_by_stage.get(i).map(|x| x.moi_tm2).unwrap_or(0.0),
+                wheel_torque_knm: inertia_by_stage
+                    .get(i)
+                    .map(|x| x.wheel_torque_knm)
+                    .unwrap_or(0.0),
+                gimbal_torque_knm: inertia_by_stage
+                    .get(i)
+                    .map(|x| x.gimbal_torque_knm)
+                    .unwrap_or(0.0),
             });
         }
         FlightSpec {
@@ -142,6 +173,12 @@ pub struct Powered {
     pub crashed: bool,
     /// Universal time since which the vessel has been coasting above the atmosphere (for the rails handoff).
     pub coasting_since: Option<f64>,
+    /// Thrust axis, unit vector in the body-centred inertial frame.
+    #[serde(default = "default_facing")]
+    pub facing: DVec3,
+    /// Angular velocity, rad/s, inertial (roll is not modelled).
+    #[serde(default)]
+    pub angvel: DVec3,
 }
 
 /// The flight state of a vessel that is on rails: stage, propellant and mass are kept so the vessel can
@@ -220,6 +257,18 @@ pub fn ground_radius(
 #[derive(Component, Clone, Debug, PartialEq)]
 pub struct Atmosphere(pub Atmo);
 
+fn default_facing() -> DVec3 {
+    DVec3::new(0.0, 0.0, 1.0)
+}
+
+/// What firing a stage did.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StageOutcome {
+    pub fired: bool,
+    /// Mass that separated from the vessel (structure plus the dropped stage's unburned propellant), t.
+    pub dropped_t: f64,
+}
+
 impl Powered {
     pub fn new(spec: FlightSpec, r: DVec3, v: DVec3, landed: bool) -> Powered {
         let (mass, prop) = match spec.stages.first() {
@@ -238,6 +287,12 @@ impl Powered {
             landed,
             crashed: false,
             coasting_since: None,
+            facing: if r.length_squared() > 0.0 {
+                r.normalized()
+            } else {
+                default_facing()
+            },
+            angvel: DVec3::ZERO,
         }
     }
 
@@ -245,21 +300,50 @@ impl Powered {
         self.spec.stages.get(self.stage)
     }
 
-    /// Fire the next stage: drop what the current stage leaves behind and take the next one's engines.
-    pub fn stage_next(&mut self) -> bool {
+    /// Fire the next stage and take its engines. When the stage jettisons structure (decouplers), that
+    /// structure separates together with the current stage's unburned propellant; when it jettisons nothing,
+    /// the unburned propellant stays on board and is added to the next stage's.
+    pub fn stage_next(&mut self) -> StageOutcome {
         if self.stage + 1 >= self.spec.stages.len() {
             if self.stage < self.spec.stages.len() {
-                // last stage spent: nothing left to drop but mark it done
+                // last stage: nothing further to fire; its remaining propellant can no longer be used
                 self.stage += 1;
                 self.propellant_t = 0.0;
             }
-            return false;
+            return StageOutcome {
+                fired: false,
+                dropped_t: 0.0,
+            };
         }
+        let cur = &self.spec.stages[self.stage];
+        let cur_dry_end = cur.start_mass_t - cur.propellant_t;
+        let leftover = self.propellant_t.max(0.0);
         self.stage += 1;
-        let s = &self.spec.stages[self.stage];
-        self.mass_t = s.start_mass_t;
-        self.propellant_t = s.propellant_t;
-        true
+        let next = &self.spec.stages[self.stage];
+        let jettison = (cur_dry_end - next.start_mass_t).max(0.0);
+        if jettison > 0.001 {
+            self.mass_t = next.start_mass_t;
+            self.propellant_t = next.propellant_t;
+            StageOutcome {
+                fired: true,
+                dropped_t: jettison + leftover,
+            }
+        } else {
+            self.mass_t = next.start_mass_t + leftover;
+            self.propellant_t = next.propellant_t + leftover;
+            StageOutcome {
+                fired: true,
+                dropped_t: 0.0,
+            }
+        }
+    }
+
+    /// Stage whose rotation properties apply now (the last one once all are spent).
+    fn rotation_stage(&self) -> Option<&StageSpec> {
+        self.spec
+            .stages
+            .get(self.stage)
+            .or_else(|| self.spec.stages.last())
     }
 
     pub fn thrust_kn(&self, pressure_atm: f64) -> f64 {
@@ -343,6 +427,71 @@ pub fn attitude_direction(att: Attitude, r: DVec3, v: DVec3, omega: f64) -> DVec
     dir.normalized()
 }
 
+/// Rotate `f` by the rotation vector `w * dt` (Rodrigues).
+fn rotate(f: DVec3, w: DVec3, dt: f64) -> DVec3 {
+    let angle = w.length() * dt;
+    if angle < 1e-12 {
+        return f;
+    }
+    let k = w.normalized();
+    let (sa, ca) = angle.sin_cos();
+    (f * ca + k.cross(f) * sa + k * (k.dot(f) * (1.0 - ca))).normalized()
+}
+
+/// Turn the thrust axis toward `target` with the torque available: reaction wheels always, gimbals in
+/// proportion to `thrust_fraction`. The controller commands a turn rate that can still be stopped at the
+/// available angular acceleration (`w = sqrt(2 alpha theta)`), capped at [`MAX_TURN_RATE`].
+pub fn steer(p: &mut Powered, target: DVec3, thrust_fraction: f64, dt: f64) {
+    let Some(s) = p.rotation_stage().cloned() else {
+        p.facing = target;
+        return;
+    };
+    if s.moi_tm2 <= 0.0 {
+        p.facing = target;
+        p.angvel = DVec3::ZERO;
+        return;
+    }
+    let mass_ratio = if s.start_mass_t > 0.0 {
+        (p.mass_t / s.start_mass_t).clamp(0.05, 1.5)
+    } else {
+        1.0
+    };
+    let moi = s.moi_tm2 * mass_ratio;
+    let torque = s.wheel_torque_knm + s.gimbal_torque_knm * thrust_fraction.clamp(0.0, 1.0);
+    // drop roll: only the component of the angular velocity that moves the thrust axis matters here
+    let w = p.angvel - p.facing * p.angvel.dot(p.facing);
+    if torque > 0.0 {
+        let alpha_max = torque / moi; // kN*m / t*m^2 = rad/s^2
+        let axis = p.facing.cross(target);
+        let sin = axis.length();
+        let cos = p.facing.dot(target);
+        let theta = sin.atan2(cos);
+        let axis_u = if sin > 1e-9 {
+            axis * (1.0 / sin)
+        } else if cos < 0.0 {
+            // pointing exactly away: any perpendicular axis
+            let a = p.facing.cross(DVec3::new(1.0, 0.0, 0.0));
+            if a.length() > 1e-6 {
+                a.normalized()
+            } else {
+                p.facing.cross(DVec3::new(0.0, 1.0, 0.0)).normalized()
+            }
+        } else {
+            DVec3::ZERO
+        };
+        let w_des = axis_u * (2.0 * alpha_max * theta * 0.9).sqrt().min(MAX_TURN_RATE);
+        let mut a = (w_des - w) * (1.0 / dt);
+        let am = a.length();
+        if am > alpha_max {
+            a = a * (alpha_max / am);
+        }
+        p.angvel = w + a * dt;
+    } else {
+        p.angvel = w;
+    }
+    p.facing = rotate(p.facing, p.angvel, dt);
+}
+
 pub struct StepOutcome {
     pub crashed: bool,
     pub touched_down: bool,
@@ -378,8 +527,26 @@ pub fn integrate(
     };
     let pressure_atm = pressure_kpa / 101.325;
 
-    // thrust and propellant
+    // attitude: landed vessels stand upright; otherwise turn toward the commanded attitude with torque
     let thrust_kn = p.thrust_kn(pressure_atm);
+    if p.landed {
+        p.facing = p.r.normalized();
+        p.angvel = DVec3::ZERO;
+    } else {
+        let target = attitude_direction(p.attitude, p.r, p.v, omega);
+        let max_thrust = p
+            .current_stage()
+            .map(|s| s.thrust_vac_kn.max(s.thrust_asl_kn))
+            .unwrap_or(0.0);
+        let frac = if max_thrust > 0.0 {
+            thrust_kn / max_thrust
+        } else {
+            0.0
+        };
+        steer(p, target, frac, dt);
+    }
+
+    // thrust and propellant
     let mut thrust_acc = DVec3::ZERO;
     if thrust_kn > 0.0 {
         let s = p.current_stage().expect("stage");
@@ -395,7 +562,11 @@ pub fn integrate(
         } else {
             0.0
         };
-        let dir = attitude_direction(p.attitude, p.r, p.v, omega);
+        let dir = if p.landed {
+            attitude_direction(p.attitude, p.r, p.v, omega)
+        } else {
+            p.facing
+        };
         thrust_acc = dir * (thrust_kn * frac / p.mass_t); // kN / t = m/s^2
         p.propellant_t -= burn;
         p.mass_t -= burn;
@@ -440,6 +611,8 @@ pub fn integrate(
         p.r = up * ground;
         p.v = omega_v.cross(p.r);
         p.landed = true;
+        p.facing = up;
+        p.angvel = DVec3::ZERO;
         out.touched_down = true;
         if speed > CRASH_SPEED_MPS {
             p.crashed = true;
@@ -571,6 +744,7 @@ mod tests {
                     isp_asl_s: 290.0,
                     propellant_t: 50.0,
                     start_mass_t: 72.0,
+                    ..Default::default()
                 },
                 StageSpec {
                     stage_id: 0,
@@ -580,6 +754,7 @@ mod tests {
                     isp_asl_s: 280.0,
                     propellant_t: 12.0,
                     start_mass_t: 16.0,
+                    ..Default::default()
                 },
             ],
             drag_area_m2: 5.0,
@@ -728,6 +903,164 @@ mod tests {
         );
         let (lat, lon) = lat_lon(&body, p.r, 0.0);
         assert!(lat.abs() < 0.1 && lon.abs() < 1.0, "lat {lat} lon {lon}");
+    }
+
+    #[test]
+    fn turning_takes_time_set_by_torque_and_inertia() {
+        let body = kerbin();
+        let r = DVec3::new(body.radius_m + 200_000.0, 0.0, 0.0);
+        let v = DVec3::new(0.0, 2_200.0, 0.0);
+        let spec = FlightSpec {
+            stages: vec![StageSpec {
+                thrust_vac_kn: 10.0,
+                thrust_asl_kn: 10.0,
+                isp_vac_s: 300.0,
+                isp_asl_s: 300.0,
+                propellant_t: 1.0,
+                start_mass_t: 5.0,
+                moi_tm2: 100.0,
+                wheel_torque_knm: 10.0,
+                ..Default::default()
+            }],
+            drag_area_m2: 1.0,
+            drag_cd: DEFAULT_CD,
+        };
+        let mut p = Powered::new(spec, r, v, false);
+        assert!(
+            (p.facing - r.normalized()).length() < 1e-9,
+            "starts facing radially out"
+        );
+        let target = DVec3::new(0.0, 1.0, 0.0);
+        p.attitude = Attitude::Fixed(target);
+        let angle = |p: &Powered| p.facing.dot(target).clamp(-1.0, 1.0).acos().to_degrees();
+        for i in 0..50 {
+            integrate(&mut p, &body, None, None, i as f64 * 0.02, 0.02);
+        }
+        // alpha = 0.1 rad/s^2: after 1 s at most 0.05 rad (~3 deg) of turn
+        assert!(angle(&p) > 80.0, "after 1 s still {} deg off", angle(&p));
+        for i in 50..1500 {
+            integrate(&mut p, &body, None, None, i as f64 * 0.02, 0.02);
+        }
+        assert!(angle(&p) < 2.0, "after 30 s {} deg off", angle(&p));
+        assert!(
+            p.angvel.length() < 0.02,
+            "settled, w = {}",
+            p.angvel.length()
+        );
+    }
+
+    fn fly_gravity_turn(spec: FlightSpec) -> (f64, f64, f64) {
+        let body = kerbin();
+        let atmo = kerbin_atmo();
+        let (r, v) = surface_state(&body, -0.1, -74.5, 0.0);
+        let mut p = Powered::new(spec, r, v, true);
+        p.throttle = 1.0;
+        let dt = 0.02;
+        let mut ut = 0.0;
+        let mut coasting = false;
+        for _ in 0..(1500 * 50) {
+            let alt = p.r.length() - body.radius_m;
+            let orbit = ose_math::Orbit::from_state_vectors(body.mu, p.r, p.v, ut);
+            let ap_alt = orbit.apoapsis() - body.radius_m;
+            if !coasting {
+                let pitch = if alt < 1_000.0 {
+                    90.0
+                } else {
+                    (90.0 * (1.0 - (alt - 1_000.0) / 44_000.0)).clamp(0.0, 90.0)
+                };
+                p.attitude = Attitude::PitchHeading {
+                    pitch_deg: pitch,
+                    heading_deg: 90.0,
+                };
+                p.throttle = 1.0;
+                if p.propellant_t <= 0.0 && p.stage == 0 {
+                    p.stage_next();
+                }
+                if ap_alt >= 80_000.0 && orbit.eccentricity() < 1.0 {
+                    coasting = true;
+                    p.throttle = 0.0;
+                }
+            } else {
+                let t_ap = orbit.time_to_true_anomaly(std::f64::consts::PI, ut);
+                if orbit.periapsis() - body.radius_m > 72_000.0 {
+                    break;
+                }
+                p.attitude = Attitude::OrbitPrograde;
+                if t_ap < 20.0 || t_ap > orbit.period - 20.0 {
+                    if p.propellant_t <= 0.0 && p.stage == 0 {
+                        p.stage_next();
+                    }
+                    p.throttle = 1.0;
+                } else {
+                    p.throttle = 0.0;
+                }
+            }
+            let out = integrate(&mut p, &body, Some(&atmo), None, ut, dt);
+            assert!(!out.crashed, "crashed at ut {ut}");
+            ut += dt;
+        }
+        let orbit = ose_math::Orbit::from_state_vectors(body.mu, p.r, p.v, ut);
+        (
+            orbit.periapsis() - body.radius_m,
+            orbit.apoapsis() - body.radius_m,
+            p.propellant_t,
+        )
+    }
+
+    #[test]
+    fn gravity_turn_with_rotation_dynamics_still_reaches_orbit() {
+        let mut spec = rocket();
+        // booster: 72 t over ~15 m, wheels 15 kN*m, gimbal 2000 kN * sin(3 deg) * 7 m
+        spec.stages[0].moi_tm2 = 72.0 * 15.0 * 15.0 / 12.0;
+        spec.stages[0].wheel_torque_knm = 15.0;
+        spec.stages[0].gimbal_torque_knm = 2000.0 * 3f64.to_radians().sin() * 7.0;
+        // upper: 16 t over ~5 m
+        spec.stages[1].moi_tm2 = 16.0 * 5.0 * 5.0 / 12.0;
+        spec.stages[1].wheel_torque_knm = 15.0;
+        spec.stages[1].gimbal_torque_knm = 250.0 * 3f64.to_radians().sin() * 2.0;
+        let (pe, ap, prop) = fly_gravity_turn(spec);
+        assert!(
+            pe > 70_000.0 && ap < 250_000.0,
+            "orbit {pe:.0} x {ap:.0} m, prop {prop:.2} t"
+        );
+    }
+
+    #[test]
+    fn staging_drops_structure_with_leftover_fuel_or_keeps_the_fuel() {
+        let mut p = Powered::new(
+            rocket(),
+            DVec3::new(700_000.0, 0.0, 0.0),
+            DVec3::ZERO,
+            false,
+        );
+        // burn 10 of the booster's 50 t, then stage: 22 t dry end, next stage starts at 16 t
+        p.propellant_t -= 10.0;
+        p.mass_t -= 10.0;
+        let before = p.mass_t;
+        let out = p.stage_next();
+        assert!(out.fired);
+        assert!(
+            (out.dropped_t - (6.0 + 40.0)).abs() < 1e-9,
+            "dropped {}",
+            out.dropped_t
+        );
+        assert!(
+            (p.mass_t + out.dropped_t - before).abs() < 1e-9,
+            "mass is conserved"
+        );
+        // no jettison: an extra stage that only lights another engine keeps the leftover propellant
+        let mut spec = rocket();
+        spec.stages[1].start_mass_t = 22.0; // = booster dry end: nothing separates
+        spec.stages[1].propellant_t = 12.0;
+        let mut q = Powered::new(spec, DVec3::new(700_000.0, 0.0, 0.0), DVec3::ZERO, false);
+        q.propellant_t -= 30.0;
+        q.mass_t -= 30.0;
+        let before = q.mass_t;
+        let out = q.stage_next();
+        assert!(out.fired && out.dropped_t == 0.0);
+        assert!((q.mass_t - before).abs() < 1e-9);
+        assert!((q.propellant_t - (12.0 + 20.0)).abs() < 1e-9);
+        assert!(!q.stage_next().fired, "nothing after the last stage");
     }
 
     #[test]

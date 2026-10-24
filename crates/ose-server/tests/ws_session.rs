@@ -674,6 +674,41 @@ async fn hello_catalog_and_snapshots() {
         }
     }
     assert!(flying, "the craft did not lift off");
+    ws.send(Message::Binary(
+        ose_net::encode(&ClientMessage::Stage { vessel: pad_vessel })
+            .unwrap()
+            .into(),
+    ))
+    .await
+    .unwrap();
+    let mut staged = false;
+    let mut debris_seen = false;
+    for _ in 0..80 {
+        match recv(&mut ws).await {
+            ServerMessage::FlightAck {
+                vessel,
+                accepted,
+                reason,
+            } if vessel == pad_vessel => {
+                assert!(accepted, "{reason:?}");
+                staged = true;
+            }
+            ServerMessage::Vessels { vessels, .. }
+                if staged
+                    && vessels
+                        .iter()
+                        .any(|v| v.name.ends_with("debris") && v.owner == Some(player_id)) =>
+            {
+                debris_seen = true;
+                break;
+            }
+            _ => {}
+        }
+    }
+    assert!(
+        staged && debris_seen,
+        "staged {staged} debris {debris_seen}"
+    );
 
     // Raise warp and see it reflected.
     ws.send(Message::Binary(
@@ -762,8 +797,11 @@ async fn hello_catalog_and_snapshots() {
     let mut checked = false;
     for _ in 0..40 {
         if let ServerMessage::Vessels { vessels, .. } = recv(&mut ws3).await {
-            let mine: Vec<_> = vessels.iter().filter(|v| v.owner == Some(p3)).collect();
-            // the probe and the launched craft, and no second probe on resume
+            let mine: Vec<_> = vessels
+                .iter()
+                .filter(|v| v.owner == Some(p3) && !v.name.ends_with("debris"))
+                .collect();
+            // the probe, two Tiny launches and the pad craft (debris comes and goes), no second probe
             assert_eq!(
                 mine.len(),
                 4,

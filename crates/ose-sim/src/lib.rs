@@ -30,6 +30,14 @@ impl Default for WarpFactor {
     }
 }
 
+/// What `Universe::stage` did.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StageResult {
+    pub fired: bool,
+    /// The separated stage, now its own vessel.
+    pub debris: Option<Entity>,
+}
+
 /// The whole universe.
 pub struct Universe {
     pub world: World,
@@ -271,15 +279,85 @@ impl Universe {
         }
     }
 
-    /// Fire the next stage of a vessel (powered or dormant on rails).
-    pub fn stage(&mut self, e: Entity) -> bool {
-        if let Some(mut p) = self.world.get_mut::<flight::Powered>(e) {
-            return p.stage_next();
+    /// Fire the next stage of a vessel (powered or dormant on rails). Separated structure becomes a debris
+    /// vessel that keeps the vessel's position and velocity, pushed 3 m back along the thrust axis at 1.5 m/s.
+    pub fn stage(&mut self, e: Entity) -> StageResult {
+        let ut = self.ut();
+        let (outcome, r, v, facing, area) =
+            if let Some(mut p) = self.world.get_mut::<flight::Powered>(e) {
+                let o = p.stage_next();
+                (o, p.r, p.v, p.facing, p.spec.drag_area_m2)
+            } else if let Some(mut d) = self.world.get_mut::<flight::Dormant>(e) {
+                let o = d.0.stage_next();
+                let (facing, area) = (d.0.facing, d.0.spec.drag_area_m2);
+                let Some(orbit) = self.world.get::<bodies::OnRails>(e).map(|o| o.0) else {
+                    return StageResult {
+                        fired: o.fired,
+                        debris: None,
+                    };
+                };
+                let (r, v) = orbit.state_at(ut);
+                (o, r, v, facing, area)
+            } else {
+                return StageResult {
+                    fired: false,
+                    debris: None,
+                };
+            };
+        let debris = if outcome.fired && outcome.dropped_t > 0.01 {
+            self.spawn_debris(e, outcome.dropped_t, r, v, facing, area)
+        } else {
+            None
+        };
+        StageResult {
+            fired: outcome.fired,
+            debris,
         }
-        match self.world.get_mut::<flight::Dormant>(e) {
-            Some(mut d) => d.0.stage_next(),
-            None => false,
-        }
+    }
+
+    fn spawn_debris(
+        &mut self,
+        parent: Entity,
+        mass_t: f64,
+        r: DVec3,
+        v: DVec3,
+        facing: DVec3,
+        drag_area_m2: f64,
+    ) -> Option<Entity> {
+        let body = self.world.get::<bodies::ReferenceBody>(parent)?.0;
+        let mu = self.world.get::<bodies::Body>(body)?.mu;
+        let name = format!(
+            "{} debris",
+            self.world
+                .get::<vessels::Vessel>(parent)
+                .map(|v| v.name.as_str())
+                .unwrap_or("vessel")
+        );
+        let ut = self.ut();
+        let r2 = r - facing * 3.0;
+        let v2 = v - facing * 1.5;
+        let spec = flight::FlightSpec {
+            stages: vec![flight::StageSpec {
+                start_mass_t: mass_t,
+                ..Default::default()
+            }],
+            drag_area_m2,
+            drag_cd: flight::DEFAULT_CD,
+        };
+        let mut p = flight::Powered::new(spec, r2, v2, false);
+        p.facing = facing;
+        let orbit = Orbit::from_state_vectors(mu, r2, v2, ut);
+        Some(
+            self.world
+                .spawn((
+                    vessels::Vessel { name },
+                    bodies::ReferenceBody(body),
+                    bodies::OnRails(orbit),
+                    p,
+                    vessels::Debris,
+                ))
+                .id(),
+        )
     }
 
     /// Atmosphere of a body, if any.
@@ -441,8 +519,19 @@ impl Universe {
                 );
             }
             let orbit = Orbit::from_state_vectors(body.mu, p.r, p.v, ut);
-            let hand_off =
-                p.coasting_since.is_some_and(|t| ut - t >= 10.0) && !p.landed && !p.crashed;
+            // back on rails only when the coast cannot hit anything: periapsis above the atmosphere and the
+            // highest terrain (or an escape trajectory)
+            let clear_top = body.radius_m
+                + atmo
+                    .as_ref()
+                    .map(|a| a.depth_m)
+                    .unwrap_or(0.0)
+                    .max(terrain.as_ref().map(|t| t.max_m.max(0.0)).unwrap_or(0.0));
+            let safe_coast = orbit.eccentricity() >= 1.0 || orbit.periapsis() > clear_top;
+            let hand_off = p.coasting_since.is_some_and(|t| ut - t >= 10.0)
+                && !p.landed
+                && !p.crashed
+                && safe_coast;
             self.world
                 .entity_mut(e)
                 .insert(bodies::OnRails(orbit))
@@ -476,6 +565,19 @@ impl Universe {
                 ent.insert(flight::Dormant(p));
             }
             vessels::refresh_next_transition(&mut self.world, &index, e, ut, &self.params);
+        }
+        // crashed debris is gone
+        let wrecks: Vec<Entity> = {
+            let mut q = self
+                .world
+                .query_filtered::<(Entity, &flight::Powered), With<vessels::Debris>>();
+            q.iter(&self.world)
+                .filter(|(_, p)| p.crashed)
+                .map(|(e, _)| e)
+                .collect()
+        };
+        for e in wrecks {
+            self.world.despawn(e);
         }
         for e in self.vessels() {
             if self.world.get::<flight::Powered>(e).is_some() {
@@ -533,6 +635,7 @@ mod tests {
                 isp_asl_s: 170.0,
                 propellant_t: 2.0,
                 start_mass_t: 4.0,
+                ..Default::default()
             }],
             drag_area_m2: 1.0,
             drag_cd: flight::DEFAULT_CD,
@@ -579,7 +682,7 @@ mod tests {
         let d = u.dormant(v).expect("dormant state kept");
         assert!((d.propellant_t - (2.0 - burned)).abs() < 1e-3);
         // staging works while dormant (single stage: nothing further, propellant dropped)
-        assert!(!u.stage(v));
+        assert!(!u.stage(v).fired);
         assert_eq!(u.dormant(v).unwrap().propellant_t, 0.0);
     }
 
@@ -661,6 +764,64 @@ mod tests {
             "powered state re-expressed around Kerbol"
         );
         assert!(p.r.length() > 1.0e10, "now relative to the star");
+    }
+
+    #[test]
+    fn staging_leaves_a_falling_debris_vessel_that_is_removed_on_impact() {
+        let mut u = Universe::with_bodies(&[kerbin_def()]);
+        let body = u.body_entity("Kerbin").unwrap();
+        let spec = flight::FlightSpec {
+            stages: vec![
+                flight::StageSpec {
+                    stage_id: 1,
+                    thrust_vac_kn: 400.0,
+                    thrust_asl_kn: 400.0,
+                    isp_vac_s: 300.0,
+                    isp_asl_s: 300.0,
+                    propellant_t: 8.0,
+                    start_mass_t: 14.0,
+                    ..Default::default()
+                },
+                flight::StageSpec {
+                    stage_id: 0,
+                    thrust_vac_kn: 60.0,
+                    thrust_asl_kn: 60.0,
+                    isp_vac_s: 340.0,
+                    isp_asl_s: 340.0,
+                    propellant_t: 2.0,
+                    start_mass_t: 4.0,
+                    ..Default::default()
+                },
+            ],
+            drag_area_m2: 1.0,
+            drag_cd: flight::DEFAULT_CD,
+        };
+        let v = u.spawn_powered_on_surface("hopper", body, spec, 0.0, 0.0);
+        assert!(u.set_controls(v, 1.0, flight::Attitude::Up));
+        for _ in 0..(3 * TICKS_PER_SECOND) {
+            u.step();
+        }
+        let before = u.powered(v).unwrap().mass_t;
+        let res = u.stage(v);
+        assert!(res.fired);
+        let d = res.debris.expect("debris vessel");
+        let dp = u.powered(d).expect("debris is a flying point mass");
+        assert!(
+            (dp.mass_t + u.powered(v).unwrap().mass_t - before).abs() < 1e-6,
+            "mass conserved"
+        );
+        assert!(u.world.get::<vessels::Debris>(d).is_some());
+        assert_eq!(u.vessel(d).unwrap().0.name, "hopper debris");
+        assert!(u.vessels().len() == 2);
+        // it falls back and is removed when it hits the ground
+        for _ in 0..(120 * TICKS_PER_SECOND) {
+            u.step();
+            if u.vessel(d).is_none() {
+                break;
+            }
+        }
+        assert!(u.vessel(d).is_none(), "debris still there");
+        assert!(u.vessel(v).is_some());
     }
 
     #[test]

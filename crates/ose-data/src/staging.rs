@@ -16,6 +16,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 #[derive(Clone, Debug, PartialEq)]
 pub struct StageDeltaV {
     pub stage_id: usize,
+    /// Part indices still attached while this stage burns (after its jettison).
+    pub alive: Vec<usize>,
     pub start_mass_t: f64,
     pub end_mass_t: f64,
     pub delta_v_vacuum_mps: f64,
@@ -175,6 +177,7 @@ pub fn delta_v_by_stage(
         let start_mass = total_mass(&alive, &stored);
         if running.is_empty() {
             stages_out.push(StageDeltaV {
+                alive: (0..n).filter(|&i| alive[i]).collect(),
                 stage_id,
                 start_mass_t: start_mass,
                 end_mass_t: start_mass,
@@ -312,6 +315,7 @@ pub fn delta_v_by_stage(
         let mut engines: Vec<usize> = running.iter().copied().collect();
         engines.sort_unstable();
         stages_out.push(StageDeltaV {
+            alive: (0..n).filter(|&i| alive[i]).collect(),
             stage_id,
             start_mass_t: start_mass,
             end_mass_t: end_mass,
@@ -390,6 +394,7 @@ mod tests {
                 .unwrap_or_default(),
             drag_cubes: vec![],
             bounds: None,
+            reaction_wheel_torque_knm: 0.0,
             module_names: vec![],
             raw_modules: Default::default(),
         }

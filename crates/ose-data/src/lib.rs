@@ -232,6 +232,9 @@ pub struct PartDef {
     pub drag_cubes: Vec<DragCube>,
     #[serde(default)]
     pub bounds: Option<PartBounds>,
+    /// Reaction wheel torque (the larger of pitch and yaw), kN*m; 0 for parts without a wheel.
+    #[serde(default)]
+    pub reaction_wheel_torque_knm: f64,
     /// Names of every module on the part, in order, so the sim knows what else to implement.
     pub module_names: Vec<String>,
     /// Module data not yet mapped into typed fields, keyed by module name.
