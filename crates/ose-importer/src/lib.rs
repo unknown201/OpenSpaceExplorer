@@ -352,9 +352,28 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
     let mut docking = None;
     let mut chute: Option<ose_data::Parachute> = None;
     let mut heatshield: Option<ose_data::Heatshield> = None;
+    let mut wheel: Option<(bool, f64)> = None;
+    let mut deployable: Option<(bool, bool)> = None;
     if let Some(mods) = d["serializedPartModules"].as_array() {
         for m in mods {
             if let Some(entries) = m["ModuleData"].as_array() {
+                for entry in entries.iter() {
+                    let o = &entry["DataObject"];
+                    if entry["Name"] == "Data_WheelBase" {
+                        let leg = o["WheelType"] == "LEG";
+                        wheel = Some((leg, wheel.map(|w| w.1).unwrap_or(0.0)));
+                    }
+                    if entry["Name"] == "Data_WheelSuspension" {
+                        let leg = wheel.map(|w| w.0).unwrap_or(false);
+                        wheel = Some((leg, f(o, "suspensionDistance")));
+                    }
+                    if entry["Name"] == "Data_Deployable" {
+                        let state = o["CurrentDeployState"]["storedValue"]
+                            .as_str()
+                            .unwrap_or("");
+                        deployable = Some((b(o, "retractable"), state == "Extended"));
+                    }
+                }
                 for entry in entries.iter().filter(|x| x["Name"] == "Data_Heatshield") {
                     let o = &entry["DataObject"];
                     let res = &o["requiredResources"][0];
@@ -509,6 +528,23 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
         c.deployed_cube = drag_cubes.iter().find(|d| d.name == "DEPLOYED").cloned();
     }
     let parachute = chute;
+    let landing_gear = wheel.map(|(leg, suspension_m)| {
+        let extended =
+            drag_cubes
+                .iter()
+                .find(|d| d.name == "EXTENDED")
+                .map(|c| ose_data::PartBounds {
+                    size_m: c.size,
+                    center_m: c.center,
+                });
+        ose_data::LandingGear {
+            leg,
+            suspension_m,
+            retractable: deployable.is_some_and(|d| d.0) && extended.is_some(),
+            starts_extended: deployable.is_none_or(|d| d.1) || extended.is_none(),
+            extended: if deployable.is_some() { extended } else { None },
+        }
+    });
     let bounds = part_bounds(&drag_cubes, &attach_nodes);
     PartDef {
         id: s(d, "partName"),
@@ -541,6 +577,7 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
             _ => 1.0,
         },
         heatshield,
+        landing_gear,
         drag_cubes,
         module_names,
         raw_modules,

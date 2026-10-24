@@ -71,8 +71,13 @@ pub struct Structure {
     /// Heat shields on the parts, and whether each is ablating.
     pub heatshields: Vec<Option<ose_data::Heatshield>>,
     pub ablating: Vec<bool>,
-    /// Each part's bounds centre relative to its origin, vessel frame.
-    bounds_offset: Vec<DVec3>,
+    /// Each part's bounds as a box (centre relative to the part origin, half size), vessel frame; landing
+    /// gear also folded out.
+    stowed_box: Vec<(DVec3, DVec3)>,
+    extended_box: Vec<Option<(DVec3, DVec3)>>,
+    /// Landing gear: definition and whether it is out.
+    pub gear_defs: Vec<Option<ose_data::LandingGear>>,
+    pub gear_out: Vec<bool>,
     /// Flight stage the structure was last trimmed to.
     staged_to: usize,
 }
@@ -103,6 +108,32 @@ pub struct Piece {
     /// Position and velocity relative to the vessel, inertial frame.
     pub offset_m: DVec3,
     pub dv_mps: DVec3,
+}
+
+/// A part's bounds (part space, Unity axes) as a box in the vessel frame: centre relative to the part
+/// origin and half size of the rotated box.
+fn vessel_box(q: ose_data::craft::Quat, b: ose_data::PartBounds) -> (DVec3, DVec3) {
+    let q = if q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w < 1e-12 {
+        [0.0, 0.0, 0.0, 1.0]
+    } else {
+        [q.x, q.y, q.z, q.w]
+    };
+    let to_vessel = |v: DVec3| {
+        let u = aero::rotate(q, v);
+        DVec3::new(u.x, u.y, -u.z)
+    };
+    let h = b.size_m * 0.5;
+    let (ax, ay, az) = (
+        to_vessel(DVec3::new(h.x, 0.0, 0.0)),
+        to_vessel(DVec3::new(0.0, h.y, 0.0)),
+        to_vessel(DVec3::new(0.0, 0.0, h.z)),
+    );
+    let half = DVec3::new(
+        ax.x.abs() + ay.x.abs() + az.x.abs(),
+        ax.y.abs() + ay.y.abs() + az.y.abs(),
+        ax.z.abs() + ay.z.abs() + az.z.abs(),
+    );
+    (to_vessel(b.center_m), half)
 }
 
 /// An orthonormal basis with `y` along the vessel axis.
@@ -145,6 +176,7 @@ impl Structure {
                     .unwrap_or(0.0)
             })
             .collect();
+        let sizes = rigid.sizes_m.clone();
         let thermal_mass: Vec<f64> = (0..craft.parts.len())
             .map(|i| {
                 let modifier = defs
@@ -268,15 +300,32 @@ impl Structure {
                 .map(|i| def_of(i).and_then(|d| d.heatshield.clone()))
                 .collect(),
             ablating: vec![false; n],
-            bounds_offset: (0..n)
+            stowed_box: (0..n)
                 .map(|i| {
-                    let c = def_of(i)
-                        .and_then(|d| d.bounds)
-                        .map(|b| b.center_m)
-                        .unwrap_or(DVec3::ZERO);
                     let q = craft.parts[i].local_rotation;
-                    let u = aero::rotate([q.x, q.y, q.z, q.w], c);
-                    DVec3::new(u.x, u.y, -u.z)
+                    match def_of(i).and_then(|d| d.bounds) {
+                        Some(b) => vessel_box(q, b),
+                        None => (DVec3::ZERO, sizes[i] * 0.5),
+                    }
+                })
+                .collect(),
+            extended_box: (0..n)
+                .map(|i| {
+                    let q = craft.parts[i].local_rotation;
+                    def_of(i)
+                        .and_then(|d| d.landing_gear.as_ref())
+                        .and_then(|g| g.extended)
+                        .map(|b| vessel_box(q, b))
+                })
+                .collect(),
+            gear_defs: (0..n)
+                .map(|i| def_of(i).and_then(|d| d.landing_gear.clone()))
+                .collect(),
+            gear_out: (0..n)
+                .map(|i| {
+                    def_of(i)
+                        .and_then(|d| d.landing_gear.as_ref())
+                        .is_some_and(|g| g.starts_extended)
                 })
                 .collect(),
             engine_load_kn: vec![0.0; n],
@@ -377,14 +426,45 @@ impl Structure {
     /// How the attached parts meet the ground standing upright: (centre of mass height above the lowest
     /// point, radius of the parts it stands on, lowest crash tolerance among them).
     pub fn ground_profile(&self) -> (f64, f64, f64) {
+        let (clearance, footprint, tolerance, _) = self.feet();
+        (clearance, footprint, tolerance)
+    }
+
+    /// A part's box at rest (centre, half size), vessel frame, with landing gear as it is now.
+    pub fn part_box(&self, i: usize) -> (DVec3, DVec3) {
+        let (offset, half) = match (&self.extended_box[i], self.gear_out[i]) {
+            (Some(b), true) => *b,
+            _ => self.stowed_box[i],
+        };
+        (self.rigid.rest_position(i) + offset, half)
+    }
+
+    /// Fold the landing gear out (or in); returns how many changed.
+    pub fn deploy_gear(&mut self, out: bool) -> usize {
+        let mut changed = 0;
+        for i in 0..self.gear_out.len() {
+            let foldable = self.gear_defs[i].as_ref().is_some_and(|g| g.retractable);
+            if foldable && self.rigid.present[i] && self.gear_out[i] != out {
+                self.gear_out[i] = out;
+                changed += 1;
+            }
+        }
+        changed
+    }
+
+    /// `ground_profile` and the parts that touch the ground first.
+    fn feet(&self) -> (f64, f64, f64, Vec<usize>) {
         let present: Vec<usize> = (0..self.rigid.len())
             .filter(|&i| self.rigid.present[i])
             .collect();
         if present.is_empty() {
-            return (0.0, 0.0, 0.0);
+            return (0.0, 0.0, 0.0, Vec::new());
         }
         let c = self.rigid.rest_centre();
-        let bottom = |i: usize| self.rigid.rest_position(i).y - self.rigid.sizes_m[i].y * 0.5;
+        let bottom = |i: usize| {
+            let (centre, half) = self.part_box(i);
+            centre.y - half.y
+        };
         let lowest = present
             .iter()
             .map(|&i| bottom(i))
@@ -398,12 +478,18 @@ impl Structure {
         let footprint = feet
             .iter()
             .map(|&i| {
-                let p = self.rigid.rest_position(i) - c;
-                let s = self.rigid.sizes_m[i];
-                (p.x * p.x + p.z * p.z).sqrt() + s.x.max(s.z) * 0.5
+                let (centre, half) = self.part_box(i);
+                let p = centre - c;
+                (p.x * p.x + p.z * p.z).sqrt() + half.x.max(half.z)
             })
             .fold(0.0, f64::max);
-        let tolerance = feet
+        // the impact lands on the parts that touch first (within 15 cm of the lowest point)
+        let contact: Vec<usize> = feet
+            .iter()
+            .copied()
+            .filter(|&i| bottom(i) < lowest + 0.15)
+            .collect();
+        let tolerance = contact
             .iter()
             .map(|&i| self.crash_tolerance[i])
             .filter(|t| *t > 0.0)
@@ -416,6 +502,7 @@ impl Structure {
             } else {
                 0.0
             },
+            contact,
         )
     }
 
@@ -567,15 +654,7 @@ impl Structure {
         };
         let du = DVec3::new(d.x, d.y, -d.z);
         let exposed = if speed > 0.0 {
-            let boxes: Vec<(DVec3, DVec3)> = present
-                .iter()
-                .map(|&i| {
-                    (
-                        self.rigid.rest_position(i) + self.bounds_offset[i],
-                        self.rigid.sizes_m[i] * 0.5,
-                    )
-                })
-                .collect();
+            let boxes: Vec<(DVec3, DVec3)> = present.iter().map(|&i| self.part_box(i)).collect();
             thermal::exposed_proportions(&boxes, d, mach)
         } else {
             vec![0.0; present.len()]
@@ -671,6 +750,36 @@ impl Structure {
             t.stored -= take;
             units -= take;
         }
+    }
+
+    /// A touchdown at `speed`, m/s, harder than the parts it lands on can take (`crashTolerance`): those parts
+    /// break, taking up the impact their tolerance allows (speed² less tolerance²), and the next parts down
+    /// meet what is left. Returns the broken parts and the pieces that came loose, or `None` when the root
+    /// broke (the vessel is lost).
+    pub fn impact(&mut self, mut speed: f64, facing: DVec3) -> Option<(Vec<usize>, Vec<Piece>)> {
+        let (bx, by, bz) = basis(facing);
+        let mut broken = Vec::new();
+        let mut pieces = Vec::new();
+        loop {
+            let (_, _, tolerance, feet) = self.feet();
+            let tolerance = if tolerance > 0.0 {
+                tolerance
+            } else {
+                crate::flight::CRASH_SPEED_MPS
+            };
+            if feet.is_empty() || speed <= tolerance {
+                break;
+            }
+            if feet.contains(&self.root) {
+                return None;
+            }
+            self.rigid.remove_parts(&feet);
+            self.net.remove_parts(&feet);
+            broken.extend(feet);
+            pieces.extend(self.split_off(bx, by, bz));
+            speed = (speed * speed - tolerance * tolerance).max(0.0).sqrt();
+        }
+        Some((broken, pieces))
     }
 
     /// Destroy parts that burned up: they leave the structure, and whatever only they held on breaks off
@@ -1086,6 +1195,68 @@ pub(crate) fn test_capsule(shield: bool) -> (Craft, Vec<PartDef>, Vec<ResourceDe
 mod tests {
     use super::*;
     use crate::flight::{FlightSpec, StageSpec};
+
+    /// The starter rocket with three large landing legs on its tank.
+    fn lander() -> (Craft, Vec<PartDef>, Vec<ResourceDef>) {
+        let (crafts, defs, res) = assets();
+        let mut c = crafts
+            .iter()
+            .find(|c| c.name == "Stock12_StartRocket")
+            .unwrap()
+            .clone();
+        let tank = 2;
+        for k in 0..3 {
+            let a = k as f64 * std::f64::consts::TAU / 3.0;
+            let mut leg = c.parts[tank].clone();
+            leg.guid = format!("leg{k}");
+            leg.part_id = "landingleg_2v".into();
+            leg.parent = Some(tank);
+            leg.own_node = None;
+            leg.parent_node = None;
+            leg.resources = Vec::new();
+            leg.local_position = DVec3::new(0.65 * a.cos(), -0.9, 0.65 * a.sin());
+            let half = -a * 0.5 + std::f64::consts::FRAC_PI_4;
+            leg.local_rotation = ose_data::craft::Quat {
+                x: 0.0,
+                y: half.sin(),
+                z: 0.0,
+                w: half.cos(),
+            };
+            c.parts.push(leg);
+        }
+        (c, defs, res)
+    }
+
+    #[test]
+    fn landing_legs_fold_out_below_the_engine_widen_the_stance_and_take_a_hard_landing() {
+        let (c, defs, res) = lander();
+        let mut s = Structure::build(&c, &defs, &res);
+        let (clear_in, foot_in, tol_in) = s.ground_profile();
+        assert_eq!(tol_in, 10.0, "stowed, it stands on its engine");
+        assert_eq!(s.deploy_gear(true), 3);
+        assert_eq!(s.deploy_gear(true), 0, "already out");
+        let (clear_out, foot_out, tol_out) = s.ground_profile();
+        assert!(
+            clear_out > clear_in + 0.3,
+            "legs reach below the bell: {clear_in} -> {clear_out}"
+        );
+        assert!(
+            foot_out > foot_in + 0.5,
+            "a wider stance: {foot_in} -> {foot_out}"
+        );
+        assert_eq!(tol_out, 20.0, "it lands on the legs");
+        // 15 m/s: the legs take it; folded in, the engine breaks
+        let (broken, _) = s.impact(15.0, DVec3::new(1.0, 0.0, 0.0)).unwrap();
+        assert!(broken.is_empty());
+        s.deploy_gear(false);
+        let (broken, _) = s.impact(15.0, DVec3::new(1.0, 0.0, 0.0)).unwrap();
+        assert_eq!(broken, vec![3], "the engine breaks");
+        // with the engine gone the vessel stands on its tank and legs
+        assert!(
+            s.impact(200.0, DVec3::new(1.0, 0.0, 0.0)).is_none(),
+            "far too fast"
+        );
+    }
 
     #[test]
     fn re_entry_burns_a_bare_pod_and_a_heat_shield_ablates_to_save_it() {

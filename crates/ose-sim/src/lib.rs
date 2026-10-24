@@ -298,6 +298,18 @@ impl Universe {
         self.world.insert_resource(settings);
     }
 
+    /// Fold a vessel's landing gear out or in; how many changed, `None` without a structure. The vessel
+    /// stands on whatever is lowest afterwards.
+    pub fn deploy_gear(&mut self, e: Entity, out: bool) -> Option<usize> {
+        let mut st = self.world.entity_mut(e).take::<structure::Structure>()?;
+        let n = st.deploy_gear(out);
+        if let Some(mut p) = self.world.get_mut::<flight::Powered>(e) {
+            st.sync(&mut p);
+        }
+        self.world.entity_mut(e).insert(st);
+        Some(n)
+    }
+
     /// Arm a vessel's packed parachutes; how many, `None` without a structure.
     pub fn arm_parachutes(&mut self, e: Entity) -> Option<usize> {
         self.world
@@ -774,7 +786,7 @@ impl Universe {
                 }
                 let mass_before = p.mass_t;
                 let was_landed = p.landed;
-                let out = flight::integrate(
+                let mut out = flight::integrate(
                     &mut p,
                     &body,
                     atmo.as_ref(),
@@ -782,6 +794,19 @@ impl Universe {
                     start_ut + i as f64 * step_dt,
                     step_dt,
                 );
+                // a hard landing breaks the parts it lands on; the rest may come through
+                if out.crashed {
+                    if let Some(st) = &mut structure {
+                        if let Some((_, off)) = st.impact(out.impact_mps, p.facing) {
+                            p.crashed = false;
+                            out.crashed = false;
+                            for piece in off {
+                                pieces.push((piece, p.r, p.v, p.facing));
+                            }
+                            st.sync(&mut p);
+                        }
+                    }
+                }
                 self.log_flight_step(
                     e,
                     &body,
@@ -1393,11 +1418,26 @@ mod tests {
             leaning.r.length() - 600_000.0 < upright.r.length() - 600_000.0,
             "lying lower"
         );
-        let fast = drop(&mut u, 0.0, tolerance + 5.0);
+        // a little faster than its bottom parts take: they break and the rest comes through
+        let parts = |u: &Universe| {
+            u.structure(v)
+                .unwrap()
+                .rigid
+                .present
+                .iter()
+                .filter(|x| **x)
+                .count()
+        };
+        let before = parts(&u);
+        let hard = drop(&mut u, 0.0, tolerance + 5.0);
         assert!(
-            fast.crashed,
-            "faster than its bottom parts' {tolerance} m/s"
+            hard.landed && !hard.crashed,
+            "faster than its bottom parts' {tolerance} m/s: they break"
         );
+        assert!(parts(&u) < before, "the engine broke off");
+        // far faster: it breaks all the way up to the pod
+        let fast = drop(&mut u, 0.0, 150.0);
+        assert!(fast.crashed);
     }
 
     #[test]

@@ -873,6 +873,15 @@ fn flight_readout(
                     .collect()
             })
             .unwrap_or_default(),
+        gear: u
+            .structure(e)
+            .map(|st| {
+                (0..st.gear_out.len())
+                    .filter(|&i| st.gear_defs[i].is_some() && st.rigid.present[i])
+                    .map(|i| (i as u16, st.gear_out[i]))
+                    .collect()
+            })
+            .unwrap_or_default(),
     })
 }
 
@@ -2197,6 +2206,17 @@ async fn session(mut socket: WebSocket, s: AppState) {
                                 Some(e) => match s.universe.lock().expect("sim lock").arm_parachutes(e) {
                                     Some(n) if n > 0 => ServerMessage::FlightAck { vessel, accepted: true, reason: None },
                                     _ => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("no packed parachutes".into()) },
+                                },
+                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
+                            };
+                            if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::DeployGear { vessel, deploy }) => {
+                            let reply = match owned_vessel(&s, vessel, player_id) {
+                                Some(e) => match s.universe.lock().expect("sim lock").deploy_gear(e, deploy) {
+                                    Some(n) if n > 0 => ServerMessage::FlightAck { vessel, accepted: true, reason: None },
+                                    Some(_) => ServerMessage::FlightAck { vessel, accepted: false, reason: Some(if deploy { "no folded gear" } else { "no gear out" }.into()) },
+                                    None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("vessel has no parts".into()) },
                                 },
                                 None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
                             };

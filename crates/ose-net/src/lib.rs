@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 20;
+pub const PROTOCOL_VERSION: u16 = 21;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -152,6 +152,11 @@ pub enum ClientMessage {
     },
     /// Fold the vessel's deployable solar panels out (`deploy`) or in; answers `FlightAck`.
     DeployPanels {
+        vessel: u64,
+        deploy: bool,
+    },
+    /// Fold the vessel's landing legs and retractable wheels out (`deploy`) or in; answers `FlightAck`.
+    DeployGear {
         vessel: u64,
         deploy: bool,
     },
@@ -442,6 +447,8 @@ pub struct FlightReadout {
     /// Parts that are heating up or warm: (craft part index, temperature K, maximum K, re-entry heat kW).
     /// Listed when re-entry heat reaches them or they are above 40% of their maximum.
     pub heat: Vec<(u16, f32, f32, f32)>,
+    /// Landing legs and wheels: (craft part index, folded out).
+    pub gear: Vec<(u16, bool)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

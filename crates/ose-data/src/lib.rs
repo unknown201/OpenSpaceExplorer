@@ -256,6 +256,9 @@ pub struct PartDef {
     /// A heat shield (`Data_Heatshield`).
     #[serde(default)]
     pub heatshield: Option<Heatshield>,
+    /// A landing leg or wheel (`Data_WheelBase`, `Data_WheelSuspension`, `Data_Deployable`).
+    #[serde(default)]
+    pub landing_gear: Option<LandingGear>,
     /// Names of every module on the part, in order, so the sim knows what else to implement.
     pub module_names: Vec<String>,
     /// Module data not yet mapped into typed fields, keyed by module name.
@@ -292,6 +295,20 @@ pub struct Electric {
 
 fn one() -> f64 {
     1.0
+}
+
+/// A landing leg or wheel as the original defines it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LandingGear {
+    /// A landing leg (`WheelType` LEG) rather than a wheel.
+    pub leg: bool,
+    /// Suspension travel, m (`suspensionDistance`).
+    pub suspension_m: f64,
+    /// Folds in and out (`Data_Deployable`), and how it starts.
+    pub retractable: bool,
+    pub starts_extended: bool,
+    /// Its shape folded out (the `EXTENDED` drag cube), when it folds.
+    pub extended: Option<PartBounds>,
 }
 
 /// A heat shield as the original defines it (`Data_Heatshield`): above its ablation temperature it burns its

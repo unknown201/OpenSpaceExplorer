@@ -574,6 +574,8 @@ pub struct StepOutcome {
     pub angvel: DVec3,
     /// Share of that control torque from reaction wheels (the rest from engine gimbals).
     pub wheel_share: f64,
+    /// Speed over the ground at touchdown, m/s.
+    pub impact_mps: f64,
 }
 
 /// Integrate one `dt` of powered flight around `body`.
@@ -746,6 +748,7 @@ pub fn integrate(
         p.landed = true;
         p.angvel = DVec3::ZERO;
         out.touched_down = true;
+        out.impact_mps = speed;
         let tolerance = if p.crash_tolerance_mps > 0.0 {
             p.crash_tolerance_mps
         } else {
