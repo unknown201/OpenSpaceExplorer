@@ -23,6 +23,9 @@ pub mod missions;
 #[cfg(target_arch = "wasm32")]
 pub mod navball;
 #[cfg(target_arch = "wasm32")]
+pub mod planet;
+pub mod planet_lod;
+#[cfg(target_arch = "wasm32")]
 pub mod render;
 pub mod rnd;
 pub mod scene;

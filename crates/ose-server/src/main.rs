@@ -373,9 +373,16 @@ async fn main() -> anyhow::Result<()> {
         let Some(def) = defs.iter().find(|d| d.id == entry.id) else {
             continue;
         };
-        if let Some(map) =
+        // A terrain pack from the container's assets (finer map, tiled layers, decals) when there is one;
+        // the embedded global-only map otherwise. The client reads the same pack from /assets/terrain/.
+        let pack = args
+            .assets_dir
+            .as_ref()
+            .and_then(|dir| load_terrain_pack(dir, &entry.id, def.radius_m));
+        let map = pack.or_else(|| {
             ose_data::terrain::TerrainMap::from_entry(entry, EMBEDDED_TERRAIN, def.radius_m)
-        {
+        });
+        if let Some(map) = map {
             if universe.set_terrain(&entry.id, map) {
                 terrains += 1;
             }
@@ -767,6 +774,35 @@ fn roll_reference(facing: ose_math::DVec3, up: ose_math::DVec3) -> ose_math::DVe
 /// Fallback launch pad (Kerbin) when the terrain index has no pad site, degrees.
 const KSC_LAT_DEG: f64 = -0.6836;
 const KSC_LON_DEG: f64 = -74.8198;
+
+/// `<assets>/terrain/<Body>.json` + `.bin` (tools/extract_terrain.py --packs), if present and readable.
+fn load_terrain_pack(
+    assets: &std::path::Path,
+    id: &str,
+    radius_m: f64,
+) -> Option<ose_data::terrain::TerrainMap> {
+    let dir = assets.join("terrain");
+    let text = std::fs::read_to_string(dir.join(format!("{id}.json"))).ok()?;
+    let mut pack: ose_data::terrain::TerrainPack = match serde_json::from_str(&text) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(body = id, error = %e, "terrain pack unreadable");
+            return None;
+        }
+    };
+    let blob = std::fs::read(dir.join(format!("{id}.bin"))).ok()?;
+    pack.radius_m = radius_m;
+    let map = ose_data::terrain::TerrainMap::from_pack(&pack, &blob);
+    if map.is_some() {
+        tracing::info!(
+            body = id,
+            bytes = blob.len(),
+            decals = pack.decals.len(),
+            "terrain pack loaded"
+        );
+    }
+    map
+}
 
 fn terrain_index() -> ose_data::terrain::TerrainIndex {
     serde_json::from_str(EMBEDDED_TERRAIN_INDEX).expect("embedded terrain index")

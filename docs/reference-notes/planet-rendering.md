@@ -1,0 +1,106 @@
+# Reference notes: planet rendering (terrain surface, ocean, atmosphere, clouds, LOD, sunlight)
+
+From the decompile (`KSP.Rendering.Planets`: `PQS`, `PQJob`, `PQSGlobalSettings`, `PQSData`, `PQSRenderer`,
+`WaterManager`, `VolumeCloudManager`; `KSP.Rendering.AtmosphereModel`, `KSP.Rendering.Utility.AtmosphereConstants`,
+`KSP.AtmosphereScattering.*`; `KSP.VolumeCloud.*`, `ScaledCloudConfiguration`) and from the assets in the
+`celestialbody-shared-<body>` / `celestialbody-simulation-<body>` bundles (dumped with UnityPy). The shaders
+themselves are compiled DXBC and were not decompiled; what they do is inferred from their property names and
+values, and says so below.
+
+## 1. Terrain mesh: PQS quadtree
+
+- A cube sphere: six root quads, each a quadtree. `PQSGlobalSettings.subdivisionInfo` (one shared asset,
+  `pqs_global_settings`): `minLevel 3`, `maxLevel 12`, `minDetailMultiplier 10`, `subdivisionThreshold 1`,
+  `disableSubdivRadiusMultiplier 3`.
+- `PQSGlobalSettings.Setup`: `subdivisionThresholds[i] = radius * minDetailMultiplier / 2^i * subdivisionThreshold`,
+  collapse thresholds equal. `PQJob.UpdateSubdivision`: a quad subdivides when `level < minLevel` or
+  `gcDist < threshold[level]`, collapses when `gcDist > threshold[level]` or `level > maxLevel`; `gcDist` is the
+  great-circle distance from the camera's ground point plus altitude minus the quad's angular size. Kerbin:
+  6000 km at level 0, 1.46 km at level 12.
+- Subdivision stops (the planet stays at its current quads) above `disableSubdivRadiusMultiplier * radius`
+  altitude (1800 km for Kerbin).
+- Vertex height: `PQS.GetSurfaceHeight` (see `terrain.md`): `radius - oceanAltitude + global map * heightMapScale +
+  tiled detail layers + decals`. The tiled layers (`largeR..A`, `mediumR..A`, `subzone3/4R..A`: a height map, a
+  `uvScale` repeat count and a `heightScale` in metres each) are weighted by the biome mask channel they belong to.
+- Scaled space: beyond `heightMapInfo.scaledToLocalTransition` (Kerbin 5,000 km, blend 500 km) the body is the
+  scaled-space sphere with `<body>_scaled` material (albedo `_MainTex`, normal, packed map, pole textures).
+
+## 2. Surface material (`<body>_mat`, `PQSData.materialSettings.surfaceMaterial`)
+
+Textures (Kerbin): `_AlbedoScaledTex` = `kerbin_scaled_nowater_d` (4096², equirectangular, the sea floor coloured
+instead of water), `_NormalScaledTex`, `_PackedScaledTex`, `_BiomeMaskTex` (4096² RGBA: one biome per channel;
+on Kerbin R covers most land, B the polar caps, G a few patches; A, whose slots are snow, dirt, rock and grass,
+is presumably the mountains), `_SubzoneMaskTex`, global/large/mid/sub-zone
+gradience (slope) and curvature maps per channel, `_SmallAlbedoArray` (13 slices of 2048² albedo + height in
+alpha), `_SmallNormalArray` (normal, smoothness, AO), decal arrays, `_ShorelineTex` (ocean height SDF).
+
+Per biome channel X in RGBA the material carries `_SmallBiomeX` = four slice indices into the small arrays
+(Kerbin R: rock 8, dark grass 5, dirt 3, bright grass 4), and for each of the four layers `HeightParams`,
+`SlopeParams`, `GradMapWeights`, `CurvMapWeights`, `Tint`, plus `_SmallBiomeHeightEnableX`/`SlopeEnableX`,
+`_SmallUVScaleX`, `_SmallHeightWeightX` (height-blend), `_SmallWeightSoftnessX`, `_SmallNormalStrengthX`.
+Inferred: each layer's weight is a window on terrain height and slope (min, max, blend), layers blend by their
+albedo-height, and the result is tiled in world space (`_TriplanarUVScaleOffset` 10, `_TriplanarContrast` 4,
+anti-tiling `_AntiTile*` and distance resampling `_DistanceResample*` at 100 / 1000 / 4000 / 10000 m).
+
+Distance fades (`(start, end, min, max)` in metres): `_AlbedoScaledFadeParams (0, 160000, 0.3, 1)`: the scaled
+albedo covers the detail fully from 160 km and still contributes 30 % at the ground; `_NormalScaledFadeParams`
+around 80 km.
+
+## 3. Ocean (`WaterManager`, `PQSRenderer` ocean part, `<body>_ocean_mat`, `OceanWaveSpectrum`)
+
+- A separate sea-level sphere (`OceanQuadMeshGenerator`, quads like the terrain) at `radius`; only bodies with
+  `hasOcean` (Kerbin, Eve, Laythe).
+- Waves: an FFT spectrum (`OceanWaveSpectrum`: wind 10, fetch 500 km, 14 octave powers) rendered into animation
+  textures near the camera, plus a sum-of-waves set (`_Wavelengths`, `_Amplitudes`, `_WaveDirX/Z`, `_Phases`) and
+  scrolling normal maps (`_DetailNormal*`, `_LargeNormalMap_1/2` with tiling 500 m and 4 km).
+- Colour: `_DeepWaterColor (0, 0.34, 0.62)`, `_ShallowColor (0.08, 0.36, 0.38)` over `_ShallowMaxDepth 343 m`,
+  `_DiffuseColor`, sky reflection from the atmosphere (`_EnableAdvancedSkyColor`), Fresnel `_FresnelPower 15`,
+  sun specular `_SpecularStrength 203`, smoothness 0.865, foam by the shoreline SDF, caustics and under-water
+  fog. From orbit the water blends into the scaled albedo (`_ScaleAlbedoStart/EndHeight 66 km / 160 km`).
+
+## 4. Atmosphere (`AtmosphereModel`, Bruneton precomputed scattering)
+
+- The model is Eric Bruneton's precomputed atmospheric scattering: per body a transmittance LUT (1024 x 128),
+  an irradiance LUT (64 x 16) and a combined scattering LUT (3D, `NU 8 * MU_S 32` x `MU 128` x `R 32`, Mie in
+  alpha), all RGBA float, baked into the bundle (`<body>_atmosphere_*_lut`). Lengths in kilometres.
+- Uniforms (`AtmosphereModel.BindToMaterial`): bottom radius 600, top = bottom + `AtmosphereHeight` (60),
+  `mu_s_min = cos(SunZenithAngle)` (111.4 deg), `MieAnisotropy` 0.113, sun angular radius `SunAngleRadius * 0.1`,
+  exposure `Exposure * 0.1` (4.12, 5.0), solar irradiance `SolarIrradiance * 2`, Rayleigh `RayleighScattering *
+  scale * 0.1` per km (0.0175, 0.041, 0.1), Mie `MieScattering * scale * 0.01`.
+- Used for the sky (camera ray), aerial perspective on terrain and parts (`AerialPerspective`: a camera volume of
+  transmittance and in-scatter), the sun's colour at the ground (transmittance) and sky irradiance (ambient).
+  Gas giants use a separate keyword.
+
+## 5. Clouds (`VolumeCloudConfiguration`, `ScaledCloudConfiguration`)
+
+- Near the planet: ray-marched volumetric cumulus layers (Kerbin "Fluffy Clouds" 7,000 to 9,500 m, coverage from
+  a distribution cubemap, 3D Perlin-Worley noise, wind, god rays, cloud shadows).
+- Far: `bakedScaledTexture` cubemaps (`kerbin_scaledclouds_01`, 2048² RGBA half; coverage in alpha) drawn on a
+  shell, with a bottom texture for the view from below and a normal cubemap.
+
+## 6. Sunlight
+
+Directional light from the star; colour at a point = solar irradiance x atmosphere transmittance towards the sun;
+sky ambient from the irradiance LUT; terrain and parts in a body's shadow are dark (no eclipse code beyond that
+in the renderer).
+
+## Minimal functionality list (what a player needs to see), and what we implement
+
+| # | Feature | Original | v1 here |
+|---|---|---|---|
+| 1 | Planet surface you can descend to without popping | PQS quadtree, levels 3..12, thresholds above | Cube-sphere quadtree with the same thresholds; 33 x 33 vertices per quad with skirts, built on the CPU over frames |
+| 2 | Ground where the physics puts it | `GetSurfaceHeight` | Vertex heights from `ose_data::terrain::TerrainMap::height_m`, the server's own function: the terrain pack's global map, tiled layers and decals (terrain.md), or the embedded global map without a pack |
+| 3 | Planet colour from orbit to ground | scaled albedo + biome detail | Scaled albedo (no-water version) everywhere, faded to 30 % at the ground under biome detail |
+| 4 | Ground texture up close | biome mask, small arrays, rules | Biome mask picks the four small slices; height and slope windows weight them; tiled in world space at two scales; detail modulates the albedo's brightness so large-scale colour stays the original's |
+| 5 | Water | ocean sphere, waves, colours, Fresnel, glint | Sea-level shell where terrain is below it; depth colour from the material's shallow/deep colours; Fresnel sky reflection; sun glint; animated normal waves |
+| 6 | Sky and aerial perspective | Bruneton LUTs | The body's own LUTs, Bruneton's `GetSkyRadiance` / `GetSkyRadianceToPoint` in WGSL, exposure tone map |
+| 7 | Clouds | volumetric + scaled shell | The scaled shell at the layer's base height with the baked coverage cubemap, lit by the sun; no volumetrics |
+| 8 | Sunlight | light + transmittance | Sun colour through the transmittance LUT, ambient from the irradiance LUT, night side dark |
+| 9 | Scaled vs local | swap at 5,000 km | One path: the quadtree at low levels is the scaled body |
+
+Deviations: quads split below 2.5 x radius / 2^level instead of 10 x (about 1.6 quad edges, so a browser builds
+a few hundred quads, not a thousand), and the shallowest level drawn is 2, not 3. The KSC hub scene's flat 60 km
+ground plane (`ksc.glb` mesh `ground`) is hidden in flight once the terrain draws.
+
+Not in v1: FFT waves, foam, caustics and under-water, volumetric clouds and cloud shadows, scatter
+(rocks, trees), eclipses, gas giant mode.

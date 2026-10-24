@@ -55,6 +55,46 @@ The global map alone puts KSC at -44 m (the coast); the plateau comes from heigh
   `kerbin_KSCLaunchpad_spawn_01`. Trajectory collision tests against `radius + max terrain` like the original's
   `WillCollideWithParent`.
 
-Not yet: the tiled detail layers (they add roughly 0.5 to 1.5 km of relief on Kerbin; peaks are low), the
-decals other than our site discs, and full-resolution maps (one texel is about 7.4 km on Kerbin and 2.5 km on the
-Mun at 512 x 256).
+## Terrain packs (v2): the rest of `HeightSample`
+
+`PQSJobUtil.HeightSample(uv, dir)` in full, as `ose_data::terrain_detail` implements it:
+
+```
+height = global(uv) * heightMapScale
+       + layers(large) + layers(medium)                      tiled, weighted by the biome mask
+       (pole fix-up: radius 0 on every stock body, skipped)
+height = DoDecals(dir * radius + dir * height, height)       PQS height decals, in sort order
+surface radius = radius - oceanAltitude + height
+```
+
+- `dir` is the body-fixed Unity direction `(cos lat cos lon, sin lat, cos lat sin lon)`.
+- Layers: for each channel c of the biome mask (bilinear, normalised to sum 1), `lerp(top, side, blend) *
+  heightScale_c * mask_c` where `side` samples the layer at `(2u, v) * uvScale`, `top` at `(dir.x, dir.z) / 2 *
+  uvScale` and `blend = 1 - |dir.y|^heightMapContrast` (side projection at the equator, top projection at the
+  poles). All samples biquadratic and wrapping.
+- Decals (`PQSDecalController.UpdateDecalInstances`, `CullDecal`, `DrawDecal`): each placed `PQSDecalInstance`
+  sits at `normal(lat, lon) * radius`, turned so local +Y is the normal and then by `Rotation` about it, scaled
+  `Scale` metres. A point is affected when it is within `sqrt(1.5) * Scale` of the centre and its local
+  position `l = R^T (p - centre) / Scale` has `l.x + 0.5`, `l.z + 0.5` and `l.y + 0.5 - 1 / Scale` all in
+  [0, 1]. Then `h = (decal(uv) - 0.5 + HeightOffset) * mode * fade * HeightScale + VerticalOffset * fade` with
+  `fade = saturate(shape^FadeStrength * 2) * alpha(uv)` (shape: 1 - 2 * Chebyshev or Euclidean distance from
+  the centre by `FadeShape`); `HeightBlendMode` 3 adds, 1 subtracts, 2 replaces (the running height is first
+  scaled by `1 - fade`). Settings come from the `PQSDecal` asset unless the instance overrides them.
+- Kerbin: global map 0 to 5000 m against an ocean altitude of 4270 m (so 730 m at most from the map; the body
+  data's `MaxTerrainHeight` 1499 m is the global map's), eight tiled layers, 67 decals (mountain groups around
+  the KSC, the desert mountains, the lake mask under the KSC). The highest point comes out at 2.7 km. Under the
+  KSC campus the ground is near sea level: the campus model carries its own ground, as in the original.
+
+`tools/extract_terrain.py --packs assets/web/terrain` writes one pack per body (`<Body>.json` + `<Body>.bin`):
+the global map at 4096 x 2048 (Kerbin, Mun) or 2048 x 1024, the mask at 1024 x 512, layers at most 1024 square,
+decal heights at 512 square and alphas at 256 square. 15 to 41 MB per body, about 370 MB in all, so the packs
+are never committed: they go to the container with the other game assets (`tools/push_assets.py terrain`).
+The server loads `<assets-dir>/terrain/<Body>.*` when present and falls back to the embedded global-only maps
+(which CI and the session tests use); the client fetches the same pack from `/assets/terrain/` for the body it
+flies over, so the drawn ground is the ground the server lands on.
+
+Sites: only launch pads get a flat (250 m held at the pad altitude, 800 m falloff). Base anchors such as
+`kerbin_KSC_Object` (221.7 m) are reference points, not ground: a 1 km disc there stood 100 m above the campus.
+
+Not yet: the sub-zone layers (`subzone3/4`, used by the shader only), the scatter and colliders of the campus
+model itself.

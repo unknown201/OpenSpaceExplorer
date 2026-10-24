@@ -225,6 +225,8 @@ pub struct FlightView {
     flex_since_ms: f64,
     /// Craft axes and local horizon of the last frame, for the navball.
     pub nav: Option<crate::navball::NavFrame>,
+    /// Terrain, ocean, sky and clouds of the body (planet.rs), created with the first frame.
+    planet: Option<crate::planet::PlanetRenderer>,
 }
 
 impl Default for FlightView {
@@ -275,6 +277,7 @@ impl FlightView {
             flex_cur: HashMap::new(),
             flex_since_ms: 0.0,
             nav: None,
+            planet: None,
         }
     }
 
@@ -527,10 +530,26 @@ impl FlightView {
         let mut items: Vec<DrawItem> = Vec::new();
         let mut flames: Vec<DrawItem> = Vec::new();
 
-        // The body sphere, sunk by 1.5 km so its facets stay under the campus ground near the KSC.
+        // The body: the planet renderer's terrain, ocean, sky and clouds once its assets are in; until then the
+        // scaled sphere, sunk by 1.5 km so its facets stay under the campus ground near the KSC.
+        let planet = self
+            .planet
+            .get_or_insert_with(|| crate::planet::PlanetRenderer::new(gpu));
+        let planet_ready = planet.prepare(
+            gpu,
+            &crate::planet::PlanetView {
+                body_id: inp.body_id,
+                radius_m: inp.body_radius,
+                cam,
+                sun,
+                time_s: inp.now_ms / 1000.0,
+            },
+        );
         let body_model = format!("body:{}", inp.body_id);
-        gpu.request_model(&body_model, &format!("assets/bodies/{}.glb", inp.body_id));
-        if let Some(m) = gpu.model(&body_model) {
+        if !planet_ready {
+            gpu.request_model(&body_model, &format!("assets/bodies/{}.glb", inp.body_id));
+        }
+        if let Some(m) = gpu.model(&body_model).filter(|_| !planet_ready) {
             let sunk = if alt < 40_000.0 { 1500.0 } else { 0.0 };
             let scale = (inp.body_radius - sunk) / m.mesh_radius.max(1e-9);
             let mut it = DrawItem::lit(body_model.clone(), -cam, DQuat::IDENTITY, scale, sun);
@@ -660,7 +679,16 @@ impl FlightView {
         };
         let k = (1.0 - t).powf(2.5);
         let clear = [0.45 * k, 0.65 * k, 0.92 * k];
-        gpu.frame("assets/parts/", &items, &[], clear);
+        if planet_ready {
+            // The planet's terrain replaces the hub scene's flat 60 km ground plane.
+            gpu.hide_meshes("ksc", &["ground"]);
+        }
+        let extra = self
+            .planet
+            .as_ref()
+            .filter(|_| planet_ready)
+            .map(|p| p as &dyn crate::render::ExtraPass);
+        gpu.frame_with("assets/parts/", &items, &[], clear, extra);
         true
     }
 }

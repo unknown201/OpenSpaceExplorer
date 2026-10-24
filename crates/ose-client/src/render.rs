@@ -157,6 +157,8 @@ pub struct Model {
     /// (index into `meshes`, world transform within the model) per drawn node.
     primitives: Vec<(usize, Mat4)>,
     textures: Vec<Option<wgpu::TextureView>>,
+    /// glTF mesh name of each entry of `meshes` (for `hide_meshes`).
+    mesh_names: Vec<String>,
     /// Radius of the mesh in its own units (planet spheres), from the GLB extras.
     pub mesh_radius: f64,
     /// Bounds of all primitives in model units, for framing in the editor.
@@ -185,6 +187,8 @@ struct CpuModel {
     primitives: Vec<(usize, Mat4)>,
     image_uris: Vec<String>,
     mesh_radius: f64,
+    /// glTF mesh name of each entry of `meshes`.
+    mesh_names: Vec<String>,
 }
 
 pub struct DrawItem {
@@ -248,6 +252,15 @@ pub struct LineItem {
 
 type ModelInbox = Rc<RefCell<Vec<(String, CpuModel)>>>;
 
+/// Extra drawing inside the main pass (planet terrain, ocean, sky, clouds: `planet.rs`). It owns its pipelines,
+/// built for `Renderer::format()` and a `Depth32Float` reversed-depth attachment.
+pub trait ExtraPass {
+    /// Before the meshes: sky and opaque ground.
+    fn draw_opaque(&self, pass: &mut wgpu::RenderPass<'_>);
+    /// After the opaque meshes, before blended ones: water and clouds.
+    fn draw_transparent(&self, pass: &mut wgpu::RenderPass<'_>);
+}
+
 pub struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -274,6 +287,8 @@ pub struct Renderer {
     texture_inbox: Rc<RefCell<Vec<PendingTexture>>>,
     lines: HashMap<String, (wgpu::Buffer, u32)>,
     view_proj: DMat4,
+    /// Meshes (by glTF mesh name) left out of a model for the next frame only, see `hide_meshes`.
+    hidden: HashMap<String, Vec<String>>,
     pub width: u32,
     pub height: u32,
 }
@@ -647,6 +662,7 @@ impl Renderer {
             texture_inbox: Rc::new(RefCell::new(Vec::new())),
             lines: HashMap::new(),
             view_proj: DMat4::IDENTITY,
+            hidden: HashMap::new(),
             width,
             height,
         })
@@ -830,6 +846,7 @@ impl Renderer {
                 }
             }
             let primitives = cpu.primitives.clone();
+            let mesh_names = cpu.mesh_names.clone();
             let textures = vec![None; cpu.image_uris.len()];
             for (i, uri) in cpu.image_uris.iter().enumerate() {
                 let url = resolve_uri(asset_base, uri);
@@ -858,6 +875,7 @@ impl Renderer {
                     meshes,
                     primitives,
                     textures,
+                    mesh_names,
                     mesh_radius: cpu.mesh_radius,
                     bounds_min,
                     bounds_max,
@@ -947,6 +965,33 @@ impl Renderer {
         }
     }
 
+    pub fn device(&self) -> &wgpu::Device {
+        &self.device
+    }
+
+    pub fn queue(&self) -> &wgpu::Queue {
+        &self.queue
+    }
+
+    /// Colour attachment format of the main pass.
+    pub fn format(&self) -> wgpu::TextureFormat {
+        self.config.format
+    }
+
+    /// The camera's view-projection (camera at the origin of the relative world) set by `set_camera`.
+    pub fn view_proj(&self) -> DMat4 {
+        self.view_proj
+    }
+
+    /// Leave the named meshes of `model` out of the next frame (the flight view hides the KSC's flat ground
+    /// plane where the planet's terrain is drawn).
+    pub fn hide_meshes(&mut self, model: &str, names: &[&str]) {
+        self.hidden.insert(
+            model.to_string(),
+            names.iter().map(|n| n.to_string()).collect(),
+        );
+    }
+
     /// Set the camera: it sits at the origin of the relative world looking along `forward` with `up`.
     /// `near` and `far` in kilometres.
     pub fn set_camera(&mut self, forward: DVec3, up: DVec3, fov_y_rad: f64, near: f64, far: f64) {
@@ -981,6 +1026,18 @@ impl Renderer {
         items: &[DrawItem],
         lines: &[LineItem],
         clear: [f64; 3],
+    ) {
+        self.frame_with(asset_base, items, lines, clear, None);
+    }
+
+    /// `frame` with extra drawing from `extra` inside the same pass.
+    pub fn frame_with(
+        &mut self,
+        asset_base: &str,
+        items: &[DrawItem],
+        lines: &[LineItem],
+        clear: [f64; 3],
+        extra: Option<&dyn ExtraPass>,
     ) {
         self.drain_inbox(asset_base);
         let output = match self.surface.get_current_texture() {
@@ -1031,10 +1088,12 @@ impl Renderer {
         let mut slot = 0usize;
         // (model, primitive, slot, mirrored)
         let mut mesh_draws: Vec<(String, usize, usize, bool)> = Vec::new();
+        let hidden = std::mem::take(&mut self.hidden);
         for item in items {
             let Some(model) = self.models.get(&item.model) else {
                 continue;
             };
+            let hide = hidden.get(&item.model);
             let base = DMat4::from_scale_rotation_translation(
                 if item.mirror_z {
                     DVec3::new(item.scale, item.scale, -item.scale)
@@ -1045,6 +1104,9 @@ impl Renderer {
                 item.rel_pos_km,
             );
             for (pi, (mesh_i, local)) in model.primitives.iter().enumerate() {
+                if hide.is_some_and(|h| h.contains(&model.mesh_names[*mesh_i])) {
+                    continue;
+                }
                 let m = base * local.as_dmat4();
                 let fill = item.fill_dir.normalize_or_zero().as_vec3();
                 let factor = model.meshes[*mesh_i].color;
@@ -1133,8 +1195,17 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+            if let Some(x) = extra {
+                x.draw_opaque(&mut pass);
+            }
             pass.set_bind_group(0, &self.camera_bind, &[]);
             for (blended, mirrored) in [(false, false), (false, true), (true, false)] {
+                if blended {
+                    if let Some(x) = extra {
+                        x.draw_transparent(&mut pass);
+                        pass.set_bind_group(0, &self.camera_bind, &[]);
+                    }
+                }
                 pass.set_pipeline(if blended {
                     &self.blend_pipeline
                 } else if mirrored {
@@ -1230,7 +1301,7 @@ pub(crate) async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     Ok(js_sys::Uint8Array::new(&buf).to_vec())
 }
 
-async fn fetch_bitmap(url: &str) -> Result<web_sys::ImageBitmap, String> {
+pub(crate) async fn fetch_bitmap(url: &str) -> Result<web_sys::ImageBitmap, String> {
     let window = web_sys::window().ok_or("no window")?;
     let resp = wasm_bindgen_futures::JsFuture::from(window.fetch_with_str(url))
         .await
@@ -1425,6 +1496,7 @@ fn parse_glb(bytes: &[u8]) -> Result<CpuModel, String> {
     let mut cpu_meshes: Vec<CpuMesh> = Vec::new();
     let mut by_key: HashMap<(usize, usize), usize> = HashMap::new();
     let mut primitives: Vec<(usize, Mat4)> = Vec::new();
+    let mut mesh_names: Vec<String> = Vec::new();
     for (mi, world) in placed {
         let Some(mesh) = meshes.get(mi) else { continue };
         for (pi, prim) in mesh["primitives"]
@@ -1480,6 +1552,7 @@ fn parse_glb(bytes: &[u8]) -> Result<CpuModel, String> {
                 .map(|m| material_color(m as usize))
                 .unwrap_or([1.0; 4]);
             cpu_meshes.push((vertices, indices, texture, blend, color));
+            mesh_names.push(mesh["name"].as_str().unwrap_or("").to_string());
             by_key.insert((mi, pi), cpu_meshes.len() - 1);
             primitives.push((cpu_meshes.len() - 1, world));
         }
@@ -1501,6 +1574,7 @@ fn parse_glb(bytes: &[u8]) -> Result<CpuModel, String> {
         primitives,
         image_uris,
         mesh_radius,
+        mesh_names,
     })
 }
 

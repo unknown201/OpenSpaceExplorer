@@ -6,8 +6,15 @@
 //! `value / 65535 * scale_m + offset_m`, matching the original's `GetSurfaceHeight` restricted to the global
 //! map (see `docs/reference-notes/terrain.md`). Sampling is biquadratic over a 3x3 neighbourhood like the
 //! original's `BiquadraticSample`, wrapping in longitude and clamping in latitude.
+//!
+//! A `TerrainPack` (`tools/extract_terrain.py --packs`, one per body, served from the container's assets and
+//! never committed) adds the rest of the original's `PQSJobUtil.HeightSample`: a finer global map, the tiled
+//! large and medium height layers weighted by the biome mask, and the PQS height decals (the KSC plateau,
+//! mountain groups). `TerrainMap::from_pack` builds a map that samples all of it.
 
 use serde::{Deserialize, Serialize};
+
+pub use crate::terrain_detail::{Detail, TerrainPack};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TerrainIndex {
@@ -67,18 +74,25 @@ pub struct TerrainMap {
     pub flats: Vec<Flat>,
     /// Highest point of the map (flats included), m above the nominal radius.
     pub max_m: f64,
+    /// Tiled layers and decals from a terrain pack; `None` for the embedded global-only maps.
+    pub detail: Option<Box<Detail>>,
 }
 
-/// Flatten discs around a site: pads get a small disc, base anchors a wide one.
-fn flat_for(site: &Site) -> Flat {
-    let pad = site.name.to_ascii_lowercase().contains("launchpad");
-    Flat {
-        lat_deg: site.lat_deg,
-        lon_deg: site.lon_deg,
-        radius_m: if pad { 250.0 } else { 1_000.0 },
-        falloff_m: if pad { 800.0 } else { 1_500.0 },
-        altitude_m: site.altitude_m,
-    }
+/// Flatten a disc around each launch pad, held at the pad's altitude. Other sites (base anchors such as
+/// `kerbin_KSC_Object` at 221.7 m) are reference points, not ground: a disc there stood 100 m above the KSC
+/// campus, so they get none. The ground around them comes from the map and, with a pack, the decals.
+pub(crate) fn flats_for(sites: &[Site]) -> Vec<Flat> {
+    sites
+        .iter()
+        .filter(|s| s.name.to_ascii_lowercase().contains("launchpad"))
+        .map(|s| Flat {
+            lat_deg: s.lat_deg,
+            lon_deg: s.lon_deg,
+            radius_m: 250.0,
+            falloff_m: 800.0,
+            altitude_m: s.altitude_m,
+        })
+        .collect()
 }
 
 impl TerrainMap {
@@ -96,13 +110,7 @@ impl TerrainMap {
             .iter()
             .map(|c| u16::from_le_bytes(*c))
             .collect();
-        let mut flats: Vec<Flat> = entry.sites.iter().map(flat_for).collect();
-        // wide discs first so pads (narrow, exact) are applied last and win
-        flats.sort_by(|a, b| {
-            b.radius_m
-                .partial_cmp(&a.radius_m)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        let flats = flats_for(&entry.sites);
         let raw_max =
             data.iter().copied().max().unwrap_or(0) as f64 / 65535.0 * m.scale_m + m.offset_m;
         let flat_max = flats.iter().map(|f| f.altitude_m).fold(f64::MIN, f64::max);
@@ -116,6 +124,7 @@ impl TerrainMap {
             data,
             flats,
             max_m: raw_max.max(flat_max),
+            detail: None,
         })
     }
 
@@ -127,8 +136,17 @@ impl TerrainMap {
         self.data[yi * self.width + xi] as f64 / 65535.0
     }
 
-    /// Global map height above the nominal radius at a body-fixed latitude/longitude, m.
+    /// Height above the nominal radius at a body-fixed latitude/longitude without the pad flats, m: the global
+    /// map, plus the tiled layers and decals when the map came from a pack.
     pub fn map_height_m(&self, lat_deg: f64, lon_deg: f64) -> f64 {
+        match &self.detail {
+            Some(d) => d.sample(self, lat_deg, lon_deg) + self.offset_m,
+            None => self.global_m(lat_deg, lon_deg),
+        }
+    }
+
+    /// The global map alone, m above the nominal radius.
+    pub fn global_m(&self, lat_deg: f64, lon_deg: f64) -> f64 {
         let u = (lon_deg / 360.0 + 0.5).rem_euclid(1.0);
         let v = (lat_deg / 180.0 + 0.5).clamp(0.0, 1.0);
         let fx = u * self.width as f64 - 0.5;

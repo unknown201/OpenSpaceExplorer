@@ -10,6 +10,7 @@ pub mod missions;
 pub mod science;
 pub mod staging;
 pub mod terrain;
+pub mod terrain_detail;
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
