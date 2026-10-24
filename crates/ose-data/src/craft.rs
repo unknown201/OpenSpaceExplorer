@@ -33,6 +33,9 @@ pub struct CraftPart {
     pub fuel_crossfeed: bool,
     /// Stored resource units by resource id.
     pub resources: Vec<StoredResource>,
+    /// A fuel line (compound part) hanging on its parent tank feeds this part (index in `Craft::parts`).
+    #[serde(default)]
+    pub fuel_line_target: Option<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

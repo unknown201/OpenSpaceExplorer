@@ -450,6 +450,7 @@ mod tests {
                 stage_index: 0,
                 fuel_crossfeed: true,
                 resources: vec![],
+                fuel_line_target: None,
             }],
             stages: vec![],
         };

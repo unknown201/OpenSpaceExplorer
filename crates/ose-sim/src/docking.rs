@@ -173,6 +173,7 @@ pub fn merge(a: &Craft, pa: &Port, b: &Craft, pb: &Port) -> Craft {
     reroot(&mut parts_b, pb.part);
     for p in &mut parts_b {
         p.parent = p.parent.map(|x| x + off);
+        p.fuel_line_target = p.fuel_line_target.map(|x| x + off);
     }
     parts_b[pb.part].parent = Some(pa.part);
     parts_b[pb.part].own_node = Some(pb.def.node.clone());
@@ -205,6 +206,7 @@ pub fn subset(craft: &Craft, keep: &[usize]) -> (Craft, Vec<Option<usize>>) {
         .map(|&i| {
             let mut p = craft.parts[i].clone();
             p.parent = p.parent.and_then(|x| map[x]);
+            p.fuel_line_target = p.fuel_line_target.and_then(|x| map[x]);
             if p.parent.is_none() {
                 p.own_node = None;
                 p.parent_node = None;
@@ -689,6 +691,7 @@ mod tests {
             stage_index: 0,
             fuel_crossfeed: true,
             resources: vec![],
+            fuel_line_target: None,
         }
     }
 

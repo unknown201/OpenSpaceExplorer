@@ -232,6 +232,7 @@ impl Editor {
                 stage_index,
                 fuel_crossfeed: true,
                 resources,
+                fuel_line_target: None,
             });
             self.selected = Some(0);
             self.rebuild_stages(catalog);
@@ -312,6 +313,7 @@ impl Editor {
             stage_index,
             fuel_crossfeed: true,
             resources,
+            fuel_line_target: None,
         });
         self.selected = Some(idx);
         self.rebuild_stages(catalog);

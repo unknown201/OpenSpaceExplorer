@@ -157,6 +157,7 @@ mod tests {
             stage_index: stage,
             fuel_crossfeed: false,
             resources: vec![],
+            fuel_line_target: None,
         }
     }
 

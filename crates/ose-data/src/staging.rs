@@ -433,6 +433,7 @@ mod tests {
                     capacity_units: *u,
                 })
                 .collect(),
+            fuel_line_target: None,
         }
     }
 

@@ -404,6 +404,7 @@ async fn hello_catalog_and_snapshots() {
                 stage_index: -1,
                 fuel_crossfeed: true,
                 resources: vec![],
+                fuel_line_target: None,
             },
             ose_data::craft::CraftPart {
                 guid: "b".into(),
@@ -421,6 +422,7 @@ async fn hello_catalog_and_snapshots() {
                 stage_index: 0,
                 fuel_crossfeed: true,
                 resources: vec![],
+                fuel_line_target: None,
             },
         ],
         stages: vec![vec![1]],
@@ -876,6 +878,7 @@ fn starter_craft() -> ose_data::craft::Craft {
             stage_index: 0,
             fuel_crossfeed: true,
             resources: vec![],
+            fuel_line_target: None,
         }
     };
     ose_data::craft::Craft {

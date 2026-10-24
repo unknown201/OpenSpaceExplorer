@@ -131,6 +131,7 @@ pub fn craft_from_value(v: &Value) -> anyhow::Result<Craft> {
             stage_index: ps["StageIndex"].as_i64().unwrap_or(-1) as i32,
             fuel_crossfeed: ps["FuelCrossfeed"].as_bool().unwrap_or(true),
             resources,
+            fuel_line_target: None,
         });
     }
     // parts not reached from the root become roots of their own; report rather than hide

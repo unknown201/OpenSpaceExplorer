@@ -33,6 +33,8 @@ struct Edge {
     to: usize,
     crossfeed: bool,
     boundary: bool,
+    /// Across a fuel line, against its flow: from the part it feeds back to the tank it hangs on.
+    fuel_line: bool,
 }
 
 /// One resource the request moves out of the tanks (positive, units per second) or into them (negative:
@@ -115,12 +117,24 @@ impl FlowNet {
             to,
             crossfeed: craft.parts[from].fuel_crossfeed,
             boundary: decoupler(from),
+            fuel_line: false,
         };
         let mut edges = vec![Vec::new(); n];
         for (i, p) in craft.parts.iter().enumerate() {
             if let Some(parent) = p.parent {
                 edges[i].push(edge_from(i, parent));
                 edges[parent].push(edge_from(parent, i));
+            }
+            // a fuel line lets the part it feeds draw from the tank it hangs on (one way)
+            if let (Some(target), Some(source)) = (p.fuel_line_target, p.parent) {
+                if target < n {
+                    edges[target].push(Edge {
+                        to: source,
+                        crossfeed: true,
+                        boundary: false,
+                        fuel_line: true,
+                    });
+                }
             }
         }
         FlowNet {
@@ -250,20 +264,43 @@ impl FlowNet {
                     .collect()
             }
             FlowMode::StackPrioritySearch | FlowMode::StageStackFlowBalance => {
+                // over crossfeed edges, counting fuel lines crossed; the far end of a fuel line chain drains
+                // first (the original's stack distance), so asparagus boosters empty before the core
                 let n = self.present.len();
-                let mut seen = vec![false; n];
-                let mut stack = vec![part];
-                seen[part] = true;
-                while let Some(i) = stack.pop() {
+                let mut dist = vec![usize::MAX; n];
+                let mut q = VecDeque::new();
+                dist[part] = 0;
+                q.push_back(part);
+                while let Some(i) = q.pop_front() {
                     for e in &self.edges[i] {
-                        if e.crossfeed && self.present[e.to] && !seen[e.to] {
-                            seen[e.to] = true;
-                            stack.push(e.to);
+                        if !e.crossfeed || !self.present[e.to] {
+                            continue;
+                        }
+                        let d = dist[i] + usize::from(e.fuel_line);
+                        if d < dist[e.to] {
+                            dist[e.to] = d;
+                            if e.fuel_line {
+                                q.push_back(e.to);
+                            } else {
+                                q.push_front(e.to);
+                            }
                         }
                     }
                 }
-                let parts: Vec<usize> = (0..n).filter(|&i| seen[i]).collect();
-                vec![tanks_in(&parts)]
+                let max = dist
+                    .iter()
+                    .filter(|&&d| d != usize::MAX)
+                    .max()
+                    .copied()
+                    .unwrap_or(0);
+                (0..=max)
+                    .rev()
+                    .map(|d| {
+                        let parts: Vec<usize> = (0..n).filter(|&i| dist[i] == d).collect();
+                        tanks_in(&parts)
+                    })
+                    .filter(|g| !g.is_empty())
+                    .collect()
             }
         }
     }
@@ -515,6 +552,37 @@ mod tests {
             .map(|&t| net.tanks[t].capacity)
             .sum();
         assert!((full - room).abs() < 1e-6 && room <= cap);
+    }
+
+    #[test]
+    fn a_fuel_line_feeds_the_core_from_the_booster_first() {
+        let (crafts, defs, res) = assets();
+        let mut c = crafts.into_iter().find(|c| c.name == "Kerbal K1").unwrap();
+        // a fuel line on the radial booster's... use the 1x8 core (19) fed from the upper 1x4 (7) across the
+        // decoupler: a line hanging on tank 7 feeding tank 19
+        let line = ose_data::craft::CraftPart {
+            guid: "line".into(),
+            part_id: "fuelline_0v_external".into(),
+            parent: Some(7),
+            own_node: Some("srfAttach".into()),
+            parent_node: None,
+            local_position: c.parts[7].local_position,
+            local_rotation: c.parts[7].local_rotation,
+            stage_index: 0,
+            fuel_crossfeed: true,
+            resources: vec![],
+            fuel_line_target: Some(19),
+        };
+        c.parts.push(line);
+        let net = FlowNet::build(&c, &defs, &res);
+        let ox = net.resource("Oxidizer").unwrap();
+        let g = net.groups(36, ox);
+        assert_eq!(g.len(), 2, "two groups: across the line, then the core");
+        let first: Vec<usize> = g[0].iter().map(|&t| net.tanks[t].part).collect();
+        assert!(first.contains(&7), "the far tank drains first: {first:?}");
+        // and nothing flows the other way: the upper stage's engine cannot reach the core
+        let up = net.groups(16, ox);
+        assert!(up.iter().flatten().all(|&t| net.tanks[t].part != 19));
     }
 
     #[test]
