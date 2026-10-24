@@ -11,6 +11,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod audio;
 #[cfg(target_arch = "wasm32")]
 pub mod flight3d;
 pub mod kerbin_time;
@@ -141,6 +142,10 @@ struct App {
     missions: Vec<missions::Mission>,
     mc_primary: bool,
     mc_selected: Option<String>,
+    /// Music and sound effects, and the last stage seen in flight (vessel, stage, parts jettisoned) to play
+    /// staging and decoupling sounds once.
+    audio: audio::Audio,
+    last_stage: Option<(u64, u32, usize)>,
     /// Controls as last sent.
     throttle: f64,
     attitude: ose_net::AttitudeMode,
@@ -355,6 +360,8 @@ pub fn start() -> Result<(), JsValue> {
         missions: missions::all(),
         mc_primary: true,
         mc_selected: None,
+        audio: audio::Audio::new(stored("ose.sound").as_deref() == Some("off")),
+        last_stage: None,
         throttle: 0.0,
         attitude: ose_net::AttitudeMode::Up,
         gpu_canvas: get("gpu")?.dyn_into()?,
@@ -373,6 +380,8 @@ pub fn start() -> Result<(), JsValue> {
     install_menu(&app)?;
     load_part_sizes(app.clone());
     load_localization(app.clone());
+    load_sounds(app.clone());
+    install_audio(&app)?;
     #[cfg(target_arch = "wasm32")]
     start_webgpu(app.clone());
     animate(app);
@@ -413,6 +422,96 @@ fn start_webgpu(app: Shared) {
 /// editor. A missing route leaves the default cubes in place and the VAB picker empty.
 /// Fetch the original's English text (assets/loc/en.json, exported by tools/export_localization.py); screens
 /// fall back to the localization term when it is missing.
+/// The sound list (`audio/sounds.json`, `tools/export_audio.py`); without it the client is silent.
+fn load_sounds(app: Shared) {
+    wasm_bindgen_futures::spawn_local(async move {
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let Ok(resp) =
+            wasm_bindgen_futures::JsFuture::from(window.fetch_with_str("assets/audio/sounds.json"))
+                .await
+        else {
+            return;
+        };
+        let Ok(resp) = resp.dyn_into::<web_sys::Response>() else {
+            return;
+        };
+        if !resp.ok() {
+            return;
+        }
+        let Ok(text) = resp.text() else { return };
+        let Ok(text) = wasm_bindgen_futures::JsFuture::from(text).await else {
+            return;
+        };
+        let Some(text) = text.as_string() else { return };
+        app.borrow_mut()
+            .audio
+            .set_manifest(audio::parse_manifest(&text));
+    });
+}
+
+/// Audio starts on the first gesture; buttons click like the original's (its button-select sound), and the
+/// sound toggle mutes everything.
+fn install_audio(app: &Shared) -> Result<(), JsValue> {
+    let window = web_sys::window().ok_or("no window")?;
+    let a = app.clone();
+    let unlock = Closure::<dyn FnMut()>::new(move || {
+        if let Ok(mut app) = a.try_borrow_mut() {
+            if !app.audio.unlocked() {
+                app.audio.unlock();
+            }
+        }
+    });
+    for ev in ["pointerdown", "keydown"] {
+        window.add_event_listener_with_callback_and_bool(
+            ev,
+            unlock.as_ref().unchecked_ref(),
+            true,
+        )?;
+    }
+    unlock.forget();
+    let a = app.clone();
+    let click = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+        let Some(el) = ev.target().and_then(|t| t.dyn_into::<Element>().ok()) else {
+            return;
+        };
+        let Some(button) = el.closest("button:not([disabled])").ok().flatten() else {
+            return;
+        };
+        let Ok(mut app) = a.try_borrow_mut() else {
+            return;
+        };
+        let key = match button.id().as_str() {
+            "rd-research" => "rd_research",
+            "sound-toggle" => return,
+            _ => "ui_select",
+        };
+        app.audio.play(key);
+    });
+    window.add_event_listener_with_callback_and_bool(
+        "click",
+        click.as_ref().unchecked_ref(),
+        true,
+    )?;
+    click.forget();
+    let doc = app.borrow().doc.clone();
+    if let Some(btn) = doc.get_element_by_id("sound-toggle") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut()>::new(move || {
+            let mut app = a.borrow_mut();
+            let muted = !app.audio.muted;
+            app.audio.set_muted(muted);
+            store("ose.sound", if muted { "off" } else { "on" });
+            app.show_sound_toggle();
+        });
+        btn.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
+    app.borrow().show_sound_toggle();
+    Ok(())
+}
+
 fn load_localization(app: Shared) {
     wasm_bindgen_futures::spawn_local(async move {
         let Some(window) = web_sys::window() else {
@@ -1323,6 +1422,9 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                         .map(|m| !m.class_list().contains("hidden"))
                         .unwrap_or(false);
                     app.show_menu(!open);
+                    if !open && app.in_session {
+                        app.audio.play("ui_esc_open");
+                    }
                 }
                 "." | ">" => {
                     let w = kerbin_time::next_warp(app.time.warp);
@@ -1661,6 +1763,7 @@ impl App {
                     if let Some(craft_id) = self.pending_launch.take() {
                         self.start_flight(id, Some(craft_id));
                     }
+                    self.audio.play("launch_seq");
                     set_text(
                         &self.doc,
                         "menu-note",
@@ -2830,6 +2933,94 @@ impl App {
         });
     }
 
+    fn show_sound_toggle(&self) {
+        if let Some(el) = self.doc.get_element_by_id("sound-toggle") {
+            el.set_text_content(Some(if self.audio.muted {
+                "\u{266a} off"
+            } else {
+                "\u{266a} on"
+            }));
+            el.class_list()
+                .toggle_with_force("off", self.audio.muted)
+                .ok();
+        }
+    }
+
+    /// The scene's music, the engine loop and staging sounds in flight.
+    fn update_audio(&mut self, now: f64) {
+        let menu_open = self
+            .doc
+            .get_element_by_id("menu")
+            .map(|m| !m.class_list().contains("hidden"))
+            .unwrap_or(false);
+        let front = self
+            .doc
+            .query_selector(
+                "#menu:not(.hidden) #screen-name.open, #menu:not(.hidden) #screen-sessions.open",
+            )
+            .ok()
+            .flatten()
+            .is_some();
+        let flight = self.flying.and_then(|id| {
+            let scene = self.scene.as_ref()?;
+            let v = scene.vessel(id)?;
+            let body = scene.bodies.get(v.reference_body as usize)?.id.clone();
+            Some((id, body, v.flight.clone()))
+        });
+        let scene = match &flight {
+            _ if !self.in_session || front => audio::Scene::MainMenu,
+            _ if self.vab_active() => audio::Scene::Vab,
+            Some((_, body, _)) if !menu_open => audio::Scene::Flight(body),
+            _ => audio::Scene::Ksc,
+        };
+        self.audio.music(Some(audio::scene_music(scene)));
+        let mut level = 0.0;
+        let mut solid = false;
+        if let Some((id, _, Some(f))) = &flight {
+            if f.thrust_kn > 0.1 && !menu_open {
+                // Thrust with the throttle closed is solid boosters, which have no throttle.
+                solid = f.throttle <= 0.01;
+                level = if solid { 1.0 } else { f.throttle.max(0.2) };
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            let gone = 0usize;
+            #[cfg(target_arch = "wasm32")]
+            let gone = self
+                .flight_craft
+                .as_ref()
+                .map(|craft| {
+                    let catalog = &self.catalog;
+                    let is_dec =
+                        |pid: &str| catalog.get(pid).map(|p| p.is_decoupler).unwrap_or(false);
+                    flight3d::jettisoned(craft, f.stage as usize, &is_dec)
+                        .iter()
+                        .filter(|g| **g)
+                        .count()
+                })
+                .unwrap_or(0);
+            if let Some((vid, stage, was_gone)) = self.last_stage {
+                if vid == *id && f.stage > stage {
+                    self.audio.play("stage");
+                    if gone > was_gone {
+                        self.audio.play("decouple");
+                    }
+                }
+            }
+            self.last_stage = Some((*id, f.stage, gone));
+        } else {
+            self.last_stage = None;
+        }
+        let mass = flight
+            .as_ref()
+            .and_then(|(_, _, f)| f.as_ref().map(|f| f.mass_t))
+            .unwrap_or(10.0);
+        // Heavier rockets rumble lower.
+        let rate = (1.15 - 0.08 * mass.max(1.0).ln()).clamp(0.75, 1.15);
+        let key = if solid { "engine_srb" } else { "engine_liquid" };
+        self.audio.engine(key, level, rate);
+        self.audio.tick(now, &self.doc);
+    }
+
     /// Refresh the flight HUD from the vessel's readout.
     fn update_flight_hud(&self) {
         let Some(id) = self.flying else { return };
@@ -3419,6 +3610,7 @@ impl App {
     fn frame(&mut self) {
         let now = now_ms();
         let ut = self.time.ut_at(now);
+        self.update_audio(now);
         if self.time.have_time {
             self.update_hud(ut);
         }

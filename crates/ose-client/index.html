@@ -348,6 +348,9 @@
     .mc-objectives { padding-left: calc(22 * var(--u)); font-size: calc(16 * var(--u)); line-height: 1.6; }
     .mc-reward { margin-top: calc(18 * var(--u)); font-size: calc(16 * var(--u)); } .mc-reward b { color: #8fd08f; }
     .mc-state { margin-top: calc(8 * var(--u)); font-size: calc(13 * var(--u)); color: #9fb0cc; }
+    /* The sound toggle: a small pill over everything, top right. */
+    #sound-toggle { position: fixed; top: 10px; right: 12px; z-index: 60; margin: 0; width: auto; padding: 4px 10px; font: 600 12px var(--ui-font, sans-serif); color: #cfd6e6; background: #10161fcc; border: 1px solid #2c3d63; border-radius: 12px; cursor: pointer; opacity: 0.75; }
+    #sound-toggle:hover { opacity: 1; } #sound-toggle.off { color: #8a94a8; text-decoration: line-through; }
   </style>
 </head>
 <body>
@@ -509,6 +512,8 @@
     </div>
   </div>
   <div id="ksc-tooltip" data-ose="ksc-tooltip"></div>
+  <div id="audio" data-ose="audio" hidden></div>
+  <button id="sound-toggle" data-ose="sound-toggle" title="Sound on or off">&#9834; on</button>
   <div id="flight-hud" data-ose="flight">
     <div class="fh-top"><div class="fh-label">ALTITUDE</div><div id="fh-altitude" data-ose="flight-altitude">--</div><div id="fh-situation" class="fh-small">--</div><div id="fh-note" class="fh-small" style="color:#f0a070"></div><div id="fh-control" data-ose="flight-control" style="color:#ff6a5a;font-weight:700"></div></div>
     <div class="fh-bottom">
