@@ -197,6 +197,14 @@ pub struct RecipeIngredient {
     pub units_per_recipe_unit: f64,
 }
 
+/// Rough extent of a part for thumbnails and editor placement: from the first drag cube, else the attach
+/// node bounding box. Unity Y-up metres as authored.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PartBounds {
+    pub size_m: ose_math::DVec3,
+    pub center_m: ose_math::DVec3,
+}
+
 /// A part definition.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PartDef {
@@ -221,6 +229,8 @@ pub struct PartDef {
     pub resource_containers: Vec<ResourceContainer>,
     pub engines: Vec<EngineMode>,
     pub drag_cubes: Vec<DragCube>,
+    #[serde(default)]
+    pub bounds: Option<PartBounds>,
     /// Names of every module on the part, in order, so the sim knows what else to implement.
     pub module_names: Vec<String>,
     /// Module data not yet mapped into typed fields, keyed by module name.

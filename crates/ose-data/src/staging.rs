@@ -389,6 +389,7 @@ mod tests {
                 })
                 .unwrap_or_default(),
             drag_cubes: vec![],
+            bounds: None,
             module_names: vec![],
             raw_modules: Default::default(),
         }

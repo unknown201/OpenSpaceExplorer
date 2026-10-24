@@ -582,6 +582,50 @@ async fn hello_catalog_and_snapshots() {
     assert!(checked);
 }
 
+async fn http_get_json(addr: &str, path: &str) -> serde_json::Value {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+    s.write_all(format!("GET {path} HTTP/1.0\r\nHost: {addr}\r\n\r\n").as_bytes())
+        .await
+        .unwrap();
+    let mut buf = Vec::new();
+    s.read_to_end(&mut buf).await.unwrap();
+    let text = String::from_utf8_lossy(&buf);
+    let (head, body) = text.split_once("\r\n\r\n").expect("http response");
+    assert!(
+        head.starts_with("HTTP/1.0 200") || head.starts_with("HTTP/1.1 200"),
+        "{head}"
+    );
+    assert!(
+        head.to_ascii_lowercase().contains("application/json"),
+        "{head}"
+    );
+    serde_json::from_str(body).expect("json body")
+}
+
+#[tokio::test]
+async fn parts_catalog_route_serves_geometry() {
+    let (_server, addr) = spawn_server().await;
+    let parts = http_get_json(&addr, "/parts.json").await;
+    let arr = parts.as_array().expect("array");
+    assert!(arr.len() >= 400, "parts {}", arr.len());
+    let terrier = arr
+        .iter()
+        .find(|p| p["id"] == "engine_1v_methalox_terrier")
+        .expect("terrier");
+    assert_eq!(terrier["has_engine"], true);
+    assert_eq!(terrier["is_decoupler"], false);
+    assert!(terrier["size_m"]["x"].as_f64().unwrap() > 0.5, "{terrier}");
+    assert!(terrier["attach_nodes"].as_array().unwrap().len() >= 2);
+    assert!(arr.iter().any(|p| p["is_decoupler"] == true));
+    let res = http_get_json(&addr, "/resources.json").await;
+    assert!(res
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|r| r["id"] == "Methalox"));
+}
+
 #[tokio::test]
 async fn stale_guests_are_swept_but_members_stay() {
     let args = [

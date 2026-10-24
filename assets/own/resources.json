@@ -1,232 +1,232 @@
 [
- {
-  "id": "Ablator",
-  "display_name_key": "Resource/DisplayName/Ablator",
-  "abbreviation_key": "Resource/Abbreviation/Ab",
-  "kind": {
-   "Basic": {
-    "mass_per_unit_t": 1.0,
-    "volume_per_unit": 1.0,
-    "specific_heat_capacity_per_unit": 400.0,
-    "flow_mode": "StackPrioritySearch",
-    "pumpable": true,
-    "cost_per_unit": 0.5,
-    "non_stageable": false
-   }
+  {
+    "id": "Ablator",
+    "display_name_key": "Resource/DisplayName/Ablator",
+    "abbreviation_key": "Resource/Abbreviation/Ab",
+    "kind": {
+      "Basic": {
+        "mass_per_unit_t": 1.0,
+        "volume_per_unit": 1.0,
+        "specific_heat_capacity_per_unit": 400.0,
+        "flow_mode": "StackPrioritySearch",
+        "pumpable": true,
+        "cost_per_unit": 0.5,
+        "non_stageable": false
+      }
+    }
+  },
+  {
+    "id": "EVAPropellant",
+    "display_name_key": "Resource/DisplayName/EVAPropellant",
+    "abbreviation_key": "Resource/Abbreviation/EP",
+    "kind": {
+      "Basic": {
+        "mass_per_unit_t": 1.0,
+        "volume_per_unit": 20.0,
+        "specific_heat_capacity_per_unit": 3000.0,
+        "flow_mode": "StagePriorityFlow",
+        "pumpable": true,
+        "cost_per_unit": 1.0,
+        "non_stageable": true
+      }
+    }
+  },
+  {
+    "id": "ElectricCharge",
+    "display_name_key": "Resource/DisplayName/Electric Charge",
+    "abbreviation_key": "Resource/Abbreviation/EC",
+    "kind": {
+      "Basic": {
+        "mass_per_unit_t": 0.0,
+        "volume_per_unit": 0.0,
+        "specific_heat_capacity_per_unit": 0.0,
+        "flow_mode": "StagePriorityFlow",
+        "pumpable": true,
+        "cost_per_unit": 0.0,
+        "non_stageable": true
+      }
+    }
+  },
+  {
+    "id": "Hydrogen",
+    "display_name_key": "Resource/DisplayName/Hydrogen",
+    "abbreviation_key": "Resource/Abbreviation/H",
+    "kind": {
+      "Basic": {
+        "mass_per_unit_t": 1.0,
+        "volume_per_unit": 5.0,
+        "specific_heat_capacity_per_unit": 2010.0,
+        "flow_mode": "StackPrioritySearch",
+        "pumpable": true,
+        "cost_per_unit": 0.8,
+        "non_stageable": false
+      }
+    }
+  },
+  {
+    "id": "IntakeAir",
+    "display_name_key": "Resource/DisplayName/Intake Air",
+    "abbreviation_key": "Resource/Abbreviation/Air",
+    "kind": {
+      "Basic": {
+        "mass_per_unit_t": 1.0,
+        "volume_per_unit": 1.0,
+        "specific_heat_capacity_per_unit": 10.0,
+        "flow_mode": "AllVessel",
+        "pumpable": true,
+        "cost_per_unit": 0.0,
+        "non_stageable": false
+      }
+    }
+  },
+  {
+    "id": "MonoPropellant",
+    "display_name_key": "Resource/DisplayName/MonoPropellant",
+    "abbreviation_key": "Resource/Abbreviation/MP",
+    "kind": {
+      "Basic": {
+        "mass_per_unit_t": 1.0,
+        "volume_per_unit": 5.0,
+        "specific_heat_capacity_per_unit": 3000.0,
+        "flow_mode": "StagePriorityFlow",
+        "pumpable": true,
+        "cost_per_unit": 1.2,
+        "non_stageable": true
+      }
+    }
+  },
+  {
+    "id": "Oxidizer",
+    "display_name_key": "Resource/DisplayName/Oxidizer",
+    "abbreviation_key": "Resource/Abbreviation/Ox",
+    "kind": {
+      "Basic": {
+        "mass_per_unit_t": 1.0,
+        "volume_per_unit": 1.2,
+        "specific_heat_capacity_per_unit": 1551.0,
+        "flow_mode": "StackPrioritySearch",
+        "pumpable": true,
+        "cost_per_unit": 0.18,
+        "non_stageable": false
+      }
+    }
+  },
+  {
+    "id": "SolidFuel",
+    "display_name_key": "Resource/DisplayName/Solid Fuel",
+    "abbreviation_key": "Resource/Abbreviation/SF",
+    "kind": {
+      "Basic": {
+        "mass_per_unit_t": 1.0,
+        "volume_per_unit": 5.0,
+        "specific_heat_capacity_per_unit": 920.0,
+        "flow_mode": "NoFlow",
+        "pumpable": false,
+        "cost_per_unit": 0.6,
+        "non_stageable": false
+      }
+    }
+  },
+  {
+    "id": "TestRocks",
+    "display_name_key": "Resource/DisplayName/TestRocks",
+    "abbreviation_key": "Resource/Abbreviation/TR",
+    "kind": {
+      "Basic": {
+        "mass_per_unit_t": 0.01,
+        "volume_per_unit": 5.0,
+        "specific_heat_capacity_per_unit": 1000.0,
+        "flow_mode": "AllVessel",
+        "pumpable": true,
+        "cost_per_unit": 0.02,
+        "non_stageable": false
+      }
+    }
+  },
+  {
+    "id": "Uranium",
+    "display_name_key": "Resource/DisplayName/Uranium",
+    "abbreviation_key": "Resource/Abbreviation/Uranium",
+    "kind": {
+      "Basic": {
+        "mass_per_unit_t": 1.0,
+        "volume_per_unit": 5.0,
+        "specific_heat_capacity_per_unit": 1000.0,
+        "flow_mode": "AllVessel",
+        "pumpable": true,
+        "cost_per_unit": 0.02,
+        "non_stageable": false
+      }
+    }
+  },
+  {
+    "id": "Xenon",
+    "display_name_key": "Resource/DisplayName/Xenon Gas",
+    "abbreviation_key": "Resource/Abbreviation/Xe",
+    "kind": {
+      "Basic": {
+        "mass_per_unit_t": 1.0,
+        "volume_per_unit": 0.1,
+        "specific_heat_capacity_per_unit": 120.0,
+        "flow_mode": "StagePriorityFlow",
+        "pumpable": true,
+        "cost_per_unit": 4.0,
+        "non_stageable": false
+      }
+    }
+  },
+  {
+    "id": "XenonEC",
+    "display_name_key": "Resource/DisplayName/Xenon",
+    "abbreviation_key": "Resource/Abbreviation/Xe",
+    "kind": {
+      "Recipe": {
+        "ingredients": [
+          {
+            "resource": "Xenon",
+            "units_per_recipe_unit": 1.0
+          },
+          {
+            "resource": "ElectricCharge",
+            "units_per_recipe_unit": 1.0
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "Methalox",
+    "display_name_key": "Resource/DisplayName/Methalox",
+    "abbreviation_key": "Resource/Abbreviation/MO",
+    "kind": {
+      "Recipe": {
+        "ingredients": [
+          {
+            "resource": "Methane",
+            "units_per_recipe_unit": 0.2
+          },
+          {
+            "resource": "Oxidizer",
+            "units_per_recipe_unit": 0.8
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "Methane",
+    "display_name_key": "Resource/DisplayName/Methane",
+    "abbreviation_key": "Resource/Abbreviation/LF",
+    "kind": {
+      "Basic": {
+        "mass_per_unit_t": 1.0,
+        "volume_per_unit": 0.65,
+        "specific_heat_capacity_per_unit": 2010.0,
+        "flow_mode": "StackPrioritySearch",
+        "pumpable": true,
+        "cost_per_unit": 0.8,
+        "non_stageable": false
+      }
+    }
   }
- },
- {
-  "id": "EVAPropellant",
-  "display_name_key": "Resource/DisplayName/EVAPropellant",
-  "abbreviation_key": "Resource/Abbreviation/EP",
-  "kind": {
-   "Basic": {
-    "mass_per_unit_t": 1.0,
-    "volume_per_unit": 20.0,
-    "specific_heat_capacity_per_unit": 3000.0,
-    "flow_mode": "StagePriorityFlow",
-    "pumpable": true,
-    "cost_per_unit": 1.0,
-    "non_stageable": true
-   }
-  }
- },
- {
-  "id": "ElectricCharge",
-  "display_name_key": "Resource/DisplayName/Electric Charge",
-  "abbreviation_key": "Resource/Abbreviation/EC",
-  "kind": {
-   "Basic": {
-    "mass_per_unit_t": 0.0,
-    "volume_per_unit": 0.0,
-    "specific_heat_capacity_per_unit": 0.0,
-    "flow_mode": "StagePriorityFlow",
-    "pumpable": true,
-    "cost_per_unit": 0.0,
-    "non_stageable": true
-   }
-  }
- },
- {
-  "id": "Hydrogen",
-  "display_name_key": "Resource/DisplayName/Hydrogen",
-  "abbreviation_key": "Resource/Abbreviation/H",
-  "kind": {
-   "Basic": {
-    "mass_per_unit_t": 1.0,
-    "volume_per_unit": 5.0,
-    "specific_heat_capacity_per_unit": 2010.0,
-    "flow_mode": "StackPrioritySearch",
-    "pumpable": true,
-    "cost_per_unit": 0.8,
-    "non_stageable": false
-   }
-  }
- },
- {
-  "id": "IntakeAir",
-  "display_name_key": "Resource/DisplayName/Intake Air",
-  "abbreviation_key": "Resource/Abbreviation/Air",
-  "kind": {
-   "Basic": {
-    "mass_per_unit_t": 1.0,
-    "volume_per_unit": 1.0,
-    "specific_heat_capacity_per_unit": 10.0,
-    "flow_mode": "AllVessel",
-    "pumpable": true,
-    "cost_per_unit": 0.0,
-    "non_stageable": false
-   }
-  }
- },
- {
-  "id": "MonoPropellant",
-  "display_name_key": "Resource/DisplayName/MonoPropellant",
-  "abbreviation_key": "Resource/Abbreviation/MP",
-  "kind": {
-   "Basic": {
-    "mass_per_unit_t": 1.0,
-    "volume_per_unit": 5.0,
-    "specific_heat_capacity_per_unit": 3000.0,
-    "flow_mode": "StagePriorityFlow",
-    "pumpable": true,
-    "cost_per_unit": 1.2,
-    "non_stageable": true
-   }
-  }
- },
- {
-  "id": "Oxidizer",
-  "display_name_key": "Resource/DisplayName/Oxidizer",
-  "abbreviation_key": "Resource/Abbreviation/Ox",
-  "kind": {
-   "Basic": {
-    "mass_per_unit_t": 1.0,
-    "volume_per_unit": 1.2,
-    "specific_heat_capacity_per_unit": 1551.0,
-    "flow_mode": "StackPrioritySearch",
-    "pumpable": true,
-    "cost_per_unit": 0.18,
-    "non_stageable": false
-   }
-  }
- },
- {
-  "id": "SolidFuel",
-  "display_name_key": "Resource/DisplayName/Solid Fuel",
-  "abbreviation_key": "Resource/Abbreviation/SF",
-  "kind": {
-   "Basic": {
-    "mass_per_unit_t": 1.0,
-    "volume_per_unit": 5.0,
-    "specific_heat_capacity_per_unit": 920.0,
-    "flow_mode": "NoFlow",
-    "pumpable": false,
-    "cost_per_unit": 0.6,
-    "non_stageable": false
-   }
-  }
- },
- {
-  "id": "TestRocks",
-  "display_name_key": "Resource/DisplayName/TestRocks",
-  "abbreviation_key": "Resource/Abbreviation/TR",
-  "kind": {
-   "Basic": {
-    "mass_per_unit_t": 0.01,
-    "volume_per_unit": 5.0,
-    "specific_heat_capacity_per_unit": 1000.0,
-    "flow_mode": "AllVessel",
-    "pumpable": true,
-    "cost_per_unit": 0.02,
-    "non_stageable": false
-   }
-  }
- },
- {
-  "id": "Uranium",
-  "display_name_key": "Resource/DisplayName/Uranium",
-  "abbreviation_key": "Resource/Abbreviation/Uranium",
-  "kind": {
-   "Basic": {
-    "mass_per_unit_t": 1.0,
-    "volume_per_unit": 5.0,
-    "specific_heat_capacity_per_unit": 1000.0,
-    "flow_mode": "AllVessel",
-    "pumpable": true,
-    "cost_per_unit": 0.02,
-    "non_stageable": false
-   }
-  }
- },
- {
-  "id": "Xenon",
-  "display_name_key": "Resource/DisplayName/Xenon Gas",
-  "abbreviation_key": "Resource/Abbreviation/Xe",
-  "kind": {
-   "Basic": {
-    "mass_per_unit_t": 1.0,
-    "volume_per_unit": 0.1,
-    "specific_heat_capacity_per_unit": 120.0,
-    "flow_mode": "StagePriorityFlow",
-    "pumpable": true,
-    "cost_per_unit": 4.0,
-    "non_stageable": false
-   }
-  }
- },
- {
-  "id": "XenonEC",
-  "display_name_key": "Resource/DisplayName/Xenon",
-  "abbreviation_key": "Resource/Abbreviation/Xe",
-  "kind": {
-   "Recipe": {
-    "ingredients": [
-     {
-      "resource": "Xenon",
-      "units_per_recipe_unit": 1.0
-     },
-     {
-      "resource": "ElectricCharge",
-      "units_per_recipe_unit": 1.0
-     }
-    ]
-   }
-  }
- },
- {
-  "id": "Methalox",
-  "display_name_key": "Resource/DisplayName/Methalox",
-  "abbreviation_key": "Resource/Abbreviation/MO",
-  "kind": {
-   "Recipe": {
-    "ingredients": [
-     {
-      "resource": "Methane",
-      "units_per_recipe_unit": 0.2
-     },
-     {
-      "resource": "Oxidizer",
-      "units_per_recipe_unit": 0.8
-     }
-    ]
-   }
-  }
- },
- {
-  "id": "Methane",
-  "display_name_key": "Resource/DisplayName/Methane",
-  "abbreviation_key": "Resource/Abbreviation/LF",
-  "kind": {
-   "Basic": {
-    "mass_per_unit_t": 1.0,
-    "volume_per_unit": 0.65,
-    "specific_heat_capacity_per_unit": 2010.0,
-    "flow_mode": "StackPrioritySearch",
-    "pumpable": true,
-    "cost_per_unit": 0.8,
-    "non_stageable": false
-   }
-  }
- }
 ]

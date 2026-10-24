@@ -18,6 +18,10 @@ struct Args {
     /// Where to write the converted data.
     #[arg(long, default_value = "assets/ksp2/converted")]
     out: PathBuf,
+    /// Where to write the slim, committed server assets (bodies, parts without drag cubes/raw modules,
+    /// resources, stock craft). Skipped when empty.
+    #[arg(long, default_value = "assets/own")]
+    own_out: PathBuf,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -53,6 +57,39 @@ fn main() -> anyhow::Result<()> {
         }
         std::fs::write(
             args.out.join("stock-craft.json"),
+            serde_json::to_string(&crafts)?,
+        )?;
+    }
+    if !args.own_out.as_os_str().is_empty() {
+        std::fs::create_dir_all(&args.own_out)?;
+        let bodies: Vec<_> = game
+            .bodies
+            .iter()
+            .filter(|b| !b.id.starts_with("Asteroid"))
+            .collect();
+        std::fs::write(
+            args.own_out.join("kerbol-system.json"),
+            serde_json::to_string_pretty(&bodies)?,
+        )?;
+        let slim: Vec<ose_data::PartDef> = game
+            .parts
+            .iter()
+            .map(|p| ose_data::PartDef {
+                drag_cubes: Vec::new(),
+                raw_modules: Default::default(),
+                ..p.clone()
+            })
+            .collect();
+        std::fs::write(
+            args.own_out.join("parts-catalog.json"),
+            serde_json::to_string(&slim)?,
+        )?;
+        std::fs::write(
+            args.own_out.join("resources.json"),
+            serde_json::to_string_pretty(&game.resources)?,
+        )?;
+        std::fs::write(
+            args.own_out.join("stock-craft.json"),
             serde_json::to_string(&crafts)?,
         )?;
     }

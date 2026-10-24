@@ -293,7 +293,7 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
         allow_rotate: b(ar, "allowRotate"),
         allow_root: b(ar, "allowRoot"),
     };
-    let attach_nodes = d["attachNodes"]
+    let attach_nodes: Vec<AttachNode> = d["attachNodes"]
         .as_array()
         .map(|a| {
             a.iter()
@@ -415,6 +415,7 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
             "serializedPartModules",
         ],
     );
+    let bounds = part_bounds(&drag_cubes, &attach_nodes);
     PartDef {
         id: s(d, "partName"),
         title_key: s(d, "Title"),
@@ -435,10 +436,49 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
         attach_nodes,
         resource_containers,
         engines,
+        bounds,
         drag_cubes,
         module_names,
         raw_modules,
     }
+}
+
+/// First drag cube's size and centre, else the attach-node bounding box padded to at least 0.1 m, else None.
+fn part_bounds(cubes: &[DragCube], nodes: &[AttachNode]) -> Option<ose_data::PartBounds> {
+    if let Some(c) = cubes.first() {
+        if c.size.length() > 0.0 {
+            return Some(ose_data::PartBounds {
+                size_m: c.size,
+                center_m: c.center,
+            });
+        }
+    }
+    if nodes.is_empty() {
+        return None;
+    }
+    let mut lo = DVec3::new(f64::MAX, f64::MAX, f64::MAX);
+    let mut hi = DVec3::new(f64::MIN, f64::MIN, f64::MIN);
+    for n in nodes {
+        lo = DVec3::new(
+            lo.x.min(n.position.x),
+            lo.y.min(n.position.y),
+            lo.z.min(n.position.z),
+        );
+        hi = DVec3::new(
+            hi.x.max(n.position.x),
+            hi.y.max(n.position.y),
+            hi.z.max(n.position.z),
+        );
+    }
+    let size = DVec3::new(
+        (hi.x - lo.x).max(0.1),
+        (hi.y - lo.y).max(0.1),
+        (hi.z - lo.z).max(0.1),
+    );
+    Some(ose_data::PartBounds {
+        size_m: size,
+        center_m: (lo + hi) * 0.5,
+    })
 }
 
 /// The original files were written for Newtonsoft and sometimes carry trailing commas; fall back to json5.

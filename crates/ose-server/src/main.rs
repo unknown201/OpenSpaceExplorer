@@ -114,6 +114,85 @@ struct Args {
     guest_sweep_s: f64,
 }
 
+/// What the client needs to draw and place a part (served at `/parts.json`).
+#[derive(serde::Serialize)]
+struct PartInfo {
+    id: String,
+    title: String,
+    category: String,
+    size_category: String,
+    mass_t: f64,
+    crew_capacity: u32,
+    stage_type: String,
+    size_m: ose_math::DVec3,
+    center_m: ose_math::DVec3,
+    attach_nodes: Vec<AttachNodeInfo>,
+    has_engine: bool,
+    is_decoupler: bool,
+}
+
+#[derive(serde::Serialize)]
+struct AttachNodeInfo {
+    id: String,
+    node_type: String,
+    position: ose_math::DVec3,
+    orientation: ose_math::DVec3,
+    size: i32,
+}
+
+fn part_infos(parts: &[ose_data::PartDef]) -> Vec<PartInfo> {
+    parts
+        .iter()
+        .map(|p| {
+            let (size_m, center_m) = match p.bounds {
+                Some(b) => (b.size_m, b.center_m),
+                None => (ose_math::DVec3::new(1.0, 1.0, 1.0), ose_math::DVec3::ZERO),
+            };
+            PartInfo {
+                id: p.id.clone(),
+                title: if p.title_key.is_empty() {
+                    p.id.clone()
+                } else {
+                    p.title_key.clone()
+                },
+                category: p.category.clone(),
+                size_category: p.size_category.clone(),
+                mass_t: p.mass_t,
+                crew_capacity: p.crew_capacity,
+                stage_type: p.stage_type.clone(),
+                size_m,
+                center_m,
+                attach_nodes: p
+                    .attach_nodes
+                    .iter()
+                    .map(|n| AttachNodeInfo {
+                        id: n.id.clone(),
+                        node_type: n.node_type.clone(),
+                        position: n.position,
+                        orientation: n.orientation,
+                        size: n.size,
+                    })
+                    .collect(),
+                has_engine: !p.engines.is_empty(),
+                is_decoupler: matches!(
+                    p.stage_type.as_str(),
+                    "DecouplerHorizontal" | "DecouplerVertical"
+                ) || p.category == "Coupling",
+            }
+        })
+        .collect()
+}
+
+async fn json_route(body: Arc<String>) -> impl IntoResponse {
+    (
+        [
+            (axum::http::header::CONTENT_TYPE, "application/json"),
+            (axum::http::header::CACHE_CONTROL, "public, max-age=3600"),
+        ],
+        body.as_str().to_owned(),
+    )
+}
+
 struct Shared {
     universe: Mutex<Universe>,
     catalog: Vec<BodyInfo>,
@@ -299,6 +378,20 @@ async fn main() -> anyhow::Result<()> {
             }),
         )
         .route(WS_PATH, get(ws_upgrade))
+        .route(
+            "/parts.json",
+            get({
+                let body = Arc::new(serde_json::to_string(&part_infos(&shared.parts))?);
+                move || json_route(body.clone())
+            }),
+        )
+        .route(
+            "/resources.json",
+            get({
+                let body = Arc::new(serde_json::to_string(&shared.resources)?);
+                move || json_route(body.clone())
+            }),
+        )
         .with_state(shared);
     if let Some(dir) = &args.static_dir {
         let index = ServeFile::new(dir.join("index.html"));
