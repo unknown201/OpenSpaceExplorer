@@ -77,6 +77,11 @@ impl Audio {
     pub fn set_manifest(&mut self, sounds: HashMap<String, Sound>) {
         self.sounds = sounds;
         self.load_buffers();
+        if self.current.is_none() && self.unlocked() {
+            if let Some(k) = self.want_music.clone() {
+                self.start_track(&k);
+            }
+        }
     }
 
     pub fn has(&self, key: &str) -> bool {
@@ -167,7 +172,7 @@ impl Audio {
 
     /// The scene's music; a change crossfades from the playing track.
     pub fn music(&mut self, key: Option<&str>) {
-        let key = key.filter(|k| self.sounds.contains_key(*k));
+        // The key is kept even when the sound list lacks it (no game assets): the hook still names the scene.
         if self.want_music.as_deref() == key {
             return;
         }

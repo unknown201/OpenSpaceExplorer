@@ -478,7 +478,7 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
   );
 
   // 13. Flight: the launch put the craft on the pad and opened the flight view; full throttle and stage,
-  // and the craft leaves the ground (the server's powered flight model, protocol v8).
+  // and the craft leaves the ground under power: more than 20 m up and Flying, not a bounce on the pad.
   results.push(
     await timed("flight", async () => {
       if (!pageUp) return notLoaded;
@@ -511,9 +511,9 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
         }
         after = await altOf();
         situation = (await hud.first().getAttribute("data-ose-situation")) ?? "";
-        if (after > before + 5) break;
+        if (after > before + 20 && situation === "Flying") break;
       }
-      if (!(after > before + 5)) {
+      if (!(after > before + 20 && situation === "Flying")) {
         const note = ((await page.locator("#fh-note").textContent().catch(() => "")) ?? "").trim();
         return failed(`the craft did not climb after full throttle and stage (${before.toFixed(0)} m -> ${after.toFixed(0)} m, ${situation}${note ? `; ${note}` : ""}) [${await page.locator("#fh-stage").textContent()}, ${await page.locator("#fh-fuel").textContent()}, ${await page.locator("#fh-twr").textContent()}]`);
       }

@@ -146,6 +146,9 @@ struct App {
     /// staging and decoupling sounds once.
     audio: audio::Audio,
     last_stage: Option<(u64, u32, usize)>,
+    /// Timed experiments running on the flown vessel and when the server reported them (ms), for the countdown.
+    running: Vec<ose_net::RunningExperiment>,
+    running_since_ms: f64,
     /// Controls as last sent.
     throttle: f64,
     attitude: ose_net::AttitudeMode,
@@ -362,6 +365,8 @@ pub fn start() -> Result<(), JsValue> {
         mc_selected: None,
         audio: audio::Audio::new(stored("ose.sound").as_deref() == Some("off")),
         last_stage: None,
+        running: Vec::new(),
+        running_since_ms: 0.0,
         throttle: 0.0,
         attitude: ose_net::AttitudeMode::Up,
         gpu_canvas: get("gpu")?.dyn_into()?,
@@ -513,6 +518,22 @@ fn install_audio(app: &Shared) -> Result<(), JsValue> {
     }
     app.borrow().show_sound_toggle();
     Ok(())
+}
+
+/// An experiment id as a readable name: "TemperatureScan" reads "Temperature Scan".
+fn experiment_name(id: &str) -> String {
+    let mut out = String::new();
+    for (i, c) in id.trim_start_matches("Experiment_").chars().enumerate() {
+        if c == '_' {
+            out.push(' ');
+        } else {
+            if i > 0 && c.is_uppercase() && !out.ends_with(' ') {
+                out.push(' ');
+            }
+            out.push(c);
+        }
+    }
+    out
 }
 
 fn load_localization(app: Shared) {
@@ -1920,8 +1941,11 @@ impl App {
                 skipped,
                 carried,
                 reason,
+                running,
                 ..
             } => {
+                self.running = running;
+                self.running_since_ms = now_ms();
                 let msg = match reason {
                     Some(r) => r,
                     None => format!(
@@ -1937,6 +1961,32 @@ impl App {
                     ),
                 };
                 set_text(&self.doc, "fh-note", &msg);
+            }
+            ServerMessage::ExperimentFinished {
+                part,
+                experiment,
+                reports,
+                interrupted,
+                ..
+            } => {
+                self.running
+                    .retain(|r| !(r.part == part && r.experiment == experiment));
+                let name = experiment_name(&experiment);
+                let msg = if interrupted {
+                    format!("{name} stopped: the vessel left the situation it started in")
+                } else {
+                    format!(
+                        "{name} finished: {} new report{}",
+                        reports.len(),
+                        if reports.len() == 1 { "" } else { "s" }
+                    )
+                };
+                set_text(&self.doc, "fh-note", &msg);
+                self.audio.play(if interrupted {
+                    "ui_esc_open"
+                } else {
+                    "rd_research"
+                });
             }
             ServerMessage::ScienceSubmitted {
                 reports,
@@ -3053,6 +3103,24 @@ impl App {
             &format!("{:+.1} m/s", f.vertical_speed_mps),
         );
         set_text(&self.doc, "fh-situation", &format!("{:?}", f.situation));
+        // Timed experiments counting down from the server's last report.
+        let elapsed = (now_ms() - self.running_since_ms) / 1000.0;
+        let running: Vec<String> = self
+            .running
+            .iter()
+            .map(|r| {
+                format!(
+                    "{} {:.0} s",
+                    experiment_name(&r.experiment),
+                    (r.remaining_s - elapsed).max(0.0).ceil()
+                )
+            })
+            .collect();
+        if let Some(el) = self.doc.get_element_by_id("fh-running") {
+            el.set_text_content(Some(&running.join(" \u{b7} ")));
+            el.set_attribute("data-ose-running", &self.running.len().to_string())
+                .ok();
+        }
         set_text(
             &self.doc,
             "fh-stage",
