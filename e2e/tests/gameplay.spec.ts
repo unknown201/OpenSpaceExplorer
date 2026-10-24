@@ -25,6 +25,7 @@ const FRONTIER: [StepName, Expect][] = [
   ["player_vessel", "Pass"],
   ["breadcrumbs", "Pass"],
   ["maneuver_node", "Pass"],
+  ["vab", "Pass"],
   ["launchpad", "Pass"],
 ];
 

@@ -14,6 +14,7 @@
 pub mod kerbin_time;
 pub mod scene;
 pub mod thumb;
+pub mod vab;
 
 use scene::{Camera, Scene, TimeSync};
 use std::cell::RefCell;
@@ -55,6 +56,16 @@ struct App {
     craft_docs: std::collections::HashMap<u64, ose_data::craft::Craft>,
     /// Part geometry from GET /parts.json, by part id: (size_m, center_m). Empty until it loads.
     part_sizes: std::collections::HashMap<String, (ose_math::DVec3, ose_math::DVec3)>,
+    /// The full part catalog from /parts.json for the editor.
+    catalog: vab::Catalog,
+    editor: vab::Editor,
+    vab_category: String,
+    /// Boxes of the last editor draw in canvas pixels, for click selection.
+    vab_boxes: Vec<(usize, f64, f64, f64, f64)>,
+    /// Library id of the craft being edited (set by Edit on the launch pad or after a save).
+    vab_craft_id: Option<u64>,
+    /// Launch as soon as the next `CraftSaved` arrives.
+    launch_after_save: bool,
     difficulty_defs: Vec<DifficultyDefinition>,
     difficulty_presets: Vec<DifficultyPreset>,
     agency_sent: bool,
@@ -217,6 +228,12 @@ pub fn start() -> Result<(), JsValue> {
         crafts: Vec::new(),
         craft_docs: std::collections::HashMap::new(),
         part_sizes: std::collections::HashMap::new(),
+        catalog: vab::Catalog::new(),
+        editor: vab::Editor::default(),
+        vab_category: "Pods".into(),
+        vab_boxes: Vec::new(),
+        vab_craft_id: None,
+        launch_after_save: false,
         difficulty_defs: Vec::new(),
         difficulty_presets: Vec::new(),
         agency_sent: false,
@@ -247,17 +264,8 @@ pub fn start() -> Result<(), JsValue> {
     Ok(())
 }
 
-/// One entry of GET /parts.json (the server's part geometry route); only what thumbnails need is read.
-#[derive(serde::Deserialize)]
-struct PartInfoJson {
-    id: String,
-    #[serde(default)]
-    size_m: Option<ose_math::DVec3>,
-    #[serde(default)]
-    center_m: Option<ose_math::DVec3>,
-}
-
-/// Fetch part sizes in the background; a missing route leaves the default cubes in place.
+/// Fetch the part catalog (GET /parts.json) in the background: sizes for thumbnails, everything for the
+/// editor. A missing route leaves the default cubes in place and the VAB picker empty.
 fn load_part_sizes(app: Shared) {
     wasm_bindgen_futures::spawn_local(async move {
         let Some(window) = web_sys::window() else {
@@ -291,20 +299,24 @@ fn load_part_sizes(app: Shared) {
         let Some(text) = text.as_string() else {
             return;
         };
-        match serde_json::from_str::<Vec<PartInfoJson>>(&text) {
+        match serde_json::from_str::<Vec<vab::PartSpec>>(&text) {
             Ok(parts) => {
                 let mut a = app.borrow_mut();
                 for p in parts {
                     if let Some(size) = p.size_m {
-                        a.part_sizes
-                            .insert(p.id, (size, p.center_m.unwrap_or(ose_math::DVec3::ZERO)));
+                        a.part_sizes.insert(
+                            p.id.clone(),
+                            (size, p.center_m.unwrap_or(ose_math::DVec3::ZERO)),
+                        );
                     }
+                    a.catalog.insert(p.id.clone(), p);
                 }
                 log(&format!(
-                    "part geometry loaded for {} parts",
-                    a.part_sizes.len()
+                    "part catalog loaded for {} parts",
+                    a.catalog.len()
                 ));
                 a.draw_thumbnails();
+                a.render_vab_picker();
             }
             Err(e) => log(&format!("parts.json: {e}")),
         }
@@ -408,6 +420,78 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         Box::new(|a| a.borrow_mut().open_launchpad()),
     )?;
     wire("launchpad-back", Box::new(|a| a.borrow().open_ksc()))?;
+    wire("ksc-vab", Box::new(|a| a.borrow_mut().open_vab(None)))?;
+    wire("vab-back", Box::new(|a| a.borrow().open_ksc()))?;
+    wire("vab-remove", Box::new(|a| a.borrow_mut().vab_remove()))?;
+    wire("vab-clear", Box::new(|a| a.borrow_mut().vab_clear()))?;
+    wire(
+        "vab-stage-up",
+        Box::new(|a| a.borrow_mut().vab_shift_stage(-1)),
+    )?;
+    wire(
+        "vab-stage-down",
+        Box::new(|a| a.borrow_mut().vab_shift_stage(1)),
+    )?;
+    wire("vab-save", Box::new(|a| a.borrow_mut().vab_save(false)))?;
+    wire("vab-launch", Box::new(|a| a.borrow_mut().vab_save(true)))?;
+    if let Some(cats) = doc.get_element_by_id("vab-cats") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let cat = ev
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .and_then(|e| e.get_attribute("data-ose-category"));
+            if let Some(cat) = cat {
+                let mut app = a.borrow_mut();
+                app.vab_category = cat;
+                app.render_vab_picker();
+            }
+        });
+        cats.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
+    if let Some(search) = doc.get_element_by_id("vab-search") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut()>::new(move || a.borrow().render_vab_picker());
+        search.add_event_listener_with_callback("input", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
+    if let Some(parts) = doc.get_element_by_id("vab-parts") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let mut t = ev.target().and_then(|t| t.dyn_into::<Element>().ok());
+            // Clicks land on the <small> inside the row as often as on the row itself.
+            while let Some(el) = t.clone() {
+                if let Some(id) = el.get_attribute("data-ose-part") {
+                    a.borrow_mut().vab_add(&id);
+                    break;
+                }
+                t = el.parent_element();
+            }
+        });
+        parts.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
+    if let Some(canvas) = doc.get_element_by_id("vab-canvas") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            a.borrow_mut()
+                .vab_click(ev.offset_x() as f64, ev.offset_y() as f64);
+        });
+        canvas.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
+    if let Some(name) = doc.get_element_by_id("vab-name") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut()>::new(move || {
+            let mut app = a.borrow_mut();
+            if let Some(n) = input_string(&app.doc, "vab-name") {
+                app.editor.craft.name = n;
+            }
+        });
+        name.add_event_listener_with_callback("input", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
     if let Some(cb_el) = doc.get_element_by_id("launch-stock") {
         let a = app.clone();
         let cb = Closure::<dyn FnMut()>::new(move || a.borrow().render_crafts());
@@ -424,6 +508,15 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                 .and_then(|s| s.parse::<u64>().ok());
             if let Some(id) = id {
                 a.borrow_mut().launch_craft(id);
+                return;
+            }
+            let edit = ev
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .and_then(|e| e.get_attribute("data-ose-craft-edit"))
+                .and_then(|s| s.parse::<u64>().ok());
+            if let Some(id) = edit {
+                a.borrow_mut().open_vab(Some(id));
             }
         });
         list.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
@@ -825,8 +918,49 @@ impl App {
             } => {
                 self.craft_docs.insert(id, craft);
                 self.draw_thumbnail(id);
+                if self.vab_craft_id == Some(id) && self.editor.is_empty() {
+                    self.open_vab(Some(id));
+                }
             }
             ServerMessage::CraftDocument { craft: None, .. } => {}
+            ServerMessage::CraftSaved {
+                id,
+                summary,
+                reason,
+            } => match (id, summary) {
+                (Some(id), Some(s)) => {
+                    self.vab_craft_id = Some(id);
+                    self.craft_docs.remove(&id);
+                    set_text(
+                            &self.doc,
+                            "vab-report",
+                            &format!(
+                                "Saved as #{id}: {} parts, {} stages, {:.2} t dry, {:.2} t wet, {:.0} m/s vacuum delta-v",
+                                s.parts, s.stages, s.dry_mass_t, s.wet_mass_t, s.delta_v_vacuum_mps
+                            ),
+                        );
+                    if self.launch_after_save {
+                        self.launch_after_save = false;
+                        let altitude_m =
+                            input_value(&self.doc, "launch-altitude").unwrap_or(100.0) * 1000.0;
+                        set_text(&self.doc, "menu-note", "launching...");
+                        if let Some(ws) = &self.ws {
+                            send(ws, &ClientMessage::LaunchSavedCraft { id, altitude_m });
+                        }
+                    }
+                }
+                _ => {
+                    self.launch_after_save = false;
+                    set_text(
+                        &self.doc,
+                        "vab-report",
+                        &format!(
+                            "Not saved: {}",
+                            reason.unwrap_or_else(|| "the server gave no reason".into())
+                        ),
+                    );
+                }
+            },
             ServerMessage::CraftLaunched {
                 vessel,
                 name,
@@ -1100,7 +1234,7 @@ impl App {
 
     /// Show one of the menu screens: "name", "sessions" or "paused".
     fn menu_screen(&self, which: &str) {
-        for id in ["name", "sessions", "ksc", "launchpad", "paused"] {
+        for id in ["name", "sessions", "ksc", "launchpad", "vab", "paused"] {
             if let Some(el) = self.doc.get_element_by_id(&format!("screen-{id}")) {
                 if id == which {
                     el.class_list().add_1("open").ok();
@@ -1110,6 +1244,11 @@ impl App {
             }
         }
         if let Some(card) = self.doc.get_element_by_id("menu-card") {
+            if which == "vab" {
+                card.class_list().add_1("vab").ok();
+            } else {
+                card.class_list().remove_1("vab").ok();
+            }
             if matches!(which, "sessions" | "ksc" | "launchpad") {
                 card.class_list().add_1("wide").ok();
             } else {
@@ -1135,6 +1274,330 @@ impl App {
         }
         set_text(&self.doc, "menu-note", "");
         self.menu_screen("ksc");
+    }
+
+    // ---- Vehicle Assembly Building
+
+    /// Open the editor, empty or on a library craft (its document is fetched if not cached).
+    fn open_vab(&mut self, craft_id: Option<u64>) {
+        if let Some(m) = self.doc.get_element_by_id("menu") {
+            m.class_list().remove_1("hidden").ok();
+        }
+        self.menu_screen("vab");
+        self.launch_after_save = false;
+        match craft_id {
+            Some(id) => {
+                self.vab_craft_id = Some(id);
+                if let Some(c) = self.craft_docs.get(&id) {
+                    self.editor = vab::Editor::from_craft(c.clone());
+                    let cat = std::mem::take(&mut self.catalog);
+                    self.editor.rebuild_stages(&cat);
+                    self.catalog = cat;
+                } else if let Some(ws) = &self.ws {
+                    send(ws, &ClientMessage::GetCraft { id });
+                }
+            }
+            None => {
+                if self.editor.is_empty() {
+                    self.vab_craft_id = None;
+                }
+            }
+        }
+        set_text(&self.doc, "vab-report", "");
+        self.render_vab_picker();
+        self.render_vab();
+    }
+
+    fn render_vab_picker(&self) {
+        let Some(cats) = self.doc.get_element_by_id("vab-cats") else {
+            return;
+        };
+        let mut html = String::new();
+        for c in vab::categories(&self.catalog) {
+            let on = if c == self.vab_category { " on" } else { "" };
+            html.push_str(&format!(
+                "<button class=\"{on}\" data-ose-category=\"{c}\">{c}</button>",
+                on = on.trim(),
+                c = esc(&c)
+            ));
+        }
+        cats.set_inner_html(&html);
+        let Some(list) = self.doc.get_element_by_id("vab-parts") else {
+            return;
+        };
+        let query = input_string(&self.doc, "vab-search")
+            .unwrap_or_default()
+            .to_lowercase();
+        let mut parts: Vec<&vab::PartSpec> = self
+            .catalog
+            .values()
+            .filter(|p| {
+                if query.is_empty() {
+                    p.category == self.vab_category
+                } else {
+                    p.display_title().to_lowercase().contains(&query)
+                        || p.id.to_lowercase().contains(&query)
+                }
+            })
+            .collect();
+        parts.sort_by(|a, b| {
+            (
+                &a.size_category,
+                a.mass_t
+                    .partial_cmp(&b.mass_t)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
+                .cmp(&(&b.size_category, std::cmp::Ordering::Equal))
+                .then_with(|| a.display_title().cmp(b.display_title()))
+        });
+        let mut html = String::new();
+        for p in parts {
+            html.push_str(&format!(
+                "<li data-ose=\"vab-part\" data-ose-part=\"{id}\">{title}<small>{cat} \u{b7} size {size} \u{b7} {mass:.2} t{extra}</small></li>",
+                id = esc(&p.id),
+                title = esc(p.display_title()),
+                cat = esc(&p.category),
+                size = esc(&p.size_category),
+                mass = p.mass_t,
+                extra = if p.has_engine {
+                    " \u{b7} engine"
+                } else if p.is_decoupler {
+                    " \u{b7} decoupler"
+                } else if p.crew_capacity > 0 {
+                    " \u{b7} crew"
+                } else {
+                    ""
+                },
+            ));
+        }
+        if html.is_empty() {
+            html = if self.catalog.is_empty() {
+                "<li>part catalog not loaded (server has no /parts.json)</li>".into()
+            } else {
+                "<li>no parts match</li>".into()
+            };
+        }
+        list.set_inner_html(&html);
+    }
+
+    fn vab_add(&mut self, part_id: &str) {
+        let cat = std::mem::take(&mut self.catalog);
+        let result = match cat.get(part_id) {
+            Some(spec) => self.editor.add_part(spec, &cat).map(|_| ()),
+            None => Err(format!("unknown part {part_id}")),
+        };
+        self.catalog = cat;
+        if let Err(e) = result {
+            set_text(&self.doc, "vab-report", &e);
+        }
+        self.render_vab();
+    }
+
+    fn vab_remove(&mut self) {
+        let cat = std::mem::take(&mut self.catalog);
+        self.editor.remove_selected(&cat);
+        self.catalog = cat;
+        self.render_vab();
+    }
+
+    fn vab_clear(&mut self) {
+        let name = self.editor.craft.name.clone();
+        self.editor = vab::Editor::new(&name);
+        self.vab_craft_id = None;
+        set_text(&self.doc, "vab-report", "");
+        self.render_vab();
+    }
+
+    fn vab_shift_stage(&mut self, delta: i32) {
+        let cat = std::mem::take(&mut self.catalog);
+        self.editor.shift_stage(delta, &cat);
+        self.catalog = cat;
+        self.render_vab();
+    }
+
+    fn vab_save(&mut self, then_launch: bool) {
+        if self.editor.is_empty() {
+            set_text(
+                &self.doc,
+                "vab-report",
+                "Nothing to save: add a part first.",
+            );
+            return;
+        }
+        if !self.editor.craft.is_tree() {
+            set_text(&self.doc, "vab-report", "The craft is not a single tree.");
+            return;
+        }
+        self.launch_after_save = then_launch;
+        set_text(&self.doc, "vab-report", "saving...");
+        if let Some(ws) = &self.ws {
+            send(
+                ws,
+                &ClientMessage::SaveCraft {
+                    craft: self.editor.craft.clone(),
+                },
+            );
+        }
+    }
+
+    /// Select the part under a canvas click (topmost box wins).
+    fn vab_click(&mut self, x: f64, y: f64) {
+        let Some(canvas) = self
+            .doc
+            .get_element_by_id("vab-canvas")
+            .and_then(|e| e.dyn_into::<HtmlCanvasElement>().ok())
+        else {
+            return;
+        };
+        let rect = canvas.get_bounding_client_rect();
+        let sx = canvas.width() as f64 / rect.width().max(1.0);
+        let sy = canvas.height() as f64 / rect.height().max(1.0);
+        let (px, py) = (x * sx, y * sy);
+        let hit = self
+            .vab_boxes
+            .iter()
+            .rev()
+            .find(|(_, x0, y0, x1, y1)| px >= *x0 && px <= *x1 && py >= *y0 && py <= *y1)
+            .map(|(i, ..)| *i);
+        if let Some(i) = hit {
+            self.editor.selected = Some(i);
+            self.render_vab();
+        }
+    }
+
+    /// Draw the craft side view, the selection, and refresh the side panel.
+    fn render_vab(&mut self) {
+        set_text(&self.doc, "vab-selected", "");
+        let (parts_n, dry) = (
+            self.editor.craft.parts.len(),
+            self.editor.dry_mass_t(&self.catalog),
+        );
+        if let Some(el) = self.doc.get_element_by_id("vab-stats") {
+            el.set_inner_html(&format!(
+                "<b>{parts_n}</b> parts \u{b7} <b>{:.2} t</b> dry (catalog) \u{b7} <b>{}</b> stages",
+                dry.max(0.0),
+                self.editor.craft.stages.len()
+            ));
+        }
+        if let Some(sel) = self
+            .editor
+            .selected
+            .and_then(|i| self.editor.craft.parts.get(i))
+        {
+            let title = self
+                .catalog
+                .get(&sel.part_id)
+                .map(|s| s.display_title().to_string())
+                .unwrap_or_else(|| sel.part_id.clone());
+            let stage = if sel.stage_index > 0 {
+                format!(" \u{b7} stage {}", sel.stage_index)
+            } else {
+                String::new()
+            };
+            set_text(
+                &self.doc,
+                "vab-selected",
+                &format!("selected: {title}{stage}"),
+            );
+        }
+        if let Some(list) = self.doc.get_element_by_id("vab-stages") {
+            let mut html = String::new();
+            for (n, stage) in self.editor.craft.stages.iter().enumerate() {
+                let names: Vec<String> = stage
+                    .iter()
+                    .filter_map(|&i| self.editor.craft.parts.get(i))
+                    .map(|p| {
+                        self.catalog
+                            .get(&p.part_id)
+                            .map(|s| esc(s.display_title()))
+                            .unwrap_or_else(|| esc(&p.part_id))
+                    })
+                    .collect();
+                html.push_str(&format!("<li>stage {}: {}</li>", n + 1, names.join(", ")));
+            }
+            list.set_inner_html(&html);
+        }
+        if let Some(name) = self
+            .doc
+            .get_element_by_id("vab-name")
+            .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+        {
+            if name.value() != self.editor.craft.name {
+                name.set_value(&self.editor.craft.name);
+            }
+        }
+        let Some(canvas) = self
+            .doc
+            .get_element_by_id("vab-canvas")
+            .and_then(|e| e.dyn_into::<HtmlCanvasElement>().ok())
+        else {
+            return;
+        };
+        let Ok(Some(ctx)) = canvas.get_context("2d") else {
+            return;
+        };
+        let Ok(ctx) = ctx.dyn_into::<CanvasRenderingContext2d>() else {
+            return;
+        };
+        let (w, h) = (canvas.width() as f64, canvas.height() as f64);
+        ctx.clear_rect(0.0, 0.0, w, h);
+        self.vab_boxes.clear();
+        let sizes = &self.part_sizes;
+        let size_of = |pid: &str| sizes.get(pid).copied();
+        let Some((boxes, bounds)) = thumb::layout(&self.editor.craft, &size_of) else {
+            ctx.set_fill_style_str("#6f7f9c");
+            ctx.set_font("14px system-ui");
+            ctx.fill_text("Pick a part on the left to start the craft.", 20.0, 32.0)
+                .ok();
+            return;
+        };
+        // Keep a sane scale: never larger than 40 px per metre, so small crafts do not fill the canvas.
+        let to_px = {
+            let fitted = thumb::fit(&bounds, w, h, 24.0);
+            let scale_fit =
+                ((w - 48.0) / bounds.width().max(1e-6)).min((h - 48.0) / bounds.height().max(1e-6));
+            if scale_fit > 40.0 {
+                let cx = (bounds.min.x + bounds.max.x) * 0.5;
+                let cy = (bounds.min.y + bounds.max.y) * 0.5;
+                Box::new(move |x: f64, y: f64| {
+                    (w * 0.5 + (x - cx) * 40.0, h * 0.5 - (y - cy) * 40.0)
+                }) as Box<dyn Fn(f64, f64) -> (f64, f64)>
+            } else {
+                Box::new(fitted) as Box<dyn Fn(f64, f64) -> (f64, f64)>
+            }
+        };
+        let stages = self.editor.craft.stages.len().max(1) as f64;
+        let mut px_boxes = Vec::with_capacity(boxes.len());
+        for b in &boxes {
+            let (x0, y0) = to_px(b.min.x, b.max.y);
+            let (x1, y1) = to_px(b.max.x, b.min.y);
+            let t = if b.stage <= 0 {
+                1.0
+            } else {
+                1.0 - 0.5 * (b.stage as f64 / stages).min(1.0)
+            };
+            let c = (120.0 + 100.0 * t) as u32;
+            let selected = self.editor.selected == Some(b.part);
+            ctx.set_fill_style_str(&if selected {
+                "#9ef0c0".to_string()
+            } else {
+                format!(
+                    "rgb({c},{},{})",
+                    (c as f64 * 0.95) as u32,
+                    (c as f64 * 1.05).min(255.0) as u32
+                )
+            });
+            ctx.set_stroke_style_str(if selected { "#ffffff" } else { "#2c3d63" });
+            ctx.set_line_width(if selected { 2.0 } else { 1.0 });
+            let (bw, bh) = ((x1 - x0).max(2.0), (y1 - y0).max(2.0));
+            ctx.fill_rect(x0, y0, bw, bh);
+            ctx.stroke_rect(x0, y0, bw, bh);
+            px_boxes.push((b.part, x0, y0, x0 + bw, y0 + bh));
+        }
+        self.vab_boxes = px_boxes;
+        canvas
+            .set_attribute("data-ose-vab-parts", &boxes.len().to_string())
+            .ok();
     }
 
     fn open_launchpad(&mut self) {
@@ -1167,7 +1630,8 @@ impl App {
             html.push_str(&format!(
                 "<li data-ose=\"craft\" data-ose-id=\"{id}\"><canvas class=\"thumb\" width=\"128\" height=\"168\" data-ose-thumb=\"{id}\"></canvas><div><div class=\"name\">{name}{badge}</div>\
                  <div class=\"meta\">{parts} parts \u{b7} {stages} {st} \u{b7} {wet:.1} t \u{b7} {dv:.0} m/s vacuum</div>\
-                 {desc}</div><button data-ose=\"craft-launch\" data-ose-craft-launch=\"{id}\">Launch</button></li>",
+                 {desc}</div><span><button class=\"secondary\" data-ose=\"craft-edit\" data-ose-craft-edit=\"{id}\">Edit</button> \
+                 <button data-ose=\"craft-launch\" data-ose-craft-launch=\"{id}\">Launch</button></span></li>",
                 id = c.id,
                 name = esc(&c.name),
                 parts = c.parts,

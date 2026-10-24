@@ -364,7 +364,7 @@ OSE status today: map view with bodies and orbits, UT and warp HUD, the player's
 | Multiplayer menu | empty prefab, compiled out | `KSP.Game.StartupFlow/MultiplayerMenu.cs`, `KSP.Networking.MP/MultiplayerCompileFlagsUtil.cs` | none (OSE design) |
 | Loading curtain | context images, fades, progress bar | `KSP.game/UIManager.cs`, `data/loadingscreens/LoadingScreens.json` | none |
 | Game state machine | 20 states, enter/exit effects, 3 messages per change | `KSP.game/GameStateMachine.cs`, `GameState.cs`, `UIStateViews.cs` | none |
-| KSC hub | 3D KSC with building buttons and launch-site flyout | `KSP.UI/KSCMenuManager.cs`, `KSCNavEnum.cs` | partial (2D hub: launch pad and tracking station live, other buildings disabled) |
+| KSC hub | 3D KSC with building buttons and launch-site flyout | `KSP.UI/KSCMenuManager.cs`, `KSCNavEnum.cs` | partial (2D hub: launch pad, VAB and tracking station live; R&D, mission control and training disabled) |
 | Launchpad dialog | saved craft, crew, launch, recover pad | `KSP.game/LaunchpadDialog.cs` | partial (craft library with side-view thumbnails from `/parts.json` geometry, stock filter and altitude; no crew, no recover) |
 | Global header | escape, contextual menu, warp, UT, player/science | `KSP.game/GlobalHeaderManager.cs`, `GlobalHeaderTimewarpManager.cs`, `UniverseDataProvider.cs` | partial (UT, warp and holder, player, campaign members) |
 | Breadcrumbs | star > body > vessel, clickable | `KSP.game/BreadcrumbsController.cs` | done |
@@ -374,12 +374,12 @@ OSE status today: map view with bodies and orbits, UT and warp HUD, the player's
 | Notifications | tiers, importance, event-driven toasts | `KSP.game/NotificationManager.cs`, `NotificationEvents.cs` | none |
 | Message boxes, tooltips, windows | modal boxes, tutorial boxes, character dialog, complex tooltips, drag/resize windows | `KSP.UI/KSP2MessageBox.cs`, `KSP2UIWindow.cs`, `KSP2ComplexTooltip.cs`, `KSP.Game.Missions/CharacterDialogWindow.cs` | none |
 | Cheats/debug menu | Alt+F8 teleport, science, aero GUI | `KSP.game/CheatsMenu.cs` | none |
-| VAB: parts picker | categories, filters, sort, search, favourites | `KSP.OAB/AssemblyPartsPicker.cs`, `AssemblyBuilderPartCategory.cs` | none |
-| VAB: assembly tools | attach, symmetry, snap, rotate, undo, markers, anchor | `KSP.OAB/ObjectAssemblyBuilder.cs`, `ObjectAssemblyToolbar.cs`, `BuilderSymmetryMode.cs` | none |
-| VAB: staging stack | drag-drop stages, dV/TWR per stage | `KSP.UI/OABStagingUIDriver.cs`, `KSP.game/StagingDataProvider.cs`, `StageDataContext.cs` | none |
-| VAB: engineer report, dV tool | stats, flaw checkers, situation dV | `KSP.OAB/ObjectAssemblyUIEngineeringReport.cs`, `AssemblyCheck*.cs`, `KSP.game/DeltaVToolManagerUI.cs` | none |
+| VAB: parts picker | categories, filters, sort, search, favourites | `KSP.OAB/AssemblyPartsPicker.cs`, `AssemblyBuilderPartCategory.cs` | partial (categories, search, title/size/mass rows; no filters, favourites or tooltips) |
+| VAB: assembly tools | attach, symmetry, snap, rotate, undo, markers, anchor | `KSP.OAB/ObjectAssemblyBuilder.cs`, `ObjectAssemblyToolbar.cs`, `BuilderSymmetryMode.cs` | partial (2D side view: click-to-attach on free stack nodes or the surface, select, remove subtree; no drag, symmetry, rotation or undo) |
+| VAB: staging stack | drag-drop stages, dV/TWR per stage | `KSP.UI/OABStagingUIDriver.cs`, `KSP.game/StagingDataProvider.cs`, `StageDataContext.cs` | partial (stageable parts grouped by stage, move earlier/later; no drag-drop) |
+| VAB: engineer report, dV tool | stats, flaw checkers, situation dV | `KSP.OAB/ObjectAssemblyUIEngineeringReport.cs`, `AssemblyCheck*.cs`, `KSP.game/DeltaVToolManagerUI.cs` | partial (server CraftSaved summary: parts, stages, dry/wet mass, vacuum delta-v) |
 | VAB: PAM, action groups, crew, colour | part settings, group assignment, seats, colours | `KSP.game/PartsManagerCore.cs`, `ActionGroupManager.cs`, `KSP.UI/KerbalManager.cs`, `KSP.OAB/ObjectAssemblyColorPicker.cs` | none |
-| VAB: workspace save/load, launch | save/load/merge, launch site, launch | `KSP.OAB/OABSaveDialog.cs`, `OABLoadDialog.cs`, `ObjectAssemblyHeader.cs`, `KSP.game/OABProvider.cs` | none |
+| VAB: workspace save/load, launch | save/load/merge, launch site, launch | `KSP.OAB/OABSaveDialog.cs`, `OABLoadDialog.cs`, `ObjectAssemblyHeader.cs`, `KSP.game/OABProvider.cs` | partial (Save/Save and launch to the server library; Edit from the launch pad; no workspaces or thumbnails of own crafts yet) |
 | Flight: navball and SAS | markers, 10 SAS modes, SAS/RCS toggles | `KSP.UI.Flight/NavballInstrument.cs`, `KSP.game/TelemetryDataProvider.cs`, `KSP.Sim/AutopilotMode.cs` | none |
 | Flight: throttle, altimeter, speed, G, atmosphere | gauges with mode toggles | `KSP.UI.Flight/ThrottleInstrument.cs`, `VerticalSpeedInstrument.cs`, `AtmosphericIndicatorInstrument.cs`, `KSP.game/TelemetryDataProvider.cs` | none |
 | Flight: orbital readout, burn timer | Ap/Pe + times, node countdown | `KSP.UI/OrbitalReadoutInstrumentManager.cs`, `KSP.UI.Flight/BurnTimerInstrument.cs` | none |

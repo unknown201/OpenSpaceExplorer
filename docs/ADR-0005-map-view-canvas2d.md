@@ -34,6 +34,10 @@ untestable in CI.
   ahead, sliders set the burn time (up to one orbit ahead) and prograde delta-v, every change sends
   `ScheduleBurn`, and the marker sits on the current orbit at the burn time. The server's `BurnState`
   reason shows in the panel; its `Trajectory` with `Maneuver` patches is what draws the result.
+- The Vehicle Assembly Building starts as a 2D side-view editor on the same Canvas 2D stack
+  (`ose-client::vab` for the part tree, `ose-client::thumb` for the boxes): parts attach on matching stack
+  nodes from `/parts.json` geometry, the server stays authoritative for masses and delta-v through
+  `SaveCraft`. A 3D editor with drag, symmetry and rotation is the WebGPU flight-view work.
 - WebGPU stays the plan for the flight view (3D vessel, terrain, scaled space), where Canvas 2D cannot
   go. The map can move to the same pipeline later; its scene model and camera do not depend on how it is
   drawn.

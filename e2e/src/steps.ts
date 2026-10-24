@@ -19,6 +19,9 @@
 //   [data-ose="ksc"]            the KSC hub screen; [data-ose="ksc-tracking"] opens the map, [data-ose="ksc-launchpad"]
 //                               the launch pad ([data-ose="craft"] entries with [data-ose="craft-launch"]);
 //                               [data-ose="ksc-button"] in the HUD reopens the hub
+//   [data-ose="vab"]            the editor: [data-ose="vab-categories"] buttons, [data-ose="vab-part"] rows,
+//                               [data-ose="vab-canvas"] (data-ose-vab-parts = parts drawn), vab-name, vab-save,
+//                               vab-launch, vab-remove, vab-clear, vab-report (the server's engineer report)
 //   [data-ose="add-node"]       adds a maneuver node on the player's vessel
 //   [data-ose="maneuver-node"]  a maneuver node on the player's trajectory (data-ose-ut = burn time)
 import type { ConsoleMessage, Page, WebSocket } from "@playwright/test";
@@ -39,6 +42,7 @@ export const STEP_NAMES = [
   "player_vessel",
   "breadcrumbs",
   "maneuver_node",
+  "vab",
   "launchpad",
 ] as const;
 export type StepName = (typeof STEP_NAMES)[number];
@@ -360,6 +364,54 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
       const reason = ((await page.locator("#node-reason").textContent().catch(() => "")) ?? "").trim();
       if (reason) return failed(`server refused the burn: ${reason}`);
       return passed(`node scheduled at UT ${Number(ut).toFixed(1)}`);
+    }),
+  );
+
+  // 11b. The Vehicle Assembly Building: pick a pod, a tank and an engine from the picker, name the craft, save
+  // it, and read the server's engineer report back.
+  results.push(
+    await timed("vab", async () => {
+      if (!pageUp) return notLoaded;
+      const open = page.locator('[data-ose="ksc-button"]');
+      if ((await open.count()) === 0) return blocked('VAB editor ([data-ose="vab"]); Phase 5');
+      await open.first().click();
+      const vabButton = page.locator('[data-ose="ksc-vab"]');
+      if ((await vabButton.count()) === 0 || (await vabButton.first().isDisabled())) {
+        return blocked('VAB editor ([data-ose="vab"]); Phase 5');
+      }
+      await vabButton.first().click();
+      const vab = page.locator('[data-ose="vab"]');
+      await vab.first().waitFor({ state: "visible", timeout: 5000 });
+      await page.locator('[data-ose="vab-clear"]').first().click();
+      const picked: string[] = [];
+      for (const category of ["Pods", "FuelTank", "Engine"]) {
+        const tab = page.locator(`[data-ose="vab-categories"] button[data-ose-category="${category}"]`);
+        if ((await tab.count()) === 0) return failed(`no ${category} category in the picker (catalog loaded?)`);
+        await tab.first().click();
+        const part = page.locator('[data-ose="vab-part"]').first();
+        try {
+          await part.waitFor({ timeout: 5000 });
+        } catch {
+          return failed(`no parts listed under ${category}`);
+        }
+        picked.push(((await part.getAttribute("data-ose-part")) ?? "?").trim());
+        await part.click();
+      }
+      const drawn = await page.locator('[data-ose="vab-canvas"]').first().getAttribute("data-ose-vab-parts");
+      if (drawn !== "3") return failed(`expected 3 parts on the canvas, saw ${drawn}`);
+      await page.locator('[data-ose="vab-name"]').first().fill("e2e stack");
+      await page.locator('[data-ose="vab-save"]').first().click();
+      const report = page.locator('[data-ose="vab-report"]');
+      try {
+        await report.filter({ hasText: /Saved as|Not saved/ }).waitFor({ timeout: 10_000 });
+      } catch {
+        return failed(`no save report (${JSON.stringify((await report.textContent()) ?? "")})`);
+      }
+      const text = ((await report.textContent()) ?? "").trim();
+      if (!/^Saved as/.test(text)) return failed(text);
+      await page.locator('[data-ose="vab-back"]').first().click();
+      await page.locator('[data-ose="ksc-tracking"]').first().click();
+      return passed(`${picked.join(" + ")}; ${text}`);
     }),
   );
 

@@ -36,7 +36,9 @@
     #crumbs span[data-ose-index], #crumbs span[data-ose-vessel] { color: #9fb0cc; cursor: pointer; }
     #crumbs span[data-ose-index]:hover, #crumbs span[data-ose-vessel]:hover { color: #fff; }
     #menu { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
-      background: #06080fcc; }
+      background: #06080fcc; z-index: 20; }
+    /* The menu covers the HUD panels; the node panel must not sit over its buttons. */
+    #menu:not(.hidden) ~ #node-panel { display: none; }
     #menu.hidden { display: none; }
     #menu .card { width: 360px; padding: 24px 28px; border-radius: 8px; background: #0b1020f2;
       border: 1px solid #2c3d63; }
@@ -86,6 +88,23 @@
     #crafts canvas.thumb { width: 64px; height: 84px; background: #0b1020; border: 1px solid #2c3d63; border-radius: 4px; }
     #launch-opts { display: grid; grid-template-columns: auto 1fr auto auto; gap: 8px; align-items: center; margin-top: 8px; font-size: 12px; color: #9fb0cc; }
     #launch-opts input[type=number] { width: 90px; padding: 4px 6px; font: inherit; background: #06080f; color: #e6ecf7; border: 1px solid #2c3d63; border-radius: 4px; }
+    #menu .card.vab { width: min(1100px, 96vw); max-height: 94vh; }
+    #vab { display: grid; grid-template-columns: 260px 1fr 260px; gap: 12px; margin-top: 8px; }
+    #vab-cats { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
+    #vab-cats button { margin: 0; width: auto; padding: 3px 8px; font-size: 11px; background: #16213a; border-color: #2c3d63; color: #cfd6e6; }
+    #vab-cats button.on { background: #1f3d6b; border-color: #3b63a8; color: #fff; }
+    #vab-search { width: 100%; box-sizing: border-box; padding: 5px 8px; font: inherit; font-size: 12px; background: #06080f; color: #e6ecf7; border: 1px solid #2c3d63; border-radius: 4px; }
+    #vab-parts { margin: 6px 0 0; padding: 0; list-style: none; max-height: 56vh; overflow: auto; }
+    #vab-parts li { padding: 5px 8px; margin-bottom: 3px; border: 1px solid #2c3d63; border-radius: 4px; background: #06080f; cursor: pointer; font-size: 12px; color: #e6ecf7; }
+    #vab-parts li:hover { background: #16213a; } #vab-parts li small { color: #6f7f9c; display: block; }
+    #vab-canvas { width: 100%; height: 64vh; display: block; background: radial-gradient(#101a33, #06080f); border: 1px solid #2c3d63; border-radius: 6px; cursor: crosshair; }
+    #vab-side label { margin-top: 6px; } #vab-side input[type=text] { width: 100%; box-sizing: border-box; padding: 5px 8px; font: inherit; background: #06080f; color: #e6ecf7; border: 1px solid #2c3d63; border-radius: 4px; }
+    #vab-side .row { margin-top: 6px; } #vab-side .row button { margin: 0; padding: 6px; font-size: 12px; }
+    #vab-stats { font-size: 12px; color: #9fb0cc; margin-top: 8px; line-height: 1.5; } #vab-stats b { color: #e6ecf7; font-weight: 500; }
+    #vab-report { font-size: 12px; color: #cfd6e6; margin-top: 6px; white-space: pre-line; }
+    #vab-stages { margin: 6px 0 0; padding: 0; list-style: none; font-size: 12px; color: #9fb0cc; }
+    #vab-stages li { padding: 3px 6px; border-left: 2px solid #2c3d63; margin-bottom: 3px; }
+    #vab-selected { font-size: 12px; color: #9ef0c0; margin-top: 6px; min-height: 1.2em; }
     #player .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
     #ut { font-variant-numeric: tabular-nums; font-size: 16px; color: #e6ecf7; }
     .warp { display: flex; align-items: center; gap: 4px; }
@@ -157,7 +176,7 @@
         <div id="ksc-buildings">
           <button id="ksc-launchpad" data-ose="ksc-launchpad">Launch pad<small>pick a craft and launch it</small></button>
           <button id="ksc-tracking" data-ose="ksc-tracking">Tracking Station<small>the map view: bodies, vessels, nodes</small></button>
-          <button id="ksc-vab" data-ose="ksc-vab" disabled title="Phase 5">Vehicle Assembly Building<small>build crafts; not yet (Phase 5)</small></button>
+          <button id="ksc-vab" data-ose="ksc-vab">Vehicle Assembly Building<small>build a craft from parts and save it</small></button>
           <button id="ksc-rnd" data-ose="ksc-rnd" disabled title="Phase 8">Research and Development<small>tech tree; not yet (Phase 8)</small></button>
           <button id="ksc-mission" data-ose="ksc-mission" disabled title="Phase 8">Mission Control<small>missions; not yet (Phase 8)</small></button>
           <button id="ksc-training" data-ose="ksc-training" disabled title="Phase 8">Training Center<small>tutorials; not yet (Phase 8)</small></button>
@@ -174,6 +193,29 @@
         <div class="row">
           <button id="launchpad-refresh" class="secondary" data-ose="craft-refresh">Refresh</button>
           <button id="launchpad-back" class="secondary" data-ose="launchpad-back">Back to KSC</button>
+        </div>
+      </div>
+      <div class="screen" id="screen-vab" data-ose="vab">
+        <label>Vehicle Assembly Building</label>
+        <div id="vab">
+          <div id="vab-picker">
+            <div id="vab-cats" data-ose="vab-categories"></div>
+            <input id="vab-search" data-ose="vab-search" type="search" placeholder="search parts" />
+            <ul id="vab-parts" data-ose="vab-parts"></ul>
+          </div>
+          <canvas id="vab-canvas" data-ose="vab-canvas" width="640" height="640"></canvas>
+          <div id="vab-side">
+            <label for="vab-name">Craft name</label>
+            <input id="vab-name" data-ose="vab-name" type="text" maxlength="48" value="Untitled craft" />
+            <div id="vab-selected" data-ose="vab-selected"></div>
+            <div class="row"><button id="vab-remove" class="secondary" data-ose="vab-remove">Remove part</button><button id="vab-clear" class="secondary" data-ose="vab-clear">Clear</button></div>
+            <div class="row"><button id="vab-stage-up" class="secondary" data-ose="vab-stage-up">Stage earlier</button><button id="vab-stage-down" class="secondary" data-ose="vab-stage-down">Stage later</button></div>
+            <div id="vab-stats" data-ose="vab-stats"></div>
+            <ul id="vab-stages" data-ose="vab-stages"></ul>
+            <div class="row"><button id="vab-save" data-ose="vab-save">Save</button><button id="vab-launch" data-ose="vab-launch">Save and launch</button></div>
+            <div id="vab-report" data-ose="vab-report"></div>
+            <div class="row"><button id="vab-back" class="secondary" data-ose="vab-back">Back to KSC</button></div>
+          </div>
         </div>
       </div>
       <div class="screen" id="screen-paused" data-ose="menu-paused">
