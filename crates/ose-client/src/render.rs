@@ -33,20 +33,23 @@ struct ObjectUniform {
     color: [f32; 4],
     /// Direction towards the light in world (camera-relative) space, w unused.
     light_dir: [f32; 4],
-    /// x: emissive strength (1 = unlit, show the texture as is), y: use texture (1) or colour (0).
+    /// Second, fill light: direction towards it (xyz) and intensity (w).
+    light2: [f32; 4],
+    /// x: emissive strength (1 = unlit, show the texture as is), y: use texture (1) or colour (0),
+    /// z: 1 draws an atmosphere shell (rim glow from `color`, alpha by view angle), w: ambient level.
     params: [f32; 4],
 }
 
 const SHADER: &str = r#"
 struct Camera { view_proj: mat4x4<f32> };
-struct Object { model: mat4x4<f32>, color: vec4<f32>, light_dir: vec4<f32>, params: vec4<f32> };
+struct Object { model: mat4x4<f32>, color: vec4<f32>, light_dir: vec4<f32>, light2: vec4<f32>, params: vec4<f32> };
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(1) @binding(0) var<uniform> object: Object;
 @group(2) @binding(0) var tex: texture_2d<f32>;
 @group(2) @binding(1) var samp: sampler;
 
 struct VsIn { @location(0) pos: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv: vec2<f32> };
-struct VsOut { @builtin(position) clip: vec4<f32>, @location(0) normal: vec3<f32>, @location(1) uv: vec2<f32> };
+struct VsOut { @builtin(position) clip: vec4<f32>, @location(0) normal: vec3<f32>, @location(1) uv: vec2<f32>, @location(2) world: vec3<f32> };
 
 @vertex
 fn vs_mesh(in: VsIn) -> VsOut {
@@ -56,6 +59,7 @@ fn vs_mesh(in: VsIn) -> VsOut {
     // Uniform scale is assumed, so the rotation part of the model matrix is enough for normals.
     out.normal = normalize((object.model * vec4<f32>(in.normal, 0.0)).xyz);
     out.uv = in.uv;
+    out.world = world.xyz;
     return out;
 }
 
@@ -64,8 +68,19 @@ fn fs_mesh(in: VsOut) -> @location(0) vec4<f32> {
     let texel = textureSample(tex, samp, in.uv);
     let base = mix(object.color, texel * object.color, object.params.y);
     let n = normalize(in.normal);
+    // The camera sits at the origin of the relative world.
+    let view = normalize(-in.world);
     let diffuse = max(dot(n, normalize(object.light_dir.xyz)), 0.0);
-    let lit = base.rgb * (0.08 + 0.92 * diffuse);
+    if object.params.z > 0.5 {
+        // Atmosphere shell: a rim that brightens towards the limb and on the day side, see-through
+        // elsewhere. The alpha of the colour sets the strength.
+        let rim = pow(1.0 - clamp(dot(n, view), 0.0, 1.0), 3.0);
+        let day = 0.15 + 0.85 * diffuse;
+        return vec4<f32>(object.color.rgb * day, object.color.a * rim * day);
+    }
+    let fill = max(dot(n, normalize(object.light2.xyz)), 0.0) * object.light2.w;
+    let ambient = max(object.params.w, 0.08);
+    let lit = base.rgb * min(ambient + (1.0 - ambient) * diffuse + fill, 1.6);
     let rgb = mix(lit, base.rgb, object.params.x);
     return vec4<f32>(rgb, base.a);
 }
@@ -93,6 +108,8 @@ struct GpuPrimitive {
     index_count: u32,
     /// Index into `Model::textures`, if the primitive has a base colour texture.
     texture: Option<usize>,
+    /// glTF `alphaMode: BLEND`: drawn after the opaque primitives without writing depth.
+    blend: bool,
 }
 
 /// A loaded GLB: primitives with their node transforms (already flattened), and textures by image index.
@@ -113,8 +130,9 @@ struct PendingTexture {
 }
 
 /// Parsed GLB before GPU upload.
-/// Vertices, indices, base-colour image index, and node transform of one primitive before upload.
-type CpuPrimitive = (Vec<Vertex>, Vec<u32>, Option<usize>, Mat4);
+/// Vertices, indices, base-colour image index, alpha blending, and node transform of one primitive
+/// before upload.
+type CpuPrimitive = (Vec<Vertex>, Vec<u32>, Option<usize>, bool, Mat4);
 
 struct CpuModel {
     primitives: Vec<CpuPrimitive>,
@@ -133,6 +151,38 @@ pub struct DrawItem {
     /// 1 for self-lit bodies (the star), 0 for lit surfaces.
     pub emissive: f32,
     pub color: [f32; 4],
+    /// Fill light: direction towards it and intensity (0 for none).
+    pub fill_dir: DVec3,
+    pub fill: f32,
+    /// Ambient level (0 keeps the default 0.08).
+    pub ambient: f32,
+    /// True draws the model as an atmosphere shell: `color` is the rim colour, its alpha the strength.
+    pub atmosphere: bool,
+}
+
+impl DrawItem {
+    /// A lit, textured model with no fill light, the common case.
+    pub fn lit(
+        model: String,
+        rel_pos_km: DVec3,
+        rotation: DQuat,
+        scale: f64,
+        light_dir: DVec3,
+    ) -> DrawItem {
+        DrawItem {
+            model,
+            rel_pos_km,
+            rotation,
+            scale,
+            light_dir,
+            emissive: 0.0,
+            color: [1.0; 4],
+            fill_dir: DVec3::ZERO,
+            fill: 0.0,
+            ambient: 0.0,
+            atmosphere: false,
+        }
+    }
 }
 
 pub struct LineItem {
@@ -153,6 +203,7 @@ pub struct Renderer {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     mesh_pipeline: wgpu::RenderPipeline,
+    blend_pipeline: wgpu::RenderPipeline,
     line_pipeline: wgpu::RenderPipeline,
     camera_buf: wgpu::Buffer,
     camera_bind: wgpu::BindGroup,
@@ -320,6 +371,42 @@ impl Renderer {
             multiview_mask: None,
             cache: None,
         });
+        let blend_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("mesh-blend"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_mesh"),
+                compilation_options: Default::default(),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<Vertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2],
+                })],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_mesh"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: Some(wgpu::Face::Back),
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                depth_write_enabled: Some(false),
+                ..depth_state.clone()
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
         let line_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("line"),
             layout: Some(&layout),
@@ -434,6 +521,7 @@ impl Renderer {
             surface,
             config,
             mesh_pipeline,
+            blend_pipeline,
             line_pipeline,
             camera_buf,
             camera_bind,
@@ -522,7 +610,7 @@ impl Renderer {
             let mut primitives = Vec::new();
             let mut bounds_min = Vec3::splat(f32::INFINITY);
             let mut bounds_max = Vec3::splat(f32::NEG_INFINITY);
-            for (vertices, indices, texture, transform) in &cpu.primitives {
+            for (vertices, indices, texture, blend, transform) in &cpu.primitives {
                 for v in vertices {
                     let p = transform.transform_point3(Vec3::from(v.pos));
                     bounds_min = bounds_min.min(p);
@@ -550,6 +638,7 @@ impl Renderer {
                         indices: ib,
                         index_count: indices.len() as u32,
                         texture: *texture,
+                        blend: *blend,
                     },
                     *transform,
                 ));
@@ -766,6 +855,7 @@ impl Renderer {
             );
             for (pi, (_, local)) in model.primitives.iter().enumerate() {
                 let m = base * local.as_dmat4();
+                let fill = item.fill_dir.normalize_or_zero().as_vec3();
                 let u = ObjectUniform {
                     model: m.as_mat4().to_cols_array_2d(),
                     color: item.color,
@@ -775,7 +865,13 @@ impl Renderer {
                         .extend(0.0)
                         .as_vec4()
                         .to_array(),
-                    params: [item.emissive, 1.0, 0.0, 0.0],
+                    light2: [fill.x, fill.y, fill.z, item.fill],
+                    params: [
+                        item.emissive,
+                        1.0,
+                        if item.atmosphere { 1.0 } else { 0.0 },
+                        item.ambient,
+                    ],
                 };
                 self.queue
                     .write_buffer(&self.objects[slot].0, 0, bytemuck::bytes_of(&u));
@@ -797,6 +893,7 @@ impl Renderer {
                     .to_cols_array_2d(),
                 color: l.color,
                 light_dir: [0.0; 4],
+                light2: [0.0; 4],
                 params: [1.0, 0.0, 0.0, 0.0],
             };
             self.queue
@@ -840,20 +937,29 @@ impl Renderer {
                 multiview_mask: None,
             });
             pass.set_bind_group(0, &self.camera_bind, &[]);
-            pass.set_pipeline(&self.mesh_pipeline);
-            for (model_name, pi, s) in &mesh_draws {
-                let model = &self.models[model_name];
-                let (prim, _) = &model.primitives[*pi];
-                let tex = prim
-                    .texture
-                    .and_then(|t| model.textures.get(t))
-                    .and_then(|t| t.as_ref())
-                    .unwrap_or(&self.white);
-                pass.set_bind_group(1, &self.objects[*s].1, &[]);
-                pass.set_bind_group(2, tex, &[]);
-                pass.set_vertex_buffer(0, prim.vertices.slice(..));
-                pass.set_index_buffer(prim.indices.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(0..prim.index_count, 0, 0..1);
+            for blended in [false, true] {
+                pass.set_pipeline(if blended {
+                    &self.blend_pipeline
+                } else {
+                    &self.mesh_pipeline
+                });
+                for (model_name, pi, s) in &mesh_draws {
+                    let model = &self.models[model_name];
+                    let (prim, _) = &model.primitives[*pi];
+                    if prim.blend != blended {
+                        continue;
+                    }
+                    let tex = prim
+                        .texture
+                        .and_then(|t| model.textures.get(t))
+                        .and_then(|t| t.as_ref())
+                        .unwrap_or(&self.white);
+                    pass.set_bind_group(1, &self.objects[*s].1, &[]);
+                    pass.set_bind_group(2, tex, &[]);
+                    pass.set_vertex_buffer(0, prim.vertices.slice(..));
+                    pass.set_index_buffer(prim.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..prim.index_count, 0, 0..1);
+                }
             }
             pass.set_pipeline(&self.line_pipeline);
             pass.set_bind_group(2, &self.white, &[]);
@@ -912,7 +1018,7 @@ fn resolve_uri(base: &str, uri: &str) -> String {
     parts.join("/")
 }
 
-async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
+pub(crate) async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     let window = web_sys::window().ok_or("no window")?;
     let resp = wasm_bindgen_futures::JsFuture::from(window.fetch_with_str(url))
         .await
@@ -1015,6 +1121,13 @@ fn parse_glb(bytes: &[u8]) -> Result<CpuModel, String> {
         let m = json["materials"].as_array()?.get(mi)?;
         let ti = m["pbrMetallicRoughness"]["baseColorTexture"]["index"].as_u64()? as usize;
         textures.get(ti)?["source"].as_u64().map(|s| s as usize)
+    };
+    let material_blend = |mi: usize| -> bool {
+        json["materials"]
+            .as_array()
+            .and_then(|a| a.get(mi))
+            .map(|m| m["alphaMode"].as_str() == Some("BLEND"))
+            .unwrap_or(false)
     };
     let image_uris: Vec<String> = json["images"]
         .as_array()
@@ -1123,7 +1236,11 @@ fn parse_glb(bytes: &[u8]) -> Result<CpuModel, String> {
             let texture = prim["material"]
                 .as_u64()
                 .and_then(|m| material_image(m as usize));
-            primitives.push((vertices, indices, texture, world));
+            let blend = prim["material"]
+                .as_u64()
+                .map(|m| material_blend(m as usize))
+                .unwrap_or(false);
+            primitives.push((vertices, indices, texture, blend, world));
         }
     }
     let mesh_radius = json["extras"]["mesh_radius"].as_f64().unwrap_or(1.0);

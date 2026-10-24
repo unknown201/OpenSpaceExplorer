@@ -33,6 +33,7 @@ to `Pass` in the same change.
 | `[data-ose="player"]`, `[data-ose="campaign"]`, `[data-ose="warp-holder"]` | header readouts: who you are, the campaign and its members, who holds warp |
 | `[data-ose="breadcrumbs"]` | star > body > vessel for what the camera looks at; each crumb is clickable |
 | `canvas` | the render surface: `[data-ose="gpu"]` carries `data-ose-renderer="webgpu"` once the wgpu renderer is up; the 2D `#map` canvas is the fallback |
+| `[data-ose="gpu"][data-ose-menu-vessel]` | set once the main menu's 3D backdrop (the original's menu scene, ADR-0007) is drawn; the value names the vessel on show. Absent when the server has no exported assets |
 | `[data-ose="ut"]` | universal time readout, updated from server `TimeState` |
 | `[data-ose="body"]` with `data-ose-id` | one element per celestial body in the map view |
 | `[data-ose="warp"]` | the time-warp control; a click raises the warp factor |

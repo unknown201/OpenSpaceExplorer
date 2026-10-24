@@ -234,8 +234,10 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
       const box = await canvas.boundingBox();
       if (!box || box.width < 1 || box.height < 1) return failed("canvas has no size");
       await sleep(1500);
-      const renderer = (await page.locator('[data-ose="gpu"]').first().getAttribute("data-ose-renderer")) ?? "canvas2d";
-      return passed(`canvas ${Math.round(box.width)}x${Math.round(box.height)}, renderer ${renderer}`);
+      const gpu = page.locator('[data-ose="gpu"]').first();
+      const renderer = (await gpu.getAttribute("data-ose-renderer")) ?? "canvas2d";
+      const backdrop = (await gpu.getAttribute("data-ose-menu-vessel")) ?? "none (no menu assets on this server)";
+      return passed(`canvas ${Math.round(box.width)}x${Math.round(box.height)}, renderer ${renderer}, menu backdrop ${backdrop}`);
     }),
   );
 

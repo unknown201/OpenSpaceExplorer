@@ -13,6 +13,8 @@
 
 pub mod kerbin_time;
 #[cfg(target_arch = "wasm32")]
+pub mod menu3d;
+#[cfg(target_arch = "wasm32")]
 pub mod render;
 pub mod scene;
 pub mod thumb;
@@ -88,6 +90,9 @@ struct App {
     /// The WebGPU renderer when the browser has an adapter; the 2D canvas is the fallback.
     #[cfg(target_arch = "wasm32")]
     gpu: Option<render::Renderer>,
+    /// The main menu's 3D backdrop (the original's menu scene), drawn while no session is joined.
+    #[cfg(target_arch = "wasm32")]
+    menu3d: menu3d::MenuBackdrop,
     gpu_canvas: HtmlCanvasElement,
     /// 3D orbit camera: yaw and pitch (radians) around the focus, distance in kilometres.
     orbit_yaw: f64,
@@ -264,6 +269,8 @@ pub fn start() -> Result<(), JsValue> {
         dpr: window.device_pixel_ratio().max(1.0),
         #[cfg(target_arch = "wasm32")]
         gpu: None,
+        #[cfg(target_arch = "wasm32")]
+        menu3d: menu3d::MenuBackdrop::new(),
         gpu_canvas: get("gpu")?.dyn_into()?,
         orbit_yaw: 0.6,
         orbit_pitch: 0.5,
@@ -2294,6 +2301,21 @@ impl App {
         ctx.set_fill_style_str("#06080f");
         ctx.fill_rect(0.0, 0.0, w, h);
 
+        // Before a session is joined the 3D view shows the menu backdrop.
+        #[cfg(target_arch = "wasm32")]
+        if !self.in_session {
+            if let Some(gpu) = &mut self.gpu {
+                let was_ready = self.menu3d.is_ready();
+                if self.menu3d.frame(gpu, now) && !was_ready {
+                    if let Some(v) = self.menu3d.vessel_name() {
+                        self.gpu_canvas
+                            .set_attribute("data-ose-menu-vessel", v)
+                            .ok();
+                    }
+                }
+                return;
+            }
+        }
         let Some(scene) = &self.scene else {
             return;
         };
@@ -2454,6 +2476,10 @@ impl App {
                     } else {
                         [1.0; 4]
                     },
+                    fill_dir: GV::ZERO,
+                    fill: 0.0,
+                    ambient: 0.0,
+                    atmosphere: false,
                 });
             }
             if let (Some(orbit), Some(p)) = (scene.orbit(i), b.parent) {

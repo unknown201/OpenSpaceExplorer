@@ -34,3 +34,4 @@ ose.db*
 ose-save.json*
 ose-accounts.json*
 assets/web/
+__pycache__/

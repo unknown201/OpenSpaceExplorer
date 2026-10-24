@@ -116,6 +116,75 @@
     #focus { color: #9fb0cc; }
     #status { margin-left: auto; color: #6f7f9c; font-size: 12px; }
     #help { position: fixed; bottom: 8px; left: 12px; color: #4e5c78; font-size: 11px; pointer-events: none; }
+
+  </style>
+  <style>
+    /* Main menu after the original (MainMenu.prefab, 1920x1080 reference): logo top-left, a column of items
+       under it, the account bar top-right, over the 3D backdrop (menu3d.rs). --u is one reference pixel. */
+    :root { --u: min(calc(100vh / 1080), calc(100vw / 1920)); --ui-font: "Segoe UI", "Noto Sans", Roboto, system-ui, sans-serif; }
+    #menu { font-family: var(--ui-font); }
+    body:has(#screen-name.open) #hud, body:has(#screen-sessions.open) #hud, body:has(#screen-name.open) #crumbs, body:has(#screen-sessions.open) #crumbs,
+    body:has(#screen-name.open) #help, body:has(#screen-sessions.open) #help, body:has(#screen-name.open) #labels, body:has(#screen-sessions.open) #labels { display: none; }
+    #menu:has(#screen-name.open), #menu:has(#screen-sessions.open) { background: transparent; align-items: stretch; justify-content: stretch; }
+    #menu-card:has(#screen-name.open), #menu-card:has(#screen-sessions.open) { width: auto; max-height: none; overflow: visible;
+      position: fixed; inset: 0; padding: 0; background: none; border: 0; border-radius: 0; }
+    #menu-card:has(#screen-name.open) > h1, #menu-card:has(#screen-name.open) > .sub, #menu-card:has(#screen-name.open) > .info,
+    #menu-card:has(#screen-sessions.open) > h1, #menu-card:has(#screen-sessions.open) > .sub, #menu-card:has(#screen-sessions.open) > .info { display: none; }
+    #menu-card:has(#screen-name.open) > .note, #menu-card:has(#screen-sessions.open) > .note { position: fixed; left: calc(80 * var(--u)); bottom: calc(60 * var(--u)); font-size: calc(16 * var(--u)); }
+    #menu #screen-name.open { display: block; position: fixed; inset: 0; }
+    #logo { position: absolute; left: calc(80 * var(--u)); top: calc(60 * var(--u)); width: calc(485 * var(--u)); height: calc(200 * var(--u));
+      background: url(assets/ui/sno_logo-wht_red_2x.png) left top / contain no-repeat; }
+    #logo span { position: absolute; left: 0; bottom: calc(-26 * var(--u)); font-size: calc(18 * var(--u)); letter-spacing: 0.35em; text-transform: uppercase; color: #cfd6e6cc; white-space: nowrap; }
+    #main-items { position: absolute; left: calc(80 * var(--u)); top: calc(279 * var(--u)); display: flex; flex-direction: column; gap: calc(32 * var(--u)); margin: 0; padding: 0; list-style: none; }
+    #main-items button { margin: 0; width: calc(400 * var(--u)); height: calc(36 * var(--u)); padding: 0 0 0 calc(10 * var(--u)); text-align: left;
+      font: inherit; font-size: calc(24 * var(--u)); color: #fff; background: transparent; border: 0; border-radius: calc(6 * var(--u)); cursor: pointer; letter-spacing: 0.02em; }
+    #main-items button:hover, #main-items button:focus-visible { background: #ccedff; color: #0b1020; outline: 0; }
+    #main-items button:disabled { color: #ffffff66; cursor: default; background: transparent; }
+    #login-bar { position: absolute; right: 0; top: 0; height: calc(50 * var(--u)); min-width: calc(210 * var(--u)); display: flex; align-items: center; gap: calc(10 * var(--u));
+      padding: 0 calc(16 * var(--u)); background: #000; color: #fff; font-size: calc(15 * var(--u)); }
+    #login-bar label { margin: 0; color: #9fb0cc; font-size: calc(13 * var(--u)); white-space: nowrap; }
+    #login-bar input[type=text] { width: calc(160 * var(--u)); padding: calc(4 * var(--u)) calc(8 * var(--u)); font-size: calc(15 * var(--u)); background: #111; border-color: #333; }
+    #version { position: absolute; left: calc(80 * var(--u)); bottom: calc(24 * var(--u)); font-size: calc(13 * var(--u)); color: #ffffff80; }
+    #extras { position: absolute; right: calc(80 * var(--u)); bottom: calc(24 * var(--u)); font-size: calc(13 * var(--u)); color: #ffffff80; }
+    #extras a { color: #ffffffb0; text-decoration: none; margin-left: calc(16 * var(--u)); }
+
+    /* Campaign menu: a left column (title, "start a new campaign", the campaign list) and a right column
+       (what the original uses for the save list; here the create form and the agency). */
+    #menu #screen-sessions.open { display: flex; position: fixed; inset: 0; align-items: stretch; justify-content: center; padding: 0; pointer-events: none; }
+    #campaign { display: flex; gap: 0; width: min(calc(1116 * var(--u)), 100vw); height: 100%; pointer-events: auto; font-size: calc(16 * var(--u)); }
+    #campaign-left { width: calc(400 * var(--u)); flex: none; background: #30374599; display: flex; flex-direction: column; padding: calc(16 * var(--u)); box-sizing: border-box; gap: calc(16 * var(--u)); }
+    #campaign-right { width: calc(484 * var(--u)); flex: none; background: #1f262ecc; padding: calc(16 * var(--u)); box-sizing: border-box; overflow: auto; }
+    #campaign .divider { height: calc(6 * var(--u)); background: repeating-linear-gradient(90deg, #858c9e66 0 calc(4 * var(--u)), transparent calc(4 * var(--u)) calc(8 * var(--u))); }
+    #campaign .title-row { display: flex; align-items: center; gap: calc(16 * var(--u)); }
+    #campaign .title-row button { margin: 0; width: calc(32 * var(--u)); height: calc(32 * var(--u)); padding: 0; background: #0000; border: 0; color: #a3abb5; font-size: calc(24 * var(--u)); line-height: 1; }
+    #campaign .title-row button:hover { color: #fff; background: #0000; }
+    #campaign h2 { margin: 0; font-size: calc(30 * var(--u)); font-weight: 500; color: #ffffffe6; letter-spacing: 0.04em; }
+    #campaign .subtitle { color: #858c9e; font-size: calc(20 * var(--u)); }
+    #campaign .subtitle b { color: #858c9e66; font-weight: 400; margin-right: calc(12 * var(--u)); }
+    #campaign .h1 { display: block; width: 100%; margin: 0; height: calc(56 * var(--u)); background: #000; border: 1px solid #ffffff22; border-radius: calc(4 * var(--u)); color: #f2f2f2; font-size: calc(20 * var(--u)); font-weight: 600; cursor: pointer; }
+    #campaign .h1:hover { background: #111; }
+    #campaign .options { flex: 1; min-height: 0; display: flex; flex-direction: column; background: #1f2129; padding: calc(8 * var(--u)) 0; gap: calc(8 * var(--u)); }
+    #campaign .list-title { display: flex; align-items: center; gap: calc(8 * var(--u)); padding: 0 calc(8 * var(--u)); color: #f2f2f2; font-size: calc(17 * var(--u)); font-weight: 600; }
+    #campaign .list-title::before, #campaign .list-title::after { content: ""; height: calc(10 * var(--u)); background: #2e3340; flex: 1; }
+    #campaign .list-title::before { flex: 0 0 calc(16 * var(--u)); }
+    #sessions { margin: 0; padding: calc(10 * var(--u)) calc(24 * var(--u)) calc(10 * var(--u)) calc(10 * var(--u)); overflow: auto; flex: 1; min-height: 0; }
+    #sessions li { grid-template-columns: calc(75 * var(--u)) 1fr auto; min-height: calc(72 * var(--u)); margin-bottom: calc(5 * var(--u)); padding: calc(8 * var(--u)) calc(10 * var(--u)); background: #000; border: 0; border-bottom: calc(6 * var(--u)) solid transparent; border-radius: 0;
+      border-image: repeating-linear-gradient(90deg, #f2f2f233 0 calc(4 * var(--u)), transparent calc(4 * var(--u)) calc(8 * var(--u))) 0 0 1 0 / 0 0 calc(6 * var(--u)) 0; }
+    #sessions li::before { content: ""; width: calc(75 * var(--u)); height: calc(40 * var(--u)); background: url(assets/ui/ELE-Placeholder-Flag.png) center / contain no-repeat; }
+    #sessions .name { font-size: calc(18 * var(--u)); font-weight: 600; color: #f2f2f2; }
+    #sessions .meta { font-size: calc(12 * var(--u)); color: #ffffff99; }
+    #sessions button { padding: calc(6 * var(--u)) calc(14 * var(--u)); font-size: calc(14 * var(--u)); }
+    #sessions .empty { color: #ffffff80; padding: calc(8 * var(--u)); }
+    #campaign-left > .row button { margin: 0; height: calc(40 * var(--u)); font-size: calc(16 * var(--u)); }
+    #campaign-right h3 { margin: 0 0 calc(8 * var(--u)); font-size: calc(17 * var(--u)); font-weight: 600; color: #f2f2f2; }
+    #campaign-right details { margin-top: 0; border-top: 0; padding-top: 0; }
+    #campaign-right summary { display: block; height: calc(56 * var(--u)); line-height: calc(56 * var(--u)); text-align: center; background: #000; border: 1px solid #ffffff22; border-radius: calc(4 * var(--u)); color: #f2f2f2; font-size: calc(20 * var(--u)); font-weight: 600; margin-bottom: calc(12 * var(--u)); list-style: none; }
+    #campaign-right summary::-webkit-details-marker { display: none; }
+    #campaign-right summary:hover { background: #111; }
+    #campaign-right details[open] summary { background: #0b1020; border-color: #3b63a8; }
+    #campaign-right .info { color: #ffffff99; }
+    #campaign-right label { color: #ffffffe6; font-size: calc(18 * var(--u)); font-weight: 600; }
+    #campaign-right input[type=text], #campaign-right select { background: #0a0c10; border-color: #ffffff22; color: #f2f2f2; }
   </style>
 </head>
 <body>
@@ -142,19 +211,37 @@
       <h1>OpenSpaceExplorer</h1>
       <div class="sub">a shared Kerbol system, played in the browser</div>
       <div class="screen open" id="screen-name" data-ose="menu-name">
-        <label for="player-name">Your name</label>
-        <input id="player-name" data-ose="player-name" type="text" maxlength="32" autocomplete="nickname" value="Pilot" />
-        <button id="play" data-ose="play">Play</button>
+        <div id="logo" title="Kerbal Space Program 2, in the browser"></div>
+        <ul id="main-items">
+          <li><button id="play" data-ose="play">Campaign</button></li>
+          <li><button id="main-settings" data-ose="main-settings" disabled title="not yet">Settings</button></li>
+          <li><button id="main-extras" data-ose="main-extras" disabled title="not yet">Extras</button></li>
+        </ul>
+        <div id="login-bar">
+          <label for="player-name">Pilot</label>
+          <input id="player-name" data-ose="player-name" type="text" maxlength="32" autocomplete="nickname" value="Pilot" />
+        </div>
+        <div id="version">OpenSpaceExplorer, a shared Kerbol system in the browser</div>
+        <div id="extras"><a href="https://github.com/unknown201/OpenSpaceExplorer" target="_blank" rel="noopener">Source</a></div>
       </div>
       <div class="screen" id="screen-sessions" data-ose="menu-sessions">
-        <label>Sessions on this server</label>
-        <ul id="sessions" data-ose="session-list"><li class="empty">asking the server...</li></ul>
-        <div class="row">
-          <button id="sessions-refresh" class="secondary" data-ose="session-refresh">Refresh</button>
-          <button id="sessions-back" class="secondary" data-ose="session-back">Change name</button>
+       <div id="campaign">
+        <div id="campaign-left">
+          <div class="divider"></div>
+          <div class="title-row"><button id="sessions-back" data-ose="session-back" title="Back to the main menu">&#8592;</button><h2>Campaign</h2></div>
+          <div class="subtitle"><b>##</b>Shared server</div>
+          <div class="divider"></div>
+          <div class="options">
+            <div class="list-title">all campaigns</div>
+            <ul id="sessions" data-ose="session-list"><li class="empty">asking the server...</li></ul>
+          </div>
+          <div class="row">
+            <button id="sessions-refresh" class="secondary" data-ose="session-refresh">Refresh</button>
+          </div>
         </div>
+        <div id="campaign-right">
         <details id="create-details" data-ose="create-session">
-          <summary>Create a session</summary>
+          <summary>Start a new campaign</summary>
           <label for="create-name">Session name</label>
           <input id="create-name" data-ose="create-name" type="text" maxlength="48" value="Shared campaign" />
           <label for="create-mode">Mode</label>
@@ -173,6 +260,8 @@
           </div>
           <button id="agency-apply" class="secondary" data-ose="agency-apply">Apply</button>
         </details>
+        </div>
+       </div>
       </div>
       <div class="screen" id="screen-ksc" data-ose="ksc">
         <label>Kerbal Space Center</label>
