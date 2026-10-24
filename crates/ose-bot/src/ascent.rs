@@ -93,8 +93,6 @@ pub async fn fly_ascent(
     let start_wall = Instant::now();
     let start_ut = c.latest.ut();
     let mut phase = Phase::Ascent;
-    let mut stages_fired = 0u32;
-    let mut last_stage_ut = f64::NEG_INFINITY;
     let mut last_cmd: Option<(f64, AttitudeMode)> = None;
     let mut last_cmd_ut = f64::NEG_INFINITY;
     let mut full_accel = 10.0_f64; // m/s^2 at full throttle, refreshed while burning
@@ -111,6 +109,20 @@ pub async fn fly_ascent(
         None => None,
     };
     let mut last_trace_ut = f64::NEG_INFINITY;
+    // A craft on the pad starts unlit: open the throttle and press stage once to light stage 0, as a
+    // player does.
+    c.set_controls(
+        vessel,
+        1.0,
+        AttitudeMode::PitchHeading {
+            pitch_deg: 90.0,
+            heading_deg: p.heading_deg,
+        },
+    )
+    .await?;
+    c.stage(vessel).await?;
+    let mut stages_fired = 1u32;
+    let mut last_stage_ut = c.latest.ut();
     c.request_warp(ose_sim::flight::MAX_PHYSICS_WARP).await?;
 
     loop {
