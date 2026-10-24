@@ -239,10 +239,24 @@ pub async fn fly_ascent(
                 (if top_up { 0.3 } else { 0.0 }, AttitudeMode::OrbitPrograde)
             }
             Phase::Circularise => {
+                // Burn horizontally, pitching up just enough to hold the vertical speed near zero: thrusting
+                // along the velocity from below apoapsis on a weak upper stage raises apoapsis instead of
+                // periapsis.
                 let need = (p.target_periapsis_m - pe_alt).max(0.0);
+                let r = radius + f.altitude_m;
+                let v_h = (f.surface_speed_mps.powi(2) - f.vertical_speed_mps.powi(2))
+                    .max(0.0)
+                    .sqrt()
+                    + r * equator_spin(c, body);
+                let g_eff = g - v_h * v_h / r;
+                let a_max = (f.twr * g).max(0.1);
+                let up = ((g_eff - 0.2 * f.vertical_speed_mps) / a_max).clamp(-0.5, 0.8);
                 (
                     (need / 10_000.0).clamp(0.2, 1.0),
-                    AttitudeMode::OrbitPrograde,
+                    AttitudeMode::PitchHeading {
+                        pitch_deg: up.asin().to_degrees(),
+                        heading_deg: p.heading_deg,
+                    },
                 )
             }
         };
@@ -286,7 +300,11 @@ pub async fn fly_ascent(
 
         // Staging: the current stage is dry, or the engines give nothing while we ask for thrust.
         let dry = f.propellant_fraction <= 1e-6;
-        let dead = f.throttle > 0.05 && f.thrust_kn <= 1e-6 && ut - last_cmd_ut > 1.0;
+        // engines spool up for a moment after staging or throttling up: only call a stage dead after that
+        let dead = f.throttle > 0.05
+            && f.thrust_kn <= 1e-6
+            && ut - last_cmd_ut > 3.0
+            && ut - last_stage_ut > 3.0;
         if throttle > 0.0 && (dry || dead) && f.stage + 1 < f.stages && ut - last_stage_ut > 1.0 {
             c.stage(vessel).await?;
             stages_fired += 1;
@@ -340,6 +358,16 @@ pub async fn wait_for_rails(c: &mut Client, vessel: u64, timeout: Duration) -> R
         .await;
     c.request_warp(1).await?;
     r
+}
+
+/// Angular speed of the body's rotation, rad/s (the readout's speeds are surface-relative).
+fn equator_spin(c: &Client, body: u16) -> f64 {
+    c.latest
+        .spins
+        .get(body as usize)
+        .filter(|s| s.rotation_period_s > 0.0)
+        .map(|s| std::f64::consts::TAU / s.rotation_period_s)
+        .unwrap_or(0.0)
 }
 
 fn same_attitude(a: AttitudeMode, b: AttitudeMode) -> bool {

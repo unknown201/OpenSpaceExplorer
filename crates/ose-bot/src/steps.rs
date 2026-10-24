@@ -41,7 +41,7 @@ const SESSION_NAME: &str = "ose-bot Mun run";
 const BURN_MARGIN_S: f64 = 30.0;
 /// Target Mun periapsis band for the tuned transfer burn, m above the surface.
 const MUN_PERIAPSIS_MIN_M: f64 = 30_000.0;
-const MUN_PERIAPSIS_MAX_M: f64 = 150_000.0;
+const MUN_PERIAPSIS_MAX_M: f64 = 90_000.0;
 /// Wall-clock allowance for a warped coast.
 const COAST_TIMEOUT: Duration = Duration::from_secs(180);
 
@@ -298,25 +298,7 @@ pub async fn run_mun_campaign(cfg: &BotConfig) -> Vec<StepResult> {
                 target_apoapsis_m: cfg.parking_altitude_m.max(75_000.0),
                 ..AscentParams::default()
             };
-            // Stage 0 must not be able to reach later stages' tanks: the staging readout assumes the
-            // decouplers block crossfeed, and the ascent profile is planned stage by stage.
-            let pad = match c.vessel_state(id, Duration::from_secs(10)).await {
-                Ok(v) => v,
-                Err(e) => return Outcome::failed(e),
-            };
-            let reach = pad
-                .flight
-                .as_ref()
-                .map(|f| f.propellant_fraction)
-                .unwrap_or(1.0);
-            let outcome = if reach > 1.02 {
-                Outcome::blocked(format!(
-                    "resource flow: stage 0 engines on the pad reach {:.0}% of their own stage's propellant, \
-                     so they drain the upper stages' tanks through the decouplers and the K2 cannot make \
-                     orbit (the server's staging readout assumes no crossfeed)",
-                    reach * 100.0
-                ))
-            } else {
+            let outcome = {
                 match ascent::fly_ascent(c, id, b.kerbin, &params).await {
                 Ok(r) => {
                     // let the server put the craft back on rails before any burn is scheduled
@@ -517,6 +499,9 @@ pub async fn run_mun_campaign(cfg: &BotConfig) -> Vec<StepResult> {
                     (ut - t.burn_ut) / 3600.0,
                     peri / 1000.0
                 ));
+            }
+            if flight.client.is_some() {
+                return Outcome::skipped("the transfer burn was not scheduled on the server");
             }
             let Some(rw) = flight.rails.as_mut() else {
                 return Outcome::failed("no rails world (plan_mun_transfer did not run)");

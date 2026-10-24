@@ -124,8 +124,13 @@ async fn eval(
     Ok((mun_patch(&patches, b).map(|(a, t, _)| (a, t)), patches))
 }
 
-/// Schedule the Hohmann burn, then nudge its delta-v upward in small steps until the server predicts a Mun
-/// periapsis between `alt_min_m` and `alt_max_m` above the surface (an exact Hohmann aims at the centre).
+/// Find a transfer burn the server predicts will pass the Mun with a periapsis between `alt_min_m` and
+/// `alt_max_m` above the surface. An exact Hohmann aims at the Mun's centre, and from a slightly elliptical
+/// parking orbit it can miss either way, so the bot searches like a player dragging a maneuver node: delta-v
+/// from 15 m/s below to 25 m/s above the Hohmann value in 0.5 m/s steps, at the planned burn time and then
+/// at burn times shifted by up to a minute either way. Each sample is one `ScheduleBurn` and the prediction
+/// the server sends back. Among in-band samples it keeps the one closest to the middle of the band, then
+/// schedules that burn.
 pub async fn tune_transfer_burn(
     c: &mut Client,
     b: &Bodies,
@@ -134,74 +139,56 @@ pub async fn tune_transfer_burn(
     alt_min_m: f64,
     alt_max_m: f64,
 ) -> Result<TunedBurn> {
-    const STEP_MPS: f64 = 0.5;
-    const MAX_STEPS: u32 = 40;
     let mut attempts = 0u32;
-    let (first, patches) = eval(c, b, vessel, plan.burn_ut, plan.dv_mps, &mut attempts).await?;
-    let Some((alt0, _)) = first else {
-        bail!(
-            "server predicts no Mun encounter for the Hohmann burn ({:.1} m/s); patches end {:?}",
-            plan.dv_mps,
-            patches.iter().map(|p| p.end).collect::<Vec<_>>()
-        );
-    };
-    let mut lo = (plan.dv_mps, alt0);
-    let mut chosen = None;
-    for k in 1..=MAX_STEPS {
-        let dv = plan.dv_mps + k as f64 * STEP_MPS;
-        let (hit, patches) = eval(c, b, vessel, plan.burn_ut, dv, &mut attempts).await?;
-        let Some((alt, enc)) = hit else {
-            bail!("lost the Mun encounter at {dv:.2} m/s");
-        };
-        if alt >= alt_min_m && alt <= alt_max_m {
-            chosen = Some((dv, alt, enc, patches));
-            break;
+    let mid = 0.5 * (alt_min_m + alt_max_m);
+    let mut best: Option<(f64, f64, f64, f64)> = None; // (score, dv, burn_ut, alt)
+    let mut closest: Option<(f64, f64, f64)> = None; // (|alt - mid|, dv, alt) over every encounter
+    let now = c.latest.ut();
+    for shift in [0.0, -20.0, 20.0, -40.0, 40.0, -60.0, 60.0] {
+        let burn_ut = plan.burn_ut + shift;
+        if burn_ut < now + 10.0 {
+            continue;
         }
-        if alt > alt_max_m {
-            // overshot: bisect between the last low sample and this one
-            let (mut a, mut bb) = (lo.0, dv);
-            let mut last = (dv, alt, enc, patches);
-            for _ in 0..8 {
-                let mid = 0.5 * (a + bb);
-                let (hit, patches) = eval(c, b, vessel, plan.burn_ut, mid, &mut attempts).await?;
-                let Some((alt, enc)) = hit else {
-                    bail!("lost the Mun encounter at {mid:.2} m/s");
-                };
-                last = (mid, alt, enc, patches);
-                if alt >= alt_min_m && alt <= alt_max_m {
-                    break;
-                }
-                if alt > alt_max_m {
-                    bb = mid;
-                } else {
-                    a = mid;
-                }
+        let mut k = -30;
+        while k <= 50 {
+            let dv = plan.dv_mps + k as f64 * 0.5;
+            k += 1;
+            let (hit, _) = eval(c, b, vessel, burn_ut, dv, &mut attempts).await?;
+            let Some((alt, _)) = hit else { continue };
+            let score = (alt - mid).abs();
+            if closest.is_none_or(|(s, _, _)| score < s) {
+                closest = Some((score, dv, alt));
             }
-            chosen = Some(last);
+            if alt >= alt_min_m && alt <= alt_max_m && best.is_none_or(|(s, ..)| score < s) {
+                best = Some((score, dv, burn_ut, alt));
+            }
+        }
+        if best.is_some() {
             break;
         }
-        lo = (dv, alt);
     }
-    let Some((dv, alt, enc, patches)) = chosen else {
-        bail!(
-            "could not raise the Mun periapsis above {:.0} km within {} m/s of the Hohmann burn (last {:.0} km at {:.2} m/s)",
-            alt_min_m / 1000.0,
-            MAX_STEPS as f64 * STEP_MPS,
-            lo.1 / 1000.0,
-            lo.0
-        );
+    let Some((_, dv, burn_ut, _)) = best else {
+        return Err(match closest {
+            Some((_, dv, alt)) => anyhow!(
+                "no burn within -15..+25 m/s of Hohmann and a minute of the window gives a Mun periapsis in \
+                 [{:.0}, {:.0}] km; closest {:.0} km at {dv:.2} m/s",
+                alt_min_m / 1000.0,
+                alt_max_m / 1000.0,
+                alt / 1000.0
+            ),
+            None => anyhow!(
+                "server predicts no Mun encounter for any burn within -15..+25 m/s of Hohmann ({:.1} m/s)",
+                plan.dv_mps
+            ),
+        });
     };
-    if alt < alt_min_m || alt > alt_max_m {
-        bail!(
-            "tuned burn predicts a Mun periapsis of {:.0} km, outside [{:.0}, {:.0}] km",
-            alt / 1000.0,
-            alt_min_m / 1000.0,
-            alt_max_m / 1000.0
-        );
-    }
+    // schedule the chosen burn last so it is the one the server keeps
+    let (hit, patches) = eval(c, b, vessel, burn_ut, dv, &mut attempts).await?;
+    let (alt, enc) =
+        hit.ok_or_else(|| anyhow!("the chosen burn lost its encounter on re-check"))?;
     Ok(TunedBurn {
         dv_mps: dv,
-        burn_ut: plan.burn_ut,
+        burn_ut,
         predicted_periapsis_alt_m: alt,
         predicted_encounter_ut: enc,
         attempts,

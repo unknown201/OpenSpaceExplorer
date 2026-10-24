@@ -14,7 +14,9 @@ enum Expect {
     Pass,
     /// Must pass, or be skipped when this machine lacks the KSP2 data.
     PassOrSkip,
-    /// The feature does not exist yet; blocked is the expected state, passing is progress.
+    /// The feature does not exist yet; blocked is the expected state, passing is progress. Every step of
+    /// the Mun run passes today; this stays for steps added past the Mun.
+    #[allow(dead_code)]
     Blocked,
 }
 
@@ -24,7 +26,7 @@ const FRONTIER: [(&str, Expect); 11] = [
     ("start_campaign", Expect::Pass),
     ("load_stock_craft", Expect::PassOrSkip),
     ("upload_and_launch_craft", Expect::Pass),
-    ("ascend_to_orbit", Expect::Blocked),
+    ("ascend_to_orbit", Expect::Pass),
     ("plan_mun_transfer", Expect::Pass),
     ("execute_transfer_burn", Expect::Pass),
     ("coast_to_mun_encounter", Expect::Pass),

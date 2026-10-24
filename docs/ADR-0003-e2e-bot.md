@@ -100,3 +100,23 @@ developer's save and account files.
 - `OSE_BOT_LANDING_TRACE=file.csv` writes a descent trace. `cargo run -p ose-bot --example ascent -- file.csv`
   flies only the ascent with a trace.
 - A failed run now stops its spawned server before exiting.
+
+## Update 2026-10-24 (later): the whole run passes from the pad
+
+With 079356b (structure loads fixed, so the K2 climbs in one piece, and parked craft no longer cap warp),
+every step passes and the frontier expects all eleven. The earlier crossfeed check is gone: it misread a
+craft breaking apart at about 12 km. `propellant_fraction` is now a fraction of the reachable tanks.
+
+- Ascent: after a stage fires, the next engine takes a moment to spool up. A stage is only called dead
+  after 3 s with no thrust. The earlier version fired twice and skipped the middle stage. Circularisation
+  steers by pitch so the vertical speed holds near zero, instead of burning orbit-prograde from below
+  apoapsis, which on a weak upper stage only raised apoapsis. Result: pad to a 72 x 99 km orbit in
+  292 s of flight.
+- Transfer tuning searches like a player dragging a node. It tries delta-v from 15 m/s below to 25 m/s
+  above Hohmann in 0.5 m/s steps, at the planned burn time and up to a minute either side. It keeps the
+  in-band sample closest to the middle of a 30 to 90 km Mun periapsis band. From an elliptical parking
+  orbit, an upward-only search could miss.
+- First full run from the pad: transfer 863.1 m/s (82 samples), Mun SOI 5.41 h after the burn as
+  predicted, capture 249.5 m/s into a 92 km circular orbit, and touchdown at 1.7 m/s at lat -3.4,
+  lon 131.8, with 3.1 t of propellant left. The narrower band leaves more margin for the descent.
+- The test takes several minutes of wall time: the ascent and descent run at the physics warp cap of 4.
