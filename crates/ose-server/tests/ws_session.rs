@@ -658,6 +658,21 @@ async fn parts_catalog_route_serves_geometry() {
     assert_eq!(terrier["is_decoupler"], false);
     assert!(terrier["size_m"]["x"].as_f64().unwrap() > 0.5, "{terrier}");
     assert!(terrier["attach_nodes"].as_array().unwrap().len() >= 2);
+    assert_eq!(terrier["engines"][0]["max_thrust_kn"], 60.0);
+    assert_eq!(terrier["engines"][0]["isp_vacuum_s"], 335.0);
+    assert_eq!(terrier["attach_rules"]["stack"], true);
+    let tank = arr
+        .iter()
+        .find(|p| {
+            !p["resource_containers"].as_array().unwrap().is_empty() && p["category"] == "FuelTank"
+        })
+        .expect("a fuel tank with containers");
+    assert!(
+        tank["resource_containers"][0]["capacity_units"]
+            .as_f64()
+            .unwrap()
+            > 0.0
+    );
     assert!(arr.iter().any(|p| p["is_decoupler"] == true));
     let res = http_get_json(&addr, "/resources.json").await;
     assert!(res

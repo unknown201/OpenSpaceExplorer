@@ -127,8 +127,35 @@ struct PartInfo {
     size_m: ose_math::DVec3,
     center_m: ose_math::DVec3,
     attach_nodes: Vec<AttachNodeInfo>,
+    attach_rules: AttachRulesInfo,
+    resource_containers: Vec<ContainerInfo>,
+    engines: Vec<EngineInfo>,
     has_engine: bool,
     is_decoupler: bool,
+}
+
+#[derive(serde::Serialize)]
+struct AttachRulesInfo {
+    stack: bool,
+    srf_attach: bool,
+    allow_stack: bool,
+    allow_srf_attach: bool,
+}
+
+#[derive(serde::Serialize)]
+struct ContainerInfo {
+    resource: String,
+    capacity_units: f64,
+    initial_units: f64,
+}
+
+#[derive(serde::Serialize)]
+struct EngineInfo {
+    id: String,
+    max_thrust_kn: f64,
+    isp_vacuum_s: f64,
+    isp_sea_level_s: f64,
+    propellant_mixture: String,
 }
 
 #[derive(serde::Serialize)]
@@ -171,6 +198,32 @@ fn part_infos(parts: &[ose_data::PartDef]) -> Vec<PartInfo> {
                         position: n.position,
                         orientation: n.orientation,
                         size: n.size,
+                    })
+                    .collect(),
+                attach_rules: AttachRulesInfo {
+                    stack: p.attach_rules.stack,
+                    srf_attach: p.attach_rules.srf_attach,
+                    allow_stack: p.attach_rules.allow_stack,
+                    allow_srf_attach: p.attach_rules.allow_srf_attach,
+                },
+                resource_containers: p
+                    .resource_containers
+                    .iter()
+                    .map(|c| ContainerInfo {
+                        resource: c.resource.clone(),
+                        capacity_units: c.capacity_units,
+                        initial_units: c.initial_units,
+                    })
+                    .collect(),
+                engines: p
+                    .engines
+                    .iter()
+                    .map(|e| EngineInfo {
+                        id: e.id.clone(),
+                        max_thrust_kn: e.max_thrust_kn,
+                        isp_vacuum_s: e.isp_curve.evaluate(0.0),
+                        isp_sea_level_s: e.isp_curve.evaluate(1.0),
+                        propellant_mixture: e.propellant_mixture.clone(),
                     })
                     .collect(),
                 has_engine: !p.engines.is_empty(),
@@ -695,7 +748,29 @@ fn find_craft(s: &Shared, id: u64, player_id: u64) -> Option<ose_data::craft::Cr
         .map(|c| c.craft.clone())
 }
 
-fn save_craft(s: &Shared, player_id: u64, craft: ose_data::craft::Craft) -> ServerMessage {
+/// Parts that list no resources get their definition containers at `initial_units` (the editor default of
+/// full tanks); parts that list resources are left as sent.
+fn fill_default_resources(s: &Shared, craft: &mut ose_data::craft::Craft) {
+    for p in &mut craft.parts {
+        if !p.resources.is_empty() {
+            continue;
+        }
+        if let Some(def) = s.parts.iter().find(|d| d.id == p.part_id) {
+            p.resources = def
+                .resource_containers
+                .iter()
+                .map(|c| ose_data::craft::StoredResource {
+                    resource: c.resource.clone(),
+                    stored_units: c.initial_units,
+                    capacity_units: c.capacity_units,
+                })
+                .collect();
+        }
+    }
+}
+
+fn save_craft(s: &Shared, player_id: u64, mut craft: ose_data::craft::Craft) -> ServerMessage {
+    fill_default_resources(s, &mut craft);
     if craft.parts.is_empty() || !craft.is_tree() {
         return ServerMessage::CraftSaved {
             id: None,
@@ -739,6 +814,9 @@ fn launch_craft(
     craft: &ose_data::craft::Craft,
     altitude_m: f64,
 ) -> ServerMessage {
+    let mut filled = craft.clone();
+    fill_default_resources(s, &mut filled);
+    let craft = &filled;
     let name = craft.name.clone();
     let parts = craft.parts.len() as u32;
     let m = craft.mass(&s.parts, &s.resources);
