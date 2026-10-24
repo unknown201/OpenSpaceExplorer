@@ -309,6 +309,26 @@ pub struct LandingGear {
     pub starts_extended: bool,
     /// Its shape folded out (the `EXTENDED` drag cube), when it folds.
     pub extended: Option<PartBounds>,
+    /// Wheel radius, m (`Data_WheelBase.Radius`).
+    #[serde(default)]
+    pub radius_m: f64,
+    /// A drive motor (`Data_WheelMotor`).
+    #[serde(default)]
+    pub motor: Option<WheelMotor>,
+    /// Brake torque, kN·m (`Data_WheelBrakes.MaxBrakeTorque`), and whether it steers (`Data_WheelSteering`).
+    #[serde(default)]
+    pub brake_torque_knm: f64,
+    #[serde(default)]
+    pub steerable: bool,
+}
+
+/// A wheel's drive motor as the original defines it (`Data_WheelMotor`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WheelMotor {
+    /// Drive torque, kN·m, against ground speed, m/s (`torqueCurve`); none past its last key.
+    pub torque_curve: Curve,
+    /// Electric charge at full drive, units/s (`requiredResource.Rate`).
+    pub ec_per_s: f64,
 }
 
 /// A heat shield as the original defines it (`Data_Heatshield`): above its ablation temperature it burns its

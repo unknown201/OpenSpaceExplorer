@@ -790,7 +790,14 @@ fn flight_readout(
         },
         dynamic_pressure_kpa: 0.0005 * rho * v_surf.length_squared(),
         facing: p.facing,
-        roll_ref: roll_reference(p.facing, up),
+        // a craft standing on the ground keeps its own heading (rovers turn)
+        roll_ref: if p.landed && !p.tipped {
+            p.drive.roll_ref(p.r)
+        } else {
+            roll_reference(p.facing, up)
+        },
+        drive_speed_mps: p.drive.speed_mps as f32,
+        brakes: p.drive.brakes,
         electric_charge: ec.0,
         electric_capacity: ec.1,
         has_control: p.controlled,
@@ -2245,6 +2252,16 @@ async fn session(mut socket: WebSocket, s: AppState) {
                                     Some(n) if n > 0 => ServerMessage::FlightAck { vessel, accepted: true, reason: None },
                                     _ => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("no packed parachutes".into()) },
                                 },
+                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
+                            };
+                            if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::Drive { vessel, throttle, steer, brakes }) => {
+                            let reply = match owned_vessel(&s, vessel, player_id) {
+                                Some(e) => {
+                                    let ok = s.universe.lock().expect("sim lock").set_drive(e, throttle as f64, steer as f64, brakes);
+                                    ServerMessage::FlightAck { vessel, accepted: ok, reason: (!ok).then(|| "not under power".into()) }
+                                }
                                 None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
                             };
                             if !send(&mut socket, &reply).await { break; }

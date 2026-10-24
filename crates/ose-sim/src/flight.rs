@@ -211,6 +211,131 @@ pub struct Powered {
     /// A Kerbal on EVA: on the ground, the throttle with a level attitude walks instead of firing the pack.
     #[serde(default)]
     pub walker: bool,
+    /// Driving on wheels (rovers).
+    #[serde(default)]
+    pub drive: Drive,
+}
+
+/// A vessel's wheels and how it is being driven. On the ground the wheel motors push it along its drive
+/// direction, the steering wheels turn it, and brakes and rolling resistance slow it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Drive {
+    /// The wheels it stands on (from its parts; empty without any).
+    pub wheels: Vec<DriveWheel>,
+    /// Which way it drives, craft axes (x, z): the root part's pointing direction laid flat.
+    pub forward: [f64; 2],
+    /// Spread of the wheels along that direction, m (sets how tightly it turns).
+    pub wheelbase_m: f64,
+    /// Wheel throttle (-1 back .. 1 forward), steering (-1 left .. 1 right) and brakes.
+    pub throttle: f64,
+    pub steer: f64,
+    pub brakes: bool,
+    /// Speed along the drive direction, m/s, and the compass heading of the craft's +Z axis, radians
+    /// clockwise from north.
+    pub speed_mps: f64,
+    pub heading_rad: f64,
+    /// Share of the motors' charge that was delivered (0..1).
+    pub powered: f64,
+}
+
+impl Default for Drive {
+    fn default() -> Self {
+        Drive {
+            wheels: Vec::new(),
+            forward: [0.0, 1.0],
+            wheelbase_m: 1.0,
+            throttle: 0.0,
+            steer: 0.0,
+            brakes: false,
+            speed_mps: 0.0,
+            heading_rad: 0.0,
+            powered: 1.0,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DriveWheel {
+    pub radius_m: f64,
+    /// Drive torque against ground speed, kN·m (`None`: a free wheel), and its charge use at full drive.
+    pub torque_knm: Option<ose_data::Curve>,
+    pub ec_per_s: f64,
+    pub brake_knm: f64,
+    pub steers: bool,
+}
+
+/// How far the steering wheels turn at full input, radians.
+pub const MAX_STEER_RAD: f64 = 0.5;
+/// Tyre grip (share of the weight a wheel can push with) and rolling resistance.
+pub const WHEEL_GRIP: f64 = 1.0;
+pub const ROLLING_RESISTANCE: f64 = 0.02;
+
+impl Drive {
+    /// The craft's +Z axis on the ground at `r` (the roll reference of a standing craft).
+    pub fn roll_ref(&self, r: DVec3) -> DVec3 {
+        let (_, east, north) = surface_frame(r);
+        north * self.heading_rad.cos() + east * self.heading_rad.sin()
+    }
+
+    /// The direction it drives in on the ground at `r`.
+    pub fn direction(&self, r: DVec3) -> DVec3 {
+        let (up, _, _) = surface_frame(r);
+        let z = self.roll_ref(r);
+        let x = up.cross(z);
+        (z * self.forward[1] + x * self.forward[0]).normalized()
+    }
+
+    /// One step on the ground for a vessel of `mass_t` under gravity `g`: the speed it ends with and how far
+    /// it went (m, along `direction`); the heading turns with the steering.
+    pub fn step(&mut self, mass_t: f64, g: f64, dt: f64) -> f64 {
+        if self.wheels.is_empty() || mass_t <= 0.0 {
+            self.speed_mps = 0.0;
+            return 0.0;
+        }
+        let v = self.speed_mps;
+        let input = self.throttle.clamp(-1.0, 1.0) * self.powered.clamp(0.0, 1.0);
+        let push: f64 = self
+            .wheels
+            .iter()
+            .filter_map(|w| {
+                let t = w.torque_knm.as_ref()?;
+                let last = t.keys.last().map(|k| k.t).unwrap_or(0.0);
+                let torque = if v.abs() >= last {
+                    0.0
+                } else {
+                    t.evaluate(v.abs()).max(0.0)
+                };
+                (w.radius_m > 0.0).then(|| torque / w.radius_m)
+            })
+            .sum::<f64>()
+            * input;
+        let grip = WHEEL_GRIP * mass_t * g;
+        let push = push.clamp(-grip, grip);
+        let brake: f64 = if self.brakes {
+            self.wheels
+                .iter()
+                .filter(|w| w.radius_m > 0.0)
+                .map(|w| w.brake_knm / w.radius_m)
+                .sum::<f64>()
+                .min(grip)
+        } else {
+            0.0
+        };
+        let resist = (brake + ROLLING_RESISTANCE * mass_t * g) / mass_t * dt;
+        let mut nv = v + push / mass_t * dt;
+        if nv.abs() <= resist && push.abs() <= resist * mass_t / dt {
+            nv = 0.0;
+        } else {
+            nv -= nv.signum() * resist.min(nv.abs());
+        }
+        self.speed_mps = nv;
+        if self.wheels.iter().any(|w| w.steers) {
+            let yaw = nv * (self.steer.clamp(-1.0, 1.0) * MAX_STEER_RAD).tan()
+                / self.wheelbase_m.max(0.5);
+            self.heading_rad = (self.heading_rad + yaw * dt).rem_euclid(std::f64::consts::TAU);
+        }
+        nv * dt
+    }
 }
 
 /// A Kerbal's walking speed at full throttle, m/s (the original's run is about this).
@@ -355,6 +480,7 @@ impl Powered {
             crash_tolerance_mps: 0.0,
             tipped: false,
             walker: false,
+            drive: Drive::default(),
         }
     }
 
@@ -691,13 +817,21 @@ pub fn integrate(
             if let Some(dir) = walk_dir {
                 p.r = p.r + dir * (WALK_SPEED_MPS * p.throttle * dt);
             }
+            // on wheels: drive along the ground
+            let mut rolling = DVec3::ZERO;
+            if !p.tipped && !p.drive.wheels.is_empty() {
+                let dir = p.drive.direction(p.r);
+                let moved = p.drive.step(p.mass_t, g, dt);
+                p.r = p.r + dir * moved;
+                rolling = dir * p.drive.speed_mps;
+            }
             let ang = omega * dt;
             let (s, c) = ang.sin_cos();
             p.r = DVec3::new(p.r.x * c - p.r.y * s, p.r.x * s + p.r.y * c, p.r.z);
             // standing on its lowest point (or its side once tipped over)
             let ground = ground_radius(body, terrain, p.r, ut + dt) + stand_height(p);
             p.r = p.r.normalized() * ground;
-            p.v = omega_v.cross(p.r);
+            p.v = omega_v.cross(p.r) + rolling;
             return out;
         }
     }

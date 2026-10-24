@@ -439,6 +439,55 @@ impl Structure {
         (self.rigid.rest_position(i) + offset, half)
     }
 
+    /// The wheels out under the craft, its drive direction and wheelbase, into the flight state's `drive`.
+    fn sync_drive(&self, p: &mut Powered) {
+        let wheels: Vec<usize> = (0..self.rigid.len())
+            .filter(|&i| {
+                self.rigid.present[i]
+                    && self.gear_out[i]
+                    && self.gear_defs[i]
+                        .as_ref()
+                        .is_some_and(|g| !g.leg && g.radius_m > 0.0)
+            })
+            .collect();
+        p.drive.wheels = wheels
+            .iter()
+            .map(|&i| {
+                let g = self.gear_defs[i].as_ref().expect("gear");
+                crate::flight::DriveWheel {
+                    radius_m: g.radius_m,
+                    torque_knm: g.motor.as_ref().map(|m| m.torque_curve.clone()),
+                    ec_per_s: g.motor.as_ref().map(|m| m.ec_per_s).unwrap_or(0.0),
+                    brake_knm: g.brake_torque_knm,
+                    steers: g.steerable,
+                }
+            })
+            .collect();
+        // the root part points the way it drives (a probe core's up), laid flat; craft +Z otherwise
+        let up = aero::rotate(self.part_rot[self.root], DVec3::new(0.0, 1.0, 0.0));
+        let flat = (up.x * up.x + up.z * up.z).sqrt();
+        p.drive.forward = if flat > 0.3 {
+            [up.x / flat, up.z / flat]
+        } else {
+            [0.0, 1.0]
+        };
+        // wheel spread along that direction (positions in craft axes: vessel z is craft -Z)
+        let along: Vec<f64> = wheels
+            .iter()
+            .map(|&i| {
+                let r = self.rigid.rest_position(i);
+                r.x * p.drive.forward[0] - r.z * p.drive.forward[1]
+            })
+            .collect();
+        let spread = along.iter().cloned().fold(f64::MIN, f64::max)
+            - along.iter().cloned().fold(f64::MAX, f64::min);
+        p.drive.wheelbase_m = if spread.is_finite() {
+            spread.max(0.5)
+        } else {
+            1.0
+        };
+    }
+
     /// Fold the landing gear out (or in); returns how many changed.
     pub fn deploy_gear(&mut self, out: bool) -> usize {
         let mut changed = 0;
@@ -513,6 +562,7 @@ impl Structure {
             self.trim_to(p.stage);
         }
         p.mass_t = self.net.mass_t().max(0.001);
+        self.sync_drive(p);
         let (clearance, footprint, tolerance) = self.ground_profile();
         p.ground_clearance_m = clearance;
         p.footprint_m = footprint;
@@ -599,7 +649,34 @@ impl Structure {
                 });
             }
         }
+        // wheel motors draw in proportion to the drive input
+        let motor_use: f64 = p
+            .drive
+            .wheels
+            .iter()
+            .filter(|w| w.torque_knm.is_some())
+            .map(|w| w.ec_per_s)
+            .sum::<f64>()
+            * p.drive.throttle.abs().clamp(0.0, 1.0);
+        let motors = (motor_use > 0.0).then(|| {
+            requests.push(Request {
+                part: self.root,
+                instructions: vec![instruction(motor_use)],
+                priority: 4,
+            });
+            requests.len() - 1
+        });
         let fractions = self.net.process(&requests, dt);
+        p.drive.powered = match motors {
+            Some(r) => fractions[r],
+            None => {
+                if self.net.available(self.root, ec) > 1e-9 {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
+        };
         // a wheel idling draws nothing but still needs charge to turn
         let total: f64 = wheels.iter().map(|w| w.1).sum();
         p.wheel_scale = if total > 0.0 {

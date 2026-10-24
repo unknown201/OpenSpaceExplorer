@@ -354,12 +354,29 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
     let mut heatshield: Option<ose_data::Heatshield> = None;
     let mut wheel: Option<(bool, f64)> = None;
     let mut deployable: Option<(bool, bool)> = None;
+    let mut wheel_radius = 0.0;
+    let mut motor: Option<ose_data::WheelMotor> = None;
+    let mut brake_torque = 0.0;
+    let mut steerable = false;
     if let Some(mods) = d["serializedPartModules"].as_array() {
         for m in mods {
             if let Some(entries) = m["ModuleData"].as_array() {
                 for entry in entries.iter() {
                     let o = &entry["DataObject"];
+                    if entry["Name"] == "Data_WheelMotor" {
+                        motor = Some(ose_data::WheelMotor {
+                            torque_curve: curve(&o["torqueCurve"]),
+                            ec_per_s: f(&o["requiredResource"], "Rate"),
+                        });
+                    }
+                    if entry["Name"] == "Data_WheelBrakes" {
+                        brake_torque = f(o, "MaxBrakeTorque");
+                    }
+                    if entry["Name"] == "Data_WheelSteering" {
+                        steerable = true;
+                    }
                     if entry["Name"] == "Data_WheelBase" {
+                        wheel_radius = f(o, "Radius");
                         let leg = o["WheelType"] == "LEG";
                         wheel = Some((leg, wheel.map(|w| w.1).unwrap_or(0.0)));
                     }
@@ -543,6 +560,10 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
             retractable: deployable.is_some_and(|d| d.0) && extended.is_some(),
             starts_extended: deployable.is_none_or(|d| d.1) || extended.is_none(),
             extended: if deployable.is_some() { extended } else { None },
+            radius_m: wheel_radius,
+            motor: motor.clone(),
+            brake_torque_knm: brake_torque,
+            steerable,
         }
     });
     let bounds = part_bounds(&drag_cubes, &attach_nodes);

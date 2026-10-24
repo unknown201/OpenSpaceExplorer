@@ -363,6 +363,17 @@ impl Universe {
         }
     }
 
+    /// Wheel throttle, steering and brakes for a vessel; false without a powered vessel.
+    pub fn set_drive(&mut self, e: Entity, throttle: f64, steer: f64, brakes: bool) -> bool {
+        let Some(mut p) = self.world.get_mut::<flight::Powered>(e) else {
+            return false;
+        };
+        p.drive.throttle = throttle.clamp(-1.0, 1.0);
+        p.drive.steer = steer.clamp(-1.0, 1.0);
+        p.drive.brakes = brakes;
+        true
+    }
+
     /// Set the heat difficulty options.
     pub fn set_heat_settings(&mut self, settings: thermal::HeatSettings) {
         self.world.insert_resource(settings);
@@ -789,7 +800,11 @@ impl Universe {
             };
             let mut pieces = Vec::new();
             // a vessel standing on the ground with its engines off just turns with the body: one long step
-            let parked = p.landed && !p.crashed && p.throttle <= 0.0;
+            let parked = p.landed
+                && !p.crashed
+                && p.throttle <= 0.0
+                && p.drive.throttle == 0.0
+                && p.drive.speed_mps == 0.0;
             let (steps, step_dt) = if parked {
                 (1, dt * ticks.max(1) as f64)
             } else {
@@ -1554,6 +1569,81 @@ mod tests {
             "the shielded pod comes through: {alt} m, pod at {hottest} K"
         );
         assert!(hottest < 850.0, "{hottest} K");
+    }
+
+    #[test]
+    fn a_rover_drives_steers_and_brakes_on_its_wheels() {
+        let (mut u, body, _, _) = k1_on_real_kerbin();
+        let crafts: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let defs: Vec<ose_data::PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let res: Vec<ose_data::ResourceDef> =
+            serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
+        let c = crafts
+            .iter()
+            .find(|c| c.name == "Inquisitive Rover")
+            .unwrap();
+        let report = ose_data::staging::delta_v_by_stage(c, &defs, &res);
+        let spec = flight::FlightSpec::from_report(&report, &[], &[], 1.5);
+        let v = u.spawn_powered_on_surface("Rover", body, spec, 0.0, 0.0);
+        u.set_structure(v, structure::Structure::build(c, &defs, &res));
+        u.step();
+        let p0 = u.powered(v).unwrap().clone();
+        assert!(p0.landed && !p0.tipped);
+        assert_eq!(p0.drive.wheels.len(), 6, "six motor wheels");
+        assert_eq!(
+            p0.drive.forward,
+            [0.0, 1.0],
+            "the probe core points along +Z"
+        );
+        let ground = |u: &Universe| {
+            // position over the ground, taking out the body's turn
+            let p = u.powered(v).unwrap();
+            let body_e = u.body_entity("Kerbin").unwrap();
+            let b = u.world.get::<bodies::Body>(body_e).unwrap();
+            let (lat, lon) = flight::lat_lon(b, p.r, u.ut());
+            (lat, lon)
+        };
+        let (lat0, lon0) = ground(&u);
+        // full drive for 10 s
+        assert!(u.set_drive(v, 1.0, 0.0, false));
+        for _ in 0..(10 * TICKS_PER_SECOND) {
+            u.step();
+        }
+        let p = u.powered(v).unwrap().clone();
+        assert!(p.landed && !p.crashed);
+        assert!(
+            p.drive.speed_mps > 5.0 && p.drive.speed_mps < 12.0,
+            "{} m/s",
+            p.drive.speed_mps
+        );
+        let (lat1, lon1) = ground(&u);
+        let moved = ((lat1 - lat0).powi(2) + (lon1 - lon0).powi(2))
+            .sqrt()
+            .to_radians()
+            * 600_000.0;
+        assert!(moved > 40.0, "drove {moved} m");
+        // heading north: latitude grows
+        assert!(lat1 > lat0, "{lat0} -> {lat1}");
+        assert!(p.drive.powered > 0.9, "the batteries feed the motors");
+        // steering turns it
+        u.set_drive(v, 1.0, 1.0, false);
+        for _ in 0..(3 * TICKS_PER_SECOND) {
+            u.step();
+        }
+        let turned = u.powered(v).unwrap().drive.heading_rad;
+        assert!(turned > 0.3 && turned < 6.0, "turned right to {turned} rad");
+        // brakes stop it
+        u.set_drive(v, 0.0, 0.0, true);
+        for _ in 0..(5 * TICKS_PER_SECOND) {
+            u.step();
+        }
+        assert_eq!(
+            u.powered(v).unwrap().drive.speed_mps,
+            0.0,
+            "braked to a stop"
+        );
     }
 
     #[test]
