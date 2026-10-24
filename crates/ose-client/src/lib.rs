@@ -2306,6 +2306,20 @@ impl App {
             other => format!("{other:?}"),
         };
         set_text(&self.doc, "fh-attitude", &att);
+        set_text(
+            &self.doc,
+            "fh-ec",
+            &format!("EC {:.0} / {:.0}", f.electric_charge, f.electric_capacity),
+        );
+        set_text(
+            &self.doc,
+            "fh-control",
+            if f.has_control {
+                ""
+            } else {
+                "NO CONTROL: the probe cores are out of electric charge"
+            },
+        );
         if let Some(bar) = self
             .doc
             .get_element_by_id("fh-throttle-fill")
