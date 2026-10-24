@@ -13,6 +13,8 @@
 
 pub mod kerbin_time;
 #[cfg(target_arch = "wasm32")]
+pub mod ksc3d;
+#[cfg(target_arch = "wasm32")]
 pub mod menu3d;
 #[cfg(target_arch = "wasm32")]
 pub mod render;
@@ -93,6 +95,11 @@ struct App {
     /// The main menu's 3D backdrop (the original's menu scene), drawn while no session is joined.
     #[cfg(target_arch = "wasm32")]
     menu3d: menu3d::MenuBackdrop,
+    /// The Kerbal Space Center as a 3D scene (the original's campus), shown behind the facility panel.
+    #[cfg(target_arch = "wasm32")]
+    ksc3d: ksc3d::KscView,
+    /// Where the last mousedown happened, to tell a click from a drag.
+    press: Option<(f64, f64)>,
     gpu_canvas: HtmlCanvasElement,
     /// 3D orbit camera: yaw and pitch (radians) around the focus, distance in kilometres.
     orbit_yaw: f64,
@@ -271,6 +278,9 @@ pub fn start() -> Result<(), JsValue> {
         gpu: None,
         #[cfg(target_arch = "wasm32")]
         menu3d: menu3d::MenuBackdrop::new(),
+        #[cfg(target_arch = "wasm32")]
+        ksc3d: ksc3d::KscView::new(),
+        press: None,
         gpu_canvas: get("gpu")?.dyn_into()?,
         orbit_yaw: 0.6,
         orbit_pitch: 0.5,
@@ -753,6 +763,11 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
             ev.prevent_default();
             let factor = if ev.delta_y() > 0.0 { 1.25 } else { 0.8 };
             let mut app = a.borrow_mut();
+            #[cfg(target_arch = "wasm32")]
+            if app.in_session && app.ksc_active() {
+                app.ksc3d.zoom(factor);
+                return;
+            }
             if app.is_3d() {
                 app.orbit_dist_km = (app.orbit_dist_km * factor).clamp(1.0e-2, 1.0e10);
             } else {
@@ -768,6 +783,7 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
             if ev.button() == 0 {
                 let mut app = a.borrow_mut();
                 app.drag = Some((ev.client_x() as f64, ev.client_y() as f64));
+                app.press = app.drag;
                 app.canvas.class_list().add_1("dragging").ok();
                 app.gpu_canvas.class_list().add_1("dragging").ok();
             }
@@ -779,6 +795,27 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
     let a = app.clone();
     let on_move = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
         let mut app = a.borrow_mut();
+        #[cfg(target_arch = "wasm32")]
+        if app.in_session && app.ksc_active() {
+            if let Some((x, y)) = app.drag {
+                let (nx, ny) = (ev.client_x() as f64, ev.client_y() as f64);
+                app.ksc3d.orbit(nx - x, ny - y);
+                app.drag = Some((nx, ny));
+            } else {
+                let rect = app.gpu_canvas.get_bounding_client_rect();
+                let (px, py) = (
+                    (ev.client_x() as f64 - rect.left()) * app.dpr,
+                    (ev.client_y() as f64 - rect.top()) * app.dpr,
+                );
+                let hit = app.gpu.as_ref().and_then(|g| app.ksc3d.pick(g, px, py));
+                app.ksc3d.hovered = hit;
+                app.gpu_canvas
+                    .style()
+                    .set_property("cursor", if hit.is_some() { "pointer" } else { "grab" })
+                    .ok();
+            }
+            return;
+        }
         if let Some((x, y)) = app.drag {
             let (nx, ny) = (ev.client_x() as f64, ev.client_y() as f64);
             if app.is_3d() {
@@ -794,11 +831,34 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
     on_move.forget();
 
     let a = app.clone();
-    let on_up = Closure::<dyn FnMut(MouseEvent)>::new(move |_ev: MouseEvent| {
+    let on_up = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
         let mut app = a.borrow_mut();
         app.drag = None;
         app.canvas.class_list().remove_1("dragging").ok();
         app.gpu_canvas.class_list().remove_1("dragging").ok();
+        // A press and release within a few pixels on the KSC scene is a click on a facility.
+        #[cfg(target_arch = "wasm32")]
+        if let Some((x, y)) = app.press.take() {
+            let (nx, ny) = (ev.client_x() as f64, ev.client_y() as f64);
+            if ev.button() == 0
+                && (nx - x).abs() < 4.0
+                && (ny - y).abs() < 4.0
+                && app.in_session
+                && app.ksc_active()
+            {
+                let rect = app.gpu_canvas.get_bounding_client_rect();
+                let (px, py) = ((nx - rect.left()) * app.dpr, (ny - rect.top()) * app.dpr);
+                let hit = app.gpu.as_ref().and_then(|g| app.ksc3d.pick(g, px, py));
+                if let Some(i) = hit {
+                    let facility = app.ksc3d.buildings()[i].facility.clone();
+                    app.open_facility(&facility);
+                }
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            app.press = None;
+        }
     });
     window.add_event_listener_with_callback("mouseup", on_up.as_ref().unchecked_ref())?;
     on_up.forget();
@@ -940,6 +1000,65 @@ impl App {
             let extent = scene.system_extent(self.camera.focus);
             self.camera.frame(extent);
             self.orbit_dist_km = (extent / 1000.0) * 2.4;
+        }
+    }
+
+    /// True while the KSC hub screen is the open menu screen.
+    fn ksc_active(&self) -> bool {
+        self.doc
+            .query_selector("#menu:not(.hidden) #screen-ksc.open")
+            .ok()
+            .flatten()
+            .is_some()
+    }
+
+    /// Move the facility tooltip over the hovered building, or hide it.
+    #[cfg(target_arch = "wasm32")]
+    fn place_ksc_tooltip(&self) {
+        let Some(tip) = self
+            .doc
+            .get_element_by_id("ksc-tooltip")
+            .and_then(|e| e.dyn_into::<HtmlElement>().ok())
+        else {
+            return;
+        };
+        let (Some(gpu), Some(i)) = (&self.gpu, self.ksc3d.hovered) else {
+            tip.style().set_property("display", "none").ok();
+            return;
+        };
+        let Some(b) = self.ksc3d.buildings().get(i) else {
+            tip.style().set_property("display", "none").ok();
+            return;
+        };
+        match self.ksc3d.label_anchor(gpu, i) {
+            Some((x, y)) => {
+                let (x, y) = (x / self.dpr, y / self.dpr);
+                let text = if b.is_open() {
+                    b.label().to_string()
+                } else {
+                    format!("{} (not yet)", b.label())
+                };
+                tip.set_text_content(Some(&text));
+                tip.set_attribute("data-ose-facility", &b.facility).ok();
+                tip.style().set_property("display", "block").ok();
+                tip.style().set_property("left", &format!("{x:.0}px")).ok();
+                tip.style()
+                    .set_property("top", &format!("{:.0}px", y - 12.0))
+                    .ok();
+            }
+            None => {
+                tip.style().set_property("display", "none").ok();
+            }
+        }
+    }
+
+    /// A facility was clicked in the KSC scene: open its screen.
+    fn open_facility(&mut self, facility: &str) {
+        match facility {
+            "VAB" => self.open_vab(None),
+            "TrackingCenter" => self.show_menu(false),
+            f if f.starts_with("Launchpad") => self.open_launchpad(),
+            _ => {}
         }
     }
 
@@ -2301,6 +2420,27 @@ impl App {
         ctx.set_fill_style_str("#06080f");
         ctx.fill_rect(0.0, 0.0, w, h);
 
+        // The KSC hub screen shows the campus in 3D; elsewhere its tooltip must not linger.
+        #[cfg(target_arch = "wasm32")]
+        if !(self.in_session && self.ksc_active()) && self.ksc3d.hovered.is_some() {
+            self.ksc3d.hovered = None;
+            self.place_ksc_tooltip();
+        }
+        #[cfg(target_arch = "wasm32")]
+        if self.in_session && self.ksc_active() {
+            if let Some(gpu) = &mut self.gpu {
+                let was_ready = self.ksc3d.is_ready();
+                if self.ksc3d.frame(gpu) {
+                    if !was_ready {
+                        self.gpu_canvas
+                            .set_attribute("data-ose-ksc-scene", "ready")
+                            .ok();
+                    }
+                    self.place_ksc_tooltip();
+                }
+                return;
+            }
+        }
         // Before a session is joined the 3D view shows the menu backdrop.
         #[cfg(target_arch = "wasm32")]
         if !self.in_session {

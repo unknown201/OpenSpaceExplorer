@@ -32,11 +32,22 @@ the order a new player meets it, using the original's assets).
   (clockwise from outside once X is mirrored), so back-face culling had been showing the far inside of
   every sphere and tank. This re-export is the one the server carries from 2026-10-24.
 
+- The KSC hub is the original's campus: `tools/export_ksc.py` reads `KSC.prefab` (`kerbin-ksc_assets_all.bundle`,
+  about 40,000 objects) and writes `ksc/ksc.glb`, one glTF where the 1,093 kept LOD0 renderers are nodes
+  sharing 174 meshes (the renderer uploads each mesh once and draws it per node), with the lower LODs and the
+  thousands of light, sign and tyre-mark props left out, plus a flat ground square where the original has
+  procedural terrain. `ksc/scene.json` carries the camera origin and look-at the original starts from and
+  the clickable facilities (`KSCTargetableBuilding`) as world-space boxes. `ose-client::ksc3d` orbits that
+  camera (drag, wheel), outlines the facility under the pointer with a tooltip, and a click opens it; the
+  facility panel follows `KSCMenu.prefab` (VAB, Training Center, R&D Center, Tracking Station, Mission
+  Control, Launchpad) 48 px from the left.
+
 ## Consequences
 
 - The menu needs the exported assets on the server; without them the backdrop stays black and the menu
   still works (the e2e suite on GitHub has no game install).
 - Fonts: the original's menu fonts (Sbliquid, Realtime Rounded) are not in the bundles as font files, only
   as TextMeshPro atlases, so the page uses a system sans-serif at the original's sizes.
+- Not yet at the KSC: the layered "Standard Tileable (Vertex Color)" building shader (only each material's base map is drawn, so buildings read darker than the original), terrain, trees and props, the day cycle, the launch pad flyout.
 - Not yet: the sun flare and bloom, the ship's team colours (`ApplyTeamColors` masks), the Settings and
   Extras screens, and the menu's hover and fade animations.

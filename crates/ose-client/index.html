@@ -124,10 +124,10 @@
     :root { --u: min(calc(100vh / 1080), calc(100vw / 1920)); --ui-font: "Segoe UI", "Noto Sans", Roboto, system-ui, sans-serif; }
     #menu { font-family: var(--ui-font); }
     /* The HUD stays in the DOM but invisible on the menu screens (#status inside it is a test hook). */
-    body:has(#screen-name.open) #hud, body:has(#screen-sessions.open) #hud { opacity: 0; pointer-events: none; }
-    body:has(#screen-name.open) #hud > *, body:has(#screen-sessions.open) #hud > * { pointer-events: none; }
-    body:has(#screen-name.open) #crumbs, body:has(#screen-sessions.open) #crumbs,
-    body:has(#screen-name.open) #help, body:has(#screen-sessions.open) #help, body:has(#screen-name.open) #labels, body:has(#screen-sessions.open) #labels { display: none; }
+    body:has(#menu:not(.hidden) #screen-name.open) #hud, body:has(#menu:not(.hidden) #screen-sessions.open) #hud { opacity: 0; pointer-events: none; }
+    body:has(#menu:not(.hidden) #screen-name.open) #hud > *, body:has(#menu:not(.hidden) #screen-sessions.open) #hud > * { pointer-events: none; }
+    body:has(#menu:not(.hidden) #screen-name.open) #crumbs, body:has(#menu:not(.hidden) #screen-sessions.open) #crumbs,
+    body:has(#menu:not(.hidden) #screen-name.open) #help, body:has(#menu:not(.hidden) #screen-sessions.open) #help, body:has(#menu:not(.hidden) #screen-name.open) #labels, body:has(#menu:not(.hidden) #screen-sessions.open) #labels { display: none; }
     #menu:has(#screen-name.open), #menu:has(#screen-sessions.open) { background: transparent; align-items: stretch; justify-content: stretch; }
     #menu-card:has(#screen-name.open), #menu-card:has(#screen-sessions.open) { width: auto; max-height: none; overflow: visible;
       position: fixed; inset: 0; padding: 0; background: none; border: 0; border-radius: 0; }
@@ -204,6 +204,36 @@
       background: #1a1a1a; border: calc(2 * var(--u)) solid #c2e3d1; border-radius: calc(14 * var(--u)); color: #fff; }
     #campaign-right .start button:hover { background: #2a2f2a; }
     #campaign-right .create .info { margin-top: calc(12 * var(--u)); font-size: calc(12 * var(--u)); text-align: center; }
+    /* KSC hub, after KSCMenu.prefab: the facility panel 48 px from the left over the 3D campus (ksc3d.rs);
+       the rest of the screen stays clickable so buildings can be picked. */
+    #menu:has(#screen-ksc.open) { background: transparent; pointer-events: none; align-items: flex-start; justify-content: flex-start; }
+    #menu-card:has(#screen-ksc.open) { pointer-events: auto; width: auto; margin: calc(36 * var(--u)) 0 0 calc(48 * var(--u)); padding: 0; background: none; border: 0; }
+    #menu-card:has(#screen-ksc.open) > h1, #menu-card:has(#screen-ksc.open) > .sub, #menu-card:has(#screen-ksc.open) > .info { display: none; }
+    #menu-card:has(#screen-ksc.open) > .note { color: #f0a070; font-size: calc(14 * var(--u)); margin: calc(8 * var(--u)) 0 0 calc(16 * var(--u)); }
+    body:has(#menu:not(.hidden) #screen-ksc.open) #hud { opacity: 0; pointer-events: none; }
+    body:has(#menu:not(.hidden) #screen-ksc.open) #crumbs, body:has(#menu:not(.hidden) #screen-ksc.open) #help, body:has(#menu:not(.hidden) #screen-ksc.open) #labels { display: none; }
+    #ksc-panel { width: calc(440 * var(--u)); box-sizing: border-box; padding: calc(16 * var(--u)) calc(16 * var(--u)) calc(25 * var(--u)); border-radius: calc(6 * var(--u));
+      background: #ebf0ff96; border-bottom: calc(6 * var(--u)) solid #ebf0ff; color: #0a0a0a; font-family: var(--ui-font); }
+    #ksc-panel .ksc-title { display: flex; align-items: center; gap: calc(10 * var(--u)); margin: 0 0 calc(8 * var(--u)); }
+    #ksc-panel .ksc-title .flag { width: calc(56 * var(--u)); height: calc(56 * var(--u)); background: #f23d4d; clip-path: polygon(0 0, 100% 0, 100% 75%, 50% 100%, 0 75%); display: flex; align-items: center; justify-content: center; }
+    #ksc-panel .ksc-title .flag img { width: calc(40 * var(--u)); height: calc(40 * var(--u)); }
+    #ksc-panel h2 { margin: 0; font-size: calc(30 * var(--u)); font-weight: 500; letter-spacing: 0.02em; color: #000; }
+    #ksc-buildings { display: block; margin: 0; padding: calc(8 * var(--u)) calc(4 * var(--u)); background: #ebf0ffcc; border: 1px solid #6a718f; }
+    #ksc-buildings button { display: flex; align-items: center; gap: calc(16 * var(--u)); width: 100%; min-width: calc(304 * var(--u)); height: calc(44 * var(--u)); margin: 0 0 calc(8 * var(--u)); padding: 0 calc(16 * var(--u));
+      background: #fff; border: 0; border-left: calc(6 * var(--u)) solid #fff; border-radius: 0; color: #0a0a0a; font-size: calc(20 * var(--u)); font-weight: 700; text-align: left; position: relative; }
+    #ksc-buildings button::after { content: ""; position: absolute; left: calc(16 * var(--u)); right: calc(16 * var(--u)); bottom: calc(-5 * var(--u)); height: calc(2 * var(--u)); background: repeating-linear-gradient(90deg, #828282 0 calc(2 * var(--u)), transparent calc(2 * var(--u)) calc(6 * var(--u))); }
+    #ksc-buildings button:last-child::after { display: none; }
+    #ksc-buildings button img { width: calc(24 * var(--u)); height: calc(24 * var(--u)); }
+    #ksc-buildings button:hover { background: #cde6ff; border-left-color: #2f8fff; }
+    #ksc-buildings button:disabled { opacity: 0.45; cursor: default; }
+    #ksc-buildings button:disabled:hover { background: #fff; border-left-color: #fff; }
+    #ksc-buildings button.launch { color: #4f8f1f; }
+    #ksc-buildings button.launch .arrow { margin-left: auto; width: 0; height: 0; border-left: calc(8 * var(--u)) solid transparent; border-right: calc(8 * var(--u)) solid transparent; border-top: calc(8 * var(--u)) solid #4f8f1f; }
+    #ksc-panel > .row { margin-top: calc(10 * var(--u)); }
+    #ksc-panel > .row button { margin: 0; background: #ffffffb0; border: 1px solid #6a718f; color: #0a0a0a; font-size: calc(14 * var(--u)); }
+    #ksc-tooltip { position: fixed; display: none; transform: translate(-50%, -100%); padding: calc(6 * var(--u)) calc(12 * var(--u)); background: #ebf0ffe6; border: 1px solid #6a718f; border-radius: calc(4 * var(--u));
+      color: #0a0a0a; font: 700 calc(16 * var(--u)) var(--ui-font); white-space: nowrap; pointer-events: none; z-index: 30; }
+    #ksc-tooltip::after { content: ""; position: absolute; left: 50%; bottom: calc(-8 * var(--u)); transform: translateX(-50%); border-left: calc(8 * var(--u)) solid transparent; border-right: calc(8 * var(--u)) solid transparent; border-top: calc(8 * var(--u)) solid #ebf0ffe6; }
   </style>
 </head>
 <body>
@@ -286,16 +316,18 @@
        </div>
       </div>
       <div class="screen" id="screen-ksc" data-ose="ksc">
-        <label>Kerbal Space Center</label>
-        <div id="ksc-buildings">
-          <button id="ksc-launchpad" data-ose="ksc-launchpad">Launch pad<small>pick a craft and launch it</small></button>
-          <button id="ksc-tracking" data-ose="ksc-tracking">Tracking Station<small>the map view: bodies, vessels, nodes</small></button>
-          <button id="ksc-vab" data-ose="ksc-vab">Vehicle Assembly Building<small>build a craft from parts and save it</small></button>
-          <button id="ksc-rnd" data-ose="ksc-rnd" disabled title="Phase 8">Research and Development<small>tech tree; not yet (Phase 8)</small></button>
-          <button id="ksc-mission" data-ose="ksc-mission" disabled title="Phase 8">Mission Control<small>missions; not yet (Phase 8)</small></button>
-          <button id="ksc-training" data-ose="ksc-training" disabled title="Phase 8">Training Center<small>tutorials; not yet (Phase 8)</small></button>
+        <div id="ksc-panel">
+          <div class="ksc-title"><span class="flag"><img src="assets/ui/ICO-Map-KSC-16x16.png" alt="" /></span><h2>Kerbal Space Center (KSC)</h2></div>
+          <div id="ksc-buildings">
+            <button id="ksc-vab" data-ose="ksc-vab"><img src="assets/ui/ICO-VAB-Med.png" alt="" />VAB</button>
+            <button id="ksc-training" data-ose="ksc-training" disabled title="not yet"><img src="assets/ui/ICO-Training-Center-Med.png" alt="" />Training Center</button>
+            <button id="ksc-rnd" data-ose="ksc-rnd" disabled title="not yet"><img src="assets/ui/ICO-RDCenter-Med.png" alt="" />R&amp;D Center</button>
+            <button id="ksc-tracking" data-ose="ksc-tracking"><img src="assets/ui/ICO-Tracking-Station-Med.png" alt="" />Tracking Station</button>
+            <button id="ksc-mission" data-ose="ksc-mission" disabled title="not yet"><img src="assets/ui/ICO-Mission-Control-Med.png" alt="" />Mission Control</button>
+            <button id="ksc-launchpad" data-ose="ksc-launchpad" class="launch"><img src="assets/ui/ICO-Launchpad-Med.png" alt="" />Launchpad<span class="arrow"></span></button>
+          </div>
+          <div class="row"><button id="ksc-sessions" class="secondary" data-ose="ksc-sessions">Sessions and agency</button></div>
         </div>
-        <div class="row"><button id="ksc-sessions" class="secondary" data-ose="ksc-sessions">Sessions and agency</button></div>
       </div>
       <div class="screen" id="screen-launchpad" data-ose="launchpad">
         <label>Launch pad: your craft library</label>
@@ -342,6 +374,7 @@
       <div class="info" id="menu-info">Esc opens this menu again. Drag to pan, wheel to zoom, click a name to focus, F to frame.</div>
     </div>
   </div>
+  <div id="ksc-tooltip" data-ose="ksc-tooltip"></div>
   <div id="node-panel" data-ose="node-panel">
     <label>time <input id="node-dt" type="range" min="60" max="600" step="1" value="120" /><span id="node-dt-text">T-2:00</span></label>
     <label>prograde <input id="node-prograde" type="range" min="-1500" max="1500" step="1" value="0" /><span id="node-prograde-text">0 m/s</span></label>

@@ -39,6 +39,9 @@ UI_SPRITES = [
     "Divider-DashSlash", "Divider-EqualSign", "ELE-tile-highlighted", "ELE-Placeholder-Flag", "flag_rocket",
     "bg2", "Background", "Tile-Dash-002", "WB-ICO-Check", "WB-ICO-Close-X", "ICO-Edit", "ICO-Launchpad",
     "Toggle-BG", "Toggle-Puck", "Scrollbar-Handle", "Scrollbar-Path", "cursor_arrow@2x", "logo_pd",
+    "ICO-VAB-Med", "ICO-Training-Center-Med", "ICO-RDCenter-Med", "ICO-Tracking-Station-Med", "ICO-Mission-Control-Med",
+    "ICO-Launchpad-Med", "ICO-Runway-16", "ICO-BoatLaunch-24", "ICO-Flag-2x", "ICO-Map-KSC-16x16", "ICO-Arrow-Pixel-Med",
+    "Frame-6px-rad-shade", "Border-6pxRadius-ThiccBottom", "DIV-Period-002-1x", "TILE-TextPixelGrid", "SHAPE-Pixel-000-Fill-Med",
 ]
 
 

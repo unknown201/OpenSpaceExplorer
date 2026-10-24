@@ -110,11 +110,16 @@ struct GpuPrimitive {
     texture: Option<usize>,
     /// glTF `alphaMode: BLEND`: drawn after the opaque primitives without writing depth.
     blend: bool,
+    /// The material's base colour factor, multiplied into the draw colour.
+    color: [f32; 4],
 }
 
-/// A loaded GLB: primitives with their node transforms (already flattened), and textures by image index.
+/// A loaded GLB: each mesh primitive uploaded once, the node instances that draw them with their flattened
+/// transforms, and textures by image index.
 pub struct Model {
-    primitives: Vec<(GpuPrimitive, Mat4)>,
+    meshes: Vec<GpuPrimitive>,
+    /// (index into `meshes`, world transform within the model) per drawn node.
+    primitives: Vec<(usize, Mat4)>,
     textures: Vec<Option<wgpu::BindGroup>>,
     /// Radius of the mesh in its own units (planet spheres), from the GLB extras.
     pub mesh_radius: f64,
@@ -130,12 +135,14 @@ struct PendingTexture {
 }
 
 /// Parsed GLB before GPU upload.
-/// Vertices, indices, base-colour image index, alpha blending, and node transform of one primitive
+/// Vertices, indices, base-colour image index, alpha blending and base colour factor of one mesh primitive
 /// before upload.
-type CpuPrimitive = (Vec<Vertex>, Vec<u32>, Option<usize>, bool, Mat4);
+type CpuMesh = (Vec<Vertex>, Vec<u32>, Option<usize>, bool, [f32; 4]);
 
 struct CpuModel {
-    primitives: Vec<CpuPrimitive>,
+    meshes: Vec<CpuMesh>,
+    /// (mesh index, node transform) per instance.
+    primitives: Vec<(usize, Mat4)>,
     image_uris: Vec<String>,
     mesh_radius: f64,
 }
@@ -607,15 +614,16 @@ impl Renderer {
         let ready: Vec<(String, CpuModel)> = self.inbox.borrow_mut().drain(..).collect();
         for (name, cpu) in ready {
             self.pending.remove(&name);
-            let mut primitives = Vec::new();
-            let mut bounds_min = Vec3::splat(f32::INFINITY);
-            let mut bounds_max = Vec3::splat(f32::NEG_INFINITY);
-            for (vertices, indices, texture, blend, transform) in &cpu.primitives {
+            let mut meshes = Vec::new();
+            let mut local_bounds: Vec<(Vec3, Vec3)> = Vec::new();
+            for (vertices, indices, texture, blend, color) in &cpu.meshes {
+                let mut lo = Vec3::splat(f32::INFINITY);
+                let mut hi = Vec3::splat(f32::NEG_INFINITY);
                 for v in vertices {
-                    let p = transform.transform_point3(Vec3::from(v.pos));
-                    bounds_min = bounds_min.min(p);
-                    bounds_max = bounds_max.max(p);
+                    lo = lo.min(Vec3::from(v.pos));
+                    hi = hi.max(Vec3::from(v.pos));
                 }
+                local_bounds.push((lo, hi));
                 let vb = self.device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("vertices"),
                     size: (vertices.len() * std::mem::size_of::<Vertex>()) as u64,
@@ -632,17 +640,36 @@ impl Renderer {
                 });
                 self.queue
                     .write_buffer(&ib, 0, bytemuck::cast_slice(indices));
-                primitives.push((
-                    GpuPrimitive {
-                        vertices: vb,
-                        indices: ib,
-                        index_count: indices.len() as u32,
-                        texture: *texture,
-                        blend: *blend,
-                    },
-                    *transform,
-                ));
+                meshes.push(GpuPrimitive {
+                    vertices: vb,
+                    indices: ib,
+                    index_count: indices.len() as u32,
+                    texture: *texture,
+                    blend: *blend,
+                    color: *color,
+                });
             }
+            let mut bounds_min = Vec3::splat(f32::INFINITY);
+            let mut bounds_max = Vec3::splat(f32::NEG_INFINITY);
+            for (mi, transform) in &cpu.primitives {
+                let Some((lo, hi)) = local_bounds.get(*mi) else {
+                    continue;
+                };
+                if !lo.is_finite() {
+                    continue;
+                }
+                for corner in 0..8 {
+                    let c = Vec3::new(
+                        if corner & 1 == 0 { lo.x } else { hi.x },
+                        if corner & 2 == 0 { lo.y } else { hi.y },
+                        if corner & 4 == 0 { lo.z } else { hi.z },
+                    );
+                    let p = transform.transform_point3(c);
+                    bounds_min = bounds_min.min(p);
+                    bounds_max = bounds_max.max(p);
+                }
+            }
+            let primitives = cpu.primitives.clone();
             let textures = vec![None; cpu.image_uris.len()];
             for (i, uri) in cpu.image_uris.iter().enumerate() {
                 let url = resolve_uri(asset_base, uri);
@@ -666,6 +693,7 @@ impl Renderer {
             self.models.insert(
                 name,
                 Model {
+                    meshes,
                     primitives,
                     textures,
                     mesh_radius: cpu.mesh_radius,
@@ -853,12 +881,18 @@ impl Renderer {
                 item.rotation,
                 item.rel_pos_km,
             );
-            for (pi, (_, local)) in model.primitives.iter().enumerate() {
+            for (pi, (mesh_i, local)) in model.primitives.iter().enumerate() {
                 let m = base * local.as_dmat4();
                 let fill = item.fill_dir.normalize_or_zero().as_vec3();
+                let factor = model.meshes[*mesh_i].color;
                 let u = ObjectUniform {
                     model: m.as_mat4().to_cols_array_2d(),
-                    color: item.color,
+                    color: [
+                        item.color[0] * factor[0],
+                        item.color[1] * factor[1],
+                        item.color[2] * factor[2],
+                        item.color[3] * factor[3],
+                    ],
                     light_dir: item
                         .light_dir
                         .normalize_or_zero()
@@ -945,7 +979,8 @@ impl Renderer {
                 });
                 for (model_name, pi, s) in &mesh_draws {
                     let model = &self.models[model_name];
-                    let (prim, _) = &model.primitives[*pi];
+                    let (mesh_i, _) = model.primitives[*pi];
+                    let prim = &model.meshes[mesh_i];
                     if prim.blend != blended {
                         continue;
                     }
@@ -1122,6 +1157,17 @@ fn parse_glb(bytes: &[u8]) -> Result<CpuModel, String> {
         let ti = m["pbrMetallicRoughness"]["baseColorTexture"]["index"].as_u64()? as usize;
         textures.get(ti)?["source"].as_u64().map(|s| s as usize)
     };
+    let material_color = |mi: usize| -> [f32; 4] {
+        json["materials"]
+            .as_array()
+            .and_then(|a| a.get(mi))
+            .and_then(|m| m["pbrMetallicRoughness"]["baseColorFactor"].as_array())
+            .map(|f| {
+                let g = |i: usize| f.get(i).and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+                [g(0), g(1), g(2), g(3)]
+            })
+            .unwrap_or([1.0; 4])
+    };
     let material_blend = |mi: usize| -> bool {
         json["materials"]
             .as_array()
@@ -1202,10 +1248,22 @@ fn parse_glb(bytes: &[u8]) -> Result<CpuModel, String> {
         walk(&nodes, r, Mat4::IDENTITY, &mut placed, 0);
     }
     let meshes = json["meshes"].as_array().cloned().unwrap_or_default();
-    let mut primitives = Vec::new();
+    let mut cpu_meshes: Vec<CpuMesh> = Vec::new();
+    let mut by_key: HashMap<(usize, usize), usize> = HashMap::new();
+    let mut primitives: Vec<(usize, Mat4)> = Vec::new();
     for (mi, world) in placed {
         let Some(mesh) = meshes.get(mi) else { continue };
-        for prim in mesh["primitives"].as_array().cloned().unwrap_or_default() {
+        for (pi, prim) in mesh["primitives"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .enumerate()
+        {
+            if let Some(&idx) = by_key.get(&(mi, pi)) {
+                primitives.push((idx, world));
+                continue;
+            }
             let pos = read_f32(
                 prim["attributes"]["POSITION"].as_u64().ok_or("POSITION")? as usize,
                 3,
@@ -1240,11 +1298,18 @@ fn parse_glb(bytes: &[u8]) -> Result<CpuModel, String> {
                 .as_u64()
                 .map(|m| material_blend(m as usize))
                 .unwrap_or(false);
-            primitives.push((vertices, indices, texture, blend, world));
+            let color = prim["material"]
+                .as_u64()
+                .map(|m| material_color(m as usize))
+                .unwrap_or([1.0; 4]);
+            cpu_meshes.push((vertices, indices, texture, blend, color));
+            by_key.insert((mi, pi), cpu_meshes.len() - 1);
+            primitives.push((cpu_meshes.len() - 1, world));
         }
     }
     let mesh_radius = json["extras"]["mesh_radius"].as_f64().unwrap_or(1.0);
     Ok(CpuModel {
+        meshes: cpu_meshes,
         primitives,
         image_uris,
         mesh_radius,
