@@ -246,6 +246,31 @@
     body.webgpu #vab-canvas { visibility: hidden; pointer-events: none; }
     body:has(#menu:not(.hidden) #screen-vab.open) #hud { opacity: 0; pointer-events: none; }
     body:has(#menu:not(.hidden) #screen-vab.open) #crumbs, body:has(#menu:not(.hidden) #screen-vab.open) #help, body:has(#menu:not(.hidden) #screen-vab.open) #labels { display: none; }
+    /* Flight HUD after the original's flight screen: altimeter top centre, speed, attitude holds and the
+       throttle at the bottom centre around where the navball sits, the staging stack bottom left. */
+    #flight-hud { display: none; position: fixed; inset: 0; pointer-events: none; font-family: var(--ui-font); color: #e6ecf7; z-index: 10; }
+    #flight-hud.open { display: block; }
+    body:has(#menu:not(.hidden)) #flight-hud { display: none; }
+    #flight-hud button { pointer-events: auto; background: #1b2230e6; color: #e6ecf7; border: 1px solid #ffffff33; border-radius: calc(4 * var(--u)); font: 600 calc(14 * var(--u)) var(--ui-font); padding: calc(4 * var(--u)) calc(10 * var(--u)); cursor: pointer; }
+    #flight-hud button:hover { background: #2a3448; }
+    .fh-label { font-size: calc(11 * var(--u)); letter-spacing: 0.1em; color: #9fb0cc; }
+    .fh-small { font-size: calc(13 * var(--u)); color: #cfd6e6; }
+    .fh-top { position: absolute; top: calc(12 * var(--u)); left: 50%; transform: translateX(-50%); text-align: center; background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)); padding: calc(6 * var(--u)) calc(24 * var(--u)); }
+    #fh-altitude { font: 700 calc(30 * var(--u)) var(--ui-font); font-variant-numeric: tabular-nums; color: #fff; }
+    .fh-bottom { position: absolute; bottom: calc(16 * var(--u)); left: 50%; transform: translateX(-50%); display: flex; gap: calc(12 * var(--u)); align-items: stretch; }
+    .fh-core { background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(8 * var(--u)); padding: calc(10 * var(--u)) calc(16 * var(--u)); display: flex; flex-direction: column; gap: calc(8 * var(--u)); min-width: calc(420 * var(--u)); }
+    .fh-row { display: flex; gap: calc(10 * var(--u)); align-items: center; justify-content: center; }
+    .fh-row b { font: 700 calc(18 * var(--u)) var(--ui-font); font-variant-numeric: tabular-nums; min-width: calc(90 * var(--u)); }
+    .fh-throttle { position: relative; width: calc(28 * var(--u)); background: #10141bd9; border: 1px solid #ffffff33; border-radius: calc(6 * var(--u)); overflow: hidden; }
+    #fh-throttle-fill { position: absolute; left: 0; right: 0; bottom: 0; height: 0; background: linear-gradient(#ffd060, #f08030); }
+    .fh-throttle span { position: absolute; top: calc(4 * var(--u)); left: 0; right: 0; text-align: center; font-size: calc(9 * var(--u)); color: #fff; }
+    .fh-staging { position: absolute; left: calc(16 * var(--u)); bottom: calc(16 * var(--u)); background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(8 * var(--u)); padding: calc(10 * var(--u)); display: flex; flex-direction: column; gap: calc(6 * var(--u)); min-width: calc(160 * var(--u)); }
+    #fh-stage-btn { background: #2f6b2f !important; font-size: calc(18 * var(--u)) !important; padding: calc(10 * var(--u)) !important; }
+    .fh-help { position: absolute; right: calc(16 * var(--u)); bottom: calc(16 * var(--u)); font-size: calc(11 * var(--u)); color: #9fb0cc; max-width: calc(260 * var(--u)); text-align: right; }
+    body:has(#flight-hud.open) #help { display: none; }
+    body:has(#flight-hud.open:not(.map)) #hud { opacity: 0; pointer-events: none; }
+    body:has(#flight-hud.open:not(.map)) #crumbs, body:has(#flight-hud.open:not(.map)) #labels { display: none; }
+    #flight-hud.map .fh-top, #flight-hud.map .fh-staging { opacity: 0.85; }
   </style>
 </head>
 <body>
@@ -387,6 +412,31 @@
     </div>
   </div>
   <div id="ksc-tooltip" data-ose="ksc-tooltip"></div>
+  <div id="flight-hud" data-ose="flight">
+    <div class="fh-top"><div class="fh-label">ALTITUDE</div><div id="fh-altitude" data-ose="flight-altitude">--</div><div id="fh-situation" class="fh-small">--</div><div id="fh-note" class="fh-small" style="color:#f0a070"></div></div>
+    <div class="fh-bottom">
+      <div class="fh-throttle" title="Z full, X cut, Shift and Ctrl to adjust"><div id="fh-throttle-fill"></div><span>THR</span></div>
+      <div class="fh-core">
+        <div class="fh-row"><span class="fh-label">SURFACE</span><b id="fh-speed">--</b><span class="fh-label">VERTICAL</span><b id="fh-vspeed">--</b></div>
+        <div class="fh-row"><span id="fh-attitude">--</span><span id="fh-twr" class="fh-small">--</span></div>
+        <div class="fh-row fh-att">
+          <button id="fh-att-up" title="hold straight up">Up</button>
+          <button id="fh-att-pro" title="surface prograde (T)">Pro</button>
+          <button id="fh-att-retro" title="surface retrograde">Retro</button>
+          <button id="fh-att-oprog" title="orbit prograde">Orbit</button>
+          <button id="fh-att-normal" title="orbit normal">Nrm</button>
+          <button id="fh-att-radial" title="radial out">Rad</button>
+        </div>
+        <div class="fh-row"><button id="fh-full" data-ose="flight-throttle-full">Full</button><button id="fh-cut" data-ose="flight-throttle-cut">Cut</button><button id="fh-map" title="M">Map</button><button id="fh-ksc">KSC</button></div>
+      </div>
+    </div>
+    <div class="fh-staging">
+      <div id="fh-stage" class="fh-small">--</div>
+      <div id="fh-fuel" class="fh-small">--</div>
+      <button id="fh-stage-btn" data-ose="flight-stage" title="Space">STAGE</button>
+    </div>
+    <div class="fh-help">Space stage, Z/X throttle, Shift/Ctrl adjust, W/S pitch, A/D heading, T prograde, M map, drag to look</div>
+  </div>
   <div id="node-panel" data-ose="node-panel">
     <label>time <input id="node-dt" type="range" min="60" max="600" step="1" value="120" /><span id="node-dt-text">T-2:00</span></label>
     <label>prograde <input id="node-prograde" type="range" min="-1500" max="1500" step="1" value="0" /><span id="node-prograde-text">0 m/s</span></label>

@@ -17,6 +17,7 @@ Frames as the other exports: glTF right-handed Y-up with Unity's X negated and t
 from __future__ import annotations
 
 import argparse
+import re
 import json
 import math
 import sys
@@ -146,6 +147,7 @@ def main() -> int:
     kept = skipped_lod = skipped_prop = skipped_missing = 0
     instance_verts = 0
     camera_origin = camera_lookat = None
+    spawns: dict = {}
     buildings: dict[str, dict] = {}
     building_nodes: list[tuple[str, object]] = []
     mesh_material: dict[tuple[int, int], int] = {}  # (mesh index, material index) -> glTF mesh with material
@@ -177,6 +179,8 @@ def main() -> int:
             camera_origin = n.world
         elif n.name == "KSCCameraLookAt":
             camera_lookat = n.world
+        elif re.fullmatch(r"(LaunchPad|Runway)_spawn_\d\d", n.name):
+            spawns[n.name] = n.world
         tb = n.behaviour("KSCTargetableBuilding") if active else None
         if tb:
             enum = int(tb.get("_buildingEnum", 0))
@@ -270,6 +274,8 @@ def main() -> int:
         l, _, _ = decompose(camera_lookat)
         scene["camera"] = {"origin": list(to_gltf_pos(t)), "look_at": list(to_gltf_pos(l)), "fov_deg": 60.0, "default_distance": 80.0, "min_distance": 0.625, "max_distance": 40000.0}
     scene["buildings"] = list(buildings.values())
+    # Vessel spawn points (where the original puts a craft on each pad and runway), world positions.
+    scene["spawns"] = {k: list(to_gltf_pos(decompose(w)[0])) for k, w in sorted(spawns.items())}
     scene["ground_y"] = ground_y
     (out / "ksc" / "scene.json").write_text(json.dumps(scene, indent=1), encoding="utf-8")
     print("camera", scene.get("camera"))

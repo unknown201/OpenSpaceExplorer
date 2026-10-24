@@ -34,15 +34,6 @@ impl Bounds {
     }
 }
 
-fn q_mul(a: Quat, b: Quat) -> Quat {
-    Quat {
-        w: a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
-        x: a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
-        y: a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
-        z: a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
-    }
-}
-
 fn q_rotate(q: Quat, v: DVec3) -> DVec3 {
     // v' = v + 2w(q x v) + 2(q x (q x v))
     let u = DVec3::new(q.x, q.y, q.z);
@@ -71,47 +62,14 @@ fn q_norm(q: Quat) -> Quat {
 /// Size and centre (metres, part frame) of a part, or `None` to use the default cube.
 pub type SizeOf<'a> = &'a dyn Fn(&str) -> Option<(DVec3, DVec3)>;
 
-/// World (craft-frame) pose of every part: parent pose composed with the part's local position and rotation.
+/// Craft-frame pose of every part. KSP2 assemblies store `partState.localPosition` / `localRotation`
+/// relative to the craft root (the stock crafts show it: a 38-part K1 stack descends monotonically in the
+/// root frame), and the editor stores the same, so a part's stored pose is its craft-frame pose.
 pub fn poses(craft: &Craft) -> Vec<(DVec3, Quat)> {
-    let n = craft.parts.len();
-    let mut out: Vec<Option<(DVec3, Quat)>> = vec![None; n];
-    // Parts are not guaranteed parent-first; iterate until everything is placed (tree depth passes).
-    for _ in 0..n.max(1) {
-        let mut progressed = false;
-        for (i, p) in craft.parts.iter().enumerate() {
-            if out[i].is_some() {
-                continue;
-            }
-            let pose = match p.parent {
-                None => Some((p.local_position, q_norm(p.local_rotation))),
-                Some(pi) => out.get(pi).copied().flatten().map(|(pp, pq)| {
-                    (
-                        pp + q_rotate(pq, p.local_position),
-                        q_norm(q_mul(pq, p.local_rotation)),
-                    )
-                }),
-            };
-            if pose.is_some() {
-                out[i] = pose;
-                progressed = true;
-            }
-        }
-        if !progressed {
-            break;
-        }
-    }
-    out.into_iter()
-        .map(|p| {
-            p.unwrap_or((
-                DVec3::ZERO,
-                Quat {
-                    x: 0.0,
-                    y: 0.0,
-                    z: 0.0,
-                    w: 1.0,
-                },
-            ))
-        })
+    craft
+        .parts
+        .iter()
+        .map(|p| (p.local_position, q_norm(p.local_rotation)))
         .collect()
 }
 
@@ -209,7 +167,7 @@ mod tests {
             parts: vec![
                 part("pod", None, DVec3::ZERO, -1),
                 part("tank", Some(0), DVec3::new(0.0, -2.0, 0.0), 0),
-                part("engine", Some(1), DVec3::new(0.0, -1.5, 0.0), 0),
+                part("engine", Some(1), DVec3::new(0.0, -3.5, 0.0), 0),
             ],
             stages: vec![vec![2]],
         }
@@ -244,9 +202,9 @@ mod tests {
         let tank = boxes.iter().find(|b| b.part == 1).unwrap();
         assert!(((tank.max.x - tank.min.x) - 3.0).abs() < 1e-9);
         assert!(((tank.max.y - tank.min.y) - 1.0).abs() < 1e-9);
-        // The engine hangs off the rotated tank, so its offset turned sideways too.
+        // Poses are root-relative (KSP2 assemblies), so the engine stays where it is stored.
         let engine = boxes.iter().find(|b| b.part == 2).unwrap();
-        assert!(((engine.min.x + engine.max.x) * 0.5 - 1.5).abs() < 1e-9);
+        assert!(((engine.min.x + engine.max.x) * 0.5).abs() < 1e-9);
     }
 
     #[test]

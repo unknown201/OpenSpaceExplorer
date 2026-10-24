@@ -11,6 +11,8 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(target_arch = "wasm32")]
+pub mod flight3d;
 pub mod kerbin_time;
 #[cfg(target_arch = "wasm32")]
 pub mod ksc3d;
@@ -105,6 +107,19 @@ struct App {
     vab3d: vab3d::VabView,
     /// Where the last mousedown happened, to tell a click from a drag.
     press: Option<(f64, f64)>,
+    /// The flight view (the vessel in 3D near its body).
+    #[cfg(target_arch = "wasm32")]
+    flight3d: flight3d::FlightView,
+    /// The vessel the player is flying (launched from the pad), the craft it was built from, and whether
+    /// the map is shown instead of the flight view (M).
+    flying: Option<u64>,
+    flight_craft: Option<ose_data::craft::Craft>,
+    map_mode: bool,
+    /// Craft id of a launch waiting for `CraftLaunched`.
+    pending_launch: Option<u64>,
+    /// Controls as last sent.
+    throttle: f64,
+    attitude: ose_net::AttitudeMode,
     gpu_canvas: HtmlCanvasElement,
     /// 3D orbit camera: yaw and pitch (radians) around the focus, distance in kilometres.
     orbit_yaw: f64,
@@ -288,6 +303,14 @@ pub fn start() -> Result<(), JsValue> {
         #[cfg(target_arch = "wasm32")]
         vab3d: vab3d::VabView::new(),
         press: None,
+        #[cfg(target_arch = "wasm32")]
+        flight3d: flight3d::FlightView::new(),
+        flying: None,
+        flight_craft: None,
+        map_mode: false,
+        pending_launch: None,
+        throttle: 0.0,
+        attitude: ose_net::AttitudeMode::Up,
         gpu_canvas: get("gpu")?.dyn_into()?,
         orbit_yaw: 0.6,
         orbit_pitch: 0.5,
@@ -483,7 +506,40 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         "ksc-sessions",
         Box::new(|a| a.borrow_mut().open_sessions_screen()),
     )?;
-    wire("to-ksc", Box::new(|a| a.borrow().open_ksc()))?;
+    wire(
+        "to-ksc",
+        Box::new(|a| {
+            a.borrow_mut().end_flight();
+            a.borrow().open_ksc()
+        }),
+    )?;
+    wire("fh-stage-btn", Box::new(|a| a.borrow_mut().flight_stage()))?;
+    wire("fh-full", Box::new(|a| a.borrow_mut().set_throttle(1.0)))?;
+    wire("fh-cut", Box::new(|a| a.borrow_mut().set_throttle(0.0)))?;
+    wire(
+        "fh-map",
+        Box::new(|a| {
+            let mut app = a.borrow_mut();
+            app.map_mode = !app.map_mode;
+        }),
+    )?;
+    wire(
+        "fh-ksc",
+        Box::new(|a| {
+            a.borrow_mut().end_flight();
+            a.borrow().open_ksc()
+        }),
+    )?;
+    for (id, mode) in [
+        ("fh-att-up", ose_net::AttitudeMode::Up),
+        ("fh-att-pro", ose_net::AttitudeMode::SurfacePrograde),
+        ("fh-att-retro", ose_net::AttitudeMode::SurfaceRetrograde),
+        ("fh-att-oprog", ose_net::AttitudeMode::OrbitPrograde),
+        ("fh-att-normal", ose_net::AttitudeMode::Normal),
+        ("fh-att-radial", ose_net::AttitudeMode::RadialOut),
+    ] {
+        wire(id, Box::new(move |a| a.borrow_mut().set_attitude(mode)))?;
+    }
     wire("ksc-button", Box::new(|a| a.borrow().open_ksc()))?;
     wire("ksc-tracking", Box::new(|a| a.borrow().show_menu(false)))?;
     wire(
@@ -583,6 +639,15 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                 .and_then(|s| s.parse::<u64>().ok());
             if let Some(id) = id {
                 a.borrow_mut().launch_craft(id);
+                return;
+            }
+            let orbit = ev
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .and_then(|e| e.get_attribute("data-ose-craft-orbit"))
+                .and_then(|s| s.parse::<u64>().ok());
+            if let Some(id) = orbit {
+                a.borrow_mut().launch_craft_to_orbit(id);
                 return;
             }
             let edit = ev
@@ -780,6 +845,11 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                 app.vab3d.zoom(factor);
                 return;
             }
+            #[cfg(target_arch = "wasm32")]
+            if app.flight_active() && app.gpu.is_some() {
+                app.flight3d.zoom(factor);
+                return;
+            }
             if app.is_3d() {
                 app.orbit_dist_km = (app.orbit_dist_km * factor).clamp(1.0e-2, 1.0e10);
             } else {
@@ -812,6 +882,15 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
             if let Some((x, y)) = app.drag {
                 let (nx, ny) = (ev.client_x() as f64, ev.client_y() as f64);
                 app.vab3d.orbit(nx - x, ny - y);
+                app.drag = Some((nx, ny));
+            }
+            return;
+        }
+        #[cfg(target_arch = "wasm32")]
+        if app.flight_active() && app.gpu.is_some() {
+            if let Some((x, y)) = app.drag {
+                let (nx, ny) = (ev.client_x() as f64, ev.client_y() as f64);
+                app.flight3d.orbit(nx - x, ny - y);
                 app.drag = Some((nx, ny));
             }
             return;
@@ -891,6 +970,7 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
+            let _ = &ev;
             app.press = None;
         }
     });
@@ -901,6 +981,72 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
     let on_key =
         Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |ev: web_sys::KeyboardEvent| {
             let mut app = a.borrow_mut();
+            let typing = ev
+                .target()
+                .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+                .is_some();
+            let menu_open = app
+                .doc
+                .get_element_by_id("menu")
+                .map(|m| !m.class_list().contains("hidden"))
+                .unwrap_or(false);
+            if app.flying.is_some() && !menu_open && !typing {
+                // The original's flight keys: Z full throttle, X cut, Shift/Ctrl up and down, Space
+                // stage, W/S pitch, A/D heading, T prograde hold, M map.
+                let handled = match ev.key().as_str() {
+                    "z" | "Z" => {
+                        app.set_throttle(1.0);
+                        true
+                    }
+                    "x" | "X" => {
+                        app.set_throttle(0.0);
+                        true
+                    }
+                    "Shift" => {
+                        let t = app.throttle + 0.1;
+                        app.set_throttle(t);
+                        true
+                    }
+                    "Control" => {
+                        let t = app.throttle - 0.1;
+                        app.set_throttle(t);
+                        true
+                    }
+                    " " => {
+                        app.flight_stage();
+                        true
+                    }
+                    "w" | "W" => {
+                        app.nudge_attitude(-5.0, 0.0);
+                        true
+                    }
+                    "s" | "S" => {
+                        app.nudge_attitude(5.0, 0.0);
+                        true
+                    }
+                    "a" | "A" => {
+                        app.nudge_attitude(0.0, -5.0);
+                        true
+                    }
+                    "d" | "D" => {
+                        app.nudge_attitude(0.0, 5.0);
+                        true
+                    }
+                    "t" | "T" => {
+                        app.set_attitude(ose_net::AttitudeMode::SurfacePrograde);
+                        true
+                    }
+                    "m" | "M" => {
+                        app.map_mode = !app.map_mode;
+                        true
+                    }
+                    _ => false,
+                };
+                if handled {
+                    ev.prevent_default();
+                    return;
+                }
+            }
             match ev.key().as_str() {
                 "f" | "F" => app.frame_focus(),
                 "Escape" => {
@@ -1038,6 +1184,7 @@ impl App {
     }
 
     /// True while the VAB screen is the open menu screen.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     fn vab_active(&self) -> bool {
         self.doc
             .query_selector("#menu:not(.hidden) #screen-vab.open")
@@ -1047,6 +1194,7 @@ impl App {
     }
 
     /// True while the KSC hub screen is the open menu screen.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     fn ksc_active(&self) -> bool {
         self.doc
             .query_selector("#menu:not(.hidden) #screen-ksc.open")
@@ -1096,6 +1244,7 @@ impl App {
     }
 
     /// A facility was clicked in the KSC scene: open its screen.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     fn open_facility(&mut self, facility: &str) {
         match facility {
             "VAB" => self.open_vab(None),
@@ -1215,6 +1364,19 @@ impl App {
                     );
                 }
             },
+            ServerMessage::FlightAck {
+                accepted, reason, ..
+            } => {
+                set_text(
+                    &self.doc,
+                    "fh-note",
+                    if accepted {
+                        ""
+                    } else {
+                        reason.as_deref().unwrap_or("refused")
+                    },
+                );
+            }
             ServerMessage::CraftLaunched {
                 vessel,
                 name,
@@ -1226,6 +1388,9 @@ impl App {
                 ..
             } => match (vessel, reason) {
                 (Some(id), _) => {
+                    if let Some(craft_id) = self.pending_launch.take() {
+                        self.start_flight(id, Some(craft_id));
+                    }
                     set_text(
                         &self.doc,
                         "menu-note",
@@ -1884,9 +2049,10 @@ impl App {
                 ""
             };
             html.push_str(&format!(
-                "<li data-ose=\"craft\" data-ose-id=\"{id}\"><canvas class=\"thumb\" width=\"128\" height=\"168\" data-ose-thumb=\"{id}\"></canvas><div><div class=\"name\">{name}{badge}</div>\
+                "<li data-ose=\"craft\" data-ose-id=\"{id}\" data-ose-dv=\"{dv:.0}\" data-ose-stock=\"{stock}\"><canvas class=\"thumb\" width=\"128\" height=\"168\" data-ose-thumb=\"{id}\"></canvas><div><div class=\"name\">{name}{badge}</div>\
                  <div class=\"meta\">{parts} parts \u{b7} {stages} {st} \u{b7} {wet:.1} t \u{b7} {dv:.0} m/s vacuum</div>\
                  {desc}</div><span><button class=\"secondary\" data-ose=\"craft-edit\" data-ose-craft-edit=\"{id}\">Edit</button> \
+                 <button class=\"secondary\" data-ose=\"craft-orbit\" data-ose-craft-orbit=\"{id}\" title=\"skip the ascent: put it straight into orbit\">Orbit</button> \
                  <button data-ose=\"craft-launch\" data-ose-craft-launch=\"{id}\">Launch</button></span></li>",
                 id = c.id,
                 name = esc(&c.name),
@@ -1895,6 +2061,7 @@ impl App {
                 st = if c.stages == 1 { "stage" } else { "stages" },
                 wet = c.wet_mass_t,
                 dv = c.delta_v_vacuum_mps,
+                stock = if c.stock { 1 } else { 0 },
                 desc = if c.description.is_empty() {
                     String::new()
                 } else {
@@ -1969,11 +2136,184 @@ impl App {
             .ok();
     }
 
+    /// Roll a library craft out to launch pad 1 (the original's launch: landed, engines off).
     fn launch_craft(&mut self, id: u64) {
+        set_text(&self.doc, "menu-note", "rolling out to the launch pad...");
+        self.pending_launch = Some(id);
+        if let Some(ws) = &self.ws {
+            send(ws, &ClientMessage::LaunchSavedOnPad { id });
+        }
+    }
+
+    /// Put a library craft straight into orbit (the earlier shortcut, kept for testing orbits).
+    fn launch_craft_to_orbit(&mut self, id: u64) {
         let altitude_m = input_value(&self.doc, "launch-altitude").unwrap_or(100.0) * 1000.0;
-        set_text(&self.doc, "menu-note", "launching...");
+        set_text(&self.doc, "menu-note", "launching to orbit...");
+        self.pending_launch = None;
         if let Some(ws) = &self.ws {
             send(ws, &ClientMessage::LaunchSavedCraft { id, altitude_m });
+        }
+    }
+
+    // ---- Flight
+
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    fn flight_active(&self) -> bool {
+        self.flying.is_some()
+            && !self.map_mode
+            && self
+                .doc
+                .get_element_by_id("menu")
+                .map(|m| m.class_list().contains("hidden"))
+                .unwrap_or(false)
+    }
+
+    fn start_flight(&mut self, vessel: u64, craft_id: Option<u64>) {
+        self.flying = Some(vessel);
+        self.flight_craft = craft_id.and_then(|c| self.craft_docs.get(&c).cloned());
+        if let Some(c) = craft_id {
+            store(&format!("ose.flight.{vessel}"), &c.to_string());
+        }
+        self.map_mode = false;
+        self.throttle = 0.0;
+        self.attitude = ose_net::AttitudeMode::Up;
+        self.follow = Some(vessel);
+        if let Some(el) = self.doc.get_element_by_id("flight-hud") {
+            el.class_list().add_1("open").ok();
+            el.set_attribute("data-ose-vessel", &vessel.to_string())
+                .ok();
+        }
+    }
+
+    fn end_flight(&mut self) {
+        self.flying = None;
+        self.flight_craft = None;
+        if let Some(el) = self.doc.get_element_by_id("flight-hud") {
+            el.class_list().remove_1("open").ok();
+        }
+    }
+
+    fn send_controls(&mut self) {
+        let Some(vessel) = self.flying else { return };
+        if let Some(ws) = &self.ws {
+            send(
+                ws,
+                &ClientMessage::SetControls {
+                    vessel,
+                    throttle: self.throttle,
+                    attitude: self.attitude,
+                },
+            );
+        }
+    }
+
+    fn flight_stage(&mut self) {
+        let Some(vessel) = self.flying else { return };
+        if let Some(ws) = &self.ws {
+            send(ws, &ClientMessage::Stage { vessel });
+        }
+    }
+
+    fn set_throttle(&mut self, t: f64) {
+        self.throttle = t.clamp(0.0, 1.0);
+        self.send_controls();
+    }
+
+    fn set_attitude(&mut self, a: ose_net::AttitudeMode) {
+        self.attitude = a;
+        self.send_controls();
+    }
+
+    /// Pitch/heading nudge: switches to a pitch-and-heading hold from the current one.
+    fn nudge_attitude(&mut self, dpitch: f64, dheading: f64) {
+        let (p, h) = match self.attitude {
+            ose_net::AttitudeMode::PitchHeading {
+                pitch_deg,
+                heading_deg,
+            } => (pitch_deg, heading_deg),
+            _ => (90.0, 90.0),
+        };
+        self.set_attitude(ose_net::AttitudeMode::PitchHeading {
+            pitch_deg: (p + dpitch).clamp(-90.0, 90.0),
+            heading_deg: (h + dheading).rem_euclid(360.0),
+        });
+    }
+
+    /// Refresh the flight HUD from the vessel's readout.
+    fn update_flight_hud(&self) {
+        let Some(id) = self.flying else { return };
+        if let Some(el) = self.doc.get_element_by_id("flight-hud") {
+            el.class_list().toggle_with_force("map", self.map_mode).ok();
+        }
+        let Some(v) = self.scene.as_ref().and_then(|s| s.vessel(id)) else {
+            return;
+        };
+        let Some(f) = &v.flight else {
+            set_text(&self.doc, "fh-situation", "on rails");
+            return;
+        };
+        let alt = if f.altitude_m.abs() >= 100_000.0 {
+            format!("{:.1} km", f.altitude_m / 1000.0)
+        } else {
+            format!("{:.0} m", f.altitude_m)
+        };
+        set_text(&self.doc, "fh-altitude", &alt);
+        set_text(
+            &self.doc,
+            "fh-speed",
+            &format!("{:.1} m/s", f.surface_speed_mps),
+        );
+        set_text(
+            &self.doc,
+            "fh-vspeed",
+            &format!("{:+.1} m/s", f.vertical_speed_mps),
+        );
+        set_text(&self.doc, "fh-situation", &format!("{:?}", f.situation));
+        set_text(
+            &self.doc,
+            "fh-stage",
+            &format!(
+                "stage {} of {}",
+                (f.stage + 1).min(f.stages.max(1)),
+                f.stages.max(1)
+            ),
+        );
+        set_text(
+            &self.doc,
+            "fh-twr",
+            &format!("TWR {:.2} \u{b7} {:.0} kN", f.twr, f.thrust_kn),
+        );
+        set_text(
+            &self.doc,
+            "fh-fuel",
+            &format!(
+                "{:.1} t ({:.0}%)",
+                f.propellant_t,
+                f.propellant_fraction * 100.0
+            ),
+        );
+        let att = match f.attitude {
+            ose_net::AttitudeMode::PitchHeading {
+                pitch_deg,
+                heading_deg,
+            } => format!("pitch {pitch_deg:.0}\u{b0} hdg {heading_deg:.0}\u{b0}"),
+            other => format!("{other:?}"),
+        };
+        set_text(&self.doc, "fh-attitude", &att);
+        if let Some(bar) = self
+            .doc
+            .get_element_by_id("fh-throttle-fill")
+            .and_then(|e| e.dyn_into::<HtmlElement>().ok())
+        {
+            bar.style()
+                .set_property("height", &format!("{:.0}%", f.throttle * 100.0))
+                .ok();
+        }
+        if let Some(el) = self.doc.get_element_by_id("flight-hud") {
+            el.set_attribute("data-ose-altitude", &format!("{:.1}", f.altitude_m))
+                .ok();
+            el.set_attribute("data-ose-situation", &format!("{:?}", f.situation))
+                .ok();
         }
     }
 
@@ -2456,6 +2796,11 @@ impl App {
         if self.time.have_time {
             self.update_hud(ut);
         }
+        self.update_flight_hud();
+        #[cfg(target_arch = "wasm32")]
+        if self.flight_active() && self.frame_flight(ut) {
+            return;
+        }
         let dpr = self.dpr;
         let (w, h) = (self.camera.width, self.camera.height);
         let ctx = &self.ctx;
@@ -2632,6 +2977,58 @@ impl App {
     /// The 3D map: planets from the exported GLBs at true scale, orbit lines, trajectories, and the DOM
     /// labels projected through the same camera. Kilometres, relative to the camera.
     #[cfg(target_arch = "wasm32")]
+    /// One frame of the flight view; false when it cannot draw (no renderer, vessel unknown yet).
+    #[cfg(target_arch = "wasm32")]
+    fn frame_flight(&mut self, ut: f64) -> bool {
+        let Some(id) = self.flying else { return false };
+        let Some(scene) = &self.scene else {
+            return false;
+        };
+        let Some(v) = scene.vessel(id) else {
+            return false;
+        };
+        let Some(gpu) = self.gpu.as_mut() else {
+            return false;
+        };
+        let rb = v.reference_body as usize;
+        let Some(body) = scene.bodies.get(rb) else {
+            return false;
+        };
+        let vp = scene.vessel_position(v, ut);
+        let bp = scene.position(rb, ut);
+        let dt = 0.5;
+        let vv =
+            (scene.vessel_position(v, ut + dt) - scene.vessel_position(v, ut - dt)) * (0.5 / dt);
+        let bv = (scene.position(rb, ut + dt) - scene.position(rb, ut - dt)) * (0.5 / dt);
+        let star = scene
+            .root()
+            .map(|i| scene.position(i, ut))
+            .unwrap_or_default();
+        let g = |d: ose_math::DVec3| glam::DVec3::new(d.x, d.y, d.z);
+        let catalog = &self.catalog;
+        let is_dec = |pid: &str| catalog.get(pid).map(|p| p.is_decoupler).unwrap_or(false);
+        let inp = flight3d::FlightInput {
+            vessel: v,
+            vessel_pos: g(vp),
+            vessel_vel: g(vv),
+            body_pos: g(bp),
+            body_vel: g(bv),
+            star_pos: g(star),
+            body_id: &body.id,
+            body_radius: body.radius_m,
+            atmosphere_m: if body.has_atmosphere {
+                body.atmosphere_depth_m
+            } else {
+                0.0
+            },
+            ut,
+            craft: self.flight_craft.as_ref(),
+            is_decoupler: &is_dec,
+        };
+        self.flight3d.frame(gpu, &inp)
+    }
+
+    #[cfg(target_arch = "wasm32")]
     fn frame_3d(&mut self, ut: f64, positions: &[ose_math::DVec3], centre: ose_math::DVec3) {
         use glam::{DQuat, DVec3 as GV};
         let Some(scene) = &self.scene else {
@@ -2679,6 +3076,7 @@ impl App {
                     fill: 0.0,
                     ambient: 0.0,
                     atmosphere: false,
+                    mirror_z: true,
                 });
             }
             if let (Some(orbit), Some(p)) = (scene.orbit(i), b.parent) {

@@ -27,6 +27,7 @@ const FRONTIER: [StepName, Expect][] = [
   ["maneuver_node", "Pass"],
   ["vab", "Pass"],
   ["launchpad", "Pass"],
+  ["flight", "Pass"],
 ];
 
 test("frontier names every step in order", () => {

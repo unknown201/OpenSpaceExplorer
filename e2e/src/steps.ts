@@ -44,6 +44,7 @@ export const STEP_NAMES = [
   "maneuver_node",
   "vab",
   "launchpad",
+  "flight",
 ] as const;
 export type StepName = (typeof STEP_NAMES)[number];
 
@@ -434,10 +435,19 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
         return failed("launch pad showed no crafts");
       }
       const n = await launch.count();
-      const first = page.locator('[data-ose="craft"]').first();
-      const craft = ((await first.locator(".name").textContent()) ?? "").trim();
+      // Prefer a stock craft that can fly (delta-v listed), so the flight step has something that lifts off.
+      const flyable = page.locator('[data-ose="craft"][data-ose-stock="1"]').filter({ has: page.locator('[data-ose="craft-launch"]') });
+      let pick = page.locator('[data-ose="craft"]').first();
+      for (let i = 0; i < (await flyable.count()); i++) {
+        const dv = Number((await flyable.nth(i).getAttribute("data-ose-dv")) ?? "0");
+        if (dv > 1500) {
+          pick = flyable.nth(i);
+          break;
+        }
+      }
+      const craft = ((await pick.locator(".name").textContent()) ?? "").trim();
       const vesselsBefore = await page.locator('[data-ose="vessel"]').count();
-      await launch.first().click();
+      await pick.locator('[data-ose="craft-launch"]').first().click();
       try {
         await page.locator('[data-ose="menu"]').first().waitFor({ state: "hidden", timeout: 10_000 });
       } catch {
@@ -448,6 +458,43 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
       const vesselsAfter = await page.locator('[data-ose="vessel"]').count();
       if (vesselsAfter <= vesselsBefore) return failed(`launched but no new vessel (${vesselsBefore} -> ${vesselsAfter})`);
       return passed(`${n} crafts listed; launched ${JSON.stringify(craft)}, vessels ${vesselsBefore} -> ${vesselsAfter}`);
+    }),
+  );
+
+  // 13. Flight: the launch put the craft on the pad and opened the flight view; full throttle and stage,
+  // and the craft leaves the ground (the server's powered flight model, protocol v8).
+  results.push(
+    await timed("flight", async () => {
+      if (!pageUp) return notLoaded;
+      const hud = page.locator('[data-ose="flight"]');
+      if ((await hud.count()) === 0) return blocked('flight view with HUD after launching from the pad ([data-ose="flight"]); Phase 6');
+      try {
+        await page.locator('[data-ose="flight"].open').first().waitFor({ timeout: 5_000 });
+      } catch {
+        return failed("launching from the pad did not open the flight view");
+      }
+      const altOf = async () => Number((await hud.first().getAttribute("data-ose-altitude")) ?? "NaN");
+      const t0 = Date.now();
+      while (!Number.isFinite(await altOf()) && Date.now() - t0 < 5_000) await sleep(200);
+      const before = await altOf();
+      if (!Number.isFinite(before)) return failed("the flight HUD shows no altitude for the launched vessel");
+      await page.locator('[data-ose="flight-throttle-full"]').first().click();
+      await sleep(300);
+      await page.locator('[data-ose="flight-stage"]').first().click();
+      let after = before;
+      let situation = "";
+      const t1 = Date.now();
+      while (Date.now() - t1 < 20_000) {
+        await sleep(500);
+        after = await altOf();
+        situation = (await hud.first().getAttribute("data-ose-situation")) ?? "";
+        if (after > before + 5) break;
+      }
+      if (!(after > before + 5)) {
+        const note = ((await page.locator("#fh-note").textContent().catch(() => "")) ?? "").trim();
+        return failed(`the craft did not climb after full throttle and stage (${before.toFixed(0)} m -> ${after.toFixed(0)} m, ${situation}${note ? `; ${note}` : ""})`);
+      }
+      return passed(`lifted off: ${before.toFixed(0)} m -> ${after.toFixed(0)} m, ${situation}`);
     }),
   );
 

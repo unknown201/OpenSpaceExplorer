@@ -165,6 +165,9 @@ pub struct DrawItem {
     pub ambient: f32,
     /// True draws the model as an atmosphere shell: `color` is the rim colour, its alpha the strength.
     pub atmosphere: bool,
+    /// Mirror the model along its Z axis (celestial body spheres: their UVs run west-to-east the other way
+    /// round from a right-handed frame, see flight3d).
+    pub mirror_z: bool,
 }
 
 impl DrawItem {
@@ -188,6 +191,7 @@ impl DrawItem {
             fill: 0.0,
             ambient: 0.0,
             atmosphere: false,
+            mirror_z: false,
         }
     }
 }
@@ -914,7 +918,11 @@ impl Renderer {
                 continue;
             };
             let base = DMat4::from_scale_rotation_translation(
-                DVec3::splat(item.scale),
+                if item.mirror_z {
+                    DVec3::new(item.scale, item.scale, -item.scale)
+                } else {
+                    DVec3::splat(item.scale)
+                },
                 item.rotation,
                 item.rel_pos_km,
             );

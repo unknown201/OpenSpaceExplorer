@@ -48,6 +48,22 @@ the order a new player meets it, using the original's assets).
   `initialCameraPivotDistance`), and a click selects a part. Nodes with a mirroring scale are drawn with a
   front-face-culling pipeline. With WebGPU the parts picker and craft panel float left and right over the
   hall; the 2D side view stays as the fallback and keeps its `data-ose-vab-parts` hook.
+- Launch and flight: Launch on the launch pad rolls the craft out to pad 1 (`LaunchSavedOnPad`) and opens the
+  flight view (`ose-client::flight3d`); Orbit keeps the old put-in-orbit shortcut. The flight view draws in the
+  body's own model frame (the ground holds still): the server's inertial position becomes body-fixed
+  latitude and longitude through the body rotation from the embedded system file, the KSC campus is anchored
+  on the original's `LaunchPad_spawn_01..04` points (exported with the KSC) at the server's pad sites, and the
+  vessel is drawn from its craft's part meshes, pointed by its attitude hold, standing on its lowest point,
+  with jettisoned stages hidden. Body spheres are drawn mirrored along Z: their UVs put longitude L at
+  azimuth 180 - L (east clockwise from the north pole); mirrored, east, north and up are right-handed, the
+  campus fits the four pad sites with a proper rotation (about -5 degrees, 340 m residual, against 1.9 km for
+  a mirror), and the KSC sits on its coast with the ocean to the east. The HUD follows the original's layout
+  (altimeter top centre, speed, attitude holds and throttle bottom centre, staging bottom left) and its keys
+  (Z, X, Shift, Ctrl, Space, W/S, A/D, T, M for the map).
+- Craft poses: KSP2 assemblies store `partState.localPosition` relative to the craft root, not the parent
+  (the stock K1 descends monotonically down its 38-part tree), so the client reads stored poses as
+  craft-frame poses and the editor now stores root-relative positions too. Crafts saved by the editor
+  before 2026-10-24 were parent-relative and draw stacked too closely.
 
 ## Consequences
 
@@ -56,5 +72,6 @@ the order a new player meets it, using the original's assets).
 - Fonts: the original's menu fonts (Sbliquid, Realtime Rounded) are not in the bundles as font files, only
   as TextMeshPro atlases, so the page uses a system sans-serif at the original's sizes.
 - Not yet at the KSC: the layered "Standard Tileable (Vertex Color)" building shader (only each material's base map is drawn, so buildings read darker than the original), terrain, trees and props, the day cycle, the launch pad flyout.
+- Not yet in flight: a navball, the vessel's actual facing (the server turns it toward the hold at a limited rate but sends only the hold), engine plumes, debris vessels drawn as parts, terrain relief under the campus, the original's launch camera.
 - Not yet: the sun flare and bloom, the ship's team colours (`ApplyTeamColors` masks), the Settings and
   Extras screens, and the menu's hover and fade animations.

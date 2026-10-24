@@ -241,6 +241,9 @@ impl Editor {
                 DVec3::new(dx, target_spec.centre().y - spec.centre().y, 0.0),
             )
         };
+        // Positions are stored relative to the craft root, as KSP2 assemblies (and the stock crafts) store
+        // `partState.localPosition`; the editor never rotates parts, so the parent's position is its frame.
+        let local_position = self.craft.parts[target].local_position + local_position;
         let idx = self.craft.parts.len();
         self.craft.parts.push(CraftPart {
             guid: format!("p{}", idx + 1),
@@ -501,7 +504,8 @@ mod tests {
         assert_eq!(e.craft.parts[t].own_node.as_deref(), Some("top"));
         // pod bottom at -0.6, tank top at +1.0: tank sits 1.6 below the pod
         assert!((e.craft.parts[t].local_position.y + 1.6).abs() < 1e-9);
-        assert!((e.craft.parts[en].local_position.y + 1.9).abs() < 1e-9);
+        // root-relative: the engine sits 1.9 below the tank, 3.5 below the root
+        assert!((e.craft.parts[en].local_position.y + 3.5).abs() < 1e-9);
         assert_eq!(e.craft.parts[t].resources[0].stored_units, 100.0);
         assert_eq!(e.craft.stages, vec![vec![en]]);
         assert!((e.dry_mass_t(&cat) - 1.75).abs() < 1e-9);

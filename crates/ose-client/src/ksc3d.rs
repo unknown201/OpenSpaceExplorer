@@ -19,6 +19,9 @@ pub struct KscScene {
     pub buildings: Vec<Building>,
     #[serde(default = "default_ground")]
     pub ground_y: f64,
+    /// The original's vessel spawn points (`LaunchPad_spawn_01`..., `Runway_spawn_01`...), world positions.
+    #[serde(default)]
+    pub spawns: std::collections::HashMap<String, [f64; 3]>,
 }
 
 fn default_ground() -> f64 {
