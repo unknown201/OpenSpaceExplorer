@@ -147,6 +147,16 @@ async fn hello_catalog_and_snapshots() {
     let ServerMessage::BodyCatalog { bodies } = recv(&mut ws).await else {
         panic!("expected BodyCatalog")
     };
+    let ServerMessage::BodyRotation { bodies: spins } = recv(&mut ws).await else {
+        panic!("expected BodyRotation")
+    };
+    assert_eq!(spins.len(), bodies.len());
+    let k = bodies.iter().position(|b| b.id == "Kerbin").unwrap();
+    assert!(
+        (spins[k].rotation_period_s - 21_549.425).abs() < 1.0,
+        "{:?}",
+        spins[k]
+    );
     let ServerMessage::DifficultyOptions {
         definitions,
         presets,
@@ -638,6 +648,10 @@ async fn hello_catalog_and_snapshots() {
                 f.altitude_m
             );
             assert!(f.twr > 1.0, "twr {}", f.twr);
+            // standing on the pad: the axis points up, the roll reference lies across it
+            assert!((f.facing.length() - 1.0).abs() < 1e-6, "{:?}", f.facing);
+            assert!((f.roll_ref.length() - 1.0).abs() < 1e-6);
+            assert!(f.facing.dot(f.roll_ref).abs() < 1e-6);
             landed_seen = true;
             break;
         }

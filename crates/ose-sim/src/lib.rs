@@ -5,9 +5,11 @@
 
 #![forbid(unsafe_code)]
 
+pub mod aero;
 pub mod bodies;
 pub mod flight;
 pub mod rigid;
+pub mod structure;
 pub mod trajectory;
 pub mod vessels;
 
@@ -43,6 +45,8 @@ pub struct StageResult {
 pub struct Universe {
     pub world: World,
     params: trajectory::SolverParams,
+    /// Pieces that broke off powered vessels since the last `take_broken_off`: (vessel, new debris).
+    broken_off: Vec<(Entity, Entity)>,
 }
 
 impl Default for Universe {
@@ -60,6 +64,7 @@ impl Universe {
         Self {
             world,
             params: trajectory::SolverParams::default(),
+            broken_off: Vec::new(),
         }
     }
 
@@ -216,6 +221,20 @@ impl Universe {
         q.iter(&self.world).next().is_some()
     }
 
+    /// Give a vessel a part structure so flight loads its joints and pieces can break off.
+    pub fn set_structure(&mut self, e: Entity, s: structure::Structure) {
+        self.world.entity_mut(e).insert(s);
+    }
+
+    pub fn structure(&self, e: Entity) -> Option<&structure::Structure> {
+        self.world.get::<structure::Structure>(e)
+    }
+
+    /// Debris created by structural failure since the last call, as (vessel it came from, debris).
+    pub fn take_broken_off(&mut self) -> Vec<(Entity, Entity)> {
+        std::mem::take(&mut self.broken_off)
+    }
+
     /// Keep a flight state for a vessel on rails so it can be woken later (crafts launched straight into
     /// orbit, restored saves).
     pub fn set_dormant(&mut self, e: Entity, p: flight::Powered) {
@@ -306,7 +325,14 @@ impl Universe {
                 };
             };
         let debris = if outcome.fired && outcome.dropped_t > 0.01 {
-            self.spawn_debris(e, outcome.dropped_t, r, v, facing, area)
+            self.spawn_debris(
+                e,
+                outcome.dropped_t,
+                r - facing * 3.0,
+                v - facing * 1.5,
+                facing,
+                area,
+            )
         } else {
             None
         };
@@ -335,8 +361,7 @@ impl Universe {
                 .unwrap_or("vessel")
         );
         let ut = self.ut();
-        let r2 = r - facing * 3.0;
-        let v2 = v - facing * 1.5;
+        let (r2, v2) = (r, v);
         let spec = flight::FlightSpec {
             stages: vec![flight::StageSpec {
                 start_mass_t: mass_t,
@@ -509,8 +534,30 @@ impl Universe {
                 .get::<flight::Powered>(e)
                 .expect("powered")
                 .clone();
+            let mut structure = self.world.entity_mut(e).take::<structure::Structure>();
+            let mut pieces = Vec::new();
             for i in 0..ticks.max(1) {
-                flight::integrate(
+                if let Some(st) = &mut structure {
+                    p.thrust_scale = st.thrust_scale(p.stage);
+                    // part drag for the airflow now
+                    p.drag_cda_m2 = atmo.as_ref().map(|a| {
+                        let omega = if body.rotation_period_s > 0.0 {
+                            std::f64::consts::TAU / body.rotation_period_s
+                        } else {
+                            0.0
+                        };
+                        let v_air = p.v - DVec3::new(0.0, 0.0, omega).cross(p.r);
+                        let alt = p.r.length() - body.radius_m;
+                        let sound = a.speed_of_sound(alt);
+                        let mach = if sound > 0.0 {
+                            v_air.length() / sound
+                        } else {
+                            0.0
+                        };
+                        st.aero(p.stage, p.facing, v_air, a.density(alt), mach)
+                    });
+                }
+                let out = flight::integrate(
                     &mut p,
                     &body,
                     atmo.as_ref(),
@@ -518,6 +565,29 @@ impl Universe {
                     start_ut + i as f64 * dt,
                     dt,
                 );
+                if let Some(st) = &mut structure {
+                    for piece in st.apply(&p, &out, dt) {
+                        p.propellant_t = (p.propellant_t - piece.propellant_t).max(0.0);
+                        p.mass_t = (p.mass_t - piece.mass_t).max(0.001);
+                        pieces.push((piece, p.r, p.v, p.facing));
+                    }
+                }
+            }
+            if let Some(st) = structure {
+                self.world.entity_mut(e).insert(st);
+            }
+            let area = p.spec.drag_area_m2;
+            for (piece, r, v, facing) in pieces {
+                if let Some(d) = self.spawn_debris(
+                    e,
+                    piece.mass_t,
+                    r + piece.offset_m,
+                    v + piece.dv_mps,
+                    facing,
+                    area,
+                ) {
+                    self.broken_off.push((e, d));
+                }
             }
             let orbit = Orbit::from_state_vectors(body.mu, p.r, p.v, ut);
             // back on rails only when the coast cannot hit anything: periapsis above the atmosphere and the
@@ -823,6 +893,74 @@ mod tests {
         }
         assert!(u.vessel(d).is_none(), "debris still there");
         assert!(u.vessel(v).is_some());
+    }
+
+    fn k1_on_real_kerbin() -> (Universe, Entity, flight::FlightSpec, structure::Structure) {
+        let bodies: Vec<ose_data::CelestialBody> =
+            serde_json::from_str(include_str!("../../../assets/own/kerbol-system.json")).unwrap();
+        let mut kerbin = bodies.into_iter().find(|b| b.id == "Kerbin").unwrap();
+        kerbin.parent = None;
+        kerbin.orbit = None;
+        kerbin.soi_radius_m = None;
+        let crafts: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let defs: Vec<ose_data::PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let res: Vec<ose_data::ResourceDef> =
+            serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
+        let k1 = crafts.iter().find(|c| c.name == "Kerbal K1").unwrap();
+        let report = ose_data::staging::delta_v_by_stage(k1, &defs, &res);
+        let spec = flight::FlightSpec::from_report(&report, &[], &[], 1.5);
+        let st = structure::Structure::build(k1, &defs, &res);
+        let u = Universe::with_bodies(&[kerbin]);
+        let body = u.body_entity("Kerbin").unwrap();
+        (u, body, spec, st)
+    }
+
+    #[test]
+    fn kerbal_k1_launches_at_full_thrust_in_one_piece() {
+        let (mut u, body, spec, st) = k1_on_real_kerbin();
+        let v = u.spawn_powered_on_surface("K1", body, spec, 0.0, 0.0);
+        u.set_structure(v, st);
+        assert!(u.set_controls(v, 1.0, flight::Attitude::Up));
+        for _ in 0..(15 * TICKS_PER_SECOND) {
+            u.step();
+        }
+        let p = u.powered(v).unwrap();
+        assert!(!p.landed && p.v.length() > 100.0, "climbing");
+        assert!(u.take_broken_off().is_empty());
+        assert_eq!(u.structure(v).unwrap().rigid.groups().len(), 1);
+    }
+
+    #[test]
+    fn flying_broadside_through_thick_air_tears_parts_off_as_debris() {
+        let (mut u, body, spec, st) = k1_on_real_kerbin();
+        let v = u.spawn_vessel_in_circular_orbit("K1", body, 100_000.0);
+        // 3 km up, 900 m/s across the stack, nose held straight up
+        let r = DVec3::new(600_000.0 + 3_000.0, 0.0, 0.0);
+        let mut p = flight::Powered::new(spec, r, DVec3::new(0.0, 900.0, 0.0), false);
+        p.attitude = flight::Attitude::Fixed(DVec3::new(1.0, 0.0, 0.0));
+        p.facing = DVec3::new(1.0, 0.0, 0.0);
+        u.set_powered(v, p);
+        u.set_structure(v, st);
+        let before = u.powered(v).unwrap().mass_t;
+        let mut broken = Vec::new();
+        for _ in 0..(3 * TICKS_PER_SECOND) {
+            u.step();
+            broken.extend(u.take_broken_off());
+        }
+        assert!(!broken.is_empty(), "the boosters should tear off");
+        let shed: f64 = broken
+            .iter()
+            .filter_map(|&(from, d)| {
+                assert_eq!(from, v);
+                assert!(u.world.get::<vessels::Debris>(d).is_some());
+                u.powered(d).map(|dp| dp.spec.stages[0].start_mass_t)
+            })
+            .sum();
+        let after = u.powered(v).unwrap().mass_t;
+        assert!(after < before - 1.0, "mass {before} -> {after}");
+        assert!(shed > 1.0, "debris carries the mass ({shed} t)");
     }
 
     #[test]

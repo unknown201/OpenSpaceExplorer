@@ -179,6 +179,17 @@ pub struct Powered {
     /// Angular velocity, rad/s, inertial (roll is not modelled).
     #[serde(default)]
     pub angvel: DVec3,
+    /// Fraction of the current stage's engines still attached (engines can break off).
+    #[serde(default = "one")]
+    pub thrust_scale: f64,
+    /// Drag `Cd * A` from the part drag cubes for the current airflow, m^2; `None` uses the spec's
+    /// reference area and coefficient.
+    #[serde(default)]
+    pub drag_cda_m2: Option<f64>,
+}
+
+fn one() -> f64 {
+    1.0
 }
 
 /// The flight state of a vessel that is on rails: stage, propellant and mass are kept so the vessel can
@@ -203,6 +214,15 @@ impl Atmo {
             self.pressure_kpa.evaluate(alt_m).max(0.0)
         }
     }
+    /// Speed of sound, m/s (ideal diatomic gas).
+    pub fn speed_of_sound(&self, alt_m: f64) -> f64 {
+        let t = self.temperature_k.evaluate(alt_m.min(self.depth_m));
+        if t <= 0.0 || self.molar_mass <= 0.0 {
+            return 0.0;
+        }
+        (1.4 * IDEAL_GAS_CONSTANT * t / self.molar_mass).sqrt()
+    }
+
     pub fn density(&self, alt_m: f64) -> f64 {
         let p = self.pressure_kpa(alt_m);
         let t = self.temperature_k.evaluate(alt_m);
@@ -293,6 +313,8 @@ impl Powered {
                 default_facing()
             },
             angvel: DVec3::ZERO,
+            thrust_scale: 1.0,
+            drag_cda_m2: None,
         }
     }
 
@@ -350,7 +372,9 @@ impl Powered {
         match self.current_stage() {
             Some(s) if self.propellant_t > 0.0 && self.throttle > 0.0 => {
                 let p = pressure_atm.clamp(0.0, 1.0);
-                (s.thrust_vac_kn + (s.thrust_asl_kn - s.thrust_vac_kn) * p) * self.throttle
+                (s.thrust_vac_kn + (s.thrust_asl_kn - s.thrust_vac_kn) * p)
+                    * self.throttle
+                    * self.thrust_scale
             }
             _ => 0.0,
         }
@@ -495,6 +519,10 @@ pub fn steer(p: &mut Powered, target: DVec3, thrust_fraction: f64, dt: f64) {
 pub struct StepOutcome {
     pub crashed: bool,
     pub touched_down: bool,
+    /// Thrust delivered this step, kN, along `facing`.
+    pub thrust_kn: f64,
+    /// Aerodynamic drag this step, kN, inertial.
+    pub drag_kn: DVec3,
 }
 
 /// Integrate one `dt` of powered flight around `body`.
@@ -509,6 +537,8 @@ pub fn integrate(
     let mut out = StepOutcome {
         crashed: false,
         touched_down: false,
+        thrust_kn: 0.0,
+        drag_kn: DVec3::ZERO,
     };
     if p.crashed {
         return out;
@@ -568,6 +598,7 @@ pub fn integrate(
             p.facing
         };
         thrust_acc = dir * (thrust_kn * frac / p.mass_t); // kN / t = m/s^2
+        out.thrust_kn = thrust_kn * frac;
         p.propellant_t -= burn;
         p.mass_t -= burn;
     }
@@ -592,11 +623,15 @@ pub fn integrate(
     let v_surf = p.v - omega_v.cross(p.r);
     let drag_acc = if rho > 0.0 && v_surf.length_squared() > 0.0 {
         let q = 0.5 * rho * v_surf.length_squared();
-        let f_n = q * p.spec.drag_cd * p.spec.drag_area_m2; // newtons
+        let cda = p
+            .drag_cda_m2
+            .unwrap_or(p.spec.drag_cd * p.spec.drag_area_m2);
+        let f_n = q * cda; // newtons
         -v_surf.normalized() * (f_n / (p.mass_t * 1000.0))
     } else {
         DVec3::ZERO
     };
+    out.drag_kn = drag_acc * p.mass_t;
     let acc = g_acc + thrust_acc + drag_acc;
     p.v = p.v + acc * dt;
     p.r = p.r + p.v * dt;

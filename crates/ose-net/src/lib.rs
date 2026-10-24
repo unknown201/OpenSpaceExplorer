@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 8;
+pub const PROTOCOL_VERSION: u16 = 9;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -296,6 +296,23 @@ pub struct FlightReadout {
     pub thrust_kn: f64,
     pub twr: f64,
     pub dynamic_pressure_kpa: f64,
+    /// Where the vessel actually points (the craft's +Y, its thrust axis): unit vector in the reference
+    /// body's inertial frame (Z-up, the same frame as `VesselState`). It turns toward `attitude` at a
+    /// limited rate.
+    pub facing: DVec3,
+    /// Roll reference: unit vector across `facing` along which the craft's forward side (craft +Z, where a
+    /// pod's windows face) points. Roll is not simulated, so this is the local north projected across the
+    /// vessel axis (east when the axis is north-south).
+    pub roll_ref: DVec3,
+}
+
+/// How a body spins, index-aligned with `BodyCatalog::bodies`. Body-fixed longitude 0 is at inertial angle
+/// `initial_rotation_deg + 360 * ut / rotation_period_s` about +Z.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BodySpin {
+    /// Sidereal rotation period, s; 0 for a body that does not spin.
+    pub rotation_period_s: f64,
+    pub initial_rotation_deg: f64,
 }
 
 /// A craft in the library listing. Stock crafts have ids below 1000 and no owner.
@@ -421,6 +438,10 @@ pub enum ServerMessage {
     },
     Pong {
         sent_tick: Tick,
+    },
+    /// Sent right after `BodyCatalog`: each body's rotation.
+    BodyRotation {
+        bodies: Vec<BodySpin>,
     },
 }
 

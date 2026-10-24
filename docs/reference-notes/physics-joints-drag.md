@@ -70,9 +70,11 @@ Joint configuration:
 Example, two size-1 parts with `breakingForce = 50`, `breakingTorque = 50` (the Terrier's values): nodeFactor
 100, stiffness 1.5e6, breakForce `50 * 100 / 1 * 50 = 250000`, breakTorque the same.
 
-Our mapping: rapier `GenericJoint` / `SpringJoint` per attach node with a stiff linear spring and an angular
-spring of `stiffness` with damping ratio from `JointDampingFactor`, plus break thresholds checked each step from
-the joint impulse. Keep the formulas above as a pure function in `ose-sim` so the values can be unit tested.
+Our mapping (`ose_sim::rigid`): one rapier multibody joint per parent link, fixed, so a craft is one
+reduced-coordinate tree (exact across the 100:1 mass ratios of radial decouplers; impulse joints with angular
+springs sagged there). The angular spring is not simulated: rapier's multibody motors for three free rotations
+track integrated angular velocity, not the true relative rotation, and wandered. Joint loads come from
+Newton-Euler over each joint's subtree and are checked against `joint_limits` (the formulas above) every step.
 
 ## Atmosphere properties used by flight (`CelestialBodyComponent`, `PartComponent`)
 
@@ -122,7 +124,8 @@ F_drag     = -d * dragScalar         applied at coPressureOffset (+ lifting surf
 bodyLift   = q_kPa * bodyLiftMultiplier(part) * BodyLiftMultiplier(18) * liftMachCurve(m)
 F_lift     = projectOnPlane(bodyLift * LiftForce, -d)     applied at coLiftOffset
 ```
-So drag force in newtons is `AreaDrag * 0.1 * pseudoRe * 8 * q_Pa / 1000 = 0.0008 * AreaDrag * pseudoRe * q_Pa`.
+So drag force in kN is `AreaDrag * 0.1 * pseudoRe * 8 * q_Pa / 1000 = 0.0008 * AreaDrag * pseudoRe * q_Pa`, i.e. an
+equivalent `Cd * A = 0.8 * AreaDrag * pseudoRe` m^2 (implemented in `ose_sim::aero`).
 
 Default curves (`time, value, inTangent, outTangent`), all evaluated with Unity's Hermite interpolation and
 clamped ends:

@@ -258,6 +258,8 @@ async fn json_route(body: Arc<String>) -> impl IntoResponse {
 struct Shared {
     universe: Mutex<Universe>,
     catalog: Vec<BodyInfo>,
+    /// Body rotation, index-aligned with `catalog`.
+    spins: Vec<ose_net::BodySpin>,
     parts: Vec<ose_data::PartDef>,
     resources: Vec<ose_data::ResourceDef>,
     accounts: Mutex<accounts::Accounts>,
@@ -348,6 +350,13 @@ async fn main() -> anyhow::Result<()> {
     };
     let defs: Vec<CelestialBody> = serde_json::from_str(&bodies_json)?;
     let catalog = catalog_from(&defs);
+    let spins = defs
+        .iter()
+        .map(|b| ose_net::BodySpin {
+            rotation_period_s: b.rotation_period_s,
+            initial_rotation_deg: b.initial_rotation_deg,
+        })
+        .collect();
     tracing::info!(bodies = defs.len(), "loaded celestial bodies");
 
     let mut universe = Universe::with_bodies(&defs);
@@ -387,6 +396,7 @@ async fn main() -> anyhow::Result<()> {
     let shared: AppState = Arc::new(Shared {
         universe: Mutex::new(universe),
         catalog,
+        spins,
         parts: serde_json::from_str(EMBEDDED_PARTS)?,
         resources: serde_json::from_str(EMBEDDED_RESOURCES)?,
         accounts: Mutex::new({
@@ -653,7 +663,21 @@ fn flight_readout(
             0.0
         },
         dynamic_pressure_kpa: 0.0005 * rho * v_surf.length_squared(),
+        facing: p.facing,
+        roll_ref: roll_reference(p.facing, up),
     })
+}
+
+/// Local north (east when the vessel axis is north-south) made perpendicular to `facing`.
+fn roll_reference(facing: ose_math::DVec3, up: ose_math::DVec3) -> ose_math::DVec3 {
+    let (_, east, north) = ose_sim::flight::surface_frame(up);
+    for d in [north, east] {
+        let across = d - facing * d.dot(facing);
+        if across.length_squared() > 1e-6 {
+            return across.normalized();
+        }
+    }
+    up
 }
 
 /// Fallback launch pad (Kerbin) when the terrain index has no pad site, degrees.
@@ -842,6 +866,10 @@ fn launch_on_pad(s: &Shared, player_id: u64, craft: &ose_data::craft::Craft) -> 
     };
     let (pad_lat, pad_lon) = launch_pad(&home.id);
     let e = u.spawn_powered_on_surface(&name, body, spec, pad_lat, pad_lon);
+    u.set_structure(
+        e,
+        ose_sim::structure::Structure::build(craft, &s.parts, &s.resources),
+    );
     let mut list = s.vessels.lock().expect("vessels lock");
     let id = list.iter().map(|&(_, id, _)| id).max().unwrap_or(0) + 1;
     list.push((e, id, Some(player_id)));
@@ -1236,6 +1264,10 @@ fn launch_craft(
         if let Some((_, _, orbit)) = u.vessel(e) {
             let (r, v) = orbit.state_at(u.ut());
             u.set_dormant(e, ose_sim::flight::Powered::new(spec, r, v, false));
+            u.set_structure(
+                e,
+                ose_sim::structure::Structure::build(craft, &s.parts, &s.resources),
+            );
         }
     }
     let mut list = s.vessels.lock().expect("vessels lock");
@@ -1327,6 +1359,16 @@ async fn session(mut socket: WebSocket, s: AppState) {
                         {
                             return;
                         }
+                        if !send(
+                            &mut socket,
+                            &ServerMessage::BodyRotation {
+                                bodies: s.spins.clone(),
+                            },
+                        )
+                        .await
+                        {
+                            return;
+                        }
                         if !has_vessel(&s, id) {
                             if !send(&mut socket, &s.difficulty).await {
                                 return;
@@ -1377,8 +1419,15 @@ async fn session(mut socket: WebSocket, s: AppState) {
         tokio::select! {
             _ = interval.tick() => {
                 {
-                    let u = s.universe.lock().expect("sim lock");
-                    s.vessels.lock().expect("vessels lock").retain(|&(e, _, _)| u.vessel(e).is_some());
+                    let mut u = s.universe.lock().expect("sim lock");
+                    let mut list = s.vessels.lock().expect("vessels lock");
+                    // pieces that broke off belong to whoever flew the vessel
+                    for (from, debris) in u.take_broken_off() {
+                        let owner = list.iter().find(|v| v.0 == from).and_then(|v| v.2);
+                        let id = list.iter().map(|&(_, id, _)| id).max().unwrap_or(0) + 1;
+                        list.push((debris, id, owner));
+                    }
+                    list.retain(|&(e, _, _)| u.vessel(e).is_some());
                 }
                 let (time, snap, vessels) = snapshot(&s);
                 if !send(&mut socket, &time).await

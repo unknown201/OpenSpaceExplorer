@@ -1,10 +1,13 @@
 //! Per-part rigid bodies linked by the original's part joints (see `docs/reference-notes/physics-joints-drag.md`).
 //!
 //! One rapier body per part, one joint per parent link. Units follow the original's PhysX setup: tonnes, metres,
-//! seconds, so forces are kN and torques kN*m. Translation is locked at the joint (the original holds it with a
-//! 1e20 spring); rotation is an angular spring of the original's stiffness with damping
-//! `stiffness * JointDampingFactor`, or locked for rigid nodes. A joint breaks when the force it carries or its
-//! spring torque exceeds the original's limits, and the craft splits into the connected groups that remain.
+//! seconds, so forces are kN and torques kN*m. Joints are fixed, reduced-coordinate (multibody) links: a craft
+//! is a tree, and a multibody stays exact across the 100:1 mass ratios of radial decouplers between tanks and
+//! boosters, which an iterative solver cannot hold. The original's angular spring (`JointLimits::stiffness`)
+//! only adds wobble, so it is kept as data but not simulated; rapier's multibody motors for joints with three
+//! free rotations integrate angular velocity rather than track the true relative rotation, and wander.
+//! Each joint's load comes from Newton-Euler over the subtree it carries; it breaks when the force or the
+//! torque exceeds the original's limits, and the craft splits into the connected groups that remain.
 //!
 //! The vessel frame is the craft frame made right-handed: Unity Y-up with Z negated, so engines push along +Y.
 
@@ -16,9 +19,9 @@ use ose_math::DVec3;
 use rapier3d_f64::math::{Pose, Rotation, Vector};
 use rapier3d_f64::prelude::{
     CCDSolver, ColliderSet, DefaultBroadPhase, GenericJointBuilder, ImpulseJointSet,
-    IntegrationParameters, IslandManager, JointAxesMask, JointAxis, MassProperties, MotorModel,
-    MultibodyJointHandle, MultibodyJointSet, NarrowPhase, PhysicsPipeline, RigidBodyBuilder,
-    RigidBodyHandle, RigidBodySet, SoftBodySet,
+    IntegrationParameters, IslandManager, JointAxesMask, MassProperties, MultibodyJointHandle,
+    MultibodyJointSet, NarrowPhase, PhysicsPipeline, RigidBodyBuilder, RigidBodyHandle,
+    RigidBodySet, SoftBodySet,
 };
 
 /// `PhysicsSettings` defaults.
@@ -92,6 +95,9 @@ fn quat_to_vessel(q: Quat) -> Rotation {
     let r = Rotation::from_xyzw(-q.x, -q.y, q.z, q.w);
     if r.length_squared() < 1e-12 {
         Rotation::IDENTITY
+    } else if r.w < 0.0 {
+        // one sign for every part, so joint frames never start a full turn apart
+        -r.normalize()
     } else {
         r.normalize()
     }
@@ -115,8 +121,6 @@ pub struct Link {
     pub force_kn: f64,
     pub torque_knm: f64,
     handle: Option<MultibodyJointHandle>,
-    /// Parent-relative child rotation at rest.
-    rest: Rotation,
     /// The joint anchor in the child's frame.
     anchor_child: Vector,
 }
@@ -145,7 +149,13 @@ pub struct PartForce {
 }
 
 pub struct RigidVessel {
+    /// Wet mass at build (dry plus stored resources), t.
     pub masses_t: Vec<f64>,
+    pub dry_masses_t: Vec<f64>,
+    /// Box size of each part (vessel frame axes), m, as used for its inertia.
+    pub sizes_m: Vec<DVec3>,
+    /// Parts still simulated (removed ones were staged away or broke off).
+    pub present: Vec<bool>,
     pub links: Vec<Link>,
     bodies_of: Vec<RigidBodyHandle>,
     bodies: RigidBodySet,
@@ -194,6 +204,8 @@ impl RigidVessel {
         let mut bodies = RigidBodySet::new();
         let mut joints = MultibodyJointSet::new();
         let mut masses_t = Vec::with_capacity(craft.parts.len());
+        let mut dry_masses_t = Vec::with_capacity(craft.parts.len());
+        let mut sizes_m = Vec::with_capacity(craft.parts.len());
         let mut bodies_of = Vec::with_capacity(craft.parts.len());
         let mut rots = Vec::with_capacity(craft.parts.len());
         for (i, p) in craft.parts.iter().enumerate() {
@@ -222,6 +234,8 @@ impl RigidVessel {
                 .build();
             bodies_of.push(bodies.insert(rb));
             masses_t.push(m);
+            dry_masses_t.push(def.map(|d| d.mass_t).unwrap_or(0.0).min(m));
+            sizes_m.push(DVec3::new(sx, sy, sz));
             rots.push(rot);
         }
         let mut links = Vec::new();
@@ -255,28 +269,10 @@ impl RigidVessel {
             };
             let a1 = rots[parent].inverse() * v(anchor - ppos);
             let a2 = rots[i].inverse() * v(anchor - cpos);
-            let mask = if rigid {
-                JointAxesMask::LOCKED_FIXED_AXES
-            } else {
-                JointAxesMask::LIN_AXES
-            };
-            let mut b = GenericJointBuilder::new(mask)
+            let b = GenericJointBuilder::new(JointAxesMask::LOCKED_FIXED_AXES)
                 .local_frame1(Pose::from_parts(a1, rots[parent].inverse()))
                 .local_frame2(Pose::from_parts(a2, rots[i].inverse()))
                 .contacts_enabled(false);
-            if !rigid {
-                for axis in [JointAxis::AngX, JointAxis::AngY, JointAxis::AngZ] {
-                    b = b.motor_model(axis, MotorModel::ForceBased).motor_position(
-                        axis,
-                        0.0,
-                        limits.stiffness,
-                        limits.damping,
-                    );
-                }
-            }
-            // reduced-coordinate (multibody) joints: a craft is a tree, and these stay stiff across the
-            // 100:1 mass ratios of radial decouplers between tanks and boosters, which an iterative solver
-            // cannot hold
             let h = joints.insert(bodies_of[parent], bodies_of[i], b.build(), true);
             links.push(Link {
                 child: i,
@@ -285,7 +281,6 @@ impl RigidVessel {
                 force_kn: 0.0,
                 torque_knm: 0.0,
                 handle: h,
-                rest: rots[parent].inverse() * rots[i],
                 anchor_child: a2,
             });
         }
@@ -293,6 +288,9 @@ impl RigidVessel {
         let n = masses_t.len();
         RigidVessel {
             masses_t,
+            dry_masses_t,
+            sizes_m,
+            present: vec![true; n],
             links,
             bodies_of,
             bodies,
@@ -318,18 +316,30 @@ impl RigidVessel {
         self.bodies_of.is_empty()
     }
 
+    /// Zero for a removed part.
     pub fn position(&self, part: usize) -> DVec3 {
-        d(self.bodies[self.bodies_of[part]].translation())
+        self.bodies
+            .get(self.bodies_of[part])
+            .map(|b| d(b.translation()))
+            .unwrap_or(DVec3::ZERO)
     }
 
     pub fn velocity(&self, part: usize) -> DVec3 {
-        d(self.bodies[self.bodies_of[part]].linvel())
+        self.bodies
+            .get(self.bodies_of[part])
+            .map(|b| d(b.linvel()))
+            .unwrap_or(DVec3::ZERO)
     }
 
     /// Rotation of a part as a quaternion (x, y, z, w) in the vessel frame.
     pub fn rotation(&self, part: usize) -> [f64; 4] {
-        let r = self.bodies[self.bodies_of[part]].rotation();
-        [r.x, r.y, r.z, r.w]
+        match self.bodies.get(self.bodies_of[part]) {
+            Some(b) => {
+                let r = b.rotation();
+                [r.x, r.y, r.z, r.w]
+            }
+            None => [0.0, 0.0, 0.0, 1.0],
+        }
     }
 
     /// Mass-weighted centre and velocity of a set of parts.
@@ -348,7 +358,9 @@ impl RigidVessel {
     pub fn step(&mut self, dt: f64, gravity: DVec3, forces: &[PartForce]) -> Vec<Broken> {
         let n = self.len();
         for &h in &self.bodies_of {
-            self.bodies[h].reset_forces(false);
+            if let Some(b) = self.bodies.get_mut(h) {
+                b.reset_forces(false);
+            }
         }
         // external force and its moment about the origin, per part, for the joint loads below
         let mut ext = vec![(DVec3::ZERO, DVec3::ZERO); n];
@@ -356,13 +368,16 @@ impl RigidVessel {
             let Some(&h) = self.bodies_of.get(f.part) else {
                 continue;
             };
+            if !self.present[f.part] {
+                continue;
+            }
             let rb = &mut self.bodies[h];
             let at = rb.translation() + v(f.offset_m);
             rb.add_force_at_point(v(f.force_kn), at, true);
             ext[f.part].0 = ext[f.part].0 + f.force_kn;
             ext[f.part].1 = ext[f.part].1 + d(at).cross(f.force_kn);
         }
-        for i in 0..n {
+        for i in (0..n).filter(|&i| self.present[i]) {
             self.prev_vel[i] = self.velocity(i);
         }
         self.params.dt = dt;
@@ -385,7 +400,7 @@ impl RigidVessel {
         // motion needs beyond gravity and the external forces on it (rotational inertia neglected).
         let mut sum_f = vec![DVec3::ZERO; n];
         let mut sum_m = vec![DVec3::ZERO; n];
-        for i in 0..n {
+        for i in (0..n).filter(|&i| self.present[i]) {
             let a = (self.velocity(i) - self.prev_vel[i]) * (1.0 / dt);
             let need = (a - gravity) * self.masses_t[i];
             sum_f[i] = need - ext[i].0;
@@ -404,15 +419,7 @@ impl RigidVessel {
             let body = &self.bodies[self.bodies_of[l.child]];
             let anchor = d(body.position().transform_point(l.anchor_child));
             l.force_kn = sum_f[l.child].length();
-            l.torque_knm = if l.limits.rigid {
-                (sum_m[l.child] - anchor.cross(sum_f[l.child])).length()
-            } else {
-                let qp = *self.bodies[self.bodies_of[l.parent]].rotation();
-                let qc = *body.rotation();
-                let rel = (qp.inverse() * qc * l.rest.inverse()).normalize();
-                let angle = 2.0 * rel.w.abs().min(1.0).acos();
-                l.limits.stiffness * angle
-            };
+            l.torque_knm = (sum_m[l.child] - anchor.cross(sum_f[l.child])).length();
             if l.force_kn > l.limits.break_force_kn || l.torque_knm > l.limits.break_torque_knm {
                 self.joints.remove(h, true);
                 l.handle = None;
@@ -437,12 +444,40 @@ impl RigidVessel {
             has_parent[l.child] = true;
         }
         let mut order = Vec::with_capacity(n);
-        let mut stack: Vec<usize> = (0..n).filter(|&i| !has_parent[i]).collect();
+        let mut stack: Vec<usize> = (0..n)
+            .filter(|&i| self.present[i] && !has_parent[i])
+            .collect();
         while let Some(i) = stack.pop() {
             order.push(i);
             stack.extend(children[i].iter().copied());
         }
         order
+    }
+
+    /// Take parts out of the simulation (staged away, broken off): their bodies and joints are removed.
+    pub fn remove_parts(&mut self, parts: &[usize]) {
+        for &i in parts {
+            if !self.present.get(i).copied().unwrap_or(false) {
+                continue;
+            }
+            for l in self
+                .links
+                .iter_mut()
+                .filter(|l| l.child == i || l.parent == i)
+            {
+                l.handle = None;
+            }
+            self.bodies.remove(
+                self.bodies_of[i],
+                &mut self.islands,
+                &mut self.colliders,
+                &mut self.impulse,
+                &mut self.joints,
+                &mut self.soft,
+                true,
+            );
+            self.present[i] = false;
+        }
     }
 
     /// Connected groups of parts over the intact joints, each sorted, the group holding part 0 first.
@@ -463,7 +498,7 @@ impl RigidVessel {
             }
         }
         let mut by_root: Vec<(usize, Vec<usize>)> = Vec::new();
-        for i in 0..n {
+        for i in (0..n).filter(|&i| self.present[i]) {
             let r = find(&mut root, i);
             match by_root.iter_mut().find(|g| g.0 == r) {
                 Some(g) => g.1.push(i),
@@ -594,10 +629,10 @@ mod tests {
             .iter()
             .filter(|l| l.parent == pod || l.child == pod)
             .map(|l| l.limits.break_force_kn)
-            .fold(f64::INFINITY, f64::min);
+            .fold(0.0, f64::max);
         let yank = PartForce {
             part: pod,
-            force_kn: DVec3::new(limit * 4.0, 0.0, 0.0),
+            force_kn: DVec3::new(limit * 8.0, 0.0, 0.0),
             offset_m: DVec3::ZERO,
         };
         let mut broken = Vec::new();

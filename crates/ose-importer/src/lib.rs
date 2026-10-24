@@ -419,6 +419,15 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
             "serializedPartModules",
         ],
     );
+    // the stowed shape first (parachutes list DEPLOYED first, gear and panels RETRACTED/EXTENDED): it is the
+    // part's default drag and extent
+    if let Some(i) = drag_cubes
+        .iter()
+        .position(|c| matches!(c.name.as_str(), "PACKED" | "RETRACTED"))
+    {
+        let stowed = drag_cubes.remove(i);
+        drag_cubes.insert(0, stowed);
+    }
     let bounds = part_bounds(&drag_cubes, &attach_nodes);
     PartDef {
         id: s(d, "partName"),

@@ -18,8 +18,8 @@ struct Args {
     /// Where to write the converted data.
     #[arg(long, default_value = "assets/ksp2/converted")]
     out: PathBuf,
-    /// Where to write the slim, committed server assets (bodies, parts without drag cubes/raw modules,
-    /// resources, stock craft). Skipped when empty.
+    /// Where to write the slim, committed server assets (bodies, parts with their first drag cube and no raw
+    /// modules, resources, stock craft). Skipped when empty.
     #[arg(long, default_value = "assets/own")]
     own_out: PathBuf,
 }
@@ -75,7 +75,8 @@ fn main() -> anyhow::Result<()> {
             .parts
             .iter()
             .map(|p| ose_data::PartDef {
-                drag_cubes: Vec::new(),
+                // the first cube is the part's default shape (the sim's drag); the rest are deployed states
+                drag_cubes: p.drag_cubes.iter().take(1).cloned().collect(),
                 raw_modules: Default::default(),
                 ..p.clone()
             })
