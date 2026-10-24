@@ -266,6 +266,8 @@
     .fh-throttle span { position: absolute; top: calc(4 * var(--u)); left: 0; right: 0; text-align: center; font-size: calc(9 * var(--u)); color: #fff; }
     .fh-staging { position: absolute; left: calc(16 * var(--u)); bottom: calc(16 * var(--u)); background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(8 * var(--u)); padding: calc(10 * var(--u)); display: flex; flex-direction: column; gap: calc(6 * var(--u)); min-width: calc(160 * var(--u)); }
     #fh-stage-btn { background: #2f6b2f !important; font-size: calc(18 * var(--u)) !important; padding: calc(10 * var(--u)) !important; }
+    .fh-stress { height: calc(8 * var(--u)); background: #ffffff22; border-radius: calc(4 * var(--u)); overflow: hidden; }
+    #fh-stress-fill { height: 100%; width: 0; background: hsl(120, 85%, 50%); transition: width 0.1s linear; }
     .fh-help { position: absolute; right: calc(16 * var(--u)); bottom: calc(16 * var(--u)); font-size: calc(11 * var(--u)); color: #9fb0cc; max-width: calc(260 * var(--u)); text-align: right; }
     body:has(#flight-hud.open) #help { display: none; }
     body:has(#flight-hud.open:not(.map)) #hud { opacity: 0; pointer-events: none; }
@@ -434,6 +436,8 @@
       <div id="fh-stage" class="fh-small">--</div>
       <div id="fh-fuel" class="fh-small">--</div>
       <div id="fh-ec" class="fh-small" data-ose="flight-ec">--</div>
+      <div class="fh-small" title="worst joint load against its break limit">STRESS</div>
+      <div class="fh-stress" data-ose="flight-stress"><div id="fh-stress-fill"></div></div>
       <button id="fh-stage-btn" data-ose="flight-stage" title="Space">STAGE</button>
     </div>
     <div class="fh-help">Space stage, Z/X throttle, Shift/Ctrl adjust, W/S pitch, A/D heading, T prograde, M map, drag to look</div>

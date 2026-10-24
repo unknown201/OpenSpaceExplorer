@@ -347,7 +347,8 @@ impl Renderer {
         let depth_state = wgpu::DepthStencilState {
             format: wgpu::TextureFormat::Depth32Float,
             depth_write_enabled: Some(true),
-            depth_compare: Some(wgpu::CompareFunction::Less),
+            // Reversed depth (near 1, far 0) for precision from metres to thousands of kilometres.
+            depth_compare: Some(wgpu::CompareFunction::Greater),
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
         };
@@ -1006,7 +1007,7 @@ impl Renderer {
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &self.depth,
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
+                        load: wgpu::LoadOp::Clear(0.0),
                         store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: None,
@@ -1070,15 +1071,15 @@ fn look_to_rh(dir: DVec3, up: DVec3) -> DMat4 {
     )
 }
 
-/// Right-handed perspective projection with a zero-to-one depth range (WebGPU clip space).
-fn perspective_rh(fov_y: f64, aspect: f64, near: f64, far: f64) -> DMat4 {
+/// Right-handed perspective projection, reversed and infinite: depth 1 at `near`, falling towards 0 at
+/// infinity (WebGPU clip space, compared with `Greater`). `far` is kept in the signature for callers.
+fn perspective_rh(fov_y: f64, aspect: f64, near: f64, _far: f64) -> DMat4 {
     let f = 1.0 / (fov_y * 0.5).tan();
-    let r = far / (near - far);
     DMat4::from_cols(
         glam::DVec4::new(f / aspect, 0.0, 0.0, 0.0),
         glam::DVec4::new(0.0, f, 0.0, 0.0),
-        glam::DVec4::new(0.0, 0.0, r, -1.0),
-        glam::DVec4::new(0.0, 0.0, r * near, 0.0),
+        glam::DVec4::new(0.0, 0.0, 0.0, -1.0),
+        glam::DVec4::new(0.0, 0.0, near, 0.0),
     )
 }
 

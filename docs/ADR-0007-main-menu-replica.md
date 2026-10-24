@@ -63,6 +63,11 @@ the order a new player meets it, using the original's assets).
   Protocol 9: the craft is drawn along the server's actual `facing` with its +Z on `roll_ref`, so it turns
   toward a new hold at the simulated rate, and body spin comes from `BodyRotation` (the embedded system file
   is the fallback).
+  Protocol 11: each part is bent by the server's `flex` (a rotation about its own origin, then an offset,
+  craft frame), blended between the last two snapshots over one 100 ms interval and exaggerated three times
+  (`FLEX_EXAGGERATION`) so the wobble reads on screen; the HUD shows `joint_stress` as a green-to-red bar.
+  The renderer now uses reversed infinite depth (near 1, far 0, `Greater`), which removed most of the
+  z-fighting on the ground seen from altitude.
 - Craft poses: KSP2 assemblies store `partState.localPosition` relative to the craft root, not the parent
   (the stock K1 descends monotonically down its 38-part tree), so the client reads stored poses as
   craft-frame poses and the editor now stores root-relative positions too. Crafts saved by the editor

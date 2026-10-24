@@ -30,6 +30,15 @@ const KSC_PADS: [(f64, f64, f64); 4] = [
     (-0.4362, -75.3480, 132.0),
 ];
 
+/// Visual exaggeration of the server's part flex: the real bends are a few milliradians, which reads as
+/// nothing on screen; three times keeps the wobble subtle but visible.
+pub const FLEX_EXAGGERATION: f64 = 3.0;
+
+/// Snapshot interval the flex interpolation spans (the server streams vessels at 10 Hz).
+const SNAPSHOT_MS: f64 = 100.0;
+
+type FlexMap = HashMap<u16, ([f32; 3], [f32; 3])>;
+
 /// Body rotation constants from the embedded system file (the server uses the same data).
 #[derive(Clone, Copy, Debug)]
 pub struct Spin {
@@ -173,6 +182,10 @@ pub struct FlightView {
     ksc: Option<(DVec3, DQuat)>,
     ksc_scene_req: bool,
     ksc_scene: std::rc::Rc<std::cell::RefCell<Option<crate::ksc3d::KscScene>>>,
+    /// Part flex of the last two distinct snapshots and when the newer one arrived (ms), for interpolation.
+    flex_prev: FlexMap,
+    flex_cur: FlexMap,
+    flex_since_ms: f64,
 }
 
 impl Default for FlightView {
@@ -198,6 +211,8 @@ pub struct FlightInput<'a> {
     pub is_decoupler: &'a dyn Fn(&str) -> bool,
     /// Body spin from the server's `BodyRotation` (protocol 9); the embedded system file otherwise.
     pub spin: Option<Spin>,
+    /// Wall clock, ms (flex interpolation).
+    pub now_ms: f64,
 }
 
 fn quat_from_basis(x: DVec3, y: DVec3, z: DVec3) -> DQuat {
@@ -214,7 +229,47 @@ impl FlightView {
             ksc: None,
             ksc_scene_req: false,
             ksc_scene: Default::default(),
+            flex_prev: HashMap::new(),
+            flex_cur: HashMap::new(),
+            flex_since_ms: 0.0,
         }
+    }
+
+    /// Take a new flex snapshot when it differs from the last one, and return each part's interpolated
+    /// (rotation vector, offset) in the craft's Unity frame, exaggerated for display.
+    fn flex_now(&mut self, flex: &[ose_net::PartFlex], now_ms: f64) -> FlexMap {
+        let incoming: FlexMap = flex
+            .iter()
+            .map(|f| (f.part, (f.rotation, f.offset_m)))
+            .collect();
+        if incoming != self.flex_cur {
+            self.flex_prev = std::mem::replace(&mut self.flex_cur, incoming);
+            self.flex_since_ms = now_ms;
+        }
+        // Render one snapshot behind: blend from the previous to the current over one interval.
+        let t = ((now_ms - self.flex_since_ms) / SNAPSHOT_MS).clamp(0.0, 1.0) as f32;
+        let k = FLEX_EXAGGERATION as f32;
+        let mut out = FlexMap::new();
+        let zero = ([0.0f32; 3], [0.0f32; 3]);
+        let keys: std::collections::HashSet<u16> = self
+            .flex_prev
+            .keys()
+            .chain(self.flex_cur.keys())
+            .copied()
+            .collect();
+        for part in keys {
+            let a = self.flex_prev.get(&part).copied().unwrap_or(zero);
+            let b = self.flex_cur.get(&part).copied().unwrap_or(zero);
+            let lerp = |x: [f32; 3], y: [f32; 3]| {
+                [
+                    (x[0] + (y[0] - x[0]) * t) * k,
+                    (x[1] + (y[1] - x[1]) * t) * k,
+                    (x[2] + (y[2] - x[2]) * t) * k,
+                ]
+            };
+            out.insert(part, (lerp(a.0, b.0), lerp(a.1, b.1)));
+        }
+        out
     }
 
     pub fn orbit(&mut self, dx: f64, dy: f64) {
@@ -400,6 +455,10 @@ impl FlightView {
                 .map(|f| f.stage as usize)
                 .unwrap_or(0);
             let gone = jettisoned(craft, fired, inp.is_decoupler);
+            let flex = match &inp.vessel.flight {
+                Some(f) => self.flex_now(&f.flex, inp.now_ms),
+                None => FlexMap::new(),
+            };
             let poses = crate::thumb::poses(craft);
             // Bottom anchor: the craft's lowest point (along its own +Y) sits at the vessel point.
             let mut min_y = f64::INFINITY;
@@ -410,8 +469,17 @@ impl FlightView {
                 }
                 let name = format!("part:{}", p.part_id);
                 gpu.request_model(&name, &format!("assets/parts/{}.glb", p.part_id));
-                let lp = DVec3::new(-pp.x, pp.y, pp.z);
-                let lq = DQuat::from_xyzw(q.x, -q.y, -q.z, q.w).normalize();
+                let mut lp = DVec3::new(-pp.x, pp.y, pp.z);
+                let mut lq = DQuat::from_xyzw(q.x, -q.y, -q.z, q.w).normalize();
+                // Wobble: rotate about the part's own origin, then shift, both given in the craft's Unity
+                // frame; mirroring X turns a rotation vector (x, y, z) into (x, -y, -z).
+                if let Some((rv, off)) = flex.get(&(i as u16)) {
+                    let w = DVec3::new(rv[0] as f64, -(rv[1] as f64), -(rv[2] as f64));
+                    if w.length() > 1e-9 {
+                        lq = (DQuat::from_scaled_axis(w) * lq).normalize();
+                    }
+                    lp += DVec3::new(-(off[0] as f64), off[1] as f64, off[2] as f64);
+                }
                 if let Some(m) = gpu.model(&name) {
                     for c in 0..8 {
                         let (lo, hi) = (m.bounds_min.as_dvec3(), m.bounds_max.as_dvec3());

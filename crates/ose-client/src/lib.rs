@@ -2306,6 +2306,27 @@ impl App {
             other => format!("{other:?}"),
         };
         set_text(&self.doc, "fh-attitude", &att);
+        // Joint stress: worst joint load over its break limit (1 breaks), as the bar's fill and colour.
+        let stress = f.joint_stress.clamp(0.0, 1.0);
+        if let Some(bar) = self
+            .doc
+            .get_element_by_id("fh-stress-fill")
+            .and_then(|e| e.dyn_into::<HtmlElement>().ok())
+        {
+            let hue = 120.0 * (1.0 - stress);
+            bar.style()
+                .set_property("width", &format!("{:.0}%", stress * 100.0))
+                .ok();
+            bar.style()
+                .set_property("background", &format!("hsl({hue:.0}, 85%, 50%)"))
+                .ok();
+        }
+        if let Some(el) = self.doc.get_element_by_id("flight-hud") {
+            el.set_attribute("data-ose-stress", &format!("{:.3}", f.joint_stress))
+                .ok();
+            el.set_attribute("data-ose-flex", &f.flex.len().to_string())
+                .ok();
+        }
         set_text(
             &self.doc,
             "fh-ec",
@@ -3044,6 +3065,7 @@ impl App {
             ut,
             craft: self.flight_craft.as_ref(),
             is_decoupler: &is_dec,
+            now_ms: now_ms(),
             spin: self.body_spins.get(rb).map(|b| flight3d::Spin {
                 period_s: b.rotation_period_s,
                 initial_deg: b.initial_rotation_deg,
