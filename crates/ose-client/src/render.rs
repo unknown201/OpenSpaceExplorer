@@ -47,6 +47,8 @@ struct Object { model: mat4x4<f32>, color: vec4<f32>, light_dir: vec4<f32>, ligh
 @group(1) @binding(0) var<uniform> object: Object;
 @group(2) @binding(0) var tex: texture_2d<f32>;
 @group(2) @binding(1) var samp: sampler;
+@group(2) @binding(2) var normal_tex: texture_2d<f32>;
+@group(2) @binding(3) var mg_tex: texture_2d<f32>;
 
 struct VsIn { @location(0) pos: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv: vec2<f32> };
 struct VsOut { @builtin(position) clip: vec4<f32>, @location(0) normal: vec3<f32>, @location(1) uv: vec2<f32>, @location(2) world: vec3<f32> };
@@ -66,11 +68,34 @@ fn vs_mesh(in: VsIn) -> VsOut {
 @fragment
 fn fs_mesh(in: VsOut) -> @location(0) vec4<f32> {
     let texel = textureSample(tex, samp, in.uv);
+    let nm = textureSample(normal_tex, samp, in.uv);
+    let mg = textureSample(mg_tex, samp, in.uv);
     let base = mix(object.color, texel * object.color, object.params.y);
-    let n = normalize(in.normal);
+    let n0 = normalize(in.normal);
+    // Normal map: the original's maps are DXT5nm-style (x in alpha, y in green). The tangent frame comes
+    // from screen-space derivatives of position and uv, so mirrored and flipped uvs work as they are; the
+    // exporter flipped v, hence the minus on y.
+    let dp1 = dpdx(in.world);
+    let dp2 = dpdy(in.world);
+    let duv1 = dpdx(in.uv);
+    let duv2 = dpdy(in.uv);
+    let dp2perp = cross(dp2, n0);
+    let dp1perp = cross(n0, dp1);
+    let t = dp2perp * duv1.x + dp1perp * duv2.x;
+    let b = dp2perp * duv1.y + dp1perp * duv2.y;
+    let len2 = max(dot(t, t), dot(b, b));
+    let tx = nm.a * 2.0 - 1.0;
+    let ty = -(nm.g * 2.0 - 1.0);
+    let tz = sqrt(max(1.0 - tx * tx - ty * ty, 0.0));
+    var n = n0;
+    if len2 > 1e-20 {
+        let inv = inverseSqrt(len2);
+        n = normalize(t * inv * tx + b * inv * ty + n0 * tz);
+    }
     // The camera sits at the origin of the relative world.
     let view = normalize(-in.world);
-    let diffuse = max(dot(n, normalize(object.light_dir.xyz)), 0.0);
+    let ldir = normalize(object.light_dir.xyz);
+    let diffuse = max(dot(n, ldir), 0.0);
     if object.params.z > 0.5 {
         // Atmosphere shell: a rim that brightens towards the limb and on the day side, see-through
         // elsewhere. The alpha of the colour sets the strength.
@@ -81,7 +106,16 @@ fn fs_mesh(in: VsOut) -> @location(0) vec4<f32> {
     let fill = max(dot(n, normalize(object.light2.xyz)), 0.0) * object.light2.w;
     let ambient = max(object.params.w, 0.08);
     let lit = base.rgb * min(ambient + (1.0 - ambient) * diffuse + fill, 1.6);
-    let rgb = mix(lit, base.rgb, object.params.x);
+    // Specular from the metallic-gloss map (metal in red, smoothness in alpha): a Blinn-Phong lobe whose
+    // sharpness follows smoothness, tinted by the base colour on metal.
+    let metal = mg.r * 0.8;
+    let smooth_ = mg.a;
+    let h = normalize(ldir + view);
+    let spec_pow = mix(8.0, 256.0, smooth_ * smooth_);
+    let spec = pow(max(dot(n, h), 0.0), spec_pow) * smooth_ * diffuse * (spec_pow + 8.0) / 64.0;
+    let spec_col = mix(vec3<f32>(0.04), base.rgb, metal);
+    let shaded = lit * (1.0 - metal * 0.5) + spec_col * spec;
+    let rgb = mix(shaded, base.rgb, object.params.x);
     return vec4<f32>(rgb, base.a);
 }
 
@@ -106,8 +140,10 @@ struct GpuPrimitive {
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     index_count: u32,
-    /// Index into `Model::textures`, if the primitive has a base colour texture.
-    texture: Option<usize>,
+    /// Indices into `Model::textures` of the base colour, normal and metallic-gloss images.
+    textures: [Option<usize>; 3],
+    /// Bind group for those textures (defaults where missing or not loaded yet); rebuilt as images arrive.
+    bind: Option<wgpu::BindGroup>,
     /// glTF `alphaMode: BLEND`: drawn after the opaque primitives without writing depth.
     blend: bool,
     /// The material's base colour factor, multiplied into the draw colour.
@@ -120,7 +156,7 @@ pub struct Model {
     meshes: Vec<GpuPrimitive>,
     /// (index into `meshes`, world transform within the model) per drawn node.
     primitives: Vec<(usize, Mat4)>,
-    textures: Vec<Option<wgpu::BindGroup>>,
+    textures: Vec<Option<wgpu::TextureView>>,
     /// Radius of the mesh in its own units (planet spheres), from the GLB extras.
     pub mesh_radius: f64,
     /// Bounds of all primitives in model units, for framing in the editor.
@@ -132,15 +168,19 @@ struct PendingTexture {
     model: String,
     index: usize,
     bitmap: web_sys::ImageBitmap,
+    /// Data texture (normal, metallic-gloss): uploaded without sRGB decoding.
+    linear: bool,
 }
 
 /// Parsed GLB before GPU upload.
-/// Vertices, indices, base-colour image index, alpha blending and base colour factor of one mesh primitive
-/// before upload.
-type CpuMesh = (Vec<Vertex>, Vec<u32>, Option<usize>, bool, [f32; 4]);
+/// Vertices, indices, base-colour / normal / metallic-gloss image indices, alpha blending and base colour
+/// factor of one mesh primitive before upload.
+type CpuMesh = (Vec<Vertex>, Vec<u32>, [Option<usize>; 3], bool, [f32; 4]);
 
 struct CpuModel {
     meshes: Vec<CpuMesh>,
+    /// Per image: true when it is used as data (normal or metallic-gloss) rather than colour.
+    image_linear: Vec<bool>,
     /// (mesh index, node transform) per instance.
     primitives: Vec<(usize, Mat4)>,
     image_uris: Vec<String>,
@@ -224,6 +264,8 @@ pub struct Renderer {
     texture_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     white: wgpu::BindGroup,
+    /// Default texture views: white colour, flat normal, no metal or gloss.
+    default_views: [wgpu::TextureView; 3],
     depth: wgpu::TextureView,
     objects: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
     models: HashMap<String, Model>,
@@ -331,6 +373,26 @@ impl Renderer {
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
                     count: None,
                 },
             ],
@@ -512,55 +574,54 @@ impl Renderer {
             mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..Default::default()
         });
-        let white_tex = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("white"),
-            size: wgpu::Extent3d {
-                width: 1,
-                height: 1,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &white_tex,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &[255, 255, 255, 255],
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(4),
-                rows_per_image: None,
-            },
-            wgpu::Extent3d {
-                width: 1,
-                height: 1,
-                depth_or_array_layers: 1,
-            },
+        let solid = |rgba: [u8; 4], format: wgpu::TextureFormat| {
+            let t = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("default"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &t,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &rgba,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(4),
+                    rows_per_image: None,
+                },
+                wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+            );
+            t.create_view(&wgpu::TextureViewDescriptor::default())
+        };
+        let default_views = [
+            solid([255, 255, 255, 255], wgpu::TextureFormat::Rgba8UnormSrgb),
+            // Flat normal in the DXT5nm layout: x (alpha) and y (green) at the middle.
+            solid([255, 128, 128, 128], wgpu::TextureFormat::Rgba8Unorm),
+            solid([0, 0, 0, 0], wgpu::TextureFormat::Rgba8Unorm),
+        ];
+        let white = Self::bind_views(
+            &device,
+            &texture_layout,
+            &sampler,
+            [&default_views[0], &default_views[1], &default_views[2]],
         );
-        let white = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("white"),
-            layout: &texture_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(
-                        &white_tex.create_view(&wgpu::TextureViewDescriptor::default()),
-                    ),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-            ],
-        });
         let depth = Self::make_depth(&device, width, height);
         Some(Renderer {
             device,
@@ -577,6 +638,7 @@ impl Renderer {
             texture_layout,
             sampler,
             white,
+            default_views,
             depth,
             objects: Vec::new(),
             models: HashMap::new(),
@@ -588,6 +650,62 @@ impl Renderer {
             width,
             height,
         })
+    }
+
+    fn bind_views(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        sampler: &wgpu::Sampler,
+        views: [&wgpu::TextureView; 3],
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("material"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(views[0]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(views[1]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(views[2]),
+                },
+            ],
+        })
+    }
+
+    /// (Re)build the material bind groups of a model from the textures it has so far.
+    fn rebind_model(&mut self, name: &str) {
+        let Some(m) = self.models.get_mut(name) else {
+            return;
+        };
+        for prim in &mut m.meshes {
+            if prim.textures.iter().all(|t| t.is_none()) {
+                prim.bind = None;
+                continue;
+            }
+            let pick = |k: usize| -> &wgpu::TextureView {
+                prim.textures[k]
+                    .and_then(|i| m.textures.get(i))
+                    .and_then(|v| v.as_ref())
+                    .unwrap_or(&self.default_views[k])
+            };
+            let views = [pick(0), pick(1), pick(2)];
+            prim.bind = Some(Self::bind_views(
+                &self.device,
+                &self.texture_layout,
+                &self.sampler,
+                views,
+            ));
+        }
     }
 
     fn make_depth(device: &wgpu::Device, width: u32, height: u32) -> wgpu::TextureView {
@@ -657,7 +775,7 @@ impl Renderer {
             self.pending.remove(&name);
             let mut meshes = Vec::new();
             let mut local_bounds: Vec<(Vec3, Vec3)> = Vec::new();
-            for (vertices, indices, texture, blend, color) in &cpu.meshes {
+            for (vertices, indices, textures, blend, color) in &cpu.meshes {
                 let mut lo = Vec3::splat(f32::INFINITY);
                 let mut hi = Vec3::splat(f32::NEG_INFINITY);
                 for v in vertices {
@@ -685,7 +803,8 @@ impl Renderer {
                     vertices: vb,
                     indices: ib,
                     index_count: indices.len() as u32,
-                    texture: *texture,
+                    textures: *textures,
+                    bind: None,
                     blend: *blend,
                     color: *color,
                 });
@@ -716,12 +835,14 @@ impl Renderer {
                 let url = resolve_uri(asset_base, uri);
                 let inbox = self.texture_inbox.clone();
                 let model = name.clone();
+                let linear = cpu.image_linear.get(i).copied().unwrap_or(false);
                 wasm_bindgen_futures::spawn_local(async move {
                     match fetch_bitmap(&url).await {
                         Ok(bitmap) => inbox.borrow_mut().push(PendingTexture {
                             model,
                             index: i,
                             bitmap,
+                            linear,
                         }),
                         Err(e) => log(&format!("texture {url}: {e}")),
                     }
@@ -744,17 +865,24 @@ impl Renderer {
             );
         }
         let textures: Vec<PendingTexture> = self.texture_inbox.borrow_mut().drain(..).collect();
+        let mut touched: Vec<String> = Vec::new();
         for t in textures {
-            let bind = self.upload_bitmap(&t.bitmap);
+            let view = self.upload_bitmap(&t.bitmap, t.linear);
             if let Some(m) = self.models.get_mut(&t.model) {
                 if t.index < m.textures.len() {
-                    m.textures[t.index] = Some(bind);
+                    m.textures[t.index] = Some(view);
+                    if !touched.contains(&t.model) {
+                        touched.push(t.model.clone());
+                    }
                 }
             }
         }
+        for name in touched {
+            self.rebind_model(&name);
+        }
     }
 
-    fn upload_bitmap(&self, bitmap: &web_sys::ImageBitmap) -> wgpu::BindGroup {
+    fn upload_bitmap(&self, bitmap: &web_sys::ImageBitmap, linear: bool) -> wgpu::TextureView {
         let (w, h) = (bitmap.width().max(1), bitmap.height().max(1));
         let size = wgpu::Extent3d {
             width: w,
@@ -768,7 +896,11 @@ impl Renderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            format: if linear {
+                wgpu::TextureFormat::Rgba8Unorm
+            } else {
+                wgpu::TextureFormat::Rgba8UnormSrgb
+            },
             usage: wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_DST
                 | wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -791,22 +923,7 @@ impl Renderer {
             },
             size,
         );
-        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("image"),
-            layout: &self.texture_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(
-                        &texture.create_view(&wgpu::TextureViewDescriptor::default()),
-                    ),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-            ],
-        })
+        texture.create_view(&wgpu::TextureViewDescriptor::default())
     }
 
     /// Make sure at least `n` object uniform slots exist (grown ahead of a frame so draws only borrow).
@@ -1032,11 +1149,7 @@ impl Renderer {
                     if prim.blend != blended || (!blended && *m != mirrored) {
                         continue;
                     }
-                    let tex = prim
-                        .texture
-                        .and_then(|t| model.textures.get(t))
-                        .and_then(|t| t.as_ref())
-                        .unwrap_or(&self.white);
+                    let tex = prim.bind.as_ref().unwrap_or(&self.white);
                     pass.set_bind_group(1, &self.objects[*s].1, &[]);
                     pass.set_bind_group(2, tex, &[]);
                     pass.set_vertex_buffer(0, prim.vertices.slice(..));
@@ -1130,11 +1243,14 @@ async fn fetch_bitmap(url: &str) -> Result<web_sys::ImageBitmap, String> {
         .await
         .map_err(|e| format!("{e:?}"))?;
     let blob: web_sys::Blob = blob.dyn_into().map_err(|_| "not a blob")?;
-    let bitmap = wasm_bindgen_futures::JsFuture::from(
+    let bitmap = wasm_bindgen_futures::JsFuture::from({
+        let opts = web_sys::ImageBitmapOptions::new();
+        opts.set_premultiply_alpha(web_sys::PremultiplyAlpha::None);
+        opts.set_color_space_conversion(web_sys::ColorSpaceConversion::None);
         window
-            .create_image_bitmap_with_blob(&blob)
-            .map_err(|e| format!("{e:?}"))?,
-    )
+            .create_image_bitmap_with_blob_and_image_bitmap_options(&blob, &opts)
+            .map_err(|e| format!("{e:?}"))?
+    })
     .await
     .map_err(|e| format!("{e:?}"))?;
     bitmap
@@ -1203,6 +1319,16 @@ fn parse_glb(bytes: &[u8]) -> Result<CpuModel, String> {
     let material_image = |mi: usize| -> Option<usize> {
         let m = json["materials"].as_array()?.get(mi)?;
         let ti = m["pbrMetallicRoughness"]["baseColorTexture"]["index"].as_u64()? as usize;
+        textures.get(ti)?["source"].as_u64().map(|s| s as usize)
+    };
+    let material_data_image = |mi: usize, which: &str| -> Option<usize> {
+        let m = json["materials"].as_array()?.get(mi)?;
+        let slot = if which == "normal" {
+            &m["normalTexture"]
+        } else {
+            &m["pbrMetallicRoughness"]["metallicRoughnessTexture"]
+        };
+        let ti = slot["index"].as_u64()? as usize;
         textures.get(ti)?["source"].as_u64().map(|s| s as usize)
     };
     let material_color = |mi: usize| -> [f32; 4] {
@@ -1339,9 +1465,12 @@ fn parse_glb(bytes: &[u8]) -> Result<CpuModel, String> {
                         .unwrap_or([0.0, 0.0]),
                 })
                 .collect();
-            let texture = prim["material"]
-                .as_u64()
-                .and_then(|m| material_image(m as usize));
+            let mat = prim["material"].as_u64().map(|m| m as usize);
+            let texture = [
+                mat.and_then(material_image),
+                mat.and_then(|m| material_data_image(m, "normal")),
+                mat.and_then(|m| material_data_image(m, "mg")),
+            ];
             let blend = prim["material"]
                 .as_u64()
                 .map(|m| material_blend(m as usize))
@@ -1356,8 +1485,19 @@ fn parse_glb(bytes: &[u8]) -> Result<CpuModel, String> {
         }
     }
     let mesh_radius = json["extras"]["mesh_radius"].as_f64().unwrap_or(1.0);
+    let mut image_linear = vec![false; image_uris.len()];
+    for (_, _, tex, _, _) in &cpu_meshes {
+        for k in [1, 2] {
+            if let Some(i) = tex[k] {
+                if i < image_linear.len() {
+                    image_linear[i] = true;
+                }
+            }
+        }
+    }
     Ok(CpuModel {
         meshes: cpu_meshes,
+        image_linear,
         primitives,
         image_uris,
         mesh_radius,

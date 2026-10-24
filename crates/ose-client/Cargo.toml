@@ -19,7 +19,7 @@ web-sys = { workspace = true, features = [
   "Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "CanvasRenderingContext2d",
   "CssStyleDeclaration", "DomRect", "Location", "Performance",
   "WebSocket", "BinaryType", "MessageEvent", "CloseEvent", "Event", "ErrorEvent",
-  "MouseEvent", "WheelEvent", "KeyboardEvent", "EventTarget", "DomTokenList", "console", "HtmlInputElement", "HtmlSelectElement", "Storage", "Request", "RequestInit", "Response", "Headers", "Blob", "ImageBitmap", "HtmlImageElement", "ImageData",
+  "MouseEvent", "WheelEvent", "KeyboardEvent", "EventTarget", "DomTokenList", "console", "HtmlInputElement", "HtmlSelectElement", "Storage", "Request", "RequestInit", "Response", "Headers", "Blob", "ImageBitmap", "HtmlImageElement", "ImageData", "ImageBitmapOptions", "PremultiplyAlpha", "ColorSpaceConversion",
 ] }
 ose-net = { workspace = true }
 ose-data = { workspace = true }
