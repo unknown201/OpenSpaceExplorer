@@ -145,9 +145,18 @@ impl Universe {
             mass_t: powered.map(|p| p.mass_t).unwrap_or(0.0),
             ..Default::default()
         };
+        f.crew = self
+            .world
+            .get::<crate::crew::Crew>(e)
+            .map(|c| c.members.len() as i64)
+            .unwrap_or(0);
+        f.eva = crate::crew::is_eva(&self.world, e);
+        if f.eva {
+            f.crew = 1;
+            f.parts.push("eva_kerbal".into());
+        }
         if let Some(st) = self.world.get::<structure::Structure>(e) {
             for i in (0..st.rigid.len()).filter(|&i| st.rigid.present[i]) {
-                f.crew += st.crew[i] as i64;
                 f.parts.push(st.part_ids[i].clone());
                 f.part_families.push(st.families[i].clone());
                 if st.families[i].ends_with("-Wheel") {
@@ -219,6 +228,10 @@ mod tests {
         let v = u.spawn_powered_on_surface("K1", body, spec, 0.0, 0.0);
         u.set_structure(v, structure::Structure::build(k1, &defs, &res));
         assert!(u.set_controls(v, 1.0, flight::Attitude::Up));
+        assert!(
+            u.stage(v).debris.is_none(),
+            "the first press lights the engines"
+        );
         let mut progress = MissionProgress::default();
         let mut stage_start = 0;
         let mut earned = 0.0;

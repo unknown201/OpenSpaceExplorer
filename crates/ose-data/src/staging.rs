@@ -397,6 +397,7 @@ mod tests {
             reaction_wheel_torque_knm: 0.0,
             electric: Default::default(),
             experiments: vec![],
+            docking: None,
             module_names: vec![],
             raw_modules: Default::default(),
         }

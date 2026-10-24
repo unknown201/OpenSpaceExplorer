@@ -7,6 +7,8 @@
 
 pub mod aero;
 pub mod bodies;
+pub mod crew;
+pub mod docking;
 pub mod flight;
 pub mod missions;
 pub mod resources;
@@ -281,6 +283,11 @@ impl Universe {
             s.sync(&mut d.0);
         }
         self.world.entity_mut(e).insert(s);
+        // crewed parts get their Kerbals (the server's roster replaces these)
+        if self.world.get::<crew::Crew>(e).is_none() {
+            let roster: Vec<String> = crew::VETERANS.iter().map(|n| n.to_string()).collect();
+            self.crew_vessel(e, &roster);
+        }
     }
 
     pub fn structure(&self, e: Entity) -> Option<&structure::Structure> {
@@ -360,8 +367,7 @@ impl Universe {
     /// vessel that keeps the vessel's position and velocity, pushed 3 m back along the thrust axis at 1.5 m/s.
     pub fn stage(&mut self, e: Entity) -> StageResult {
         let ut = self.ut();
-        // The first stage press ignites the first stage, as in the original, unless its engines have already
-        // been run on the throttle: nothing is dropped.
+        // The first stage press lights the first stage of a craft that has not fired yet: nothing is dropped.
         let ignite = |p: &mut flight::Powered| !std::mem::replace(&mut p.ignited, true);
         let first = match self.world.get_mut::<flight::Powered>(e) {
             Some(mut p) => ignite(&mut p),
@@ -1000,6 +1006,10 @@ mod tests {
         };
         let v = u.spawn_powered_on_surface("hopper", body, spec, 0.0, 0.0);
         assert!(u.set_controls(v, 1.0, flight::Attitude::Up));
+        assert!(
+            u.stage(v).debris.is_none(),
+            "the first press lights the engines"
+        );
         for _ in 0..(3 * TICKS_PER_SECOND) {
             u.step();
         }
@@ -1079,6 +1089,10 @@ mod tests {
         let v = u.spawn_powered_on_surface("K1", body, spec, 0.0, 0.0);
         u.set_structure(v, st);
         assert!(u.set_controls(v, 1.0, flight::Attitude::Up));
+        assert!(
+            u.stage(v).debris.is_none(),
+            "the first press lights the engines"
+        );
         let mut peak_stress: f64 = 0.0;
         for _ in 0..(15 * TICKS_PER_SECOND) {
             u.step();
@@ -1127,6 +1141,10 @@ mod tests {
         };
         let (sf0, ox0) = (sf(&u), lf(&u));
         assert!(u.set_controls(v, 1.0, flight::Attitude::Up));
+        assert!(
+            u.stage(v).debris.is_none(),
+            "the first press lights the engines"
+        );
         for _ in 0..(5 * TICKS_PER_SECOND) {
             u.step();
         }
@@ -1169,8 +1187,14 @@ mod tests {
         let spec = flight::FlightSpec::from_report(&report, &[], &[], 1.5);
         let v = u.spawn_powered_on_surface("Start", body, spec, 0.0, 0.0);
         u.set_structure(v, structure::Structure::build(c, &defs, &res));
-        // full throttle and one stage press, as a player launches: the engine lights, nothing drops
+        // full throttle and one stage press, as a player launches: the engine lights, nothing drops, even when
+        // a few ticks run in between (another player's connection, a busy server)
         assert!(u.set_controls(v, 1.0, flight::Attitude::Up));
+        for _ in 0..3 {
+            u.step();
+        }
+        // the throttle alone does nothing on the pad
+        assert!(u.powered(v).unwrap().landed);
         let r = u.stage(v);
         assert!(r.fired && r.debris.is_none());
         assert_eq!(u.powered(v).unwrap().stage, 0);
@@ -1225,6 +1249,10 @@ mod tests {
         // parked on the pad it does not hold time warp down for everyone
         assert!(!u.has_powered());
         assert!(u.set_controls(v, 1.0, flight::Attitude::Up));
+        assert!(
+            u.stage(v).debris.is_none(),
+            "the first press lights the engines"
+        );
         assert!(u.has_powered());
         // boosters and core burn, the boosters drop, the core burns out, the upper stage still has its tanks
         let mut upper = 0.0;

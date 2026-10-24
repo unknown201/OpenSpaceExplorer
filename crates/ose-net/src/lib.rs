@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 14;
+pub const PROTOCOL_VERSION: u16 = 15;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -128,6 +128,27 @@ pub enum ClientMessage {
     /// `ScienceState`.
     UnlockTechNode {
         id: String,
+    },
+    /// A Kerbal (the first aboard when `kerbal` is `None`) steps out on EVA as a vessel of their own;
+    /// answers `CrewAck` with it in `new_vessel`.
+    GoEva {
+        vessel: u64,
+        kerbal: Option<String>,
+    },
+    /// A Kerbal on EVA (`vessel`) climbs into `target` (within 6 m, with a free seat); answers `CrewAck`.
+    Board {
+        vessel: u64,
+        target: u64,
+    },
+    /// A Kerbal on EVA standing on the ground plants the agency flag; answers `CrewAck` with the flag.
+    PlantFlag {
+        vessel: u64,
+    },
+    /// Undock at a docked joint (the docking port part on either side; the last joint when `None`); answers
+    /// `Undocked`.
+    Undock {
+        vessel: u64,
+        port: Option<u16>,
     },
 }
 
@@ -379,6 +400,13 @@ pub struct FlightReadout {
     /// Parts bent away from their rest pose by joint flex (wobble); parts within 0.1 mrad and 2 mm are left
     /// out. Craft part indices, in the craft's own frame (Unity Y-up, as `local_position`).
     pub flex: Vec<PartFlex>,
+    /// Kerbals aboard: (craft part index, name).
+    pub crew: Vec<(u16, String)>,
+    /// This vessel is a Kerbal on EVA.
+    pub eva: bool,
+    /// Free docking ports (craft part indices) and docked joints (part docked to, part that docked).
+    pub docking_ports: Vec<u16>,
+    pub docked: Vec<(u16, u16)>,
 }
 
 /// One part's pose away from rest: rotate the part by `rotation` (rotation vector, rad, craft frame) about its
@@ -562,6 +590,26 @@ pub enum ServerMessage {
         unlocked: Vec<String>,
         submitted: Vec<ReportInfo>,
         missions: Vec<MissionInfo>,
+    },
+    /// Answer to `GoEva`, `Board` and `PlantFlag`.
+    CrewAck {
+        vessel: u64,
+        accepted: bool,
+        reason: Option<String>,
+        /// The Kerbal's vessel after `GoEva`, the flag after `PlantFlag`.
+        new_vessel: Option<u64>,
+    },
+    /// Two vessels latched at their docking ports and are one vessel now: `absorbed` joined `vessel`.
+    /// Sent to both owners.
+    Docked {
+        vessel: u64,
+        absorbed: u64,
+    },
+    /// Answer to `Undock`: the part beyond the port flies off as `new_vessel`.
+    Undocked {
+        vessel: u64,
+        new_vessel: Option<u64>,
+        reason: Option<String>,
     },
     /// Answer to `UnlockTechNode`.
     TechUnlock {

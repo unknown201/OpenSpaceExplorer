@@ -673,6 +673,8 @@ async fn hello_catalog_and_snapshots() {
     ))
     .await
     .unwrap();
+    // the first stage press lights the engines (the throttle alone does not, on the pad)
+    send_msg(&mut ws, &ClientMessage::Stage { vessel: pad_vessel }).await;
     let mut flying = false;
     for _ in 0..200 {
         match recv(&mut ws).await {
@@ -1053,6 +1055,76 @@ async fn exploration_science_tech_tree_and_recovery() {
     assert!(tree.as_array().is_some_and(|a| a.len() > 50));
     let missions = http_get_json(&addr, "/missions.json").await;
     assert!(missions.as_array().is_some_and(|a| a.len() > 40));
+}
+
+#[tokio::test]
+async fn a_pad_launch_lights_while_a_teammate_is_connected() {
+    let (_server, addr) = spawn_server().await;
+    // a teammate joins the campaign and sits there
+    let mut mate = connect_ws(&addr).await;
+    hello(&mut mate, None, "teammate").await;
+    send_msg(&mut mate, &ClientMessage::JoinCampaign).await;
+    wait_for(&mut mate, |m| {
+        matches!(m, ServerMessage::CampaignState { .. }).then_some(())
+    })
+    .await;
+    let mut ws = connect_ws(&addr).await;
+    hello(&mut ws, None, "pilot").await;
+    send_msg(&mut ws, &ClientMessage::JoinCampaign).await;
+    wait_for(&mut ws, |m| {
+        matches!(m, ServerMessage::CampaignState { .. }).then_some(())
+    })
+    .await;
+    send_msg(
+        &mut ws,
+        &ClientMessage::LaunchOnPad {
+            craft: starter_craft(),
+        },
+    )
+    .await;
+    let vessel = wait_for(&mut ws, |m| match m {
+        ServerMessage::CraftLaunched { vessel, reason, .. } => {
+            assert!(reason.is_none(), "{reason:?}");
+            vessel
+        }
+        _ => None,
+    })
+    .await;
+    // throttle up, let the server run a moment, then the first stage press
+    send_msg(
+        &mut ws,
+        &ClientMessage::SetControls {
+            vessel,
+            throttle: 1.0,
+            attitude: ose_net::AttitudeMode::Up,
+        },
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    send_msg(&mut ws, &ClientMessage::Stage { vessel }).await;
+    let mut lifted = false;
+    for _ in 0..300 {
+        // keep the teammate's socket drained
+        while let Ok(Some(_)) = tokio::time::timeout(Duration::from_millis(1), mate.next()).await {}
+        if let ServerMessage::Vessels { vessels, .. } = recv(&mut ws).await {
+            let f = vessels
+                .iter()
+                .find(|v| v.id == vessel)
+                .and_then(|v| v.flight.clone())
+                .expect("flight readout");
+            assert_eq!(f.stage, 0, "the press must not drop the engine stage");
+            eprintln!(
+                "TT {:?} alt {:.1} thr {} thrust {:.1} prop {:.2} ctl {}",
+                f.situation, f.altitude_m, f.throttle, f.thrust_kn, f.propellant_t, f.has_control
+            );
+            if f.situation == ose_net::FlightSituation::Flying && f.altitude_m > 130.0 {
+                assert!(f.thrust_kn > 0.0);
+                lifted = true;
+                break;
+            }
+        }
+    }
+    assert!(lifted, "the starter rocket did not lift off");
 }
 
 async fn http_get_json(addr: &str, path: &str) -> serde_json::Value {

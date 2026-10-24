@@ -141,8 +141,21 @@ impl Universe {
         let Some(loc) = self.science_location(e) else {
             return out;
         };
-        let Some(mut st) = self.world.entity_mut(e).take::<structure::Structure>() else {
-            return out;
+        // a vessel's parts, or a Kerbal on EVA with the experiments of the eva_kerbal part
+        let mut st = self.world.entity_mut(e).take::<structure::Structure>();
+        let kerbal = self.world.get::<crate::crew::EvaKerbal>(e).cloned();
+        let (experiments, crewed) = match (&st, &kerbal) {
+            (Some(st), _) => (
+                st.experiments.clone(),
+                (0..st.rigid.len()).any(|i| st.rigid.present[i] && st.crew[i] > 0)
+                    && !self.crew(e).is_empty(),
+            ),
+            (None, Some(k)) => (k.experiments.iter().map(|x| (0, x.clone())).collect(), true),
+            (None, None) => return out,
+        };
+        let part_id = |st: &Option<structure::Structure>, part: usize| match st {
+            Some(st) => st.part_ids[part].clone(),
+            None => "eva_kerbal".to_string(),
         };
         let sci = self.world.resource::<Science>().clone();
         let mut storage = self
@@ -158,11 +171,10 @@ impl Universe {
             .region
             .as_deref()
             .and_then(|id| bs.regions.iter().find(|r| r.id == id));
-        let crewed = (0..st.rigid.len()).any(|i| st.rigid.present[i] && st.crew[i] > 0);
-        let ec = st.net.resource("ElectricCharge");
+        let ec = st.as_ref().and_then(|s| s.net.resource("ElectricCharge"));
         let mut activated = Vec::new();
-        for (part, pe) in st.experiments.clone() {
-            if !st.rigid.present[part] {
+        for (part, pe) in experiments {
+            if st.as_ref().is_some_and(|s| !s.rigid.present[part]) {
                 continue;
             }
             let skip = |reason: &str| Skipped {
@@ -215,10 +227,10 @@ impl Universe {
                 runs.runs.push(run.clone());
                 self.world.entity_mut(e).insert(runs);
                 out.started.push(run);
-                activated.push(st.part_ids[part].clone());
+                activated.push(part_id(&st, part));
                 continue;
             }
-            if pe.electric_rate > 0.0 {
+            if let (true, Some(st)) = (pe.electric_rate > 0.0, st.as_mut()) {
                 let need = pe.electric_rate;
                 let have = ec.map(|r| st.net.available(part, r)).unwrap_or(0.0);
                 if have < need {
@@ -240,9 +252,12 @@ impl Universe {
             }
             storage.reports.extend(fresh.iter().cloned());
             out.reports.extend(fresh);
-            activated.push(st.part_ids[part].clone());
+            activated.push(part_id(&st, part));
         }
-        self.world.entity_mut(e).insert((st, storage));
+        if let Some(st) = st {
+            self.world.entity_mut(e).insert(st);
+        }
+        self.world.entity_mut(e).insert(storage);
         let tick = self.tick().0;
         if let Some(mut log) = self.log_mut(e) {
             for id in &activated {

@@ -349,8 +349,32 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
     let mut wheel_torque: f64 = 0.0;
     let mut electric = ose_data::Electric::default();
     let mut experiments = Vec::new();
+    let mut docking = None;
     if let Some(mods) = d["serializedPartModules"].as_array() {
         for m in mods {
+            if let Some(entries) = m["ModuleData"].as_array() {
+                for entry in entries.iter().filter(|x| x["Name"] == "Data_DockingNode") {
+                    let o = &entry["DataObject"];
+                    docking = Some(ose_data::DockingPort {
+                        node: s(o, "AttachmentNodeId"),
+                        sizes: o["NodeTypes"]
+                            .as_array()
+                            .map(|a| {
+                                a.iter()
+                                    .filter_map(|x| x.as_str().map(String::from))
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
+                        acquire_range_m: f(o, "AcquireRange"),
+                        acquire_min_fwd_dot: f(o, "AcquireMinFwdDot"),
+                        capture_range_m: f(o, "CaptureRange"),
+                        capture_min_fwd_dot: f(o, "CaptureMinFwdDot"),
+                        capture_max_rvel_mps: f(o, "CaptureMaxRvel"),
+                        undock_ejection_kn: f(o, "UndockEjectionForce"),
+                        min_distance_to_reengage_m: f(o, "MinDistanceToReengage"),
+                    });
+                }
+            }
             electric_from_module(m, &mut electric);
             science::part_experiments(m, &mut experiments);
             let name = s(m, "Name");
@@ -474,6 +498,7 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
         reaction_wheel_torque_knm: wheel_torque,
         electric,
         experiments,
+        docking,
         drag_cubes,
         module_names,
         raw_modules,

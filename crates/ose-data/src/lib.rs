@@ -244,6 +244,9 @@ pub struct PartDef {
     /// Experiments the part can run.
     #[serde(default)]
     pub experiments: Vec<science::PartExperiment>,
+    /// A docking port (`Data_DockingNode`).
+    #[serde(default)]
+    pub docking: Option<DockingPort>,
     /// Names of every module on the part, in order, so the sim knows what else to implement.
     pub module_names: Vec<String>,
     /// Module data not yet mapped into typed fields, keyed by module name.
@@ -267,6 +270,26 @@ pub struct Electric {
     /// Generator output (`Data_ModuleGenerator.ResourceSetting.Rate`): an engine's alternator while it runs,
     /// otherwise always on (RTGs).
     pub generator_output: f64,
+}
+
+/// A docking port as the original defines it (`Data_DockingNode`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DockingPort {
+    /// The attach node that docks (`AttachmentNodeId`, usually "top").
+    pub node: String,
+    /// Port sizes that fit (`NodeTypes`, like "size1").
+    pub sizes: Vec<String>,
+    /// Ports within this range, facing within `acquire_min_fwd_dot`, pull together, m.
+    pub acquire_range_m: f64,
+    pub acquire_min_fwd_dot: f64,
+    /// Ports within this range, facing within `capture_min_fwd_dot`, slower than `capture_max_rvel`, latch.
+    pub capture_range_m: f64,
+    pub capture_min_fwd_dot: f64,
+    pub capture_max_rvel_mps: f64,
+    /// Push on undocking, kN.
+    pub undock_ejection_kn: f64,
+    /// Distance before the two can dock again after undocking, m.
+    pub min_distance_to_reengage_m: f64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

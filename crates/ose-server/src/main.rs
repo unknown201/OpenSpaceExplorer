@@ -10,6 +10,7 @@
 //! with `--bodies PATH`.
 
 mod accounts;
+mod crew_docking;
 mod save;
 mod science;
 
@@ -389,6 +390,10 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     tracing::info!(bodies = terrains, "terrain height maps loaded");
+    let part_defs: Vec<ose_data::PartDef> = serde_json::from_str(EMBEDDED_PARTS)?;
+    if let Some(k) = part_defs.iter().find(|d| d.id == "eva_kerbal") {
+        universe.set_kerbal_part(k.experiments.clone());
+    }
     let save_path = (args.save.to_string_lossy() != "none").then(|| args.save.clone());
     let mut registry: Vec<save::VesselEntry> = Vec::new();
     let mut campaign = save::Campaign::default();
@@ -396,7 +401,9 @@ async fn main() -> anyhow::Result<()> {
     if let Some(p) = &save_path {
         match save::read(p) {
             Ok(Some(file)) => {
-                registry = save::restore(&mut universe, &file);
+                let defs: Vec<ose_data::PartDef> = serde_json::from_str(EMBEDDED_PARTS)?;
+                let res: Vec<ose_data::ResourceDef> = serde_json::from_str(EMBEDDED_RESOURCES)?;
+                registry = save::restore(&mut universe, &file, &defs, &res);
                 campaign = file.campaign.clone();
                 crafts = file.crafts.clone();
                 tracing::info!(path = %p.display(), tick = file.tick.0, vessels = registry.len(), "save loaded");
@@ -448,6 +455,13 @@ async fn main() -> anyhow::Result<()> {
             interval.tick().await;
             sim.universe.lock().expect("sim lock").step();
             ticks += 1;
+            // docking ports latch ten times a second
+            if ticks.is_multiple_of(5) {
+                let msgs = crew_docking::dock_latched(&sim);
+                if !msgs.is_empty() {
+                    sim.pending.lock().expect("pending lock").extend(msgs);
+                }
+            }
             // missions look at the agency's vessels once a second
             if ticks.is_multiple_of(ose_sim::TICKS_PER_SECOND) {
                 science::evaluate_missions(&sim);
@@ -595,7 +609,7 @@ fn vessels_message(s: &Shared, u: &Universe, tick: Tick) -> ServerMessage {
                 position_m: bp + rp,
                 velocity_mps: bv + rv,
                 orbit: elements(&orbit),
-                flight: flight_readout(u, e, body),
+                flight: flight_readout(u, e, body, &s.parts),
             })
         })
         .collect();
@@ -652,6 +666,7 @@ fn flight_readout(
     u: &Universe,
     e: bevy_ecs::entity::Entity,
     body_e: bevy_ecs::entity::Entity,
+    defs: &[ose_data::PartDef],
 ) -> Option<ose_net::FlightReadout> {
     let p = u.powered(e)?;
     let body = u.world.get::<ose_sim::bodies::Body>(body_e)?;
@@ -756,6 +771,22 @@ fn flight_readout(
                     .collect()
             })
             .unwrap_or_default(),
+        crew: u.crew(e).into_iter().map(|(i, n)| (i as u16, n)).collect(),
+        eva: u.eva_kerbal(e).is_some(),
+        docking_ports: u
+            .current_craft(e)
+            .map(|c| {
+                ose_sim::docking::free_ports(&c, defs)
+                    .into_iter()
+                    .map(|p| p.part as u16)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        docked: u
+            .docked_links(e)
+            .into_iter()
+            .map(|(a, b)| (a as u16, b as u16))
+            .collect(),
     })
 }
 
@@ -998,6 +1029,7 @@ fn launch_on_pad(s: &Shared, player_id: u64, craft: &ose_data::craft::Craft) -> 
     };
     let (pad_lat, pad_lon) = launch_pad(&home.id);
     let e = u.spawn_powered_on_surface(&name, body, spec, pad_lat, pad_lon);
+    u.set_craft(e, craft.clone());
     u.set_structure(
         e,
         ose_sim::structure::Structure::build(craft, &s.parts, &s.resources),
@@ -1078,6 +1110,98 @@ fn snapshot(s: &Shared) -> (ServerMessage, ServerMessage, ServerMessage) {
 }
 
 /// The entity of vessel `id` if `player` owns it.
+/// EVA, boarding, flags and undocking.
+fn crew_request(s: &Shared, player_id: u64, msg: ClientMessage) -> ServerMessage {
+    let ack = |vessel: u64, r: Result<Option<u64>, String>| match r {
+        Ok(new_vessel) => ServerMessage::CrewAck {
+            vessel,
+            accepted: true,
+            reason: None,
+            new_vessel,
+        },
+        Err(reason) => ServerMessage::CrewAck {
+            vessel,
+            accepted: false,
+            reason: Some(reason),
+            new_vessel: None,
+        },
+    };
+    match msg {
+        ClientMessage::GoEva { vessel, kerbal } => {
+            let Some(e) = owned_vessel(s, vessel, player_id) else {
+                return ack(vessel, Err("not your vessel".into()));
+            };
+            let r = s
+                .universe
+                .lock()
+                .expect("sim lock")
+                .go_eva(e, kerbal.as_deref());
+            ack(
+                vessel,
+                r.map(|k| Some(crew_docking::register(s, k, Some(player_id)))),
+            )
+        }
+        ClientMessage::Board { vessel, target } => {
+            let Some(e) = owned_vessel(s, vessel, player_id) else {
+                return ack(vessel, Err("not your Kerbal".into()));
+            };
+            let t = s
+                .vessels
+                .lock()
+                .expect("vessels lock")
+                .iter()
+                .find(|v| v.1 == target)
+                .map(|v| v.0);
+            let Some(t) = t else {
+                return ack(vessel, Err("no such vessel".into()));
+            };
+            let r = s.universe.lock().expect("sim lock").board(e, t);
+            if r.is_ok() {
+                s.vessels.lock().expect("vessels lock").retain(|v| v.0 != e);
+            }
+            ack(vessel, r.map(|_| None))
+        }
+        ClientMessage::PlantFlag { vessel } => {
+            let Some(e) = owned_vessel(s, vessel, player_id) else {
+                return ack(vessel, Err("not your Kerbal".into()));
+            };
+            let label = format!("{} flag", display_name_for(s, player_id));
+            let r = s.universe.lock().expect("sim lock").plant_flag(e, &label);
+            ack(
+                vessel,
+                r.map(|f| Some(crew_docking::register(s, f, Some(player_id)))),
+            )
+        }
+        ClientMessage::Undock { vessel, port } => {
+            let Some(e) = owned_vessel(s, vessel, player_id) else {
+                return ServerMessage::Undocked {
+                    vessel,
+                    new_vessel: None,
+                    reason: Some("not your vessel".into()),
+                };
+            };
+            match crew_docking::undock(s, e, port.map(|p| p as usize)) {
+                Ok(ne) => ServerMessage::Undocked {
+                    vessel,
+                    new_vessel: Some(crew_docking::register(s, ne, Some(player_id))),
+                    reason: None,
+                },
+                Err(reason) => ServerMessage::Undocked {
+                    vessel,
+                    new_vessel: None,
+                    reason: Some(reason),
+                },
+            }
+        }
+        _ => ServerMessage::CrewAck {
+            vessel: 0,
+            accepted: false,
+            reason: Some("unexpected".into()),
+            new_vessel: None,
+        },
+    }
+}
+
 /// Science requests: run experiments, transmit, recover, state, research. Replies in order.
 fn science_request(s: &Shared, player_id: u64, msg: ClientMessage) -> Vec<ServerMessage> {
     let state = |s: &Shared| s.science.state(&s.campaign.lock().expect("campaign lock"));
@@ -1409,15 +1533,35 @@ fn fill_default_resources(s: &Shared, craft: &mut ose_data::craft::Craft) {
             continue;
         }
         if let Some(def) = s.parts.iter().find(|d| d.id == p.part_id) {
-            p.resources = def
-                .resource_containers
-                .iter()
-                .map(|c| ose_data::craft::StoredResource {
-                    resource: c.resource.clone(),
-                    stored_units: c.initial_units,
-                    capacity_units: c.capacity_units,
-                })
-                .collect();
+            // a tank defined for a mixture (Methalox) holds its ingredients, as the original's craft files do
+            let mut out: Vec<ose_data::craft::StoredResource> = Vec::new();
+            for c in &def.resource_containers {
+                let recipe = s
+                    .resources
+                    .iter()
+                    .find(|r| r.id == c.resource)
+                    .and_then(|r| match &r.kind {
+                        ose_data::ResourceKind::Recipe { ingredients } => Some(ingredients.clone()),
+                        _ => None,
+                    });
+                match recipe {
+                    Some(ingredients) => {
+                        for i in ingredients {
+                            out.push(ose_data::craft::StoredResource {
+                                resource: i.resource.clone(),
+                                stored_units: c.initial_units * i.units_per_recipe_unit,
+                                capacity_units: c.capacity_units * i.units_per_recipe_unit,
+                            });
+                        }
+                    }
+                    None => out.push(ose_data::craft::StoredResource {
+                        resource: c.resource.clone(),
+                        stored_units: c.initial_units,
+                        capacity_units: c.capacity_units,
+                    }),
+                }
+            }
+            p.resources = out;
         }
     }
 }
@@ -1532,6 +1676,7 @@ fn launch_craft(
         if let Some((_, _, orbit)) = u.vessel(e) {
             let (r, v) = orbit.state_at(u.ut());
             u.set_dormant(e, ose_sim::flight::Powered::new(spec, r, v, false));
+            u.set_craft(e, craft.clone());
             u.set_structure(
                 e,
                 ose_sim::structure::Structure::build(craft, &s.parts, &s.resources),
@@ -1927,6 +2072,13 @@ async fn session(mut socket: WebSocket, s: AppState) {
                                 ok = ok && send(&mut socket, r).await;
                             }
                             if !ok { break; }
+                        }
+                        Ok(msg @ (ClientMessage::GoEva { .. }
+                        | ClientMessage::Board { .. }
+                        | ClientMessage::PlantFlag { .. }
+                        | ClientMessage::Undock { .. })) => {
+                            let reply = crew_request(&s, player_id, msg);
+                            if !send(&mut socket, &reply).await { break; }
                         }
                         Ok(ClientMessage::Hello { .. }) => {}
                         Err(e) => tracing::warn!(player = player_id, error = %e, "bad client message"),

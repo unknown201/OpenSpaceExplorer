@@ -192,8 +192,8 @@ pub struct Powered {
     /// False for an uncrewed vessel whose probe cores have no power: no steering, no throttle.
     #[serde(default = "yes")]
     pub controlled: bool,
-    /// The first stage has been fired (by the first stage press, or by burning on the throttle). Until then
-    /// a stage press ignites rather than drops anything.
+    /// The first stage has been fired. A craft on the launch pad starts unlit, as in the original: the
+    /// throttle does nothing until the first stage press lights it (and that press drops nothing).
     #[serde(default = "yes")]
     pub ignited: bool,
 }
@@ -331,7 +331,7 @@ impl Powered {
             drag_cda_m2: None,
             wheel_scale: 1.0,
             controlled: true,
-            ignited: false,
+            ignited: !landed,
         }
     }
 
@@ -387,7 +387,7 @@ impl Powered {
 
     pub fn thrust_kn(&self, pressure_atm: f64) -> f64 {
         match self.current_stage() {
-            Some(s) if self.propellant_t > 0.0 && self.throttle > 0.0 => {
+            Some(s) if self.ignited && self.propellant_t > 0.0 && self.throttle > 0.0 => {
                 let p = pressure_atm.clamp(0.0, 1.0);
                 (s.thrust_vac_kn + (s.thrust_asl_kn - s.thrust_vac_kn) * p)
                     * self.throttle
@@ -637,7 +637,6 @@ pub fn integrate(
         };
         thrust_acc = dir * (thrust_kn * frac / p.mass_t); // kN / t = m/s^2
         out.thrust_kn = thrust_kn * frac;
-        p.ignited = true;
         p.propellant_t -= burn;
         p.mass_t -= burn;
     }
@@ -842,6 +841,7 @@ mod tests {
         let atmo = kerbin_atmo();
         let (r, v) = surface_state(&body, -0.1, -74.5, 0.0);
         let mut p = Powered::new(rocket(), r, v, true);
+        p.ignited = true;
         for i in 0..50 {
             integrate(&mut p, &body, Some(&atmo), None, i as f64 * 0.02, 0.02);
         }
@@ -869,6 +869,7 @@ mod tests {
         let atmo = kerbin_atmo();
         let (r, v) = surface_state(&body, -0.1, -74.5, 0.0);
         let mut p = Powered::new(rocket(), r, v, true);
+        p.ignited = true;
         p.throttle = 1.0;
         let dt = 0.02;
         let mut ut = 0.0;
@@ -1028,6 +1029,7 @@ mod tests {
         let atmo = kerbin_atmo();
         let (r, v) = surface_state(&body, -0.1, -74.5, 0.0);
         let mut p = Powered::new(spec, r, v, true);
+        p.ignited = true;
         p.throttle = 1.0;
         let dt = 0.02;
         let mut ut = 0.0;
