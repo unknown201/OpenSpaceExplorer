@@ -196,6 +196,8 @@ pub struct FlightInput<'a> {
     pub ut: f64,
     pub craft: Option<&'a Craft>,
     pub is_decoupler: &'a dyn Fn(&str) -> bool,
+    /// Body spin from the server's `BodyRotation` (protocol 9); the embedded system file otherwise.
+    pub spin: Option<Spin>,
 }
 
 fn quat_from_basis(x: DVec3, y: DVec3, z: DVec3) -> DQuat {
@@ -300,9 +302,11 @@ impl FlightView {
 
     /// Draw the flight scene; returns the vessel's altitude above the sphere for the HUD.
     pub fn frame(&mut self, gpu: &mut Renderer, inp: &FlightInput) -> bool {
-        let spin = self.spins.get(inp.body_id).copied().unwrap_or(Spin {
-            period_s: 0.0,
-            initial_deg: 0.0,
+        let spin = inp.spin.unwrap_or_else(|| {
+            self.spins.get(inp.body_id).copied().unwrap_or(Spin {
+                period_s: 0.0,
+                initial_deg: 0.0,
+            })
         });
         let r = inp.vessel_pos - inp.body_pos;
         let v_rel = inp.vessel_vel - inp.body_vel;
@@ -325,9 +329,26 @@ impl FlightView {
         } else {
             attitude_dir(&att, r, v_rel, spin)
         };
-        let dir = dir_to_model(r, dir_i, spin, inp.ut);
-        let vessel_rot =
-            DQuat::from_rotation_arc(DVec3::Y, if dir.length() > 0.5 { dir } else { up });
+        // The server's actual facing and roll reference (protocol 9) when present; the hold otherwise.
+        let g = |d: ose_math::DVec3| DVec3::new(d.x, d.y, d.z);
+        let (facing, roll) = match &inp.vessel.flight {
+            Some(f) if g(f.facing).length() > 0.5 => (g(f.facing), g(f.roll_ref)),
+            _ => (dir_i, DVec3::ZERO),
+        };
+        let dir = dir_to_model(r, facing, spin, inp.ut);
+        let dir = if dir.length() > 0.5 { dir } else { up };
+        let roll_m = if roll.length() > 0.5 {
+            dir_to_model(r, roll, spin, inp.ut)
+        } else {
+            DVec3::ZERO
+        };
+        // Craft +Y along the facing, craft +Z (a pod's windows) along the roll reference.
+        let z = (roll_m - dir * roll_m.dot(dir)).normalize_or_zero();
+        let vessel_rot = if z.length() > 0.5 {
+            quat_from_basis(dir.cross(z), dir, z)
+        } else {
+            DQuat::from_rotation_arc(DVec3::Y, dir)
+        };
 
         // Chase camera in the local horizon frame.
         let north = (DVec3::Y - up * up.dot(DVec3::Y)).normalize_or_zero();

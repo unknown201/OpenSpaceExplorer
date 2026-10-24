@@ -117,6 +117,8 @@ struct App {
     map_mode: bool,
     /// Craft id of a launch waiting for `CraftLaunched`.
     pending_launch: Option<u64>,
+    /// Body spin from `BodyRotation`, index-aligned with the catalog (empty until it arrives).
+    body_spins: Vec<ose_net::BodySpin>,
     /// Controls as last sent.
     throttle: f64,
     attitude: ose_net::AttitudeMode,
@@ -309,6 +311,7 @@ pub fn start() -> Result<(), JsValue> {
         flight_craft: None,
         map_mode: false,
         pending_launch: None,
+        body_spins: Vec::new(),
         throttle: 0.0,
         attitude: ose_net::AttitudeMode::Up,
         gpu_canvas: get("gpu")?.dyn_into()?,
@@ -1484,6 +1487,9 @@ impl App {
                         send(ws, &ClientMessage::ListSessions);
                     }
                 }
+            }
+            ServerMessage::BodyRotation { bodies } => {
+                self.body_spins = bodies;
             }
             ServerMessage::BodyCatalog { bodies } => {
                 let scene = Scene::new(bodies);
@@ -3024,6 +3030,10 @@ impl App {
             ut,
             craft: self.flight_craft.as_ref(),
             is_decoupler: &is_dec,
+            spin: self.body_spins.get(rb).map(|b| flight3d::Spin {
+                period_s: b.rotation_period_s,
+                initial_deg: b.initial_rotation_deg,
+            }),
         };
         self.flight3d.frame(gpu, &inp)
     }

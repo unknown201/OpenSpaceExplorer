@@ -60,6 +60,9 @@ the order a new player meets it, using the original's assets).
   a mirror), and the KSC sits on its coast with the ocean to the east. The HUD follows the original's layout
   (altimeter top centre, speed, attitude holds and throttle bottom centre, staging bottom left) and its keys
   (Z, X, Shift, Ctrl, Space, W/S, A/D, T, M for the map).
+  Protocol 9: the craft is drawn along the server's actual `facing` with its +Z on `roll_ref`, so it turns
+  toward a new hold at the simulated rate, and body spin comes from `BodyRotation` (the embedded system file
+  is the fallback).
 - Craft poses: KSP2 assemblies store `partState.localPosition` relative to the craft root, not the parent
   (the stock K1 descends monotonically down its 38-part tree), so the client reads stored poses as
   craft-frame poses and the editor now stores root-relative positions too. Crafts saved by the editor
@@ -72,6 +75,6 @@ the order a new player meets it, using the original's assets).
 - Fonts: the original's menu fonts (Sbliquid, Realtime Rounded) are not in the bundles as font files, only
   as TextMeshPro atlases, so the page uses a system sans-serif at the original's sizes.
 - Not yet at the KSC: the layered "Standard Tileable (Vertex Color)" building shader (only each material's base map is drawn, so buildings read darker than the original), terrain, trees and props, the day cycle, the launch pad flyout.
-- Not yet in flight: a navball, the vessel's actual facing (the server turns it toward the hold at a limited rate but sends only the hold), engine plumes, debris vessels drawn as parts, terrain relief under the campus, the original's launch camera.
+- Not yet in flight: a navball, engine plumes, debris vessels drawn as parts, terrain relief under the campus, the original's launch camera.
 - Not yet: the sun flare and bloom, the ship's team colours (`ApplyTeamColors` masks), the Settings and
   Extras screens, and the menu's hover and fade animations.
