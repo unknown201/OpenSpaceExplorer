@@ -484,7 +484,7 @@ fn install_audio(app: &Shared) -> Result<(), JsValue> {
         };
         let key = match button.id().as_str() {
             "rd-research" => "rd_research",
-            "sound-toggle" => return,
+            "sound-toggle" | "main-sound" => return,
             _ => "ui_select",
         };
         app.audio.play(key);
@@ -496,7 +496,10 @@ fn install_audio(app: &Shared) -> Result<(), JsValue> {
     )?;
     click.forget();
     let doc = app.borrow().doc.clone();
-    if let Some(btn) = doc.get_element_by_id("sound-toggle") {
+    for btn in ["sound-toggle", "main-sound"]
+        .iter()
+        .filter_map(|id| doc.get_element_by_id(id))
+    {
         let a = app.clone();
         let cb = Closure::<dyn FnMut()>::new(move || {
             let mut app = a.borrow_mut();
@@ -2934,15 +2937,14 @@ impl App {
     }
 
     fn show_sound_toggle(&self) {
-        if let Some(el) = self.doc.get_element_by_id("sound-toggle") {
-            el.set_text_content(Some(if self.audio.muted {
-                "\u{266a} off"
-            } else {
-                "\u{266a} on"
-            }));
-            el.class_list()
-                .toggle_with_force("off", self.audio.muted)
-                .ok();
+        for id in ["sound-toggle", "main-sound"] {
+            if let Some(el) = self.doc.get_element_by_id(id) {
+                el.set_text_content(Some(if self.audio.muted {
+                    "Sound: off"
+                } else {
+                    "Sound: on"
+                }));
+            }
         }
     }
 

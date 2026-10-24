@@ -30,9 +30,22 @@ const KSC_PADS: [(f64, f64, f64); 4] = [
     (-0.4362, -75.3480, 132.0),
 ];
 
-/// Visual exaggeration of the server's part flex: the real bends are a few milliradians, which reads as
-/// nothing on screen; three times keeps the wobble subtle but visible.
-pub const FLEX_EXAGGERATION: f64 = 3.0;
+/// Visual exaggeration of the server's part flex: with the server's realistic joint loads the bends are a
+/// milliradian or two under thrust, which reads as nothing on screen; twelve times makes the wobble visible
+/// and still subtle. FLEX_MAX_RAD and FLEX_MAX_M cap the result so a near-breaking joint doesn't fold a part.
+pub const FLEX_EXAGGERATION: f64 = 12.0;
+const FLEX_MAX_RAD: f32 = 0.12;
+const FLEX_MAX_M: f32 = 0.4;
+
+fn cap(v: [f32; 3], max: f32) -> [f32; 3] {
+    let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    if len > max {
+        let k = max / len;
+        [v[0] * k, v[1] * k, v[2] * k]
+    } else {
+        v
+    }
+}
 
 /// Snapshot interval the flex interpolation spans (the server streams vessels at 10 Hz).
 const SNAPSHOT_MS: f64 = 100.0;
@@ -297,7 +310,13 @@ impl FlightView {
                     (x[2] + (y[2] - x[2]) * t) * k,
                 ]
             };
-            out.insert(part, (lerp(a.0, b.0), lerp(a.1, b.1)));
+            out.insert(
+                part,
+                (
+                    cap(lerp(a.0, b.0), FLEX_MAX_RAD),
+                    cap(lerp(a.1, b.1), FLEX_MAX_M),
+                ),
+            );
         }
         out
     }

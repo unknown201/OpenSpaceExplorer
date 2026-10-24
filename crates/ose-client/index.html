@@ -348,9 +348,6 @@
     .mc-objectives { padding-left: calc(22 * var(--u)); font-size: calc(16 * var(--u)); line-height: 1.6; }
     .mc-reward { margin-top: calc(18 * var(--u)); font-size: calc(16 * var(--u)); } .mc-reward b { color: #8fd08f; }
     .mc-state { margin-top: calc(8 * var(--u)); font-size: calc(13 * var(--u)); color: #9fb0cc; }
-    /* The sound toggle: a small pill over everything, top right. */
-    #sound-toggle { position: fixed; top: 10px; right: 12px; z-index: 60; margin: 0; width: auto; padding: 4px 10px; font: 600 12px var(--ui-font, sans-serif); color: #cfd6e6; background: #10161fcc; border: 1px solid #2c3d63; border-radius: 12px; cursor: pointer; opacity: 0.75; }
-    #sound-toggle:hover { opacity: 1; } #sound-toggle.off { color: #8a94a8; text-decoration: line-through; }
   </style>
 </head>
 <body>
@@ -382,6 +379,7 @@
           <li><button id="play" data-ose="play">Campaign</button></li>
           <li><button id="main-settings" data-ose="main-settings" disabled title="not yet">Settings</button></li>
           <li><button id="main-extras" data-ose="main-extras" disabled title="not yet">Extras</button></li>
+          <li><button id="main-sound" class="sound-toggle" data-ose="sound-toggle">Sound: on</button></li>
         </ul>
         <div id="login-bar">
           <label for="player-name">Pilot</label>
@@ -505,6 +503,7 @@
         <button id="resume" data-ose="resume">Resume</button>
         <button id="to-ksc" class="secondary" data-ose="to-ksc">Kerbal Space Center</button>
         <button id="to-sessions" class="secondary" data-ose="to-sessions">Sessions and agency</button>
+        <button id="sound-toggle" class="secondary sound-toggle" data-ose="sound-toggle">Sound: on</button>
         <button id="leave" class="secondary" data-ose="leave">Leave session</button>
       </div>
       <div class="note" id="menu-note"></div>
@@ -513,7 +512,6 @@
   </div>
   <div id="ksc-tooltip" data-ose="ksc-tooltip"></div>
   <div id="audio" data-ose="audio" hidden></div>
-  <button id="sound-toggle" data-ose="sound-toggle" title="Sound on or off">&#9834; on</button>
   <div id="flight-hud" data-ose="flight">
     <div class="fh-top"><div class="fh-label">ALTITUDE</div><div id="fh-altitude" data-ose="flight-altitude">--</div><div id="fh-situation" class="fh-small">--</div><div id="fh-note" class="fh-small" style="color:#f0a070"></div><div id="fh-control" data-ose="flight-control" style="color:#ff6a5a;font-weight:700"></div></div>
     <div class="fh-bottom">

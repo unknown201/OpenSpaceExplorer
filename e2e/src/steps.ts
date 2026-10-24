@@ -499,16 +499,29 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
       await page.locator('[data-ose="flight-stage"]').first().click();
       let after = before;
       let situation = "";
+      let engineMax = 0;
+      let thrustSeen = false;
+      const audio = page.locator('[data-ose="audio"]');
       const t1 = Date.now();
       while (Date.now() - t1 < 20_000) {
         await sleep(500);
+        if ((await audio.count()) > 0) {
+          engineMax = Math.max(engineMax, Number((await audio.first().getAttribute("data-ose-engine")) ?? "0"));
+          thrustSeen ||= !/ 0 kN/.test((await page.locator("#fh-twr").textContent()) ?? " 0 kN");
+        }
         after = await altOf();
         situation = (await hud.first().getAttribute("data-ose-situation")) ?? "";
         if (after > before + 5) break;
       }
       if (!(after > before + 5)) {
         const note = ((await page.locator("#fh-note").textContent().catch(() => "")) ?? "").trim();
-        return failed(`the craft did not climb after full throttle and stage (${before.toFixed(0)} m -> ${after.toFixed(0)} m, ${situation}${note ? `; ${note}` : ""})`);
+        return failed(`the craft did not climb after full throttle and stage (${before.toFixed(0)} m -> ${after.toFixed(0)} m, ${situation}${note ? `; ${note}` : ""}) [${await page.locator("#fh-stage").textContent()}, ${await page.locator("#fh-fuel").textContent()}, ${await page.locator("#fh-twr").textContent()}]`);
+      }
+      // Sound follows the flight: the engine loop ran under thrust and the music is the body's.
+      if ((await audio.count()) > 0) {
+        const music = (await audio.first().getAttribute("data-ose-music")) ?? "";
+        if (thrustSeen && !(engineMax > 0)) return failed("the engine sound stayed silent under thrust (data-ose-engine 0)");
+        if (!music.startsWith("music_kerbin")) return failed(`flight music is "${music}", not Kerbin's`);
       }
       return passed(`lifted off: ${before.toFixed(0)} m -> ${after.toFixed(0)} m, ${situation}`);
     }),

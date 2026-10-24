@@ -95,7 +95,7 @@ Wwise (`AkSoundEngine`, `AkMotion`, `AkSynthOne`, `MasteringSuite`), `lib_burst_
 | Decompile C# for reference | `ilspycmd` 11.1 | installed |
 | Unpack bundles (JSON, meshes, textures) | `UnityPy` (pip) or AssetRipper | not installed yet |
 | Mesh/texture to web formats | glTF via UnityPy export or AssetRipper, KTX2/Basis via `toktx` | not installed yet |
-| Audio | `vgmstream` or `ww2ogg` | not installed yet |
+| Audio | `vgmstream` r2117 (win64, in `.cache/tools`) | used by `tools/export_audio.py` |
 | Rust | cargo/rustc 1.99, target `wasm32-unknown-unknown` already installed | installed; `wasm-bindgen`/`trunk` missing |
 | .NET | dotnet 9 | installed |
 
