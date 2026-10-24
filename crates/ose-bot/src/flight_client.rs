@@ -163,6 +163,12 @@ impl Client {
         .await
     }
 
+    /// Extend (or fold) the landing legs without waiting for the acknowledgement.
+    pub async fn deploy_gear(&mut self, vessel: u64, deploy: bool) -> Result<()> {
+        self.send(&ClientMessage::DeployGear { vessel, deploy })
+            .await
+    }
+
     /// Fire the next stage without waiting for the acknowledgement.
     pub async fn stage(&mut self, vessel: u64) -> Result<()> {
         self.send(&ClientMessage::Stage { vessel }).await

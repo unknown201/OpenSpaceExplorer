@@ -73,6 +73,8 @@ pub struct Landing {
     pub game_time_s: f64,
     pub wall_time_s: f64,
     pub stages_fired: u32,
+    /// Whether the craft had folded landing legs that the bot extended.
+    pub gear_deployed: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -100,6 +102,8 @@ pub async fn land(c: &mut Client, vessel: u64, body: u16, timeout: Duration) -> 
     let mut stages_fired = 0;
     let mut touch_speed = 0.0_f64;
     let mut real_time = false;
+    let mut gear_requested = false;
+    let mut gear_deployed = false;
     let mut trace = match std::env::var_os("OSE_BOT_LANDING_TRACE") {
         Some(path) => {
             let mut f = std::fs::File::create(path)?;
@@ -126,11 +130,16 @@ pub async fn land(c: &mut Client, vessel: u64, body: u16, timeout: Duration) -> 
         let msg = c.poll(Duration::from_secs(10)).await?;
         if let ServerMessage::FlightAck {
             vessel: v,
-            accepted: false,
+            accepted,
             reason,
         } = &msg
         {
-            if *v == vessel {
+            let gear_answer = reason.as_deref().is_some_and(|r| r.contains("gear"));
+            if *v == vessel && !*accepted && gear_answer {
+                // a craft without folded legs lands on whatever it has
+                continue;
+            }
+            if *v == vessel && !*accepted {
                 bail!(
                     "server refused a flight command: {}",
                     reason.clone().unwrap_or_default()
@@ -170,6 +179,7 @@ pub async fn land(c: &mut Client, vessel: u64, body: u16, timeout: Duration) -> 
                     game_time_s: ut - start_ut,
                     wall_time_s: start_wall.elapsed().as_secs_f64(),
                     stages_fired,
+                    gear_deployed,
                 });
             }
             FlightSituation::Crashed => bail!(
@@ -201,6 +211,17 @@ pub async fn land(c: &mut Client, vessel: u64, body: u16, timeout: Duration) -> 
         };
         if phase == Phase::Brake && (horizontal < 20.0 || descending > v_target + 5.0) {
             phase = Phase::Descend;
+        }
+        // Legs come out a couple of kilometres up, well before touchdown.
+        if !gear_requested && h < 2_000.0 {
+            c.deploy_gear(vessel, true).await?;
+            gear_requested = true;
+        }
+        if gear_requested && !gear_deployed {
+            gear_deployed = v
+                .flight
+                .as_ref()
+                .is_some_and(|fl| fl.gear.iter().any(|&(_, out)| out));
         }
         // Near the ground the bot needs every snapshot: at the physics warp cap each one is 0.4 s of flight.
         if !real_time && h < 3_000.0 {

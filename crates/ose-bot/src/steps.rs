@@ -604,14 +604,19 @@ pub async fn run_mun_campaign(cfg: &BotConfig) -> Vec<StepResult> {
             match landing::land(c, id, b.mun, LANDING_TIMEOUT).await {
                 Ok(l) => Outcome::passed(format!(
                     "landed on the Mun at lat {:.3} lon {:.3}, {:.0} m above the datum, touching down at \
-                     {:.1} m/s after {:.0} s of powered descent ({:.0} s wall); {:.1} t propellant left",
+                     {:.1} m/s after {:.0} s of powered descent ({:.0} s wall); {:.1} t propellant left; {}",
                     l.lat_deg,
                     l.lon_deg,
                     l.altitude_m,
                     l.touchdown_speed_mps,
                     l.game_time_s,
                     l.wall_time_s,
-                    l.propellant_t
+                    l.propellant_t,
+                    if l.gear_deployed {
+                        "landing legs deployed"
+                    } else {
+                        "no landing legs to deploy"
+                    }
                 )),
                 Err(e) => Outcome::failed(e),
             }
