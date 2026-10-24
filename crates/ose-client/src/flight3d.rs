@@ -411,6 +411,32 @@ impl FlightView {
     }
 
     /// Direction to the sun in the KSC campus frame (glTF, Y up) at `ut`, given the inertial direction from
+    /// The campus footprint (all facility boxes, 300 m wider) as a scatter exclusion in the model frame.
+    fn ksc_exclusion(&self, pos: DVec3, rot: DQuat) -> Option<crate::planet_scatter::Exclusion> {
+        let scene = self.ksc_scene.borrow();
+        let scene = scene.as_ref()?;
+        let (mut x0, mut x1, mut z0, mut z1) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
+        for b in &scene.buildings {
+            x0 = x0.min(b.min[0]);
+            x1 = x1.max(b.max[0]);
+            z0 = z0.min(b.min[2]);
+            z1 = z1.max(b.max[2]);
+        }
+        if x0 > x1 {
+            return None;
+        }
+        let m = 300.0;
+        let ax = rot * DVec3::X;
+        let az = rot * DVec3::Z;
+        Some(crate::planet_scatter::Exclusion {
+            origin: pos.to_array(),
+            ax: ax.to_array(),
+            az: az.to_array(),
+            x: [x0 - m, x1 + m],
+            z: [z0 - m, z1 + m],
+        })
+    }
+
     /// Kerbin to the sun. `None` until the campus placement is known.
     pub fn ksc_sun(
         &mut self,
@@ -580,6 +606,13 @@ impl FlightView {
         // The KSC campus on Kerbin while low enough to matter.
         if inp.body_id == "Kerbin" && alt < 25_000.0 {
             if let Some((kpos, krot)) = self.ksc_pose(inp.body_radius) {
+                // No trees, rocks or grass on the campus, its runways and pads (the original draws the campus
+                // over its own ground): the facilities' footprint, 300 m wider all round.
+                if let Some(ex) = self.ksc_exclusion(kpos, krot) {
+                    if let Some(p) = self.planet.as_mut() {
+                        p.set_exclusions(vec![ex]);
+                    }
+                }
                 gpu.request_model("ksc", "assets/ksc/ksc.glb");
                 if gpu.has_model("ksc") {
                     let mut it = DrawItem::lit("ksc".into(), kpos - cam, krot, 1.0, sun);

@@ -80,6 +80,40 @@ pub struct Grass {
 pub const GRASS_RANGE_M: f64 = 55.0;
 pub const MAX_GRASS: usize = 14_000;
 
+/// A rectangle on the ground kept free of scatter (the KSC campus, its runway and pads): `origin` and the two
+/// horizontal axes of its own frame (model frame, unit), and its extent along them (m).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Exclusion {
+    pub origin: V3,
+    pub ax: V3,
+    pub az: V3,
+    pub x: [f64; 2],
+    pub z: [f64; 2],
+}
+
+impl Exclusion {
+    /// 1 well inside the rectangle shrunk by `inset` m, falling to 0 over `falloff` m towards its edge.
+    pub fn inner_weight(&self, p: V3, inset: f64, falloff: f64) -> f64 {
+        let d = sub(p, self.origin);
+        let (x, z) = (dot(d, self.ax), dot(d, self.az));
+        let edge = (x - (self.x[0] + inset))
+            .min((self.x[1] - inset) - x)
+            .min(z - (self.z[0] + inset))
+            .min((self.z[1] - inset) - z);
+        (edge / falloff.max(1e-6)).clamp(0.0, 1.0)
+    }
+
+    pub fn contains(&self, p: V3) -> bool {
+        let d = sub(p, self.origin);
+        let (x, z) = (dot(d, self.ax), dot(d, self.az));
+        x >= self.x[0] && x <= self.x[1] && z >= self.z[0] && z <= self.z[1]
+    }
+}
+
+fn excluded(ex: &[Exclusion], p: V3) -> bool {
+    ex.iter().any(|e| e.contains(p))
+}
+
 /// One placed prop.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Instance {
@@ -136,7 +170,13 @@ impl ScatterFile {
     }
 
     /// Props around `cam` (model frame, m) on a body of `radius` with terrain `map`.
-    pub fn place(&self, map: &TerrainMap, radius: f64, cam: V3) -> Vec<Instance> {
+    pub fn place(
+        &self,
+        map: &TerrainMap,
+        radius: f64,
+        cam: V3,
+        exclude: &[Exclusion],
+    ) -> Vec<Instance> {
         let mut out: Vec<(f64, Instance)> = Vec::new();
         let cam_dir = normalize(cam);
         let (face, ca, cb) = planet_lod::face_ab(cam_dir);
@@ -255,6 +295,9 @@ impl ScatterFile {
                         let yo =
                             item.y_offset[0] + (item.y_offset[1] - item.y_offset[0]) * unit(h, 7);
                         let pos = scale(d, radius + hgt + yo * s);
+                        if excluded(exclude, pos) {
+                            continue;
+                        }
                         let dist = length(sub(pos, cam));
                         out.push((
                             dist,
@@ -297,7 +340,13 @@ impl ScatterFile {
     /// Grass patches within `GRASS_RANGE_M` of the camera's ground point, positions relative to `origin` (the
     /// camera position the placement is for). Heights come from a small grid of terrain samples around the
     /// camera, bilinearly interpolated: thousands of exact samples would cost too much per placement.
-    pub fn place_grass(&self, map: &TerrainMap, radius: f64, cam: V3) -> Vec<Grass> {
+    pub fn place_grass(
+        &self,
+        map: &TerrainMap,
+        radius: f64,
+        cam: V3,
+        exclude: &[Exclusion],
+    ) -> Vec<Grass> {
         let textures = self.grass_textures();
         let cam_dir = normalize(cam);
         let height = |d: V3| planet_lod::map_height(Some(map), d);
@@ -422,7 +471,11 @@ impl ScatterFile {
                             d,
                             planet_lod::add(scale(east, -dx), scale(north, -dy)),
                         ));
-                        let pos = sub(scale(d, radius + hgt), cam);
+                        let world = scale(d, radius + hgt);
+                        if excluded(exclude, world) {
+                            continue;
+                        }
+                        let pos = sub(world, cam);
                         let s = item.scale[0] + (item.scale[1] - item.scale[0]) * unit(h, 6);
                         out.push(Grass {
                             pos: [pos[0] as f32, pos[1] as f32, pos[2] as f32],
@@ -487,7 +540,7 @@ mod tests {
         let map = flat_map(r);
         let f = file();
         let cam = scale(planet_lod::direction(10.0, 20.0), r + 20.0);
-        let a = f.place(&map, r, cam);
+        let a = f.place(&map, r, cam, &[]);
         // a 100 m disc of 10 m cells at half density: roughly 50 to 200 rocks
         assert!(a.len() > 40 && a.len() < 250, "{}", a.len());
         for i in &a {
@@ -497,7 +550,7 @@ mod tests {
         }
         // moving the camera a little keeps the rocks that stay in range exactly where they were
         let cam2 = scale(planet_lod::direction(10.0, 20.0001), r + 20.0);
-        let b = f.place(&map, r, cam2);
+        let b = f.place(&map, r, cam2, &[]);
         let same = a
             .iter()
             .filter(|i| b.iter().any(|j| length(sub(i.pos, j.pos)) < 1e-6))
@@ -505,7 +558,7 @@ mod tests {
         assert!(same as f64 > a.len() as f64 * 0.8, "{same} of {}", a.len());
         // too high above the ground: nothing
         let high = scale(planet_lod::direction(10.0, 20.0), r + 500.0);
-        assert!(f.place(&map, r, high).is_empty());
+        assert!(f.place(&map, r, high, &[]).is_empty());
     }
 
     #[test]
@@ -521,7 +574,7 @@ mod tests {
         )
         .unwrap();
         let cam = scale(planet_lod::direction(-0.7, -74.8), r + 2.0);
-        let g = f.place_grass(&map, r, cam);
+        let g = f.place_grass(&map, r, cam, &[]);
         // pi 55^2 / 1.4^2: about 4,800 patches
         assert!(g.len() > 3_500 && g.len() < 6_500, "{}", g.len());
         for p in &g {
@@ -529,6 +582,6 @@ mod tests {
             assert!(d < 60.0);
         }
         // props skip grass items
-        assert!(f.place(&map, r, cam).is_empty());
+        assert!(f.place(&map, r, cam, &[]).is_empty());
     }
 }

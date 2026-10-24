@@ -22,6 +22,8 @@ pub struct Preview {
     debug: f32,
     /// `occ=<distance m>,<radius m>,<offset deg>`: a body that hides the sun, for checking eclipses.
     occ: Option<(f64, f64, f64)>,
+    /// `part=<part id>`: draw that part 6 m in front of the camera (checks that the planet never covers craft).
+    part: Option<String>,
     planet: Option<PlanetRenderer>,
 }
 
@@ -59,6 +61,7 @@ impl Preview {
             sun_az: num("sunaz", 120.0),
             sun_el: num("sunel", 30.0),
             debug: num("debug", 0.0) as f32,
+            part: get.get("part").cloned(),
             occ: get.get("occ").and_then(|s| {
                 let v: Vec<f64> = s.split(',').filter_map(|x| x.parse().ok()).collect();
                 (v.len() == 3).then(|| (v[0], v[1], v[2]))
@@ -94,7 +97,11 @@ impl Preview {
             fwd,
             up,
             60f64.to_radians(),
-            (self.alt * 0.01).clamp(0.5, 5_000.0),
+            if self.part.is_some() {
+                0.3
+            } else {
+                (self.alt * 0.01).clamp(0.5, 5_000.0)
+            },
             1e9,
         );
         let ready = planet.prepare(
@@ -118,10 +125,20 @@ impl Preview {
             occluders: &occluders,
             sun_radius_rad: 0.0047,
         };
-        let items = match (&mut self.planet, ready) {
+        let mut items = match (&mut self.planet, ready) {
             (Some(p), true) => p.scatter_items(gpu, &view),
             _ => Vec::new(),
         };
+        if let Some(part) = &self.part {
+            let name = format!("part:{part}");
+            gpu.request_model(&name, &format!("assets/parts/{part}.glb"));
+            if gpu.has_model(&name) {
+                let mut it =
+                    crate::render::DrawItem::lit(name, fwd * 6.0, glam::DQuat::IDENTITY, 1.0, sun);
+                it.ambient = 0.25;
+                items.push(it);
+            }
+        }
         let extra = self
             .planet
             .as_ref()

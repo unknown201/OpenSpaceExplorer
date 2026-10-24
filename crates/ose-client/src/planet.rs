@@ -7,7 +7,7 @@
 //! built a few per frame, nearest first; until a quad's children exist the quad itself is drawn.
 
 use crate::planet_lod::{self, QuadKey, TerrainVertex};
-use crate::planet_scatter::{Grass, Instance, ScatterFile};
+use crate::planet_scatter::{Exclusion, Grass, Instance, ScatterFile};
 use crate::render::{fetch_bitmap, fetch_bytes, DrawItem, ExtraPass, Renderer};
 use glam::{DMat4, DVec3};
 use ose_data::terrain::{TerrainIndex, TerrainMap, TerrainPack};
@@ -212,6 +212,8 @@ pub struct PlanetRenderer {
     active: bool,
     /// Shader debug view (preview `debug=`): 0 off, 1 biome mask, 2 detail ratio, 3 detail inputs.
     pub debug: f32,
+    /// Ground kept free of scatter (the KSC campus), set by the flight view.
+    exclusions: Vec<Exclusion>,
 }
 
 impl PlanetRenderer {
@@ -609,6 +611,7 @@ impl PlanetRenderer {
             cloud_draws: Vec::new(),
             active: false,
             debug: 0.0,
+            exclusions: Vec::new(),
         }
     }
 
@@ -1207,7 +1210,18 @@ impl PlanetRenderer {
             }
             let mesh = {
                 let map = self.bodies[&id].map.as_ref();
-                planet_lod::build_quad(&key, radius, has_ocean, &|d| planet_lod::map_height(map, d))
+                let ex = &self.exclusions;
+                planet_lod::build_quad(&key, radius, has_ocean, &|d| {
+                    let h = planet_lod::map_height(map, d);
+                    // The original hides its terrain under the KSC campus (the campus is a terrain blocker):
+                    // here the ground drops 20 m under the facilities so the campus model's own ground shows.
+                    let p = planet_lod::scale(d, radius + h);
+                    let sink = ex
+                        .iter()
+                        .map(|e| e.inner_weight(p, 300.0, 150.0))
+                        .fold(0.0, f64::max);
+                    h - 20.0 * sink
+                })
             };
             let q = self.upload_quad(&mesh);
             self.bodies.get_mut(&id).unwrap().quads.insert(key, q);
@@ -1434,7 +1448,12 @@ impl PlanetRenderer {
             .map(|p| (p - view.cam).length())
             .unwrap_or(f64::INFINITY);
         if moved > 4.0 {
-            b.placed = f.place(map, view.radius_m, [view.cam.x, view.cam.y, view.cam.z]);
+            b.placed = f.place(
+                map,
+                view.radius_m,
+                [view.cam.x, view.cam.y, view.cam.z],
+                &self.exclusions,
+            );
 
             b.placed_at = Some(view.cam);
         }
@@ -1444,7 +1463,12 @@ impl PlanetRenderer {
             .map(|p| (p - view.cam).length())
             .unwrap_or(f64::INFINITY);
         if gmoved > 3.0 {
-            let g = f.place_grass(map, view.radius_m, [view.cam.x, view.cam.y, view.cam.z]);
+            let g = f.place_grass(
+                map,
+                view.radius_m,
+                [view.cam.x, view.cam.y, view.cam.z],
+                &self.exclusions,
+            );
             b.grass_at = Some(view.cam);
             b.grass = (!g.is_empty()).then(|| {
                 let floats: Vec<f32> = g
@@ -1533,6 +1557,19 @@ impl PlanetRenderer {
             out.push(it);
         }
         out
+    }
+
+    /// Keep scatter (rocks, plants, trees, grass) off these rectangles; props are placed again when they change.
+    pub fn set_exclusions(&mut self, ex: Vec<Exclusion>) {
+        if ex != self.exclusions {
+            self.exclusions = ex;
+            for b in self.bodies.values_mut() {
+                b.placed_at = None;
+                b.grass_at = None;
+                // terrain under the campus is lowered: rebuild the quads
+                b.quads.clear();
+            }
+        }
     }
 
     fn body(&self) -> Option<&Body> {
