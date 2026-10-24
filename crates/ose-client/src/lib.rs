@@ -21,6 +21,8 @@ pub mod render;
 pub mod scene;
 pub mod thumb;
 pub mod vab;
+#[cfg(target_arch = "wasm32")]
+pub mod vab3d;
 
 use scene::{Camera, Scene, TimeSync};
 use std::cell::RefCell;
@@ -98,6 +100,9 @@ struct App {
     /// The Kerbal Space Center as a 3D scene (the original's campus), shown behind the facility panel.
     #[cfg(target_arch = "wasm32")]
     ksc3d: ksc3d::KscView,
+    /// The Vehicle Assembly Building hall with the craft in 3D (the original's OAB interior).
+    #[cfg(target_arch = "wasm32")]
+    vab3d: vab3d::VabView,
     /// Where the last mousedown happened, to tell a click from a drag.
     press: Option<(f64, f64)>,
     gpu_canvas: HtmlCanvasElement,
@@ -280,6 +285,8 @@ pub fn start() -> Result<(), JsValue> {
         menu3d: menu3d::MenuBackdrop::new(),
         #[cfg(target_arch = "wasm32")]
         ksc3d: ksc3d::KscView::new(),
+        #[cfg(target_arch = "wasm32")]
+        vab3d: vab3d::VabView::new(),
         press: None,
         gpu_canvas: get("gpu")?.dyn_into()?,
         orbit_yaw: 0.6,
@@ -768,6 +775,11 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                 app.ksc3d.zoom(factor);
                 return;
             }
+            #[cfg(target_arch = "wasm32")]
+            if app.in_session && app.vab_active() {
+                app.vab3d.zoom(factor);
+                return;
+            }
             if app.is_3d() {
                 app.orbit_dist_km = (app.orbit_dist_km * factor).clamp(1.0e-2, 1.0e10);
             } else {
@@ -795,6 +807,15 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
     let a = app.clone();
     let on_move = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
         let mut app = a.borrow_mut();
+        #[cfg(target_arch = "wasm32")]
+        if app.in_session && app.vab_active() {
+            if let Some((x, y)) = app.drag {
+                let (nx, ny) = (ev.client_x() as f64, ev.client_y() as f64);
+                app.vab3d.orbit(nx - x, ny - y);
+                app.drag = Some((nx, ny));
+            }
+            return;
+        }
         #[cfg(target_arch = "wasm32")]
         if app.in_session && app.ksc_active() {
             if let Some((x, y)) = app.drag {
@@ -852,6 +873,19 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                 if let Some(i) = hit {
                     let facility = app.ksc3d.buildings()[i].facility.clone();
                     app.open_facility(&facility);
+                }
+            } else if ev.button() == 0
+                && (nx - x).abs() < 4.0
+                && (ny - y).abs() < 4.0
+                && app.in_session
+                && app.vab_active()
+            {
+                let rect = app.gpu_canvas.get_bounding_client_rect();
+                let (px, py) = ((nx - rect.left()) * app.dpr, (ny - rect.top()) * app.dpr);
+                let hit = app.gpu.as_ref().and_then(|g| app.vab3d.pick(g, px, py));
+                if let Some(i) = hit {
+                    app.editor.selected = Some(i);
+                    app.render_vab();
                 }
             }
         }
@@ -1001,6 +1035,15 @@ impl App {
             self.camera.frame(extent);
             self.orbit_dist_km = (extent / 1000.0) * 2.4;
         }
+    }
+
+    /// True while the VAB screen is the open menu screen.
+    fn vab_active(&self) -> bool {
+        self.doc
+            .query_selector("#menu:not(.hidden) #screen-vab.open")
+            .ok()
+            .flatten()
+            .is_some()
     }
 
     /// True while the KSC hub screen is the open menu screen.
@@ -2425,6 +2468,22 @@ impl App {
         if !(self.in_session && self.ksc_active()) && self.ksc3d.hovered.is_some() {
             self.ksc3d.hovered = None;
             self.place_ksc_tooltip();
+        }
+        #[cfg(target_arch = "wasm32")]
+        if self.in_session && self.vab_active() {
+            if let Some(gpu) = &mut self.gpu {
+                let was_ready = self.vab3d.is_ready();
+                if self
+                    .vab3d
+                    .frame(gpu, &self.editor.craft, self.editor.selected)
+                    && !was_ready
+                {
+                    self.gpu_canvas
+                        .set_attribute("data-ose-vab-scene", "ready")
+                        .ok();
+                }
+                return;
+            }
         }
         #[cfg(target_arch = "wasm32")]
         if self.in_session && self.ksc_active() {

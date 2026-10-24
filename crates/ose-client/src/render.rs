@@ -210,6 +210,8 @@ pub struct Renderer {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     mesh_pipeline: wgpu::RenderPipeline,
+    /// Same as `mesh_pipeline` but culling front faces, for mirrored instances (negative determinant).
+    mirror_pipeline: wgpu::RenderPipeline,
     blend_pipeline: wgpu::RenderPipeline,
     line_pipeline: wgpu::RenderPipeline,
     camera_buf: wgpu::Buffer,
@@ -378,6 +380,39 @@ impl Renderer {
             multiview_mask: None,
             cache: None,
         });
+        let mirror_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("mesh-mirror"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_mesh"),
+                compilation_options: Default::default(),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<Vertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2],
+                })],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_mesh"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: Some(wgpu::Face::Front),
+                ..Default::default()
+            },
+            depth_stencil: Some(depth_state.clone()),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
         let blend_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("mesh-blend"),
             layout: Some(&layout),
@@ -528,6 +563,7 @@ impl Renderer {
             surface,
             config,
             mesh_pipeline,
+            mirror_pipeline,
             blend_pipeline,
             line_pipeline,
             camera_buf,
@@ -871,7 +907,8 @@ impl Renderer {
             + lines.len();
         self.ensure_slots(needed);
         let mut slot = 0usize;
-        let mut mesh_draws: Vec<(String, usize, usize)> = Vec::new(); // (model, primitive, slot)
+        // (model, primitive, slot, mirrored)
+        let mut mesh_draws: Vec<(String, usize, usize, bool)> = Vec::new();
         for item in items {
             let Some(model) = self.models.get(&item.model) else {
                 continue;
@@ -909,7 +946,7 @@ impl Renderer {
                 };
                 self.queue
                     .write_buffer(&self.objects[slot].0, 0, bytemuck::bytes_of(&u));
-                mesh_draws.push((item.model.clone(), pi, slot));
+                mesh_draws.push((item.model.clone(), pi, slot, m.determinant() < 0.0));
                 slot += 1;
             }
         }
@@ -971,17 +1008,19 @@ impl Renderer {
                 multiview_mask: None,
             });
             pass.set_bind_group(0, &self.camera_bind, &[]);
-            for blended in [false, true] {
+            for (blended, mirrored) in [(false, false), (false, true), (true, false)] {
                 pass.set_pipeline(if blended {
                     &self.blend_pipeline
+                } else if mirrored {
+                    &self.mirror_pipeline
                 } else {
                     &self.mesh_pipeline
                 });
-                for (model_name, pi, s) in &mesh_draws {
+                for (model_name, pi, s, m) in &mesh_draws {
                     let model = &self.models[model_name];
                     let (mesh_i, _) = model.primitives[*pi];
                     let prim = &model.meshes[mesh_i];
-                    if prim.blend != blended {
+                    if prim.blend != blended || (!blended && *m != mirrored) {
                         continue;
                     }
                     let tex = prim

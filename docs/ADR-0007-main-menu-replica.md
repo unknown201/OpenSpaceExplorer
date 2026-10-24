@@ -41,6 +41,13 @@ the order a new player meets it, using the original's assets).
   camera (drag, wheel), outlines the facility under the pointer with a tooltip, and a click opens it; the
   facility panel follows `KSCMenu.prefab` (VAB, Training Center, R&D Center, Tracking Station, Mission
   Control, Launchpad) 48 px from the left.
+- The VAB is the original's assembly hall: `tools/export_vab.py` writes the `Env-Terrestrial` environment of
+  `OAB.prefab` to `vab/vab.glb` (376 instances of 114 meshes, the exterior shell, sun rays and light props
+  left out) and `vab/scene.json` (the build area centre, the hall light). `ose-client::vab3d` draws the hall
+  and the craft from the part GLBs at the build centre, orbits the craft's centre from 20 m (the original's
+  `initialCameraPivotDistance`), and a click selects a part. Nodes with a mirroring scale are drawn with a
+  front-face-culling pipeline. With WebGPU the parts picker and craft panel float left and right over the
+  hall; the 2D side view stays as the fallback and keeps its `data-ose-vab-parts` hook.
 
 ## Consequences
 

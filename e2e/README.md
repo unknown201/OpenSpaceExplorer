@@ -33,6 +33,7 @@ to `Pass` in the same change.
 | `[data-ose="player"]`, `[data-ose="campaign"]`, `[data-ose="warp-holder"]` | header readouts: who you are, the campaign and its members, who holds warp |
 | `[data-ose="breadcrumbs"]` | star > body > vessel for what the camera looks at; each crumb is clickable |
 | `canvas` | the render surface: `[data-ose="gpu"]` carries `data-ose-renderer="webgpu"` once the wgpu renderer is up; the 2D `#map` canvas is the fallback |
+| `[data-ose="gpu"][data-ose-vab-scene]` | set once the VAB hall (the original's OAB interior) is drawn with the craft; the 2D `vab-canvas` is hidden then but still reports `data-ose-vab-parts` |
 | `[data-ose="gpu"][data-ose-ksc-scene]` | set once the KSC campus (the original's `KSC.prefab`, ADR-0007) is drawn behind the hub panel; `[data-ose="ksc-tooltip"]` names the facility under the pointer (`data-ose-facility`), a click on it opens that facility |
 | `[data-ose="gpu"][data-ose-menu-vessel]` | set once the main menu's 3D backdrop (the original's menu scene, ADR-0007) is drawn; the value names the vessel on show. Absent when the server has no exported assets |
 | `[data-ose="ut"]` | universal time readout, updated from server `TimeState` |

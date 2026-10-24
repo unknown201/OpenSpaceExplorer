@@ -234,6 +234,18 @@
     #ksc-tooltip { position: fixed; display: none; transform: translate(-50%, -100%); padding: calc(6 * var(--u)) calc(12 * var(--u)); background: #ebf0ffe6; border: 1px solid #6a718f; border-radius: calc(4 * var(--u));
       color: #0a0a0a; font: 700 calc(16 * var(--u)) var(--ui-font); white-space: nowrap; pointer-events: none; z-index: 30; }
     #ksc-tooltip::after { content: ""; position: absolute; left: 50%; bottom: calc(-8 * var(--u)); transform: translateX(-50%); border-left: calc(8 * var(--u)) solid transparent; border-right: calc(8 * var(--u)) solid transparent; border-top: calc(8 * var(--u)) solid #ebf0ffe6; }
+    /* VAB with WebGPU: the original's hall in 3D fills the window (vab3d.rs); the parts picker and the craft
+       panel float on the left and right like the original's OAB, the 2D side view is not shown. */
+    body.webgpu #menu:has(#screen-vab.open) { background: transparent; pointer-events: none; align-items: stretch; justify-content: stretch; }
+    body.webgpu #menu-card.vab:has(#screen-vab.open) { position: fixed; inset: 0; width: auto; max-height: none; padding: calc(16 * var(--u)); background: none; border: 0; border-radius: 0; pointer-events: none; }
+    body.webgpu #menu-card.vab > h1, body.webgpu #menu-card.vab > .sub, body.webgpu #menu-card.vab > .info, body.webgpu #screen-vab > label { display: none; }
+    body.webgpu #menu-card.vab > .note { position: fixed; left: 50%; bottom: calc(24 * var(--u)); transform: translateX(-50%); pointer-events: none; }
+    body.webgpu #screen-vab #vab { height: calc(100vh - 32 * var(--u)); margin: 0; grid-template-columns: calc(340 * var(--u)) 1fr calc(320 * var(--u)); }
+    body.webgpu #vab-picker, body.webgpu #vab-side { pointer-events: auto; background: #10141bf0; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)); padding: calc(12 * var(--u)); overflow: auto; }
+    body.webgpu #vab-parts { max-height: calc(100vh - 200 * var(--u)); }
+    body.webgpu #vab-canvas { visibility: hidden; pointer-events: none; }
+    body:has(#menu:not(.hidden) #screen-vab.open) #hud { opacity: 0; pointer-events: none; }
+    body:has(#menu:not(.hidden) #screen-vab.open) #crumbs, body:has(#menu:not(.hidden) #screen-vab.open) #help, body:has(#menu:not(.hidden) #screen-vab.open) #labels { display: none; }
   </style>
 </head>
 <body>

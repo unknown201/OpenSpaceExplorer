@@ -72,7 +72,7 @@ fn q_norm(q: Quat) -> Quat {
 pub type SizeOf<'a> = &'a dyn Fn(&str) -> Option<(DVec3, DVec3)>;
 
 /// World (craft-frame) pose of every part: parent pose composed with the part's local position and rotation.
-fn poses(craft: &Craft) -> Vec<(DVec3, Quat)> {
+pub fn poses(craft: &Craft) -> Vec<(DVec3, Quat)> {
     let n = craft.parts.len();
     let mut out: Vec<Option<(DVec3, Quat)>> = vec![None; n];
     // Parts are not guaranteed parent-first; iterate until everything is placed (tree depth passes).

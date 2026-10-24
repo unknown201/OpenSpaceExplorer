@@ -288,7 +288,7 @@ impl KscView {
 }
 
 /// Slab test: distance along the ray to the box, if hit.
-fn ray_box(origin: DVec3, dir: DVec3, lo: DVec3, hi: DVec3) -> Option<f64> {
+pub(crate) fn ray_box(origin: DVec3, dir: DVec3, lo: DVec3, hi: DVec3) -> Option<f64> {
     let mut tmin = 0.0f64;
     let mut tmax = f64::INFINITY;
     for axis in 0..3 {
