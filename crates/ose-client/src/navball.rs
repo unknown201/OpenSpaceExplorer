@@ -31,6 +31,8 @@ pub struct NavFrame {
     /// Orbit normal and radial-out, for their markers.
     pub normal: Option<DVec3>,
     pub radial: Option<DVec3>,
+    /// Burn direction of the planned maneuver node, if any.
+    pub maneuver: Option<DVec3>,
 }
 
 struct Atlas {
@@ -80,6 +82,7 @@ impl Navball {
             "ICO-Navball-AntiNormal",
             "ICO-Navball-RadialOut",
             "ICO-Navball-RadialIn",
+            "ICO-Navball-Maneuver",
         ] {
             if let Some(img) = image(&format!("assets/ui/{name}.png")) {
                 self.icons.push((name, img));
@@ -247,6 +250,9 @@ impl Navball {
         if let Some(r) = nav.radial {
             put("ICO-Navball-RadialOut", r);
             put("ICO-Navball-RadialIn", -r);
+        }
+        if let Some(m) = nav.maneuver {
+            put("ICO-Navball-Maneuver", m);
         }
         // The craft's own marker: a fixed chevron at the centre.
         ctx.set_stroke_style_str("#ffcc33");

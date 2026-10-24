@@ -275,7 +275,9 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
         return blocked('universal-time readout in the HUD ([data-ose="ut"]); Phase 3');
       }
       const a = (await ut.first().textContent()) ?? "";
-      await sleep(1500);
+      // The readout shows whole seconds and a debug server with several structured vessels runs below real
+      // time, so give it a few seconds.
+      await sleep(3000);
       const b = (await ut.first().textContent()) ?? "";
       if (a === b) return failed(`time readout did not advance (${JSON.stringify(a)})`);
       return passed(`UT ${a.trim()} -> ${b.trim()}`);

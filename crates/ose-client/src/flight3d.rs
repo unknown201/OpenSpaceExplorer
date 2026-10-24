@@ -236,6 +236,8 @@ pub struct FlightInput<'a> {
     pub craft: Option<&'a Craft>,
     pub is_decoupler: &'a dyn Fn(&str) -> bool,
     pub is_engine: &'a dyn Fn(&str) -> bool,
+    /// Planned maneuver for this vessel: prograde, normal and radial delta-v, m/s.
+    pub maneuver: Option<(f64, f64, f64)>,
     /// Body spin from the server's `BodyRotation` (protocol 9); the embedded system file otherwise.
     pub spin: Option<Spin>,
     /// Wall clock, ms (flex interpolation).
@@ -459,6 +461,14 @@ impl FlightView {
                 normal: (normal_i.length() > 1.0).then(|| dir_to_model(r, normal_i, spin, inp.ut)),
                 radial: (radial_i.length() > 1.0 && moving)
                     .then(|| dir_to_model(r, radial_i, spin, inp.ut)),
+                // The burn in the orbital frame (prograde, orbit normal, radial out), as the node defines it.
+                maneuver: inp.maneuver.and_then(|(p, n, rd)| {
+                    let pro = v_rel.normalize_or_zero();
+                    let nrm = r.cross(v_rel).normalize_or_zero();
+                    let rad = nrm.cross(pro);
+                    let d = pro * p + nrm * n + rad * rd;
+                    (d.length() > 0.01).then(|| dir_to_model(r, d, spin, inp.ut))
+                }),
             });
         }
         let offs = self.pitch.cos() * (self.yaw.cos() * north + self.yaw.sin() * east)

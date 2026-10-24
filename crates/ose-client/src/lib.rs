@@ -3187,6 +3187,11 @@ impl App {
             craft: self.flight_craft.as_ref(),
             is_decoupler: &is_dec,
             is_engine: &is_eng,
+            maneuver: self
+                .node
+                .as_ref()
+                .filter(|n| n.vessel == id)
+                .map(|n| (n.prograde_mps, n.normal_mps, n.radial_mps)),
             now_ms: now_ms(),
             spin: self.body_spins.get(rb).map(|b| flight3d::Spin {
                 period_s: b.rotation_period_s,
