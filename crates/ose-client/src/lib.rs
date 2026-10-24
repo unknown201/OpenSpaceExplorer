@@ -109,6 +109,10 @@ struct App {
     vab3d: vab3d::VabView,
     /// Where the last mousedown happened, to tell a click from a drag.
     press: Option<(f64, f64)>,
+    /// A press on a VAB picker row (part id, where), which becomes a drag after a few pixels; and a flag
+    /// that swallows the row's click after a drag.
+    vab_press: Option<(String, f64, f64)>,
+    vab_dragged: bool,
     /// The flight view (the vessel in 3D near its body).
     #[cfg(target_arch = "wasm32")]
     flight3d: flight3d::FlightView,
@@ -309,6 +313,8 @@ pub fn start() -> Result<(), JsValue> {
         #[cfg(target_arch = "wasm32")]
         vab3d: vab3d::VabView::new(),
         press: None,
+        vab_press: None,
+        vab_dragged: false,
         #[cfg(target_arch = "wasm32")]
         flight3d: flight3d::FlightView::new(),
         #[cfg(target_arch = "wasm32")]
@@ -603,7 +609,11 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
             // Clicks land on the <small> inside the row as often as on the row itself.
             while let Some(el) = t.clone() {
                 if let Some(id) = el.get_attribute("data-ose-part") {
-                    a.borrow_mut().vab_add(&id);
+                    // A drag that ended in the hall already placed the part (or dropped it).
+                    let dragged = std::mem::take(&mut a.borrow_mut().vab_dragged);
+                    if !dragged {
+                        a.borrow_mut().vab_add(&id);
+                    }
                     break;
                 }
                 t = el.parent_element();
@@ -611,6 +621,25 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         });
         parts.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
         cb.forget();
+        // Press on a row: the start of a possible drag into the hall.
+        let a = app.clone();
+        let down = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            if ev.button() != 0 {
+                return;
+            }
+            let mut t = ev.target().and_then(|t| t.dyn_into::<Element>().ok());
+            while let Some(el) = t.clone() {
+                if let Some(id) = el.get_attribute("data-ose-part") {
+                    ev.prevent_default();
+                    a.borrow_mut().vab_press =
+                        Some((id, ev.client_x() as f64, ev.client_y() as f64));
+                    break;
+                }
+                t = el.parent_element();
+            }
+        });
+        parts.add_event_listener_with_callback("mousedown", down.as_ref().unchecked_ref())?;
+        down.forget();
     }
     if let Some(canvas) = doc.get_element_by_id("vab-canvas") {
         let a = app.clone();
@@ -886,6 +915,41 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
     let a = app.clone();
     let on_move = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
         let mut app = a.borrow_mut();
+        // A picker press that moves becomes a part held over the hall.
+        #[cfg(target_arch = "wasm32")]
+        if let Some((id, x0, y0)) = app.vab_press.clone() {
+            let (nx, ny) = (ev.client_x() as f64, ev.client_y() as f64);
+            if app.vab3d.held.is_none() && ((nx - x0).abs() > 6.0 || (ny - y0).abs() > 6.0) {
+                let nodes = app
+                    .catalog
+                    .get(&id)
+                    .map(|s| {
+                        s.attach_nodes
+                            .iter()
+                            .map(|n| {
+                                (
+                                    glam::DVec3::new(n.position.x, n.position.y, n.position.z),
+                                    glam::DVec3::new(
+                                        n.orientation.x,
+                                        n.orientation.y,
+                                        n.orientation.z,
+                                    ),
+                                )
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                app.vab3d.held = Some((id, nodes));
+                if let Some(b) = app.doc.body() {
+                    b.class_list().add_1("vab-holding").ok();
+                }
+            }
+            if app.vab3d.held.is_some() {
+                let rect = app.gpu_canvas.get_bounding_client_rect();
+                app.vab3d.cursor = ((nx - rect.left()) * app.dpr, (ny - rect.top()) * app.dpr);
+                return;
+            }
+        }
         #[cfg(target_arch = "wasm32")]
         if app.in_session && app.vab_active() {
             if let Some((x, y)) = app.drag {
@@ -942,6 +1006,55 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
     let a = app.clone();
     let on_up = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
         let mut app = a.borrow_mut();
+        // Drop a held part: on its snapped node, or as the root of an empty craft; over the panels it is put
+        // back.
+        #[cfg(target_arch = "wasm32")]
+        {
+            let held = app.vab3d.held.take();
+            let pressed = app.vab_press.take();
+            if let Some((id, _)) = held {
+                app.vab_dragged = pressed.is_some();
+                if let Some(b) = app.doc.body() {
+                    b.class_list().remove_1("vab-holding").ok();
+                }
+                let over_panel = ev
+                    .target()
+                    .and_then(|t| t.dyn_into::<Element>().ok())
+                    .map(|e| e.closest("#vab-picker, #vab-side").ok().flatten().is_some())
+                    .unwrap_or(false);
+                // Where the cursor is now decides, not the last frame (frames may lag behind the mouse).
+                let free = app.editor.free_nodes(&app.catalog);
+                let rect = app.gpu_canvas.get_bounding_client_rect();
+                app.vab3d.cursor = (
+                    (ev.client_x() as f64 - rect.left()) * app.dpr,
+                    (ev.client_y() as f64 - rect.top()) * app.dpr,
+                );
+                let snap = app
+                    .gpu
+                    .as_ref()
+                    .and_then(|g| app.vab3d.snap_now(g, &free))
+                    .or_else(|| app.vab3d.snap.take());
+                if !over_panel {
+                    let cat = std::mem::take(&mut app.catalog);
+                    let result = match (cat.get(&id), snap) {
+                        (Some(spec), Some((target, node))) => app
+                            .editor
+                            .add_part_on(spec, &cat, target, &node)
+                            .map(|_| ()),
+                        (Some(spec), None) if app.editor.is_empty() => {
+                            app.editor.add_part(spec, &cat).map(|_| ())
+                        }
+                        (Some(_), None) => Err("drop the part on a green attach point".into()),
+                        (None, _) => Err(format!("unknown part {id}")),
+                    };
+                    app.catalog = cat;
+                    if let Err(e) = result {
+                        set_text(&app.doc, "vab-report", &e);
+                    }
+                    app.render_vab();
+                }
+            }
+        }
         app.drag = None;
         app.canvas.class_list().remove_1("dragging").ok();
         app.gpu_canvas.class_list().remove_1("dragging").ok();
@@ -2865,9 +2978,10 @@ impl App {
         if self.in_session && self.vab_active() {
             if let Some(gpu) = &mut self.gpu {
                 let was_ready = self.vab3d.is_ready();
+                let free = self.editor.free_nodes(&self.catalog);
                 if self
                     .vab3d
-                    .frame(gpu, &self.editor.craft, self.editor.selected)
+                    .frame(gpu, &self.editor.craft, self.editor.selected, &free)
                     && !was_ready
                 {
                     self.gpu_canvas

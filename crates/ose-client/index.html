@@ -244,6 +244,8 @@
     body.webgpu #vab-picker, body.webgpu #vab-side { pointer-events: auto; background: #10141bf0; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)); padding: calc(12 * var(--u)); overflow: auto; }
     body.webgpu #vab-parts { max-height: calc(100vh - 200 * var(--u)); }
     body.webgpu #vab-canvas { visibility: hidden; pointer-events: none; }
+    body.webgpu #vab-parts li { cursor: grab; user-select: none; }
+    body.vab-holding, body.vab-holding * { cursor: grabbing !important; }
     body:has(#menu:not(.hidden) #screen-vab.open) #hud { opacity: 0; pointer-events: none; }
     body:has(#menu:not(.hidden) #screen-vab.open) #crumbs, body:has(#menu:not(.hidden) #screen-vab.open) #help, body:has(#menu:not(.hidden) #screen-vab.open) #labels { display: none; }
     /* Flight HUD after the original's flight screen: altimeter top centre, speed, attitude holds and the

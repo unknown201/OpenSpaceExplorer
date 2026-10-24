@@ -93,6 +93,13 @@ const IDENTITY: Quat = Quat {
     w: 1.0,
 };
 
+/// Rotate `v` by the unit quaternion `q`.
+fn quat_rotate(q: Quat, v: DVec3) -> DVec3 {
+    let u = DVec3::new(q.x, q.y, q.z);
+    let t = u.cross(v) * 2.0;
+    v + t * q.w + u.cross(t)
+}
+
 /// The craft under construction plus the selection.
 #[derive(Clone, Debug)]
 pub struct Editor {
@@ -151,6 +158,54 @@ impl Editor {
     /// Add `spec` to the craft. The first part becomes the root; later parts attach to the selected part
     /// (or the last part) on the first free stack node pair, else on the surface. Returns the new index.
     pub fn add_part(&mut self, spec: &PartSpec, catalog: &Catalog) -> Result<usize, String> {
+        self.add_part_with(spec, catalog, None)
+    }
+
+    /// Add `spec` on part `target`, preferring the parent node `node` (a drop on that node in the 3D VAB).
+    pub fn add_part_on(
+        &mut self,
+        spec: &PartSpec,
+        catalog: &Catalog,
+        target: usize,
+        node: &str,
+    ) -> Result<usize, String> {
+        if target < self.craft.parts.len() {
+            self.selected = Some(target);
+        }
+        self.add_part_with(spec, catalog, Some(node))
+    }
+
+    /// Free stack attach nodes of the craft: (part index, node id, craft-frame position, outward direction),
+    /// in the craft's stored (Unity) frame. The drop targets of the 3D VAB.
+    pub fn free_nodes(&self, catalog: &Catalog) -> Vec<(usize, String, DVec3, DVec3)> {
+        let mut out = Vec::new();
+        for (i, p) in self.craft.parts.iter().enumerate() {
+            let Some(spec) = catalog.get(&p.part_id) else {
+                continue;
+            };
+            let used = self.used_nodes(i);
+            for n in &spec.attach_nodes {
+                if !PartSpec::is_stack_node(n) || used.contains(&n.id) {
+                    continue;
+                }
+                let q = p.local_rotation;
+                out.push((
+                    i,
+                    n.id.clone(),
+                    p.local_position + quat_rotate(q, n.position),
+                    quat_rotate(q, n.orientation),
+                ));
+            }
+        }
+        out
+    }
+
+    fn add_part_with(
+        &mut self,
+        spec: &PartSpec,
+        catalog: &Catalog,
+        prefer: Option<&str>,
+    ) -> Result<usize, String> {
         let resources = spec
             .resource_containers
             .iter()
@@ -197,9 +252,10 @@ impl Editor {
             .iter()
             .filter(|n| PartSpec::is_stack_node(n))
             .collect();
-        // Prefer the parent's bottom node (building downwards), then its top, then anything.
+        // Prefer the requested node, then the parent's bottom node (building downwards), then its top, then
+        // anything.
         let mut pairs: Vec<(&NodeSpec, &NodeSpec)> = Vec::new();
-        for pref in ["bottom", "top"] {
+        for pref in prefer.into_iter().chain(["bottom", "top"]) {
             for tn in free_stack.iter().filter(|n| n.id == pref) {
                 if let Some(nn) = new_stack
                     .iter()
@@ -510,6 +566,23 @@ mod tests {
         assert_eq!(e.craft.stages, vec![vec![en]]);
         assert!((e.dry_mass_t(&cat) - 1.75).abs() < 1e-9);
         assert!(e.craft.is_tree());
+    }
+
+    #[test]
+    fn drop_on_a_chosen_node_attaches_there() {
+        let cat = catalog();
+        let mut e = Editor::new("test");
+        e.add_part(&cat["pod"], &cat).unwrap();
+        let t = e.add_part(&cat["tank"], &cat).unwrap();
+        // The tank's free nodes include its bottom; the pod has its top free.
+        let free = e.free_nodes(&cat);
+        assert!(free.iter().any(|(i, n, ..)| *i == t && n == "bottom"));
+        assert!(free.iter().any(|(i, n, ..)| *i == 0 && n == "top"));
+        // Dropping a tank on the pod's top node puts it above the root.
+        let up = e.add_part_on(&cat["tank"], &cat, 0, "top").unwrap();
+        assert_eq!(e.craft.parts[up].parent, Some(0));
+        assert_eq!(e.craft.parts[up].parent_node.as_deref(), Some("top"));
+        assert!(e.craft.parts[up].local_position.y > 0.0);
     }
 
     #[test]

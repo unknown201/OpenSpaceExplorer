@@ -48,6 +48,10 @@ the order a new player meets it, using the original's assets).
   `initialCameraPivotDistance`), and a click selects a part. Nodes with a mirroring scale are drawn with a
   front-face-culling pipeline. With WebGPU the parts picker and craft panel float left and right over the
   hall; the 2D side view stays as the fallback and keeps its `data-ose-vab-parts` hook.
+  Parts drag from the picker into the hall as the original's: the held part follows the cursor and snaps
+  (green marker, tinted ghost) to the free stack node nearest the cursor on screen, and a drop attaches it
+  there (`Editor::add_part_on`); a drop elsewhere does nothing unless the craft is empty. A click on a row
+  still attaches to the selected part, which the e2e suite uses.
 - Launch and flight: Launch on the launch pad rolls the craft out to pad 1 (`LaunchSavedOnPad`) and opens the
   flight view (`ose-client::flight3d`); Orbit keeps the old put-in-orbit shortcut. The flight view draws in the
   body's own model frame (the ground holds still): the server's inertial position becomes body-fixed
@@ -83,6 +87,8 @@ the order a new player meets it, using the original's assets).
   still works (the e2e suite on GitHub has no game install).
 - Fonts: the original's menu fonts (Sbliquid, Realtime Rounded) are not in the bundles as font files, only
   as TextMeshPro atlases, so the page uses a system sans-serif at the original's sizes.
+- Lighting: each material binds base colour, normal and metallic-gloss maps; normals in the original's
+  DXT5nm layout with derivative-based tangents, and a Blinn-Phong lobe from smoothness and metal.
 - Not yet at the KSC: the layered "Standard Tileable (Vertex Color)" building shader (only each material's base map is drawn, so buildings read darker than the original), terrain, trees and props, the day cycle, the launch pad flyout.
 - Not yet in flight: the original's particle plumes, the maneuver and target markers on the navball, debris vessels drawn as parts, terrain relief under the campus, the original's launch camera.
 - Not yet: the sun flare and bloom, the ship's team colours (`ApplyTeamColors` masks), the Settings and

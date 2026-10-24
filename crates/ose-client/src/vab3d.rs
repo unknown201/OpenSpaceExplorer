@@ -48,6 +48,12 @@ pub struct VabView {
     cam_pos: DVec3,
     /// Per drawn part: craft index and world-space box, for picking.
     boxes: Vec<(usize, DVec3, DVec3)>,
+    /// A part being dragged from the picker: its id and attach nodes (position, direction; Unity frame), the
+    /// cursor in device
+    /// pixels, and the free node it snaps to (part index, node id) when close enough.
+    pub held: Option<(String, Vec<(DVec3, DVec3)>)>,
+    pub cursor: (f64, f64),
+    pub snap: Option<(usize, String)>,
 }
 
 impl Default for VabView {
@@ -70,6 +76,9 @@ impl VabView {
             target: DVec3::ZERO,
             cam_pos: DVec3::ZERO,
             boxes: Vec::new(),
+            held: None,
+            cursor: (0.0, 0.0),
+            snap: None,
         }
     }
 
@@ -115,6 +124,53 @@ impl VabView {
         (self.target + dir * self.distance, -dir)
     }
 
+    /// The free node nearest the cursor on screen within 80 px: (distance, index into `free_nodes`). Uses
+    /// the camera of the last frame, so it also works between frames (a drop).
+    fn nearest_node(
+        &self,
+        gpu: &Renderer,
+        free_nodes: &[(usize, String, ose_math::DVec3, ose_math::DVec3)],
+    ) -> Option<(f64, usize)> {
+        let centre = self.centre();
+        let mut best: Option<(f64, usize)> = None;
+        for (k, (_, _, p, _)) in free_nodes.iter().enumerate() {
+            let w = centre + to_gltf(*p);
+            if let Some((sx, sy)) = gpu.project(w - self.cam_pos) {
+                let d = ((sx - self.cursor.0).powi(2) + (sy - self.cursor.1).powi(2)).sqrt();
+                if d < 80.0 && best.map(|(bd, _)| d < bd).unwrap_or(true) {
+                    best = Some((d, k));
+                }
+            }
+        }
+        best
+    }
+
+    /// The snap target under the cursor right now (part index, node id).
+    pub fn snap_now(
+        &self,
+        gpu: &Renderer,
+        free_nodes: &[(usize, String, ose_math::DVec3, ose_math::DVec3)],
+    ) -> Option<(usize, String)> {
+        self.nearest_node(gpu, free_nodes)
+            .map(|(_, k)| (free_nodes[k].0, free_nodes[k].1.clone()))
+    }
+
+    /// Camera ray through the cursor (device pixels): origin and unit direction.
+    fn cursor_ray(&self, gpu: &Renderer) -> (DVec3, DVec3) {
+        let (pos, forward) = self.camera();
+        let up = DVec3::Y;
+        let aspect = gpu.width as f64 / gpu.height.max(1) as f64;
+        let right = forward.cross(up).normalize();
+        let cam_up = right.cross(forward).normalize();
+        let ndc_x = self.cursor.0 / gpu.width.max(1) as f64 * 2.0 - 1.0;
+        let ndc_y = 1.0 - self.cursor.1 / gpu.height.max(1) as f64 * 2.0;
+        let t = (self.fov_rad * 0.5).tan();
+        (
+            pos,
+            (forward + right * (ndc_x * t * aspect) + cam_up * (ndc_y * t)).normalize(),
+        )
+    }
+
     /// Craft part under a pixel (ray against part boxes, nearest first).
     pub fn pick(&self, gpu: &Renderer, x_px: f64, y_px: f64) -> Option<usize> {
         let (pos, forward) = self.camera();
@@ -138,7 +194,13 @@ impl VabView {
     }
 
     /// Draw hall and craft. `selected` is tinted. Returns false while the hall is not loaded.
-    pub fn frame(&mut self, gpu: &mut Renderer, craft: &Craft, selected: Option<usize>) -> bool {
+    pub fn frame(
+        &mut self,
+        gpu: &mut Renderer,
+        craft: &Craft,
+        selected: Option<usize>,
+        free_nodes: &[(usize, String, ose_math::DVec3, ose_math::DVec3)],
+    ) -> bool {
         if !self.requested {
             self.start_fetch();
         }
@@ -231,7 +293,52 @@ impl VabView {
             }
             items.push(item);
         }
-        gpu.frame("assets/vab/", &items, &[], [0.12, 0.13, 0.15]);
+        // The part held from the picker: snap to the free attach node nearest the cursor on screen (within
+        // 80 px), else float under the cursor at the craft's depth.
+        let mut lines = Vec::new();
+        self.snap = None;
+        if let Some((id, nodes)) = self.held.clone() {
+            let name = format!("part:{id}");
+            gpu.request_model(&name, &format!("assets/parts/{id}.glb"));
+            let best = self.nearest_node(gpu, free_nodes);
+            let at = match best {
+                Some((_, k)) => {
+                    let (pi, nid, p, dir) = &free_nodes[k];
+                    self.snap = Some((*pi, nid.clone()));
+                    // Put the held part's node that faces the other way on the target node.
+                    let own = nodes
+                        .iter()
+                        .find(|(_, o)| o.dot(DVec3::new(dir.x, dir.y, dir.z)) < -0.5)
+                        .map(|(np, _)| *np)
+                        .unwrap_or(DVec3::ZERO);
+                    let wn = centre + to_gltf(*p);
+                    for axis in [DVec3::X, DVec3::Y, DVec3::Z] {
+                        lines.push(crate::render::LineItem {
+                            key: format!("vab-snap:{pi}:{nid}:{axis:?}"),
+                            points_km: vec![-axis * 0.6, axis * 0.6],
+                            rel_origin_km: wn - cam_pos,
+                            color: [0.4, 1.0, 0.5, 1.0],
+                        });
+                    }
+                    wn - DVec3::new(-own.x, own.y, own.z)
+                }
+                None => {
+                    let (ro, rd) = self.cursor_ray(gpu);
+                    ro + rd * self.distance
+                }
+            };
+            if gpu.has_model(&name) {
+                let mut ghost = DrawItem::lit(name, at - cam_pos, DQuat::IDENTITY, 1.0, light);
+                ghost.ambient = 0.6;
+                ghost.color = if self.snap.is_some() {
+                    [0.7, 1.0, 0.75, 1.0]
+                } else {
+                    [1.0, 0.7, 0.6, 1.0]
+                };
+                items.push(ghost);
+            }
+        }
+        gpu.frame("assets/vab/", &items, &lines, [0.12, 0.13, 0.15]);
         true
     }
 }
