@@ -85,6 +85,13 @@ the order a new player meets it, using the original's assets).
   science cost, parts by catalog title). Text is the original's English localization, exported by
   `tools/export_localization.py` to `assets/web/loc/en.json` with the node icons in `ui/tech/`. Until the
   protocol carries the player's tech, only the start node counts as researched.
+- Science (protocol 13): the client asks for `ScienceInfo` on joining and keeps the pushed `ScienceState`.
+  The R&D Center shows the campaign's free points and a Research button (`UnlockTechNode`, with the server's
+  refusal reason under it); sandbox shows everything researched. Mission Control lists the missions the
+  server offers with their stage, the current objective marked. The VAB picker and the launch pad grey out
+  parts and crafts the campaign has not researched (the pad refuses them in Exploration). The flight HUD
+  has Experiments, Transmit and Recover (`RunExperiments`, `TransmitScience`, `RecoverVessel`) with the
+  result under the altimeter; a recovery returns to the KSC.
 
 ## Consequences
 

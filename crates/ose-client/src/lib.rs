@@ -135,6 +135,8 @@ struct App {
     loc: std::collections::HashMap<String, String>,
     researched: std::collections::HashSet<String>,
     rd_selected: Option<String>,
+    /// The campaign's science from `ScienceState` (protocol 13): tech tree on, points, missions in progress.
+    science: Option<SciencePoints>,
     /// Missions, the Mission Control tab (primary or secondary) and the mission shown.
     missions: Vec<missions::Mission>,
     mc_primary: bool,
@@ -152,6 +154,15 @@ struct App {
 }
 
 type Shared = Rc<RefCell<App>>;
+
+/// The campaign's science as the server last sent it.
+struct SciencePoints {
+    tech_tree: bool,
+    capacity: u32,
+    allocated: u32,
+    missions: Vec<ose_net::MissionInfo>,
+    submitted: usize,
+}
 
 /// A maneuver node: an impulsive burn the player is planning. `anchor_ut` is UT when the node was added;
 /// the time slider sets `ut = anchor_ut + dt`.
@@ -340,6 +351,7 @@ pub fn start() -> Result<(), JsValue> {
         loc: std::collections::HashMap::new(),
         researched: ["tNode_1v_start".to_string()].into_iter().collect(),
         rd_selected: None,
+        science: None,
         missions: missions::all(),
         mc_primary: true,
         mc_selected: None,
@@ -624,6 +636,29 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
     wire("launchpad-back", Box::new(|a| a.borrow().open_ksc()))?;
     wire("ksc-vab", Box::new(|a| a.borrow_mut().open_vab(None)))?;
     wire("ksc-rnd", Box::new(|a| a.borrow_mut().open_rnd()))?;
+    // The research button lives in the info panel, which is re-rendered; listen on the panel.
+    if let Some(info) = doc.get_element_by_id("rd-info") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let id = ev
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .filter(|e| e.id() == "rd-research")
+                .and_then(|e| e.get_attribute("data-ose-node"));
+            if let Some(id) = id {
+                let app = a.borrow();
+                set_text(&app.doc, "rd-note", "researching...");
+                if let Some(ws) = &app.ws {
+                    send(ws, &ClientMessage::UnlockTechNode { id });
+                }
+            }
+        });
+        info.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
+    wire("fh-science", Box::new(|a| a.borrow().flight_science(0)))?;
+    wire("fh-transmit", Box::new(|a| a.borrow().flight_science(1)))?;
+    wire("fh-recover", Box::new(|a| a.borrow().flight_science(2)))?;
     wire("rnd-back", Box::new(|a| a.borrow().open_ksc()))?;
     wire("ksc-mission", Box::new(|a| a.borrow_mut().open_missions()))?;
     wire("mc-back", Box::new(|a| a.borrow().open_ksc()))?;
@@ -1555,6 +1590,7 @@ impl App {
             } => {
                 self.craft_docs.insert(id, craft);
                 self.draw_thumbnail(id);
+                self.mark_craft_research(id);
                 if self.vab_craft_id == Some(id) && self.editor.is_empty() {
                     self.open_vab(Some(id));
                 }
@@ -1708,6 +1744,9 @@ impl App {
                     if !self.in_session {
                         self.in_session = true;
                         self.open_ksc();
+                        if let Some(ws) = &self.ws {
+                            send(ws, &ClientMessage::ScienceInfo);
+                        }
                     }
                     if !self.agency_sent {
                         self.send_agency();
@@ -1717,6 +1756,107 @@ impl App {
                     if let Some(ws) = &self.ws {
                         send(ws, &ClientMessage::ListSessions);
                     }
+                }
+            }
+            ServerMessage::ScienceState {
+                tech_tree,
+                capacity,
+                allocated,
+                unlocked,
+                submitted,
+                missions,
+            } => {
+                self.researched = if tech_tree {
+                    unlocked.into_iter().collect()
+                } else {
+                    self.tech.iter().map(|n| n.id.clone()).collect()
+                };
+                self.science = Some(SciencePoints {
+                    tech_tree,
+                    capacity,
+                    allocated,
+                    missions,
+                    submitted: submitted.len(),
+                });
+                self.render_rnd();
+                self.render_missions();
+                self.render_vab_picker();
+                let ids: Vec<u64> = self.craft_docs.keys().copied().collect();
+                for id in ids {
+                    self.mark_craft_research(id);
+                }
+            }
+            ServerMessage::TechUnlock {
+                id,
+                accepted,
+                reason,
+            } => {
+                let msg = if accepted {
+                    format!(
+                        "researched {}",
+                        rnd::text(
+                            &self.loc,
+                            &self
+                                .tech
+                                .iter()
+                                .find(|n| n.id == id)
+                                .map(|n| n.name_key.clone())
+                                .unwrap_or(id.clone())
+                        )
+                    )
+                } else {
+                    reason.unwrap_or_else(|| "refused".into())
+                };
+                set_text(&self.doc, "rd-note", &msg);
+            }
+            ServerMessage::ScienceReports {
+                new,
+                skipped,
+                carried,
+                reason,
+                ..
+            } => {
+                let msg = match reason {
+                    Some(r) => r,
+                    None => format!(
+                        "{} new report{}, {} carried{}",
+                        new.len(),
+                        if new.len() == 1 { "" } else { "s" },
+                        carried.len(),
+                        if skipped.is_empty() {
+                            String::new()
+                        } else {
+                            format!(", {} experiments could not run here", skipped.len())
+                        }
+                    ),
+                };
+                set_text(&self.doc, "fh-note", &msg);
+            }
+            ServerMessage::ScienceSubmitted {
+                reports,
+                earned,
+                recovered,
+                reason,
+                ..
+            } => {
+                let msg = match reason {
+                    Some(r) => r,
+                    None => format!(
+                        "{} {} report{} for {:.0} science",
+                        if recovered {
+                            "recovered"
+                        } else {
+                            "transmitted"
+                        },
+                        reports.len(),
+                        if reports.len() == 1 { "" } else { "s" },
+                        earned
+                    ),
+                };
+                set_text(&self.doc, "fh-note", &msg);
+                if recovered {
+                    self.end_flight();
+                    self.open_ksc();
                 }
             }
             ServerMessage::BodyRotation { bodies } => {
@@ -1963,12 +2103,14 @@ impl App {
 
     fn render_missions(&self) {
         let sel = self.mc_selected.as_deref();
+        let progress = self.science.as_ref().map(|s| s.missions.as_slice());
         if let Some(el) = self.doc.get_element_by_id("mc-list") {
             el.set_inner_html(&missions::render_list(
                 &self.missions,
                 &self.loc,
                 self.mc_primary,
                 sel,
+                progress,
             ));
         }
         for (id, on) in [
@@ -1983,7 +2125,8 @@ impl App {
             self.doc.get_element_by_id("mc-briefing"),
             sel.and_then(|id| self.missions.iter().find(|m| m.id == id)),
         ) {
-            el.set_inner_html(&missions::render_briefing(m, &self.loc));
+            let info = progress.and_then(|p| p.iter().find(|i| i.id == m.id));
+            el.set_inner_html(&missions::render_briefing(m, &self.loc, info));
         }
     }
 
@@ -2028,7 +2171,18 @@ impl App {
                     .map(|p| p.display_title().to_string())
                     .unwrap_or_else(|| pid.to_string())
             };
-            el.set_inner_html(&rnd::render_info(node, &self.loc, &self.researched, &title));
+            let free = self
+                .science
+                .as_ref()
+                .filter(|s| s.tech_tree)
+                .map(|s| s.capacity.saturating_sub(s.allocated));
+            el.set_inner_html(&rnd::render_info(
+                node,
+                &self.loc,
+                &self.researched,
+                &title,
+                free,
+            ));
         }
         let total: f64 = self
             .tech
@@ -2036,11 +2190,21 @@ impl App {
             .filter(|n| self.researched.contains(&n.id))
             .map(|n| n.required_science)
             .sum();
+        let points = match &self.science {
+            Some(s) if !s.tech_tree => " \u{b7} sandbox: everything is unlocked".to_string(),
+            Some(s) => format!(
+                " \u{b7} {} science points free of {} \u{b7} {} reports submitted",
+                s.capacity.saturating_sub(s.allocated),
+                s.capacity,
+                s.submitted
+            ),
+            None => String::new(),
+        };
         set_text(
             &self.doc,
             "rd-summary",
             &format!(
-                "{} of {} technologies researched \u{b7} {:.0} science spent",
+                "{} of {} technologies researched \u{b7} {:.0} science spent{points}",
                 self.researched.len(),
                 self.tech.len(),
                 total
@@ -2122,11 +2286,28 @@ impl App {
                 .cmp(&(&b.size_category, std::cmp::Ordering::Equal))
                 .then_with(|| a.display_title().cmp(b.display_title()))
         });
+        // Parts of technologies the campaign has not researched are greyed out (the pad refuses them).
+        let locked: std::collections::HashSet<&str> =
+            if self.science.as_ref().map(|s| s.tech_tree).unwrap_or(false) {
+                self.tech
+                    .iter()
+                    .filter(|n| !self.researched.contains(&n.id))
+                    .flat_map(|n| n.parts.iter().map(|p| p.as_str()))
+                    .collect()
+            } else {
+                Default::default()
+            };
         let mut html = String::new();
         for p in parts {
+            let lock = locked.contains(p.id.as_str());
             html.push_str(&format!(
-                "<li data-ose=\"vab-part\" data-ose-part=\"{id}\">{title}<small>{cat} \u{b7} size {size} \u{b7} {mass:.2} t{extra}</small></li>",
+                "<li data-ose=\"vab-part\" data-ose-part=\"{id}\"{lock}>{title}<small>{cat} \u{b7} size {size} \u{b7} {mass:.2} t{extra}</small></li>",
                 id = esc(&p.id),
+                lock = if lock {
+                    " class=\"locked\" title=\"not researched yet: the launch pad will refuse it\""
+                } else {
+                    ""
+                },
                 title = esc(p.display_title()),
                 cat = esc(&p.category),
                 size = esc(&p.size_category),
@@ -2425,6 +2606,9 @@ impl App {
         }
         list.set_inner_html(&html);
         self.draw_thumbnails();
+        for c in &self.crafts {
+            self.mark_craft_research(c.id);
+        }
     }
 
     fn draw_thumbnails(&self) {
@@ -2556,6 +2740,62 @@ impl App {
                 },
             );
         }
+    }
+
+    /// Parts the campaign has not researched (empty in sandbox or before the science state arrives).
+    fn locked_parts(&self) -> std::collections::HashSet<String> {
+        if !self.science.as_ref().map(|s| s.tech_tree).unwrap_or(false) {
+            return Default::default();
+        }
+        self.tech
+            .iter()
+            .filter(|n| !self.researched.contains(&n.id))
+            .flat_map(|n| n.parts.iter().cloned())
+            .collect()
+    }
+
+    /// Grey out a launch pad entry whose craft uses parts the campaign has not researched (the pad refuses it).
+    fn mark_craft_research(&self, id: u64) {
+        let Some(craft) = self.craft_docs.get(&id) else {
+            return;
+        };
+        let locked = self.locked_parts();
+        let missing: Vec<&str> = craft
+            .parts
+            .iter()
+            .map(|p| p.part_id.as_str())
+            .filter(|p| locked.contains(*p))
+            .collect();
+        if let Ok(Some(li)) = self
+            .doc
+            .query_selector(&format!("#crafts li[data-ose-id=\"{id}\"]"))
+        {
+            li.class_list()
+                .toggle_with_force("locked", !missing.is_empty())
+                .ok();
+            if missing.is_empty() {
+                li.remove_attribute("title").ok();
+            } else {
+                li.set_attribute(
+                    "title",
+                    &format!("not researched yet: {} parts", missing.len()),
+                )
+                .ok();
+            }
+        }
+    }
+
+    /// Science from the flight HUD: 0 runs the vessel's experiments, 1 transmits its reports, 2 recovers it.
+    fn flight_science(&self, what: u8) {
+        let Some(vessel) = self.flying else { return };
+        let Some(ws) = &self.ws else { return };
+        let msg = match what {
+            0 => ClientMessage::RunExperiments { vessel },
+            1 => ClientMessage::TransmitScience { vessel },
+            _ => ClientMessage::RecoverVessel { vessel },
+        };
+        set_text(&self.doc, "fh-note", "");
+        send(ws, &msg);
     }
 
     fn flight_stage(&mut self) {

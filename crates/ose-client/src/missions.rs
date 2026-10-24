@@ -74,24 +74,38 @@ pub fn reward(m: &Mission) -> f64 {
     m.stages.iter().map(|s| s.science_reward.max(0.0)).sum()
 }
 
-/// The mission log for one tab (primary or secondary).
+/// The mission log for one tab (primary or secondary). With the server's progress, offered missions are
+/// listed (active first, completed after); without it, every mission.
 pub fn render_list(
     missions: &[Mission],
     loc: &HashMap<String, String>,
     primary: bool,
     selected: Option<&str>,
+    progress: Option<&[ose_net::MissionInfo]>,
 ) -> String {
     let mut html = String::new();
-    for m in missions.iter().filter(|m| m.primary == primary) {
+    let mut rows: Vec<&Mission> = missions.iter().filter(|m| m.primary == primary).collect();
+    if let Some(p) = progress {
+        rows.retain(|m| p.iter().any(|i| i.id == m.id));
+        rows.sort_by_key(|m| {
+            p.iter()
+                .find(|i| i.id == m.id)
+                .map(|i| i.complete)
+                .unwrap_or(false)
+        });
+    }
+    for m in rows {
         let sel = if selected == Some(m.id.as_str()) {
             " selected"
         } else {
             ""
         };
-        let state = if m.active_at_start {
-            "active"
-        } else {
-            "offered-later"
+        let info = progress.and_then(|p| p.iter().find(|i| i.id == m.id));
+        let state = match info {
+            Some(i) if i.complete => "complete",
+            Some(_) => "active",
+            None if m.active_at_start => "active",
+            None => "offered-later",
         };
         html.push_str(&format!(
             "<li class=\"mc-mission {state}{sel}\" data-ose=\"mc-mission\" data-ose-mission=\"{id}\">\
@@ -107,11 +121,28 @@ pub fn render_list(
     html
 }
 
-/// The briefing panel of one mission.
-pub fn render_briefing(m: &Mission, loc: &HashMap<String, String>) -> String {
+/// The briefing panel of one mission, with the current objective marked when the server sent progress.
+pub fn render_briefing(
+    m: &Mission,
+    loc: &HashMap<String, String>,
+    info: Option<&ose_net::MissionInfo>,
+) -> String {
     let mut objectives = String::new();
-    for s in m.stages.iter().filter(|s| !s.objective_key.is_empty()) {
-        objectives.push_str(&format!("<li>{}</li>", esc(&text(loc, &s.objective_key))));
+    for (k, s) in m
+        .stages
+        .iter()
+        .filter(|s| !s.objective_key.is_empty())
+        .enumerate()
+    {
+        let cls = match info {
+            Some(i) if i.complete || (k as u32) < i.stage => " class=\"done\"",
+            Some(i) if k as u32 == i.stage => " class=\"current\"",
+            _ => "",
+        };
+        objectives.push_str(&format!(
+            "<li{cls}>{}</li>",
+            esc(&text(loc, &s.objective_key))
+        ));
     }
     format!(
         "<div class=\"mc-kind\">{kind}</div><h3>{name}</h3>\
@@ -149,10 +180,15 @@ pub fn render_briefing(m: &Mission, loc: &HashMap<String, String>) -> String {
         reward_head = esc(&text(loc, "Missions/MissionControl/Rewards/Reward")),
         science = esc(&text(loc, "Missions/MissionControl/Rewards/Science")),
         reward = reward(m),
-        state = if m.active_at_start {
-            "Active"
-        } else {
-            "Offered later in the campaign"
+        state = match info {
+            Some(i) if i.complete => "Complete".to_string(),
+            Some(i) => format!(
+                "Active: stage {} of {}",
+                (i.stage + 1).min(i.stages.max(1)),
+                i.stages.max(1)
+            ),
+            None if m.active_at_start => "Active".to_string(),
+            None => "Offered later in the campaign".to_string(),
         },
     )
 }
@@ -168,9 +204,9 @@ mod tests {
         assert!(m.iter().any(|x| x.primary) && m.iter().any(|x| !x.primary));
         assert!(m.iter().any(|x| x.active_at_start));
         let loc = HashMap::new();
-        let list = render_list(&m, &loc, true, None);
+        let list = render_list(&m, &loc, true, None, None);
         assert!(list.contains("data-ose=\"mc-mission\""));
-        let b = render_briefing(&m[0], &loc);
+        let b = render_briefing(&m[0], &loc, None);
         assert!(b.contains("<h3>"));
     }
 }

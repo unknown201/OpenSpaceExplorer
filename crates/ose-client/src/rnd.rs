@@ -162,6 +162,7 @@ pub fn render_info(
     loc: &HashMap<String, String>,
     researched: &HashSet<String>,
     part_title: &dyn Fn(&str) -> String,
+    free_points: Option<u32>,
 ) -> String {
     let st = state(node, researched);
     let status = match st {
@@ -177,9 +178,22 @@ pub fn render_info(
             title = esc(&part_title(p))
         ));
     }
+    // The research button, when the campaign has a tech tree and the node can be researched now.
+    let button = match (st, free_points) {
+        (State::Available, Some(free)) => {
+            let enough = free as f64 >= node.required_science;
+            format!(
+                "<button id=\"rd-research\" data-ose=\"rd-research\" data-ose-node=\"{id}\"{dis}>Research ({cost:.0})</button>",
+                id = esc(&node.id),
+                cost = node.required_science,
+                dis = if enough { "" } else { " disabled title=\"not enough science points\"" },
+            )
+        }
+        _ => String::new(),
+    };
     format!(
         "<h3>{name}</h3><div class=\"rd-status {cls}\">{status}</div><p>{desc}</p>\
-         <div class=\"rd-cost\">Science cost <b>{cost:.0}</b></div>\
+         <div class=\"rd-cost\">Science cost <b>{cost:.0}</b></div>{button}<div id=\"rd-note\" data-ose=\"rd-note\"></div>\
          <div class=\"rd-sub\">Parts acquired</div><ul class=\"rd-parts\">{parts}</ul>",
         name = esc(&text(loc, &node.name_key)),
         desc = esc(&text(loc, &node.description_key)),
@@ -216,6 +230,18 @@ mod tests {
             .count();
         assert!(open > 0);
         let html = render_tree(&t, &HashMap::new(), &done, None);
+        let open = t
+            .iter()
+            .find(|n| state(n, &done) == State::Available)
+            .unwrap();
+        let info = render_info(
+            open,
+            &HashMap::new(),
+            &done,
+            &|p| p.to_string(),
+            Some(1_000),
+        );
+        assert!(info.contains("data-ose=\"rd-research\""));
         assert_eq!(html.matches("data-ose=\"rd-node\"").count(), t.len());
     }
 }

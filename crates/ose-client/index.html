@@ -312,6 +312,13 @@
     .rd-status.researched { color: #7bd07b; } .rd-status.available { color: #8fb0ff; } .rd-status.locked { color: #8a94a8; }
     .rd-cost { margin: calc(10 * var(--u)) 0; font-size: calc(14 * var(--u)); }
     .rd-sub { margin-top: calc(12 * var(--u)); font-size: calc(12 * var(--u)); text-transform: uppercase; letter-spacing: 0.08em; color: #6f7f9c; }
+    #rd-research { margin: calc(4 * var(--u)) 0 calc(6 * var(--u)); width: 100%; padding: calc(10 * var(--u)); background: #2f6b2f; border: 1px solid #63b863; color: #fff; font-size: calc(16 * var(--u)); font-weight: 700; }
+    #rd-research:disabled { background: #2a2f38; border-color: #444; color: #888; }
+    #rd-note { min-height: 1.2em; font-size: calc(13 * var(--u)); color: #f0c070; }
+    .mc-mission.complete { opacity: 0.6; border-left-color: #63b863; }
+    .mc-objectives li.done { color: #7bd07b; text-decoration: line-through; } .mc-objectives li.current { color: #ffd87a; font-weight: 600; }
+    #vab-parts li.locked { opacity: 0.45; }
+    #crafts li.locked { opacity: 0.5; } #crafts li.locked .name::after { content: "  needs research"; font-size: 11px; color: #f0a070; }
     .rd-parts { list-style: none; margin: calc(6 * var(--u)) 0 0; padding: 0; }
     .rd-parts li { padding: calc(6 * var(--u)) calc(8 * var(--u)); margin-bottom: calc(4 * var(--u)); background: #141c2c; border: 1px solid #2c3d63; border-radius: 4px; font-size: calc(13 * var(--u)); }
     /* Mission Control after the original's mission log: tabs and missions on the left, the briefing card on the
@@ -518,6 +525,7 @@
           <button id="fh-att-normal" title="orbit normal">Nrm</button>
           <button id="fh-att-radial" title="radial out">Rad</button>
         </div>
+        <div class="fh-row"><button id="fh-science" data-ose="flight-science" title="run every experiment on board">Experiments</button><button id="fh-transmit" data-ose="flight-transmit" title="send the reports home">Transmit</button><button id="fh-recover" data-ose="flight-recover" title="recover the vessel (landed on Kerbin)">Recover</button></div>
         <div class="fh-row"><button id="fh-full" data-ose="flight-throttle-full">Full</button><button id="fh-cut" data-ose="flight-throttle-cut">Cut</button><button id="fh-map" title="M">Map</button><button id="fh-ksc">KSC</button></div>
       </div>
     </div>

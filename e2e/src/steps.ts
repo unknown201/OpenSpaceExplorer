@@ -438,25 +438,38 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
         return failed("launch pad showed no crafts");
       }
       const n = await launch.count();
-      // Prefer a stock craft that can fly (delta-v listed), so the flight step has something that lifts off.
-      const flyable = page.locator('[data-ose="craft"][data-ose-stock="1"]').filter({ has: page.locator('[data-ose="craft-launch"]') });
-      let pick = page.locator('[data-ose="craft"]').first();
-      for (let i = 0; i < (await flyable.count()); i++) {
-        const dv = Number((await flyable.nth(i).getAttribute("data-ose-dv")) ?? "0");
-        if (dv > 1500) {
-          pick = flyable.nth(i);
-          break;
-        }
+      // Stock crafts that can fly (delta-v listed), the biggest first; an Exploration campaign refuses crafts
+      // with parts it has not researched, so try the next one when the pad says so.
+      const rows = page.locator('[data-ose="craft"][data-ose-stock="1"]');
+      const candidates: { i: number; dv: number }[] = [];
+      for (let i = 0; i < (await rows.count()); i++) {
+        const dv = Number((await rows.nth(i).getAttribute("data-ose-dv")) ?? "0");
+        if (dv > 300) candidates.push({ i, dv });
       }
-      const craft = ((await pick.locator(".name").textContent()) ?? "").trim();
+      candidates.sort((a, b) => b.dv - a.dv);
       const vesselsBefore = await page.locator('[data-ose="vessel"]').count();
-      await pick.locator('[data-ose="craft-launch"]').first().click();
-      try {
-        await page.locator('[data-ose="menu"]').first().waitFor({ state: "hidden", timeout: 10_000 });
-      } catch {
-        const note = ((await page.locator("#menu-note").textContent().catch(() => "")) ?? "").trim();
-        return failed(`launch did not complete${note ? `: ${note}` : ""}`);
+      let craft = "";
+      let launched = false;
+      const refusals: string[] = [];
+      for (const c of candidates) {
+        const row = rows.nth(c.i);
+        craft = ((await row.locator(".name").textContent()) ?? "").trim();
+        await row.locator('[data-ose="craft-launch"]').first().click();
+        const t0 = Date.now();
+        let note = "";
+        while (Date.now() - t0 < 10_000) {
+          if (!(await page.locator('[data-ose="menu"]').first().isVisible())) {
+            launched = true;
+            break;
+          }
+          note = ((await page.locator("#menu-note").textContent().catch(() => "")) ?? "").trim();
+          if (note.includes("refused")) break;
+          await sleep(200);
+        }
+        if (launched) break;
+        refusals.push(`${craft}: ${note || "no answer"}`);
       }
+      if (!launched) return failed(`no craft could launch: ${refusals.join(" | ").slice(0, 400)}`);
       await sleep(700);
       const vesselsAfter = await page.locator('[data-ose="vessel"]').count();
       if (vesselsAfter <= vesselsBefore) return failed(`launched but no new vessel (${vesselsBefore} -> ${vesselsAfter})`);
