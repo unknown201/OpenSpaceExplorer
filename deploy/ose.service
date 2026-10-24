@@ -7,7 +7,7 @@ Type=simple
 User=ose
 Group=ose
 WorkingDirectory=/var/lib/ose
-ExecStart=/opt/ose/current/ose-server --listen 0.0.0.0:7777 --static-dir /opt/ose/current/web
+ExecStart=/opt/ose/current/ose-server --listen 0.0.0.0:7777 --static-dir /opt/ose/current/web --assets-dir /var/lib/ose/assets
 Restart=on-failure
 RestartSec=5
 

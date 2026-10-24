@@ -93,6 +93,10 @@ struct Args {
     /// Directory with the built web client to serve at `/` (its `index.html` answers unknown paths).
     #[arg(long)]
     static_dir: Option<PathBuf>,
+    /// Directory of converted game assets (glTF, textures) served at `/assets/` with a one-day cache;
+    /// missing files are 404, no index fallback.
+    #[arg(long)]
+    assets_dir: Option<PathBuf>,
     /// JSON array of `ose_data::CelestialBody` to use instead of the embedded Kerbol system.
     #[arg(long)]
     bodies: Option<PathBuf>,
@@ -446,6 +450,21 @@ async fn main() -> anyhow::Result<()> {
             }),
         )
         .with_state(shared);
+    if let Some(dir) = &args.assets_dir {
+        let assets = Router::new().fallback_service(ServeDir::new(dir)).layer(
+            axum::middleware::map_response(|mut r: axum::response::Response| async move {
+                if r.status().is_success() {
+                    r.headers_mut().insert(
+                        axum::http::header::CACHE_CONTROL,
+                        axum::http::HeaderValue::from_static("public, max-age=86400"),
+                    );
+                }
+                r
+            }),
+        );
+        app = app.nest_service("/assets", assets);
+        tracing::info!(dir = %dir.display(), "serving game assets");
+    }
     if let Some(dir) = &args.static_dir {
         let index = ServeFile::new(dir.join("index.html"));
         app = app.fallback_service(ServeDir::new(dir).fallback(index));

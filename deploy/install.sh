@@ -9,7 +9,9 @@ mkdir -p "$dir"
 tar --no-same-owner -xzf "$tar" -C "$dir"
 chmod 755 "$dir/ose-server"
 ln -sfn "$dir" /opt/ose/current
-if [ ! -f /etc/systemd/system/ose.service ]; then
+mkdir -p /var/lib/ose/assets
+chown -R ose:ose /var/lib/ose 2>/dev/null || true
+if ! cmp -s "$dir/ose.service" /etc/systemd/system/ose.service; then
   cp "$dir/ose.service" /etc/systemd/system/ose.service
   systemctl daemon-reload
   systemctl enable ose >/dev/null

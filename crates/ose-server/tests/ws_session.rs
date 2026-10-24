@@ -644,6 +644,46 @@ async fn http_get_json(addr: &str, path: &str) -> serde_json::Value {
     serde_json::from_str(body).expect("json body")
 }
 
+async fn http_get_raw(addr: &str, path: &str) -> (String, String) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+    s.write_all(format!("GET {path} HTTP/1.0\r\nHost: {addr}\r\n\r\n").as_bytes())
+        .await
+        .unwrap();
+    let mut buf = Vec::new();
+    s.read_to_end(&mut buf).await.unwrap();
+    let text = String::from_utf8_lossy(&buf).to_string();
+    match text.split_once("\r\n\r\n") {
+        Some((h, b)) => (h.to_string(), b.to_string()),
+        None => (text, String::new()),
+    }
+}
+
+#[tokio::test]
+async fn assets_dir_is_served_with_long_cache() {
+    let dir = std::env::temp_dir().join(format!("ose-assets-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("parts")).unwrap();
+    std::fs::write(dir.join("parts/pod.glb"), b"glTF-binary-bytes").unwrap();
+    let dir_s = dir.to_str().unwrap().to_string();
+    let args = ["--db", ":memory:", "--save", "none", "--assets-dir", &dir_s];
+    let (_server, addr) = spawn_server_with(&args, None).await;
+    let (head, body) = http_get_raw(&addr, "/assets/parts/pod.glb").await;
+    assert!(head.contains(" 200 "), "{head}");
+    assert!(
+        head.to_ascii_lowercase().contains("max-age=86400"),
+        "{head}"
+    );
+    assert_eq!(body, "glTF-binary-bytes");
+    let (head, _) = http_get_raw(&addr, "/assets/parts/missing.glb").await;
+    assert!(head.contains(" 404 "), "{head}");
+    let (head, _) = http_get_raw(&addr, "/assets/").await;
+    assert!(
+        !head.contains(" 200 ") || head.contains(" 404 "),
+        "no index fallback: {head}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[tokio::test]
 async fn parts_catalog_route_serves_geometry() {
     let (_server, addr) = spawn_server().await;
