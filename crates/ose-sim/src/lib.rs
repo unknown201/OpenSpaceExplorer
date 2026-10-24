@@ -252,6 +252,76 @@ impl Universe {
         true
     }
 
+    /// Use a terrain map another universe already holds (a new campaign on the same server).
+    pub fn set_terrain_shared(
+        &mut self,
+        id: &str,
+        map: std::sync::Arc<ose_data::terrain::TerrainMap>,
+    ) -> bool {
+        let Some(e) = self.body_entity(id) else {
+            return false;
+        };
+        self.world.entity_mut(e).insert(flight::Terrain(map));
+        true
+    }
+
+    /// The terrain maps the bodies hold, by body id.
+    pub fn terrain_maps(&mut self) -> Vec<(String, std::sync::Arc<ose_data::terrain::TerrainMap>)> {
+        let mut q = self.world.query::<(&bodies::Body, &flight::Terrain)>();
+        q.iter(&self.world)
+            .map(|(b, t)| (b.id.clone(), t.0.clone()))
+            .collect()
+    }
+
+    /// How high the sun stands over a body-fixed place at `ut`, degrees (negative at night).
+    pub fn sun_elevation_deg(&self, body: Entity, lat_deg: f64, lon_deg: f64, ut: f64) -> f64 {
+        let Some(b) = self.world.get::<bodies::Body>(body) else {
+            return 0.0;
+        };
+        let (lat, lon) = (
+            lat_deg.to_radians(),
+            lon_deg.to_radians() + flight::rotation_angle(b, ut),
+        );
+        let up = DVec3::new(lat.cos() * lon.cos(), lat.cos() * lon.sin(), lat.sin());
+        let place = bodies::star_space_state(&self.world, body, ut).0 + up * b.radius_m;
+        if place.length() <= 0.0 {
+            return 90.0;
+        }
+        let to_sun = place * (-1.0 / place.length());
+        up.dot(to_sun).clamp(-1.0, 1.0).asin().to_degrees()
+    }
+
+    /// The first time from `after` at which the sun rises through `elevation_deg` over a place (morning),
+    /// to the minute; `after` when the body does not turn.
+    pub fn next_morning_ut(
+        &self,
+        body: Entity,
+        lat_deg: f64,
+        lon_deg: f64,
+        elevation_deg: f64,
+        after: f64,
+    ) -> f64 {
+        let period = self
+            .world
+            .get::<bodies::Body>(body)
+            .map(|b| b.rotation_period_s)
+            .unwrap_or(0.0);
+        if period <= 0.0 {
+            return after;
+        }
+        let mut prev = self.sun_elevation_deg(body, lat_deg, lon_deg, after);
+        let mut t = after;
+        while t < after + 2.0 * period {
+            t += 60.0;
+            let e = self.sun_elevation_deg(body, lat_deg, lon_deg, t);
+            if prev < elevation_deg && e >= elevation_deg {
+                return t;
+            }
+            prev = e;
+        }
+        after
+    }
+
     /// Ground height (terrain or sea) above the nominal radius at a body-fixed latitude/longitude.
     pub fn ground_height(&self, body: Entity, lat_deg: f64, lon_deg: f64) -> f64 {
         self.world
@@ -1484,6 +1554,22 @@ mod tests {
             "the shielded pod comes through: {alt} m, pod at {hottest} K"
         );
         assert!(hottest < 850.0, "{hottest} K");
+    }
+
+    #[test]
+    fn the_sun_rises_over_the_ksc_once_a_kerbin_day() {
+        let bodies: Vec<ose_data::CelestialBody> =
+            serde_json::from_str(include_str!("../../../assets/own/kerbol-system.json")).unwrap();
+        let u = Universe::with_bodies(&bodies);
+        let kerbin = u.body_entity("Kerbin").unwrap();
+        let (lat, lon) = (-0.0972, -74.5577);
+        let t = u.next_morning_ut(kerbin, lat, lon, 15.0, 0.0);
+        assert!(t > 0.0 && t < 21_549.425 * 1.01, "{t}");
+        let e = u.sun_elevation_deg(kerbin, lat, lon, t);
+        assert!((14.0..17.0).contains(&e), "{e}");
+        // rising: higher a little later, and night half a day on
+        assert!(u.sun_elevation_deg(kerbin, lat, lon, t + 600.0) > e);
+        assert!(u.sun_elevation_deg(kerbin, lat, lon, t + 21_549.425 * 0.5) < 0.0);
     }
 
     #[test]

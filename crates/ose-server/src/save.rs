@@ -65,6 +65,9 @@ pub struct CampaignMember {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Campaign {
+    /// The campaign's id in the session list (the first campaign of a server is "shared").
+    #[serde(default = "shared_id")]
+    pub id: String,
     pub name: String,
     pub started_tick: Tick,
     pub members: Vec<CampaignMember>,
@@ -79,6 +82,10 @@ pub struct Campaign {
     pub science: crate::science::ScienceProgress,
 }
 
+fn shared_id() -> String {
+    crate::SHARED_SESSION_ID.into()
+}
+
 fn default_mode() -> ose_net::SessionMode {
     ose_net::SessionMode::Exploration
 }
@@ -86,6 +93,7 @@ fn default_mode() -> ose_net::SessionMode {
 impl Default for Campaign {
     fn default() -> Self {
         Campaign {
+            id: shared_id(),
             name: "Shared campaign".into(),
             started_tick: Tick(0),
             members: Vec::new(),
@@ -114,6 +122,15 @@ pub struct SaveFile {
     pub campaign: Campaign,
     #[serde(default)]
     pub crafts: Vec<SavedCraft>,
+    /// The campaigns not being played, each as its own save.
+    #[serde(default)]
+    pub shelf: Vec<ShelvedCampaign>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ShelvedCampaign {
+    pub id: String,
+    pub save: SaveFile,
 }
 
 /// Vessel registry entry as the server keeps it: entity, vessel id, owner.
@@ -160,6 +177,7 @@ pub fn capture(
         vessels: saved,
         campaign: campaign.clone(),
         crafts: crafts.to_vec(),
+        shelf: Vec::new(),
     }
 }
 

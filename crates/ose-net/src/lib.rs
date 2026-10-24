@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 21;
+pub const PROTOCOL_VERSION: u16 = 22;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -46,19 +46,23 @@ pub enum ClientMessage {
     JoinCampaign,
     /// Ask for the campaign state without joining.
     CampaignInfo,
-    /// Session browser: answers `SessionList` (one entry per server, ADR-0001).
+    /// Session browser: answers `SessionList`, every campaign on the server, the one being played first.
     ListSessions,
-    /// Join the session with this id (same as `JoinCampaign` for the shared one); answers `CampaignState`.
+    /// Play the campaign with this id (resume); answers `CampaignState`, or `Rejected` while another player
+    /// is playing a different campaign.
     SelectSession {
         id: String,
     },
-    /// Configure the shared campaign when nobody has joined it yet (name, mode, difficulty); otherwise the
-    /// existing campaign is returned unchanged with `created: false`. Answers `CampaignState`.
+    /// Start a new campaign (name, mode, difficulty), its clock on the first morning at the KSC, and join
+    /// it; the one being played goes back on the list. Answers `CampaignState` with `created: true`, or
+    /// `Rejected` while another player is playing.
     CreateSession {
         name: String,
         mode: SessionMode,
         difficulty: Vec<DifficultyOption>,
     },
+    /// Leave the campaign for the main menu (it stays on the list to resume); answers `SessionList`.
+    LeaveSession,
     /// Set the player agency (flag and colours), echoed in `CampaignMember::agency`. Answers `CampaignState`.
     SetAgency {
         agency: Agency,

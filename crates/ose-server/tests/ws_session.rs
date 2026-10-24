@@ -1178,6 +1178,98 @@ async fn a_pad_launch_lights_while_a_teammate_is_connected() {
     assert!(lifted, "the starter rocket did not lift off");
 }
 
+#[tokio::test]
+async fn a_vab_built_rocket_sits_still_on_the_pad_and_lifts_off() {
+    let (_server, addr) = spawn_server_with(&["--db", ":memory:", "--save", "none"], None).await;
+    let mut ws = connect_ws(&addr).await;
+    hello(&mut ws, None, "pilot").await;
+    send_msg(
+        &mut ws,
+        &ClientMessage::CreateSession {
+            name: "Pad".into(),
+            mode: ose_net::SessionMode::Sandbox,
+            difficulty: Vec::new(),
+        },
+    )
+    .await;
+    wait_for(&mut ws, |m| {
+        matches!(m, ServerMessage::CampaignState { .. }).then_some(())
+    })
+    .await;
+    // as the editor sends it: the tank lists its mixture (Methalox), the engine is in stage 1
+    let mut craft = starter_craft();
+    craft.parts[1].resources = vec![ose_data::craft::StoredResource {
+        resource: "Methalox".into(),
+        stored_units: 1.0,
+        capacity_units: 1.0,
+    }];
+    craft.parts[0].resources = vec![ose_data::craft::StoredResource {
+        resource: "ElectricCharge".into(),
+        stored_units: 50.0,
+        capacity_units: 50.0,
+    }];
+    craft.parts[2].stage_index = 1;
+    send_msg(&mut ws, &ClientMessage::LaunchOnPad { craft }).await;
+    let vessel = wait_for(&mut ws, |m| match m {
+        ServerMessage::CraftLaunched { vessel, reason, .. } => {
+            assert!(reason.is_none(), "{reason:?}");
+            vessel
+        }
+        _ => None,
+    })
+    .await;
+    let flight = |m: ServerMessage| match m {
+        ServerMessage::Vessels { vessels, .. } => vessels
+            .iter()
+            .find(|v| v.id == vessel)
+            .and_then(|v| v.flight.clone()),
+        _ => None,
+    };
+    // throttle up (Z): still on the pad, standing still, before the stage press
+    send_msg(
+        &mut ws,
+        &ClientMessage::SetControls {
+            vessel,
+            throttle: 1.0,
+            attitude: ose_net::AttitudeMode::Up,
+        },
+    )
+    .await;
+    let first = wait_for(&mut ws, flight).await;
+    assert!(
+        first.propellant_t > 0.5,
+        "the tank is full: {} t",
+        first.propellant_t
+    );
+    let (mut lo, mut hi) = (f64::MAX, f64::MIN);
+    for _ in 0..20 {
+        let f = wait_for(&mut ws, flight).await;
+        assert_eq!(f.situation, ose_net::FlightSituation::Landed, "{f:?}");
+        lo = lo.min(f.altitude_m);
+        hi = hi.max(f.altitude_m);
+        assert!(
+            f.flex.is_empty() && f.vertical_speed_mps.abs() < 1e-6,
+            "{f:?}"
+        );
+    }
+    assert!(
+        hi - lo < 0.01,
+        "standing still on the pad: {lo:.3}..{hi:.3} m"
+    );
+    send_msg(&mut ws, &ClientMessage::Stage { vessel }).await;
+    let mut lifted = false;
+    for _ in 0..300 {
+        let f = wait_for(&mut ws, flight).await;
+        if f.situation == ose_net::FlightSituation::Flying && f.altitude_m > first.altitude_m + 30.0
+        {
+            assert!(f.thrust_kn > 0.0);
+            lifted = true;
+            break;
+        }
+    }
+    assert!(lifted, "the rocket did not lift off");
+}
+
 async fn http_get_json(addr: &str, path: &str) -> serde_json::Value {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
@@ -1314,6 +1406,72 @@ async fn stale_guests_are_swept_but_members_stay() {
         }
     }
     assert!(checked, "guest probe was not swept");
+}
+
+#[tokio::test]
+async fn campaigns_can_be_left_resumed_and_started_again() {
+    let (_server, addr) = spawn_server_with(&["--db", ":memory:", "--save", "none"], None).await;
+    let mut ws = connect_ws(&addr).await;
+    let (me, _) = hello(&mut ws, None, "josh").await;
+    let create = |name: &str| ClientMessage::CreateSession {
+        name: name.into(),
+        mode: ose_net::SessionMode::Sandbox,
+        difficulty: Vec::new(),
+    };
+    let state = |m: ServerMessage| match m {
+        ServerMessage::CampaignState {
+            id,
+            name,
+            created,
+            you_are_member,
+            ..
+        } => Some((id, name, created, you_are_member)),
+        ServerMessage::Rejected { reason } => panic!("rejected: {reason}"),
+        _ => None,
+    };
+    let listed = |m: ServerMessage| match m {
+        ServerMessage::SessionList { sessions } => Some(sessions),
+        _ => None,
+    };
+    // start one, leave it: it stays on the list
+    send_msg(&mut ws, &create("Alpha")).await;
+    let (alpha, name, created, member) = wait_for(&mut ws, state).await;
+    assert!(created && member && name == "Alpha");
+    send_msg(&mut ws, &ClientMessage::LeaveSession).await;
+    let list = wait_for(&mut ws, listed).await;
+    assert!(list
+        .iter()
+        .any(|x| x.id == alpha && x.name == "Alpha" && x.players == 1));
+    // start another: both are listed, the new one first
+    send_msg(&mut ws, &create("Beta")).await;
+    let (beta, name, created, member) = wait_for(&mut ws, state).await;
+    assert!(created && member && name == "Beta" && beta != alpha);
+    send_msg(&mut ws, &ClientMessage::ListSessions).await;
+    let list = wait_for(&mut ws, listed).await;
+    let names: Vec<&str> = list.iter().map(|x| x.name.as_str()).collect();
+    assert_eq!(names[0], "Beta", "{names:?}");
+    assert!(names.contains(&"Alpha"), "{names:?}");
+    // resume the first: its own state comes back
+    send_msg(&mut ws, &ClientMessage::SelectSession { id: alpha.clone() }).await;
+    let (id, name, _, member) = wait_for(&mut ws, state).await;
+    assert_eq!((id.as_str(), name.as_str()), (alpha.as_str(), "Alpha"));
+    assert!(member);
+    // a teammate playing it keeps another campaign from being started under them
+    let mut mate = connect_ws(&addr).await;
+    hello(&mut mate, None, "val").await;
+    send_msg(&mut mate, &ClientMessage::JoinCampaign).await;
+    wait_for(&mut mate, |m| {
+        matches!(m, ServerMessage::CampaignState { .. }).then_some(())
+    })
+    .await;
+    send_msg(&mut ws, &create("Gamma")).await;
+    let reason = wait_for(&mut ws, |m| match m {
+        ServerMessage::Rejected { reason } => Some(reason),
+        _ => None,
+    })
+    .await;
+    assert!(reason.contains("another player"), "{reason}");
+    let _ = me;
 }
 
 async fn hello(ws: &mut Ws, token: Option<String>, name: &str) -> (u64, String) {

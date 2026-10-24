@@ -10,6 +10,7 @@
 //! with `--bodies PATH`.
 
 mod accounts;
+mod campaigns;
 mod crew_docking;
 mod save;
 mod science;
@@ -282,6 +283,11 @@ struct Shared {
     names: Mutex<std::collections::HashMap<u64, String>>,
     /// Warp each connected player is willing to run at; the universe runs at the minimum (lowest wins).
     warp_requests: Mutex<std::collections::HashMap<u64, u32>>,
+    /// What a new campaign's universe is built from, the campaigns waiting to be resumed, and the players
+    /// playing the live one (joined and not left).
+    setup: campaigns::WorldSetup,
+    shelf: Mutex<Vec<save::ShelvedCampaign>>,
+    playing: Mutex<std::collections::HashSet<u64>>,
 }
 
 /// Apply lowest-wins warp arbitration. Returns (effective warp, the player holding it down, if any).
@@ -368,6 +374,10 @@ async fn main() -> anyhow::Result<()> {
         .collect();
     tracing::info!(bodies = defs.len(), "loaded celestial bodies");
 
+    let mut setup = campaigns::WorldSetup {
+        bodies: defs.clone(),
+        ..Default::default()
+    };
     let mut universe = Universe::with_bodies(&defs);
     let mut terrains = 0;
     for entry in &terrain_index().bodies {
@@ -390,28 +400,25 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     tracing::info!(bodies = terrains, "terrain height maps loaded");
-    // the KSC is the CommNet source
-    if let Some(kerbin) = universe.body_entity("Kerbin") {
-        let site = terrain_index()
-            .bodies
-            .iter()
-            .find(|b| b.id == "Kerbin")
-            .and_then(|b| ose_data::terrain::TerrainMap::site(b, "kerbin_KSC_Object").cloned());
-        let (lat, lon, alt) = site
-            .map(|s| (s.lat_deg, s.lon_deg, s.altitude_m))
-            .unwrap_or((KSC_LAT_DEG, KSC_LON_DEG, 100.0));
-        universe.set_ground_station(ose_sim::commnet::GroundStation {
-            body: kerbin,
-            lat_deg: lat,
-            lon_deg: lon,
-            altitude_m: alt,
-            range_m: ose_sim::commnet::KSC_RANGE_M,
-        });
-    }
+    setup.terrains = universe.terrain_maps();
+    // the KSC is the CommNet source, and where a campaign's first morning is
+    let site = terrain_index()
+        .bodies
+        .iter()
+        .find(|b| b.id == "Kerbin")
+        .and_then(|b| ose_data::terrain::TerrainMap::site(b, "kerbin_KSC_Object").cloned());
+    setup.ksc = site
+        .map(|s| (s.lat_deg, s.lon_deg, s.altitude_m))
+        .unwrap_or((KSC_LAT_DEG, KSC_LON_DEG, 100.0));
     let part_defs: Vec<ose_data::PartDef> = serde_json::from_str(EMBEDDED_PARTS)?;
     if let Some(k) = part_defs.iter().find(|d| d.id == "eva_kerbal") {
-        universe.set_kerbal_part(k.experiments.clone());
+        setup.kerbal_experiments = k.experiments.clone();
     }
+    setup.science = serde_json::from_str(EMBEDDED_SCIENCE)?;
+    setup.regions = EMBEDDED_REGIONS.to_vec();
+    // the first campaign starts on a morning at the KSC unless a save says otherwise
+    let mut universe = setup.new_campaign_universe();
+    let mut shelf: Vec<save::ShelvedCampaign> = Vec::new();
     let save_path = (args.save.to_string_lossy() != "none").then(|| args.save.clone());
     let mut registry: Vec<save::VesselEntry> = Vec::new();
     let mut campaign = save::Campaign::default();
@@ -421,9 +428,11 @@ async fn main() -> anyhow::Result<()> {
             Ok(Some(file)) => {
                 let defs: Vec<ose_data::PartDef> = serde_json::from_str(EMBEDDED_PARTS)?;
                 let res: Vec<ose_data::ResourceDef> = serde_json::from_str(EMBEDDED_RESOURCES)?;
+                universe = setup.universe();
                 registry = save::restore(&mut universe, &file, &defs, &res);
                 campaign = file.campaign.clone();
                 crafts = file.crafts.clone();
+                shelf = file.shelf.clone();
                 tracing::info!(path = %p.display(), tick = file.tick.0, vessels = registry.len(), "save loaded");
             }
             Ok(None) => tracing::info!(path = %p.display(), "no save file, starting fresh"),
@@ -433,10 +442,6 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     }
-    universe.set_science(
-        serde_json::from_str(EMBEDDED_SCIENCE)?,
-        EMBEDDED_REGIONS.to_vec(),
-    );
     let shared: AppState = Arc::new(Shared {
         universe: Mutex::new(universe),
         pending: Mutex::new(Vec::new()),
@@ -460,6 +465,9 @@ async fn main() -> anyhow::Result<()> {
         crafts: Mutex::new(crafts),
         names: Mutex::new(std::collections::HashMap::new()),
         warp_requests: Mutex::new(std::collections::HashMap::new()),
+        setup,
+        shelf: Mutex::new(shelf),
+        playing: Mutex::new(std::collections::HashSet::new()),
     });
 
     let sim = shared.clone();
@@ -521,7 +529,9 @@ async fn main() -> anyhow::Result<()> {
                     let v = saver.vessels.lock().expect("vessels lock");
                     let c = saver.campaign.lock().expect("campaign lock");
                     let k = saver.crafts.lock().expect("crafts lock");
-                    save::capture(&u, &v, &c, &k)
+                    let mut file = save::capture(&u, &v, &c, &k);
+                    file.shelf = saver.shelf.lock().expect("shelf lock").clone();
+                    file
                 };
                 match save::write(&p, &file) {
                     Ok(()) => {
@@ -1561,10 +1571,11 @@ fn campaign_state(s: &Shared, player_id: u64, join: Option<&String>) -> ServerMe
             tracing::info!(player = player_id, "joined the campaign");
         }
         c.last_played_unix = now_unix();
+        s.playing.lock().expect("playing lock").insert(player_id);
     }
     let vessels = s.vessels.lock().expect("vessels lock").len() as u32;
     ServerMessage::CampaignState {
-        id: SHARED_SESSION_ID.into(),
+        id: c.id.clone(),
         name: c.name.clone(),
         mode: c.mode,
         difficulty: c.difficulty.clone(),
@@ -1586,18 +1597,7 @@ fn campaign_state(s: &Shared, player_id: u64, join: Option<&String>) -> ServerMe
 }
 
 fn session_list(s: &Shared) -> ServerMessage {
-    let ut_s = s.universe.lock().expect("sim lock").ut();
-    let c = s.campaign.lock().expect("campaign lock");
-    ServerMessage::SessionList {
-        sessions: vec![ose_net::SessionInfo {
-            id: SHARED_SESSION_ID.into(),
-            name: c.name.clone(),
-            mode: c.mode,
-            ut_s,
-            last_played_unix: c.last_played_unix,
-            players: c.members.len() as u32,
-        }],
-    }
+    campaigns::list(s)
 }
 
 fn craft_summary(
@@ -1654,8 +1654,34 @@ fn find_craft(s: &Shared, id: u64, player_id: u64) -> Option<ose_data::craft::Cr
 /// Parts that list no resources get their definition containers at `initial_units` (the editor default of
 /// full tanks); parts that list resources are left as sent.
 fn fill_default_resources(s: &Shared, craft: &mut ose_data::craft::Craft) {
+    let recipe_of = |id: &str| {
+        s.resources
+            .iter()
+            .find(|r| r.id == id)
+            .and_then(|r| match &r.kind {
+                ose_data::ResourceKind::Recipe { ingredients } => Some(ingredients.clone()),
+                _ => None,
+            })
+    };
     for p in &mut craft.parts {
         if !p.resources.is_empty() {
+            // an editor may list a mixture tank by its mixture (Methalox): store the ingredients instead
+            let mut out = Vec::new();
+            for r in p.resources.drain(..) {
+                match recipe_of(&r.resource) {
+                    Some(ingredients) => {
+                        for i in ingredients {
+                            out.push(ose_data::craft::StoredResource {
+                                resource: i.resource.clone(),
+                                stored_units: r.stored_units * i.units_per_recipe_unit,
+                                capacity_units: r.capacity_units * i.units_per_recipe_unit,
+                            });
+                        }
+                    }
+                    None => out.push(r),
+                }
+            }
+            p.resources = out;
             continue;
         }
         if let Some(def) = s.parts.iter().find(|d| d.id == p.part_id) {
@@ -1908,10 +1934,11 @@ async fn session(mut socket: WebSocket, s: AppState) {
                         {
                             return;
                         }
+                        // the difficulty options every time: the new-campaign form needs them
+                        if !send(&mut socket, &s.difficulty).await {
+                            return;
+                        }
                         if !has_vessel(&s, id) {
-                            if !send(&mut socket, &s.difficulty).await {
-                                return;
-                            }
                             spawn_player_probe(&s, id, &display_name);
                         }
                         s.warp_requests.lock().expect("warp lock").insert(id, 1);
@@ -2057,32 +2084,43 @@ async fn session(mut socket: WebSocket, s: AppState) {
                             if !send(&mut socket, &reply).await { break; }
                         }
                         Ok(ClientMessage::SelectSession { id }) => {
-                            let reply = if id == SHARED_SESSION_ID {
-                                let name = display_name_for(&s, player_id);
-                                campaign_state(&s, player_id, Some(&name))
+                            let live = s.campaign.lock().expect("campaign lock").id.clone();
+                            let switched = if id == live {
+                                Ok(())
                             } else {
-                                ServerMessage::Rejected { reason: format!("no session {id}") }
+                                campaigns::switch(&s, player_id, campaigns::Target::Shelved(id.clone()))
+                            };
+                            let reply = match switched {
+                                Ok(()) => {
+                                    let name = display_name_for(&s, player_id);
+                                    campaign_state(&s, player_id, Some(&name))
+                                }
+                                Err(reason) => ServerMessage::Rejected { reason },
                             };
                             if !send(&mut socket, &reply).await { break; }
                         }
                         Ok(ClientMessage::CreateSession { name, mode, difficulty }) => {
-                            let created = {
-                                let mut c = s.campaign.lock().expect("campaign lock");
-                                if c.members.is_empty() {
-                                    c.name = if name.trim().is_empty() { c.name.clone() } else { name.trim().to_string() };
-                                    c.mode = mode;
-                                    c.difficulty = difficulty;
-                                    c.started_tick = s.universe.lock().expect("sim lock").tick();
-                                    true
-                                } else {
-                                    false
+                            let name = if name.trim().is_empty() { "New campaign".to_string() } else { name.trim().to_string() };
+                            let new = campaigns::NewCampaign { name, mode, difficulty };
+                            let reply = match campaigns::switch(&s, player_id, campaigns::Target::New(new)) {
+                                Ok(()) => {
+                                    let pname = display_name_for(&s, player_id);
+                                    if !has_vessel(&s, player_id) {
+                                        spawn_player_probe(&s, player_id, &pname);
+                                    }
+                                    let mut reply = campaign_state(&s, player_id, Some(&pname));
+                                    if let ServerMessage::CampaignState { created: c, .. } = &mut reply {
+                                        *c = true;
+                                    }
+                                    reply
                                 }
+                                Err(reason) => ServerMessage::Rejected { reason },
                             };
-                            let pname = display_name_for(&s, player_id);
-                            let mut reply = campaign_state(&s, player_id, Some(&pname));
-                            if let ServerMessage::CampaignState { created: c, .. } = &mut reply {
-                                *c = created;
-                            }
+                            if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::LeaveSession) => {
+                            s.playing.lock().expect("playing lock").remove(&player_id);
+                            let reply = session_list(&s);
                             if !send(&mut socket, &reply).await { break; }
                         }
                         Ok(ClientMessage::SetAgency { agency }) => {
@@ -2253,6 +2291,7 @@ async fn session(mut socket: WebSocket, s: AppState) {
         .lock()
         .expect("warp lock")
         .remove(&player_id);
+    s.playing.lock().expect("playing lock").remove(&player_id);
     apply_warp(&s);
     let _ = s.accounts.lock().expect("accounts lock").touch(player_id);
     tracing::info!(player = player_id, "player left");
