@@ -46,6 +46,11 @@ certbot certificate for `ose.jfly.dev` (auto-renewed), the default SSO-or-LAN ga
 (`whitelist-auth.conf`). To open it to people outside the house, swap that include for
 `proxy-no-auth.conf` as the Lost In Time `/play/` site does.
 
+Guests sign in with Google: their email goes in `/etc/oauth2/emails.cfg` (who may sign in at all;
+oauth2-proxy reloads it by itself) and in the `ose.jfly.dev` entry of
+`/etc/nginx/conf.d/01-authz-emails.conf` (who may reach this site), then `nginx -t && systemctl
+reload nginx`. One guest was added this way on 2026-10-24.
+
 ## How a deploy happens
 
 - **From GitHub**: `.github/workflows/deploy.yml` on every push to `main`. It needs four repository
