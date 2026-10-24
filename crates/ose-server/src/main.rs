@@ -1119,6 +1119,13 @@ fn launch_craft(
         return fail("home body missing".into());
     };
     let e = u.spawn_vessel_in_circular_orbit(&name, body, altitude_m);
+    let spec = flight_spec_for(s, craft);
+    if !spec.stages.is_empty() {
+        if let Some((_, _, orbit)) = u.vessel(e) {
+            let (r, v) = orbit.state_at(u.ut());
+            u.set_dormant(e, ose_sim::flight::Powered::new(spec, r, v, false));
+        }
+    }
     let mut list = s.vessels.lock().expect("vessels lock");
     let id = list.iter().map(|&(_, id, _)| id).max().unwrap_or(0) + 1;
     list.push((e, id, Some(player_id)));
@@ -1413,7 +1420,7 @@ async fn session(mut socket: WebSocket, s: AppState) {
                             let reply = match owned_vessel(&s, vessel, player_id) {
                                 Some(e) => {
                                     let ok = s.universe.lock().expect("sim lock").set_controls(e, throttle, from_net_attitude(attitude));
-                                    ServerMessage::FlightAck { vessel, accepted: ok, reason: (!ok).then(|| "vessel is not under powered flight".to_string()) }
+                                    ServerMessage::FlightAck { vessel, accepted: ok, reason: (!ok).then(|| "vessel has no flight state (bare probe) or has crashed".to_string()) }
                                 }
                                 None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
                             };

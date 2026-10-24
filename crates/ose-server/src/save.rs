@@ -22,6 +22,9 @@ pub struct SavedVessel {
     pub burn: Option<SavedBurn>,
     #[serde(default)]
     pub flight: Option<ose_sim::flight::Powered>,
+    /// Flight state kept while on rails (stage, propellant), restored as dormant.
+    #[serde(default)]
+    pub dormant: Option<ose_sim::flight::Powered>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -110,6 +113,7 @@ pub fn capture(
                 body: u.body_id(body)?.to_string(),
                 elements: orbit.elements,
                 flight: u.powered(e).cloned(),
+                dormant: u.dormant(e).cloned(),
                 burn: u.scheduled_burn(e).map(|b| SavedBurn {
                     ut: b.ut,
                     prograde_mps: b.prograde_mps,
@@ -142,6 +146,8 @@ pub fn restore(u: &mut Universe, save: &SaveFile) -> Vec<VesselEntry> {
         let e = u.spawn_vessel_with_elements(&v.name, body, v.elements);
         if let Some(f) = &v.flight {
             u.set_powered(e, f.clone());
+        } else if let Some(d) = &v.dormant {
+            u.set_dormant(e, d.clone());
         }
         if let Some(b) = v.burn {
             u.schedule_burn(

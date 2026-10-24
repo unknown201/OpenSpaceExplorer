@@ -144,6 +144,12 @@ pub struct Powered {
     pub coasting_since: Option<f64>,
 }
 
+/// The flight state of a vessel that is on rails: stage, propellant and mass are kept so the vessel can
+/// be put back under power (a burn from orbit, a descent) with what it had left. `r`/`v` are stale while
+/// dormant and are refreshed from the rails orbit on wake.
+#[derive(Component, Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Dormant(pub Powered);
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Atmo {
     pub depth_m: f64,

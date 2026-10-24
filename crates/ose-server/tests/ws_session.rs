@@ -441,6 +441,71 @@ async fn hello_catalog_and_snapshots() {
     }
     let launched = launched.expect("CraftLaunched");
 
+    // A craft launched straight into orbit keeps a flight state: throttle up wakes it under power.
+    ws.send(Message::Binary(
+        ose_net::encode(&ClientMessage::SetControls {
+            vessel: launched,
+            throttle: 0.5,
+            attitude: ose_net::AttitudeMode::OrbitPrograde,
+        })
+        .unwrap()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let mut woke = false;
+    for _ in 0..60 {
+        match recv(&mut ws).await {
+            ServerMessage::FlightAck {
+                vessel,
+                accepted,
+                reason,
+            } if vessel == launched => {
+                assert!(accepted, "{reason:?}");
+            }
+            ServerMessage::Vessels { vessels, .. } => {
+                if let Some(f) = vessels
+                    .iter()
+                    .find(|v| v.id == launched)
+                    .and_then(|v| v.flight.as_ref())
+                {
+                    assert_eq!(f.situation, ose_net::FlightSituation::Orbit);
+                    assert_eq!(f.throttle, 0.5);
+                    woke = true;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    assert!(woke, "orbiting craft was not woken by SetControls");
+    // the bare probe has no flight state and is refused
+    ws.send(Message::Binary(
+        ose_net::encode(&ClientMessage::SetControls {
+            vessel: 1,
+            throttle: 1.0,
+            attitude: ose_net::AttitudeMode::OrbitPrograde,
+        })
+        .unwrap()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let mut refused = false;
+    for _ in 0..60 {
+        if let ServerMessage::FlightAck {
+            vessel: 1,
+            accepted,
+            ..
+        } = recv(&mut ws).await
+        {
+            assert!(!accepted);
+            refused = true;
+            break;
+        }
+    }
+    assert!(refused, "probe controls were not refused");
+
     // Craft library: stock crafts are listed; saving adds ours; a saved id launches.
     ws.send(Message::Binary(
         ose_net::encode(&ClientMessage::CraftList).unwrap().into(),

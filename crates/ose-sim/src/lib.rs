@@ -183,14 +183,63 @@ impl Universe {
         q.iter(&self.world).next().is_some()
     }
 
-    /// Throttle (0..1) and attitude for a powered vessel. False when the vessel is on rails.
+    /// Keep a flight state for a vessel on rails so it can be woken later (crafts launched straight into
+    /// orbit, restored saves).
+    pub fn set_dormant(&mut self, e: Entity, p: flight::Powered) {
+        self.world.entity_mut(e).insert(flight::Dormant(p));
+    }
+
+    pub fn dormant(&self, e: Entity) -> Option<&flight::Powered> {
+        self.world.get::<flight::Dormant>(e).map(|d| &d.0)
+    }
+
+    /// Put a dormant vessel back under powered flight from its current rails state. Returns false when the
+    /// vessel has no flight state (a bare probe) or is already powered.
+    pub fn wake(&mut self, e: Entity) -> bool {
+        if self.world.get::<flight::Powered>(e).is_some() {
+            return true;
+        }
+        let Some(mut p) = self.world.get::<flight::Dormant>(e).map(|d| d.0.clone()) else {
+            return false;
+        };
+        let Some(orbit) = self.world.get::<bodies::OnRails>(e).map(|o| o.0) else {
+            return false;
+        };
+        let (r, v) = orbit.state_at(self.ut());
+        p.r = r;
+        p.v = v;
+        p.landed = false;
+        p.coasting_since = None;
+        let mut ent = self.world.entity_mut(e);
+        ent.remove::<flight::Dormant>();
+        ent.remove::<vessels::NextTransition>();
+        ent.insert(p);
+        true
+    }
+
+    /// Throttle (0..1) and attitude for a vessel. A vessel on rails with a dormant flight state is woken
+    /// when the throttle is above zero. False for a crashed vessel or one with no flight state.
     pub fn set_controls(&mut self, e: Entity, throttle: f64, attitude: flight::Attitude) -> bool {
+        let throttle = throttle.clamp(0.0, 1.0);
+        if self.world.get::<flight::Powered>(e).is_none() {
+            if self.world.get::<flight::Dormant>(e).is_none() {
+                return false;
+            }
+            if throttle <= 0.0 {
+                // nothing to do on rails; remember the attitude for the next wake
+                if let Some(mut d) = self.world.get_mut::<flight::Dormant>(e) {
+                    d.0.attitude = attitude;
+                }
+                return true;
+            }
+            self.wake(e);
+        }
         match self.world.get_mut::<flight::Powered>(e) {
             Some(mut p) => {
                 if p.crashed {
                     return false;
                 }
-                p.throttle = throttle.clamp(0.0, 1.0);
+                p.throttle = throttle;
                 p.attitude = attitude;
                 true
             }
@@ -198,10 +247,13 @@ impl Universe {
         }
     }
 
-    /// Fire the next stage of a powered vessel.
+    /// Fire the next stage of a vessel (powered or dormant on rails).
     pub fn stage(&mut self, e: Entity) -> bool {
-        match self.world.get_mut::<flight::Powered>(e) {
-            Some(mut p) => p.stage_next(),
+        if let Some(mut p) = self.world.get_mut::<flight::Powered>(e) {
+            return p.stage_next();
+        }
+        match self.world.get_mut::<flight::Dormant>(e) {
+            Some(mut d) => d.0.stage_next(),
             None => false,
         }
     }
@@ -360,12 +412,34 @@ impl Universe {
                 .entity_mut(e)
                 .insert(bodies::OnRails(orbit))
                 .insert(p);
+            // sphere-of-influence change while powered: re-express the state around the new body
+            if !self
+                .world
+                .get::<flight::Powered>(e)
+                .is_some_and(|p| p.landed)
+            {
+                let t = vessels::update_reference_body(&mut self.world, &index, e, ut);
+                if t != vessels::SoiTransition::None {
+                    let rails = self.world.get::<bodies::OnRails>(e).map(|o| o.0);
+                    if let (Some(o), Some(mut p)) =
+                        (rails, self.world.get_mut::<flight::Powered>(e))
+                    {
+                        let (r, v) = o.state_at(ut);
+                        p.r = r;
+                        p.v = v;
+                    }
+                }
+            }
             if hand_off {
                 to_rails.push(e);
             }
         }
         for e in to_rails {
-            self.world.entity_mut(e).remove::<flight::Powered>();
+            if let Some(p) = self.world.get::<flight::Powered>(e).cloned() {
+                let mut ent = self.world.entity_mut(e);
+                ent.remove::<flight::Powered>();
+                ent.insert(flight::Dormant(p));
+            }
             vessels::refresh_next_transition(&mut self.world, &index, e, ut, &self.params);
         }
         for e in self.vessels() {
@@ -388,6 +462,171 @@ impl Universe {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn kerbin_def() -> ose_data::CelestialBody {
+        use ose_data::{CelestialBody as BodyDef, BIG_G, G0};
+        let mu = 1.00034160493135 * G0 * 600_000.0 * 600_000.0;
+        BodyDef {
+            id: "Kerbin".into(),
+            display_name: "Kerbin".into(),
+            parent: None,
+            is_star: false,
+            is_home_world: true,
+            radius_m: 600_000.0,
+            gravity_asl: 1.00034160493135,
+            mu,
+            mass_kg: mu / BIG_G,
+            soi_radius_m: None,
+            rotation_period_s: 21_549.425,
+            initial_rotation_deg: 0.0,
+            is_tidally_locked: false,
+            has_solid_surface: true,
+            ocean: None,
+            orbit: None,
+            atmosphere: None,
+            star_luminosity: None,
+        }
+    }
+
+    fn upper_stage() -> flight::FlightSpec {
+        flight::FlightSpec {
+            stages: vec![flight::StageSpec {
+                stage_id: 0,
+                thrust_vac_kn: 60.0,
+                thrust_asl_kn: 30.0,
+                isp_vac_s: 345.0,
+                isp_asl_s: 170.0,
+                propellant_t: 2.0,
+                start_mass_t: 4.0,
+            }],
+            drag_area_m2: 1.0,
+            drag_cd: flight::DEFAULT_CD,
+        }
+    }
+
+    #[test]
+    fn vessel_in_orbit_wakes_burns_and_returns_to_rails_with_less_propellant() {
+        let mut u = Universe::with_bodies(&[kerbin_def()]);
+        let body = u.body_entity("Kerbin").unwrap();
+        let v = u.spawn_vessel_in_circular_orbit("upper", body, 100_000.0);
+        let (_, _, o0) = u.vessel(v).unwrap();
+        let (r0, v0) = o0.state_at(u.ut());
+        u.set_dormant(v, flight::Powered::new(upper_stage(), r0, v0, false));
+        assert!(u.powered(v).is_none());
+        // zero throttle keeps it on rails
+        assert!(u.set_controls(v, 0.0, flight::Attitude::OrbitPrograde));
+        assert!(u.powered(v).is_none());
+        // throttle up: woken at the rails position, burns prograde
+        assert!(u.set_controls(v, 1.0, flight::Attitude::OrbitPrograde));
+        let p = u.powered(v).expect("woken");
+        assert!(
+            (p.r - r0).length() < 1.0,
+            "woken where the rails orbit puts it"
+        );
+        for _ in 0..(20 * TICKS_PER_SECOND) {
+            u.step();
+        }
+        let (_, _, o1) = u.vessel(v).unwrap();
+        assert!(
+            o1.apoapsis() > o0.apoapsis() + 50_000.0,
+            "apoapsis {} -> {}",
+            o0.apoapsis(),
+            o1.apoapsis()
+        );
+        let burned = 2.0 - u.powered(v).unwrap().propellant_t;
+        assert!(burned > 0.3, "propellant burned {burned}");
+        // cut throttle; after 10 s of coasting it goes dormant again, keeping what is left
+        assert!(u.set_controls(v, 0.0, flight::Attitude::OrbitPrograde));
+        for _ in 0..(12 * TICKS_PER_SECOND) {
+            u.step();
+        }
+        assert!(u.powered(v).is_none(), "back on rails");
+        let d = u.dormant(v).expect("dormant state kept");
+        assert!((d.propellant_t - (2.0 - burned)).abs() < 1e-3);
+        // staging works while dormant (single stage: nothing further, propellant dropped)
+        assert!(!u.stage(v));
+        assert_eq!(u.dormant(v).unwrap().propellant_t, 0.0);
+    }
+
+    #[test]
+    fn bare_probe_without_flight_state_refuses_controls() {
+        let mut u = Universe::with_bodies(&[kerbin_def()]);
+        let body = u.body_entity("Kerbin").unwrap();
+        let v = u.spawn_vessel_in_circular_orbit("probe", body, 100_000.0);
+        assert!(!u.set_controls(v, 1.0, flight::Attitude::OrbitPrograde));
+        assert!(u.powered(v).is_none());
+    }
+
+    #[test]
+    fn powered_vessel_crossing_an_soi_is_handed_to_the_parent_continuously() {
+        use ose_data::{CelestialBody as BodyDef, Orbit as OrbitDef, BIG_G, G0};
+        let sun_mu = 1.7467 * G0 * 261_600_000.0f64.powi(2);
+        let sun = BodyDef {
+            id: "Kerbol".into(),
+            display_name: "Kerbol".into(),
+            parent: None,
+            is_star: true,
+            is_home_world: false,
+            radius_m: 261_600_000.0,
+            gravity_asl: 1.7467,
+            mu: sun_mu,
+            mass_kg: sun_mu / BIG_G,
+            soi_radius_m: None,
+            rotation_period_s: 432_000.0,
+            initial_rotation_deg: 0.0,
+            is_tidally_locked: false,
+            has_solid_surface: false,
+            ocean: None,
+            orbit: None,
+            atmosphere: None,
+            star_luminosity: None,
+        };
+        let mut k = kerbin_def();
+        k.parent = Some("Kerbol".into());
+        k.soi_radius_m = Some(84_159_286.0);
+        k.orbit = Some(OrbitDef {
+            semi_major_axis_m: 13_599_840_256.0,
+            eccentricity: 0.0,
+            inclination_deg: 0.0,
+            longitude_of_ascending_node_deg: 0.0,
+            argument_of_periapsis_deg: 0.0,
+            mean_anomaly_at_epoch_rad: 0.0,
+            epoch_s: 0.0,
+        });
+        let mut u = Universe::with_bodies(&[sun, k]);
+        let kerbin = u.body_entity("Kerbin").unwrap();
+        let kerbol = u.body_entity("Kerbol").unwrap();
+        // 1000 km inside the SOI, moving outward at 3 km/s, engine at a whisper so it stays powered
+        let r = DVec3::new(84_159_286.0 - 1_000_000.0, 0.0, 0.0);
+        let vv = DVec3::new(3_000.0, 500.0, 0.0);
+        let e = u.spawn_vessel("escaper", kerbin, r, vv);
+        u.set_dormant(e, flight::Powered::new(upper_stage(), r, vv, false));
+        assert!(u.set_controls(e, 0.01, flight::Attitude::OrbitPrograde));
+        let mut last = bodies::star_space_state(&u.world, e, u.ut()).0;
+        let mut handed = false;
+        for _ in 0..(600 * TICKS_PER_SECOND) {
+            u.step();
+            let now = bodies::star_space_state(&u.world, e, u.ut()).0;
+            assert!(
+                (now - last).length() < 1_000.0,
+                "jump {}",
+                (now - last).length()
+            );
+            last = now;
+            if u.world.get::<bodies::ReferenceBody>(e).unwrap().0 == kerbol {
+                handed = true;
+                break;
+            }
+        }
+        assert!(handed, "never left Kerbin's SOI");
+        let p = u.powered(e).expect("still powered after the handoff");
+        let (rails_r, _) = u.vessel(e).unwrap().2.state_at(u.ut());
+        assert!(
+            (p.r - rails_r).length() < 1.0,
+            "powered state re-expressed around Kerbol"
+        );
+        assert!(p.r.length() > 1.0e10, "now relative to the star");
+    }
 
     #[test]
     fn time_advances_by_warp_factor() {
