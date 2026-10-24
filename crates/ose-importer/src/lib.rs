@@ -219,6 +219,21 @@ pub fn resolve_soi(bodies: &mut [CelestialBody]) {
     }
 }
 
+/// Tidally locked moons turn once per orbit. The body JSON carries a placeholder `rotationPeriod` for some
+/// (100 s for the Mun, Tylo and Vall), which would make their equators move at kilometres per second; the
+/// original keeps them facing their parent, so the period is the orbital period `2 pi sqrt(a^3 / mu_parent)`.
+pub fn resolve_tidal_lock(bodies: &mut [CelestialBody]) {
+    let mus: BTreeMap<String, f64> = bodies.iter().map(|b| (b.id.clone(), b.mu)).collect();
+    for body in bodies.iter_mut().filter(|b| b.is_tidally_locked) {
+        if let (Some(p), Some(o)) = (&body.parent, &body.orbit) {
+            if let Some(mu) = mus.get(p).filter(|m| **m > 0.0) {
+                body.rotation_period_s =
+                    std::f64::consts::TAU * (o.semi_major_axis_m.powi(3) / mu).sqrt();
+            }
+        }
+    }
+}
+
 pub fn resource(v: &Value, cov: &mut Coverage) -> ResourceDef {
     if v["isRecipe"].as_bool().unwrap_or(false) {
         let r = &v["recipeData"];
@@ -586,6 +601,7 @@ pub fn import_dir(data_dir: &Path, cov: &mut Coverage) -> anyhow::Result<GameDat
         bodies.push(celestial_body(&v, parent, orbit, cov));
     }
     resolve_soi(&mut bodies);
+    resolve_tidal_lock(&mut bodies);
 
     let mut resources = Vec::new();
     for p in json_files(&data_dir.join("resources-json"))? {
@@ -685,5 +701,33 @@ mod tests {
         assert_eq!(part.attach_nodes[0].position.y, 0.264);
         assert_eq!(part.module_names.len(), 3);
         assert!(part.raw_modules.contains_key("PartComponentModule_Color"));
+    }
+
+    #[test]
+    fn tidally_locked_moons_turn_once_per_orbit() {
+        let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/own/kerbol-system.json");
+        let bodies: Vec<CelestialBody> =
+            serde_json::from_str(&std::fs::read_to_string(data).unwrap()).unwrap();
+        let mun = bodies.iter().find(|b| b.id == "Mun").unwrap();
+        let kerbin = bodies.iter().find(|b| b.id == "Kerbin").unwrap();
+        let a = mun.orbit.as_ref().unwrap().semi_major_axis_m;
+        let orbital = std::f64::consts::TAU * (a.powi(3) / kerbin.mu).sqrt();
+        assert!(
+            (mun.rotation_period_s - orbital).abs() < 1.0,
+            "{}",
+            mun.rotation_period_s
+        );
+        // the Mun's equator then moves at about 9 m/s, not kilometres per second
+        let v = std::f64::consts::TAU * mun.radius_m / mun.rotation_period_s;
+        assert!(v < 20.0, "{v}");
+        for b in bodies.iter().filter(|b| b.is_tidally_locked) {
+            assert!(
+                b.rotation_period_s > 10_000.0,
+                "{} {}",
+                b.id,
+                b.rotation_period_s
+            );
+        }
     }
 }
