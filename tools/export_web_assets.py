@@ -15,8 +15,8 @@ install and is copied to the server with tools/push_assets.py. Read-only on the 
     .venv/Scripts/python tools/export_web_assets.py --max-texture 1024 --out assets/web
 
 Unity is left-handed Y-up with X mirrored relative to glTF (right-handed Y-up); positions, normals, node
-translations and rotations are converted by negating X (and the quaternion's y and z) and the triangle
-winding is flipped, which is the usual Unity-to-glTF convention.
+translations and rotations are converted by negating X (and the quaternion's y and z); the mirror turns Unity's clockwise front faces into glTF's
+counter-clockwise ones, so the triangle order is kept.
 """
 from __future__ import annotations
 
@@ -262,7 +262,9 @@ class Exporter:
         tris: list[int] = []
         for sub in h.get_triangles():
             for a, b, c in sub:
-                tris.extend((a, c, b))  # flipped winding for the mirrored X axis
+                # Unity front faces are clockwise in its left-handed frame; mirroring X turns them
+                # counter-clockwise, which is what glTF wants, so the order is kept as authored.
+                tris.extend((a, b, c))
         return positions, normals, uvs, tris
 
     # -- parts

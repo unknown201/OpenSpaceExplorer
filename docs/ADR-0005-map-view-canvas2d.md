@@ -38,6 +38,7 @@ untestable in CI.
   (`ose-client::vab` for the part tree, `ose-client::thumb` for the boxes): parts attach on matching stack
   nodes from `/parts.json` geometry, the server stays authoritative for masses and delta-v through
   `SaveCraft`. A 3D editor with drag, symmetry and rotation is the WebGPU flight-view work.
+- Superseded in part by ADR-0006: with WebGPU the map renders in 3D from the game's assets; this Canvas 2D path remains the fallback.
 - WebGPU stays the plan for the flight view (3D vessel, terrain, scaled space), where Canvas 2D cannot
   go. The map can move to the same pipeline later; its scene model and camera do not depend on how it is
   drawn.

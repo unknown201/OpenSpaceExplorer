@@ -227,13 +227,15 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
   results.push(
     await timed("render_canvas", async () => {
       if (!pageUp) return notLoaded;
-      const canvas = page.locator("canvas").first();
+      const canvas = page.locator("canvas:visible").first();
       if ((await canvas.count()) === 0) {
         return blocked("client renderer (a <canvas> with a WebGPU surface); Phase 3");
       }
       const box = await canvas.boundingBox();
       if (!box || box.width < 1 || box.height < 1) return failed("canvas has no size");
-      return passed(`canvas ${Math.round(box.width)}x${Math.round(box.height)}`);
+      await sleep(1500);
+      const renderer = (await page.locator('[data-ose="gpu"]').first().getAttribute("data-ose-renderer")) ?? "canvas2d";
+      return passed(`canvas ${Math.round(box.width)}x${Math.round(box.height)}, renderer ${renderer}`);
     }),
   );
 

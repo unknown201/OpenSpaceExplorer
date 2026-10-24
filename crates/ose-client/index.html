@@ -9,6 +9,8 @@
     html, body { margin: 0; height: 100%; overflow: hidden; background: #06080f; color: #cfd6e6;
       font: 14px system-ui, sans-serif; }
     #map { position: fixed; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; }
+    #gpu { position: fixed; inset: 0; width: 100%; height: 100%; display: none; cursor: grab; }
+    body.webgpu #gpu { display: block; } body.webgpu #map { display: none; }
     #map.dragging { cursor: grabbing; }
     #labels { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
     #labels .body { position: absolute; transform: translate(8px, -50%); white-space: nowrap;
@@ -117,6 +119,7 @@
   </style>
 </head>
 <body>
+  <canvas id="gpu" data-ose="gpu"></canvas>
   <canvas id="map"></canvas>
   <div id="labels"></div>
   <div id="hud">

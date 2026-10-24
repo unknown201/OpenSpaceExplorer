@@ -12,6 +12,8 @@
 #![forbid(unsafe_code)]
 
 pub mod kerbin_time;
+#[cfg(target_arch = "wasm32")]
+pub mod render;
 pub mod scene;
 pub mod thumb;
 pub mod vab;
@@ -83,6 +85,16 @@ struct App {
     player_id: Option<u64>,
     drag: Option<(f64, f64)>,
     dpr: f64,
+    /// The WebGPU renderer when the browser has an adapter; the 2D canvas is the fallback.
+    #[cfg(target_arch = "wasm32")]
+    gpu: Option<render::Renderer>,
+    gpu_canvas: HtmlCanvasElement,
+    /// 3D orbit camera: yaw and pitch (radians) around the focus, distance in kilometres.
+    orbit_yaw: f64,
+    orbit_pitch: f64,
+    orbit_dist_km: f64,
+    /// Line keys for trajectory strips, versioned so a new prediction replaces the old buffers.
+    traj_version: u64,
 }
 
 type Shared = Rc<RefCell<App>>;
@@ -250,6 +262,13 @@ pub fn start() -> Result<(), JsValue> {
         player_id: None,
         drag: None,
         dpr: window.device_pixel_ratio().max(1.0),
+        #[cfg(target_arch = "wasm32")]
+        gpu: None,
+        gpu_canvas: get("gpu")?.dyn_into()?,
+        orbit_yaw: 0.6,
+        orbit_pitch: 0.5,
+        orbit_dist_km: 5.0e7,
+        traj_version: 0,
         doc,
         canvas,
         ctx,
@@ -260,8 +279,40 @@ pub fn start() -> Result<(), JsValue> {
     install_label_clicks(&app)?;
     install_menu(&app)?;
     load_part_sizes(app.clone());
+    #[cfg(target_arch = "wasm32")]
+    start_webgpu(app.clone());
     animate(app);
     Ok(())
+}
+
+/// Create the wgpu renderer on the `#gpu` canvas; on success the page switches to the 3D view.
+#[cfg(target_arch = "wasm32")]
+fn start_webgpu(app: Shared) {
+    let has_gpu = js_sys::Reflect::get(&web_sys::window().unwrap().navigator(), &"gpu".into())
+        .map(|v| !v.is_undefined() && !v.is_null())
+        .unwrap_or(false);
+    if !has_gpu {
+        log("no navigator.gpu: staying on the 2D map");
+        return;
+    }
+    let canvas = app.borrow().gpu_canvas.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        match render::Renderer::new(canvas).await {
+            Some(r) => {
+                let mut a = app.borrow_mut();
+                a.gpu = Some(r);
+                if let Some(body) = a.doc.body() {
+                    body.class_list().add_1("webgpu").ok();
+                }
+                a.gpu_canvas
+                    .set_attribute("data-ose-renderer", "webgpu")
+                    .ok();
+                a.resize();
+                log("webgpu renderer ready");
+            }
+            None => log("webgpu unavailable: staying on the 2D map"),
+        }
+    });
 }
 
 /// Fetch the part catalog (GET /parts.json) in the background: sizes for thumbnails, everything for the
@@ -688,34 +739,47 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
     window.add_event_listener_with_callback("resize", on_resize.as_ref().unchecked_ref())?;
     on_resize.forget();
 
-    let a = app.clone();
-    let on_wheel = Closure::<dyn FnMut(WheelEvent)>::new(move |ev: WheelEvent| {
-        ev.prevent_default();
-        let factor = if ev.delta_y() > 0.0 { 1.25 } else { 0.8 };
-        a.borrow_mut()
-            .camera
-            .zoom_at(factor, ev.offset_x() as f64, ev.offset_y() as f64);
-    });
-    canvas.add_event_listener_with_callback("wheel", on_wheel.as_ref().unchecked_ref())?;
-    on_wheel.forget();
-
-    let a = app.clone();
-    let on_down = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
-        if ev.button() == 0 {
+    let gpu_canvas = app.borrow().gpu_canvas.clone();
+    for target in [&canvas, &gpu_canvas] {
+        let a = app.clone();
+        let on_wheel = Closure::<dyn FnMut(WheelEvent)>::new(move |ev: WheelEvent| {
+            ev.prevent_default();
+            let factor = if ev.delta_y() > 0.0 { 1.25 } else { 0.8 };
             let mut app = a.borrow_mut();
-            app.drag = Some((ev.client_x() as f64, ev.client_y() as f64));
-            app.canvas.class_list().add_1("dragging").ok();
-        }
-    });
-    canvas.add_event_listener_with_callback("mousedown", on_down.as_ref().unchecked_ref())?;
-    on_down.forget();
+            if app.is_3d() {
+                app.orbit_dist_km = (app.orbit_dist_km * factor).clamp(1.0e-2, 1.0e10);
+            } else {
+                app.camera
+                    .zoom_at(factor, ev.offset_x() as f64, ev.offset_y() as f64);
+            }
+        });
+        target.add_event_listener_with_callback("wheel", on_wheel.as_ref().unchecked_ref())?;
+        on_wheel.forget();
+
+        let a = app.clone();
+        let on_down = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            if ev.button() == 0 {
+                let mut app = a.borrow_mut();
+                app.drag = Some((ev.client_x() as f64, ev.client_y() as f64));
+                app.canvas.class_list().add_1("dragging").ok();
+                app.gpu_canvas.class_list().add_1("dragging").ok();
+            }
+        });
+        target.add_event_listener_with_callback("mousedown", on_down.as_ref().unchecked_ref())?;
+        on_down.forget();
+    }
 
     let a = app.clone();
     let on_move = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
         let mut app = a.borrow_mut();
         if let Some((x, y)) = app.drag {
             let (nx, ny) = (ev.client_x() as f64, ev.client_y() as f64);
-            app.camera.pan_px(nx - x, ny - y);
+            if app.is_3d() {
+                app.orbit_yaw -= (nx - x) * 0.005;
+                app.orbit_pitch = (app.orbit_pitch - (ny - y) * 0.005).clamp(-1.5, 1.5);
+            } else {
+                app.camera.pan_px(nx - x, ny - y);
+            }
             app.drag = Some((nx, ny));
         }
     });
@@ -727,6 +791,7 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
         let mut app = a.borrow_mut();
         app.drag = None;
         app.canvas.class_list().remove_1("dragging").ok();
+        app.gpu_canvas.class_list().remove_1("dragging").ok();
     });
     window.add_event_listener_with_callback("mouseup", on_up.as_ref().unchecked_ref())?;
     on_up.forget();
@@ -842,6 +907,14 @@ impl App {
         self.canvas.set_height((h * self.dpr) as u32);
         self.camera.width = w;
         self.camera.height = h;
+        let grect = self.gpu_canvas.get_bounding_client_rect();
+        let (gw, gh) = (grect.width().max(w), grect.height().max(h));
+        self.gpu_canvas.set_width((gw * self.dpr) as u32);
+        self.gpu_canvas.set_height((gh * self.dpr) as u32);
+        #[cfg(target_arch = "wasm32")]
+        if let Some(gpu) = &mut self.gpu {
+            gpu.resize((gw * self.dpr) as u32, (gh * self.dpr) as u32);
+        }
     }
 
     fn request_warp(&mut self, factor: u32) {
@@ -859,6 +932,18 @@ impl App {
         if let Some(scene) = &self.scene {
             let extent = scene.system_extent(self.camera.focus);
             self.camera.frame(extent);
+            self.orbit_dist_km = (extent / 1000.0) * 2.4;
+        }
+    }
+
+    fn is_3d(&self) -> bool {
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.gpu.is_some()
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            false
         }
     }
 
@@ -1121,6 +1206,7 @@ impl App {
                 if let Some(scene) = &mut self.scene {
                     scene.trajectories.insert(vessel, patches);
                 }
+                self.traj_version = self.traj_version.wrapping_add(1);
             }
             ServerMessage::BurnState {
                 vessel,
@@ -1207,6 +1293,7 @@ impl App {
                     .abs()
                     .max(body.radius_m * 1.5);
                 self.camera.frame(a * 1.3);
+                self.orbit_dist_km = (a / 1000.0) * 2.5;
                 self.focus_el
                     .set_text_content(Some(&format!("following: {}", v.name)));
             }
@@ -2217,6 +2304,11 @@ impl App {
             .and_then(|id| scene.vessel(id))
             .map(|v| scene.vessel_position(v, ut));
         let centre = followed.unwrap_or(positions[cam.focus]);
+        #[cfg(target_arch = "wasm32")]
+        if self.is_3d() {
+            self.frame_3d(ut, &positions, centre);
+            return;
+        }
         // Exposed for tests and debugging: current scale and the star-space position of the focus body.
         self.canvas
             .set_attribute("data-ose-scale", &format!("{:.3e}", cam.m_per_px))
@@ -2313,6 +2405,222 @@ impl App {
         }
         self.draw_vessels(ut, &positions, centre);
         self.draw_node(ut, &positions, centre);
+        self.update_breadcrumbs();
+    }
+
+    /// The 3D map: planets from the exported GLBs at true scale, orbit lines, trajectories, and the DOM
+    /// labels projected through the same camera. Kilometres, relative to the camera.
+    #[cfg(target_arch = "wasm32")]
+    fn frame_3d(&mut self, ut: f64, positions: &[ose_math::DVec3], centre: ose_math::DVec3) {
+        use glam::{DQuat, DVec3 as GV};
+        let Some(scene) = &self.scene else {
+            return;
+        };
+        let to_km = |p: ose_math::DVec3| GV::new(p.x / 1000.0, p.z / 1000.0, -p.y / 1000.0); // Z-up -> Y-up
+        let centre_km = to_km(centre);
+        let dir = GV::new(
+            self.orbit_pitch.cos() * self.orbit_yaw.sin(),
+            self.orbit_pitch.sin(),
+            self.orbit_pitch.cos() * self.orbit_yaw.cos(),
+        );
+        let cam_km = centre_km + dir * self.orbit_dist_km;
+        let forward = -dir;
+        let near = (self.orbit_dist_km * 1.0e-3).max(1.0e-3);
+        let far = (self.orbit_dist_km * 2.0e4).max(1.0e4);
+        let gpu = self.gpu.as_mut().unwrap();
+        gpu.set_camera(forward, GV::Y, 50f64.to_radians(), near, far);
+
+        // Ask for every body model once; draw the ones that have arrived.
+        let star = scene.root();
+        let star_km = star.map(|i| to_km(positions[i])).unwrap_or(GV::ZERO);
+        let mut items: Vec<render::DrawItem> = Vec::new();
+        let mut lines: Vec<render::LineItem> = Vec::new();
+        for (i, b) in scene.bodies.iter().enumerate() {
+            let name = format!("body:{}", b.id);
+            gpu.request_model(&name, &format!("assets/bodies/{}.glb", b.id));
+            let pos_km = to_km(positions[i]);
+            if let Some(model) = gpu.model(&name) {
+                let scale = (b.radius_m / 1000.0) / model.mesh_radius.max(1e-9);
+                let light = if b.is_star { GV::Y } else { star_km - pos_km };
+                items.push(render::DrawItem {
+                    model: name.clone(),
+                    rel_pos_km: pos_km - cam_km,
+                    rotation: DQuat::IDENTITY,
+                    scale,
+                    light_dir: light,
+                    emissive: if b.is_star { 1.0 } else { 0.0 },
+                    color: if b.is_star {
+                        [1.0, 0.95, 0.75, 1.0]
+                    } else {
+                        [1.0; 4]
+                    },
+                });
+            }
+            if let (Some(orbit), Some(p)) = (scene.orbit(i), b.parent) {
+                let n = 256;
+                let pts: Vec<GV> = (0..=n)
+                    .map(|k| {
+                        let nu = k as f64 / n as f64 * std::f64::consts::TAU;
+                        let (rel, _) = orbit.state_at_true_anomaly(nu);
+                        to_km(rel)
+                    })
+                    .collect();
+                let origin = to_km(positions[p as usize]) - cam_km;
+                let focus = i == self.camera.focus;
+                lines.push(render::LineItem {
+                    key: format!("orbit:{}", b.id),
+                    points_km: pts,
+                    rel_origin_km: origin,
+                    color: if focus {
+                        [0.55, 0.65, 0.95, 0.9]
+                    } else {
+                        [0.45, 0.55, 0.8, 0.45]
+                    },
+                });
+            }
+        }
+        // Vessel trajectories: one strip per patch, keyed by the prediction version.
+        let mut traj: Vec<render::LineItem> = Vec::new();
+        for v in &scene.vessels {
+            let mine = v.owner.is_some() && v.owner == self.player_id;
+            if let Some(patches) = scene.trajectories.get(&v.id) {
+                for (pi, patch) in patches.iter().enumerate() {
+                    let Some(body) = scene.bodies.get(patch.body as usize) else {
+                        continue;
+                    };
+                    let orbit = scene::orbit_from(body.mu, &patch.orbit);
+                    let end_ut = if patch.end_ut.is_finite() {
+                        patch.end_ut
+                    } else if orbit.period.is_finite() {
+                        patch.start_ut + orbit.period
+                    } else {
+                        patch.start_ut + 6.0 * 3600.0
+                    };
+                    let soi = body.soi_radius_m.unwrap_or(f64::INFINITY);
+                    let n = 240;
+                    let mut pts = Vec::with_capacity(n + 1);
+                    for s in 0..=n {
+                        let t = patch.start_ut + (end_ut - patch.start_ut) * s as f64 / n as f64;
+                        let rel = orbit.position_at(t);
+                        if rel.length() > soi * 1.02 {
+                            break;
+                        }
+                        pts.push(to_km(rel));
+                    }
+                    let colour = match patch.end {
+                        PatchEnd::Final => [0.47, 0.86, 0.63, 0.95],
+                        PatchEnd::Encounter => [0.94, 0.78, 0.35, 0.95],
+                        PatchEnd::Escape => [0.94, 0.51, 0.35, 0.95],
+                        PatchEnd::Collision => [0.94, 0.35, 0.35, 0.95],
+                        PatchEnd::Maneuver => [0.59, 0.67, 1.0, 0.95],
+                        #[allow(unreachable_patterns)]
+                        _ => [0.8, 0.8, 0.8, 0.7],
+                    };
+                    let _ = mine;
+                    traj.push(render::LineItem {
+                        key: format!("traj:{}:{}:{}", v.id, pi, self.traj_version),
+                        points_km: pts,
+                        rel_origin_km: to_km(positions[patch.body as usize]) - cam_km,
+                        color: colour,
+                    });
+                }
+            }
+        }
+        lines.extend(traj);
+        gpu.frame("assets/bodies/", &items, &lines, [0.024, 0.031, 0.059]);
+
+        // Labels and markers through the 3D camera.
+        let (w, h) = (self.camera.width, self.camera.height);
+        let dpr = self.dpr;
+        let project = |p: GV| gpu.project(p - cam_km).map(|(x, y)| (x / dpr, y / dpr));
+        for (i, b) in scene.bodies.iter().enumerate() {
+            let Some(el) = self.label_els.get(i) else {
+                continue;
+            };
+            let style = el.style();
+            let orbit_px = scene
+                .orbit(i)
+                .map(|o| o.semi_major_axis().abs() / 1000.0 / self.orbit_dist_km * h)
+                .unwrap_or(f64::INFINITY);
+            let shown = orbit_px >= 6.0 || i == self.camera.focus;
+            match project(to_km(positions[i])) {
+                Some((x, y))
+                    if shown && x > -200.0 && x < w + 200.0 && y > -50.0 && y < h + 50.0 =>
+                {
+                    let r_px =
+                        (b.radius_m / 1000.0 / self.orbit_dist_km * h * 0.6).clamp(3.0, 40.0);
+                    style
+                        .set_property("left", &format!("{:.1}px", x + r_px))
+                        .ok();
+                    style.set_property("top", &format!("{y:.1}px")).ok();
+                    style.set_property("visibility", "visible").ok();
+                }
+                _ => {
+                    style.set_property("visibility", "hidden").ok();
+                }
+            }
+            let cls = el.class_list();
+            if i == self.camera.focus {
+                cls.add_1("focus").ok();
+            } else {
+                cls.remove_1("focus").ok();
+            }
+        }
+        for v in &scene.vessels {
+            if let Some((_, el)) = self.vessel_els.iter().find(|(id, _)| *id == v.id) {
+                let style = el.style();
+                match project(to_km(scene.vessel_position(v, ut))) {
+                    Some((x, y)) => {
+                        style
+                            .set_property("left", &format!("{:.1}px", x + 8.0))
+                            .ok();
+                        style.set_property("top", &format!("{y:.1}px")).ok();
+                        style.set_property("visibility", "visible").ok();
+                    }
+                    None => {
+                        style.set_property("visibility", "hidden").ok();
+                    }
+                }
+            }
+        }
+        if let (Some(node), Some(el)) = (self.node, &self.node_el) {
+            if let Some(v) = scene.vessel(node.vessel) {
+                let rb = v.reference_body as usize;
+                let rel = scene::orbit_from(scene.bodies[rb].mu, &v.orbit).position_at(node.ut);
+                if let Some((x, y)) = project(to_km(positions[rb] + rel)) {
+                    let style = el.style();
+                    style.set_property("left", &format!("{x:.1}px")).ok();
+                    style.set_property("top", &format!("{y:.1}px")).ok();
+                }
+                let remaining = node.ut - ut;
+                let sign = if remaining < 0.0 { "+" } else { "-" };
+                let r = remaining.abs();
+                set_text(
+                    &self.doc,
+                    "node-dt-text",
+                    &format!(
+                        "T{sign}{}:{:02}",
+                        (r / 60.0).floor() as u64,
+                        (r % 60.0) as u64
+                    ),
+                );
+            }
+        }
+        self.canvas
+            .set_attribute(
+                "data-ose-scale",
+                &format!("{:.3e}", self.orbit_dist_km * 1000.0 / h),
+            )
+            .ok();
+        self.canvas
+            .set_attribute(
+                "data-ose-focus",
+                &format!(
+                    "{} {:.3e} {:.3e}",
+                    scene.bodies[self.camera.focus].id, centre.x, centre.y
+                ),
+            )
+            .ok();
         self.update_breadcrumbs();
     }
 

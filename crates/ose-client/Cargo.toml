@@ -19,7 +19,7 @@ web-sys = { workspace = true, features = [
   "Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "CanvasRenderingContext2d",
   "CssStyleDeclaration", "DomRect", "Location", "Performance",
   "WebSocket", "BinaryType", "MessageEvent", "CloseEvent", "Event", "ErrorEvent",
-  "MouseEvent", "WheelEvent", "KeyboardEvent", "EventTarget", "DomTokenList", "console", "HtmlInputElement", "HtmlSelectElement", "Storage", "Request", "RequestInit", "Response", "Headers",
+  "MouseEvent", "WheelEvent", "KeyboardEvent", "EventTarget", "DomTokenList", "console", "HtmlInputElement", "HtmlSelectElement", "Storage", "Request", "RequestInit", "Response", "Headers", "Blob", "ImageBitmap",
 ] }
 ose-net = { workspace = true }
 ose-data = { workspace = true }
@@ -27,3 +27,6 @@ ose-math = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.3", features = ["wasm_js"] }
+wgpu = "30"
+glam = "0.34"
+bytemuck = { version = "1", features = ["derive"] }

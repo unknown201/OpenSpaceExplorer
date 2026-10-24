@@ -44,7 +44,19 @@ def main() -> int:
     print(f"pushing {', '.join(subdirs)} ({size / 1e6:.0f} MB) to {piper} -> ct {ct}:{REMOTE_DIR}")
     with tempfile.TemporaryDirectory() as tmp:
         tar = Path(tmp) / "ose-assets.tar.gz"
-        run("tar", "--force-local", "--owner=0", "--group=0", "-czf", str(tar), "-C", str(ASSETS), *members)
+        # Python's tarfile rather than a tar binary: on Windows, subprocess may pick the system bsdtar, which
+        # lacks --force-local, and the archive must carry uid/gid 0 for the container.
+        import tarfile
+
+        def anon(info: tarfile.TarInfo) -> tarfile.TarInfo:
+            info.uid = info.gid = 0
+            info.uname = info.gname = "root"
+            return info
+
+        print(f"+ tar {tar.name} <- {', '.join(members)}", flush=True)
+        with tarfile.open(tar, "w:gz", compresslevel=3) as tf:
+            for m in members:
+                tf.add(ASSETS / m, arcname=m, filter=anon)
         print(f"tarball {tar.stat().st_size / 1e6:.0f} MB")
         run("scp", "-q", "-i", key, str(tar), f"{piper}:/root/ose-assets.tar.gz")
     remote = (
