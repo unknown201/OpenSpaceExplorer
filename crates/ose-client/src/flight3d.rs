@@ -135,6 +135,30 @@ pub fn attitude_dir(att: &AttitudeMode, r: DVec3, v_rel: DVec3, spin: Spin) -> D
     }
 }
 
+/// Engines lit after `fired` stages: engines in the fired stages that are still attached.
+pub fn lit_engines(
+    craft: &Craft,
+    fired: usize,
+    gone: &[bool],
+    is_engine: &dyn Fn(&str) -> bool,
+) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..craft.stages.len()).collect();
+    order.sort_by(|a, b| b.cmp(a));
+    order.retain(|&s| !craft.stages[s].is_empty());
+    let mut out = Vec::new();
+    for &s in order.iter().take(fired) {
+        for &pi in &craft.stages[s] {
+            if pi < craft.parts.len()
+                && !gone.get(pi).copied().unwrap_or(false)
+                && is_engine(&craft.parts[pi].part_id)
+            {
+                out.push(pi);
+            }
+        }
+    }
+    out
+}
+
 /// Parts gone after `fired` stages: decouplers in the fired stages and everything hanging below them.
 /// Stages fire from the highest stage id down (`ose_data::staging`).
 pub fn jettisoned(craft: &Craft, fired: usize, is_decoupler: &dyn Fn(&str) -> bool) -> Vec<bool> {
@@ -186,6 +210,8 @@ pub struct FlightView {
     flex_prev: FlexMap,
     flex_cur: FlexMap,
     flex_since_ms: f64,
+    /// Craft axes and local horizon of the last frame, for the navball.
+    pub nav: Option<crate::navball::NavFrame>,
 }
 
 impl Default for FlightView {
@@ -209,6 +235,7 @@ pub struct FlightInput<'a> {
     pub ut: f64,
     pub craft: Option<&'a Craft>,
     pub is_decoupler: &'a dyn Fn(&str) -> bool,
+    pub is_engine: &'a dyn Fn(&str) -> bool,
     /// Body spin from the server's `BodyRotation` (protocol 9); the embedded system file otherwise.
     pub spin: Option<Spin>,
     /// Wall clock, ms (flex interpolation).
@@ -232,6 +259,7 @@ impl FlightView {
             flex_prev: HashMap::new(),
             flex_cur: HashMap::new(),
             flex_since_ms: 0.0,
+            nav: None,
         }
     }
 
@@ -408,6 +436,31 @@ impl FlightView {
         // Chase camera in the local horizon frame.
         let north = (DVec3::Y - up * up.dot(DVec3::Y)).normalize_or_zero();
         let east = north.cross(up);
+
+        // Navball frame: craft nose, top (craft +Z) and right, local horizon, and the markers' directions.
+        {
+            let forward = vessel_rot * DVec3::Y;
+            let top = vessel_rot * DVec3::Z;
+            let alt_m = r.length() - inp.body_radius;
+            let v_surf = v_rel - DVec3::new(0.0, 0.0, spin.omega()).cross(r);
+            // The original switches the navball from surface to orbit speed high in the atmosphere.
+            let v_nav = if alt_m < 36_000.0 { v_surf } else { v_rel };
+            let moving = v_nav.length() > 0.5;
+            let normal_i = r.cross(v_rel);
+            let radial_i = r - v_rel.normalize_or_zero() * r.dot(v_rel.normalize_or_zero());
+            self.nav = Some(crate::navball::NavFrame {
+                forward,
+                top,
+                right: forward.cross(top),
+                up,
+                north,
+                east,
+                prograde: moving.then(|| dir_to_model(r, v_nav, spin, inp.ut)),
+                normal: (normal_i.length() > 1.0).then(|| dir_to_model(r, normal_i, spin, inp.ut)),
+                radial: (radial_i.length() > 1.0 && moving)
+                    .then(|| dir_to_model(r, radial_i, spin, inp.ut)),
+            });
+        }
         let offs = self.pitch.cos() * (self.yaw.cos() * north + self.yaw.sin() * east)
             + self.pitch.sin() * up;
         let cam = pos + offs * self.distance;
@@ -423,6 +476,7 @@ impl FlightView {
             inp.ut,
         );
         let mut items: Vec<DrawItem> = Vec::new();
+        let mut flames: Vec<DrawItem> = Vec::new();
 
         // The body sphere, sunk by 1.5 km so its facets stay under the campus ground near the KSC.
         let body_model = format!("body:{}", inp.body_id);
@@ -494,6 +548,41 @@ impl FlightView {
                 parts.push((name, lp, lq));
             }
             let lift = if min_y.is_finite() { -min_y } else { 0.0 };
+            // Engine flames: a glowing cone under each lit engine's nozzle, longer with throttle.
+            let (throttle, thrust) = inp
+                .vessel
+                .flight
+                .as_ref()
+                .map(|f| (f.throttle, f.thrust_kn))
+                .unwrap_or((0.0, 0.0));
+            if throttle > 0.01 && thrust > 0.1 {
+                gpu.request_model("fx:flame", "assets/fx/flame.glb");
+                let lit = lit_engines(craft, fired, &gone, inp.is_engine);
+                for pi in lit {
+                    let p = &craft.parts[pi];
+                    let (pp, q) = poses[pi];
+                    let name = format!("part:{}", p.part_id);
+                    let Some(m) = gpu.model(&name) else { continue };
+                    let (lo, hi) = (m.bounds_min.as_dvec3(), m.bounds_max.as_dvec3());
+                    let width = ((hi.x - lo.x).min(hi.z - lo.z) * 0.7).max(0.3);
+                    let nozzle = DVec3::new((lo.x + hi.x) * 0.5, lo.y, (lo.z + hi.z) * 0.5);
+                    let lp = DVec3::new(-pp.x, pp.y, pp.z);
+                    let lq = DQuat::from_xyzw(q.x, -q.y, -q.z, q.w).normalize();
+                    let at = pos + vessel_rot * (lp + lq * nozzle + DVec3::Y * lift);
+                    // Flicker a little so the flame lives.
+                    let flicker = 1.0 + 0.06 * ((inp.now_ms * 0.031 + pi as f64).sin());
+                    let mut it = DrawItem::lit(
+                        "fx:flame".into(),
+                        at - cam,
+                        vessel_rot * lq,
+                        width * (1.0 + 2.5 * throttle) * flicker,
+                        sun,
+                    );
+                    it.emissive = 1.0;
+                    it.color = [1.0, 0.72, 0.38, 0.85];
+                    flames.push(it);
+                }
+            }
             for (name, lp, lq) in parts {
                 if !gpu.has_model(&name) {
                     continue;
@@ -513,6 +602,7 @@ impl FlightView {
                 items.push(DrawItem::lit(name, pos - cam, vessel_rot, 1.0, sun));
             }
         }
+        items.append(&mut flames);
         // Sky: blue low in the atmosphere, black above it.
         let t = if inp.atmosphere_m > 0.0 {
             (alt / inp.atmosphere_m).clamp(0.0, 1.0)

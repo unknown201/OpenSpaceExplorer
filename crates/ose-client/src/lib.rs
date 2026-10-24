@@ -19,6 +19,8 @@ pub mod ksc3d;
 #[cfg(target_arch = "wasm32")]
 pub mod menu3d;
 #[cfg(target_arch = "wasm32")]
+pub mod navball;
+#[cfg(target_arch = "wasm32")]
 pub mod render;
 pub mod scene;
 pub mod thumb;
@@ -110,6 +112,8 @@ struct App {
     /// The flight view (the vessel in 3D near its body).
     #[cfg(target_arch = "wasm32")]
     flight3d: flight3d::FlightView,
+    #[cfg(target_arch = "wasm32")]
+    navball: navball::Navball,
     /// The vessel the player is flying (launched from the pad), the craft it was built from, and whether
     /// the map is shown instead of the flight view (M).
     flying: Option<u64>,
@@ -307,6 +311,8 @@ pub fn start() -> Result<(), JsValue> {
         press: None,
         #[cfg(target_arch = "wasm32")]
         flight3d: flight3d::FlightView::new(),
+        #[cfg(target_arch = "wasm32")]
+        navball: navball::Navball::new(),
         flying: None,
         flight_craft: None,
         map_mode: false,
@@ -3048,6 +3054,7 @@ impl App {
         let g = |d: ose_math::DVec3| glam::DVec3::new(d.x, d.y, d.z);
         let catalog = &self.catalog;
         let is_dec = |pid: &str| catalog.get(pid).map(|p| p.is_decoupler).unwrap_or(false);
+        let is_eng = |pid: &str| catalog.get(pid).map(|p| p.has_engine).unwrap_or(false);
         let inp = flight3d::FlightInput {
             vessel: v,
             vessel_pos: g(vp),
@@ -3065,13 +3072,27 @@ impl App {
             ut,
             craft: self.flight_craft.as_ref(),
             is_decoupler: &is_dec,
+            is_engine: &is_eng,
             now_ms: now_ms(),
             spin: self.body_spins.get(rb).map(|b| flight3d::Spin {
                 period_s: b.rotation_period_s,
                 initial_deg: b.initial_rotation_deg,
             }),
         };
-        self.flight3d.frame(gpu, &inp)
+        let drawn = self.flight3d.frame(gpu, &inp);
+        if drawn {
+            if let (Some(nav), Some(canvas)) = (
+                self.flight3d.nav,
+                self.doc
+                    .get_element_by_id("fh-navball")
+                    .and_then(|e| e.dyn_into::<HtmlCanvasElement>().ok()),
+            ) {
+                if self.navball.draw(&canvas, &nav) {
+                    canvas.set_attribute("data-ose-navball", "drawn").ok();
+                }
+            }
+        }
+        drawn
     }
 
     #[cfg(target_arch = "wasm32")]

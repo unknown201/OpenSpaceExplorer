@@ -68,6 +68,10 @@ the order a new player meets it, using the original's assets).
   (`FLEX_EXAGGERATION`) so the wobble reads on screen; the HUD shows `joint_stress` as a green-to-red bar.
   The renderer now uses reversed infinite depth (near 1, far 0, `Greater`), which removed most of the
   z-fighting on the ground seen from altitude.
+  Navball: drawn per pixel from the original's own atlas (`Flight-Navball-Texture`: a pitch band across the
+  middle and a disk per pole, mapped in `navball.rs`) with its prograde, normal and radial markers; surface
+  speed below 36 km, orbital above, as the original switches. Engine flames: a procedural cone
+  (`tools/make_fx.py`, `fx/flame.glb`) under each lit engine's nozzle, scaled by throttle.
 - Craft poses: KSP2 assemblies store `partState.localPosition` relative to the craft root, not the parent
   (the stock K1 descends monotonically down its 38-part tree), so the client reads stored poses as
   craft-frame poses and the editor now stores root-relative positions too. Crafts saved by the editor
@@ -80,6 +84,6 @@ the order a new player meets it, using the original's assets).
 - Fonts: the original's menu fonts (Sbliquid, Realtime Rounded) are not in the bundles as font files, only
   as TextMeshPro atlases, so the page uses a system sans-serif at the original's sizes.
 - Not yet at the KSC: the layered "Standard Tileable (Vertex Color)" building shader (only each material's base map is drawn, so buildings read darker than the original), terrain, trees and props, the day cycle, the launch pad flyout.
-- Not yet in flight: a navball, engine plumes, debris vessels drawn as parts, terrain relief under the campus, the original's launch camera.
+- Not yet in flight: the original's particle plumes, the maneuver and target markers on the navball, debris vessels drawn as parts, terrain relief under the campus, the original's launch camera.
 - Not yet: the sun flare and bloom, the ship's team colours (`ApplyTeamColors` masks), the Settings and
   Extras screens, and the menu's hover and fade animations.

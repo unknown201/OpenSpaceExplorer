@@ -266,6 +266,7 @@
     .fh-throttle span { position: absolute; top: calc(4 * var(--u)); left: 0; right: 0; text-align: center; font-size: calc(9 * var(--u)); color: #fff; }
     .fh-staging { position: absolute; left: calc(16 * var(--u)); bottom: calc(16 * var(--u)); background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(8 * var(--u)); padding: calc(10 * var(--u)); display: flex; flex-direction: column; gap: calc(6 * var(--u)); min-width: calc(160 * var(--u)); }
     #fh-stage-btn { background: #2f6b2f !important; font-size: calc(18 * var(--u)) !important; padding: calc(10 * var(--u)) !important; }
+    #fh-navball { width: calc(200 * var(--u)); height: calc(200 * var(--u)); align-self: flex-end; border-radius: 50%; background: #10141b; box-shadow: 0 0 0 calc(3 * var(--u)) #2a3140, 0 0 calc(12 * var(--u)) #000a; }
     .fh-stress { height: calc(8 * var(--u)); background: #ffffff22; border-radius: calc(4 * var(--u)); overflow: hidden; }
     #fh-stress-fill { height: 100%; width: 0; background: hsl(120, 85%, 50%); transition: width 0.1s linear; }
     .fh-help { position: absolute; right: calc(16 * var(--u)); bottom: calc(16 * var(--u)); font-size: calc(11 * var(--u)); color: #9fb0cc; max-width: calc(260 * var(--u)); text-align: right; }
@@ -418,6 +419,7 @@
     <div class="fh-top"><div class="fh-label">ALTITUDE</div><div id="fh-altitude" data-ose="flight-altitude">--</div><div id="fh-situation" class="fh-small">--</div><div id="fh-note" class="fh-small" style="color:#f0a070"></div><div id="fh-control" data-ose="flight-control" style="color:#ff6a5a;font-weight:700"></div></div>
     <div class="fh-bottom">
       <div class="fh-throttle" title="Z full, X cut, Shift and Ctrl to adjust"><div id="fh-throttle-fill"></div><span>THR</span></div>
+      <canvas id="fh-navball" data-ose="flight-navball" width="200" height="200"></canvas>
       <div class="fh-core">
         <div class="fh-row"><span class="fh-label">SURFACE</span><b id="fh-speed">--</b><span class="fh-label">VERTICAL</span><b id="fh-vspeed">--</b></div>
         <div class="fh-row"><span id="fh-attitude">--</span><span id="fh-twr" class="fh-small">--</span></div>

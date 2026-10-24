@@ -10,7 +10,8 @@ writes, under `assets/web/` (gitignored, pushed to the server with tools/push_as
     menu/kerbin.glb      the menu sphere with the `kerbin_menu_d` / `_n` textures
     menu/clouds.glb      the same sphere, the cloud cubemap unwrapped to a panorama, alpha blended
     menu/sky.glb         an inverted sphere with the starfield cubemap unwrapped to a panorama
-    ui/<sprite>.png      the logo and the frames the menu is drawn with (from `ui_assets_all.bundle`)
+    ui/<sprite>.png      the logo and the frames the menu is drawn with (from `ui_assets_all.bundle`), and the
+                         flight HUD's navball atlas and marker icons (from `hudinstruments_assets_all.bundle`)
 
 Frames: everything is written in the glTF frame the part exports use (Unity's X negated, quaternion y and z
 negated, see export_web_assets.py). Spin rates are degrees per second about the world Y axis, already
@@ -33,6 +34,12 @@ from export_web_assets import DEFAULT_INSTALL, ROOT, Exporter, Glb, normalize, t
 
 SCENE_BUNDLE = "boot-ksp_scenes_all.bundle"
 UI_BUNDLE = "ui_assets_all.bundle"
+HUD_BUNDLE = "hudinstruments_assets_all.bundle"
+HUD_TEXTURES = {
+    "Flight-Navball-Texture", "Flight-Navball-Texture_Orbit", "Flight-Navball-Shadow", "Flight-Navball-Crosshair",
+    "ICO-Navball-Prograde", "ICO-Navball-Retrograde", "ICO-Navball-Normal", "ICO-Navball-AntiNormal",
+    "ICO-Navball-RadialIn", "ICO-Navball-RadialOut", "ICO-Navball-Maneuver", "ICO-Navball-Target", "ICO-Navball-AntiTarget",
+}
 UI_SPRITES = [
     "sno_logo-wht_red_2x", "WB-ELE-Button-Rounded", "WB-ELE-Box-Rounded", "WB-ELE-Box-Rounded-Stroke",
     "WB-ELE-Box 1", "Frame-6px-rad-fill", "Frame-6px-rad-border", "WB-ELE-PanelBG-Right", "BTN-FrontEnd-back",
@@ -521,6 +528,18 @@ def main() -> int:
                     got.append(s.m_Name)
                 except Exception as e:  # noqa: BLE001
                     print(f"  sprite {s.m_Name}: {e}")
+        # Flight HUD textures (the navball atlas and its markers) from the HUD instruments bundle.
+        henv = ex.env(HUD_BUNDLE)
+        for o in henv.objects:
+            if o.type.name != "Texture2D":
+                continue
+            t = o.read()
+            if t.m_Name in HUD_TEXTURES and t.m_Name not in got:
+                try:
+                    t.image.save(out / "ui" / f"{t.m_Name}.png")
+                    got.append(t.m_Name)
+                except Exception as e:  # noqa: BLE001
+                    print(f"  texture {t.m_Name}: {e}")
         scene["ui_sprites"] = sorted(got)
         print(f"ui: {len(got)} sprites" + (f", missing {sorted(wanted - set(got))}" if wanted - set(got) else ""))
 
