@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 pub mod craft;
+pub mod missions;
 pub mod science;
 pub mod staging;
 pub mod terrain;

@@ -1,0 +1,3265 @@
+[
+  {
+    "id": "KSP2Mission_Secondary_Bop_ExperimentFossil",
+    "name_key": "Missions/Secondary/Bop_ExperimentFossil/Name",
+    "description_key": "Missions/Secondary/Bop_ExperimentFossil/Description",
+    "primary": false,
+    "granter": "MIssionGranterProbodobodyne",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "Missions/Secondary/Bop_ExperimentFossil/Objective",
+        "condition": {
+          "Property": {
+            "watch": "HasStoredReport",
+            "op": "Equal",
+            "value": 0.0,
+            "count": 0,
+            "text": "",
+            "input": "SurfaceSurvey_SampleType_Bop_Landed_BopCarcass",
+            "expect": true,
+            "latch": false
+          }
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 15,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 3000.0
+      }
+    ]
+  },
+  {
+    "id": "KSP2Mission_Secondary_Dres_Flag",
+    "name_key": "Missions/Secondary/Dres_Flag/Name",
+    "description_key": "Missions/Secondary/Dres_Flag/Description",
+    "primary": false,
+    "granter": "MissionGranterJebsJunkyard",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "Missions/Secondary/Dres_Flag/Objective",
+        "condition": {
+          "All": [
+            {
+              "Property": {
+                "watch": "ResearchLocation",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "Dres_Landed_DresEyeOfDres",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Event": "FlagPlanted"
+            }
+          ]
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 15,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 8000.0
+      }
+    ]
+  },
+  {
+    "id": "KSP2Mission_Secondary_Duna_LandingHeavy",
+    "name_key": "Missions/Secondary/Duna_LandingHeavy/Name",
+    "description_key": "Missions/Secondary/Duna_LandingHeavy/Description",
+    "primary": false,
+    "granter": "MissionGranterKerbodyne",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "Missions/Secondary/Duna_LandingHeavy/Objective",
+        "condition": {
+          "All": [
+            {
+              "Property": {
+                "watch": "Mass",
+                "op": "Greater",
+                "value": 299.0,
+                "count": 0,
+                "text": "",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Event": "LandedOnGround"
+            },
+            {
+              "Property": {
+                "watch": "Soi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "Duna",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            }
+          ]
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 15,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 3000.0
+      }
+    ]
+  },
+  {
+    "id": "KSP2Mission_Secondary_Eeloo_Rover",
+    "name_key": "Missions/Secondary/Eeloo_Rover/Name",
+    "description_key": "Missions/Secondary/Eeloo_Rover/Description",
+    "primary": false,
+    "granter": "MissionGranterKSC",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "Missions/Secondary/Eeloo_Rover/Objective",
+        "condition": {
+          "All": [
+            {
+              "Property": {
+                "watch": "ResearchLocation",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "Eeloo_Landed_EelooWaveIce",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "WheelCount",
+                "op": "Greater",
+                "value": 0.0,
+                "count": 3,
+                "text": "",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            }
+          ]
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 15,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 8000.0
+      }
+    ]
+  },
+  {
+    "id": "KSP2Mission_Secondary_Eeloo_SOI",
+    "name_key": "Missions/Secondary/Eeloo_SOI/Name",
+    "description_key": "Missions/Secondary/Eeloo_SOI/Description",
+    "primary": false,
+    "granter": "MissionGranterCoopsConnectors",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "Missions/Secondary/Eeloo_SOI/Objective",
+        "condition": {
+          "Property": {
+            "watch": "Soi",
+            "op": "Equal",
+            "value": 0.0,
+            "count": 0,
+            "text": "Eeloo",
+            "input": "",
+            "expect": true,
+            "latch": false
+          }
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 15,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 8000.0
+      }
+    ]
+  },
+  {
+    "id": "KSP2Mission_Secondary_Eve_LandCrew",
+    "name_key": "Missions/Secondary/Eve_LandCrew/Name",
+    "description_key": "Missions/Secondary/Eve_LandCrew/Description",
+    "primary": false,
+    "granter": "MissionGranterJebsJunkyard",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "Missions/Secondary/Eve_LandCrew/Objective",
+        "condition": {
+          "All": [
+            {
+              "Property": {
+                "watch": "CrewCount",
+                "op": "Greater",
+                "value": 0.0,
+                "count": 9,
+                "text": "",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "LandedOnBody",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "Eve",
+                "input": "Eve",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "Soi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "Kerbin",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Any": [
+                {
+                  "Event": "LandedOnGround"
+                },
+                {
+                  "Event": "LandedOnWater"
+                }
+              ]
+            }
+          ]
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 15,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 8000.0
+      }
+    ]
+  },
+  {
+    "id": "KSP2Mission_Secondary_Eve_SOI",
+    "name_key": "Missions/Secondary/Eve_SOI/Name",
+    "description_key": "Missions/Secondary/Eve_SOI/Description",
+    "primary": false,
+    "granter": "MissionGranterMajorComms",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "Missions/Secondary/Eve_SOI/Objective",
+        "condition": {
+          "Property": {
+            "watch": "Soi",
+            "op": "Equal",
+            "value": 0.0,
+            "count": 0,
+            "text": "Eve",
+            "input": "",
+            "expect": true,
+            "latch": false
+          }
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 15,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 3000.0
+      }
+    ]
+  },
+  {
+    "id": "KSP2Mission_Secondary_Gilly_ExperimentImpact",
+    "name_key": "Missions/Secondary/Gilly_ExperimentImpact/Name",
+    "description_key": "Missions/Secondary/Gilly_ExperimentImpact/Description",
+    "primary": false,
+    "granter": "MissionGranterOMB",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "Missions/Secondary/Gilly_ExperimentImpact/Objective",
+        "condition": {
+          "Property": {
+            "watch": "HasStoredReport",
+            "op": "Equal",
+            "value": 0.0,
+            "count": 0,
+            "text": "",
+            "input": "EnvironmentSurvey_DataType_Gilly_Landed_GillyObliqueImpact",
+            "expect": true,
+            "latch": false
+          }
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 15,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 3000.0
+      }
+    ]
+  },
+  {
+    "id": "KSP2Mission_Secondary_Ike_LandingCrewed",
+    "name_key": "Missions/Secondary/Ike_LandingCrewed/Name",
+    "description_key": "Missions/Secondary/Ike_LandingCrewed/Description",
+    "primary": false,
+    "granter": "MissionGranterKHS",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "Missions/Secondary/Ike_LandingCrewed/Objective",
+        "condition": {
+          "All": [
+            {
+              "Property": {
+                "watch": "CrewCount",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 3,
+                "text": "",
+                "input": "",
+                "expect": true,
+                "latch": true
+              }
+            },
+            {
+              "Property": {
+                "watch": "Soi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "Ike",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Event": "LandedOnGround"
+            }
+          ]
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 15,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 1000.0
+      }
+    ]
+  },
+  {
+    "id": "KSP2Mission_Secondary_Jool_ExperimentAtmosphere",
+    "name_key": "Missions/Secondary/Jool_ExperimentAtmosphere/Name",
+    "description_key": "Missions/Secondary/Jool_ExperimentAtmosphere/Description",
+    "primary": false,
+    "granter": "MissionGranterJoelsLenses",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "Missions/Secondary/Jool_ExperimentAtmosphere/Objective",
+        "condition": {
+          "Any": [
+            {
+              "Property": {
+                "watch": "HasScoredReport",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "",
+                "input": "AtmosphereSurvey_DataType_Jool_Atmosphere_JoolNorthernCircle",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "HasScoredReport",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "",
+                "input": "AtmosphereSurvey_DataType_Jool_Atmosphere_JoolNorthernTropic",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "HasScoredReport",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "",
+                "input": "AtmosphereSurvey_DataType_Jool_Atmosphere_JoolEquator",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "HasScoredReport",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "",
+                "input": "AtmosphereSurvey_DataType_Jool_Atmosphere_JoolSouthernCircle",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "HasScoredReport",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "",
+                "input": "AtmosphereSurvey_DataType_Jool_Atmosphere_JoolSouthernTropic",
+                "expect": true,
+                "latch": false
+              }
+            }
+          ]
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 15,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 3000.0
+      }
+    ]
+  },
+  {
+    "id": "KSP2Mission_Secondary_Kerbin_Buoyancy",
+    "name_key": "Missions/Secondary/Kerbin_Buoyancy/Name",
+    "description_key": "Missions/Secondary/Kerbin_Buoyancy/Description",
+    "primary": false,
+    "granter": "MissionGranterKSC",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "Missions/Secondary/Kerbin_Buoyancy/Objective",
+        "condition": {
+          "All": [
+            {
+              "Property": {
+                "watch": "HasPartInGroup",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "",
+                "input": "0000-Pod",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Any": [
+                {
+                  "Property": {
+                    "watch": "ResearchLocation",
+                    "op": "Equal",
+                    "value": 0.0,
+                    "count": 0,
+                    "text": "Kerbin_Landed_KerbinWater",
+                    "input": "",
+                    "expect": true,
+                    "latch": false
+                  }
+                },
+                {
+                  "Property": {
+                    "watch": "ResearchLocation",
+                    "op": "Equal",
+                    "value": 0.0,
+                    "count": 0,
+                    "text": "Kerbin_Splashed_KerbinWater",
+                    "input": "",
+                    "expect": true,
+                    "latch": false
+                  }
+                }
+              ]
+            },
+            {
+              "Event": "LandedOnWater"
+            }
+          ]
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 15,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 40.0
+      }
+    ]
+  },
+  {
+    "id": "KSP2Mission_Secondary_Kerbin_EVASpace",
+    "name_key": "Missions/Secondary/Kerbin_EVASpace/Name",
+    "description_key": "Missions/Secondary/Kerbin_EVASpace/Description",
+    "primary": false,
+    "granter": "MissionGranterStrutCo",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "Missions/Secondary/Kerbin_EVASpace/Objective",
+        "condition": {
+          "All": [
+            {
+              "Property": {
+                "watch": "Soi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "Kerbin",
+                "input": "",
+                "expect": true,
+                "latch": true
+              }
+            },
+            {
+              "Property": {
+                "watch": "PeriapsisAltitude",
+                "op": "Greater",
+                "value": 70000.0,
+                "count": 0,
+                "text": "",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "IsEva",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "",
+                "input": "true",
+                "expect": true,
+                "latch": false
+              }
+            }
+          ]
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 15,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 40.0
+      }
+    ]
+  },
+  {
+    "id": "KSP2Mission_Secondary_Kerbin_Experiment",
+    "name_key": "Missions/Secondary/Kerbin_Experiment/Name",
+    "description_key": "Missions/Secondary/Kerbin_Experiment/Description",
+    "primary": false,
+    "granter": "MissionGranterKSC",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "Missions/Secondary/Kerbin_Experiment/Objective",
+        "condition": {
+          "All": [
+            {
+              "Property": {
+                "watch": "PartActivated",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "",
+                "input": "collector_1v_science_general",
+                "expect": true,
+                "latch": true
+              }
+            },
+            {
+              "Property": {
+                "watch": "Soi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "Kerbin",
+                "input": "",
+                "expect": true,
+                "latch": true
+              }
+            },
+            {
+              "Event": "ReportAcquired"
+            }
+          ]
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 15,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 25.0
+      }
+    ]
+  },
+  {
+    "id": "KSP2Mission_Secondary_Kerbin_ExperimentKapy",
+    "name_key": "Missions/Secondary/Kerbin_ExperimentKapy/Name",
+    "description_key": "Missions/Secondary/Kerbin_ExperimentKapy/Description",
+    "primary": false,
+    "granter": "MissionGranterSeansCannery",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "Missions/Secondary/Kerbin_ExperimentKapy/Objective",
+        "condition": {
+          "All": [
+            {
+              "Any": [
+                {
+                  "Property": {
+                    "watch": "HasPart",
+                    "op": "Equal",
+                    "value": 0.0,
+                    "count": 0,
+                    "text": "",
+                    "input": "pod_3v_lander_crew",
+                    "expect": true,
+                    "latch": false
+                  }
+                },
+                {
+                  "Property": {
+                    "watch": "HasPart",
+                    "op": "Equal",
+                    "value": 0.0,
+                    "count": 0,
+                    "text": "",
+                    "input": "pod_2v_lander_crew",
+                    "expect": true,
+                    "latch": false
+                  }
+                },
+                {
+                  "Property": {
+                    "watch": "HasPart",
+                    "op": "Equal",
+                    "value": 0.0,
+                    "count": 0,
+                    "text": "",
+                    "input": "pod_1v_lander_crew",
+                    "expect": true,
+                    "latch": false
+                  }
+                }
+              ]
+            },
+            {
+              "Property": {
+                "watch": "HasStoredReport",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "",
+                "input": "CrewObservation_DataType_Kerbin_Landed_KerbinCamelRock",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "ResearchLocation",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "Kerbin_Landed_KerbinCamelRock",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            }
+          ]
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 15,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 400.0
+      }
+    ]
+  },
+  {
+    "id": "KSP2Mission_Secondary_Kerbin_ExperimentStargazer",
+    "name_key": "Missions/Secondary/Kerbin_ExperimentStargazer/Name",
+    "description_key": "Missions/Secondary/Kerbin_ExperimentStargazer/Description",
+    "primary": false,
+    "granter": "MissionGranterSeansCannery",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "Missions/Secondary/Kerbin_ExperimentStargazer/Objective",
+        "condition": {
+          "All": [
+            {
+              "Any": [
+                {
+                  "Property": {
+                    "watch": "HasPart",
+                    "op": "Equal",
+                    "value": 0.0,
+                    "count": 0,
+                    "text": "",
+                    "input": "pod_3v_lander_crew",
+                    "expect": true,
+                    "latch": false
+                  }
+                },
+                {
+                  "Property": {
+                    "watch": "HasPart",
+                    "op": "Equal",
+                    "value": 0.0,
+                    "count": 0,
+                    "text": "",
+                    "input": "pod_2v_lander_crew",
+                    "expect": true,
+                    "latch": false
+                  }
+                },
+                {
+                  "Property": {
+                    "watch": "HasPart",
+                    "op": "Equal",
+                    "value": 0.0,
+                    "count": 0,
+                    "text": "",
+                    "input": "pod_1v_lander_crew",
+                    "expect": true,
+                    "latch": false
+                  }
+                }
+              ]
+            },
+            {
+              "Property": {
+                "watch": "HasStoredReport",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "Kerbin_Landed_KerbinDevilsTower",
+                "input": "CrewObservation_DataType_Kerbin_Landed_KerbinDevilsTower",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "ResearchLocation",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "Kerbin_Landed_KerbinDevilsTower",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            }
+          ]
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 15,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 400.0
+      }
+    ]
+  },
+  {
+    "id": "KSP2Mission_Secondary_Kerbin_OrbitCircular",
+    "name_key": "Missions/Secondary/Kerbin_OrbitCircular/Name",
+    "description_key": "Missions/Secondary/Kerbin_OrbitCircular/Description",
+    "primary": false,
+    "granter": "MissionGranterLightyear",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "Missions/Secondary/Kerbin_OrbitCircular/Objective",
+        "condition": {
+          "All": [
+            {
+              "Property": {
+                "watch": "Soi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "Kerbin",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "ApoapsisAltitude",
+                "op": "Greater",
+                "value": 99000.0,
+                "count": 0,
+                "text": "",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "ApoapsisAltitude",
+                "op": "Lesser",
+                "value": 101000.0,
+                "count": 0,
+                "text": "",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "PeriapsisAltitude",
+                "op": "Greater",
+                "value": 99000.0,
+                "count": 0,
+                "text": "",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "PeriapsisAltitude",
+                "op": "Lesser",
+                "value": 101000.0,
+                "count": 0,
+                "text": "",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "EscapePredictedSoi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "",
+                "input": "Mun",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "EscapePredictedSoi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "",
+                "input": "Minmus",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "EscapePredictedSoi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "",
+                "input": "Kerboil",
+                "expect": true,
+                "latch": false
+              }
+            }
+          ]
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 15,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 100.0
+      }
+    ]
+  },
+  {
+    "id": "KSP2Mission_Secondary_Kerbin_OrbitEccentric",
+    "name_key": "Missions/Secondary/Kerbin_OrbitEccentric/Name",
+    "description_key": "Missions/Secondary/Kerbin_OrbitEccentric/Description",
+    "primary": false,
+    "granter": "MissionGranterIonic",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "Missions/Secondary/Kerbin_OrbitEccentric/Objective",
+        "condition": {
+          "All": [
+            {
+              "Property": {
+                "watch": "Soi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "Kerbin",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "PeriapsisAltitude",
+                "op": "Greater",
+                "value": 70000.0,
+                "count": 0,
+                "text": "",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "PeriapsisAltitude",
+                "op": "Lesser",
+                "value": 150000.0,
+                "count": 0,
+                "text": "",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "ApoapsisAltitude",
+                "op": "Lesser",
+                "value": 8400000.0,
+                "count": 0,
+                "text": "",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "ApoapsisAltitude",
+                "op": "Greater",
+                "value": 300000.0,
+                "count": 0,
+                "text": "Kerbin",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "EscapePredictedSoi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "",
+                "input": "Mun",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "EscapePredictedSoi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "",
+                "input": "Minmus",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "EscapePredictedSoi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "",
+                "input": "Kerbol",
+                "expect": true,
+                "latch": false
+              }
+            }
+          ]
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 15,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 100.0
+      }
+    ]
+  },
+  {
+    "id": "KSP2Mission_Secondary_Kerbin_OrbitFuelStation",
+    "name_key": "Missions/Secondary/Kerbin_OrbitFuelStation/Name",
+    "description_key": "Missions/Secondary/Kerbin_OrbitFuelStation/Description",
+    "primary": false,
+    "granter": "MissionGranterRockomax",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "Missions/Secondary/Kerbin_OrbitFuelStation/Objective",
+        "condition": {
+          "All": [
+            {
+              "Property": {
+                "watch": "HasPart",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "",
+                "input": "fueltank_2v_inline_methalox_1x8",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "HasPartInGroup",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "",
+                "input": "0310-Docking Port",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "PeriapsisAltitude",
+                "op": "Greater",
+                "value": 70000.0,
+                "count": 0,
+                "text": "",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "EscapePredictedSoi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "",
+                "input": "Mun",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "EscapePredictedSoi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "",
+                "input": "Minmus",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "EscapePredictedSoi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "",
+                "input": "Kerbol",
+                "expect": true,
+                "latch": false
+              }
+            }
+          ]
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 15,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 35.0
+      }
+    ]
+  },
+  {
+    "id": "KSP2Mission_Secondary_Kerbin_OrbitKeostationary",
+    "name_key": "Missions/Secondary/Kerbin_OrbitKeostationary/Name",
+    "description_key": "Missions/Secondary/Kerbin_OrbitKeostationary/Description",
+    "primary": false,
+    "granter": "MissionGranterEEG",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "Missions/Secondary/Kerbin_OrbitKeostationary/Objective",
+        "condition": {
+          "All": [
+            {
+              "Property": {
+                "watch": "Soi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "Kerbin",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "All": [
+                {
+                  "Property": {
+                    "watch": "OrbitSpeed",
+                    "op": "Greater",
+                    "value": 1000.0,
+                    "count": 0,
+                    "text": "",
+                    "input": "",
+                    "expect": true,
+                    "latch": false
+                  }
+                },
+                {
+                  "Property": {
+                    "watch": "OrbitSpeed",
+                    "op": "Lesser",
+                    "value": 1020.0,
+                    "count": 0,
+                    "text": "",
+                    "input": "",
+                    "expect": true,
+                    "latch": false
+                  }
+                }
+              ]
+            },
+            {
+              "All": [
+                {
+                  "Property": {
+                    "watch": "PeriapsisAltitude",
+                    "op": "Greater",
+                    "value": 2834000.0,
+                    "count": 0,
+                    "text": "",
+                    "input": "",
+                    "expect": true,
+                    "latch": false
+                  }
+                },
+                {
+                  "Property": {
+                    "watch": "PeriapsisAltitude",
+                    "op": "Lesser",
+                    "value": 2892000.0,
+                    "count": 0,
+                    "text": "",
+                    "input": "",
+                    "expect": true,
+                    "latch": false
+                  }
+                }
+              ]
+            },
+            {
+              "All": [
+                {
+                  "Property": {
+                    "watch": "ApoapsisAltitude",
+                    "op": "Greater",
+                    "value": 2834000.0,
+                    "count": 0,
+                    "text": "",
+                    "input": "",
+                    "expect": true,
+                    "latch": true
+                  }
+                },
+                {
+                  "Property": {
+                    "watch": "ApoapsisAltitude",
+                    "op": "Lesser",
+                    "value": 2892000.0,
+                    "count": 0,
+                    "text": "",
+                    "input": "",
+                    "expect": true,
+                    "latch": true
+                  }
+                }
+              ]
+            },
+            {
+              "Property": {
+                "watch": "EscapePredictedSoi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "",
+                "input": "Mun",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "EscapePredictedSoi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "",
+                "input": "Minmus",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "EscapePredictedSoi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "",
+                "input": "Kerbol",
+                "expect": true,
+                "latch": false
+              }
+            }
+          ]
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 15,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 300.0
+      }
+    ]
+  },
+  {
+    "id": "KSP2Mission_Secondary_Kerbin_Rover",
+    "name_key": "Missions/Secondary/Kerbin_Rover/Name",
+    "description_key": "Missions/Secondary/Kerbin_Rover/Description",
+    "primary": false,
+    "granter": "MissionGranterLightyear",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "Missions/Secondary/Kerbin_Rover/Objective",
+        "condition": {
+          "Property": {
+            "watch": "WheelCount",
+            "op": "Greater",
+            "value": 0.0,
+            "count": 3,
+            "text": "",
+            "input": "",
+            "expect": true,
+            "latch": false
+          }
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 15,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 50.0
+      }
+    ]
+  },
+  {
+    "id": "KSP2Mission_Secondary_Kerbin_Satellite",
+    "name_key": "Missions/Secondary/Kerbin_Satellite/Name",
+    "description_key": "Missions/Secondary/Kerbin_Satellite/Description",
+    "primary": false,
+    "granter": "MissionGranterKSC",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "Missions/Secondary/Kerbin_Satellite/Objective",
+        "condition": {
+          "All": [
+            {
+              "Property": {
+                "watch": "Soi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "Kerbin",
+                "input": "",
+                "expect": true,
+                "latch": true
+              }
+            },
+            {
+              "Property": {
+                "watch": "HasPartInGroup",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "",
+                "input": "0010-Probe",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "HasPartInGroup",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "",
+                "input": "0500-Antenna",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "HasPartInGroup",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "",
+                "input": "0480-Solar Array",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "PeriapsisAltitude",
+                "op": "Greater",
+                "value": 70000.0,
+                "count": 0,
+                "text": "",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            }
+          ]
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 15,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 100.0
+      }
+    ]
+  },
+  {
+    "id": "KSP2Mission_Secondary_Kerbol_SOI",
+    "name_key": "Missions/Secondary/Kerbol_SOI/Name",
+    "description_key": "Missions/Secondary/Kerbol_SOI/Description",
+    "primary": false,
+    "granter": "MissionGranterRokea",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "Missions/Secondary/Kerbol_SOI/Objective",
+        "condition": {
+          "Property": {
+            "watch": "Soi",
+            "op": "Equal",
+            "value": 0.0,
+            "count": 0,
+            "text": "Kerbol",
+            "input": "",
+            "expect": true,
+            "latch": true
+          }
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 15,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 50.0
+      }
+    ]
+  },
+  {
+    "id": "KSP2Mission_Secondary_Laythe_ExperimentFossil",
+    "name_key": "Missions/Secondary/Laythe_ExperimentFossil/Name",
+    "description_key": "Missions/Secondary/Laythe_ExperimentFossil/Description",
+    "primary": false,
+    "granter": "MissionGranterProbodobodyne",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "Missions/Secondary/Laythe_ExperimentFossil/Objective",
+        "condition": {
+          "Property": {
+            "watch": "HasStoredReport",
+            "op": "Equal",
+            "value": 0.0,
+            "count": 0,
+            "text": "",
+            "input": "SurfaceSurvey_SampleType_Laythe_Landed_LaytheFossil",
+            "expect": true,
+            "latch": false
+          }
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 15,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 3000.0
+      }
+    ]
+  },
+  {
+    "id": "KSP2Mission_Secondary_Laythe_Plane",
+    "name_key": "Missions/Secondary/Laythe_Plane/Name",
+    "description_key": "Missions/Secondary/Laythe_Plane/Description",
+    "primary": false,
+    "granter": "MissionGranterWinterOwl",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "Missions/Secondary/Laythe_Plane/Objective",
+        "condition": {
+          "All": [
+            {
+              "Property": {
+                "watch": "Soi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "Laythe",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Any": [
+                {
+                  "Property": {
+                    "watch": "PartActivated",
+                    "op": "Equal",
+                    "value": 0.0,
+                    "count": 0,
+                    "text": "engine_2v_turbofan_methane_goliath",
+                    "input": "",
+                    "expect": true,
+                    "latch": false
+                  }
+                },
+                {
+                  "Property": {
+                    "watch": "PartActivated",
+                    "op": "Equal",
+                    "value": 0.0,
+                    "count": 0,
+                    "text": "engine_1v_turboramjet_methane_whiplash",
+                    "input": "",
+                    "expect": true,
+                    "latch": false
+                  }
+                },
+                {
+                  "Property": {
+                    "watch": "PartActivated",
+                    "op": "Equal",
+                    "value": 0.0,
+                    "count": 0,
+                    "text": "engine_1v_turbofan_methane_wheesley",
+                    "input": "",
+                    "expect": true,
+                    "latch": false
+                  }
+                },
+                {
+                  "Property": {
+                    "watch": "PartActivated",
+                    "op": "Equal",
+                    "value": 0.0,
+                    "count": 0,
+                    "text": "engine_1v_turbofan_methane_panther",
+                    "input": "",
+                    "expect": true,
+                    "latch": false
+                  }
+                },
+                {
+                  "Property": {
+                    "watch": "PartActivated",
+                    "op": "Equal",
+                    "value": 0.0,
+                    "count": 0,
+                    "text": "engine_1v_methane-methalox_rapier",
+                    "input": "",
+                    "expect": true,
+                    "latch": false
+                  }
+                },
+                {
+                  "Property": {
+                    "watch": "PartActivated",
+                    "op": "Equal",
+                    "value": 0.0,
+                    "count": 0,
+                    "text": "engine_0v_methane_whittle",
+                    "input": "",
+                    "expect": true,
+                    "latch": false
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 15,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 3000.0
+      }
+    ]
+  },
+  {
+    "id": "KSP2Mission_Secondary_Minmus_LandHeavy",
+    "name_key": "Missions/Secondary/Minmus_LandHeavy/Name",
+    "description_key": "Missions/Secondary/Minmus_LandHeavy/Description",
+    "primary": false,
+    "granter": "",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "Missions/Secondary/Minmus_LandHeavy/Objective",
+        "condition": {
+          "All": [
+            {
+              "Property": {
+                "watch": "Soi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "Minmus",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "Mass",
+                "op": "Greater",
+                "value": 199.0,
+                "count": 0,
+                "text": "",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Event": "LandedOnGround"
+            }
+          ]
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 15,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 35.0
+      }
+    ]
+  },
+  {
+    "id": "KSP2Mission_Secondary_Moho_01",
+    "name_key": "Precision_Landing",
+    "description_key": "Take your ship to the Northern Pole of Moho.",
+    "primary": false,
+    "granter": "",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 4,
+        "objective_key": "",
+        "condition": {
+          "Event": {
+            "Other": "GoToNextTutorialStep"
+          }
+        },
+        "science_reward": 0.0
+      },
+      {
+        "id": 0,
+        "objective_key": "",
+        "condition": {
+          "All": [
+            {
+              "Property": {
+                "watch": "Soi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "Moho",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Event": "LandedOnGround"
+            },
+            {
+              "Property": {
+                "watch": {
+                  "Other": "FlightVehicleDistanceFromPosition"
+                },
+                "op": "Lesser",
+                "value": 5000.0,
+                "count": 0,
+                "text": "",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": {
+                  "Other": "FlightVehicleDistanceFromPosition"
+                },
+                "op": "Greater",
+                "value": 0.0,
+                "count": 0,
+                "text": "",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            }
+          ]
+        },
+        "science_reward": 0.0
+      },
+      {
+        "id": 1,
+        "objective_key": "",
+        "condition": {
+          "Event": {
+            "Other": "GoToNextTutorialStep"
+          }
+        },
+        "science_reward": 0.0
+      },
+      {
+        "id": 3,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 0.0
+      }
+    ]
+  },
+  {
+    "id": "KSP2Mission_Secondary_Moho_ExperimentCroissant",
+    "name_key": "Missions/Secondary/Moho_ExperimentCroissant/Name",
+    "description_key": "Missions/Secondary/Moho_ExperimentCroissant/Description",
+    "primary": false,
+    "granter": "MissionGranterKSC",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "Missions/Secondary/Moho_ExperimentCroissant/Objective",
+        "condition": {
+          "Property": {
+            "watch": "HasScoredReport",
+            "op": "Equal",
+            "value": 0.0,
+            "count": 0,
+            "text": "",
+            "input": "SurfaceSurvey_SampleType_Moho_Landed_MohoGiantRock",
+            "expect": true,
+            "latch": false
+          }
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 15,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 3000.0
+      }
+    ]
+  },
+  {
+    "id": "KSP2Mission_Secondary_Moho_LandingMohole",
+    "name_key": "Missions/Secondary/Moho_LandingMohole/Name",
+    "description_key": "Missions/Secondary/Moho_LandingMohole/Description",
+    "primary": false,
+    "granter": "MissionGranterReactionSystems",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "Missions/Secondary/Moho_LandingMohole/Objective",
+        "condition": {
+          "Property": {
+            "watch": "ResearchLocation",
+            "op": "Equal",
+            "value": 0.0,
+            "count": 0,
+            "text": "Moho_Landed_MohoMoholeCore",
+            "input": "",
+            "expect": true,
+            "latch": false
+          }
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 15,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 3000.0
+      }
+    ]
+  },
+  {
+    "id": "KSP2Mission_Secondary_Mun_Flag",
+    "name_key": "Missions/Secondary/Mun_Flag/Name",
+    "description_key": "Missions/Secondary/Mun_Flag/Description",
+    "primary": false,
+    "granter": "MissionGranterMaxo",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "Missions/Secondary/Mun_Flag/Objective",
+        "condition": {
+          "All": [
+            {
+              "Event": "FlagPlanted"
+            },
+            {
+              "Property": {
+                "watch": "ResearchLocation",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "Mun_Landed_MunMare",
+                "input": "",
+                "expect": true,
+                "latch": true
+              }
+            }
+          ]
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 15,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 100.0
+      }
+    ]
+  },
+  {
+    "id": "KSP2Mission_Secondary_Pol_ExperimentHighlands",
+    "name_key": "Missions/Secondary/Pol_ExperimentHighlands/Name",
+    "description_key": "Missions/Secondary/Pol_ExperimentHighlands/Description",
+    "primary": false,
+    "granter": "MIssionGranterKSC",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "Missions/Secondary/Pol_ExperimentHighlands/Objective",
+        "condition": {
+          "Property": {
+            "watch": "HasStoredReport",
+            "op": "Equal",
+            "value": 0.0,
+            "count": 0,
+            "text": "",
+            "input": "RadiationReport_DataType_Pol_Landed_PolLowlands",
+            "expect": true,
+            "latch": false
+          }
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 15,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 3000.0
+      }
+    ]
+  },
+  {
+    "id": "KSP2Mission_Secondary_Vall_LandLair",
+    "name_key": "Missions/Secondary/Vall_LandLair/Name",
+    "description_key": "Missions/Secondary/Vall_LandLair/Description",
+    "primary": false,
+    "granter": "MissionGranterProbodobodyne",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "Missions/Secondary/Vall_LandLair/Objective",
+        "condition": {
+          "Property": {
+            "watch": "ResearchLocation",
+            "op": "Equal",
+            "value": 0.0,
+            "count": 0,
+            "text": "",
+            "input": "Vall_Landed_VallMineralFormation",
+            "expect": true,
+            "latch": false
+          }
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 15,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 3000.0
+      }
+    ]
+  },
+  {
+    "id": "Main_Duna_01",
+    "name_key": "Missions/Primary/PM09/Name",
+    "description_key": "Missions/Primary/PM09/Description",
+    "primary": true,
+    "granter": "MIssionGranterKSC",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "Missions/Primary/PM01/Objective09",
+        "condition": {
+          "Property": {
+            "watch": "ResearchLocation",
+            "op": "Equal",
+            "value": 0.0,
+            "count": 0,
+            "text": "Duna_Landed_DunaMonument",
+            "input": "",
+            "expect": true,
+            "latch": false
+          }
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 1,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 2000.0
+      }
+    ]
+  },
+  {
+    "id": "Main_Jool_BetterSignal",
+    "name_key": "Missions/Primary/PM10/Name",
+    "description_key": "Missions/Primary/PM10/Description",
+    "primary": true,
+    "granter": "MIssionGranterKSC",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 16,
+        "objective_key": "Missions/Primary/PM01/Objective10",
+        "condition": {
+          "All": [
+            {
+              "Property": {
+                "watch": "Soi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "Jool",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Any": [
+                {
+                  "Property": {
+                    "watch": "HasPart",
+                    "op": "Equal",
+                    "value": 0.0,
+                    "count": 0,
+                    "text": "",
+                    "input": "antenna_1v_dish_88-88",
+                    "expect": true,
+                    "latch": false
+                  }
+                },
+                {
+                  "Property": {
+                    "watch": "HasPart",
+                    "op": "Equal",
+                    "value": 0.0,
+                    "count": 0,
+                    "text": "",
+                    "input": "antenna_1v_dish_ra-100",
+                    "expect": true,
+                    "latch": false
+                  }
+                },
+                {
+                  "Property": {
+                    "watch": "HasPart",
+                    "op": "Equal",
+                    "value": 0.0,
+                    "count": 0,
+                    "text": "",
+                    "input": "antenna_0v_dish_ra-15",
+                    "expect": true,
+                    "latch": false
+                  }
+                },
+                {
+                  "Property": {
+                    "watch": "HasPart",
+                    "op": "Equal",
+                    "value": 0.0,
+                    "count": 0,
+                    "text": "",
+                    "input": "antenna_1v_dish_hg55",
+                    "expect": true,
+                    "latch": false
+                  }
+                }
+              ]
+            },
+            {
+              "Property": {
+                "watch": "HasPartInGroup",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "",
+                "input": "0010-Probe",
+                "expect": true,
+                "latch": true
+              }
+            },
+            {
+              "Property": {
+                "watch": "EscapePredictedSoi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "",
+                "input": "Kerbol",
+                "expect": true,
+                "latch": false
+              }
+            }
+          ]
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 10,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 5000.0
+      }
+    ]
+  },
+  {
+    "id": "Main_Kerbin_01",
+    "name_key": "Missions/Primary/PM01/Name",
+    "description_key": "Missions/Primary/PM01/Description",
+    "primary": true,
+    "granter": "MissionGranterKSC",
+    "active_at_start": true,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "Missions/Primary/PM01/Objective01",
+        "condition": {
+          "All": [
+            {
+              "Property": {
+                "watch": "Soi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "Kerbin",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "GroundAltitude",
+                "op": "Greater",
+                "value": 10000.0,
+                "count": 0,
+                "text": "",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            }
+          ]
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 17,
+        "objective_key": "Missions/Primary/PM01/Objective01Part2",
+        "condition": {
+          "Any": [
+            {
+              "All": [
+                {
+                  "Property": {
+                    "watch": "MaxGroundAltitude",
+                    "op": "Greater",
+                    "value": 10000.0,
+                    "count": 0,
+                    "text": "",
+                    "input": "",
+                    "expect": true,
+                    "latch": false
+                  }
+                },
+                {
+                  "Event": "LandedAfterFlight"
+                },
+                {
+                  "Property": {
+                    "watch": "Soi",
+                    "op": "Equal",
+                    "value": 0.0,
+                    "count": 0,
+                    "text": "Kerbin",
+                    "input": "",
+                    "expect": true,
+                    "latch": false
+                  }
+                }
+              ]
+            },
+            {
+              "All": [
+                {
+                  "Property": {
+                    "watch": "LastDestroyedMaxGroundAltitude",
+                    "op": "Greater",
+                    "value": 10000.0,
+                    "count": 0,
+                    "text": "",
+                    "input": "",
+                    "expect": true,
+                    "latch": false
+                  }
+                },
+                {
+                  "Event": "VesselDestroyed"
+                },
+                {
+                  "Property": {
+                    "watch": "DestroyedByCollision",
+                    "op": "Equal",
+                    "value": 0.0,
+                    "count": 0,
+                    "text": "",
+                    "input": "Kerbin",
+                    "expect": true,
+                    "latch": false
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 15,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 25.0
+      }
+    ]
+  },
+  {
+    "id": "Main_Kerbin_02",
+    "name_key": "Missions/Primary/PM02/Name",
+    "description_key": "Missions/Primary/PM02/Description",
+    "primary": true,
+    "granter": "MissionGranterKSC",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "Missions/Primary/PM01/Objective02",
+        "condition": {
+          "All": [
+            {
+              "Property": {
+                "watch": "Soi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "Kerbin",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "SeaLevelAltitude",
+                "op": "Greater",
+                "value": 70000.0,
+                "count": 0,
+                "text": "",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            }
+          ]
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 20,
+        "objective_key": "Missions/Primary/PM01/Objective02Part2",
+        "condition": {
+          "All": [
+            {
+              "Property": {
+                "watch": "Soi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "Kerbin",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "MaxGroundAltitude",
+                "op": "Greater",
+                "value": 70000.0,
+                "count": 0,
+                "text": "",
+                "input": "",
+                "expect": true,
+                "latch": true
+              }
+            },
+            {
+              "Event": "LandedAfterFlight"
+            }
+          ]
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 1,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 50.0
+      }
+    ]
+  },
+  {
+    "id": "Main_Kerbin_03",
+    "name_key": "Missions/Primary/PM03/Name",
+    "description_key": "Missions/Primary/PM03/Description",
+    "primary": true,
+    "granter": "MissionGranterKSC",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "Missions/Primary/PM01/Objective03",
+        "condition": {
+          "All": [
+            {
+              "Property": {
+                "watch": "Soi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "Kerbin",
+                "input": "",
+                "expect": true,
+                "latch": true
+              }
+            },
+            {
+              "Property": {
+                "watch": "PeriapsisAltitude",
+                "op": "Greater",
+                "value": 70000.0,
+                "count": 0,
+                "text": "",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "ApoapsisAltitude",
+                "op": "Lesser",
+                "value": 300000.0,
+                "count": 0,
+                "text": "",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            }
+          ]
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 1,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 75.0
+      }
+    ]
+  },
+  {
+    "id": "Main_Minmus_01",
+    "name_key": "Missions/Primary/PM08/Name",
+    "description_key": "Missions/Primary/PM08/Description",
+    "primary": true,
+    "granter": "MIssionGranterKSC",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "Missions/Primary/PM01/Objective08",
+        "condition": {
+          "Property": {
+            "watch": "ResearchLocation",
+            "op": "Equal",
+            "value": 0.0,
+            "count": 0,
+            "text": "Minmus_Landed_MinmusMonument",
+            "input": "",
+            "expect": true,
+            "latch": false
+          }
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 1,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 750.0
+      }
+    ]
+  },
+  {
+    "id": "Main_Minmus_BadSignal",
+    "name_key": "Missions/Primary/PM07/Name",
+    "description_key": "Missions/Primary/PM07/Description",
+    "primary": true,
+    "granter": "MissionGranterKSC",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 16,
+        "objective_key": "Missions/Primary/PM01/Objective07",
+        "condition": {
+          "All": [
+            {
+              "Property": {
+                "watch": "Soi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "Minmus",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "HasPartInGroup",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "",
+                "input": "0500-Antenna",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "EscapePredictedSoi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "",
+                "input": "Kerbin",
+                "expect": true,
+                "latch": false
+              }
+            }
+          ]
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 10,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 400.0
+      }
+    ]
+  },
+  {
+    "id": "Main_MunOrBust_04",
+    "name_key": "Missions/Primary/PM04/Name",
+    "description_key": "Missions/Primary/PM04/Description",
+    "primary": true,
+    "granter": "MissionGranterKSC",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 16,
+        "objective_key": "Missions/Primary/PM01/Objective04",
+        "condition": {
+          "All": [
+            {
+              "Property": {
+                "watch": "Soi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "Mun",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "PeriapsisAltitude",
+                "op": "Greater",
+                "value": 60000.0,
+                "count": 0,
+                "text": "",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "ApoapsisAltitude",
+                "op": "Lesser",
+                "value": 2400000.0,
+                "count": 0,
+                "text": "",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Property": {
+                "watch": "EscapePredictedSoi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "",
+                "input": "Kerbin",
+                "expect": true,
+                "latch": false
+              }
+            }
+          ]
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 10,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 150.0
+      }
+    ]
+  },
+  {
+    "id": "Main_Mun_01",
+    "name_key": "Missions/Primary/PM06/Name",
+    "description_key": "Missions/Primary/PM06/Description",
+    "primary": true,
+    "granter": "MissionGranterKSC",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "Missions/Primary/PM01/Objective06",
+        "condition": {
+          "Property": {
+            "watch": "ResearchLocation",
+            "op": "Equal",
+            "value": 0.0,
+            "count": 0,
+            "text": "Mun_Landed_MunMonument",
+            "input": "",
+            "expect": true,
+            "latch": false
+          }
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 1,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 350.0
+      }
+    ]
+  },
+  {
+    "id": "Main_Mun_01_Activator",
+    "name_key": "Munar Signal Activator",
+    "description_key": "Activates Mun_01",
+    "primary": true,
+    "granter": "",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 6,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": -0.0
+      },
+      {
+        "id": 5,
+        "objective_key": "",
+        "condition": {
+          "Event": {
+            "Other": "GoToNextTutorialStep"
+          }
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 0,
+        "objective_key": "",
+        "condition": {
+          "Event": {
+            "Other": "MissionControlLoadedMessage"
+          }
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 3,
+        "objective_key": "",
+        "condition": {
+          "Event": {
+            "Other": "GoToNextTutorialStep"
+          }
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 1,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": -0.0
+      }
+    ]
+  },
+  {
+    "id": "Main_Mun_OSS",
+    "name_key": "Missions/Primary/PM05/Name",
+    "description_key": "Missions/Primary/PM05/Description",
+    "primary": true,
+    "granter": "MissionGranterKSC",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 16,
+        "objective_key": "Missions/Primary/PM01/Objective05",
+        "condition": {
+          "All": [
+            {
+              "Property": {
+                "watch": "Soi",
+                "op": "Equal",
+                "value": 2400000.0,
+                "count": 0,
+                "text": "Mun",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Event": "LandedOnGround"
+            }
+          ]
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 10,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 300.0
+      }
+    ]
+  },
+  {
+    "id": "Main_Tylo_01",
+    "name_key": "Missions/Primary/PM11/Name",
+    "description_key": "Missions/Primary/PM11/Description",
+    "primary": true,
+    "granter": "MissionGranterKSC",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "Missions/Primary/PM01/Objective11",
+        "condition": {
+          "Property": {
+            "watch": "ResearchLocation",
+            "op": "Equal",
+            "value": 0.0,
+            "count": 0,
+            "text": "Tylo_Landed_TyloMonument",
+            "input": "",
+            "expect": true,
+            "latch": false
+          }
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 1,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 10000.0
+      }
+    ]
+  },
+  {
+    "id": "Secondary_Bop_02",
+    "name_key": "Land on Bop!",
+    "description_key": "Hey there, can you land on the Bop?",
+    "primary": false,
+    "granter": "",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "",
+        "condition": {
+          "All": [
+            {
+              "Event": "LandedOnGround"
+            },
+            {
+              "Property": {
+                "watch": "Soi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "Bop",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            }
+          ]
+        },
+        "science_reward": 0.0
+      },
+      {
+        "id": 1,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 0.0
+      }
+    ]
+  },
+  {
+    "id": "Secondary_Dres_02",
+    "name_key": "Land on Dres!",
+    "description_key": "Hey there, can you land on the Dres?",
+    "primary": false,
+    "granter": "",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "",
+        "condition": {
+          "All": [
+            {
+              "Event": "LandedOnGround"
+            },
+            {
+              "Property": {
+                "watch": "Soi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "Dres",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            }
+          ]
+        },
+        "science_reward": 0.0
+      },
+      {
+        "id": 1,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 0.0
+      }
+    ]
+  },
+  {
+    "id": "Secondary_Duna_02",
+    "name_key": "Land on Duna!",
+    "description_key": "Kerbalkind is scared of all things red. Please land on Duna to show that it won't turn us yellow.",
+    "primary": false,
+    "granter": "",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "Land on Duna",
+        "condition": {
+          "All": [
+            {
+              "Event": "LandedOnGround"
+            },
+            {
+              "Property": {
+                "watch": "Soi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "Duna",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            }
+          ]
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 1,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 50.0
+      }
+    ]
+  },
+  {
+    "id": "Secondary_Eeloo_02",
+    "name_key": "Land on Eeloo!",
+    "description_key": "Hey there, can you land on the Eeloo?",
+    "primary": false,
+    "granter": "",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "",
+        "condition": {
+          "All": [
+            {
+              "Event": "LandedOnGround"
+            },
+            {
+              "Property": {
+                "watch": "Soi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "Eeloo",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            }
+          ]
+        },
+        "science_reward": 0.0
+      },
+      {
+        "id": 1,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 0.0
+      }
+    ]
+  },
+  {
+    "id": "Secondary_Eve_02",
+    "name_key": "Land on Eve!",
+    "description_key": "Hey there, can you land on the Eve?",
+    "primary": false,
+    "granter": "",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "",
+        "condition": {
+          "All": [
+            {
+              "Property": {
+                "watch": "Soi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "Eve",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Any": [
+                {
+                  "Event": "LandedOnGround"
+                },
+                {
+                  "Event": "LandedOnWater"
+                }
+              ]
+            }
+          ]
+        },
+        "science_reward": 0.0
+      },
+      {
+        "id": 1,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 0.0
+      }
+    ]
+  },
+  {
+    "id": "Secondary_Gilly_02",
+    "name_key": "Land on Gilly!",
+    "description_key": "Hey there, can you land on the Gilly?",
+    "primary": false,
+    "granter": "",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "",
+        "condition": {
+          "All": [
+            {
+              "Event": "LandedOnGround"
+            },
+            {
+              "Property": {
+                "watch": "Soi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "Gilly",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            }
+          ]
+        },
+        "science_reward": 0.0
+      },
+      {
+        "id": 1,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 0.0
+      }
+    ]
+  },
+  {
+    "id": "Secondary_Ike_02",
+    "name_key": "Land on Ike!",
+    "description_key": "Hey there, can you land on the Ike?",
+    "primary": false,
+    "granter": "",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "",
+        "condition": {
+          "All": [
+            {
+              "Event": "LandedOnGround"
+            },
+            {
+              "Property": {
+                "watch": "Soi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "Ike",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            }
+          ]
+        },
+        "science_reward": 0.0
+      },
+      {
+        "id": 1,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 0.0
+      }
+    ]
+  },
+  {
+    "id": "Secondary_Laythe_02",
+    "name_key": "Land on Laythe!",
+    "description_key": "Hey there, can you land on the Laythe?",
+    "primary": false,
+    "granter": "",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "",
+        "condition": {
+          "All": [
+            {
+              "Property": {
+                "watch": "Soi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "Laythe",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Any": [
+                {
+                  "Event": "LandedOnGround"
+                },
+                {
+                  "Event": "LandedOnWater"
+                }
+              ]
+            }
+          ]
+        },
+        "science_reward": 0.0
+      },
+      {
+        "id": 1,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 0.0
+      }
+    ]
+  },
+  {
+    "id": "Secondary_Minmus_02",
+    "name_key": "Land on Minmus!",
+    "description_key": "Hey there, can you land on Minmus? We have a pool on what it's made of.",
+    "primary": false,
+    "granter": "",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "Land on Minmus",
+        "condition": {
+          "All": [
+            {
+              "Event": "LandedOnGround"
+            },
+            {
+              "Property": {
+                "watch": "Soi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "Minmus",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            }
+          ]
+        },
+        "science_reward": -0.0
+      },
+      {
+        "id": 1,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 50.0
+      }
+    ]
+  },
+  {
+    "id": "Secondary_Moho_02",
+    "name_key": "Land on Moho!",
+    "description_key": "Hey there, can you land on the Moho?",
+    "primary": false,
+    "granter": "",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "",
+        "condition": {
+          "All": [
+            {
+              "Event": "LandedOnGround"
+            },
+            {
+              "Property": {
+                "watch": "Soi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "Moho",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            }
+          ]
+        },
+        "science_reward": 0.0
+      },
+      {
+        "id": 1,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 0.0
+      }
+    ]
+  },
+  {
+    "id": "Secondary_Mun_02",
+    "name_key": "Land on Mun!",
+    "description_key": "Hey there, can you land on the Mun?",
+    "primary": false,
+    "granter": "",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "",
+        "condition": {
+          "All": [
+            {
+              "Event": "LandedOnGround"
+            },
+            {
+              "Property": {
+                "watch": "Soi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "Mun",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            }
+          ]
+        },
+        "science_reward": 0.0
+      },
+      {
+        "id": 1,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 0.0
+      }
+    ]
+  },
+  {
+    "id": "Secondary_Pol_02",
+    "name_key": "Land on Pol!",
+    "description_key": "Hey there, can you land on the Pol?",
+    "primary": false,
+    "granter": "",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "",
+        "condition": {
+          "All": [
+            {
+              "Event": "LandedOnGround"
+            },
+            {
+              "Property": {
+                "watch": "Soi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "Pol",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            }
+          ]
+        },
+        "science_reward": 0.0
+      },
+      {
+        "id": 1,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 0.0
+      }
+    ]
+  },
+  {
+    "id": "Secondary_Tylo_02",
+    "name_key": "Land on Tylo!",
+    "description_key": "Hey there, can you land on the Tylo?",
+    "primary": false,
+    "granter": "",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "",
+        "condition": {
+          "All": [
+            {
+              "Event": "LandedOnGround"
+            },
+            {
+              "Property": {
+                "watch": "Soi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "Tylo",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            }
+          ]
+        },
+        "science_reward": 0.0
+      },
+      {
+        "id": 1,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 0.0
+      }
+    ]
+  },
+  {
+    "id": "Secondary_Vall_02",
+    "name_key": "Land on Vall!",
+    "description_key": "Hey there, can you land on the Vall?",
+    "primary": false,
+    "granter": "",
+    "active_at_start": false,
+    "stages": [
+      {
+        "id": 0,
+        "objective_key": "",
+        "condition": {
+          "All": [
+            {
+              "Property": {
+                "watch": "Soi",
+                "op": "Equal",
+                "value": 0.0,
+                "count": 0,
+                "text": "Vall",
+                "input": "",
+                "expect": true,
+                "latch": false
+              }
+            },
+            {
+              "Any": [
+                {
+                  "Event": "LandedOnGround"
+                },
+                {
+                  "Event": "LandedOnWater"
+                }
+              ]
+            }
+          ]
+        },
+        "science_reward": 0.0
+      },
+      {
+        "id": 1,
+        "objective_key": "",
+        "condition": null,
+        "science_reward": 0.0
+      }
+    ]
+  }
+]

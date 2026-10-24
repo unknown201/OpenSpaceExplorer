@@ -43,6 +43,9 @@ pub struct Structure {
     /// Each part's electric charge use and production, and crew capacity.
     pub electric: Vec<ose_data::Electric>,
     pub crew: Vec<u32>,
+    /// Each part's id and family (like "0010-Probe").
+    pub part_ids: Vec<String>,
+    pub families: Vec<String>,
     /// Experiments on the parts: (part, experiment).
     pub experiments: Vec<(usize, ose_data::science::PartExperiment)>,
     /// Flight stage the structure was last trimmed to.
@@ -187,6 +190,10 @@ impl Structure {
             electric,
             crew,
             experiments,
+            part_ids: craft.parts.iter().map(|p| p.part_id.clone()).collect(),
+            families: (0..n)
+                .map(|i| def_of(i).map(|d| d.family.clone()).unwrap_or_default())
+                .collect(),
             staged_to: 0,
         };
         s.trim_to(0);
@@ -207,7 +214,7 @@ impl Structure {
     }
 
     /// Engines of `stage` still attached, with their rated thrust.
-    fn live_engines(&self, stage: usize) -> Vec<usize> {
+    pub fn live_engines(&self, stage: usize) -> Vec<usize> {
         self.stage_engines
             .get(stage)
             .map(|e| {

@@ -8,6 +8,7 @@
 pub mod aero;
 pub mod bodies;
 pub mod flight;
+pub mod missions;
 pub mod resources;
 pub mod rigid;
 pub mod science;
@@ -632,6 +633,7 @@ impl Universe {
                     });
                 }
                 let mass_before = p.mass_t;
+                let was_landed = p.landed;
                 let out = flight::integrate(
                     &mut p,
                     &body,
@@ -640,6 +642,26 @@ impl Universe {
                     start_ut + i as f64 * dt,
                     dt,
                 );
+                self.log_flight_step(
+                    e,
+                    &body,
+                    terrain.as_deref(),
+                    &p,
+                    was_landed,
+                    start_ut + (i + 1) as f64 * dt,
+                );
+                if let (Some(st), true) = (&structure, out.thrust_kn > 0.0) {
+                    let ids: Vec<String> = st
+                        .live_engines(p.stage)
+                        .into_iter()
+                        .map(|i| st.part_ids[i].clone())
+                        .collect();
+                    if let Some(mut log) = self.log_mut(e) {
+                        for id in ids {
+                            log.activated(&id);
+                        }
+                    }
+                }
                 if let Some(st) = &mut structure {
                     // the propellant burned comes out of the tanks through the flow graph
                     let burned = (mass_before - p.mass_t).max(0.0);

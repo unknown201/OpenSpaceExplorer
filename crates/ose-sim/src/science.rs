@@ -127,6 +127,7 @@ impl Universe {
             .and_then(|id| bs.regions.iter().find(|r| r.id == id));
         let crewed = (0..st.rigid.len()).any(|i| st.rigid.present[i] && st.crew[i] > 0);
         let ec = st.net.resource("ElectricCharge");
+        let mut activated = Vec::new();
         for (part, pe) in st.experiments.clone() {
             if !st.rigid.present[part] {
                 continue;
@@ -179,8 +180,18 @@ impl Universe {
             }
             storage.reports.extend(fresh.iter().cloned());
             out.reports.extend(fresh);
+            activated.push(st.part_ids[part].clone());
         }
         self.world.entity_mut(e).insert((st, storage));
+        let tick = self.tick().0;
+        if let Some(mut log) = self.log_mut(e) {
+            for id in &activated {
+                log.activated(id);
+            }
+            if !out.reports.is_empty() {
+                log.event(tick, ose_data::missions::MissionEvent::ReportAcquired);
+            }
+        }
         out
     }
 

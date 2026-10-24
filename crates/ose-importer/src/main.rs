@@ -93,6 +93,16 @@ fn main() -> anyhow::Result<()> {
             serde_json::to_string_pretty(&science)?,
         )?;
         std::fs::write(args.own_out.join("science/regions.bin"), &regions)?;
+        let missions = ose_importer::missions::import_missions(&args.data)?;
+        println!(
+            "missions: {} ({} playable)",
+            missions.len(),
+            missions.iter().filter(|m| m.playable()).count()
+        );
+        std::fs::write(
+            args.own_out.join("missions.json"),
+            serde_json::to_string_pretty(&missions)?,
+        )?;
         std::fs::write(
             args.own_out.join("tech-tree.json"),
             serde_json::to_string_pretty(&tech)?,
