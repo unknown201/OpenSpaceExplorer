@@ -32,7 +32,6 @@ every secondary agency mission with a granter at once; the primaries `Main_Kerbi
 then the remaining primaries. 40 of the 57 use only checks we support; the rest (tutorial helpers, distance
 from a mission position) are not offered.
 
-Simplifications: events count from when their stage began rather than from the evaluation that consumes them;
-latched checks persist until the stage passes; missions are accepted automatically and rewards granted on
-completion rather than turned in at Mission Control; flags and EVA do not exist yet, so those missions cannot
-finish.
+Missions are accepted and turned in at Mission Control (`AcceptMission`, `TurnInMission`); rewards are paid
+on turn-in. Simplifications: events count from when their stage began rather than from the evaluation that
+consumes them; latched checks persist until the stage passes.

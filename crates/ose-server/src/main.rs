@@ -1358,6 +1358,31 @@ fn science_request(s: &Shared, player_id: u64, msg: ClientMessage) -> Vec<Server
             ]
         }
         ClientMessage::ScienceInfo => vec![state(s)],
+        ClientMessage::AcceptMission { ref id } | ClientMessage::TurnInMission { ref id } => {
+            let id = id.clone();
+            let accept = matches!(msg, ClientMessage::AcceptMission { .. });
+            let now = s.universe.lock().expect("sim lock").tick().0;
+            let res = {
+                let mut c = s.campaign.lock().expect("campaign lock");
+                if accept {
+                    s.science.accept(&mut c, &id, now).map(|_| 0.0)
+                } else {
+                    s.science.turn_in(&mut c, &id)
+                }
+            };
+            if let Ok(paid) = res {
+                tracing::info!(player = player_id, mission = %id, accept, paid, "mission");
+            }
+            vec![
+                ServerMessage::MissionAck {
+                    id,
+                    accepted: res.is_ok(),
+                    science: *res.as_ref().unwrap_or(&0.0),
+                    reason: res.err(),
+                },
+                state(s),
+            ]
+        }
         ClientMessage::UnlockTechNode { id } => {
             let res = {
                 let mut c = s.campaign.lock().expect("campaign lock");
@@ -2106,7 +2131,9 @@ async fn session(mut socket: WebSocket, s: AppState) {
                         | ClientMessage::TransmitScience { .. }
                         | ClientMessage::RecoverVessel { .. }
                         | ClientMessage::ScienceInfo
-                        | ClientMessage::UnlockTechNode { .. })) => {
+                        | ClientMessage::UnlockTechNode { .. }
+                        | ClientMessage::AcceptMission { .. }
+                        | ClientMessage::TurnInMission { .. })) => {
                             let replies = science_request(&s, player_id, msg);
                             science_rev = s.campaign.lock().expect("campaign lock").science.rev;
                             let mut ok = true;

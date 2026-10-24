@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 17;
+pub const PROTOCOL_VERSION: u16 = 18;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -155,6 +155,14 @@ pub enum ClientMessage {
         vessel: u64,
         deploy: bool,
     },
+    /// Take on an offered mission at Mission Control; answers `MissionAck` and `ScienceState`.
+    AcceptMission {
+        id: String,
+    },
+    /// Hand in a completed mission for its science reward; answers `MissionAck` and `ScienceState`.
+    TurnInMission {
+        id: String,
+    },
 }
 
 /// A science report (the original's research report).
@@ -200,6 +208,10 @@ pub struct MissionInfo {
     pub objective_key: String,
     pub complete: bool,
     pub science_reward: f64,
+    /// Taken on (missions only progress once accepted; the first is accepted from the start).
+    pub accepted: bool,
+    /// Handed in: its reward is paid.
+    pub turned_in: bool,
 }
 
 /// Static description of one celestial body, sent once after `Welcome`.
@@ -624,6 +636,13 @@ pub enum ServerMessage {
         vessel: u64,
         new_vessel: Option<u64>,
         reason: Option<String>,
+    },
+    /// Answer to `AcceptMission` / `TurnInMission`; `science` is the reward a turn-in paid.
+    MissionAck {
+        id: String,
+        accepted: bool,
+        reason: Option<String>,
+        science: f64,
     },
     /// Answer to `UnlockTechNode`.
     TechUnlock {

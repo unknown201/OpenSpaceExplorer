@@ -31,6 +31,16 @@ pub struct SavedMission {
     pub progress: MissionProgress,
     /// When the current stage began (its events count from here).
     pub stage_started_tick: u64,
+    /// Taken on at Mission Control (missions only progress once accepted; older saves were all accepted).
+    #[serde(default = "yes")]
+    pub accepted: bool,
+    /// Complete and handed in at Mission Control: its science reward is paid.
+    #[serde(default)]
+    pub turned_in: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// The agency's science progress, saved with the campaign.
@@ -88,18 +98,14 @@ impl ScienceData {
             .map(|r| r.report.value.round())
             .sum::<f64>()
             * option(c, "ScienceRewards");
+        // missions pay when turned in (`UpdateSciencePointCapacity`: `missionSaveData.TurnedIn`)
         let missions: f64 = p
             .missions
             .iter()
+            .filter(|m| m.turned_in)
             .filter_map(|m| {
                 let def = self.missions.iter().find(|d| d.id == m.id)?;
-                Some(
-                    def.stages
-                        .iter()
-                        .take(m.progress.stage)
-                        .map(|s| s.science_reward)
-                        .sum::<f64>(),
-                )
+                Some(def.science_reward())
             })
             .sum::<f64>()
             * option(c, "MissionRewards");
@@ -137,7 +143,10 @@ impl ScienceData {
                     .find(|m| m.id == d.id)
                     .map(|m| m.progress.clone())
                     .unwrap_or_default();
+                let saved = p.missions.iter().find(|m| m.id == d.id);
                 MissionInfo {
+                    accepted: saved.map(|m| m.accepted).unwrap_or(d.active_at_start),
+                    turned_in: saved.is_some_and(|m| m.turned_in),
                     id: d.id.clone(),
                     name_key: d.name_key.clone(),
                     description_key: d.description_key.clone(),
@@ -158,6 +167,66 @@ impl ScienceData {
                 }
             })
             .collect()
+    }
+
+    /// Take on an offered mission.
+    pub fn accept(&self, c: &mut Campaign, id: &str, now: u64) -> Result<(), String> {
+        let def = self
+            .missions
+            .iter()
+            .find(|d| d.id == id)
+            .ok_or_else(|| format!("no mission {id}"))?;
+        if !self.available(def, &c.science) {
+            return Err("not offered yet".into());
+        }
+        match c.science.missions.iter_mut().find(|m| m.id == id) {
+            Some(m) if m.accepted => return Err("already accepted".into()),
+            Some(m) => {
+                m.accepted = true;
+                m.stage_started_tick = now;
+            }
+            None => c.science.missions.push(SavedMission {
+                id: id.to_string(),
+                progress: MissionProgress::default(),
+                stage_started_tick: now,
+                accepted: true,
+                turned_in: false,
+            }),
+        }
+        c.science.rev += 1;
+        Ok(())
+    }
+
+    /// Hand in a completed mission for its science reward.
+    pub fn turn_in(&self, c: &mut Campaign, id: &str) -> Result<f64, String> {
+        let def = self
+            .missions
+            .iter()
+            .find(|d| d.id == id)
+            .ok_or_else(|| format!("no mission {id}"))?;
+        let Some(m) = c
+            .science
+            .missions
+            .iter_mut()
+            .find(|m| m.id == id && m.accepted)
+        else {
+            // the first mission is taken on from the start, before it is tracked
+            return Err(if def.active_at_start {
+                "not complete yet"
+            } else {
+                "not accepted"
+            }
+            .into());
+        };
+        if !m.progress.complete {
+            return Err("not complete yet".into());
+        }
+        if m.turned_in {
+            return Err("already turned in".into());
+        }
+        m.turned_in = true;
+        c.science.rev += 1;
+        Ok(def.science_reward() * option(c, "MissionRewards"))
     }
 
     pub fn state(&self, c: &Campaign) -> ServerMessage {
@@ -339,17 +408,21 @@ pub fn evaluate_missions(s: &Shared) -> bool {
         }
         let idx = match c.science.missions.iter().position(|m| m.id == def.id) {
             Some(i) => i,
-            None => {
+            // the campaign starts with the first mission already taken on (`state: Active`)
+            None if def.active_at_start => {
                 c.science.missions.push(SavedMission {
                     id: def.id.clone(),
                     progress: MissionProgress::default(),
                     stage_started_tick: now,
+                    accepted: true,
+                    turned_in: false,
                 });
                 changed = true;
                 c.science.missions.len() - 1
             }
+            None => continue,
         };
-        if c.science.missions[idx].progress.complete {
+        if !c.science.missions[idx].accepted || c.science.missions[idx].progress.complete {
             continue;
         }
         let since = c.science.missions[idx].stage_started_tick;
@@ -477,9 +550,22 @@ mod tests {
                 latched: vec![],
             },
             stage_started_tick: 0,
+            accepted: true,
+            turned_in: false,
         });
         assert!(open(&c).contains(&"Main_Kerbin_02".to_string()));
-        // its rewards count as earned science
+        // complete but not handed in: nothing paid yet
+        assert_eq!(d.capacity(&c), 0);
+        assert_eq!(d.turn_in(&mut c, "Main_Kerbin_01"), Ok(25.0));
         assert_eq!(d.capacity(&c), 25);
+        assert!(d.turn_in(&mut c, "Main_Kerbin_01").is_err(), "only once");
+        // the next one has to be accepted before it counts
+        assert!(d.turn_in(&mut c, "Main_Kerbin_02").is_err());
+        assert!(d.accept(&mut c, "Main_Kerbin_02", 10).is_ok());
+        assert!(d.accept(&mut c, "Main_Kerbin_02", 10).is_err());
+        assert!(
+            d.accept(&mut c, "Main_Kerbin_03", 10).is_err(),
+            "not offered yet"
+        );
     }
 }

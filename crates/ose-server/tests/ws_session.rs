@@ -942,6 +942,53 @@ async fn exploration_science_tech_tree_and_recovery() {
         "{missions:?}"
     );
 
+    // Mission Control: the first mission is taken on already; a secondary has to be accepted, and nothing
+    // can be handed in before it is complete
+    send_msg(
+        &mut ws,
+        &ClientMessage::AcceptMission {
+            id: "KSP2Mission_Secondary_Kerbin_Rover".into(),
+        },
+    )
+    .await;
+    let (ok, reason) = wait_for(&mut ws, |m| match m {
+        ServerMessage::MissionAck {
+            accepted, reason, ..
+        } => Some((accepted, reason)),
+        _ => None,
+    })
+    .await;
+    assert!(ok, "{reason:?}");
+    let missions = wait_for(&mut ws, |m| match m {
+        ServerMessage::ScienceState { missions, .. } => Some(missions),
+        _ => None,
+    })
+    .await;
+    assert!(missions
+        .iter()
+        .any(|m| m.id == "KSP2Mission_Secondary_Kerbin_Rover" && m.accepted));
+    assert!(missions
+        .iter()
+        .any(|m| m.id == "Main_Kerbin_01" && m.accepted && !m.turned_in));
+    send_msg(
+        &mut ws,
+        &ClientMessage::TurnInMission {
+            id: "Main_Kerbin_01".into(),
+        },
+    )
+    .await;
+    let (ok, reason) = wait_for(&mut ws, |m| match m {
+        ServerMessage::MissionAck {
+            accepted, reason, ..
+        } => Some((accepted, reason)),
+        _ => None,
+    })
+    .await;
+    assert!(
+        !ok && reason.as_deref() == Some("not complete yet"),
+        "{reason:?}"
+    );
+
     // unresearched parts stay in the VAB
     let mut locked = starter_craft();
     locked.parts[2].part_id = "engine_1v_methalox_terrier".into();
