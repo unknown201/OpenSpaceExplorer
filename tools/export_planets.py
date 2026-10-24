@@ -293,7 +293,11 @@ def export_body(bid: str, bundles: Path, out_root: Path, args) -> dict | None:
                                   ("ScatteringTexture", "atmo_scattering.f16", (32, 128, 256, 4))):
             o = a.get(atmo.get(key))
             if o is not None:
-                (out / fname).write_bytes(half_bytes(o, shape))
+                data = half_bytes(o, shape)
+                (out / fname).write_bytes(data)
+                import gzip
+
+                (out / (fname + ".gz")).write_bytes(gzip.compress(data, compresslevel=6))
         info["atmosphere"] = p
     # clouds: the first enabled cumulus layer with a baked scaled texture
     for cfg in a.find_mono("cumulusList"):

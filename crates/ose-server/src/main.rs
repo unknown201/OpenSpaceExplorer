@@ -578,17 +578,20 @@ async fn main() -> anyhow::Result<()> {
         )
         .with_state(shared);
     if let Some(dir) = &args.assets_dir {
-        let assets = Router::new().fallback_service(ServeDir::new(dir)).layer(
-            axum::middleware::map_response(|mut r: axum::response::Response| async move {
-                if r.status().is_success() {
-                    r.headers_mut().insert(
-                        axum::http::header::CACHE_CONTROL,
-                        axum::http::HeaderValue::from_static("public, max-age=86400"),
-                    );
-                }
-                r
-            }),
-        );
+        // Precompressed `.gz` copies (terrain packs, tools/extract_terrain.py) go out to browsers that accept gzip.
+        let assets = Router::new()
+            .fallback_service(ServeDir::new(dir).precompressed_gzip())
+            .layer(axum::middleware::map_response(
+                |mut r: axum::response::Response| async move {
+                    if r.status().is_success() {
+                        r.headers_mut().insert(
+                            axum::http::header::CACHE_CONTROL,
+                            axum::http::HeaderValue::from_static("public, max-age=86400"),
+                        );
+                    }
+                    r
+                },
+            ));
         app = app.nest_service("/assets", assets);
         tracing::info!(dir = %dir.display(), "serving game assets");
     }

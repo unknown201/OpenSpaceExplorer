@@ -257,6 +257,9 @@ pub struct FlightInput<'a> {
     pub spin: Option<Spin>,
     /// Wall clock, ms (flex interpolation).
     pub now_ms: f64,
+    /// Every other body that can hide the sun: star-space position and radius (m), and the star's radius.
+    pub others: &'a [(DVec3, f64)],
+    pub star_radius: f64,
 }
 
 fn quat_from_basis(x: DVec3, y: DVec3, z: DVec3) -> DQuat {
@@ -532,6 +535,21 @@ impl FlightView {
 
         // The body: the planet renderer's terrain, ocean, sky and clouds once its assets are in; until then the
         // scaled sphere, sunk by 1.5 km so its facets stay under the campus ground near the KSC.
+        // Bodies that can hide the sun from here, in the model frame, biggest in the sky first.
+        let mut occluders: Vec<(DVec3, f64)> = inp
+            .others
+            .iter()
+            .map(|(p, rad)| (to_model(*p - inp.body_pos, spin, inp.ut), *rad))
+            .collect();
+        occluders.sort_by(|a, b| {
+            let sa = b.1 / (b.0 - cam).length().max(1.0);
+            let sb = a.1 / (a.0 - cam).length().max(1.0);
+            sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        occluders.truncate(4);
+        let sun_radius_rad = (inp.star_radius / (inp.star_pos - inp.vessel_pos).length().max(1.0))
+            .clamp(0.0, 1.0)
+            .asin();
         let planet = self
             .planet
             .get_or_insert_with(|| crate::planet::PlanetRenderer::new(gpu));
@@ -543,6 +561,8 @@ impl FlightView {
                 cam,
                 sun,
                 time_s: inp.now_ms / 1000.0,
+                occluders: &occluders,
+                sun_radius_rad,
             },
         );
         let body_model = format!("body:{}", inp.body_id);
@@ -691,6 +711,8 @@ impl FlightView {
                         cam,
                         sun,
                         time_s: inp.now_ms / 1000.0,
+                        occluders: &occluders,
+                        sun_radius_rad,
                     },
                 ));
             }

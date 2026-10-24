@@ -120,5 +120,9 @@ places them on a planet-fixed grid on the camera's cube face with hashed jitter,
 weight as probability, and the rules; at most 120 per item and 900 in all, nearest first, props under 0.4 m left
 to the ground texture. Grass is not drawn. The original's PQS texture sample rules are unused on the stock bodies.
 
-Not in v1: FFT waves, caustics and under-water, volumetric clouds, grass, eclipses, the gas giant mode of the
-atmosphere.
+Since v1: grass (Vegetation Studio's grass items: the patch texture between the dry and healthy tints, drawn as
+crossed cards in one instanced batch within 55 m); under water (fog and light falling off with depth, the surface
+from below with Snell's window); eclipses (the disc overlap of up to four bodies with the star, on ground, sea,
+clouds, grass, sky and props); terrain packs and atmosphere LUTs served gzip-compressed.
+
+Not yet: FFT waves, caustics, volumetric clouds, the gas giant mode of the atmosphere.

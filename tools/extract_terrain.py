@@ -265,6 +265,10 @@ def write_pack(bid: str, body: dict, env_objs: dict, pqs: dict, radius: float, o
             })
     out.mkdir(parents=True, exist_ok=True)
     (out / f"{bid}.bin").write_bytes(bytes(blob))
+    # a gzip copy the server hands to browsers (about a quarter smaller); the server itself reads the .bin
+    import gzip
+
+    (out / f"{bid}.bin.gz").write_bytes(gzip.compress(bytes(blob), compresslevel=6))
     (out / f"{bid}.json").write_text(json.dumps(pack, indent=1), encoding="utf-8")
     return {"id": bid, "bytes": len(blob), "decals": len(pack["decals"]),
             "layers": sum(1 for x in pack["large"] + pack["medium"] if x)}

@@ -20,6 +20,8 @@ pub struct Preview {
     sun_az: f64,
     sun_el: f64,
     debug: f32,
+    /// `occ=<distance m>,<radius m>,<offset deg>`: a body that hides the sun, for checking eclipses.
+    occ: Option<(f64, f64, f64)>,
     planet: Option<PlanetRenderer>,
 }
 
@@ -57,6 +59,10 @@ impl Preview {
             sun_az: num("sunaz", 120.0),
             sun_el: num("sunel", 30.0),
             debug: num("debug", 0.0) as f32,
+            occ: get.get("occ").and_then(|s| {
+                let v: Vec<f64> = s.split(',').filter_map(|x| x.parse().ok()).collect();
+                (v.len() == 3).then(|| (v[0], v[1], v[2]))
+            }),
             planet: None,
         })
     }
@@ -79,6 +85,11 @@ impl Preview {
         };
         let fwd = dir_at(self.heading, self.pitch);
         let sun = dir_at(self.sun_az, self.sun_el);
+        let occluders: Vec<(DVec3, f64)> = self
+            .occ
+            .map(|(d, r, off)| (cam + dir_at(self.sun_az + off, self.sun_el) * d, r))
+            .into_iter()
+            .collect();
         gpu.set_camera(
             fwd,
             up,
@@ -94,6 +105,8 @@ impl Preview {
                 cam,
                 sun,
                 time_s: now_ms / 1000.0,
+                occluders: &occluders,
+                sun_radius_rad: 0.0047,
             },
         );
         let view = PlanetView {
@@ -102,6 +115,8 @@ impl Preview {
             cam,
             sun,
             time_s: now_ms / 1000.0,
+            occluders: &occluders,
+            sun_radius_rad: 0.0047,
         };
         let items = match (&mut self.planet, ready) {
             (Some(p), true) => p.scatter_items(gpu, &view),

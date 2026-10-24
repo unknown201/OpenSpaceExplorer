@@ -51,6 +51,10 @@ struct FrameU {
     water: [f32; 4],
     /// the water's colour under the surface
     water_col: [f32; 4],
+    /// up to four bodies that can hide the sun: centre (km, model frame), radius (km)
+    occluders: [[f32; 4]; 4],
+    /// x: the star's angular radius (rad), y: number of occluders
+    eclipse: [f32; 4],
 }
 
 #[repr(C)]
@@ -100,6 +104,10 @@ pub struct PlanetView<'a> {
     pub sun: DVec3,
     /// Seconds, for animation (waves).
     pub time_s: f64,
+    /// Other bodies that can hide the sun (eclipses): centre in the model frame (m) and radius (m).
+    pub occluders: &'a [(DVec3, f64)],
+    /// The star's angular radius seen from here (rad), for partial eclipses.
+    pub sun_radius_rad: f64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -1372,6 +1380,20 @@ impl PlanetRenderer {
                 0.0,
                 0.0,
             ],
+            occluders: {
+                let mut o = [[0.0f32; 4]; 4];
+                for (k, (c, r)) in view.occluders.iter().take(4).enumerate() {
+                    let ck = *c / 1000.0;
+                    o[k] = [ck.x as f32, ck.y as f32, ck.z as f32, (*r / 1000.0) as f32];
+                }
+                o
+            },
+            eclipse: [
+                view.sun_radius_rad.max(1e-5) as f32,
+                view.occluders.len().min(4) as f32,
+                0.0,
+                0.0,
+            ],
             water_col: {
                 let s = surface_uniform(b, 0.0);
                 [
@@ -1485,6 +1507,9 @@ impl PlanetRenderer {
             }
         }
         let models = f.models();
+        // props are lit by the renderer's own shader: dim them by hand during an eclipse
+        let vis = eclipse_visible(view.cam, view.sun, view.occluders, view.sun_radius_rad) as f32;
+        let dim = 0.15 + 0.85 * vis;
         let mut out = Vec::with_capacity(b.placed.len());
         for inst in &b.placed {
             let path = models[inst.model];
@@ -1504,6 +1529,7 @@ impl PlanetRenderer {
                 view.sun,
             );
             it.ambient = 0.3;
+            it.color = [dim, dim, dim, 1.0];
             out.push(it);
         }
         out
@@ -1512,6 +1538,32 @@ impl PlanetRenderer {
     fn body(&self) -> Option<&Body> {
         self.bodies.get(self.current.as_deref()?)
     }
+}
+
+/// Fraction of the star's disc visible from `p` (model frame, m), as the shader's `eclipse`.
+pub fn eclipse_visible(p: DVec3, sun: DVec3, occluders: &[(DVec3, f64)], sun_radius: f64) -> f64 {
+    let a_s = sun_radius.max(1e-5);
+    let sun = sun.normalize_or_zero();
+    let mut vis = 1.0;
+    for (c, r) in occluders.iter().take(4) {
+        let d = *c - p;
+        let dist = d.length();
+        if dist <= *r || d.dot(sun) <= 0.0 {
+            continue;
+        }
+        let a_o = (r / dist).clamp(0.0, 1.0).asin();
+        let theta = (d / dist).dot(sun).clamp(-1.0, 1.0).acos();
+        let full = (a_o - a_s).abs();
+        let deepest = if a_o < a_s {
+            (a_o * a_o) / (a_s * a_s)
+        } else {
+            1.0
+        };
+        let x = ((theta - full) / (a_s + a_o - full).max(1e-9)).clamp(0.0, 1.0);
+        let t = x * x * (3.0 - 2.0 * x);
+        vis *= 1.0 - deepest * (1.0 - t);
+    }
+    vis
 }
 
 fn surface_uniform(b: &Body, debug: f32) -> SurfaceU {

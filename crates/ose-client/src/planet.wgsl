@@ -23,6 +23,10 @@ struct Frame {
     water: vec4<f32>,
     // the water's colour under the surface (shallow and deep mixed)
     water_col: vec4<f32>,
+    // bodies that can hide the sun: centre (km, model frame), radius (km)
+    occluders: array<vec4<f32>, 4>,
+    // x: the star's angular radius (rad), y: number of occluders
+    eclipse: vec4<f32>,
 };
 
 struct Chunk {
@@ -280,11 +284,37 @@ fn irradiance(r: f32, mu_s: f32) -> vec3<f32> {
 
 struct Light { sun: vec3<f32>, sky: vec3<f32> };
 
+// Fraction of the star's disc not hidden by other bodies, seen from `p` (km): moons and planets passing in front
+// of the sun (the disc overlap of the two, smoothed between first and full contact).
+fn eclipse(p: vec3<f32>, sun: vec3<f32>) -> f32 {
+    var vis = 1.0;
+    let a_s = frame.eclipse.x;
+    for (var i = 0; i < 4; i = i + 1) {
+        if f32(i) >= frame.eclipse.y {
+            break;
+        }
+        let o = frame.occluders[i];
+        let d = o.xyz - p;
+        let dist = length(d);
+        if dist <= o.w || dot(d, sun) <= 0.0 {
+            continue;
+        }
+        let a_o = asin(clamp(o.w / dist, 0.0, 1.0));
+        let theta = acos(clamp(dot(d / dist, sun), -1.0, 1.0));
+        let full = abs(a_o - a_s);
+        // covered fraction at the deepest point: all of it, or the ratio of the disc areas
+        let deepest = select(1.0, (a_o * a_o) / (a_s * a_s), a_o < a_s);
+        let t = smoothstep(full, a_s + a_o, theta);
+        vis = vis * (1.0 - deepest * (1.0 - t));
+    }
+    return vis;
+}
+
 // Direct sun and sky irradiance on a surface at `p` (km) with normal `n`.
 fn sun_and_sky(p: vec3<f32>, n: vec3<f32>, sun: vec3<f32>) -> Light {
     var out: Light;
     let has_atmo = frame.rayleigh.w > 0.5;
-    let ndl = max(dot(n, sun), 0.0);
+    let ndl = max(dot(n, sun), 0.0) * eclipse(p, sun);
     if !has_atmo {
         out.sun = frame.solar.xyz * ndl;
         out.sky = vec3<f32>(0.0);
@@ -357,7 +387,8 @@ fn through_air(radiance: vec3<f32>, p: vec3<f32>) -> vec3<f32> {
         return radiance;
     }
     let s = sky_to_point(frame.cam_km.xyz, p, frame.sun.xyz);
-    return radiance * s.transmittance + s.radiance;
+    // an eclipse dims the sunlit air too
+    return radiance * s.transmittance + s.radiance * eclipse(frame.cam_km.xyz, frame.sun.xyz);
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -389,7 +420,7 @@ fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
     var t = vec3<f32>(1.0);
     if frame.rayleigh.w > 0.5 {
         let s = sky_radiance(frame.cam_km.xyz, view, sun);
-        radiance = s.radiance;
+        radiance = s.radiance * eclipse(frame.cam_km.xyz, sun);
         t = s.transmittance;
     }
     // The sun's disc.

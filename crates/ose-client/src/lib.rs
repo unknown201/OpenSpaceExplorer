@@ -4081,6 +4081,19 @@ impl App {
             .map(|i| scene.position(i, ut))
             .unwrap_or_default();
         let g = |d: ose_math::DVec3| glam::DVec3::new(d.x, d.y, d.z);
+        // Other bodies (not the star, not the body flown over) for eclipses in the planet renderer.
+        let root = scene.root();
+        let others: Vec<(glam::DVec3, f64)> = scene
+            .bodies
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != rb && Some(*i) != root)
+            .map(|(i, b)| (g(scene.position(i, ut)), b.radius_m))
+            .collect();
+        let star_radius = root
+            .and_then(|i| scene.bodies.get(i))
+            .map(|b| b.radius_m)
+            .unwrap_or(0.0);
         let catalog = &self.catalog;
         let is_dec = |pid: &str| catalog.get(pid).map(|p| p.is_decoupler).unwrap_or(false);
         let is_eng = |pid: &str| catalog.get(pid).map(|p| p.has_engine).unwrap_or(false);
@@ -4108,6 +4121,8 @@ impl App {
                 .filter(|n| n.vessel == id)
                 .map(|n| (n.prograde_mps, n.normal_mps, n.radial_mps)),
             now_ms: now_ms(),
+            others: &others,
+            star_radius,
             spin: self.body_spins.get(rb).map(|b| flight3d::Spin {
                 period_s: b.rotation_period_s,
                 initial_deg: b.initial_rotation_deg,
