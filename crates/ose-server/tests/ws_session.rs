@@ -291,7 +291,7 @@ async fn hello_catalog_and_snapshots() {
     ws.send(Message::Binary(
         ose_net::encode(&ClientMessage::CreateSession {
             name: "Mun or bust".into(),
-            mode: ose_net::SessionMode::Exploration,
+            mode: ose_net::SessionMode::Sandbox,
             difficulty: vec![ose_net::DifficultyOption {
                 id: "InfiniteFuel".into(),
                 value: ose_net::DifficultyValue::Bool(false),
@@ -315,7 +315,9 @@ async fn hello_catalog_and_snapshots() {
         {
             assert!(created);
             assert_eq!(name, "Mun or bust");
-            assert_eq!(mode, ose_net::SessionMode::Exploration);
+            // sandbox: this flight test launches stock craft without researching their parts (the
+            // exploration tech tree has its own test)
+            assert_eq!(mode, ose_net::SessionMode::Sandbox);
             assert_eq!(difficulty.len(), 1);
             assert!(you_are_member);
             created_ok = true;
@@ -323,6 +325,7 @@ async fn hello_catalog_and_snapshots() {
         }
     }
     assert!(created_ok, "no CampaignState after CreateSession");
+
     ws.send(Message::Binary(
         ose_net::encode(&ClientMessage::SetAgency {
             agency: ose_net::Agency {
@@ -829,6 +832,227 @@ async fn hello_catalog_and_snapshots() {
         }
     }
     assert!(checked);
+}
+
+async fn send_msg(ws: &mut Ws, m: &ClientMessage) {
+    ws.send(Message::Binary(ose_net::encode(m).unwrap().into()))
+        .await
+        .unwrap();
+}
+
+/// Wait for the first message `pick` accepts (other traffic, like snapshots, is skipped).
+async fn wait_for<T>(ws: &mut Ws, mut pick: impl FnMut(ServerMessage) -> Option<T>) -> T {
+    for _ in 0..400 {
+        if let Some(t) = pick(recv(ws).await) {
+            return t;
+        }
+    }
+    panic!("expected message never came");
+}
+
+fn starter_craft() -> ose_data::craft::Craft {
+    // only parts of the free starting tech node: pod, tank, Swivel
+    let part = |guid: &str,
+                id: &str,
+                parent: Option<usize>,
+                own: Option<&str>,
+                other: Option<&str>,
+                y: f64| {
+        ose_data::craft::CraftPart {
+            guid: guid.into(),
+            part_id: id.into(),
+            parent,
+            own_node: own.map(String::from),
+            parent_node: other.map(String::from),
+            local_position: ose_math::DVec3::new(0.0, y, 0.0),
+            local_rotation: ose_data::craft::Quat {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                w: 1.0,
+            },
+            stage_index: 0,
+            fuel_crossfeed: true,
+            resources: vec![],
+        }
+    };
+    ose_data::craft::Craft {
+        name: "Starter".into(),
+        description: String::new(),
+        parts: vec![
+            part("a", "pod_1v_conical_crew", None, None, None, 0.0),
+            part(
+                "b",
+                "fueltank_1v_inline_methalox_1x2",
+                Some(0),
+                Some("top"),
+                Some("bottom"),
+                -1.0,
+            ),
+            part(
+                "c",
+                "engine_1v_methalox_swivel",
+                Some(1),
+                Some("top"),
+                Some("bottom"),
+                -2.2,
+            ),
+        ],
+        stages: vec![vec![2]],
+    }
+}
+
+#[tokio::test]
+async fn exploration_science_tech_tree_and_recovery() {
+    let (_server, addr) = spawn_server().await;
+    let mut ws = connect_ws(&addr).await;
+    let (player_id, _) = hello(&mut ws, None, "scientist").await;
+    send_msg(&mut ws, &ClientMessage::JoinCampaign).await;
+    wait_for(&mut ws, |m| {
+        matches!(m, ServerMessage::CampaignState { .. }).then_some(())
+    })
+    .await;
+
+    // a fresh exploration campaign: the tech tree is on, nothing earned, the first mission offered
+    send_msg(&mut ws, &ClientMessage::ScienceInfo).await;
+    let (tech_tree, capacity, unlocked, missions) = wait_for(&mut ws, |m| match m {
+        ServerMessage::ScienceState {
+            tech_tree,
+            capacity,
+            unlocked,
+            missions,
+            ..
+        } => Some((tech_tree, capacity, unlocked, missions)),
+        _ => None,
+    })
+    .await;
+    assert!(tech_tree);
+    assert_eq!(capacity, 0);
+    assert!(unlocked.contains(&"tNode_1v_start".to_string()));
+    assert!(
+        missions
+            .iter()
+            .any(|m| m.id == "Main_Kerbin_01" && !m.complete),
+        "{missions:?}"
+    );
+
+    // unresearched parts stay in the VAB
+    let mut locked = starter_craft();
+    locked.parts[2].part_id = "engine_1v_methalox_terrier".into();
+    send_msg(&mut ws, &ClientMessage::LaunchOnPad { craft: locked }).await;
+    let reason = wait_for(&mut ws, |m| match m {
+        ServerMessage::CraftLaunched { reason, .. } => Some(reason),
+        _ => None,
+    })
+    .await;
+    assert!(reason.unwrap_or_default().contains("not researched"));
+
+    // a starter craft on the pad: the crew observes the KSC
+    send_msg(
+        &mut ws,
+        &ClientMessage::LaunchOnPad {
+            craft: starter_craft(),
+        },
+    )
+    .await;
+    let vessel = wait_for(&mut ws, |m| match m {
+        ServerMessage::CraftLaunched { vessel, reason, .. } => {
+            assert!(reason.is_none(), "{reason:?}");
+            vessel
+        }
+        _ => None,
+    })
+    .await;
+    send_msg(&mut ws, &ClientMessage::RunExperiments { vessel }).await;
+    let (new, carried) = wait_for(&mut ws, |m| match m {
+        ServerMessage::ScienceReports {
+            new,
+            carried,
+            reason,
+            ..
+        } => {
+            assert!(reason.is_none(), "{reason:?}");
+            Some((new, carried))
+        }
+        _ => None,
+    })
+    .await;
+    let obs = new
+        .iter()
+        .find(|r| r.experiment == "CrewObservation")
+        .expect("crew observation");
+    assert_eq!(obs.location, "Kerbin_Landed_KerbinKSC");
+    assert_eq!(carried.len(), new.len());
+
+    // transmitting scores it; the state follows
+    send_msg(&mut ws, &ClientMessage::TransmitScience { vessel }).await;
+    let earned = wait_for(&mut ws, |m| match m {
+        ServerMessage::ScienceSubmitted { earned, reason, .. } => {
+            assert!(reason.is_none(), "{reason:?}");
+            Some(earned)
+        }
+        _ => None,
+    })
+    .await;
+    assert!(earned > 0.0);
+    let capacity = wait_for(&mut ws, |m| match m {
+        ServerMessage::ScienceState { capacity, .. } => Some(capacity),
+        _ => None,
+    })
+    .await;
+    assert_eq!(capacity as f64, earned);
+
+    // research: a node we cannot afford is refused with the reason
+    send_msg(
+        &mut ws,
+        &ClientMessage::UnlockTechNode {
+            id: "tNode_1v_rockets_03".into(),
+        },
+    )
+    .await;
+    let (accepted, reason) = wait_for(&mut ws, |m| match m {
+        ServerMessage::TechUnlock {
+            accepted, reason, ..
+        } => Some((accepted, reason)),
+        _ => None,
+    })
+    .await;
+    assert!(!accepted && reason.is_some());
+
+    // the same report again is worth nothing
+    send_msg(&mut ws, &ClientMessage::RunExperiments { vessel }).await;
+    wait_for(&mut ws, |m| {
+        matches!(m, ServerMessage::ScienceReports { .. }).then_some(())
+    })
+    .await;
+    send_msg(&mut ws, &ClientMessage::RecoverVessel { vessel }).await;
+    let (earned, recovered) = wait_for(&mut ws, |m| match m {
+        ServerMessage::ScienceSubmitted {
+            earned,
+            recovered,
+            reason,
+            ..
+        } => {
+            assert!(reason.is_none(), "{reason:?}");
+            Some((earned, recovered))
+        }
+        _ => None,
+    })
+    .await;
+    assert!(recovered && earned == 0.0, "{earned}");
+    // the recovered vessel is gone
+    for _ in 0..40 {
+        if let ServerMessage::Vessels { vessels, .. } = recv(&mut ws).await {
+            assert!(vessels.iter().all(|v| v.id != vessel));
+            break;
+        }
+    }
+    let _ = player_id;
+    // the tech tree and missions are served for the R&D and Mission Control screens
+    let tree = http_get_json(&addr, "/tech-tree.json").await;
+    assert!(tree.as_array().is_some_and(|a| a.len() > 50));
+    let missions = http_get_json(&addr, "/missions.json").await;
+    assert!(missions.as_array().is_some_and(|a| a.len() > 40));
 }
 
 async fn http_get_json(addr: &str, path: &str) -> serde_json::Value {

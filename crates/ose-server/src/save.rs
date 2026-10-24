@@ -25,6 +25,9 @@ pub struct SavedVessel {
     /// Flight state kept while on rails (stage, propellant), restored as dormant.
     #[serde(default)]
     pub dormant: Option<ose_sim::flight::Powered>,
+    /// Science reports the vessel carries.
+    #[serde(default)]
+    pub science: Vec<ose_data::science::ResearchReport>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -55,6 +58,9 @@ pub struct Campaign {
     pub difficulty: Vec<ose_net::DifficultyOption>,
     #[serde(default)]
     pub last_played_unix: u64,
+    /// The agency's science, tech unlocks and missions.
+    #[serde(default)]
+    pub science: crate::science::ScienceProgress,
 }
 
 fn default_mode() -> ose_net::SessionMode {
@@ -70,6 +76,7 @@ impl Default for Campaign {
             mode: default_mode(),
             difficulty: Vec::new(),
             last_played_unix: 0,
+            science: Default::default(),
         }
     }
 }
@@ -114,6 +121,7 @@ pub fn capture(
                 elements: orbit.elements,
                 flight: u.powered(e).cloned(),
                 dormant: u.dormant(e).cloned(),
+                science: u.science_carried(e),
                 burn: u.scheduled_burn(e).map(|b| SavedBurn {
                     ut: b.ut,
                     prograde_mps: b.prograde_mps,
@@ -148,6 +156,9 @@ pub fn restore(u: &mut Universe, save: &SaveFile) -> Vec<VesselEntry> {
             u.set_powered(e, f.clone());
         } else if let Some(d) = &v.dormant {
             u.set_dormant(e, d.clone());
+        }
+        if !v.science.is_empty() {
+            u.set_science_carried(e, v.science.clone());
         }
         if let Some(b) = v.burn {
             u.schedule_burn(

@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 11;
+pub const PROTOCOL_VERSION: u16 = 13;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -109,6 +109,63 @@ pub enum ClientMessage {
     Ping {
         sent_tick: Tick,
     },
+    /// Run every experiment on the vessel's parts where it is; answers `ScienceReports`.
+    RunExperiments {
+        vessel: u64,
+    },
+    /// Send the vessel's reports home for science points; answers `ScienceSubmitted`.
+    TransmitScience {
+        vessel: u64,
+    },
+    /// Recover a vessel standing on the home world: its reports are submitted and it is removed. Answers
+    /// `ScienceSubmitted`.
+    RecoverVessel {
+        vessel: u64,
+    },
+    /// Ask for the campaign's science, tech tree and missions; answers `ScienceState`.
+    ScienceInfo,
+    /// Research a tech node with the campaign's free science points; answers `TechUnlock` and
+    /// `ScienceState`.
+    UnlockTechNode {
+        id: String,
+    },
+}
+
+/// A science report (the original's research report).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ReportInfo {
+    /// `{experiment}_{DataType|SampleType}_{location}`: one submission each.
+    pub key: String,
+    pub experiment: String,
+    pub sample: bool,
+    /// `{Body}_{Situation}` or `{Body}_{Situation}_{Region}`.
+    pub location: String,
+    /// Science points it is worth (before the campaign's science reward multiplier).
+    pub value: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SkippedExperiment {
+    pub part: u16,
+    pub experiment: String,
+    pub reason: String,
+}
+
+/// One mission's state (texts are the original's localisation keys).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MissionInfo {
+    pub id: String,
+    pub name_key: String,
+    pub description_key: String,
+    pub primary: bool,
+    pub granter: String,
+    /// Current stage index and the number of stages.
+    pub stage: u32,
+    pub stages: u32,
+    /// The current stage's objective key (empty once complete).
+    pub objective_key: String,
+    pub complete: bool,
+    pub science_reward: f64,
 }
 
 /// Static description of one celestial body, sent once after `Welcome`.
@@ -457,6 +514,41 @@ pub enum ServerMessage {
     },
     Pong {
         sent_tick: Tick,
+    },
+    /// Answer to `RunExperiments`: new reports now carried, experiments that did not run, and everything the
+    /// vessel carries.
+    ScienceReports {
+        vessel: u64,
+        new: Vec<ReportInfo>,
+        skipped: Vec<SkippedExperiment>,
+        carried: Vec<ReportInfo>,
+        reason: Option<String>,
+    },
+    /// Answer to `TransmitScience` / `RecoverVessel`: what was submitted and the points it earned (0 for a
+    /// report the campaign already had).
+    ScienceSubmitted {
+        vessel: u64,
+        reports: Vec<ReportInfo>,
+        earned: f64,
+        recovered: bool,
+        reason: Option<String>,
+    },
+    /// The campaign's science: free points are `capacity - allocated`. Sent on `ScienceInfo`, after an
+    /// unlock or submission, and to everyone whenever it changes (a mission advanced, a teammate scored).
+    ScienceState {
+        /// False in sandbox: everything is unlocked and points do not matter.
+        tech_tree: bool,
+        capacity: u32,
+        allocated: u32,
+        unlocked: Vec<String>,
+        submitted: Vec<ReportInfo>,
+        missions: Vec<MissionInfo>,
+    },
+    /// Answer to `UnlockTechNode`.
+    TechUnlock {
+        id: String,
+        accepted: bool,
+        reason: Option<String>,
     },
     /// Sent right after `BodyCatalog`: each body's rotation.
     BodyRotation {

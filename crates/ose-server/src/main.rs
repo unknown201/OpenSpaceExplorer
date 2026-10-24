@@ -11,6 +11,7 @@
 
 mod accounts;
 mod save;
+mod science;
 
 use axum::{
     extract::{
@@ -39,6 +40,10 @@ const EMBEDDED_PARTS: &str = include_str!("../../../assets/own/parts-catalog.jso
 const EMBEDDED_RESOURCES: &str = include_str!("../../../assets/own/resources.json");
 const EMBEDDED_DIFFICULTY: &str = include_str!("../../../assets/own/difficulty.json");
 const EMBEDDED_STOCK_CRAFT: &str = include_str!("../../../assets/own/stock-craft.json");
+const EMBEDDED_SCIENCE: &str = include_str!("../../../assets/own/science/index.json");
+const EMBEDDED_REGIONS: &[u8] = include_bytes!("../../../assets/own/science/regions.bin");
+const EMBEDDED_TECH_TREE: &str = include_str!("../../../assets/own/tech-tree.json");
+const EMBEDDED_MISSIONS: &str = include_str!("../../../assets/own/missions.json");
 const EMBEDDED_TERRAIN_INDEX: &str = include_str!("../../../assets/own/terrain/index.json");
 const EMBEDDED_TERRAIN: &[u8] = include_bytes!("../../../assets/own/terrain/terrain.bin");
 /// The launch pad craft are placed on (from the Kerbin body data's LocalSimObjectsData).
@@ -257,6 +262,7 @@ async fn json_route(body: Arc<String>) -> impl IntoResponse {
 
 struct Shared {
     universe: Mutex<Universe>,
+    science: science::ScienceData,
     catalog: Vec<BodyInfo>,
     /// Body rotation, index-aligned with `catalog`.
     spins: Vec<ose_net::BodySpin>,
@@ -393,8 +399,16 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     }
+    universe.set_science(
+        serde_json::from_str(EMBEDDED_SCIENCE)?,
+        EMBEDDED_REGIONS.to_vec(),
+    );
     let shared: AppState = Arc::new(Shared {
         universe: Mutex::new(universe),
+        science: science::ScienceData {
+            tech: serde_json::from_str(EMBEDDED_TECH_TREE)?,
+            missions: serde_json::from_str(EMBEDDED_MISSIONS)?,
+        },
         catalog,
         spins,
         parts: serde_json::from_str(EMBEDDED_PARTS)?,
@@ -419,9 +433,15 @@ async fn main() -> anyhow::Result<()> {
             1000 / ose_sim::TICKS_PER_SECOND,
         ));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut ticks: u64 = 0;
         loop {
             interval.tick().await;
             sim.universe.lock().expect("sim lock").step();
+            ticks += 1;
+            // missions look at the agency's vessels once a second
+            if ticks.is_multiple_of(ose_sim::TICKS_PER_SECOND) {
+                science::evaluate_missions(&sim);
+            }
         }
     });
 
@@ -483,6 +503,20 @@ async fn main() -> anyhow::Result<()> {
             "/resources.json",
             get({
                 let body = Arc::new(serde_json::to_string(&shared.resources)?);
+                move || json_route(body.clone())
+            }),
+        )
+        .route(
+            "/tech-tree.json",
+            get({
+                let body = Arc::new(serde_json::to_string(&shared.science.tech)?);
+                move || json_route(body.clone())
+            }),
+        )
+        .route(
+            "/missions.json",
+            get({
+                let body = Arc::new(serde_json::to_string(&shared.science.missions)?);
                 move || json_route(body.clone())
             }),
         )
@@ -889,6 +923,18 @@ fn launch_on_pad(s: &Shared, player_id: u64, craft: &ose_data::craft::Craft) -> 
     if craft.parts.is_empty() || !craft.is_tree() {
         return fail("craft must be a non-empty single tree".into());
     }
+    let locked = {
+        let c = s.campaign.lock().expect("campaign lock");
+        // the tech tree binds the campaign's members; guests and visitors fly anything
+        if c.members.iter().any(|m| m.player_id == player_id) {
+            s.science.locked_parts(&c, craft)
+        } else {
+            Vec::new()
+        }
+    };
+    if !locked.is_empty() {
+        return fail(format!("not researched yet: {}", locked.join(", ")));
+    }
     if !m.unknown_parts.is_empty() {
         return fail(format!("unknown parts: {:?}", m.unknown_parts));
     }
@@ -990,6 +1036,131 @@ fn snapshot(s: &Shared) -> (ServerMessage, ServerMessage, ServerMessage) {
 }
 
 /// The entity of vessel `id` if `player` owns it.
+/// Science requests: run experiments, transmit, recover, state, research. Replies in order.
+fn science_request(s: &Shared, player_id: u64, msg: ClientMessage) -> Vec<ServerMessage> {
+    let state = |s: &Shared| s.science.state(&s.campaign.lock().expect("campaign lock"));
+    match msg {
+        ClientMessage::RunExperiments { vessel } => {
+            let Some(e) = owned_vessel(s, vessel, player_id) else {
+                return vec![ServerMessage::ScienceReports {
+                    vessel,
+                    new: vec![],
+                    skipped: vec![],
+                    carried: vec![],
+                    reason: Some("not your vessel".into()),
+                }];
+            };
+            let mut u = s.universe.lock().expect("sim lock");
+            let located = u.science_location(e).is_some();
+            let out = u.run_experiments(e);
+            vec![ServerMessage::ScienceReports {
+                vessel,
+                new: out.reports.iter().map(science::report_info).collect(),
+                skipped: out
+                    .skipped
+                    .iter()
+                    .map(|k| ose_net::SkippedExperiment {
+                        part: k.part as u16,
+                        experiment: k.experiment.clone(),
+                        reason: k.reason.clone(),
+                    })
+                    .collect(),
+                carried: u
+                    .science_carried(e)
+                    .iter()
+                    .map(science::report_info)
+                    .collect(),
+                reason: (!located).then(|| "no science here".to_string()),
+            }]
+        }
+        ClientMessage::TransmitScience { vessel } | ClientMessage::RecoverVessel { vessel } => {
+            let recover = matches!(msg, ClientMessage::RecoverVessel { .. });
+            let fail = |reason: &str| {
+                vec![ServerMessage::ScienceSubmitted {
+                    vessel,
+                    reports: vec![],
+                    earned: 0.0,
+                    recovered: false,
+                    reason: Some(reason.to_string()),
+                }]
+            };
+            let Some(e) = owned_vessel(s, vessel, player_id) else {
+                return fail("not your vessel");
+            };
+            let (reports, tick) = {
+                let mut u = s.universe.lock().expect("sim lock");
+                if recover {
+                    let home = s
+                        .catalog
+                        .iter()
+                        .find(|b| b.id == "Kerbin")
+                        .map(|b| b.id.clone())
+                        .unwrap_or_default();
+                    let on_home = u
+                        .vessel(e)
+                        .and_then(|(_, body, _)| u.body_id(body).map(|b| b == home))
+                        .unwrap_or(false);
+                    let landed = u.powered(e).is_some_and(|p| p.landed && !p.crashed);
+                    if !(on_home && landed) {
+                        return fail("only a vessel standing on Kerbin can be recovered");
+                    }
+                }
+                let r = u.take_science(e);
+                if recover {
+                    u.despawn_vessel(e);
+                }
+                (r, u.tick().0)
+            };
+            if recover {
+                s.vessels
+                    .lock()
+                    .expect("vessels lock")
+                    .retain(|&(v, _, _)| v != e);
+            }
+            let (reports, earned) = {
+                let mut c = s.campaign.lock().expect("campaign lock");
+                science::submit(&mut c, reports, player_id, tick)
+            };
+            tracing::info!(
+                player = player_id,
+                vessel,
+                earned,
+                recover,
+                "science submitted"
+            );
+            vec![
+                ServerMessage::ScienceSubmitted {
+                    vessel,
+                    reports,
+                    earned,
+                    recovered: recover,
+                    reason: None,
+                },
+                state(s),
+            ]
+        }
+        ClientMessage::ScienceInfo => vec![state(s)],
+        ClientMessage::UnlockTechNode { id } => {
+            let res = {
+                let mut c = s.campaign.lock().expect("campaign lock");
+                s.science.unlock(&mut c, &id)
+            };
+            if res.is_ok() {
+                tracing::info!(player = player_id, node = %id, "tech node unlocked");
+            }
+            vec![
+                ServerMessage::TechUnlock {
+                    id,
+                    accepted: res.is_ok(),
+                    reason: res.err(),
+                },
+                state(s),
+            ]
+        }
+        _ => Vec::new(),
+    }
+}
+
 fn owned_vessel(s: &Shared, id: u64, player: u64) -> Option<bevy_ecs::entity::Entity> {
     s.vessels
         .lock()
@@ -1284,6 +1455,7 @@ fn launch_craft(
     if !craft.is_tree() {
         return fail("craft parts do not form a single tree".into());
     }
+
     if !m.unknown_parts.is_empty() {
         return fail(format!("unknown parts: {:?}", m.unknown_parts));
     }
@@ -1456,6 +1628,7 @@ async fn session(mut socket: WebSocket, s: AppState) {
     // Stream.
     let mut interval =
         tokio::time::interval(std::time::Duration::from_millis(1000 / SNAPSHOT_HZ as u64));
+    let mut science_rev = s.campaign.lock().expect("campaign lock").science.rev;
     let mut traj_interval = tokio::time::interval(std::time::Duration::from_millis(
         1000 / TRAJECTORY_HZ as u64,
     ));
@@ -1479,6 +1652,16 @@ async fn session(mut socket: WebSocket, s: AppState) {
                     || !send(&mut socket, &vessels).await
                 {
                     break;
+                }
+                let changed = {
+                    let c = s.campaign.lock().expect("campaign lock");
+                    (c.science.rev != science_rev).then(|| (c.science.rev, s.science.state(&c)))
+                };
+                if let Some((rev, state)) = changed {
+                    science_rev = rev;
+                    if !send(&mut socket, &state).await {
+                        break;
+                    }
                 }
             }
             _ = traj_interval.tick() => {
@@ -1666,6 +1849,19 @@ async fn session(mut socket: WebSocket, s: AppState) {
                                 },
                             };
                             if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(msg @ (ClientMessage::RunExperiments { .. }
+                        | ClientMessage::TransmitScience { .. }
+                        | ClientMessage::RecoverVessel { .. }
+                        | ClientMessage::ScienceInfo
+                        | ClientMessage::UnlockTechNode { .. })) => {
+                            let replies = science_request(&s, player_id, msg);
+                            science_rev = s.campaign.lock().expect("campaign lock").science.rev;
+                            let mut ok = true;
+                            for r in &replies {
+                                ok = ok && send(&mut socket, r).await;
+                            }
+                            if !ok { break; }
                         }
                         Ok(ClientMessage::Hello { .. }) => {}
                         Err(e) => tracing::warn!(player = player_id, error = %e, "bad client message"),
