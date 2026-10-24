@@ -69,4 +69,4 @@ Live at https://ose.jfly.dev/ (home network and Tailscale). A push to `main` bui
 
 ## Known problems
 
-- The 3D map (ADR-0006) draws planets only; vessels and the VAB still use the 2D paths, bodies have no icons at system scale, and back-face culling is off until the asset re-export with the authored winding is verified. Vessels of players who disconnected stay on the server with the same name, so a busy server shows stacked "browser probe" labels.
+- The 3D map (ADR-0006) draws planets only; vessels and the VAB still use the 2D paths, bodies have no icons at system scale. Vessels of players who disconnected stay on the server with the same name, so a busy server shows stacked "browser probe" labels.

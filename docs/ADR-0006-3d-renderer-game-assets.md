@@ -34,5 +34,5 @@ like Kerbal is. It should also use the Kerbal assets").
 - The exported assets are about 900 MB at 1024-pixel textures and live outside the repository; a fresh
   machine needs the export and push once. Phase 9 (own assets) replaces them.
 - Not yet: body rotation, atmosphere and star glow, body icons at system scale, normal and emissive maps in
-  the shader, part meshes in the VAB and on the map (the next step), terrain. Back-face culling is off
-  until the re-export with the authored winding is verified.
+  the shader, part meshes in the VAB and on the map (the next step), terrain. Back-face culling is on; the
+  authored winding was verified against Kerbin after the re-export.

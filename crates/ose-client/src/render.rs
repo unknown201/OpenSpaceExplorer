@@ -312,8 +312,7 @@ impl Renderer {
             }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
-                // The exporter mirrors X for glTF; winding is checked against the real meshes before culling.
-                cull_mode: None,
+                cull_mode: Some(wgpu::Face::Back),
                 ..Default::default()
             },
             depth_stencil: Some(depth_state.clone()),
