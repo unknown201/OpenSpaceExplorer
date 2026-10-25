@@ -34,6 +34,7 @@ pub mod planet_scatter;
 pub mod render;
 pub mod rnd;
 pub mod scene;
+pub mod settings;
 pub mod thumb;
 pub mod tracking;
 pub mod vab;
@@ -567,7 +568,7 @@ fn install_audio(app: &Shared) -> Result<(), JsValue> {
     )?;
     click.forget();
     let doc = app.borrow().doc.clone();
-    for btn in ["sound-toggle", "main-sound"]
+    for btn in ["sound-toggle", "main-sound", "settings-sound"]
         .iter()
         .filter_map(|id| doc.get_element_by_id(id))
     {
@@ -583,7 +584,247 @@ fn install_audio(app: &Shared) -> Result<(), JsValue> {
         cb.forget();
     }
     app.borrow().show_sound_toggle();
+    install_settings(app)?;
+    install_rnd_nav(&app.borrow().doc.clone())?;
     Ok(())
+}
+
+/// R&D tree navigation as the original's (`RDInputDefinition`): drag with the left button to pan, wheel to
+/// zoom about the pointer, arrow keys to pan. A drag does not count as a click on a node.
+fn install_rnd_nav(doc: &Document) -> Result<(), JsValue> {
+    use std::cell::Cell;
+    let Some(tree) = doc
+        .get_element_by_id("rd-tree")
+        .and_then(|e| e.dyn_into::<HtmlElement>().ok())
+    else {
+        return Ok(());
+    };
+    // (pointer x, y, scroll left, top) at the press, and whether it moved far enough to be a drag.
+    let press = Rc::new(Cell::new(None::<(f64, f64, f64, f64)>));
+    let dragged = Rc::new(Cell::new(false));
+    let zoom = Rc::new(Cell::new(1.0f64));
+
+    let (p, d) = (press.clone(), dragged.clone());
+    let t = tree.clone();
+    let down = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+        if ev.button() == 0 {
+            p.set(Some((
+                ev.client_x() as f64,
+                ev.client_y() as f64,
+                t.scroll_left() as f64,
+                t.scroll_top() as f64,
+            )));
+            d.set(false);
+        }
+    });
+    tree.add_event_listener_with_callback("mousedown", down.as_ref().unchecked_ref())?;
+    down.forget();
+
+    let (p, d) = (press.clone(), dragged.clone());
+    let t = tree.clone();
+    let mv = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+        let Some((x0, y0, sl, st)) = p.get() else {
+            return;
+        };
+        let (dx, dy) = (ev.client_x() as f64 - x0, ev.client_y() as f64 - y0);
+        if dx.abs() + dy.abs() > 4.0 {
+            d.set(true);
+            t.class_list().add_1("dragging").ok();
+        }
+        if d.get() {
+            t.set_scroll_left((sl - dx) as i32);
+            t.set_scroll_top((st - dy) as i32);
+        }
+    });
+    if let Some(w) = web_sys::window() {
+        w.add_event_listener_with_callback("mousemove", mv.as_ref().unchecked_ref())?;
+    }
+    mv.forget();
+
+    let p = press.clone();
+    let t = tree.clone();
+    let up = Closure::<dyn FnMut(MouseEvent)>::new(move |_: MouseEvent| {
+        p.set(None);
+        t.class_list().remove_1("dragging").ok();
+    });
+    if let Some(w) = web_sys::window() {
+        w.add_event_listener_with_callback("mouseup", up.as_ref().unchecked_ref())?;
+    }
+    up.forget();
+
+    // A click that ends a drag is swallowed before it reaches the node handler.
+    let d = dragged.clone();
+    let swallow = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+        if d.get() {
+            ev.stop_propagation();
+            ev.prevent_default();
+            d.set(false);
+        }
+    });
+    tree.add_event_listener_with_callback_and_bool(
+        "click",
+        swallow.as_ref().unchecked_ref(),
+        true,
+    )?;
+    swallow.forget();
+
+    let t = tree.clone();
+    let z = zoom.clone();
+    let wheel = Closure::<dyn FnMut(WheelEvent)>::new(move |ev: WheelEvent| {
+        ev.prevent_default();
+        let old = z.get();
+        let new = (old * if ev.delta_y() > 0.0 { 0.9 } else { 1.1 }).clamp(0.4, 1.6);
+        z.set(new);
+        // Keep the point under the pointer where it is.
+        let rect = t.get_bounding_client_rect();
+        let (cx, cy) = (
+            ev.client_x() as f64 - rect.left(),
+            ev.client_y() as f64 - rect.top(),
+        );
+        let k = new / old;
+        let (sl, st) = (t.scroll_left() as f64, t.scroll_top() as f64);
+        t.style()
+            .set_property("--rd-zoom", &format!("{new:.3}"))
+            .ok();
+        t.set_scroll_left(((sl + cx) * k - cx) as i32);
+        t.set_scroll_top(((st + cy) * k - cy) as i32);
+    });
+    tree.add_event_listener_with_callback("wheel", wheel.as_ref().unchecked_ref())?;
+    wheel.forget();
+
+    let t = tree.clone();
+    let d2 = doc.clone();
+    let keys =
+        Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |ev: web_sys::KeyboardEvent| {
+            let open = d2
+                .query_selector("#menu:not(.hidden) #screen-rnd.open")
+                .ok()
+                .flatten()
+                .is_some();
+            if !open {
+                return;
+            }
+            let (dx, dy) = match ev.code().as_str() {
+                "ArrowLeft" => (-80, 0),
+                "ArrowRight" => (80, 0),
+                "ArrowUp" => (0, -80),
+                "ArrowDown" => (0, 80),
+                _ => return,
+            };
+            ev.prevent_default();
+            t.set_scroll_left(t.scroll_left() + dx);
+            t.set_scroll_top(t.scroll_top() + dy);
+        });
+    if let Some(w) = web_sys::window() {
+        w.add_event_listener_with_callback("keydown", keys.as_ref().unchecked_ref())?;
+    }
+    keys.forget();
+    Ok(())
+}
+
+/// The settings overlay: any `[data-open-settings]` element opens it; tabs, UI scale and key hints, all kept
+/// in localStorage and applied at start.
+fn install_settings(app: &Shared) -> Result<(), JsValue> {
+    let doc = app.borrow().doc.clone();
+    if let Some(el) = doc.get_element_by_id("settings-input") {
+        el.set_inner_html(&settings::input_html());
+    }
+    let apply_scale = |doc: &Document, pct: f64| {
+        if let Some(root) = doc
+            .document_element()
+            .and_then(|e| e.dyn_into::<HtmlElement>().ok())
+        {
+            root.style()
+                .set_property(
+                    "--u",
+                    &format!(
+                        "calc(min(calc(100vh / 1080), calc(100vw / 1920)) * {:.2})",
+                        pct / 100.0
+                    ),
+                )
+                .ok();
+        }
+        set_text(doc, "settings-scale-text", &format!("{pct:.0}%"));
+    };
+    let scale = settings::ui_scale(stored("ose.uiScale").as_deref());
+    apply_scale(&doc, scale);
+    if let Some(input) = doc
+        .get_element_by_id("settings-scale")
+        .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+    {
+        input.set_value(&format!("{scale:.0}"));
+        let d = doc.clone();
+        let i2 = input.clone();
+        let cb = Closure::<dyn FnMut()>::new(move || {
+            let pct = settings::ui_scale(Some(&i2.value()));
+            store("ose.uiScale", &format!("{pct:.0}"));
+            apply_scale(&d, pct);
+        });
+        input.add_event_listener_with_callback("input", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
+    let hints = stored("ose.hints").as_deref() != Some("off");
+    if let Some(b) = doc.body() {
+        b.class_list().toggle_with_force("no-hints", !hints).ok();
+    }
+    if let Some(input) = doc
+        .get_element_by_id("settings-hints")
+        .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+    {
+        input.set_checked(hints);
+        let d = doc.clone();
+        let i2 = input.clone();
+        let cb = Closure::<dyn FnMut()>::new(move || {
+            let on = i2.checked();
+            store("ose.hints", if on { "on" } else { "off" });
+            if let Some(b) = d.body() {
+                b.class_list().toggle_with_force("no-hints", !on).ok();
+            }
+        });
+        input.add_event_listener_with_callback("change", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
+    // Open from any [data-open-settings], close with the X; tabs switch sections.
+    let d = doc.clone();
+    let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+        let Some(el) = ev.target().and_then(|t| t.dyn_into::<Element>().ok()) else {
+            return;
+        };
+        if el.closest("[data-open-settings]").ok().flatten().is_some() {
+            show_settings(&d, true);
+        } else if el.closest("#settings-close").ok().flatten().is_some() {
+            show_settings(&d, false);
+        } else if let Some(tab) = el
+            .closest("#settings-tabs [data-tab]")
+            .ok()
+            .flatten()
+            .and_then(|t| t.get_attribute("data-tab"))
+        {
+            if let Ok(all) = d.query_selector_all("#settings [data-tab]") {
+                for k in 0..all.length() {
+                    if let Some(e) = all.item(k).and_then(|n| n.dyn_into::<Element>().ok()) {
+                        let on = e.get_attribute("data-tab").as_deref() == Some(tab.as_str());
+                        e.class_list().toggle_with_force("on", on).ok();
+                    }
+                }
+            }
+        }
+    });
+    doc.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+    cb.forget();
+    Ok(())
+}
+
+fn show_settings(doc: &Document, open: bool) {
+    if let Some(el) = doc.get_element_by_id("settings") {
+        el.class_list().toggle_with_force("open", open).ok();
+    }
+}
+
+fn settings_open(doc: &Document) -> bool {
+    doc.get_element_by_id("settings")
+        .map(|e| e.class_list().contains("open"))
+        .unwrap_or(false)
 }
 
 /// An experiment id as a readable name: "TemperatureScan" reads "Temperature Scan".
@@ -1659,6 +1900,10 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                 .map(|m| !m.class_list().contains("hidden"))
                 .unwrap_or(false);
             let code = ev.code();
+            if code == "Escape" && settings_open(&app.doc) {
+                show_settings(&app.doc, false);
+                return;
+            }
             if typing {
                 app.keys.clear();
                 return;
@@ -3938,7 +4183,7 @@ impl App {
     }
 
     fn show_sound_toggle(&self) {
-        for id in ["sound-toggle", "main-sound"] {
+        for id in ["sound-toggle", "main-sound", "settings-sound"] {
             if let Some(el) = self.doc.get_element_by_id(id) {
                 el.set_text_content(Some(if self.audio.muted {
                     "Sound: off"

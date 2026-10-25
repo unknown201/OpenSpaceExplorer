@@ -304,7 +304,8 @@
     #rd-head button { margin: 0 0 0 auto; width: auto; padding: calc(6 * var(--u)) calc(14 * var(--u)); }
     #rd-body { flex: 1; min-height: 0; display: flex; }
     #rd-tree { flex: 1; overflow: auto; background: #0a1220 repeating-linear-gradient(0deg, #ffffff07 0 1px, transparent 1px 40px), repeating-linear-gradient(90deg, #ffffff07 0 1px, transparent 1px 40px); }
-    .rd-canvas { position: relative; }
+    .rd-canvas { position: relative; zoom: var(--rd-zoom, 1); }
+    #rd-tree { cursor: grab; user-select: none; } #rd-tree.dragging { cursor: grabbing; }
     .rd-lines { position: absolute; left: 0; top: 0; pointer-events: none; }
     .rd-lines path { fill: none; stroke: #3a4a68; stroke-width: 2; }
     .rd-lines path.open { stroke: #6a8fd0; }
@@ -369,6 +370,26 @@
     @keyframes toast-in { from { transform: translateX(30px); opacity: 0; } }
     @keyframes toast-out { to { opacity: 0; } }
     #fh-note { display: none; }
+    /* Settings over everything (SettingsMenuManager): tabs on top, the original's binding list. */
+    #settings { position: fixed; inset: 0; z-index: 50; display: none; place-items: center; background: #000a; font-family: var(--ui-font, system-ui); }
+    #settings.open { display: grid; }
+    #settings .set-card { width: min(760px, 94vw); max-height: 88vh; display: flex; flex-direction: column; background: #0b1020f8; border: 1px solid #3b63a8; border-radius: 8px; color: #e6ecf7; box-shadow: 0 10px 40px #000c; }
+    #settings .set-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px 6px; }
+    #settings .set-head h2 { margin: 0; font-size: 22px; }
+    #settings button { margin: 0; width: auto; cursor: pointer; background: #16213a; color: #e6ecf7; border: 1px solid #2c3d63; border-radius: 4px; padding: 6px 12px; font: 600 13px var(--ui-font, system-ui); }
+    #settings .set-tabs { display: flex; gap: 4px; padding: 0 18px; border-bottom: 1px solid #2c3d63; }
+    #settings .set-tabs button { border-bottom: 0; border-radius: 4px 4px 0 0; background: transparent; color: #9fb0cc; }
+    #settings .set-tabs button.on { background: #1f3d6b; color: #fff; }
+    #settings .set-body { overflow: auto; padding: 12px 18px 18px; }
+    #settings section { display: none; } #settings section.on { display: block; }
+    #settings h4 { margin: 12px 0 4px; font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: #9fb0cc; }
+    #settings table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    #settings td { padding: 3px 6px; border-bottom: 1px solid #ffffff10; } #settings td:first-child { width: 38%; }
+    #settings tr.off { color: #6f7f9c; } #settings small { color: #6f7f9c; }
+    #settings kbd { font: 600 12px var(--ui-font, system-ui); background: #16213a; border: 1px solid #2c3d63; border-bottom-width: 2px; border-radius: 3px; padding: 1px 6px; }
+    #settings .set-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; font-size: 14px; } #settings .set-row span { flex: 0 0 220px; }
+    #settings .set-row input[type=range] { flex: 1; }
+    body.no-hints .fh-help, body.no-hints .vs-help, body.no-hints #help, body.no-hints #menu-info { display: none !important; }
     body.ui-hidden #toasts { display: none; }
     #vab-tip h4 { margin: 0; font-size: 14px; } #vab-tip .sub { color: #9fb0cc; font-size: 11px; margin: 2px 0 6px; }
     #vab-tip table { width: 100%; border-collapse: collapse; margin: 4px 0; } #vab-tip td { padding: 1px 0; } #vab-tip td:last-child { text-align: right; color: #fff; }
@@ -531,7 +552,7 @@
         <div id="logo" title="Kerbal Space Program 2, in the browser"></div>
         <ul id="main-items">
           <li><button id="play" data-ose="play">Campaign</button></li>
-          <li><button id="main-settings" data-ose="main-settings" disabled title="not yet">Settings</button></li>
+          <li><button id="main-settings" data-ose="main-settings" data-open-settings title="Controls, interface and sound">Settings</button></li>
           <li><button id="main-extras" data-ose="main-extras" disabled title="not yet">Extras</button></li>
           <li><button id="main-sound" class="sound-toggle" data-ose="sound-toggle">Sound: on</button></li>
         </ul>
@@ -687,6 +708,22 @@
   <div id="ksc-tooltip" data-ose="ksc-tooltip"></div>
   <div id="vab-tip" data-ose="vab-tip"></div>
   <div id="toasts" data-ose="toasts"></div>
+  <div id="settings" data-ose="settings">
+    <div class="set-card">
+      <div class="set-head"><h2>Settings</h2><button id="settings-close" data-ose="settings-close" title="Close (Esc)">&#10005;</button></div>
+      <div class="set-tabs" id="settings-tabs"><button data-tab="input" class="on">Input</button><button data-tab="interface">Interface</button><button data-tab="audio">Audio</button></div>
+      <div class="set-body">
+        <section data-tab="input" class="on" id="settings-input"></section>
+        <section data-tab="interface">
+          <label class="set-row"><span>Interface scale</span><input id="settings-scale" data-ose="settings-scale" type="range" min="50" max="150" step="5" value="100" /><b id="settings-scale-text">100%</b></label>
+          <label class="set-row"><span>Show key hints on screen</span><input id="settings-hints" data-ose="settings-hints" type="checkbox" checked /></label>
+        </section>
+        <section data-tab="audio">
+          <div class="set-row"><span>Sound</span><button id="settings-sound" class="sound-toggle" data-ose="sound-toggle">Sound: on</button></div>
+        </section>
+      </div>
+    </div>
+  </div>
   <div id="audio" data-ose="audio" hidden></div>
   <div id="tracking" data-ose="tracking">
     <div class="ts-head"><span class="flag"><img src="assets/ui/ICO-Tracking-Station-Med.png" alt="" /></span><h2>Tracking Station</h2></div>

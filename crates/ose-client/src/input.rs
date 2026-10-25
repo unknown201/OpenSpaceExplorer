@@ -115,27 +115,6 @@ pub fn turn(pitch_deg: f64, heading_deg: f64, dpitch: f64, dyaw: f64) -> (f64, f
     (pitch, heading.rem_euclid(360.0))
 }
 
-/// One `?` overlay line per binding the client honours, in the original's words (Settings > Input lists them).
-pub const FLIGHT_KEYS: &[(&str, &str)] = &[
-    ("W / S", "pitch down / up (held)"),
-    ("A / D", "yaw left / right (held)"),
-    ("Caps Lock", "precision controls"),
-    ("Shift / Ctrl", "throttle up / down (held)"),
-    ("Z / X", "full throttle / cut"),
-    ("Space", "stage"),
-    ("T", "SAS: hold the current direction"),
-    ("G", "landing gear"),
-    ("B", "brakes (held)"),
-    ("W / S, A / D landed", "drive and steer on wheels"),
-    ("M", "map view"),
-    ("Home", "reset the camera"),
-    ("Right mouse drag", "look around"),
-    (". / , / /", "time warp up / down / stop"),
-    ("F2", "hide the interface"),
-    ("F4", "vessel labels"),
-    ("Esc", "pause menu"),
-];
-
 #[cfg(test)]
 mod tests {
     use super::*;
