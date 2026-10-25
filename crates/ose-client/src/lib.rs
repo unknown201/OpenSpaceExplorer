@@ -5700,7 +5700,7 @@ impl App {
         }
         el.set_inner_html(&format!(
             "<div class=\"lp-blueprint\"><canvas width=\"388\" height=\"220\" data-ose-thumb=\"{id}\"></canvas></div>\
-             <h3>{name}</h3><div class=\"lp-at\">At Launchpad 1</div>{desc}\
+             <h3>{name}</h3><div class=\"lp-at\">At {site}</div>{desc}\
              <div class=\"lp-report\"><b>Engineering Report</b><dl>\
              <dt>Parts</dt><dd>{parts}</dd><dt>Stages</dt><dd>{stages}</dd><dt>Mass</dt><dd>{wet:.1} t</dd>\
              <dt>Delta-v (vacuum)</dt><dd>{dv:.0} m/s</dd></dl>{warn}</div>\
@@ -5708,7 +5708,8 @@ impl App {
              <button data-ose=\"lp-orbit\" data-ose-craft-orbit=\"{id}\" title=\"skip the ascent: put it straight into orbit\">Orbit</button>\
              <button class=\"go\" data-ose=\"lp-launch\" data-ose-craft-launch=\"{id}\">Launch</button></div>",
             id = c.id,
-            name = esc(&c.name),
+            site = esc(&self.launch_site_name()),
+                name = esc(&c.name),
             // Some stock crafts carry the original's untranslated placeholder.
             desc = if c.description.is_empty()
                 || c.description == "This should be a localized string"
@@ -5889,6 +5890,16 @@ impl App {
             .ok();
     }
 
+    /// The chosen launch site's name (Launchpad 1 when none is chosen or the server has not listed them).
+    fn launch_site_name(&self) -> String {
+        let id = self.launch_site.as_deref().unwrap_or("LaunchPad_1");
+        self.launch_sites
+            .iter()
+            .find(|s| s.id == id)
+            .map(|s| s.name.clone())
+            .unwrap_or_else(|| "Launchpad 1".to_string())
+    }
+
     /// Fill the launch-site choosers (VAB header and launch pad dialog) from the server's list.
     fn render_launch_sites(&self) {
         let chosen = self.launch_site.clone().unwrap_or_default();
@@ -5905,6 +5916,9 @@ impl App {
                 name = esc(&s.name),
             ));
         }
+        // The launch dialog is titled after the site, as the original's is.
+        set_text(&self.doc, "lp-title", &self.launch_site_name());
+        self.render_launchpad_info();
         for id in ["vab-site", "lp-site"] {
             if let Some(el) = self.doc.get_element_by_id(id) {
                 el.set_inner_html(&html);
