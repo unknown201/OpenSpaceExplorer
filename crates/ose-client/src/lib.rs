@@ -9211,6 +9211,7 @@ impl App {
                 let light = if b.is_star { GV::Y } else { star_km - pos_km };
                 items.push(render::DrawItem {
                     animation: None,
+                    node_turns: Vec::new(),
                     model: name.clone(),
                     rel_pos_km: pos_km - cam_km,
                     rotation: DQuat::IDENTITY,
