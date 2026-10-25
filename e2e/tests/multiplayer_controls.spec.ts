@@ -16,9 +16,9 @@ test("held flight controls with 30 ms added round-trip delay", async ({ page, ba
       timers.add(timer);
     };
     socket.onMessage(message => {
-      // Postcard enum discriminants of ClientMessage::SetControls (22) and SetRotation (36): held steering
-      // keys go as a held rotation input (protocol 39 on), sent when it changes.
-      if (typeof message !== "string" && (message[0] === 22 || message[0] === 36)) {
+      // Every binary client message: held steering keys go as a held rotation input (SetRotation, protocol
+      // 39 on), sent when it changes. Not tied to discriminants, which move whenever the protocol grows.
+      if (typeof message !== "string") {
         controls.push({ at: performance.now(), bytes: message.length });
       }
       later(() => server.send(message));

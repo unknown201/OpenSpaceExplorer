@@ -4279,11 +4279,7 @@ impl App {
                 reason,
             } => match (id, summary) {
                 (Some(id), Some(s)) => {
-                    if self.vab_craft_id != Some(id) {
-                        self.vab_craft_id = Some(id);
-                        self.save_loose();
-                        store(&self.loose_key(None), "");
-                    }
+                    self.vab_craft_id = Some(id);
                     // The saved craft is the editor's: keep it, so Save and launch can draw it on the pad
                     // straight away, and ask for the server's copy to replace it.
                     self.craft_docs.insert(id, self.editor.craft.clone());
@@ -4960,51 +4956,49 @@ impl App {
     }
 
     /// Local storage key for the craft a vessel was launched from: vessel ids restart in every campaign.
-    /// Local storage key for the loose assemblies of the craft in the VAB (per campaign; an unsaved craft
-    /// keeps them under "new" until it gets an id).
-    fn loose_key(&self, craft: Option<u64>) -> String {
-        match craft {
-            Some(id) => format!("ose.loose.{}.{id}", self.campaign_id),
-            None => format!("ose.loose.{}.new", self.campaign_id),
-        }
-    }
-
-    /// Keep the workspace's loose assemblies with the craft (in this browser).
-    fn save_loose(&self) {
+    /// Keep the workspace's loose assemblies in the craft (`Craft::loose`, protocol 41: saved and loaded with
+    /// it, shared with the campaign, left behind by a launch), each with its parts where it stands.
+    fn save_loose(&mut self) {
         #[cfg(target_arch = "wasm32")]
         {
-            let list: Vec<(&Vec<ose_data::craft::CraftPart>, [f64; 3])> = self
-                .vab3d
-                .loose
-                .iter()
-                .map(|(parts, at)| (parts, [at.x, at.y, at.z]))
-                .collect();
-            let key = self.loose_key(self.vab_craft_id);
-            if list.is_empty() {
-                store(&key, "");
-            } else if let Ok(text) = serde_json::to_string(&list) {
-                store(&key, &text);
+            let mut loose = Vec::new();
+            for (parts, at) in &self.vab3d.loose {
+                let Some(first) = parts.first() else { continue };
+                let c = self.vab3d.world_to_craft(*at);
+                let shift = c - first.local_position;
+                let mut parts = parts.clone();
+                for p in &mut parts {
+                    p.local_position = p.local_position + shift;
+                }
+                loose.push(ose_data::craft::Craft {
+                    name: String::new(),
+                    description: String::new(),
+                    parts,
+                    stages: Vec::new(),
+                    loose: Vec::new(),
+                });
             }
+            self.editor.craft.loose = loose;
         }
     }
 
-    /// Bring back the loose assemblies kept with this craft.
+    /// Bring back the loose assemblies kept in the craft.
     fn load_loose(&mut self) {
         #[cfg(target_arch = "wasm32")]
         {
-            let key = self.loose_key(self.vab_craft_id);
-            self.vab3d.loose = stored(&key)
-                .filter(|t| !t.is_empty())
-                .and_then(|t| {
-                    serde_json::from_str::<Vec<(Vec<ose_data::craft::CraftPart>, [f64; 3])>>(&t)
-                        .ok()
+            self.vab3d.loose = self
+                .editor
+                .craft
+                .loose
+                .iter()
+                .filter_map(|c| {
+                    let first = c.parts.first()?;
+                    Some((
+                        c.parts.clone(),
+                        self.vab3d.craft_to_world(first.local_position),
+                    ))
                 })
-                .map(|l| {
-                    l.into_iter()
-                        .map(|(parts, a)| (parts, glam::DVec3::new(a[0], a[1], a[2])))
-                        .collect()
-                })
-                .unwrap_or_default();
+                .collect();
             self.loose_stamps = vec![0; self.vab3d.loose.len()];
         }
     }
@@ -6567,6 +6561,13 @@ impl App {
         self.vab_boxes = px_boxes;
         canvas
             .set_attribute("data-ose-vab-parts", &boxes.len().to_string())
+            .ok();
+        // Test hook: loose assemblies kept with the craft.
+        canvas
+            .set_attribute(
+                "data-ose-vab-loose",
+                &self.editor.craft.loose.len().to_string(),
+            )
             .ok();
     }
 

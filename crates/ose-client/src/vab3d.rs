@@ -160,6 +160,16 @@ impl VabView {
         self.distance = (self.distance * factor).clamp(2.0, 250.0);
     }
 
+    /// A hall point (glTF frame) in the craft's frame, and back: for loose assemblies saved in the craft.
+    pub fn world_to_craft(&self, w: DVec3) -> ose_math::DVec3 {
+        let d = w - self.centre();
+        ose_math::DVec3::new(-d.x, d.y, d.z)
+    }
+
+    pub fn craft_to_world(&self, p: ose_math::DVec3) -> DVec3 {
+        self.centre() + to_gltf(p)
+    }
+
     fn centre(&self) -> DVec3 {
         self.scene
             .as_ref()
