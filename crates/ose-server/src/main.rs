@@ -1170,7 +1170,7 @@ const KSC_SPAWNS: [(&str, &str, bool, [f64; 3]); 5] = [
 ];
 /// Facility footprints (min x, max x, min z, max z) and the surface a craft stands on there: the pads'
 /// decks, the runways, then the campus ground.
-const KSC_AREAS: [(f64, f64, f64, f64, f64); 7] = [
+const KSC_AREAS: [(f64, f64, f64, f64, f64); 8] = [
     (-87.1, 107.2, -2_158.7, -1_948.1, -117.589),
     (-1_723.8, -1_529.6, -4_094.4, -3_883.8, -117.589),
     (-3_383.5, -3_189.2, -2_156.2, -1_945.6, -117.489),
@@ -1178,6 +1178,8 @@ const KSC_AREAS: [(f64, f64, f64, f64, f64); 7] = [
     (-5_375.2, 2_048.0, -511.2, 58.1, -125.834),
     (-5_375.2, 2_048.0, 184.3, 300.6, -125.834),
     (-5_375.2, 2_048.0, -4_094.4, 300.6, -126.5),
+    // out to the Boat_Launch box (scene.json), whose terrain the client sinks too: the campus ground level
+    (2_048.0, 3_373.6, -2_074.9, -1_180.5, -126.5),
 ];
 
 /// The campus as a built site on Kerbin.
@@ -3324,4 +3326,21 @@ async fn session(mut socket: WebSocket, s: AppState) {
     apply_warp(&s);
     let _ = s.accounts.lock().expect("accounts lock").touch(player_id);
     tracing::info!(player = player_id, "player left");
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_campus_ground_reaches_the_boat_launch() {
+        let site = super::ksc_site();
+        for x in [2_100.0, 2_900.0, 3_350.0] {
+            let p = ose_math::DVec3::new(x, -126.5, -1_600.0);
+            let (lat, lon, h) = site.place(600_000.0, p);
+            let u = ose_sim::campus::direction(lat, lon);
+            let g = site
+                .ground_radius(600_000.0, u)
+                .unwrap_or_else(|| panic!("no campus ground at x {x}"));
+            assert!((g - (600_000.0 + h)).abs() < 0.5, "x {x}: {g} vs {h}");
+        }
+    }
 }
