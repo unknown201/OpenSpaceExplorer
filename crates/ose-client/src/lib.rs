@@ -171,6 +171,8 @@ struct App {
     /// Timed experiments running on the flown vessel and when the server reported them (ms), for the countdown.
     running: Vec<ose_net::RunningExperiment>,
     running_since_ms: f64,
+    /// The live campaign's id (CampaignState), so stored per-vessel data stays with its campaign.
+    campaign_id: String,
     /// The vehicle selected on the launch pad.
     lp_selected: Option<u64>,
     /// The Tracking Station: open, the selected vessel, the "mine only" filter and the last list refresh (ms).
@@ -421,6 +423,7 @@ pub fn start() -> Result<(), JsValue> {
         running: Vec::new(),
         running_since_ms: 0.0,
         lp_selected: None,
+        campaign_id: String::new(),
         tracking_open: false,
         ts_selected: None,
         ts_mine_only: false,
@@ -1109,7 +1112,7 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                 app.track_focus(id);
             } else if let Some(id) = num("data-ose-ts-fly") {
                 app.tracking_open = false;
-                let craft = stored(&format!("ose.flight.{id}")).and_then(|s| s.parse::<u64>().ok());
+                let craft = stored(&app.craft_link_key(id)).and_then(|s| s.parse::<u64>().ok());
                 app.start_flight(id, craft);
             } else if let Some(id) = num("data-ose-ts-recover") {
                 if let Some(ws) = &app.ws {
@@ -2436,6 +2439,7 @@ impl App {
                 self.apply_preset();
             }
             ServerMessage::CampaignState {
+                id: campaign_id,
                 name,
                 mode,
                 members,
@@ -2477,6 +2481,7 @@ impl App {
                     }
                 }
                 self.campaign = Some((name, members));
+                self.campaign_id = campaign_id;
                 self.update_warp_holder();
                 if created {
                     set_text(&self.doc, "menu-note", "session created");
@@ -2766,6 +2771,11 @@ impl App {
             self.labels.append_child(&el).ok();
             self.vessel_els.push((v.id, el));
         }
+    }
+
+    /// Local storage key for the craft a vessel was launched from: vessel ids restart in every campaign.
+    fn craft_link_key(&self, vessel: u64) -> String {
+        format!("ose.flight.{}.{vessel}", self.campaign_id)
     }
 
     fn apply_spins(&mut self) {
@@ -3847,7 +3857,7 @@ impl App {
         self.flying = Some(vessel);
         self.flight_craft = craft_id.and_then(|c| self.craft_docs.get(&c).cloned());
         if let Some(c) = craft_id {
-            store(&format!("ose.flight.{vessel}"), &c.to_string());
+            store(&self.craft_link_key(vessel), &c.to_string());
         }
         self.map_mode = false;
         self.throttle = 0.0;
