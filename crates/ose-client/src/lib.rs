@@ -35,6 +35,7 @@ pub mod render;
 pub mod rnd;
 pub mod scene;
 pub mod thumb;
+pub mod tracking;
 pub mod vab;
 #[cfg(target_arch = "wasm32")]
 pub mod vab3d;
@@ -169,6 +170,11 @@ struct App {
     running_since_ms: f64,
     /// The vehicle selected on the launch pad.
     lp_selected: Option<u64>,
+    /// The Tracking Station: open, the selected vessel, the "mine only" filter and the last list refresh (ms).
+    tracking_open: bool,
+    ts_selected: Option<u64>,
+    ts_mine_only: bool,
+    ts_rendered_ms: f64,
     /// Whether the KSC camera is on the launch pad (glides there while the pad dialog is open).
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     ksc_on_pad: bool,
@@ -412,6 +418,10 @@ pub fn start() -> Result<(), JsValue> {
         running: Vec::new(),
         running_since_ms: 0.0,
         lp_selected: None,
+        tracking_open: false,
+        ts_selected: None,
+        ts_mine_only: false,
+        ts_rendered_ms: 0.0,
         ksc_on_pad: false,
         throttle: 0.0,
         attitude: ose_net::AttitudeMode::Up,
@@ -773,6 +783,14 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
             a.borrow().open_ksc()
         }),
     )?;
+    wire(
+        "to-tracking",
+        Box::new(|a| {
+            let mut app = a.borrow_mut();
+            app.end_flight();
+            app.open_tracking();
+        }),
+    )?;
     wire("fh-stage-btn", Box::new(|a| a.borrow_mut().flight_stage()))?;
     wire("fh-full", Box::new(|a| a.borrow_mut().set_throttle(1.0)))?;
     wire("fh-cut", Box::new(|a| a.borrow_mut().set_throttle(0.0)))?;
@@ -817,7 +835,64 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         }),
     )?;
     wire("ksc-button", Box::new(|a| a.borrow().open_ksc()))?;
-    wire("ksc-tracking", Box::new(|a| a.borrow().show_menu(false)))?;
+    wire("ksc-tracking", Box::new(|a| a.borrow_mut().open_tracking()))?;
+    wire(
+        "ts-back",
+        Box::new(|a| {
+            let mut app = a.borrow_mut();
+            app.tracking_open = false;
+            app.open_ksc();
+        }),
+    )?;
+    for (id, mine) in [("ts-tab-all", false), ("ts-tab-mine", true)] {
+        wire(
+            id,
+            Box::new(move |a| {
+                let mut app = a.borrow_mut();
+                app.ts_mine_only = mine;
+                app.render_tracking();
+            }),
+        )?;
+    }
+    if let Some(panel) = doc.get_element_by_id("tracking") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let Some(el) = ev.target().and_then(|t| t.dyn_into::<Element>().ok()) else {
+                return;
+            };
+            let num = |attr: &str| {
+                el.closest(&format!("[{attr}]"))
+                    .ok()
+                    .flatten()
+                    .and_then(|e| e.get_attribute(attr))
+                    .and_then(|s| s.parse::<u64>().ok())
+            };
+            let mut app = a.borrow_mut();
+            if let Some(id) = num("data-ose-ts-focus") {
+                app.track_focus(id);
+            } else if let Some(id) = num("data-ose-ts-fly") {
+                app.tracking_open = false;
+                let craft = stored(&format!("ose.flight.{id}")).and_then(|s| s.parse::<u64>().ok());
+                app.start_flight(id, craft);
+            } else if let Some(id) = num("data-ose-ts-recover") {
+                if let Some(ws) = &app.ws {
+                    send(ws, &ClientMessage::RecoverVessel { vessel: id });
+                }
+            } else if let Some(id) = el
+                .closest("li[data-ose=\"ts-vessel\"]")
+                .ok()
+                .flatten()
+                .and_then(|e| e.get_attribute("data-ose-id"))
+                .and_then(|s| s.parse::<u64>().ok())
+            {
+                app.ts_selected = Some(id);
+                app.track_focus(id);
+                app.render_tracking();
+            }
+        });
+        panel.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
     wire(
         "ksc-launchpad",
         Box::new(|a| a.borrow_mut().open_launchpad()),
@@ -1863,6 +1938,15 @@ impl App {
             .is_some()
     }
 
+    /// True while the menu shows the named screen (`screen-<name>`).
+    fn screen_open(&self, name: &str) -> bool {
+        self.doc
+            .query_selector(&format!("#menu:not(.hidden) #screen-{name}.open"))
+            .ok()
+            .flatten()
+            .is_some()
+    }
+
     /// True while the launch pad dialog is open (the KSC stays in 3D behind it).
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     fn launchpad_active(&self) -> bool {
@@ -1930,7 +2014,7 @@ impl App {
             "VAB" => self.open_vab(None),
             "ResearchCenter" => self.open_rnd(),
             "AstronautComplex" => self.open_missions(),
-            "TrackingCenter" => self.show_menu(false),
+            "TrackingCenter" => self.open_tracking(),
             f if f.starts_with("Launchpad") => self.open_launchpad(),
             _ => {}
         }
@@ -2303,6 +2387,7 @@ impl App {
                 };
                 set_text(&self.doc, "fh-note", &msg);
                 if recovered {
+                    self.tracking_open = false;
                     self.end_flight();
                     self.open_ksc();
                 }
@@ -3274,6 +3359,102 @@ impl App {
         ));
     }
 
+    // ---- Tracking Station
+
+    fn open_tracking(&mut self) {
+        self.tracking_open = true;
+        self.show_menu(false);
+        self.render_tracking();
+    }
+
+    fn track_focus(&mut self, id: u64) {
+        let rb = self
+            .scene
+            .as_ref()
+            .and_then(|s| s.vessel(id))
+            .map(|v| v.reference_body as usize);
+        if let Some(rb) = rb {
+            self.follow_vessel(id, rb);
+        }
+    }
+
+    fn tracking_rows(&self) -> Vec<tracking::Row> {
+        let Some(scene) = &self.scene else {
+            return Vec::new();
+        };
+        let ut = self.time.ut_at(now_ms());
+        scene
+            .vessels
+            .iter()
+            .filter_map(|v| {
+                let body = scene.bodies.get(v.reference_body as usize)?;
+                let orbit = scene::orbit_from(body.mu, &v.orbit);
+                let (pe, ap) = (orbit.periapsis(), orbit.apoapsis());
+                let atmo = if body.has_atmosphere {
+                    body.atmosphere_depth_m
+                } else {
+                    0.0
+                };
+                let altitude = v.flight.as_ref().map(|f| f.altitude_m).unwrap_or_else(|| {
+                    let rb = v.reference_body as usize;
+                    (scene.vessel_position(v, ut) - scene.position(rb, ut)).length() - body.radius_m
+                });
+                Some(tracking::Row {
+                    id: v.id,
+                    name: v.name.clone(),
+                    mine: v.owner.is_some() && v.owner == self.player_id,
+                    body: body.id.clone(),
+                    situation: tracking::situation(v, body.radius_m, atmo, pe),
+                    altitude_m: altitude,
+                    apoapsis_m: ap - body.radius_m,
+                    periapsis_m: pe - body.radius_m,
+                })
+            })
+            .collect()
+    }
+
+    fn render_tracking(&mut self) {
+        self.ts_rendered_ms = now_ms();
+        let rows = self.tracking_rows();
+        if let Some(el) = self.doc.get_element_by_id("ts-list") {
+            el.set_inner_html(&tracking::render_list(
+                &rows,
+                self.ts_selected,
+                self.ts_mine_only,
+            ));
+        }
+        for (id, on) in [
+            ("ts-tab-all", !self.ts_mine_only),
+            ("ts-tab-mine", self.ts_mine_only),
+        ] {
+            if let Some(el) = self.doc.get_element_by_id(id) {
+                el.class_list().toggle_with_force("on", on).ok();
+            }
+        }
+        if let Some(el) = self.doc.get_element_by_id("ts-info") {
+            match self
+                .ts_selected
+                .and_then(|id| rows.iter().find(|r| r.id == id))
+            {
+                Some(r) => el.set_inner_html(&tracking::render_info(r)),
+                None => {
+                    el.set_inner_html("<div class=\"ts-hint\">Select a vessel to track it</div>")
+                }
+            }
+        }
+    }
+
+    /// Show or hide the station and refresh it twice a second while it is open.
+    fn update_tracking(&mut self, now: f64) {
+        let visible = self.tracking_open && self.flying.is_none() && self.in_session;
+        if let Some(el) = self.doc.get_element_by_id("tracking") {
+            el.class_list().toggle_with_force("open", visible).ok();
+        }
+        if visible && now - self.ts_rendered_ms > 500.0 {
+            self.render_tracking();
+        }
+    }
+
     fn draw_thumbnails(&self) {
         let ids: Vec<u64> = self.craft_docs.keys().copied().collect();
         for id in ids {
@@ -3749,6 +3930,11 @@ impl App {
         let scene = match &flight {
             _ if !self.in_session || front => audio::Scene::MainMenu,
             _ if self.vab_active() => audio::Scene::Vab,
+            _ if self.tracking_open && self.flying.is_none() && !menu_open => {
+                audio::Scene::Tracking
+            }
+            _ if self.screen_open("rnd") => audio::Scene::Rnd,
+            _ if self.screen_open("mission") => audio::Scene::Mission,
             Some((_, body, _)) if !menu_open => audio::Scene::Flight(body),
             _ => audio::Scene::Ksc,
         };
@@ -4422,6 +4608,7 @@ impl App {
     fn frame(&mut self) {
         let now = now_ms();
         let ut = self.time.ut_at(now);
+        self.update_tracking(now);
         self.update_audio(now);
         if self.time.have_time {
             self.update_hud(ut);

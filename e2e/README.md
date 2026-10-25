@@ -47,6 +47,7 @@ to `Pass` in the same change.
 | `[data-ose="audio"]` | hidden sound state: `data-ose-music` (the scene's music key: `music_menu`, `music_ksc`, `music_vab`, `music_kerbin`, `music_mun`), `data-ose-playing` (the track playing once audio is unlocked by a gesture), `data-ose-sfx` and `data-ose-sfx-count` (last one-shot), `data-ose-engine` (engine loop level, 0 silent), `data-ose-muted`; `[data-ose="sound-toggle"]` mutes |
 | `[data-ose="mission"]` | Mission Control (`ksc-mission` opens it, `mc-back` returns): `mc-tab-primary`/`mc-tab-secondary`, `mc-mission` rows (`data-ose-mission`, class `active`/`complete`), `mc-briefing` |
 | `[data-ose="rnd"]` | the R&D Center (`ksc-rnd` opens it, `rnd-back` returns): `rd-node` buttons (`data-ose-node`, class `researched`, `available` or `locked`), `rd-info` panel for the selected node with `rd-research` (UnlockTechNode) and `rd-note`, `rd-summary` |
+| `[data-ose="tracking"]` | the Tracking Station over the map (`ksc-tracking` or the Esc menu's `to-tracking` opens it, `ts-back` returns): `ts-vessel` rows (`data-ose-id`), `ts-tab-all` / `ts-tab-mine`, `ts-info` card for the selected vessel with `ts-focus`, `ts-fly` (yours) and `ts-recover` (yours, landed on Kerbin) |
 | `[data-ose="add-node"]` | adds a maneuver node on the player's vessel (sends `ScheduleBurn`) |
 | `[data-ose="maneuver-node"]` | the maneuver node on the player's trajectory; `data-ose-ut` is the burn time, `data-ose-prograde` the delta-v |
 | `[data-ose="clear-node"]` | removes the node (`ClearBurn`) |

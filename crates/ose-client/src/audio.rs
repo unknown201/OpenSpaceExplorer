@@ -394,6 +394,9 @@ pub fn scene_music(scene: Scene<'_>) -> &'static str {
         Scene::MainMenu => "music_menu",
         Scene::Ksc => "music_ksc",
         Scene::Vab => "music_vab",
+        Scene::Tracking => "music_tracking",
+        Scene::Rnd => "music_rnd",
+        Scene::Mission => "music_mission",
         Scene::Flight(body) if body.eq_ignore_ascii_case("mun") => "music_mun",
         Scene::Flight(_) => "music_kerbin",
     }
@@ -404,6 +407,9 @@ pub enum Scene<'a> {
     MainMenu,
     Ksc,
     Vab,
+    Tracking,
+    Rnd,
+    Mission,
     Flight(&'a str),
 }
 

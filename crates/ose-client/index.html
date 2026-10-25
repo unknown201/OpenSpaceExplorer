@@ -453,6 +453,51 @@
     body.ui-hidden #node-panel, body.ui-hidden #help { opacity: 0 !important; pointer-events: none !important; }
     body.ui-hidden #hud > *, body.ui-hidden #flight-hud * { pointer-events: none !important; }
     body.labels-hidden #labels { visibility: hidden; }
+    /* Tracking Station after the original's: the map fills the window and the vessel list sits at the left in
+       the KSC's light panels; the selected vessel's orbit and actions below the list. */
+    #tracking { display: none; position: fixed; top: 56px; left: calc(48 * var(--u)); bottom: calc(36 * var(--u)); width: calc(400 * var(--u)); z-index: 12;
+      flex-direction: column; box-sizing: border-box; padding: calc(16 * var(--u)); border-radius: calc(6 * var(--u)); background: #ebf0ff96; border-bottom: calc(6 * var(--u)) solid #ebf0ff;
+      color: #0a0a0a; font-family: var(--ui-font); }
+    #tracking.open { display: flex; }
+    body:has(#menu:not(.hidden)) #tracking { display: none; }
+    body:has(#tracking.open) #crumbs { left: calc(470 * var(--u)); }
+    .ts-head { display: flex; align-items: center; gap: calc(10 * var(--u)); margin-bottom: calc(10 * var(--u)); }
+    .ts-head .flag { width: calc(56 * var(--u)); height: calc(56 * var(--u)); background: #f23d4d; clip-path: polygon(0 0, 100% 0, 100% 75%, 50% 100%, 0 75%); display: flex; align-items: center; justify-content: center; }
+    .ts-head .flag img { width: calc(36 * var(--u)); height: calc(36 * var(--u)); filter: brightness(10); }
+    .ts-head h2 { margin: 0; font-size: calc(28 * var(--u)); font-weight: 500; color: #000; }
+    .ts-tabs { display: flex; gap: calc(6 * var(--u)); margin-bottom: calc(8 * var(--u)); }
+    #tracking .ts-tabs button { flex: 1; margin: 0; padding: calc(6 * var(--u)); background: #ffffffb0; border: 1px solid #6a718f; color: #2b2b2b; font-size: calc(14 * var(--u)); border-radius: calc(4 * var(--u)); }
+    #tracking .ts-tabs button.on { background: #2f8fff; border-color: #2f8fff; color: #fff; }
+    #ts-list { list-style: none; margin: 0; padding: calc(6 * var(--u)); flex: 1; overflow: auto; background: #ebf0ffcc; border: 1px solid #6a718f; }
+    .ts-vessel { display: flex; flex-direction: column; padding: calc(6 * var(--u)) calc(10 * var(--u)); margin-bottom: calc(6 * var(--u)); background: #fff; border-left: calc(6 * var(--u)) solid #fff; cursor: pointer; }
+    .ts-vessel:hover { background: #e3eeff; } .ts-vessel.selected { background: #cde6ff; border-left-color: #2f8fff; }
+    .ts-vessel.mine .name::before { content: "\25B2 "; color: #4f8f1f; font-size: calc(11 * var(--u)); }
+    .ts-vessel .name { font-weight: 700; font-size: calc(16 * var(--u)); } .ts-vessel .meta { font-size: calc(12 * var(--u)); color: #4a5068; }
+    .ts-empty, .ts-hint { color: #6a718f; font-size: calc(14 * var(--u)); padding: calc(8 * var(--u)); list-style: none; }
+    #ts-info { margin-top: calc(10 * var(--u)); padding: calc(10 * var(--u)) calc(12 * var(--u)); background: #10161fe6; color: #e6ecf7; border-radius: calc(4 * var(--u)); font-size: calc(14 * var(--u)); }
+    #ts-info h3 { margin: 0; font-size: calc(18 * var(--u)); } #ts-info .ts-owner { color: #9fb0cc; font-size: calc(12 * var(--u)); margin-bottom: calc(6 * var(--u)); }
+    #ts-info dl { display: grid; grid-template-columns: auto 1fr; gap: calc(2 * var(--u)) calc(12 * var(--u)); margin: 0 0 calc(8 * var(--u)); }
+    #ts-info dt { color: #9fb0cc; } #ts-info dd { margin: 0; text-align: right; }
+    #ts-info .ts-actions { display: flex; gap: calc(6 * var(--u)); }
+    #ts-info .ts-actions button { flex: 1; margin: 0; padding: calc(6 * var(--u)); font-size: calc(14 * var(--u)); background: #ebf0ff; color: #0a0a0a; border: 1px solid #6a718f; border-radius: calc(4 * var(--u)); cursor: pointer; }
+    #ts-info .ts-actions button:hover:not([disabled]) { background: #cde6ff; }
+    #ts-info .ts-actions button[disabled] { opacity: 0.4; }
+    #tracking > #ts-back { margin: calc(10 * var(--u)) 0 0; background: #ffffffb0; border: 1px solid #6a718f; color: #0a0a0a; font-size: calc(14 * var(--u)); }
+    /* Esc menu after the original's game menu: the scene dims and blurs, a light panel at the centre with the
+       title and the options as white rows that light up blue, as the KSC menu does. */
+    #menu:has(#screen-paused.open) { background: #06080f80; backdrop-filter: blur(3px); }
+    #menu-card:has(#screen-paused.open) { width: calc(400 * var(--u)); padding: calc(16 * var(--u)) calc(16 * var(--u)) calc(22 * var(--u)); border-radius: calc(6 * var(--u)); border: 0;
+      background: #ebf0ffd9; border-bottom: calc(6 * var(--u)) solid #ebf0ff; font-family: var(--ui-font); }
+    #menu-card:has(#screen-paused.open) > h1, #menu-card:has(#screen-paused.open) > .sub { display: none; }
+    #menu-card:has(#screen-paused.open) > .info { color: #4a5068; font-size: calc(12 * var(--u)); }
+    #screen-paused .pm-title { display: flex; align-items: center; gap: calc(10 * var(--u)); margin-bottom: calc(10 * var(--u)); }
+    #screen-paused .pm-title img { width: calc(40 * var(--u)); height: calc(40 * var(--u)); padding: calc(8 * var(--u)); background: #f23d4d; clip-path: polygon(0 0, 100% 0, 100% 75%, 50% 100%, 0 75%); }
+    #screen-paused .pm-title h2 { margin: 0; font-size: calc(28 * var(--u)); font-weight: 500; color: #000; }
+    #menu #screen-paused button { display: block; margin: 0 0 calc(6 * var(--u)); height: calc(44 * var(--u)); padding: 0 calc(16 * var(--u)); text-align: left;
+      background: #fff; color: #0a0a0a; border: 0; border-left: calc(6 * var(--u)) solid #fff; border-radius: 0; font-size: calc(18 * var(--u)); font-weight: 700; }
+    #menu #screen-paused button:hover { background: #cde6ff; border-left-color: #2f8fff; }
+    #menu #screen-paused #resume { color: #4f8f1f; }
+    #menu #screen-paused #leave { color: #b03a2e; margin-top: calc(12 * var(--u)); }
   </style>
 </head>
 <body>
@@ -623,8 +668,10 @@
         </div>
       </div>
       <div class="screen" id="screen-paused" data-ose="menu-paused">
+        <div class="pm-title"><img src="assets/ui/ICO-Map-KSC-16x16.png" alt="" /><h2>Game Menu</h2></div>
         <button id="resume" data-ose="resume">Resume</button>
         <button id="to-ksc" class="secondary" data-ose="to-ksc">Kerbal Space Center</button>
+        <button id="to-tracking" class="secondary" data-ose="to-tracking">Tracking Station</button>
         <button id="to-sessions" class="secondary" data-ose="to-sessions">Sessions and agency</button>
         <button id="sound-toggle" class="secondary sound-toggle" data-ose="sound-toggle">Sound: on</button>
         <button id="leave" class="secondary" data-ose="leave">Leave session</button>
@@ -637,6 +684,13 @@
   <div id="vab-tip" data-ose="vab-tip"></div>
   <div id="toasts" data-ose="toasts"></div>
   <div id="audio" data-ose="audio" hidden></div>
+  <div id="tracking" data-ose="tracking">
+    <div class="ts-head"><span class="flag"><img src="assets/ui/ICO-Tracking-Station-Med.png" alt="" /></span><h2>Tracking Station</h2></div>
+    <div class="ts-tabs"><button id="ts-tab-all" data-ose="ts-tab-all" class="on">All vessels</button><button id="ts-tab-mine" data-ose="ts-tab-mine">Mine</button></div>
+    <ul id="ts-list" data-ose="ts-list"></ul>
+    <div id="ts-info" data-ose="ts-info"></div>
+    <button id="ts-back" data-ose="ts-back">Back to KSC</button>
+  </div>
   <div id="flight-hud" data-ose="flight">
     <div class="fh-top"><div class="fh-label">ALTITUDE</div><div id="fh-altitude" data-ose="flight-altitude">--</div><div id="fh-situation" class="fh-small">--</div><div id="fh-note" class="fh-small" style="color:#f0a070"></div><div id="fh-running" class="fh-small" data-ose="flight-running" style="color:#8fd08f"></div><div id="fh-control" data-ose="flight-control" style="color:#ff6a5a;font-weight:700"></div></div>
     <div class="fh-bottom">

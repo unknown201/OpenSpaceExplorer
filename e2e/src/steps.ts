@@ -46,6 +46,7 @@ export const STEP_NAMES = [
   "launchpad",
   "flight",
   "rnd",
+  "tracking_station",
 ] as const;
 export type StepName = (typeof STEP_NAMES)[number];
 
@@ -552,6 +553,39 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
       const title = ((await page.locator('[data-ose="rd-info"] h3').first().textContent()) ?? "").trim();
       if (!title) return failed("clicking a tech node showed no info");
       return passed(`${n} tech nodes; selected ${JSON.stringify(title)}`);
+    }),
+  );
+
+  // 15. Tracking Station: back to the KSC, open the station, pick a vessel and read its orbit card.
+  results.push(
+    await timed("tracking_station", async () => {
+      if (!pageUp) return notLoaded;
+      const open = page.locator('[data-ose="ksc-tracking"]');
+      if ((await open.count()) === 0 || (await page.locator('[data-ose="tracking"]').count()) === 0) {
+        return blocked('Tracking Station with the vessel list ([data-ose="tracking"]); Phase 8');
+      }
+      const back = page.locator('[data-ose="rnd-back"]');
+      if (await back.first().isVisible()) await back.first().click();
+      await open.first().click();
+      const rows = page.locator('[data-ose="ts-vessel"]');
+      try {
+        await rows.first().waitFor({ timeout: 5_000 });
+      } catch {
+        return failed("the Tracking Station listed no vessels");
+      }
+      const n = await rows.count();
+      await rows.first().click();
+      const card = page.locator('[data-ose="ts-info"] h3');
+      try {
+        await card.first().waitFor({ timeout: 3_000 });
+      } catch {
+        return failed("selecting a vessel showed no orbit card");
+      }
+      const name = ((await card.first().textContent()) ?? "").trim();
+      const focus = page.locator('[data-ose="ts-focus"]');
+      if ((await focus.count()) === 0) return failed("the vessel card has no Focus button");
+      await focus.first().click();
+      return passed(`${n} vessels tracked; selected ${JSON.stringify(name)}`);
     }),
   );
 
