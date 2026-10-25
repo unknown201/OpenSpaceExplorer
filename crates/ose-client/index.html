@@ -452,6 +452,9 @@
     #vab-dv { font-size: 13px; color: #9fb0cc; margin-right: 6px; white-space: nowrap; }
     #vab-header { flex-wrap: nowrap; } #vab-header #vab-name { min-width: 120px; }
     #vab-header button { padding: 6px 9px !important; }
+    #vab-header #vab-site { flex: 0 0 auto; width: 130px; }
+    /* Narrow windows: the tool buttons lose padding before the name and site squeeze. */
+    @media (max-width: 1400px) { #vab-header button { padding-left: 6px; padding-right: 6px; } #vab-header #vab-name { flex: 1 1 140px; min-width: 90px; } #vab-header { gap: 4px; } }
     #vab-site, #lp-site { font: 13px var(--ui-font, inherit); background: #06080f; color: #e6ecf7; border: 1px solid #2c3d63; border-radius: 4px; padding: 5px 6px; }
     body.webgpu #vab-header { position: relative; pointer-events: auto; background: #10141bf0; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)); padding: calc(6 * var(--u)) calc(10 * var(--u)); margin: 0 0 calc(8 * var(--u)); }
     body.webgpu #screen-vab #vab { height: calc(100vh - 92 * var(--u)) !important; }
