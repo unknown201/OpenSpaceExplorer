@@ -1643,7 +1643,9 @@ impl FlightView {
         let clear = [0.45 * k, 0.65 * k, 0.92 * k];
         if planet_ready {
             // The planet's terrain replaces the hub scene's flat 60 km ground plane.
-            gpu.hide_meshes("ksc", &["ground"]);
+            // The campus's far LOD (KSCmain_LOD, a 13 km stand-in for the whole centre) would draw over the
+            // detailed buildings and stand as a slab past the campus edge.
+            gpu.hide_meshes("ksc", &["ground", "KSCmain_LOD"]);
             if let Some(p) = self.planet.as_mut() {
                 items.extend(p.scatter_items(
                     gpu,
