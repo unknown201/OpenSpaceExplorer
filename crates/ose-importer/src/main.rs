@@ -73,6 +73,55 @@ fn main() -> anyhow::Result<()> {
                 Err(e) => println!("warning: stock craft {}: {e}", f.display()),
             }
         }
+        // the tutorial lessons' rockets (their saves hold vessels in the assembly schema), after the stock
+        // crafts so those keep their ids
+        let tutorials = args.data.join("tutorials");
+        if tutorials.is_dir() {
+            let mut saves: Vec<_> = std::fs::read_dir(&tutorials)?
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| {
+                    p.file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| n.starts_with("Tutorial") && n.ends_with("_Save.json"))
+                })
+                .collect();
+            saves.sort();
+            for f in saves {
+                let stem = f.file_stem().and_then(|n| n.to_str()).unwrap_or("");
+                let lesson = stem
+                    .trim_start_matches("Tutorial")
+                    .trim_end_matches("_Save")
+                    .to_string();
+                let text = std::fs::read_to_string(&f)?;
+                let v: serde_json::Value =
+                    match serde_json::from_str(&text).or_else(|_| json5::from_str(&text)) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            println!("warning: {}: {e}", f.display());
+                            continue;
+                        }
+                    };
+                let vessels: Vec<&serde_json::Value> = v["Vessels"]
+                    .as_array()
+                    .map(|a| a.iter().filter(|x| x["IsDebris"] != true).collect())
+                    .unwrap_or_default();
+                for (k, vessel) in vessels.iter().enumerate() {
+                    let name = if vessels.len() == 1 {
+                        format!("Lesson {lesson} rocket")
+                    } else {
+                        format!("Lesson {lesson} rocket {}", k + 1)
+                    };
+                    let wrapped = serde_json::json!({
+                        "Metadata": { "Name": name },
+                        "Assemblies": [ { "Assembly": vessel } ],
+                    });
+                    match ose_importer::craft::craft_from_value(&wrapped) {
+                        Ok(c) => crafts.push(c),
+                        Err(e) => println!("warning: {}: {e}", f.display()),
+                    }
+                }
+            }
+        }
         std::fs::write(
             args.out.join("stock-craft.json"),
             serde_json::to_string(&crafts)?,

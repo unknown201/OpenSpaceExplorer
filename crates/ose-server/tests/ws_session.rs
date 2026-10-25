@@ -213,6 +213,8 @@ async fn hello_catalog_and_snapshots() {
                 assert_eq!(patches[0].end, ose_net::PatchEnd::Final);
                 saw_traj = true;
             }
+            // the roster is pushed whenever it changes, at any time
+            ServerMessage::KerbalRoster { .. } => {}
             other => panic!("unexpected {other:?}"),
         }
         if saw_time.is_some() && saw_snap.is_some() && saw_vessel && saw_traj {

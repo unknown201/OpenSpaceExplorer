@@ -1077,6 +1077,14 @@ pub fn integrate(
             };
         }
         p.angvel = DVec3::ZERO;
+        // on the ground the control surfaces still follow the pilot's keys (they can be checked before
+        // take-off)
+        let i = p.rotation_input;
+        let top = vessel_top(p);
+        let right = p.facing.cross(top);
+        p.steer_cmd = right * -i.x.clamp(-1.0, 1.0)
+            + top * i.y.clamp(-1.0, 1.0)
+            + p.facing * i.z.clamp(-1.0, 1.0);
     } else {
         let target = attitude_direction(p.attitude, p.r, p.v, omega);
         let max_thrust = p
