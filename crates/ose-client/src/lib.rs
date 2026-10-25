@@ -98,6 +98,10 @@ struct App {
     catalog: vab::Catalog,
     editor: vab::Editor,
     vab_category: String,
+    /// Picker sort (0 default, 1 name, 2 mass), size filter, and favourite parts (middle click; kept per browser).
+    vab_sort: u8,
+    vab_size: Option<String>,
+    vab_favs: std::collections::HashSet<String>,
     /// Boxes of the last editor draw in canvas pixels, for click selection.
     vab_boxes: Vec<(usize, f64, f64, f64, f64)>,
     /// Library id of the craft being edited (set by Edit on the launch pad or after a save).
@@ -437,6 +441,16 @@ pub fn start() -> Result<(), JsValue> {
         catalog: vab::Catalog::new(),
         editor: vab::Editor::default(),
         vab_category: "Pods".into(),
+        vab_sort: 0,
+        vab_size: None,
+        vab_favs: stored("ose.vab.favs")
+            .map(|s| {
+                s.split(',')
+                    .filter(|p| !p.is_empty())
+                    .map(String::from)
+                    .collect()
+            })
+            .unwrap_or_default(),
         vab_boxes: Vec::new(),
         vab_craft_id: None,
         launch_after_save: false,
@@ -1709,6 +1723,63 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
             a.borrow().vab_tooltip(None);
         });
         info.add_event_listener_with_callback("mouseleave", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
+    // Sort and size filter, and middle click on a row to make it a favourite.
+    if let Some(sel) = doc.get_element_by_id("vab-sort") {
+        let a = app.clone();
+        let s2 = sel.clone();
+        let cb = Closure::<dyn FnMut()>::new(move || {
+            let v = s2
+                .dyn_ref::<web_sys::HtmlSelectElement>()
+                .map(|s| s.value())
+                .unwrap_or_default();
+            let mut app = a.borrow_mut();
+            app.vab_sort = v.parse().unwrap_or(0);
+            app.render_vab_picker();
+        });
+        sel.add_event_listener_with_callback("change", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
+    if let Some(chips) = doc.get_element_by_id("vab-sizes") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let size = ev
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .and_then(|e| e.get_attribute("data-size"));
+            if let Some(size) = size {
+                let mut app = a.borrow_mut();
+                app.vab_size = (size != "All").then_some(size);
+                app.render_vab_picker();
+            }
+        });
+        chips.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
+    if let Some(parts) = doc.get_element_by_id("vab-parts") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            if ev.button() != 1 {
+                return;
+            }
+            let id = ev
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .and_then(|e| e.closest("li[data-ose-part]").ok().flatten())
+                .and_then(|e| e.get_attribute("data-ose-part"));
+            if let Some(id) = id {
+                ev.prevent_default();
+                let mut app = a.borrow_mut();
+                if !app.vab_favs.remove(&id) {
+                    app.vab_favs.insert(id);
+                }
+                let list: Vec<&str> = app.vab_favs.iter().map(|s| s.as_str()).collect();
+                store("ose.vab.favs", &list.join(","));
+                app.render_vab_picker();
+            }
+        });
+        parts.add_event_listener_with_callback("mousedown", cb.as_ref().unchecked_ref())?;
         cb.forget();
     }
     // Part tooltip (the original's part info overlay) while the pointer is over a picker row.
@@ -3964,7 +4035,10 @@ impl App {
             return;
         };
         let mut html = String::new();
-        for c in vab::categories(&self.catalog) {
+        // Favourites first, as the original's picker has them (middle click a part to add it).
+        let mut all = vec!["Favorites".to_string()];
+        all.extend(vab::categories(&self.catalog));
+        for c in all {
             let on = if c == self.vab_category { " on" } else { "" };
             html.push_str(&format!(
                 "<button class=\"{on}\" data-ose-category=\"{c}\">{c}</button>",
@@ -3984,23 +4058,53 @@ impl App {
             .values()
             .filter(|p| {
                 if query.is_empty() {
-                    p.category == self.vab_category
+                    if self.vab_category == "Favorites" {
+                        self.vab_favs.contains(&p.id)
+                    } else {
+                        p.category == self.vab_category
+                    }
                 } else {
                     p.display_title().to_lowercase().contains(&query)
                         || p.id.to_lowercase().contains(&query)
                 }
             })
+            .filter(|p| self.vab_size.as_ref().is_none_or(|s| &p.size_category == s))
             .collect();
-        parts.sort_by(|a, b| {
-            (
-                &a.size_category,
-                a.mass_t
-                    .partial_cmp(&b.mass_t)
-                    .unwrap_or(std::cmp::Ordering::Equal),
-            )
-                .cmp(&(&b.size_category, std::cmp::Ordering::Equal))
-                .then_with(|| a.display_title().cmp(b.display_title()))
-        });
+        let size_rank = |s: &str| {
+            ["XS", "S", "M", "L", "XL", "XXL"]
+                .iter()
+                .position(|x| *x == s)
+                .unwrap_or(9)
+        };
+        match self.vab_sort {
+            1 => parts.sort_by(|a, b| a.display_title().cmp(b.display_title())),
+            2 => parts.sort_by(|a, b| a.mass_t.total_cmp(&b.mass_t)),
+            _ => parts.sort_by(|a, b| {
+                size_rank(&a.size_category)
+                    .cmp(&size_rank(&b.size_category))
+                    .then(a.mass_t.total_cmp(&b.mass_t))
+                    .then_with(|| a.display_title().cmp(b.display_title()))
+            }),
+        }
+        if let Some(chips) = self.doc.get_element_by_id("vab-sizes") {
+            let mut h = String::new();
+            for s in ["All", "XS", "S", "M", "L", "XL"] {
+                let on = match &self.vab_size {
+                    None => s == "All",
+                    Some(v) => v == s,
+                };
+                h.push_str(&format!(
+                    "<button data-size=\"{s}\" class=\"{}\" title=\"{}\">{s}</button>",
+                    if on { "on" } else { "" },
+                    if s == "All" {
+                        "every size".to_string()
+                    } else {
+                        format!("size {s} parts only")
+                    }
+                ));
+            }
+            chips.set_inner_html(&h);
+        }
         // Parts of technologies the campaign has not researched are greyed out (the pad refuses them).
         let locked: std::collections::HashSet<&str> =
             if self.science.as_ref().map(|s| s.tech_tree).unwrap_or(false) {
@@ -4016,7 +4120,7 @@ impl App {
         for p in parts {
             let lock = locked.contains(p.id.as_str());
             html.push_str(&format!(
-                "<li data-ose=\"vab-part\" data-ose-part=\"{id}\"{lock}>{title}<small>{cat} \u{b7} size {size} \u{b7} {mass:.2} t{extra}</small></li>",
+                "<li data-ose=\"vab-part\" data-ose-part=\"{id}\"{lock}>{fav}{title}<small>{cat} \u{b7} size {size} \u{b7} {mass:.2} t{extra}</small></li>",
                 id = esc(&p.id),
                 lock = if lock {
                     " class=\"locked\" title=\"not researched yet: the launch pad will refuse it\""
@@ -4024,6 +4128,11 @@ impl App {
                     ""
                 },
                 title = esc(p.display_title()),
+                fav = if self.vab_favs.contains(&p.id) {
+                    "<span class=\"fav\" title=\"favourite (middle click to remove)\">\u{2605}</span> "
+                } else {
+                    ""
+                },
                 cat = esc(&p.category),
                 size = esc(&p.size_category),
                 mass = p.mass_t,

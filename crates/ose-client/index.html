@@ -355,6 +355,12 @@
     .mc-mission.complete { opacity: 0.6; border-left-color: #63b863; }
     .mc-objectives li.done { color: #7bd07b; text-decoration: line-through; } .mc-objectives li.current { color: #ffd87a; font-weight: 600; }
     #vab-parts li.locked { opacity: 0.45; }
+    #vab-filter { display: flex; gap: 6px; align-items: center; justify-content: space-between; margin-top: 6px; }
+    #vab-sizes { display: flex; gap: 2px; flex-wrap: wrap; }
+    #vab-sizes button { margin: 0; width: auto; padding: 2px 6px; font-size: 11px; background: #16213a; border: 1px solid #2c3d63; color: #cfd6e6; border-radius: 3px; cursor: pointer; }
+    #vab-sizes button.on { background: #1f3d6b; border-color: #3b63a8; color: #fff; }
+    #vab-sort { font-size: 11px; background: #06080f; color: #e6ecf7; border: 1px solid #2c3d63; border-radius: 3px; padding: 2px 4px; }
+    #vab-parts li .fav { color: #ffd84a; }
     /* VAB after the original's OAB: header bar with the vehicle name, New/undo/redo on the left and
        Save/Launch on the right; the staging stack on the right with one card per stage, last to fire on top. */
     #vab-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; }
@@ -739,6 +745,8 @@
           <div id="vab-picker">
             <div id="vab-cats" data-ose="vab-categories"></div>
             <input id="vab-search" data-ose="vab-search" type="search" placeholder="search parts (Ctrl+F)" />
+            <div id="vab-filter"><span id="vab-sizes" data-ose="vab-sizes"></span>
+              <select id="vab-sort" data-ose="vab-sort" title="Sort the parts"><option value="0">Size</option><option value="1">Name</option><option value="2">Mass</option></select></div>
             <ul id="vab-parts" data-ose="vab-parts"></ul>
           </div>
           <canvas id="vab-canvas" data-ose="vab-canvas" width="640" height="640"></canvas>
