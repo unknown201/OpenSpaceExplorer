@@ -886,14 +886,15 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
       const latlon = async () => ((await hud.first().getAttribute("data-ose-latlon")) ?? "0,0").split(",").map(Number);
       await sleep(1000);
       const [la0, lo0] = await latlon();
+      // Kerbals walk at the original's 0.8 m/s (protocol 33), so hold long enough to clear the threshold.
       await page.keyboard.down("KeyW");
-      await sleep(1200);
+      await sleep(2000);
       await page.keyboard.up("KeyW");
       await sleep(500);
       const [la1, lo1] = await latlon();
       // Back up the same way (S), so the capsule stays within boarding reach (6 m).
       await page.keyboard.down("KeyS");
-      await sleep(1200);
+      await sleep(2000);
       await page.keyboard.up("KeyS");
       const deg = Math.hypot(la1 - la0, (lo1 - lo0) * Math.cos((la0 * Math.PI) / 180));
       const walked = (deg * Math.PI * 600_000) / 180;
