@@ -56,13 +56,15 @@ impl Universe {
         Some(bodies::star_space_state(&self.world, body, ut).0 + self.position_of(e)?)
     }
 
-    /// Antenna range of a vessel: its best attached antenna (EVA Kerbals carry none and do not relay).
+    /// Antenna range of a vessel: its best attached antenna, a deployable one only while extended
+    /// (`PartComponentModule_DataTransmitter.IsTransmitterActive`); EVA Kerbals carry none and do not relay.
     fn antenna_range(&self, e: Entity) -> f64 {
         self.world
             .get::<structure::Structure>(e)
             .map(|st| {
                 (0..st.rigid.len())
                     .filter(|&i| st.rigid.present[i])
+                    .filter(|&i| !st.antenna_deployable[i] || st.deployed[i])
                     .map(|i| st.electric[i].comm_range_m)
                     .fold(0.0, f64::max)
             })
@@ -186,5 +188,19 @@ mod tests {
         );
         assert!(u.commnet_blocks_control(far));
         assert!(!u.commnet_blocks_control(near));
+        // the truck's whip antennas fold out: folded, they reach nobody
+        let truck = crafts.iter().find(|c| c.name == "Stock09_Truck").unwrap();
+        let t = u.spawn_vessel_in_circular_orbit("truck", body, 100_000.0);
+        let mut st = structure::Structure::build(truck, &defs, &res);
+        // leave out the cab's built-in antenna
+        for i in 0..st.electric.len() {
+            if !st.antenna_deployable[i] {
+                st.electric[i].comm_range_m = 0.0;
+            }
+        }
+        u.set_structure(t, st);
+        assert_eq!(u.antenna_range(t), 0.0, "antennas folded");
+        assert_eq!(u.deploy_antennas(t, true), Some(2));
+        assert!(u.antenna_range(t) > 0.0, "antennas out");
     }
 }
