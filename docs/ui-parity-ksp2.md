@@ -31,7 +31,7 @@ Camera rule that runs through every map: **the right button drags the camera, th
 |---|---|---|---|
 | G1 | Warp `.` `,` `/` everywhere in session; the warp widget stays visible in flight (top left) | `.` `,` `/` work; UT and warp stay up in flight | done |
 | G2 | F2 hides all UI (screenshots) | F2 fades the interface | done |
-| G3 | Tooltips on every HUD control, naming the key; Shift expands | a few `title` attributes, many controls without | open |
+| G3 | Tooltips on every HUD control, naming the key; Shift expands | every HUD, VAB and KSC control names what it does and its key; the VAB and R&D show full part tooltips; no Shift-to-expand | done |
 | G4 | Notification toasts (warp limited, out of charge, lost link, vessel lost ...) | flight messages and refusals come up as toasts at the top right | done (more event sources later) |
 | G5 | F5/F9 quicksave/quickload | F5/F9 with toasts; any `[data-save-action]` button (the pause menu's revert buttons) reverts to launch or to the VAB | done |
 | G6 | Settings screen: input bindings, audio sliders, UI scale, tooltips on/off, graphics | Settings from the main menu (any `[data-open-settings]` element opens it): Input lists the original's bindings and which work, Interface has UI scale and key hints, Audio the sound switch; no rebinding or volume sliders yet | partly done |
@@ -82,7 +82,7 @@ Camera rule that runs through every map: **the right button drags the camera, th
 |---|---|---|---|
 | K1 | Building hover tooltip and click, wheel zoom, M opens the Tracking Station map | hover/click, zoom, M, right or left drag | done |
 | K2 | Launch-site flyout (Launchpad 1-4, runway) | single Launchpad button | later |
-| R1 | R&D tree pans by drag and arrows, zooms with the wheel, part tooltips | drag and arrow keys pan, the wheel zooms about the pointer; part names only | partly done |
+| R1 | R&D tree pans by drag and arrows, zooms with the wheel, part tooltips | drag and arrow keys pan, the wheel zooms about the pointer; hovering a part in a node's list shows the full part tooltip | done |
 | C1 | Mission Control: track a mission, in-flight mission tracker, turn-in button when complete | accept and turn in at Mission Control (other thread); in flight a mission tracker window lists the missions taken on with their current objective | done |
 | A1 | Main menu Settings, Extras/Credits | Settings works; Extras disabled | partly done |
 

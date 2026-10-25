@@ -1494,6 +1494,25 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         list.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
         cb.forget();
     }
+    // The same part tooltip over the R&D node's part list (expandPartInfoTooltip in the original).
+    if let Some(info) = doc.get_element_by_id("rd-info") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let row = ev
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .and_then(|e| e.closest("li[data-ose-part]").ok().flatten());
+            a.borrow().vab_tooltip(row.as_ref());
+        });
+        info.add_event_listener_with_callback("mouseover", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |_: MouseEvent| {
+            a.borrow().vab_tooltip(None);
+        });
+        info.add_event_listener_with_callback("mouseleave", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
     // Part tooltip (the original's part info overlay) while the pointer is over a picker row.
     if let Some(parts) = doc.get_element_by_id("vab-parts") {
         let a = app.clone();
@@ -3822,9 +3841,17 @@ impl App {
                     .unwrap_or(900.0)
                     - 320.0,
             );
-            t.style()
-                .set_property("left", &format!("{}px", r.right() + 12.0))
-                .ok();
+            // Right of the row, or left of it when that would run off the screen (the R&D panel is on the right).
+            let width = web_sys::window()
+                .and_then(|w| w.inner_width().ok())
+                .and_then(|w| w.as_f64())
+                .unwrap_or(1600.0);
+            let left = if r.right() + 324.0 > width {
+                r.left() - 312.0
+            } else {
+                r.right() + 12.0
+            };
+            t.style().set_property("left", &format!("{left}px")).ok();
             t.style()
                 .set_property("top", &format!("{}px", top.max(8.0)))
                 .ok();

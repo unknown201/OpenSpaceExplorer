@@ -656,12 +656,12 @@
         <div id="ksc-panel">
           <div class="ksc-title"><span class="flag"><img src="assets/ui/ICO-Map-KSC-16x16.png" alt="" /></span><h2>Kerbal Space Center (KSC)</h2></div>
           <div id="ksc-buildings">
-            <button id="ksc-vab" data-ose="ksc-vab"><img src="assets/ui/ICO-VAB-Med.png" alt="" />VAB</button>
+            <button id="ksc-vab" data-ose="ksc-vab" title="Vehicle Assembly Building: design and build rockets"><img src="assets/ui/ICO-VAB-Med.png" alt="" />VAB</button>
             <button id="ksc-training" data-ose="ksc-training" disabled title="not yet"><img src="assets/ui/ICO-Training-Center-Med.png" alt="" />Training Center</button>
-            <button id="ksc-rnd" data-ose="ksc-rnd"><img src="assets/ui/ICO-RDCenter-Med.png" alt="" />R&amp;D Center</button>
-            <button id="ksc-tracking" data-ose="ksc-tracking"><img src="assets/ui/ICO-Tracking-Station-Med.png" alt="" />Tracking Station</button>
-            <button id="ksc-mission" data-ose="ksc-mission"><img src="assets/ui/ICO-Mission-Control-Med.png" alt="" />Mission Control</button>
-            <button id="ksc-launchpad" data-ose="ksc-launchpad" class="launch"><img src="assets/ui/ICO-Launchpad-Med.png" alt="" />Launchpad<span class="arrow"></span></button>
+            <button id="ksc-rnd" data-ose="ksc-rnd" title="Research and Development: spend science on new technology"><img src="assets/ui/ICO-RDCenter-Med.png" alt="" />R&amp;D Center</button>
+            <button id="ksc-tracking" data-ose="ksc-tracking" title="Tracking Station: every vessel and body in the system (M)"><img src="assets/ui/ICO-Tracking-Station-Med.png" alt="" />Tracking Station</button>
+            <button id="ksc-mission" data-ose="ksc-mission" title="Mission Control: take on missions and hand them in for science"><img src="assets/ui/ICO-Mission-Control-Med.png" alt="" />Mission Control</button>
+            <button id="ksc-launchpad" data-ose="ksc-launchpad" title="Launchpad: roll a saved vehicle out and launch it" class="launch"><img src="assets/ui/ICO-Launchpad-Med.png" alt="" />Launchpad<span class="arrow"></span></button>
           </div>
           <div class="row"><button id="ksc-sessions" class="secondary" data-ose="ksc-sessions">Exit to Main Menu</button></div>
         </div>
@@ -823,7 +823,7 @@
     <label>normal <input id="node-normal" type="range" min="-1500" max="1500" step="1" value="0" /><span id="node-normal-text">0 m/s</span></label>
     <label>radial <input id="node-radial" type="range" min="-1500" max="1500" step="1" value="0" /><span id="node-radial-text">0 m/s</span></label>
     <div class="reason" id="node-reason"></div>
-    <button id="clear-node" data-ose="clear-node">Clear node</button>
+    <button id="clear-node" data-ose="clear-node" title="Delete the maneuver node">Clear node</button>
   </div>
   <div id="help">drag to pan, wheel to zoom, click a name to focus, F to frame the system</div>
 </body>
