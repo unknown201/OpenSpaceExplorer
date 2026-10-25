@@ -552,6 +552,19 @@
     #vab-site, #lp-site { font: 13px var(--ui-font, inherit); background: #06080f; color: #e6ecf7; border: 1px solid #2c3d63; border-radius: 4px; padding: 5px 6px; }
     body.webgpu #vab-header { position: relative; pointer-events: auto; background: #10141bf0; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)); padding: calc(6 * var(--u)) calc(10 * var(--u)); margin: 0 0 calc(8 * var(--u)); }
     body.webgpu #screen-vab #vab { height: calc(100vh - 92 * var(--u)) !important; }
+    /* KSP2's VAB (Josh's screenshots): no header row; the tools sit in a bar at the bottom of the hall, the
+       vehicle's name at its top left, and Save, the reports and a big green Launch at its top right. */
+    body.webgpu #vab-header { position: static; background: none; border: 0; padding: 0; margin: 0; height: 0; font-family: var(--hud-font); }
+    body.webgpu #screen-vab #vab { height: calc(100vh - 32 * var(--u)) !important; }
+    body.webgpu #vab-header > .vh-group { position: fixed; z-index: 15; bottom: calc(16 * var(--u)); gap: calc(4 * var(--u)); background: #10141bf0; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)); padding: calc(5 * var(--u)) calc(6 * var(--u)); }
+    body.webgpu #vab-header > .vh-group:first-of-type { left: calc(366 * var(--u)); }
+    body.webgpu #vab-header > .vh-group:last-of-type { right: calc(352 * var(--u)); top: calc(16 * var(--u)); bottom: auto; }
+    body.webgpu #vab-header #vab-name { position: fixed; z-index: 15; top: calc(16 * var(--u)); left: calc(366 * var(--u)); width: calc(340 * var(--u)); min-width: 0; flex: none; font-family: var(--hud-font); }
+    body.webgpu #vab-header #vab-desc-pop { position: fixed; top: calc(64 * var(--u)); left: calc(366 * var(--u)); right: auto; transform: none; }
+    body.webgpu #vab-header > .vh-group:first-of-type .vh-pop { top: auto; bottom: calc(100% + 6px); }
+    body.webgpu #vab-header #vab-launch { font: 700 calc(22 * var(--u)) var(--hud-font); letter-spacing: 0.08em; padding: calc(8 * var(--u)) calc(22 * var(--u)) !important; color: #0b1a0b; background: #3fe05a; border-color: #8fff9f; }
+    body.webgpu #vab-header #vab-launch i { background: #0b1a0b; }
+    body.webgpu #vab-header button { font-family: var(--hud-font); }
     #vab-side .vs-title { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: #9fb0cc; margin: 10px 0 4px; }
     #vab-side .vs-title:first-child { margin-top: 0; display: flex; justify-content: space-between; align-items: center; }
     #vab-twr-body { font-size: 11px; text-transform: none; letter-spacing: 0; background: #06080f; color: #e6ecf7; border: 1px solid #2c3d63; border-radius: 3px; padding: 1px 3px; max-width: 160px; }
