@@ -1997,6 +1997,21 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         });
         panel.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
         cb.forget();
+        // Double click a vessel in the list to fly it.
+        let a = app.clone();
+        let dbl = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let id = ev
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .and_then(|e| e.closest("li[data-ose=\"ts-vessel\"]").ok().flatten())
+                .and_then(|e| e.get_attribute("data-ose-id"))
+                .and_then(|s| s.parse::<u64>().ok());
+            if let Some(id) = id {
+                a.borrow_mut().control_vessel(id);
+            }
+        });
+        panel.add_event_listener_with_callback("dblclick", dbl.as_ref().unchecked_ref())?;
+        dbl.forget();
     }
     wire(
         "ksc-launchpad",
@@ -5160,11 +5175,33 @@ impl App {
         let i = ids.iter().position(|id| *id == cur).unwrap_or(0);
         let n = ids.len();
         let next = ids[if back { (i + n - 1) % n } else { (i + 1) % n }];
-        let craft = stored(&format!("ose.flight.{next}")).and_then(|c| c.parse::<u64>().ok());
+        let craft = stored(&self.craft_link_key(next)).and_then(|c| c.parse::<u64>().ok());
         self.start_flight(next, craft);
         if let Some(v) = self.scene.as_ref().and_then(|s| s.vessel(next)) {
             hud::push(&self.doc, &format!("Switched to {}", v.name), "passive");
         }
+    }
+
+    /// Double click on the map or in the station: take control of that vessel when it is yours.
+    fn control_vessel(&mut self, id: u64) {
+        let Some(v) = self.scene.as_ref().and_then(|s| s.vessel(id)) else {
+            return;
+        };
+        if v.owner.is_none() || v.owner != self.player_id {
+            hud::push(&self.doc, "Not your vessel", "passive");
+            return;
+        }
+        if self.flying == Some(id) {
+            return;
+        }
+        let name = v.name.clone();
+        let map = self.map_mode;
+        self.tracking_open = false;
+        let craft = stored(&self.craft_link_key(id)).and_then(|c| c.parse::<u64>().ok());
+        self.start_flight(id, craft);
+        // Taken from the map, stay on it (the original keeps the map view open).
+        self.map_mode = map;
+        hud::push(&self.doc, &format!("Switched to {name}"), "passive");
     }
 
     /// `]` / `[` on the map: follow the next or previous vessel (yours first), as the original's FocusNext.
@@ -11329,6 +11366,14 @@ fn install_focus_clicks(app: &Shared, target: &Element) -> Result<(), JsValue> {
     });
     target.add_event_listener_with_callback("click", on_click.as_ref().unchecked_ref())?;
     on_click.forget();
+    let a = app.clone();
+    let on_dbl = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+        if let Some(id) = App::vessel_click_target(&ev) {
+            a.borrow_mut().control_vessel(id);
+        }
+    });
+    target.add_event_listener_with_callback("dblclick", on_dbl.as_ref().unchecked_ref())?;
+    on_dbl.forget();
     let a = app.clone();
     let on_apsis = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
         let id = ev
