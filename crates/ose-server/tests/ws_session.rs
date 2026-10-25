@@ -1538,6 +1538,7 @@ async fn a_plane_launched_on_the_runway_lies_level_facing_down_it() {
         &ClientMessage::LaunchSavedAt {
             id: jet,
             site: Some("Runway_1".into()),
+            crew: None,
         },
     )
     .await;
@@ -1590,6 +1591,7 @@ async fn a_plane_launched_on_the_runway_lies_level_facing_down_it() {
         &ClientMessage::LaunchSavedAt {
             id: jet,
             site: Some("Moon".into()),
+            crew: None,
         },
     )
     .await;
@@ -1633,6 +1635,7 @@ async fn every_launch_site_stands_the_craft_on_the_drawn_campus() {
             &ClientMessage::LaunchAt {
                 craft: starter_craft(),
                 site: Some(site.into()),
+                crew: None,
             },
         )
         .await;
@@ -1660,6 +1663,89 @@ async fn every_launch_site_stands_the_craft_on_the_drawn_campus() {
             f.altitude_m
         );
     }
+}
+
+#[tokio::test]
+async fn the_roster_lists_the_astronauts_and_a_launch_takes_the_chosen_crew() {
+    let (_server, addr) = spawn_server_with(&["--db", ":memory:", "--save", "none"], None).await;
+    let mut ws = connect_ws(&addr).await;
+    hello(&mut ws, None, "pilot").await;
+    send_msg(
+        &mut ws,
+        &ClientMessage::CreateSession {
+            name: "Crew".into(),
+            mode: ose_net::SessionMode::Sandbox,
+            difficulty: Vec::new(),
+        },
+    )
+    .await;
+    wait_for(&mut ws, |m| {
+        matches!(m, ServerMessage::CampaignState { .. }).then_some(())
+    })
+    .await;
+    let roster = |m: ServerMessage| match m {
+        ServerMessage::KerbalRoster { kerbals } => Some(kerbals),
+        _ => None,
+    };
+    send_msg(&mut ws, &ClientMessage::KerbalRoster).await;
+    let kerbals = wait_for(&mut ws, roster).await;
+    assert_eq!(kerbals.len(), 8, "a new campaign hires eight");
+    assert_eq!(kerbals[0].name, "Jebediah Kerman");
+    assert!(kerbals[0].veteran && kerbals[3].veteran && !kerbals[4].veteran);
+    assert!(kerbals
+        .iter()
+        .all(|k| k.status == ose_net::KerbalStatus::Available));
+    assert!(kerbals[0]
+        .looks
+        .iter()
+        .any(|(k, v)| k == "HAIRSTYLE" && v == "HAIR_JEB"));
+    let launch = |crew: Option<Vec<String>>| ClientMessage::LaunchAt {
+        craft: starter_craft(),
+        site: None,
+        crew,
+    };
+    let launched = |m: ServerMessage| match m {
+        ServerMessage::CraftLaunched { vessel, reason, .. } => Some((vessel, reason)),
+        _ => None,
+    };
+    // Bill flies the pod
+    send_msg(&mut ws, &launch(Some(vec!["Bill Kerman".into()]))).await;
+    let (vessel, reason) = wait_for(&mut ws, launched).await;
+    assert!(reason.is_none(), "{reason:?}");
+    let vessel = vessel.unwrap();
+    // the roster comes by itself once it changes
+    let kerbals = wait_for(&mut ws, |m| {
+        roster(m).filter(|ks| {
+            ks.iter().any(|k| {
+                k.name == "Bill Kerman" && k.status == ose_net::KerbalStatus::Assigned { vessel }
+            })
+        })
+    })
+    .await;
+    assert!(kerbals
+        .iter()
+        .filter(|k| k.name != "Bill Kerman")
+        .all(|k| k.status == ose_net::KerbalStatus::Available));
+    // he cannot fly two rockets, and strangers are not on the roster
+    send_msg(&mut ws, &launch(Some(vec!["Bill Kerman".into()]))).await;
+    let (_, reason) = wait_for(&mut ws, launched).await;
+    assert!(reason.unwrap().contains("not available"));
+    send_msg(&mut ws, &launch(Some(vec!["Nobody Kerman".into()]))).await;
+    let (_, reason) = wait_for(&mut ws, launched).await;
+    assert!(reason.unwrap().contains("not on the roster"));
+    // nobody chosen: the first free one in roster order
+    send_msg(&mut ws, &launch(None)).await;
+    let (second, _) = wait_for(&mut ws, launched).await;
+    let second = second.unwrap();
+    wait_for(&mut ws, |m| {
+        roster(m).filter(|ks| {
+            ks.iter().any(|k| {
+                k.name == "Jebediah Kerman"
+                    && k.status == ose_net::KerbalStatus::Assigned { vessel: second }
+            })
+        })
+    })
+    .await;
 }
 
 async fn http_get_json(addr: &str, path: &str) -> serde_json::Value {

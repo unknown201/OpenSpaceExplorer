@@ -81,6 +81,19 @@ impl Universe {
     }
 
     /// Fill a vessel's crewed seats from `roster`, skipping Kerbals already flying.
+    /// The vessel's seats, one entry (its part) per seat, in craft order.
+    pub fn crew_seats(&self, e: Entity) -> Vec<usize> {
+        self.world
+            .get::<structure::Structure>(e)
+            .map(|st| {
+                (0..st.rigid.len())
+                    .filter(|&i| st.rigid.present[i])
+                    .flat_map(|i| std::iter::repeat_n(i, st.crew[i] as usize))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     pub fn crew_vessel(&mut self, e: Entity, roster: &[String]) -> Vec<(usize, String)> {
         let Some(seats) = self.world.get::<structure::Structure>(e).map(|st| {
             (0..st.rigid.len())

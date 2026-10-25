@@ -5941,6 +5941,7 @@ impl App {
                 &ClientMessage::LaunchSavedAt {
                     id,
                     site: self.launch_site.clone(),
+                    crew: None,
                 },
             );
         }

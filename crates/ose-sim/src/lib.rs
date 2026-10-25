@@ -565,10 +565,32 @@ impl Universe {
             s.sync(&mut d.0);
         }
         self.world.entity_mut(e).insert(s);
+        self.stand_on_ground(e);
         // crewed parts get their Kerbals (the server's roster replaces these)
         if self.world.get::<crew::Crew>(e).is_none() {
             let roster: Vec<String> = crew::VETERANS.iter().map(|n| n.to_string()).collect();
             self.crew_vessel(e, &roster);
+        }
+    }
+
+    /// Put a landed vessel on the ground at its clearance right away (before its first step).
+    fn stand_on_ground(&mut self, e: Entity) {
+        let ut = self.ut();
+        let body = self.world.get::<bodies::ReferenceBody>(e).map(|b| b.0);
+        let Some(b) = body
+            .and_then(|b| self.world.get::<bodies::Body>(b))
+            .cloned()
+        else {
+            return;
+        };
+        let terrain = body
+            .and_then(|b| self.world.get::<flight::Terrain>(b))
+            .map(|t| t.0.clone());
+        if let Some(mut p) = self.world.get_mut::<flight::Powered>(e) {
+            if p.landed && !p.crashed && !p.tipped {
+                let ground = flight::ground_radius(&b, terrain.as_deref(), p.r, ut);
+                p.r = p.r.normalized() * (ground + p.ground_clearance_m);
+            }
         }
     }
 

@@ -776,6 +776,86 @@ fn part_bounds(cubes: &[DragCube], nodes: &[AttachNode]) -> Option<ose_data::Par
 }
 
 /// The original files were written for Newtonsoft and sometimes carry trailing commas; fall back to json5.
+/// The original's Kerbals (`kerbal_variety_text/*.json`, one Kerbal each): the four veterans in their
+/// order, then the rest by name.
+pub fn import_kerbals(dir: &Path) -> anyhow::Result<Vec<ose_data::KerbalDef>> {
+    let mut out = Vec::new();
+    for p in json_files(dir)? {
+        let v = read_json(&p)?;
+        // one Kerbal per file; the attribute tables beside them are skipped
+        let Some((_, k)) = v.as_object().and_then(|o| o.iter().next()) else {
+            continue;
+        };
+        if !k["NAME"].is_string() {
+            continue;
+        }
+        let title = |w: &str| {
+            w.split(' ')
+                .map(|part| {
+                    let mut c = part.chars();
+                    match c.next() {
+                        Some(f) => {
+                            f.to_uppercase().collect::<String>() + &c.as_str().to_lowercase()
+                        }
+                        None => String::new(),
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let name = format!("{} {}", title(&s(k, "NAME")), title(&s(k, "SURNAME")));
+        let num = |key: &str| match &k[key] {
+            Value::String(x) => x.parse().unwrap_or(0.0),
+            other => other.as_f64().unwrap_or(0.0),
+        };
+        let veteran = match &k["ISVETERAN"] {
+            Value::String(x) => x == "true",
+            other => other.as_bool().unwrap_or(false),
+        };
+        let looks = [
+            "TYPE",
+            "HAIRSTYLE",
+            "HAIRCOLOR",
+            "EYES",
+            "SKINCOLOR",
+            "FACIALHAIR",
+            "FACEDECORATION",
+            "FACEDETAIL",
+            "HELMET",
+            "TEAMCOLOR1",
+            "TEAMCOLOR2",
+        ]
+        .iter()
+        .filter_map(|key| k[*key].as_str().map(|v| (key.to_string(), v.to_string())))
+        .collect();
+        out.push(ose_data::KerbalDef {
+            name,
+            veteran,
+            bravery: num("BRAVERY"),
+            stupidity: num("STUPIDITY"),
+            optimism: num("OPTIMISM"),
+            constitution: num("CONSTITUTION"),
+            looks,
+        });
+    }
+    const VETERANS: [&str; 4] = [
+        "Jebediah Kerman",
+        "Bill Kerman",
+        "Bob Kerman",
+        "Valentina Kerman",
+    ];
+    out.sort_by(|a, b| {
+        let rank = |k: &ose_data::KerbalDef| {
+            VETERANS
+                .iter()
+                .position(|v| *v == k.name)
+                .unwrap_or(VETERANS.len())
+        };
+        rank(a).cmp(&rank(b)).then_with(|| a.name.cmp(&b.name))
+    });
+    Ok(out)
+}
+
 pub(crate) fn read_json(path: &Path) -> anyhow::Result<Value> {
     let text = std::fs::read_to_string(path)?;
     match serde_json::from_str(&text) {
