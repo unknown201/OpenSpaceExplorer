@@ -20,6 +20,7 @@ pub struct Preview {
     sun_az: f64,
     sun_el: f64,
     debug: f32,
+    exposure: f32,
     /// `occ=<distance m>,<radius m>,<offset deg>`: a body that hides the sun, for checking eclipses.
     occ: Option<(f64, f64, f64)>,
     /// `part=<part id>`: draw that part 6 m in front of the camera (checks that the planet never covers craft).
@@ -61,6 +62,7 @@ impl Preview {
             sun_az: num("sunaz", 120.0),
             sun_el: num("sunel", 30.0),
             debug: num("debug", 0.0) as f32,
+            exposure: num("exp", 1.0) as f32,
             part: get.get("part").cloned(),
             occ: get.get("occ").and_then(|s| {
                 let v: Vec<f64> = s.split(',').filter_map(|x| x.parse().ok()).collect();
@@ -72,9 +74,11 @@ impl Preview {
 
     pub fn frame(&mut self, gpu: &mut Renderer, now_ms: f64) {
         let debug = self.debug;
+        let exposure = self.exposure;
         let planet = self.planet.get_or_insert_with(|| {
             let mut p = PlanetRenderer::new(gpu);
             p.debug = debug;
+            p.exposure_scale = exposure;
             p
         });
         let up = v(planet_lod::direction(self.lat, self.lon));

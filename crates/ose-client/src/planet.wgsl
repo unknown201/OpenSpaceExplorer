@@ -72,6 +72,10 @@ struct Surface {
     clouds2: vec4<f32>,
     // polar caps: has albedo caps, has cloud caps, cap radius (rad)
     poles: vec4<f32>,
+    // the terrain pack's eight tiled height layers: (uv scale, height scale) pairs
+    layers: array<vec4<f32>, 4>,
+    // x: 1 with layer slopes, y: side/top projection contrast
+    layer_info: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> frame: Frame;
@@ -98,6 +102,10 @@ struct Surface {
 // Polar caps of the albedo and cloud maps (tools/export_poles.py): north left, south right.
 @group(2) @binding(10) var pole_albedo_tex: texture_2d<f32>;
 @group(2) @binding(11) var pole_clouds_tex: texture_2d<f32>;
+// The terrain pack's layer slopes (d height / d tile u, v per layer, ose_data LayerSlopes), with mips.
+@group(2) @binding(12) var slopes_tex: texture_2d_array<f32>;
+// The pack's own layer mask (not the scaled biome mask): row 0 at the south pole.
+@group(2) @binding(13) var layer_mask_tex: texture_2d<f32>;
 
 const PI: f32 = 3.14159265;
 const TRANSMITTANCE_W: f32 = 1024.0;
@@ -639,6 +647,63 @@ fn sample_bicubic(t: texture_2d<f32>, uv: vec2<f32>, g: EquiGrad) -> vec4<f32> {
     return mix(mix(a, b, s1.x / (s0.x + s1.x)), mix(c, d, s1.x / (s0.x + s1.x)), s1.y / (s0.y + s1.y));
 }
 
+// Per-pixel relief from the terrain pack's tiled height layers (ose_data terrain_detail::Detail::sample): the
+// same side (equirect, uv x 2) and top projections blended by latitude, the same biome weights, differentiated
+// into a slope (east, north; m per m). Only what the mesh cannot show is returned: each layer's slope at the
+// pixel's mip minus its slope at the mip matching twice the mesh's vertex spacing.
+fn relief_slope(up: vec3<f32>, eg: EquiGrad, biome: vec4<f32>, dtx: vec2<f32>, dty: vec2<f32>,
+                spacing: f32) -> vec2<f32> {
+    let r = frame.solar.w;
+    let lat = asin(clamp(up.y, -1.0, 1.0));
+    let u = fract(atan2(-up.z, up.x) / (2.0 * PI));
+    let lon = u * 2.0 * PI - PI;
+    let v = lat / PI + 0.5;
+    let cl = max(cos(lat), 0.05);
+    let sl = sin(lat);
+    let co = cos(lon);
+    let so = sin(lon);
+    let top = vec2<f32>(cos(lat) * co, cos(lat) * so) * 0.5;
+    let blend = 1.0 - pow(abs(sl), surface.layer_info.y);
+    let m = biome / max(biome.r + biome.g + biome.b + biome.a, 0.001);
+    let last = f32(textureNumLevels(slopes_tex) - 1u);
+    var se = 0.0;
+    var sn = 0.0;
+    for (var k = 0; k < 8; k = k + 1) {
+        let pr = surface.layers[k / 2];
+        let s = select(pr.x, pr.z, k % 2 == 1);
+        let hs = select(pr.y, pr.w, k % 2 == 1);
+        let w = m[k % 4] * hs;
+        if s <= 0.0 || w < 0.01 {
+            continue;
+        }
+        if blend > 0.01 {
+            let c = vec2<f32>(u * 2.0, v) * s;
+            let dx = vec2<f32>(eg.dx.x * 2.0, -eg.dx.y) * s;
+            let dy = vec2<f32>(eg.dy.x * 2.0, -eg.dy.y) * s;
+            let lod = clamp(log2(max(max(length(dx), length(dy)) * 1024.0, 1e-6)), 0.0, last);
+            let texel = PI * r / (s * 1024.0);
+            let lod_mesh = clamp(log2(max(2.0 * spacing / texel, 1.0)), lod, last);
+            let g = textureSampleLevel(slopes_tex, wrap_samp, c, k, lod).xy
+                - textureSampleLevel(slopes_tex, wrap_samp, c, k, lod_mesh).xy;
+            se = se + w * blend * g.x * s / (PI * r * cl);
+            sn = sn + w * blend * g.y * s / (PI * r);
+        }
+        if blend < 0.99 {
+            let c = top * s;
+            let lod = clamp(log2(max(max(length(dtx), length(dty)) * s * 1024.0, 1e-6)), 0.0, last);
+            let texel = 2.0 * r / (s * 1024.0);
+            let lod_mesh = clamp(log2(max(2.0 * spacing / texel, 1.0)), lod, last);
+            let g = textureSampleLevel(slopes_tex, wrap_samp, c, k, lod).xy
+                - textureSampleLevel(slopes_tex, wrap_samp, c, k, lod_mesh).xy;
+            let xe = (g.x * -so + g.y * co) * 0.5 * s / r;
+            let xn = (g.x * -sl * co + g.y * -sl * so) * 0.5 * s / r;
+            se = se + w * (1.0 - blend) * xe;
+            sn = sn + w * (1.0 - blend) * xn;
+        }
+    }
+    return vec2<f32>(se, sn);
+}
+
 fn sample_equi(t: texture_2d<f32>, uv: vec2<f32>, g: EquiGrad) -> vec4<f32> {
     return textureSampleGrad(t, equi_samp, uv, g.dx, g.dy);
 }
@@ -712,6 +777,10 @@ fn fs_terrain(in: VOut) -> @location(0) vec4<f32> {
     let dpy = dpdy(in.tile);
     let dist = length(in.rel);
     let pu = pole_uv(up);
+    // projections of the terrain layers (relief below), differentiated here in uniform control flow
+    let top_c = vec2<f32>(-up.x, up.z) * 0.5;
+    let dtx = dpdx(top_c);
+    let dty = dpdy(top_c);
     var albedo = sample_equi(albedo_tex, uv, eg).rgb;
     if surface.clouds2.z > 0.0 {
         albedo = flowed_albedo(uv, eg, up.y);
@@ -840,6 +909,23 @@ fn fs_terrain(in: VOut) -> @location(0) vec4<f32> {
         return vec4<f32>(surface.flags.x, surface.clouds.w / 16.0, f32(surface.slots[0].x) / 16.0, 1.0);
     }
     let p_km = frame.cam_km.xyz + in.rel * 0.001;
+    // the tiled layers' relief finer than the mesh shows
+    if surface.layer_info.x > 0.5 {
+        let spacing = frame.solar.w * 1.5708 / exp2(chunk.center.w) / 32.0;
+        let mask_uv = vec2<f32>(fract(uv.x), 1.0 - uv.y);
+        let mask = textureSampleGrad(layer_mask_tex, equi_samp, mask_uv, eg.dx * vec2<f32>(1.0, -1.0),
+            eg.dy * vec2<f32>(1.0, -1.0));
+        let sl = relief_slope(up, eg, mask, dtx, dty, spacing);
+        let east = normalize(cross(vec3<f32>(0.0, 1.0, 0.0), up) + vec3<f32>(1e-6, 0.0, 0.0));
+        let north = cross(up, east);
+        n = normalize(n - east * sl.x - north * sl.y);
+        if surface.flags.z > 6.5 && surface.flags.z < 7.5 {
+            return vec4<f32>(abs(sl.x) * 4.0, abs(sl.y) * 4.0, mask.r * 0.5, 1.0);
+        }
+    }
+    if surface.flags.z > 6.5 && surface.flags.z < 7.5 {
+        return vec4<f32>(0.0, 0.0, 1.0, 1.0);
+    }
     let light = sun_and_sky(p_km, n, frame.sun.xyz);
     let shade = cloud_shadow(in.model, frame.sun.xyz);
     // Caustics: the sea floor under shallow water catches the waves' focused sunlight (the original's
@@ -861,7 +947,7 @@ fn fs_terrain(in: VOut) -> @location(0) vec4<f32> {
     if surface.flags.z > 4.5 && surface.flags.z < 5.5 {
         return vec4<f32>(light.sun * 0.25, 1.0);
     }
-    if surface.flags.z > 5.5 {
+    if surface.flags.z > 5.5 && surface.flags.z < 6.5 {
         return vec4<f32>(n * 0.5 + 0.5, 1.0);
     }
     var radiance = albedo / PI * (light.sun * shade + light.sky) + albedo * ambient(up, frame.sun.xyz);

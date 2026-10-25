@@ -157,6 +157,72 @@ pub struct Detail {
     decals: Vec<Decal>,
 }
 
+/// One tiled height layer's slopes, for per-pixel terrain shading (the client's planet shader): the layer's
+/// tiling and height scale and, per texel, the derivative of its normalised height (0..1) along the tile's u and
+/// v (per whole tile), row 0 at v = 0. Layers 0..3 are the large set, 4..7 the medium set; layer k is weighted
+/// by biome mask channel k % 4.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LayerSlopes {
+    pub uv_scale: f64,
+    pub height_scale: f64,
+    pub width: usize,
+    pub height: usize,
+    pub slopes: Vec<[f32; 2]>,
+}
+
+impl Grid {
+    fn slopes(&self) -> Vec<[f32; 2]> {
+        let (w, h) = (self.w as i64, self.h as i64);
+        let at = |x: i64, y: i64| {
+            self.data[(y.rem_euclid(h) as usize) * self.w + x.rem_euclid(w) as usize] as f64
+                / 65535.0
+        };
+        let mut out = Vec::with_capacity(self.w * self.h);
+        for y in 0..h {
+            for x in 0..w {
+                let du = (at(x + 1, y) - at(x - 1, y)) * 0.5 * w as f64;
+                let dv = (at(x, y + 1) - at(x, y - 1)) * 0.5 * h as f64;
+                out.push([du as f32, dv as f32]);
+            }
+        }
+        out
+    }
+}
+
+impl Detail {
+    /// The eight layers' slopes (`None` where a biome has no layer).
+    pub fn layer_slopes(&self) -> Vec<Option<LayerSlopes>> {
+        let get = |l: Option<&Option<Layer>>| {
+            l.and_then(|l| l.as_ref()).map(|l| LayerSlopes {
+                uv_scale: l.uv_scale,
+                height_scale: l.height_scale,
+                width: l.grid.w,
+                height: l.grid.h,
+                slopes: l.grid.slopes(),
+            })
+        };
+        (0..8)
+            .map(|k| {
+                if k < 4 {
+                    get(self.large.get(k))
+                } else {
+                    get(self.medium.get(k - 4))
+                }
+            })
+            .collect()
+    }
+
+    /// The layers' biome mask (width, height, RGBA texels; row 0 at the south pole, column 0 at -180 deg).
+    pub fn mask(&self) -> Option<(usize, usize, &[[u8; 4]])> {
+        self.mask.as_ref().map(|(w, h, d)| (*w, *h, d.as_slice()))
+    }
+
+    /// How fast the side (equirectangular) projection gives way to the top one towards the poles.
+    pub fn contrast(&self) -> f64 {
+        self.contrast
+    }
+}
+
 /// Unity direction of a latitude/longitude (degrees).
 pub fn unity_dir(lat_deg: f64, lon_deg: f64) -> [f64; 3] {
     let (la, lo) = (lat_deg.to_radians(), lon_deg.to_radians());
@@ -506,6 +572,69 @@ mod tests {
         let m = TerrainMap::from_pack(&p, &blob).unwrap();
         let h = m.height_m(10.0, 20.0);
         assert!((h - 150.0).abs() < 1.0, "{h}");
+    }
+
+    #[test]
+    fn layer_slopes_match_the_heights() {
+        // One large layer: a 32 x 32 ramp-and-bump grid tiled 4 times around, 1 km tall, mask all channel R.
+        let (mut p, mut blob) = pack(vec![]);
+        let goff = blob.len();
+        let n = 32usize;
+        let vals: Vec<u16> = (0..n * n)
+            .map(|i| {
+                let (x, y) = ((i % n) as f64 / n as f64, (i / n) as f64 / n as f64);
+                let v = 0.5
+                    + 0.3
+                        * (2.0 * std::f64::consts::PI * x).sin()
+                        * (2.0 * std::f64::consts::PI * y).cos();
+                (v * 65535.0) as u16
+            })
+            .collect();
+        blob.extend(u16s(&vals));
+        let moff = blob.len();
+        blob.extend(std::iter::repeat_n([255u8, 0, 0, 0], 8 * 4).flatten());
+        p.mask = Some(GridRef {
+            offset: moff,
+            width: 8,
+            height: 4,
+            count: 1,
+        });
+        p.large = vec![Some(LayerRef {
+            grid: GridRef {
+                offset: goff,
+                width: n,
+                height: n,
+                count: 1,
+            },
+            uv_scale: 4.0,
+            height_scale: 1000.0,
+        })];
+        let m = TerrainMap::from_pack(&p, &blob).unwrap();
+        let d = m.detail.as_ref().unwrap();
+        let ls = d.layer_slopes();
+        assert_eq!(ls.len(), 8);
+        let l = ls[0].as_ref().unwrap();
+        assert!(ls[1].is_none() && ls[4].is_none());
+        // at the equator the side projection dominates: north slope of the height function (m per m) against
+        // the texel slope: dh/dnorth = slope_v * uv_scale * height_scale / (pi R)
+        // a texel centre (8.5 / 32 of a tile in both directions) where the bump slopes
+        let (lat, lon) = (11.953125, 11.953125);
+        let r = p.radius_m;
+        let step = 0.001;
+        let dh = (m.height_m(lat + step, lon) - m.height_m(lat - step, lon))
+            / (2.0 * step.to_radians() * r);
+        let u = lon / 360.0 + 0.5;
+        let v = lat / 180.0 + 0.5;
+        let (tx, ty) = (
+            (u * 2.0 * 4.0).fract() * n as f64,
+            (v * 4.0).fract() * n as f64,
+        );
+        let s = l.slopes[(ty as usize % n) * n + tx as usize % n];
+        let want = s[1] as f64 * 4.0 * 1000.0 / (std::f64::consts::PI * r);
+        assert!(
+            (dh - want).abs() < want.abs() * 0.35 + 2e-4,
+            "dh {dh} want {want}"
+        );
     }
 
     #[test]
