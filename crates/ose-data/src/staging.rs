@@ -411,6 +411,8 @@ mod tests {
             cargo_bay: false,
             rcs: None,
             lifting_surface: None,
+            ctrl_range_deg: 0.0,
+            ctrl_area: 0.0,
             intake_area_m2: 0.0,
             module_names: vec![],
             raw_modules: Default::default(),

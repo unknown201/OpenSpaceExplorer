@@ -252,6 +252,9 @@ pub struct Powered {
     pub lift_kn: DVec3,
     #[serde(default)]
     pub aero_torque_knm: DVec3,
+    /// Steering torque the control surfaces can give in the airflow now, kN·m.
+    #[serde(default)]
+    pub surface_torque_knm: f64,
     /// The burning stage's engines breathe air (jets), and whether the vessel has intakes.
     #[serde(default)]
     pub jet: Option<Jet>,
@@ -682,6 +685,7 @@ impl Powered {
             rcs: RcsState::default(),
             lift_kn: DVec3::ZERO,
             aero_torque_knm: DVec3::ZERO,
+            surface_torque_knm: 0.0,
             jet: None,
             intakes: false,
             level: false,
@@ -873,6 +877,7 @@ pub fn steer(p: &mut Powered, target: DVec3, thrust_fraction: f64, dt: f64) {
         s.wheel_torque_knm * p.wheel_scale.clamp(0.0, 1.0)
             + s.gimbal_torque_knm * thrust_fraction.clamp(0.0, 1.0)
             + rcs_torque
+            + p.surface_torque_knm
     } else {
         0.0
     };
@@ -931,6 +936,7 @@ fn turning_authority(p: &Powered, thrust_fraction: f64) -> Option<(f64, f64)> {
         s.wheel_torque_knm * p.wheel_scale.clamp(0.0, 1.0)
             + s.gimbal_torque_knm * thrust_fraction.clamp(0.0, 1.0)
             + rcs
+            + p.surface_torque_knm
     } else {
         0.0
     };
