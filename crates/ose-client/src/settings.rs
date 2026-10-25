@@ -42,7 +42,12 @@ pub const INPUT: &[(&str, &[Binding])] = &[
                 "Walk, turn, step sideways",
                 true,
             ),
-            ("Space (on EVA)", "Jetpack up", true),
+            (
+                "Shift / Space (on EVA)",
+                "Run / jump; in the air the jetpack up",
+                true,
+            ),
+            ("Ctrl (on EVA)", "Jetpack down", true),
             ("F (on EVA)", "Board the craft within reach", true),
             ("M", "Map view", true),
             ("V", "Camera mode: auto, free, orbital, chase, locked", true),

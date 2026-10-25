@@ -307,6 +307,9 @@ struct App {
     /// turning and throttling.
     lin_mode: bool,
     translate_sent: (f32, f32, f32),
+    /// EVA: run as last sent, and a Space press not yet sent as a jump.
+    eva_run_sent: bool,
+    eva_jump: bool,
     /// Screen points (CSS px) along the planning vessel's current orbit with their UT, from the last map
     /// frame: a click near one adds a maneuver node there, as clicking an orbit does in the original.
     orbit_pick: Vec<(f64, f64, f64)>,
@@ -643,6 +646,8 @@ pub fn start() -> Result<(), JsValue> {
         lin_mode: false,
         flight_pam: None,
         translate_sent: (0.0, 0.0, 0.0),
+        eva_run_sent: false,
+        eva_jump: false,
         orbit_pick: Vec::new(),
         mnv_dirs: [(0.0, 0.0); 6],
         mnv_drag: None,
@@ -3175,9 +3180,13 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                         true
                     }
                     "Space" => {
-                        // On EVA Space is the jetpack (held, flight_keys_tick); a Kerbal has nothing to stage.
-                        if !ev.repeat() && !app.flying_eva() {
-                            app.flight_stage();
+                        // On EVA Space jumps or fires the jetpack (flight_keys_tick); a Kerbal has nothing to stage.
+                        if !ev.repeat() {
+                            if app.flying_eva() {
+                                app.eva_jump = true;
+                            } else {
+                                app.flight_stage();
+                            }
                         }
                         true
                     }
@@ -6457,21 +6466,71 @@ impl App {
             .is_some_and(|f| f.eva)
     }
 
-    /// A Kerbal on EVA, as the original's EVA keys: W walks ahead, S backs up, A/D turn, Q/E step sideways,
-    /// Space fires the jetpack straight up. The server walks a Kerbal with throttle and a level heading, and
-    /// flies the jetpack when the attitude points steeply up.
+    /// A Kerbal on EVA, as the original's EVA keys (protocol 33). On the ground W walks ahead, S backs up,
+    /// A/D turn, Q/E step sideways, Shift runs and Space jumps. In the air the jetpack: Shift or Space up,
+    /// Ctrl down, W/S and Q/E push ahead, back and sideways. The server walks a Kerbal with throttle and a
+    /// level heading; the pack takes `Translate` (y up along the Kerbal, z its front, x its right).
     fn eva_keys_tick(&mut self, now: f64, dt: f64) {
         let k = &self.keys;
-        let (walk, strafe, turn, jet) = (-k.pitch(), k.roll(), k.yaw(), k.is("Space"));
+        let (walk, strafe, turn) = (-k.pitch(), k.roll(), k.yaw());
+        let shift = k.is("ShiftLeft") || k.is("ShiftRight");
+        let ctrl = k.is("ControlLeft") || k.is("ControlRight");
+        let space = k.is("Space");
+        let Some(vessel) = self.flying else { return };
+        let landed = self
+            .scene
+            .as_ref()
+            .and_then(|s| s.vessel(vessel))
+            .and_then(|v| v.flight.as_ref())
+            .is_some_and(|f| matches!(f.situation, ose_net::FlightSituation::Landed));
         let heading = match self.attitude {
             ose_net::AttitudeMode::PitchHeading { heading_deg, .. } => heading_deg,
             _ => self.facing_pitch_heading().map(|(_, h)| h).unwrap_or(90.0),
         };
         let heading = (heading + turn * 90.0 * dt).rem_euclid(360.0);
-        // The walk direction relative to the Kerbal's own heading: ahead, back, to either side or between.
-        let moving = walk != 0.0 || strafe != 0.0;
-        let (pitch_deg, heading_deg, throttle) = if jet {
-            (85.0, heading, 1.0)
+        // Run and jump: run held while Shift is down on the ground, a jump on each new Space press there.
+        let run = landed && shift;
+        // A press is caught on key down, so a tap shorter than a frame still jumps.
+        let jump = landed && std::mem::take(&mut self.eva_jump);
+        if run != self.eva_run_sent || jump {
+            self.eva_run_sent = run;
+            if let Some(ws) = &self.ws {
+                send(ws, &ClientMessage::EvaControls { vessel, run, jump });
+            }
+        }
+        // The jetpack in the air.
+        let translate = if landed {
+            (0.0, 0.0, 0.0)
+        } else {
+            let up = f32::from(shift || space) - f32::from(ctrl);
+            (strafe as f32, up, walk as f32)
+        };
+        if translate != self.translate_sent {
+            self.translate_sent = translate;
+            if let Some(ws) = &self.ws {
+                send(
+                    ws,
+                    &ClientMessage::Translate {
+                        vessel,
+                        x: translate.0,
+                        y: translate.1,
+                        z: translate.2,
+                    },
+                );
+            }
+        }
+        // Walking: the direction relative to the Kerbal's own heading (ahead, back, either side or between).
+        // Under the pack in the air the Kerbal stands upright and keeps its heading.
+        let moving = landed && (walk != 0.0 || strafe != 0.0);
+        let held_pitch = match self.attitude {
+            ose_net::AttitudeMode::PitchHeading { pitch_deg, .. } => pitch_deg,
+            _ => 0.0,
+        };
+        let (pitch_deg, heading_deg, throttle) = if !landed && translate != (0.0, 0.0, 0.0) {
+            (85.0, heading, 0.0)
+        } else if !landed {
+            // A hop or a coast: hold the pose it has.
+            (held_pitch, heading, 0.0)
         } else if moving {
             let off = strafe.atan2(walk).to_degrees();
             (
@@ -6488,15 +6547,15 @@ impl App {
             // the Kerbal's own.
             heading_deg,
         };
-        if moving && !jet {
-            self.attitude = ose_net::AttitudeMode::PitchHeading {
+        self.attitude = if moving {
+            ose_net::AttitudeMode::PitchHeading {
                 pitch_deg: 0.0,
                 heading_deg: heading,
-            };
+            }
         } else {
-            self.attitude = attitude;
-        }
-        let changed = throttle != self.throttle || turn != 0.0 || jet || moving;
+            attitude
+        };
+        let changed = throttle != self.throttle || turn != 0.0 || moving;
         if changed || self.controls_dirty {
             self.throttle = throttle;
             self.controls_dirty = true;
@@ -6504,7 +6563,7 @@ impl App {
         if self.controls_dirty && now - self.controls_sent_ms >= 100.0 {
             self.controls_dirty = false;
             self.controls_sent_ms = now;
-            if let (Some(vessel), Some(ws)) = (self.flying, &self.ws) {
+            if let Some(ws) = &self.ws {
                 send(
                     ws,
                     &ClientMessage::SetControls {
