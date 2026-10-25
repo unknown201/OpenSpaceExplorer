@@ -248,6 +248,13 @@ struct App {
     /// target (true) or away from it (false), held by resending a fixed direction.
     target: Option<u64>,
     speed_target: bool,
+    /// Altimeter in terrain mode (height above the ground below) instead of sea level.
+    alt_terrain: bool,
+    /// Warp to a moment (UT) with a name for the toast, stepping the warp down on the way; the UT of the
+    /// apoapsis and periapsis markers from the last map frame, for clicks on them.
+    warp_to: Option<(f64, String)>,
+    warp_to_sent_ms: f64,
+    apsis_ut: [f64; 2],
     sas_target: Option<bool>,
     sas_target_sent_ms: f64,
     toasts: hud::Toasts,
@@ -528,6 +535,10 @@ pub fn start() -> Result<(), JsValue> {
         brakes_latched: false,
         target: None,
         speed_target: false,
+        alt_terrain: false,
+        warp_to: None,
+        warp_to_sent_ms: 0.0,
+        apsis_ut: [f64::NAN; 2],
         sas_target: None,
         sas_target_sent_ms: 0.0,
         toasts: hud::Toasts::default(),
@@ -1279,6 +1290,13 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
             cb.forget();
         }
     }
+    wire(
+        "fh-alt-mode",
+        Box::new(|a| {
+            let mut app = a.borrow_mut();
+            app.alt_terrain = !app.alt_terrain;
+        }),
+    )?;
     wire(
         "fh-missions-btn",
         Box::new(|a| {
@@ -2611,7 +2629,10 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                 }
             }
             match code.as_str() {
-                "Slash" if app.in_session => app.request_warp(1),
+                "Slash" if app.in_session => {
+                    app.warp_to = None;
+                    app.request_warp(1);
+                }
                 "F2" => {
                     ev.prevent_default();
                     if let Some(b) = app.doc.body() {
@@ -2655,10 +2676,12 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                     }
                 }
                 "." | ">" => {
+                    app.warp_to = None;
                     let w = kerbin_time::next_warp(app.time.warp);
                     app.request_warp(w);
                 }
                 "," | "<" => {
+                    app.warp_to = None;
                     let w = kerbin_time::prev_warp(app.time.warp);
                     app.request_warp(w);
                 }
@@ -2707,6 +2730,29 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
     if let Some(btn) = doc.get_element_by_id("add-node") {
         let a = app.clone();
         let cb = Closure::<dyn FnMut()>::new(move || a.borrow_mut().add_node());
+        btn.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
+    if let Some(btn) = doc.get_element_by_id("node-warp") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut()>::new(move || {
+            let mut app = a.borrow_mut();
+            // To a little before the burn should start (half its length before the node), as the original.
+            let Some(n) = app.node else { return };
+            let burn = app
+                .scene
+                .as_ref()
+                .and_then(|s| s.vessel(n.vessel))
+                .and_then(|v| v.flight.as_ref())
+                .filter(|f| f.throttle > 0.01)
+                .map(|f| {
+                    let dv = (n.prograde_mps.powi(2) + n.normal_mps.powi(2) + n.radial_mps.powi(2))
+                        .sqrt();
+                    dv * f.mass_t / (f.thrust_kn / f.throttle).max(1e-6)
+                })
+                .unwrap_or(0.0);
+            app.start_warp_to(n.ut - burn * 0.5 - 15.0, "the maneuver");
+        });
         btn.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
         cb.forget();
     }
@@ -5402,6 +5448,39 @@ impl App {
         }
     }
 
+    /// Start warping to `ut` (the original's WarpTo on nodes and orbit markers).
+    fn start_warp_to(&mut self, ut: f64, what: &str) {
+        let now = self.time.ut_at(now_ms());
+        if !ut.is_finite() || ut <= now + 10.0 {
+            return;
+        }
+        self.warp_to = Some((ut, what.to_string()));
+        self.warp_to_sent_ms = 0.0;
+        hud::push(&self.doc, &format!("Warping to {what}"), "passive");
+    }
+
+    /// Step the warp toward the warp-to point: as fast as leaves a few seconds, 1x for the last ten.
+    fn warp_to_tick(&mut self, now: f64) {
+        let Some((at, what)) = self.warp_to.clone() else {
+            return;
+        };
+        let ut = self.time.ut_at(now);
+        let remaining = at - ut;
+        if remaining <= 2.0 {
+            self.warp_to = None;
+            if self.time.warp != 1 {
+                self.request_warp(1);
+            }
+            hud::push(&self.doc, &format!("Arrived: {what}"), "triumph");
+            return;
+        }
+        let want = kerbin_time::warp_toward(remaining);
+        if want != self.time.warp && now - self.warp_to_sent_ms > 600.0 {
+            self.warp_to_sent_ms = now;
+            self.request_warp(want);
+        }
+    }
+
     /// The direction from the flown vessel to the target (star frame, unit), if both exist.
     fn target_dir(&self) -> Option<ose_math::DVec3> {
         let scene = self.scene.as_ref()?;
@@ -5632,6 +5711,18 @@ impl App {
                 brakes_latched: self.brakes_latched,
             },
         );
+        // Altimeter mode: sea level (the readout above) or terrain, from the planet map the ground is drawn from.
+        #[cfg(target_arch = "wasm32")]
+        let agl = self.flight3d.agl_m;
+        #[cfg(not(target_arch = "wasm32"))]
+        let agl: Option<f64> = None;
+        match (self.alt_terrain, agl) {
+            (true, Some(h)) => {
+                set_text(&self.doc, "fh-alt-mode", "TERRAIN");
+                set_text(&self.doc, "fh-altitude", &hud::fmt_dist(h.max(0.0)));
+            }
+            _ => set_text(&self.doc, "fh-alt-mode", "SEA LEVEL"),
+        }
         // Target: distance and closing speed, the TARGET speed mode, and the SAS target buttons.
         let tgt = self.target.and_then(|t| scene.vessel(t));
         if self.target.is_some() && tgt.is_none() {
@@ -6017,6 +6108,18 @@ impl App {
                 pitch_deg,
                 heading_deg,
             } => format!("pitch {pitch_deg:.0}\u{b0} hdg {heading_deg:.0}\u{b0}"),
+            ose_net::AttitudeMode::Fixed(_) => match self.sas_target {
+                Some(true) => "Target".to_string(),
+                Some(false) => "Anti-target".to_string(),
+                None => "Holding a direction".to_string(),
+            },
+            ose_net::AttitudeMode::SurfacePrograde => "Prograde (surface)".to_string(),
+            ose_net::AttitudeMode::SurfaceRetrograde => "Retrograde (surface)".to_string(),
+            ose_net::AttitudeMode::OrbitPrograde => "Prograde (orbit)".to_string(),
+            ose_net::AttitudeMode::OrbitRetrograde => "Retrograde (orbit)".to_string(),
+            ose_net::AttitudeMode::AntiNormal => "Anti-normal".to_string(),
+            ose_net::AttitudeMode::RadialOut => "Radial out".to_string(),
+            ose_net::AttitudeMode::RadialIn => "Radial in".to_string(),
             other => format!("{other:?}"),
         };
         set_text(&self.doc, "fh-attitude", &att);
@@ -6723,6 +6826,7 @@ impl App {
         self.update_flight_instruments();
         self.toasts.watch(&self.doc, "fh-note", "alert");
         self.flight_keys_tick(now);
+        self.warp_to_tick(now);
         self.sas_target_tick(now);
         if self.in_session && self.vab_active() {
             self.vab_report_tick(now);
@@ -6967,6 +7071,7 @@ impl App {
         let Some(v) = scene.vessel(id) else {
             return false;
         };
+        let target_dir = self.target_dir().map(|d| glam::DVec3::new(d.x, d.y, d.z));
         let Some(gpu) = self.gpu.as_mut() else {
             return false;
         };
@@ -7030,6 +7135,7 @@ impl App {
                 .as_ref()
                 .filter(|n| n.vessel == id)
                 .map(|n| (n.prograde_mps, n.normal_mps, n.radial_mps)),
+            target: target_dir,
             now_ms: now_ms(),
             others: &others,
             star_radius,
@@ -7455,6 +7561,7 @@ impl App {
                     e.set_id(id);
                     e.set_class_name("apsis");
                     e.set_attribute("data-ose", id).ok();
+                    e.set_attribute("title", "Click to warp here").ok();
                     self.labels.append_child(&e).ok();
                     e
                 }
@@ -7484,6 +7591,7 @@ impl App {
             let style = el.style();
             match at {
                 Some(((x, y), alt, t)) => {
+                    self.apsis_ut[usize::from(id == "map-pe")] = ut + t;
                     style.set_property("left", &format!("{x:.1}px")).ok();
                     style.set_property("top", &format!("{y:.1}px")).ok();
                     style.set_property("visibility", "visible").ok();
@@ -7742,6 +7850,24 @@ fn install_focus_clicks(app: &Shared, target: &Element) -> Result<(), JsValue> {
     });
     target.add_event_listener_with_callback("click", on_click.as_ref().unchecked_ref())?;
     on_click.forget();
+    let a = app.clone();
+    let on_apsis = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+        let id = ev
+            .target()
+            .and_then(|t| t.dyn_into::<Element>().ok())
+            .map(|e| e.id())
+            .unwrap_or_default();
+        let k = match id.as_str() {
+            "map-ap" => 0,
+            "map-pe" => 1,
+            _ => return,
+        };
+        let mut app = a.borrow_mut();
+        let ut = app.apsis_ut[k];
+        app.start_warp_to(ut, if k == 0 { "apoapsis" } else { "periapsis" });
+    });
+    target.add_event_listener_with_callback("click", on_apsis.as_ref().unchecked_ref())?;
+    on_apsis.forget();
     let a = app.clone();
     let on_menu = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
         if let Some(id) = App::vessel_click_target(&ev) {

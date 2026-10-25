@@ -68,8 +68,10 @@ struct Surface {
     foam: vec4<f32>,
     // caustics: strength, max visible depth (m), tiling (m), animation speed
     caustics: vec4<f32>,
-    // cloud layer top (m), wind speed (m/s), 0, 0
+    // cloud layer top (m), wind speed (m/s), flow speed, flow strength
     clouds2: vec4<f32>,
+    // polar caps: has albedo caps, has cloud caps, cap radius (rad)
+    poles: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> frame: Frame;
@@ -93,6 +95,9 @@ struct Surface {
 @group(2) @binding(7) var wrap_samp: sampler;
 @group(2) @binding(8) var equi_samp: sampler;
 @group(2) @binding(9) var foam_tex: texture_2d<f32>;
+// Polar caps of the albedo and cloud maps (tools/export_poles.py): north left, south right.
+@group(2) @binding(10) var pole_albedo_tex: texture_2d<f32>;
+@group(2) @binding(11) var pole_clouds_tex: texture_2d<f32>;
 
 const PI: f32 = 3.14159265;
 const TRANSMITTANCE_W: f32 = 1024.0;
@@ -358,7 +363,7 @@ fn cloud_shadow(model: vec3<f32>, sun: vec3<f32>) -> f32 {
     let b = dot(model, sun);
     let t = -b + sqrt(max(b * b - r * r + r_cloud * r_cloud, 0.0));
     let hit = normalize(model + sun * t);
-    let c = textureSampleLevel(clouds_tex, equi_samp, equi_uv(hit), 3.0);
+    let c = textureSampleLevel(clouds_tex, equi_samp, equi_uv(hit), 4.0);
     let cover = clamp(c.a * surface.clouds.y, 0.0, 1.0);
     return 1.0 - 0.75 * cover;
 }
@@ -583,6 +588,48 @@ fn equi_grad(uv: vec2<f32>) -> EquiGrad {
     return g;
 }
 
+// Where a direction falls on the polar caps (azimuthal equidistant around each pole, the same azimuth as
+// `equi_uv`), and how much the cap replaces the equirect map there (fully inside 55 % of the cap radius).
+struct PoleUv { uv: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>, w: f32 };
+
+fn pole_uv(up: vec3<f32>) -> PoleUv {
+    var o: PoleUv;
+    let cap = max(surface.poles.z, 0.01);
+    let colat = acos(clamp(abs(up.y), 0.0, 1.0));
+    let h = vec2<f32>(up.x, -up.z);
+    let r = colat / cap;
+    let c = 0.5 + 0.5 * h / max(length(h), 1e-6) * min(r, 1.0);
+    o.uv = vec2<f32>(c.x * 0.5 + select(0.5, 0.0, up.y >= 0.0), c.y);
+    o.dx = dpdx(o.uv);
+    o.dy = dpdy(o.uv);
+    o.w = 1.0 - smoothstep(0.55, 0.8, r);
+    return o;
+}
+
+// Cubic B-spline filtering from four bilinear taps (the baked cloud coverage is noisy at texel scale; plain
+// bilinear magnification of it shows soft squares from orbit).
+fn sample_bicubic(t: texture_2d<f32>, uv: vec2<f32>, g: EquiGrad) -> vec4<f32> {
+    let size = vec2<f32>(textureDimensions(t, 0));
+    let st = uv * size - 0.5;
+    let i = floor(st);
+    let f = st - i;
+    let f2 = f * f;
+    let f3 = f2 * f;
+    let w0 = (1.0 - 3.0 * f + 3.0 * f2 - f3) / 6.0;
+    let w1 = (4.0 - 6.0 * f2 + 3.0 * f3) / 6.0;
+    let w2 = (1.0 + 3.0 * f + 3.0 * f2 - 3.0 * f3) / 6.0;
+    let w3 = f3 / 6.0;
+    let s0 = w0 + w1;
+    let s1 = w2 + w3;
+    let o0 = (i - 1.0 + w1 / s0 + 0.5) / size;
+    let o1 = (i + 1.0 + w3 / s1 + 0.5) / size;
+    let a = textureSampleGrad(t, equi_samp, vec2<f32>(o0.x, o0.y), g.dx, g.dy);
+    let b = textureSampleGrad(t, equi_samp, vec2<f32>(o1.x, o0.y), g.dx, g.dy);
+    let c = textureSampleGrad(t, equi_samp, vec2<f32>(o0.x, o1.y), g.dx, g.dy);
+    let d = textureSampleGrad(t, equi_samp, vec2<f32>(o1.x, o1.y), g.dx, g.dy);
+    return mix(mix(a, b, s1.x / (s0.x + s1.x)), mix(c, d, s1.x / (s0.x + s1.x)), s1.y / (s0.y + s1.y));
+}
+
 fn sample_equi(t: texture_2d<f32>, uv: vec2<f32>, g: EquiGrad) -> vec4<f32> {
     return textureSampleGrad(t, equi_samp, uv, g.dx, g.dy);
 }
@@ -655,9 +702,13 @@ fn fs_terrain(in: VOut) -> @location(0) vec4<f32> {
     let dpx = dpdx(in.tile);
     let dpy = dpdy(in.tile);
     let dist = length(in.rel);
+    let pu = pole_uv(up);
     var albedo = sample_equi(albedo_tex, uv, eg).rgb;
     if surface.clouds2.z > 0.0 {
         albedo = flowed_albedo(uv, eg, up.y);
+    }
+    if surface.poles.x > 0.5 && pu.w > 0.0 {
+        albedo = mix(albedo, textureSampleGrad(pole_albedo_tex, equi_samp, pu.uv, pu.dx, pu.dy).rgb, pu.w);
     }
 
     // The scaled normal map (far): perturb in the east/north/up frame.
@@ -939,7 +990,12 @@ fn vnoise(p: vec3<f32>, cells: i32) -> f32 {
 fn fs_clouds(in: VOut) -> @location(0) vec4<f32> {
     let up = normalize(in.model);
     let uv = equi_uv(up);
-    let c = sample_equi(clouds_tex, uv, equi_grad(uv));
+    let eg = equi_grad(uv);
+    let pu = pole_uv(up);
+    var c = sample_bicubic(clouds_tex, uv, eg);
+    if surface.poles.y > 0.5 && pu.w > 0.0 {
+        c = mix(c, textureSampleGrad(pole_clouds_tex, equi_samp, pu.uv, pu.dx, pu.dy), pu.w);
+    }
     let base = clamp(c.a * surface.clouds.y, 0.0, 1.0);
     if base < 0.01 {
         discard;
@@ -1222,7 +1278,7 @@ fn vc_density(p: vec3<f32>, base_r: f32, top_r: f32, t: f32, detail: bool) -> f3
     // wind: the coverage drifts east
     let drift = vec3<f32>(-up.z, 0.0, up.x) * (t * surface.clouds2.y);
     let uv = equi_uv(normalize(p + drift));
-    let cover = textureSampleLevel(clouds_tex, equi_samp, uv, 1.0).a * surface.clouds.y;
+    let cover = textureSampleLevel(clouds_tex, equi_samp, uv, 2.0).a * surface.clouds.y;
     if cover < 0.04 {
         return 0.0;
     }

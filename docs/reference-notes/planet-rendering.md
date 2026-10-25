@@ -145,4 +145,8 @@ Jool: `jool_scaled` has `_FlowmapSpeed1` 0.22 and `_FlowmapStrength1` 0.25 but n
 bands drift here by alternating zonal jets by latitude (two cross-faded phases), exported as `surface.flow`.
 Its north and south pole textures are the main map again, so no pole blend is needed.
 
-Not yet: the equirect maps still pinch at the poles (a starburst seen from straight above).
+Poles: the equirect albedo and cloud maps pinch into a starburst at the poles; `tools/export_poles.py` writes
+azimuthal caps (30 deg around each pole, rows box-filtered by latitude first) that the client blends in inside
+about 20 deg of each pole. Clouds: the baked cubemaps (Kerbin and Laythe 6 x 2048², Eve and Duna 1024²) are
+unwrapped bilinearly to 4096 x 2048 (nearest sampling had aliased the noisy coverage into speckle), alpha only,
+and the shell samples them with a cubic B-spline so they stay soft when magnified from low orbit.

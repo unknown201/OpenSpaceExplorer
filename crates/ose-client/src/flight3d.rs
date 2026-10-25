@@ -328,6 +328,8 @@ pub struct FlightView {
     deployments: HashMap<(u64, usize), crate::animation::Deployment>,
     /// Craft axes and local horizon of the last frame, for the navball.
     pub nav: Option<crate::navball::NavFrame>,
+    /// Height above the ground under the vessel (the altimeter's terrain mode), once the body's map is loaded.
+    pub agl_m: Option<f64>,
     /// Terrain, ocean, sky and clouds of the body (planet.rs), created with the first frame.
     planet: Option<crate::planet::PlanetRenderer>,
     fx_nozzles: std::rc::Rc<std::cell::RefCell<HashMap<String, Vec<Nozzle>>>>,
@@ -364,6 +366,8 @@ pub struct FlightInput<'a> {
     pub is_decoupler: &'a dyn Fn(&str) -> bool,
     /// Planned maneuver for this vessel: prograde, normal and radial delta-v, m/s.
     pub maneuver: Option<(f64, f64, f64)>,
+    /// Direction to the target vessel in the body's inertial frame, for the navball's target markers.
+    pub target: Option<DVec3>,
     /// Body spin from the server's `BodyRotation` (protocol 9); the embedded system file otherwise.
     pub spin: Option<Spin>,
     /// Wall clock, ms (flex interpolation).
@@ -396,6 +400,7 @@ impl FlightView {
             walk_phase: 0.0,
             deployments: HashMap::new(),
             nav: None,
+            agl_m: None,
             planet: None,
             fx_nozzles: Default::default(),
             fx_requested: false,
@@ -589,6 +594,11 @@ impl FlightView {
         let v_rel = inp.vessel_vel - inp.body_vel;
         let pos = to_model(r, spin, inp.ut);
         let up = pos.normalize_or_zero();
+        self.agl_m = self
+            .planet
+            .as_ref()
+            .and_then(|p| p.ground_m(inp.body_id, up))
+            .map(|g| r.length() - inp.body_radius - g);
         let att = inp
             .vessel
             .flight
@@ -642,7 +652,9 @@ impl FlightView {
             let moving = v_nav.length() > 0.5;
             let normal_i = r.cross(v_rel);
             let radial_i = r - v_rel.normalize_or_zero() * r.dot(v_rel.normalize_or_zero());
+            let target = inp.target.map(|d| dir_to_model(r, d, spin, inp.ut));
             self.nav = Some(crate::navball::NavFrame {
+                target,
                 forward,
                 top,
                 right: forward.cross(top),
