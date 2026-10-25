@@ -97,6 +97,38 @@ impl Spin {
     }
 }
 
+/// What stands in for a vessel the flight view has no craft for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stand {
+    Craft,
+    Kerbal,
+    Flag,
+}
+
+impl Stand {
+    /// A Kerbal on EVA reads `eva` in its flight readout; a planted flag is named "<agency> flag".
+    pub fn of(v: &ose_net::VesselState) -> Stand {
+        if v.flight.as_ref().is_some_and(|f| f.eva) {
+            Stand::Kerbal
+        } else if v.name.ends_with(" flag") {
+            Stand::Flag
+        } else {
+            Stand::Craft
+        }
+    }
+
+    fn model(self) -> (&'static str, &'static str) {
+        match self {
+            Stand::Kerbal => ("fx:kerbal", "assets/fx/kerbal.glb"),
+            Stand::Flag => ("fx:flag", "assets/fx/flag.glb"),
+            Stand::Craft => (
+                "part:probe_0v_octagonal_electricity_1x1",
+                "assets/parts/probe_0v_octagonal_electricity_1x1.glb",
+            ),
+        }
+    }
+}
+
 /// Open canopy diameter for a chute part, m: the Mk16-XL main, the radial Mk16-R and the drogue.
 fn canopy_diameter(part_id: &str) -> f64 {
     match part_id {
@@ -291,8 +323,10 @@ pub struct FlightInput<'a> {
     pub vessel: &'a VesselState,
     /// Vessel and body star-space positions, body star-space velocity, at `ut`.
     pub vessel_pos: DVec3,
-    /// Other vessels' star-space positions, drawn when they are near (a probe core stands in for each).
-    pub nearby_vessels: &'a [DVec3],
+    /// Other vessels' star-space positions and what they are, drawn when they are near.
+    pub nearby_vessels: &'a [(DVec3, Stand)],
+    /// What the flown vessel is when it has no craft: a Kerbal on EVA, a flag, or an unknown craft.
+    pub stand: Stand,
     pub vessel_vel: DVec3,
     pub body_pos: DVec3,
     pub body_vel: DVec3,
@@ -880,35 +914,35 @@ impl FlightView {
                 }
             }
         } else {
-            // Unknown craft (launched from another browser): a probe core as a stand-in.
-            let name = "part:probe_0v_octagonal_electricity_1x1".to_string();
-            gpu.request_model(&name, "assets/parts/probe_0v_octagonal_electricity_1x1.glb");
-            if gpu.has_model(&name) {
-                let mut it = DrawItem::lit(name, pos - cam, vessel_rot, 1.0, sun);
+            // No craft document: a Kerbal on EVA, a flag, or a craft launched elsewhere (a probe core).
+            let (name, file) = inp.stand.model();
+            gpu.request_model(name, file);
+            if gpu.has_model(name) {
+                // Kerbals and flags stand up from the ground; a stand-in probe keeps the vessel's attitude.
+                let rot = match inp.stand {
+                    Stand::Craft => vessel_rot,
+                    _ => DQuat::from_rotation_arc(DVec3::Y, up),
+                };
+                let mut it = DrawItem::lit(name.to_string(), pos - cam, rot, 1.0, sun);
                 it.ambient = part_ambient;
+                it.sun = sun_share;
                 items.push(it);
             }
         }
         // Other vessels within a few kilometres, as the original loads crafts around the active one.
-        let stand_in = "part:probe_0v_octagonal_electricity_1x1".to_string();
-        let near: Vec<DVec3> = inp
-            .nearby_vessels
-            .iter()
-            .map(|o| to_model(*o - inp.body_pos, spin, inp.ut))
-            .filter(|p| (*p - pos).length() < 5_000.0)
-            .collect();
-        if !near.is_empty() {
-            gpu.request_model(
-                &stand_in,
-                "assets/parts/probe_0v_octagonal_electricity_1x1.glb",
-            );
-            if gpu.has_model(&stand_in) {
-                for p in near {
-                    let mut it =
-                        DrawItem::lit(stand_in.clone(), p - cam, DQuat::IDENTITY, 1.0, sun);
-                    it.ambient = part_ambient;
-                    items.push(it);
-                }
+        for (o, stand) in inp.nearby_vessels {
+            let p = to_model(*o - inp.body_pos, spin, inp.ut);
+            if (p - pos).length() > 5_000.0 {
+                continue;
+            }
+            let (name, file) = stand.model();
+            gpu.request_model(name, file);
+            if gpu.has_model(name) {
+                let rot = DQuat::from_rotation_arc(DVec3::Y, p.normalize_or_zero());
+                let mut it = DrawItem::lit(name.to_string(), p - cam, rot, 1.0, sun);
+                it.ambient = part_ambient;
+                it.sun = sun_share;
+                items.push(it);
             }
         }
         items.append(&mut flames);

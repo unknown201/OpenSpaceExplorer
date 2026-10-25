@@ -50,6 +50,7 @@ export const STEP_NAMES = [
   "missions",
   "campaign_cycle",
   "vab_rocket",
+  "eva",
 ] as const;
 export type StepName = (typeof STEP_NAMES)[number];
 
@@ -737,13 +738,91 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
       if (!(after > before + 20 && situation === "Flying")) {
         return failed(`${picked.join(" + ")} did not lift off after Z and Space (${before.toFixed(0)} m -> ${after.toFixed(0)} m, ${situation}; ${(await page.locator("#fh-twr").textContent()) ?? ""})`);
       }
-      // Leave the server's own campaign live again, as a later run (the other browser) expects to find it.
-      await page.keyboard.press("Escape");
-      await page.locator('[data-ose="to-sessions"]').first().click();
-      const shared = page.locator('[data-ose="session"]', { hasText: "Shared campaign" });
-      if (await shared.count()) await shared.first().locator('[data-ose="session-join"]').click();
-      await sleep(1500);
       return passed(`${picked.join(" + ")}: ${before.toFixed(0)} m -> ${after.toFixed(0)} m, ${situation}`);
+    }),
+  );
+
+  // 18. A Kerbal on EVA (protocol 15): back at the KSC, a Mk1 pod with a parachute on the pad, EVA, plant the
+  // flag, board again. Then the server's own campaign is made live again for the next run.
+  results.push(
+    await timed("eva", async () => {
+      if (!pageUp) return notLoaded;
+      const restore = async () => {
+        if (!(await page.locator('[data-ose="menu"]').first().isVisible())) await page.keyboard.press("Escape");
+        if (await page.locator('[data-ose="to-sessions"]').first().isVisible()) await page.locator('[data-ose="to-sessions"]').first().click();
+        else if (await page.locator('[data-ose="ksc-sessions"]').first().isVisible()) await page.locator('[data-ose="ksc-sessions"]').first().click();
+        const shared = page.locator('[data-ose="session"]', { hasText: "Shared campaign" });
+        try {
+          await shared.first().waitFor({ timeout: 5_000 });
+          await shared.first().locator('[data-ose="session-join"]').click();
+        } catch {
+          /* no shared campaign on this server */
+        }
+        await sleep(1500);
+      };
+      if (!(await page.locator('[data-ose="menu"]').first().isVisible())) await page.keyboard.press("Escape");
+      const toKsc = page.locator('[data-ose="to-ksc"]');
+      if (await toKsc.first().isVisible()) await toKsc.first().click();
+      if (!(await page.locator('[data-ose="ksc-vab"]').first().isVisible())) {
+        await restore();
+        return skipped("not on the KSC screen");
+      }
+      await page.locator('[data-ose="ksc-vab"]').first().click();
+      await page.locator('[data-ose="vab-clear"]').first().click();
+      for (const q of ["Tin Can", "Mk16-XL"]) {
+        await page.fill('[data-ose="vab-search"]', q);
+        await page.locator('[data-ose="vab-part"]').first().click();
+      }
+      await page.fill('[data-ose="vab-search"]', "");
+      await page.fill('[data-ose="vab-name"]', "e2e capsule");
+      await page.locator('[data-ose="vab-launch"]').first().click();
+      const hud = page.locator('[data-ose="flight"]');
+      try {
+        await page.locator('[data-ose="flight"].open').first().waitFor({ timeout: 10_000 });
+      } catch {
+        await restore();
+        return failed("the capsule did not roll out to the pad");
+      }
+      const craftVessel = await hud.first().getAttribute("data-ose-vessel");
+      const eva = page.locator('[data-ose="flight-eva"]');
+      try {
+        await eva.first().waitFor({ state: "visible", timeout: 8_000 });
+      } catch {
+        await restore();
+        return failed("no EVA button for a crewed pod on the pad");
+      }
+      await eva.first().click();
+      const kerbalVessel = async () => (await hud.first().getAttribute("data-ose-vessel")) ?? "";
+      const t0 = Date.now();
+      while ((await kerbalVessel()) === craftVessel && Date.now() - t0 < 8_000) await sleep(200);
+      if ((await kerbalVessel()) === craftVessel) {
+        const why = (await page.locator("#fh-note").textContent()) ?? "";
+        await restore();
+        return failed(`EVA did not hand the view to a Kerbal (${why})`);
+      }
+      const flag = page.locator('[data-ose="flight-flag"]');
+      try {
+        await flag.first().waitFor({ state: "visible", timeout: 8_000 });
+      } catch {
+        await restore();
+        return failed("no Plant flag button for a Kerbal standing on the pad");
+      }
+      await flag.first().click();
+      try {
+        await page.locator("#fh-note").filter({ hasText: "flag planted" }).waitFor({ state: "attached", timeout: 5_000 });
+      } catch {
+        const why = (await page.locator("#fh-note").textContent()) ?? "";
+        await restore();
+        return failed(`planting the flag: ${why}`);
+      }
+      await page.locator('[data-ose="flight-board"]').first().click();
+      const t1 = Date.now();
+      while ((await kerbalVessel()) !== craftVessel && Date.now() - t1 < 8_000) await sleep(200);
+      const boarded = (await kerbalVessel()) === craftVessel;
+      const why = (await page.locator("#fh-note").textContent()) ?? "";
+      await restore();
+      if (!boarded) return failed(`boarding the capsule again: ${why}`);
+      return passed("EVA, flag planted, boarded the capsule again");
     }),
   );
 

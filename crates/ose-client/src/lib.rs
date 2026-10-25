@@ -183,6 +183,10 @@ struct App {
     campaign_id: String,
     /// The library craft the flown vessel was launched from, to fill `flight_craft` when its document arrives.
     flight_craft_id: Option<u64>,
+    /// The craft a Kerbal asked to board, flown once the server accepts.
+    board_target: std::cell::Cell<Option<u64>>,
+    /// The crew action awaiting its CrewAck (the HUD button's id).
+    crew_pending: std::cell::Cell<Option<&'static str>>,
     /// The vehicle selected on the launch pad.
     lp_selected: Option<u64>,
     /// The Tracking Station: open, the selected vessel, the "mine only" filter and the last list refresh (ms).
@@ -446,6 +450,8 @@ pub fn start() -> Result<(), JsValue> {
         lp_selected: None,
         campaign_id: String::new(),
         flight_craft_id: None,
+        board_target: std::cell::Cell::new(None),
+        crew_pending: std::cell::Cell::new(None),
         tracking_open: false,
         ts_selected: None,
         ts_mine_only: false,
@@ -1213,6 +1219,9 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         cb.forget();
     }
     wire("fh-science", Box::new(|a| a.borrow().flight_science(0)))?;
+    for id in ["fh-eva", "fh-board", "fh-flag", "fh-undock"] {
+        wire(id, Box::new(move |a| a.borrow().crew_action(id)))?;
+    }
     wire("fh-transmit", Box::new(|a| a.borrow().flight_science(1)))?;
     wire("fh-recover", Box::new(|a| a.borrow().flight_science(2)))?;
     wire("rnd-back", Box::new(|a| a.borrow().open_ksc()))?;
@@ -2763,6 +2772,62 @@ impl App {
                 };
                 set_text(&self.doc, "rd-note", &msg);
             }
+            ServerMessage::CrewAck {
+                vessel,
+                accepted,
+                reason,
+                new_vessel,
+            } => {
+                if !accepted {
+                    set_text(
+                        &self.doc,
+                        "fh-note",
+                        &reason.unwrap_or_else(|| "refused".into()),
+                    );
+                } else {
+                    match (self.crew_pending.take(), new_vessel) {
+                        // Out of the hatch: fly the Kerbal.
+                        (Some("fh-eva"), Some(nv)) => {
+                            set_text(&self.doc, "fh-note", "");
+                            self.start_flight(nv, None);
+                        }
+                        (Some("fh-flag"), _) => set_text(&self.doc, "fh-note", "flag planted"),
+                        // Boarded: fly the craft the Kerbal climbed into.
+                        (Some("fh-board"), _) if self.flying == Some(vessel) => {
+                            if let Some(target) = self.board_target.take() {
+                                let craft = stored(&self.craft_link_key(target))
+                                    .and_then(|s| s.parse::<u64>().ok());
+                                self.start_flight(target, craft);
+                                set_text(&self.doc, "fh-note", "boarded");
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            ServerMessage::Docked { vessel, absorbed } => {
+                if self.flying == Some(absorbed) {
+                    let craft =
+                        stored(&self.craft_link_key(vessel)).and_then(|s| s.parse::<u64>().ok());
+                    self.start_flight(vessel, craft);
+                }
+                if self.flying == Some(vessel) {
+                    set_text(&self.doc, "fh-note", "docked");
+                    self.audio.play("decouple");
+                }
+            }
+            ServerMessage::Undocked {
+                new_vessel, reason, ..
+            } => {
+                let msg = match (new_vessel, reason) {
+                    (Some(_), _) => "undocked".to_string(),
+                    (None, r) => r.unwrap_or_else(|| "could not undock".into()),
+                };
+                set_text(&self.doc, "fh-note", &msg);
+                if new_vessel.is_some() {
+                    self.audio.play("decouple");
+                }
+            }
             ServerMessage::MissionAck {
                 accepted,
                 reason,
@@ -4307,6 +4372,68 @@ impl App {
         }
     }
 
+    /// Crew actions from the flight HUD: EVA, board the nearest craft, plant a flag, undock.
+    fn crew_action(&self, id: &str) {
+        let Some(vessel) = self.flying else { return };
+        let Some(ws) = &self.ws else { return };
+        let msg = match id {
+            "fh-eva" => ClientMessage::GoEva {
+                vessel,
+                kerbal: None,
+            },
+            "fh-board" => {
+                let Some(target) = self.board_candidate() else {
+                    set_text(&self.doc, "fh-note", "no craft within reach to board");
+                    return;
+                };
+                self.board_target.set(Some(target));
+                ClientMessage::Board { vessel, target }
+            }
+            "fh-flag" => ClientMessage::PlantFlag { vessel },
+            _ => ClientMessage::Undock { vessel, port: None },
+        };
+        self.crew_pending.set(Some(match id {
+            "fh-eva" => "fh-eva",
+            "fh-board" => "fh-board",
+            "fh-flag" => "fh-flag",
+            _ => "fh-undock",
+        }));
+        send(ws, &msg);
+    }
+
+    /// The nearest other vessel (not a Kerbal or a flag) within 10 m of the Kerbal flown.
+    fn board_candidate(&self) -> Option<u64> {
+        let scene = self.scene.as_ref()?;
+        let me = scene.vessel(self.flying?)?;
+        let ut = self.time.ut_at(now_ms());
+        let here = scene.vessel_position(me, ut);
+        scene
+            .vessels
+            .iter()
+            .filter(|v| v.id != me.id && v.reference_body == me.reference_body)
+            .filter(|v| !v.flight.as_ref().is_some_and(|f| f.eva) && !v.name.ends_with(" flag"))
+            .map(|v| (v.id, (scene.vessel_position(v, ut) - here).length()))
+            .filter(|(_, d)| *d < 10.0)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(id, _)| id)
+    }
+
+    /// Show the crew buttons that apply: EVA with crew aboard, Board and Plant Flag for a Kerbal (the flag on
+    /// the ground), Undock while docked.
+    fn update_crew_buttons(&self, f: &ose_net::FlightReadout) {
+        let landed = matches!(f.situation, ose_net::FlightSituation::Landed);
+        for (id, show) in [
+            ("fh-eva", !f.eva && !f.crew.is_empty()),
+            ("fh-board", f.eva),
+            ("fh-flag", f.eva && landed),
+            ("fh-undock", !f.docked.is_empty()),
+        ] {
+            if let Some(el) = self.doc.get_element_by_id(id) {
+                el.class_list().toggle_with_force("hidden", !show).ok();
+            }
+        }
+    }
+
     /// Science from the flight HUD: 0 runs the vessel's experiments, 1 transmits its reports, 2 recovers it.
     fn flight_science(&self, what: u8) {
         let Some(vessel) = self.flying else { return };
@@ -4797,6 +4924,7 @@ impl App {
             &format!("{:+.1} m/s", f.vertical_speed_mps),
         );
         set_text(&self.doc, "fh-situation", &format!("{:?}", f.situation));
+        self.update_crew_buttons(f);
         // Timed experiments counting down from the server's last report.
         let elapsed = (now_ms() - self.running_since_ms) / 1000.0;
         let running: Vec<String> = self
@@ -5697,15 +5825,16 @@ impl App {
         let catalog = &self.catalog;
         let is_dec = |pid: &str| catalog.get(pid).map(|p| p.is_decoupler).unwrap_or(false);
         let is_eng = |pid: &str| catalog.get(pid).map(|p| p.has_engine).unwrap_or(false);
-        let nearby_vessels: Vec<glam::DVec3> = scene
+        let nearby_vessels: Vec<(glam::DVec3, flight3d::Stand)> = scene
             .vessels
             .iter()
             .filter(|o| o.id != id && o.reference_body == v.reference_body)
-            .map(|o| g(scene.vessel_position(o, ut)))
+            .map(|o| (g(scene.vessel_position(o, ut)), flight3d::Stand::of(o)))
             .collect();
         let inp = flight3d::FlightInput {
             vessel: v,
             nearby_vessels: &nearby_vessels,
+            stand: flight3d::Stand::of(v),
             vessel_pos: g(vp),
             vessel_vel: g(vv),
             body_pos: g(bp),

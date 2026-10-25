@@ -6,6 +6,9 @@
     assets/web/fx/canopy.glb  a parachute canopy: a dome 1 m across at its rim (y = 0) rising to y = 0.42, in
                               alternating orange and white gores, double sided; the client hangs it above each
                               open chute, scaled by the chute's size and how far it has opened
+    assets/web/fx/kerbal.glb  a Kerbal on EVA, 1.25 m tall standing on y = 0: white suit, green head, dark visor,
+                              backpack, facing +Z
+    assets/web/fx/flag.glb    a planted flag: a 2.4 m pole on y = 0 and its cloth towards +X
 
     .venv/Scripts/python tools/make_fx.py
 """
@@ -83,6 +86,63 @@ def canopy(gores: int = 12, rings: int = 8):
     return meshes
 
 
+def ellipsoid(c, r, segments: int = 16, rings: int = 10):
+    """An ellipsoid centred at c with radii r = (rx, ry, rz) and outward normals."""
+    pos, nrm, uv, tris = [], [], [], []
+    for k in range(rings + 1):
+        th = math.pi * k / rings
+        for sg in range(segments + 1):
+            ph = 2 * math.pi * sg / segments
+            n = (math.sin(th) * math.cos(ph), math.cos(th), math.sin(th) * math.sin(ph))
+            pos.append((c[0] + r[0] * n[0], c[1] + r[1] * n[1], c[2] + r[2] * n[2]))
+            nrm.append(n)
+            uv.append((sg / segments, k / rings))
+    row = segments + 1
+    for k in range(rings):
+        for sg in range(segments):
+            a = k * row + sg
+            tris += [a, a + 1, a + row, a + 1, a + row + 1, a + row]
+    return pos, nrm, uv, tris
+
+
+def box(lo, hi):
+    """An axis-aligned box (one winding; `solid` adds the other side)."""
+    pos, nrm, uv, tris = [], [], [], []
+    faces = [((1, 0, 0), 0, hi[0]), ((-1, 0, 0), 0, lo[0]), ((0, 1, 0), 1, hi[1]), ((0, -1, 0), 1, lo[1]), ((0, 0, 1), 2, hi[2]), ((0, 0, -1), 2, lo[2])]
+    for n, axis, v in faces:
+        u_ax, w_ax = [a for a in range(3) if a != axis]
+        base = len(pos)
+        for du, dw in ((0, 0), (1, 0), (1, 1), (0, 1)):
+            q = [0.0, 0.0, 0.0]
+            q[axis] = v
+            q[u_ax] = hi[u_ax] if du else lo[u_ax]
+            q[w_ax] = hi[w_ax] if dw else lo[w_ax]
+            pos.append(tuple(q))
+            nrm.append(n)
+            uv.append((du, dw))
+        tris += [base, base + 1, base + 2, base, base + 2, base + 3]
+    return pos, nrm, uv, tris
+
+
+def solid(g, name, rgba, mesh):
+    mat = g.material(name, {})
+    g.materials[mat]["pbrMetallicRoughness"]["baseColorFactor"] = rgba
+    # Both faces: the renderer culls back faces, and these hand-built meshes are not worth winding-proofing.
+    pos, nrm, uv, tris = both_faces(mesh)
+    return g.node(name, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0), (1.0, 1.0, 1.0), g.mesh(name, pos, nrm, uv, tris, mat), [])
+
+
+def both_faces(mesh):
+    pos, nrm, uv, tris = (list(x) for x in mesh)
+    n0, t0 = len(pos), len(tris)
+    pos += pos[:n0]
+    nrm += [(-x, -y, -z) for x, y, z in nrm[:n0]]
+    uv += uv[:n0]
+    for i in range(0, t0, 3):
+        tris += [tris[i] + n0, tris[i + 2] + n0, tris[i + 1] + n0]
+    return pos, nrm, uv, tris
+
+
 def main() -> int:
     out = ROOT / "assets" / "web" / "fx"
     out.mkdir(parents=True, exist_ok=True)
@@ -108,6 +168,25 @@ def main() -> int:
     g.roots.append(g.node("canopy", (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0), (1.0, 1.0, 1.0), None, nodes))
     size = g.write(out / "canopy.glb", {"source": "tools/make_fx.py"})
     print(f"fx/canopy.glb: {size} bytes")
+
+    g = Glb()
+    parts = [
+        solid(g, "suit", [0.9, 0.9, 0.88, 1.0], ellipsoid((0.0, 0.48, 0.0), (0.26, 0.42, 0.22))),
+        solid(g, "boots", [0.25, 0.25, 0.28, 1.0], box((-0.2, 0.0, -0.12), (0.2, 0.12, 0.16))),
+        solid(g, "head", [0.45, 0.78, 0.25, 1.0], ellipsoid((0.0, 1.02, 0.02), (0.24, 0.22, 0.22))),
+        solid(g, "visor", [0.08, 0.1, 0.16, 1.0], ellipsoid((0.0, 1.04, 0.14), (0.17, 0.12, 0.1))),
+        solid(g, "pack", [0.55, 0.57, 0.6, 1.0], box((-0.2, 0.35, -0.36), (0.2, 0.85, -0.16))),
+    ]
+    g.roots.append(g.node("kerbal", (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0), (1.0, 1.0, 1.0), None, parts))
+    print(f"fx/kerbal.glb: {g.write(out / 'kerbal.glb', {'source': 'tools/make_fx.py'})} bytes")
+
+    g = Glb()
+    parts = [
+        solid(g, "pole", [0.7, 0.7, 0.72, 1.0], box((-0.03, 0.0, -0.03), (0.03, 2.4, 0.03))),
+        solid(g, "cloth", [0.95, 0.45, 0.12, 1.0], box((0.03, 1.6, -0.005), (1.23, 2.35, 0.005))),
+    ]
+    g.roots.append(g.node("flag", (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0), (1.0, 1.0, 1.0), None, parts))
+    print(f"fx/flag.glb: {g.write(out / 'flag.glb', {'source': 'tools/make_fx.py'})} bytes")
     return 0
 
 

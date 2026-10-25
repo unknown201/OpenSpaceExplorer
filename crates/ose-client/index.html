@@ -538,6 +538,9 @@
       background: #fff; color: #0a0a0a; border: 0; border-left: calc(6 * var(--u)) solid #fff; border-radius: 0; font-size: calc(18 * var(--u)); font-weight: 700; }
     #menu #screen-paused button:hover { background: #cde6ff; border-left-color: #2f8fff; }
     #menu #screen-paused #resume { color: #4f8f1f; }
+    body:not(:has(#flight-hud.open)) #screen-paused .pm-flight { display: none; }
+    #flight-hud .fh-crew button.hidden { display: none; }
+    #flight-hud .fh-crew:not(:has(button:not(.hidden))) { display: none; }
     #menu #screen-paused #leave { color: #b03a2e; margin-top: calc(12 * var(--u)); }
   </style>
 </head>
@@ -715,6 +718,8 @@
         <button id="resume" data-ose="resume">Resume</button>
         <button id="to-ksc" class="secondary" data-ose="to-ksc">Kerbal Space Center</button>
         <button id="to-tracking" class="secondary" data-ose="to-tracking">Tracking Station</button>
+        <button id="to-revert-launch" class="secondary pm-flight" data-ose="to-revert-launch" data-save-action="RevertToLaunch">Revert to Launch</button>
+        <button id="to-revert-editor" class="secondary pm-flight" data-ose="to-revert-editor" data-save-action="RevertToEditor">Revert to VAB</button>
         <button id="to-settings" class="secondary" data-ose="to-settings" data-open-settings>Settings</button>
         <button id="to-sessions" class="secondary" data-ose="to-sessions">Exit to Main Menu</button>
         <button id="sound-toggle" class="secondary sound-toggle" data-ose="sound-toggle">Sound: on</button>
@@ -762,6 +767,7 @@
         <div class="fh-row fh-orbit" data-ose="flight-apsides"><span class="fh-label" title="Apoapsis: highest point of the orbit and the time to it">AP</span><b id="fh-ap">--</b><span id="fh-ap-t" class="fh-small">--</span><span class="fh-label" title="Periapsis: lowest point of the orbit and the time to it">PE</span><b id="fh-pe">--</b><span id="fh-pe-t" class="fh-small">--</span></div>
         <div class="fh-row"><span id="fh-attitude">--</span><span id="fh-twr" class="fh-small">--</span></div>
         <div class="fh-row"><button id="fh-science" data-ose="flight-science" title="run every experiment on board">Experiments</button><button id="fh-transmit" data-ose="flight-transmit" title="send the reports home">Transmit</button><button id="fh-recover" data-ose="flight-recover" title="recover the vessel (landed on Kerbin)">Recover</button></div>
+        <div class="fh-row fh-crew"><button id="fh-eva" data-ose="flight-eva" class="hidden" title="a Kerbal climbs out">EVA</button><button id="fh-board" data-ose="flight-board" class="hidden" title="climb into the craft within reach">Board</button><button id="fh-flag" data-ose="flight-flag" class="hidden" title="plant the agency flag">Plant flag</button><button id="fh-undock" data-ose="flight-undock" class="hidden" title="release the last docking">Undock</button></div>
         <div class="fh-row"><button id="fh-full" data-ose="flight-throttle-full" title="Full throttle (Z)">Full</button><button id="fh-cut" data-ose="flight-throttle-cut" title="Cut the throttle (X)">Cut</button><button id="fh-map" title="Map view (M)">Map</button><button id="fh-ksc" title="Leave the vessel and go to the Kerbal Space Center">KSC</button></div>
       </div>
     </div>
