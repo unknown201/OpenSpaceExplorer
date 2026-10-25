@@ -262,6 +262,9 @@ pub struct PartDef {
     /// A resource converter (`Data_ResourceConverter`: fuel cells, the fission reactor).
     #[serde(default)]
     pub converter: Option<Converter>,
+    /// A decoupler's push when it fires (`Data_Decouple.ejectionForce`).
+    #[serde(default)]
+    pub ejection_force: f64,
     /// Names of every module on the part, in order, so the sim knows what else to implement.
     pub module_names: Vec<String>,
     /// Module data not yet mapped into typed fields, keyed by module name.

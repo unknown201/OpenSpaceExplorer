@@ -610,6 +610,7 @@ impl Universe {
                 };
             };
         let mut outcome = outcome;
+        let mut impulse = 0.0;
         if outcome.fired {
             let mut st = self.world.entity_mut(e).take::<structure::Structure>();
             if let Some(st) = &mut st {
@@ -628,6 +629,7 @@ impl Universe {
                     .or_else(|| self.world.get::<flight::Dormant>(e).map(|d| d.0.stage));
                 if let Some(stage) = stage {
                     st.activate_stage(stage);
+                    impulse = st.ejection_impulse(stage);
                 }
             }
             if let Some(st) = st {
@@ -635,11 +637,28 @@ impl Universe {
             }
         }
         let debris = if outcome.fired && outcome.dropped_t > 0.01 {
+            // the decouplers push the two sides apart (light pieces get a fifth:
+            // GLOBAL_EJECTION_FORCE_SCALE below GLOBAL_EJECTION_FORCE_SCALING_LOWMASS_LIMIT)
+            let impulse = if outcome.dropped_t < 0.5 {
+                impulse * 0.2
+            } else {
+                impulse
+            };
+            let away = if impulse > 0.0 {
+                impulse / outcome.dropped_t
+            } else {
+                0.5
+            };
+            if let Some(mut p) = self.world.get_mut::<flight::Powered>(e) {
+                if !p.landed && p.mass_t > 0.0 {
+                    p.v = p.v + facing * (impulse / p.mass_t);
+                }
+            }
             self.spawn_debris(
                 e,
                 outcome.dropped_t,
                 r - facing * 3.0,
-                v - facing * 1.5,
+                v - facing * away,
                 facing,
                 area,
             )
@@ -1768,6 +1787,49 @@ mod tests {
         let p = u.powered(v).unwrap();
         assert_eq!(p.throttle, 0.0);
         assert!(p.groups.custom[9] && p.groups.abort);
+    }
+
+    #[test]
+    fn a_decoupler_pushes_the_stage_away() {
+        let (mut u, body, _, _) = k1_on_real_kerbin();
+        let crafts: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let defs: Vec<ose_data::PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let res: Vec<ose_data::ResourceDef> =
+            serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
+        let c = crafts
+            .iter()
+            .find(|c| c.name == "Stock12_StartRocket")
+            .unwrap();
+        let report = ose_data::staging::delta_v_by_stage(c, &defs, &res);
+        let spec = flight::FlightSpec::from_report(&report, &[], &[], 1.5);
+        let v = u.spawn_vessel_in_circular_orbit("Start", body, 100_000.0);
+        let mut p = flight::Powered::new(
+            spec,
+            DVec3::new(700_000.0, 0.0, 0.0),
+            DVec3::new(0.0, 2_246.0, 0.0),
+            false,
+        );
+        p.facing = DVec3::new(0.0, 1.0, 0.0);
+        u.set_powered(v, p);
+        u.set_structure(v, structure::Structure::build(c, &defs, &res));
+        let mut debris = None;
+        for _ in 0..4 {
+            let before = u.powered(v).unwrap().v;
+            let r = u.stage(v);
+            if let Some(d) = r.debris {
+                debris = Some((d, before));
+                break;
+            }
+        }
+        let (d, before) = debris.expect("the tank and engine drop");
+        let after = u.powered(v).unwrap().v;
+        let dv_ship = (after - before).dot(DVec3::new(0.0, 1.0, 0.0));
+        let dv_debris = (u.powered(d).unwrap().v - before).dot(DVec3::new(0.0, 1.0, 0.0));
+        // a 1.25 m decoupler (ejectionForce 50): 0.5 kN s each way
+        assert!(dv_ship > 0.1 && dv_ship < 2.0, "pod pushed {dv_ship} m/s");
+        assert!(dv_debris < -0.1, "stage pushed back {dv_debris} m/s");
     }
 
     #[test]

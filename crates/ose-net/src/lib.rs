@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 25;
+pub const PROTOCOL_VERSION: u16 = 26;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -169,6 +169,10 @@ pub enum ClientMessage {
         vessel: u64,
         group: ActionGroup,
         on: Option<bool>,
+    },
+    /// The staging readout of a craft in the editor, without saving or launching it; answers `StageReport`.
+    StageReport {
+        craft: ose_data::craft::Craft,
     },
     /// Quicksave the campaign (F5); answers `SaveAck`.
     QuickSave,
@@ -569,6 +573,10 @@ pub struct StageReadout {
     pub delta_v_vacuum_mps: f64,
     pub burn_time_s: f64,
     pub thrust_kn: f64,
+    /// Thrust at sea level (1 atm), kN, and the thrust-to-weight ratio at the stage's start on Kerbin's
+    /// surface (9.81 m/s^2).
+    pub thrust_asl_kn: f64,
+    pub twr_asl: f64,
 }
 
 /// Server to client.
@@ -735,6 +743,12 @@ pub enum ServerMessage {
         accepted: bool,
         reason: Option<String>,
         science: f64,
+    },
+    /// Answer to `ClientMessage::StageReport`: per stage, first-firing first, and the whole craft's vacuum
+    /// delta-v.
+    StageReport {
+        stages: Vec<StageReadout>,
+        delta_v_vacuum_mps: f64,
     },
     /// Answer to `QuickSave`, `QuickLoad`, `RevertToLaunch` and `RevertToEditor`; `craft` is the reverted
     /// craft for the editor.

@@ -1385,6 +1385,39 @@ async fn quicksave_quickload_and_revert_put_the_campaign_back() {
     until(&mut ws, me, |vs| !on_pad(vs)).await;
 }
 
+#[tokio::test]
+async fn the_editor_gets_a_stage_report_with_sea_level_twr() {
+    let (_server, addr) = spawn_server_with(&["--db", ":memory:", "--save", "none"], None).await;
+    let mut ws = connect_ws(&addr).await;
+    hello(&mut ws, None, "builder").await;
+    send_msg(
+        &mut ws,
+        &ClientMessage::StageReport {
+            craft: starter_craft(),
+        },
+    )
+    .await;
+    let (stages, dv) = wait_for(&mut ws, |m| match m {
+        ServerMessage::StageReport {
+            stages,
+            delta_v_vacuum_mps,
+        } => Some((stages, delta_v_vacuum_mps)),
+        _ => None,
+    })
+    .await;
+    assert!(dv > 500.0, "{dv} m/s");
+    let s = stages
+        .iter()
+        .find(|s| s.thrust_kn > 0.0)
+        .expect("an engine stage");
+    // the Swivel loses some thrust at sea level, and lifts the starter rocket
+    assert!(
+        s.thrust_asl_kn > 0.5 * s.thrust_kn && s.thrust_asl_kn < s.thrust_kn,
+        "{s:?}"
+    );
+    assert!(s.twr_asl > 1.0, "{s:?}");
+}
+
 async fn http_get_json(addr: &str, path: &str) -> serde_json::Value {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();

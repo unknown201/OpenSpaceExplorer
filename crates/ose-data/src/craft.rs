@@ -51,7 +51,8 @@ pub struct Craft {
     pub name: String,
     pub description: String,
     pub parts: Vec<CraftPart>,
-    /// Stages in activation order (stage 0 first); each lists part indices activated by that stage.
+    /// Stages by index; each lists part indices activated by that stage. The highest index fires first (as
+    /// the original numbers them; `staging::delta_v_by_stage` and the sim follow this).
     pub stages: Vec<Vec<usize>>,
 }
 

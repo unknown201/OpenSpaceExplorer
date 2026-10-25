@@ -1127,18 +1127,7 @@ fn launch_on_pad_now(s: &Shared, player_id: u64, craft: &ose_data::craft::Craft)
     let parts = craft.parts.len() as u32;
     let m = craft.mass(&s.parts, &s.resources);
     let report = ose_data::staging::delta_v_by_stage(craft, &s.parts, &s.resources);
-    let stages: Vec<ose_net::StageReadout> = report
-        .stages
-        .iter()
-        .map(|st| ose_net::StageReadout {
-            stage_id: st.stage_id as u32,
-            start_mass_t: st.start_mass_t,
-            end_mass_t: st.end_mass_t,
-            delta_v_vacuum_mps: st.delta_v_vacuum_mps,
-            burn_time_s: st.burn_time_s,
-            thrust_kn: st.thrust_kn,
-        })
-        .collect();
+    let stages = stage_readouts(s, craft, &report);
     let fail = |reason: String| ServerMessage::CraftLaunched {
         vessel: None,
         name: name.clone(),
@@ -1715,6 +1704,50 @@ fn save_request(s: &Shared, player_id: u64, msg: &ClientMessage) -> ServerMessag
     }
 }
 
+/// The staging report as the protocol carries it, with sea-level thrust and TWR.
+fn stage_readouts(
+    s: &Shared,
+    craft: &ose_data::craft::Craft,
+    report: &ose_data::staging::DeltaVReport,
+) -> Vec<ose_net::StageReadout> {
+    let asl = |part: usize| -> f64 {
+        s.parts
+            .iter()
+            .find(|d| d.id == craft.parts[part].part_id)
+            .and_then(|d| d.engines.first())
+            .map(|e| {
+                let (vac, sea) = (e.isp_curve.evaluate(0.0), e.isp_curve.evaluate(1.0));
+                if vac > 0.0 {
+                    e.max_thrust_kn * sea / vac
+                } else {
+                    0.0
+                }
+            })
+            .unwrap_or(0.0)
+    };
+    report
+        .stages
+        .iter()
+        .map(|st| {
+            let thrust_asl_kn: f64 = st.engines.iter().map(|&i| asl(i)).sum();
+            ose_net::StageReadout {
+                stage_id: st.stage_id as u32,
+                start_mass_t: st.start_mass_t,
+                end_mass_t: st.end_mass_t,
+                delta_v_vacuum_mps: st.delta_v_vacuum_mps,
+                burn_time_s: st.burn_time_s,
+                thrust_kn: st.thrust_kn,
+                thrust_asl_kn,
+                twr_asl: if st.start_mass_t > 0.0 {
+                    thrust_asl_kn / (st.start_mass_t * 9.81)
+                } else {
+                    0.0
+                },
+            }
+        })
+        .collect()
+}
+
 fn session_list(s: &Shared) -> ServerMessage {
     campaigns::list(s)
 }
@@ -1889,18 +1922,7 @@ fn launch_craft(
     let parts = craft.parts.len() as u32;
     let m = craft.mass(&s.parts, &s.resources);
     let report = ose_data::staging::delta_v_by_stage(craft, &s.parts, &s.resources);
-    let stages: Vec<ose_net::StageReadout> = report
-        .stages
-        .iter()
-        .map(|st| ose_net::StageReadout {
-            stage_id: st.stage_id as u32,
-            start_mass_t: st.start_mass_t,
-            end_mass_t: st.end_mass_t,
-            delta_v_vacuum_mps: st.delta_v_vacuum_mps,
-            burn_time_s: st.burn_time_s,
-            thrust_kn: st.thrust_kn,
-        })
-        .collect();
+    let stages = stage_readouts(s, craft, &report);
     let dv = if report.total_vacuum_mps > 0.0 {
         report.total_vacuum_mps
     } else {
@@ -2400,6 +2422,16 @@ async fn session(mut socket: WebSocket, s: AppState) {
                                     ServerMessage::FlightAck { vessel, accepted: state.is_some(), reason: state.is_none().then(|| "not under power, or no such group".into()) }
                                 }
                                 None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
+                            };
+                            if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::StageReport { craft }) => {
+                            let mut filled = craft;
+                            fill_default_resources(&s, &mut filled);
+                            let report = ose_data::staging::delta_v_by_stage(&filled, &s.parts, &s.resources);
+                            let reply = ServerMessage::StageReport {
+                                stages: stage_readouts(&s, &filled, &report),
+                                delta_v_vacuum_mps: report.total_vacuum_mps,
                             };
                             if !send(&mut socket, &reply).await { break; }
                         }

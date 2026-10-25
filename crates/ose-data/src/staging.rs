@@ -403,6 +403,7 @@ mod tests {
             heatshield: None,
             landing_gear: None,
             converter: None,
+            ejection_force: 0.0,
             module_names: vec![],
             raw_modules: Default::default(),
         }

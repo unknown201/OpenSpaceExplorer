@@ -82,6 +82,8 @@ pub struct Structure {
     pub converter_defs: Vec<Option<ose_data::Converter>>,
     pub converter_on: Vec<bool>,
     pub converter_running: Vec<f64>,
+    /// Each part's decoupler push (`ejectionForce`, 0 for other parts).
+    pub ejection_force: Vec<f64>,
     /// Flight stage the structure was last trimmed to.
     staged_to: usize,
 }
@@ -326,6 +328,9 @@ impl Structure {
                 .map(|i| def_of(i).and_then(|d| d.converter.clone()))
                 .collect(),
             converter_on: vec![false; n],
+            ejection_force: (0..n)
+                .map(|i| def_of(i).map(|d| d.ejection_force).unwrap_or(0.0))
+                .collect(),
             converter_running: vec![0.0; n],
             gear_defs: (0..n)
                 .map(|i| def_of(i).and_then(|d| d.landing_gear.clone()))
@@ -932,6 +937,22 @@ impl Structure {
         self.net.remove_parts(parts);
         let (bx, by, bz) = basis(facing);
         Some(self.split_off(bx, by, bz))
+    }
+
+    /// The push the decouplers in flight stage `stage` give the parts they let go, kN·s
+    /// (`Module_Decouple`: half the ejection force over one 50 Hz step each way).
+    pub fn ejection_impulse(&self, stage: usize) -> f64 {
+        self.stage_activations
+            .get(stage)
+            .map(|parts| {
+                parts
+                    .iter()
+                    .map(|&i| self.ejection_force.get(i).copied().unwrap_or(0.0))
+                    .sum::<f64>()
+            })
+            .unwrap_or(0.0)
+            * 0.5
+            * 0.02
     }
 
     /// Fire flight stage `stage`'s activations: parachutes in it arm.

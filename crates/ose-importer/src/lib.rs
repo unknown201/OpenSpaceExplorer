@@ -359,11 +359,15 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
     let mut brake_torque = 0.0;
     let mut steerable = false;
     let mut converter: Option<ose_data::Converter> = None;
+    let mut ejection_force = 0.0;
     if let Some(mods) = d["serializedPartModules"].as_array() {
         for m in mods {
             if let Some(entries) = m["ModuleData"].as_array() {
                 for entry in entries.iter() {
                     let o = &entry["DataObject"];
+                    if entry["Name"] == "Data_Decouple" {
+                        ejection_force = f(o, "ejectionForce");
+                    }
                     if entry["Name"] == "Data_ResourceConverter" {
                         let pick = o["SelectedFormula"].as_u64().unwrap_or(0) as usize;
                         if let Some(fm) =
@@ -624,6 +628,7 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
         heatshield,
         landing_gear,
         converter,
+        ejection_force,
         drag_cubes,
         module_names,
         raw_modules,
