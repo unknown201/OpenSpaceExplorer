@@ -145,6 +145,8 @@ pub fn attitude_dir(att: &AttitudeMode, r: DVec3, v_rel: DVec3, spin: Spin) -> D
             (p.cos() * (h.cos() * north + h.sin() * east) + p.sin() * up).normalize_or_zero()
         }
         AttitudeMode::Fixed(d) => or_up(DVec3::new(d.x, d.y, d.z)),
+        // the server turns toward the burn; the readout's facing shows it
+        AttitudeMode::Maneuver => or_up(v_rel),
     }
 }
 

@@ -26,6 +26,16 @@ use serde::{Deserialize, Serialize};
 
 pub use ose_data::{Tick, TICKS_PER_SECOND};
 
+/// An action group a player can fire (`ActionGroup` keys: U, R, Backspace, 1..0).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ActionGroup {
+    Lights,
+    Rcs,
+    Abort,
+    /// 1..10.
+    Custom(u8),
+}
+
 /// ECS resource wrapper around the shared [`Tick`].
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct UniverseTime(pub Tick);
@@ -361,6 +371,46 @@ impl Universe {
             }
             self.world.entity_mut(e).insert(st);
         }
+    }
+
+    /// Roll input for a vessel (-1..1, held until changed); false without a powered vessel.
+    pub fn set_roll(&mut self, e: Entity, input: f64) -> bool {
+        match self.world.get_mut::<flight::Powered>(e) {
+            Some(mut p) => {
+                p.roll_input = input.clamp(-1.0, 1.0);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Set (`Some`) or toggle (`None`) an action group; returns its new state, `None` without a powered
+    /// vessel. Lights and RCS are switches; abort cuts the throttle and arms the parachutes; custom groups
+    /// (1..10) are switches the craft has no actions bound to yet.
+    pub fn action_group(
+        &mut self,
+        e: Entity,
+        group: ActionGroup,
+        on: Option<bool>,
+    ) -> Option<bool> {
+        let mut p = self.world.get_mut::<flight::Powered>(e)?;
+        let g = &mut p.groups;
+        let slot = match group {
+            ActionGroup::Lights => &mut g.lights,
+            ActionGroup::Rcs => &mut g.rcs,
+            ActionGroup::Abort => &mut g.abort,
+            ActionGroup::Custom(n) => g.custom.get_mut((n as usize).checked_sub(1)?)?,
+        };
+        let state = on.unwrap_or(!*slot);
+        *slot = state;
+        let abort = group == ActionGroup::Abort && state;
+        if abort {
+            p.throttle = 0.0;
+        }
+        if abort {
+            self.arm_parachutes(e);
+        }
+        Some(state)
     }
 
     /// Switch a vessel's resource converters (fuel cells, reactors) on or off; how many changed, `None`
@@ -799,6 +849,17 @@ impl Universe {
                 .get::<flight::Powered>(e)
                 .expect("powered")
                 .clone();
+            // a maneuver hold points at the scheduled burn as it stands now
+            if matches!(p.attitude, flight::Attitude::Maneuver(_)) {
+                let burn = self.world.get::<vessels::ScheduledBurn>(e).copied();
+                let orbit = self.world.get::<bodies::OnRails>(e).map(|o| o.0);
+                if let (Some(b), Some(o)) = (burn, orbit) {
+                    let dv = vessels::burn_delta_v(&o, &b);
+                    if dv.length() > 1e-9 {
+                        p.attitude = flight::Attitude::Maneuver(dv.normalized());
+                    }
+                }
+            }
             let comm_blocked = self.commnet_blocks_control(e);
             let mut structure = self.world.entity_mut(e).take::<structure::Structure>();
             let sun = if structure.is_some() {
@@ -1652,6 +1713,61 @@ mod tests {
             0.0,
             "braked to a stop"
         );
+    }
+
+    #[test]
+    fn maneuver_hold_points_at_the_burn_roll_turns_and_abort_cuts_and_arms() {
+        let (mut u, body, spec, st) = k1_on_real_kerbin();
+        let v = u.spawn_vessel_in_circular_orbit("K1", body, 100_000.0);
+        let mut p = flight::Powered::new(
+            spec,
+            DVec3::new(700_000.0, 0.0, 0.0),
+            DVec3::new(0.0, 2_246.0, 0.0),
+            false,
+        );
+        p.facing = DVec3::new(0.0, 1.0, 0.0);
+        u.set_powered(v, p);
+        u.set_structure(v, st);
+        // a pure normal burn in a minute
+        u.schedule_burn(
+            v,
+            vessels::ScheduledBurn {
+                ut: u.ut() + 60.0,
+                prograde_mps: 0.0,
+                normal_mps: 100.0,
+                radial_mps: 0.0,
+            },
+        );
+        // a whisper of throttle keeps it under power (a coast goes back on rails)
+        assert!(u.set_controls(v, 0.01, flight::Attitude::Maneuver(DVec3::ZERO)));
+        assert!(u.set_roll(v, 1.0));
+        for _ in 0..(20 * TICKS_PER_SECOND) {
+            u.step();
+        }
+        let p = u.powered(v).unwrap().clone();
+        let flight::Attitude::Maneuver(d) = p.attitude else {
+            panic!("{:?}", p.attitude)
+        };
+        let normal = p.r.cross(p.v).normalized();
+        assert!(d.dot(normal) > 0.99, "points along the burn: {d:?}");
+        assert!(p.facing.dot(normal) > 0.9, "turned to it: {:?}", p.facing);
+        assert!(p.roll_rad > 1.0, "rolled {} rad", p.roll_rad);
+        // groups
+        assert_eq!(u.action_group(v, ActionGroup::Lights, None), Some(true));
+        assert_eq!(u.action_group(v, ActionGroup::Lights, None), Some(false));
+        assert_eq!(
+            u.action_group(v, ActionGroup::Custom(10), Some(true)),
+            Some(true)
+        );
+        assert_eq!(u.action_group(v, ActionGroup::Custom(11), Some(true)), None);
+        u.set_controls(v, 1.0, flight::Attitude::OrbitPrograde);
+        assert_eq!(
+            u.action_group(v, ActionGroup::Abort, Some(true)),
+            Some(true)
+        );
+        let p = u.powered(v).unwrap();
+        assert_eq!(p.throttle, 0.0);
+        assert!(p.groups.custom[9] && p.groups.abort);
     }
 
     #[test]

@@ -144,6 +144,8 @@ pub enum Attitude {
     },
     /// A fixed direction in the body's inertial frame (normalised on use).
     Fixed(DVec3),
+    /// Toward the scheduled burn (the universe keeps the direction current; normalised on use).
+    Maneuver(DVec3),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -214,6 +216,28 @@ pub struct Powered {
     /// Driving on wheels (rovers).
     #[serde(default)]
     pub drive: Drive,
+    /// Roll about the vessel axis from the horizon reference, radians, and the roll input (-1..1, Q/E).
+    #[serde(default)]
+    pub roll_rad: f64,
+    #[serde(default)]
+    pub roll_input: f64,
+    /// Action groups (lights, RCS, abort, custom 1..10).
+    #[serde(default)]
+    pub groups: ActionGroups,
+}
+
+/// How fast a vessel rolls at full input, rad/s (scaled by its reaction wheels' power).
+pub const ROLL_RATE_RAD_S: f64 = 0.5;
+
+/// A vessel's action groups and what they are set to.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActionGroups {
+    pub lights: bool,
+    pub rcs: bool,
+    /// Abort fired: throttle cut and parachutes armed.
+    pub abort: bool,
+    /// Custom groups 1..10 (the 0 key is the tenth).
+    pub custom: [bool; 10],
 }
 
 /// A vessel's wheels and how it is being driven. On the ground the wheel motors push it along its drive
@@ -481,6 +505,9 @@ impl Powered {
             tipped: false,
             walker: false,
             drive: Drive::default(),
+            roll_rad: 0.0,
+            roll_input: 0.0,
+            groups: ActionGroups::default(),
         }
     }
 
@@ -612,7 +639,15 @@ pub fn attitude_direction(att: Attitude, r: DVec3, v: DVec3, omega: f64) -> DVec
             let (sh, ch) = heading_deg.to_radians().sin_cos();
             up * sp + (east * sh + north * ch) * cp
         }
-        Attitude::Fixed(d) => d,
+        // a maneuver hold with no burn to point at yet keeps to prograde
+        Attitude::Maneuver(d) if d.length_squared() < 1e-18 => {
+            if v.length() > 1e-6 {
+                v.normalized()
+            } else {
+                up
+            }
+        }
+        Attitude::Fixed(d) | Attitude::Maneuver(d) => d,
     };
     dir.normalized()
 }
@@ -764,6 +799,9 @@ pub fn integrate(
         };
         let w0 = p.angvel;
         steer(p, target, frac, dt);
+        // roll about the axis at the reaction wheels' pace
+        let rate = ROLL_RATE_RAD_S * p.wheel_scale.clamp(0.0, 1.0) * p.roll_input.clamp(-1.0, 1.0);
+        p.roll_rad = (p.roll_rad + rate * dt).rem_euclid(std::f64::consts::TAU);
         out.angular_accel = (p.angvel - w0) * (1.0 / dt);
         out.angvel = p.angvel;
         out.wheel_share = p

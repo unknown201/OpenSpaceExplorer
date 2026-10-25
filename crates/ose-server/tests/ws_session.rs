@@ -1270,6 +1270,121 @@ async fn a_vab_built_rocket_sits_still_on_the_pad_and_lifts_off() {
     assert!(lifted, "the rocket did not lift off");
 }
 
+#[tokio::test]
+async fn quicksave_quickload_and_revert_put_the_campaign_back() {
+    let (_server, addr) = spawn_server_with(&["--db", ":memory:", "--save", "none"], None).await;
+    let mut ws = connect_ws(&addr).await;
+    let (me, _) = hello(&mut ws, None, "pilot").await;
+    send_msg(
+        &mut ws,
+        &ClientMessage::CreateSession {
+            name: "Saves".into(),
+            mode: ose_net::SessionMode::Sandbox,
+            difficulty: Vec::new(),
+        },
+    )
+    .await;
+    wait_for(&mut ws, |m| {
+        matches!(m, ServerMessage::CampaignState { .. }).then_some(())
+    })
+    .await;
+    let ack = |m: ServerMessage| match m {
+        ServerMessage::SaveAck {
+            action,
+            accepted,
+            reason,
+            craft,
+        } => Some((action, accepted, reason, craft)),
+        _ => None,
+    };
+    let launched = |m: ServerMessage| match m {
+        ServerMessage::CraftLaunched { vessel, reason, .. } => {
+            assert!(reason.is_none(), "{reason:?}");
+            vessel
+        }
+        _ => None,
+    };
+    // Vessels snapshots until `pick` holds for the player's vessels
+    async fn until(ws: &mut Ws, me: u64, pick: impl Fn(&[ose_net::VesselState]) -> bool) {
+        wait_for(ws, |m| match m {
+            ServerMessage::Vessels { vessels, .. } => {
+                let mine: Vec<_> = vessels
+                    .into_iter()
+                    .filter(|v| v.owner == Some(me))
+                    .collect();
+                pick(&mine).then_some(())
+            }
+            _ => None,
+        })
+        .await
+    }
+    let on_pad = |vs: &[ose_net::VesselState]| vs.iter().any(|v| v.name == "Starter");
+    // nothing to revert to yet
+    send_msg(&mut ws, &ClientMessage::RevertToLaunch).await;
+    let (_, ok, reason, _) = wait_for(&mut ws, ack).await;
+    assert!(!ok && reason.is_some());
+    // quicksave with only the probe, launch, quickload: the rocket is gone
+    send_msg(&mut ws, &ClientMessage::QuickSave).await;
+    assert!(wait_for(&mut ws, ack).await.1);
+    send_msg(
+        &mut ws,
+        &ClientMessage::LaunchOnPad {
+            craft: starter_craft(),
+        },
+    )
+    .await;
+    let rocket = wait_for(&mut ws, launched).await;
+    until(&mut ws, me, on_pad).await;
+    send_msg(&mut ws, &ClientMessage::QuickLoad).await;
+    let (action, ok, reason, _) = wait_for(&mut ws, ack).await;
+    assert!(ok, "{reason:?}");
+    assert_eq!(action, ose_net::SaveAction::QuickLoad);
+    until(&mut ws, me, |vs| !on_pad(vs)).await;
+    // launch and fly: revert to launch puts it back on the pad, unlit
+    send_msg(
+        &mut ws,
+        &ClientMessage::LaunchOnPad {
+            craft: starter_craft(),
+        },
+    )
+    .await;
+    let rocket2 = wait_for(&mut ws, launched).await;
+    let _ = rocket;
+    send_msg(
+        &mut ws,
+        &ClientMessage::SetControls {
+            vessel: rocket2,
+            throttle: 1.0,
+            attitude: ose_net::AttitudeMode::Up,
+        },
+    )
+    .await;
+    send_msg(&mut ws, &ClientMessage::Stage { vessel: rocket2 }).await;
+    until(&mut ws, me, |vs| {
+        vs.iter()
+            .any(|v| v.id == rocket2 && v.flight.as_ref().is_some_and(|f| f.altitude_m > 200.0))
+    })
+    .await;
+    send_msg(&mut ws, &ClientMessage::RevertToLaunch).await;
+    let (_, ok, reason, _) = wait_for(&mut ws, ack).await;
+    assert!(ok, "{reason:?}");
+    until(&mut ws, me, |vs| {
+        vs.iter().any(|v| {
+            v.id == rocket2
+                && v.flight.as_ref().is_some_and(|f| {
+                    f.situation == ose_net::FlightSituation::Landed && f.thrust_kn == 0.0
+                })
+        })
+    })
+    .await;
+    // revert to the editor: the rocket is gone and its craft comes back
+    send_msg(&mut ws, &ClientMessage::RevertToEditor).await;
+    let (_, ok, reason, craft) = wait_for(&mut ws, ack).await;
+    assert!(ok, "{reason:?}");
+    assert_eq!(craft.map(|c| c.name), Some("Starter".into()));
+    until(&mut ws, me, |vs| !on_pad(vs)).await;
+}
+
 async fn http_get_json(addr: &str, path: &str) -> serde_json::Value {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();

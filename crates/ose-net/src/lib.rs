@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 24;
+pub const PROTOCOL_VERSION: u16 = 25;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -159,6 +159,26 @@ pub enum ClientMessage {
         vessel: u64,
         deploy: bool,
     },
+    /// Roll input (-1..1, Q/E), held until changed; answers `FlightAck`.
+    SetRoll {
+        vessel: u64,
+        input: f32,
+    },
+    /// Set (`Some`) or toggle (`None`) an action group; answers `FlightAck`.
+    ActionGroup {
+        vessel: u64,
+        group: ActionGroup,
+        on: Option<bool>,
+    },
+    /// Quicksave the campaign (F5); answers `SaveAck`.
+    QuickSave,
+    /// Load the campaign's quicksave (F9, needs `AllowQuickLoad`); answers `SaveAck`.
+    QuickLoad,
+    /// Back to the moment of the player's last launch, on the pad (needs `AllowRevert`); answers `SaveAck`.
+    RevertToLaunch,
+    /// Back to just before the player's last launch, with its craft for the editor (needs `AllowRevert`);
+    /// answers `SaveAck` with `craft`.
+    RevertToEditor,
     /// Switch the vessel's resource converters (fuel cells, reactor) on or off; answers `FlightAck`.
     SetConverters {
         vessel: u64,
@@ -395,6 +415,8 @@ pub enum AttitudeMode {
     },
     /// Fixed direction in the reference body's inertial frame.
     Fixed(DVec3),
+    /// Toward the vessel's scheduled burn (refused when none is planned).
+    Maneuver,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -471,6 +493,29 @@ pub struct FlightReadout {
     pub brakes: bool,
     /// Resource converters: (craft part index, switched on, share of its rate it is running at 0..1).
     pub converters: Vec<(u16, bool, f32)>,
+    /// Action groups: lights, RCS, abort fired, custom 1..10.
+    pub lights: bool,
+    pub rcs: bool,
+    pub abort: bool,
+    pub custom_groups: [bool; 10],
+}
+
+/// Action groups (keys U, R, Backspace, 1..0).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ActionGroup {
+    Lights,
+    Rcs,
+    Abort,
+    /// 1..10 (the 0 key is 10).
+    Custom(u8),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SaveAction {
+    QuickSave,
+    QuickLoad,
+    RevertToLaunch,
+    RevertToEditor,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -690,6 +735,14 @@ pub enum ServerMessage {
         accepted: bool,
         reason: Option<String>,
         science: f64,
+    },
+    /// Answer to `QuickSave`, `QuickLoad`, `RevertToLaunch` and `RevertToEditor`; `craft` is the reverted
+    /// craft for the editor.
+    SaveAck {
+        action: SaveAction,
+        accepted: bool,
+        reason: Option<String>,
+        craft: Option<ose_data::craft::Craft>,
     },
     /// Answer to `UnlockTechNode`.
     TechUnlock {

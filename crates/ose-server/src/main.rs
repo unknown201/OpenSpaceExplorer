@@ -288,6 +288,8 @@ struct Shared {
     setup: campaigns::WorldSetup,
     shelf: Mutex<Vec<save::ShelvedCampaign>>,
     playing: Mutex<std::collections::HashSet<u64>>,
+    /// The last pad launch, for revert.
+    revert: Mutex<Option<campaigns::RevertPoint>>,
 }
 
 /// Apply lowest-wins warp arbitration. Returns (effective warp, the player holding it down, if any).
@@ -468,6 +470,7 @@ async fn main() -> anyhow::Result<()> {
         setup,
         shelf: Mutex::new(shelf),
         playing: Mutex::new(std::collections::HashSet::new()),
+        revert: Mutex::new(None),
     });
 
     let sim = shared.clone();
@@ -687,6 +690,7 @@ fn to_net_attitude(a: Attitude) -> ose_net::AttitudeMode {
             heading_deg,
         },
         Attitude::Fixed(d) => M::Fixed(d),
+        Attitude::Maneuver(_) => M::Maneuver,
     }
 }
 
@@ -710,6 +714,8 @@ fn from_net_attitude(a: ose_net::AttitudeMode) -> Attitude {
             heading_deg,
         },
         M::Fixed(d) => Attitude::Fixed(d),
+        // the universe points it at the burn on its next step
+        M::Maneuver => Attitude::Maneuver(ose_math::DVec3::ZERO),
     }
 }
 
@@ -794,8 +800,16 @@ fn flight_readout(
         roll_ref: if p.landed && !p.tipped {
             p.drive.roll_ref(p.r)
         } else {
-            roll_reference(p.facing, up)
+            // rolled about the axis from the horizon reference
+            let base = roll_reference(p.facing, up);
+            let side = p.facing.cross(base);
+            let (sr, cr) = p.roll_rad.sin_cos();
+            base * cr + side * sr
         },
+        lights: p.groups.lights,
+        rcs: p.groups.rcs,
+        abort: p.groups.abort,
+        custom_groups: p.groups.custom,
         drive_speed_mps: p.drive.speed_mps as f32,
         brakes: p.drive.brakes,
         converters: u
@@ -1083,8 +1097,29 @@ fn stage_inertia(
     }
 }
 
-/// Put a craft on the KSC pad as a landed, powered vessel.
+/// Put a craft on the KSC pad and remember the moments before and after for revert.
 fn launch_on_pad(s: &Shared, player_id: u64, craft: &ose_data::craft::Craft) -> ServerMessage {
+    let editor = campaigns::snapshot(s);
+    let reply = launch_on_pad_now(s, player_id, craft);
+    if matches!(
+        reply,
+        ServerMessage::CraftLaunched {
+            vessel: Some(_),
+            ..
+        }
+    ) {
+        *s.revert.lock().expect("revert lock") = Some(campaigns::RevertPoint {
+            player: player_id,
+            editor,
+            launch: campaigns::snapshot(s),
+            craft: craft.clone(),
+        });
+    }
+    reply
+}
+
+/// Put a craft on the KSC pad as a landed, powered vessel.
+fn launch_on_pad_now(s: &Shared, player_id: u64, craft: &ose_data::craft::Craft) -> ServerMessage {
     let mut filled = craft.clone();
     fill_default_resources(s, &mut filled);
     let craft = &filled;
@@ -1609,6 +1644,74 @@ fn campaign_state(s: &Shared, player_id: u64, join: Option<&String>) -> ServerMe
         you_are_member: c.members.iter().any(|m| m.player_id == player_id),
         vessels,
         created: false,
+    }
+}
+
+/// Quicksave, quickload and revert.
+fn save_request(s: &Shared, player_id: u64, msg: &ClientMessage) -> ServerMessage {
+    use ose_net::SaveAction as A;
+    let action = match msg {
+        ClientMessage::QuickSave => A::QuickSave,
+        ClientMessage::QuickLoad => A::QuickLoad,
+        ClientMessage::RevertToLaunch => A::RevertToLaunch,
+        _ => A::RevertToEditor,
+    };
+    let mut craft = None;
+    let result: Result<(), String> = match action {
+        A::QuickSave => {
+            let file = campaigns::snapshot(s);
+            s.campaign.lock().expect("campaign lock").quicksave = Some(Box::new(file));
+            Ok(())
+        }
+        A::QuickLoad => {
+            let file = s.campaign.lock().expect("campaign lock").quicksave.clone();
+            match file {
+                _ if !campaigns::allowed(s, "AllowQuickLoad") => {
+                    Err("quickload is off for this campaign".into())
+                }
+                None => Err("no quicksave yet".into()),
+                Some(f) => campaigns::reload(s, player_id, &f).map(|_| {
+                    *s.revert.lock().expect("revert lock") = None;
+                }),
+            }
+        }
+        A::RevertToLaunch | A::RevertToEditor => {
+            let point = s
+                .revert
+                .lock()
+                .expect("revert lock")
+                .as_ref()
+                .filter(|r| r.player == player_id)
+                .map(|r| {
+                    let file = if action == A::RevertToLaunch {
+                        r.launch.clone()
+                    } else {
+                        r.editor.clone()
+                    };
+                    (file, r.craft.clone())
+                });
+            match point {
+                _ if !campaigns::allowed(s, "AllowRevert") => {
+                    Err("revert is off for this campaign".into())
+                }
+                None => Err("nothing to revert to".into()),
+                Some((file, c)) => campaigns::reload(s, player_id, &file).map(|_| {
+                    if action == A::RevertToEditor {
+                        craft = Some(c);
+                        *s.revert.lock().expect("revert lock") = None;
+                    }
+                }),
+            }
+        }
+    };
+    if result.is_ok() {
+        tracing::info!(player = player_id, ?action, "save action");
+    }
+    ServerMessage::SaveAck {
+        action,
+        accepted: result.is_ok(),
+        reason: result.err(),
+        craft,
     }
 }
 
@@ -2204,6 +2307,11 @@ async fn session(mut socket: WebSocket, s: AppState) {
                         }
                         Ok(ClientMessage::SetControls { vessel, throttle, attitude }) => {
                             let reply = match owned_vessel(&s, vessel, player_id) {
+                                Some(e) if attitude == ose_net::AttitudeMode::Maneuver
+                                    && s.universe.lock().expect("sim lock").scheduled_burn(e).is_none() =>
+                                {
+                                    ServerMessage::FlightAck { vessel, accepted: false, reason: Some("no maneuver planned".into()) }
+                                }
                                 Some(e) => {
                                     let ok = s.universe.lock().expect("sim lock").set_controls(e, throttle, from_net_attitude(attitude));
                                     ServerMessage::FlightAck { vessel, accepted: ok, reason: (!ok).then(|| "vessel has no flight state (bare probe), has crashed, or has no power for its probe core".to_string()) }
@@ -2267,6 +2375,39 @@ async fn session(mut socket: WebSocket, s: AppState) {
                                 },
                                 None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
                             };
+                            if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::SetRoll { vessel, input }) => {
+                            let reply = match owned_vessel(&s, vessel, player_id) {
+                                Some(e) => {
+                                    let ok = s.universe.lock().expect("sim lock").set_roll(e, input as f64);
+                                    ServerMessage::FlightAck { vessel, accepted: ok, reason: (!ok).then(|| "not under power".into()) }
+                                }
+                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
+                            };
+                            if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::ActionGroup { vessel, group, on }) => {
+                            let group = match group {
+                                ose_net::ActionGroup::Lights => ose_sim::ActionGroup::Lights,
+                                ose_net::ActionGroup::Rcs => ose_sim::ActionGroup::Rcs,
+                                ose_net::ActionGroup::Abort => ose_sim::ActionGroup::Abort,
+                                ose_net::ActionGroup::Custom(n) => ose_sim::ActionGroup::Custom(n),
+                            };
+                            let reply = match owned_vessel(&s, vessel, player_id) {
+                                Some(e) => {
+                                    let state = s.universe.lock().expect("sim lock").action_group(e, group, on);
+                                    ServerMessage::FlightAck { vessel, accepted: state.is_some(), reason: state.is_none().then(|| "not under power, or no such group".into()) }
+                                }
+                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
+                            };
+                            if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(msg @ (ClientMessage::QuickSave
+                        | ClientMessage::QuickLoad
+                        | ClientMessage::RevertToLaunch
+                        | ClientMessage::RevertToEditor)) => {
+                            let reply = save_request(&s, player_id, &msg);
                             if !send(&mut socket, &reply).await { break; }
                         }
                         Ok(ClientMessage::SetConverters { vessel, on }) => {

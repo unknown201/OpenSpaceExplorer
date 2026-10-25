@@ -142,12 +142,67 @@ pub fn switch(s: &Shared, player_id: u64, target: Target) -> Result<(), String> 
     u.set_warp(1);
     drop((u, v, c, shelf));
     s.playing.lock().expect("playing lock").clear();
+    *s.revert.lock().expect("revert lock") = None;
     s.warp_requests
         .lock()
         .expect("warp lock")
         .values_mut()
         .for_each(|w| *w = 1);
     Ok(())
+}
+
+/// The live campaign as a save, without its quicksave.
+pub fn snapshot(s: &Shared) -> save::SaveFile {
+    let u = s.universe.lock().expect("sim lock");
+    let v = s.vessels.lock().expect("vessels lock");
+    let c = s.campaign.lock().expect("campaign lock");
+    let mut file = save::capture(&u, &v, &c, &[]);
+    file.campaign.quicksave = None;
+    file
+}
+
+/// Where the player's last launch can be reverted to.
+pub struct RevertPoint {
+    pub player: u64,
+    pub editor: save::SaveFile,
+    pub launch: save::SaveFile,
+    pub craft: ose_data::craft::Craft,
+}
+
+/// Put the live campaign back to `file` (a quicksave or revert point): its universe, vessels and progress.
+/// It keeps its id, quicksave and members. Refused while another player is playing it.
+pub fn reload(s: &Shared, player_id: u64, file: &save::SaveFile) -> Result<(), String> {
+    if s.playing
+        .lock()
+        .expect("playing lock")
+        .iter()
+        .any(|&p| p != player_id)
+    {
+        return Err("another player is playing this campaign".into());
+    }
+    let mut nu = s.setup.universe();
+    let registry = save::restore(&mut nu, file, &s.parts, &s.resources);
+    let mut u = s.universe.lock().expect("sim lock");
+    let mut v = s.vessels.lock().expect("vessels lock");
+    let mut c = s.campaign.lock().expect("campaign lock");
+    let mut back = file.campaign.clone();
+    back.id = c.id.clone();
+    back.quicksave = c.quicksave.take();
+    back.members = c.members.clone();
+    *u = nu;
+    *v = registry;
+    *c = back;
+    u.set_warp(1);
+    Ok(())
+}
+
+/// Whether a difficulty option of the live campaign is on (on when the campaign does not set it).
+pub fn allowed(s: &Shared, id: &str) -> bool {
+    let c = s.campaign.lock().expect("campaign lock");
+    !matches!(
+        c.difficulty.iter().find(|d| d.id == id).map(|d| &d.value),
+        Some(ose_net::DifficultyValue::Bool(false))
+    )
 }
 
 /// Every campaign: the live one first, then the shelf, most recently played first.
