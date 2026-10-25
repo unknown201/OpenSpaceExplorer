@@ -245,6 +245,9 @@ struct App {
     controls_sent_ms: f64,
     controls_dirty: bool,
     drive_sent: (f32, f32, bool),
+    /// Frames counted since `fps_since_ms`, for the FPS counter (Settings > Graphics).
+    fps_frames: u32,
+    fps_since_ms: f64,
     /// Flight HUD: speed readout in orbit (true) or surface mode, brakes latched from the action bar.
     speed_orbit: bool,
     brakes_latched: bool,
@@ -481,7 +484,9 @@ pub fn start() -> Result<(), JsValue> {
         ws: None,
         player_id: None,
         drag: None,
-        dpr: window.device_pixel_ratio().max(1.0),
+        // Settings > Graphics: render resolution as a share of the screen's pixels.
+        dpr: window.device_pixel_ratio().max(1.0)
+            * settings::render_scale(stored("ose.renderScale").as_deref()),
         #[cfg(target_arch = "wasm32")]
         gpu: None,
         #[cfg(target_arch = "wasm32")]
@@ -560,6 +565,8 @@ pub fn start() -> Result<(), JsValue> {
         controls_sent_ms: 0.0,
         controls_dirty: false,
         drive_sent: (0.0, 0.0, false),
+        fps_frames: 0,
+        fps_since_ms: 0.0,
         speed_orbit: false,
         brakes_latched: false,
         target: None,
@@ -734,6 +741,60 @@ fn install_audio(app: &Shared) -> Result<(), JsValue> {
     }
     app.borrow().show_sound_toggle();
     install_settings(app)?;
+    // Graphics: render resolution (applied at once) and the FPS counter.
+    {
+        let doc = app.borrow().doc.clone();
+        let scale = settings::render_scale(stored("ose.renderScale").as_deref());
+        set_text(&doc, "settings-res-text", &format!("{:.0}%", scale * 100.0));
+        if let Some(input) = doc
+            .get_element_by_id("settings-res")
+            .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+        {
+            input.set_value(&format!("{:.0}", scale * 100.0));
+            let a = app.clone();
+            let i2 = input.clone();
+            let cb = Closure::<dyn FnMut()>::new(move || {
+                let v = i2.value();
+                store("ose.renderScale", &v);
+                let scale = settings::render_scale(Some(&v));
+                let mut app = a.borrow_mut();
+                set_text(
+                    &app.doc,
+                    "settings-res-text",
+                    &format!("{:.0}%", scale * 100.0),
+                );
+                let ratio = web_sys::window()
+                    .map(|w| w.device_pixel_ratio())
+                    .unwrap_or(1.0)
+                    .max(1.0);
+                app.dpr = ratio * scale;
+                app.resize();
+            });
+            input.add_event_listener_with_callback("input", cb.as_ref().unchecked_ref())?;
+            cb.forget();
+        }
+        let fps = stored("ose.fps").as_deref() == Some("on");
+        if let Some(b) = doc.body() {
+            b.class_list().toggle_with_force("show-fps", fps).ok();
+        }
+        if let Some(input) = doc
+            .get_element_by_id("settings-fps")
+            .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+        {
+            input.set_checked(fps);
+            let d = doc.clone();
+            let i2 = input.clone();
+            let cb = Closure::<dyn FnMut()>::new(move || {
+                let on = i2.checked();
+                store("ose.fps", if on { "on" } else { "off" });
+                if let Some(b) = d.body() {
+                    b.class_list().toggle_with_force("show-fps", on).ok();
+                }
+            });
+            input.add_event_listener_with_callback("change", cb.as_ref().unchecked_ref())?;
+            cb.forget();
+        }
+    }
     // Volume sliders (Settings > Audio), kept per browser.
     {
         let pct = |key: &str| {
@@ -7237,6 +7298,14 @@ impl App {
         self.update_flight_instruments();
         self.toasts.watch(&self.doc, "fh-note", "alert");
         self.flight_keys_tick(now);
+        // FPS counter, refreshed twice a second while shown.
+        self.fps_frames += 1;
+        if now - self.fps_since_ms >= 500.0 {
+            let fps = self.fps_frames as f64 * 1000.0 / (now - self.fps_since_ms).max(1.0);
+            self.fps_frames = 0;
+            self.fps_since_ms = now;
+            set_text(&self.doc, "fps", &format!("{fps:.0} FPS"));
+        }
         self.warp_to_tick(now);
         self.sas_target_tick(now);
         if self.in_session && self.vab_active() {

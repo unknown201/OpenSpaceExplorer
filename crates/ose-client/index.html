@@ -452,6 +452,8 @@
     @keyframes toast-in { from { transform: translateX(30px); opacity: 0; } }
     @keyframes toast-out { to { opacity: 0; } }
     #fh-note { display: none; }
+    #fps { display: none; position: fixed; left: 8px; bottom: 6px; z-index: 45; font: 600 11px var(--ui-font, system-ui); color: #7dff8a; background: #06080fb0; padding: 1px 5px; border-radius: 3px; pointer-events: none; }
+    body.show-fps #fps { display: block; }
     /* Settings over everything (SettingsMenuManager): tabs on top, the original's binding list. */
     #settings { position: fixed; inset: 0; z-index: 50; display: none; place-items: center; background: #000a; font-family: var(--ui-font, system-ui); }
     #settings.open { display: grid; }
@@ -818,15 +820,20 @@
   <div id="vab-pam" data-ose="vab-pam"></div>
   <div id="fh-pam" class="fh-pam" data-ose="flight-pam"></div>
   <div id="toasts" data-ose="toasts"></div>
+  <div id="fps" data-ose="fps"></div>
   <div id="settings" data-ose="settings">
     <div class="set-card">
       <div class="set-head"><h2>Settings</h2><button id="settings-close" data-ose="settings-close" title="Close (Esc)">&#10005;</button></div>
-      <div class="set-tabs" id="settings-tabs"><button data-tab="input" class="on">Input</button><button data-tab="interface">Interface</button><button data-tab="audio">Audio</button></div>
+      <div class="set-tabs" id="settings-tabs"><button data-tab="input" class="on">Input</button><button data-tab="interface">Interface</button><button data-tab="audio">Audio</button><button data-tab="graphics">Graphics</button></div>
       <div class="set-body">
         <section data-tab="input" class="on" id="settings-input"></section>
         <section data-tab="interface">
           <label class="set-row"><span>Interface scale</span><input id="settings-scale" data-ose="settings-scale" type="range" min="50" max="150" step="5" value="100" /><b id="settings-scale-text">100%</b></label>
           <label class="set-row"><span>Show key hints on screen</span><input id="settings-hints" data-ose="settings-hints" type="checkbox" checked /></label>
+        </section>
+        <section data-tab="graphics">
+          <label class="set-row"><span>Render resolution</span><input id="settings-res" data-ose="settings-res" type="range" min="50" max="100" step="5" value="100" /><b id="settings-res-text">100%</b></label>
+          <label class="set-row"><span>Show FPS</span><input id="settings-fps" data-ose="settings-fps" type="checkbox" /></label>
         </section>
         <section data-tab="audio">
           <div class="set-row"><span>Sound</span><button id="settings-sound" class="sound-toggle" data-ose="sound-toggle">Sound: on</button></div>

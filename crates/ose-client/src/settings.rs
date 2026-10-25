@@ -126,6 +126,15 @@ pub fn input_html() -> String {
     html
 }
 
+/// Render resolution as a share of the screen's pixels from the stored percentage (50..100, default 100).
+pub fn render_scale(stored: Option<&str>) -> f64 {
+    stored
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(100.0)
+        .clamp(50.0, 100.0)
+        / 100.0
+}
+
 /// UI scale from the stored percentage (50..150, default 100).
 pub fn ui_scale(stored: Option<&str>) -> f64 {
     stored
