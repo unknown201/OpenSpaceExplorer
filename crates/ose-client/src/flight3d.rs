@@ -472,6 +472,8 @@ pub struct FlightView {
     fx_context: Option<(u64, String)>,
     ground_radius: f64,
     launch_origin: Option<DVec3>,
+    /// The aero overlay (F12): lift and drag arrows on screen this frame, device pixels (tail, tip, lift).
+    pub aero_segments: Vec<([f64; 2], [f64; 2], bool)>,
 }
 
 impl Default for FlightView {
@@ -512,6 +514,8 @@ pub struct FlightInput<'a> {
     /// Every other body that can hide the sun: star-space position and radius (m), and the star's radius.
     pub others: &'a [(DVec3, f64)],
     pub star_radius: f64,
+    /// Aero overlay forces from the readout (protocol 39): part, lift and drag, kN, body-inertial.
+    pub aero: &'a [(u16, ose_math::DVec3, ose_math::DVec3)],
 }
 
 fn quat_from_basis(x: DVec3, y: DVec3, z: DVec3) -> DQuat {
@@ -521,6 +525,7 @@ fn quat_from_basis(x: DVec3, y: DVec3, z: DVec3) -> DQuat {
 impl FlightView {
     pub fn new() -> FlightView {
         FlightView {
+            aero_segments: Vec::new(),
             mode: CameraMode::Auto,
             yaw: 0.8,
             pitch: 0.25,
@@ -1099,6 +1104,28 @@ impl FlightView {
                 parts.push((i, name, lp, lq, animation));
             }
             let lift = if min_y.is_finite() { -min_y } else { 0.0 };
+            // The aero overlay: an arrow per part for its lift (blue) and drag (red), 0.5 m per kN.
+            self.aero_segments.clear();
+            for (pi, lift_kn, drag_kn) in inp.aero {
+                let Some((_, _, lp, _, _)) = parts.iter().find(|p| p.0 == *pi as usize) else {
+                    continue;
+                };
+                let at = pos + vessel_rot * (*lp + DVec3::Y * lift);
+                for (f, is_lift) in [(lift_kn, true), (drag_kn, false)] {
+                    let fv = DVec3::new(f.x, f.y, f.z);
+                    let mag = fv.length();
+                    if mag < 0.05 {
+                        continue;
+                    }
+                    let d = dir_to_model(r, fv, spin, inp.ut);
+                    let len = (mag * 0.5).clamp(0.5, 25.0);
+                    if let (Some(a), Some(b)) =
+                        (gpu.project(at - cam), gpu.project(at + d * len - cam))
+                    {
+                        self.aero_segments.push(([a.0, a.1], [b.0, b.1], is_lift));
+                    }
+                }
+            }
             // Use the server's attached, fuel-fed engines, not just stage membership. Nozzles share
             // the exact flexed pose used by the part mesh (including radial/multi-nozzle engines).
             if let Some(f) = &inp.vessel.flight {

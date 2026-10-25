@@ -519,6 +519,11 @@
     /* First-time hints: PAIGE in a character box at the bottom right (CharacterDialogWindow). */
     #ftue { position: fixed; z-index: 55; right: 16px; bottom: calc(130 * var(--u, 1px)); width: min(460px, 92vw); display: none; gap: 12px; align-items: flex-start; background: #0b1020f5; border: 1px solid #ffa114aa; border-radius: 8px; padding: 12px 14px; color: #e6ecf7; font: 14px var(--ui-font, system-ui); box-shadow: 0 10px 30px #000c; }
     #ftue.open { display: flex; }
+    /* The aero overlay (F12): arrows over the flight view. */
+    #aero-svg { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 5; }
+    #aero-svg line { stroke-width: 3; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+    #aero-svg line.lift { stroke: #4aa8ff; } #aero-svg line.drag { stroke: #ff5a4a; }
+    body:not(:has(#flight-hud.open)) #aero-svg, body.ui-hidden #aero-svg { display: none; }
     /* In flight it sits above the crew portraits and action bar. */
     body:has(#flight-hud.open) #ftue { bottom: calc(250 * var(--u)); }
     #ftue img { width: 96px; height: 96px; object-fit: contain; flex: none; }
@@ -968,6 +973,7 @@
   <div id="fps" data-ose="fps"></div>
   <div id="flight-report" data-ose="flight-report"></div>
   <div id="ftue" data-ose="ftue"></div>
+  <svg id="aero-svg" data-ose="aero-svg" preserveAspectRatio="none"></svg>
   <div id="settings" data-ose="settings">
     <div class="set-card">
       <div class="set-head"><h2>Settings</h2><button id="settings-close" data-ose="settings-close" title="Close (Esc)">&#10005;</button></div>

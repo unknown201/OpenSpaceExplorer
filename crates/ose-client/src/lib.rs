@@ -298,6 +298,9 @@ struct App {
     tc_lessons: bool,
     /// Flight mouselook (Tab): moving the mouse turns the camera.
     mouselook: bool,
+    /// The aero overlay (F12) and the control trim (Alt + W/A/S/D/Q/E, Alt+X clears it): pitch, yaw, roll.
+    aero_overlay: bool,
+    trim: (f32, f32, f32),
     /// VAB offset tool (2): arrows and Q/E move the selected part.
     vab_offset: bool,
     /// VAB frame of reference (F): turn the held part about its own axes instead of the craft's.
@@ -672,6 +675,8 @@ pub fn start() -> Result<(), JsValue> {
         tc_lessons: false,
         vab_offset: false,
         mouselook: false,
+        aero_overlay: false,
+        trim: (0.0, 0.0, 0.0),
         vab_local_frame: false,
         lesson_selected: None,
         academy: None,
@@ -3520,6 +3525,65 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                 // The original's flight bindings (KSP.Input/GameInput.cs). Rotation, throttle steps and wheels
                 // act while held and are read every frame (flight_keys_tick); these act once.
                 let handled = match code.as_str() {
+                    "F12" => {
+                        ev.prevent_default();
+                        app.aero_overlay = !app.aero_overlay;
+                        if let (Some(vessel), Some(ws)) = (app.flying, &app.ws) {
+                            send(
+                                ws,
+                                &ClientMessage::AeroOverlay {
+                                    vessel,
+                                    on: app.aero_overlay,
+                                },
+                            );
+                        }
+                        hud::push(
+                            &app.doc,
+                            if app.aero_overlay {
+                                "Aero forces: lift blue, drag red (F12)"
+                            } else {
+                                "Aero forces off"
+                            },
+                            "passive",
+                        );
+                        true
+                    }
+                    // The original's TrimModifier: Alt with the steering keys sets a held trim.
+                    "KeyW" | "KeyS" | "KeyA" | "KeyD" | "KeyQ" | "KeyE" | "KeyX"
+                        if ev.alt_key() =>
+                    {
+                        ev.prevent_default();
+                        let step = if app.keys.precision { 0.01 } else { 0.05 };
+                        let (mut p, mut y, mut r) = app.trim;
+                        match code.as_str() {
+                            "KeyW" => p -= step,
+                            "KeyS" => p += step,
+                            "KeyA" => y -= step,
+                            "KeyD" => y += step,
+                            "KeyQ" => r -= step,
+                            "KeyE" => r += step,
+                            _ => (p, y, r) = (0.0, 0.0, 0.0),
+                        }
+                        app.trim = (p.clamp(-1.0, 1.0), y.clamp(-1.0, 1.0), r.clamp(-1.0, 1.0));
+                        let (p, y, r) = app.trim;
+                        if let (Some(vessel), Some(ws)) = (app.flying, &app.ws) {
+                            send(
+                                ws,
+                                &ClientMessage::SetTrim {
+                                    vessel,
+                                    pitch: p,
+                                    yaw: y,
+                                    roll: r,
+                                },
+                            );
+                        }
+                        hud::push(
+                            &app.doc,
+                            &format!("Trim: pitch {p:+.2} \u{b7} yaw {y:+.2} \u{b7} roll {r:+.2}"),
+                            "passive",
+                        );
+                        true
+                    }
                     "Tab" if !ev.repeat() && !app.map_mode => {
                         app.mouselook = !app.mouselook;
                         hud::push(
@@ -9584,8 +9648,31 @@ impl App {
                 period_s: b.rotation_period_s,
                 initial_deg: b.initial_rotation_deg,
             }),
+            aero: match (&v.flight, self.aero_overlay) {
+                (Some(f), true) => &f.aero_forces,
+                _ => &[],
+            },
         };
         let drawn = self.flight3d.frame(gpu, &inp);
+        // The aero overlay's arrows, drawn over the view.
+        if let Some(svg) = self.doc.get_element_by_id("aero-svg") {
+            let mut html = String::new();
+            if self.aero_overlay {
+                for (a, b, lift) in &self.flight3d.aero_segments {
+                    html.push_str(&format!(
+                        "<line x1=\"{:.0}\" y1=\"{:.0}\" x2=\"{:.0}\" y2=\"{:.0}\" class=\"{}\" />",
+                        a[0],
+                        a[1],
+                        b[0],
+                        b[1],
+                        if *lift { "lift" } else { "drag" }
+                    ));
+                }
+            }
+            svg.set_inner_html(&html);
+            svg.set_attribute("viewBox", &format!("0 0 {} {}", gpu.width, gpu.height))
+                .ok();
+        }
         if drawn {
             if let Some(hud) = self.doc.query_selector("[data-ose=flight]").ok().flatten() {
                 hud.set_attribute(
