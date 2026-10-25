@@ -86,6 +86,10 @@ pub struct Structure {
     pub ejection_force: Vec<f64>,
     /// RCS thrusters on the parts.
     pub rcs_defs: Vec<Option<ose_data::Rcs>>,
+    /// Lifting surfaces (their curves resolved), intake areas, and each engine's jet curves.
+    lift_defs: Vec<Option<(ose_data::LiftingSurface, aero::LiftCurves)>>,
+    pub intake_area_m2: Vec<f64>,
+    engine_jet: Vec<Option<crate::flight::Jet>>,
     /// Flight stage the structure was last trimmed to.
     staged_to: usize,
 }
@@ -330,6 +334,37 @@ impl Structure {
                 .map(|i| def_of(i).and_then(|d| d.converter.clone()))
                 .collect(),
             converter_on: vec![false; n],
+            lift_defs: (0..n)
+                .map(|i| {
+                    def_of(i).and_then(|d| d.lifting_surface.clone()).map(|l| {
+                        let curves = if l.curve_set == "Custom" {
+                            aero::LiftCurves {
+                                lift: l.lift_curve.clone(),
+                                lift_mach: l.lift_mach_curve.clone(),
+                                drag: l.drag_curve.clone(),
+                                drag_mach: l.drag_mach_curve.clone(),
+                            }
+                        } else {
+                            aero::default_lift_curves()
+                        };
+                        (l, curves)
+                    })
+                })
+                .collect(),
+            intake_area_m2: (0..n)
+                .map(|i| def_of(i).map(|d| d.intake_area_m2).unwrap_or(0.0))
+                .collect(),
+            engine_jet: (0..n)
+                .map(|i| {
+                    def_of(i)
+                        .and_then(|d| d.engines.first())
+                        .filter(|e| e.air_breathing)
+                        .map(|e| crate::flight::Jet {
+                            vel_curve: e.vel_curve.clone(),
+                            atm_curve: e.atm_curve.clone(),
+                        })
+                })
+                .collect(),
             rcs_defs: (0..n)
                 .map(|i| def_of(i).and_then(|d| d.rcs.clone()))
                 .collect(),
@@ -666,6 +701,12 @@ impl Structure {
         p.mass_t = self.net.mass_t().max(0.001);
         self.sync_drive(p);
         self.sync_rcs(p);
+        p.jet = self
+            .live_engines(p.stage)
+            .into_iter()
+            .find_map(|i| self.engine_jet[i].clone());
+        p.intakes =
+            (0..self.rigid.len()).any(|i| self.rigid.present[i] && self.intake_area_m2[i] > 0.0);
         let (clearance, footprint, tolerance) = self.ground_profile();
         p.ground_clearance_m = clearance;
         p.footprint_m = footprint;
@@ -1181,6 +1222,41 @@ impl Structure {
         attached / total
     }
 
+    /// Lift and drag of the attached lifting surfaces (wings, fins, control surfaces) for travel through air
+    /// of density `rho` at `v_air` (inertial) with the vessel axis along `facing`, kN, inertial.
+    pub fn lift(&self, facing: DVec3, v_air: DVec3, rho: f64, mach: f64) -> DVec3 {
+        let speed = v_air.length();
+        if speed <= 0.0 || rho <= 0.0 {
+            return DVec3::ZERO;
+        }
+        let (bx, by, bz) = basis(facing);
+        let travel = v_air * (1.0 / speed);
+        let q = 0.5 * rho * speed * speed;
+        let mut total = DVec3::ZERO;
+        for i in 0..self.rigid.len() {
+            let Some((l, curves)) = &self.lift_defs[i] else {
+                continue;
+            };
+            if !self.rigid.present[i] || l.deflection_lift_coeff <= 0.0 {
+                continue;
+            }
+            // the surface's axis: part space (Unity) to the craft, to the vessel frame (Z negated), to inertial
+            let u = aero::rotate(self.part_rot[i], l.axis);
+            let axis = bx * u.x + by * u.y + bz * (-u.z);
+            total = total
+                + aero::surface_force(
+                    curves,
+                    l.deflection_lift_coeff,
+                    l.omnidirectional,
+                    axis,
+                    travel,
+                    q,
+                    mach,
+                );
+        }
+        total
+    }
+
     /// Drag of the attached parts for travel through the air at `v_air` (inertial, m/s) with the vessel axis
     /// along `facing`: sets each part's `Cd * A` and returns the total, m^2. Parts without a cube add none.
     pub fn aero(&mut self, stage: usize, facing: DVec3, v_air: DVec3, rho: f64, mach: f64) -> f64 {
@@ -1463,6 +1539,56 @@ mod tests {
             c.parts.push(leg);
         }
         (c, defs, res)
+    }
+
+    #[test]
+    fn a_planes_wings_lift_it_with_its_nose_up_and_its_jet_needs_air() {
+        let (crafts, defs, res) = assets();
+        let c = crafts.iter().find(|c| c.name == "Stock04_Jet").unwrap();
+        let s = Structure::build(c, &defs, &res);
+        // vessel axis (craft +Y, the plane's top) along world +Y; the nose (craft +Z) is world -Z
+        let facing = DVec3::new(0.0, 1.0, 0.0);
+        let (_, by, bz) = basis(facing);
+        let nose = -bz;
+        let at = |aoa_deg: f64| {
+            let a = aoa_deg.to_radians();
+            // flying 80 m/s along the nose, the flight path below it by the angle of attack
+            let travel = nose * a.cos() - by * a.sin();
+            s.lift(facing, travel * 80.0, 1.2, 0.24)
+        };
+        let level = at(0.0);
+        let up5 = at(5.0);
+        let up10 = at(10.0);
+        // lift grows with the angle of attack, pointing up through the wings
+        assert!(up5.dot(by) > level.dot(by) + 1.0, "{level:?} {up5:?}");
+        assert!(up10.dot(by) > up5.dot(by), "{up5:?} {up10:?}");
+        // at 10 degrees the wings carry the plane (7.8 t) at 80 m/s
+        let weight_kn = 7.78 * 9.81;
+        assert!(
+            up10.dot(by) > weight_kn,
+            "lift {} kN vs weight {weight_kn}",
+            up10.dot(by)
+        );
+        // and drag holds it back
+        assert!(up10.dot(nose) < 0.0);
+        // no air, no lift
+        assert_eq!(s.lift(facing, nose * 80.0, 0.0, 0.0), DVec3::ZERO);
+        // the Wheesley breathes: thrust follows the air, nothing in vacuum or without intakes
+        let mut p = flying(facing);
+        let mut s = s;
+        s.sync(&mut p);
+        let jet = p.jet.clone().expect("a jet stage");
+        assert!(p.intakes);
+        let sea = jet.factor(0.3, 1.2, true, true);
+        assert!(sea > 0.8 && sea <= 1.0, "{sea}");
+        assert!(jet.factor(0.3, 0.2, true, true) < 0.5 * sea, "thin air");
+        assert_eq!(jet.factor(0.3, 1.2, false, true), 0.0, "no oxygen");
+        assert_eq!(jet.factor(3.0, 1.2, true, true), 0.0, "past its top speed");
+        assert!(
+            p.propellant_t > 0.5,
+            "methane reaches the jet: {} t",
+            p.propellant_t
+        );
     }
 
     #[test]

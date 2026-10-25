@@ -59,6 +59,7 @@ pub fn spawn_bodies(world: &mut World, defs: &[BodyDef]) -> BodyIndex {
                 .entity_mut(e)
                 .insert(crate::flight::Atmosphere(crate::flight::Atmo {
                     depth_m: a.depth_m,
+                    oxygen: a.contains_oxygen,
                     pressure_kpa: a.pressure_curve.clone(),
                     temperature_k: a.temperature_curve.clone(),
                     molar_mass: a.molar_mass_kg_per_mol,

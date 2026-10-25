@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 28;
+pub const PROTOCOL_VERSION: u16 = 29;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -520,6 +520,10 @@ pub struct FlightReadout {
     /// (share of full thrust, translation plus turning).
     pub rcs_thrust_kn: f32,
     pub rcs_firing: f32,
+    /// Force of the wings and other lifting surfaces, kN (lift and their drag).
+    pub lift_kn: f32,
+    /// The burning stage is jets (their thrust follows speed and air; `thrust_kn` shows it).
+    pub jet: bool,
 }
 
 /// Action groups (keys U, R, Backspace, 1..0).
@@ -772,6 +776,8 @@ pub enum ServerMessage {
         com_m: DVec3,
         cot_m: DVec3,
         thrust_dir: DVec3,
+        /// Centre of lift: the lifting surfaces weighted by their lift coefficient (zero without any).
+        col_m: DVec3,
     },
     /// Answer to `QuickSave`, `QuickLoad`, `RevertToLaunch` and `RevertToEditor`; `craft` is the reverted
     /// craft for the editor.

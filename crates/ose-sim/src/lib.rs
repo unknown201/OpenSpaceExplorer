@@ -918,6 +918,7 @@ impl Universe {
                 if let Some(st) = &mut structure {
                     st.sync(&mut p);
                     let mut burned = Vec::new();
+                    let mut lift = DVec3::ZERO;
                     // part drag (and heating) for the airflow now
                     p.drag_cda_m2 = atmo.as_ref().map(|a| {
                         let omega = if body.rotation_period_s > 0.0 {
@@ -943,6 +944,7 @@ impl Universe {
                             step_dt,
                         );
                         let cda = st.aero(p.stage, p.facing, v_air, a.density(alt), mach);
+                        lift = st.lift(p.facing, v_air, a.density(alt), mach);
                         if heat.enabled {
                             burned = st.update_heat(
                                 p.facing,
@@ -957,6 +959,7 @@ impl Universe {
                         }
                         cda
                     });
+                    p.lift_kn = lift;
                     if !burned.is_empty() {
                         match st.burn_up(&burned, p.facing) {
                             Some(off) => {

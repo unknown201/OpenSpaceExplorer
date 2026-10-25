@@ -3335,6 +3335,7 @@ impl App {
                 com_m,
                 cot_m,
                 thrust_dir,
+                ..
             } => {
                 self.vab_stages_readout = stages;
                 // The server sends zeros for all three when the craft has no engines.

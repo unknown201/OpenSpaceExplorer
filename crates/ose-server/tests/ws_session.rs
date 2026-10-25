@@ -1404,7 +1404,15 @@ async fn the_editor_gets_a_stage_report_with_sea_level_twr() {
             com_m,
             cot_m,
             thrust_dir,
-        } => Some((stages, delta_v_vacuum_mps, com_m, cot_m, thrust_dir)),
+            col_m,
+        } => {
+            assert_eq!(
+                col_m,
+                ose_math::DVec3::ZERO,
+                "no wings on the starter rocket"
+            );
+            Some((stages, delta_v_vacuum_mps, com_m, cot_m, thrust_dir))
+        }
         _ => None,
     })
     .await;

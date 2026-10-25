@@ -268,6 +268,12 @@ pub struct PartDef {
     /// RCS thrusters (`Data_RCS`).
     #[serde(default)]
     pub rcs: Option<Rcs>,
+    /// A wing, fin or control surface (`Data_LiftingSurface`).
+    #[serde(default)]
+    pub lifting_surface: Option<LiftingSurface>,
+    /// An air intake's area, m^2 (`Data_ResourceIntake.area`; jets with their own intake have it too).
+    #[serde(default)]
+    pub intake_area_m2: f64,
     /// Names of every module on the part, in order, so the sim knows what else to implement.
     pub module_names: Vec<String>,
     /// Module data not yet mapped into typed fields, keyed by module name.
@@ -314,6 +320,21 @@ pub struct Converter {
     pub inputs: Vec<(String, f64)>,
     pub outputs: Vec<(String, f64)>,
     pub conversion_rate: f64,
+}
+
+/// A lifting surface as the original defines it (`Data_LiftingSurface`): lift pushes along its axis
+/// (`transformDir` times `transformSign`, part space) against the airflow through it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LiftingSurface {
+    pub deflection_lift_coeff: f64,
+    pub axis: ose_math::DVec3,
+    pub omnidirectional: bool,
+    /// The curve set it uses (`Default`, `SpeedBrake`, ... `Custom` keeps its own curves).
+    pub curve_set: String,
+    pub lift_curve: Curve,
+    pub lift_mach_curve: Curve,
+    pub drag_curve: Curve,
+    pub drag_mach_curve: Curve,
 }
 
 /// RCS thrusters as the original defines them (`Data_RCS`): thrust per thruster, kN, the propellant
@@ -457,6 +478,13 @@ pub struct EngineMode {
     pub allow_restart: bool,
     pub allow_shutdown: bool,
     pub gimbal_range_deg: Option<f64>,
+    /// Breathes intake air (a jet): thrust scales with Mach (`velCurve`) and air density (`atmCurve`).
+    #[serde(default)]
+    pub air_breathing: bool,
+    #[serde(default)]
+    pub vel_curve: Option<Curve>,
+    #[serde(default)]
+    pub atm_curve: Option<Curve>,
 }
 
 /// Drag cube in the original six-face form: +X, -X, +Y, -Y, +Z, -Z.
