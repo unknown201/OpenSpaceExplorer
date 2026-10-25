@@ -325,7 +325,7 @@
     #fh-throttle-fill { position: absolute; left: 0; right: 0; bottom: 0; height: 0; background: linear-gradient(#ffd060, #f08030); }
     .fh-throttle span { position: absolute; top: calc(4 * var(--u)); left: 0; right: 0; text-align: center; font-size: calc(9 * var(--u)); color: #fff; }
     .fh-staging { position: absolute; left: calc(16 * var(--u)); bottom: calc(16 * var(--u)); background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(8 * var(--u)); padding: calc(10 * var(--u)); display: flex; flex-direction: column; gap: calc(6 * var(--u)); min-width: calc(160 * var(--u)); }
-    #fh-stage-btn { background: #2f6b2f !important; font-size: calc(18 * var(--u)) !important; padding: calc(10 * var(--u)) !important; }
+    #fh-stage-btn { background: #2f6b2f; font-size: calc(18 * var(--u)); padding: calc(10 * var(--u)); }
     #fh-navball { width: calc(200 * var(--u)); height: calc(200 * var(--u)); align-self: flex-end; border-radius: 50%; background: #10141b; box-shadow: 0 0 0 calc(3 * var(--u)) #2a3140, 0 0 calc(12 * var(--u)) #000a; }
     .fh-stress { height: calc(8 * var(--u)); background: #ffffff22; border-radius: calc(4 * var(--u)); overflow: hidden; }
     #fh-stress-fill { height: 100%; width: 0; background: hsl(120, 85%, 50%); transition: width 0.1s linear; }
@@ -862,6 +862,32 @@
     #flight-hud .fh-crew button.hidden { display: none; }
     #flight-hud .fh-crew:not(:has(button:not(.hidden))) { display: none; }
     #menu #screen-paused #leave { color: #b03a2e; margin-top: calc(12 * var(--u)); }
+    /* KSP2's flight layout (after Josh's screenshots of the original): the navball cluster bottom left, time warp
+       bottom centre, the app bar and views beside it, staging bottom right, vessel actions down the left edge,
+       crew top right; the UI font is the original's Realtime Rounded (taken from the install, not in git). */
+    @font-face { font-family: "Realtime Rounded"; src: url(assets/ui/fonts/realtimerounded-regular.otf) format("opentype"); font-weight: 400 500; font-display: swap; }
+    @font-face { font-family: "Realtime Rounded"; src: url(assets/ui/fonts/realtimerounded-bold.otf) format("opentype"); font-weight: 600 900; font-display: swap; }
+    :root { --hud-font: "Realtime Rounded", "Cascadia Mono", Consolas, "Roboto Mono", monospace; }
+    #flight-hud, #flight-hud button, #flight-hud .fh-row b, #ftue, #toasts, #labels { font-family: var(--hud-font) !important; }
+    #flight-hud .fh-bottom { left: calc(16 * var(--u)); bottom: calc(12 * var(--u)); transform: none; }
+    #flight-hud .fh-staging { left: auto; right: calc(16 * var(--u)); bottom: calc(12 * var(--u)); }
+    #flight-hud .fh-bottom .fh-core { min-width: calc(300 * var(--u)); padding: calc(8 * var(--u)) calc(10 * var(--u)); }
+    #flight-hud .fh-bottom .fh-row b { min-width: calc(70 * var(--u)); font-size: calc(16 * var(--u)); }
+    #flight-hud #fh-stage-btn { font: 700 calc(26 * var(--u)) var(--hud-font); letter-spacing: 0.08em; color: #0b1a0b; background: #3fe05a; border-color: #8fff9f; padding: calc(8 * var(--u)) calc(12 * var(--u)); }
+    #flight-hud #fh-stage-btn:hover { background: #6cf07f; }
+    #flight-hud .fh-actions { right: auto; bottom: auto; left: calc(8 * var(--u)); top: calc(76 * var(--u)); flex-direction: column; }
+    #flight-hud .fh-appbar { top: auto; bottom: calc(12 * var(--u)); right: calc(260 * var(--u)); flex-direction: row; background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(8 * var(--u)); padding: calc(4 * var(--u)); }
+    #flight-hud .fh-views { top: auto; bottom: calc(12 * var(--u)); right: calc(620 * var(--u)); background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(8 * var(--u)); padding: calc(4 * var(--u)); }
+    #flight-hud .fh-missions { top: auto; bottom: calc(68 * var(--u)); right: calc(260 * var(--u)); max-height: 60vh; overflow-y: auto; }
+    #flight-hud .fh-crewbox { bottom: auto; top: calc(52 * var(--u)); right: calc(16 * var(--u)); }
+    #flight-hud .fh-crew-acts { bottom: auto; top: calc(166 * var(--u)); }
+    #flight-hud .fh-help { display: none; }
+    #fh-map-info { left: calc(64 * var(--u)) !important; font-family: var(--hud-font); }
+    body:has(#flight-hud.open) #ftue { bottom: auto; top: calc(210 * var(--u)); }
+    /* Time warp and the clock leave the top bar for the bottom centre, as the original's TIME.WARP widget. */
+    body:has(#flight-hud.open) #hud > #ut, body:has(#flight-hud.open) #hud > .warp { position: fixed; left: 50%; transform: translateX(-50%); font-family: var(--hud-font); z-index: 12; }
+    body:has(#flight-hud.open) #hud > #ut { bottom: calc(52 * var(--u)); background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)) calc(6 * var(--u)) 0 0; padding: calc(2 * var(--u)) calc(14 * var(--u)); font-size: calc(16 * var(--u)); }
+    body:has(#flight-hud.open) #hud > .warp { bottom: calc(12 * var(--u)); background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)); padding: calc(4 * var(--u)) calc(8 * var(--u)); }
   </style>
 </head>
 <body>
