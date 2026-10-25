@@ -188,6 +188,29 @@ mod tests {
         );
         assert!(u.commnet_blocks_control(far));
         assert!(!u.commnet_blocks_control(near));
+        // a report goes home packet by packet from the near drone; the far one waits for a link
+        let report = ose_data::science::ResearchReport {
+            experiment: "CrewReport".into(),
+            sample: false,
+            location: "Kerbin_InSpaceLow".into(),
+            value: 8.0,
+        };
+        for v in [near, far] {
+            u.set_science_carried(v, vec![report.clone()]);
+            assert_eq!(u.start_transmission(v), Ok(1));
+        }
+        let mut arrived = Vec::new();
+        for _ in 0..(20 * crate::TICKS_PER_SECOND) {
+            u.step();
+            arrived.extend(u.take_transmitted());
+        }
+        assert_eq!(arrived.len(), 1, "{arrived:?}");
+        assert_eq!(arrived[0].0, near);
+        assert_eq!(
+            u.transmission(far).map(|t| t.3),
+            Some(Some("no CommNet connection to the KSC"))
+        );
+        assert!(u.science_carried(near).is_empty());
         // the truck's whip antennas fold out: folded, they reach nobody
         let truck = crafts.iter().find(|c| c.name == "Stock09_Truck").unwrap();
         let t = u.spawn_vessel_in_circular_orbit("truck", body, 100_000.0);

@@ -514,6 +514,7 @@ async fn main() -> anyhow::Result<()> {
                 push_roster(&sim);
                 science::evaluate_missions(&sim);
                 science::deliver_experiment_events(&sim);
+                deliver_transmitted(&sim);
                 let (required, heat) = {
                     let c = sim.campaign.lock().expect("campaign lock");
                     let get = |id: &str| c.difficulty.iter().find(|d| d.id == id).map(|d| &d.value);
@@ -1021,6 +1022,15 @@ fn flight_readout(
         comm_hops: u.comm_link(e).hops,
         comm_range_m: u.comm_link(e).range_m,
         control_part: u.control_part(e).map(|i| i as u16),
+        transmitting: u.transmission(e).map(|(r, share, waiting, stalled)| {
+            (
+                r.experiment.clone(),
+                r.location.clone(),
+                share as f32,
+                waiting as u16,
+                stalled.map(String::from),
+            )
+        }),
         // filled in by `vessels_message`, which knows the vessel ids
         on_ladder: None,
         boarding: u.boarding(e).is_some(),
@@ -1752,6 +1762,19 @@ fn science_request(s: &Shared, player_id: u64, msg: ClientMessage) -> Vec<Server
                 if !recover && !u.comm_link(e).connected {
                     return fail("no CommNet connection to the KSC");
                 }
+                if !recover {
+                    // the reports go packet by packet; each scores as it arrives (`deliver_transmitted`)
+                    return match u.start_transmission(e) {
+                        Ok(_) => vec![ServerMessage::ScienceSubmitted {
+                            vessel,
+                            reports: vec![],
+                            earned: 0.0,
+                            recovered: false,
+                            reason: None,
+                        }],
+                        Err(reason) => fail(reason),
+                    };
+                }
                 let r = u.take_science(e);
                 if recover {
                     u.despawn_vessel(e);
@@ -2398,6 +2421,56 @@ fn kerbal_roster(s: &Shared) -> ServerMessage {
 }
 
 /// Push the roster to every connected player when it has changed.
+/// Reports that finished sending: scored for the vessel's owner, who hears what they earned; everyone in the
+/// campaign gets the science state.
+fn deliver_transmitted(s: &Shared) {
+    let (done, tick) = {
+        let mut u = s.universe.lock().expect("sim lock");
+        (u.take_transmitted(), u.tick().0)
+    };
+    if done.is_empty() {
+        return;
+    }
+    let list = s.vessels.lock().expect("vessels lock").clone();
+    let mut out = Vec::new();
+    for (e, report) in done {
+        let Some(&(_, vessel, owner)) = list.iter().find(|x| x.0 == e) else {
+            continue;
+        };
+        let by = owner.unwrap_or(0);
+        let (reports, earned) = {
+            let mut c = s.campaign.lock().expect("campaign lock");
+            science::submit(&mut c, vec![report], by, tick)
+        };
+        tracing::info!(player = by, vessel, earned, "science transmitted");
+        if let Some(p) = owner {
+            out.push((
+                p,
+                ServerMessage::ScienceSubmitted {
+                    vessel,
+                    reports,
+                    earned,
+                    recovered: false,
+                    reason: None,
+                },
+            ));
+        }
+    }
+    let state = s.science.state(&s.campaign.lock().expect("campaign lock"));
+    let players: Vec<u64> = s
+        .warp_requests
+        .lock()
+        .expect("warp lock")
+        .keys()
+        .copied()
+        .collect();
+    let mut q = s.pending.lock().expect("pending lock");
+    q.extend(out);
+    for p in players {
+        q.push((p, state.clone()));
+    }
+}
+
 fn push_roster(s: &Shared) {
     let msg = kerbal_roster(s);
     let mut last = s.last_roster.lock().expect("roster lock");

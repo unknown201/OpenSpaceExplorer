@@ -318,6 +318,14 @@ pub struct Electric {
     /// Generator output (`Data_ModuleGenerator.ResourceSetting.Rate`): an engine's alternator while it runs,
     /// otherwise always on (RTGs).
     pub generator_output: f64,
+    /// The antenna's data packet (`Data_Transmitter.DataPacketSize`), science data units, its time per packet
+    /// (`DataTransmissionInterval`), s, and its draw while sending (`RequiredResources`), EC/s.
+    #[serde(default)]
+    pub transmit_packet: f64,
+    #[serde(default)]
+    pub transmit_interval_s: f64,
+    #[serde(default)]
+    pub transmit_ec_per_s: f64,
 }
 
 fn one() -> f64 {

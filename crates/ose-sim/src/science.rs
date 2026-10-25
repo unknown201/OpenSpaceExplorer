@@ -23,6 +23,19 @@ pub struct ScienceStorage {
     pub reports: Vec<ResearchReport>,
 }
 
+/// Reports going home over the vessel's best antenna, one at a time (`ScienceStorageComponent`): each
+/// with its size and how much of it is sent, science data units.
+#[derive(Component, Clone, Debug, Default, PartialEq)]
+pub struct Transmission {
+    pub queue: Vec<(ResearchReport, f64, f64)>,
+    /// Why it is waiting, when it is (no link, no power, no antenna).
+    pub stalled: Option<&'static str>,
+}
+
+/// Reports that finished sending, waiting for the server to score them: (vessel, report).
+#[derive(Resource, Default)]
+pub struct Transmitted(pub Vec<(Entity, ResearchReport)>);
+
 /// Where a vessel is for science.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ScienceLocation {
@@ -417,6 +430,166 @@ impl Universe {
         match self.world.get_mut::<ScienceStorage>(e) {
             Some(mut s) => std::mem::take(&mut s.reports),
             None => Vec::new(),
+        }
+    }
+
+    /// The antenna that sends: the active one with the biggest packet (part, packet units, s per packet,
+    /// EC/s), as the original picks it.
+    fn best_transmitter(&self, e: Entity) -> Option<(usize, f64, f64, f64)> {
+        let st = self.world.get::<structure::Structure>(e)?;
+        (0..st.rigid.len())
+            .filter(|&i| st.rigid.present[i] && (!st.antenna_deployable[i] || st.deployed[i]))
+            .map(|i| (i, st.electric[i]))
+            .filter(|(_, x)| x.transmit_packet > 0.0 && x.transmit_interval_s > 0.0)
+            .max_by(|a, b| a.1.transmit_packet.total_cmp(&b.1.transmit_packet))
+            .map(|(i, x)| {
+                (
+                    i,
+                    x.transmit_packet,
+                    x.transmit_interval_s,
+                    x.transmit_ec_per_s,
+                )
+            })
+    }
+
+    /// Start sending the vessel's data reports home (samples have to be recovered), each of its
+    /// experiment's `TransmissionSize`; they finish one by one in `take_transmitted`. Returns how many were
+    /// queued.
+    pub fn start_transmission(&mut self, e: Entity) -> Result<usize, &'static str> {
+        if self.best_transmitter(e).is_none() {
+            return Err("no working antenna (a folded one has to be extended)");
+        }
+        let data: Vec<ResearchReport> = match self.world.get_mut::<ScienceStorage>(e) {
+            Some(mut s) => {
+                let (data, samples): (Vec<_>, Vec<_>) = std::mem::take(&mut s.reports)
+                    .into_iter()
+                    .partition(|r| !r.sample);
+                s.reports = samples;
+                data
+            }
+            None => Vec::new(),
+        };
+        if data.is_empty() {
+            return Err("no data reports to send (samples have to be recovered)");
+        }
+        let n = data.len();
+        let size_of = |r: &ResearchReport| {
+            self.world
+                .get_resource::<Science>()
+                .and_then(|s| {
+                    s.catalog
+                        .experiments
+                        .iter()
+                        .find(|x| x.id == r.experiment)
+                        .map(|x| x.transmission_size)
+                })
+                .unwrap_or(5.0)
+        };
+        let mut t = self
+            .world
+            .get::<Transmission>(e)
+            .cloned()
+            .unwrap_or_default();
+        t.queue.extend(data.into_iter().map(|r| {
+            let size = size_of(&r).max(0.0);
+            (r, size, 0.0)
+        }));
+        self.world.entity_mut(e).insert(t);
+        Ok(n)
+    }
+
+    /// What the vessel is sending: the report going now, the share of it sent, how many wait, and why it
+    /// is held up if it is.
+    pub fn transmission(
+        &self,
+        e: Entity,
+    ) -> Option<(&ResearchReport, f64, usize, Option<&'static str>)> {
+        let t = self.world.get::<Transmission>(e)?;
+        let (r, size, done) = t.queue.first()?;
+        let share = if *size > 0.0 {
+            (done / size).min(1.0)
+        } else {
+            1.0
+        };
+        Some((r, share, t.queue.len() - 1, t.stalled))
+    }
+
+    /// Reports that finished sending since the last call.
+    pub fn take_transmitted(&mut self) -> Vec<(Entity, ResearchReport)> {
+        self.world
+            .get_resource_mut::<Transmitted>()
+            .map(|mut t| std::mem::take(&mut t.0))
+            .unwrap_or_default()
+    }
+
+    /// Send for `dt` seconds: a packet each interval while the vessel has its link to the KSC and the
+    /// antenna its power; held up otherwise (it carries on when they come back).
+    pub(crate) fn run_transmissions(&mut self, dt: f64) {
+        let sending: Vec<Entity> = self
+            .world
+            .query_filtered::<Entity, With<Transmission>>()
+            .iter(&self.world)
+            .collect();
+        for e in sending {
+            let stalled = if !self.comm_link(e).connected {
+                Some("no CommNet connection to the KSC")
+            } else if let Some((part, packet, interval, ec_rate)) = self.best_transmitter(e) {
+                let power = match self.world.get_mut::<structure::Structure>(e) {
+                    Some(mut st) if ec_rate > 0.0 => match st.net.resource("ElectricCharge") {
+                        Some(ec) => st.net.process(
+                            &[crate::resources::Request {
+                                part,
+                                instructions: vec![crate::resources::Instruction {
+                                    resource: ec,
+                                    units_per_s: ec_rate,
+                                }],
+                                priority: 0,
+                            }],
+                            dt,
+                        )[0],
+                        None => 0.0,
+                    },
+                    _ => 1.0,
+                };
+                if power < 0.999 {
+                    Some("out of electric charge")
+                } else {
+                    let mut t = self.world.get_mut::<Transmission>(e).expect("sending");
+                    let mut left = packet * dt / interval;
+                    let mut done = Vec::new();
+                    while left > 0.0 {
+                        let Some(first) = t.queue.first_mut() else {
+                            break;
+                        };
+                        // whole packets: a report of size s takes ceil(s / packet) of them
+                        let need = (first.1 / packet).ceil() * packet - first.2;
+                        if left >= need {
+                            left -= need;
+                            done.push(t.queue.remove(0).0);
+                        } else {
+                            first.2 += left;
+                            left = 0.0;
+                        }
+                    }
+                    if !done.is_empty() {
+                        let mut out = self.world.get_resource_or_insert_with(Transmitted::default);
+                        out.0.extend(done.into_iter().map(|r| (e, r)));
+                    }
+                    None
+                }
+            } else {
+                Some("no working antenna")
+            };
+            let empty = match self.world.get_mut::<Transmission>(e) {
+                Some(mut t) => {
+                    t.stalled = stalled;
+                    t.queue.is_empty()
+                }
+                None => true,
+            };
+            if empty {
+                self.world.entity_mut(e).remove::<Transmission>();
+            }
         }
     }
 

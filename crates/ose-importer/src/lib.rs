@@ -731,6 +731,14 @@ fn electric_from_module(m: &Value, e: &mut ose_data::Electric) {
             }
             "Data_Transmitter" => {
                 e.comm_range_m = e.comm_range_m.max(f(o, "CommunicationRange"));
+                if f(o, "DataPacketSize") > e.transmit_packet {
+                    e.transmit_packet = f(o, "DataPacketSize");
+                    e.transmit_interval_s = f(o, "DataTransmissionInterval");
+                    e.transmit_ec_per_s = o["RequiredResources"]
+                        .as_array()
+                        .map(|r| r.iter().map(ec_rate).sum::<f64>())
+                        .unwrap_or(0.0);
+                }
             }
             "Data_ReactionWheel" => {
                 if let Some(r) = o["RequiredResources"].as_array() {

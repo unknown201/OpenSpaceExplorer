@@ -1570,6 +1570,7 @@ impl Universe {
         }
         self.charge_on_rails(ticks.max(1) as f64 * dt, ut);
         self.run_transfers(ticks.max(1) as f64 * dt);
+        self.run_transmissions(ticks.max(1) as f64 * dt);
         self.run_ladders(ticks.max(1) as f64 * dt);
         // crashed debris is gone
         let wrecks: Vec<Entity> = {

@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 46;
+pub const PROTOCOL_VERSION: u16 = 47;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -141,7 +141,10 @@ pub enum ClientMessage {
     RunExperiments {
         vessel: u64,
     },
-    /// Send the vessel's reports home for science points; answers `ScienceSubmitted`.
+    /// Send the vessel's data reports home over its best working antenna (samples have to be recovered):
+    /// answers `ScienceSubmitted` with no reports at once (or the reason it cannot), then each report goes
+    /// packet by packet at the antenna's rate, drawing its power, while the link holds, and arrives as its
+    /// own `ScienceSubmitted` with the points it earned. `FlightReadout::transmitting` shows it going.
     TransmitScience {
         vessel: u64,
     },
@@ -638,6 +641,9 @@ pub struct FlightReadout {
     pub antennas: Vec<(u16, bool)>,
     /// The part the vessel is controlled from, when not its root (`ControlFrom`).
     pub control_part: Option<u16>,
+    /// The report being sent home: (experiment, location, share sent 0..1, reports waiting behind it, why
+    /// it is held up when it is: no link, no power).
+    pub transmitting: Option<(String, String, f32, u16, Option<String>)>,
     /// A Kerbal holding a ladder: (vessel, part).
     pub on_ladder: Option<(u64, u16)>,
     /// A Kerbal climbing in through a hatch (`Board`): the vessel is gone a moment later.

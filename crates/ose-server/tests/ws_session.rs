@@ -1049,23 +1049,59 @@ async fn exploration_science_tech_tree_and_recovery() {
     assert_eq!(obs.location, "Kerbin_Landed_KerbinKSC");
     assert_eq!(carried.len(), new.len());
 
-    // transmitting scores it; the state follows
+    // transmitting sends the data reports one by one; each scores as it arrives, and the state follows
     send_msg(&mut ws, &ClientMessage::TransmitScience { vessel }).await;
-    let earned = wait_for(&mut ws, |m| match m {
-        ServerMessage::ScienceSubmitted { earned, reason, .. } => {
+    wait_for(&mut ws, |m| match m {
+        ServerMessage::ScienceSubmitted {
+            reports, reason, ..
+        } => {
             assert!(reason.is_none(), "{reason:?}");
-            Some(earned)
+            assert!(reports.is_empty(), "sending, not sent");
+            Some(())
         }
         _ => None,
     })
     .await;
+    let data = carried.iter().filter(|r| !r.sample).count();
+    let mut earned = 0.0;
+    let mut sent = 0;
+    // each report takes a few packets of seconds each: give it a while, and say why if it stalls
+    let mut last = None;
+    for _ in 0..20_000 {
+        if sent >= data {
+            break;
+        }
+        match recv(&mut ws).await {
+            ServerMessage::ScienceSubmitted {
+                reports, earned: e, ..
+            } if !reports.is_empty() => {
+                sent += reports.len();
+                earned += e;
+            }
+            ServerMessage::Vessels { vessels, .. } => {
+                if let Some(t) = vessels
+                    .iter()
+                    .find(|v| v.id == vessel)
+                    .and_then(|v| v.flight.as_ref())
+                    .and_then(|f| f.transmitting.clone())
+                {
+                    last = Some(t);
+                }
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(sent, data, "still sending: {last:?}");
     assert!(earned > 0.0);
     let capacity = wait_for(&mut ws, |m| match m {
         ServerMessage::ScienceState { capacity, .. } => Some(capacity),
         _ => None,
     })
     .await;
-    assert_eq!(capacity as f64, earned);
+    assert!(
+        (capacity as f64 - earned).abs() < 1e-3,
+        "{capacity} vs {earned}"
+    );
 
     // research: a node we cannot afford is refused with the reason
     send_msg(
