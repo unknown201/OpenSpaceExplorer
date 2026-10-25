@@ -220,6 +220,11 @@ struct App {
     /// Screen points (CSS px) along the planning vessel's current orbit with their UT, from the last map
     /// frame: a click near one adds a maneuver node there, as clicking an orbit does in the original.
     orbit_pick: Vec<(f64, f64, f64)>,
+    /// Maneuver gizmo: each handle's screen direction from the node (CSS px, unit) from the last map frame,
+    /// and the handle being dragged (index, press x, y, the node's delta-v components at the press).
+    mnv_dirs: [(f64, f64); 6],
+    mnv_drag: Option<(usize, f64, f64, [f64; 3])>,
+    mnv_sent_ms: f64,
     gpu_canvas: HtmlCanvasElement,
     /// 3D orbit camera: yaw and pitch (radians) around the focus, distance in kilometres.
     orbit_yaw: f64,
@@ -475,6 +480,9 @@ pub fn start() -> Result<(), JsValue> {
         staged: Default::default(),
         roll_sent: 0.0,
         orbit_pick: Vec::new(),
+        mnv_dirs: [(0.0, 0.0); 6],
+        mnv_drag: None,
+        mnv_sent_ms: 0.0,
         gpu_canvas: get("gpu")?.dyn_into()?,
         orbit_yaw: 0.6,
         orbit_pitch: 0.5,
@@ -625,6 +633,25 @@ fn install_audio(app: &Shared) -> Result<(), JsValue> {
     app.borrow().show_sound_toggle();
     install_settings(app)?;
     install_rnd_nav(&app.borrow().doc.clone())?;
+    // Maneuver handles take their own presses (they sit above vessel labels, which take clicks too).
+    if let Some(labels) = app.borrow().doc.get_element_by_id("labels") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let on_handle = ev
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .and_then(|e| e.closest(".mnv-h").ok().flatten())
+                .is_some();
+            if on_handle && ev.button() == 0 {
+                ev.prevent_default();
+                ev.stop_propagation();
+                a.borrow_mut()
+                    .mnv_press(ev.client_x() as f64, ev.client_y() as f64);
+            }
+        });
+        labels.add_event_listener_with_callback("mousedown", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
     // Any [data-save-action="QuickSave|QuickLoad|RevertToLaunch|RevertToEditor"] element asks the server.
     let a = app.clone();
     let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
@@ -1730,6 +1757,9 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
         let on_down = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
             if ev.button() == 0 || ev.button() == 2 {
                 let mut app = a.borrow_mut();
+                if ev.button() == 0 && app.mnv_press(ev.client_x() as f64, ev.client_y() as f64) {
+                    return;
+                }
                 if ev.button() == 0 && app.vab_pasting {
                     return;
                 }
@@ -1760,6 +1790,10 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
     let a = app.clone();
     let on_move = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
         let mut app = a.borrow_mut();
+        if app.mnv_drag.is_some() {
+            app.mnv_drag_to(ev.client_x() as f64, ev.client_y() as f64, ev.shift_key());
+            return;
+        }
         #[cfg(target_arch = "wasm32")]
         if app.vab_pasting {
             let rect = app.gpu_canvas.get_bounding_client_rect();
@@ -1888,6 +1922,12 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
     let a = app.clone();
     let on_up = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
         let mut app = a.borrow_mut();
+        if app.mnv_drag.take().is_some() {
+            app.send_node();
+            app.press = None;
+            app.drag = None;
+            return;
+        }
         // Drop a held part: on its snapped node, or as the root of an empty craft; over the panels it is put
         // back.
         #[cfg(target_arch = "wasm32")]
@@ -5578,6 +5618,87 @@ impl App {
         self.send_node();
     }
 
+    /// A left press on a maneuver handle (the handles sit in #labels, which takes no pointer events, so the
+    /// press is matched by position): start dragging it. True when a handle took the press.
+    fn mnv_press(&mut self, x: f64, y: f64) -> bool {
+        let Some(node) = self.node else { return false };
+        let hit = (0..6).find(|k| {
+            self.doc
+                .get_element_by_id(&format!(
+                    "mnv-{}",
+                    [
+                        "prograde",
+                        "retrograde",
+                        "normal",
+                        "antinormal",
+                        "radialout",
+                        "radialin"
+                    ][*k]
+                ))
+                .filter(|e| {
+                    e.dyn_ref::<HtmlElement>()
+                        .map(|h| {
+                            h.style().get_property_value("visibility").ok().as_deref()
+                                == Some("visible")
+                        })
+                        .unwrap_or(false)
+                })
+                .map(|e| {
+                    let r = e.get_bounding_client_rect();
+                    let (cx, cy) = (r.left() + r.width() * 0.5, r.top() + r.height() * 0.5);
+                    (cx - x).powi(2) + (cy - y).powi(2) < 13.0 * 13.0
+                })
+                .unwrap_or(false)
+        });
+        let Some(k) = hit else { return false };
+        self.mnv_drag = Some((
+            k,
+            x,
+            y,
+            [node.prograde_mps, node.normal_mps, node.radial_mps],
+        ));
+        true
+    }
+
+    /// Dragging a handle outward adds delta-v along it: 1 m/s per pixel, 0.1 with Shift.
+    fn mnv_drag_to(&mut self, x: f64, y: f64, fine: bool) {
+        let Some((k, x0, y0, start)) = self.mnv_drag else {
+            return;
+        };
+        let (ux, uy) = self.mnv_dirs[k];
+        let along = (x - x0) * ux + (y - y0) * uy;
+        let dv = along * if fine { 0.1 } else { 1.0 };
+        let (axis, sign) = (k / 2, if k % 2 == 0 { 1.0 } else { -1.0 });
+        let Some(node) = self.node.as_mut() else {
+            return;
+        };
+        let value = (start[axis] + sign * dv).clamp(-5000.0, 5000.0);
+        match axis {
+            0 => node.prograde_mps = value,
+            1 => node.normal_mps = value,
+            _ => node.radial_mps = value,
+        }
+        let (id, v) = (["node-prograde", "node-normal", "node-radial"][axis], value);
+        if let Some(el) = self
+            .doc
+            .get_element_by_id(id)
+            .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+        {
+            let max: f64 = el.max().parse().unwrap_or(1500.0);
+            if v.abs() > max {
+                el.set_max(&format!("{:.0}", v.abs().ceil()));
+                el.set_min(&format!("{:.0}", -v.abs().ceil()));
+            }
+        }
+        set_input_value(&self.doc, id, v);
+        set_text(&self.doc, &format!("{id}-text"), &format!("{v:.1} m/s"));
+        let now = now_ms();
+        if now - self.mnv_sent_ms > 100.0 {
+            self.mnv_sent_ms = now;
+            self.send_node();
+        }
+    }
+
     /// A click on the map near the planning vessel's orbit puts a maneuver node there (CSS px).
     fn map_click(&mut self, x: f64, y: f64) -> bool {
         let best = self
@@ -6344,6 +6465,79 @@ impl App {
                     }
                 }
                 None => {
+                    style.set_property("visibility", "hidden").ok();
+                }
+            }
+        }
+        // The maneuver gizmo (MapManeuverGizmo): six handles around the node along prograde, retrograde,
+        // normal, anti-normal, radial out and radial in, in the burn frame flight3d uses for the node marker.
+        let gizmo = self.node.and_then(|node| {
+            let v = scene.vessel(node.vessel)?;
+            let rb = v.reference_body as usize;
+            let orbit = scene::orbit_from(scene.bodies[rb].mu, &v.orbit);
+            let (r, vel) = orbit.state_at(node.ut);
+            let pro = to_km(vel).normalize_or_zero();
+            let nrm = to_km(r.cross(vel)).normalize_or_zero();
+            let rad = nrm.cross(pro);
+            let at = to_km(positions[rb] + r);
+            let (cx, cy) = project(at)?;
+            let reach = self.orbit_dist_km * 0.03;
+            let dirs = [pro, -pro, nrm, -nrm, rad, -rad].map(|d| {
+                project(at + d * reach)
+                    .map(|(x, y)| {
+                        let (dx, dy) = (x - cx, y - cy);
+                        let len = (dx * dx + dy * dy).sqrt();
+                        if len > 1e-6 {
+                            (dx / len, dy / len)
+                        } else {
+                            (0.0, 0.0)
+                        }
+                    })
+                    .unwrap_or((0.0, 0.0))
+            });
+            Some((cx, cy, dirs))
+        });
+        const HANDLES: [(&str, &str); 6] = [
+            (
+                "prograde",
+                "Prograde: drag outward to add speed along the orbit",
+            ),
+            ("retrograde", "Retrograde: drag outward to slow down"),
+            ("normal", "Normal: tilt the orbit"),
+            ("antinormal", "Anti-normal: tilt the orbit the other way"),
+            ("radialout", "Radial out"),
+            ("radialin", "Radial in"),
+        ];
+        for (k, (name, tip)) in HANDLES.iter().enumerate() {
+            let id = format!("mnv-{name}");
+            let el = match self.doc.get_element_by_id(&id) {
+                Some(e) => e,
+                None => {
+                    let Ok(e) = self.doc.create_element("div") else {
+                        continue;
+                    };
+                    e.set_id(&id);
+                    e.set_class_name(&format!("mnv-h {name}"));
+                    e.set_attribute("data-mnv", &k.to_string()).ok();
+                    e.set_attribute("data-ose", "maneuver-handle").ok();
+                    e.set_attribute("title", tip).ok();
+                    self.labels.append_child(&e).ok();
+                    e
+                }
+            };
+            let Some(el) = el.dyn_ref::<HtmlElement>() else {
+                continue;
+            };
+            let style = el.style();
+            match gizmo {
+                Some((cx, cy, dirs)) if dirs[k] != (0.0, 0.0) => {
+                    self.mnv_dirs[k] = dirs[k];
+                    let (x, y) = (cx + dirs[k].0 * 48.0, cy + dirs[k].1 * 48.0);
+                    style.set_property("left", &format!("{x:.1}px")).ok();
+                    style.set_property("top", &format!("{y:.1}px")).ok();
+                    style.set_property("visibility", "visible").ok();
+                }
+                _ => {
                     style.set_property("visibility", "hidden").ok();
                 }
             }

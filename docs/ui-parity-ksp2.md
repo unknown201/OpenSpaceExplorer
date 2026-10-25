@@ -59,7 +59,7 @@ Camera rule that runs through every map: **the right button drags the camera, th
 | # | KSP2 | Ours today | Status |
 |---|---|---|---|
 | M1 | Right-drag rotates, Home resets, M back to flight, `]` `[` cycle focus | right-drag (and left) rotates, Home and F frame, `]` `[` follow the next or previous vessel (yours first) | done |
-| M2 | Click an orbit to add a node; six-handle gizmo dragged in 3D; warp-to and trash on the node | clicking your orbit on the map puts a node there (sliders then tune it), "Add node" still works; no 3D handles or warp-to yet | partly done |
+| M2 | Click an orbit to add a node; six-handle gizmo dragged in 3D; warp-to and trash on the node | clicking your orbit on the map puts a node there; six handles around the node (prograde, retrograde, normal, anti-normal, radial out/in) add delta-v as you drag them outward (1 m/s per pixel, Shift 0.1); sliders still fine-tune; no warp-to or drag along the orbit yet | partly done |
 | M3 | Ap/Pe/SOI markers with tooltips (time and altitude) | Ap and Pe markers with altitude and countdown on the flown vessel's orbit; no SOI or closest-approach markers yet | partly done |
 | M4 | Vessel labels drawn once | not a bug: the test pilot had joined twice and owned two probes | closed |
 | M5 | Tracking Station object list, filters, focus/control/recover | rebuilt by "Build 3D world and menu replica" (unpushed) | other thread |

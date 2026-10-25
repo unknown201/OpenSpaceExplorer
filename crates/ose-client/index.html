@@ -25,7 +25,7 @@
     body.webgpu #labels .vessel.mine::before { color: #9ef0c0; }
     #labels .node { position: absolute; transform: translate(-50%, -50%); width: 12px; height: 12px;
       border: 2px solid #96aaff; border-radius: 50%; background: #06080f; pointer-events: auto; cursor: pointer; }
-    #node-panel { position: fixed; top: 64px; left: 12px; width: 280px; padding: 8px 10px; border-radius: 6px;
+    #node-panel { position: fixed; top: 100px; left: 50%; transform: translateX(-50%); z-index: 12; width: 280px; padding: 8px 10px; border-radius: 6px;
       background: #0b1020e6; border: 1px solid #2c3d63; font-size: 12px; display: none; }
     #node-panel.open { display: block; }
     #node-panel label { display: grid; grid-template-columns: 70px 1fr 70px; gap: 6px; align-items: center; margin: 4px 0; }
@@ -385,6 +385,11 @@
     #toasts .toast { background: #10141bf0; border: 1px solid #ffffff2a; border-left: 4px solid #9fb0cc; border-radius: 6px; padding: 8px 12px; color: #e6ecf7; font: 13px var(--ui-font, system-ui); box-shadow: 0 4px 14px #0008; animation: toast-in 0.2s ease-out, toast-out 0.6s ease-in 5.4s forwards; }
     #labels .apsis { position: absolute; transform: translate(-50%, -130%); font: 600 11px var(--ui-font, system-ui); color: #9ef0c0; background: #06080fcc; border: 1px solid #9ef0c055; border-radius: 3px; padding: 1px 5px; white-space: nowrap; pointer-events: none; }
     #labels .apsis::after { content: ""; position: absolute; left: 50%; bottom: -6px; width: 6px; height: 6px; margin-left: -3px; border-radius: 50%; background: #9ef0c0; }
+    /* Maneuver gizmo handles around the node: prograde/retrograde green-yellow, normal violet, radial cyan. */
+    #labels .mnv-h { pointer-events: auto; z-index: 3; position: absolute; width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%; border: 2px solid currentColor; background: #06080fcc; cursor: grab; box-shadow: 0 0 6px currentColor; }
+    #labels .mnv-h.prograde, #labels .mnv-h.retrograde { color: #e6e65a; } #labels .mnv-h.retrograde { background: #e6e65a55; }
+    #labels .mnv-h.normal, #labels .mnv-h.antinormal { color: #c070ff; } #labels .mnv-h.antinormal { background: #c070ff55; }
+    #labels .mnv-h.radialout, #labels .mnv-h.radialin { color: #5ae6e6; } #labels .mnv-h.radialin { background: #5ae6e655; }
     #toasts .toast.alert { border-left-color: #f0a070; } #toasts .toast.triumph { border-left-color: #7dff8a; }
     @keyframes toast-in { from { transform: translateX(30px); opacity: 0; } }
     @keyframes toast-out { to { opacity: 0; } }
