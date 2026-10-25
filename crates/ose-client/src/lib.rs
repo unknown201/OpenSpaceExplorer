@@ -303,6 +303,8 @@ struct App {
     /// The aero overlay (F12) and the control trim (Alt + W/A/S/D/Q/E, Alt+X clears it): pitch, yaw, roll.
     aero_overlay: bool,
     trim: (f32, f32, f32),
+    /// R&D: the science archive shows in the info panel instead of the node picked.
+    rd_archive: bool,
     /// VAB offset tool (2): arrows and Q/E move the selected part.
     vab_offset: bool,
     /// VAB frame of reference (F): turn the held part about its own axes instead of the craft's.
@@ -379,6 +381,8 @@ struct SciencePoints {
     allocated: u32,
     missions: Vec<ose_net::MissionInfo>,
     submitted: usize,
+    /// The reports themselves, for the R&D science archive.
+    reports: Vec<ose_net::ReportInfo>,
 }
 
 /// A maneuver node: an impulsive burn the player is planning. `anchor_ut` is UT when the node was added;
@@ -683,6 +687,7 @@ pub fn start() -> Result<(), JsValue> {
         tc_selected: None,
         tc_lessons: false,
         vab_offset: false,
+        rd_archive: false,
         mouselook: false,
         aero_overlay: false,
         trim: (0.0, 0.0, 0.0),
@@ -1982,6 +1987,14 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
     // The pause menu's Recover Vessel, as the flight HUD's.
     wire("to-recover", Box::new(|a| a.borrow().flight_science(2)))?;
     wire("rnd-back", Box::new(|a| a.borrow().open_ksc()))?;
+    wire(
+        "rnd-archive",
+        Box::new(|a| {
+            let mut app = a.borrow_mut();
+            app.rd_archive = !app.rd_archive;
+            app.render_rnd();
+        }),
+    )?;
     wire("ksc-mission", Box::new(|a| a.borrow_mut().open_missions()))?;
     wire("ksc-training", Box::new(|a| a.borrow_mut().open_training()))?;
     wire("tc-back", Box::new(|a| a.borrow().open_ksc()))?;
@@ -2125,6 +2138,7 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                 if let Some(id) = el.get_attribute("data-ose-node") {
                     let mut app = a.borrow_mut();
                     app.rd_selected = Some(id);
+                    app.rd_archive = false;
                     app.render_rnd();
                     break;
                 }
@@ -4349,6 +4363,7 @@ impl App {
                     allocated,
                     missions,
                     submitted: submitted.len(),
+                    reports: submitted,
                 });
                 self.render_rnd();
                 self.render_missions();
@@ -5062,7 +5077,27 @@ impl App {
     }
 
     fn render_rnd(&self) {
-        let sel = self.rd_selected.as_deref();
+        if let Some(b) = self.doc.get_element_by_id("rnd-archive") {
+            b.class_list().toggle_with_force("on", self.rd_archive).ok();
+        }
+        if self.rd_archive {
+            if let Some(el) = self.doc.get_element_by_id("rd-info") {
+                let loc = &self.loc;
+                let name = |id: &str| {
+                    let exp = id.trim_start_matches("Experiment_");
+                    loc.get(&format!("Science/Experiments/{exp}"))
+                        .cloned()
+                        .unwrap_or_else(|| experiment_name(id))
+                };
+                let reports = self
+                    .science
+                    .as_ref()
+                    .map(|s| s.reports.as_slice())
+                    .unwrap_or(&[]);
+                el.set_inner_html(&hud::archive_html(reports, &name));
+            }
+        }
+        let sel = self.rd_selected.as_deref().filter(|_| !self.rd_archive);
         if let Some(el) = self.doc.get_element_by_id("rd-tree") {
             el.set_inner_html(&rnd::render_tree(
                 &self.tech,

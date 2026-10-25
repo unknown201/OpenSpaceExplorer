@@ -1024,6 +1024,47 @@ pub fn inventory_html(
     html
 }
 
+/// The science archive (R&D, the original's completed research reports): reports submitted so far, by body,
+/// with where each was taken and what it was worth.
+pub fn archive_html(reports: &[ose_net::ReportInfo], name: &dyn Fn(&str) -> String) -> String {
+    let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;");
+    if reports.is_empty() {
+        return "<h3>Science archive</h3><p>No research reports submitted yet. Run experiments in flight, then transmit them or recover the vessel.</p>".into();
+    }
+    let mut bodies: Vec<&str> = reports
+        .iter()
+        .map(|r| r.location.split('_').next().unwrap_or(""))
+        .collect();
+    bodies.sort();
+    bodies.dedup();
+    let total: f64 = reports.iter().map(|r| r.value).sum();
+    let mut html = format!(
+        "<h3>Science archive</h3><p class=\"ar-sum\">{} reports \u{b7} {:.0} science</p>",
+        reports.len(),
+        total
+    );
+    for b in bodies {
+        html.push_str(&format!(
+            "<div class=\"rd-sub\">{}</div><ul class=\"ar-list\">",
+            esc(b)
+        ));
+        for r in reports
+            .iter()
+            .filter(|r| r.location.split('_').next() == Some(b))
+        {
+            html.push_str(&format!(
+                "<li data-ose=\"archive-report\"><b>{}</b> <span>{} \u{b7} {}</span><em>{:.0}</em></li>",
+                esc(&name(&r.experiment)),
+                if r.sample { "Sample" } else { "Data" },
+                esc(&report_place(&r.location)),
+                r.value
+            ));
+        }
+        html.push_str("</ul>");
+    }
+    html
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
