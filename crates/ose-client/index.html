@@ -865,8 +865,7 @@
     /* KSP2's flight layout (after Josh's screenshots of the original): the navball cluster bottom left, time warp
        bottom centre, the app bar and views beside it, staging bottom right, vessel actions down the left edge,
        crew top right; the UI font is the original's Realtime Rounded (taken from the install, not in git). */
-    @font-face { font-family: "Realtime Rounded"; src: url(assets/ui/fonts/realtimerounded-regular.otf) format("opentype"); font-weight: 400 500; font-display: swap; }
-    @font-face { font-family: "Realtime Rounded"; src: url(assets/ui/fonts/realtimerounded-bold.otf) format("opentype"); font-weight: 600 900; font-display: swap; }
+    /* "Realtime Rounded" is added by the client (load_fonts) when the server has it. */
     :root { --hud-font: "Realtime Rounded", "Cascadia Mono", Consolas, "Roboto Mono", monospace; }
     #flight-hud, #flight-hud button, #flight-hud .fh-row b, #ftue, #toasts, #labels { font-family: var(--hud-font) !important; }
     #flight-hud .fh-bottom { left: calc(16 * var(--u)); bottom: calc(12 * var(--u)); transform: none; }

@@ -781,6 +781,7 @@ pub fn start() -> Result<(), JsValue> {
     load_localization(app.clone());
     load_trip_planner(app.clone());
     load_ftue(app.clone());
+    load_fonts();
     load_tutorials(app.clone());
     load_sounds(app.clone());
     install_audio(&app)?;
@@ -1438,6 +1439,60 @@ fn load_tutorials(app: Shared) {
         let Some(text) = text.as_string() else { return };
         if let Some(a) = tutorials::parse(&text) {
             app.borrow_mut().academy = Some(a);
+        }
+    });
+}
+
+/// KSP2's UI font, Realtime Rounded, when the server has it (taken from the install, never in git): added to
+/// the page's fonts only after checking it is one, so a server without it logs nothing and the monospace
+/// fallbacks stand.
+fn load_fonts() {
+    wasm_bindgen_futures::spawn_local(async move {
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let Some(doc) = window.document() else { return };
+        for (file, weight) in [
+            ("realtimerounded-regular.otf", "400"),
+            ("realtimerounded-bold.otf", "700"),
+        ] {
+            let url = format!("assets/ui/fonts/{file}");
+            let Ok(resp) = wasm_bindgen_futures::JsFuture::from(window.fetch_with_str(&url)).await
+            else {
+                return;
+            };
+            let Ok(resp) = resp.dyn_into::<web_sys::Response>() else {
+                return;
+            };
+            if !resp.ok() {
+                return;
+            }
+            let Ok(buf) = resp.array_buffer() else { return };
+            let Ok(buf) = wasm_bindgen_futures::JsFuture::from(buf).await else {
+                return;
+            };
+            let Ok(buf) = buf.dyn_into::<js_sys::ArrayBuffer>() else {
+                return;
+            };
+            let head = js_sys::Uint8Array::new_with_byte_offset_and_length(
+                &buf,
+                0,
+                4.min(buf.byte_length()),
+            )
+            .to_vec();
+            if head != b"OTTO" && head != [0, 1, 0, 0] {
+                return;
+            }
+            let desc = web_sys::FontFaceDescriptors::new();
+            desc.set_weight(weight);
+            let Ok(face) = web_sys::FontFace::new_with_array_buffer_and_descriptors(
+                "Realtime Rounded",
+                &buf,
+                &desc,
+            ) else {
+                return;
+            };
+            doc.fonts().add(&face).ok();
         }
     });
 }
