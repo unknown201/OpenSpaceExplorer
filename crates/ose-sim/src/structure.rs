@@ -216,6 +216,8 @@ pub struct Piece {
     /// Position and velocity relative to the vessel, inertial frame.
     pub offset_m: DVec3,
     pub dv_mps: DVec3,
+    /// How it tumbles as it goes, rad/s, inertial (zero: the universe picks).
+    pub spin: DVec3,
 }
 
 /// A part's bounds (part space, Unity axes) as a box in the vessel frame: centre relative to the part
@@ -1275,13 +1277,32 @@ impl Structure {
     /// first); `None` takes it on the parts the vessel stands on.
     pub fn impact(
         &mut self,
-        mut speed: f64,
+        speed: f64,
         facing: DVec3,
         against: Option<DVec3>,
     ) -> Option<(Vec<usize>, Vec<Piece>)> {
+        let c = self.rigid.rest_centre();
+        match self.crash(speed, facing, against, c) {
+            (broken, pieces, false) => Some((broken, pieces)),
+            _ => None,
+        }
+    }
+
+    /// `impact`, carried on when the root breaks: the blow goes on through the parts in line until it is
+    /// spent, and what is left falls apart into its connected pieces (`true`: the vessel is lost; its pieces
+    /// are offset from `centre`, the vessel frame point the vessel's position stands for). The parts it
+    /// breaks are gone; the pieces leave the structure.
+    pub fn crash(
+        &mut self,
+        mut speed: f64,
+        facing: DVec3,
+        against: Option<DVec3>,
+        centre: DVec3,
+    ) -> (Vec<usize>, Vec<Piece>, bool) {
         let (bx, by, bz) = self.frame(facing);
         let mut broken = Vec::new();
         let mut pieces = Vec::new();
+        let mut lost = false;
         let u = against
             .filter(|a| a.length_squared() > 1e-12)
             .map(|a| a.normalized())
@@ -1306,16 +1327,49 @@ impl Structure {
             if feet.is_empty() || speed_on_parts <= tolerance {
                 break;
             }
-            if feet.contains(&self.root) {
-                return None;
-            }
+            lost |= feet.contains(&self.root);
             self.rigid.remove_parts(&feet);
             self.net.remove_parts(&feet);
             broken.extend(feet);
-            pieces.extend(self.split_off(bx, by, bz));
-            speed = (speed * speed - tolerance * tolerance).max(0.0).sqrt();
+            if !lost {
+                pieces.extend(self.split_off(bx, by, bz));
+                speed = (speed * speed - tolerance * tolerance).max(0.0).sqrt();
+            } else {
+                // once it is coming apart each crushed layer slows what is behind it more (our own figure:
+                // twice its tolerance), so the far end of a fast crash comes through
+                speed = (speed - 2.0 * tolerance).max(0.0);
+            }
         }
-        Some((broken, pieces))
+        if lost {
+            // the wreck: every piece still holding together goes its own way
+            let to_inertial = |v: DVec3| bx * v.x + by * v.y + bz * v.z;
+            for g in self.rigid.groups() {
+                let mass = self.net.mass_of(&g);
+                let dry: f64 = g.iter().map(|&i| self.net.dry_t[i]).sum();
+                let m: f64 = g.iter().map(|&i| self.rigid.masses_t[i]).sum();
+                let c = if m > 0.0 {
+                    g.iter()
+                        .map(|&i| self.rigid.rest_position(i) * self.rigid.masses_t[i])
+                        .fold(DVec3::ZERO, |a, b| a + b)
+                        * (1.0 / m)
+                } else {
+                    self.rigid.rest_position(g[0])
+                };
+                pieces.push(Piece {
+                    mass_t: mass,
+                    propellant_t: mass - dry,
+                    offset_m: to_inertial(c - centre),
+                    dv_mps: DVec3::ZERO,
+                    spin: DVec3::ZERO,
+                    parts: g,
+                });
+            }
+            for piece in &pieces {
+                self.rigid.remove_parts(&piece.parts);
+                self.net.remove_parts(&piece.parts);
+            }
+        }
+        (broken, pieces, lost)
     }
 
     /// Destroy parts that burned up: they leave the structure, and whatever only they held on breaks off
@@ -1946,6 +2000,7 @@ impl Structure {
                 propellant_t: mass - dry,
                 offset_m: to_inertial(c - keep_c),
                 dv_mps: to_inertial(v - keep_v),
+                spin: DVec3::ZERO,
                 parts: g,
             });
         }

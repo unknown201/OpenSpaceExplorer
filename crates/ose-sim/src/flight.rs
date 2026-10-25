@@ -1050,6 +1050,8 @@ pub struct StepOutcome {
     /// Where the blow came from, vessel frame (+Y the axis, +Z the craft's top): `None` when it came
     /// through the parts it stands on (a plane on its wheels).
     pub impact_against: Option<DVec3>,
+    /// Its velocity over the ground as it hit, m/s, inertial.
+    pub impact_velocity: DVec3,
 }
 
 /// Integrate one `dt` of powered flight around `body`.
@@ -1383,6 +1385,7 @@ pub fn integrate(
         // what hits the ground: the whole speed standing, the sink rate for a plane on its wheels
         let on_wheels = p.level && !p.tipped && !p.drive.wheels.is_empty() && !nose_down;
         out.impact_against = (!on_wheels).then_some(against);
+        out.impact_velocity = v_surf;
         let impact = if on_wheels {
             // the speed into the ground under it: the sink rate, and the rise it runs into
             let h = v_surf - up * v_surf.dot(up);

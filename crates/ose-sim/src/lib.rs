@@ -77,6 +77,19 @@ impl Default for Universe {
     }
 }
 
+/// A fixed pseudo-random unit-ish vector (each component -1..1) for wreck scatter: the same crash throws
+/// the same way.
+fn scatter(seed: u64, k: u64) -> DVec3 {
+    let mut x = seed ^ k.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0xD1B5_4A32_D192_ED03;
+    let mut next = || {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        (x >> 11) as f64 / (1u64 << 53) as f64 * 2.0 - 1.0
+    };
+    DVec3::new(next(), next(), next())
+}
+
 /// `parts` (indices into `craft`) split into the pieces they hold together as, over the craft's tree links.
 fn connected_groups(craft: &ose_data::craft::Craft, parts: &[usize]) -> Vec<Vec<usize>> {
     let inside = |i: usize| parts.contains(&i);
@@ -1241,6 +1254,8 @@ impl Universe {
                 0.0
             };
             let mut pieces = Vec::new();
+            // the pieces a crash threw (they come to rest on the ground rather than crash again)
+            let mut wrecked: Vec<usize> = Vec::new();
             // a vessel standing on the ground with its engines off just turns with the body: one long step
             let parked = p.landed
                 && !p.crashed
@@ -1334,16 +1349,34 @@ impl Universe {
                 // a hard landing breaks the parts it lands on; the rest may come through
                 if out.crashed {
                     if let Some(st) = &mut structure {
-                        if let Some((_, off)) =
-                            st.impact(out.impact_mps, p.facing, out.impact_against)
-                        {
+                        let centre = st.rigid.rest_centre();
+                        let (_, off, lost) =
+                            st.crash(out.impact_mps, p.facing, out.impact_against, centre);
+                        if !lost {
                             p.crashed = false;
                             out.crashed = false;
                             for piece in off {
                                 pieces.push((piece, p.r, p.v, p.facing));
                             }
-                            st.sync(&mut p);
+                        } else {
+                            // the wreck flies apart: the blow bounced back weakly, scattered, tumbling
+                            let up = p.r.normalized();
+                            let v_in = out.impact_velocity;
+                            let bounce = (v_in - up * (2.0 * v_in.dot(up))) * 0.12;
+                            let speed = v_in.length();
+                            for (k, mut piece) in off.into_iter().enumerate() {
+                                let a = scatter(e.to_bits(), k as u64);
+                                let b = scatter(e.to_bits() ^ 0x9e37, k as u64);
+                                let side = a - up * a.dot(up);
+                                piece.dv_mps = bounce
+                                    + side * (0.06 * speed)
+                                    + up * (0.03 * speed * (1.0 + a.dot(up).abs()));
+                                piece.spin = b * 2.0;
+                                wrecked.push(pieces.len());
+                                pieces.push((piece, p.r, p.v, p.facing));
+                            }
                         }
+                        st.sync(&mut p);
                     }
                 }
                 self.log_flight_step(
@@ -1404,14 +1437,17 @@ impl Universe {
                 self.world.entity_mut(e).insert(st);
             }
             let area = p.spec.drag_area_m2;
-            for (piece, r, v, facing) in pieces {
+            for (k, (piece, r, v, facing)) in pieces.into_iter().enumerate() {
                 // a piece off the side tips away from the vessel
                 let side = piece.offset_m - facing * piece.offset_m.dot(facing);
-                let tumble = if side.length() > 0.5 {
+                let tumble = if piece.spin.length_squared() > 0.0 {
+                    piece.spin
+                } else if side.length() > 0.5 {
                     facing.cross(side.normalized()) * 0.15
                 } else {
                     DVec3::ZERO
                 };
+                let wreck = wrecked.contains(&k);
                 if let Some(d) = self.spawn_debris(
                     e,
                     piece.mass_t,
@@ -1422,6 +1458,11 @@ impl Universe {
                     &piece.parts,
                     tumble,
                 ) {
+                    if wreck {
+                        if let Some(mut q) = self.world.get_mut::<flight::Powered>(d) {
+                            q.crash_tolerance_mps = 1.0e4;
+                        }
+                    }
                     self.broken_off.push((e, d));
                 }
             }
@@ -1935,6 +1976,53 @@ mod tests {
         }
         let r = u.stage(v);
         assert!(r.fired && r.debris.is_some());
+    }
+
+    #[test]
+    fn a_crash_leaves_a_wreck_of_the_parts_that_came_through() {
+        let (mut u, body, spec, st) = k1_on_real_kerbin();
+        let crafts: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let k1 = crafts.iter().find(|c| c.name == "Kerbal K1").unwrap();
+        let v = u.spawn_powered_on_surface("K1", body, spec, 0.0, 0.0);
+        u.set_craft(v, k1.clone());
+        u.set_structure(v, st);
+        u.step();
+        let p0 = u.powered(v).unwrap().clone();
+        let up = p0.r.normalized();
+        let omega = DVec3::new(0.0, 0.0, 2.0 * std::f64::consts::PI / 21_549.425);
+        // nose first at 150 m/s
+        let mut q = p0.clone();
+        q.landed = false;
+        q.r = up * (p0.r.length() + 20.0);
+        q.v = omega.cross(q.r) - up * 150.0;
+        q.facing = -up;
+        q.attitude = flight::Attitude::Free;
+        u.set_powered(v, q);
+        let mut wreck = Vec::new();
+        for _ in 0..TICKS_PER_SECOND {
+            u.step();
+            wreck.extend(u.take_broken_off().into_iter().map(|(_, d)| d));
+        }
+        assert!(
+            u.powered(v).is_some_and(|p| p.crashed),
+            "the vessel is lost"
+        );
+        assert!(!wreck.is_empty(), "but some of it came through");
+        let kept: usize = wreck
+            .iter()
+            .filter_map(|&d| u.current_craft(d))
+            .map(|c| c.parts.len())
+            .sum();
+        assert!(kept > 0 && kept < k1.parts.len(), "{kept} parts left");
+        for _ in 0..(10 * TICKS_PER_SECOND) {
+            u.step();
+        }
+        let resting = wreck
+            .iter()
+            .filter(|&&d| u.powered(d).is_some_and(|p| p.landed))
+            .count();
+        assert!(resting > 0, "the pieces come to rest on the ground");
     }
 
     #[test]
