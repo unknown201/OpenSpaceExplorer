@@ -70,6 +70,7 @@ to `Pass` in the same change.
 | `[data-ose="training"]` | Training Center (`ksc-training` opens it, `tc-back` returns): `tc-kerbal` rows (`data-ose-kerbal`, class `available`/`assigned`/`missing`), `tc-info` with `tc-name` and `tc-status`. The launch dialog's `lp-crew` has one `lp-seat` select per seat (`data-ose-seat`), sent as LaunchSavedAt `crew` |
 | `#loading` | The loading screen on scene changes (class `show`, `data-ose-art` names the art) |
 | `#flight-hud[data-ose-deflection]` | The largest control surface deflection in the readout, degrees |
+| `#flight-hud[data-ose-near]` | Vessels within 5 km and how many of them are drawn from their craft, `near:full` |
 | `[data-ose="ksc-sessions"]`, `[data-ose="to-sessions"]` | Exit to Main Menu (LeaveSession): the campaign list shows every campaign with `session-join` (Resume); `#create-details` starts a new one. The `campaign_cycle` step exits, resumes, and starts "e2e sandbox"; `vab_rocket` builds a Mk1 pod, FL-T400 and LV-T45 with `vab-search`, uses Save and launch, presses Z and Space and checks the climb, then makes "Shared campaign" live again |
 | `[data-ose="add-node"]` | adds a maneuver node on the player's vessel (sends `ScheduleBurn`) |
 | `[data-ose="maneuver-node"]` | the maneuver node on the player's trajectory; `data-ose-ut` is the burn time, `data-ose-prograde` the delta-v |

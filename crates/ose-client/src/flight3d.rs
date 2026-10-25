@@ -511,6 +511,9 @@ pub struct FlightInput<'a> {
     pub atmosphere_m: f64,
     pub ut: f64,
     pub craft: Option<&'a Craft>,
+    /// The guids of the parts the server says the vessel still has (its current craft); parts of `craft`
+    /// not among them have been staged away or broken off. `None` before it arrives: stage counting then.
+    pub present: Option<&'a std::collections::HashSet<String>>,
     pub is_decoupler: &'a dyn Fn(&str) -> bool,
     /// Planned maneuver for this vessel: prograde, normal and radial delta-v, m/s.
     pub maneuver: Option<(f64, f64, f64)>,
@@ -1017,7 +1020,10 @@ impl FlightView {
                 .as_ref()
                 .map(|f| f.stage as usize)
                 .unwrap_or(0);
-            let gone = jettisoned(craft, fired, inp.is_decoupler);
+            let gone = match inp.present {
+                Some(set) => craft.parts.iter().map(|p| !set.contains(&p.guid)).collect(),
+                None => jettisoned(craft, fired, inp.is_decoupler),
+            };
             let flex = match &inp.vessel.flight {
                 Some(f) => self.flex_now(&f.flex, inp.now_ms),
                 None => FlexMap::new(),

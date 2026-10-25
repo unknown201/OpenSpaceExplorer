@@ -10085,6 +10085,26 @@ impl App {
                 self.vessel_craft_asked.insert(*vessel, *rev);
             }
         }
+        // Test hook: vessels drawn nearby, and how many of them have their craft.
+        if let Some(el) = self.doc.get_element_by_id("flight-hud") {
+            let near = nearby_vessels
+                .iter()
+                .filter(|n| (n.pos - g(vp)).length() < 5_000.0)
+                .count();
+            let full = nearby_vessels
+                .iter()
+                .filter(|n| (n.pos - g(vp)).length() < 5_000.0 && n.craft.is_some())
+                .count();
+            el.set_attribute("data-ose-near", &format!("{near}:{full}"))
+                .ok();
+        }
+        // What the server says the flown vessel still has, by part guid.
+        let present: Option<std::collections::HashSet<String>> = self
+            .vessel_crafts
+            .get(&id)
+            .filter(|k| k.0 == v.craft_rev)
+            .and_then(|k| k.1.as_ref())
+            .map(|c| c.parts.iter().map(|p| p.guid.clone()).collect());
         let inp = flight3d::FlightInput {
             vessel: v,
             attitude: scene.vessel_attitude(id, now_ms()),
@@ -10116,6 +10136,7 @@ impl App {
                         .is_none_or(|d| d.parts.len() == c.parts.len())
                 })
                 .or(self.flight_craft.as_ref()),
+            present: present.as_ref(),
             is_decoupler: &is_dec,
             maneuver: self
                 .node
