@@ -806,13 +806,17 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
       await sleep(1000);
       const [la0, lo0] = await latlon();
       await page.keyboard.down("KeyW");
-      await sleep(2500);
+      await sleep(1200);
       await page.keyboard.up("KeyW");
       await sleep(500);
       const [la1, lo1] = await latlon();
+      // Back up the same way (S), so the capsule stays within boarding reach (6 m).
+      await page.keyboard.down("KeyS");
+      await sleep(1200);
+      await page.keyboard.up("KeyS");
       const deg = Math.hypot(la1 - la0, (lo1 - lo0) * Math.cos((la0 * Math.PI) / 180));
       const walked = (deg * Math.PI * 600_000) / 180;
-      if (!(walked > 1)) {
+      if (!(walked > 0.5)) {
         await restore();
         return failed(`holding W did not walk the Kerbal (moved ${walked.toFixed(2)} m)`);
       }
