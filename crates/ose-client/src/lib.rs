@@ -3268,7 +3268,9 @@ impl App {
                 thrust_dir,
             } => {
                 self.vab_stages_readout = stages;
-                self.vab_com = Some(com_m);
+                // The server sends zeros for all three when the craft has no engines.
+                self.vab_com =
+                    (com_m.length() > 1e-9 || thrust_dir.length() > 0.5).then_some(com_m);
                 self.vab_cot = (thrust_dir.length() > 0.5).then_some((cot_m, thrust_dir));
                 set_text(
                     &self.doc,
