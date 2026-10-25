@@ -346,7 +346,12 @@ pub fn staging_html(
 ) -> String {
     let mut html = String::new();
     let stages = &craft.stages;
-    for (n, stage) in stages.iter().enumerate().skip(next_stage).rev() {
+    // The highest index fires first: firing step k is craft stage len - 1 - k. Cards run from the last to
+    // fire (index 0) at the top to the next one at the bottom, numbered from the bottom up.
+    let Some(next) = stages.len().checked_sub(next_stage + 1) else {
+        return html;
+    };
+    for (n, stage) in stages.iter().enumerate().take(next + 1) {
         let mut icons = String::new();
         for &i in stage {
             let Some(p) = craft.parts.get(i) else {
@@ -374,8 +379,8 @@ pub fn staging_html(
         }
         html.push_str(&format!(
             "<li class=\"{}\"><b>{}</b>{icons}</li>",
-            if n == next_stage { "next" } else { "" },
-            n + 1
+            if n == next { "next" } else { "" },
+            stages.len() - n
         ));
     }
     html
@@ -386,6 +391,44 @@ pub fn fnv(s: &str) -> u64 {
     s.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| {
         (h ^ b as u64).wrapping_mul(0x100_0000_01b3)
     })
+}
+
+/// The mission tracker window (`MissionTracker`): accepted missions not yet handed in, each with its current
+/// objective and progress, or that it is ready to turn in at Mission Control.
+pub fn tracker_html(
+    missions: &[ose_net::MissionInfo],
+    loc: &std::collections::HashMap<String, String>,
+) -> String {
+    let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;");
+    let mut rows: Vec<&ose_net::MissionInfo> = missions
+        .iter()
+        .filter(|m| m.accepted && !m.turned_in)
+        .collect();
+    rows.sort_by_key(|m| (!m.primary, m.complete));
+    let mut html = String::new();
+    for m in rows {
+        let name = crate::rnd::text(loc, &m.name_key);
+        let body = if m.complete {
+            "<span class=\"done\">Complete: hand it in at Mission Control</span>".to_string()
+        } else {
+            format!(
+                "{} <small>{}/{}</small>",
+                esc(&crate::rnd::text(loc, &m.objective_key)),
+                m.stage + 1,
+                m.stages.max(1)
+            )
+        };
+        html.push_str(&format!(
+            "<li class=\"{}\"><b>{}</b><div>{body}</div></li>",
+            if m.primary { "primary" } else { "secondary" },
+            esc(&name)
+        ));
+    }
+    if html.is_empty() {
+        html = "<li class=\"empty\">No missions in progress. Take one on at Mission Control.</li>"
+            .into();
+    }
+    html
 }
 
 /// Notification toasts (`NotificationManager`): short messages stacked at the top right that fade after a few

@@ -1127,6 +1127,20 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         }
     }
     wire(
+        "fh-missions-btn",
+        Box::new(|a| {
+            if let Some(el) = a.borrow().doc.get_element_by_id("fh-missions") {
+                let open = el.class_list().toggle("open").unwrap_or(false);
+                store("ose.tracker", if open { "open" } else { "closed" });
+            }
+        }),
+    )?;
+    if stored("ose.tracker").as_deref() == Some("open") {
+        if let Some(el) = doc.get_element_by_id("fh-missions") {
+            el.class_list().add_1("open").ok();
+        }
+    }
+    wire(
         "fh-speed-mode",
         Box::new(|a| {
             let mut app = a.borrow_mut();
@@ -1304,11 +1318,11 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
     wire("vab-clear", Box::new(|a| a.borrow_mut().vab_clear()))?;
     wire(
         "vab-stage-up",
-        Box::new(|a| a.borrow_mut().vab_shift_stage(-1)),
+        Box::new(|a| a.borrow_mut().vab_shift_stage(1)),
     )?;
     wire(
         "vab-stage-down",
-        Box::new(|a| a.borrow_mut().vab_shift_stage(1)),
+        Box::new(|a| a.borrow_mut().vab_shift_stage(-1)),
     )?;
     wire("vab-save", Box::new(|a| a.borrow_mut().vab_save(false)))?;
     wire("vab-undo", Box::new(|a| a.borrow_mut().vab_undo(false)))?;
@@ -3899,9 +3913,11 @@ impl App {
         }
         if let Some(list) = self.doc.get_element_by_id("vab-stages") {
             // One card per stage, the last to fire on top and the first (Space) at the bottom, as the
-            // original's staging stack.
+            // original's staging stack. The highest stage index fires first (ose_data::staging), so the cards
+            // run in index order and count up from the bottom.
             let mut html = String::new();
-            for (n, stage) in self.editor.craft.stages.iter().enumerate().rev() {
+            let count = self.editor.craft.stages.len();
+            for (n, stage) in self.editor.craft.stages.iter().enumerate() {
                 let parts: Vec<String> = stage
                     .iter()
                     .filter_map(|&i| self.editor.craft.parts.get(i).map(|p| (i, p)))
@@ -3924,7 +3940,7 @@ impl App {
                     .collect();
                 html.push_str(&format!(
                     "<li><span class=\"st\">STAGE {}</span>{}</li>",
-                    n + 1,
+                    count - n,
                     parts.join("")
                 ));
             }
@@ -4806,6 +4822,17 @@ impl App {
             let next = f.stage as usize + usize::from(lit);
             let html = hud::staging_html(craft, &self.catalog, next, &f.parachutes);
             // Compare with what was set last (the browser rewrites inner HTML, so it would never match).
+            let key = format!("{}:{}", html.len(), hud::fnv(&html));
+            if list.get_attribute("data-ose-key").as_deref() != Some(key.as_str()) {
+                list.set_inner_html(&html);
+                list.set_attribute("data-ose-key", &key).ok();
+            }
+        }
+        if let (Some(sci), Some(list)) = (
+            &self.science,
+            self.doc.get_element_by_id("fh-missions-list"),
+        ) {
+            let html = hud::tracker_html(&sci.missions, &self.loc);
             let key = format!("{}:{}", html.len(), hud::fnv(&html));
             if list.get_attribute("data-ose-key").as_deref() != Some(key.as_str()) {
                 list.set_inner_html(&html);

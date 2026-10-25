@@ -392,7 +392,8 @@ impl Editor {
         Some(removed)
     }
 
-    /// Move the selected stageable part one stage earlier (`-1`) or later (`+1`).
+    /// Move the selected stageable part to a higher stage (`+1`, fires earlier: the highest stage fires
+    /// first, as `ose_data::staging` runs them) or a lower one (`-1`, later).
     pub fn shift_stage(&mut self, delta: i32, catalog: &Catalog) {
         let Some(sel) = self.selected else {
             return;
@@ -408,7 +409,8 @@ impl Editor {
         self.rebuild_stages(catalog);
     }
 
-    /// `Craft::stages`: stageable parts grouped by `stage_index`, first-firing stage first, renumbered densely.
+    /// `Craft::stages`: stageable parts grouped by `stage_index`, lowest first, renumbered densely. The last
+    /// stage (highest index) fires first.
     pub fn rebuild_stages(&mut self, catalog: &Catalog) {
         let mut by_stage: Vec<(i32, usize)> = self
             .craft
@@ -428,7 +430,7 @@ impl Editor {
             }
             stages.last_mut().unwrap().push(i);
         }
-        // Dense renumbering so the indices are 1..=n in firing order.
+        // Dense renumbering so the indices are 1..=n.
         for (n, stage) in stages.iter().enumerate() {
             for &i in stage {
                 self.craft.parts[i].stage_index = n as i32 + 1;

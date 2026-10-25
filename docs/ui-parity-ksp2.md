@@ -83,7 +83,7 @@ Camera rule that runs through every map: **the right button drags the camera, th
 | K1 | Building hover tooltip and click, wheel zoom, M opens the Tracking Station map | hover/click, zoom, M, right or left drag | done |
 | K2 | Launch-site flyout (Launchpad 1-4, runway) | single Launchpad button | later |
 | R1 | R&D tree pans by drag and arrows, zooms with the wheel, part tooltips | drag and arrow keys pan, the wheel zooms about the pointer; part names only | partly done |
-| C1 | Mission Control: track a mission, in-flight mission tracker, turn-in button when complete | log and briefing only | open |
+| C1 | Mission Control: track a mission, in-flight mission tracker, turn-in button when complete | accept and turn in at Mission Control (other thread); in flight a mission tracker window lists the missions taken on with their current objective | done |
 | A1 | Main menu Settings, Extras/Credits | Settings works; Extras disabled | partly done |
 
 ## 3. Order of work
