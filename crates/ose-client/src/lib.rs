@@ -216,6 +216,8 @@ struct App {
     /// Missions, the Mission Control tab (primary or secondary) and the mission shown.
     missions: Vec<missions::Mission>,
     mc_primary: bool,
+    /// Mission Control's Completed tab: the missions handed in.
+    mc_completed: bool,
     mc_selected: Option<String>,
     /// The last Mission Control answer (accepted, turned in, or why not).
     mc_note: String,
@@ -636,6 +638,7 @@ pub fn start() -> Result<(), JsValue> {
         science: None,
         missions: missions::all(),
         mc_primary: true,
+        mc_completed: false,
         mc_selected: None,
         mc_note: String::new(),
         audio: audio::Audio::new(stored("ose.sound").as_deref() == Some("off")),
@@ -2096,6 +2099,7 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         Box::new(|a| {
             let mut app = a.borrow_mut();
             app.mc_primary = true;
+            app.mc_completed = false;
             app.render_missions();
         }),
     )?;
@@ -2104,6 +2108,15 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         Box::new(|a| {
             let mut app = a.borrow_mut();
             app.mc_primary = false;
+            app.mc_completed = false;
+            app.render_missions();
+        }),
+    )?;
+    wire(
+        "mc-tab-completed",
+        Box::new(|a| {
+            let mut app = a.borrow_mut();
+            app.mc_completed = true;
             app.render_missions();
         }),
     )?;
@@ -5060,11 +5073,13 @@ impl App {
                 self.mc_primary,
                 sel,
                 progress,
+                self.mc_completed,
             ));
         }
         for (id, on) in [
-            ("mc-tab-primary", self.mc_primary),
-            ("mc-tab-secondary", !self.mc_primary),
+            ("mc-tab-primary", self.mc_primary && !self.mc_completed),
+            ("mc-tab-secondary", !self.mc_primary && !self.mc_completed),
+            ("mc-tab-completed", self.mc_completed),
         ] {
             if let Some(el) = self.doc.get_element_by_id(id) {
                 el.class_list().toggle_with_force("on", on).ok();

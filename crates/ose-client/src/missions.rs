@@ -82,9 +82,22 @@ pub fn render_list(
     primary: bool,
     selected: Option<&str>,
     progress: Option<&[ose_net::MissionInfo]>,
+    completed: bool,
 ) -> String {
     let mut html = String::new();
-    let mut rows: Vec<&Mission> = missions.iter().filter(|m| m.primary == primary).collect();
+    let turned_in =
+        |m: &Mission| progress.is_some_and(|p| p.iter().any(|i| i.id == m.id && i.turned_in));
+    // The Completed tab holds the missions handed in, primary and secondary; the others leave them out.
+    let mut rows: Vec<&Mission> = missions
+        .iter()
+        .filter(|m| {
+            if completed {
+                turned_in(m)
+            } else {
+                m.primary == primary && !turned_in(m)
+            }
+        })
+        .collect();
     if let Some(p) = progress {
         rows.retain(|m| p.iter().any(|i| i.id == m.id));
         rows.sort_by_key(|m| {
@@ -221,7 +234,7 @@ mod tests {
         assert!(m.iter().any(|x| x.primary) && m.iter().any(|x| !x.primary));
         assert!(m.iter().any(|x| x.active_at_start));
         let loc = HashMap::new();
-        let list = render_list(&m, &loc, true, None, None);
+        let list = render_list(&m, &loc, true, None, None, false);
         assert!(list.contains("data-ose=\"mc-mission\""));
         let b = render_briefing(&m[0], &loc, None);
         assert!(b.contains("<h3>"));
