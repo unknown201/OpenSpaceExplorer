@@ -273,7 +273,18 @@
     #fh-stress-fill { height: 100%; width: 0; background: hsl(120, 85%, 50%); transition: width 0.1s linear; }
     .fh-help { position: absolute; right: calc(16 * var(--u)); bottom: calc(16 * var(--u)); font-size: calc(11 * var(--u)); color: #9fb0cc; max-width: calc(260 * var(--u)); text-align: right; }
     body:has(#flight-hud.open) #help { display: none; }
-    body:has(#flight-hud.open:not(.map)) #hud { opacity: 0; pointer-events: none; }
+    body:has(#flight-hud.open:not(.map)) #hud > :not(#ut):not(.warp) { opacity: 0; pointer-events: none; }
+    body:has(#flight-hud.open:not(.map)) #hud { background: none; border: 0; }
+    /* SAS modes beside the navball and the action bar, icons from the original's HUD masked in the text colour. */
+    .fh-sas { display: grid; grid-template-columns: repeat(2, calc(34 * var(--u))); grid-auto-rows: calc(34 * var(--u)); gap: calc(4 * var(--u)); align-self: flex-end; }
+    #flight-hud .fh-sas button, #flight-hud .fh-actions button { padding: 0; display: grid; place-items: center; width: calc(34 * var(--u)); height: calc(34 * var(--u)); color: #9fb0cc; }
+    #flight-hud .fh-sas button i, #flight-hud .fh-actions button i { width: 70%; height: 70%; background: currentColor; -webkit-mask: var(--ico) center / contain no-repeat; mask: var(--ico) center / contain no-repeat; }
+    #flight-hud .fh-sas button.on, #flight-hud .fh-actions button.on { color: #7dff8a; border-color: #7dff8a99; background: #17321ce6; }
+    #flight-hud .fh-sas button:disabled, #flight-hud .fh-actions button:disabled { opacity: 0.35; cursor: default; }
+    .fh-actions { position: absolute; right: calc(16 * var(--u)); bottom: calc(64 * var(--u)); display: flex; gap: calc(4 * var(--u)); background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(8 * var(--u)); padding: calc(6 * var(--u)); }
+    #fh-speed-mode { cursor: pointer; text-decoration: underline dotted; pointer-events: auto; }
+    #fh-throttle-pct { position: absolute; bottom: calc(4 * var(--u)); left: 0; right: 0; text-align: center; font-size: calc(9 * var(--u)); color: #fff; }
+    .fh-orbit b { min-width: calc(70 * var(--u)) !important; font-size: calc(15 * var(--u)) !important; }
     body:has(#flight-hud.open:not(.map)) #crumbs, body:has(#flight-hud.open:not(.map)) #labels { display: none; }
     #flight-hud.map .fh-top, #flight-hud.map .fh-staging { opacity: 0.85; }
     /* R&D Center after RDCenterUI.prefab: the tech tree on a dark blueprint canvas that scrolls, nodes at
@@ -574,21 +585,15 @@
   <div id="flight-hud" data-ose="flight">
     <div class="fh-top"><div class="fh-label">ALTITUDE</div><div id="fh-altitude" data-ose="flight-altitude">--</div><div id="fh-situation" class="fh-small">--</div><div id="fh-note" class="fh-small" style="color:#f0a070"></div><div id="fh-running" class="fh-small" data-ose="flight-running" style="color:#8fd08f"></div><div id="fh-control" data-ose="flight-control" style="color:#ff6a5a;font-weight:700"></div></div>
     <div class="fh-bottom">
-      <div class="fh-throttle" title="Z full, X cut, Shift and Ctrl to adjust"><div id="fh-throttle-fill"></div><span>THR</span></div>
+      <div class="fh-throttle" title="Throttle: hold Shift / Ctrl, Z full, X cut"><div id="fh-throttle-fill"></div><span>THR</span><span id="fh-throttle-pct">0%</span></div>
       <canvas id="fh-navball" data-ose="flight-navball" width="200" height="200"></canvas>
+      <div class="fh-sas" id="fh-sas" data-ose="flight-sas"></div>
       <div class="fh-core">
-        <div class="fh-row"><span class="fh-label">SURFACE</span><b id="fh-speed">--</b><span class="fh-label">VERTICAL</span><b id="fh-vspeed">--</b></div>
+        <div class="fh-row"><span class="fh-label" id="fh-speed-mode" data-ose="flight-speed-mode" title="Speed relative to the surface or in orbit; click to switch">SURFACE</span><b id="fh-speed">--</b><span class="fh-label">VERTICAL</span><b id="fh-vspeed">--</b></div>
+        <div class="fh-row fh-orbit" data-ose="flight-apsides"><span class="fh-label" title="Apoapsis: highest point of the orbit and the time to it">AP</span><b id="fh-ap">--</b><span id="fh-ap-t" class="fh-small">--</span><span class="fh-label" title="Periapsis: lowest point of the orbit and the time to it">PE</span><b id="fh-pe">--</b><span id="fh-pe-t" class="fh-small">--</span></div>
         <div class="fh-row"><span id="fh-attitude">--</span><span id="fh-twr" class="fh-small">--</span></div>
-        <div class="fh-row fh-att">
-          <button id="fh-att-up" title="hold straight up">Up</button>
-          <button id="fh-att-pro" title="surface prograde (T)">Pro</button>
-          <button id="fh-att-retro" title="surface retrograde">Retro</button>
-          <button id="fh-att-oprog" title="orbit prograde">Orbit</button>
-          <button id="fh-att-normal" title="orbit normal">Nrm</button>
-          <button id="fh-att-radial" title="radial out">Rad</button>
-        </div>
         <div class="fh-row"><button id="fh-science" data-ose="flight-science" title="run every experiment on board">Experiments</button><button id="fh-transmit" data-ose="flight-transmit" title="send the reports home">Transmit</button><button id="fh-recover" data-ose="flight-recover" title="recover the vessel (landed on Kerbin)">Recover</button></div>
-        <div class="fh-row"><button id="fh-full" data-ose="flight-throttle-full">Full</button><button id="fh-cut" data-ose="flight-throttle-cut">Cut</button><button id="fh-map" title="M">Map</button><button id="fh-ksc">KSC</button></div>
+        <div class="fh-row"><button id="fh-full" data-ose="flight-throttle-full" title="Full throttle (Z)">Full</button><button id="fh-cut" data-ose="flight-throttle-cut" title="Cut the throttle (X)">Cut</button><button id="fh-map" title="Map view (M)">Map</button><button id="fh-ksc" title="Leave the vessel and go to the Kerbal Space Center">KSC</button></div>
       </div>
     </div>
     <div class="fh-staging">
@@ -599,6 +604,7 @@
       <div class="fh-stress" data-ose="flight-stress"><div id="fh-stress-fill"></div></div>
       <button id="fh-stage-btn" data-ose="flight-stage" title="Space">STAGE</button>
     </div>
+    <div class="fh-actions" id="fh-actions" data-ose="flight-actions"></div>
     <div class="fh-help">W/S/A/D steer (hold, Caps Lock fine), Shift/Ctrl throttle, Z/X full/cut, Space stage, T hold direction, G gear, B brakes, M map, right-drag to look, Home resets the camera</div>
   </div>
   <div id="node-panel" data-ose="node-panel">
