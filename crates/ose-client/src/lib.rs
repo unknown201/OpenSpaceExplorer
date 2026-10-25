@@ -3895,6 +3895,23 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
         .add_event_listener_with_callback("click", on_warp.as_ref().unchecked_ref())?;
     on_warp.forget();
 
+    if let Some(pips) = app.borrow().doc.get_element_by_id("warp-pips") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let w = ev
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .and_then(|e| e.get_attribute("data-warp"))
+                .and_then(|w| w.parse::<u32>().ok());
+            if let Some(w) = w {
+                let mut app = a.borrow_mut();
+                app.warp_to = None;
+                app.request_warp(w);
+            }
+        });
+        pips.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
     if let Some(down) = app.borrow().doc.get_element_by_id("warp-down") {
         let a = app.clone();
         let on_down = Closure::<dyn FnMut()>::new(move || {
@@ -9530,6 +9547,24 @@ impl App {
             .set_text_content(Some(&format!("UT {}", kerbin_time::format_ut(ut))));
         self.warp_el
             .set_text_content(Some(&format!("\u{d7}{}", self.time.warp)));
+        if let Some(pips) = self.doc.get_element_by_id("warp-pips") {
+            let mut html = String::new();
+            for (i, w) in kerbin_time::WARP_LADDER.iter().enumerate() {
+                html.push_str(&format!(
+                    "<i data-warp=\"{w}\" title=\"\u{d7}{w}\"{}></i>",
+                    if i > 0 && *w <= self.time.warp {
+                        " class=\"on\""
+                    } else {
+                        ""
+                    }
+                ));
+            }
+            if pips.get_attribute("data-ose-warp").as_deref() != Some(&self.time.warp.to_string()) {
+                pips.set_inner_html(&html);
+                pips.set_attribute("data-ose-warp", &self.time.warp.to_string())
+                    .ok();
+            }
+        }
     }
 
     fn frame(&mut self) {

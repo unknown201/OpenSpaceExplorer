@@ -140,6 +140,10 @@
     .warp button { background: #16213a; color: #cfd6e6; border: 1px solid #2c3d63; border-radius: 4px;
       padding: 2px 10px; font: inherit; cursor: pointer; min-width: 64px; }
     .warp button:hover { background: #1f2d4d; }
+    /* The original's warp rate chevrons: lit up to the rate running now, click one to warp at it. */
+    .warp-pips { display: inline-flex; gap: 1px; margin-left: 6px; vertical-align: middle; }
+    .warp-pips i { width: 9px; height: 14px; cursor: pointer; background: #2c3d63; clip-path: polygon(0 0, 60% 0, 100% 50%, 60% 100%, 0 100%, 40% 50%); }
+    .warp-pips i.on { background: #e0a040; } .warp-pips i:hover { background: #ffd08a; }
     #focus { color: #9fb0cc; }
     /* The loading screen: the original's art for the destination and a tip, over everything, never taking clicks. */
     #loading { position: fixed; inset: 0; z-index: 9000; background: #05060a; pointer-events: none; opacity: 0; visibility: hidden; transition: opacity .45s ease, visibility 0s linear .45s; }
@@ -806,6 +810,7 @@
     <span class="warp">
       <button id="warp-down" data-ose="warp-down" title="Slow down">&minus;</button>
       <button id="warp" data-ose="warp" title="Time warp; click to speed up">&times;--</button>
+      <span id="warp-pips" class="warp-pips" data-ose="warp-pips" title="Time warp rates: click one (. and , step, / stops)"></span>
     </span>
     <span id="focus"></span>
     <span id="warp-holder" data-ose="warp-holder"></span>

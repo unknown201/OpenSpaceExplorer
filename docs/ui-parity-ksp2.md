@@ -29,7 +29,7 @@ Camera rule that runs through every map: **the right button drags the camera, th
 
 | # | KSP2 | Ours today | Status |
 |---|---|---|---|
-| G1 | Warp `.` `,` `/` everywhere in session; the warp widget stays visible in flight (top left) | `.` `,` `/` work; UT and warp stay up in flight | done |
+| G1 | Warp `.` `,` `/` everywhere in session; the warp widget stays visible in flight (top left), rate chevrons | `.` `,` `/` work; UT and warp stay up in flight; a row of the original's rate chevrons lights up to the rate running and sets it on click | done |
 | G2 | F2 hides all UI (screenshots) | F2 fades the interface | done |
 | G3 | Tooltips on every HUD control, naming the key; Shift expands | every HUD, VAB and KSC control names what it does and its key; the VAB and R&D show full part tooltips; no Shift-to-expand | done |
 | G4 | Notification toasts (warp limited, out of charge, lost link, vessel lost ...) | flight messages and refusals come up as toasts at the top right, plus events: lost and restored signal, lost control, charge running out, a new sphere of influence, stable orbit, landing, escaping, crashing | done |
