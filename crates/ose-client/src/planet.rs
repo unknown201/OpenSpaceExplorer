@@ -1861,6 +1861,23 @@ impl PlanetRenderer {
         self.draws = draws;
         self.cloud_draws = cloud_draws;
         self.under_water = has_ocean && fu.water[0] < 0.0;
+        // The sun's lens flare (lens_flare.rs, drawn by the renderer over the finished scene): faded and reddened
+        // as the sun sinks into the air, none under the sea; the depth buffer hides it behind terrain and craft.
+        {
+            let el = view.cam.normalize_or_zero().dot(sun) as f32;
+            let (strength, tint) = if self.under_water {
+                (0.0, [1.0, 1.0, 1.0])
+            } else if has_atmo {
+                let day = ((el + 0.03) / 0.13).clamp(0.0, 1.0);
+                let warm = (el / 0.2).clamp(0.0, 1.0);
+                (day, [1.0, 0.55 + 0.45 * warm, 0.3 + 0.7 * warm])
+            } else {
+                (1.0, [1.0, 1.0, 1.0])
+            };
+            if strength > 0.0 {
+                gpu.set_flare(sun, strength, tint, view.sun_radius_rad);
+            }
+        }
         self.shafts = self.under_water && quality() > 0;
         self.active = true;
         true

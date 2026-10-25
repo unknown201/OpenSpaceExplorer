@@ -212,5 +212,9 @@ turned, shifted copy by low-frequency noise (the original's `_StochasticScale` s
 
 Sun: the disc goes into the HDR target at 24 x (tinted by the air's transmittance) so fx_post's bloom glows around
 it, with a soft corona (0.55 e^(-a/0.012) + 0.12 e^(-a/0.08) beyond the disc's edge) in the sky pass; terrain and
-props hide both. Not done: the original's lens-flare ghosts (a post overlay with an occlusion query; fx_post).
+props hide both. Lens flare: lens_flare.rs, a full-screen additive pass the renderer draws into the HDR scene after the engine
+effects and before the post pass (so it blooms and is encoded with the rest); ghosts along the line through the
+screen centre, a thin horizontal streak and a faint glare, hidden by the depth buffer sampled over the sun's disc
+(terrain, craft, the limb) and faded and reddened by the air near the horizon. The planet renderer requests it
+each frame (`Renderer::set_flare`).
 

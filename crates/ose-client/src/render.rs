@@ -350,6 +350,11 @@ pub struct Renderer {
     line_pipeline: wgpu::RenderPipeline,
     engine_fx: crate::engine_fx_gpu::EngineFxGpu,
     post: crate::fx_post::FxPost,
+    /// The sun's lens flare (lens_flare.rs), drawn into the HDR scene before the post pass.
+    lens_flare: crate::lens_flare::LensFlare,
+    /// This frame's flare: sun direction (camera-relative world), strength, tint, angular radius (rad); set by
+    /// the planet renderer, cleared after each frame.
+    flare: std::cell::Cell<Option<crate::lens_flare::FlareRequest>>,
     view: DMat4,
     near: f64,
     fixture_grid: bool,
@@ -744,7 +749,10 @@ impl Renderer {
         let post = crate::fx_post::FxPost::new(&device, width, height, surface_format);
         let engine_fx =
             crate::engine_fx_gpu::EngineFxGpu::new(&device, &queue, &depth, &post.snapshot_view);
+        let lens_flare = crate::lens_flare::LensFlare::new(&device, &depth);
         Some(Renderer {
+            lens_flare,
+            flare: std::cell::Cell::new(None),
             device,
             queue,
             surface,
@@ -875,6 +883,12 @@ impl Renderer {
         self.post = crate::fx_post::FxPost::new(&self.device, width, height, self.config.format);
         self.engine_fx
             .resize(&self.device, &self.depth, &self.post.snapshot_view);
+        self.lens_flare.resize(&self.device, &self.depth);
+    }
+
+    /// Ask for the sun's lens flare this frame (the planet renderer does, while a body is drawn).
+    pub fn set_flare(&self, sun_dir: DVec3, strength: f32, tint: [f32; 3], radius_rad: f64) {
+        self.flare.set(Some((sun_dir, strength, tint, radius_rad)));
     }
 
     /// Models still loading.
@@ -1517,6 +1531,17 @@ impl Renderer {
                 multiview_mask: None,
             });
             self.engine_fx.draw(&mut pass);
+        }
+        if let Some((dir, strength, tint, radius)) = self.flare.take() {
+            self.lens_flare.draw(
+                &self.queue,
+                &mut encoder,
+                &self.post.view,
+                self.view_proj(),
+                (dir, strength, tint),
+                radius,
+                (self.width, self.height),
+            );
         }
         self.post.finish(&mut encoder, &view);
         self.queue.submit(Some(encoder.finish()));

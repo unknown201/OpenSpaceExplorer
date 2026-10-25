@@ -32,6 +32,8 @@ pub mod kerbin_time;
 #[cfg(target_arch = "wasm32")]
 pub mod ksc3d;
 #[cfg(target_arch = "wasm32")]
+pub mod lens_flare;
+#[cfg(target_arch = "wasm32")]
 pub mod menu3d;
 pub mod missions;
 #[cfg(target_arch = "wasm32")]
