@@ -222,6 +222,7 @@ struct App {
     /// Vessels this client has staged at least once: their first stage is lit, so the next is the one after.
     staged: std::collections::HashSet<u64>,
     roll_sent: f32,
+    translate_sent: (f32, f32, f32),
     /// Screen points (CSS px) along the planning vessel's current orbit with their UT, from the last map
     /// frame: a click near one adds a maneuver node there, as clicking an orbit does in the original.
     orbit_pick: Vec<(f64, f64, f64)>,
@@ -486,6 +487,7 @@ pub fn start() -> Result<(), JsValue> {
         toasts: hud::Toasts::default(),
         staged: Default::default(),
         roll_sent: 0.0,
+        translate_sent: (0.0, 0.0, 0.0),
         orbit_pick: Vec::new(),
         mnv_dirs: [(0.0, 0.0); 6],
         mnv_drag: None,
@@ -2295,6 +2297,7 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                         app.action_group(ose_net::ActionGroup::Custom(if n == 0 { 10 } else { n }));
                         true
                     }
+                    "KeyI" | "KeyJ" | "KeyK" | "KeyL" | "KeyH" | "KeyN" => true,
                     "KeyW" | "KeyA" | "KeyS" | "KeyD" | "KeyQ" | "KeyE" | "KeyB" | "ShiftLeft"
                     | "ShiftRight" | "ControlLeft" | "ControlRight" => true,
                     _ => false,
@@ -4872,6 +4875,23 @@ impl App {
                     &ClientMessage::SetRoll {
                         vessel,
                         input: roll,
+                    },
+                );
+            }
+        }
+        let (tx, ty, tz) = self.keys.translate();
+        let s = self.keys.scale() as f32;
+        let translate = (tx as f32 * s, ty as f32 * s, tz as f32 * s);
+        if translate != self.translate_sent {
+            self.translate_sent = translate;
+            if let Some(ws) = &self.ws {
+                send(
+                    ws,
+                    &ClientMessage::Translate {
+                        vessel,
+                        x: translate.0,
+                        y: translate.1,
+                        z: translate.2,
                     },
                 );
             }

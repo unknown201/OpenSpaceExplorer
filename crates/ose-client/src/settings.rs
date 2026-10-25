@@ -23,7 +23,11 @@ pub const INPUT: &[(&str, &[Binding])] = &[
             ("U", "Lights", true),
             ("1 - 0", "Custom action groups", true),
             ("W / S, A / D landed", "Wheel throttle and steering", true),
-            ("I J K L H N", "Translate (RCS)", false),
+            (
+                "J / L, I / K, H / N",
+                "RCS translate right / left, up / down, fore / aft (with RCS on)",
+                true,
+            ),
             ("M", "Map view", true),
             ("V", "Camera mode: auto, free, orbital, chase, locked", true),
             ("] / [ (map)", "Next / previous vessel", true),
@@ -122,6 +126,6 @@ mod tests {
     fn input_list_names_every_group() {
         let html = input_html();
         assert!(html.contains("Vehicle Assembly Building"));
-        assert!(html.contains("(not yet)"));
+        assert!(html.contains("RCS translate"));
     }
 }

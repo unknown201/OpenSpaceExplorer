@@ -63,6 +63,15 @@ impl Held {
     pub fn wheel_steer(&self) -> f64 {
         self.axis(&["KeyA"], &["KeyD"])
     }
+    /// RCS translation (the original's TranslateX J/L, fore/aft H/N, up/down I/K): right, fore and top in
+    /// the vessel's frame, as protocol 27's `Translate` takes them.
+    pub fn translate(&self) -> (f64, f64, f64) {
+        (
+            self.axis(&["KeyJ"], &["KeyL"]),
+            self.axis(&["KeyN"], &["KeyH"]),
+            self.axis(&["KeyK"], &["KeyI"]),
+        )
+    }
     /// WheelBrakes is held, not toggled.
     pub fn brakes(&self) -> bool {
         self.is("KeyB")
