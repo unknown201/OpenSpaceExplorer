@@ -241,6 +241,9 @@ struct App {
     /// Keys held down (by physical code) for the flight keys that act while held, when the held keys last
     /// moved the controls and were last sent, and the wheel input last sent (throttle, steer, brakes).
     keys: input::Held,
+    /// The player's key rebinds (Settings > Input), and the action waiting for its new key.
+    remap: input::Remap,
+    rebinding: Option<String>,
     keys_tick_ms: f64,
     controls_sent_ms: f64,
     controls_dirty: bool,
@@ -561,6 +564,8 @@ pub fn start() -> Result<(), JsValue> {
         throttle: 0.0,
         attitude: ose_net::AttitudeMode::Up,
         keys: input::Held::default(),
+        remap: input::Remap::parse(&stored("ose.keys").unwrap_or_default()),
+        rebinding: None,
         keys_tick_ms: 0.0,
         controls_sent_ms: 0.0,
         controls_dirty: false,
@@ -741,6 +746,25 @@ fn install_audio(app: &Shared) -> Result<(), JsValue> {
     }
     app.borrow().show_sound_toggle();
     install_settings(app)?;
+    // Key rebinding: a click on an action's key waits for the next key press.
+    app.borrow().render_rebind();
+    if let Some(el) = app.borrow().doc.get_element_by_id("settings-rebind") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let t = ev.target().and_then(|t| t.dyn_into::<Element>().ok());
+            let mut app = a.borrow_mut();
+            if let Some(d) = t.as_ref().and_then(|e| e.get_attribute("data-rebind")) {
+                app.rebinding = Some(d);
+                app.render_rebind();
+            } else if t.as_ref().is_some_and(|e| e.id() == "rebind-reset") {
+                app.remap = input::Remap::default();
+                store("ose.keys", "");
+                app.render_rebind();
+            }
+        });
+        el.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
     // Graphics: render resolution (applied at once) and the FPS counter.
     {
         let doc = app.borrow().doc.clone();
@@ -1040,7 +1064,10 @@ fn install_rnd_nav(doc: &Document) -> Result<(), JsValue> {
 fn install_settings(app: &Shared) -> Result<(), JsValue> {
     let doc = app.borrow().doc.clone();
     if let Some(el) = doc.get_element_by_id("settings-input") {
-        el.set_inner_html(&settings::input_html());
+        el.set_inner_html(&format!(
+            "<div id=\"settings-rebind\" data-ose=\"settings-rebind\"></div>{}",
+            settings::input_html()
+        ));
     }
     let apply_scale = |doc: &Document, pct: f64| {
         if let Some(root) = doc
@@ -2680,7 +2707,19 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                 .get_element_by_id("menu")
                 .map(|m| !m.class_list().contains("hidden"))
                 .unwrap_or(false);
-            let code = ev.code();
+            // Settings > Input waits for a key: this one is the new binding (Esc keeps the old one).
+            if let Some(default) = app.rebinding.take() {
+                ev.prevent_default();
+                let raw = ev.code();
+                if raw != "Escape" {
+                    app.remap.bind(&default, &raw);
+                    store("ose.keys", &app.remap.to_stored());
+                }
+                app.render_rebind();
+                return;
+            }
+            // The client acts on the original's default keys; a rebound key stands in for its action's.
+            let code = app.remap.translate(&ev.code()).unwrap_or_default();
             if code == "Escape" && settings_open(&app.doc) {
                 show_settings(&app.doc, false);
                 return;
@@ -2932,7 +2971,9 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
     let a = app.clone();
     let on_key_up =
         Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |ev: web_sys::KeyboardEvent| {
-            a.borrow_mut().keys.up(&ev.code());
+            let mut app = a.borrow_mut();
+            let code = app.remap.translate(&ev.code()).unwrap_or_default();
+            app.keys.up(&code);
         });
     window.add_event_listener_with_callback("keyup", on_key_up.as_ref().unchecked_ref())?;
     on_key_up.forget();
@@ -4571,6 +4612,26 @@ impl App {
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     fn vab_record(&mut self) {
         self.vab_history.record(&self.editor);
+    }
+
+    /// Settings > Input: each rebindable action with the key it is on now.
+    fn render_rebind(&self) {
+        let Some(el) = self.doc.get_element_by_id("settings-rebind") else {
+            return;
+        };
+        let mut html =
+            String::from("<h4>Keys (click to change, Esc keeps the old one)</h4><table>");
+        for (action, default) in input::REBINDABLE {
+            let waiting = self.rebinding.as_deref() == Some(*default);
+            let key = self.remap.key_for(default);
+            html.push_str(&format!(
+                "<tr><td>{action}</td><td><button data-rebind=\"{default}\" class=\"{}\">{}</button></td></tr>",
+                if waiting { "waiting" } else if key != *default { "changed" } else { "" },
+                if waiting { "press a key...".to_string() } else { input::key_name(key) },
+            ));
+        }
+        html.push_str("</table><button id=\"rebind-reset\">Reset all keys</button>");
+        el.set_inner_html(&html);
     }
 
     /// Open the flight part window for craft part `i` at a screen point, or close it with `None`.

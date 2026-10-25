@@ -124,9 +124,154 @@ pub fn turn(pitch_deg: f64, heading_deg: f64, dpitch: f64, dyaw: f64) -> (f64, f
     (pitch, heading.rem_euclid(360.0))
 }
 
+/// Keys the player can rebind (Settings > Input, the original's `InputRebindingController`): the action's
+/// name and its default physical key. The rest of the client handles the default keys; [`Remap`] turns a
+/// pressed key into the default key of the action it is bound to.
+pub const REBINDABLE: &[(&str, &str)] = &[
+    ("Pitch down", "KeyW"),
+    ("Pitch up", "KeyS"),
+    ("Yaw left", "KeyA"),
+    ("Yaw right", "KeyD"),
+    ("Roll left", "KeyQ"),
+    ("Roll right", "KeyE"),
+    ("Throttle up", "ShiftLeft"),
+    ("Throttle down", "ControlLeft"),
+    ("Full throttle", "KeyZ"),
+    ("Cut throttle", "KeyX"),
+    ("Stage", "Space"),
+    ("SAS on / off", "KeyT"),
+    ("RCS", "KeyR"),
+    ("Landing gear", "KeyG"),
+    ("Brakes", "KeyB"),
+    ("Lights", "KeyU"),
+    ("Precision controls", "CapsLock"),
+    ("Docking mode", "Delete"),
+    ("Translate left", "KeyJ"),
+    ("Translate right", "KeyL"),
+    ("Translate up", "KeyI"),
+    ("Translate down", "KeyK"),
+    ("Translate forward", "KeyH"),
+    ("Translate back", "KeyN"),
+    ("Map", "KeyM"),
+    ("Camera mode", "KeyV"),
+    ("Quicksave", "F5"),
+    ("Quickload", "F9"),
+    ("Hide the interface", "F2"),
+    ("Vessel labels", "F4"),
+];
+
+/// The player's rebinds: default key -> the key now used for it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Remap {
+    pub custom: std::collections::HashMap<String, String>,
+}
+
+impl Remap {
+    /// From the stored form `default=key;default=key`.
+    pub fn parse(s: &str) -> Remap {
+        let custom = s
+            .split(';')
+            .filter_map(|kv| kv.split_once('='))
+            .filter(|(d, k)| !d.is_empty() && !k.is_empty())
+            .map(|(d, k)| (d.to_string(), k.to_string()))
+            .collect();
+        Remap { custom }
+    }
+
+    pub fn to_stored(&self) -> String {
+        let mut v: Vec<String> = self
+            .custom
+            .iter()
+            .map(|(d, k)| format!("{d}={k}"))
+            .collect();
+        v.sort();
+        v.join(";")
+    }
+
+    /// The key that now does what `default` does by default.
+    pub fn key_for<'a>(&'a self, default: &'a str) -> &'a str {
+        self.custom
+            .get(default)
+            .map(|s| s.as_str())
+            .unwrap_or(default)
+    }
+
+    /// Bind the action whose default key is `default` to `key`. An action that had `key` before gives it up
+    /// and goes back to its own default (or nothing, when that default is now taken).
+    pub fn bind(&mut self, default: &str, key: &str) {
+        let others: Vec<String> = self
+            .custom
+            .iter()
+            .filter(|(d, k)| k.as_str() == key && d.as_str() != default)
+            .map(|(d, _)| d.clone())
+            .collect();
+        for d in others {
+            self.custom.remove(&d);
+        }
+        if key == default {
+            self.custom.remove(default);
+        } else {
+            self.custom.insert(default.to_string(), key.to_string());
+        }
+    }
+
+    /// The default key to act on for a pressed key: the action it is bound to, `None` when the key's own
+    /// action was moved elsewhere and nothing else uses it, the key itself otherwise.
+    pub fn translate(&self, code: &str) -> Option<String> {
+        if let Some((d, _)) = self.custom.iter().find(|(_, k)| k.as_str() == code) {
+            return Some(d.clone());
+        }
+        if self.custom.contains_key(code) {
+            return None;
+        }
+        Some(code.to_string())
+    }
+}
+
+/// A key code as the player reads it: `KeyW` -> `W`, `ShiftLeft` -> `Left Shift`, `Digit1` -> `1`.
+pub fn key_name(code: &str) -> String {
+    if let Some(k) = code.strip_prefix("Key") {
+        return k.to_string();
+    }
+    if let Some(d) = code.strip_prefix("Digit") {
+        return d.to_string();
+    }
+    for side in ["Left", "Right"] {
+        if let Some(k) = code.strip_suffix(side) {
+            return format!("{side} {k}");
+        }
+    }
+    match code {
+        "Space" => "Space".into(),
+        "CapsLock" => "Caps Lock".into(),
+        other => other.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rebinding_moves_actions_between_keys() {
+        let mut r = Remap::default();
+        assert_eq!(r.translate("KeyW").as_deref(), Some("KeyW"));
+        // Stage on P: P stages, Space does nothing.
+        r.bind("Space", "KeyP");
+        assert_eq!(r.translate("KeyP").as_deref(), Some("Space"));
+        assert_eq!(r.translate("Space"), None);
+        assert_eq!(r.key_for("Space"), "KeyP");
+        // Gear on P takes it from staging, which goes back to Space.
+        r.bind("KeyG", "KeyP");
+        assert_eq!(r.translate("KeyP").as_deref(), Some("KeyG"));
+        assert_eq!(r.translate("Space").as_deref(), Some("Space"));
+        let back = Remap::parse(&r.to_stored());
+        assert_eq!(back, r);
+        r.bind("KeyG", "KeyG");
+        assert!(r.custom.is_empty());
+        assert_eq!(key_name("ShiftLeft"), "Left Shift");
+        assert_eq!(key_name("KeyT"), "T");
+    }
 
     fn close(a: (f64, f64), b: (f64, f64)) -> bool {
         (a.0 - b.0).abs() < 1e-6 && ((a.1 - b.1 + 540.0).rem_euclid(360.0) - 180.0).abs() < 1e-6
