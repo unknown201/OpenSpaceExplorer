@@ -16,8 +16,9 @@ test("held flight controls with 30 ms added round-trip delay", async ({ page, ba
       timers.add(timer);
     };
     socket.onMessage(message => {
-      // Postcard enum discriminant for ClientMessage::SetControls in protocol v37.
-      if (typeof message !== "string" && message[0] === 22) {
+      // Postcard enum discriminants of ClientMessage::SetControls (22) and SetRotation (36): held steering
+      // keys go as a held rotation input (protocol 39 on), sent when it changes.
+      if (typeof message !== "string" && (message[0] === 22 || message[0] === 36)) {
         controls.push({ at: performance.now(), bytes: message.length });
       }
       later(() => server.send(message));
@@ -59,9 +60,9 @@ test("held flight controls with 30 ms added round-trip delay", async ({ page, ba
     await page.waitForTimeout(150);
     const samples = controls.filter(sample => sample.at >= start);
     const fps = (frames.length - 1) * 1000 / (frames.at(-1)! - frames[0]);
+    // Holding W sends the rotation input once (the server holds it until it changes), and letting go
+    // sends it again; no steady stream of attitude targets is needed any more.
     expect(samples.length).toBeGreaterThan(0);
-    // Rendering itself limits polling on slow/software GPUs; enforce the faster cadence when frames allow it.
-    if (fps >= 40) expect(samples.length).toBeGreaterThanOrEqual(37);
     expect(errors).toEqual([]);
     const report = { addedRttMs: 30, browser: testInfo.project.name, fps,
       controlMessages: samples.length, controlPayloadBytes: samples.reduce((n, s) => n + s.bytes, 0),

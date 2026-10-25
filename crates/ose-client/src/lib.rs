@@ -328,6 +328,8 @@ struct App {
     /// Take the attitude the server holds from the next readout (after a launch or a vessel switch), so the
     /// first key press turns from there: a plane on the runway holds level along it.
     adopt_attitude: bool,
+    /// When the steering keys were last let go (ms): the hold the server kept is adopted a moment later.
+    adopt_after_ms: f64,
     /// The flown vessel's part whose window is open (right click in flight).
     flight_pam: Option<usize>,
     /// Docking mode (Delete, the original's ToggleRotLinControls): W/A/S/D and Shift/Ctrl translate instead of
@@ -704,6 +706,7 @@ pub fn start() -> Result<(), JsValue> {
         lp_crew_for: None,
         loading_since: None,
         adopt_attitude: false,
+        adopt_after_ms: 0.0,
         lin_mode: false,
         flight_pam: None,
         translate_sent: (0.0, 0.0, 0.0),
@@ -7775,7 +7778,7 @@ impl App {
         if menu_open {
             self.keys.clear();
         }
-        if self.adopt_attitude {
+        if self.adopt_attitude && now >= self.adopt_after_ms {
             let held = self
                 .scene
                 .as_ref()
@@ -7808,25 +7811,9 @@ impl App {
             self.throttle = (self.throttle + thr_in * input::THROTTLE_RATE * dt).clamp(0.0, 1.0);
             self.controls_dirty = true;
         }
-        let free = matches!(self.attitude, ose_net::AttitudeMode::Free);
-        if (pitch_in != 0.0 || yaw_in != 0.0) && !free {
-            // Start turning from where the vessel points when the target is not a free direction yet.
-            let (p, h) = match self.attitude {
-                ose_net::AttitudeMode::PitchHeading {
-                    pitch_deg,
-                    heading_deg,
-                } => (pitch_deg, heading_deg),
-                _ => self.facing_pitch_heading().unwrap_or((90.0, 0.0)),
-            };
-            let step = input::TURN_RATE_DEG_S * scale * dt;
-            // W (-1) lowers the nose: positive pitch input is S.
-            let (pitch_deg, heading_deg) = input::turn(p, h, pitch_in * step, yaw_in * step);
-            self.attitude = ose_net::AttitudeMode::PitchHeading {
-                pitch_deg,
-                heading_deg,
-            };
-            self.controls_dirty = true;
-        }
+        // The steering keys turn the craft about its own axes in every SAS mode (SetRotation, protocol 39 on);
+        // the server's hold takes the new direction when they are let go, so the client stops moving a
+        // pitch/heading target (which traced circles near the vertical) and adopts the server's hold after.
         // Twenty updates a second while held; input edges flush the newest target immediately.
         if self
             .control_cadence
@@ -7843,13 +7830,14 @@ impl App {
             .map(|f| f.situation == ose_net::FlightSituation::Landed)
             .unwrap_or(false);
         let roll = self.keys.roll() as f32 * self.keys.scale() as f32;
-        // SAS off: the keys turn the craft directly (pitch toward its top, yaw to its right, roll clockwise).
+        // The keys turn the craft directly (pitch toward its top, yaw to its right, roll clockwise).
         let s = self.keys.scale() as f32;
-        let rotation = if free {
-            (pitch_in as f32 * s, yaw_in as f32 * s, roll)
-        } else {
-            (0.0, 0.0, 0.0)
-        };
+        let rotation = (pitch_in as f32 * s, yaw_in as f32 * s, roll);
+        if rotation == (0.0, 0.0, 0.0) && self.rotation_sent != (0.0, 0.0, 0.0) {
+            // Let go: take the hold the server kept for the new direction once it has it.
+            self.adopt_attitude = !matches!(self.attitude, ose_net::AttitudeMode::Free);
+            self.adopt_after_ms = now + 300.0;
+        }
         if rotation != self.rotation_sent {
             self.rotation_sent = rotation;
             if let Some(ws) = &self.ws {
@@ -7864,7 +7852,8 @@ impl App {
                 );
             }
         }
-        let roll = if free { 0.0 } else { roll };
+        // Roll goes with the rotation above; the older roll input stays at zero.
+        let roll = 0.0;
         if roll != self.roll_sent {
             self.roll_sent = roll;
             if let Some(ws) = &self.ws {
