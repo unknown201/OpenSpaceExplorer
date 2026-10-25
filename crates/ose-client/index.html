@@ -606,6 +606,13 @@
     /* Settings over everything (SettingsMenuManager): tabs on top, the original's binding list. */
     #settings { position: fixed; inset: 0; z-index: 50; display: none; place-items: center; background: #000a; font-family: var(--ui-font, system-ui); }
     #settings.open { display: grid; }
+    #credits { position: fixed; inset: 0; z-index: 50; display: none; place-items: center; background: #000a; font-family: var(--ui-font, system-ui); }
+    #credits.open { display: grid; }
+    #credits .set-card { width: min(640px, 94vw); max-height: 88vh; display: flex; flex-direction: column; background: #0b1020f8; border: 1px solid #3b63a8; border-radius: 8px; color: #e6ecf7; box-shadow: 0 10px 40px #000c; }
+    #credits .set-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px 6px; } #credits .set-head h2 { margin: 0; font-size: 22px; }
+    #credits button { margin: 0; width: auto; cursor: pointer; background: #16213a; color: #e6ecf7; border: 1px solid #2c3d63; border-radius: 4px; padding: 6px 12px; }
+    #credits .set-body { overflow: auto; padding: 4px 18px 18px; font-size: 14px; line-height: 1.45; }
+    #credits h4 { margin: 14px 0 4px; font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: #9fb0cc; } #credits p { margin: 4px 0; }
     #settings .set-card { width: min(760px, 94vw); max-height: 88vh; display: flex; flex-direction: column; background: #0b1020f8; border: 1px solid #3b63a8; border-radius: 8px; color: #e6ecf7; box-shadow: 0 10px 40px #000c; }
     #settings .set-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px 6px; }
     #settings .set-head h2 { margin: 0; font-size: 22px; }
@@ -860,7 +867,7 @@
         <ul id="main-items">
           <li><button id="play" data-ose="play">Campaign</button></li>
           <li><button id="main-settings" data-ose="main-settings" data-open-settings title="Controls, interface and sound">Settings</button></li>
-          <li><button id="main-extras" data-ose="main-extras" disabled title="not yet">Extras</button></li>
+          <li><button id="main-extras" data-ose="main-extras" title="Credits">Extras</button></li>
           <li><button id="main-sound" class="sound-toggle" data-ose="sound-toggle">Sound: on</button></li>
         </ul>
         <div id="login-bar">
@@ -1061,6 +1068,20 @@
   <div id="flight-report" data-ose="flight-report"></div>
   <div id="ftue" data-ose="ftue"></div>
   <svg id="aero-svg" data-ose="aero-svg" preserveAspectRatio="none"></svg>
+  <div id="credits" data-ose="credits">
+    <div class="set-card">
+      <div class="set-head"><h2>Credits</h2><button id="credits-close" data-ose="credits-close" title="Close (Esc)">&#10005;</button></div>
+      <div class="set-body">
+        <h4>OpenSpaceExplorer</h4>
+        <p>A shared Kerbol system played in the browser: everyone in a campaign flies in the same universe.</p>
+        <p>Made by Josh, with Claude (Anthropic) writing much of the code.</p>
+        <h4>Inspired by</h4>
+        <p>Kerbal Space Program 2 and the Kerbal Space Program series, whose game we follow screen by screen. Kerbal Space Program is a trademark of Take-Two Interactive Software.</p>
+        <h4>Built with</h4>
+        <p>Rust; wgpu (rendering), rapier (vessel physics), bevy_ecs (simulation), glam (maths), tokio, axum and tungstenite (server), serde and postcard (protocol), wasm-bindgen and web-sys (browser), trunk (build), Playwright (tests).</p>
+      </div>
+    </div>
+  </div>
   <div id="settings" data-ose="settings">
     <div class="set-card">
       <div class="set-head"><h2>Settings</h2><button id="settings-close" data-ose="settings-close" title="Close (Esc)">&#10005;</button></div>

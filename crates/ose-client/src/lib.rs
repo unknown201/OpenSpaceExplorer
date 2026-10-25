@@ -2424,6 +2424,16 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
             }
         }),
     )?;
+    for (id, open) in [("main-extras", true), ("credits-close", false)] {
+        wire(
+            id,
+            Box::new(move |a| {
+                if let Some(el) = a.borrow().doc.get_element_by_id("credits") {
+                    el.class_list().toggle_with_force("open", open).ok();
+                }
+            }),
+        )?;
+    }
     wire(
         "vab-orient",
         Box::new(|a| {
@@ -3617,6 +3627,16 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
             }
             // The client acts on the original's default keys; a rebound key stands in for its action's.
             let code = app.remap.translate(&ev.code()).unwrap_or_default();
+            if let Some(x) = app
+                .doc
+                .get_element_by_id("credits")
+                .filter(|x| x.class_list().contains("open"))
+            {
+                if code == "Escape" {
+                    x.class_list().remove_1("open").ok();
+                }
+                return;
+            }
             if code == "Escape" && settings_open(&app.doc) {
                 show_settings(&app.doc, false);
                 return;
