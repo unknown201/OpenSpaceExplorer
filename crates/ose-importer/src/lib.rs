@@ -360,6 +360,8 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
     let mut steerable = false;
     let mut converter: Option<ose_data::Converter> = None;
     let mut ejection_force = 0.0;
+    let mut fairing = false;
+    let mut cargo_bay = false;
     let mut rcs: Option<ose_data::Rcs> = None;
     let mut lifting_surface: Option<ose_data::LiftingSurface> = None;
     let mut intake_area_m2 = 0.0;
@@ -398,6 +400,13 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
                             propellant: s(&o["Propellant"], "mixtureName"),
                             isp_curve: curve(&o["atmosphereCurve"]),
                         });
+                    }
+                    // a fairing part of its own (engines carry Data_Fairing for their shrouds too)
+                    if entry["Name"] == "Data_Fairing" && d["stageType"] == "Fairing" {
+                        fairing = true;
+                    }
+                    if entry["Name"] == "Data_CargoBay" {
+                        cargo_bay = true;
                     }
                     if entry["Name"] == "Data_Decouple" {
                         ejection_force = f(o, "ejectionForce");
@@ -674,6 +683,8 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
         landing_gear,
         converter,
         ejection_force,
+        fairing,
+        cargo_bay,
         rcs,
         lifting_surface,
         intake_area_m2,

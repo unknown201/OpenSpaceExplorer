@@ -832,6 +832,41 @@ fn flight_readout(
         rcs_firing: p.rcs.usage as f32,
         lift_kn: p.lift_kn.length() as f32,
         angvel: p.angvel,
+        resources: u
+            .structure(e)
+            .map(|st| st.resource_totals())
+            .unwrap_or_default(),
+        stage_resources: u
+            .structure(e)
+            .map(|st| st.stage_resource_totals(p.stage))
+            .unwrap_or_default(),
+        fairings: u
+            .structure(e)
+            .map(|st| {
+                (0..st.fairing_deployed.len())
+                    .filter(|&i| st.fairing_payload[i].is_some() && st.rigid.present[i])
+                    .map(|i| (i as u16, st.fairing_deployed[i]))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        cargo_bays: u
+            .structure(e)
+            .map(|st| {
+                (0..st.bay_open.len())
+                    .filter(|&i| st.cargo_bay[i] && st.rigid.present[i])
+                    .map(|i| (i as u16, st.bay_open[i]))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        shielded: u
+            .structure(e)
+            .map(|st| {
+                (0..st.shielded.len())
+                    .filter(|&i| st.shielded[i] && st.rigid.present[i])
+                    .map(|i| i as u16)
+                    .collect()
+            })
+            .unwrap_or_default(),
         jet: p.jet.is_some(),
         lights: p.groups.lights,
         rcs: p.groups.rcs,
@@ -2879,6 +2914,26 @@ async fn session(mut socket: WebSocket, s: AppState) {
                         | ClientMessage::RevertToLaunch
                         | ClientMessage::RevertToEditor)) => {
                             let reply = save_request(&s, player_id, &msg);
+                            if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::DeployFairings { vessel }) => {
+                            let reply = match owned_vessel(&s, vessel, player_id) {
+                                Some(e) => match s.universe.lock().expect("sim lock").deploy_fairings(e) {
+                                    Some(n) if n > 0 => ServerMessage::FlightAck { vessel, accepted: true, reason: None },
+                                    _ => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("no fairings on".into()) },
+                                },
+                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
+                            };
+                            if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::SetCargoBays { vessel, open }) => {
+                            let reply = match owned_vessel(&s, vessel, player_id) {
+                                Some(e) => match s.universe.lock().expect("sim lock").open_cargo_bays(e, open) {
+                                    Some(n) if n > 0 => ServerMessage::FlightAck { vessel, accepted: true, reason: None },
+                                    _ => ServerMessage::FlightAck { vessel, accepted: false, reason: Some(if open { "no closed cargo bays" } else { "no open cargo bays" }.into()) },
+                                },
+                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
+                            };
                             if !send(&mut socket, &reply).await { break; }
                         }
                         Ok(ClientMessage::SetConverters { vessel, on }) => {

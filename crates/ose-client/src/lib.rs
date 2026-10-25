@@ -307,6 +307,9 @@ struct App {
     /// turning and throttling.
     lin_mode: bool,
     translate_sent: (f32, f32, f32),
+    /// EVA: run as last sent, and a Space press not yet sent as a jump.
+    eva_run_sent: bool,
+    eva_jump: bool,
     /// Screen points (CSS px) along the planning vessel's current orbit with their UT, from the last map
     /// frame: a click near one adds a maneuver node there, as clicking an orbit does in the original.
     orbit_pick: Vec<(f64, f64, f64)>,
@@ -643,6 +646,8 @@ pub fn start() -> Result<(), JsValue> {
         lin_mode: false,
         flight_pam: None,
         translate_sent: (0.0, 0.0, 0.0),
+        eva_run_sent: false,
+        eva_jump: false,
         orbit_pick: Vec::new(),
         mnv_dirs: [(0.0, 0.0); 6],
         mnv_drag: None,
@@ -1570,6 +1575,18 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
             if let Some(el) = doc.get_element_by_id("fh-missions") {
                 let open = el.class_list().toggle("open").unwrap_or(false);
                 store("ose.tracker", if open { "open" } else { "closed" });
+                if open {
+                    for id in ["fh-parts", "fh-res"] {
+                        if let Some(e) = doc.get_element_by_id(id) {
+                            e.class_list().remove_1("open").ok();
+                        }
+                    }
+                    for id in ["fh-parts-btn", "fh-res-btn"] {
+                        if let Some(e) = doc.get_element_by_id(id) {
+                            e.class_list().remove_1("on").ok();
+                        }
+                    }
+                }
                 if let Some(b) = doc.get_element_by_id("fh-missions-btn") {
                     b.class_list().toggle_with_force("on", open).ok();
                 }
@@ -1609,6 +1626,59 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
     }
     if let Some(el) = doc.get_element_by_id("fh-crew-btn") {
         el.class_list().toggle_with_force("on", !crew_off).ok();
+    }
+    const APP_WINDOWS: [(&str, &str); 3] = [
+        ("fh-missions-btn", "fh-missions"),
+        ("fh-parts-btn", "fh-parts"),
+        ("fh-res-btn", "fh-res"),
+    ];
+    for (btn, win) in [("fh-parts-btn", "fh-parts"), ("fh-res-btn", "fh-res")] {
+        wire(
+            btn,
+            Box::new(move |a| {
+                let app = a.borrow();
+                if let Some(el) = app.doc.get_element_by_id(win) {
+                    let open = el.class_list().toggle("open").unwrap_or(false);
+                    if let Some(b) = app.doc.get_element_by_id(btn) {
+                        b.class_list().toggle_with_force("on", open).ok();
+                    }
+                    // The app windows share a place: opening one closes the others.
+                    if open {
+                        for (b2, w2) in APP_WINDOWS.iter().filter(|(_, w)| *w != win) {
+                            for (id, class) in [(*w2, "open"), (*b2, "on")] {
+                                if let Some(e) = app.doc.get_element_by_id(id) {
+                                    e.class_list().remove_1(class).ok();
+                                }
+                            }
+                        }
+                        store("ose.tracker", "closed");
+                    }
+                }
+                app.render_parts_manager();
+                app.render_resource_manager();
+            }),
+        )?;
+    }
+    // A parts manager row opens that part's window beside the list.
+    if let Some(list) = doc.get_element_by_id("fh-parts-list") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let row = ev
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .and_then(|e| e.closest("[data-part]").ok().flatten());
+            let Some(i) = row
+                .and_then(|r| r.get_attribute("data-part"))
+                .and_then(|v| v.parse::<usize>().ok())
+            else {
+                return;
+            };
+            let x = (ev.client_x() as f64 - 620.0).max(10.0);
+            a.borrow_mut()
+                .flight_open_pam(Some(i), x, ev.client_y() as f64);
+        });
+        list.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
     }
     wire(
         "fh-crew-btn",
@@ -3201,9 +3271,13 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                         true
                     }
                     "Space" => {
-                        // On EVA Space is the jetpack (held, flight_keys_tick); a Kerbal has nothing to stage.
-                        if !ev.repeat() && !app.flying_eva() {
-                            app.flight_stage();
+                        // On EVA Space jumps or fires the jetpack (flight_keys_tick); a Kerbal has nothing to stage.
+                        if !ev.repeat() {
+                            if app.flying_eva() {
+                                app.eva_jump = true;
+                            } else {
+                                app.flight_stage();
+                            }
                         }
                         true
                     }
@@ -6349,7 +6423,89 @@ impl App {
 
     /// Show the crew buttons that apply: EVA with crew aboard, Board and Plant Flag for a Kerbal (the flag on
     /// the ground), Undock while docked.
+    /// The parts manager window: the parts still on the flown vessel (staged-off ones gone), by name.
+    fn render_parts_manager(&self) {
+        let Some(el) = self.doc.get_element_by_id("fh-parts-list") else {
+            return;
+        };
+        let open = self
+            .doc
+            .get_element_by_id("fh-parts")
+            .is_some_and(|e| e.class_list().contains("open"));
+        if !open {
+            return;
+        }
+        let Some(craft) = &self.flight_craft else {
+            el.set_inner_html("");
+            return;
+        };
+        let fired = self
+            .flying
+            .and_then(|id| self.scene.as_ref()?.vessel(id))
+            .and_then(|v| v.flight.as_ref())
+            .map(|f| f.stage as usize)
+            .unwrap_or(0);
+        let catalog = &self.catalog;
+        let is_dec = |pid: &str| catalog.get(pid).map(|p| p.is_decoupler).unwrap_or(false);
+        #[cfg(target_arch = "wasm32")]
+        let gone = flight3d::jettisoned(craft, fired, &is_dec);
+        #[cfg(not(target_arch = "wasm32"))]
+        let gone = {
+            let _ = (fired, &is_dec);
+            vec![false; craft.parts.len()]
+        };
+        let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
+        for (i, p) in craft.parts.iter().enumerate() {
+            if gone.get(i).copied().unwrap_or(false) {
+                continue;
+            }
+            let title = catalog
+                .get(&p.part_id)
+                .map(|s| s.display_title().to_string())
+                .unwrap_or_else(|| p.part_id.clone());
+            match groups.iter_mut().find(|(t, _)| *t == title) {
+                Some((_, v)) => v.push(i),
+                None => groups.push((title, vec![i])),
+            }
+        }
+        let html = hud::parts_html(&groups);
+        let key = format!("{}:{}", html.len(), hud::fnv(&html));
+        if el.get_attribute("data-ose-key").as_deref() != Some(key.as_str()) {
+            el.set_inner_html(&html);
+            el.set_attribute("data-ose-key", &key).ok();
+        }
+    }
+
+    /// The resource manager window: the burning stage's and the whole vessel's resources (protocol 34).
+    fn render_resource_manager(&self) {
+        let Some(el) = self.doc.get_element_by_id("fh-res-list") else {
+            return;
+        };
+        let open = self
+            .doc
+            .get_element_by_id("fh-res")
+            .is_some_and(|e| e.class_list().contains("open"));
+        if !open {
+            return;
+        }
+        let Some(f) = self
+            .flying
+            .and_then(|id| self.scene.as_ref()?.vessel(id))
+            .and_then(|v| v.flight.as_ref())
+        else {
+            return;
+        };
+        let html = hud::resources_html(&f.stage_resources, &f.resources);
+        let key = format!("{}:{}", html.len(), hud::fnv(&html));
+        if el.get_attribute("data-ose-key").as_deref() != Some(key.as_str()) {
+            el.set_inner_html(&html);
+            el.set_attribute("data-ose-key", &key).ok();
+        }
+    }
+
     fn update_crew_buttons(&self, f: &ose_net::FlightReadout) {
+        self.render_parts_manager();
+        self.render_resource_manager();
         let landed = matches!(f.situation, ose_net::FlightSituation::Landed);
         if let Some(el) = self.doc.get_element_by_id("fh-crewbox") {
             let face = |name: &str| {
@@ -6483,21 +6639,71 @@ impl App {
             .is_some_and(|f| f.eva)
     }
 
-    /// A Kerbal on EVA, as the original's EVA keys: W walks ahead, S backs up, A/D turn, Q/E step sideways,
-    /// Space fires the jetpack straight up. The server walks a Kerbal with throttle and a level heading, and
-    /// flies the jetpack when the attitude points steeply up.
+    /// A Kerbal on EVA, as the original's EVA keys (protocol 33). On the ground W walks ahead, S backs up,
+    /// A/D turn, Q/E step sideways, Shift runs and Space jumps. In the air the jetpack: Shift or Space up,
+    /// Ctrl down, W/S and Q/E push ahead, back and sideways. The server walks a Kerbal with throttle and a
+    /// level heading; the pack takes `Translate` (y up along the Kerbal, z its front, x its right).
     fn eva_keys_tick(&mut self, now: f64, dt: f64) {
         let k = &self.keys;
-        let (walk, strafe, turn, jet) = (-k.pitch(), k.roll(), k.yaw(), k.is("Space"));
+        let (walk, strafe, turn) = (-k.pitch(), k.roll(), k.yaw());
+        let shift = k.is("ShiftLeft") || k.is("ShiftRight");
+        let ctrl = k.is("ControlLeft") || k.is("ControlRight");
+        let space = k.is("Space");
+        let Some(vessel) = self.flying else { return };
+        let landed = self
+            .scene
+            .as_ref()
+            .and_then(|s| s.vessel(vessel))
+            .and_then(|v| v.flight.as_ref())
+            .is_some_and(|f| matches!(f.situation, ose_net::FlightSituation::Landed));
         let heading = match self.attitude {
             ose_net::AttitudeMode::PitchHeading { heading_deg, .. } => heading_deg,
             _ => self.facing_pitch_heading().map(|(_, h)| h).unwrap_or(90.0),
         };
         let heading = (heading + turn * 90.0 * dt).rem_euclid(360.0);
-        // The walk direction relative to the Kerbal's own heading: ahead, back, to either side or between.
-        let moving = walk != 0.0 || strafe != 0.0;
-        let (pitch_deg, heading_deg, throttle) = if jet {
-            (85.0, heading, 1.0)
+        // Run and jump: run held while Shift is down on the ground, a jump on each new Space press there.
+        let run = landed && shift;
+        // A press is caught on key down, so a tap shorter than a frame still jumps.
+        let jump = landed && std::mem::take(&mut self.eva_jump);
+        if run != self.eva_run_sent || jump {
+            self.eva_run_sent = run;
+            if let Some(ws) = &self.ws {
+                send(ws, &ClientMessage::EvaControls { vessel, run, jump });
+            }
+        }
+        // The jetpack in the air.
+        let translate = if landed {
+            (0.0, 0.0, 0.0)
+        } else {
+            let up = f32::from(shift || space) - f32::from(ctrl);
+            (strafe as f32, up, walk as f32)
+        };
+        if translate != self.translate_sent {
+            self.translate_sent = translate;
+            if let Some(ws) = &self.ws {
+                send(
+                    ws,
+                    &ClientMessage::Translate {
+                        vessel,
+                        x: translate.0,
+                        y: translate.1,
+                        z: translate.2,
+                    },
+                );
+            }
+        }
+        // Walking: the direction relative to the Kerbal's own heading (ahead, back, either side or between).
+        // Under the pack in the air the Kerbal stands upright and keeps its heading.
+        let moving = landed && (walk != 0.0 || strafe != 0.0);
+        let held_pitch = match self.attitude {
+            ose_net::AttitudeMode::PitchHeading { pitch_deg, .. } => pitch_deg,
+            _ => 0.0,
+        };
+        let (pitch_deg, heading_deg, throttle) = if !landed && translate != (0.0, 0.0, 0.0) {
+            (85.0, heading, 0.0)
+        } else if !landed {
+            // A hop or a coast: hold the pose it has.
+            (held_pitch, heading, 0.0)
         } else if moving {
             let off = strafe.atan2(walk).to_degrees();
             (
@@ -6514,15 +6720,15 @@ impl App {
             // the Kerbal's own.
             heading_deg,
         };
-        if moving && !jet {
-            self.attitude = ose_net::AttitudeMode::PitchHeading {
+        self.attitude = if moving {
+            ose_net::AttitudeMode::PitchHeading {
                 pitch_deg: 0.0,
                 heading_deg: heading,
-            };
+            }
         } else {
-            self.attitude = attitude;
-        }
-        let changed = throttle != self.throttle || turn != 0.0 || jet || moving;
+            attitude
+        };
+        let changed = throttle != self.throttle || turn != 0.0 || moving;
         if changed || self.controls_dirty {
             self.throttle = throttle;
             self.controls_dirty = true;
@@ -6530,7 +6736,7 @@ impl App {
         if self.controls_dirty && now - self.controls_sent_ms >= 100.0 {
             self.controls_dirty = false;
             self.controls_sent_ms = now;
-            if let (Some(vessel), Some(ws)) = (self.flying, &self.ws) {
+            if let Some(ws) = &self.ws {
                 send(
                     ws,
                     &ClientMessage::SetControls {

@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 33;
+pub const PROTOCOL_VERSION: u16 = 35;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -225,6 +225,15 @@ pub enum ClientMessage {
     /// Back to just before the player's last launch, with its craft for the editor (needs `AllowRevert`);
     /// answers `SaveAck` with `craft`.
     RevertToEditor,
+    /// Jettison the vessel's fairings (also done by staging them); answers `FlightAck`.
+    DeployFairings {
+        vessel: u64,
+    },
+    /// Open (`open`) or close the vessel's cargo bays; answers `FlightAck`.
+    SetCargoBays {
+        vessel: u64,
+        open: bool,
+    },
     /// Switch the vessel's resource converters (fuel cells, reactor) on or off; answers `FlightAck`.
     SetConverters {
         vessel: u64,
@@ -560,6 +569,15 @@ pub struct FlightReadout {
     pub lift_kn: f32,
     /// Angular velocity, rad/s, inertial (with SAS off it is what the vessel keeps spinning at).
     pub angvel: DVec3,
+    /// Resource manager: (resource id, amount, capacity) in units for the whole vessel, and for the tanks
+    /// the burning stage's engines draw from.
+    pub resources: Vec<(String, f64, f64)>,
+    pub stage_resources: Vec<(String, f64, f64)>,
+    /// Fairings (craft part index, jettisoned), cargo bays (part, open), and the parts they shield from the
+    /// airflow (no drag, no re-entry heat).
+    pub fairings: Vec<(u16, bool)>,
+    pub cargo_bays: Vec<(u16, bool)>,
+    pub shielded: Vec<u16>,
     /// The burning stage is jets (their thrust follows speed and air; `thrust_kn` shows it).
     pub jet: bool,
 }

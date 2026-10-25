@@ -407,6 +407,8 @@ mod tests {
             landing_gear: None,
             converter: None,
             ejection_force: 0.0,
+            fairing: false,
+            cargo_bay: false,
             rcs: None,
             lifting_surface: None,
             intake_area_m2: 0.0,
