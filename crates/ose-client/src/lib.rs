@@ -3100,6 +3100,7 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                 if k < app.vab3d.loose.len() {
                     app.vab_record();
                     let (parts, _) = app.vab3d.loose.remove(k);
+                    app.save_loose();
                     let frag = vab::Fragment { parts };
                     let nodes = vab_nodes(&app.catalog, frag.root_id());
                     app.vab3d.held = Some((frag.root_id().to_string(), nodes));
@@ -3310,6 +3311,7 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                     match app.vab3d.held_at {
                         Some(at) if !app.editor.is_empty() => {
                             app.vab3d.loose.push((frag.parts.clone(), at));
+                            app.save_loose();
                             set_text(
                                 &app.doc,
                                 "vab-report",
@@ -4268,7 +4270,11 @@ impl App {
                 reason,
             } => match (id, summary) {
                 (Some(id), Some(s)) => {
-                    self.vab_craft_id = Some(id);
+                    if self.vab_craft_id != Some(id) {
+                        self.vab_craft_id = Some(id);
+                        self.save_loose();
+                        store(&self.loose_key(None), "");
+                    }
                     // The saved craft is the editor's: keep it, so Save and launch can draw it on the pad
                     // straight away, and ask for the server's copy to replace it.
                     self.craft_docs.insert(id, self.editor.craft.clone());
@@ -4945,6 +4951,54 @@ impl App {
     }
 
     /// Local storage key for the craft a vessel was launched from: vessel ids restart in every campaign.
+    /// Local storage key for the loose assemblies of the craft in the VAB (per campaign; an unsaved craft
+    /// keeps them under "new" until it gets an id).
+    fn loose_key(&self, craft: Option<u64>) -> String {
+        match craft {
+            Some(id) => format!("ose.loose.{}.{id}", self.campaign_id),
+            None => format!("ose.loose.{}.new", self.campaign_id),
+        }
+    }
+
+    /// Keep the workspace's loose assemblies with the craft (in this browser).
+    fn save_loose(&self) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let list: Vec<(&Vec<ose_data::craft::CraftPart>, [f64; 3])> = self
+                .vab3d
+                .loose
+                .iter()
+                .map(|(parts, at)| (parts, [at.x, at.y, at.z]))
+                .collect();
+            let key = self.loose_key(self.vab_craft_id);
+            if list.is_empty() {
+                store(&key, "");
+            } else if let Ok(text) = serde_json::to_string(&list) {
+                store(&key, &text);
+            }
+        }
+    }
+
+    /// Bring back the loose assemblies kept with this craft.
+    fn load_loose(&mut self) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let key = self.loose_key(self.vab_craft_id);
+            self.vab3d.loose = stored(&key)
+                .filter(|t| !t.is_empty())
+                .and_then(|t| {
+                    serde_json::from_str::<Vec<(Vec<ose_data::craft::CraftPart>, [f64; 3])>>(&t)
+                        .ok()
+                })
+                .map(|l| {
+                    l.into_iter()
+                        .map(|(parts, a)| (parts, glam::DVec3::new(a[0], a[1], a[2])))
+                        .collect()
+                })
+                .unwrap_or_default();
+        }
+    }
+
     fn craft_link_key(&self, vessel: u64) -> String {
         format!("ose.flight.{}.{vessel}", self.campaign_id)
     }
@@ -5332,6 +5386,7 @@ impl App {
             }
         }
         set_text(&self.doc, "vab-report", "");
+        self.load_loose();
         self.render_vab_picker();
         self.render_vab();
     }
@@ -5504,6 +5559,7 @@ impl App {
         // A new craft starts a new workspace: the loose assemblies go too.
         #[cfg(target_arch = "wasm32")]
         self.vab3d.loose.clear();
+        self.save_loose();
         set_text(&self.doc, "vab-report", "");
         self.render_vab();
     }
