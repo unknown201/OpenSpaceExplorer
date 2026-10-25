@@ -296,6 +296,8 @@ struct App {
     toasts: hud::Toasts,
     /// The flown vessel as last seen, for event toasts (signal, charge, sphere of influence, orbit, landing).
     flight_watch: std::cell::RefCell<Option<hud::FlightWatch>>,
+    /// Your other vessels' reference bodies as last seen (the original's inactive-vessel SOI notices).
+    soi_seen: std::cell::RefCell<std::collections::HashMap<u64, u16>>,
     /// The flown vessel's records for the flight report.
     flight_records: std::cell::RefCell<Option<hud::FlightRecords>>,
     /// Vessels this client has staged at least once: their first stage is lit, so the next is the one after.
@@ -712,6 +714,7 @@ pub fn start() -> Result<(), JsValue> {
         apsis_ut: [f64::NAN; 2],
         toasts: hud::Toasts::default(),
         flight_watch: std::cell::RefCell::new(None),
+        soi_seen: Default::default(),
         flight_records: std::cell::RefCell::new(None),
         staged: Default::default(),
         roll_sent: 0.0,
@@ -9212,12 +9215,41 @@ impl App {
             body: v.reference_body,
             situation: Some(f.situation),
             charge_low: f.electric_capacity > 0.0 && f.electric_charge < f.electric_capacity * 0.05,
+            stage_dry: hud::propellant_left(&f.stage_resources).is_some_and(|x| x < 1e-3),
+            vessel_dry: hud::propellant_left(&f.resources).is_some_and(|x| x < 1e-3),
+            ablator_out: f
+                .part_resources
+                .iter()
+                .any(|r| r.1 == "Ablator" && r.3 > 0.0 && r.2 < 1e-3),
+            recoverable: matches!(f.situation, ose_net::FlightSituation::Landed)
+                && body.is_some_and(|b| b.id == "Kerbin")
+                && !f.eva,
+            transferring: f.transfer.is_some(),
         };
         let before = self.flight_watch.replace(Some(watch.clone()));
         if let Some(before) = before {
             let name = body.map(|b| b.id.as_str()).unwrap_or("the body");
             for (text, tier) in hud::flight_events(&before, &watch, name) {
                 hud::push(&self.doc, &text, tier);
+            }
+        }
+        if let Some(scene) = &self.scene {
+            let mut seen = self.soi_seen.borrow_mut();
+            for o in scene
+                .vessels
+                .iter()
+                .filter(|o| o.id != id && o.owner.is_some() && o.owner == self.player_id)
+            {
+                let was = seen.insert(o.id, o.reference_body);
+                if was.is_some_and(|b| b != o.reference_body) {
+                    if let Some(b) = scene.bodies.get(o.reference_body as usize) {
+                        hud::push(
+                            &self.doc,
+                            &format!("Inactive vessel: {} entered {}'s SOI", o.name, b.id),
+                            "passive",
+                        );
+                    }
+                }
             }
         }
         // Altimeter mode: sea level (the readout above) or terrain, from the planet map the ground is drawn from.

@@ -763,6 +763,30 @@ pub struct FlightWatch {
     pub body: u16,
     pub situation: Option<ose_net::FlightSituation>,
     pub charge_low: bool,
+    /// The burning stage's propellant is gone; the whole vessel's is gone.
+    pub stage_dry: bool,
+    pub vessel_dry: bool,
+    /// A heat shield has burnt its ablator away.
+    pub ablator_out: bool,
+    /// Landed or splashed down on Kerbin: it can be recovered.
+    pub recoverable: bool,
+    /// A resource transfer is running.
+    pub transferring: bool,
+}
+
+/// Propellant left in a list of (resource, amount, capacity): `None` when it carries none at all.
+pub fn propellant_left(list: &[(String, f64, f64)]) -> Option<f64> {
+    let props: Vec<&(String, f64, f64)> = list
+        .iter()
+        .filter(|r| r.2 > 0.0)
+        .filter(|r| {
+            !matches!(
+                r.0.as_str(),
+                "ElectricCharge" | "Ablator" | "MonoPropellant"
+            )
+        })
+        .collect();
+    (!props.is_empty()).then(|| props.iter().map(|r| r.1).sum())
 }
 
 /// The original's `NotificationEvents` the client can tell from two readouts of the same vessel: lost and
@@ -797,6 +821,27 @@ pub fn flight_events(
             format!("Entered {body_name}'s sphere of influence"),
             "passive",
         ));
+    }
+    // The original's fuel, ablator, recovery and transfer notifications.
+    if !before.vessel_dry && now.vessel_dry {
+        out.push(("Completely out of fuel".to_string(), "alert"));
+    } else if !before.stage_dry && now.stage_dry && !now.vessel_dry {
+        out.push((
+            "Stage partially out of fuel: stage to go on".to_string(),
+            "alert",
+        ));
+    }
+    if !before.ablator_out && now.ablator_out {
+        out.push((
+            "Ablator depleted! The heat shield will be damaged".to_string(),
+            "alert",
+        ));
+    }
+    if !before.recoverable && now.recoverable {
+        out.push(("Vessel recoverable".to_string(), "passive"));
+    }
+    if before.transferring && !now.transferring {
+        out.push(("Resource transfer finished".to_string(), "passive"));
     }
     if before.situation != now.situation {
         match now.situation {
@@ -1369,7 +1414,7 @@ mod tests {
             control: true,
             body: 1,
             situation: Some(S::SubOrbital),
-            charge_low: false,
+            ..Default::default()
         };
         let b = FlightWatch {
             comm: false,
@@ -1381,6 +1426,32 @@ mod tests {
             .iter()
             .any(|(t, k)| t == "Lost connection to the KSC" && *k == "alert"));
         assert!(ev.iter().any(|(t, _)| t == "Stable orbit around Kerbin"));
+        // Fuel: the stage running dry, then the whole vessel.
+        let dry = FlightWatch {
+            stage_dry: true,
+            ..a.clone()
+        };
+        assert!(flight_events(&a, &dry, "Kerbin")
+            .iter()
+            .any(|(t, _)| t.starts_with("Stage partially out of fuel")));
+        let empty = FlightWatch {
+            vessel_dry: true,
+            ..dry.clone()
+        };
+        let ev = flight_events(&dry, &empty, "Kerbin");
+        assert_eq!(ev.len(), 1);
+        assert_eq!(ev[0].0, "Completely out of fuel");
+        assert_eq!(
+            propellant_left(&[("ElectricCharge".into(), 5.0, 10.0)]),
+            None
+        );
+        assert_eq!(
+            propellant_left(&[
+                ("Methane".into(), 0.0, 10.0),
+                ("Oxidizer".into(), 1.0, 40.0)
+            ]),
+            Some(1.0)
+        );
         // Another vessel: nothing (switching is not an event).
         let c = FlightWatch {
             vessel: 2,
