@@ -63,7 +63,7 @@ Camera rule that runs through every map: **the right button drags the camera, th
 | F15 | App bar: mission tracker, flight report, Kerbal manager, resource and parts managers | an app bar at the top right: mission tracker, parts manager (parts still aboard by name; a row opens that part's window), resource manager, action groups (lights, RCS, abort, 1-10 lit while on, click to toggle), the flight report so far and the Kerbal portraits toggle; one app window open at a time | done |
 | F16 | Fairings and cargo bays: deploy the fairing, open and close bays from the part window | the part window shows a fairing's state with Deploy fairing, a bay's with Open/Close bay, and Shielded on parts they enclose (protocol 35) | done |
 | F17 | Flight staging stack with each stage's delta-v and TWR, and the vessel's total delta-v | each stage card shows delta-v, TWR and burn time where the vessel is now, the stage burning now stays at the bottom, and the stage line gives the vessel's total delta-v (protocol 38) | done |
-| F18 | Arrow keys turn the flight camera (cameraPan) | same, outside the map; listed in Settings > Input | done |
+| F18 | Arrow keys turn the flight camera (cameraPan); Tab mouselook | same, outside the map; Tab makes the camera follow the mouse with no button held; both listed in Settings > Input | done |
 
 ### Map view and Tracking Station
 

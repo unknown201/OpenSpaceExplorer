@@ -296,6 +296,8 @@ struct App {
     /// Training Center's Lessons tab (Kerbal Space Academy): shown instead of the Kerbals, the lesson picked,
     /// and the lessons from assets/ui/tutorials.json.
     tc_lessons: bool,
+    /// Flight mouselook (Tab): moving the mouse turns the camera.
+    mouselook: bool,
     /// VAB offset tool (2): arrows and Q/E move the selected part.
     vab_offset: bool,
     /// VAB frame of reference (F): turn the held part about its own axes instead of the craft's.
@@ -669,6 +671,7 @@ pub fn start() -> Result<(), JsValue> {
         tc_selected: None,
         tc_lessons: false,
         vab_offset: false,
+        mouselook: false,
         vab_local_frame: false,
         lesson_selected: None,
         academy: None,
@@ -2980,6 +2983,12 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
     let a = app.clone();
     let on_move = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
         let mut app = a.borrow_mut();
+        // Mouselook (Tab): the flight camera follows the mouse without a button held.
+        #[cfg(target_arch = "wasm32")]
+        if app.mouselook && app.flying.is_some() && !app.map_mode && ev.buttons() == 0 {
+            app.flight3d
+                .orbit(ev.movement_x() as f64, ev.movement_y() as f64);
+        }
         if app.mnv_drag.is_some() {
             app.mnv_drag_to(ev.client_x() as f64, ev.client_y() as f64, ev.shift_key());
             return;
@@ -3511,6 +3520,19 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                 // The original's flight bindings (KSP.Input/GameInput.cs). Rotation, throttle steps and wheels
                 // act while held and are read every frame (flight_keys_tick); these act once.
                 let handled = match code.as_str() {
+                    "Tab" if !ev.repeat() && !app.map_mode => {
+                        app.mouselook = !app.mouselook;
+                        hud::push(
+                            &app.doc,
+                            if app.mouselook {
+                                "Mouselook on (Tab)"
+                            } else {
+                                "Mouselook off"
+                            },
+                            "passive",
+                        );
+                        true
+                    }
                     // The original's cameraPan: the arrow keys turn the flight camera round the vessel.
                     "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown" if !app.map_mode => {
                         #[cfg(target_arch = "wasm32")]
