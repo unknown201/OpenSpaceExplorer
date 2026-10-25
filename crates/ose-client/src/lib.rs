@@ -3511,6 +3511,21 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                 // The original's flight bindings (KSP.Input/GameInput.cs). Rotation, throttle steps and wheels
                 // act while held and are read every frame (flight_keys_tick); these act once.
                 let handled = match code.as_str() {
+                    // The original's cameraPan: the arrow keys turn the flight camera round the vessel.
+                    "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown" if !app.map_mode => {
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            let (dx, dy) = match code.as_str() {
+                                "ArrowLeft" => (-30.0, 0.0),
+                                "ArrowRight" => (30.0, 0.0),
+                                "ArrowUp" => (0.0, -30.0),
+                                _ => (0.0, 30.0),
+                            };
+                            app.flight3d.orbit(dx, dy);
+                            app.lesson_event("CameraRotatedMessage");
+                        }
+                        true
+                    }
                     "KeyZ" => {
                         app.set_throttle(1.0);
                         true

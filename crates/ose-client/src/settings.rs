@@ -50,6 +50,7 @@ pub const INPUT: &[(&str, &[Binding])] = &[
             ("Ctrl (on EVA)", "Jetpack down", true),
             ("F (on EVA)", "Board the craft within reach", true),
             ("M", "Map view", true),
+            ("Arrow keys", "Turn the flight camera", true),
             ("V", "Camera mode: auto, free, orbital, chase, locked", true),
             (
                 "] / [",
