@@ -33,7 +33,7 @@ Camera rule that runs through every map: **the right button drags the camera, th
 | G2 | F2 hides all UI (screenshots) | F2 fades the interface | done |
 | G3 | Tooltips on every HUD control, naming the key; Shift expands | a few `title` attributes, many controls without | open |
 | G4 | Notification toasts (warp limited, out of charge, lost link, vessel lost ...) | flight messages and refusals come up as toasts at the top right | done (more event sources later) |
-| G5 | F5/F9 quicksave/quickload | missing | server |
+| G5 | F5/F9 quicksave/quickload | F5/F9 with toasts; any `[data-save-action]` button (the pause menu's revert buttons) reverts to launch or to the VAB | done |
 | G6 | Settings screen: input bindings, audio sliders, UI scale, tooltips on/off, graphics | Settings from the main menu (any `[data-open-settings]` element opens it): Input lists the original's bindings and which work, Interface has UI scale and key hints, Audio the sound switch; no rebinding or volume sliders yet | partly done |
 | G7 | Esc menu: resume, save, load, revert to launch/VAB, recover, KSC, Tracking Station, Mission Control, R&D, VAB, settings, quit | resume, KSC, sessions, sound, leave | other thread (restyle in progress); revert/save/load server |
 
@@ -41,12 +41,12 @@ Camera rule that runs through every map: **the right button drags the camera, th
 
 | # | KSP2 | Ours today | Status |
 |---|---|---|---|
-| F1 | W/S/A/D/Q/E rotate continuously while held; CapsLock precision | W/S/A/D turn the target at 25°/s while held, Caps Lock x0.1; no roll | done (roll needs server) |
+| F1 | W/S/A/D/Q/E rotate continuously while held; CapsLock precision | W/S/A/D turn the target at 25°/s while held, Q/E roll (protocol 25), Caps Lock x0.1 | done |
 | F2 | Shift/Ctrl held ramps the throttle at 100%/s | same | done |
-| F3 | T toggles SAS; SAS mode buttons around the navball (stability, prograde, retrograde, normal, anti-normal, radial in/out, target, anti-target, maneuver) | T holds the current direction; SAS buttons with the original's icons beside the navball, lit for the active mode | done (target/maneuver modes: server) |
-| F4 | G gear, B brakes, U lights, R RCS, 1..0 action groups; action bar with state lights (gear, lights, brakes, solar, radiators, science, abort) | G, B (held) and an action bar with state lights for gear, brakes, solar, chutes, science | done; lights, RCS, abort, action groups: server |
+| F3 | T toggles SAS; SAS mode buttons around the navball (stability, prograde, retrograde, normal, anti-normal, radial in/out, target, anti-target, maneuver) | T holds the current direction; SAS buttons with the original's icons beside the navball, lit for the active mode | done, maneuver mode too (target modes wait for targets) |
+| F4 | G gear, B brakes, U lights, R RCS, 1..0 action groups; action bar with state lights (gear, lights, brakes, solar, radiators, science, abort) | G, B (held) and an action bar with state lights for gear, brakes, solar, chutes, science | done, with lights (U), RCS (R), abort and custom groups 1..0 since protocol 25 |
 | F5 | Rovers: W/S wheel throttle, A/D steer, B brakes | same, through `Drive` while landed | done |
-| F6 | Staging stack: one card per stage with part icons and fuel bars, Space fires the next | "stage 1 of 3" text and a STAGE button | open |
+| F6 | Staging stack: one card per stage with part icons and fuel bars, Space fires the next | one card per stage still to fire with part and parachute icons, the next one lit at the bottom; no per-stage fuel bars | partly done |
 | F7 | Orbital readout Ap/Pe with time to each; altimeter sea level / terrain toggle; speed orbit / surface / target toggle | Ap/Pe with countdowns, SURFACE/ORBIT speed toggle; no terrain altitude or target speed | done (AGL, target: later) |
 | F8 | Right-drag orbits the camera, wheel zooms, V cycles camera modes, Home resets | right-drag (and left) orbits, Home resets; no V camera modes yet | partly done |
 | F9 | `]` `[` switch to the next/previous vessel nearby | on the map `]` `[` change the followed vessel; switching control in flight needs the flight view to load another craft | partly done |

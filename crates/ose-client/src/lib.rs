@@ -204,6 +204,9 @@ struct App {
     speed_orbit: bool,
     brakes_latched: bool,
     toasts: hud::Toasts,
+    /// Vessels this client has staged at least once: their first stage is lit, so the next is the one after.
+    staged: std::collections::HashSet<u64>,
+    roll_sent: f32,
     gpu_canvas: HtmlCanvasElement,
     /// 3D orbit camera: yaw and pitch (radians) around the focus, distance in kilometres.
     orbit_yaw: f64,
@@ -450,6 +453,8 @@ pub fn start() -> Result<(), JsValue> {
         speed_orbit: false,
         brakes_latched: false,
         toasts: hud::Toasts::default(),
+        staged: Default::default(),
+        roll_sent: 0.0,
         gpu_canvas: get("gpu")?.dyn_into()?,
         orbit_yaw: 0.6,
         orbit_pitch: 0.5,
@@ -600,6 +605,29 @@ fn install_audio(app: &Shared) -> Result<(), JsValue> {
     app.borrow().show_sound_toggle();
     install_settings(app)?;
     install_rnd_nav(&app.borrow().doc.clone())?;
+    // Any [data-save-action="QuickSave|QuickLoad|RevertToLaunch|RevertToEditor"] element asks the server.
+    let a = app.clone();
+    let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+        let action = ev
+            .target()
+            .and_then(|t| t.dyn_into::<Element>().ok())
+            .and_then(|e| e.closest("[data-save-action]").ok().flatten())
+            .and_then(|e| e.get_attribute("data-save-action"));
+        let action = match action.as_deref() {
+            Some("QuickSave") => ose_net::SaveAction::QuickSave,
+            Some("QuickLoad") => ose_net::SaveAction::QuickLoad,
+            Some("RevertToLaunch") => ose_net::SaveAction::RevertToLaunch,
+            Some("RevertToEditor") => ose_net::SaveAction::RevertToEditor,
+            _ => return,
+        };
+        if let Ok(app) = a.try_borrow() {
+            app.save_action(action);
+        }
+    });
+    app.borrow()
+        .doc
+        .add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+    cb.forget();
     Ok(())
 }
 
@@ -2063,6 +2091,20 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                         app.map_mode = !app.map_mode;
                         true
                     }
+                    "KeyU" | "KeyR" if !ev.repeat() => {
+                        app.hud_button(if code == "KeyU" {
+                            "fh-act-lights"
+                        } else {
+                            "fh-act-rcs"
+                        });
+                        true
+                    }
+                    c if c.starts_with("Digit") && !ev.repeat() && !ev.ctrl_key() => {
+                        // 1..9 are custom groups 1..9 and 0 is group 10, as the original binds them.
+                        let n: u8 = c[5..].parse().unwrap_or(0);
+                        app.action_group(ose_net::ActionGroup::Custom(if n == 0 { 10 } else { n }));
+                        true
+                    }
                     "KeyW" | "KeyA" | "KeyS" | "KeyD" | "KeyQ" | "KeyE" | "KeyB" | "ShiftLeft"
                     | "ShiftRight" | "ControlLeft" | "ControlRight" => true,
                     _ => false,
@@ -2087,6 +2129,14 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                     }
                 }
                 "Home" => app.reset_camera(),
+                "F5" | "F9" if app.in_session => {
+                    ev.prevent_default();
+                    app.save_action(if code == "F5" {
+                        ose_net::SaveAction::QuickSave
+                    } else {
+                        ose_net::SaveAction::QuickLoad
+                    });
+                }
                 "BracketRight" | "BracketLeft" if app.in_session && !app.flight_active() => {
                     app.cycle_vessel(code == "BracketLeft");
                 }
@@ -2816,6 +2866,34 @@ impl App {
                 }
             }
             ServerMessage::Pong { .. } => {}
+            ServerMessage::SaveAck {
+                action,
+                accepted,
+                reason,
+                craft,
+            } => {
+                let what = match action {
+                    ose_net::SaveAction::QuickSave => "Quicksave",
+                    ose_net::SaveAction::QuickLoad => "Quickload",
+                    ose_net::SaveAction::RevertToLaunch => "Revert to launch",
+                    ose_net::SaveAction::RevertToEditor => "Revert to the VAB",
+                };
+                if accepted {
+                    hud::push(&self.doc, &format!("{what} done"), "triumph");
+                    if let (ose_net::SaveAction::RevertToEditor, Some(c)) = (action, craft) {
+                        self.end_flight();
+                        self.vab_history.record(&self.editor);
+                        self.editor = vab::Editor::from_craft(c);
+                        let cat = std::mem::take(&mut self.catalog);
+                        self.editor.rebuild_stages(&cat);
+                        self.catalog = cat;
+                        self.open_vab(None);
+                    }
+                } else {
+                    let why = reason.unwrap_or_else(|| "refused".into());
+                    hud::push(&self.doc, &format!("{what}: {why}"), "alert");
+                }
+            }
             // Messages for features this client does not draw yet are ignored.
             #[allow(unreachable_patterns)]
             _ => {}
@@ -4138,6 +4216,7 @@ impl App {
 
     fn flight_stage(&mut self) {
         let Some(vessel) = self.flying else { return };
+        self.staged.insert(vessel);
         if let Some(ws) = &self.ws {
             send(ws, &ClientMessage::Stage { vessel });
         }
@@ -4263,6 +4342,19 @@ impl App {
             .and_then(|v| v.flight.as_ref())
             .map(|f| f.situation == ose_net::FlightSituation::Landed)
             .unwrap_or(false);
+        let roll = self.keys.roll() as f32 * self.keys.scale() as f32;
+        if roll != self.roll_sent {
+            self.roll_sent = roll;
+            if let Some(ws) = &self.ws {
+                send(
+                    ws,
+                    &ClientMessage::SetRoll {
+                        vessel,
+                        input: roll,
+                    },
+                );
+            }
+        }
         let drive = if landed { drive } else { (0.0, 0.0, drive.2) };
         if drive != self.drive_sent {
             self.drive_sent = drive;
@@ -4278,6 +4370,33 @@ impl App {
                 );
             }
         }
+    }
+
+    /// Toggle an action group of the flown vessel.
+    fn action_group(&self, group: ose_net::ActionGroup) {
+        let (Some(vessel), Some(ws)) = (self.flying, &self.ws) else {
+            return;
+        };
+        send(
+            ws,
+            &ClientMessage::ActionGroup {
+                vessel,
+                group,
+                on: None,
+            },
+        );
+    }
+
+    /// Quicksave, quickload and the reverts (F5, F9 and `[data-save-action]` buttons such as the pause menu's).
+    fn save_action(&self, action: ose_net::SaveAction) {
+        let Some(ws) = &self.ws else { return };
+        let msg = match action {
+            ose_net::SaveAction::QuickSave => ClientMessage::QuickSave,
+            ose_net::SaveAction::QuickLoad => ClientMessage::QuickLoad,
+            ose_net::SaveAction::RevertToLaunch => ClientMessage::RevertToLaunch,
+            ose_net::SaveAction::RevertToEditor => ClientMessage::RevertToEditor,
+        };
+        send(ws, &msg);
     }
 
     /// A SAS mode or action bar button.
@@ -4315,6 +4434,21 @@ impl App {
                 deploy: !f.map(|f| f.panels_deployed).unwrap_or(false),
             },
             "fh-act-chutes" => ClientMessage::DeployParachutes { vessel },
+            "fh-act-lights" => ClientMessage::ActionGroup {
+                vessel,
+                group: ose_net::ActionGroup::Lights,
+                on: None,
+            },
+            "fh-act-rcs" => ClientMessage::ActionGroup {
+                vessel,
+                group: ose_net::ActionGroup::Rcs,
+                on: None,
+            },
+            "fh-act-abort" => ClientMessage::ActionGroup {
+                vessel,
+                group: ose_net::ActionGroup::Abort,
+                on: Some(true),
+            },
             "fh-act-converters" => ClientMessage::SetConverters {
                 vessel,
                 on: !f
@@ -4342,6 +4476,23 @@ impl App {
             .get(v.reference_body as usize)
             .map(|b| b.velocity_mps)
             .unwrap_or_default();
+        if let (Some(craft), Some(list)) =
+            (&self.flight_craft, self.doc.get_element_by_id("fh-stages"))
+        {
+            // `stage` is the stage burning now; before the first Space nothing burns and stage 0 goes next.
+            let lit = self.staged.contains(&id)
+                || f.stage > 0
+                || f.thrust_kn > 0.1
+                || f.situation != ose_net::FlightSituation::Landed;
+            let next = f.stage as usize + usize::from(lit);
+            let html = hud::staging_html(craft, &self.catalog, next, &f.parachutes);
+            // Compare with what was set last (the browser rewrites inner HTML, so it would never match).
+            let key = format!("{}:{}", html.len(), hud::fnv(&html));
+            if list.get_attribute("data-ose-key").as_deref() != Some(key.as_str()) {
+                list.set_inner_html(&html);
+                list.set_attribute("data-ose-key", &key).ok();
+            }
+        }
         let ut = self.time.ut_at(now_ms());
         let apsides = body
             .map(|b| hud::apsides(&v.orbit, b.radius_m, b.mu, ut))

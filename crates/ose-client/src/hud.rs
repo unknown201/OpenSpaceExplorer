@@ -53,7 +53,7 @@ pub const SAS_BUTTONS: &[(&str, &str, &str)] = &[
     (
         "fh-sas-maneuver",
         "Flight-ICO-Maneuver",
-        "Maneuver (not available yet)",
+        "Maneuver: point along the planned burn",
     ),
 ];
 
@@ -69,6 +69,7 @@ pub fn sas_mode(id: &str, orbit_speed: bool) -> Option<AttitudeMode> {
         ("fh-sas-antinormal", _) => AttitudeMode::AntiNormal,
         ("fh-sas-radialin", _) => AttitudeMode::RadialIn,
         ("fh-sas-radialout", _) => AttitudeMode::RadialOut,
+        ("fh-sas-maneuver", _) => AttitudeMode::Maneuver,
         _ => return None,
     })
 }
@@ -106,9 +107,10 @@ pub const ACTIONS: &[(&str, &str, &str, bool)] = &[
     (
         "fh-act-lights",
         "ICO-Action-Lights-24x24",
-        "Lights (U, not available yet)",
-        false,
+        "Lights (U)",
+        true,
     ),
+    ("fh-act-rcs", "ICO-Action-Jetpack-24x24", "RCS (R)", true),
     (
         "fh-act-solar",
         "ICO-Action-Solar-24x24",
@@ -136,8 +138,8 @@ pub const ACTIONS: &[(&str, &str, &str, bool)] = &[
     (
         "fh-act-abort",
         "ICO-Action-Abort-24x24",
-        "Abort (not available yet)",
-        false,
+        "Abort: cut the throttle and arm the parachutes",
+        true,
     ),
 ];
 
@@ -290,6 +292,9 @@ pub fn update(doc: &Document, s: &HudState) {
     lit(doc, "fh-act-gear", f.gear.iter().any(|(_, out)| *out));
     lit(doc, "fh-act-brakes", f.brakes || s.brakes_latched);
     lit(doc, "fh-act-solar", f.panels_deployed);
+    lit(doc, "fh-act-lights", f.lights);
+    lit(doc, "fh-act-rcs", f.rcs);
+    lit(doc, "fh-act-abort", f.abort);
     lit(
         doc,
         "fh-act-converters",
@@ -329,6 +334,58 @@ pub fn update(doc: &Document, s: &HudState) {
             .iter()
             .any(|(_, st, _)| !matches!(st, ChuteState::Stowed)),
     );
+}
+
+/// The flight staging stack (`FlightStagingStackInstrument`): one card per stage still to fire, the next one
+/// at the bottom and lit, each with its parts' icons and parachute states.
+pub fn staging_html(
+    craft: &ose_data::craft::Craft,
+    catalog: &crate::vab::Catalog,
+    next_stage: usize,
+    chutes: &[(u16, ChuteState, f32)],
+) -> String {
+    let mut html = String::new();
+    let stages = &craft.stages;
+    for (n, stage) in stages.iter().enumerate().skip(next_stage).rev() {
+        let mut icons = String::new();
+        for &i in stage {
+            let Some(p) = craft.parts.get(i) else {
+                continue;
+            };
+            let spec = catalog.get(&p.part_id);
+            let chute = chutes.iter().find(|(pi, _, _)| *pi as usize == i);
+            let icon = match (spec, chute) {
+                (_, Some((_, ChuteState::Armed, _))) => "Staging-ICO-Chute-Armed",
+                (_, Some((_, ChuteState::SemiDeployed | ChuteState::Deployed, _))) => {
+                    "Staging-ICO-Chute-Deployed"
+                }
+                (_, Some((_, ChuteState::Cut, _))) => "Staging-ICO-Chute-Cut",
+                (_, Some(_)) => "Staging-ICO-Chute-Stowed",
+                (Some(s), None) if s.has_engine => "Staging-Icon-Thruster",
+                (Some(s), None) if s.is_decoupler => "Staging-Icon-Inline",
+                (Some(s), None) if s.stage_type.contains("Parachute") => "Staging-ICO-Chute-Stowed",
+                _ => "Staging-ICO-Structure01",
+            };
+            let title = spec.map(|s| s.display_title()).unwrap_or(&p.part_id);
+            icons.push_str(&format!(
+                "<i title=\"{}\" style=\"--ico:url(assets/ui/hud/{icon}.png)\"></i>",
+                title.replace('"', "&quot;")
+            ));
+        }
+        html.push_str(&format!(
+            "<li class=\"{}\"><b>{}</b>{icons}</li>",
+            if n == next_stage { "next" } else { "" },
+            n + 1
+        ));
+    }
+    html
+}
+
+/// FNV-1a of a string, to tell rendered HTML apart cheaply.
+pub fn fnv(s: &str) -> u64 {
+    s.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| {
+        (h ^ b as u64).wrapping_mul(0x100_0000_01b3)
+    })
 }
 
 /// Notification toasts (`NotificationManager`): short messages stacked at the top right that fade after a few
