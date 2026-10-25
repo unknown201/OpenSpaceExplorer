@@ -274,8 +274,6 @@ struct App {
     warp_to: Option<(f64, String)>,
     warp_to_sent_ms: f64,
     apsis_ut: [f64; 2],
-    sas_target: Option<bool>,
-    sas_target_sent_ms: f64,
     toasts: hud::Toasts,
     /// The flown vessel as last seen, for event toasts (signal, charge, sphere of influence, orbit, landing).
     flight_watch: std::cell::RefCell<Option<hud::FlightWatch>>,
@@ -631,8 +629,6 @@ pub fn start() -> Result<(), JsValue> {
         warp_to: None,
         warp_to_sent_ms: 0.0,
         apsis_ut: [f64::NAN; 2],
-        sas_target: None,
-        sas_target_sent_ms: 0.0,
         toasts: hud::Toasts::default(),
         flight_watch: std::cell::RefCell::new(None),
         flight_records: std::cell::RefCell::new(None),
@@ -6315,6 +6311,11 @@ impl App {
     fn start_flight(&mut self, vessel: u64, craft_id: Option<u64>) {
         self.ftue("FTUE_Flight");
         self.flying = Some(vessel);
+        // The server keeps a target per vessel; the one picked carries over to the vessel flown now.
+        if self.target == Some(vessel) {
+            self.target = None;
+        }
+        self.send_target();
         self.flight_craft = craft_id.and_then(|c| self.craft_docs.get(&c).cloned());
         self.flight_craft_id = craft_id;
         // A craft not fetched yet (launched from another screen, or after a reload): ask for it; the flight
@@ -6629,7 +6630,6 @@ impl App {
             self.sas_hold();
             hud::push(&self.doc, "SAS on", "passive");
         } else {
-            self.sas_target = None;
             self.set_attitude(ose_net::AttitudeMode::Free);
             hud::push(&self.doc, "SAS off", "passive");
         }
@@ -6975,6 +6975,7 @@ impl App {
     }
 
     /// The direction from the flown vessel to the target (star frame, unit), if both exist.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     fn target_dir(&self) -> Option<ose_math::DVec3> {
         let scene = self.scene.as_ref()?;
         let ut = self.time.ut_at(now_ms());
@@ -6984,21 +6985,18 @@ impl App {
         (d.length() > 1e-6).then(|| d * (1.0 / d.length()))
     }
 
-    /// SAS target / anti-target: point along the line to the target, refreshed once a second as both move.
-    fn sas_target_tick(&mut self, now: f64) {
-        let Some(toward) = self.sas_target else {
+    /// Tell the server the flown vessel's target (protocol 36), or that it has none.
+    fn send_target(&self) {
+        let (Some(vessel), Some(ws)) = (self.flying, &self.ws) else {
             return;
         };
-        if now - self.sas_target_sent_ms < 1000.0 {
-            return;
-        }
-        let Some(d) = self.target_dir() else {
-            self.sas_target = None;
-            return;
-        };
-        self.sas_target_sent_ms = now;
-        let d = if toward { d } else { d * -1.0 };
-        self.set_attitude(ose_net::AttitudeMode::Fixed(d));
+        send(
+            ws,
+            &ClientMessage::SetTarget {
+                vessel,
+                target: self.target.map(ose_net::TargetId::Vessel),
+            },
+        );
     }
 
     /// Right click on a vessel label: make it the target, or clear it when it already is.
@@ -7015,12 +7013,19 @@ impl App {
         if self.target == Some(id) {
             self.target = None;
             self.speed_target = false;
-            self.sas_target = None;
+            // A target hold has nothing left to point at.
+            if matches!(
+                self.attitude,
+                ose_net::AttitudeMode::Target | ose_net::AttitudeMode::AntiTarget
+            ) {
+                self.sas_hold();
+            }
             hud::push(&self.doc, "Target cleared", "passive");
         } else {
             self.target = Some(id);
             hud::push(&self.doc, &format!("Target: {name}"), "passive");
         }
+        self.send_target();
         for (vid, el) in &self.vessel_els {
             el.class_list()
                 .toggle_with_force("target", Some(*vid) == self.target)
@@ -7059,19 +7064,19 @@ impl App {
     fn hud_button(&mut self, id: &str) {
         let Some(vessel) = self.flying else { return };
         if id == "fh-sas-stability" {
-            self.sas_target = None;
             self.sas_hold();
             return;
         }
         if id == "fh-sas-target" || id == "fh-sas-antitarget" {
             if self.target.is_some() {
-                self.sas_target = Some(id == "fh-sas-target");
-                self.sas_target_sent_ms = 0.0;
-                self.sas_target_tick(now_ms());
+                self.set_attitude(if id == "fh-sas-target" {
+                    ose_net::AttitudeMode::Target
+                } else {
+                    ose_net::AttitudeMode::AntiTarget
+                });
             }
             return;
         }
-        self.sas_target = None;
         if let Some(mode) = hud::sas_mode(id, self.speed_orbit) {
             self.set_attitude(mode);
             return;
@@ -7279,13 +7284,20 @@ impl App {
             // The target is gone (recovered, crashed).
             set_text(&self.doc, "fh-target", "");
         }
-        let rel = tgt.map(|t| {
-            let d = scene.vessel_position(t, ut) - scene.vessel_position(v, ut);
-            (
+        let rel = tgt.map(|t| match v.target {
+            Some(r) if r.target == ose_net::TargetId::Vessel(t.id) => (
                 t.name.clone(),
-                d.length(),
-                (t.velocity_mps - v.velocity_mps).length(),
-            )
+                r.distance_m,
+                r.relative_velocity_mps.length(),
+            ),
+            _ => {
+                let d = scene.vessel_position(t, ut) - scene.vessel_position(v, ut);
+                (
+                    t.name.clone(),
+                    d.length(),
+                    (t.velocity_mps - v.velocity_mps).length(),
+                )
+            }
         });
         match &rel {
             Some((name, dist, speed)) => set_text(
@@ -7314,13 +7326,12 @@ impl App {
                 } else {
                     b.set_attribute("disabled", "").ok();
                 }
-                let on = self.sas_target == Some(id == "fh-sas-target");
+                let on = match self.attitude {
+                    ose_net::AttitudeMode::Target => id == "fh-sas-target",
+                    ose_net::AttitudeMode::AntiTarget => id == "fh-sas-antitarget",
+                    _ => false,
+                };
                 b.class_list().toggle_with_force("on", on).ok();
-            }
-        }
-        if self.sas_target.is_some() {
-            if let Some(b) = self.doc.get_element_by_id("fh-sas-stability") {
-                b.class_list().remove_1("on").ok();
             }
         }
     }
@@ -7736,11 +7747,7 @@ impl App {
                 pitch_deg,
                 heading_deg,
             } => format!("pitch {pitch_deg:.0}\u{b0} hdg {heading_deg:.0}\u{b0}"),
-            ose_net::AttitudeMode::Fixed(_) => match self.sas_target {
-                Some(true) => "Target".to_string(),
-                Some(false) => "Anti-target".to_string(),
-                None => "Holding a direction".to_string(),
-            },
+            ose_net::AttitudeMode::Fixed(_) => "Holding a direction".to_string(),
             ose_net::AttitudeMode::SurfacePrograde => "Prograde (surface)".to_string(),
             ose_net::AttitudeMode::SurfaceRetrograde => "Retrograde (surface)".to_string(),
             ose_net::AttitudeMode::OrbitPrograde => "Prograde (orbit)".to_string(),
@@ -7749,6 +7756,8 @@ impl App {
             ose_net::AttitudeMode::RadialOut => "Radial out".to_string(),
             ose_net::AttitudeMode::RadialIn => "Radial in".to_string(),
             ose_net::AttitudeMode::Free => "SAS off".to_string(),
+            ose_net::AttitudeMode::Target => "Target".to_string(),
+            ose_net::AttitudeMode::AntiTarget => "Anti-target".to_string(),
             other => format!("{other:?}"),
         };
         set_text(&self.doc, "fh-attitude", &att);
@@ -8465,7 +8474,6 @@ impl App {
             set_text(&self.doc, "fps", &format!("{fps:.0} FPS"));
         }
         self.warp_to_tick(now);
-        self.sas_target_tick(now);
         if self.in_session && self.vab_active() {
             self.vab_report_tick(now);
         }
