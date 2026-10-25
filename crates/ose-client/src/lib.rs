@@ -426,6 +426,13 @@ fn store(key: &str, value: &str) {
     }
 }
 
+/// Ask for a line of text with the browser's prompt; `None` when cancelled.
+fn prompt_text(message: &str, default: &str) -> Option<String> {
+    web_sys::window()?
+        .prompt_with_message_and_default(message, default)
+        .ok()?
+}
+
 fn input_value(doc: &Document, id: &str) -> Option<f64> {
     doc.get_element_by_id(id)?
         .dyn_into::<web_sys::HtmlInputElement>()
@@ -6056,18 +6063,76 @@ impl App {
         let title = spec
             .map(|s| s.display_title().to_string())
             .unwrap_or_else(|| part.part_id.clone());
+        let cur = self.flight_cur_part(i);
+        let pid = part.part_id.to_ascii_lowercase();
+        let can_control = spec.is_some_and(|s| s.crew_capacity > 0)
+            || ["probe", "pod", "cockpit", "cabin", "docking", "command"]
+                .iter()
+                .any(|k| pid.contains(k));
+        let stage = self.flight_stages_now().and_then(|stages| {
+            let s = stages.iter().position(|st| st.contains(&i))?;
+            Some((s, stages.len()))
+        });
         let html = hud::flight_pam_html(
             &title,
             i,
             f,
             spec.is_some_and(|s| s.has_engine),
             part.part_id.contains("solar"),
+            hud::PamPart {
+                can_control,
+                controlling: cur.is_some() && f.control_part.map(usize::from) == cur,
+                stage,
+            },
         );
         let key = format!("{}:{}", html.len(), hud::fnv(&html));
         if el.get_attribute("data-ose-key").as_deref() != Some(key.as_str()) {
             el.set_inner_html(&html);
             el.set_attribute("data-ose-key", &key).ok();
         }
+    }
+
+    /// The index in the craft as flown now (`GetVesselCraft`) of part `i` of the craft as launched.
+    fn flight_cur_part(&self, i: usize) -> Option<usize> {
+        let craft = self.flight_craft.as_ref()?;
+        let guid = &craft.parts.get(i)?.guid;
+        match self
+            .flying
+            .and_then(|id| self.vessel_crafts.get(&id))
+            .and_then(|k| k.1.as_ref())
+        {
+            Some(now) => now.parts.iter().position(|p| &p.guid == guid),
+            None => Some(i),
+        }
+    }
+
+    /// The flown vessel's stages as the server has them now (they change with `MoveToStage`), listing
+    /// parts of the craft as launched.
+    fn flight_stages_now(&self) -> Option<Vec<Vec<usize>>> {
+        let craft = self.flight_craft.as_ref()?;
+        let Some(now) = self
+            .flying
+            .and_then(|id| self.vessel_crafts.get(&id))
+            .and_then(|k| k.1.as_ref())
+        else {
+            return Some(craft.stages.clone());
+        };
+        let orig: std::collections::HashMap<&str, usize> = craft
+            .parts
+            .iter()
+            .enumerate()
+            .map(|(k, p)| (p.guid.as_str(), k))
+            .collect();
+        Some(
+            now.stages
+                .iter()
+                .map(|st| {
+                    st.iter()
+                        .filter_map(|&c| orig.get(now.parts.get(c)?.guid.as_str()).copied())
+                        .collect()
+                })
+                .collect(),
+        )
     }
 
     /// Open the part manager for part `i` at a screen point, or close it with `None`.
@@ -8283,10 +8348,71 @@ impl App {
                 self.flight_science(0);
                 return;
             }
-            "fh-act-solar" => ClientMessage::DeployPanels {
+            "fh-act-solar" => {
+                // The original's Solar/Deploy group: panels, antennas and dishes go out (or in) together.
+                let deploy = !f.as_ref().is_some_and(|f| f.panels_deployed);
+                if let Some(ws) = &self.ws {
+                    if f.as_ref().is_some_and(|f| !f.antennas.is_empty()) {
+                        send(ws, &ClientMessage::DeployAntennas { vessel, deploy });
+                    }
+                }
+                ClientMessage::DeployPanels { vessel, deploy }
+            }
+            "fh-act-antenna" => ClientMessage::DeployAntennas {
                 vessel,
-                deploy: !f.map(|f| f.panels_deployed).unwrap_or(false),
+                deploy: !f
+                    .as_ref()
+                    .is_some_and(|f| f.antennas.iter().any(|(_, out)| *out)),
             },
+            "fh-act-control" => {
+                let Some(cur) = self.flight_pam.and_then(|i| self.flight_cur_part(i)) else {
+                    return;
+                };
+                let here = f.as_ref().and_then(|f| f.control_part).map(usize::from) == Some(cur);
+                // Pressed again on the part in control: back to the root.
+                ClientMessage::ControlFrom {
+                    vessel,
+                    part: if here { 0 } else { cur as u16 },
+                }
+            }
+            "fh-act-rename" => {
+                let old = self
+                    .scene
+                    .as_ref()
+                    .and_then(|s| s.vessel(vessel))
+                    .map(|v| v.name.clone())
+                    .unwrap_or_default();
+                let Some(name) = prompt_text("Rename vessel", &old) else {
+                    return;
+                };
+                let name = name.trim().to_string();
+                if name.is_empty() || name == old {
+                    return;
+                }
+                ClientMessage::RenameVessel { vessel, name }
+            }
+            "fh-act-stage-earlier" | "fh-act-stage-later" => {
+                let Some(i) = self.flight_pam else { return };
+                let (Some(cur), Some(stages)) = (self.flight_cur_part(i), self.flight_stages_now())
+                else {
+                    return;
+                };
+                let Some(s) = stages.iter().position(|st| st.contains(&i)) else {
+                    return;
+                };
+                let to = if id == "fh-act-stage-earlier" {
+                    s + 1
+                } else if s > 0 {
+                    s - 1
+                } else {
+                    return;
+                };
+                ClientMessage::MoveToStage {
+                    vessel,
+                    part: cur as u16,
+                    stage: to as u32,
+                }
+            }
             "fh-act-chutes" => ClientMessage::DeployParachutes { vessel },
             "fh-act-fairings" => ClientMessage::DeployFairings { vessel },
             "fh-act-bays" => ClientMessage::SetCargoBays {
@@ -8346,6 +8472,15 @@ impl App {
                 || f.thrust_kn > 0.1
                 || f.situation != ose_net::FlightSituation::Landed;
             let next = f.stage as usize + usize::from(lit);
+            // Stages as the server has them now: parts moved in flight (`MoveToStage`) show where they went.
+            let moved = self
+                .flight_stages_now()
+                .filter(|st| *st != craft.stages)
+                .map(|stages| ose_data::craft::Craft {
+                    stages,
+                    ..craft.clone()
+                });
+            let craft = moved.as_ref().unwrap_or(craft);
             let html = hud::staging_html(craft, &self.catalog, next, &f.parachutes, &f.stage_list);
             // Compare with what was set last (the browser rewrites inner HTML, so it would never match).
             let key = format!("{}:{}", html.len(), hud::fnv(&html));

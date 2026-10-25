@@ -532,12 +532,24 @@ pub fn burn_text(to_node_s: f64, dv_mps: f64, mass_t: f64, full_thrust_kn: f64) 
 
 /// The part window in flight (right click a part, the original's PAM): name, temperature, crew, parachute
 /// and gear state, and the actions that apply to it (`data-act` names the action bar button they press).
+/// What the flight part window offers beyond the readout (protocol 41): control from it, its stage.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PamPart {
+    /// A command part or docking port the vessel could be controlled from.
+    pub can_control: bool,
+    /// The vessel is controlled from this part (not its root).
+    pub controlling: bool,
+    /// The part's stage in the craft as flown and how many stages there are.
+    pub stage: Option<(usize, usize)>,
+}
+
 pub fn flight_pam_html(
     title: &str,
     idx: usize,
     f: &FlightReadout,
     is_engine: bool,
     is_solar: bool,
+    part: PamPart,
 ) -> String {
     let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;");
     let i = idx as u16;
@@ -628,6 +640,41 @@ pub fn flight_pam_html(
     }
     if f.shielded.contains(&i) {
         rows.push_str(&row("Shielded", "no drag or re-entry heat".into()));
+    }
+    // Antennas and dishes (protocol 41): they extend and retract together, as the original's Deploy group.
+    if let Some((_, out)) = f.antennas.iter().find(|a| a.0 == i) {
+        rows.push_str(&row(
+            "Antenna",
+            if *out { "extended" } else { "retracted" }.into(),
+        ));
+        acts.push_str(&format!(
+            "<button data-act=\"fh-act-antenna\">{}</button>",
+            if *out {
+                "Retract antenna"
+            } else {
+                "Extend antenna"
+            }
+        ));
+    }
+    if part.controlling {
+        rows.push_str(&row("Control", "from here".into()));
+        acts.push_str("<button data-act=\"fh-act-control\">Control from root</button>");
+    } else if part.can_control {
+        acts.push_str("<button data-act=\"fh-act-control\">Control from here</button>");
+    }
+    if part.can_control {
+        acts.push_str("<button data-act=\"fh-act-rename\">Rename vessel</button>");
+    }
+    if let Some((s, n)) = part.stage {
+        // Numbered as the staging stack shows it (the top, firing last, has the highest number).
+        rows.push_str(&row("Stage", (n - s).to_string()));
+        // The highest stage fires first; one past the end makes a new first stage.
+        if s < n {
+            acts.push_str("<button data-act=\"fh-act-stage-earlier\">Stage earlier</button>");
+        }
+        if s > 0 {
+            acts.push_str("<button data-act=\"fh-act-stage-later\">Stage later</button>");
+        }
     }
     if is_engine {
         rows.push_str(&row(
