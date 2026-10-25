@@ -2042,6 +2042,7 @@ pub(crate) fn test_capsule(shield: bool) -> (Craft, Vec<PartDef>, Vec<ResourceDe
     chute.parent = Some(0);
     parts.push(chute);
     let craft = Craft {
+        colors: None,
         loose: Vec::new(),
         name: "Capsule".into(),
         description: String::new(),

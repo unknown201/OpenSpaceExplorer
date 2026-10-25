@@ -5069,6 +5069,7 @@ impl App {
                     p.local_position = p.local_position + shift;
                 }
                 loose.push(ose_data::craft::Craft {
+                    colors: None,
                     name: String::new(),
                     description: String::new(),
                     parts,

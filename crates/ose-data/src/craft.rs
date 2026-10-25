@@ -16,6 +16,9 @@ pub struct Quat {
     pub w: f64,
 }
 
+/// Base and accent colours, sRGB bytes (the VAB's Colors tool).
+pub type Paint = ([u8; 3], [u8; 3]);
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CraftPart {
     /// Stable id within the craft (the original part GUID when imported).
@@ -37,6 +40,9 @@ pub struct CraftPart {
     // (no skip_serializing_if: crafts also travel in postcard, which needs every field)
     #[serde(default)]
     pub fuel_line_target: Option<usize>,
+    /// This part's own paint over the craft's (base, accent), when set.
+    #[serde(default)]
+    pub colors: Option<Paint>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -58,6 +64,9 @@ pub struct Craft {
     /// and loaded with it, left on the ground by a launch.
     #[serde(default)]
     pub loose: Vec<Craft>,
+    /// The craft's paint (VAB Colors): base and accent, sRGB; `None` paints it in the agency's colours.
+    #[serde(default)]
+    pub colors: Option<Paint>,
 }
 
 /// Mass summary of a craft against a part and resource catalog.

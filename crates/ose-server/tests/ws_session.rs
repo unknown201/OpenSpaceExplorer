@@ -390,11 +390,13 @@ async fn hello_catalog_and_snapshots() {
 
     // Launch a tiny craft: a pod with charge and a Terrier; it appears as a second owned vessel.
     let craft = ose_data::craft::Craft {
+        colors: None,
         loose: Vec::new(),
         name: "Tiny".into(),
         description: String::new(),
         parts: vec![
             ose_data::craft::CraftPart {
+                colors: None,
                 guid: "a".into(),
                 part_id: "pod_1v_conical_crew".into(),
                 parent: None,
@@ -413,6 +415,7 @@ async fn hello_catalog_and_snapshots() {
                 fuel_line_target: None,
             },
             ose_data::craft::CraftPart {
+                colors: None,
                 guid: "b".into(),
                 part_id: "engine_1v_methalox_terrier".into(),
                 parent: Some(0),
@@ -870,6 +873,7 @@ fn starter_craft() -> ose_data::craft::Craft {
                 other: Option<&str>,
                 y: f64| {
         ose_data::craft::CraftPart {
+            colors: None,
             guid: guid.into(),
             part_id: id.into(),
             parent,
@@ -889,6 +893,7 @@ fn starter_craft() -> ose_data::craft::Craft {
         }
     };
     ose_data::craft::Craft {
+        colors: None,
         loose: Vec::new(),
         name: "Starter".into(),
         description: String::new(),

@@ -20,6 +20,29 @@ fn guid(v: &Value) -> String {
 }
 const NIL: &str = "00000000-0000-0000-0000-000000000000";
 
+/// A part's paint (`Data_Color` Base and Accent), sRGB bytes.
+fn part_colors(v: &Value) -> Option<ose_data::craft::Paint> {
+    fn find(v: &Value) -> Option<&Value> {
+        match v {
+            Value::Object(m) => {
+                if m.get("Name").and_then(|n| n.as_str()) == Some("Data_Color") {
+                    return m.get("DataObject");
+                }
+                m.values().find_map(find)
+            }
+            Value::Array(a) => a.iter().find_map(find),
+            _ => None,
+        }
+    }
+    let d = find(v)?;
+    let rgb = |k: &str| -> Option<[u8; 3]> {
+        let c = &d[k]["storedValue"];
+        let b = |x: &str| Some((c[x].as_f64()?.clamp(0.0, 1.0) * 255.0).round() as u8);
+        Some([b("r")?, b("g")?, b("b")?])
+    };
+    Some((rgb("Base")?, rgb("Accent")?))
+}
+
 /// The part at the far end of a two-anchor part (fuel line, strut): `Data_CompoundPart.OtherEndAnchor`.
 fn compound_other_end(v: &Value) -> Option<String> {
     match v {
@@ -131,6 +154,7 @@ pub fn craft_from_value(v: &Value) -> anyhow::Result<Craft> {
             None => (None, None, None),
         };
         parts.push(CraftPart {
+            colors: part_colors(p),
             guid: guids[i].clone(),
             part_id: s(p, "partName"),
             parent: par,
@@ -183,7 +207,22 @@ pub fn craft_from_value(v: &Value) -> anyhow::Result<Craft> {
         stages.push((id, members));
     }
     stages.sort_by_key(|(id, _)| *id);
+    // the craft's paint is the one most parts wear; parts keep theirs only where it differs
+    let mut counts: Vec<(ose_data::craft::Paint, usize)> = Vec::new();
+    for c in parts.iter().filter_map(|p| p.colors) {
+        match counts.iter_mut().find(|x| x.0 == c) {
+            Some(x) => x.1 += 1,
+            None => counts.push((c, 1)),
+        }
+    }
+    let colors = counts.iter().max_by_key(|x| x.1).map(|x| x.0);
+    for p in &mut parts {
+        if p.colors == colors {
+            p.colors = None;
+        }
+    }
     Ok(Craft {
+        colors,
         loose: Vec::new(),
         name,
         description,

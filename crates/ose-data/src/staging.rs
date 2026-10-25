@@ -442,6 +442,7 @@ mod tests {
         res: &[(&str, f64)],
     ) -> CraftPart {
         CraftPart {
+            colors: None,
             guid: guid.into(),
             part_id: part.into(),
             parent,
@@ -498,6 +499,7 @@ mod tests {
             },
         }];
         let mut craft = Craft {
+            colors: None,
             loose: Vec::new(),
             name: "lined".into(),
             description: String::new(),
@@ -552,6 +554,7 @@ mod tests {
         }];
         // pod(0) - tank(1, 400 units = 2 t) - eng(2) - dec(3) - tank(4, 800 units = 4 t) - eng(5)
         let craft = Craft {
+            colors: None,
             loose: Vec::new(),
             name: "two".into(),
             description: String::new(),

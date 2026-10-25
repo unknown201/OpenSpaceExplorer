@@ -134,6 +134,7 @@ impl Editor {
     pub fn new(name: &str) -> Editor {
         Editor {
             craft: Craft {
+                colors: None,
                 loose: Vec::new(),
                 name: name.into(),
                 description: String::new(),
@@ -247,6 +248,7 @@ impl Editor {
         };
         if self.craft.parts.is_empty() {
             self.craft.parts.push(CraftPart {
+                colors: None,
                 guid: format!("p{}", 1),
                 part_id: spec.id.clone(),
                 parent: None,
@@ -335,6 +337,7 @@ impl Editor {
             self.craft.parts[target].local_position + quat_rotate(pq, local_position);
         let idx = self.craft.parts.len();
         self.craft.parts.push(CraftPart {
+            colors: None,
             guid: format!("p{}", idx + 1),
             part_id: spec.id.clone(),
             parent: Some(target),
@@ -1052,6 +1055,7 @@ impl Editor {
                 .collect();
             out.push(self.craft.parts.len());
             self.craft.parts.push(CraftPart {
+                colors: None,
                 guid: format!("p{guid}"),
                 part_id: spec.id.clone(),
                 parent: Some(spot.target),

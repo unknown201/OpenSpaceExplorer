@@ -561,6 +561,7 @@ mod tests {
         // a fuel line on the radial booster's... use the 1x8 core (19) fed from the upper 1x4 (7) across the
         // decoupler: a line hanging on tank 7 feeding tank 19
         let line = ose_data::craft::CraftPart {
+            colors: None,
             guid: "line".into(),
             part_id: "fuelline_0v_external".into(),
             parent: Some(7),

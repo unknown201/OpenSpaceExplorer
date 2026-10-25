@@ -510,10 +510,12 @@ mod tests {
         assert_eq!(d.allocated(&c.science), next.required_science);
         // its parts are no longer locked
         let craft = ose_data::craft::Craft {
+            colors: None,
             loose: Vec::new(),
             name: "x".into(),
             description: String::new(),
             parts: vec![ose_data::craft::CraftPart {
+                colors: None,
                 guid: "0".into(),
                 part_id: next.parts[0].clone(),
                 parent: None,

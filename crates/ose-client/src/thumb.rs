@@ -142,6 +142,7 @@ mod tests {
 
     fn part(part_id: &str, parent: Option<usize>, pos: DVec3, stage: i32) -> CraftPart {
         CraftPart {
+            colors: None,
             guid: part_id.into(),
             part_id: part_id.into(),
             parent,
@@ -163,6 +164,7 @@ mod tests {
 
     fn stack() -> Craft {
         Craft {
+            colors: None,
             loose: Vec::new(),
             name: "stack".into(),
             description: String::new(),

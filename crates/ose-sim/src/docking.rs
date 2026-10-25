@@ -174,6 +174,10 @@ pub fn merge(a: &Craft, pa: &Port, b: &Craft, pb: &Port) -> Craft {
     for p in &mut parts_b {
         p.parent = p.parent.map(|x| x + off);
         p.fuel_line_target = p.fuel_line_target.map(|x| x + off);
+        // the docked craft keeps its own paint
+        if p.colors.is_none() {
+            p.colors = b.colors;
+        }
     }
     parts_b[pb.part].parent = Some(pa.part);
     parts_b[pb.part].own_node = Some(pb.def.node.clone());
@@ -187,6 +191,7 @@ pub fn merge(a: &Craft, pa: &Port, b: &Craft, pb: &Port) -> Craft {
             .map(|s| s.iter().map(|i| i + off).collect::<Vec<usize>>()),
     );
     Craft {
+        colors: a.colors,
         loose: Vec::new(),
         name: a.name.clone(),
         description: a.description.clone(),
@@ -223,6 +228,7 @@ pub fn subset(craft: &Craft, keep: &[usize]) -> (Craft, Vec<Option<usize>>) {
         .collect();
     (
         Craft {
+            colors: craft.colors,
             loose: Vec::new(),
             name: craft.name.clone(),
             description: craft.description.clone(),
@@ -1033,6 +1039,7 @@ mod tests {
         y: f64,
     ) -> CraftPart {
         CraftPart {
+            colors: None,
             guid: id.into(),
             part_id: id.into(),
             parent,
@@ -1055,6 +1062,7 @@ mod tests {
     /// probe core with a docking port on top
     fn ship(name: &str) -> Craft {
         Craft {
+            colors: None,
             loose: Vec::new(),
             name: name.into(),
             description: String::new(),
