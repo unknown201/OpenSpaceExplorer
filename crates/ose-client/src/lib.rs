@@ -53,6 +53,7 @@ pub mod thumb;
 pub mod tracking;
 pub mod training;
 pub mod trip;
+pub mod tutorials;
 pub mod vab;
 #[cfg(target_arch = "wasm32")]
 pub mod vab3d;
@@ -291,6 +292,11 @@ struct App {
     /// dialog's crew picks with the craft they were made for.
     roster: Vec<ose_net::KerbalInfo>,
     tc_selected: Option<String>,
+    /// Training Center's Lessons tab (Kerbal Space Academy): shown instead of the Kerbals, the lesson picked,
+    /// and the lessons from assets/ui/tutorials.json.
+    tc_lessons: bool,
+    lesson_selected: Option<String>,
+    academy: Option<tutorials::Academy>,
     lp_crew: Vec<String>,
     lp_crew_for: Option<u64>,
     /// The loading screen: the place it last saw (None on the main menu) and when it went up.
@@ -333,6 +339,8 @@ struct FtueState {
     seen: std::collections::HashSet<String>,
     queue: std::collections::VecDeque<ftue::Message>,
     enabled: bool,
+    /// The queue is a Training Center lesson (End Tutorial instead of No more hints).
+    lesson: bool,
 }
 
 /// The campaign's science as the server last sent it.
@@ -564,6 +572,7 @@ pub fn start() -> Result<(), JsValue> {
                 .unwrap_or_default(),
             queue: Default::default(),
             enabled: stored("ose.ftue").as_deref() != Some("off"),
+            lesson: false,
         }),
         vab_twr_body: None,
         vab_com: None,
@@ -640,6 +649,9 @@ pub fn start() -> Result<(), JsValue> {
         loading_place: None,
         roster: Vec::new(),
         tc_selected: None,
+        tc_lessons: false,
+        lesson_selected: None,
+        academy: None,
         lp_crew: Vec::new(),
         lp_crew_for: None,
         loading_since: None,
@@ -671,6 +683,7 @@ pub fn start() -> Result<(), JsValue> {
     load_localization(app.clone());
     load_trip_planner(app.clone());
     load_ftue(app.clone());
+    load_tutorials(app.clone());
     load_sounds(app.clone());
     install_audio(&app)?;
     #[cfg(target_arch = "wasm32")]
@@ -1281,6 +1294,35 @@ fn experiment_name(id: &str) -> String {
     out
 }
 
+/// The Kerbal Space Academy lessons (assets/ui/tutorials.json); the Lessons tab stays empty without it.
+fn load_tutorials(app: Shared) {
+    wasm_bindgen_futures::spawn_local(async move {
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let Ok(resp) =
+            wasm_bindgen_futures::JsFuture::from(window.fetch_with_str("assets/ui/tutorials.json"))
+                .await
+        else {
+            return;
+        };
+        let Ok(resp) = resp.dyn_into::<web_sys::Response>() else {
+            return;
+        };
+        if !resp.ok() {
+            return;
+        }
+        let Ok(text) = resp.text() else { return };
+        let Ok(text) = wasm_bindgen_futures::JsFuture::from(text).await else {
+            return;
+        };
+        let Some(text) = text.as_string() else { return };
+        if let Some(a) = tutorials::parse(&text) {
+            app.borrow_mut().academy = Some(a);
+        }
+    });
+}
+
 /// The first-time hints (assets/ui/ftue.json); none show without it.
 fn load_ftue(app: Shared) {
     wasm_bindgen_futures::spawn_local(async move {
@@ -1865,6 +1907,48 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
     wire("ksc-mission", Box::new(|a| a.borrow_mut().open_missions()))?;
     wire("ksc-training", Box::new(|a| a.borrow_mut().open_training()))?;
     wire("tc-back", Box::new(|a| a.borrow().open_ksc()))?;
+    for (id, lessons) in [("tc-tab-kerbals", false), ("tc-tab-lessons", true)] {
+        wire(
+            id,
+            Box::new(move |a| {
+                let mut app = a.borrow_mut();
+                app.tc_lessons = lessons;
+                app.render_training();
+            }),
+        )?;
+    }
+    if let Some(list) = doc.get_element_by_id("tl-list") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let id = ev
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .and_then(|e| e.closest("[data-lesson]").ok().flatten())
+                .and_then(|e| e.get_attribute("data-lesson"));
+            if let Some(id) = id {
+                let mut app = a.borrow_mut();
+                app.lesson_selected = Some(id);
+                app.render_training();
+            }
+        });
+        list.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
+    if let Some(info) = doc.get_element_by_id("tc-info") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let id = ev
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .and_then(|e| e.closest("#tl-start").ok().flatten())
+                .and_then(|e| e.get_attribute("data-lesson"));
+            if let Some(id) = id {
+                a.borrow().play_lesson(&id);
+            }
+        });
+        info.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
     if let Some(list) = doc.get_element_by_id("tc-list") {
         let a = app.clone();
         let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
@@ -1996,7 +2080,21 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
             let app = a.borrow();
             match id.as_str() {
                 "ftue-next" => {
-                    app.ftue_state.borrow_mut().queue.pop_front();
+                    {
+                        let mut st = app.ftue_state.borrow_mut();
+                        st.queue.pop_front();
+                        if st.queue.is_empty() {
+                            st.lesson = false;
+                        }
+                    }
+                    app.ftue_show();
+                }
+                "ftue-off" if app.ftue_state.borrow().lesson => {
+                    {
+                        let mut st = app.ftue_state.borrow_mut();
+                        st.queue.clear();
+                        st.lesson = false;
+                    }
                     app.ftue_show();
                 }
                 "ftue-off" => {
@@ -5338,8 +5436,9 @@ impl App {
             m.image.as_str()
         };
         el.set_inner_html(&format!(
-            "<img src=\"assets/ui/hud/{image}.png\" alt=\"\" onerror=\"this.style.display='none'\" /><div class=\"ftue-body\"><div class=\"ftue-name\">PAIGE</div><div class=\"ftue-text\">{text}</div><div class=\"ftue-acts\"><button id=\"ftue-off\" class=\"secondary\">No more hints</button><button id=\"ftue-next\">{next}</button></div></div>",
-            next = if st.queue.len() > 1 { "Continue" } else { "Got it" },
+            "<img src=\"assets/ui/hud/{image}.png\" alt=\"\" onerror=\"this.style.display='none'\" /><div class=\"ftue-body\"><div class=\"ftue-name\">PAIGE</div><div class=\"ftue-text\">{text}</div><div class=\"ftue-acts\"><button id=\"ftue-off\" class=\"secondary\">{off}</button><button id=\"ftue-next\">{next}</button></div></div>",
+            next = if st.queue.len() > 1 { "Continue" } else if st.lesson { "Finish" } else { "Got it" },
+            off = if st.lesson { "End Tutorial" } else { "No more hints" },
         ));
         el.class_list().add_1("open").ok();
     }
@@ -5921,6 +6020,23 @@ impl App {
     }
 
     fn render_training(&mut self) {
+        for (id, on) in [
+            ("tc-tab-kerbals", !self.tc_lessons),
+            ("tc-tab-lessons", self.tc_lessons),
+        ] {
+            if let Some(b) = self.doc.get_element_by_id(id) {
+                b.class_list().toggle_with_force("on", on).ok();
+            }
+        }
+        for (id, show) in [("tc-list", !self.tc_lessons), ("tl-list", self.tc_lessons)] {
+            if let Some(el) = self.doc.get_element_by_id(id) {
+                el.class_list().toggle_with_force("hidden", !show).ok();
+            }
+        }
+        if self.tc_lessons {
+            self.render_lessons();
+            return;
+        }
         if !self
             .roster
             .iter()
@@ -5949,6 +6065,57 @@ impl App {
             "tc-count",
             &format!("{} astronauts, {free} available", self.roster.len()),
         );
+    }
+
+    /// The Lessons tab: the lessons by group, and the one picked (the first until one is).
+    fn render_lessons(&mut self) {
+        let Some(a) = &self.academy else {
+            set_text(&self.doc, "tc-count", "lessons are loading");
+            return;
+        };
+        if !a
+            .lessons
+            .iter()
+            .any(|l| Some(&l.id) == self.lesson_selected.as_ref())
+        {
+            self.lesson_selected = a.lessons.first().map(|l| l.id.clone());
+        }
+        let sel = self.lesson_selected.as_deref();
+        if let Some(el) = self.doc.get_element_by_id("tl-list") {
+            el.set_inner_html(&tutorials::list_html(a, &self.loc, sel));
+        }
+        if let Some(el) = self.doc.get_element_by_id("tc-info") {
+            let html = a
+                .lessons
+                .iter()
+                .find(|l| Some(l.id.as_str()) == sel)
+                .map(|l| tutorials::info_html(l, &self.loc))
+                .unwrap_or_default();
+            el.set_inner_html(&html);
+        }
+        set_text(
+            &self.doc,
+            "tc-count",
+            &format!("Kerbal Space Academy: {} lessons", a.lessons.len()),
+        );
+    }
+
+    /// Play a lesson: PAIGE's messages, stage after stage, in the hint box (whatever the hint setting).
+    fn play_lesson(&self, id: &str) {
+        let Some(l) = self
+            .academy
+            .as_ref()
+            .and_then(|a| a.lessons.iter().find(|l| l.id == id))
+        else {
+            return;
+        };
+        {
+            let mut st = self.ftue_state.borrow_mut();
+            st.queue.clear();
+            st.queue.extend(l.messages());
+            st.lesson = true;
+        }
+        self.ftue_show();
     }
 
     /// Seats on a saved craft: the crew capacity of its parts (0 until its document arrives).

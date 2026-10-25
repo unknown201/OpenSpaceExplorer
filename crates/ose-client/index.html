@@ -575,6 +575,17 @@
     .tc-kerbal .where { font-size: calc(12 * var(--u)); color: #9fb0cc; }
     .tc-vet { margin-left: calc(6 * var(--u)); padding: 0 calc(6 * var(--u)); border-radius: 3px; background: #e6b84a; color: #1a1406; font-size: calc(11 * var(--u)); font-weight: 700; }
     .tc-face { width: calc(40 * var(--u)); height: calc(40 * var(--u)); flex: none; }
+    /* Kerbals and Lessons tabs; the lessons list (Kerbal Space Academy) by group. */
+    .tc-tabs { display: flex; gap: calc(6 * var(--u)); margin-top: calc(10 * var(--u)); }
+    .tc-tabs button { flex: 1; margin: 0; padding: calc(6 * var(--u)) 0; background: #0b1020; border: 1px solid #2c3d63; color: #9fb0cc; border-radius: 4px; cursor: pointer; }
+    #tc .tc-tabs button.on { background: #3e7d2a; color: #fff; border-color: #7dbb5a; }
+    #tl-list { list-style: none; margin: calc(10 * var(--u)) 0 0; padding: 0; overflow: auto; flex: 1; }
+    #tl-list.hidden, #tc-list.hidden { display: none; }
+    .tl-group { margin: calc(12 * var(--u)) 0 calc(4 * var(--u)); font-size: calc(12 * var(--u)); letter-spacing: 0.08em; text-transform: uppercase; color: #e6b84a; }
+    .tl-lesson { padding: calc(8 * var(--u)) calc(12 * var(--u)); margin-bottom: calc(4 * var(--u)); background: #0b1020; border: 1px solid #2c3d63; border-radius: 4px; cursor: pointer; color: #e6ecf7; font-size: calc(14 * var(--u)); }
+    .tl-lesson.selected { background: #182641; border-color: #5b80c4; }
+    #tc-info .tl-meta { color: #8a94a8; font-size: calc(13 * var(--u)); }
+    #tl-start { margin: calc(8 * var(--u)) 0; padding: calc(8 * var(--u)) calc(18 * var(--u)); background: #3e7d2a; color: #fff; border: 0; border-radius: 4px; font-weight: 600; cursor: pointer; }
     #tc-info { flex: 1; max-width: calc(760 * var(--u)); background: #10161fe6; border: 1px solid #2c3d63; border-radius: calc(8 * var(--u)); padding: calc(24 * var(--u)) calc(28 * var(--u)); overflow: auto; color: #cfd6e6; }
     .tc-file { display: flex; gap: calc(20 * var(--u)); align-items: center; } .tc-file .tc-face { width: calc(110 * var(--u)); height: calc(110 * var(--u)); }
     #tc-info h3 { margin: 0 0 calc(6 * var(--u)); font-size: calc(30 * var(--u)); color: #fff; }
@@ -913,8 +924,10 @@
         <div id="tc">
           <div id="tc-roster">
             <div class="mc-head"><h2>Training Center</h2><button id="tc-back" class="secondary" data-ose="tc-back">Back to KSC</button></div>
+            <div class="tc-tabs"><button id="tc-tab-kerbals" class="on" data-ose="tc-tab-kerbals">Kerbals</button><button id="tc-tab-lessons" data-ose="tc-tab-lessons" title="Kerbal Space Academy: lessons with PAIGE">Lessons</button></div>
             <div id="tc-count" class="tc-count"></div>
             <ul id="tc-list" data-ose="tc-list"></ul>
+            <ul id="tl-list" data-ose="tl-list" class="hidden"></ul>
           </div>
           <div id="tc-info" data-ose="tc-info"></div>
         </div>
