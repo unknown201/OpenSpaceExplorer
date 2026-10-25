@@ -6898,6 +6898,11 @@ impl App {
                 } else {
                     0.0
                 };
+                let owner = v.owner.and_then(|o| {
+                    self.campaign
+                        .as_ref()
+                        .and_then(|(_, m)| m.iter().find(|m| m.player_id == o))
+                });
                 let altitude = v.flight.as_ref().map(|f| f.altitude_m).unwrap_or_else(|| {
                     let rb = v.reference_body as usize;
                     (scene.vessel_position(v, ut) - scene.position(rb, ut)).length() - body.radius_m
@@ -6911,6 +6916,20 @@ impl App {
                     altitude_m: altitude,
                     apoapsis_m: ap - body.radius_m,
                     periapsis_m: pe - body.radius_m,
+                    owner: owner.map(|m| m.display_name.clone()).unwrap_or_default(),
+                    owner_rgb: owner
+                        .map(|m| {
+                            let [r, g, b] = hud::player_rgb(m);
+                            format!("#{r:02x}{g:02x}{b:02x}")
+                        })
+                        .unwrap_or_default(),
+                    kind: if v.flight.as_ref().is_some_and(|f| f.eva) {
+                        "eva"
+                    } else if v.name.ends_with(" flag") {
+                        "flag"
+                    } else {
+                        "vessel"
+                    },
                 })
             })
             .collect()

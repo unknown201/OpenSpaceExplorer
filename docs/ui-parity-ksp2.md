@@ -77,7 +77,7 @@ Camera rule that runs through every map: **the right button drags the camera, th
 | M4 | Vessel labels drawn once | not a bug: the test pilot had joined twice and owned two probes | closed |
 | M5 | Tracking Station object list, filters, focus/control/recover | rebuilt by "Build 3D world and menu replica" (unpushed) | other thread |
 | M6 | Map markers: icons for vessels, Kerbals, flags, planets and the star; names on hover | the original's ICO-Map icons; a vessel's name shows on hover, for the vessel flown and for the target; markers behind a planet or moon are hidden | done |
-| MP1 | Multiplayer (none in the original): who is in the campaign, whose vessel is whose | a Players window in the flight app bar lists everyone in the campaign with their colour (agency colour or a steady pick) and vessels, you first; other players' map markers take their colour and name the owner on hover; online status waits on the server | partly done |
+| MP1 | Multiplayer (none in the original): who is in the campaign, whose vessel is whose | a Players window in the flight app bar lists everyone in the campaign with their colour (agency colour or a steady pick) and vessels, you first; other players' map markers take their colour and name the owner on hover; the Tracking Station rows show each vessel's map icon and its owner with their colour; online status waits on the server | partly done |
 
 ### VAB (Josh's #6)
 

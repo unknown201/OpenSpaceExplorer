@@ -15,6 +15,11 @@ pub struct Row {
     pub altitude_m: f64,
     pub apoapsis_m: f64,
     pub periapsis_m: f64,
+    /// Whose it is (multiplayer) and their colour, `#rrggbb`; empty for nobody's.
+    pub owner: String,
+    pub owner_rgb: String,
+    /// What it is, for its map icon: "vessel", "eva" or "flag".
+    pub kind: &'static str,
 }
 
 /// Situation as the original names it: the flight model's when the vessel is under it, otherwise from its
@@ -61,8 +66,18 @@ pub fn render_list(rows: &[Row], selected: Option<u64>, mine_only: bool) -> Stri
     let mut html = String::new();
     for r in rows {
         html.push_str(&format!(
-            "<li class=\"ts-vessel{mine}{sel}\" data-ose=\"ts-vessel\" data-ose-id=\"{id}\">\
-             <span class=\"name\">{name}</span><span class=\"meta\">{body} \u{b7} {sit} \u{b7} {alt}</span></li>",
+            "<li class=\"ts-vessel{mine}{sel} {kind}\" data-ose=\"ts-vessel\" data-ose-id=\"{id}\">\
+             <span class=\"name\">{name}</span><span class=\"meta\">{body} \u{b7} {sit} \u{b7} {alt}{owner}</span></li>",
+            kind = r.kind,
+            owner = if r.owner.is_empty() || r.mine {
+                String::new()
+            } else {
+                format!(
+                    " \u{b7} <i class=\"ts-owner-dot\" style=\"background:{}\"></i>{}",
+                    esc(&r.owner_rgb),
+                    esc(&r.owner)
+                )
+            },
             mine = if r.mine { " mine" } else { "" },
             sel = if selected == Some(r.id) { " selected" } else { "" },
             id = r.id,
@@ -89,7 +104,13 @@ pub fn render_info(r: &Row) -> String {
          <button data-ose=\"ts-fly\" data-ose-ts-fly=\"{id}\"{fly}>Fly</button>\
          <button data-ose=\"ts-recover\" data-ose-ts-recover=\"{id}\"{rec}>Recover</button></div>",
         name = esc(&r.name),
-        owner = if r.mine { "Your vessel" } else { "Another agency's vessel" },
+        owner = if r.mine {
+            "Your vessel".to_string()
+        } else if r.owner.is_empty() {
+            "Another agency's vessel".to_string()
+        } else {
+            format!("{}'s vessel", esc(&r.owner))
+        },
         body = esc(&r.body),
         sit = r.situation,
         alt = km(r.altitude_m),
@@ -123,6 +144,9 @@ mod tests {
             altitude_m: 80_000.0,
             apoapsis_m: 90_000.0,
             periapsis_m: 75_000.0,
+            owner: String::new(),
+            owner_rgb: String::new(),
+            kind: "vessel",
         }
     }
 
