@@ -119,6 +119,18 @@ def linear_to_srgb_image(img):
     return Image.fromarray(np.clip(a * 255.0 + 0.5, 0, 255).astype(np.uint8), "RGBA")
 
 
+def srgb_to_linear_image(img, alpha: bool = False):
+    """Decode an image's RGB (and alpha, when asked: masks keep a weight there) from sRGB to linear."""
+    import numpy as np
+    from PIL import Image
+
+    a = np.asarray(img.convert("RGBA")).astype(np.float64) / 255.0
+    k = 4 if alpha else 3
+    c = a[..., :k]
+    a[..., :k] = np.where(c <= 0.04045, c / 12.92, np.power((c + 0.055) / 1.055, 2.4))
+    return Image.fromarray(np.clip(a * 255.0 + 0.5, 0, 255).astype(np.uint8), "RGBA")
+
+
 def array_slices(arr):
     """Mip 0 of every slice of a Texture2DArray as PIL images (the data streams from the bundle's .resS)."""
     from UnityPy.enums import TextureFormat
@@ -315,7 +327,12 @@ def export_body(bid: str, bundles: Path, out_root: Path, args) -> dict | None:
             surf["normal_source"] = nrm.read().m_Name
         bm = tex_obj("_BiomeMaskTex")
         if bm is not None:
-            save_image(bm.read().image, out / "biome.png", (args.albedo // 2, args.albedo // 4), "RGBA")
+            # A mask imported as sRGB (Minmus, Duna, Bop) is decoded by the GPU before the shader weighs biomes
+            # with it; the client samples biome.png raw, so store the decoded weights.
+            bimg = bm.read().image
+            if bm.read_typetree().get("m_ColorSpace", 0) == 1:
+                bimg = srgb_to_linear_image(bimg, alpha=True)
+            save_image(bimg, out / "biome.png", (args.albedo // 2, args.albedo // 4), "RGBA")
         for name, prefix in (("_SmallAlbedoArray", "detail_a"), ("_SmallNormalArray", "detail_n")):
             arr = tex_obj(name)
             if arr is None:

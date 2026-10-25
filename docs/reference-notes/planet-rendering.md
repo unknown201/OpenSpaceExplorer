@@ -204,3 +204,9 @@ exposure, darker than the terrain beside them; their sunlight is now scaled to t
 eased above exposure 6 because dark bodies' rocks reuse bright stock textures), and the far impostors are lit the
 same way (then taken back through the tone map for the aerial haze) so a prop keeps its brightness at the switch.
 
+Colour spaces (all bodies checked): scaled normals, detail normal arrays and cloud cubemaps are linear and the
+detail albedo arrays sRGB, as the client samples them; Minmus's scaled albedo is linear (handled above); the biome
+masks of Minmus, Duna and Bop are sRGB, so the GPU decodes them in the original before weighing biomes - the export
+now stores them decoded. Anti-tiling: the detail slices at the 8 m and 64 m tilings (albedo and normal) blend in a
+turned, shifted copy by low-frequency noise (the original's `_StochasticScale` sampling), on medium and high detail.
+

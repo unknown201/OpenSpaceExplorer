@@ -801,13 +801,54 @@ fn tri_weights(n: vec3<f32>) -> vec3<f32> {
     return w / (w.x + w.y + w.z);
 }
 
+fn hash2(i: vec2<f32>) -> f32 {
+    return fract(sin(dot(i, vec2<f32>(127.1, 311.7))) * 43758.547);
+}
+
+fn vnoise2(p: vec2<f32>) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash2(i), hash2(i + vec2<f32>(1.0, 0.0)), u.x),
+               mix(hash2(i + vec2<f32>(0.0, 1.0)), hash2(i + vec2<f32>(1.0, 1.0)), u.x), u.y);
+}
+
+// Anti-tiling (the original's stochastic sampling, `_StochasticScale`): a second copy of the slice, turned and
+// shifted, blended in by low-frequency noise so the 8 m and 64 m repeats do not show as rows across the ground.
+fn detail_2d(slot: i32, uv: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>, anti: bool) -> vec4<f32> {
+    let a = textureSampleGrad(detail_a, wrap_samp, uv, slot, dx, dy);
+    if !anti {
+        return a;
+    }
+    let r = mat2x2<f32>(0.8, -0.6, 0.6, 0.8);
+    let b = textureSampleGrad(detail_a, wrap_samp, r * uv + vec2<f32>(0.37, 0.61), slot, r * dx, r * dy);
+    let k = smoothstep(0.3, 0.7, vnoise2(uv * 0.23));
+    return mix(a, b, k);
+}
+
+// The detail normal (x in alpha, y in green) with the same anti-tiling copy as `detail_2d`; the turned copy's
+// tangent-space vector is turned back.
+fn detail_n2(slot: i32, uv: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>) -> vec2<f32> {
+    let a = textureSampleGrad(detail_n, wrap_samp, uv, slot, dx, dy);
+    if frame.quality.z < 0.5 {
+        return vec2<f32>(a.a, a.g) * 2.0 - 1.0;
+    }
+    let r = mat2x2<f32>(0.8, -0.6, 0.6, 0.8);
+    let b = textureSampleGrad(detail_n, wrap_samp, r * uv + vec2<f32>(0.37, 0.61), slot, r * dx, r * dy);
+    let na = vec2<f32>(a.a, a.g) * 2.0 - 1.0;
+    let nb = transpose(r) * (vec2<f32>(b.a, b.g) * 2.0 - 1.0);
+    return mix(na, nb, smoothstep(0.3, 0.7, vnoise2(uv * 0.23)));
+}
+
 fn tri_sample(slot: i32, p: vec3<f32>, dpx: vec3<f32>, dpy: vec3<f32>, w: vec3<f32>, period: f32) -> vec4<f32> {
     let q = p / period;
     let qx = dpx / period;
     let qy = dpy / period;
-    let a = textureSampleGrad(detail_a, wrap_samp, q.yz, slot, qx.yz, qy.yz);
-    let b = textureSampleGrad(detail_a, wrap_samp, q.zx, slot, qx.zx, qy.zx);
-    let c = textureSampleGrad(detail_a, wrap_samp, q.xy, slot, qx.xy, qy.xy);
+    // (not on low detail, which keeps the plain repeat)
+    let anti = period < 100.0 && frame.quality.z > 0.5;
+    let a = detail_2d(slot, q.yz, qx.yz, qy.yz, anti);
+    let b = detail_2d(slot, q.zx, qx.zx, qy.zx, anti);
+    let c = detail_2d(slot, q.xy, qx.xy, qy.xy, anti);
     return a * w.x + b * w.y + c * w.z;
 }
 
@@ -817,12 +858,9 @@ fn tri_normal(slot: i32, p: vec3<f32>, dpx: vec3<f32>, dpy: vec3<f32>, w: vec3<f
     let q = p / period;
     let qx = dpx / period;
     let qy = dpy / period;
-    let a = textureSampleGrad(detail_n, wrap_samp, q.yz, slot, qx.yz, qy.yz);
-    let b = textureSampleGrad(detail_n, wrap_samp, q.zx, slot, qx.zx, qy.zx);
-    let c = textureSampleGrad(detail_n, wrap_samp, q.xy, slot, qx.xy, qy.xy);
-    let na = vec2<f32>(a.a, a.g) * 2.0 - 1.0;
-    let nb = vec2<f32>(b.a, b.g) * 2.0 - 1.0;
-    let nc = vec2<f32>(c.a, c.g) * 2.0 - 1.0;
+    let na = detail_n2(slot, q.yz, qx.yz, qy.yz);
+    let nb = detail_n2(slot, q.zx, qx.zx, qy.zx);
+    let nc = detail_n2(slot, q.xy, qx.xy, qy.xy);
     return vec3<f32>(0.0, na.x, na.y) * w.x + vec3<f32>(nb.y, 0.0, nb.x) * w.y + vec3<f32>(nc.x, nc.y, 0.0) * w.z;
 }
 
