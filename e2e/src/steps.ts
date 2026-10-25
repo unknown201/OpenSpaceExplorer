@@ -64,6 +64,11 @@ class Probe {
   constructor(page: Page) {
     page.on("console", (m: ConsoleMessage) => {
       if (m.type() === "error") this.consoleErrors.push(m.text());
+      // WebGPU validation failures (a shader that does not compile, a pipeline built from it) arrive as
+      // warnings, and the effect they belong to silently draws nothing.
+      else if (m.type() === "warning" && /Error while parsing WGSL|Invalid ShaderModule|Invalid RenderPipeline/.test(m.text())) {
+        this.consoleErrors.push(m.text().split(String.fromCharCode(10))[0]);
+      }
     });
     page.on("pageerror", (e) => this.pageErrors.push(e.message));
     page.on("websocket", (ws) => this.sockets.push(ws));

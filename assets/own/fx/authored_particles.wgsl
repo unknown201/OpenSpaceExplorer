@@ -37,8 +37,9 @@ fn vertex(in:Instance,position:vec3<f32>,normal:vec3<f32>,uv:vec2<f32>)->Out {
  let blend=in.params.w;
  let base=mix(textureSample(albedo,samp,in.uv),textureSample(albedo,samp,in.next),blend)*in.color;
  var n=normalize(in.normal);
+ // Sampled before the branch: WGSL allows implicit-derivative sampling only in uniform control flow.
+ let tex=mix(textureSample(normal_map,samp,in.uv),textureSample(normal_map,samp,in.next),blend);
  if in.params.z>0.5 {
-  let tex=mix(textureSample(normal_map,samp,in.uv),textureSample(normal_map,samp,in.next),blend);
   let xy=(vec2(tex.r*tex.a,tex.g)*2.0-1.0)*in.lighting.w;
   n=normalize(in.tangent*xy.x+in.bitangent*xy.y+n*sqrt(max(1.0-dot(xy,xy),0.0)));
  }
