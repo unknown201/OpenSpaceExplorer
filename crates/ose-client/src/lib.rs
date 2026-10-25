@@ -130,7 +130,9 @@ struct App {
     /// VAB undo/redo, a placed part pressed with the left button (part index, where), and the subtree lifted
     /// off the craft while it is carried.
     vab_history: vab::History,
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     vab_grab: Option<(usize, f64, f64)>,
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     vab_frag: Option<vab::Fragment>,
     vab_dragged: bool,
     /// The flight view (the vessel in 3D near its body).
@@ -3016,6 +3018,7 @@ impl App {
         tip.class_list().add_1("open").ok();
     }
 
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     fn vab_record(&mut self) {
         self.vab_history.record(&self.editor);
     }
