@@ -40,6 +40,16 @@ def qrot(q: dict, v: tuple[float, float, float]) -> tuple[float, float, float]:
     return (vx + w * tx + (y * tz - z * ty), vy + w * ty + (z * tx - x * tz), vz + w * tz + (x * ty - y * tx))
 
 
+# Launch pads 2 to 4 where the drawn KSC campus has them (the campus is fitted to pads 2-4 at a 0.041 deg yaw,
+# server and client): the install's spawn objects are offset from the campus layout, and their terrain flats
+# (ose-data flats_for) left small plateaus beside it. Pad 1 stays where the install puts it (the campus anchor).
+KSC_PAD_SITES = {
+    "kerbin_KSCLaunchpad_spawn_02": (-0.49889, -74.97621),
+    "kerbin_KSCLaunchpad_spawn_03": (-0.68405, -75.13454),
+    "kerbin_KSCLaunchpad_spawn_04": (-0.49911, -75.29724),
+}
+
+
 def sites_for(body: dict) -> list[dict]:
     objs = {s["Name"]: s for s in body.get("LocalSimObjectsData") or []}
     radius = body["radius"]
@@ -69,6 +79,7 @@ def sites_for(body: dict) -> list[dict]:
         # Unity Y-up -> Z-up: (x, z, y)
         lat = math.degrees(math.asin(p[1] / r))
         lon = math.degrees(math.atan2(p[2], p[0]))
+        lat, lon = KSC_PAD_SITES.get(name, (lat, lon))
         out.append({"name": name, "lat_deg": lat, "lon_deg": lon, "altitude_m": r - radius})
     return out
 

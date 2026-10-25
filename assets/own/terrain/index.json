@@ -123,20 +123,20 @@
     },
     {
      "name": "kerbin_KSCLaunchpad_spawn_02",
-     "lat_deg": -0.43599576659832184,
-     "lon_deg": -75.02696528328093,
+     "lat_deg": -0.49889,
+     "lon_deg": -74.97621,
      "altitude_m": 111.0179979428649
     },
     {
      "name": "kerbin_KSCLaunchpad_spawn_03",
-     "lat_deg": -0.6211281458601722,
-     "lon_deg": -75.18533298883574,
+     "lat_deg": -0.68405,
+     "lon_deg": -75.13454,
      "altitude_m": 115.7521629538387
     },
     {
      "name": "kerbin_KSCLaunchpad_spawn_04",
-     "lat_deg": -0.4361562346469534,
-     "lon_deg": -75.34799892336478,
+     "lat_deg": -0.49911,
+     "lon_deg": -75.29724,
      "altitude_m": 131.960510274861
     }
    ],
