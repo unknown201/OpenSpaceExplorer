@@ -305,6 +305,59 @@ fn sky_to_point(camera_in: vec3<f32>, point: vec3<f32>, sun: vec3<f32>) -> Sky {
     let mu_s = dot(camera, sun) / r;
     let nu = dot(view, sun);
     let d = length(point - camera);
+    // Low down, the in-scatter to a point is the difference of two nearly equal LUT values (from the camera and
+    // from the point, both looking on to the top or the ground), and near the sea-level horizon that cancels
+    // badly: a purple line crossed raised ground (a ring around a camera on a hill, plain on Laythe). There the
+    // full ray's in-scatter is taken instead, in proportion to the share of its optical depth the point covers;
+    // the exact difference returns between 2 and 6 km up.
+    let alt = r - bottom_r();
+    if alt < 6.0 {
+        // (and across the switch between the LUT's two halves at the sea-level horizon, the two sides blended)
+        let mu_h = -safe_sqrt(1.0 - (bottom_r() / r) * (bottom_r() / r));
+        // (the sky half's rows next to the switch are blurred with the other half, so its side reaches further)
+        let lo_eps = 0.004;
+        let hi_eps = 0.03;
+        var near = in_scatter_share(r, mu, mu_s, nu, d);
+        if mu > mu_h - lo_eps && mu < mu_h + hi_eps {
+            let lo = in_scatter_share(r, mu_h - lo_eps, mu_s, nu, d);
+            let hi = in_scatter_share(r, mu_h + hi_eps, mu_s, nu, d);
+            let k = (mu - mu_h + lo_eps) / (lo_eps + hi_eps);
+            near.transmittance = mix(lo.transmittance, hi.transmittance, k);
+            near.radiance = mix(lo.radiance, hi.radiance, k);
+        }
+        if alt < 2.0 {
+            return near;
+        }
+        let exact = in_scatter(r, mu, mu_s, nu, d);
+        let a = smoothstep(2.0, 6.0, alt);
+        out.transmittance = mix(near.transmittance, exact.transmittance, a);
+        out.radiance = mix(near.radiance, exact.radiance, a);
+        return out;
+    }
+    return in_scatter(r, mu, mu_s, nu, d);
+}
+
+// The full ray's in-scatter (to the top or the ground) scaled by the share of its extinction within `d` km.
+fn in_scatter_share(r: f32, mu: f32, mu_s: f32, nu: f32, d: f32) -> Sky {
+    var out: Sky;
+    let hits = ray_hits_ground(r, mu);
+    out.transmittance = transmittance(r, mu, d, hits);
+    let s0 = combined_scattering(r, mu, mu_s, nu, hits);
+    var full_t = transmittance_to_top(r, mu);
+    if hits {
+        let d_ground = -r * mu - safe_sqrt(r * r * (mu * mu - 1.0) + bottom_r() * bottom_r());
+        full_t = transmittance(r, mu, d_ground, true);
+    }
+    let share = (vec3<f32>(1.0) - out.transmittance) / max(vec3<f32>(1.0) - full_t, vec3<f32>(1e-4));
+    let mie = s0.mie * smoothstep(0.0, 0.01, mu_s);
+    out.radiance = (s0.rayleigh * rayleigh_phase(nu) + mie * mie_phase(frame.atmo.w, nu))
+        * clamp(share, vec3<f32>(0.0), vec3<f32>(1.0));
+    return out;
+}
+
+// In-scatter and transmittance over `d` km from radius `r` at view cosine `mu` (sky_to_point's core).
+fn in_scatter(r: f32, mu: f32, mu_s: f32, nu: f32, d: f32) -> Sky {
+    var out: Sky;
     let hits = ray_hits_ground(r, mu);
     out.transmittance = transmittance(r, mu, d, hits);
     let s0 = combined_scattering(r, mu, mu_s, nu, hits);

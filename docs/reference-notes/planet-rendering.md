@@ -103,11 +103,11 @@ Laythe's beach, Eve and Duna from orbit). Changes made from it:
 - Lagoons: clear seas (opaque depth over 1 m) light their shallows turquoise around coasts and islands, falling
   off over 8 % of `_ShallowMaxDepth` (Kerbin 27 m), visible from orbit as in the original.
 - Land from high up gets back 30 % saturation as the camera climbs from 10 to 40 km (the original's grading).
-Still different: the original's open sea is a brighter blue from 40 to 70 km. On Laythe, standing on raised ground, a thin purple line crosses the ground where
-the view meets the sea-level horizon: the original's scattering LUT is purple on its sky side at that angle
-from low altitude (its dense low Mie haze and the 10 to 40 km absorption layer), and the switch to the
-ground-hitting side is abrupt. Interpolating across the switch, or looking points up on the sky side, made it
-wider rather than better, so it is left as is for now.
+Still different: the original's open sea is a brighter blue from 40 to 70 km. Fixed: on Laythe, standing on raised ground, a thin purple line crossed the ground where the view meets the
+sea-level horizon. Low down (below 2 km, blended out by 6 km) the in-scatter to a point is now the full ray's
+in-scatter times the share of its extinction the point covers (well conditioned, unlike the difference of two
+nearly equal LUT values), blended across the LUT's horizon switch with the sky side sampled 0.03 above it (its
+rows next to the switch are blurred with the ground half).
 
 ## 6. Sunlight
 
