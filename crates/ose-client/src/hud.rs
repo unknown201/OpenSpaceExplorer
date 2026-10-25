@@ -53,7 +53,7 @@ pub const SAS_BUTTONS: &[(&str, &str, &str)] = &[
     (
         "fh-sas-maneuver",
         "Flight-ICO-Maneuver",
-        "Maneuver (not available yet)",
+        "Maneuver: point along the planned burn",
     ),
 ];
 
@@ -69,6 +69,7 @@ pub fn sas_mode(id: &str, orbit_speed: bool) -> Option<AttitudeMode> {
         ("fh-sas-antinormal", _) => AttitudeMode::AntiNormal,
         ("fh-sas-radialin", _) => AttitudeMode::RadialIn,
         ("fh-sas-radialout", _) => AttitudeMode::RadialOut,
+        ("fh-sas-maneuver", _) => AttitudeMode::Maneuver,
         _ => return None,
     })
 }
@@ -82,6 +83,7 @@ pub fn sas_lit(att: &AttitudeMode) -> &'static str {
         AttitudeMode::AntiNormal => "fh-sas-antinormal",
         AttitudeMode::RadialIn => "fh-sas-radialin",
         AttitudeMode::RadialOut => "fh-sas-radialout",
+        AttitudeMode::Maneuver => "fh-sas-maneuver",
         AttitudeMode::Up | AttitudeMode::PitchHeading { .. } | AttitudeMode::Fixed(_) => {
             "fh-sas-stability"
         }
@@ -105,9 +107,10 @@ pub const ACTIONS: &[(&str, &str, &str, bool)] = &[
     (
         "fh-act-lights",
         "ICO-Action-Lights-24x24",
-        "Lights (U, not available yet)",
-        false,
+        "Lights (U)",
+        true,
     ),
+    ("fh-act-rcs", "ICO-Action-Jetpack-24x24", "RCS (R)", true),
     (
         "fh-act-solar",
         "ICO-Action-Solar-24x24",
@@ -127,10 +130,16 @@ pub const ACTIONS: &[(&str, &str, &str, bool)] = &[
         true,
     ),
     (
+        "fh-act-converters",
+        "ICO-AppBar-ActionGroup-24x24",
+        "Fuel cells and reactors on or off",
+        true,
+    ),
+    (
         "fh-act-abort",
         "ICO-Action-Abort-24x24",
-        "Abort (not available yet)",
-        false,
+        "Abort: cut the throttle and arm the parachutes",
+        true,
     ),
 ];
 
@@ -283,6 +292,41 @@ pub fn update(doc: &Document, s: &HudState) {
     lit(doc, "fh-act-gear", f.gear.iter().any(|(_, out)| *out));
     lit(doc, "fh-act-brakes", f.brakes || s.brakes_latched);
     lit(doc, "fh-act-solar", f.panels_deployed);
+    lit(doc, "fh-act-lights", f.lights);
+    lit(doc, "fh-act-rcs", f.rcs);
+    lit(doc, "fh-act-abort", f.abort);
+    lit(
+        doc,
+        "fh-act-converters",
+        f.converters.iter().any(|(_, on, _)| *on),
+    );
+    if let Some(b) = doc.get_element_by_id("fh-act-converters") {
+        if f.converters.is_empty() {
+            b.set_attribute("disabled", "").ok();
+        } else {
+            b.remove_attribute("disabled").ok();
+        }
+    }
+    // CommNet (the original's signal indicator in the flight cluster): linked to the KSC and over how many
+    // relays, or no signal.
+    if let Some(el) = doc.get_element_by_id("fh-comm") {
+        let (text, cls) = if f.comm_connected {
+            (
+                if f.comm_hops <= 1 {
+                    "Signal: KSC".to_string()
+                } else {
+                    format!("Signal: KSC via {} relays", f.comm_hops - 1)
+                },
+                "on",
+            )
+        } else if f.comm_range_m > 0.0 {
+            ("No signal".to_string(), "off")
+        } else {
+            ("No antenna".to_string(), "off")
+        };
+        set(doc, "fh-comm-text", &text);
+        el.class_list().toggle_with_force("on", cls == "on").ok();
+    }
     lit(
         doc,
         "fh-act-chutes",
@@ -290,6 +334,180 @@ pub fn update(doc: &Document, s: &HudState) {
             .iter()
             .any(|(_, st, _)| !matches!(st, ChuteState::Stowed)),
     );
+}
+
+/// The flight staging stack (`FlightStagingStackInstrument`): one card per stage still to fire, the next one
+/// at the bottom and lit, each with its parts' icons and parachute states.
+pub fn staging_html(
+    craft: &ose_data::craft::Craft,
+    catalog: &crate::vab::Catalog,
+    next_stage: usize,
+    chutes: &[(u16, ChuteState, f32)],
+) -> String {
+    let mut html = String::new();
+    let stages = &craft.stages;
+    // The highest index fires first: firing step k is craft stage len - 1 - k. Cards run from the last to
+    // fire (index 0) at the top to the next one at the bottom, numbered from the bottom up.
+    let Some(next) = stages.len().checked_sub(next_stage + 1) else {
+        return html;
+    };
+    for (n, stage) in stages.iter().enumerate().take(next + 1) {
+        let mut icons = String::new();
+        for &i in stage {
+            let Some(p) = craft.parts.get(i) else {
+                continue;
+            };
+            let spec = catalog.get(&p.part_id);
+            let chute = chutes.iter().find(|(pi, _, _)| *pi as usize == i);
+            let icon = match (spec, chute) {
+                (_, Some((_, ChuteState::Armed, _))) => "Staging-ICO-Chute-Armed",
+                (_, Some((_, ChuteState::SemiDeployed | ChuteState::Deployed, _))) => {
+                    "Staging-ICO-Chute-Deployed"
+                }
+                (_, Some((_, ChuteState::Cut, _))) => "Staging-ICO-Chute-Cut",
+                (_, Some(_)) => "Staging-ICO-Chute-Stowed",
+                (Some(s), None) if s.has_engine => "Staging-Icon-Thruster",
+                (Some(s), None) if s.is_decoupler => "Staging-Icon-Inline",
+                (Some(s), None) if s.stage_type.contains("Parachute") => "Staging-ICO-Chute-Stowed",
+                _ => "Staging-ICO-Structure01",
+            };
+            let title = spec.map(|s| s.display_title()).unwrap_or(&p.part_id);
+            icons.push_str(&format!(
+                "<i title=\"{}\" style=\"--ico:url(assets/ui/hud/{icon}.png)\"></i>",
+                title.replace('"', "&quot;")
+            ));
+        }
+        html.push_str(&format!(
+            "<li class=\"{}\"><b>{}</b>{icons}</li>",
+            if n == next { "next" } else { "" },
+            stages.len() - n
+        ));
+    }
+    html
+}
+
+/// FNV-1a of a string, to tell rendered HTML apart cheaply.
+pub fn fnv(s: &str) -> u64 {
+    s.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| {
+        (h ^ b as u64).wrapping_mul(0x100_0000_01b3)
+    })
+}
+
+/// The mission tracker window (`MissionTracker`): accepted missions not yet handed in, each with its current
+/// objective and progress, or that it is ready to turn in at Mission Control.
+pub fn tracker_html(
+    missions: &[ose_net::MissionInfo],
+    loc: &std::collections::HashMap<String, String>,
+) -> String {
+    let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;");
+    let mut rows: Vec<&ose_net::MissionInfo> = missions
+        .iter()
+        .filter(|m| m.accepted && !m.turned_in)
+        .collect();
+    rows.sort_by_key(|m| (!m.primary, m.complete));
+    let mut html = String::new();
+    for m in rows {
+        let name = crate::rnd::text(loc, &m.name_key);
+        let body = if m.complete {
+            "<span class=\"done\">Complete: hand it in at Mission Control</span>".to_string()
+        } else {
+            format!(
+                "{} <small>{}/{}</small>",
+                esc(&crate::rnd::text(loc, &m.objective_key)),
+                m.stage + 1,
+                m.stages.max(1)
+            )
+        };
+        html.push_str(&format!(
+            "<li class=\"{}\"><b>{}</b><div>{body}</div></li>",
+            if m.primary { "primary" } else { "secondary" },
+            esc(&name)
+        ));
+    }
+    if html.is_empty() {
+        html = "<li class=\"empty\">No missions in progress. Take one on at Mission Control.</li>"
+            .into();
+    }
+    html
+}
+
+/// The burn timer (`BurnTimerInstrument`): time to the node, its delta-v and the burn's length at full
+/// throttle, starting half the burn before the node as the original's countdown does. `full_thrust_kn` 0
+/// leaves the length unknown.
+pub fn burn_text(to_node_s: f64, dv_mps: f64, mass_t: f64, full_thrust_kn: f64) -> String {
+    let burn = if full_thrust_kn > 0.0 {
+        Some(dv_mps * mass_t / full_thrust_kn)
+    } else {
+        None
+    };
+    let start = to_node_s - burn.unwrap_or(0.0) * 0.5;
+    match burn {
+        Some(b) => format!(
+            "Burn {} \u{b7} \u{394}v {:.0} m/s \u{b7} {:.0} s at full throttle",
+            fmt_dt(start),
+            dv_mps,
+            b
+        ),
+        None => format!(
+            "Node {} \u{b7} \u{394}v {:.0} m/s \u{b7} throttle up to time the burn",
+            fmt_dt(to_node_s),
+            dv_mps
+        ),
+    }
+}
+
+/// Notification toasts (`NotificationManager`): short messages stacked at the top right that fade after a few
+/// seconds. Flight messages still land in `#fh-note` (the tests read it); `watch` turns each new one into a toast.
+#[derive(Default)]
+pub struct Toasts {
+    seen: std::collections::HashMap<String, String>,
+}
+
+impl Toasts {
+    /// Toast the text of element `id` when it changes to something new and non-empty.
+    pub fn watch(&mut self, doc: &Document, id: &str, tier: &str) {
+        let text = doc
+            .get_element_by_id(id)
+            .and_then(|e| e.text_content())
+            .unwrap_or_default();
+        let last = self.seen.entry(id.to_string()).or_default();
+        if *last != text {
+            *last = text.clone();
+            if !text.trim().is_empty() {
+                push(doc, &text, tier);
+            }
+        }
+    }
+}
+
+/// Show one toast; `tier` is a class: `alert`, `passive` or `triumph`, as the original's tiers.
+pub fn push(doc: &Document, text: &str, tier: &str) {
+    let Some(stack) = doc.get_element_by_id("toasts") else {
+        return;
+    };
+    let Ok(el) = doc.create_element("div") else {
+        return;
+    };
+    el.set_class_name(&format!("toast {tier}"));
+    el.set_attribute("data-ose", "toast").ok();
+    el.set_text_content(Some(text));
+    stack.append_child(&el).ok();
+    // At most four at once; the oldest goes first.
+    while stack.child_element_count() > 4 {
+        if let Some(first) = stack.first_element_child() {
+            first.remove();
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        use wasm_bindgen::JsCast;
+        let gone = el.clone();
+        let cb = wasm_bindgen::closure::Closure::once_into_js(move || gone.remove());
+        if let Some(w) = web_sys::window() {
+            w.set_timeout_with_callback_and_timeout_and_arguments_0(cb.unchecked_ref(), 6000)
+                .ok();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -328,6 +546,15 @@ mod tests {
         let (ap, pe) = apsides(&orbit(-1.0e6, 1.5, 0.5), 600_000.0, 3.5316e12, 0.0);
         assert!(ap.is_none());
         assert!(pe.1 < 0.0);
+    }
+
+    #[test]
+    fn burn_starts_half_a_burn_early() {
+        // 100 m/s on 10 t with 50 kN: 20 s burn, starting 10 s before the node.
+        let t = burn_text(70.0, 100.0, 10.0, 50.0);
+        assert!(t.starts_with("Burn T-1:00"), "{t}");
+        assert!(t.contains("20 s"));
+        assert!(burn_text(70.0, 100.0, 10.0, 0.0).starts_with("Node T-1:10"));
     }
 
     #[test]

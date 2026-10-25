@@ -35,6 +35,7 @@ pub mod menu3d;
 pub mod missions;
 #[cfg(target_arch = "wasm32")]
 pub mod navball;
+pub mod ocean_fft;
 pub mod particles;
 #[cfg(target_arch = "wasm32")]
 pub mod planet;
@@ -46,7 +47,9 @@ pub mod planet_scatter;
 pub mod render;
 pub mod rnd;
 pub mod scene;
+pub mod settings;
 pub mod thumb;
+pub mod tracking;
 pub mod vab;
 #[cfg(target_arch = "wasm32")]
 pub mod vab3d;
@@ -138,6 +141,26 @@ struct App {
     /// A press on a VAB picker row (part id, where), which becomes a drag after a few pixels; and a flag
     /// that swallows the row's click after a drag.
     vab_press: Option<(String, f64, f64)>,
+    /// VAB undo/redo, a placed part pressed with the left button (part index, where), and the subtree lifted
+    /// off the craft while it is carried.
+    vab_history: vab::History,
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    vab_grab: Option<(usize, f64, f64)>,
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    vab_frag: Option<vab::Fragment>,
+    /// Symmetry count for surface parts (X / Shift+X) and angle snap (C), as the original's toolbar.
+    vab_symmetry: u32,
+    vab_snap: bool,
+    /// Ctrl+C clipboard, and whether the fragment in hand is a paste (dropped nowhere it just goes away).
+    vab_clipboard: Option<vab::Fragment>,
+    vab_pasting: bool,
+    /// The held part's turn and its yaw part (W/A/S/D/Q/E while holding, Space resets).
+    vab_turn: ose_data::craft::Quat,
+    vab_yaw: ose_data::craft::Quat,
+    /// The server's staging readout of the craft in the editor (StageReport, protocol 26), and when to ask
+    /// again after an edit (ms; asked 300 ms after the last change).
+    vab_stages_readout: Vec<ose_net::StageReadout>,
+    vab_report_due: Option<f64>,
     vab_dragged: bool,
     /// The flight view (the vessel in 3D near its body).
     #[cfg(target_arch = "wasm32")]
@@ -165,6 +188,8 @@ struct App {
     missions: Vec<missions::Mission>,
     mc_primary: bool,
     mc_selected: Option<String>,
+    /// The last Mission Control answer (accepted, turned in, or why not).
+    mc_note: String,
     /// Music and sound effects, and the last stage seen in flight (vessel, stage, parts jettisoned) to play
     /// staging and decoupling sounds once.
     audio: audio::Audio,
@@ -174,8 +199,21 @@ struct App {
     /// Timed experiments running on the flown vessel and when the server reported them (ms), for the countdown.
     running: Vec<ose_net::RunningExperiment>,
     running_since_ms: f64,
+    /// The live campaign's id (CampaignState), so stored per-vessel data stays with its campaign.
+    campaign_id: String,
+    /// The library craft the flown vessel was launched from, to fill `flight_craft` when its document arrives.
+    flight_craft_id: Option<u64>,
+    /// The craft a Kerbal asked to board, flown once the server accepts.
+    board_target: std::cell::Cell<Option<u64>>,
+    /// The crew action awaiting its CrewAck (the HUD button's id).
+    crew_pending: std::cell::Cell<Option<&'static str>>,
     /// The vehicle selected on the launch pad.
     lp_selected: Option<u64>,
+    /// The Tracking Station: open, the selected vessel, the "mine only" filter and the last list refresh (ms).
+    tracking_open: bool,
+    ts_selected: Option<u64>,
+    ts_mine_only: bool,
+    ts_rendered_ms: f64,
     /// Whether the KSC camera is on the launch pad (glides there while the pad dialog is open).
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     ksc_on_pad: bool,
@@ -192,6 +230,19 @@ struct App {
     /// Flight HUD: speed readout in orbit (true) or surface mode, brakes latched from the action bar.
     speed_orbit: bool,
     brakes_latched: bool,
+    toasts: hud::Toasts,
+    /// Vessels this client has staged at least once: their first stage is lit, so the next is the one after.
+    staged: std::collections::HashSet<u64>,
+    roll_sent: f32,
+    translate_sent: (f32, f32, f32),
+    /// Screen points (CSS px) along the planning vessel's current orbit with their UT, from the last map
+    /// frame: a click near one adds a maneuver node there, as clicking an orbit does in the original.
+    orbit_pick: Vec<(f64, f64, f64)>,
+    /// Maneuver gizmo: each handle's screen direction from the node (CSS px, unit) from the last map frame,
+    /// and the handle being dragged (index, press x, y, the node's delta-v components at the press).
+    mnv_dirs: [(f64, f64); 6],
+    mnv_drag: Option<(usize, f64, f64, [f64; 3])>,
+    mnv_sent_ms: f64,
     gpu_canvas: HtmlCanvasElement,
     /// 3D orbit camera: yaw and pitch (radians) around the focus, distance in kilometres.
     orbit_yaw: f64,
@@ -391,6 +442,17 @@ pub fn start() -> Result<(), JsValue> {
         vab3d: vab3d::VabView::new(),
         press: None,
         vab_press: None,
+        vab_history: vab::History::default(),
+        vab_grab: None,
+        vab_frag: None,
+        vab_symmetry: 1,
+        vab_snap: true,
+        vab_clipboard: None,
+        vab_pasting: false,
+        vab_turn: vab::NO_TURN,
+        vab_yaw: vab::NO_TURN,
+        vab_stages_readout: Vec::new(),
+        vab_report_due: None,
         vab_dragged: false,
         #[cfg(target_arch = "wasm32")]
         flight3d: flight3d::FlightView::new(),
@@ -409,12 +471,21 @@ pub fn start() -> Result<(), JsValue> {
         missions: missions::all(),
         mc_primary: true,
         mc_selected: None,
+        mc_note: String::new(),
         audio: audio::Audio::new(stored("ose.sound").as_deref() == Some("off")),
         last_stage: None,
         last_situation: None,
         running: Vec::new(),
         running_since_ms: 0.0,
         lp_selected: None,
+        campaign_id: String::new(),
+        flight_craft_id: None,
+        board_target: std::cell::Cell::new(None),
+        crew_pending: std::cell::Cell::new(None),
+        tracking_open: false,
+        ts_selected: None,
+        ts_mine_only: false,
+        ts_rendered_ms: 0.0,
         ksc_on_pad: false,
         throttle: 0.0,
         attitude: ose_net::AttitudeMode::Up,
@@ -425,6 +496,14 @@ pub fn start() -> Result<(), JsValue> {
         drive_sent: (0.0, 0.0, false),
         speed_orbit: false,
         brakes_latched: false,
+        toasts: hud::Toasts::default(),
+        staged: Default::default(),
+        roll_sent: 0.0,
+        translate_sent: (0.0, 0.0, 0.0),
+        orbit_pick: Vec::new(),
+        mnv_dirs: [(0.0, 0.0); 6],
+        mnv_drag: None,
+        mnv_sent_ms: 0.0,
         gpu_canvas: get("gpu")?.dyn_into()?,
         orbit_yaw: 0.6,
         orbit_pitch: 0.5,
@@ -557,7 +636,7 @@ fn install_audio(app: &Shared) -> Result<(), JsValue> {
     )?;
     click.forget();
     let doc = app.borrow().doc.clone();
-    for btn in ["sound-toggle", "main-sound"]
+    for btn in ["sound-toggle", "main-sound", "settings-sound"]
         .iter()
         .filter_map(|id| doc.get_element_by_id(id))
     {
@@ -573,7 +652,307 @@ fn install_audio(app: &Shared) -> Result<(), JsValue> {
         cb.forget();
     }
     app.borrow().show_sound_toggle();
+    install_settings(app)?;
+    install_rnd_nav(&app.borrow().doc.clone())?;
+    // Maneuver handles take their own presses (they sit above vessel labels, which take clicks too).
+    if let Some(labels) = app.borrow().doc.get_element_by_id("labels") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let target = ev.target().and_then(|t| t.dyn_into::<Element>().ok());
+            let on = |sel: &str| {
+                target
+                    .as_ref()
+                    .and_then(|e| e.closest(sel).ok().flatten())
+                    .is_some()
+            };
+            if ev.button() != 0 {
+                return;
+            }
+            if on(".mnv-h") {
+                ev.prevent_default();
+                ev.stop_propagation();
+                a.borrow_mut()
+                    .mnv_press(ev.client_x() as f64, ev.client_y() as f64);
+            } else if on(".node") {
+                // The node itself slides along the orbit (the original's DoMove).
+                ev.prevent_default();
+                ev.stop_propagation();
+                let mut app = a.borrow_mut();
+                if let Some(n) = app.node {
+                    app.mnv_drag = Some((
+                        6,
+                        ev.client_x() as f64,
+                        ev.client_y() as f64,
+                        [n.prograde_mps, n.normal_mps, n.radial_mps],
+                    ));
+                }
+            }
+        });
+        labels.add_event_listener_with_callback("mousedown", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
+    // Any [data-save-action="QuickSave|QuickLoad|RevertToLaunch|RevertToEditor"] element asks the server.
+    let a = app.clone();
+    let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+        let action = ev
+            .target()
+            .and_then(|t| t.dyn_into::<Element>().ok())
+            .and_then(|e| e.closest("[data-save-action]").ok().flatten())
+            .and_then(|e| e.get_attribute("data-save-action"));
+        let action = match action.as_deref() {
+            Some("QuickSave") => ose_net::SaveAction::QuickSave,
+            Some("QuickLoad") => ose_net::SaveAction::QuickLoad,
+            Some("RevertToLaunch") => ose_net::SaveAction::RevertToLaunch,
+            Some("RevertToEditor") => ose_net::SaveAction::RevertToEditor,
+            _ => return,
+        };
+        if let Ok(app) = a.try_borrow() {
+            app.save_action(action);
+        }
+    });
+    app.borrow()
+        .doc
+        .add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+    cb.forget();
     Ok(())
+}
+
+/// R&D tree navigation as the original's (`RDInputDefinition`): drag with the left button to pan, wheel to
+/// zoom about the pointer, arrow keys to pan. A drag does not count as a click on a node.
+fn install_rnd_nav(doc: &Document) -> Result<(), JsValue> {
+    use std::cell::Cell;
+    let Some(tree) = doc
+        .get_element_by_id("rd-tree")
+        .and_then(|e| e.dyn_into::<HtmlElement>().ok())
+    else {
+        return Ok(());
+    };
+    // (pointer x, y, scroll left, top) at the press, and whether it moved far enough to be a drag.
+    let press = Rc::new(Cell::new(None::<(f64, f64, f64, f64)>));
+    let dragged = Rc::new(Cell::new(false));
+    let zoom = Rc::new(Cell::new(1.0f64));
+
+    let (p, d) = (press.clone(), dragged.clone());
+    let t = tree.clone();
+    let down = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+        if ev.button() == 0 {
+            p.set(Some((
+                ev.client_x() as f64,
+                ev.client_y() as f64,
+                t.scroll_left() as f64,
+                t.scroll_top() as f64,
+            )));
+            d.set(false);
+        }
+    });
+    tree.add_event_listener_with_callback("mousedown", down.as_ref().unchecked_ref())?;
+    down.forget();
+
+    let (p, d) = (press.clone(), dragged.clone());
+    let t = tree.clone();
+    let mv = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+        let Some((x0, y0, sl, st)) = p.get() else {
+            return;
+        };
+        let (dx, dy) = (ev.client_x() as f64 - x0, ev.client_y() as f64 - y0);
+        if dx.abs() + dy.abs() > 4.0 {
+            d.set(true);
+            t.class_list().add_1("dragging").ok();
+        }
+        if d.get() {
+            t.set_scroll_left((sl - dx) as i32);
+            t.set_scroll_top((st - dy) as i32);
+        }
+    });
+    if let Some(w) = web_sys::window() {
+        w.add_event_listener_with_callback("mousemove", mv.as_ref().unchecked_ref())?;
+    }
+    mv.forget();
+
+    let p = press.clone();
+    let t = tree.clone();
+    let up = Closure::<dyn FnMut(MouseEvent)>::new(move |_: MouseEvent| {
+        p.set(None);
+        t.class_list().remove_1("dragging").ok();
+    });
+    if let Some(w) = web_sys::window() {
+        w.add_event_listener_with_callback("mouseup", up.as_ref().unchecked_ref())?;
+    }
+    up.forget();
+
+    // A click that ends a drag is swallowed before it reaches the node handler.
+    let d = dragged.clone();
+    let swallow = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+        if d.get() {
+            ev.stop_propagation();
+            ev.prevent_default();
+            d.set(false);
+        }
+    });
+    tree.add_event_listener_with_callback_and_bool(
+        "click",
+        swallow.as_ref().unchecked_ref(),
+        true,
+    )?;
+    swallow.forget();
+
+    let t = tree.clone();
+    let z = zoom.clone();
+    let wheel = Closure::<dyn FnMut(WheelEvent)>::new(move |ev: WheelEvent| {
+        ev.prevent_default();
+        let old = z.get();
+        let new = (old * if ev.delta_y() > 0.0 { 0.9 } else { 1.1 }).clamp(0.4, 1.6);
+        z.set(new);
+        // Keep the point under the pointer where it is.
+        let rect = t.get_bounding_client_rect();
+        let (cx, cy) = (
+            ev.client_x() as f64 - rect.left(),
+            ev.client_y() as f64 - rect.top(),
+        );
+        let k = new / old;
+        let (sl, st) = (t.scroll_left() as f64, t.scroll_top() as f64);
+        t.style()
+            .set_property("--rd-zoom", &format!("{new:.3}"))
+            .ok();
+        t.set_scroll_left(((sl + cx) * k - cx) as i32);
+        t.set_scroll_top(((st + cy) * k - cy) as i32);
+    });
+    tree.add_event_listener_with_callback("wheel", wheel.as_ref().unchecked_ref())?;
+    wheel.forget();
+
+    let t = tree.clone();
+    let d2 = doc.clone();
+    let keys =
+        Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |ev: web_sys::KeyboardEvent| {
+            let open = d2
+                .query_selector("#menu:not(.hidden) #screen-rnd.open")
+                .ok()
+                .flatten()
+                .is_some();
+            if !open {
+                return;
+            }
+            let (dx, dy) = match ev.code().as_str() {
+                "ArrowLeft" => (-80, 0),
+                "ArrowRight" => (80, 0),
+                "ArrowUp" => (0, -80),
+                "ArrowDown" => (0, 80),
+                _ => return,
+            };
+            ev.prevent_default();
+            t.set_scroll_left(t.scroll_left() + dx);
+            t.set_scroll_top(t.scroll_top() + dy);
+        });
+    if let Some(w) = web_sys::window() {
+        w.add_event_listener_with_callback("keydown", keys.as_ref().unchecked_ref())?;
+    }
+    keys.forget();
+    Ok(())
+}
+
+/// The settings overlay: any `[data-open-settings]` element opens it; tabs, UI scale and key hints, all kept
+/// in localStorage and applied at start.
+fn install_settings(app: &Shared) -> Result<(), JsValue> {
+    let doc = app.borrow().doc.clone();
+    if let Some(el) = doc.get_element_by_id("settings-input") {
+        el.set_inner_html(&settings::input_html());
+    }
+    let apply_scale = |doc: &Document, pct: f64| {
+        if let Some(root) = doc
+            .document_element()
+            .and_then(|e| e.dyn_into::<HtmlElement>().ok())
+        {
+            root.style()
+                .set_property(
+                    "--u",
+                    &format!(
+                        "calc(min(calc(100vh / 1080), calc(100vw / 1920)) * {:.2})",
+                        pct / 100.0
+                    ),
+                )
+                .ok();
+        }
+        set_text(doc, "settings-scale-text", &format!("{pct:.0}%"));
+    };
+    let scale = settings::ui_scale(stored("ose.uiScale").as_deref());
+    apply_scale(&doc, scale);
+    if let Some(input) = doc
+        .get_element_by_id("settings-scale")
+        .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+    {
+        input.set_value(&format!("{scale:.0}"));
+        let d = doc.clone();
+        let i2 = input.clone();
+        let cb = Closure::<dyn FnMut()>::new(move || {
+            let pct = settings::ui_scale(Some(&i2.value()));
+            store("ose.uiScale", &format!("{pct:.0}"));
+            apply_scale(&d, pct);
+        });
+        input.add_event_listener_with_callback("input", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
+    let hints = stored("ose.hints").as_deref() != Some("off");
+    if let Some(b) = doc.body() {
+        b.class_list().toggle_with_force("no-hints", !hints).ok();
+    }
+    if let Some(input) = doc
+        .get_element_by_id("settings-hints")
+        .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+    {
+        input.set_checked(hints);
+        let d = doc.clone();
+        let i2 = input.clone();
+        let cb = Closure::<dyn FnMut()>::new(move || {
+            let on = i2.checked();
+            store("ose.hints", if on { "on" } else { "off" });
+            if let Some(b) = d.body() {
+                b.class_list().toggle_with_force("no-hints", !on).ok();
+            }
+        });
+        input.add_event_listener_with_callback("change", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
+    // Open from any [data-open-settings], close with the X; tabs switch sections.
+    let d = doc.clone();
+    let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+        let Some(el) = ev.target().and_then(|t| t.dyn_into::<Element>().ok()) else {
+            return;
+        };
+        if el.closest("[data-open-settings]").ok().flatten().is_some() {
+            show_settings(&d, true);
+        } else if el.closest("#settings-close").ok().flatten().is_some() {
+            show_settings(&d, false);
+        } else if let Some(tab) = el
+            .closest("#settings-tabs [data-tab]")
+            .ok()
+            .flatten()
+            .and_then(|t| t.get_attribute("data-tab"))
+        {
+            if let Ok(all) = d.query_selector_all("#settings [data-tab]") {
+                for k in 0..all.length() {
+                    if let Some(e) = all.item(k).and_then(|n| n.dyn_into::<Element>().ok()) {
+                        let on = e.get_attribute("data-tab").as_deref() == Some(tab.as_str());
+                        e.class_list().toggle_with_force("on", on).ok();
+                    }
+                }
+            }
+        }
+    });
+    doc.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+    cb.forget();
+    Ok(())
+}
+
+fn show_settings(doc: &Document, open: bool) {
+    if let Some(el) = doc.get_element_by_id("settings") {
+        el.class_list().toggle_with_force("open", open).ok();
+    }
+}
+
+fn settings_open(doc: &Document) -> bool {
+    doc.get_element_by_id("settings")
+        .map(|e| e.class_list().contains("open"))
+        .unwrap_or(false)
 }
 
 /// An experiment id as a readable name: "TemperatureScan" reads "Temperature Scan".
@@ -759,20 +1138,22 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         "sessions-back",
         Box::new(|a| a.borrow().menu_screen("name")),
     )?;
-    wire(
-        "to-sessions",
-        Box::new(|a| a.borrow_mut().open_sessions_screen()),
-    )?;
+    wire("to-sessions", Box::new(|a| a.borrow_mut().leave_session()))?;
     wire("resume", Box::new(|a| a.borrow().show_menu(false)))?;
-    wire(
-        "ksc-sessions",
-        Box::new(|a| a.borrow_mut().open_sessions_screen()),
-    )?;
+    wire("ksc-sessions", Box::new(|a| a.borrow_mut().leave_session()))?;
     wire(
         "to-ksc",
         Box::new(|a| {
             a.borrow_mut().end_flight();
             a.borrow().open_ksc()
+        }),
+    )?;
+    wire(
+        "to-tracking",
+        Box::new(|a| {
+            let mut app = a.borrow_mut();
+            app.end_flight();
+            app.open_tracking();
         }),
     )?;
     wire("fh-stage-btn", Box::new(|a| a.borrow_mut().flight_stage()))?;
@@ -812,6 +1193,20 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         }
     }
     wire(
+        "fh-missions-btn",
+        Box::new(|a| {
+            if let Some(el) = a.borrow().doc.get_element_by_id("fh-missions") {
+                let open = el.class_list().toggle("open").unwrap_or(false);
+                store("ose.tracker", if open { "open" } else { "closed" });
+            }
+        }),
+    )?;
+    if stored("ose.tracker").as_deref() == Some("open") {
+        if let Some(el) = doc.get_element_by_id("fh-missions") {
+            el.class_list().add_1("open").ok();
+        }
+    }
+    wire(
         "fh-speed-mode",
         Box::new(|a| {
             let mut app = a.borrow_mut();
@@ -819,7 +1214,64 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         }),
     )?;
     wire("ksc-button", Box::new(|a| a.borrow().open_ksc()))?;
-    wire("ksc-tracking", Box::new(|a| a.borrow().show_menu(false)))?;
+    wire("ksc-tracking", Box::new(|a| a.borrow_mut().open_tracking()))?;
+    wire(
+        "ts-back",
+        Box::new(|a| {
+            let mut app = a.borrow_mut();
+            app.tracking_open = false;
+            app.open_ksc();
+        }),
+    )?;
+    for (id, mine) in [("ts-tab-all", false), ("ts-tab-mine", true)] {
+        wire(
+            id,
+            Box::new(move |a| {
+                let mut app = a.borrow_mut();
+                app.ts_mine_only = mine;
+                app.render_tracking();
+            }),
+        )?;
+    }
+    if let Some(panel) = doc.get_element_by_id("tracking") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let Some(el) = ev.target().and_then(|t| t.dyn_into::<Element>().ok()) else {
+                return;
+            };
+            let num = |attr: &str| {
+                el.closest(&format!("[{attr}]"))
+                    .ok()
+                    .flatten()
+                    .and_then(|e| e.get_attribute(attr))
+                    .and_then(|s| s.parse::<u64>().ok())
+            };
+            let mut app = a.borrow_mut();
+            if let Some(id) = num("data-ose-ts-focus") {
+                app.track_focus(id);
+            } else if let Some(id) = num("data-ose-ts-fly") {
+                app.tracking_open = false;
+                let craft = stored(&app.craft_link_key(id)).and_then(|s| s.parse::<u64>().ok());
+                app.start_flight(id, craft);
+            } else if let Some(id) = num("data-ose-ts-recover") {
+                if let Some(ws) = &app.ws {
+                    send(ws, &ClientMessage::RecoverVessel { vessel: id });
+                }
+            } else if let Some(id) = el
+                .closest("li[data-ose=\"ts-vessel\"]")
+                .ok()
+                .flatten()
+                .and_then(|e| e.get_attribute("data-ose-id"))
+                .and_then(|s| s.parse::<u64>().ok())
+            {
+                app.ts_selected = Some(id);
+                app.track_focus(id);
+                app.render_tracking();
+            }
+        });
+        panel.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
     wire(
         "ksc-launchpad",
         Box::new(|a| a.borrow_mut().open_launchpad()),
@@ -852,6 +1304,9 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         cb.forget();
     }
     wire("fh-science", Box::new(|a| a.borrow().flight_science(0)))?;
+    for id in ["fh-eva", "fh-board", "fh-flag", "fh-undock"] {
+        wire(id, Box::new(move |a| a.borrow().crew_action(id)))?;
+    }
     wire("fh-transmit", Box::new(|a| a.borrow().flight_science(1)))?;
     wire("fh-recover", Box::new(|a| a.borrow().flight_science(2)))?;
     wire("rnd-back", Box::new(|a| a.borrow().open_ksc()))?;
@@ -873,6 +1328,23 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
             app.render_missions();
         }),
     )?;
+    if let Some(panel) = doc.get_element_by_id("mc-briefing") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let Some(el) = ev.target().and_then(|t| t.dyn_into::<Element>().ok()) else {
+                return;
+            };
+            let app = a.borrow();
+            let Some(ws) = &app.ws else { return };
+            if let Some(id) = el.get_attribute("data-ose-mission-accept") {
+                send(ws, &ClientMessage::AcceptMission { id });
+            } else if let Some(id) = el.get_attribute("data-ose-mission-turnin") {
+                send(ws, &ClientMessage::TurnInMission { id });
+            }
+        });
+        panel.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
     if let Some(list) = doc.get_element_by_id("mc-list") {
         let a = app.clone();
         let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
@@ -912,13 +1384,66 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
     wire("vab-clear", Box::new(|a| a.borrow_mut().vab_clear()))?;
     wire(
         "vab-stage-up",
-        Box::new(|a| a.borrow_mut().vab_shift_stage(-1)),
+        Box::new(|a| a.borrow_mut().vab_shift_stage(1)),
     )?;
     wire(
         "vab-stage-down",
-        Box::new(|a| a.borrow_mut().vab_shift_stage(1)),
+        Box::new(|a| a.borrow_mut().vab_shift_stage(-1)),
     )?;
     wire("vab-save", Box::new(|a| a.borrow_mut().vab_save(false)))?;
+    wire("vab-undo", Box::new(|a| a.borrow_mut().vab_undo(false)))?;
+    wire(
+        "vab-sym",
+        Box::new(|a| a.borrow_mut().vab_cycle_symmetry(false)),
+    )?;
+    wire(
+        "vab-snap",
+        Box::new(|a| {
+            let mut app = a.borrow_mut();
+            app.vab_snap = !app.vab_snap;
+            app.render_vab();
+        }),
+    )?;
+    wire("vab-redo", Box::new(|a| a.borrow_mut().vab_undo(true)))?;
+    // A part named on a stage card selects it.
+    if let Some(list) = doc.get_element_by_id("vab-stages") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let i = ev
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .and_then(|e| e.closest("[data-ose-index]").ok().flatten())
+                .and_then(|e| e.get_attribute("data-ose-index"))
+                .and_then(|v| v.parse::<usize>().ok());
+            if let Some(i) = i {
+                let mut app = a.borrow_mut();
+                app.editor.selected = Some(i);
+                app.render_vab();
+            }
+        });
+        list.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
+    // Part tooltip (the original's part info overlay) while the pointer is over a picker row.
+    if let Some(parts) = doc.get_element_by_id("vab-parts") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let row = ev
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .and_then(|e| e.closest("li[data-ose-part]").ok().flatten());
+            let app = a.borrow();
+            app.vab_tooltip(row.as_ref());
+        });
+        parts.add_event_listener_with_callback("mouseover", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |_: MouseEvent| {
+            a.borrow().vab_tooltip(None);
+        });
+        parts.add_event_listener_with_callback("mouseleave", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
     wire("vab-launch", Box::new(|a| a.borrow_mut().vab_save(true)))?;
     if let Some(cats) = doc.get_element_by_id("vab-cats") {
         let a = app.clone();
@@ -971,6 +1496,14 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
             while let Some(el) = t.clone() {
                 if let Some(id) = el.get_attribute("data-ose-part") {
                     ev.prevent_default();
+                    // The search box lets go, so W/A/S/D/Q/E turn the part in hand instead of typing.
+                    if let Some(active) = web_sys::window()
+                        .and_then(|w| w.document())
+                        .and_then(|d| d.active_element())
+                        .and_then(|e| e.dyn_into::<HtmlElement>().ok())
+                    {
+                        active.blur().ok();
+                    }
                     a.borrow_mut().vab_press =
                         Some((id, ev.client_x() as f64, ev.client_y() as f64));
                     break;
@@ -1263,6 +1796,23 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
         let on_down = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
             if ev.button() == 0 || ev.button() == 2 {
                 let mut app = a.borrow_mut();
+                if ev.button() == 0 && app.mnv_press(ev.client_x() as f64, ev.client_y() as f64) {
+                    return;
+                }
+                if ev.button() == 0 && app.vab_pasting {
+                    return;
+                }
+                #[cfg(target_arch = "wasm32")]
+                if ev.button() == 0 && app.in_session && app.vab_active() {
+                    let rect = app.gpu_canvas.get_bounding_client_rect();
+                    let (x, y) = (ev.client_x() as f64, ev.client_y() as f64);
+                    let (px, py) = ((x - rect.left()) * app.dpr, (y - rect.top()) * app.dpr);
+                    if let Some(i) = app.gpu.as_ref().and_then(|g| app.vab3d.pick(g, px, py)) {
+                        app.vab_grab = Some((i, x, y));
+                        app.press = Some((x, y));
+                        return;
+                    }
+                }
                 app.drag = Some((ev.client_x() as f64, ev.client_y() as f64));
                 app.press = app.drag;
                 app.canvas.class_list().add_1("dragging").ok();
@@ -1279,6 +1829,44 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
     let a = app.clone();
     let on_move = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
         let mut app = a.borrow_mut();
+        if app.mnv_drag.is_some() {
+            app.mnv_drag_to(ev.client_x() as f64, ev.client_y() as f64, ev.shift_key());
+            return;
+        }
+        #[cfg(target_arch = "wasm32")]
+        if app.vab_pasting {
+            let rect = app.gpu_canvas.get_bounding_client_rect();
+            app.vab3d.cursor = (
+                (ev.client_x() as f64 - rect.left()) * app.dpr,
+                (ev.client_y() as f64 - rect.top()) * app.dpr,
+            );
+            return;
+        }
+        // A placed part dragged with the left button comes off the craft with everything under it.
+        #[cfg(target_arch = "wasm32")]
+        if let Some((i, x0, y0)) = app.vab_grab {
+            let (nx, ny) = (ev.client_x() as f64, ev.client_y() as f64);
+            if app.vab_frag.is_none() && ((nx - x0).abs() > 6.0 || (ny - y0).abs() > 6.0) {
+                app.vab_record();
+                let cat = std::mem::take(&mut app.catalog);
+                let frag = app.editor.detach(i, &cat);
+                if let Some(frag) = frag {
+                    let nodes = vab_nodes(&cat, frag.root_id());
+                    app.vab3d.held = Some((frag.root_id().to_string(), nodes));
+                    app.vab_frag = Some(frag);
+                    if let Some(b) = app.doc.body() {
+                        b.class_list().add_1("vab-holding").ok();
+                    }
+                }
+                app.catalog = cat;
+                app.render_vab();
+            }
+            if app.vab_frag.is_some() {
+                let rect = app.gpu_canvas.get_bounding_client_rect();
+                app.vab3d.cursor = ((nx - rect.left()) * app.dpr, (ny - rect.top()) * app.dpr);
+            }
+            return;
+        }
         // A picker press that moves becomes a part held over the hall.
         #[cfg(target_arch = "wasm32")]
         if let Some((id, x0, y0)) = app.vab_press.clone() {
@@ -1304,6 +1892,9 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                     })
                     .unwrap_or_default();
                 app.vab3d.held = Some((id, nodes));
+                app.vab_turn = vab::NO_TURN;
+                app.vab_yaw = vab::NO_TURN;
+                app.vab_sync_turn();
                 if let Some(b) = app.doc.body() {
                     b.class_list().add_1("vab-holding").ok();
                 }
@@ -1370,13 +1961,63 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
     let a = app.clone();
     let on_up = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
         let mut app = a.borrow_mut();
+        if app.mnv_drag.take().is_some() {
+            app.send_node();
+            app.press = None;
+            app.drag = None;
+            return;
+        }
         // Drop a held part: on its snapped node, or as the root of an empty craft; over the panels it is put
         // back.
         #[cfg(target_arch = "wasm32")]
         {
             let held = app.vab3d.held.take();
             let pressed = app.vab_press.take();
-            if let Some((id, _)) = held {
+            app.vab_grab = None;
+            let pasting = std::mem::take(&mut app.vab_pasting);
+            if let (Some(frag), Some(_)) = (app.vab_frag.take(), held.as_ref()) {
+                if pasting {
+                    app.vab_record();
+                }
+                if let Some(b) = app.doc.body() {
+                    b.class_list().remove_1("vab-holding").ok();
+                }
+                let free = app.editor.free_nodes(&app.catalog);
+                let rect = app.gpu_canvas.get_bounding_client_rect();
+                app.vab3d.cursor = (
+                    (ev.client_x() as f64 - rect.left()) * app.dpr,
+                    (ev.client_y() as f64 - rect.top()) * app.dpr,
+                );
+                let snap = app
+                    .gpu
+                    .as_ref()
+                    .and_then(|g| app.vab3d.snap_now(g, &free))
+                    .or_else(|| app.vab3d.snap.take());
+                let surface = if snap.is_none() {
+                    app.vab_surface(frag.root_id())
+                } else {
+                    None
+                };
+                let cat = std::mem::take(&mut app.catalog);
+                let result = match surface {
+                    Some((spot, _)) => app.editor.attach_surface(&frag, &cat, spot),
+                    None => {
+                        app.editor
+                            .attach(&frag, &cat, snap.as_ref().map(|(t, n)| (*t, n.as_str())))
+                    }
+                };
+                app.catalog = cat;
+                if let Err(e) = result {
+                    // Nowhere to hang it: a moved part goes back where it was, as the original does; a paste
+                    // is dropped.
+                    let mut history = std::mem::take(&mut app.vab_history);
+                    history.undo(&mut app.editor);
+                    app.vab_history = history;
+                    set_text(&app.doc, "vab-report", &e);
+                }
+                app.press = None;
+                app.render_vab();
+            } else if let Some((id, _)) = held {
                 app.vab_dragged = pressed.is_some();
                 if let Some(b) = app.doc.body() {
                     b.class_list().remove_1("vab-holding").ok();
@@ -1399,12 +2040,26 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                     .and_then(|g| app.vab3d.snap_now(g, &free))
                     .or_else(|| app.vab3d.snap.take());
                 if !over_panel {
+                    let surface = if snap.is_none() {
+                        app.vab_surface(&id)
+                    } else {
+                        None
+                    };
+                    app.vab_record();
                     let cat = std::mem::take(&mut app.catalog);
                     let result = match (cat.get(&id), snap) {
-                        (Some(spec), Some((target, node))) => app
-                            .editor
-                            .add_part_on(spec, &cat, target, &node)
-                            .map(|_| ()),
+                        (Some(spec), Some((target, node))) => {
+                            let yaw = app.vab_yaw;
+                            app.editor.add_part_on(spec, &cat, target, &node).map(|i| {
+                                if yaw != vab::NO_TURN {
+                                    app.editor.turn_on_own_node(i, yaw, &cat);
+                                }
+                            })
+                        }
+                        (Some(spec), None) if surface.is_some() => {
+                            let (spot, sym) = surface.unwrap();
+                            app.editor.add_surface(spec, &cat, spot, sym).map(|_| ())
+                        }
                         (Some(spec), None) if app.editor.is_empty() => {
                             app.editor.add_part(spec, &cat).map(|_| ())
                         }
@@ -1422,6 +2077,28 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
         app.drag = None;
         app.canvas.class_list().remove_1("dragging").ok();
         app.gpu_canvas.class_list().remove_1("dragging").ok();
+        // A press and release within a few pixels on the map near the planning vessel's orbit adds a node.
+        if let Some((x, y)) = app.press {
+            let (nx, ny) = (ev.client_x() as f64, ev.client_y() as f64);
+            let menu_open = app
+                .doc
+                .get_element_by_id("menu")
+                .map(|m| !m.class_list().contains("hidden"))
+                .unwrap_or(false);
+            if ev.button() == 0
+                && (nx - x).abs() < 4.0
+                && (ny - y).abs() < 4.0
+                && app.in_session
+                && !menu_open
+                && !app.flight_active()
+                && app.is_3d()
+            {
+                let rect = app.gpu_canvas.get_bounding_client_rect();
+                if app.map_click(nx - rect.left(), ny - rect.top()) {
+                    app.press = None;
+                }
+            }
+        }
         // A press and release within a few pixels on the KSC scene is a click on a facility.
         #[cfg(target_arch = "wasm32")]
         if let Some((x, y)) = app.press.take() {
@@ -1482,6 +2159,10 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                 .map(|m| !m.class_list().contains("hidden"))
                 .unwrap_or(false);
             let code = ev.code();
+            if code == "Escape" && settings_open(&app.doc) {
+                show_settings(&app.doc, false);
+                return;
+            }
             if typing {
                 app.keys.clear();
                 return;
@@ -1489,6 +2170,88 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
             app.keys.down(&code);
             if code == "CapsLock" {
                 app.keys.precision = ev.get_modifier_state("CapsLock");
+            }
+            if app.in_session && app.vab_active() {
+                let ctrl = ev.ctrl_key() || ev.meta_key();
+                let handled = match code.as_str() {
+                    "Delete" | "Backspace" => {
+                        app.vab_remove();
+                        true
+                    }
+                    "KeyZ" if ctrl && ev.shift_key() => {
+                        app.vab_undo(true);
+                        true
+                    }
+                    "KeyZ" if ctrl => {
+                        app.vab_undo(false);
+                        true
+                    }
+                    "KeyY" if ctrl => {
+                        app.vab_undo(true);
+                        true
+                    }
+                    "KeyF" if ctrl => {
+                        if let Some(el) = app
+                            .doc
+                            .get_element_by_id("vab-search")
+                            .and_then(|e| e.dyn_into::<HtmlElement>().ok())
+                        {
+                            el.focus().ok();
+                        }
+                        true
+                    }
+                    "KeyN" if ctrl => {
+                        app.vab_clear();
+                        true
+                    }
+                    "KeyC" if ctrl => {
+                        let cat = std::mem::take(&mut app.catalog);
+                        let frag = app.editor.selected.and_then(|i| app.editor.copy(i, &cat));
+                        app.catalog = cat;
+                        if frag.is_some() {
+                            app.vab_clipboard = frag;
+                            hud::push(&app.doc, "Copied", "passive");
+                        }
+                        true
+                    }
+                    "KeyV" if ctrl => {
+                        app.vab_paste();
+                        true
+                    }
+                    "Escape" if app.vab_pasting => {
+                        app.vab_cancel_paste();
+                        true
+                    }
+                    "KeyX" if !ctrl => {
+                        app.vab_cycle_symmetry(ev.shift_key());
+                        true
+                    }
+                    "KeyW" | "KeyS" | "KeyA" | "KeyD" | "KeyQ" | "KeyE" | "Space"
+                        if !ctrl && app.vab_holding() =>
+                    {
+                        app.vab_turn_held(&code, ev.shift_key());
+                        true
+                    }
+                    "KeyC" if !ctrl => {
+                        app.vab_snap = !app.vab_snap;
+                        app.render_vab();
+                        true
+                    }
+                    "ArrowUp" | "ArrowDown" => {
+                        #[cfg(target_arch = "wasm32")]
+                        app.vab3d.pan(if code == "ArrowUp" { 60.0 } else { -60.0 });
+                        true
+                    }
+                    "KeyS" if ctrl => {
+                        app.vab_save(false);
+                        true
+                    }
+                    _ => false,
+                };
+                if handled {
+                    ev.prevent_default();
+                    return;
+                }
             }
             if app.flying.is_some() && !menu_open {
                 // The original's flight bindings (KSP.Input/GameInput.cs). Rotation, throttle steps and wheels
@@ -1503,7 +2266,8 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                         true
                     }
                     "Space" => {
-                        if !ev.repeat() {
+                        // On EVA Space is the jetpack (held, flight_keys_tick); a Kerbal has nothing to stage.
+                        if !ev.repeat() && !app.flying_eva() {
                             app.flight_stage();
                         }
                         true
@@ -1522,6 +2286,30 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                         app.map_mode = !app.map_mode;
                         true
                     }
+                    "KeyV" if !ev.repeat() => {
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            app.flight3d.mode = app.flight3d.mode.next();
+                            let name = app.flight3d.mode.name();
+                            hud::push(&app.doc, &format!("Camera: {name}"), "passive");
+                        }
+                        true
+                    }
+                    "KeyU" | "KeyR" if !ev.repeat() => {
+                        app.hud_button(if code == "KeyU" {
+                            "fh-act-lights"
+                        } else {
+                            "fh-act-rcs"
+                        });
+                        true
+                    }
+                    c if c.starts_with("Digit") && !ev.repeat() && !ev.ctrl_key() => {
+                        // 1..9 are custom groups 1..9 and 0 is group 10, as the original binds them.
+                        let n: u8 = c[5..].parse().unwrap_or(0);
+                        app.action_group(ose_net::ActionGroup::Custom(if n == 0 { 10 } else { n }));
+                        true
+                    }
+                    "KeyI" | "KeyJ" | "KeyK" | "KeyL" | "KeyH" | "KeyN" => true,
                     "KeyW" | "KeyA" | "KeyS" | "KeyD" | "KeyQ" | "KeyE" | "KeyB" | "ShiftLeft"
                     | "ShiftRight" | "ControlLeft" | "ControlRight" => true,
                     _ => false,
@@ -1546,6 +2334,17 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                     }
                 }
                 "Home" => app.reset_camera(),
+                "F5" | "F9" if app.in_session => {
+                    ev.prevent_default();
+                    app.save_action(if code == "F5" {
+                        ose_net::SaveAction::QuickSave
+                    } else {
+                        ose_net::SaveAction::QuickLoad
+                    });
+                }
+                "BracketRight" | "BracketLeft" if app.in_session && !app.flight_active() => {
+                    app.cycle_vessel(code == "BracketLeft");
+                }
                 "KeyM" if app.in_session && !app.flying.is_some() && app.ksc_active() => {
                     app.open_facility("TrackingCenter");
                 }
@@ -1713,6 +2512,15 @@ impl App {
             .is_some()
     }
 
+    /// True while the menu shows the named screen (`screen-<name>`).
+    fn screen_open(&self, name: &str) -> bool {
+        self.doc
+            .query_selector(&format!("#menu:not(.hidden) #screen-{name}.open"))
+            .ok()
+            .flatten()
+            .is_some()
+    }
+
     /// True while the launch pad dialog is open (the KSC stays in 3D behind it).
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     fn launchpad_active(&self) -> bool {
@@ -1780,7 +2588,7 @@ impl App {
             "VAB" => self.open_vab(None),
             "ResearchCenter" => self.open_rnd(),
             "AstronautComplex" => self.open_missions(),
-            "TrackingCenter" => self.show_menu(false),
+            "TrackingCenter" => self.open_tracking(),
             f if f.starts_with("Launchpad") => self.open_launchpad(),
             _ => {}
         }
@@ -1851,6 +2659,9 @@ impl App {
                 id,
                 craft: Some(craft),
             } => {
+                if self.flying.is_some() && self.flight_craft_id == Some(id) {
+                    self.flight_craft = Some(craft.clone());
+                }
                 self.craft_docs.insert(id, craft);
                 self.draw_thumbnail(id);
                 self.mark_craft_research(id);
@@ -1866,7 +2677,17 @@ impl App {
             } => match (id, summary) {
                 (Some(id), Some(s)) => {
                     self.vab_craft_id = Some(id);
-                    self.craft_docs.remove(&id);
+                    // The saved craft is the editor's: keep it, so Save and launch can draw it on the pad
+                    // straight away, and ask for the server's copy to replace it.
+                    self.craft_docs.insert(id, self.editor.craft.clone());
+                    if let Some(ws) = &self.ws {
+                        send(ws, &ClientMessage::GetCraft { id });
+                    }
+                    set_text(
+                        &self.doc,
+                        "vab-dv",
+                        &format!("\u{394}v {:.0} m/s", s.delta_v_vacuum_mps),
+                    );
                     set_text(
                             &self.doc,
                             "vab-report",
@@ -1877,12 +2698,8 @@ impl App {
                         );
                     if self.launch_after_save {
                         self.launch_after_save = false;
-                        let altitude_m =
-                            input_value(&self.doc, "launch-altitude").unwrap_or(100.0) * 1000.0;
-                        set_text(&self.doc, "menu-note", "launching...");
-                        if let Some(ws) = &self.ws {
-                            send(ws, &ClientMessage::LaunchSavedCraft { id, altitude_m });
-                        }
+                        set_text(&self.doc, "menu-note", "rolling out to the pad...");
+                        self.launch_craft(id);
                     }
                 }
                 _ => {
@@ -1938,14 +2755,15 @@ impl App {
                     self.show_menu(false);
                 }
                 (None, reason) => {
-                    set_text(
-                        &self.doc,
-                        "menu-note",
-                        &format!(
-                            "launch refused: {}",
-                            reason.unwrap_or_else(|| "unknown reason".into())
-                        ),
+                    let msg = format!(
+                        "launch refused: {}",
+                        reason.unwrap_or_else(|| "unknown reason".into())
                     );
+                    set_text(&self.doc, "menu-note", &msg);
+                    // From the VAB the refusal belongs next to the craft, where the player is looking.
+                    if self.vab_active() {
+                        set_text(&self.doc, "vab-report", &msg);
+                    }
                 }
             },
             ServerMessage::DifficultyOptions {
@@ -1959,6 +2777,7 @@ impl App {
                 self.apply_preset();
             }
             ServerMessage::CampaignState {
+                id: campaign_id,
                 name,
                 mode,
                 members,
@@ -2000,6 +2819,7 @@ impl App {
                     }
                 }
                 self.campaign = Some((name, members));
+                self.campaign_id = campaign_id;
                 self.update_warp_holder();
                 if created {
                     set_text(&self.doc, "menu-note", "session created");
@@ -2072,6 +2892,80 @@ impl App {
                     reason.unwrap_or_else(|| "refused".into())
                 };
                 set_text(&self.doc, "rd-note", &msg);
+            }
+            ServerMessage::CrewAck {
+                vessel,
+                accepted,
+                reason,
+                new_vessel,
+            } => {
+                if !accepted {
+                    set_text(
+                        &self.doc,
+                        "fh-note",
+                        &reason.unwrap_or_else(|| "refused".into()),
+                    );
+                } else {
+                    match (self.crew_pending.take(), new_vessel) {
+                        // Out of the hatch: fly the Kerbal.
+                        (Some("fh-eva"), Some(nv)) => {
+                            set_text(&self.doc, "fh-note", "");
+                            self.start_flight(nv, None);
+                        }
+                        (Some("fh-flag"), _) => set_text(&self.doc, "fh-note", "flag planted"),
+                        // Boarded: fly the craft the Kerbal climbed into.
+                        (Some("fh-board"), _) if self.flying == Some(vessel) => {
+                            if let Some(target) = self.board_target.take() {
+                                let craft = stored(&self.craft_link_key(target))
+                                    .and_then(|s| s.parse::<u64>().ok());
+                                self.start_flight(target, craft);
+                                set_text(&self.doc, "fh-note", "boarded");
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            ServerMessage::Docked { vessel, absorbed } => {
+                if self.flying == Some(absorbed) {
+                    let craft =
+                        stored(&self.craft_link_key(vessel)).and_then(|s| s.parse::<u64>().ok());
+                    self.start_flight(vessel, craft);
+                }
+                if self.flying == Some(vessel) {
+                    set_text(&self.doc, "fh-note", "docked");
+                    self.audio.play("decouple");
+                }
+            }
+            ServerMessage::Undocked {
+                new_vessel, reason, ..
+            } => {
+                let msg = match (new_vessel, reason) {
+                    (Some(_), _) => "undocked".to_string(),
+                    (None, r) => r.unwrap_or_else(|| "could not undock".into()),
+                };
+                set_text(&self.doc, "fh-note", &msg);
+                if new_vessel.is_some() {
+                    self.audio.play("decouple");
+                }
+            }
+            ServerMessage::MissionAck {
+                accepted,
+                reason,
+                science,
+                ..
+            } => {
+                let msg = match (accepted, reason) {
+                    (true, _) if science > 0.0 => format!("Turned in: {science:.0} science"),
+                    (true, _) => "Mission accepted".to_string(),
+                    (false, r) => r.unwrap_or_else(|| "refused".into()),
+                };
+                if accepted {
+                    self.audio.play("rd_research");
+                }
+                // The ScienceState that follows re-renders the log; keep the note across it.
+                self.mc_note = msg.clone();
+                set_text(&self.doc, "mc-note", &msg);
             }
             ServerMessage::ScienceReports {
                 new,
@@ -2148,12 +3042,14 @@ impl App {
                 };
                 set_text(&self.doc, "fh-note", &msg);
                 if recovered {
+                    self.tracking_open = false;
                     self.end_flight();
                     self.open_ksc();
                 }
             }
             ServerMessage::BodyRotation { bodies } => {
                 self.body_spins = bodies;
+                self.apply_spins();
             }
             ServerMessage::BodyCatalog { bodies } => {
                 let scene = Scene::new(bodies);
@@ -2165,6 +3061,7 @@ impl App {
                 // Frame the whole system first so the player sees everything, centred on the star.
                 let root = scene.root().unwrap_or(focus);
                 self.scene = Some(scene);
+                self.apply_spins();
                 self.set_focus(root);
             }
             ServerMessage::TimeState {
@@ -2183,7 +3080,10 @@ impl App {
                     scene.snapshot = bodies;
                 }
             }
-            ServerMessage::Vessels { vessels, .. } => {
+            ServerMessage::Vessels { vessels, tick } => {
+                if let Some(scene) = &mut self.scene {
+                    scene.vessels_ut = tick.seconds();
+                }
                 let ids: Vec<u64> = vessels.iter().map(|v| v.id).collect();
                 let known: Vec<u64> = self.vessel_els.iter().map(|(id, _)| *id).collect();
                 let changed = ids != known;
@@ -2227,6 +3127,48 @@ impl App {
                 }
             }
             ServerMessage::Pong { .. } => {}
+            ServerMessage::StageReport {
+                stages,
+                delta_v_vacuum_mps,
+            } => {
+                self.vab_stages_readout = stages;
+                set_text(
+                    &self.doc,
+                    "vab-dv",
+                    &format!("\u{394}v {delta_v_vacuum_mps:.0} m/s"),
+                );
+                if self.vab_active() {
+                    self.render_vab_view();
+                }
+            }
+            ServerMessage::SaveAck {
+                action,
+                accepted,
+                reason,
+                craft,
+            } => {
+                let what = match action {
+                    ose_net::SaveAction::QuickSave => "Quicksave",
+                    ose_net::SaveAction::QuickLoad => "Quickload",
+                    ose_net::SaveAction::RevertToLaunch => "Revert to launch",
+                    ose_net::SaveAction::RevertToEditor => "Revert to the VAB",
+                };
+                if accepted {
+                    hud::push(&self.doc, &format!("{what} done"), "triumph");
+                    if let (ose_net::SaveAction::RevertToEditor, Some(c)) = (action, craft) {
+                        self.end_flight();
+                        self.vab_history.record(&self.editor);
+                        self.editor = vab::Editor::from_craft(c);
+                        let cat = std::mem::take(&mut self.catalog);
+                        self.editor.rebuild_stages(&cat);
+                        self.catalog = cat;
+                        self.open_vab(None);
+                    }
+                } else {
+                    let why = reason.unwrap_or_else(|| "refused".into());
+                    hud::push(&self.doc, &format!("{what}: {why}"), "alert");
+                }
+            }
             // Messages for features this client does not draw yet are ignored.
             #[allow(unreachable_patterns)]
             _ => {}
@@ -2285,7 +3227,87 @@ impl App {
         }
     }
 
+    /// Local storage key for the craft a vessel was launched from: vessel ids restart in every campaign.
+    fn craft_link_key(&self, vessel: u64) -> String {
+        format!("ose.flight.{}.{vessel}", self.campaign_id)
+    }
+
+    fn apply_spins(&mut self) {
+        let omega: Vec<f64> = self
+            .body_spins
+            .iter()
+            .map(|b| {
+                if b.rotation_period_s > 0.0 {
+                    std::f64::consts::TAU / b.rotation_period_s
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+        if let Some(scene) = &mut self.scene {
+            scene.spin_omega = omega;
+        }
+    }
+
+    /// Leave the campaign for the main menu: the server keeps it on the list to resume (protocol 22).
+    fn leave_session(&mut self) {
+        if let Some(ws) = &self.ws {
+            send(ws, &ClientMessage::LeaveSession);
+        }
+        self.end_flight();
+        self.in_session = false;
+        self.tracking_open = false;
+        self.campaign = None;
+        self.science = None;
+        self.lp_selected = None;
+        self.last_stage = None;
+        self.last_situation = None;
+        if let Some(scene) = &mut self.scene {
+            scene.vessels.clear();
+            scene.trajectories.clear();
+        }
+        let vessels: Vec<ose_net::VesselState> = Vec::new();
+        self.build_vessel_labels(&vessels);
+        set_text(&self.doc, "campaign", "");
+        set_text(&self.doc, "menu-note", "");
+        if let Some(m) = self.doc.get_element_by_id("menu") {
+            m.class_list().remove_1("hidden").ok();
+        }
+        self.menu_screen("sessions");
+    }
+
     /// Centre the camera on a vessel: focus its reference body (so orbits draw around it) and follow.
+    /// `]` / `[` on the map: follow the next or previous vessel (yours first), as the original's FocusNext.
+    fn cycle_vessel(&mut self, back: bool) {
+        let Some(scene) = &self.scene else { return };
+        let mut ids: Vec<(bool, u64, usize)> = scene
+            .vessels
+            .iter()
+            .map(|v| {
+                (
+                    !(v.owner.is_some() && v.owner == self.player_id),
+                    v.id,
+                    v.reference_body as usize,
+                )
+            })
+            .collect();
+        if ids.is_empty() {
+            return;
+        }
+        ids.sort();
+        let n = ids.len();
+        let i = self
+            .follow
+            .and_then(|f| ids.iter().position(|(_, id, _)| *id == f));
+        let j = match (i, back) {
+            (None, _) => 0,
+            (Some(i), false) => (i + 1) % n,
+            (Some(i), true) => (i + n - 1) % n,
+        };
+        let (_, id, body) = ids[j];
+        self.follow_vessel(id, body);
+    }
+
     fn follow_vessel(&mut self, id: u64, reference_body: usize) {
         self.follow = Some(id);
         self.camera.focus = reference_body;
@@ -2420,6 +3442,7 @@ impl App {
         ) {
             let info = progress.and_then(|p| p.iter().find(|i| i.id == m.id));
             el.set_inner_html(&missions::render_briefing(m, &self.loc, info));
+            set_text(&self.doc, "mc-note", &self.mc_note);
         }
     }
 
@@ -2627,6 +3650,7 @@ impl App {
     }
 
     fn vab_add(&mut self, part_id: &str) {
+        self.vab_history.record(&self.editor);
         let cat = std::mem::take(&mut self.catalog);
         let result = match cat.get(part_id) {
             Some(spec) => self.editor.add_part(spec, &cat).map(|_| ()),
@@ -2640,6 +3664,10 @@ impl App {
     }
 
     fn vab_remove(&mut self) {
+        if self.editor.selected.is_none() {
+            return;
+        }
+        self.vab_history.record(&self.editor);
         let cat = std::mem::take(&mut self.catalog);
         self.editor.remove_selected(&cat);
         self.catalog = cat;
@@ -2647,6 +3675,7 @@ impl App {
     }
 
     fn vab_clear(&mut self) {
+        self.vab_history.record(&self.editor);
         let name = self.editor.craft.name.clone();
         self.editor = vab::Editor::new(&name);
         self.vab_craft_id = None;
@@ -2654,7 +3683,238 @@ impl App {
         self.render_vab();
     }
 
+    /// Show the part tooltip for a picker row (`None` hides it): the original's title, subtitle and
+    /// manufacturer, mass, size, crew, tanks, engine thrust and specific impulse, and the description.
+    fn vab_tooltip(&self, row: Option<&Element>) {
+        let Some(tip) = self.doc.get_element_by_id("vab-tip") else {
+            return;
+        };
+        let spec = row
+            .and_then(|r| r.get_attribute("data-ose-part"))
+            .and_then(|id| self.catalog.get(&id));
+        let (Some(row), Some(spec)) = (row, spec) else {
+            tip.class_list().remove_1("open").ok();
+            return;
+        };
+        let loc = |k: &str| self.loc.get(&format!("Parts/{k}/{}", spec.id)).cloned();
+        let mut rows = vec![
+            ("Mass".to_string(), format!("{:.3} t", spec.mass_t)),
+            ("Size".to_string(), spec.size_category.clone()),
+        ];
+        if spec.crew_capacity > 0 {
+            rows.push(("Crew".into(), spec.crew_capacity.to_string()));
+        }
+        for c in &spec.resource_containers {
+            rows.push((c.resource.clone(), format!("{:.0} units", c.capacity_units)));
+        }
+        for e in &spec.engines {
+            rows.push(("Thrust".into(), format!("{:.1} kN", e.max_thrust_kn)));
+            rows.push((
+                "Isp".into(),
+                format!(
+                    "{:.0} s vac / {:.0} s ASL",
+                    e.isp_vacuum_s, e.isp_sea_level_s
+                ),
+            ));
+        }
+        let table: String = rows
+            .iter()
+            .map(|(k, v)| format!("<tr><td>{}</td><td>{}</td></tr>", esc(k), esc(v)))
+            .collect();
+        let sub = [loc("Subtitle"), loc("Manufacturer")]
+            .into_iter()
+            .flatten()
+            .map(|s| esc(&s))
+            .collect::<Vec<_>>()
+            .join(" \u{b7} ");
+        let locked = if row.class_list().contains("locked") {
+            "<p style=\"color:#f0a070\">Not researched yet: the launch pad will refuse a craft with it.</p>"
+        } else {
+            ""
+        };
+        tip.set_inner_html(&format!(
+            "<h4>{}</h4><div class=\"sub\">{}</div><table>{}</table>{}<p>{}</p>",
+            esc(spec.display_title()),
+            sub,
+            table,
+            locked,
+            esc(&loc("Description").unwrap_or_default()),
+        ));
+        let r = row.get_bounding_client_rect();
+        if let Some(t) = tip.dyn_ref::<HtmlElement>() {
+            let top = r.top().min(
+                web_sys::window()
+                    .and_then(|w| w.inner_height().ok())
+                    .and_then(|h| h.as_f64())
+                    .unwrap_or(900.0)
+                    - 320.0,
+            );
+            t.style()
+                .set_property("left", &format!("{}px", r.right() + 12.0))
+                .ok();
+            t.style()
+                .set_property("top", &format!("{}px", top.max(8.0)))
+                .ok();
+        }
+        tip.class_list().add_1("open").ok();
+    }
+
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    /// Where the held part would go on a part's side under the cursor, and how many symmetry copies (a
+    /// lifted fragment goes on alone). `None` when the part has no surface node or the cursor is on no part.
+    fn vab_surface(&self, id: &str) -> Option<(vab::SurfaceSpot, u32)> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let spec = self.catalog.get(id)?;
+            vab::surface_node(spec)?;
+            let (target, hit) = self.vab3d.surface_hit(self.gpu.as_ref()?)?;
+            let spot = self.editor.surface_spot(
+                target,
+                hit,
+                &self.catalog,
+                self.vab_snap.then_some(15.0),
+            )?;
+            let sym = if self.vab_frag.is_some() {
+                1
+            } else {
+                self.vab_symmetry
+            };
+            Some((
+                vab::SurfaceSpot {
+                    turn: self.vab_turn,
+                    ..spot
+                },
+                sym,
+            ))
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = id;
+            None
+        }
+    }
+
+    fn vab_holding(&self) -> bool {
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.vab3d.held.is_some()
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            false
+        }
+    }
+
+    /// W/S pitch, A/D yaw, Q/E roll the held part: 90 degrees a press with angle snap, 15 without (5 with
+    /// Shift), as the original's rotate keys; Space puts it back upright.
+    fn vab_turn_held(&mut self, code: &str, fine: bool) {
+        let step = if fine {
+            5.0
+        } else if self.vab_snap {
+            90.0
+        } else {
+            15.0
+        };
+        let (axis, sign) = match code {
+            "KeyW" => (0, 1.0),
+            "KeyS" => (0, -1.0),
+            "KeyA" => (1, 1.0),
+            "KeyD" => (1, -1.0),
+            "KeyQ" => (2, 1.0),
+            "KeyE" => (2, -1.0),
+            _ => {
+                self.vab_turn = vab::NO_TURN;
+                self.vab_yaw = vab::NO_TURN;
+                self.vab_sync_turn();
+                return;
+            }
+        };
+        let t = vab::axis_turn(axis, sign * step);
+        self.vab_turn = vab::turn_then(t, self.vab_turn);
+        if axis == 1 {
+            self.vab_yaw = vab::turn_then(t, self.vab_yaw);
+        }
+        self.vab_sync_turn();
+    }
+
+    fn vab_sync_turn(&mut self) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.vab3d.held_turn = self.vab_turn;
+            self.vab3d.held_yaw = self.vab_yaw;
+        }
+    }
+
+    /// Ctrl+V: a copy of the clipboard in hand, following the cursor until a click puts it down.
+    fn vab_paste(&mut self) {
+        let Some(frag) = self.vab_clipboard.clone() else {
+            return;
+        };
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.vab3d.held = Some((
+                frag.root_id().to_string(),
+                vab_nodes(&self.catalog, frag.root_id()),
+            ));
+            if let Some(b) = self.doc.body() {
+                b.class_list().add_1("vab-holding").ok();
+            }
+        }
+        self.vab_frag = Some(frag);
+        self.vab_pasting = true;
+        self.vab_turn = vab::NO_TURN;
+        self.vab_yaw = vab::NO_TURN;
+        self.vab_sync_turn();
+    }
+
+    fn vab_cancel_paste(&mut self) {
+        self.vab_frag = None;
+        self.vab_pasting = false;
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.vab3d.held = None;
+        }
+        if let Some(b) = self.doc.body() {
+            b.class_list().remove_1("vab-holding").ok();
+        }
+    }
+
+    /// X / Shift+X: the next or previous symmetry count.
+    fn vab_cycle_symmetry(&mut self, back: bool) {
+        let n = vab::SYMMETRY.len();
+        let i = vab::SYMMETRY
+            .iter()
+            .position(|s| *s == self.vab_symmetry)
+            .unwrap_or(0);
+        let j = if back { (i + n - 1) % n } else { (i + 1) % n };
+        self.vab_symmetry = vab::SYMMETRY[j];
+        self.render_vab();
+    }
+
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    fn vab_record(&mut self) {
+        self.vab_history.record(&self.editor);
+    }
+
+    /// Ctrl+Z / Ctrl+Y.
+    fn vab_undo(&mut self, redo: bool) {
+        let mut h = std::mem::take(&mut self.vab_history);
+        let done = if redo {
+            h.redo(&mut self.editor)
+        } else {
+            h.undo(&mut self.editor)
+        };
+        self.vab_history = h;
+        if done {
+            let cat = std::mem::take(&mut self.catalog);
+            self.editor.rebuild_stages(&cat);
+            self.catalog = cat;
+            self.render_vab();
+        }
+    }
+
     fn vab_shift_stage(&mut self, delta: i32) {
+        self.vab_history.record(&self.editor);
         let cat = std::mem::take(&mut self.catalog);
         self.editor.shift_stage(delta, &cat);
         self.catalog = cat;
@@ -2713,6 +3973,36 @@ impl App {
 
     /// Draw the craft side view, the selection, and refresh the side panel.
     fn render_vab(&mut self) {
+        self.vab_report_due = Some(now_ms() + 300.0);
+        self.render_vab_view();
+    }
+
+    /// Ask the server for the staging readout of the craft being built, once edits settle.
+    fn vab_report_tick(&mut self, now: f64) {
+        let Some(due) = self.vab_report_due else {
+            return;
+        };
+        if now < due {
+            return;
+        }
+        self.vab_report_due = None;
+        if self.editor.is_empty() || !self.editor.craft.is_tree() {
+            self.vab_stages_readout.clear();
+            set_text(&self.doc, "vab-dv", "");
+            return;
+        }
+        if let Some(ws) = &self.ws {
+            send(
+                ws,
+                &ClientMessage::StageReport {
+                    craft: self.editor.craft.clone(),
+                },
+            );
+        }
+    }
+
+    /// Draw the craft and the side panel without asking for a new staging readout.
+    fn render_vab_view(&mut self) {
         set_text(&self.doc, "vab-selected", "");
         let (parts_n, dry) = (
             self.editor.craft.parts.len(),
@@ -2747,21 +4037,74 @@ impl App {
             );
         }
         if let Some(list) = self.doc.get_element_by_id("vab-stages") {
+            // One card per stage, the last to fire on top and the first (Space) at the bottom, as the
+            // original's staging stack. The highest stage index fires first (ose_data::staging), so the cards
+            // run in index order and count up from the bottom.
             let mut html = String::new();
+            let count = self.editor.craft.stages.len();
             for (n, stage) in self.editor.craft.stages.iter().enumerate() {
-                let names: Vec<String> = stage
+                let parts: Vec<String> = stage
                     .iter()
-                    .filter_map(|&i| self.editor.craft.parts.get(i))
-                    .map(|p| {
-                        self.catalog
-                            .get(&p.part_id)
-                            .map(|s| esc(s.display_title()))
-                            .unwrap_or_else(|| esc(&p.part_id))
+                    .filter_map(|&i| self.editor.craft.parts.get(i).map(|p| (i, p)))
+                    .map(|(i, p)| {
+                        let spec = self.catalog.get(&p.part_id);
+                        let icon = match spec {
+                            Some(s) if s.has_engine => "Staging-Icon-Thruster",
+                            Some(s) if s.is_decoupler => "Staging-Icon-Inline",
+                            Some(s) if s.stage_type.contains("Parachute") => "Staging-ICO-Chute-Stowed",
+                            _ => "Staging-ICO-Structure01",
+                        };
+                        format!(
+                            "<span class=\"p{sel}\" data-ose-index=\"{i}\" title=\"select\"><i style=\"--ico:url(assets/ui/hud/{icon}.png)\"></i>{name}</span>",
+                            sel = if self.editor.selected == Some(i) { " sel" } else { "" },
+                            name = spec
+                                .map(|s| esc(s.display_title()))
+                                .unwrap_or_else(|| esc(&p.part_id)),
+                        )
                     })
                     .collect();
-                html.push_str(&format!("<li>stage {}: {}</li>", n + 1, names.join(", ")));
+                // The server's readout for this stage: delta-v, sea-level TWR at its start, burn time.
+                let stats = self
+                    .vab_stages_readout
+                    .iter()
+                    .find(|r| r.stage_id as usize == n)
+                    .map(|r| {
+                        format!(
+                            "<span class=\"sv\" title=\"vacuum delta-v, thrust-to-weight at Kerbin's sea level, burn time\">\u{394}v {:.0} m/s \u{b7} TWR {:.2} \u{b7} {:.0} s</span>",
+                            r.delta_v_vacuum_mps, r.twr_asl, r.burn_time_s
+                        )
+                    })
+                    .unwrap_or_default();
+                html.push_str(&format!(
+                    "<li><span class=\"st\">STAGE {}</span>{stats}{}</li>",
+                    count - n,
+                    parts.join("")
+                ));
+            }
+            if html.is_empty() {
+                html = "<li class=\"empty\">No stages yet: engines, decouplers and parachutes get one each.</li>".into();
             }
             list.set_inner_html(&html);
+        }
+        set_text(
+            &self.doc,
+            "vab-sym",
+            &format!("\u{d7}{}", self.vab_symmetry),
+        );
+        if let Some(b) = self.doc.get_element_by_id("vab-snap") {
+            b.class_list().toggle_with_force("on", self.vab_snap).ok();
+        }
+        for (id, on) in [
+            ("vab-undo", self.vab_history.can_undo()),
+            ("vab-redo", self.vab_history.can_redo()),
+        ] {
+            if let Some(b) = self.doc.get_element_by_id(id) {
+                if on {
+                    b.remove_attribute("disabled").ok();
+                } else {
+                    b.set_attribute("disabled", "").ok();
+                }
+            }
         }
         if let Some(name) = self
             .doc
@@ -2984,6 +4327,102 @@ impl App {
         ));
     }
 
+    // ---- Tracking Station
+
+    fn open_tracking(&mut self) {
+        self.tracking_open = true;
+        self.show_menu(false);
+        self.render_tracking();
+    }
+
+    fn track_focus(&mut self, id: u64) {
+        let rb = self
+            .scene
+            .as_ref()
+            .and_then(|s| s.vessel(id))
+            .map(|v| v.reference_body as usize);
+        if let Some(rb) = rb {
+            self.follow_vessel(id, rb);
+        }
+    }
+
+    fn tracking_rows(&self) -> Vec<tracking::Row> {
+        let Some(scene) = &self.scene else {
+            return Vec::new();
+        };
+        let ut = self.time.ut_at(now_ms());
+        scene
+            .vessels
+            .iter()
+            .filter_map(|v| {
+                let body = scene.bodies.get(v.reference_body as usize)?;
+                let orbit = scene::orbit_from(body.mu, &v.orbit);
+                let (pe, ap) = (orbit.periapsis(), orbit.apoapsis());
+                let atmo = if body.has_atmosphere {
+                    body.atmosphere_depth_m
+                } else {
+                    0.0
+                };
+                let altitude = v.flight.as_ref().map(|f| f.altitude_m).unwrap_or_else(|| {
+                    let rb = v.reference_body as usize;
+                    (scene.vessel_position(v, ut) - scene.position(rb, ut)).length() - body.radius_m
+                });
+                Some(tracking::Row {
+                    id: v.id,
+                    name: v.name.clone(),
+                    mine: v.owner.is_some() && v.owner == self.player_id,
+                    body: body.id.clone(),
+                    situation: tracking::situation(v, body.radius_m, atmo, pe),
+                    altitude_m: altitude,
+                    apoapsis_m: ap - body.radius_m,
+                    periapsis_m: pe - body.radius_m,
+                })
+            })
+            .collect()
+    }
+
+    fn render_tracking(&mut self) {
+        self.ts_rendered_ms = now_ms();
+        let rows = self.tracking_rows();
+        if let Some(el) = self.doc.get_element_by_id("ts-list") {
+            el.set_inner_html(&tracking::render_list(
+                &rows,
+                self.ts_selected,
+                self.ts_mine_only,
+            ));
+        }
+        for (id, on) in [
+            ("ts-tab-all", !self.ts_mine_only),
+            ("ts-tab-mine", self.ts_mine_only),
+        ] {
+            if let Some(el) = self.doc.get_element_by_id(id) {
+                el.class_list().toggle_with_force("on", on).ok();
+            }
+        }
+        if let Some(el) = self.doc.get_element_by_id("ts-info") {
+            match self
+                .ts_selected
+                .and_then(|id| rows.iter().find(|r| r.id == id))
+            {
+                Some(r) => el.set_inner_html(&tracking::render_info(r)),
+                None => {
+                    el.set_inner_html("<div class=\"ts-hint\">Select a vessel to track it</div>")
+                }
+            }
+        }
+    }
+
+    /// Show or hide the station and refresh it twice a second while it is open.
+    fn update_tracking(&mut self, now: f64) {
+        let visible = self.tracking_open && self.flying.is_none() && self.in_session;
+        if let Some(el) = self.doc.get_element_by_id("tracking") {
+            el.class_list().toggle_with_force("open", visible).ok();
+        }
+        if visible && now - self.ts_rendered_ms > 500.0 {
+            self.render_tracking();
+        }
+    }
+
     fn draw_thumbnails(&self) {
         let ids: Vec<u64> = self.craft_docs.keys().copied().collect();
         for id in ids {
@@ -3087,8 +4526,14 @@ impl App {
     fn start_flight(&mut self, vessel: u64, craft_id: Option<u64>) {
         self.flying = Some(vessel);
         self.flight_craft = craft_id.and_then(|c| self.craft_docs.get(&c).cloned());
+        self.flight_craft_id = craft_id;
+        // A craft not fetched yet (launched from another screen, or after a reload): ask for it; the flight
+        // view draws it when it arrives.
+        if let (None, Some(c), Some(ws)) = (&self.flight_craft, craft_id, &self.ws) {
+            send(ws, &ClientMessage::GetCraft { id: c });
+        }
         if let Some(c) = craft_id {
-            store(&format!("ose.flight.{vessel}"), &c.to_string());
+            store(&self.craft_link_key(vessel), &c.to_string());
         }
         self.map_mode = false;
         self.throttle = 0.0;
@@ -3166,6 +4611,68 @@ impl App {
         }
     }
 
+    /// Crew actions from the flight HUD: EVA, board the nearest craft, plant a flag, undock.
+    fn crew_action(&self, id: &str) {
+        let Some(vessel) = self.flying else { return };
+        let Some(ws) = &self.ws else { return };
+        let msg = match id {
+            "fh-eva" => ClientMessage::GoEva {
+                vessel,
+                kerbal: None,
+            },
+            "fh-board" => {
+                let Some(target) = self.board_candidate() else {
+                    set_text(&self.doc, "fh-note", "no craft within reach to board");
+                    return;
+                };
+                self.board_target.set(Some(target));
+                ClientMessage::Board { vessel, target }
+            }
+            "fh-flag" => ClientMessage::PlantFlag { vessel },
+            _ => ClientMessage::Undock { vessel, port: None },
+        };
+        self.crew_pending.set(Some(match id {
+            "fh-eva" => "fh-eva",
+            "fh-board" => "fh-board",
+            "fh-flag" => "fh-flag",
+            _ => "fh-undock",
+        }));
+        send(ws, &msg);
+    }
+
+    /// The nearest other vessel (not a Kerbal or a flag) within 10 m of the Kerbal flown.
+    fn board_candidate(&self) -> Option<u64> {
+        let scene = self.scene.as_ref()?;
+        let me = scene.vessel(self.flying?)?;
+        let ut = self.time.ut_at(now_ms());
+        let here = scene.vessel_position(me, ut);
+        scene
+            .vessels
+            .iter()
+            .filter(|v| v.id != me.id && v.reference_body == me.reference_body)
+            .filter(|v| !v.flight.as_ref().is_some_and(|f| f.eva) && !v.name.ends_with(" flag"))
+            .map(|v| (v.id, (scene.vessel_position(v, ut) - here).length()))
+            .filter(|(_, d)| *d < 10.0)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(id, _)| id)
+    }
+
+    /// Show the crew buttons that apply: EVA with crew aboard, Board and Plant Flag for a Kerbal (the flag on
+    /// the ground), Undock while docked.
+    fn update_crew_buttons(&self, f: &ose_net::FlightReadout) {
+        let landed = matches!(f.situation, ose_net::FlightSituation::Landed);
+        for (id, show) in [
+            ("fh-eva", !f.eva && !f.crew.is_empty()),
+            ("fh-board", f.eva),
+            ("fh-flag", f.eva && landed),
+            ("fh-undock", !f.docked.is_empty()),
+        ] {
+            if let Some(el) = self.doc.get_element_by_id(id) {
+                el.class_list().toggle_with_force("hidden", !show).ok();
+            }
+        }
+    }
+
     /// Science from the flight HUD: 0 runs the vessel's experiments, 1 transmits its reports, 2 recovers it.
     fn flight_science(&self, what: u8) {
         let Some(vessel) = self.flying else { return };
@@ -3181,6 +4688,7 @@ impl App {
 
     fn flight_stage(&mut self) {
         let Some(vessel) = self.flying else { return };
+        self.staged.insert(vessel);
         if let Some(ws) = &self.ws {
             send(ws, &ClientMessage::Stage { vessel });
         }
@@ -3251,6 +4759,66 @@ impl App {
     /// Flight keys that act while held, once per frame: W/S/A/D turn the attitude target at a steady rate
     /// (CapsLock for precision), Shift/Ctrl move the throttle at 100% a second, and on the ground W/S/A/D and
     /// B also drive the wheels (the original binds both, `WheelThrottle`/`WheelSteer`/`WheelBrakes`).
+    /// True while the flown vessel is a Kerbal on EVA.
+    fn flying_eva(&self) -> bool {
+        self.flying
+            .and_then(|id| self.scene.as_ref()?.vessel(id))
+            .and_then(|v| v.flight.as_ref())
+            .is_some_and(|f| f.eva)
+    }
+
+    /// A Kerbal on EVA, as the original's EVA keys: W walks ahead, S backs up, A/D turn, Space fires the
+    /// jetpack straight up. The server walks a Kerbal with throttle and a level heading, and flies the jetpack
+    /// when the attitude points steeply up.
+    fn eva_keys_tick(&mut self, now: f64, dt: f64) {
+        let k = &self.keys;
+        let (walk, turn, jet) = (-k.pitch(), k.yaw(), k.is("Space"));
+        let heading = match self.attitude {
+            ose_net::AttitudeMode::PitchHeading { heading_deg, .. } => heading_deg,
+            _ => self.facing_pitch_heading().map(|(_, h)| h).unwrap_or(90.0),
+        };
+        let heading = (heading + turn * 90.0 * dt).rem_euclid(360.0);
+        let (pitch_deg, heading_deg, throttle) = if jet {
+            (85.0, heading, 1.0)
+        } else if walk < 0.0 {
+            (0.0, (heading + 180.0).rem_euclid(360.0), 1.0)
+        } else {
+            (0.0, heading, walk.max(0.0))
+        };
+        let attitude = ose_net::AttitudeMode::PitchHeading {
+            pitch_deg,
+            // Backing up faces the walk direction for the server; the kept heading stays the Kerbal's own.
+            heading_deg,
+        };
+        if walk < 0.0 {
+            self.attitude = ose_net::AttitudeMode::PitchHeading {
+                pitch_deg: 0.0,
+                heading_deg: heading,
+            };
+        } else {
+            self.attitude = attitude;
+        }
+        let changed = throttle != self.throttle || turn != 0.0 || jet || walk != 0.0;
+        if changed || self.controls_dirty {
+            self.throttle = throttle;
+            self.controls_dirty = true;
+        }
+        if self.controls_dirty && now - self.controls_sent_ms >= 100.0 {
+            self.controls_dirty = false;
+            self.controls_sent_ms = now;
+            if let (Some(vessel), Some(ws)) = (self.flying, &self.ws) {
+                send(
+                    ws,
+                    &ClientMessage::SetControls {
+                        vessel,
+                        throttle,
+                        attitude,
+                    },
+                );
+            }
+        }
+    }
+
     fn flight_keys_tick(&mut self, now: f64) {
         let dt = ((now - self.keys_tick_ms) / 1000.0).clamp(0.0, 0.1);
         self.keys_tick_ms = now;
@@ -3262,6 +4830,10 @@ impl App {
         let Some(vessel) = self.flying else { return };
         if menu_open {
             self.keys.clear();
+        }
+        if self.flying_eva() {
+            self.eva_keys_tick(now, dt);
+            return;
         }
         let k = &self.keys;
         let (pitch_in, yaw_in, thr_in) = (k.pitch(), k.yaw(), k.throttle());
@@ -3306,6 +4878,36 @@ impl App {
             .and_then(|v| v.flight.as_ref())
             .map(|f| f.situation == ose_net::FlightSituation::Landed)
             .unwrap_or(false);
+        let roll = self.keys.roll() as f32 * self.keys.scale() as f32;
+        if roll != self.roll_sent {
+            self.roll_sent = roll;
+            if let Some(ws) = &self.ws {
+                send(
+                    ws,
+                    &ClientMessage::SetRoll {
+                        vessel,
+                        input: roll,
+                    },
+                );
+            }
+        }
+        let (tx, ty, tz) = self.keys.translate();
+        let s = self.keys.scale() as f32;
+        let translate = (tx as f32 * s, ty as f32 * s, tz as f32 * s);
+        if translate != self.translate_sent {
+            self.translate_sent = translate;
+            if let Some(ws) = &self.ws {
+                send(
+                    ws,
+                    &ClientMessage::Translate {
+                        vessel,
+                        x: translate.0,
+                        y: translate.1,
+                        z: translate.2,
+                    },
+                );
+            }
+        }
         let drive = if landed { drive } else { (0.0, 0.0, drive.2) };
         if drive != self.drive_sent {
             self.drive_sent = drive;
@@ -3321,6 +4923,33 @@ impl App {
                 );
             }
         }
+    }
+
+    /// Toggle an action group of the flown vessel.
+    fn action_group(&self, group: ose_net::ActionGroup) {
+        let (Some(vessel), Some(ws)) = (self.flying, &self.ws) else {
+            return;
+        };
+        send(
+            ws,
+            &ClientMessage::ActionGroup {
+                vessel,
+                group,
+                on: None,
+            },
+        );
+    }
+
+    /// Quicksave, quickload and the reverts (F5, F9 and `[data-save-action]` buttons such as the pause menu's).
+    fn save_action(&self, action: ose_net::SaveAction) {
+        let Some(ws) = &self.ws else { return };
+        let msg = match action {
+            ose_net::SaveAction::QuickSave => ClientMessage::QuickSave,
+            ose_net::SaveAction::QuickLoad => ClientMessage::QuickLoad,
+            ose_net::SaveAction::RevertToLaunch => ClientMessage::RevertToLaunch,
+            ose_net::SaveAction::RevertToEditor => ClientMessage::RevertToEditor,
+        };
+        send(ws, &msg);
     }
 
     /// A SAS mode or action bar button.
@@ -3358,6 +4987,27 @@ impl App {
                 deploy: !f.map(|f| f.panels_deployed).unwrap_or(false),
             },
             "fh-act-chutes" => ClientMessage::DeployParachutes { vessel },
+            "fh-act-lights" => ClientMessage::ActionGroup {
+                vessel,
+                group: ose_net::ActionGroup::Lights,
+                on: None,
+            },
+            "fh-act-rcs" => ClientMessage::ActionGroup {
+                vessel,
+                group: ose_net::ActionGroup::Rcs,
+                on: None,
+            },
+            "fh-act-abort" => ClientMessage::ActionGroup {
+                vessel,
+                group: ose_net::ActionGroup::Abort,
+                on: Some(true),
+            },
+            "fh-act-converters" => ClientMessage::SetConverters {
+                vessel,
+                on: !f
+                    .map(|f| f.converters.iter().any(|(_, on, _)| *on))
+                    .unwrap_or(false),
+            },
             _ => return,
         };
         if let Some(ws) = &self.ws {
@@ -3379,7 +5029,54 @@ impl App {
             .get(v.reference_body as usize)
             .map(|b| b.velocity_mps)
             .unwrap_or_default();
+        if let (Some(craft), Some(list)) =
+            (&self.flight_craft, self.doc.get_element_by_id("fh-stages"))
+        {
+            // `stage` is the stage burning now; before the first Space nothing burns and stage 0 goes next.
+            let lit = self.staged.contains(&id)
+                || f.stage > 0
+                || f.thrust_kn > 0.1
+                || f.situation != ose_net::FlightSituation::Landed;
+            let next = f.stage as usize + usize::from(lit);
+            let html = hud::staging_html(craft, &self.catalog, next, &f.parachutes);
+            // Compare with what was set last (the browser rewrites inner HTML, so it would never match).
+            let key = format!("{}:{}", html.len(), hud::fnv(&html));
+            if list.get_attribute("data-ose-key").as_deref() != Some(key.as_str()) {
+                list.set_inner_html(&html);
+                list.set_attribute("data-ose-key", &key).ok();
+            }
+        }
+        if let (Some(sci), Some(list)) = (
+            &self.science,
+            self.doc.get_element_by_id("fh-missions-list"),
+        ) {
+            let html = hud::tracker_html(&sci.missions, &self.loc);
+            let key = format!("{}:{}", html.len(), hud::fnv(&html));
+            if list.get_attribute("data-ose-key").as_deref() != Some(key.as_str()) {
+                list.set_inner_html(&html);
+                list.set_attribute("data-ose-key", &key).ok();
+            }
+        }
         let ut = self.time.ut_at(now_ms());
+        // Burn timer for a node planned on the flown vessel.
+        if let Some(el) = self.doc.get_element_by_id("fh-burn") {
+            match self.node.filter(|n| n.vessel == id) {
+                Some(n) => {
+                    let dv = (n.prograde_mps.powi(2) + n.normal_mps.powi(2) + n.radial_mps.powi(2))
+                        .sqrt();
+                    let full = if f.throttle > 0.01 {
+                        f.thrust_kn / f.throttle
+                    } else {
+                        0.0
+                    };
+                    el.set_text_content(Some(&hud::burn_text(n.ut - ut, dv, f.mass_t, full)));
+                    el.class_list().add_1("on").ok();
+                }
+                None => {
+                    el.class_list().remove_1("on").ok();
+                }
+            }
+        }
         let apsides = body
             .map(|b| hud::apsides(&v.orbit, b.radius_m, b.mu, ut))
             .unwrap_or((None, (f64::NAN, f64::NAN)));
@@ -3413,6 +5110,7 @@ impl App {
                 let d = vab3d::VabView::new();
                 (self.vab3d.yaw, self.vab3d.pitch, self.vab3d.distance) =
                     (d.yaw, d.pitch, d.distance);
+                self.vab3d.pan_y = 0.0;
                 return;
             }
             if self.in_session && self.ksc_active() {
@@ -3424,7 +5122,7 @@ impl App {
     }
 
     fn show_sound_toggle(&self) {
-        for id in ["sound-toggle", "main-sound"] {
+        for id in ["sound-toggle", "main-sound", "settings-sound"] {
             if let Some(el) = self.doc.get_element_by_id(id) {
                 el.set_text_content(Some(if self.audio.muted {
                     "Sound: off"
@@ -3459,13 +5157,17 @@ impl App {
         let scene = match &flight {
             _ if !self.in_session || front => audio::Scene::MainMenu,
             _ if self.vab_active() => audio::Scene::Vab,
+            _ if self.tracking_open && self.flying.is_none() && !menu_open => {
+                audio::Scene::Tracking
+            }
+            _ if self.screen_open("rnd") => audio::Scene::Rnd,
+            _ if self.screen_open("mission") => audio::Scene::Mission,
             Some((_, body, _)) if !menu_open => audio::Scene::Flight(body),
             _ => audio::Scene::Ksc,
         };
         self.audio.music(Some(audio::scene_music(scene)));
         // Ambience under the music: the launch pad emitter around the KSC, the hall in the VAB.
         self.audio.ambience(match scene {
-            audio::Scene::Ksc if menu_open => Some("ksc_launchpad"),
             audio::Scene::Vab => Some("vab_ambience"),
             _ => None,
         });
@@ -3535,6 +5237,23 @@ impl App {
             return;
         };
         let Some(f) = &v.flight else {
+            // On rails: the readout's last values would be stale; altitude and speed from the orbit.
+            if let Some(scene) = &self.scene {
+                let rb = v.reference_body as usize;
+                if let Some(body) = scene.bodies.get(rb) {
+                    let ut = self.time.ut_at(now_ms());
+                    let alt = (scene.vessel_position(v, ut) - scene.position(rb, ut)).length()
+                        - body.radius_m;
+                    set_text(&self.doc, "fh-altitude", &tracking::km(alt));
+                    if let Some(el) = self.doc.get_element_by_id("flight-hud") {
+                        el.set_attribute("data-ose-altitude", &format!("{alt:.1}"))
+                            .ok();
+                    }
+                }
+            }
+            for id in ["fh-speed", "fh-vspeed", "fh-twr"] {
+                set_text(&self.doc, id, "--");
+            }
             set_text(&self.doc, "fh-situation", "on rails");
             return;
         };
@@ -3555,6 +5274,34 @@ impl App {
             &format!("{:+.1} m/s", f.vertical_speed_mps),
         );
         set_text(&self.doc, "fh-situation", &format!("{:?}", f.situation));
+        self.update_crew_buttons(f);
+        // Where the vessel stands on its body (latitude, longitude in degrees), for the walking test hook.
+        if let Some(scene) = &self.scene {
+            let rb = v.reference_body as usize;
+            let ut = self.time.ut_at(now_ms());
+            let r = scene.vessel_position(v, ut) - scene.position(rb, ut);
+            let spin = self
+                .body_spins
+                .get(rb)
+                .map(|b| {
+                    let w = if b.rotation_period_s > 0.0 {
+                        std::f64::consts::TAU / b.rotation_period_s
+                    } else {
+                        0.0
+                    };
+                    b.initial_rotation_deg.to_radians() + w * ut
+                })
+                .unwrap_or(0.0);
+            let lat = (r.z / r.length().max(1.0))
+                .clamp(-1.0, 1.0)
+                .asin()
+                .to_degrees();
+            let lon = (r.y.atan2(r.x) - spin).to_degrees().rem_euclid(360.0);
+            if let Some(el) = self.doc.get_element_by_id("flight-hud") {
+                el.set_attribute("data-ose-latlon", &format!("{lat:.6},{lon:.6}"))
+                    .ok();
+            }
+        }
         // Timed experiments counting down from the server's last report.
         let elapsed = (now_ms() - self.running_since_ms) / 1000.0;
         let running: Vec<String> = self
@@ -3665,7 +5412,7 @@ impl App {
             html.push_str(&format!(
                 "<li data-ose=\"session\" data-ose-id=\"{id}\"><div><div class=\"name\">{name}</div>\
                  <div class=\"meta\">{mode} \u{b7} {ut} \u{b7} {players} {pl}</div></div>\
-                 <button data-ose=\"session-join\" data-ose-session=\"{id}\">Join</button></li>",
+                 <button data-ose=\"session-join\" data-ose-session=\"{id}\">Resume</button></li>",
                 id = esc(&s.id),
                 name = esc(&s.name),
                 mode = mode_name(s.mode),
@@ -3675,7 +5422,7 @@ impl App {
             ));
         }
         if html.is_empty() {
-            html = "<li class=\"empty\">no sessions yet; create one below</li>".into();
+            html = "<li class=\"empty\">no campaigns yet; start a new one</li>".into();
         }
         list.set_inner_html(&html);
     }
@@ -3932,12 +5679,21 @@ impl App {
     }
 
     /// The player's own vessel, if the server has sent one.
+    /// The vessel to plan for: the one followed if it is yours, else one of yours in orbit (on rails), else
+    /// any of yours. A craft standing on the pad has no orbit to put a node on.
     fn my_vessel(&self) -> Option<(u64, usize)> {
         let scene = self.scene.as_ref()?;
-        scene
+        let mine: Vec<&ose_net::VesselState> = scene
             .vessels
             .iter()
-            .find(|v| v.owner.is_some() && v.owner == self.player_id)
+            .filter(|v| v.owner.is_some() && v.owner == self.player_id)
+            .collect();
+        // The vessel being flown first: nodes and the orbit pick belong to it.
+        mine.iter()
+            .find(|v| Some(v.id) == self.flying)
+            .or_else(|| mine.iter().find(|v| Some(v.id) == self.follow))
+            .or_else(|| mine.iter().find(|v| v.flight.is_none()))
+            .or_else(|| mine.first())
             .map(|v| (v.id, v.reference_body as usize))
     }
 
@@ -3994,6 +5750,163 @@ impl App {
         }
         self.follow_vessel(vessel, rb);
         self.send_node();
+    }
+
+    /// A left press on a maneuver handle (the handles sit in #labels, which takes no pointer events, so the
+    /// press is matched by position): start dragging it. True when a handle took the press.
+    fn mnv_press(&mut self, x: f64, y: f64) -> bool {
+        let Some(node) = self.node else { return false };
+        let hit = (0..6).find(|k| {
+            self.doc
+                .get_element_by_id(&format!(
+                    "mnv-{}",
+                    [
+                        "prograde",
+                        "retrograde",
+                        "normal",
+                        "antinormal",
+                        "radialout",
+                        "radialin"
+                    ][*k]
+                ))
+                .filter(|e| {
+                    e.dyn_ref::<HtmlElement>()
+                        .map(|h| {
+                            h.style().get_property_value("visibility").ok().as_deref()
+                                == Some("visible")
+                        })
+                        .unwrap_or(false)
+                })
+                .map(|e| {
+                    let r = e.get_bounding_client_rect();
+                    let (cx, cy) = (r.left() + r.width() * 0.5, r.top() + r.height() * 0.5);
+                    (cx - x).powi(2) + (cy - y).powi(2) < 13.0 * 13.0
+                })
+                .unwrap_or(false)
+        });
+        let Some(k) = hit else { return false };
+        self.mnv_drag = Some((
+            k,
+            x,
+            y,
+            [node.prograde_mps, node.normal_mps, node.radial_mps],
+        ));
+        true
+    }
+
+    /// Dragging a handle outward adds delta-v along it: 1 m/s per pixel, 0.1 with Shift.
+    fn mnv_drag_to(&mut self, x: f64, y: f64, fine: bool) {
+        let Some((k, x0, y0, start)) = self.mnv_drag else {
+            return;
+        };
+        if k == 6 {
+            self.mnv_slide(x, y);
+            return;
+        }
+        let (ux, uy) = self.mnv_dirs[k];
+        let along = (x - x0) * ux + (y - y0) * uy;
+        let dv = along * if fine { 0.1 } else { 1.0 };
+        let (axis, sign) = (k / 2, if k % 2 == 0 { 1.0 } else { -1.0 });
+        let Some(node) = self.node.as_mut() else {
+            return;
+        };
+        let value = (start[axis] + sign * dv).clamp(-5000.0, 5000.0);
+        match axis {
+            0 => node.prograde_mps = value,
+            1 => node.normal_mps = value,
+            _ => node.radial_mps = value,
+        }
+        let (id, v) = (["node-prograde", "node-normal", "node-radial"][axis], value);
+        if let Some(el) = self
+            .doc
+            .get_element_by_id(id)
+            .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+        {
+            let max: f64 = el.max().parse().unwrap_or(1500.0);
+            if v.abs() > max {
+                el.set_max(&format!("{:.0}", v.abs().ceil()));
+                el.set_min(&format!("{:.0}", -v.abs().ceil()));
+            }
+        }
+        set_input_value(&self.doc, id, v);
+        set_text(&self.doc, &format!("{id}-text"), &format!("{v:.1} m/s"));
+        let now = now_ms();
+        if now - self.mnv_sent_ms > 100.0 {
+            self.mnv_sent_ms = now;
+            self.send_node();
+        }
+    }
+
+    /// Slide the node along the orbit to the sampled point nearest the pointer (screen px).
+    fn mnv_slide(&mut self, x: f64, y: f64) {
+        let rect = self.gpu_canvas.get_bounding_client_rect();
+        let (x, y) = (x - rect.left(), y - rect.top());
+        let Some((_, t)) = self
+            .orbit_pick
+            .iter()
+            .map(|(px, py, t)| ((px - x).powi(2) + (py - y).powi(2), *t))
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+        else {
+            return;
+        };
+        let Some(node) = self.node.as_mut() else {
+            return;
+        };
+        node.ut = t;
+        let dt = t - node.anchor_ut;
+        if let Some(el) = self
+            .doc
+            .get_element_by_id("node-dt")
+            .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+        {
+            let max: f64 = el.max().parse().unwrap_or(600.0);
+            if dt > max {
+                el.set_max(&format!("{:.0}", dt.ceil()));
+            }
+        }
+        set_input_value(&self.doc, "node-dt", dt);
+        let now = now_ms();
+        if now - self.mnv_sent_ms > 100.0 {
+            self.mnv_sent_ms = now;
+            self.send_node();
+        }
+    }
+
+    /// A click on the map near the planning vessel's orbit puts a maneuver node there (CSS px).
+    fn map_click(&mut self, x: f64, y: f64) -> bool {
+        let best = self
+            .orbit_pick
+            .iter()
+            .map(|(px, py, t)| ((px - x).powi(2) + (py - y).powi(2), *t))
+            .min_by(|a, b| a.0.total_cmp(&b.0));
+        let Some((d2, t)) = best else { return false };
+        if d2 > 14.0 * 14.0 {
+            return false;
+        }
+        // Keep the view where it is: add_node frames the vessel's orbit.
+        let (dist, focus, offset) = (self.orbit_dist_km, self.camera.focus, self.camera.offset);
+        let m_per_px = self.camera.m_per_px;
+        self.add_node();
+        (self.orbit_dist_km, self.camera.focus, self.camera.offset) = (dist, focus, offset);
+        self.camera.m_per_px = m_per_px;
+        if let Some(node) = self.node.as_mut() {
+            node.anchor_ut = self.time.ut_at(now_ms());
+            node.ut = t;
+            let dt = t - node.anchor_ut;
+            if let Some(el) = self
+                .doc
+                .get_element_by_id("node-dt")
+                .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+            {
+                let max: f64 = el.max().parse().unwrap_or(600.0);
+                if dt > max {
+                    el.set_max(&format!("{:.0}", dt.ceil()));
+                }
+            }
+            set_input_value(&self.doc, "node-dt", dt);
+        }
+        self.send_node();
+        true
     }
 
     fn clear_node(&mut self) {
@@ -4132,13 +6045,18 @@ impl App {
     fn frame(&mut self) {
         let now = now_ms();
         let ut = self.time.ut_at(now);
+        self.update_tracking(now);
         self.update_audio(now);
         if self.time.have_time {
             self.update_hud(ut);
         }
         self.update_flight_hud();
         self.update_flight_instruments();
+        self.toasts.watch(&self.doc, "fh-note", "alert");
         self.flight_keys_tick(now);
+        if self.in_session && self.vab_active() {
+            self.vab_report_tick(now);
+        }
         #[cfg(target_arch = "wasm32")]
         if let (Some(p), Some(gpu)) = (self.planet_preview.as_mut(), self.gpu.as_mut()) {
             if let Some(menu) = self.doc.get_element_by_id("menu") {
@@ -4169,6 +6087,17 @@ impl App {
         }
         #[cfg(target_arch = "wasm32")]
         if self.in_session && self.vab_active() {
+            self.vab3d.ghosts = self
+                .vab3d
+                .held
+                .as_ref()
+                .map(|(id, _)| id.clone())
+                .and_then(|id| {
+                    let (spot, sym) = self.vab_surface(&id)?;
+                    let spec = self.catalog.get(&id)?;
+                    Some(self.editor.surface_poses(spec, &self.catalog, spot, sym))
+                })
+                .unwrap_or_default();
             if let Some(gpu) = &mut self.gpu {
                 let was_ready = self.vab3d.is_ready();
                 let free = self.editor.free_nodes(&self.catalog);
@@ -4397,8 +6326,16 @@ impl App {
             .unwrap_or(0.0);
         let catalog = &self.catalog;
         let is_dec = |pid: &str| catalog.get(pid).map(|p| p.is_decoupler).unwrap_or(false);
+        let nearby_vessels: Vec<(glam::DVec3, flight3d::Stand)> = scene
+            .vessels
+            .iter()
+            .filter(|o| o.id != id && o.reference_body == v.reference_body)
+            .map(|o| (g(scene.vessel_position(o, ut)), flight3d::Stand::of(o)))
+            .collect();
         let inp = flight3d::FlightInput {
             vessel: v,
+            nearby_vessels: &nearby_vessels,
+            stand: flight3d::Stand::of(v),
             vessel_pos: g(vp),
             vessel_vel: g(vv),
             body_pos: g(bp),
@@ -4458,6 +6395,7 @@ impl App {
     #[cfg(target_arch = "wasm32")]
     fn frame_3d(&mut self, ut: f64, positions: &[ose_math::DVec3], centre: ose_math::DVec3) {
         use glam::{DQuat, DVec3 as GV};
+        let planner = self.my_vessel().map(|(id, _)| id);
         let Some(scene) = &self.scene else {
             return;
         };
@@ -4505,6 +6443,7 @@ impl App {
                     ambient: 0.0,
                     atmosphere: false,
                     mirror_z: true,
+                    sun: 1.0,
                 });
             }
             if let (Some(orbit), Some(p)) = (scene.orbit(i), b.parent) {
@@ -4631,6 +6570,171 @@ impl App {
                     None => {
                         style.set_property("visibility", "hidden").ok();
                     }
+                }
+            }
+        }
+        // Pick points along the planning vessel's first patch (one orbit ahead at most).
+        self.orbit_pick.clear();
+        if let Some(v) = planner.and_then(|id| scene.vessel(id)) {
+            let (bi, elements, start, end) =
+                match scene.trajectories.get(&v.id).and_then(|p| p.first()) {
+                    Some(p) => (
+                        p.body as usize,
+                        p.orbit,
+                        p.start_ut.max(ut),
+                        if p.end == PatchEnd::Maneuver {
+                            f64::INFINITY
+                        } else {
+                            p.end_ut
+                        },
+                    ),
+                    None => (v.reference_body as usize, v.orbit, ut, f64::INFINITY),
+                };
+            if let Some(body) = scene.bodies.get(bi) {
+                let orbit = scene::orbit_from(body.mu, &elements);
+                let span = if orbit.period.is_finite() {
+                    orbit.period.min(end - start)
+                } else {
+                    (end - start).min(6.0 * 3600.0)
+                };
+                if span.is_finite() && span > 0.0 {
+                    for k in 1..=360 {
+                        let t = start + span * k as f64 / 360.0;
+                        if let Some((x, y)) = project(to_km(positions[bi] + orbit.position_at(t))) {
+                            self.orbit_pick.push((x, y, t));
+                        }
+                    }
+                }
+            }
+        }
+        // Apoapsis and periapsis markers on the followed vessel's current patch, with the altitude and the time
+        // to each (the original's Map3DTrajectoryEvents Ap/Pe markers).
+        let marked = self.flying.or(self.follow);
+        for (id, nu, label) in [
+            ("map-ap", std::f64::consts::PI, "Ap"),
+            ("map-pe", 0.0, "Pe"),
+        ] {
+            let el = match self.doc.get_element_by_id(id) {
+                Some(e) => e,
+                None => {
+                    let Ok(e) = self.doc.create_element("div") else {
+                        continue;
+                    };
+                    e.set_id(id);
+                    e.set_class_name("apsis");
+                    e.set_attribute("data-ose", id).ok();
+                    self.labels.append_child(&e).ok();
+                    e
+                }
+            };
+            let Some(el) = el.dyn_ref::<HtmlElement>() else {
+                continue;
+            };
+            let at = marked
+                .and_then(|vid| scene.vessel(vid))
+                .and_then(|v| {
+                    let patch = scene.trajectories.get(&v.id).and_then(|p| p.first());
+                    let (bi, elements) = match patch {
+                        Some(p) => (p.body as usize, p.orbit),
+                        None => (v.reference_body as usize, v.orbit),
+                    };
+                    let body = scene.bodies.get(bi)?;
+                    if nu > 0.0 && elements.eccentricity >= 1.0 {
+                        return None;
+                    }
+                    let orbit = scene::orbit_from(body.mu, &elements);
+                    let (rel, _) = orbit.state_at_true_anomaly(nu);
+                    let (ap, pe) = hud::apsides(&elements, body.radius_m, body.mu, ut);
+                    let (alt, t) = if nu > 0.0 { ap? } else { pe };
+                    Some((positions[bi] + rel, alt, t))
+                })
+                .and_then(|(p, alt, t)| project(to_km(p)).map(|xy| (xy, alt, t)));
+            let style = el.style();
+            match at {
+                Some(((x, y), alt, t)) => {
+                    style.set_property("left", &format!("{x:.1}px")).ok();
+                    style.set_property("top", &format!("{y:.1}px")).ok();
+                    style.set_property("visibility", "visible").ok();
+                    let text = format!("{label} {}  {}", hud::fmt_dist(alt), hud::fmt_dt(t));
+                    if el.text_content().as_deref() != Some(text.as_str()) {
+                        el.set_text_content(Some(&text));
+                    }
+                }
+                None => {
+                    style.set_property("visibility", "hidden").ok();
+                }
+            }
+        }
+        // The maneuver gizmo (MapManeuverGizmo): six handles around the node along prograde, retrograde,
+        // normal, anti-normal, radial out and radial in, in the burn frame flight3d uses for the node marker.
+        let gizmo = self.node.and_then(|node| {
+            let v = scene.vessel(node.vessel)?;
+            let rb = v.reference_body as usize;
+            let orbit = scene::orbit_from(scene.bodies[rb].mu, &v.orbit);
+            let (r, vel) = orbit.state_at(node.ut);
+            let pro = to_km(vel).normalize_or_zero();
+            let nrm = to_km(r.cross(vel)).normalize_or_zero();
+            let rad = nrm.cross(pro);
+            let at = to_km(positions[rb] + r);
+            let (cx, cy) = project(at)?;
+            let reach = self.orbit_dist_km * 0.03;
+            let dirs = [pro, -pro, nrm, -nrm, rad, -rad].map(|d| {
+                project(at + d * reach)
+                    .map(|(x, y)| {
+                        let (dx, dy) = (x - cx, y - cy);
+                        let len = (dx * dx + dy * dy).sqrt();
+                        if len > 1e-6 {
+                            (dx / len, dy / len)
+                        } else {
+                            (0.0, 0.0)
+                        }
+                    })
+                    .unwrap_or((0.0, 0.0))
+            });
+            Some((cx, cy, dirs))
+        });
+        const HANDLES: [(&str, &str); 6] = [
+            (
+                "prograde",
+                "Prograde: drag outward to add speed along the orbit",
+            ),
+            ("retrograde", "Retrograde: drag outward to slow down"),
+            ("normal", "Normal: tilt the orbit"),
+            ("antinormal", "Anti-normal: tilt the orbit the other way"),
+            ("radialout", "Radial out"),
+            ("radialin", "Radial in"),
+        ];
+        for (k, (name, tip)) in HANDLES.iter().enumerate() {
+            let id = format!("mnv-{name}");
+            let el = match self.doc.get_element_by_id(&id) {
+                Some(e) => e,
+                None => {
+                    let Ok(e) = self.doc.create_element("div") else {
+                        continue;
+                    };
+                    e.set_id(&id);
+                    e.set_class_name(&format!("mnv-h {name}"));
+                    e.set_attribute("data-mnv", &k.to_string()).ok();
+                    e.set_attribute("data-ose", "maneuver-handle").ok();
+                    e.set_attribute("title", tip).ok();
+                    self.labels.append_child(&e).ok();
+                    e
+                }
+            };
+            let Some(el) = el.dyn_ref::<HtmlElement>() else {
+                continue;
+            };
+            let style = el.style();
+            match gizmo {
+                Some((cx, cy, dirs)) if dirs[k] != (0.0, 0.0) => {
+                    self.mnv_dirs[k] = dirs[k];
+                    let (x, y) = (cx + dirs[k].0 * 48.0, cy + dirs[k].1 * 48.0);
+                    style.set_property("left", &format!("{x:.1}px")).ok();
+                    style.set_property("top", &format!("{y:.1}px")).ok();
+                    style.set_property("visibility", "visible").ok();
+                }
+                _ => {
+                    style.set_property("visibility", "hidden").ok();
                 }
             }
         }
@@ -4807,4 +6911,23 @@ fn install_focus_clicks(app: &Shared, target: &Element) -> Result<(), JsValue> {
     target.add_event_listener_with_callback("click", on_click.as_ref().unchecked_ref())?;
     on_click.forget();
     Ok(())
+}
+
+/// Attach nodes of a catalog part as (position, orientation) in its own frame, for the part held in the VAB.
+#[cfg(target_arch = "wasm32")]
+fn vab_nodes(catalog: &vab::Catalog, id: &str) -> Vec<(glam::DVec3, glam::DVec3)> {
+    catalog
+        .get(id)
+        .map(|s| {
+            s.attach_nodes
+                .iter()
+                .map(|n| {
+                    (
+                        glam::DVec3::new(n.position.x, n.position.y, n.position.z),
+                        glam::DVec3::new(n.orientation.x, n.orientation.y, n.orientation.z),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }

@@ -49,6 +49,10 @@ EVENTS: dict[str, tuple[str, object, bool, float, str | None]] = {
     "music_vab": (MUSIC, "first", True, 0.5, "Set_State_State_VehicleAssemblyBuilder"),
     "music_kerbin": (MUSIC, "first", True, 0.4, "Set_State_State_SOI_K_Kerbin"),
     "music_mun": (MUSIC, "first", True, 0.4, "Set_State_State_SOI_K_Kerbin_Moon_Mun"),
+    # The facility screens play their own music switch from the state event itself.
+    "music_tracking": ("Set_Music_State_Menu_TrackingCenter", 952431349, True, 0.5, None),
+    "music_rnd": ("Set_Music_State_Menu_RnD", "first", True, 0.5, None),
+    "music_mission": ("Set_Music_State_Menu_Mission_Control", 218510696, True, 0.5, None),
     "ui_select": ("Play_ui_extended_button_select", "first", False, 0.5, None),
     "ui_esc_open": ("Play_EM_Gameplay_EscapeMenu_opened", "first", False, 0.5, None),
     "rd_research": ("Play_ui_RD_button_select_BIG", "first", False, 0.6, None),

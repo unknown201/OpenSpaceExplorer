@@ -24,6 +24,9 @@ const headless = !process.env.OSE_E2E_HEADED;
 const chromiumArgs = [
   "--enable-unsafe-webgpu",
   "--ignore-gpu-blocklist",
+  // On Windows Playwright's Chromium cannot load dxil.dll ("DynamicLib.Open: dxil.dll Windows Error: 87"), so
+  // device creation fails and the client drops to 2D; FXC instead of DXC works (2026-10-25).
+  ...(process.platform === "win32" ? ["--disable-dawn-features=use_dxc"] : []),
   ...(process.platform === "linux"
     ? ["--enable-features=Vulkan", "--use-vulkan=swiftshader", "--use-angle=vulkan", "--disable-vulkan-surface"]
     : []),

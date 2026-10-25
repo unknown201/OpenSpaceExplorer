@@ -82,6 +82,10 @@ pub struct Structure {
     pub converter_defs: Vec<Option<ose_data::Converter>>,
     pub converter_on: Vec<bool>,
     pub converter_running: Vec<f64>,
+    /// Each part's decoupler push (`ejectionForce`, 0 for other parts).
+    pub ejection_force: Vec<f64>,
+    /// RCS thrusters on the parts.
+    pub rcs_defs: Vec<Option<ose_data::Rcs>>,
     /// Flight stage the structure was last trimmed to.
     staged_to: usize,
 }
@@ -326,6 +330,12 @@ impl Structure {
                 .map(|i| def_of(i).and_then(|d| d.converter.clone()))
                 .collect(),
             converter_on: vec![false; n],
+            rcs_defs: (0..n)
+                .map(|i| def_of(i).and_then(|d| d.rcs.clone()))
+                .collect(),
+            ejection_force: (0..n)
+                .map(|i| def_of(i).map(|d| d.ejection_force).unwrap_or(0.0))
+                .collect(),
             converter_running: vec![0.0; n],
             gear_defs: (0..n)
                 .map(|i| def_of(i).and_then(|d| d.landing_gear.clone()))
@@ -446,6 +456,74 @@ impl Structure {
             _ => self.stowed_box[i],
         };
         (self.rigid.rest_position(i) + offset, half)
+    }
+
+    /// The RCS thrusters still attached: thrust, turning torque (each thruster at its distance from the
+    /// centre of mass) and Isp.
+    fn sync_rcs(&self, p: &mut Powered) {
+        let c = self.rigid.rest_centre();
+        let (mut thrust, mut torque) = (0.0, 0.0);
+        let mut isp = (0.0, 0.0);
+        for i in (0..self.rigid.len()).filter(|&i| self.rigid.present[i]) {
+            if let Some(r) = &self.rcs_defs[i] {
+                thrust += r.thrust_kn;
+                torque += r.thrust_kn * (self.rigid.rest_position(i) - c).length();
+                if isp.0 == 0.0 {
+                    isp = (r.isp_curve.evaluate(0.0), r.isp_curve.evaluate(1.0));
+                }
+            }
+        }
+        p.rcs.thrust_kn = thrust;
+        p.rcs.torque_knm = torque;
+        p.rcs.isp_vac_s = isp.0;
+        p.rcs.isp_asl_s = isp.1;
+    }
+
+    /// Draw the propellant the RCS used this step from the tanks; sets the share delivered.
+    pub fn rcs_burn(&mut self, p: &mut Powered, pressure_atm: f64, dt: f64) {
+        if p.rcs.usage <= 0.0 || p.rcs.thrust_kn <= 0.0 {
+            return;
+        }
+        let Some(def) = self.rcs_defs.iter().flatten().next().cloned() else {
+            return;
+        };
+        let isp = def.isp_curve.evaluate(pressure_atm.max(0.0)).max(1e-3);
+        // t/s of propellant at the thrust used
+        let flow_t = p.rcs.thrust_kn * p.rcs.usage.min(3.0) / (isp * ose_data::G0);
+        let ingredients = {
+            let mix = self.net.ingredients(&def.propellant);
+            if mix.is_empty() {
+                self.net
+                    .resources
+                    .iter()
+                    .position(|r| r.eq_ignore_ascii_case(&def.propellant))
+                    .map(|r| vec![(r, 1.0)])
+                    .unwrap_or_default()
+            } else {
+                mix
+            }
+        };
+        let unit_t: f64 = ingredients
+            .iter()
+            .map(|&(r, u)| self.net.unit_mass_t[r] * u)
+            .sum();
+        if ingredients.is_empty() || unit_t <= 0.0 {
+            p.rcs.powered = 0.0;
+            return;
+        }
+        let units = flow_t / unit_t;
+        let request = Request {
+            part: self.root,
+            instructions: ingredients
+                .iter()
+                .map(|&(r, u)| Instruction {
+                    resource: r,
+                    units_per_s: units * u,
+                })
+                .collect(),
+            priority: 6,
+        };
+        p.rcs.powered = self.net.process(&[request], dt)[0];
     }
 
     /// The wheels out under the craft, its drive direction and wheelbase, into the flight state's `drive`.
@@ -587,6 +665,7 @@ impl Structure {
         }
         p.mass_t = self.net.mass_t().max(0.001);
         self.sync_drive(p);
+        self.sync_rcs(p);
         let (clearance, footprint, tolerance) = self.ground_profile();
         p.ground_clearance_m = clearance;
         p.footprint_m = footprint;
@@ -932,6 +1011,22 @@ impl Structure {
         self.net.remove_parts(parts);
         let (bx, by, bz) = basis(facing);
         Some(self.split_off(bx, by, bz))
+    }
+
+    /// The push the decouplers in flight stage `stage` give the parts they let go, kN·s
+    /// (`Module_Decouple`: half the ejection force over one 50 Hz step each way).
+    pub fn ejection_impulse(&self, stage: usize) -> f64 {
+        self.stage_activations
+            .get(stage)
+            .map(|parts| {
+                parts
+                    .iter()
+                    .map(|&i| self.ejection_force.get(i).copied().unwrap_or(0.0))
+                    .sum::<f64>()
+            })
+            .unwrap_or(0.0)
+            * 0.5
+            * 0.02
     }
 
     /// Fire flight stage `stage`'s activations: parachutes in it arm.

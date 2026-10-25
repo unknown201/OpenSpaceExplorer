@@ -46,6 +46,11 @@ export const STEP_NAMES = [
   "launchpad",
   "flight",
   "rnd",
+  "tracking_station",
+  "missions",
+  "campaign_cycle",
+  "vab_rocket",
+  "eva",
 ] as const;
 export type StepName = (typeof STEP_NAMES)[number];
 
@@ -141,9 +146,12 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
       let joined = "";
       try {
         await join.first().waitFor({ timeout: 10_000 });
-        const entry = page.locator('[data-ose="session"]').first();
+        // The server's own campaign when it is listed: later steps start campaigns of their own, which a rerun
+        // against the same server would otherwise pick up first.
+        const shared = page.locator('[data-ose="session"]', { hasText: "Shared campaign" });
+        const entry = (await shared.count()) > 0 ? shared.first() : page.locator('[data-ose="session"]').first();
         joined = ((await entry.locator(".name").textContent().catch(() => "")) ?? "").trim();
-        await join.first().click();
+        await entry.locator('[data-ose="session-join"]').click();
       } catch {
         const note = ((await page.locator("#menu-note").textContent().catch(() => "")) ?? "").trim();
         return failed(`no session to join after Play${note ? `: ${note}` : ""}`);
@@ -367,7 +375,9 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
       try {
         await node.first().waitFor({ timeout: 3000 });
       } catch {
-        return failed("clicking add-node produced no maneuver node");
+        const why = ((await page.locator("#node-reason").textContent().catch(() => "")) ?? "").trim();
+        const n = await node.count();
+        return failed(`clicking add-node produced no maneuver node (${n} hidden markers${why ? `; ${why}` : ""})`);
       }
       const ut = await node.first().getAttribute("data-ose-ut");
       if (!ut || !Number.isFinite(Number(ut))) return failed(`node has no burn time (data-ose-ut=${ut})`);
@@ -593,6 +603,288 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
       const title = ((await page.locator('[data-ose="rd-info"] h3').first().textContent()) ?? "").trim();
       if (!title) return failed("clicking a tech node showed no info");
       return passed(`${n} tech nodes; selected ${JSON.stringify(title)}`);
+    }),
+  );
+
+  // 15. Tracking Station: back to the KSC, open the station, pick a vessel and read its orbit card.
+  results.push(
+    await timed("tracking_station", async () => {
+      if (!pageUp) return notLoaded;
+      const open = page.locator('[data-ose="ksc-tracking"]');
+      if ((await open.count()) === 0 || (await page.locator('[data-ose="tracking"]').count()) === 0) {
+        return blocked('Tracking Station with the vessel list ([data-ose="tracking"]); Phase 8');
+      }
+      const back = page.locator('[data-ose="rnd-back"]');
+      if (await back.first().isVisible()) await back.first().click();
+      await open.first().click();
+      const rows = page.locator('[data-ose="ts-vessel"]');
+      try {
+        await rows.first().waitFor({ timeout: 5_000 });
+      } catch {
+        return failed("the Tracking Station listed no vessels");
+      }
+      const n = await rows.count();
+      await rows.first().click();
+      const card = page.locator('[data-ose="ts-info"] h3');
+      try {
+        await card.first().waitFor({ timeout: 3_000 });
+      } catch {
+        return failed("selecting a vessel showed no orbit card");
+      }
+      const name = ((await card.first().textContent()) ?? "").trim();
+      const focus = page.locator('[data-ose="ts-focus"]');
+      if ((await focus.count()) === 0) return failed("the vessel card has no Focus button");
+      await focus.first().click();
+      return passed(`${n} vessels tracked; selected ${JSON.stringify(name)}`);
+    }),
+  );
+
+  // 15b. Mission Control: open it from the KSC, pick an offered mission and accept it (protocol 18).
+  results.push(
+    await timed("missions", async () => {
+      if (!pageUp) return notLoaded;
+      if (await page.locator('[data-ose="ts-back"]').first().isVisible()) await page.locator('[data-ose="ts-back"]').first().click();
+      const open = page.locator('[data-ose="ksc-mission"]');
+      if ((await open.count()) === 0 || !(await open.first().isVisible())) return skipped("not on the KSC screen");
+      await open.first().click();
+      const list = page.locator('[data-ose="mc-mission"]');
+      try {
+        await list.first().waitFor({ timeout: 5_000 });
+      } catch {
+        return failed("Mission Control listed no missions");
+      }
+      let offered = page.locator('[data-ose="mc-mission"].offered');
+      if ((await offered.count()) === 0) {
+        await page.locator('[data-ose="mc-tab-secondary"]').first().click();
+        offered = page.locator('[data-ose="mc-mission"].offered');
+      }
+      if ((await offered.count()) === 0) {
+        await page.locator('[data-ose="mc-back"]').first().click();
+        return passed(`${await list.count()} missions listed, none offered to accept`);
+      }
+      const name = ((await offered.first().locator(".name").textContent()) ?? "").trim();
+      await offered.first().click();
+      const accept = page.locator('[data-ose="mc-accept"]');
+      try {
+        await accept.first().waitFor({ timeout: 3_000 });
+      } catch {
+        return failed(`the offered mission ${JSON.stringify(name)} has no Accept button`);
+      }
+      await accept.first().click();
+      const note = page.locator('[data-ose="mc-note"]');
+      try {
+        await note.filter({ hasText: /accepted|refused|not|already/i }).first().waitFor({ timeout: 5_000 });
+      } catch {
+        return failed(`no answer after accepting ${JSON.stringify(name)}`);
+      }
+      const text = ((await note.first().textContent()) ?? "").trim();
+      await page.locator('[data-ose="mc-back"]').first().click();
+      if (text !== "Mission accepted") return failed(`accepting ${JSON.stringify(name)}: ${text}`);
+      return passed(`accepted ${JSON.stringify(name)}`);
+    }),
+  );
+
+  // 16. Campaigns: exit to the main menu, find the campaign on the list and resume it, exit again and start a
+  // new Sandbox campaign (protocol 22: several campaigns per server, LeaveSession).
+  results.push(
+    await timed("campaign_cycle", async () => {
+      if (!pageUp) return notLoaded;
+      const exit = page.locator('[data-ose="ksc-sessions"]');
+      if ((await exit.count()) === 0) return blocked("Exit to Main Menu on the KSC screen; Phase 8");
+      if (!(await page.locator('[data-ose="ksc"]').first().isVisible())) {
+        if (!(await page.locator('[data-ose="menu"]').first().isVisible())) await page.keyboard.press("Escape");
+        if (await page.locator('[data-ose="to-ksc"]').first().isVisible()) await page.locator('[data-ose="to-ksc"]').first().click();
+        if (await page.locator('[data-ose="ts-back"]').first().isVisible()) await page.locator('[data-ose="ts-back"]').first().click();
+      }
+      const name = ((await page.locator('[data-ose="campaign"]').textContent()) ?? "").split(" (")[0].trim();
+      await exit.first().click();
+      const rows = page.locator('[data-ose="session"]').filter({ hasText: name || "campaign" });
+      try {
+        await rows.first().waitFor({ timeout: 5_000 });
+      } catch {
+        return failed(`after exiting, ${JSON.stringify(name)} is not on the campaign list`);
+      }
+      await rows.first().locator('[data-ose="session-join"]').click();
+      try {
+        await page.locator('[data-ose="ksc"]').first().waitFor({ state: "visible", timeout: 10_000 });
+      } catch {
+        return failed(`resuming ${JSON.stringify(name)} did not reach the KSC (${(await page.locator("#menu-note").textContent()) ?? ""})`);
+      }
+      await exit.first().click();
+      if (!(await page.locator("#create-name").isVisible())) await page.locator("#create-details > summary").click();
+      const presets = await page.locator("#create-preset option").count();
+      if (presets === 0) return failed("the new campaign form has no difficulty presets");
+      await page.selectOption("#create-mode", "Sandbox");
+      await page.fill("#create-name", "e2e sandbox");
+      await page.locator('[data-ose="create"]').click();
+      try {
+        await page.locator('[data-ose="ksc"]').first().waitFor({ state: "visible", timeout: 10_000 });
+      } catch {
+        return failed(`starting a second campaign did not reach the KSC (${(await page.locator("#menu-note").textContent()) ?? ""})`);
+      }
+      const now = ((await page.locator('[data-ose="campaign"]').textContent()) ?? "").trim();
+      if (!now.startsWith("e2e sandbox")) return failed(`the KSC shows ${JSON.stringify(now)}, not the new campaign`);
+      return passed(`exited ${JSON.stringify(name)}, resumed it, then started "e2e sandbox" (${presets} difficulty presets)`);
+    }),
+  );
+
+  // 17. A rocket built in the VAB (Mk1 pod, FL-T400 tank, LV-T45 engine): Save and launch to the pad, then Z and
+  // Space as a player presses them, and it lifts off.
+  results.push(
+    await timed("vab_rocket", async () => {
+      if (!pageUp) return notLoaded;
+      const vabButton = page.locator('[data-ose="ksc-vab"]');
+      if (!(await vabButton.first().isVisible())) return skipped("not on the KSC screen");
+      await vabButton.first().click();
+      await page.locator('[data-ose="vab"]').first().waitFor({ state: "visible", timeout: 5000 });
+      await page.locator('[data-ose="vab-clear"]').first().click();
+      const picked: string[] = [];
+      for (const q of ["Tin Can", "FL-T400", "LV-T45"]) {
+        await page.fill('[data-ose="vab-search"]', q);
+        const part = page.locator('[data-ose="vab-part"]').first();
+        try {
+          await part.waitFor({ timeout: 3000 });
+        } catch {
+          return failed(`no part found for ${JSON.stringify(q)}`);
+        }
+        picked.push(((await part.getAttribute("data-ose-part")) ?? "?").trim());
+        await part.click();
+      }
+      await page.fill('[data-ose="vab-search"]', "");
+      await page.fill('[data-ose="vab-name"]', "e2e rocket");
+      await page.locator('[data-ose="vab-launch"]').first().click();
+      const hud = page.locator('[data-ose="flight"]');
+      try {
+        await page.locator('[data-ose="flight"].open').first().waitFor({ timeout: 10_000 });
+      } catch {
+        const why = `${(await page.locator('[data-ose="vab-report"]').textContent()) ?? ""} ${(await page.locator("#menu-note").textContent()) ?? ""}`;
+        return failed(`Save and launch did not open the flight view on the pad: ${why.trim()}`);
+      }
+      const altOf = async () => Number((await hud.first().getAttribute("data-ose-altitude")) ?? "NaN");
+      const t0 = Date.now();
+      while (!Number.isFinite(await altOf()) && Date.now() - t0 < 5_000) await sleep(200);
+      const before = await altOf();
+      await page.keyboard.press("z");
+      await sleep(300);
+      await page.keyboard.press("Space");
+      let after = before;
+      let situation = "";
+      const t1 = Date.now();
+      while (Date.now() - t1 < 20_000) {
+        await sleep(500);
+        after = await altOf();
+        situation = (await hud.first().getAttribute("data-ose-situation")) ?? "";
+        if (after > before + 20 && situation === "Flying") break;
+      }
+      if (!(after > before + 20 && situation === "Flying")) {
+        return failed(`${picked.join(" + ")} did not lift off after Z and Space (${before.toFixed(0)} m -> ${after.toFixed(0)} m, ${situation}; ${(await page.locator("#fh-twr").textContent()) ?? ""})`);
+      }
+      return passed(`${picked.join(" + ")}: ${before.toFixed(0)} m -> ${after.toFixed(0)} m, ${situation}`);
+    }),
+  );
+
+  // 18. A Kerbal on EVA (protocol 15): back at the KSC, a Mk1 pod with a parachute on the pad, EVA, plant the
+  // flag, board again. Then the server's own campaign is made live again for the next run.
+  results.push(
+    await timed("eva", async () => {
+      if (!pageUp) return notLoaded;
+      const restore = async () => {
+        if (!(await page.locator('[data-ose="menu"]').first().isVisible())) await page.keyboard.press("Escape");
+        if (await page.locator('[data-ose="to-sessions"]').first().isVisible()) await page.locator('[data-ose="to-sessions"]').first().click();
+        else if (await page.locator('[data-ose="ksc-sessions"]').first().isVisible()) await page.locator('[data-ose="ksc-sessions"]').first().click();
+        const shared = page.locator('[data-ose="session"]', { hasText: "Shared campaign" });
+        try {
+          await shared.first().waitFor({ timeout: 5_000 });
+          await shared.first().locator('[data-ose="session-join"]').click();
+        } catch {
+          /* no shared campaign on this server */
+        }
+        await sleep(1500);
+      };
+      if (!(await page.locator('[data-ose="menu"]').first().isVisible())) await page.keyboard.press("Escape");
+      const toKsc = page.locator('[data-ose="to-ksc"]');
+      if (await toKsc.first().isVisible()) await toKsc.first().click();
+      if (!(await page.locator('[data-ose="ksc-vab"]').first().isVisible())) {
+        await restore();
+        return skipped("not on the KSC screen");
+      }
+      await page.locator('[data-ose="ksc-vab"]').first().click();
+      await page.locator('[data-ose="vab-clear"]').first().click();
+      for (const q of ["Tin Can", "Mk16-XL"]) {
+        await page.fill('[data-ose="vab-search"]', q);
+        await page.locator('[data-ose="vab-part"]').first().click();
+      }
+      await page.fill('[data-ose="vab-search"]', "");
+      await page.fill('[data-ose="vab-name"]', "e2e capsule");
+      await page.locator('[data-ose="vab-launch"]').first().click();
+      const hud = page.locator('[data-ose="flight"]');
+      try {
+        await page.locator('[data-ose="flight"].open').first().waitFor({ timeout: 10_000 });
+      } catch {
+        await restore();
+        return failed("the capsule did not roll out to the pad");
+      }
+      const craftVessel = await hud.first().getAttribute("data-ose-vessel");
+      const eva = page.locator('[data-ose="flight-eva"]');
+      try {
+        await eva.first().waitFor({ state: "visible", timeout: 8_000 });
+      } catch {
+        await restore();
+        return failed("no EVA button for a crewed pod on the pad");
+      }
+      await eva.first().click();
+      const kerbalVessel = async () => (await hud.first().getAttribute("data-ose-vessel")) ?? "";
+      const t0 = Date.now();
+      while ((await kerbalVessel()) === craftVessel && Date.now() - t0 < 8_000) await sleep(200);
+      if ((await kerbalVessel()) === craftVessel) {
+        const why = (await page.locator("#fh-note").textContent()) ?? "";
+        await restore();
+        return failed(`EVA did not hand the view to a Kerbal (${why})`);
+      }
+      // Walk: hold W and the Kerbal moves along the ground (data-ose-latlon, degrees; Kerbin's radius turns
+      // them into metres).
+      const latlon = async () => ((await hud.first().getAttribute("data-ose-latlon")) ?? "0,0").split(",").map(Number);
+      await sleep(1000);
+      const [la0, lo0] = await latlon();
+      await page.keyboard.down("KeyW");
+      await sleep(1200);
+      await page.keyboard.up("KeyW");
+      await sleep(500);
+      const [la1, lo1] = await latlon();
+      // Back up the same way (S), so the capsule stays within boarding reach (6 m).
+      await page.keyboard.down("KeyS");
+      await sleep(1200);
+      await page.keyboard.up("KeyS");
+      const deg = Math.hypot(la1 - la0, (lo1 - lo0) * Math.cos((la0 * Math.PI) / 180));
+      const walked = (deg * Math.PI * 600_000) / 180;
+      if (!(walked > 0.5)) {
+        await restore();
+        return failed(`holding W did not walk the Kerbal (moved ${walked.toFixed(2)} m)`);
+      }
+      await sleep(1500);
+      const flag = page.locator('[data-ose="flight-flag"]');
+      try {
+        await flag.first().waitFor({ state: "visible", timeout: 8_000 });
+      } catch {
+        await restore();
+        return failed("no Plant flag button for a Kerbal standing on the pad");
+      }
+      await flag.first().click();
+      try {
+        await page.locator("#fh-note").filter({ hasText: "flag planted" }).waitFor({ state: "attached", timeout: 5_000 });
+      } catch {
+        const why = (await page.locator("#fh-note").textContent()) ?? "";
+        await restore();
+        return failed(`planting the flag: ${why}`);
+      }
+      await page.locator('[data-ose="flight-board"]').first().click();
+      const t1 = Date.now();
+      while ((await kerbalVessel()) !== craftVessel && Date.now() - t1 < 8_000) await sleep(200);
+      const boarded = (await kerbalVessel()) === craftVessel;
+      const why = (await page.locator("#fh-note").textContent()) ?? "";
+      await restore();
+      if (!boarded) return failed(`boarding the capsule again: ${why}`);
+      return passed(`EVA, walked ${walked.toFixed(1)} m, flag planted, boarded the capsule again`);
     }),
   );
 

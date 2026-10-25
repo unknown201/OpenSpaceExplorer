@@ -62,6 +62,9 @@ animation paths relative to the controlled Animator. An unbound FBX dependency c
 paths; it must not overwrite the live prefab's animation targets. The regression suite covers this case.
 Deployment clip selection uses the AnimatorController's semantic state, and controller ownership comes
 from part modules. An engine's OPEN state is not automatically driven by the solar or gear controls.
+Character pieces exported with a reference skeleton keep their baked-pose path so the suit, head and
+helmet remain aligned. Part skins use raw vertices with their weights; baked character pieces are not
+skinned a second time. Prefab-root filtering and engine fairing/plume exclusions apply to these paths.
 
 `render.rs` retains node indices instead of discarding them during flattening. Animated node matrices
 drive rigid meshes and CPU skinning drives skinned meshes through the same production material path.
@@ -76,7 +79,7 @@ state; the current protocol does not carry the original command timestamp or the
 so joining during deployment cannot reconstruct the exact intermediate pose. Other deployment modules
 (bays, ladders, antennae, science equipment, engine modes) are imported but have no new flight commands.
 
-Protocol **26** adds the attached panels' individual indices/states to FlightReadout, alongside the existing
+Protocol **28** adds the attached panels' individual indices/states to FlightReadout, alongside the existing
 per-gear states. Update server and client together. Integration testing also found a pre-existing import
 bug: generic Data_Deployable settings marked legs and other deployables as solar panels. The importer now
 only preserves solar flags on solar-producing parts. Simulation/snapshot checks also guard older catalogs,
@@ -106,7 +109,7 @@ Verification includes eight native animation tests (sampling, layering/constrain
 bind transforms, normals, reversal, accessor layouts and corrupt inputs), three synthetic Python exporter
 tests, and a real WebSocket integration test with two identical solar panels plus a landing leg.
 The latter verifies indices, independent module state, extension/retraction and protocol decoding.
-All ten server integration tests, workspace library tests, native/wasm clippy and the WASM build pass.
+All twelve server integration tests, workspace library tests, native/wasm clippy and the WASM build pass.
 An attempted full workspace run timed
 out in the Mun bot's sandbox-blocked local-server health check; it is not recorded as a full-suite pass.
 

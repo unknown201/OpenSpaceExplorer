@@ -63,6 +63,15 @@ impl Held {
     pub fn wheel_steer(&self) -> f64 {
         self.axis(&["KeyA"], &["KeyD"])
     }
+    /// RCS translation (the original's TranslateX J/L, fore/aft H/N, up/down I/K): right, fore and top in
+    /// the vessel's frame, as protocol 27's `Translate` takes them.
+    pub fn translate(&self) -> (f64, f64, f64) {
+        (
+            self.axis(&["KeyJ"], &["KeyL"]),
+            self.axis(&["KeyN"], &["KeyH"]),
+            self.axis(&["KeyK"], &["KeyI"]),
+        )
+    }
     /// WheelBrakes is held, not toggled.
     pub fn brakes(&self) -> bool {
         self.is("KeyB")
@@ -114,27 +123,6 @@ pub fn turn(pitch_deg: f64, heading_deg: f64, dpitch: f64, dyaw: f64) -> (f64, f
     };
     (pitch, heading.rem_euclid(360.0))
 }
-
-/// One `?` overlay line per binding the client honours, in the original's words (Settings > Input lists them).
-pub const FLIGHT_KEYS: &[(&str, &str)] = &[
-    ("W / S", "pitch down / up (held)"),
-    ("A / D", "yaw left / right (held)"),
-    ("Caps Lock", "precision controls"),
-    ("Shift / Ctrl", "throttle up / down (held)"),
-    ("Z / X", "full throttle / cut"),
-    ("Space", "stage"),
-    ("T", "SAS: hold the current direction"),
-    ("G", "landing gear"),
-    ("B", "brakes (held)"),
-    ("W / S, A / D landed", "drive and steer on wheels"),
-    ("M", "map view"),
-    ("Home", "reset the camera"),
-    ("Right mouse drag", "look around"),
-    (". / , / /", "time warp up / down / stop"),
-    ("F2", "hide the interface"),
-    ("F4", "vessel labels"),
-    ("Esc", "pause menu"),
-];
 
 #[cfg(test)]
 mod tests {

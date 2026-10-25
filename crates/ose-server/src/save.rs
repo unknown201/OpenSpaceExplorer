@@ -80,6 +80,9 @@ pub struct Campaign {
     /// The agency's science, tech unlocks and missions.
     #[serde(default)]
     pub science: crate::science::ScienceProgress,
+    /// The campaign's quicksave (F5).
+    #[serde(default)]
+    pub quicksave: Option<Box<SaveFile>>,
 }
 
 fn shared_id() -> String {
@@ -101,6 +104,7 @@ impl Default for Campaign {
             difficulty: Vec::new(),
             last_played_unix: 0,
             science: Default::default(),
+            quicksave: None,
         }
     }
 }

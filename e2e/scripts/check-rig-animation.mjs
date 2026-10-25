@@ -14,7 +14,8 @@ try {
   page.on('pageerror',e=>errors.push(e.message));
   page.on('console',m=>{if(m.type()==='error') errors.push(m.text());});
   await page.goto(process.env.OSE_BASE_URL??'http://127.0.0.1:7796');
-  await page.evaluate(async()=>{window.rigFixture=await import('/ose-client.js');await window.rigFixture.fx_fixture_setup();});
+  await page.waitForFunction(()=>window.wasmBindings?.rig_fixture_draw);
+  await page.evaluate(async()=>{window.rigFixture=window.wasmBindings;await window.rigFixture.fx_fixture_setup();});
   for(const part of ['solararray_2v_accordion','landinggear_1v','landingleg_0v']) {
     await page.waitForFunction(part=>window.rigFixture.rig_fixture_draw(part,0),part,{timeout:30000});
     // Wait for the asynchronously fetched materials before comparing deterministic poses.

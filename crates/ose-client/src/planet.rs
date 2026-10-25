@@ -6,8 +6,9 @@
 //! Frame: the flight view's body model frame (metres, camera-relative for geometry). Quads are kept per body and
 //! built a few per frame, nearest first; until a quad's children exist the quad itself is drawn.
 
+use crate::ocean_fft;
 use crate::planet_lod::{self, QuadKey, TerrainVertex};
-use crate::planet_scatter::{Exclusion, Grass, Instance, ScatterFile};
+use crate::planet_scatter::{Exclusion, Far, Grass, Instance, ScatterFile};
 use crate::render::{fetch_bitmap, fetch_bytes, DrawItem, ExtraPass, Renderer};
 use glam::{DMat4, DVec3};
 use ose_data::terrain::{TerrainIndex, TerrainMap, TerrainPack};
@@ -55,6 +56,8 @@ struct FrameU {
     occluders: [[f32; 4]; 4],
     /// x: the star's angular radius (rad), y: number of occluders
     eclipse: [f32; 4],
+    /// FFT waves: x 1 when the wave texture is live, y/z the long and short patch sizes (m), w: chop
+    waves: [f32; 4],
 }
 
 #[repr(C)]
@@ -84,6 +87,10 @@ struct SurfaceU {
     ambient_night: [f32; 4],
     /// Shoreline foam: max depth (m), tiling (m), has foam texture.
     foam: [f32; 4],
+    /// Caustics on the sea floor: strength, max visible depth (m), tiling (m), animation speed.
+    caustics: [f32; 4],
+    /// Cloud layer top (m), wind speed (m/s), 0, 0.
+    clouds2: [f32; 4],
 }
 
 fn flag_f(x: bool) -> f32 {
@@ -120,6 +127,7 @@ enum Tex {
     Clouds,
     Foam,
     Grass,
+    Impostor,
 }
 
 enum Loaded {
@@ -159,6 +167,10 @@ struct Body {
     grass: Option<(wgpu::Buffer, u32)>,
     grass_at: Option<DVec3>,
     grass_bind: Option<wgpu::BindGroup>,
+    /// Far props as impostors (instance buffer, count), placed around `far_at`.
+    far: Option<(wgpu::Buffer, u32)>,
+    far_at: Option<DVec3>,
+    far_bind: Option<wgpu::BindGroup>,
     min_h: f64,
     max_h: f64,
     quads: HashMap<QuadKey, GpuQuad>,
@@ -181,7 +193,11 @@ pub struct PlanetRenderer {
     terrain_pipeline: wgpu::RenderPipeline,
     ocean_pipeline: wgpu::RenderPipeline,
     cloud_pipeline: wgpu::RenderPipeline,
+    vcloud_pipeline: wgpu::RenderPipeline,
     grass_pipeline: wgpu::RenderPipeline,
+    far_pipeline: wgpu::RenderPipeline,
+    far_chunk_buf: wgpu::Buffer,
+    far_chunk_bind: wgpu::BindGroup,
     grass_layout: wgpu::BindGroupLayout,
     /// Grass placement origin minus camera (a chunk uniform of its own).
     grass_chunk_buf: wgpu::Buffer,
@@ -201,6 +217,10 @@ pub struct PlanetRenderer {
     mip: Mipmapper,
     defaults: HashMap<Tex, wgpu::TextureView>,
     default_luts: [wgpu::TextureView; 3],
+    /// FFT ocean: the packed wave texture (ocean_fft.rs) and the body whose spectrum it runs.
+    waves_tex: wgpu::Texture,
+    waves_view: wgpu::TextureView,
+    ocean: Option<(String, ocean_fft::OceanFft)>,
     terrain: SharedTerrain,
     terrain_requested: bool,
     bodies: HashMap<String, Body>,
@@ -227,7 +247,7 @@ impl PlanetRenderer {
         });
         let tex_entry = |binding, dim| wgpu::BindGroupLayoutEntry {
             binding,
-            visibility: wgpu::ShaderStages::FRAGMENT,
+            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
             ty: wgpu::BindingType::Texture {
                 sample_type: wgpu::TextureSampleType::Float { filterable: true },
                 view_dimension: dim,
@@ -237,7 +257,7 @@ impl PlanetRenderer {
         };
         let samp_entry = |binding| wgpu::BindGroupLayoutEntry {
             binding,
-            visibility: wgpu::ShaderStages::FRAGMENT,
+            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
             ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
             count: None,
         };
@@ -260,6 +280,7 @@ impl PlanetRenderer {
                 tex_entry(2, D::D3),
                 tex_entry(3, D::D2),
                 samp_entry(4),
+                tex_entry(5, D::D2Array),
             ],
         });
         let chunk_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -329,13 +350,13 @@ impl PlanetRenderer {
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &vertex_attrs,
         })];
-        let quad_pipeline = |label, fs, blend: bool, write: bool, cull| {
+        let quad_pipeline = |label, vs, fs, blend: bool, write: bool, cull| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&quad_layout),
                 vertex: wgpu::VertexState {
                     module: &shader,
-                    entry_point: Some("vs_quad"),
+                    entry_point: Some(vs),
                     compilation_options: Default::default(),
                     buffers: &vbl,
                 },
@@ -363,14 +384,44 @@ impl PlanetRenderer {
         };
         let terrain_pipeline = quad_pipeline(
             "planet terrain",
+            "vs_quad",
             "fs_terrain",
             false,
             true,
             Some(wgpu::Face::Back),
         );
         // no culling: the sea is seen from below when the camera is under water
-        let ocean_pipeline = quad_pipeline("planet ocean", "fs_ocean", true, true, None);
-        let cloud_pipeline = quad_pipeline("planet clouds", "fs_clouds", true, false, None);
+        let ocean_pipeline =
+            quad_pipeline("planet ocean", "vs_ocean", "fs_ocean", true, true, None);
+        let cloud_pipeline =
+            quad_pipeline("planet clouds", "vs_quad", "fs_clouds", true, false, None);
+        // Volumetric clouds: a full-screen ray march through the cloud layer, writing the depth of where it
+        // enters the cloud so nearer craft and terrain stay in front; premultiplied colour.
+        let vcloud_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("planet volume clouds"),
+            layout: Some(&quad_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_sky"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_vclouds"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(depth(false, wgpu::CompareFunction::Greater)),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
         let grass_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("planet grass"),
             entries: &[tex_entry(0, D::D2Array), samp_entry(1)],
@@ -438,6 +489,58 @@ impl PlanetRenderer {
             cache: None,
         });
         let (grass_chunk_buf, grass_chunk_bind) = Self::make_chunks(&device, &chunk_layout, 1);
+        let far_attrs = [
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x3,
+                offset: 0,
+                shader_location: 0,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x4,
+                offset: 12,
+                shader_location: 1,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x3,
+                offset: 28,
+                shader_location: 2,
+            },
+        ];
+        let far_vbl = [Some(wgpu::VertexBufferLayout {
+            array_stride: 40,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &far_attrs,
+        })];
+        let far_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("planet impostors"),
+            layout: Some(&grass_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_far"),
+                compilation_options: Default::default(),
+                buffers: &far_vbl,
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_far"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(depth(true, wgpu::CompareFunction::Greater)),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+        let (far_chunk_buf, far_chunk_bind) = Self::make_chunks(&device, &chunk_layout, 1);
         let sky_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("planet sky"),
             layout: Some(&sky_layout),
@@ -576,14 +679,39 @@ impl PlanetRenderer {
             })
         };
         let default_luts = [lut(1, 1, 1), lut(1, 1, 2), lut(1, 1, 1)];
+        let waves_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("ocean waves"),
+            size: wgpu::Extent3d {
+                width: ocean_fft::N as u32,
+                height: ocean_fft::N as u32,
+                depth_or_array_layers: 2,
+            },
+            mip_level_count: ocean_fft::MIPS,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let waves_view = waves_tex.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(D::D2Array),
+            ..Default::default()
+        });
         PlanetRenderer {
+            waves_tex,
+            waves_view,
+            ocean: None,
             device,
             queue,
             sky_pipeline,
             terrain_pipeline,
             ocean_pipeline,
             cloud_pipeline,
+            vcloud_pipeline,
             grass_pipeline,
+            far_pipeline,
+            far_chunk_buf,
+            far_chunk_bind,
             grass_layout,
             grass_chunk_buf,
             grass_chunk_bind,
@@ -708,6 +836,9 @@ impl PlanetRenderer {
                 grass: None,
                 grass_at: None,
                 grass_bind: None,
+                far: None,
+                far_at: None,
+                far_bind: None,
                 min_h: 0.0,
                 max_h: 0.0,
                 quads: HashMap::new(),
@@ -927,6 +1058,12 @@ impl PlanetRenderer {
                             .as_ref()
                             .map(|f| f.grass_textures().len())
                             .unwrap_or(1) as u32
+                    } else if tex == Tex::Impostor {
+                        self.bodies[id]
+                            .scatter
+                            .as_ref()
+                            .map(|f| f.impostor_textures().len())
+                            .unwrap_or(1) as u32
                     } else {
                         let key = if tex == Tex::DetailA {
                             "detail_a_count"
@@ -944,7 +1081,7 @@ impl PlanetRenderer {
                             bitmap.width(),
                             bitmap.height(),
                             count.max(1),
-                            tex == Tex::DetailA || tex == Tex::Grass,
+                            tex == Tex::DetailA || tex == Tex::Grass || tex == Tex::Impostor,
                         );
                         self.bodies
                             .get_mut(id)
@@ -986,6 +1123,19 @@ impl PlanetRenderer {
                     }
                 }
                 Loaded::Scatter(f) => {
+                    for (i, t) in f.impostor_textures().iter().enumerate() {
+                        let url = format!("assets/{t}");
+                        let inbox = inbox.clone();
+                        let i = i as u32;
+                        wasm_bindgen_futures::spawn_local(async move {
+                            match fetch_bitmap(&url).await {
+                                Ok(b) => {
+                                    inbox.borrow_mut().push(Loaded::Layer(Tex::Impostor, i, b))
+                                }
+                                Err(e) => log(&format!("planet {url}: {e}")),
+                            }
+                        });
+                    }
                     for (i, t) in f.grass_textures().iter().enumerate() {
                         let url = format!("assets/{t}");
                         let inbox = inbox.clone();
@@ -1016,6 +1166,13 @@ impl PlanetRenderer {
         let terrain = self.terrain.borrow();
         let b = self.bodies.get_mut(id).unwrap();
         if b.map.is_some() || b.no_terrain || !b.info_done || !b.pack_done {
+            return;
+        }
+        // A gas giant (the atmosphere model's IsGasGiant: Jool) has no ground to shape: the sphere under its
+        // cloud deck, without the height map's bumps or any scatter.
+        if gas_giant(b) {
+            b.no_terrain = true;
+            b.dirty = true;
             return;
         }
         if let Some(pack) = b.pack.take() {
@@ -1111,6 +1268,10 @@ impl PlanetRenderer {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: wgpu::BindingResource::Sampler(&self.lut_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&self.waves_view),
                 },
             ],
         });
@@ -1227,10 +1388,12 @@ impl PlanetRenderer {
             self.bodies.get_mut(&id).unwrap().quads.insert(key, q);
         }
         // The cloud shell, once its texture is in.
+        // None on a gas giant: its layer starts at 0 m, on the sphere, and the banded albedo is the deck.
         let cloud_base = self.bodies[&id].info.as_ref().and_then(|v| {
             v.get("clouds")
                 .map(|c| c["height_range_m"][0].as_f64().unwrap_or(7000.0))
         });
+        let cloud_base = cloud_base.filter(|_| !gas_giant(&self.bodies[&id]));
         if let Some(h) = cloud_base {
             let b = &self.bodies[&id];
             if b.clouds.is_empty() && b.tex.contains_key(&Tex::Clouds) {
@@ -1352,6 +1515,17 @@ impl PlanetRenderer {
             Some(e) => (e * 0.1).max((auto * 0.75).min(6.0)),
             None => auto.clamp(4.0, 20.0),
         };
+        // FFT waves while the camera is low over an ocean world with a spectrum
+        let waves_live = has_ocean
+            && view.cam.length() - radius < 60_000.0
+            && update_waves(
+                &mut self.ocean,
+                &self.queue,
+                &self.waves_tex,
+                &id,
+                b.info.as_ref(),
+                view.time_s,
+            );
         let cam_km = view.cam / 1000.0;
         let sun = view.sun.normalize_or_zero();
         let fu = FrameU {
@@ -1391,7 +1565,16 @@ impl PlanetRenderer {
             water: [
                 (view.cam.length() - radius) as f32,
                 if has_ocean { 1.0 } else { 0.0 },
-                0.0,
+                // z: 1 draws the clouds as a volume (camera below 40 km over a cloudy body)
+                // (not on a gas giant, whose cloud deck is its surface)
+                if b.tex.contains_key(&Tex::Clouds)
+                    && !gas_giant(b)
+                    && view.cam.length() - radius < 40_000.0
+                {
+                    1.0
+                } else {
+                    0.0
+                },
                 0.0,
             ],
             occluders: {
@@ -1407,6 +1590,12 @@ impl PlanetRenderer {
                 view.occluders.len().min(4) as f32,
                 0.0,
                 0.0,
+            ],
+            waves: [
+                f32::from(u8::from(waves_live)),
+                ocean_fft::PATCH_LONG as f32,
+                ocean_fft::PATCH_SHORT as f32,
+                ocean_fft::CHOP as f32,
             ],
             water_col: {
                 let s = surface_uniform(b, 0.0);
@@ -1457,12 +1646,12 @@ impl PlanetRenderer {
 
             b.placed_at = Some(view.cam);
         }
-        // Grass: re-placed around the camera when it has moved a few metres.
+        // Grass: re-placed around the camera when it has moved 8 m (it fades out 12 m inside its range).
         let gmoved = b
             .grass_at
             .map(|p| (p - view.cam).length())
             .unwrap_or(f64::INFINITY);
-        if gmoved > 3.0 {
+        if gmoved > 8.0 {
             let g = f.place_grass(
                 map,
                 view.radius_m,
@@ -1511,6 +1700,76 @@ impl PlanetRenderer {
             };
             self.queue
                 .write_buffer(&self.grass_chunk_buf, 0, bytemuck::bytes_of(&u));
+        }
+        // Far props as impostors: re-placed when the camera has moved 60 m.
+        let fmoved = b
+            .far_at
+            .map(|p| (p - view.cam).length())
+            .unwrap_or(f64::INFINITY);
+        if fmoved > 60.0 {
+            let g = f.place_far(
+                map,
+                view.radius_m,
+                [view.cam.x, view.cam.y, view.cam.z],
+                &self.exclusions,
+            );
+            b.far_at = Some(view.cam);
+            b.far = (!g.is_empty()).then(|| {
+                let floats: Vec<f32> = g
+                    .iter()
+                    .flat_map(|p: &Far| {
+                        [
+                            p.pos[0],
+                            p.pos[1],
+                            p.pos[2],
+                            p.size,
+                            p.lift,
+                            p.layer,
+                            p.frames,
+                            p.colour[0],
+                            p.colour[1],
+                            p.colour[2],
+                        ]
+                    })
+                    .collect();
+                let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("planet impostors"),
+                    size: (floats.len() * 4) as u64,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                self.queue
+                    .write_buffer(&buf, 0, bytemuck::cast_slice(&floats));
+                (buf, g.len() as u32)
+            });
+        }
+        if let Some(origin) = b.far_at {
+            let off = origin - view.cam;
+            let u = ChunkU {
+                offset: [off.x as f32, off.y as f32, off.z as f32, 0.0],
+                center: [0.0; 4],
+                tile: [0.0; 4],
+            };
+            self.queue
+                .write_buffer(&self.far_chunk_buf, 0, bytemuck::bytes_of(&u));
+        }
+        if b.far_bind.is_none() {
+            if let Some(view_tex) = b.tex.get(&Tex::Impostor) {
+                b.far_bind = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("planet impostors"),
+                    layout: &self.grass_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(view_tex),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&self.wrap_sampler),
+                        },
+                    ],
+                }));
+            }
         }
         if b.grass_bind.is_none() {
             if let Some(view_tex) = b.tex.get(&Tex::Grass) {
@@ -1566,6 +1825,7 @@ impl PlanetRenderer {
             for b in self.bodies.values_mut() {
                 b.placed_at = None;
                 b.grass_at = None;
+                b.far_at = None;
                 // terrain under the campus is lowered: rebuild the quads
                 b.quads.clear();
             }
@@ -1601,6 +1861,65 @@ pub fn eclipse_visible(p: DVec3, sun: DVec3, occluders: &[(DVec3, f64)], sun_rad
         vis *= 1.0 - deepest * (1.0 - t);
     }
     vis
+}
+
+/// Run the body's ocean spectrum to time `t` and upload the packed waves with their mips; false when the body
+/// has none. Gravity is Kerbin's for every sea (the spectrum's frequencies are tuned for it).
+fn update_waves(
+    ocean: &mut Option<(String, ocean_fft::OceanFft)>,
+    queue: &wgpu::Queue,
+    tex: &wgpu::Texture,
+    id: &str,
+    info: Option<&serde_json::Value>,
+    t: f64,
+) -> bool {
+    if ocean.as_ref().map(|o| o.0.as_str()) != Some(id) {
+        let spec = info
+            .and_then(|v| v.get("ocean"))
+            .and_then(|o| o.get("spectrum"))
+            .and_then(|s| serde_json::from_value::<ocean_fft::Spectrum>(s.clone()).ok());
+        let Some(spec) = spec else {
+            *ocean = None;
+            return false;
+        };
+        *ocean = Some((id.to_string(), ocean_fft::OceanFft::new(&spec, 9.81)));
+    }
+    let Some((_, fft)) = ocean.as_mut() else {
+        return false;
+    };
+    fft.update(t);
+    for (level, texels) in fft.texels().iter().enumerate() {
+        let n = (ocean_fft::N >> level) as u32;
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: tex,
+                mip_level: level as u32,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            bytemuck::cast_slice(texels),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(n * 8),
+                rows_per_image: Some(n),
+            },
+            wgpu::Extent3d {
+                width: n,
+                height: n,
+                depth_or_array_layers: 2,
+            },
+        );
+    }
+    true
+}
+
+/// The atmosphere model's IsGasGiant (Jool): no ground under the cloud deck.
+fn gas_giant(b: &Body) -> bool {
+    b.info
+        .as_ref()
+        .and_then(|v| v["atmosphere"]["IsGasGiant"].as_i64())
+        .unwrap_or(0)
+        == 1
 }
 
 fn surface_uniform(b: &Body, debug: f32) -> SurfaceU {
@@ -1663,6 +1982,19 @@ fn surface_uniform(b: &Body, debug: f32) -> SurfaceU {
         flag_f(b.tex.contains_key(&Tex::Foam)),
         0.0,
     ];
+    let has_caustics =
+        o.and_then(|o| o.get("caustics")).is_some() && b.tex.contains_key(&Tex::Foam);
+    let of = |k: &str, d: f64| o.and_then(|o| o[k].as_f64()).unwrap_or(d) as f32;
+    u.caustics = [
+        if has_caustics {
+            of("CausticsStrength", 0.15)
+        } else {
+            0.0
+        },
+        of("CausticsMaxVisibleDepth", 50.0),
+        of("CausticsTilingSize", 8.0),
+        of("CausticsAnimationSpeed", 1.0),
+    ];
     u.shallow = [shallow[0], shallow[1], shallow[2], smooth];
     let c = info.and_then(|v| v.get("clouds"));
     let slices = b
@@ -1676,8 +2008,20 @@ fn surface_uniform(b: &Body, debug: f32) -> SurfaceU {
             .unwrap_or(0.0) as f32,
         c.map(|c| c["density"].as_f64().unwrap_or(1.0))
             .unwrap_or(0.0) as f32,
-        if c.is_some() { 1.0 } else { 0.0 },
+        // no shell, shadow or volume on a gas giant (see gas_giant)
+        if c.is_some() && !gas_giant(b) {
+            1.0
+        } else {
+            0.0
+        },
         slices as f32,
+    ];
+    u.clouds2 = [
+        c.and_then(|c| c["height_range_m"][1].as_f64())
+            .unwrap_or(9500.0) as f32,
+        8.0,
+        0.0,
+        0.0,
     ];
     let flag = |x: bool| if x { 1.0 } else { 0.0 };
     // The original's CelestialBodyLighting ambient colours; w: 1 when the body has no atmosphere (the ambient
@@ -1690,8 +2034,9 @@ fn surface_uniform(b: &Body, debug: f32) -> SurfaceU {
     u.ambient_day = [day[0], day[1], day[2], flag(airless)];
     u.ambient_night = [night[0], night[1], night[2], 0.0];
     u.flags = [
-        flag(slices > 0 && b.tex.contains_key(&Tex::Biome)),
-        flag(b.tex.contains_key(&Tex::Normal)),
+        // a gas giant's deck takes no ground detail or normal map
+        flag(slices > 0 && b.tex.contains_key(&Tex::Biome) && !gas_giant(b)),
+        flag(b.tex.contains_key(&Tex::Normal) && !gas_giant(b)),
         debug,
         // the original's biome height rules count from the PQS radius, below the sea by its ocean altitude
         b.map.as_ref().map(|m| -m.offset_m).unwrap_or(0.0) as f32,
@@ -1720,6 +2065,15 @@ impl ExtraPass for PlanetRenderer {
             pass.set_bind_group(1, &self.chunk_bind, &[(*slot as u64 * SLOT) as u32]);
             pass.set_vertex_buffer(0, q.terrain.slice(..));
             pass.draw_indexed(0..self.index_count, 0, 0..1);
+        }
+        if let (Some((buf, n)), Some(fb2)) = (&b.far, &b.far_bind) {
+            pass.set_pipeline(&self.far_pipeline);
+            pass.set_bind_group(0, fb, &[]);
+            pass.set_bind_group(1, &self.far_chunk_bind, &[0]);
+            pass.set_bind_group(2, sb, &[]);
+            pass.set_bind_group(3, fb2, &[]);
+            pass.set_vertex_buffer(0, buf.slice(..));
+            pass.draw(0..6, 0..*n);
         }
         if let (Some((buf, n)), Some(gb)) = (&b.grass, &b.grass_bind) {
             pass.set_pipeline(&self.grass_pipeline);
@@ -1750,6 +2104,13 @@ impl ExtraPass for PlanetRenderer {
             pass.set_bind_group(1, &self.chunk_bind, &[(*slot as u64 * SLOT) as u32]);
             pass.set_vertex_buffer(0, ocean.slice(..));
             pass.draw_indexed(0..self.index_count, 0, 0..1);
+        }
+        if !self.cloud_draws.is_empty() {
+            pass.set_pipeline(&self.vcloud_pipeline);
+            pass.set_bind_group(0, fb, &[]);
+            pass.set_bind_group(1, &self.chunk_bind, &[0]);
+            pass.set_bind_group(2, sb, &[]);
+            pass.draw(0..3, 0..1);
         }
         pass.set_pipeline(&self.cloud_pipeline);
         pass.set_bind_group(0, fb, &[]);

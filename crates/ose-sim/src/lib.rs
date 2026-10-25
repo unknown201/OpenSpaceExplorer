@@ -26,6 +26,16 @@ use serde::{Deserialize, Serialize};
 
 pub use ose_data::{Tick, TICKS_PER_SECOND};
 
+/// An action group a player can fire (`ActionGroup` keys: U, R, Backspace, 1..0).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ActionGroup {
+    Lights,
+    Rcs,
+    Abort,
+    /// 1..10.
+    Custom(u8),
+}
+
 /// ECS resource wrapper around the shared [`Tick`].
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct UniverseTime(pub Tick);
@@ -363,6 +373,58 @@ impl Universe {
         }
     }
 
+    /// RCS translation input in craft axes (x right, y fore, z top; -1..1 each, held until changed); false
+    /// without a powered vessel.
+    pub fn set_translate(&mut self, e: Entity, t: DVec3) -> bool {
+        match self.world.get_mut::<flight::Powered>(e) {
+            Some(mut p) => {
+                p.rcs.translate = t;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Roll input for a vessel (-1..1, held until changed); false without a powered vessel.
+    pub fn set_roll(&mut self, e: Entity, input: f64) -> bool {
+        match self.world.get_mut::<flight::Powered>(e) {
+            Some(mut p) => {
+                p.roll_input = input.clamp(-1.0, 1.0);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Set (`Some`) or toggle (`None`) an action group; returns its new state, `None` without a powered
+    /// vessel. Lights and RCS are switches; abort cuts the throttle and arms the parachutes; custom groups
+    /// (1..10) are switches the craft has no actions bound to yet.
+    pub fn action_group(
+        &mut self,
+        e: Entity,
+        group: ActionGroup,
+        on: Option<bool>,
+    ) -> Option<bool> {
+        let mut p = self.world.get_mut::<flight::Powered>(e)?;
+        let g = &mut p.groups;
+        let slot = match group {
+            ActionGroup::Lights => &mut g.lights,
+            ActionGroup::Rcs => &mut g.rcs,
+            ActionGroup::Abort => &mut g.abort,
+            ActionGroup::Custom(n) => g.custom.get_mut((n as usize).checked_sub(1)?)?,
+        };
+        let state = on.unwrap_or(!*slot);
+        *slot = state;
+        let abort = group == ActionGroup::Abort && state;
+        if abort {
+            p.throttle = 0.0;
+        }
+        if abort {
+            self.arm_parachutes(e);
+        }
+        Some(state)
+    }
+
     /// Switch a vessel's resource converters (fuel cells, reactors) on or off; how many changed, `None`
     /// without a structure.
     pub fn set_converters(&mut self, e: Entity, on: bool) -> Option<usize> {
@@ -564,6 +626,7 @@ impl Universe {
                 };
             };
         let mut outcome = outcome;
+        let mut impulse = 0.0;
         if outcome.fired {
             let mut st = self.world.entity_mut(e).take::<structure::Structure>();
             if let Some(st) = &mut st {
@@ -582,6 +645,7 @@ impl Universe {
                     .or_else(|| self.world.get::<flight::Dormant>(e).map(|d| d.0.stage));
                 if let Some(stage) = stage {
                     st.activate_stage(stage);
+                    impulse = st.ejection_impulse(stage);
                 }
             }
             if let Some(st) = st {
@@ -589,11 +653,28 @@ impl Universe {
             }
         }
         let debris = if outcome.fired && outcome.dropped_t > 0.01 {
+            // the decouplers push the two sides apart (light pieces get a fifth:
+            // GLOBAL_EJECTION_FORCE_SCALE below GLOBAL_EJECTION_FORCE_SCALING_LOWMASS_LIMIT)
+            let impulse = if outcome.dropped_t < 0.5 {
+                impulse * 0.2
+            } else {
+                impulse
+            };
+            let away = if impulse > 0.0 {
+                impulse / outcome.dropped_t
+            } else {
+                0.5
+            };
+            if let Some(mut p) = self.world.get_mut::<flight::Powered>(e) {
+                if !p.landed && p.mass_t > 0.0 {
+                    p.v = p.v + facing * (impulse / p.mass_t);
+                }
+            }
             self.spawn_debris(
                 e,
                 outcome.dropped_t,
                 r - facing * 3.0,
-                v - facing * 1.5,
+                v - facing * away,
                 facing,
                 area,
             )
@@ -803,6 +884,17 @@ impl Universe {
                 .get::<flight::Powered>(e)
                 .expect("powered")
                 .clone();
+            // a maneuver hold points at the scheduled burn as it stands now
+            if matches!(p.attitude, flight::Attitude::Maneuver(_)) {
+                let burn = self.world.get::<vessels::ScheduledBurn>(e).copied();
+                let orbit = self.world.get::<bodies::OnRails>(e).map(|o| o.0);
+                if let (Some(b), Some(o)) = (burn, orbit) {
+                    let dv = vessels::burn_delta_v(&o, &b);
+                    if dv.length() > 1e-9 {
+                        p.attitude = flight::Attitude::Maneuver(dv.normalized());
+                    }
+                }
+            }
             let comm_blocked = self.commnet_blocks_control(e);
             let mut structure = self.world.entity_mut(e).take::<structure::Structure>();
             let sun = if structure.is_some() {
@@ -928,6 +1020,11 @@ impl Universe {
                     // the propellant burned comes out of the tanks through the flow graph
                     let burned = (mass_before - p.mass_t).max(0.0);
                     st.burn(&mut p, burned, step_dt);
+                    let pressure = atmo
+                        .as_ref()
+                        .map(|a| a.pressure_kpa(p.r.length() - body.radius_m) / 101.325)
+                        .unwrap_or(0.0);
+                    st.rcs_burn(&mut p, pressure, step_dt);
                     // wheels work in proportion to how fast the vessel is being turned
                     let turning = (p.angvel.length() / 0.2).clamp(0.0, 1.0);
                     st.electric(&mut p, sun, turning, step_dt);
@@ -1655,6 +1752,161 @@ mod tests {
             u.powered(v).unwrap().drive.speed_mps,
             0.0,
             "braked to a stop"
+        );
+    }
+
+    #[test]
+    fn maneuver_hold_points_at_the_burn_roll_turns_and_abort_cuts_and_arms() {
+        let (mut u, body, spec, st) = k1_on_real_kerbin();
+        let v = u.spawn_vessel_in_circular_orbit("K1", body, 100_000.0);
+        let mut p = flight::Powered::new(
+            spec,
+            DVec3::new(700_000.0, 0.0, 0.0),
+            DVec3::new(0.0, 2_246.0, 0.0),
+            false,
+        );
+        p.facing = DVec3::new(0.0, 1.0, 0.0);
+        u.set_powered(v, p);
+        u.set_structure(v, st);
+        // a pure normal burn in a minute
+        u.schedule_burn(
+            v,
+            vessels::ScheduledBurn {
+                ut: u.ut() + 60.0,
+                prograde_mps: 0.0,
+                normal_mps: 100.0,
+                radial_mps: 0.0,
+            },
+        );
+        // a whisper of throttle keeps it under power (a coast goes back on rails)
+        assert!(u.set_controls(v, 0.01, flight::Attitude::Maneuver(DVec3::ZERO)));
+        assert!(u.set_roll(v, 1.0));
+        for _ in 0..(20 * TICKS_PER_SECOND) {
+            u.step();
+        }
+        let p = u.powered(v).unwrap().clone();
+        let flight::Attitude::Maneuver(d) = p.attitude else {
+            panic!("{:?}", p.attitude)
+        };
+        let normal = p.r.cross(p.v).normalized();
+        assert!(d.dot(normal) > 0.99, "points along the burn: {d:?}");
+        assert!(p.facing.dot(normal) > 0.9, "turned to it: {:?}", p.facing);
+        assert!(p.roll_rad > 1.0, "rolled {} rad", p.roll_rad);
+        // groups
+        assert_eq!(u.action_group(v, ActionGroup::Lights, None), Some(true));
+        assert_eq!(u.action_group(v, ActionGroup::Lights, None), Some(false));
+        assert_eq!(
+            u.action_group(v, ActionGroup::Custom(10), Some(true)),
+            Some(true)
+        );
+        assert_eq!(u.action_group(v, ActionGroup::Custom(11), Some(true)), None);
+        u.set_controls(v, 1.0, flight::Attitude::OrbitPrograde);
+        assert_eq!(
+            u.action_group(v, ActionGroup::Abort, Some(true)),
+            Some(true)
+        );
+        let p = u.powered(v).unwrap();
+        assert_eq!(p.throttle, 0.0);
+        assert!(p.groups.custom[9] && p.groups.abort);
+    }
+
+    #[test]
+    fn a_decoupler_pushes_the_stage_away() {
+        let (mut u, body, _, _) = k1_on_real_kerbin();
+        let crafts: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let defs: Vec<ose_data::PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let res: Vec<ose_data::ResourceDef> =
+            serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
+        let c = crafts
+            .iter()
+            .find(|c| c.name == "Stock12_StartRocket")
+            .unwrap();
+        let report = ose_data::staging::delta_v_by_stage(c, &defs, &res);
+        let spec = flight::FlightSpec::from_report(&report, &[], &[], 1.5);
+        let v = u.spawn_vessel_in_circular_orbit("Start", body, 100_000.0);
+        let mut p = flight::Powered::new(
+            spec,
+            DVec3::new(700_000.0, 0.0, 0.0),
+            DVec3::new(0.0, 2_246.0, 0.0),
+            false,
+        );
+        p.facing = DVec3::new(0.0, 1.0, 0.0);
+        u.set_powered(v, p);
+        u.set_structure(v, structure::Structure::build(c, &defs, &res));
+        let mut debris = None;
+        for _ in 0..4 {
+            let before = u.powered(v).unwrap().v;
+            let r = u.stage(v);
+            if let Some(d) = r.debris {
+                debris = Some((d, before));
+                break;
+            }
+        }
+        let (d, before) = debris.expect("the tank and engine drop");
+        let after = u.powered(v).unwrap().v;
+        let dv_ship = (after - before).dot(DVec3::new(0.0, 1.0, 0.0));
+        let dv_debris = (u.powered(d).unwrap().v - before).dot(DVec3::new(0.0, 1.0, 0.0));
+        // a 1.25 m decoupler (ejectionForce 50): 0.5 kN s each way
+        assert!(dv_ship > 0.1 && dv_ship < 2.0, "pod pushed {dv_ship} m/s");
+        assert!(dv_debris < -0.1, "stage pushed back {dv_debris} m/s");
+    }
+
+    #[test]
+    fn rcs_translates_the_k2_on_monopropellant_only_with_the_group_on() {
+        let crafts: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let defs: Vec<ose_data::PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let res: Vec<ose_data::ResourceDef> =
+            serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
+        let c = crafts.iter().find(|c| c.name == "Kerbal K2").unwrap();
+        let report = ose_data::staging::delta_v_by_stage(c, &defs, &res);
+        let spec = flight::FlightSpec::from_report(&report, &[], &[], 1.5);
+        let run = |rcs_on: bool| -> (f64, f64) {
+            let (mut u, body, _, _) = k1_on_real_kerbin();
+            let v = u.spawn_vessel_in_circular_orbit("K2", body, 100_000.0);
+            let mut p = flight::Powered::new(
+                spec.clone(),
+                DVec3::new(700_000.0, 0.0, 0.0),
+                DVec3::new(0.0, 2_246.0, 0.0),
+                false,
+            );
+            p.facing = DVec3::new(1.0, 0.0, 0.0);
+            p.attitude = flight::Attitude::Fixed(DVec3::new(1.0, 0.0, 0.0));
+            u.set_powered(v, p);
+            u.set_structure(v, structure::Structure::build(c, &defs, &res));
+            u.action_group(v, ActionGroup::Rcs, Some(rcs_on));
+            let mono = |u: &Universe| -> f64 {
+                let st = u.structure(v).unwrap();
+                let m = st.net.resource("MonoPropellant").unwrap();
+                st.net
+                    .tanks
+                    .iter()
+                    .filter(|t| t.resource == m)
+                    .map(|t| t.stored)
+                    .sum()
+            };
+            let m0 = mono(&u);
+            // fore along the nose (radially out here) for 5 s
+            assert!(u.set_translate(v, DVec3::new(0.0, 1.0, 0.0)));
+            let r0 = u.powered(v).unwrap().r;
+            let v0 = u.powered(v).unwrap().v;
+            for _ in 0..(5 * TICKS_PER_SECOND) {
+                u.step();
+            }
+            let p = u.powered(v).unwrap();
+            // radial speed gained (gravity pulls both runs the same)
+            let gained = (p.v - v0).dot(r0.normalized());
+            (gained, m0 - mono(&u))
+        };
+        let (dv_on, used_on) = run(true);
+        let (dv_off, used_off) = run(false);
+        assert!(dv_on > dv_off + 0.2, "RCS pushed: {dv_on} vs {dv_off} m/s");
+        assert!(
+            used_on > 0.0 && used_off == 0.0,
+            "monoprop {used_on} / {used_off}"
         );
     }
 

@@ -14,8 +14,11 @@ pub struct Scene {
     pub bodies: Vec<BodyInfo>,
     orbits: Vec<Option<Orbit>>,
     pub snapshot: Vec<BodyState>,
-    /// Vessels from the last `Vessels` message, in the order sent.
+    /// Vessels from the last `Vessels` message, in the order sent, and the universal time of that message.
     pub vessels: Vec<VesselState>,
+    pub vessels_ut: f64,
+    /// Each body's spin rate (rad/s about star-space +Z), from `BodyRotation`.
+    pub spin_omega: Vec<f64>,
     /// Predicted patched-conic trajectory per vessel id, from the last `Trajectory` message.
     pub trajectories: HashMap<u64, Vec<TrajectoryPatch>>,
 }
@@ -51,6 +54,8 @@ impl Scene {
             orbits,
             snapshot: Vec::new(),
             vessels: Vec::new(),
+            vessels_ut: 0.0,
+            spin_omega: Vec::new(),
             trajectories: HashMap::new(),
         }
     }
@@ -58,6 +63,24 @@ impl Scene {
     /// Star-space position of a vessel at `ut`: its reference body plus its orbit, so it moves smoothly
     /// between `Vessels` messages. Falls back to the sent position if the reference body is unknown.
     pub fn vessel_position(&self, v: &VesselState, ut: f64) -> DVec3 {
+        let rb = v.reference_body as usize;
+        // A craft standing on the ground turns with its body: keep its offset from the body's centre and rotate
+        // it by the spin since the snapshot. Its orbit elements describe a fall through the planet, which made
+        // a craft on the pad bob up and down between snapshots.
+        let standing = v.flight.as_ref().is_some_and(|f| {
+            matches!(
+                f.situation,
+                ose_net::FlightSituation::Landed | ose_net::FlightSituation::Crashed
+            )
+        });
+        if standing && rb < self.bodies.len() {
+            let w = self.spin_omega.get(rb).copied().unwrap_or(0.0);
+            let rel = v.position_m - self.position(rb, self.vessels_ut);
+            let a = w * (ut - self.vessels_ut);
+            let (s, c) = a.sin_cos();
+            let turned = DVec3::new(rel.x * c - rel.y * s, rel.x * s + rel.y * c, rel.z);
+            return self.position(rb, ut) + turned;
+        }
         match self.bodies.get(v.reference_body as usize) {
             Some(body) => {
                 self.position(v.reference_body as usize, ut)

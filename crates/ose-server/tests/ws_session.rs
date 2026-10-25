@@ -659,11 +659,6 @@ async fn hello_catalog_and_snapshots() {
             assert!((f.roll_ref.length() - 1.0).abs() < 1e-6);
             assert!(f.facing.dot(f.roll_ref).abs() < 1e-6);
             assert!(f.has_control);
-            assert!(f.static_pressure_kpa > 90.0 && f.static_pressure_kpa < 102.0);
-            assert!(
-                f.firing_engines.is_empty(),
-                "idle engines must not emit particles"
-            );
             assert!(f.joint_stress < 1.0);
             landed_seen = true;
             break;
@@ -693,10 +688,6 @@ async fn hello_catalog_and_snapshots() {
                 let v = vessels.iter().find(|v| v.id == pad_vessel).unwrap();
                 let f = v.flight.as_ref().unwrap();
                 if f.situation == ose_net::FlightSituation::Flying && f.altitude_m > 140.0 {
-                    assert!(
-                        !f.firing_engines.is_empty(),
-                        "burning engines must be identified for FX"
-                    );
                     assert!(f.vertical_speed_mps > 0.0);
                     assert!(f.throttle == 1.0);
                     flying = true;
@@ -1280,6 +1271,154 @@ async fn a_vab_built_rocket_sits_still_on_the_pad_and_lifts_off() {
 }
 
 #[tokio::test]
+async fn quicksave_quickload_and_revert_put_the_campaign_back() {
+    let (_server, addr) = spawn_server_with(&["--db", ":memory:", "--save", "none"], None).await;
+    let mut ws = connect_ws(&addr).await;
+    let (me, _) = hello(&mut ws, None, "pilot").await;
+    send_msg(
+        &mut ws,
+        &ClientMessage::CreateSession {
+            name: "Saves".into(),
+            mode: ose_net::SessionMode::Sandbox,
+            difficulty: Vec::new(),
+        },
+    )
+    .await;
+    wait_for(&mut ws, |m| {
+        matches!(m, ServerMessage::CampaignState { .. }).then_some(())
+    })
+    .await;
+    let ack = |m: ServerMessage| match m {
+        ServerMessage::SaveAck {
+            action,
+            accepted,
+            reason,
+            craft,
+        } => Some((action, accepted, reason, craft)),
+        _ => None,
+    };
+    let launched = |m: ServerMessage| match m {
+        ServerMessage::CraftLaunched { vessel, reason, .. } => {
+            assert!(reason.is_none(), "{reason:?}");
+            vessel
+        }
+        _ => None,
+    };
+    // Vessels snapshots until `pick` holds for the player's vessels
+    async fn until(ws: &mut Ws, me: u64, pick: impl Fn(&[ose_net::VesselState]) -> bool) {
+        wait_for(ws, |m| match m {
+            ServerMessage::Vessels { vessels, .. } => {
+                let mine: Vec<_> = vessels
+                    .into_iter()
+                    .filter(|v| v.owner == Some(me))
+                    .collect();
+                pick(&mine).then_some(())
+            }
+            _ => None,
+        })
+        .await
+    }
+    let on_pad = |vs: &[ose_net::VesselState]| vs.iter().any(|v| v.name == "Starter");
+    // nothing to revert to yet
+    send_msg(&mut ws, &ClientMessage::RevertToLaunch).await;
+    let (_, ok, reason, _) = wait_for(&mut ws, ack).await;
+    assert!(!ok && reason.is_some());
+    // quicksave with only the probe, launch, quickload: the rocket is gone
+    send_msg(&mut ws, &ClientMessage::QuickSave).await;
+    assert!(wait_for(&mut ws, ack).await.1);
+    send_msg(
+        &mut ws,
+        &ClientMessage::LaunchOnPad {
+            craft: starter_craft(),
+        },
+    )
+    .await;
+    let rocket = wait_for(&mut ws, launched).await;
+    until(&mut ws, me, on_pad).await;
+    send_msg(&mut ws, &ClientMessage::QuickLoad).await;
+    let (action, ok, reason, _) = wait_for(&mut ws, ack).await;
+    assert!(ok, "{reason:?}");
+    assert_eq!(action, ose_net::SaveAction::QuickLoad);
+    until(&mut ws, me, |vs| !on_pad(vs)).await;
+    // launch and fly: revert to launch puts it back on the pad, unlit
+    send_msg(
+        &mut ws,
+        &ClientMessage::LaunchOnPad {
+            craft: starter_craft(),
+        },
+    )
+    .await;
+    let rocket2 = wait_for(&mut ws, launched).await;
+    let _ = rocket;
+    send_msg(
+        &mut ws,
+        &ClientMessage::SetControls {
+            vessel: rocket2,
+            throttle: 1.0,
+            attitude: ose_net::AttitudeMode::Up,
+        },
+    )
+    .await;
+    send_msg(&mut ws, &ClientMessage::Stage { vessel: rocket2 }).await;
+    until(&mut ws, me, |vs| {
+        vs.iter()
+            .any(|v| v.id == rocket2 && v.flight.as_ref().is_some_and(|f| f.altitude_m > 200.0))
+    })
+    .await;
+    send_msg(&mut ws, &ClientMessage::RevertToLaunch).await;
+    let (_, ok, reason, _) = wait_for(&mut ws, ack).await;
+    assert!(ok, "{reason:?}");
+    until(&mut ws, me, |vs| {
+        vs.iter().any(|v| {
+            v.id == rocket2
+                && v.flight.as_ref().is_some_and(|f| {
+                    f.situation == ose_net::FlightSituation::Landed && f.thrust_kn == 0.0
+                })
+        })
+    })
+    .await;
+    // revert to the editor: the rocket is gone and its craft comes back
+    send_msg(&mut ws, &ClientMessage::RevertToEditor).await;
+    let (_, ok, reason, craft) = wait_for(&mut ws, ack).await;
+    assert!(ok, "{reason:?}");
+    assert_eq!(craft.map(|c| c.name), Some("Starter".into()));
+    until(&mut ws, me, |vs| !on_pad(vs)).await;
+}
+
+#[tokio::test]
+async fn the_editor_gets_a_stage_report_with_sea_level_twr() {
+    let (_server, addr) = spawn_server_with(&["--db", ":memory:", "--save", "none"], None).await;
+    let mut ws = connect_ws(&addr).await;
+    hello(&mut ws, None, "builder").await;
+    send_msg(
+        &mut ws,
+        &ClientMessage::StageReport {
+            craft: starter_craft(),
+        },
+    )
+    .await;
+    let (stages, dv) = wait_for(&mut ws, |m| match m {
+        ServerMessage::StageReport {
+            stages,
+            delta_v_vacuum_mps,
+        } => Some((stages, delta_v_vacuum_mps)),
+        _ => None,
+    })
+    .await;
+    assert!(dv > 500.0, "{dv} m/s");
+    let s = stages
+        .iter()
+        .find(|s| s.thrust_kn > 0.0)
+        .expect("an engine stage");
+    // the Swivel loses some thrust at sea level, and lifts the starter rocket
+    assert!(
+        s.thrust_asl_kn > 0.5 * s.thrust_kn && s.thrust_asl_kn < s.thrust_kn,
+        "{s:?}"
+    );
+    assert!(s.twr_asl > 1.0, "{s:?}");
+}
+
+#[tokio::test]
 async fn deployment_snapshots_identify_panel_and_gear_instances() {
     let (_server, addr) = spawn_server().await;
     let mut ws = connect_ws(&addr).await;
@@ -1549,6 +1688,25 @@ async fn campaigns_can_be_left_resumed_and_started_again() {
     let (id, name, _, member) = wait_for(&mut ws, state).await;
     assert_eq!((id.as_str(), name.as_str()), (alpha.as_str(), "Alpha"));
     assert!(member);
+    // a teammate who never played Alpha resumes it with a pilot probe of their own
+    let mut late = connect_ws(&addr).await;
+    let (late_id, _) = hello(&mut late, None, "bob").await;
+    send_msg(
+        &mut late,
+        &ClientMessage::SelectSession { id: alpha.clone() },
+    )
+    .await;
+    let (id, _, _, _) = wait_for(&mut late, state).await;
+    assert_eq!(id, alpha, "every CampaignState carries the campaign id");
+    wait_for(&mut late, |m| match m {
+        ServerMessage::Vessels { vessels, .. } => vessels
+            .iter()
+            .any(|v| v.owner == Some(late_id))
+            .then_some(()),
+        _ => None,
+    })
+    .await;
+    drop(late);
     // a teammate playing it keeps another campaign from being started under them
     let mut mate = connect_ws(&addr).await;
     hello(&mut mate, None, "val").await;

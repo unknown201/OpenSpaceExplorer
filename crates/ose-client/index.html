@@ -19,9 +19,13 @@
     #labels .vessel { position: absolute; transform: translate(0, -50%); white-space: nowrap; font-size: 12px;
       color: #d0d8e8; text-shadow: 0 0 3px #000; pointer-events: auto; cursor: pointer; }
     #labels .vessel.mine { color: #9ef0c0; }
+    /* The 3D map draws no vessel shapes at system scale: a marker on the label shows where each craft is. */
+    body.webgpu #labels .vessel { transform: translate(-5px, -50%); }
+    body.webgpu #labels .vessel::before { content: "\25C6"; margin-right: 4px; font-size: 10px; color: #d0d8e8; }
+    body.webgpu #labels .vessel.mine::before { color: #9ef0c0; }
     #labels .node { position: absolute; transform: translate(-50%, -50%); width: 12px; height: 12px;
       border: 2px solid #96aaff; border-radius: 50%; background: #06080f; pointer-events: auto; cursor: pointer; }
-    #node-panel { position: fixed; top: 64px; left: 12px; width: 280px; padding: 8px 10px; border-radius: 6px;
+    #node-panel { position: fixed; top: 100px; left: 50%; transform: translateX(-50%); z-index: 12; width: 280px; padding: 8px 10px; border-radius: 6px;
       background: #0b1020e6; border: 1px solid #2c3d63; font-size: 12px; display: none; }
     #node-panel.open { display: block; }
     #node-panel label { display: grid; grid-template-columns: 70px 1fr 70px; gap: 6px; align-items: center; margin: 4px 0; }
@@ -282,6 +286,25 @@
     #flight-hud .fh-sas button.on, #flight-hud .fh-actions button.on { color: #7dff8a; border-color: #7dff8a99; background: #17321ce6; }
     #flight-hud .fh-sas button:disabled, #flight-hud .fh-actions button:disabled { opacity: 0.35; cursor: default; }
     .fh-actions { position: absolute; right: calc(16 * var(--u)); bottom: calc(64 * var(--u)); display: flex; gap: calc(4 * var(--u)); background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(8 * var(--u)); padding: calc(6 * var(--u)); }
+    .fh-comm { position: absolute; top: calc(12 * var(--u)); right: calc(16 * var(--u)); display: flex; align-items: center; gap: calc(6 * var(--u)); background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)); padding: calc(4 * var(--u)) calc(10 * var(--u)); font-size: calc(12 * var(--u)); color: #f0a070; pointer-events: auto; }
+    .fh-comm i { width: calc(18 * var(--u)); height: calc(18 * var(--u)); background: currentColor; -webkit-mask: var(--ico) center / contain no-repeat; mask: var(--ico) center / contain no-repeat; }
+    .fh-comm.on { color: #7dff8a; }
+    .fh-burn { display: none !important; color: #9fb8ff; font-size: calc(13 * var(--u)); font-weight: 600; }
+    .fh-burn.on { display: flex !important; }
+    #flight-hud .fh-missions-btn { position: absolute; top: calc(48 * var(--u)); right: calc(16 * var(--u)); width: calc(36 * var(--u)); height: calc(36 * var(--u)); padding: 0; display: grid; place-items: center; }
+    #flight-hud .fh-missions-btn i { width: 70%; height: 70%; background: currentColor; -webkit-mask: var(--ico) center / contain no-repeat; mask: var(--ico) center / contain no-repeat; }
+    .fh-missions { display: none; position: absolute; top: calc(48 * var(--u)); right: calc(60 * var(--u)); width: calc(300 * var(--u)); background: #10141be6; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)); padding: calc(8 * var(--u)) calc(10 * var(--u)); pointer-events: auto; }
+    .fh-missions.open { display: block; }
+    #fh-missions-list { list-style: none; margin: calc(4 * var(--u)) 0 0; padding: 0; font-size: calc(12 * var(--u)); }
+    #fh-missions-list li { padding: calc(4 * var(--u)) 0; border-top: 1px solid #ffffff14; }
+    #fh-missions-list li b { display: block; color: #fff; } #fh-missions-list li.primary b { color: #ffd87a; }
+    #fh-missions-list li small { color: #9fb0cc; } #fh-missions-list .done { color: #7dff8a; } #fh-missions-list li.empty { color: #9fb0cc; }
+    body.ui-hidden .fh-missions, body.ui-hidden .fh-missions-btn { display: none !important; }
+    #fh-stages { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: calc(3 * var(--u)); max-height: calc(360 * var(--u)); overflow: auto; }
+    #fh-stages li { display: flex; flex-wrap: wrap; align-items: center; gap: calc(3 * var(--u)); padding: calc(3 * var(--u)) calc(6 * var(--u)); border: 1px solid #ffffff22; border-left: 3px solid #e0a04066; border-radius: calc(4 * var(--u)); background: #06080fcc; }
+    #fh-stages li b { font-size: calc(11 * var(--u)); color: #e0a040; min-width: calc(14 * var(--u)); }
+    #fh-stages li.next { border-left-color: #7dff8a; background: #17321ccc; } #fh-stages li.next b { color: #7dff8a; }
+    #fh-stages li i { width: calc(20 * var(--u)); height: calc(20 * var(--u)); background: #cfd6e6; -webkit-mask: var(--ico) center / contain no-repeat; mask: var(--ico) center / contain no-repeat; }
     #fh-speed-mode { cursor: pointer; text-decoration: underline dotted; pointer-events: auto; }
     #fh-throttle-pct { position: absolute; bottom: calc(4 * var(--u)); left: 0; right: 0; text-align: center; font-size: calc(9 * var(--u)); color: #fff; }
     .fh-orbit b { min-width: calc(70 * var(--u)) !important; font-size: calc(15 * var(--u)) !important; }
@@ -300,7 +323,8 @@
     #rd-head button { margin: 0 0 0 auto; width: auto; padding: calc(6 * var(--u)) calc(14 * var(--u)); }
     #rd-body { flex: 1; min-height: 0; display: flex; }
     #rd-tree { flex: 1; overflow: auto; background: #0a1220 repeating-linear-gradient(0deg, #ffffff07 0 1px, transparent 1px 40px), repeating-linear-gradient(90deg, #ffffff07 0 1px, transparent 1px 40px); }
-    .rd-canvas { position: relative; }
+    .rd-canvas { position: relative; zoom: var(--rd-zoom, 1); }
+    #rd-tree { cursor: grab; user-select: none; } #rd-tree.dragging { cursor: grabbing; }
     .rd-lines { position: absolute; left: 0; top: 0; pointer-events: none; }
     .rd-lines path { fill: none; stroke: #3a4a68; stroke-width: 2; }
     .rd-lines path.open { stroke: #6a8fd0; }
@@ -329,6 +353,75 @@
     .mc-mission.complete { opacity: 0.6; border-left-color: #63b863; }
     .mc-objectives li.done { color: #7bd07b; text-decoration: line-through; } .mc-objectives li.current { color: #ffd87a; font-weight: 600; }
     #vab-parts li.locked { opacity: 0.45; }
+    /* VAB after the original's OAB: header bar with the vehicle name, New/undo/redo on the left and
+       Save/Launch on the right; the staging stack on the right with one card per stage, last to fire on top. */
+    #vab-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; }
+    #vab-header .vh-group { display: flex; gap: 6px; align-items: center; }
+    #vab-header button { margin: 0; width: auto; padding: 6px 12px; font-size: 13px; }
+    #vab-header #vab-name { flex: 0 1 360px; text-align: center; font: 600 16px var(--ui-font, inherit); padding: 6px 10px; background: #06080fcc; color: #fff; border: 1px solid #2c3d63; border-radius: 4px; }
+    #vab-header .vh-ico { padding: 6px 8px; display: grid; place-items: center; }
+    #vab-header .vh-ico i, #vab-header .vh-launch i, #vab-side i.vh-inline { display: inline-block; width: 18px; height: 18px; background: currentColor; -webkit-mask: var(--ico) center / contain no-repeat; mask: var(--ico) center / contain no-repeat; vertical-align: middle; }
+    #vab-header .vh-flip i { transform: scaleX(-1); }
+    #vab-header .vh-launch { background: #2f6b2f; border-color: #5aa05a; color: #fff; display: flex; gap: 6px; align-items: center; font-weight: 700; }
+    #vab-header .vh-launch:hover { background: #3a823a; }
+    #vab-header button:disabled { opacity: 0.4; }
+    #vab-header #vab-sym { min-width: 44px; font-variant-numeric: tabular-nums; }
+    #vab-header #vab-snap.on { background: #1f3d6b; border-color: #3b63a8; color: #fff; }
+    #vab-dv { font-size: 13px; color: #9fb0cc; margin-right: 6px; }
+    body.webgpu #vab-header { position: relative; pointer-events: auto; background: #10141bf0; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)); padding: calc(6 * var(--u)) calc(10 * var(--u)); margin: 0 0 calc(8 * var(--u)); }
+    body.webgpu #screen-vab #vab { height: calc(100vh - 92 * var(--u)) !important; }
+    #vab-side .vs-title { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: #9fb0cc; margin: 10px 0 4px; }
+    #vab-side .vs-title:first-child { margin-top: 0; }
+    #vab-stages li { display: block; padding: 6px 8px; border: 1px solid #2c3d63; border-left: 3px solid #e0a040; border-radius: 4px; background: #06080f; margin-bottom: 4px; color: #e6ecf7; }
+    #vab-stages li .sv { float: right; font-size: 11px; color: #9fb0cc; }
+    #vab-stages li .st { font-size: 11px; color: #e0a040; font-weight: 700; display: block; margin-bottom: 3px; }
+    #vab-stages li span.p { display: inline-flex; align-items: center; gap: 4px; margin: 0 6px 2px 0; padding: 1px 4px; border-radius: 3px; cursor: pointer; }
+    #vab-stages li span.p.sel { background: #1f3d6b; }
+    #vab-stages li span.p i { width: 14px; height: 14px; background: #cfd6e6; -webkit-mask: var(--ico) center / contain no-repeat; mask: var(--ico) center / contain no-repeat; }
+    #vab-stages li.empty { border-left-color: #2c3d63; color: #6f7f9c; }
+    #vab-side .vs-help { font-size: 11px; color: #6f7f9c; margin-top: 10px; line-height: 1.4; }
+    #vab-tip { position: fixed; z-index: 30; display: none; width: 300px; background: #0b1020f5; border: 1px solid #3b63a8; border-radius: 6px; padding: 10px 12px; color: #e6ecf7; font-size: 12px; pointer-events: none; box-shadow: 0 6px 20px #000a; }
+    #vab-tip.open { display: block; }
+    /* Notification toasts, top right (the original's NotificationManager). Flight notes show here instead of
+       under the altimeter. */
+    #toasts { position: fixed; top: calc(92 * var(--u, 1px)); right: calc(16 * var(--u, 1px)); z-index: 40; display: flex; flex-direction: column; gap: 6px; pointer-events: none; max-width: 360px; }
+    #toasts .toast { background: #10141bf0; border: 1px solid #ffffff2a; border-left: 4px solid #9fb0cc; border-radius: 6px; padding: 8px 12px; color: #e6ecf7; font: 13px var(--ui-font, system-ui); box-shadow: 0 4px 14px #0008; animation: toast-in 0.2s ease-out, toast-out 0.6s ease-in 5.4s forwards; }
+    #labels .apsis { position: absolute; transform: translate(-50%, -130%); font: 600 11px var(--ui-font, system-ui); color: #9ef0c0; background: #06080fcc; border: 1px solid #9ef0c055; border-radius: 3px; padding: 1px 5px; white-space: nowrap; pointer-events: none; }
+    #labels .apsis::after { content: ""; position: absolute; left: 50%; bottom: -6px; width: 6px; height: 6px; margin-left: -3px; border-radius: 50%; background: #9ef0c0; }
+    /* Maneuver gizmo handles around the node: prograde/retrograde green-yellow, normal violet, radial cyan. */
+    #labels .node { pointer-events: auto; cursor: grab; z-index: 3; }
+    #labels .mnv-h { pointer-events: auto; z-index: 3; position: absolute; width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%; border: 2px solid currentColor; background: #06080fcc; cursor: grab; box-shadow: 0 0 6px currentColor; }
+    #labels .mnv-h.prograde, #labels .mnv-h.retrograde { color: #e6e65a; } #labels .mnv-h.retrograde { background: #e6e65a55; }
+    #labels .mnv-h.normal, #labels .mnv-h.antinormal { color: #c070ff; } #labels .mnv-h.antinormal { background: #c070ff55; }
+    #labels .mnv-h.radialout, #labels .mnv-h.radialin { color: #5ae6e6; } #labels .mnv-h.radialin { background: #5ae6e655; }
+    #toasts .toast.alert { border-left-color: #f0a070; } #toasts .toast.triumph { border-left-color: #7dff8a; }
+    @keyframes toast-in { from { transform: translateX(30px); opacity: 0; } }
+    @keyframes toast-out { to { opacity: 0; } }
+    #fh-note { display: none; }
+    /* Settings over everything (SettingsMenuManager): tabs on top, the original's binding list. */
+    #settings { position: fixed; inset: 0; z-index: 50; display: none; place-items: center; background: #000a; font-family: var(--ui-font, system-ui); }
+    #settings.open { display: grid; }
+    #settings .set-card { width: min(760px, 94vw); max-height: 88vh; display: flex; flex-direction: column; background: #0b1020f8; border: 1px solid #3b63a8; border-radius: 8px; color: #e6ecf7; box-shadow: 0 10px 40px #000c; }
+    #settings .set-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px 6px; }
+    #settings .set-head h2 { margin: 0; font-size: 22px; }
+    #settings button { margin: 0; width: auto; cursor: pointer; background: #16213a; color: #e6ecf7; border: 1px solid #2c3d63; border-radius: 4px; padding: 6px 12px; font: 600 13px var(--ui-font, system-ui); }
+    #settings .set-tabs { display: flex; gap: 4px; padding: 0 18px; border-bottom: 1px solid #2c3d63; }
+    #settings .set-tabs button { border-bottom: 0; border-radius: 4px 4px 0 0; background: transparent; color: #9fb0cc; }
+    #settings .set-tabs button.on { background: #1f3d6b; color: #fff; }
+    #settings .set-body { overflow: auto; padding: 12px 18px 18px; }
+    #settings section { display: none; } #settings section.on { display: block; }
+    #settings h4 { margin: 12px 0 4px; font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: #9fb0cc; }
+    #settings table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    #settings td { padding: 3px 6px; border-bottom: 1px solid #ffffff10; } #settings td:first-child { width: 38%; }
+    #settings tr.off { color: #6f7f9c; } #settings small { color: #6f7f9c; }
+    #settings kbd { font: 600 12px var(--ui-font, system-ui); background: #16213a; border: 1px solid #2c3d63; border-bottom-width: 2px; border-radius: 3px; padding: 1px 6px; }
+    #settings .set-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; font-size: 14px; } #settings .set-row span { flex: 0 0 220px; }
+    #settings .set-row input[type=range] { flex: 1; }
+    body.no-hints .fh-help, body.no-hints .vs-help, body.no-hints #help, body.no-hints #menu-info { display: none !important; }
+    body.ui-hidden #toasts { display: none; }
+    #vab-tip h4 { margin: 0; font-size: 14px; } #vab-tip .sub { color: #9fb0cc; font-size: 11px; margin: 2px 0 6px; }
+    #vab-tip table { width: 100%; border-collapse: collapse; margin: 4px 0; } #vab-tip td { padding: 1px 0; } #vab-tip td:last-child { text-align: right; color: #fff; }
+    #vab-tip p { margin: 6px 0 0; color: #cfd6e6; line-height: 1.35; }
     #crafts li.locked { opacity: 0.5; } #crafts li.locked .name::after { content: "  needs research"; font-size: 11px; color: #f0a070; }
     .rd-parts { list-style: none; margin: calc(6 * var(--u)) 0 0; padding: 0; }
     .rd-parts li { padding: calc(6 * var(--u)) calc(8 * var(--u)); margin-bottom: calc(4 * var(--u)); background: #141c2c; border: 1px solid #2c3d63; border-radius: 4px; font-size: calc(13 * var(--u)); }
@@ -359,6 +452,12 @@
     .mc-objectives { padding-left: calc(22 * var(--u)); font-size: calc(16 * var(--u)); line-height: 1.6; }
     .mc-reward { margin-top: calc(18 * var(--u)); font-size: calc(16 * var(--u)); } .mc-reward b { color: #8fd08f; }
     .mc-state { margin-top: calc(8 * var(--u)); font-size: calc(13 * var(--u)); color: #9fb0cc; }
+    #mc-briefing button.mc-accept, #mc-briefing button.mc-turnin { margin-top: calc(14 * var(--u)); width: auto; padding: calc(8 * var(--u)) calc(20 * var(--u)); font-size: calc(16 * var(--u)); font-weight: 700; }
+    #mc-briefing button.mc-turnin { background: #4f8f1f; border-color: #3d7016; }
+    #mc-note { margin-top: calc(8 * var(--u)); font-size: calc(14 * var(--u)); color: #ffd87a; min-height: 1.2em; }
+    .mc-mission.ready { border-left-color: #8fd08f; color: #fff; } .mc-mission.ready .name::after { content: "  ready to turn in"; font-size: calc(11 * var(--u)); color: #8fd08f; }
+    .mc-mission.offered .name::after { content: "  offered"; font-size: calc(11 * var(--u)); color: #ffd87a; }
+    .mc-mission.complete { opacity: 0.65; }
     /* Launch pad after the original's LaunchpadDialog: a window at the top left over the KSC in 3D, flag and
        title, the vehicle list on the left and the selected vehicle's blueprint and engineering report on the
        right, light panels as the KSC menu. */
@@ -413,6 +512,54 @@
     body.ui-hidden #node-panel, body.ui-hidden #help { opacity: 0 !important; pointer-events: none !important; }
     body.ui-hidden #hud > *, body.ui-hidden #flight-hud * { pointer-events: none !important; }
     body.labels-hidden #labels { visibility: hidden; }
+    /* Tracking Station after the original's: the map fills the window and the vessel list sits at the left in
+       the KSC's light panels; the selected vessel's orbit and actions below the list. */
+    #tracking { display: none; position: fixed; top: 56px; left: calc(48 * var(--u)); bottom: calc(36 * var(--u)); width: calc(400 * var(--u)); z-index: 12;
+      flex-direction: column; box-sizing: border-box; padding: calc(16 * var(--u)); border-radius: calc(6 * var(--u)); background: #ebf0ff96; border-bottom: calc(6 * var(--u)) solid #ebf0ff;
+      color: #0a0a0a; font-family: var(--ui-font); }
+    #tracking.open { display: flex; }
+    body:has(#menu:not(.hidden)) #tracking { display: none; }
+    body:has(#tracking.open) #crumbs { left: calc(470 * var(--u)); }
+    .ts-head { display: flex; align-items: center; gap: calc(10 * var(--u)); margin-bottom: calc(10 * var(--u)); }
+    .ts-head .flag { width: calc(56 * var(--u)); height: calc(56 * var(--u)); background: #f23d4d; clip-path: polygon(0 0, 100% 0, 100% 75%, 50% 100%, 0 75%); display: flex; align-items: center; justify-content: center; }
+    .ts-head .flag img { width: calc(36 * var(--u)); height: calc(36 * var(--u)); filter: brightness(10); }
+    .ts-head h2 { margin: 0; font-size: calc(28 * var(--u)); font-weight: 500; color: #000; }
+    .ts-tabs { display: flex; gap: calc(6 * var(--u)); margin-bottom: calc(8 * var(--u)); }
+    #tracking .ts-tabs button { flex: 1; margin: 0; padding: calc(6 * var(--u)); background: #ffffffb0; border: 1px solid #6a718f; color: #2b2b2b; font-size: calc(14 * var(--u)); border-radius: calc(4 * var(--u)); }
+    #tracking .ts-tabs button.on { background: #2f8fff; border-color: #2f8fff; color: #fff; }
+    #ts-list { list-style: none; margin: 0; padding: calc(6 * var(--u)); flex: 1; overflow: auto; background: #ebf0ffcc; border: 1px solid #6a718f; }
+    .ts-vessel { display: flex; flex-direction: column; padding: calc(6 * var(--u)) calc(10 * var(--u)); margin-bottom: calc(6 * var(--u)); background: #fff; border-left: calc(6 * var(--u)) solid #fff; cursor: pointer; }
+    .ts-vessel:hover { background: #e3eeff; } .ts-vessel.selected { background: #cde6ff; border-left-color: #2f8fff; }
+    .ts-vessel.mine .name::before { content: "\25B2 "; color: #4f8f1f; font-size: calc(11 * var(--u)); }
+    .ts-vessel .name { font-weight: 700; font-size: calc(16 * var(--u)); } .ts-vessel .meta { font-size: calc(12 * var(--u)); color: #4a5068; }
+    .ts-empty, .ts-hint { color: #6a718f; font-size: calc(14 * var(--u)); padding: calc(8 * var(--u)); list-style: none; }
+    #ts-info { margin-top: calc(10 * var(--u)); padding: calc(10 * var(--u)) calc(12 * var(--u)); background: #10161fe6; color: #e6ecf7; border-radius: calc(4 * var(--u)); font-size: calc(14 * var(--u)); }
+    #ts-info h3 { margin: 0; font-size: calc(18 * var(--u)); } #ts-info .ts-owner { color: #9fb0cc; font-size: calc(12 * var(--u)); margin-bottom: calc(6 * var(--u)); }
+    #ts-info dl { display: grid; grid-template-columns: auto 1fr; gap: calc(2 * var(--u)) calc(12 * var(--u)); margin: 0 0 calc(8 * var(--u)); }
+    #ts-info dt { color: #9fb0cc; } #ts-info dd { margin: 0; text-align: right; }
+    #ts-info .ts-actions { display: flex; gap: calc(6 * var(--u)); }
+    #ts-info .ts-actions button { flex: 1; margin: 0; padding: calc(6 * var(--u)); font-size: calc(14 * var(--u)); background: #ebf0ff; color: #0a0a0a; border: 1px solid #6a718f; border-radius: calc(4 * var(--u)); cursor: pointer; }
+    #ts-info .ts-actions button:hover:not([disabled]) { background: #cde6ff; }
+    #ts-info .ts-actions button[disabled] { opacity: 0.4; }
+    #tracking > #ts-back { margin: calc(10 * var(--u)) 0 0; background: #ffffffb0; border: 1px solid #6a718f; color: #0a0a0a; font-size: calc(14 * var(--u)); }
+    /* Esc menu after the original's game menu: the scene dims and blurs, a light panel at the centre with the
+       title and the options as white rows that light up blue, as the KSC menu does. */
+    #menu:has(#screen-paused.open) { background: #06080f80; backdrop-filter: blur(3px); }
+    #menu-card:has(#screen-paused.open) { width: calc(400 * var(--u)); padding: calc(16 * var(--u)) calc(16 * var(--u)) calc(22 * var(--u)); border-radius: calc(6 * var(--u)); border: 0;
+      background: #ebf0ffd9; border-bottom: calc(6 * var(--u)) solid #ebf0ff; font-family: var(--ui-font); }
+    #menu-card:has(#screen-paused.open) > h1, #menu-card:has(#screen-paused.open) > .sub { display: none; }
+    #menu-card:has(#screen-paused.open) > .info { color: #4a5068; font-size: calc(12 * var(--u)); }
+    #screen-paused .pm-title { display: flex; align-items: center; gap: calc(10 * var(--u)); margin-bottom: calc(10 * var(--u)); }
+    #screen-paused .pm-title img { width: calc(40 * var(--u)); height: calc(40 * var(--u)); padding: calc(8 * var(--u)); background: #f23d4d; clip-path: polygon(0 0, 100% 0, 100% 75%, 50% 100%, 0 75%); }
+    #screen-paused .pm-title h2 { margin: 0; font-size: calc(28 * var(--u)); font-weight: 500; color: #000; }
+    #menu #screen-paused button { display: block; margin: 0 0 calc(6 * var(--u)); height: calc(44 * var(--u)); padding: 0 calc(16 * var(--u)); text-align: left;
+      background: #fff; color: #0a0a0a; border: 0; border-left: calc(6 * var(--u)) solid #fff; border-radius: 0; font-size: calc(18 * var(--u)); font-weight: 700; }
+    #menu #screen-paused button:hover { background: #cde6ff; border-left-color: #2f8fff; }
+    #menu #screen-paused #resume { color: #4f8f1f; }
+    body:not(:has(#flight-hud.open)) #screen-paused .pm-flight { display: none; }
+    #flight-hud .fh-crew button.hidden { display: none; }
+    #flight-hud .fh-crew:not(:has(button:not(.hidden))) { display: none; }
+    #menu #screen-paused #leave { color: #b03a2e; margin-top: calc(12 * var(--u)); }
   </style>
 </head>
 <body>
@@ -442,7 +589,7 @@
         <div id="logo" title="Kerbal Space Program 2, in the browser"></div>
         <ul id="main-items">
           <li><button id="play" data-ose="play">Campaign</button></li>
-          <li><button id="main-settings" data-ose="main-settings" disabled title="not yet">Settings</button></li>
+          <li><button id="main-settings" data-ose="main-settings" data-open-settings title="Controls, interface and sound">Settings</button></li>
           <li><button id="main-extras" data-ose="main-extras" disabled title="not yet">Extras</button></li>
           <li><button id="main-sound" class="sound-toggle" data-ose="sound-toggle">Sound: on</button></li>
         </ul>
@@ -479,7 +626,7 @@
             <div class="field"><span>Campaign Name</span><input id="create-name" data-ose="create-name" type="text" maxlength="48" value="Shared campaign" /></div>
             <details class="sub"><summary>Difficulty options</summary><div id="difficulty" data-ose="difficulty"></div></details>
             <div class="start"><button id="create" data-ose="create">Start Campaign</button></div>
-            <div class="info">One shared campaign per server: while nobody has joined it yet, Start replaces it; afterwards it is returned as is.</div>
+            <div class="info">Each campaign stays on the list after you exit, to resume later.</div>
           </div>
         </details>
         <details id="agency-details" data-ose="agency">
@@ -506,7 +653,7 @@
             <button id="ksc-mission" data-ose="ksc-mission"><img src="assets/ui/ICO-Mission-Control-Med.png" alt="" />Mission Control</button>
             <button id="ksc-launchpad" data-ose="ksc-launchpad" class="launch"><img src="assets/ui/ICO-Launchpad-Med.png" alt="" />Launchpad<span class="arrow"></span></button>
           </div>
-          <div class="row"><button id="ksc-sessions" class="secondary" data-ose="ksc-sessions">Sessions and agency</button></div>
+          <div class="row"><button id="ksc-sessions" class="secondary" data-ose="ksc-sessions">Exit to Main Menu</button></div>
         </div>
       </div>
       <div class="screen" id="screen-launchpad" data-ose="launchpad">
@@ -528,24 +675,39 @@
       </div>
       <div class="screen" id="screen-vab" data-ose="vab">
         <label>Vehicle Assembly Building</label>
+        <div id="vab-header" data-ose="vab-header">
+          <div class="vh-group">
+            <button id="vab-clear" class="secondary" data-ose="vab-clear" title="New vehicle: clear the workspace (Ctrl+N)">New</button>
+            <button id="vab-undo" class="secondary vh-ico" data-ose="vab-undo" title="Undo (Ctrl+Z)"><i style="--ico:url(assets/ui/hud/ToolsBar-ICO-Undo-onRest.png)"></i></button>
+            <button id="vab-redo" class="secondary vh-ico vh-flip" data-ose="vab-redo" title="Redo (Ctrl+Y)"><i style="--ico:url(assets/ui/hud/ToolsBar-ICO-Undo-onRest.png)"></i></button>
+            <button id="vab-sym" class="secondary" data-ose="vab-sym" title="Symmetry for parts on a side: 1, 2, 3, 4, 6 or 8 copies around the part (X, Shift+X back)">&#215;1</button>
+            <button id="vab-snap" class="secondary on" data-ose="vab-snap" title="Angle snap: side parts go at 15 degree steps (C)">Snap</button>
+          </div>
+          <input id="vab-name" data-ose="vab-name" type="text" maxlength="48" value="Untitled craft" title="Vehicle name" />
+          <div class="vh-group">
+            <span id="vab-dv" data-ose="vab-dv" title="Total delta-v in vacuum, from the server's report when the craft is saved"></span>
+            <button id="vab-save" data-ose="vab-save" class="secondary" title="Save to the craft library (Ctrl+S)">Save</button>
+            <button id="vab-launch" data-ose="vab-launch" class="vh-launch" title="Save and roll out to the launch pad"><i style="--ico:url(assets/ui/hud/Workspace-ICO-LaunchVessel-Normal-Active.png)"></i>Launch</button>
+            <button id="vab-back" class="secondary vh-ico" data-ose="vab-back" title="Back to the Kerbal Space Center"><i style="--ico:url(assets/ui/WB-ICO-Close-X.png)"></i></button>
+          </div>
+        </div>
         <div id="vab">
           <div id="vab-picker">
             <div id="vab-cats" data-ose="vab-categories"></div>
-            <input id="vab-search" data-ose="vab-search" type="search" placeholder="search parts" />
+            <input id="vab-search" data-ose="vab-search" type="search" placeholder="search parts (Ctrl+F)" />
             <ul id="vab-parts" data-ose="vab-parts"></ul>
           </div>
           <canvas id="vab-canvas" data-ose="vab-canvas" width="640" height="640"></canvas>
           <div id="vab-side">
-            <label for="vab-name">Craft name</label>
-            <input id="vab-name" data-ose="vab-name" type="text" maxlength="48" value="Untitled craft" />
-            <div id="vab-selected" data-ose="vab-selected"></div>
-            <div class="row"><button id="vab-remove" class="secondary" data-ose="vab-remove">Remove part</button><button id="vab-clear" class="secondary" data-ose="vab-clear">Clear</button></div>
-            <div class="row"><button id="vab-stage-up" class="secondary" data-ose="vab-stage-up">Stage earlier</button><button id="vab-stage-down" class="secondary" data-ose="vab-stage-down">Stage later</button></div>
-            <div id="vab-stats" data-ose="vab-stats"></div>
+            <div class="vs-title">Staging</div>
             <ul id="vab-stages" data-ose="vab-stages"></ul>
-            <div class="row"><button id="vab-save" data-ose="vab-save">Save</button><button id="vab-launch" data-ose="vab-launch">Save and launch</button></div>
+            <div id="vab-stats" data-ose="vab-stats"></div>
+            <div class="vs-title">Selected part</div>
+            <div id="vab-selected" data-ose="vab-selected"></div>
+            <div class="row"><button id="vab-remove" class="secondary" data-ose="vab-remove" title="Remove the part and everything attached under it (Delete)"><i class="vh-inline" style="--ico:url(assets/ui/hud/WB-ICO-Trash.png)"></i>Remove</button></div>
+            <div class="row"><button id="vab-stage-up" class="secondary" data-ose="vab-stage-up" title="Fire this part one stage earlier">Stage earlier</button><button id="vab-stage-down" class="secondary" data-ose="vab-stage-down" title="Fire this part one stage later">Stage later</button></div>
             <div id="vab-report" data-ose="vab-report"></div>
-            <div class="row"><button id="vab-back" class="secondary" data-ose="vab-back">Back to KSC</button></div>
+            <div class="vs-help">Drag parts from the list onto a green attach point. Drag a placed part to move it with everything under it. Right-drag to look around, wheel to zoom (Shift faster), Home resets the view. Delete removes, Ctrl+Z / Ctrl+Y undo and redo.</div>
           </div>
         </div>
       </div>
@@ -570,9 +732,14 @@
         </div>
       </div>
       <div class="screen" id="screen-paused" data-ose="menu-paused">
+        <div class="pm-title"><img src="assets/ui/ICO-Map-KSC-16x16.png" alt="" /><h2>Game Menu</h2></div>
         <button id="resume" data-ose="resume">Resume</button>
         <button id="to-ksc" class="secondary" data-ose="to-ksc">Kerbal Space Center</button>
-        <button id="to-sessions" class="secondary" data-ose="to-sessions">Sessions and agency</button>
+        <button id="to-tracking" class="secondary" data-ose="to-tracking">Tracking Station</button>
+        <button id="to-revert-launch" class="secondary pm-flight" data-ose="to-revert-launch" data-save-action="RevertToLaunch">Revert to Launch</button>
+        <button id="to-revert-editor" class="secondary pm-flight" data-ose="to-revert-editor" data-save-action="RevertToEditor">Revert to VAB</button>
+        <button id="to-settings" class="secondary" data-ose="to-settings" data-open-settings>Settings</button>
+        <button id="to-sessions" class="secondary" data-ose="to-sessions">Exit to Main Menu</button>
         <button id="sound-toggle" class="secondary sound-toggle" data-ose="sound-toggle">Sound: on</button>
         <button id="leave" class="secondary" data-ose="leave">Leave session</button>
       </div>
@@ -581,7 +748,32 @@
     </div>
   </div>
   <div id="ksc-tooltip" data-ose="ksc-tooltip"></div>
+  <div id="vab-tip" data-ose="vab-tip"></div>
+  <div id="toasts" data-ose="toasts"></div>
+  <div id="settings" data-ose="settings">
+    <div class="set-card">
+      <div class="set-head"><h2>Settings</h2><button id="settings-close" data-ose="settings-close" title="Close (Esc)">&#10005;</button></div>
+      <div class="set-tabs" id="settings-tabs"><button data-tab="input" class="on">Input</button><button data-tab="interface">Interface</button><button data-tab="audio">Audio</button></div>
+      <div class="set-body">
+        <section data-tab="input" class="on" id="settings-input"></section>
+        <section data-tab="interface">
+          <label class="set-row"><span>Interface scale</span><input id="settings-scale" data-ose="settings-scale" type="range" min="50" max="150" step="5" value="100" /><b id="settings-scale-text">100%</b></label>
+          <label class="set-row"><span>Show key hints on screen</span><input id="settings-hints" data-ose="settings-hints" type="checkbox" checked /></label>
+        </section>
+        <section data-tab="audio">
+          <div class="set-row"><span>Sound</span><button id="settings-sound" class="sound-toggle" data-ose="sound-toggle">Sound: on</button></div>
+        </section>
+      </div>
+    </div>
+  </div>
   <div id="audio" data-ose="audio" hidden></div>
+  <div id="tracking" data-ose="tracking">
+    <div class="ts-head"><span class="flag"><img src="assets/ui/ICO-Tracking-Station-Med.png" alt="" /></span><h2>Tracking Station</h2></div>
+    <div class="ts-tabs"><button id="ts-tab-all" data-ose="ts-tab-all" class="on">All vessels</button><button id="ts-tab-mine" data-ose="ts-tab-mine">Mine</button></div>
+    <ul id="ts-list" data-ose="ts-list"></ul>
+    <div id="ts-info" data-ose="ts-info"></div>
+    <button id="ts-back" data-ose="ts-back">Back to KSC</button>
+  </div>
   <div id="flight-hud" data-ose="flight">
     <div class="fh-top"><div class="fh-label">ALTITUDE</div><div id="fh-altitude" data-ose="flight-altitude">--</div><div id="fh-situation" class="fh-small">--</div><div id="fh-note" class="fh-small" style="color:#f0a070"></div><div id="fh-running" class="fh-small" data-ose="flight-running" style="color:#8fd08f"></div><div id="fh-control" data-ose="flight-control" style="color:#ff6a5a;font-weight:700"></div></div>
     <div class="fh-bottom">
@@ -590,13 +782,16 @@
       <div class="fh-sas" id="fh-sas" data-ose="flight-sas"></div>
       <div class="fh-core">
         <div class="fh-row"><span class="fh-label" id="fh-speed-mode" data-ose="flight-speed-mode" title="Speed relative to the surface or in orbit; click to switch">SURFACE</span><b id="fh-speed">--</b><span class="fh-label">VERTICAL</span><b id="fh-vspeed">--</b></div>
+        <div class="fh-row fh-burn" id="fh-burn" data-ose="flight-burn" title="Burn timer: start burning when it reaches zero, pointed at the maneuver marker"></div>
         <div class="fh-row fh-orbit" data-ose="flight-apsides"><span class="fh-label" title="Apoapsis: highest point of the orbit and the time to it">AP</span><b id="fh-ap">--</b><span id="fh-ap-t" class="fh-small">--</span><span class="fh-label" title="Periapsis: lowest point of the orbit and the time to it">PE</span><b id="fh-pe">--</b><span id="fh-pe-t" class="fh-small">--</span></div>
         <div class="fh-row"><span id="fh-attitude">--</span><span id="fh-twr" class="fh-small">--</span></div>
         <div class="fh-row"><button id="fh-science" data-ose="flight-science" title="run every experiment on board">Experiments</button><button id="fh-transmit" data-ose="flight-transmit" title="send the reports home">Transmit</button><button id="fh-recover" data-ose="flight-recover" title="recover the vessel (landed on Kerbin)">Recover</button></div>
+        <div class="fh-row fh-crew"><button id="fh-eva" data-ose="flight-eva" class="hidden" title="a Kerbal climbs out">EVA</button><button id="fh-board" data-ose="flight-board" class="hidden" title="climb into the craft within reach">Board</button><button id="fh-flag" data-ose="flight-flag" class="hidden" title="plant the agency flag">Plant flag</button><button id="fh-undock" data-ose="flight-undock" class="hidden" title="release the last docking">Undock</button></div>
         <div class="fh-row"><button id="fh-full" data-ose="flight-throttle-full" title="Full throttle (Z)">Full</button><button id="fh-cut" data-ose="flight-throttle-cut" title="Cut the throttle (X)">Cut</button><button id="fh-map" title="Map view (M)">Map</button><button id="fh-ksc" title="Leave the vessel and go to the Kerbal Space Center">KSC</button></div>
       </div>
     </div>
     <div class="fh-staging">
+      <ul id="fh-stages" data-ose="flight-stages" title="Stages still to fire; the bottom one goes next (Space)"></ul>
       <div id="fh-stage" class="fh-small">--</div>
       <div id="fh-fuel" class="fh-small">--</div>
       <div id="fh-ec" class="fh-small" data-ose="flight-ec">--</div>
@@ -605,6 +800,9 @@
       <button id="fh-stage-btn" data-ose="flight-stage" title="Space">STAGE</button>
     </div>
     <div class="fh-actions" id="fh-actions" data-ose="flight-actions"></div>
+    <button class="fh-missions-btn" id="fh-missions-btn" data-ose="flight-missions-btn" title="Mission tracker: the missions you have taken on"><i style="--ico:url(assets/ui/hud/ICO-AppBar-MissionTracker-24x24.png)"></i></button>
+    <div class="fh-missions" id="fh-missions" data-ose="flight-missions"><div class="fh-label">MISSIONS</div><ul id="fh-missions-list"></ul></div>
+    <div class="fh-comm" id="fh-comm" data-ose="flight-comm" title="CommNet: transmitting science and controlling probes need a link to the KSC"><i style="--ico:url(assets/ui/hud/ICO-Flight-Cluster-Commnet.png)"></i><span id="fh-comm-text">--</span></div>
     <div class="fh-help">W/S/A/D steer (hold, Caps Lock fine), Shift/Ctrl throttle, Z/X full/cut, Space stage, T hold direction, G gear, B brakes, M map, right-drag to look, Home resets the camera</div>
   </div>
   <div id="node-panel" data-ose="node-panel">

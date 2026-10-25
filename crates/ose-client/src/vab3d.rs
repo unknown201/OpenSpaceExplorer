@@ -54,6 +54,14 @@ pub struct VabView {
     pub held: Option<(String, Vec<(DVec3, DVec3)>)>,
     pub cursor: (f64, f64),
     pub snap: Option<(usize, String)>,
+    /// Surface attachment previews (craft frame poses, one per symmetry copy) for the held part, set by the
+    /// screen each frame; drawn when no stack node is in reach.
+    pub ghosts: Vec<(ose_math::DVec3, ose_data::craft::Quat)>,
+    /// The held part's turn (W/A/S/D/Q/E) for the floating preview, and its yaw alone for a stack snap.
+    pub held_turn: ose_data::craft::Quat,
+    pub held_yaw: ose_data::craft::Quat,
+    /// Vertical camera offset from the craft's centre, metres (arrow keys and middle drag, Home resets).
+    pub pan_y: f64,
 }
 
 impl Default for VabView {
@@ -79,6 +87,10 @@ impl VabView {
             held: None,
             cursor: (0.0, 0.0),
             snap: None,
+            ghosts: Vec::new(),
+            pan_y: 0.0,
+            held_turn: crate::vab::NO_TURN,
+            held_yaw: crate::vab::NO_TURN,
         }
     }
 
@@ -101,6 +113,11 @@ impl VabView {
     pub fn orbit(&mut self, dx_px: f64, dy_px: f64) {
         self.yaw -= dx_px * 0.005;
         self.pitch = (self.pitch + dy_px * 0.005).clamp(-1.2, 1.4);
+    }
+
+    /// Move the camera up (positive) or down along the craft, in screen pixels of a drag.
+    pub fn pan(&mut self, dy_px: f64) {
+        self.pan_y += dy_px * self.distance * 0.002;
     }
 
     pub fn zoom(&mut self, factor: f64) {
@@ -169,6 +186,22 @@ impl VabView {
             pos,
             (forward + right * (ndc_x * t * aspect) + cam_up * (ndc_y * t)).normalize(),
         )
+    }
+
+    /// The craft part under the cursor and the point hit on it, in the craft frame (for surface attachment).
+    pub fn surface_hit(&self, gpu: &Renderer) -> Option<(usize, ose_math::DVec3)> {
+        let (ro, rd) = self.cursor_ray(gpu);
+        let mut best: Option<(f64, usize)> = None;
+        for (i, lo, hi) in &self.boxes {
+            if let Some(d) = crate::ksc3d::ray_box(ro, rd, *lo, *hi) {
+                if best.map(|(bd, _)| d < bd).unwrap_or(true) {
+                    best = Some((d, *i));
+                }
+            }
+        }
+        let (d, i) = best?;
+        let w = ro + rd * d - self.centre();
+        Some((i, ose_math::DVec3::new(-w.x, w.y, w.z)))
     }
 
     /// Craft part under a pixel (ray against part boxes, nearest first).
@@ -266,7 +299,9 @@ impl VabView {
         }
         // Orbit the craft's centre (the build centre while empty).
         self.target = if lo_all.is_finite() {
-            (lo_all + hi_all) * 0.5
+            let half = (hi_all.y - lo_all.y) * 0.5 + 2.0;
+            self.pan_y = self.pan_y.clamp(-half, half);
+            (lo_all + hi_all) * 0.5 + DVec3::Y * self.pan_y
         } else {
             centre
         };
@@ -327,8 +362,26 @@ impl VabView {
                     ro + rd * self.distance
                 }
             };
-            if gpu.has_model(&name) {
-                let mut ghost = DrawItem::lit(name, at - cam_pos, DQuat::IDENTITY, 1.0, light);
+            if gpu.has_model(&name) && self.snap.is_none() && !self.ghosts.is_empty() {
+                for (p, q) in &self.ghosts {
+                    let mut ghost = DrawItem::lit(
+                        name.clone(),
+                        centre + to_gltf(*p) - cam_pos,
+                        quat_to_gltf(*q),
+                        1.0,
+                        light,
+                    );
+                    ghost.ambient = 0.6;
+                    ghost.color = [0.7, 1.0, 0.75, 1.0];
+                    items.push(ghost);
+                }
+            } else if gpu.has_model(&name) {
+                let turn = if self.snap.is_some() {
+                    self.held_yaw
+                } else {
+                    self.held_turn
+                };
+                let mut ghost = DrawItem::lit(name, at - cam_pos, quat_to_gltf(turn), 1.0, light);
                 ghost.ambient = 0.6;
                 ghost.color = if self.snap.is_some() {
                     [0.7, 1.0, 0.75, 1.0]

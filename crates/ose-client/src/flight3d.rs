@@ -103,6 +103,81 @@ impl Spin {
     }
 }
 
+/// A model to draw: renderer name, file and scale.
+type ModelRef = (&'static str, &'static str, f64);
+
+/// What stands in for a vessel the flight view has no craft for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stand {
+    Craft,
+    Kerbal,
+    Flag,
+}
+
+impl Stand {
+    /// A Kerbal on EVA reads `eva` in its flight readout; a planted flag is named "<agency> flag".
+    pub fn of(v: &ose_net::VesselState) -> Stand {
+        if v.flight.as_ref().is_some_and(|f| f.eva) {
+            Stand::Kerbal
+        } else if v.name.ends_with(" flag") {
+            Stand::Flag
+        } else {
+            Stand::Craft
+        }
+    }
+
+    /// The models to draw (name, file, scale), requested from the renderer: the original's Kerbal (suit, head,
+    /// eyes, helmet, tools/export_kerbal.py) and planted flag, with the procedural stand-ins while they load
+    /// or when a server has no game assets.
+    fn models(self, gpu: &mut Renderer) -> Vec<ModelRef> {
+        let (real, stand_in): (&[ModelRef], ModelRef) = match self {
+            Stand::Kerbal => (
+                &[
+                    ("kerbal:body", "assets/kerbal/body_spacesuit_01.glb", 1.0),
+                    ("kerbal:head", "assets/kerbal/head_m_01.glb", 1.0),
+                    ("kerbal:eyes", "assets/kerbal/eyes_m_01.glb", 1.0),
+                    ("kerbal:helmet", "assets/kerbal/helm_spacesuit_01.glb", 1.0),
+                ],
+                ("fx:kerbal", "assets/fx/kerbal.glb", 1.0),
+            ),
+            Stand::Flag => (
+                &[("kerbal:flag", "assets/kerbal/flag_portable.glb", 1.5)],
+                ("fx:flag", "assets/fx/flag.glb", 1.0),
+            ),
+            Stand::Craft => (
+                &[],
+                (
+                    "part:probe_0v_octagonal_electricity_1x1",
+                    "assets/parts/probe_0v_octagonal_electricity_1x1.glb",
+                    1.0,
+                ),
+            ),
+        };
+        for (name, file, _) in real {
+            gpu.request_model(name, file);
+        }
+        if !real.is_empty() && real.iter().all(|(name, _, _)| gpu.has_model(name)) {
+            return real.to_vec();
+        }
+        gpu.request_model(stand_in.0, stand_in.1);
+        if gpu.has_model(stand_in.0) {
+            vec![stand_in]
+        } else {
+            Vec::new()
+        }
+    }
+}
+
+/// Open canopy diameter for a chute part, m: the Mk16-XL main, the radial Mk16-R and the drogue.
+fn canopy_diameter(part_id: &str) -> f64 {
+    match part_id {
+        "parachute_1v" => 12.0,
+        "parachute_1v_radial" => 8.0,
+        "parachute_0v_radial_drogue" => 5.0,
+        _ => 8.0,
+    }
+}
+
 /// Model-frame point for body-fixed latitude, longitude (degrees) and radius (m).
 pub fn model_point(lat_deg: f64, lon_deg: f64, radius: f64) -> DVec3 {
     let lat = lat_deg.to_radians();
@@ -151,6 +226,8 @@ pub fn attitude_dir(att: &AttitudeMode, r: DVec3, v_rel: DVec3, spin: Spin) -> D
             (p.cos() * (h.cos() * north + h.sin() * east) + p.sin() * up).normalize_or_zero()
         }
         AttitudeMode::Fixed(d) => or_up(DVec3::new(d.x, d.y, d.z)),
+        // the server turns toward the burn; the readout's facing shows it
+        AttitudeMode::Maneuver => or_up(v_rel),
     }
 }
 
@@ -193,7 +270,46 @@ pub fn jettisoned(craft: &Craft, fired: usize, is_decoupler: &dyn Fn(&str) -> bo
     gone
 }
 
+/// The original's flight camera modes (`KSP.Sim/FlightCameraMode.cs`), cycled with V.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CameraMode {
+    /// Free near the ground and in the air, orbital above the atmosphere.
+    #[default]
+    Auto,
+    /// Turns with the local horizon: up is away from the body.
+    Free,
+    /// Up is the orbit normal, so the orbit stays level on screen.
+    Orbital,
+    /// Behind the vessel along its velocity.
+    Chase,
+    /// Turns with the vessel.
+    Locked,
+}
+
+impl CameraMode {
+    pub fn next(self) -> CameraMode {
+        match self {
+            CameraMode::Auto => CameraMode::Free,
+            CameraMode::Free => CameraMode::Orbital,
+            CameraMode::Orbital => CameraMode::Chase,
+            CameraMode::Chase => CameraMode::Locked,
+            CameraMode::Locked => CameraMode::Auto,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            CameraMode::Auto => "Auto",
+            CameraMode::Free => "Free",
+            CameraMode::Orbital => "Orbital",
+            CameraMode::Chase => "Chase",
+            CameraMode::Locked => "Locked",
+        }
+    }
+}
+
 pub struct FlightView {
+    pub mode: CameraMode,
     pub yaw: f64,
     pub pitch: f64,
     pub distance: f64,
@@ -228,6 +344,10 @@ pub struct FlightInput<'a> {
     pub vessel: &'a VesselState,
     /// Vessel and body star-space positions, body star-space velocity, at `ut`.
     pub vessel_pos: DVec3,
+    /// Other vessels' star-space positions and what they are, drawn when they are near.
+    pub nearby_vessels: &'a [(DVec3, Stand)],
+    /// What the flown vessel is when it has no craft: a Kerbal on EVA, a flag, or an unknown craft.
+    pub stand: Stand,
     pub vessel_vel: DVec3,
     pub body_pos: DVec3,
     pub body_vel: DVec3,
@@ -256,6 +376,7 @@ fn quat_from_basis(x: DVec3, y: DVec3, z: DVec3) -> DQuat {
 impl FlightView {
     pub fn new() -> FlightView {
         FlightView {
+            mode: CameraMode::Auto,
             yaw: 0.8,
             pitch: 0.25,
             distance: 35.0,
@@ -535,13 +656,41 @@ impl FlightView {
                 }),
             });
         }
-        let offs = self.pitch.cos() * (self.yaw.cos() * north + self.yaw.sin() * east)
-            + self.pitch.sin() * up;
+        // The camera's frame for the mode: (forward-ish, right-ish, up) axes the yaw and pitch turn around.
+        let alt_m = r.length() - inp.body_radius;
+        let mode = match self.mode {
+            CameraMode::Auto if alt_m > inp.atmosphere_m.max(30_000.0) => CameraMode::Orbital,
+            CameraMode::Auto => CameraMode::Free,
+            m => m,
+        };
+        let orbit_up = dir_to_model(r, r.cross(v_rel), spin, inp.ut).normalize_or_zero();
+        let v_surf_m = dir_to_model(
+            r,
+            v_rel - DVec3::new(0.0, 0.0, spin.omega()).cross(r),
+            spin,
+            inp.ut,
+        )
+        .normalize_or_zero();
+        let frame = |b_up: DVec3, hint: DVec3| {
+            let b_n = (hint - b_up * b_up.dot(hint)).normalize_or_zero();
+            (b_up.length() > 0.5 && b_n.length() > 0.5).then(|| (b_n, b_up.cross(b_n), b_up))
+        };
+        let (b_n, b_e, b_u) = match mode {
+            CameraMode::Orbital => frame(orbit_up, north),
+            // Behind the vessel: the default yaw looks along the velocity.
+            CameraMode::Chase => frame(up, -v_surf_m).or_else(|| frame(up, -dir)),
+            CameraMode::Locked => frame(vessel_rot * DVec3::Y, vessel_rot * DVec3::Z),
+            _ => None,
+        }
+        .unwrap_or((north, east, up));
+        let cam_up = b_u;
+        let offs = self.pitch.cos() * (self.yaw.cos() * b_n + self.yaw.sin() * b_e)
+            + self.pitch.sin() * b_u;
         let cam = pos + offs * self.distance;
         let alt = r.length() - inp.body_radius;
         let near = (self.distance * 0.02).clamp(0.3, 5_000.0);
         let far = (self.distance * 50.0).clamp(4.0e6, 5.0e8);
-        gpu.set_camera(-offs, up, 60f64.to_radians(), near, far);
+        gpu.set_camera(-offs, cam_up, 60f64.to_radians(), near, far);
 
         let sun = dir_to_model(
             r,
@@ -635,6 +784,26 @@ impl FlightView {
                 }
             }
         }
+        // Parts in space get more ambient: with only the sun, a craft between it and the camera (or in the
+        // planet's shadow) went black against black, and players could not find their probes in orbit.
+        let part_ambient = if alt > inp.atmosphere_m.max(20_000.0) {
+            0.45
+        } else {
+            0.25
+        };
+        // How much of the star the craft sees: a moon or planet in front of it dims its parts as it does the
+        // ground (planet.rs, the planet thread's eclipse test).
+        let sun_share = crate::planet::eclipse_visible(pos, sun, &occluders, sun_radius_rad) as f32;
+        // Air streams past opposite the surface velocity; open chutes trail into it.
+        let trail = {
+            let v_surf = v_rel - DVec3::new(0.0, 0.0, spin.omega()).cross(r);
+            if v_surf.length() > 1.0 {
+                dir_to_model(r, -v_surf, spin, inp.ut)
+            } else {
+                up
+            }
+        };
+        let readout = inp.vessel.flight.as_ref();
         // The vessel.
         if let Some(craft) = inp.craft {
             let fired = inp
@@ -828,24 +997,116 @@ impl FlightView {
             }
             self.deployments
                 .retain(|(v, i), _| *v == inp.vessel.id && parts.iter().any(|p| p.0 == *i));
-            for (_, name, lp, lq, animation) in parts {
+            // The chute parts' own canopy meshes are skinned in their open pose; the canopy is drawn from the
+            // chute's state instead (below).
+            for name in [
+                "part:parachute_1v",
+                "part:parachute_1v_radial",
+                "part:parachute_0v_radial_drogue",
+            ] {
+                gpu.hide_meshes(
+                    name,
+                    &[
+                        "mesh_parachute_1v_m2_canopy",
+                        "mesh_parachute_1v_m3_radial_canopy",
+                        "mesh_parachute_0v_m1_drogue_canopy",
+                    ],
+                );
+            }
+            let chutes: HashMap<u16, (ose_net::ChuteState, f32)> = readout
+                .map(|f| {
+                    f.parachutes
+                        .iter()
+                        .map(|(i, s, o)| (*i, (*s, *o)))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let heat: HashMap<u16, f32> = readout
+                .map(|f| {
+                    f.heat
+                        .iter()
+                        .map(|(i, t, max, _)| (*i, if *max > 0.0 { t / max } else { 0.0 }))
+                        .collect()
+                })
+                .unwrap_or_default();
+            for (i, name, lp, lq, animation) in parts {
                 if !gpu.has_model(&name) {
                     continue;
                 }
                 let wpos = pos + vessel_rot * (lp + DVec3::Y * lift);
+                let pid = craft.parts[i].part_id.as_str();
                 let mut it = DrawItem::lit(name, wpos - cam, vessel_rot * lq, 1.0, sun);
                 it.animation = animation;
-                it.ambient = 0.25;
+                it.ambient = part_ambient;
                 it.fill_dir = up;
                 it.fill = 0.25;
+                it.sun = sun_share;
+                // Re-entry heat: a part past half its limit glows from dull red to orange-white.
+                if let Some(frac) = heat.get(&(i as u16)) {
+                    let g = ((frac - 0.5) / 0.5).clamp(0.0, 1.0);
+                    if g > 0.0 {
+                        it.color = [1.0, 1.0 - 0.55 * g, 1.0 - 0.85 * g, 1.0];
+                        it.emissive = 0.6 * g;
+                    }
+                }
                 items.push(it);
+                if let Some((state, open)) = chutes.get(&(i as u16)) {
+                    let open = match state {
+                        ose_net::ChuteState::SemiDeployed => open.clamp(0.05, 1.0) * 0.35,
+                        ose_net::ChuteState::Deployed => open.clamp(0.05, 1.0),
+                        _ => 0.0,
+                    };
+                    if open > 0.0 {
+                        gpu.request_model("fx:canopy", "assets/fx/canopy.glb");
+                        if gpu.has_model("fx:canopy") {
+                            let size = canopy_diameter(pid) * open as f64;
+                            let at = wpos
+                                + trail * (canopy_diameter(pid) * 0.8 * (0.4 + 0.6 * open as f64));
+                            let rot = DQuat::from_rotation_arc(DVec3::Y, trail);
+                            let mut c = DrawItem::lit("fx:canopy".into(), at - cam, rot, size, sun);
+                            c.ambient = part_ambient.max(0.35);
+                            c.sun = sun_share;
+                            items.push(c);
+                        }
+                    }
+                }
             }
         } else {
-            // Unknown craft (launched from another browser): a probe core as a stand-in.
-            let name = "part:probe_0v_octagonal_electricity_1x1".to_string();
-            gpu.request_model(&name, "assets/parts/probe_0v_octagonal_electricity_1x1.glb");
-            if gpu.has_model(&name) {
-                items.push(DrawItem::lit(name, pos - cam, vessel_rot, 1.0, sun));
+            // No craft document: a Kerbal on EVA, a flag, or a craft launched elsewhere (a probe core).
+            // Kerbals and flags stand up from the ground (a Kerbal faces where it walks); a stand-in probe
+            // keeps the vessel's attitude.
+            let rot = match inp.stand {
+                Stand::Craft => vessel_rot,
+                Stand::Kerbal => {
+                    let ahead = vessel_rot * DVec3::Y;
+                    let level = (ahead - up * ahead.dot(up)).normalize_or_zero();
+                    if level.length() > 0.5 {
+                        quat_from_basis(up.cross(level), up, level)
+                    } else {
+                        DQuat::from_rotation_arc(DVec3::Y, up)
+                    }
+                }
+                Stand::Flag => DQuat::from_rotation_arc(DVec3::Y, up),
+            };
+            for (name, _, scale) in inp.stand.models(gpu) {
+                let mut it = DrawItem::lit(name.to_string(), pos - cam, rot, scale, sun);
+                it.ambient = part_ambient;
+                it.sun = sun_share;
+                items.push(it);
+            }
+        }
+        // Other vessels within a few kilometres, as the original loads crafts around the active one.
+        for (o, stand) in inp.nearby_vessels {
+            let p = to_model(*o - inp.body_pos, spin, inp.ut);
+            if (p - pos).length() > 5_000.0 {
+                continue;
+            }
+            let rot = DQuat::from_rotation_arc(DVec3::Y, p.normalize_or_zero());
+            for (name, _, scale) in stand.models(gpu) {
+                let mut it = DrawItem::lit(name.to_string(), p - cam, rot, scale, sun);
+                it.ambient = part_ambient;
+                it.sun = sun_share;
+                items.push(it);
             }
         }
         // Sky: blue low in the atmosphere, black above it.

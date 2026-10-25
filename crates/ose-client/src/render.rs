@@ -31,7 +31,8 @@ struct CameraUniform {
 struct ObjectUniform {
     model: [[f32; 4]; 4],
     color: [f32; 4],
-    /// Direction towards the light in world (camera-relative) space, w unused.
+    /// Direction towards the light in world (camera-relative) space, w: share of the light reaching the
+    /// object (1 in full sun, less in an eclipse).
     light_dir: [f32; 4],
     /// Second, fill light: direction towards it (xyz) and intensity (w).
     light2: [f32; 4],
@@ -100,7 +101,7 @@ fn fs_mesh(in: VsOut) -> @location(0) vec4<f32> {
     // The camera sits at the origin of the relative world.
     let view = normalize(-in.world);
     let ldir = normalize(object.light_dir.xyz);
-    let diffuse = max(dot(n, ldir), 0.0);
+    let diffuse = max(dot(n, ldir), 0.0) * object.light_dir.w;
     if object.params.z > 0.5 {
         // Atmosphere shell: a rim that brightens towards the limb and on the day side, see-through
         // elsewhere. The alpha of the colour sets the strength.
@@ -266,6 +267,8 @@ pub struct DrawItem {
     /// Mirror the model along its Z axis (celestial body spheres: their UVs run west-to-east the other way
     /// round from a right-handed frame, see flight3d).
     pub mirror_z: bool,
+    /// Share of the light reaching the model, 0..1: 1 in full sun, less while a body eclipses the star.
+    pub sun: f32,
 }
 
 impl DrawItem {
@@ -291,6 +294,7 @@ impl DrawItem {
             ambient: 0.0,
             atmosphere: false,
             mirror_z: false,
+            sun: 1.0,
         }
     }
 }
@@ -1322,7 +1326,7 @@ impl Renderer {
                     light_dir: item
                         .light_dir
                         .normalize_or_zero()
-                        .extend(0.0)
+                        .extend(item.sun as f64)
                         .as_vec4()
                         .to_array(),
                     light2: [fill.x, fill.y, fill.z, item.fill],

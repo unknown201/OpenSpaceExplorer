@@ -359,11 +359,23 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
     let mut brake_torque = 0.0;
     let mut steerable = false;
     let mut converter: Option<ose_data::Converter> = None;
+    let mut ejection_force = 0.0;
+    let mut rcs: Option<ose_data::Rcs> = None;
     if let Some(mods) = d["serializedPartModules"].as_array() {
         for m in mods {
             if let Some(entries) = m["ModuleData"].as_array() {
                 for entry in entries.iter() {
                     let o = &entry["DataObject"];
+                    if entry["Name"] == "Data_RCS" {
+                        rcs = Some(ose_data::Rcs {
+                            thrust_kn: f(o, "maxThrust"),
+                            propellant: s(&o["Propellant"], "mixtureName"),
+                            isp_curve: curve(&o["atmosphereCurve"]),
+                        });
+                    }
+                    if entry["Name"] == "Data_Decouple" {
+                        ejection_force = f(o, "ejectionForce");
+                    }
                     if entry["Name"] == "Data_ResourceConverter" {
                         let pick = o["SelectedFormula"].as_u64().unwrap_or(0) as usize;
                         if let Some(fm) =
@@ -630,6 +642,8 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
         heatshield,
         landing_gear,
         converter,
+        ejection_force,
+        rcs,
         drag_cubes,
         module_names,
         raw_modules,

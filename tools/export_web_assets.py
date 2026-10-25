@@ -204,6 +204,10 @@ class Exporter:
         self.aa = install / "KSP2_x64_Data/StreamingAssets/aa"
         self.bdir = self.aa / "StandaloneWindows64"
         self.cat = Catalog(str(self.aa / "catalog.json"))
+        # Bone name -> world matrix (Unity space) of a reference character skeleton, see tools/export_kerbal.py.
+        self.skeleton: dict | None = None
+        # World matrix of the bone a worn prop (a helmet prefab) is attached to, with `skeleton`.
+        self.attach = None
         self.out = out
         self.max_texture = max_texture
         self.verbose = verbose
@@ -258,13 +262,28 @@ class Exporter:
 
     # -- meshes
 
-    def mesh_arrays(self, mesh_obj):
+    def mesh_arrays(self, mesh_obj, bake=None):
+        """Positions, normals, uvs and triangles in glTF space; `bake` (a 4x4 in Unity space) first moves the
+        vertices, for skinned meshes whose bind pose differs from their renderer's transform."""
         from UnityPy.helpers.MeshHelper import MeshHandler
 
         h = MeshHandler(mesh_obj)
         h.process()
-        positions = [to_gltf_pos(v) for v in h.m_Vertices]
-        normals = [to_gltf_pos(n) for n in h.m_Normals] if h.m_Normals else []
+        verts = [tuple(v)[:3] for v in h.m_Vertices]
+        norms = [tuple(n)[:3] for n in h.m_Normals] if h.m_Normals else []
+        if bake is not None:
+            import numpy as np
+
+            m = np.asarray(bake, float)
+            v = np.c_[np.asarray(verts, float), np.ones(len(verts))] @ m.T
+            verts = [tuple(r[:3]) for r in v]
+            if norms:
+                nm = np.linalg.inv(m[:3, :3]).T
+                n = np.asarray(norms, float) @ nm.T
+                n /= np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-12)
+                norms = [tuple(r) for r in n]
+        positions = [to_gltf_pos(v) for v in verts]
+        normals = [to_gltf_pos(n) for n in norms] if norms else []
         uvs = [(float(u[0]), 1.0 - float(u[1])) for u in h.m_UV0] if h.m_UV0 else []
         tris: list[int] = []
         for sub in h.get_triangles():
@@ -378,7 +397,7 @@ class Exporter:
             return idx
 
         # Transforms of the whole environment, keyed by path id; the prefab's roots are those whose father
-        # is missing. Collision ("col_*") and reentry LOD objects are skipped.
+        # is missing. Collision ("col_*") and reentry LOD objects are skipped, and engine fairings and exhaust plumes.
         transforms = {o.path_id: o.read() for o in env.objects if o.type.name == "Transform"}
         go_name = {}
         for o in env.objects:
@@ -387,10 +406,34 @@ class Exporter:
                     go_name[o.path_id] = o.read().m_Name
                 except Exception:  # noqa: BLE001
                     pass
+        import numpy as np
+
+        def mat44(m) -> np.ndarray:
+            return np.array([[getattr(m, f"e{r}{c}") for c in range(4)] for r in range(4)], float)
+
+        def trs(tf) -> np.ndarray:
+            x, y, z, w = (tf.m_LocalRotation.x, tf.m_LocalRotation.y, tf.m_LocalRotation.z, tf.m_LocalRotation.w)
+            r = np.array([[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+                          [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+                          [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]])
+            m = np.eye(4)
+            m[:3, :3] = r * np.array([tf.m_LocalScale.x, tf.m_LocalScale.y, tf.m_LocalScale.z])
+            m[:3, 3] = (tf.m_LocalPosition.x, tf.m_LocalPosition.y, tf.m_LocalPosition.z)
+            return m
+
+        def world_of(tf_id: int) -> np.ndarray:
+            m = np.eye(4)
+            cur, hops = tf_id, 0
+            while cur in transforms and hops < 64:
+                m = trs(transforms[cur]) @ m
+                cur = transforms[cur].m_Father.path_id if transforms[cur].m_Father else 0
+                hops += 1
+            return m
+
         meshes_by_tf: dict[int, int] = {}
         renderer_material: dict[int, int | None] = {}  # GameObject path id -> material index
         for o in env.objects:
-            if o.type.name != "MeshRenderer":
+            if o.type.name not in ("MeshRenderer", "SkinnedMeshRenderer"):
                 continue
             if o.path_id in self._excluded_lod_renderers:
                 renderer_material[o.read().m_GameObject.path_id] = -1
@@ -406,8 +449,14 @@ class Exporter:
             else:
                 renderer_material[mr.m_GameObject.path_id] = mat
         mesh_count = 0
+        # Meshes come from MeshFilters and from SkinnedMeshRenderers (wheels, dishes, chutes, legs), the latter
+        # drawn in their bind pose at the renderer's transform.
         for o in env.objects:
-            if o.type.name != "MeshFilter":
+            if o.type.name not in ("MeshFilter", "SkinnedMeshRenderer"):
+                continue
+            # Part skins retain raw vertices and real weights below. Character pieces exported with
+            # a reference skeleton keep the existing baked-pose path so their head/suit/helmet align.
+            if o.type.name == "SkinnedMeshRenderer" and not self.skeleton:
                 continue
             try:
                 mf = o.read()
@@ -417,23 +466,85 @@ class Exporter:
                 name = go_name.get(go_id, "")
                 if name.startswith("col_") or renderer_material.get(go_id) == -1:
                     continue
+                # An engine's fairing (the shroud round its bell) shows in the original only when a part hangs
+                # below the engine; drawn always, it turns an LV-T45 into a fat cylinder.
+                if part_id.startswith("engine_") and "fairing" in name.lower():
+                    continue
+                # Exhaust plume meshes (exh_*, vfx_*) are effect geometry the original only shows while the
+                # engine burns; static, they stand as 20 m white cones under every engine.
+                if name.lower().startswith(("exh_", "vfx_")):
+                    continue
                 mesh = mf.m_Mesh.read()
             except Exception:  # noqa: BLE001
                 continue
             tf_id = next((k for k, v in transforms.items() if v.m_GameObject.path_id == go_id), None)
             if tf_id is None:
                 continue
-            positions, normals, uvs, tris = self.mesh_arrays(mesh)
+            bake = None
+            if o.type.name == "SkinnedMeshRenderer" and mf.m_Bones and mesh.m_BindPose:
+                # Rest pose: the first bone's world matrix times its bind pose, relative to the renderer.
+                b0 = mf.m_Bones[0].path_id
+                if b0 in transforms:
+                    # With a reference skeleton (pieces of one character, each prefab holding its own bones at
+                    # different poses), the bone's world matrix comes from the reference by bone name.
+                    bone_name = go_name.get(transforms[b0].m_GameObject.path_id, "")
+                    w_bone = (self.skeleton or {}).get(bone_name)
+                    if w_bone is None:
+                        w_bone = world_of(b0)
+                    bake = np.linalg.inv(world_of(tf_id)) @ w_bone @ mat44(mesh.m_BindPose[0])
+            elif self.skeleton and o.type.name == "MeshFilter":
+                # A rigid mesh hanging under one of the character's bones follows the reference pose of the
+                # nearest such bone.
+                cur, hops = tf_id, 0
+                while cur in transforms and hops < 64:
+                    name = go_name.get(transforms[cur].m_GameObject.path_id, "")
+                    if cur != tf_id and name in self.skeleton:
+                        w_tf = world_of(tf_id)
+                        bake = np.linalg.inv(w_tf) @ self.skeleton[name] @ np.linalg.inv(world_of(cur)) @ w_tf
+                        break
+                    cur = transforms[cur].m_Father.path_id if transforms[cur].m_Father else 0
+                    hops += 1
+                else:
+                    # Not under a bone: a prop the character wears (the helmet) hangs from `attach`.
+                    if self.attach is not None:
+                        w_tf = world_of(tf_id)
+                        bake = np.linalg.inv(w_tf) @ self.attach @ w_tf
+            positions, normals, uvs, tris = self.mesh_arrays(mesh, bake)
             if not positions or not tris:
                 continue
             mat = renderer_material.get(go_id)
             meshes_by_tf[tf_id] = glb.mesh(mesh.m_Name, positions, normals, uvs, tris, mat if mat is not None and mat >= 0 else None)
             mesh_count += 1
         from export_animation import skinned_meshes, export_rig
-        skins = skinned_meshes(self, env, glb, transforms, go_name, material_index, meshes_by_tf)
+        skins = [] if self.skeleton else skinned_meshes(self, env, glb, transforms, go_name, material_index, meshes_by_tf, part_id)
         mesh_count = len(meshes_by_tf)
         if mesh_count == 0:
             return None
+
+        # The environment also holds the dependency bundles (the source models, shared effects), whose own
+        # MeshFilters are not part of this prefab: keep only meshes under the prefab's root, the root-level
+        # transform named after the part. Without it, effect plumes and source-model copies at their authoring
+        # scale (cm) came along and drew 100 m cargo bays and antenna dishes.
+        roots = [
+            k for k, v in transforms.items()
+            if not (v.m_Father and v.m_Father.path_id in transforms) and go_name.get(v.m_GameObject.path_id) == part_id
+        ]
+        # The EVA Kerbal's prefab holds only its sample container; the body comes from its model bundles.
+        if roots and part_id != "eva_kerbal":
+            under: set[int] = set()
+            stack = list(roots)
+            while stack:
+                cur = stack.pop()
+                if cur in under or cur not in transforms:
+                    continue
+                under.add(cur)
+                stack.extend(c.path_id for c in transforms[cur].m_Children)
+            mine = {k: v for k, v in meshes_by_tf.items() if k in under}
+            if mine:
+                meshes_by_tf = mine
+
+        skins = [entry for entry in skins if entry[0] in meshes_by_tf]
+        mesh_count = len(meshes_by_tf)
 
         # Only transforms that lead to a mesh are written, so the GLB stays small.
         keep: set[int] = set(transforms)  # Preserve bones, animation targets and procedural pivots too.

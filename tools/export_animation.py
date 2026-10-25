@@ -76,7 +76,7 @@ def sampled_components(clip):
     return times, rows
 
 
-def skinned_meshes(ex, env, glb, transforms, names, material_index, meshes_by_tf):
+def skinned_meshes(ex, env, glb, transforms, names, material_index, meshes_by_tf, part_id=""):
     """Add skinned meshes before the node hierarchy is built; return renderer/bind-pose pairs."""
     from UnityPy.helpers.MeshHelper import MeshHandler
     result = []
@@ -87,6 +87,9 @@ def skinned_meshes(ex, env, glb, transforms, names, material_index, meshes_by_tf
         if obj.path_id in ex._excluded_lod_renderers:
             continue
         skin = obj.read()
+        name = names.get(skin.m_GameObject.path_id, "").lower()
+        if name.startswith(("col_", "exh_", "vfx_")) or (part_id.startswith("engine_") and "fairing" in name):
+            continue
         tf = tf_by_go.get(skin.m_GameObject.path_id)
         if tf is None or not skin.m_Mesh.path_id:
             continue

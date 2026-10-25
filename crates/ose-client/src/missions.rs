@@ -102,7 +102,9 @@ pub fn render_list(
         };
         let info = progress.and_then(|p| p.iter().find(|i| i.id == m.id));
         let state = match info {
-            Some(i) if i.complete => "complete",
+            Some(i) if i.turned_in => "complete",
+            Some(i) if i.complete => "ready",
+            Some(i) if !i.accepted => "offered",
             Some(_) => "active",
             None if m.active_at_start => "active",
             None => "offered-later",
@@ -150,7 +152,7 @@ pub fn render_briefing(
          <div class=\"mc-sub\">{desc_head}</div><p>{desc}</p>\
          <div class=\"mc-sub\">{obj_head}</div><ol class=\"mc-objectives\">{objectives}</ol>\
          <div class=\"mc-reward\">{reward_head} <b>{reward:.0}</b> {science}</div>\
-         <div class=\"mc-state\">{state}</div>",
+         <div class=\"mc-state\">{state}</div>{action}<div id=\"mc-note\" data-ose=\"mc-note\"></div>",
         kind = esc(&text(
             loc,
             if m.primary {
@@ -180,8 +182,23 @@ pub fn render_briefing(
         reward_head = esc(&text(loc, "Missions/MissionControl/Rewards/Reward")),
         science = esc(&text(loc, "Missions/MissionControl/Rewards/Science")),
         reward = reward(m),
+        // The original's mission log: take on an offered mission, hand in a finished one for its reward.
+        action = match info {
+            Some(i) if i.complete && !i.turned_in => format!(
+                "<button class=\"mc-turnin\" data-ose=\"mc-turnin\" data-ose-mission-turnin=\"{}\">Turn in ({:.0} science)</button>",
+                esc(&m.id),
+                reward(m)
+            ),
+            Some(i) if !i.accepted && !i.complete => format!(
+                "<button class=\"mc-accept\" data-ose=\"mc-accept\" data-ose-mission-accept=\"{}\">Accept mission</button>",
+                esc(&m.id)
+            ),
+            _ => String::new(),
+        },
         state = match info {
-            Some(i) if i.complete => "Complete".to_string(),
+            Some(i) if i.turned_in => "Complete: reward paid".to_string(),
+            Some(i) if i.complete => "Complete: turn it in at Mission Control".to_string(),
+            Some(i) if !i.accepted => "Offered: accept it to start".to_string(),
             Some(i) => format!(
                 "Active: stage {} of {}",
                 (i.stage + 1).min(i.stages.max(1)),
