@@ -34,7 +34,7 @@ Camera rule that runs through every map: **the right button drags the camera, th
 | G3 | Tooltips on every HUD control, naming the key; Shift expands | every HUD, VAB and KSC control names what it does and its key; the VAB and R&D show full part tooltips; no Shift-to-expand | done |
 | G4 | Notification toasts (warp limited, out of charge, lost link, vessel lost ...) | flight messages and refusals come up as toasts at the top right | done (more event sources later) |
 | G5 | F5/F9 quicksave/quickload | F5/F9 with toasts; any `[data-save-action]` button (the pause menu's revert buttons) reverts to launch or to the VAB | done |
-| G6 | Settings screen: input bindings, audio sliders, UI scale, tooltips on/off, graphics | Settings from the main menu (any `[data-open-settings]` element opens it): Input lists the original's bindings and which work, Interface has UI scale and key hints, Audio the sound switch; no rebinding or volume sliders yet | partly done |
+| G6 | Settings screen: input bindings, audio sliders, UI scale, tooltips on/off, graphics | Settings from the main menu (any `[data-open-settings]` element opens it): Input lists the original's bindings and which work, Interface has UI scale and key hints, Audio the sound switch and music and effects volume; no rebinding or graphics options yet | partly done |
 | G7 | Esc menu: resume, save, load, revert to launch/VAB, recover, KSC, Tracking Station, Mission Control, R&D, VAB, settings, quit | resume, KSC, sessions, sound, leave | other thread (restyle in progress); revert/save/load server |
 
 ### Flight

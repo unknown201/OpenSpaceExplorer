@@ -670,6 +670,49 @@ fn install_audio(app: &Shared) -> Result<(), JsValue> {
     }
     app.borrow().show_sound_toggle();
     install_settings(app)?;
+    // Volume sliders (Settings > Audio), kept per browser.
+    {
+        let pct = |key: &str| {
+            stored(key)
+                .and_then(|v| v.parse::<f64>().ok())
+                .unwrap_or(100.0)
+                .clamp(0.0, 100.0)
+        };
+        let (music, sfx) = (pct("ose.vol.music"), pct("ose.vol.sfx"));
+        app.borrow_mut()
+            .audio
+            .set_volumes(music / 100.0, sfx / 100.0);
+        let doc = app.borrow().doc.clone();
+        for (id, key, v) in [
+            ("settings-music", "ose.vol.music", music),
+            ("settings-sfx", "ose.vol.sfx", sfx),
+        ] {
+            set_text(&doc, &format!("{id}-text"), &format!("{v:.0}%"));
+            let Some(input) = doc
+                .get_element_by_id(id)
+                .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+            else {
+                continue;
+            };
+            input.set_value(&format!("{v:.0}"));
+            let a = app.clone();
+            let i2 = input.clone();
+            let cb = Closure::<dyn FnMut()>::new(move || {
+                let v = i2.value_as_number().clamp(0.0, 100.0);
+                store(key, &format!("{v:.0}"));
+                let mut app = a.borrow_mut();
+                set_text(&app.doc, &format!("{id}-text"), &format!("{v:.0}%"));
+                let (m, s) = (app.audio.music_scale, app.audio.sfx_scale);
+                if id == "settings-music" {
+                    app.audio.set_volumes(v / 100.0, s);
+                } else {
+                    app.audio.set_volumes(m, v / 100.0);
+                }
+            });
+            input.add_event_listener_with_callback("input", cb.as_ref().unchecked_ref())?;
+            cb.forget();
+        }
+    }
     install_rnd_nav(&app.borrow().doc.clone())?;
     // Maneuver handles take their own presses (they sit above vessel labels, which take clicks too).
     if let Some(labels) = app.borrow().doc.get_element_by_id("labels") {

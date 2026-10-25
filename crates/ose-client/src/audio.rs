@@ -67,12 +67,18 @@ pub struct Audio {
     sfx_count: u32,
     pub muted: bool,
     last_ms: f64,
+    /// Player volume sliders (Settings > Audio), 0..1 on top of the mix: music, and effects (one-shots, the
+    /// engine and ambience all go through the master gain).
+    pub music_scale: f64,
+    pub sfx_scale: f64,
 }
 
 impl Audio {
     pub fn new(muted: bool) -> Self {
         Audio {
             muted,
+            music_scale: 1.0,
+            sfx_scale: 1.0,
             ..Default::default()
         }
     }
@@ -100,8 +106,11 @@ impl Audio {
         if self.ctx.is_none() {
             let Ok(ctx) = AudioContext::new() else { return };
             if let Ok(g) = ctx.create_gain() {
-                g.gain()
-                    .set_value(if self.muted { 0.0 } else { SFX_VOLUME as f32 });
+                g.gain().set_value(if self.muted {
+                    0.0
+                } else {
+                    (SFX_VOLUME * self.sfx_scale) as f32
+                });
                 g.connect_with_audio_node(&ctx.destination()).ok();
                 self.master = Some(g);
             }
@@ -118,11 +127,22 @@ impl Audio {
         }
     }
 
+    /// Set the music and effects volume sliders (0..1).
+    pub fn set_volumes(&mut self, music: f64, sfx: f64) {
+        self.music_scale = music.clamp(0.0, 1.0);
+        self.sfx_scale = sfx.clamp(0.0, 1.0);
+        let muted = self.muted;
+        self.set_muted(muted);
+    }
+
     pub fn set_muted(&mut self, muted: bool) {
         self.muted = muted;
         if let Some(g) = &self.master {
-            g.gain()
-                .set_value(if muted { 0.0 } else { SFX_VOLUME as f32 });
+            g.gain().set_value(if muted {
+                0.0
+            } else {
+                (SFX_VOLUME * self.sfx_scale) as f32
+            });
         }
         self.apply_volumes();
     }
@@ -213,7 +233,11 @@ impl Audio {
     }
 
     fn apply_volumes(&self) {
-        let m = if self.muted { 0.0 } else { MUSIC_VOLUME };
+        let m = if self.muted {
+            0.0
+        } else {
+            MUSIC_VOLUME * self.music_scale
+        };
         for t in self.current.iter().chain(self.fading.iter()) {
             t.el.set_volume((t.fade * t.gain * m).clamp(0.0, 1.0));
         }
