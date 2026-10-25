@@ -909,6 +909,10 @@
     #ksc-buildings button { text-transform: uppercase; letter-spacing: 0.08em; border: 0 !important; border-bottom: 2px dotted #6a718f88 !important; border-radius: 0 !important; background: transparent !important; color: #0a0a0a !important; }
     #ksc-buildings button:last-child { border-bottom: 0 !important; }
     #ksc-buildings button img { filter: brightness(0.2); }
+    /* Map labels as the original's: event markers in blue capitals without a box, body names in a dark tag. */
+    #labels .apsis { text-transform: uppercase; letter-spacing: 0.06em; color: #8cc4ff; background: #06080f99; border-color: #8cc4ff44; }
+    #labels .apsis::after { background: #8cc4ff; }
+    #labels .body { text-transform: uppercase; letter-spacing: 0.06em; background: #1b2230d9; border: 1px solid #ffffff22; border-radius: 3px; padding: 1px 6px; }
     #ksc-buildings button:hover { background: #cde6ff !important; }
     #crumbs { font-family: var(--hud-font); background: #10141bd9; border: 1px solid #ffffff22; border-radius: 4px; padding: 3px 10px; color: #cfd6e6; top: 6px !important; }
     #ftue .ftue-name { font-family: var(--hud-font); font-size: 18px; letter-spacing: 0.08em; color: #4fd8ff; }
