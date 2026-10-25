@@ -1245,6 +1245,18 @@ async fn a_vab_built_rocket_sits_still_on_the_pad_and_lifts_off() {
         "the tank is full: {} t",
         first.propellant_t
     );
+    // the flight staging stack: the Swivel's stage at the pad, Kerbin gravity and sea-level air
+    let st = first
+        .stage_list
+        .iter()
+        .find(|s| s.thrust_kn > 0.0)
+        .expect("an engine stage");
+    assert!(
+        st.twr_now > 1.0 && st.thrust_now_kn < st.thrust_kn,
+        "{st:?}"
+    );
+    assert!(st.delta_v_now_mps > 0.0 && st.delta_v_now_mps < st.delta_v_vacuum_mps);
+    assert!(first.delta_v_now_mps > 0.0);
     let (mut lo, mut hi) = (f64::MAX, f64::MIN);
     for _ in 0..20 {
         let f = wait_for(&mut ws, flight).await;

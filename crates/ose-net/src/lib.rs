@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 37;
+pub const PROTOCOL_VERSION: u16 = 38;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -592,6 +592,10 @@ pub struct FlightReadout {
     /// Control surfaces and how far each is deflected now, rad (about its hinge; sign follows the
     /// surface's lift axis).
     pub control_surfaces: Vec<(u16, f32)>,
+    /// The stages still to come, as the editor's staging list but from the vessel as it is now (what
+    /// its tanks hold, here), first to fire first; and their total delta-v here.
+    pub stage_list: Vec<StageReadout>,
+    pub delta_v_now_mps: f64,
     /// The burning stage is jets (their thrust follows speed and air; `thrust_kn` shows it).
     pub jet: bool,
 }
@@ -733,6 +737,11 @@ pub struct StageReadout {
     /// surface (9.81 m/s^2).
     pub thrust_asl_kn: f64,
     pub twr_asl: f64,
+    /// In flight (`FlightReadout::stage_list`): thrust, TWR and delta-v where the vessel is now (the air
+    /// pressure and gravity there); 0 in the editor.
+    pub thrust_now_kn: f64,
+    pub twr_now: f64,
+    pub delta_v_now_mps: f64,
 }
 
 /// Server to client.

@@ -679,7 +679,24 @@ fn vessels_message(s: &Shared, u: &Universe, tick: Tick) -> ServerMessage {
                 position_m: bp + rp,
                 velocity_mps: bv + rv,
                 orbit: elements(&orbit),
-                flight: flight_readout(u, e, body, &s.parts),
+                flight: flight_readout(u, e, body, &s.parts).map(|mut f| {
+                    // the staging list from the vessel as it is now, here
+                    if let (Some(craft), Some(p)) = (u.current_craft(e), u.powered(e)) {
+                        let b = u.world.get::<ose_sim::bodies::Body>(body);
+                        let r = p.r.length();
+                        let g = b.map(|b| b.mu / (r * r)).unwrap_or(0.0);
+                        let atm = u
+                            .atmosphere(body)
+                            .zip(b)
+                            .map(|(a, b)| a.pressure_kpa(r - b.radius_m) / 101.325)
+                            .unwrap_or(0.0);
+                        let report =
+                            ose_data::staging::delta_v_by_stage(&craft, &s.parts, &s.resources);
+                        f.stage_list = stage_readouts_at(s, &craft, &report, Some((atm, g)));
+                        f.delta_v_now_mps = f.stage_list.iter().map(|x| x.delta_v_now_mps).sum();
+                    }
+                    f
+                }),
                 target: u.target(e).and_then(|t| {
                     let id = match list.iter().find(|x| x.0 == t) {
                         Some(&(_, vid, _)) => ose_net::TargetId::Vessel(vid),
@@ -892,6 +909,9 @@ fn flight_readout(
                     .collect()
             })
             .unwrap_or_default(),
+        // filled in by `vessels_message`, which knows the craft
+        stage_list: Vec::new(),
+        delta_v_now_mps: 0.0,
         control_surfaces: u
             .structure(e)
             .map(|st| {
@@ -2043,6 +2063,35 @@ fn stage_readouts(
     craft: &ose_data::craft::Craft,
     report: &ose_data::staging::DeltaVReport,
 ) -> Vec<ose_net::StageReadout> {
+    stage_readouts_at(s, craft, report, None)
+}
+
+/// The staging readout, and with `here = Some((pressure atm, gravity m/s^2))` the thrust, TWR and
+/// delta-v at that place too.
+fn stage_readouts_at(
+    s: &Shared,
+    craft: &ose_data::craft::Craft,
+    report: &ose_data::staging::DeltaVReport,
+    here: Option<(f64, f64)>,
+) -> Vec<ose_net::StageReadout> {
+    // an engine's thrust and Isp at `atm` (the original keeps fuel flow fixed: thrust follows Isp)
+    let at = |part: usize, atm: f64| -> (f64, f64, f64) {
+        s.parts
+            .iter()
+            .find(|d| d.id == craft.parts[part].part_id)
+            .and_then(|d| d.engines.first())
+            .map(|e| {
+                let vac = e.isp_curve.evaluate(0.0);
+                let isp = e.isp_curve.evaluate(atm);
+                let thrust = if vac > 0.0 {
+                    e.max_thrust_kn * isp / vac
+                } else {
+                    0.0
+                };
+                (thrust, isp, vac)
+            })
+            .unwrap_or((0.0, 0.0, 0.0))
+    };
     let asl = |part: usize| -> f64 {
         s.parts
             .iter()
@@ -2063,6 +2112,31 @@ fn stage_readouts(
         .iter()
         .map(|st| {
             let thrust_asl_kn: f64 = st.engines.iter().map(|&i| asl(i)).sum();
+            let jet = jet_stage(s, craft, st);
+            let (thrust_now_kn, twr_now, delta_v_now_mps) = match here {
+                Some((atm, g)) => {
+                    let e: Vec<(f64, f64, f64)> = st.engines.iter().map(|&i| at(i, atm)).collect();
+                    let thrust: f64 = e.iter().map(|x| x.0).sum();
+                    // thrust-weighted Isp ratio here against vacuum
+                    let (num, den) = e
+                        .iter()
+                        .fold((0.0, 0.0), |(n, d), x| (n + x.0 * x.1, d + x.0 * x.2));
+                    let ratio = if den > 0.0 { num / den } else { 0.0 };
+                    let dv = if jet {
+                        // jets: what they would make burning everything here
+                        st.delta_v_vacuum_mps
+                    } else {
+                        st.delta_v_vacuum_mps * ratio
+                    };
+                    let twr = if st.start_mass_t > 0.0 && g > 0.0 {
+                        thrust / (st.start_mass_t * g)
+                    } else {
+                        0.0
+                    };
+                    (thrust, twr, dv.max(0.0))
+                }
+                None => (0.0, 0.0, 0.0),
+            };
             ose_net::StageReadout {
                 stage_id: st.stage_id as u32,
                 start_mass_t: st.start_mass_t,
@@ -2080,6 +2154,9 @@ fn stage_readouts(
                 } else {
                     0.0
                 },
+                thrust_now_kn,
+                twr_now,
+                delta_v_now_mps,
             }
         })
         .collect()
