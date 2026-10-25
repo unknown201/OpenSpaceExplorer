@@ -11223,9 +11223,13 @@ impl App {
                 .get(&id)
                 .and_then(|k| k.1.as_ref())
                 .filter(|c| {
-                    self.flight_craft
-                        .as_ref()
-                        .is_none_or(|d| d.parts.len() == c.parts.len())
+                    // Controlling from a part turns the server's craft into that part's frame (and renumbers
+                    // its parts as they stand), so only its own craft draws it right then.
+                    v.flight.as_ref().is_some_and(|f| f.control_part.is_some())
+                        || self
+                            .flight_craft
+                            .as_ref()
+                            .is_none_or(|d| d.parts.len() == c.parts.len())
                 })
                 .or(self.flight_craft.as_ref()),
             present: present.as_ref(),

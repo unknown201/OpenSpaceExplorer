@@ -24,6 +24,26 @@ struct Vertex {
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct CameraUniform {
     view_proj: [[f32; 4]; 4],
+    /// Local lights (lamps on a craft): x = how many are set; then per light its position relative to the
+    /// camera and range (w), its beam direction and the cosine of its cone (w, -1 for all round), its colour.
+    light_count: [f32; 4],
+    light_pos: [[f32; 4]; MAX_LIGHTS],
+    light_dir: [[f32; 4]; MAX_LIGHTS],
+    light_col: [[f32; 4]; MAX_LIGHTS],
+}
+
+/// Local lights a frame can carry (the nearest craft lamps).
+pub const MAX_LIGHTS: usize = 8;
+
+/// A lamp lighting what is near it: position relative to the camera, range, beam direction and cone
+/// (cosine of the half angle; -1 lights all round) and linear colour times intensity.
+#[derive(Clone, Copy, Debug)]
+pub struct LocalLight {
+    pub pos: DVec3,
+    pub range: f64,
+    pub dir: DVec3,
+    pub cone_cos: f32,
+    pub color: [f32; 3],
 }
 
 #[repr(C)]
@@ -48,7 +68,7 @@ struct ObjectUniform {
 }
 
 const SHADER: &str = r#"
-struct Camera { view_proj: mat4x4<f32> };
+struct Camera { view_proj: mat4x4<f32>, light_count: vec4<f32>, light_pos: array<vec4<f32>, 8>, light_dir: array<vec4<f32>, 8>, light_col: array<vec4<f32>, 8> };
 struct Object { model: mat4x4<f32>, color: vec4<f32>, light_dir: vec4<f32>, light2: vec4<f32>, params: vec4<f32>, extra: vec4<f32>, paint_a: vec4<f32>, paint_b: vec4<f32> };
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(1) @binding(0) var<uniform> object: Object;
@@ -134,7 +154,21 @@ fn fs_mesh(in: VsOut) -> @location(0) vec4<f32> {
     let spec = pow(max(dot(n, h), 0.0), spec_pow) * smooth_ * diffuse * (spec_pow + 8.0) / 64.0;
     let spec_col = mix(vec3<f32>(0.04), base.rgb, metal);
     let shaded = lit * (1.0 - metal * 0.5) + spec_col * spec;
-    let rgb = mix(shaded, base.rgb, object.params.x) + em;
+    // Local lamps (craft lights): falloff with distance over their range, a soft cone for spots.
+    var lamps = vec3<f32>(0.0);
+    let nl = i32(camera.light_count.x);
+    for (var k = 0; k < 8; k++) {
+        if k < nl {
+            let to = camera.light_pos[k].xyz - in.world;
+            let d = length(to);
+            let l = to / max(d, 1e-3);
+            let att = pow(clamp(1.0 - d / camera.light_pos[k].w, 0.0, 1.0), 2.0);
+            let cone = camera.light_dir[k].w;
+            let spot = select(smoothstep(cone, mix(cone, 1.0, 0.35), dot(-l, camera.light_dir[k].xyz)), 1.0, cone < -0.5);
+            lamps += camera.light_col[k].rgb * max(dot(n, l), 0.0) * att * spot;
+        }
+    }
+    let rgb = mix(shaded + base.rgb * lamps, base.rgb, object.params.x) + em;
     return vec4<f32>(rgb, base.a);
 }
 
@@ -1204,9 +1238,34 @@ impl Renderer {
         self.near = near;
         let proj = perspective_rh(fov_y_rad, aspect, near, far);
         self.view_proj = proj * view;
+        // A new camera starts with no lamps; a view that has some sets them after (set_lights).
         let u = CameraUniform {
             view_proj: self.view_proj.as_mat4().to_cols_array_2d(),
+            light_count: [0.0; 4],
+            light_pos: [[0.0; 4]; MAX_LIGHTS],
+            light_dir: [[0.0; 4]; MAX_LIGHTS],
+            light_col: [[0.0; 4]; MAX_LIGHTS],
         };
+        self.queue
+            .write_buffer(&self.camera_buf, 0, bytemuck::bytes_of(&u));
+    }
+
+    /// The frame's local lamps (after `set_camera`): the first MAX_LIGHTS are used.
+    pub fn set_lights(&mut self, lights: &[LocalLight]) {
+        let mut u = CameraUniform {
+            view_proj: self.view_proj.as_mat4().to_cols_array_2d(),
+            light_count: [lights.len().min(MAX_LIGHTS) as f32, 0.0, 0.0, 0.0],
+            light_pos: [[0.0; 4]; MAX_LIGHTS],
+            light_dir: [[0.0; 4]; MAX_LIGHTS],
+            light_col: [[0.0; 4]; MAX_LIGHTS],
+        };
+        for (k, l) in lights.iter().take(MAX_LIGHTS).enumerate() {
+            let p = l.pos.as_vec3();
+            let d = l.dir.normalize_or_zero().as_vec3();
+            u.light_pos[k] = [p.x, p.y, p.z, l.range as f32];
+            u.light_dir[k] = [d.x, d.y, d.z, l.cone_cos];
+            u.light_col[k] = [l.color[0], l.color[1], l.color[2], 1.0];
+        }
         self.queue
             .write_buffer(&self.camera_buf, 0, bytemuck::bytes_of(&u));
     }

@@ -240,6 +240,18 @@ pub(crate) fn bare_engine(craft: &Craft, i: usize) -> bool {
         })
 }
 
+/// A lamp part's light in its model frame: where the original's Light node sits and the way it shines
+/// (the node's +Z), read from the exported models.
+fn lamp_frame(part_id: &str) -> (DVec3, DVec3) {
+    match part_id {
+        "light_0v_spot" => (DVec3::new(0.268, -0.135, 0.0), DVec3::Y),
+        "light_0v_broad" => (DVec3::new(0.273, -0.051, 0.0), DVec3::Y),
+        "light_0v_navigation" => (DVec3::ZERO, DVec3::new(1.0, 1.0, 0.0).normalize()),
+        "light_0v_bulb" => (DVec3::ZERO, DVec3::Z),
+        _ => (DVec3::ZERO, DVec3::X),
+    }
+}
+
 /// The original's most common Kerbal skin colour (looks SKINCOLOR BADA55).
 pub const DEFAULT_SKIN: [u8; 3] = [0xBA, 0xDA, 0x55];
 
@@ -1446,6 +1458,39 @@ impl FlightView {
                     it.sun = sun_share;
                     items.push(it);
                 }
+            }
+            // Lamps on the craft light what is near them while the Lights group is on.
+            if readout.is_some_and(|f| f.lights) {
+                let mut lamps: Vec<crate::render::LocalLight> = parts
+                    .iter()
+                    .filter(|(i, ..)| craft.parts[*i].part_id.starts_with("light_"))
+                    .map(|(i, _, lp, lq, _)| {
+                        let pid = craft.parts[*i].part_id.as_str();
+                        let spot = pid.contains("spot") || pid.contains("broad");
+                        // Where the part's Light sits and which way it shines (its +Z), from the models.
+                        let (off, axis) = lamp_frame(pid);
+                        let at = pos + vessel_rot * (*lp + DVec3::Y * lift + *lq * off);
+                        crate::render::LocalLight {
+                            pos: at - cam,
+                            range: if spot { 60.0 } else { 18.0 },
+                            dir: vessel_rot * (*lq * axis),
+                            cone_cos: if pid.contains("narrow") {
+                                0.94
+                            } else if spot {
+                                0.8
+                            } else {
+                                -1.0
+                            },
+                            color: if pid.contains("navigation") {
+                                [0.1, 0.6, 0.15]
+                            } else {
+                                [1.4, 1.25, 1.0]
+                            },
+                        }
+                    })
+                    .collect();
+                lamps.sort_by(|a, b| a.pos.length().total_cmp(&b.pos.length()));
+                gpu.set_lights(&lamps);
             }
             for (i, name, lp, lq, animation) in parts {
                 if !gpu.has_model(&name) {
