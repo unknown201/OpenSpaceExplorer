@@ -278,6 +278,9 @@ struct App {
     /// Launch sites from the server (protocol 30) and the one chosen (None: launch pad 1), kept per browser.
     launch_sites: Vec<ose_net::LaunchSite>,
     launch_site: Option<String>,
+    /// The loading screen: the place it last saw (None on the main menu) and when it went up.
+    loading_place: Option<&'static str>,
+    loading_since: Option<f64>,
     /// Take the attitude the server holds from the next readout (after a launch or a vessel switch), so the
     /// first key press turns from there: a plane on the runway holds level along it.
     adopt_attitude: bool,
@@ -589,6 +592,8 @@ pub fn start() -> Result<(), JsValue> {
         rotation_sent: (0.0, 0.0, 0.0),
         launch_sites: Vec::new(),
         launch_site: stored("ose.launchSite"),
+        loading_place: None,
+        loading_since: None,
         adopt_attitude: false,
         lin_mode: false,
         flight_pam: None,
@@ -6335,6 +6340,72 @@ impl App {
         self.frame_focus();
     }
 
+    /// The original's loading screen on a scene change: the destination's art and a loading tip, held until the
+    /// scene's models arrive (at least a moment, at most a few seconds). It never takes clicks.
+    fn loading_screen(&mut self, place: Option<&'static str>, now: f64) {
+        if place != self.loading_place {
+            let from = std::mem::replace(&mut self.loading_place, place);
+            if let Some(to) = place {
+                let art = match (from, to) {
+                    (None, _) => {
+                        if js_sys::Math::random() < 0.5 {
+                            "game"
+                        } else {
+                            "game2"
+                        }
+                    }
+                    (Some("flight"), "ksc") => "recover",
+                    (Some("vab") | Some("ksc"), "flight") => {
+                        if self
+                            .launch_site
+                            .as_deref()
+                            .is_some_and(|s| s.starts_with("Runway"))
+                        {
+                            "runway"
+                        } else {
+                            "launchpad"
+                        }
+                    }
+                    (_, "flight") => "game2",
+                    (_, p) => p,
+                };
+                let tips: Vec<&String> = (2..400)
+                    .map_while(|i| self.loc.get(&format!("LoadingTips/Tip{i}")))
+                    .collect();
+                let tip = if tips.is_empty() {
+                    "Loading...".to_string()
+                } else {
+                    let i = (js_sys::Math::random() * tips.len() as f64) as usize;
+                    tips[i.min(tips.len() - 1)].replace('\u{fffd}', "...")
+                };
+                if let Some(img) = self.doc.get_element_by_id("loading-art") {
+                    img.set_attribute("src", &format!("assets/loading/{art}.jpg"))
+                        .ok();
+                }
+                set_text(&self.doc, "loading-tip", &tip);
+                if let Some(el) = self.doc.get_element_by_id("loading") {
+                    el.set_attribute("data-ose-art", art).ok();
+                    el.class_list().add_1("show").ok();
+                }
+                self.loading_since = Some(now);
+            }
+        }
+        let Some(t0) = self.loading_since else {
+            return;
+        };
+        #[cfg(target_arch = "wasm32")]
+        let loading = self.gpu.as_ref().map(|g| g.models_loading()).unwrap_or(0);
+        #[cfg(not(target_arch = "wasm32"))]
+        let loading = 0usize;
+        let shown = now - t0;
+        if self.loading_place.is_none() || (shown > 900.0 && loading == 0) || shown > 6000.0 {
+            if let Some(el) = self.doc.get_element_by_id("loading") {
+                el.class_list().remove_1("show").ok();
+            }
+            self.loading_since = None;
+        }
+    }
+
     /// The flight's other sounds: wind rising with dynamic pressure, the re-entry roar with heat flux, a sonic
     /// boom through Mach 1, a part overheating, chutes opening and cut, legs and panels moving.
     fn flight_sounds(&mut self, flight: Option<(u64, &ose_net::FlightReadout)>, menu_open: bool) {
@@ -6452,6 +6523,17 @@ impl App {
             _ => audio::Scene::Ksc,
         };
         self.audio.music(Some(audio::scene_music(scene)));
+        let place = match scene {
+            audio::Scene::MainMenu => None,
+            audio::Scene::Vab => Some("vab"),
+            audio::Scene::Rnd => Some("rnd"),
+            audio::Scene::Mission => Some("mission"),
+            _ if self.flying.is_some() => Some("flight"),
+            audio::Scene::Tracking => Some("tracking"),
+            _ if self.tracking_open && menu_open => self.loading_place,
+            _ => Some("ksc"),
+        };
+        self.loading_screen(place, now);
         // Ambience under the music: the launch pad emitter around the KSC, the hall in the VAB.
         self.audio.ambience(match scene {
             audio::Scene::Vab => Some("vab_ambience"),

@@ -873,6 +873,11 @@ impl Renderer {
             .resize(&self.device, &self.depth, &self.post.snapshot_view);
     }
 
+    /// Models still loading.
+    pub fn models_loading(&self) -> usize {
+        self.pending.len()
+    }
+
     pub fn has_model(&self, name: &str) -> bool {
         self.models.contains_key(name)
     }
@@ -1409,10 +1414,11 @@ impl Renderer {
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
+                        // Callers give the background as it should look on screen (sRGB); the scene is linear.
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: clear[0],
-                            g: clear[1],
-                            b: clear[2],
+                            r: srgb_to_linear(clear[0]),
+                            g: srgb_to_linear(clear[1]),
+                            b: srgb_to_linear(clear[2]),
                             a: 1.0,
                         }),
                         store: wgpu::StoreOp::Store,
@@ -1737,8 +1743,11 @@ fn parse_glb(bytes: &[u8]) -> Result<CpuModel, String> {
             .and_then(|a| a.get(mi))
             .and_then(|m| m["pbrMetallicRoughness"]["baseColorFactor"].as_array())
             .map(|f| {
-                let g = |i: usize| f.get(i).and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
-                [g(0), g(1), g(2), g(3)]
+                let g = |i: usize| f.get(i).and_then(|v| v.as_f64()).unwrap_or(1.0);
+                // The exports carry the original's colours as authored, in sRGB (Unity converts them to
+                // linear in a linear-space project); the scene is lit in linear light.
+                let lin = |i: usize| srgb_to_linear(g(i)) as f32;
+                [lin(0), lin(1), lin(2), g(3) as f32]
             })
             .unwrap_or([1.0; 4])
     };
@@ -1897,4 +1906,13 @@ fn parse_glb(bytes: &[u8]) -> Result<CpuModel, String> {
 /// Unit sphere-ish fallback is not needed: bodies without an exported GLB are drawn by the 2D map instead.
 pub fn unused() -> Vec4 {
     Vec4::ZERO
+}
+
+/// One sRGB-encoded channel (0..1, as picked on screen) as linear light.
+pub fn srgb_to_linear(c: f64) -> f64 {
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
 }

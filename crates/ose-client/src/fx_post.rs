@@ -50,6 +50,14 @@ fn blur(uv:vec2<f32>,axis:vec2<f32>)->vec4<f32> {
  let glow=textureSampleLevel(bloom,samp,in.uv,0.0).rgb*0.16;
  return vec4(c+glow,1.0);
 }
+// The same onto a canvas without an sRGB format (every WebGPU canvas): the scene is linear light, so encode it
+// with the sRGB transfer curve here or the whole frame comes out too dark and contrasty.
+@fragment fn compose_encode(in:Out)->@location(0) vec4<f32> {
+ let c=textureSampleLevel(image,samp,in.uv,0.0).rgb;
+ let glow=textureSampleLevel(bloom,samp,in.uv,0.0).rgb*0.16;
+ let l=clamp(c+glow,vec3(0.0),vec3(1.0));
+ return vec4(select(1.055*pow(l,vec3(1.0/2.4))-0.055,l*12.92,l<=vec3(0.0031308)),1.0);
+}
 @fragment fn grid(in:Out)->@location(0) vec4<f32> {
  let size=vec2<f32>(textureDimensions(image));
  let pixel=in.p.xy;
@@ -192,7 +200,14 @@ impl FxPost {
         let extract = pipeline("extract", FORMAT);
         let blur_h = pipeline("blur_h", FORMAT);
         let blur_v = pipeline("blur_v", FORMAT);
-        let compose = pipeline("compose", surface);
+        let compose = pipeline(
+            if surface.is_srgb() {
+                "compose"
+            } else {
+                "compose_encode"
+            },
+            surface,
+        );
         let grid = pipeline("grid", FORMAT);
         Self {
             scene,
