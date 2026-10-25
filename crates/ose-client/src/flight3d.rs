@@ -364,6 +364,8 @@ pub struct FlightInput<'a> {
     pub is_decoupler: &'a dyn Fn(&str) -> bool,
     /// Planned maneuver for this vessel: prograde, normal and radial delta-v, m/s.
     pub maneuver: Option<(f64, f64, f64)>,
+    /// Direction to the target vessel in the body's inertial frame, for the navball's target markers.
+    pub target: Option<DVec3>,
     /// Body spin from the server's `BodyRotation` (protocol 9); the embedded system file otherwise.
     pub spin: Option<Spin>,
     /// Wall clock, ms (flex interpolation).
@@ -642,7 +644,9 @@ impl FlightView {
             let moving = v_nav.length() > 0.5;
             let normal_i = r.cross(v_rel);
             let radial_i = r - v_rel.normalize_or_zero() * r.dot(v_rel.normalize_or_zero());
+            let target = inp.target.map(|d| dir_to_model(r, d, spin, inp.ut));
             self.nav = Some(crate::navball::NavFrame {
+                target,
                 forward,
                 top,
                 right: forward.cross(top),

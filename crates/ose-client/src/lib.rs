@@ -5926,6 +5926,18 @@ impl App {
                 pitch_deg,
                 heading_deg,
             } => format!("pitch {pitch_deg:.0}\u{b0} hdg {heading_deg:.0}\u{b0}"),
+            ose_net::AttitudeMode::Fixed(_) => match self.sas_target {
+                Some(true) => "Target".to_string(),
+                Some(false) => "Anti-target".to_string(),
+                None => "Holding a direction".to_string(),
+            },
+            ose_net::AttitudeMode::SurfacePrograde => "Prograde (surface)".to_string(),
+            ose_net::AttitudeMode::SurfaceRetrograde => "Retrograde (surface)".to_string(),
+            ose_net::AttitudeMode::OrbitPrograde => "Prograde (orbit)".to_string(),
+            ose_net::AttitudeMode::OrbitRetrograde => "Retrograde (orbit)".to_string(),
+            ose_net::AttitudeMode::AntiNormal => "Anti-normal".to_string(),
+            ose_net::AttitudeMode::RadialOut => "Radial out".to_string(),
+            ose_net::AttitudeMode::RadialIn => "Radial in".to_string(),
             other => format!("{other:?}"),
         };
         set_text(&self.doc, "fh-attitude", &att);
@@ -6876,6 +6888,7 @@ impl App {
         let Some(v) = scene.vessel(id) else {
             return false;
         };
+        let target_dir = self.target_dir().map(|d| glam::DVec3::new(d.x, d.y, d.z));
         let Some(gpu) = self.gpu.as_mut() else {
             return false;
         };
@@ -6939,6 +6952,7 @@ impl App {
                 .as_ref()
                 .filter(|n| n.vessel == id)
                 .map(|n| (n.prograde_mps, n.normal_mps, n.radial_mps)),
+            target: target_dir,
             now_ms: now_ms(),
             others: &others,
             star_radius,

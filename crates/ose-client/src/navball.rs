@@ -33,6 +33,8 @@ pub struct NavFrame {
     pub radial: Option<DVec3>,
     /// Burn direction of the planned maneuver node, if any.
     pub maneuver: Option<DVec3>,
+    /// Direction to the target vessel, if one is set.
+    pub target: Option<DVec3>,
 }
 
 struct Atlas {
@@ -83,6 +85,8 @@ impl Navball {
             "ICO-Navball-RadialOut",
             "ICO-Navball-RadialIn",
             "ICO-Navball-Maneuver",
+            "ICO-Navball-Target",
+            "ICO-Navball-AntiTarget",
         ] {
             if let Some(img) = image(&format!("assets/ui/{name}.png")) {
                 self.icons.push((name, img));
@@ -253,6 +257,10 @@ impl Navball {
         }
         if let Some(m) = nav.maneuver {
             put("ICO-Navball-Maneuver", m);
+        }
+        if let Some(t) = nav.target {
+            put("ICO-Navball-Target", t);
+            put("ICO-Navball-AntiTarget", -t);
         }
         // The craft's own marker: a fixed chevron at the centre.
         ctx.set_stroke_style_str("#ffcc33");
