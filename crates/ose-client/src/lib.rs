@@ -165,6 +165,8 @@ struct App {
     /// The server's centre of mass and centre/direction of thrust, and whether their markers show.
     vab_com: Option<ose_math::DVec3>,
     vab_cot: Option<(ose_math::DVec3, ose_math::DVec3)>,
+    vab_col: Option<ose_math::DVec3>,
+    vab_show_col: bool,
     vab_show_com: bool,
     vab_show_cot: bool,
     /// The part whose manager window is open, and whether this opening's first change went into the history.
@@ -465,6 +467,8 @@ pub fn start() -> Result<(), JsValue> {
         vab_stage_drag: None,
         vab_com: None,
         vab_cot: None,
+        vab_col: None,
+        vab_show_col: stored("ose.vab.col").as_deref() != Some("off"),
         vab_show_com: stored("ose.vab.com").as_deref() != Some("off"),
         vab_show_cot: stored("ose.vab.cot").as_deref() != Some("off"),
         vab_pam: None,
@@ -1490,6 +1494,15 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
             if let Some(el) = a.borrow().doc.get_element_by_id("vab-report-pop") {
                 el.class_list().toggle("open").ok();
             }
+        }),
+    )?;
+    wire(
+        "vab-col",
+        Box::new(|a| {
+            let mut app = a.borrow_mut();
+            app.vab_show_col = !app.vab_show_col;
+            store("ose.vab.col", if app.vab_show_col { "on" } else { "off" });
+            app.render_vab_view();
         }),
     )?;
     for (id, com) in [("vab-com", true), ("vab-cot", false)] {
@@ -3378,8 +3391,10 @@ impl App {
                 com_m,
                 cot_m,
                 thrust_dir,
-                ..
+                col_m,
             } => {
+                // Zero without wings.
+                self.vab_col = (col_m.length() > 1e-9).then_some(col_m);
                 self.vab_stages_readout = stages;
                 // The server sends zeros for all three when the craft has no engines.
                 self.vab_com =
@@ -4510,6 +4525,7 @@ impl App {
         for (id, on) in [
             ("vab-com", self.vab_show_com),
             ("vab-cot", self.vab_show_cot),
+            ("vab-col", self.vab_show_col),
         ] {
             if let Some(b) = self.doc.get_element_by_id(id) {
                 b.class_list().toggle_with_force("on", on).ok();
@@ -6514,6 +6530,7 @@ impl App {
             let empty = self.editor.is_empty();
             self.vab3d.com = self.vab_com.filter(|_| self.vab_show_com && !empty);
             self.vab3d.cot = self.vab_cot.filter(|_| self.vab_show_cot && !empty);
+            self.vab3d.col = self.vab_col.filter(|_| self.vab_show_col && !empty);
             self.vab3d.ghosts = self
                 .vab3d
                 .held

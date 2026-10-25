@@ -62,6 +62,8 @@ pub struct VabView {
     /// when their toolbar toggles are on (the original's CoM and CoT markers).
     pub com: Option<ose_math::DVec3>,
     pub cot: Option<(ose_math::DVec3, ose_math::DVec3)>,
+    /// Centre of lift (wings and control surfaces), drawn in blue.
+    pub col: Option<ose_math::DVec3>,
     pub held_turn: ose_data::craft::Quat,
     pub held_yaw: ose_data::craft::Quat,
     /// Vertical camera offset from the craft's centre, metres (arrow keys and middle drag, Home resets).
@@ -95,6 +97,7 @@ impl VabView {
             pan_y: 0.0,
             com: None,
             cot: None,
+            col: None,
             held_turn: crate::vab::NO_TURN,
             held_yaw: crate::vab::NO_TURN,
         }
@@ -375,6 +378,22 @@ impl VabView {
                     b,
                     half * 1.3,
                     [1.0, 0.85, 0.2, 1.0],
+                ));
+            }
+        }
+        if let Some(c) = self.col {
+            let at = centre + to_gltf(c);
+            for (k, (a, b)) in [(DVec3::X, DVec3::Y), (DVec3::Y, DVec3::Z)]
+                .into_iter()
+                .enumerate()
+            {
+                lines.push(ring(
+                    format!("vab-col:{k}"),
+                    at,
+                    a,
+                    b,
+                    half * 1.45,
+                    [0.35, 0.65, 1.0, 1.0],
                 ));
             }
         }

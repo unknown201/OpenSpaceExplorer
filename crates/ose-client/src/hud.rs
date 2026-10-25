@@ -302,6 +302,14 @@ pub fn update(doc: &Document, s: &HudState) {
     }
     lit(doc, "fh-act-gear", f.gear.iter().any(|(_, out)| *out));
     lit(doc, "fh-act-brakes", f.brakes || s.brakes_latched);
+    // Aerodynamics: lift from wings and whether the burning stage is jets (thrust follows speed and air).
+    let aero = match (f.lift_kn > 0.1, f.jet) {
+        (true, true) => format!("Lift {:.0} kN \u{b7} jets", f.lift_kn),
+        (true, false) => format!("Lift {:.0} kN", f.lift_kn),
+        (false, true) => "jets".to_string(),
+        (false, false) => String::new(),
+    };
+    set(doc, "fh-aero", &aero);
     lit(doc, "fh-act-solar", f.panels_deployed);
     lit(doc, "fh-act-lights", f.lights);
     lit(doc, "fh-act-rcs", f.rcs);
