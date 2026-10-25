@@ -2355,6 +2355,21 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         pam.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
         cb.forget();
     }
+    // The signal indicator: with no signal and antennas folded, a click extends them.
+    wire(
+        "fh-comm",
+        Box::new(|a| {
+            let mut app = a.borrow_mut();
+            let folded = app
+                .flying
+                .and_then(|id| app.scene.as_ref()?.vessel(id))
+                .and_then(|v| v.flight.as_ref())
+                .is_some_and(|f| !f.comm_connected && f.antennas.iter().any(|(_, out)| !out));
+            if folded {
+                app.hud_button("fh-act-antenna");
+            }
+        }),
+    )?;
     wire(
         "vab-orient",
         Box::new(|a| {

@@ -360,6 +360,9 @@ pub fn update(doc: &Document, s: &HudState) {
                 },
                 "on",
             )
+        } else if f.antennas.iter().any(|(_, out)| !out) {
+            // A folded antenna or dish adds nothing to the range (protocol 41): say so, a click extends them.
+            ("No signal: extend antennas".to_string(), "off")
         } else if f.comm_range_m > 0.0 {
             ("No signal".to_string(), "off")
         } else {
