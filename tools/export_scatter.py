@@ -292,7 +292,7 @@ def grass_item(ex: Exporter, env, v: dict, distance: float) -> dict | None:
     }
 
 
-MASK_W, MASK_H = 1024, 512
+MASK_W, MASK_H = 2048, 1024
 
 
 def export_scatter_mask(install: Path, bid: str, pdir: Path) -> dict | None:
@@ -315,7 +315,7 @@ def export_scatter_mask(install: Path, bid: str, pdir: Path) -> dict | None:
         o = a.get(tt.get("BiomeTextureMask"))
         if o is None:
             return None
-        img = o.read().image.convert("RGBA").resize((MASK_W, MASK_H), Image.BILINEAR)
+        img = ep.resize_bands(o.read().image.convert("RGBA"), (MASK_W, MASK_H), Image.BILINEAR)
         if o.read_typetree().get("m_ColorSpace", 0) == 1:
             img = ep.srgb_to_linear_image(img, alpha=True)
         raw = np.asarray(img, dtype=np.uint8).tobytes()

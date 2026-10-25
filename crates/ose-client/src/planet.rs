@@ -189,7 +189,13 @@ struct GpuQuad {
     terrain: wgpu::Buffer,
     ocean: Option<wgpu::Buffer>,
     last_used: u64,
+    /// When it was built (ms): a quad that arrives late (the camera is already well inside its range, as in a fast
+    /// descent) slides in from its parent's surface instead of popping.
+    built_ms: f64,
 }
+
+/// How long a newly built quad takes to morph in from its parent (ms).
+const QUAD_FADE_MS: f64 = 400.0;
 
 struct Body {
     info: Option<serde_json::Value>,
@@ -1627,6 +1633,7 @@ impl PlanetRenderer {
             terrain: mk(&mesh.terrain),
             ocean: mesh.ocean.as_deref().map(mk),
             last_used: self.frame_no,
+            built_ms: now_ms(),
         }
     }
 
@@ -1749,7 +1756,8 @@ impl PlanetRenderer {
         }
         let mut data = vec![0u8; (needed * SLOT) as usize];
         let mut slot = 0u32;
-        let mut put = |center: DVec3, level: u8, cloud: bool| -> u32 {
+        let now = now_ms();
+        let mut put = |center: DVec3, level: u8, cloud: bool, fade: f32| -> u32 {
             let off = center - view.cam;
             let tile = DVec3::new(
                 center.x.rem_euclid(TILE_PERIOD),
@@ -1757,7 +1765,7 @@ impl PlanetRenderer {
                 center.z.rem_euclid(TILE_PERIOD),
             );
             let u = ChunkU {
-                offset: [off.x as f32, off.y as f32, off.z as f32, 0.0],
+                offset: [off.x as f32, off.y as f32, off.z as f32, fade],
                 center: [
                     center.x as f32,
                     center.y as f32,
@@ -1780,12 +1788,18 @@ impl PlanetRenderer {
         let mut draws = Vec::with_capacity(draw.len());
         for k in &draw {
             let q = &b.quads[k];
-            draws.push((*k, put(q.center, k.level, false)));
+            // the coarsest levels never had a parent to come from
+            let fade = if k.level > planet_lod::MIN_LEVEL {
+                (1.0 - (now - q.built_ms) / QUAD_FADE_MS).clamp(0.0, 1.0) as f32
+            } else {
+                0.0
+            };
+            draws.push((*k, put(q.center, k.level, false, fade)));
         }
         let mut cloud_draws = Vec::new();
         for k in &cloud_keys {
             let q = &b.clouds[k];
-            cloud_draws.push((*k, put(q.center, k.level, true)));
+            cloud_draws.push((*k, put(q.center, k.level, true, 0.0)));
         }
         self.queue.write_buffer(&self.chunk_buf, 0, &data);
         // Frame uniform.

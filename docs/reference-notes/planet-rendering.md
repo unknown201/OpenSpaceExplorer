@@ -231,3 +231,12 @@ the equatorial plane; plus an asteroid particle field, not drawn). `tools/export
 `ring`; the client draws a 256-segment strip (vs_ring / fs_ring) lit from either side and in the body's shadow. No
 body has aurora or night lights (Kerbin's `_EmissionScaledTex` is unset).
 
+Export pitfall (fixed 2026-10-25): Pillow's `Image.resize` resamples RGBA with premultiplied alpha, zeroing RGB wherever
+alpha is 0. Every planet texture whose alpha is data was damaged when resized: the biome masks (A = a biome's weight:
+the other three biomes vanished wherever it was 0, which is why so much land read as "no biome"), the detail albedo
+arrays (A = height) and the scaled normal maps (A = normal x). `export_planets.resize_bands` resizes bands separately.
+The scatter masks are 2048 x 1024 (Kerbin's KSC grassland strip is lost at 1024 x 512). Where the vegetation mask has
+no biome, nothing grows (Vegetation Studio places nothing there; the first-biome fallback only applies to the
+terrain pack's mask). Streaming: a quad costs ~1.7 ms to build (native; 6 ms per frame budget in the browser), and one
+that arrives after the camera is already inside its range morphs in from its parent over 0.4 s instead of popping.
+

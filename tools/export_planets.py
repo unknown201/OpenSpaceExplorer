@@ -80,13 +80,24 @@ def material_props(mat_tt: dict) -> tuple[dict, dict, dict]:
     return tex, floats, colors
 
 
+def resize_bands(img, size: tuple[int, int], resample=None):
+    """Resize each band on its own. Pillow resizes RGBA with premultiplied alpha, which zeroes RGB wherever alpha is
+    0: wrong for every texture here whose alpha is data (biome weights, detail heights, normal x)."""
+    from PIL import Image
+
+    resample = Image.LANCZOS if resample is None else resample
+    if img.mode not in ("RGBA", "LA"):
+        return img.resize(size, resample)
+    return Image.merge(img.mode, [b.resize(size, resample) for b in img.split()])
+
+
 def save_image(img, path: Path, size: tuple[int, int] | None, mode: str | None = None, quality: int = 90):
     from PIL import Image
 
     if mode:
         img = img.convert(mode)
     if size and img.size != size:
-        img = img.resize(size, Image.LANCZOS)
+        img = resize_bands(img, size)
     if path.suffix == ".jpg":
         img.convert("RGB").save(path, quality=quality)
     else:

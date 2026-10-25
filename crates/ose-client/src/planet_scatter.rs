@@ -212,6 +212,14 @@ fn noise(x: f64, y: f64, seed: i64) -> f64 {
 }
 
 impl ScatterFile {
+    /// Whether the vegetation system's own mask is loaded: then land with no weight in it has no vegetation (the
+    /// first-biome fallback only stands in for the terrain pack's mask).
+    pub fn has_mask(&self) -> bool {
+        self.mask
+            .as_ref()
+            .is_some_and(|m| self.mask_data.len() == m.width * m.height)
+    }
+
     /// Biome weights at a latitude/longitude: the vegetation system's own mask (bilinear) when loaded, else the
     /// terrain pack's layer mask.
     pub fn weights(&self, map: &TerrainMap, lat: f64, lon: f64) -> Option<[f64; 4]> {
@@ -317,7 +325,10 @@ impl ScatterFile {
                             .map(|w| {
                                 let s = w[0] + w[1] + w[2] + w[3];
                                 // as the shader: land with no biome weight takes the first biome
-                                if s < 0.05 {
+                                if s < 0.05 && self.has_mask() {
+                                    // no biome in the vegetation system's mask: nothing grows
+                                    0.0
+                                } else if s < 0.05 {
                                     let mut f = w;
                                     f[0] += 1.0 - s / 0.05;
                                     f[ch]
@@ -516,7 +527,10 @@ impl ScatterFile {
                             .weights(map, lat, lon)
                             .map(|w| {
                                 let s = w[0] + w[1] + w[2] + w[3];
-                                if s < 0.05 {
+                                if s < 0.05 && self.has_mask() {
+                                    // no biome in the vegetation system's mask: nothing grows
+                                    0.0
+                                } else if s < 0.05 {
                                     let mut f = w;
                                     f[0] += 1.0 - s / 0.05;
                                     f[ch]
@@ -689,7 +703,10 @@ impl ScatterFile {
                             .weights(map, lat, lon)
                             .map(|w| {
                                 let s = w[0] + w[1] + w[2] + w[3];
-                                if s < 0.05 {
+                                if s < 0.05 && self.has_mask() {
+                                    // no biome in the vegetation system's mask: nothing grows
+                                    0.0
+                                } else if s < 0.05 {
                                     let mut f = w;
                                     f[0] += 1.0 - s / 0.05;
                                     f[ch]

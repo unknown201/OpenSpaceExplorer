@@ -562,7 +562,8 @@ fn quad_out(in: VIn) -> VOut {
     let lvl = chunk.center.w;
     let t_split = frame.solar.w * 2.5 / exp2(lvl);
     let d0 = length(chunk.offset.xyz + in.pos);
-    let m = select(smoothstep(1.4 * t_split, 1.9 * t_split, d0), 0.0, lvl < 2.5);
+    // (offset.w: a newly built quad's fade-in, morphing it in from its parent over QUAD_FADE_MS)
+    let m = max(select(smoothstep(1.4 * t_split, 1.9 * t_split, d0), 0.0, lvl < 2.5), chunk.offset.w);
     let rel = chunk.offset.xyz + in.pos + in.morph * m;
     out.clip = frame.view_proj * vec4<f32>(rel, 1.0);
     out.rel = rel;
