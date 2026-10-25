@@ -391,6 +391,19 @@
     .fh-res .rs-bar { grid-column: 1 / 3; height: 5px; background: #ffffff1a; border-radius: 3px; overflow: hidden; }
     .fh-res .rs-bar i { display: block; height: 100%; background: #7dc8ff; }
     .fh-res .rs-row.low .rs-bar i { background: #ff8a5a; }
+    .fh-res .rs-tank { grid-template-columns: 1fr auto auto; } .fh-res .rs-tank .rs-bar { grid-column: 1 / 4; }
+    .fh-res .rs-xfer-res { margin: 6px 0 2px; font-size: calc(11 * var(--u)); color: #ffd25a; }
+    .fh-res .rs-xfer-btns button, .fh-res .rs-xfer-go, .fh-res .rs-xfer-run button, .fh-km button { margin: 0 0 0 3px; padding: 1px 6px; font-size: calc(11 * var(--u)); background: #16213a; color: #9fb0cc; border: 1px solid #2c3d63; border-radius: 3px; cursor: pointer; pointer-events: auto; }
+    .fh-res .rs-xfer-btns button.on { background: #1f3d6b; color: #fff; border-color: #2f8fff; }
+    .fh-res .rs-xfer-go { display: block; width: 100%; margin: 4px 0 0; padding: 4px; color: #fff; background: #2a6a2a; }
+    .fh-res .rs-xfer-run { display: flex; justify-content: space-between; align-items: center; font-size: calc(12 * var(--u)); color: #8fd08f; }
+    .fh-km .km-part { margin: 4px 0 8px; padding: 6px; background: #ffffff0d; border-radius: 4px; }
+    .fh-km .km-title { display: flex; justify-content: space-between; font-size: calc(12 * var(--u)); color: #e6ecf7; margin-bottom: 4px; }
+    .fh-km .km-crew { display: flex; flex-wrap: wrap; gap: 4px; }
+    .fh-km .km-kerbal { margin: 0; color: #e6ecf7; } .fh-km .km-kerbal.on { background: #1f3d6b; border-color: #ffd25a; }
+    .fh-km .km-seat { font-size: calc(11 * var(--u)); color: #6f7f9c; padding: 1px 6px; border: 1px dashed #2c3d63; border-radius: 3px; }
+    .fh-km .km-move { display: block; width: 100%; margin: 6px 0 0; padding: 3px; color: #fff; background: #2a4f80; }
+    .fh-km .km-portraits { display: block; margin-top: 6px; font-size: calc(12 * var(--u)); color: #9fb0cc; pointer-events: auto; }
     #flight-hud .fh-missions-btn i { width: 70%; height: 70%; background: currentColor; -webkit-mask: var(--ico) center / contain no-repeat; mask: var(--ico) center / contain no-repeat; }
     .fh-missions { display: none; position: absolute; top: calc(48 * var(--u)); right: calc(60 * var(--u)); width: calc(300 * var(--u)); background: #10141be6; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)); padding: calc(8 * var(--u)) calc(10 * var(--u)); pointer-events: auto; }
     .fh-missions.open { display: block; }
@@ -1167,12 +1180,13 @@
       <button class="fh-missions-btn" id="fh-players-btn" data-ose="flight-players-btn" title="Players: who is in this campaign and what they fly"><i style="--ico:url(assets/ui/hud/WB-ICO-Kerbal.png)"></i></button>
       <button class="fh-missions-btn" id="fh-inv-btn" data-ose="flight-inv-btn" title="Research Inventory: the reports this vessel carries"><i style="--ico:url(assets/ui/hud/ICO-AppBar-ResearchManager-24x24.png)"></i></button>
       <button class="fh-missions-btn" id="fh-res-btn" data-ose="flight-res-btn" title="Resource manager: what the vessel and the burning stage carry"><i style="--ico:url(assets/ui/hud/ICO-AppBar-ResourceManager-24x24.png)"></i></button>
-      <button class="fh-missions-btn on" id="fh-crew-btn" data-ose="flight-crew-btn" title="Kerbal portraits: show or hide the crew"><i style="--ico:url(assets/ui/hud/ICO-AppBar-KerbalManager-24x24.png)"></i></button>
+      <button class="fh-missions-btn" id="fh-crew-btn" data-ose="flight-crew-btn" title="Kerbal Manager: who sits where; move crew between parts"><i style="--ico:url(assets/ui/hud/ICO-AppBar-KerbalManager-24x24.png)"></i></button>
     </div>
     <div class="fh-missions fh-parts" id="fh-parts" data-ose="flight-parts"><div class="fh-label">PARTS</div><ul id="fh-parts-list"></ul></div>
     <div class="fh-missions fh-ag" id="fh-ag" data-ose="flight-action-groups"><div class="fh-label">ACTION GROUPS</div><div id="fh-ag-list"></div></div>
     <div class="fh-missions fh-res fh-players" id="fh-players" data-ose="flight-players"><div class="fh-label">PLAYERS</div><div id="fh-players-list"></div></div>
     <div class="fh-missions fh-res fh-inv" id="fh-inv" data-ose="flight-inventory"><div class="fh-label">RESEARCH INVENTORY</div><div id="fh-inv-list"></div></div>
+    <div class="fh-missions fh-res fh-km" id="fh-km" data-ose="flight-kerbals"><div class="fh-label">KERBAL MANAGER</div><div id="fh-km-list"></div></div>
     <div class="fh-missions fh-res" id="fh-res" data-ose="flight-resources"><div class="fh-label">RESOURCES</div><div id="fh-res-list"></div></div>
     <div class="fh-missions" id="fh-missions" data-ose="flight-missions"><div class="fh-label">MISSIONS</div><ul id="fh-missions-list"></ul></div>
     <div class="fh-comm" id="fh-comm" data-ose="flight-comm" title="CommNet: transmitting science and controlling probes need a link to the KSC"><i style="--ico:url(assets/ui/hud/ICO-Flight-Cluster-Commnet.png)"></i><span id="fh-comm-text">--</span></div>

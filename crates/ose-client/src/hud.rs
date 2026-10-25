@@ -973,6 +973,121 @@ pub fn resources_html(stage: &[(String, f64, f64)], vessel: &[(String, f64, f64)
     html
 }
 
+/// A tank for the resource manager's transfers: part index, part title, resource, stored, capacity.
+pub type Tank = (u16, String, String, f64, f64);
+
+/// The resource manager's transfer section (the original's tank-to-tank transfer): for each resource held
+/// by two tanks or more, every tank with Out and In toggles, and Transfer once both sides are picked;
+/// `pick` is (resource, out, in); `running` the transfer under way.
+pub fn transfers_html(
+    tanks: &[Tank],
+    pick: &(String, Vec<u16>, Vec<u16>),
+    running: Option<&(String, Vec<u16>, Vec<u16>)>,
+) -> String {
+    let mut html = String::from("<div class=\"rs-head\">TRANSFER</div>");
+    if let Some((res, from, to)) = running {
+        html.push_str(&format!(
+            "<div class=\"rs-xfer-run\">Moving {} from {} to {} tank{}<button data-xfer-stop=\"1\" data-ose=\"xfer-stop\">Stop</button></div>",
+            crate::esc(&resource_name(res)),
+            from.len(),
+            to.len(),
+            if to.len() == 1 { "" } else { "s" }
+        ));
+    }
+    let mut resources: Vec<&str> = Vec::new();
+    for t in tanks {
+        if !resources.contains(&t.2.as_str()) {
+            resources.push(&t.2);
+        }
+    }
+    let mut any = false;
+    for res in resources {
+        let list: Vec<&Tank> = tanks.iter().filter(|t| t.2 == res && t.4 > 0.0).collect();
+        if list.len() < 2 {
+            continue;
+        }
+        any = true;
+        let picked = pick.0 == res;
+        html.push_str(&format!(
+            "<div class=\"rs-xfer-res\">{}</div>",
+            crate::esc(&resource_name(res))
+        ));
+        for (part, title, _, stored, cap) in list {
+            let out = picked && pick.1.contains(part);
+            let into = picked && pick.2.contains(part);
+            html.push_str(&format!(
+                "<div class=\"rs-row rs-tank\"><span>{title}</span><span>{s} / {c}</span>\
+                 <span class=\"rs-xfer-btns\"><button class=\"{o}\" data-xfer-out=\"{part}\" data-xfer-res=\"{r}\">Out</button>\
+                 <button class=\"{i}\" data-xfer-in=\"{part}\" data-xfer-res=\"{r}\">In</button></span>\
+                 <div class=\"rs-bar\"><i style=\"width:{pct:.1}%\"></i></div></div>",
+                title = crate::esc(title),
+                s = units(*stored),
+                c = units(*cap),
+                o = if out { "on" } else { "" },
+                i = if into { "on" } else { "" },
+                r = crate::esc(res),
+                pct = (stored / cap).clamp(0.0, 1.0) * 100.0,
+            ));
+        }
+        if picked && !pick.1.is_empty() && !pick.2.is_empty() {
+            html.push_str(&format!(
+                "<button class=\"rs-xfer-go\" data-xfer-go=\"{}\" data-ose=\"xfer-go\">Transfer</button>",
+                crate::esc(res)
+            ));
+        }
+    }
+    if !any {
+        html.push_str("<div class=\"rs-row\"><span>no two tanks share a resource</span></div>");
+    }
+    html
+}
+
+/// The Kerbal Manager (`KerbalManager`): each crewed part with its seats and who sits there; click a Kerbal,
+/// then Move here on a part with room. `parts` is (part index, title, seats, crew).
+pub fn kerbal_manager_html(
+    parts: &[(u16, String, u32, Vec<String>)],
+    selected: Option<&str>,
+    portraits: bool,
+) -> String {
+    let mut html = String::new();
+    for (idx, title, seats, crew) in parts {
+        html.push_str(&format!(
+            "<div class=\"km-part\"><div class=\"km-title\"><span>{}</span><span>{}/{}</span></div><div class=\"km-crew\">",
+            crate::esc(title),
+            crew.len(),
+            seats
+        ));
+        for k in crew {
+            html.push_str(&format!(
+                "<button class=\"km-kerbal{on}\" data-km-kerbal=\"{n}\" data-ose=\"km-kerbal\">{n}</button>",
+                on = if selected == Some(k.as_str()) { " on" } else { "" },
+                n = crate::esc(k),
+            ));
+        }
+        for _ in crew.len()..*seats as usize {
+            html.push_str("<span class=\"km-seat\">empty seat</span>");
+        }
+        html.push_str("</div>");
+        if let Some(sel) = selected {
+            if !crew.iter().any(|k| k == sel) && (crew.len() as u32) < *seats {
+                html.push_str(&format!(
+                    "<button class=\"km-move\" data-km-move=\"{idx}\" data-ose=\"km-move\">Move {} here</button>",
+                    crate::esc(sel)
+                ));
+            }
+        }
+        html.push_str("</div>");
+    }
+    if parts.is_empty() {
+        html.push_str("<div class=\"km-title\"><span>no crewed parts</span></div>");
+    }
+    html.push_str(&format!(
+        "<label class=\"km-portraits\"><input type=\"checkbox\" data-km-portraits=\"1\"{} /> Show crew portraits</label>",
+        if portraits { " checked" } else { "" }
+    ));
+    html
+}
+
 /// The action groups app (`ActionGroupManager`): lights, RCS and abort, then groups 1-10, each lit while on;
 /// a click toggles it as its key does.
 pub fn action_groups_html(lights: bool, rcs: bool, abort: bool, custom: &[bool; 10]) -> String {

@@ -252,6 +252,10 @@ struct App {
     ts_body: Option<usize>,
     /// Object kinds the station's filters hide.
     ts_hidden: Vec<&'static str>,
+    /// The resource manager's transfer picks: (resource, out tanks, in tanks), craft part indices.
+    xfer_pick: (String, Vec<u16>, Vec<u16>),
+    /// The Kerbal picked in the Kerbal Manager to move.
+    km_selected: Option<String>,
     /// The VAB Colors tool paints the selected part rather than the whole vehicle.
     paint_part: bool,
     ts_mine_only: bool,
@@ -681,6 +685,8 @@ pub fn start() -> Result<(), JsValue> {
         ts_selected: None,
         ts_body: None,
         ts_hidden: Vec::new(),
+        xfer_pick: Default::default(),
+        km_selected: None,
         paint_part: false,
         ts_mine_only: false,
         ts_rendered_ms: 0.0,
@@ -1726,7 +1732,14 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                 let open = el.class_list().toggle("open").unwrap_or(false);
                 store("ose.tracker", if open { "open" } else { "closed" });
                 if open {
-                    for id in ["fh-parts", "fh-res", "fh-ag", "fh-inv", "fh-players"] {
+                    for id in [
+                        "fh-parts",
+                        "fh-res",
+                        "fh-ag",
+                        "fh-inv",
+                        "fh-players",
+                        "fh-km",
+                    ] {
                         if let Some(e) = doc.get_element_by_id(id) {
                             e.class_list().remove_1("open").ok();
                         }
@@ -1737,6 +1750,7 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                         "fh-ag-btn",
                         "fh-inv-btn",
                         "fh-players-btn",
+                        "fh-crew-btn",
                     ] {
                         if let Some(e) = doc.get_element_by_id(id) {
                             e.class_list().remove_1("on").ok();
@@ -1780,10 +1794,9 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
     if let Some(el) = doc.get_element_by_id("fh-crewbox") {
         el.class_list().toggle_with_force("off", crew_off).ok();
     }
-    if let Some(el) = doc.get_element_by_id("fh-crew-btn") {
-        el.class_list().toggle_with_force("on", !crew_off).ok();
-    }
-    const APP_WINDOWS: [(&str, &str); 6] = [
+
+    const APP_WINDOWS: [(&str, &str); 7] = [
+        ("fh-crew-btn", "fh-km"),
         ("fh-missions-btn", "fh-missions"),
         ("fh-parts-btn", "fh-parts"),
         ("fh-res-btn", "fh-res"),
@@ -1792,6 +1805,7 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         ("fh-players-btn", "fh-players"),
     ];
     for (btn, win) in [
+        ("fh-crew-btn", "fh-km"),
         ("fh-parts-btn", "fh-parts"),
         ("fh-res-btn", "fh-res"),
         ("fh-ag-btn", "fh-ag"),
@@ -1824,8 +1838,106 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                 app.render_action_groups();
                 app.render_inventory();
                 app.render_players();
+                app.render_kerbal_manager();
             }),
         )?;
+    }
+    // Clicks in the resource manager's transfer section and in the Kerbal Manager.
+    for list in ["fh-res-list", "fh-km-list"] {
+        let Some(el) = doc.get_element_by_id(list) else {
+            continue;
+        };
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let Some(t) = ev.target().and_then(|t| t.dyn_into::<Element>().ok()) else {
+                return;
+            };
+            let attr = |k: &str| t.get_attribute(k);
+            let mut app = a.borrow_mut();
+            let Some(vessel) = app.flying else { return };
+            let msg = if let (Some(part), Some(res)) = (
+                attr("data-xfer-out").or_else(|| attr("data-xfer-in")),
+                attr("data-xfer-res"),
+            ) {
+                let Ok(part) = part.parse::<u16>() else {
+                    return;
+                };
+                let out = t.has_attribute("data-xfer-out");
+                let pick = &mut app.xfer_pick;
+                if pick.0 != res {
+                    *pick = (res, Vec::new(), Vec::new());
+                }
+                let (mine, other) = if out {
+                    (&mut pick.1, &mut pick.2)
+                } else {
+                    (&mut pick.2, &mut pick.1)
+                };
+                other.retain(|p| *p != part);
+                if let Some(k) = mine.iter().position(|p| *p == part) {
+                    mine.remove(k);
+                } else {
+                    mine.push(part);
+                }
+                app.render_resource_manager();
+                return;
+            } else if let Some(res) = attr("data-xfer-go") {
+                let (_, from, to) = std::mem::take(&mut app.xfer_pick);
+                ClientMessage::TransferResource {
+                    vessel,
+                    resource: res,
+                    from,
+                    to,
+                }
+            } else if t.has_attribute("data-xfer-stop") {
+                let resource = app
+                    .scene
+                    .as_ref()
+                    .and_then(|s| s.vessel(vessel))
+                    .and_then(|v| v.flight.as_ref())
+                    .and_then(|f| f.transfer.as_ref())
+                    .map(|x| x.0.clone())
+                    .unwrap_or_default();
+                ClientMessage::TransferResource {
+                    vessel,
+                    resource,
+                    from: Vec::new(),
+                    to: Vec::new(),
+                }
+            } else if let Some(k) = attr("data-km-kerbal") {
+                app.km_selected = if app.km_selected.as_deref() == Some(k.as_str()) {
+                    None
+                } else {
+                    Some(k)
+                };
+                app.render_kerbal_manager();
+                return;
+            } else if let Some(part) = attr("data-km-move").and_then(|p| p.parse::<u16>().ok()) {
+                let Some(kerbal) = app.km_selected.take() else {
+                    return;
+                };
+                ClientMessage::MoveCrew {
+                    vessel,
+                    kerbal,
+                    to_part: part,
+                }
+            } else if t.has_attribute("data-km-portraits") {
+                let on = t
+                    .dyn_ref::<web_sys::HtmlInputElement>()
+                    .is_some_and(|i| i.checked());
+                if let Some(el) = app.doc.get_element_by_id("fh-crewbox") {
+                    el.class_list().toggle_with_force("off", !on).ok();
+                }
+                store("ose.crewPortraits", if on { "on" } else { "off" });
+                return;
+            } else {
+                return;
+            };
+            if let Some(ws) = &app.ws {
+                send(ws, &msg);
+            }
+        });
+        el.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
     }
     if let Some(list) = doc.get_element_by_id("fh-inv-list") {
         let a = app.clone();
@@ -1887,19 +1999,6 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         list.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
         cb.forget();
     }
-    wire(
-        "fh-crew-btn",
-        Box::new(|a| {
-            let doc = a.borrow().doc.clone();
-            if let Some(el) = doc.get_element_by_id("fh-crewbox") {
-                let off = el.class_list().toggle("off").unwrap_or(false);
-                store("ose.crewPortraits", if off { "off" } else { "on" });
-                if let Some(b) = doc.get_element_by_id("fh-crew-btn") {
-                    b.class_list().toggle_with_force("on", !off).ok();
-                }
-            }
-        }),
-    )?;
     wire(
         "fh-speed-mode",
         Box::new(|a| {
@@ -8111,11 +8210,110 @@ impl App {
         else {
             return;
         };
-        let html = hud::resources_html(&f.stage_resources, &f.resources);
+        let mut html = hud::resources_html(&f.stage_resources, &f.resources);
+        let title = |i: u16| {
+            self.flight_craft
+                .as_ref()
+                .and_then(|c| c.parts.get(i as usize))
+                .map(|p| {
+                    self.catalog
+                        .get(&p.part_id)
+                        .map(|s| s.display_title().to_string())
+                        .unwrap_or_else(|| p.part_id.clone())
+                })
+                .unwrap_or_else(|| format!("part {i}"))
+        };
+        let tanks: Vec<hud::Tank> = f
+            .part_resources
+            .iter()
+            // What the original lets flow between tanks: not solid fuel, charge or ablator.
+            .filter(|r| !matches!(r.1.as_str(), "ElectricCharge" | "Ablator" | "SolidFuel"))
+            .map(|(p, r, s, c)| (*p, title(*p), r.clone(), *s, *c))
+            .collect();
+        html.push_str(&hud::transfers_html(
+            &tanks,
+            &self.xfer_pick,
+            f.transfer.as_ref(),
+        ));
         let key = format!("{}:{}", html.len(), hud::fnv(&html));
         if el.get_attribute("data-ose-key").as_deref() != Some(key.as_str()) {
             el.set_inner_html(&html);
             el.set_attribute("data-ose-key", &key).ok();
+        }
+    }
+
+    /// The Kerbal Manager: the crewed parts still aboard, their seats and crew.
+    fn render_kerbal_manager(&self) {
+        let Some(el) = self.doc.get_element_by_id("fh-km-list") else {
+            return;
+        };
+        let open = self
+            .doc
+            .get_element_by_id("fh-km")
+            .is_some_and(|e| e.class_list().contains("open"));
+        if !open {
+            return;
+        }
+        let (Some(f), Some(craft)) = (
+            self.flying
+                .and_then(|id| self.scene.as_ref()?.vessel(id))
+                .and_then(|v| v.flight.as_ref()),
+            self.flight_craft.as_ref(),
+        ) else {
+            return;
+        };
+        let present = self.flight_present(craft, f.stage as usize);
+        let parts: Vec<(u16, String, u32, Vec<String>)> = craft
+            .parts
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| present.get(*i).copied().unwrap_or(true))
+            .filter_map(|(i, p)| {
+                let spec = self.catalog.get(&p.part_id)?;
+                let crew: Vec<String> = f
+                    .crew
+                    .iter()
+                    .filter(|c| c.0 as usize == i)
+                    .map(|c| c.1.clone())
+                    .collect();
+                (spec.crew_capacity > 0 || !crew.is_empty()).then(|| {
+                    (
+                        i as u16,
+                        spec.display_title().to_string(),
+                        spec.crew_capacity.max(crew.len() as u32),
+                        crew,
+                    )
+                })
+            })
+            .collect();
+        let portraits = self
+            .doc
+            .get_element_by_id("fh-crewbox")
+            .is_none_or(|e| !e.class_list().contains("off"));
+        let html = hud::kerbal_manager_html(&parts, self.km_selected.as_deref(), portraits);
+        let key = format!("{}:{}", html.len(), hud::fnv(&html));
+        if el.get_attribute("data-ose-key").as_deref() != Some(key.as_str()) {
+            el.set_inner_html(&html);
+            el.set_attribute("data-ose-key", &key).ok();
+        }
+    }
+
+    /// Which parts of the craft as launched are still on the flown vessel (stages dropped, debris gone).
+    #[cfg_attr(not(target_arch = "wasm32"), allow(clippy::unused_self))]
+    fn flight_present(&self, craft: &ose_data::craft::Craft, fired: usize) -> Vec<bool> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let catalog = &self.catalog;
+            let is_dec = |pid: &str| catalog.get(pid).map(|p| p.is_decoupler).unwrap_or(false);
+            flight3d::jettisoned(craft, fired, &is_dec)
+                .into_iter()
+                .map(|g| !g)
+                .collect()
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = fired;
+            vec![true; craft.parts.len()]
         }
     }
 
@@ -8217,6 +8415,7 @@ impl App {
 
     fn update_crew_buttons(&self, f: &ose_net::FlightReadout) {
         self.render_players();
+        self.render_kerbal_manager();
         self.render_parts_manager();
         self.render_resource_manager();
         self.render_action_groups();
