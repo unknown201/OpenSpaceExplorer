@@ -18,6 +18,9 @@ PIECES = [
     ("body_spacesuit_01", None),
     ("head_m_01", None),
     ("eyes_m_01", None),
+    # Kerbals whose looks are TYPE CIRCLE wear the female head and eyes.
+    ("head_f_01", None),
+    ("eyes_f_01", None),
     ("helm_spacesuit_01", "bone_kerbal_helmet"),
     ("flag_portable", None),
 ]
@@ -60,6 +63,27 @@ def reference_skeleton(ex: Exporter, prefab: str) -> dict:
     return out
 
 
+def glass_visor(path: Path) -> None:
+    """The visor's material has no base map in the export (the original draws it with a glass shader): make
+    it a tinted, mostly clear blend so the Kerbal's face shows through, as in the original."""
+    import json
+    import struct
+
+    data = path.read_bytes()
+    n = struct.unpack_from("<I", data, 12)[0]
+    doc = json.loads(data[20 : 20 + n])
+    rest = data[20 + n :]
+    for m in doc.get("materials", []):
+        if m.get("name") == "visor":
+            m["alphaMode"] = "BLEND"
+            m["doubleSided"] = True
+            m["pbrMetallicRoughness"] = {"baseColorFactor": [0.55, 0.66, 0.8, 0.22], "metallicFactor": 0.0, "roughnessFactor": 0.05}
+    js = json.dumps(doc, separators=(",", ":")).encode()
+    js += b" " * (-len(js) % 4)
+    total = 12 + 8 + len(js) + len(rest)
+    path.write_bytes(struct.pack("<III", 0x46546C67, 2, total) + struct.pack("<II", len(js), 0x4E4F534A) + js + rest)
+
+
 def main() -> int:
     out = ROOT / "assets" / "web"
     ex = Exporter(Path(DEFAULT_INSTALL), out, 1024, False)
@@ -78,6 +102,8 @@ def main() -> int:
         dst = out / "kerbal" / f"{piece}.glb"
         dst.parent.mkdir(parents=True, exist_ok=True)
         src.replace(dst)
+        if piece.startswith("helm_"):
+            glass_visor(dst)
         print(f"{piece}: {r['meshes']} meshes -> {dst.relative_to(ROOT)}")
     return 0
 

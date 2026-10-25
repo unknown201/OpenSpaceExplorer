@@ -106,11 +106,19 @@ impl Spin {
 /// A model to draw: renderer name, file and scale.
 type ModelRef = (&'static str, &'static str, f64);
 
+/// The original's most common Kerbal skin colour (looks SKINCOLOR BADA55).
+pub const DEFAULT_SKIN: [u8; 3] = [0xBA, 0xDA, 0x55];
+
 /// What stands in for a vessel the flight view has no craft for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Stand {
     Craft,
-    Kerbal,
+    /// `round`: the Kerbal's looks are TYPE CIRCLE, which wears the female head and eyes; `skin` is their
+    /// SKINCOLOR, which tints the original's grey head texture.
+    Kerbal {
+        round: bool,
+        skin: [u8; 3],
+    },
     Flag,
 }
 
@@ -118,11 +126,25 @@ impl Stand {
     /// A Kerbal on EVA reads `eva` in its flight readout; a planted flag is named "<agency> flag".
     pub fn of(v: &ose_net::VesselState) -> Stand {
         if v.flight.as_ref().is_some_and(|f| f.eva) {
-            Stand::Kerbal
+            Stand::Kerbal {
+                round: false,
+                skin: DEFAULT_SKIN,
+            }
         } else if v.name.ends_with(" flag") {
             Stand::Flag
         } else {
             Stand::Craft
+        }
+    }
+
+    /// The colour a model of this stand is drawn in: a Kerbal's head takes their skin colour (linear light).
+    fn tint(self, model: &str) -> Option<[f32; 4]> {
+        match self {
+            Stand::Kerbal { skin, .. } if model.starts_with("kerbal:head") => {
+                let c = |v: u8| crate::render::srgb_to_linear(v as f64 / 255.0) as f32;
+                Some([c(skin[0]), c(skin[1]), c(skin[2]), 1.0])
+            }
+            _ => None,
         }
     }
 
@@ -131,11 +153,20 @@ impl Stand {
     /// or when a server has no game assets.
     fn models(self, gpu: &mut Renderer) -> Vec<ModelRef> {
         let (real, stand_in): (&[ModelRef], ModelRef) = match self {
-            Stand::Kerbal => (
+            Stand::Kerbal { round: false, .. } => (
                 &[
                     ("kerbal:body", "assets/kerbal/body_spacesuit_01.glb", 1.0),
                     ("kerbal:head", "assets/kerbal/head_m_01.glb", 1.0),
                     ("kerbal:eyes", "assets/kerbal/eyes_m_01.glb", 1.0),
+                    ("kerbal:helmet", "assets/kerbal/helm_spacesuit_01.glb", 1.0),
+                ],
+                ("fx:kerbal", "assets/fx/kerbal.glb", 1.0),
+            ),
+            Stand::Kerbal { round: true, .. } => (
+                &[
+                    ("kerbal:body", "assets/kerbal/body_spacesuit_01.glb", 1.0),
+                    ("kerbal:head_f", "assets/kerbal/head_f_01.glb", 1.0),
+                    ("kerbal:eyes_f", "assets/kerbal/eyes_f_01.glb", 1.0),
                     ("kerbal:helmet", "assets/kerbal/helm_spacesuit_01.glb", 1.0),
                 ],
                 ("fx:kerbal", "assets/fx/kerbal.glb", 1.0),
@@ -1144,7 +1175,7 @@ impl FlightView {
             // keeps the vessel's attitude.
             let rot = match inp.stand {
                 Stand::Craft => vessel_rot,
-                Stand::Kerbal => {
+                Stand::Kerbal { .. } => {
                     let ahead = vessel_rot * DVec3::Y;
                     let level = (ahead - up * ahead.dot(up)).normalize_or_zero();
                     if level.length() > 0.5 {
@@ -1158,7 +1189,7 @@ impl FlightView {
             // A walking Kerbal bobs and sways with its stride (the original animates a walk cycle; this
             // rigid model moves as a whole).
             let (mut at, mut rot) = (pos, rot);
-            if inp.stand == Stand::Kerbal {
+            if matches!(inp.stand, Stand::Kerbal { .. }) {
                 let landed = inp
                     .vessel
                     .flight
@@ -1181,6 +1212,9 @@ impl FlightView {
                 let mut it = DrawItem::lit(name.to_string(), at - cam, rot, scale, sun);
                 it.ambient = part_ambient;
                 it.sun = sun_share;
+                if let Some(c) = inp.stand.tint(name) {
+                    it.color = c;
+                }
                 items.push(it);
             }
         }
@@ -1195,6 +1229,9 @@ impl FlightView {
                 let mut it = DrawItem::lit(name.to_string(), p - cam, rot, scale, sun);
                 it.ambient = part_ambient;
                 it.sun = sun_share;
+                if let Some(c) = stand.tint(name) {
+                    it.color = c;
+                }
                 items.push(it);
             }
         }

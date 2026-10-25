@@ -1219,6 +1219,32 @@ fn settings_open(doc: &Document) -> bool {
         .unwrap_or(false)
 }
 
+/// What a vessel without a craft looks like; a Kerbal on EVA wears the head their roster looks give.
+#[cfg(target_arch = "wasm32")]
+fn stand_of(roster: &[ose_net::KerbalInfo], v: &ose_net::VesselState) -> flight3d::Stand {
+    match flight3d::Stand::of(v) {
+        flight3d::Stand::Kerbal { .. } => {
+            let k = roster
+                .iter()
+                .find(|k| k.status == ose_net::KerbalStatus::Eva { vessel: v.id });
+            let look = |key: &str| {
+                k.and_then(|k| k.looks.iter().find(|(a, _)| a == key))
+                    .map(|(_, b)| b.as_str())
+            };
+            let skin = look("SKINCOLOR")
+                .filter(|h| h.len() == 6)
+                .and_then(|h| u32::from_str_radix(h, 16).ok())
+                .map(|c| [(c >> 16) as u8, (c >> 8) as u8, c as u8])
+                .unwrap_or(flight3d::DEFAULT_SKIN);
+            flight3d::Stand::Kerbal {
+                round: look("TYPE") == Some("CIRCLE"),
+                skin,
+            }
+        }
+        s => s,
+    }
+}
+
 /// The flown vessel's state the flight sounds react to.
 struct FlightSoundState {
     vessel: u64,
@@ -8479,12 +8505,12 @@ impl App {
             .vessels
             .iter()
             .filter(|o| o.id != id && o.reference_body == v.reference_body)
-            .map(|o| (g(scene.vessel_position(o, ut)), flight3d::Stand::of(o)))
+            .map(|o| (g(scene.vessel_position(o, ut)), stand_of(&self.roster, o)))
             .collect();
         let inp = flight3d::FlightInput {
             vessel: v,
             nearby_vessels: &nearby_vessels,
-            stand: flight3d::Stand::of(v),
+            stand: stand_of(&self.roster, v),
             vessel_pos: g(vp),
             vessel_vel: g(vv),
             body_pos: g(bp),
