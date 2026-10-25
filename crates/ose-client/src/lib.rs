@@ -51,6 +51,7 @@ pub mod scene;
 pub mod settings;
 pub mod thumb;
 pub mod tracking;
+pub mod training;
 pub mod trip;
 pub mod vab;
 #[cfg(target_arch = "wasm32")]
@@ -288,6 +289,12 @@ struct App {
     /// Launch sites from the server (protocol 30) and the one chosen (None: launch pad 1), kept per browser.
     launch_sites: Vec<ose_net::LaunchSite>,
     launch_site: Option<String>,
+    /// The campaign's astronauts (`KerbalRoster`), the one shown in the Training Center, and the launch
+    /// dialog's crew picks with the craft they were made for.
+    roster: Vec<ose_net::KerbalInfo>,
+    tc_selected: Option<String>,
+    lp_crew: Vec<String>,
+    lp_crew_for: Option<u64>,
     /// The loading screen: the place it last saw (None on the main menu) and when it went up.
     loading_place: Option<&'static str>,
     loading_since: Option<f64>,
@@ -627,6 +634,10 @@ pub fn start() -> Result<(), JsValue> {
         launch_sites: Vec::new(),
         launch_site: stored("ose.launchSite"),
         loading_place: None,
+        roster: Vec::new(),
+        tc_selected: None,
+        lp_crew: Vec::new(),
+        lp_crew_for: None,
         loading_since: None,
         adopt_attitude: false,
         lin_mode: false,
@@ -1656,6 +1667,47 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
     wire("fh-recover", Box::new(|a| a.borrow().flight_science(2)))?;
     wire("rnd-back", Box::new(|a| a.borrow().open_ksc()))?;
     wire("ksc-mission", Box::new(|a| a.borrow_mut().open_missions()))?;
+    wire("ksc-training", Box::new(|a| a.borrow_mut().open_training()))?;
+    wire("tc-back", Box::new(|a| a.borrow().open_ksc()))?;
+    if let Some(list) = doc.get_element_by_id("tc-list") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let name = ev
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .and_then(|e| e.closest("[data-ose-kerbal]").ok().flatten())
+                .and_then(|e| e.get_attribute("data-ose-kerbal"));
+            if let Some(name) = name {
+                let mut app = a.borrow_mut();
+                app.tc_selected = Some(name);
+                app.render_training();
+            }
+        });
+        list.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
+    if let Some(info) = doc.get_element_by_id("lp-info") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut()>::new(move || {
+            let mut app = a.borrow_mut();
+            let mut crew = Vec::new();
+            if let Ok(seats) = app.doc.query_selector_all("#lp-info [data-ose-seat]") {
+                for i in 0..seats.length() {
+                    if let Some(sel) = seats
+                        .get(i)
+                        .and_then(|n| n.dyn_into::<web_sys::HtmlSelectElement>().ok())
+                    {
+                        crew.push(sel.value());
+                    }
+                }
+            }
+            app.lp_crew = crew;
+            app.lp_crew_for = app.lp_selected;
+            app.render_launchpad_info();
+        });
+        info.add_event_listener_with_callback("change", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
     wire("mc-back", Box::new(|a| a.borrow().open_ksc()))?;
     wire(
         "mc-tab-primary",
@@ -3470,6 +3522,7 @@ impl App {
             "VAB" => self.open_vab(None),
             "ResearchCenter" => self.open_rnd(),
             "AstronautComplex" => self.open_missions(),
+            "TrainingCenter" => self.open_training(),
             "TrackingCenter" => self.open_tracking(),
             f if f.starts_with("Launchpad") => self.open_launchpad(),
             _ => {}
@@ -4039,6 +4092,15 @@ impl App {
                 }
                 self.render_trip();
             }
+            ServerMessage::KerbalRoster { kerbals } => {
+                self.roster = kerbals;
+                if self.screen_open("training") {
+                    self.render_training();
+                }
+                if self.screen_open("launchpad") {
+                    self.render_launchpad_info();
+                }
+            }
             ServerMessage::LaunchSites { sites } => {
                 self.launch_sites = sites;
                 if self
@@ -4298,6 +4360,7 @@ impl App {
             "vab",
             "rnd",
             "mission",
+            "training",
             "paused",
         ] {
             if let Some(el) = self.doc.get_element_by_id(&format!("screen-{id}")) {
@@ -5590,7 +5653,84 @@ impl App {
         self.menu_screen("launchpad");
         if let Some(ws) = &self.ws {
             send(ws, &ClientMessage::CraftList);
+            send(ws, &ClientMessage::KerbalRoster);
         }
+    }
+
+    // ---- Training Center
+
+    fn open_training(&mut self) {
+        if let Some(m) = self.doc.get_element_by_id("menu") {
+            m.class_list().remove_1("hidden").ok();
+        }
+        set_text(&self.doc, "menu-note", "");
+        self.menu_screen("training");
+        if let Some(ws) = &self.ws {
+            send(ws, &ClientMessage::KerbalRoster);
+        }
+        self.render_training();
+    }
+
+    fn vessel_name(&self, id: u64) -> Option<String> {
+        self.scene
+            .as_ref()
+            .and_then(|s| s.vessel(id))
+            .map(|v| v.name.clone())
+    }
+
+    fn render_training(&mut self) {
+        if !self
+            .roster
+            .iter()
+            .any(|k| Some(&k.name) == self.tc_selected.as_ref())
+        {
+            self.tc_selected = training::sorted(&self.roster)
+                .first()
+                .map(|k| k.name.clone());
+        }
+        let name = |id: u64| self.vessel_name(id);
+        let sel = self.tc_selected.as_deref();
+        if let Some(el) = self.doc.get_element_by_id("tc-list") {
+            el.set_inner_html(&training::render_list(&self.roster, sel, &name));
+        }
+        if let Some(el) = self.doc.get_element_by_id("tc-info") {
+            let k = self.roster.iter().find(|k| Some(k.name.as_str()) == sel);
+            el.set_inner_html(&training::render_info(k, &name));
+        }
+        let free = self
+            .roster
+            .iter()
+            .filter(|k| k.status == ose_net::KerbalStatus::Available)
+            .count();
+        set_text(
+            &self.doc,
+            "tc-count",
+            &format!("{} astronauts, {free} available", self.roster.len()),
+        );
+    }
+
+    /// Seats on a saved craft: the crew capacity of its parts (0 until its document arrives).
+    fn craft_seats(&self, id: u64) -> usize {
+        self.craft_docs
+            .get(&id)
+            .map(|d| {
+                d.parts
+                    .iter()
+                    .filter_map(|p| self.catalog.get(&p.part_id))
+                    .map(|cp| cp.crew_capacity as usize)
+                    .sum()
+            })
+            .unwrap_or(0)
+    }
+
+    /// Who flies craft `id`: the launch dialog's picks for it, else the roster's first available Kerbals.
+    fn launch_crew(&self, id: u64) -> Vec<String> {
+        let picks: &[String] = if self.lp_crew_for == Some(id) {
+            &self.lp_crew
+        } else {
+            &[]
+        };
+        training::fill_crew(picks, self.craft_seats(id), &self.roster)
     }
 
     fn render_crafts(&self) {
@@ -5703,7 +5843,7 @@ impl App {
              <h3>{name}</h3><div class=\"lp-at\">At {site}</div>{desc}\
              <div class=\"lp-report\"><b>Engineering Report</b><dl>\
              <dt>Parts</dt><dd>{parts}</dd><dt>Stages</dt><dd>{stages}</dd><dt>Mass</dt><dd>{wet:.1} t</dd>\
-             <dt>Delta-v (vacuum)</dt><dd>{dv:.0} m/s</dd></dl>{warn}</div>\
+             <dt>Delta-v (vacuum)</dt><dd>{dv:.0} m/s</dd></dl>{warn}</div>{crew}\
              <div class=\"lp-actions\"><button data-ose=\"lp-edit\" data-ose-craft-edit=\"{id}\">Edit Vehicle</button>\
              <button data-ose=\"lp-orbit\" data-ose-craft-orbit=\"{id}\" title=\"skip the ascent: put it straight into orbit\">Orbit</button>\
              <button class=\"go\" data-ose=\"lp-launch\" data-ose-craft-launch=\"{id}\">Launch</button></div>",
@@ -5718,6 +5858,7 @@ impl App {
             } else {
                 format!("<p>{}</p>", esc(&c.description))
             },
+            crew = training::render_crew(&self.launch_crew(c.id), &self.roster),
             parts = c.parts,
             stages = c.stages,
             wet = c.wet_mass_t,
@@ -5941,7 +6082,9 @@ impl App {
                 &ClientMessage::LaunchSavedAt {
                     id,
                     site: self.launch_site.clone(),
-                    crew: None,
+                    // Before the roster arrives the server picks the crew itself.
+                    crew: (!self.roster.is_empty() && self.craft_seats(id) > 0)
+                        .then(|| self.launch_crew(id)),
                 },
             );
         }
@@ -7040,6 +7183,7 @@ impl App {
             audio::Scene::Vab => Some("vab"),
             audio::Scene::Rnd => Some("rnd"),
             audio::Scene::Mission => Some("mission"),
+            _ if self.screen_open("training") => Some("training"),
             _ if self.flying.is_some() => Some("flight"),
             audio::Scene::Tracking => Some("tracking"),
             _ if self.tracking_open && menu_open => self.loading_place,

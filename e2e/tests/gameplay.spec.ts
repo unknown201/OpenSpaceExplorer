@@ -31,6 +31,7 @@ const FRONTIER: [StepName, Expect][] = [
   ["rnd", "Pass"],
   ["tracking_station", "Pass"],
   ["missions", "Pass"],
+  ["training_center", "Pass"],
   ["campaign_cycle", "Pass"],
   ["vab_rocket", "Pass"],
   ["eva", "Pass"],
