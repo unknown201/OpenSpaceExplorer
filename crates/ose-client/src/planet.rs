@@ -18,12 +18,18 @@ use std::rc::Rc;
 
 const SHADER: &str = include_str!("planet.wgsl");
 const BASE: &str = "assets/planets";
-/// The sea's deep colour from a body's `_DiffuseColor`, scaled by one factor for every body: the one that
+/// The sea's deep colour from a body's `_DiffuseColor`, scaled by one factor for every body (the one that
 /// brings Kerbin's to the luminance of the shared `_DeepWaterColor` default (0, 0.34, 0.62), so darker seas
-/// (Eve's) stay darker.
+/// such as Eve's stay darker), its saturation doubled and its blue raised: Kerbin's then comes out at that default's azure,
+/// as the original's seas look from 90 km in Josh's screenshots, Eve's a deep violet.
 fn ocean_deep_colour(diffuse: [f32; 4]) -> [f32; 4] {
     const K: f32 = 2.2;
-    [diffuse[0] * K, diffuse[1] * K, diffuse[2] * K, 1.0]
+    const SATURATION: f32 = 2.0;
+    let c = [diffuse[0] * K, diffuse[1] * K, diffuse[2] * K];
+    let lum = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+    let s = |v: f32| (lum + (v - lum) * SATURATION).max(0.0);
+    // and a quarter more blue: Kerbin's lands on the default's azure (0.04, 0.35, 0.64 against 0, 0.34, 0.62)
+    [s(c[0]), s(c[1]), s(c[2]) * 1.25, 1.0]
 }
 
 /// Depth (m) where the sea surface stops showing the floor: a quarter of `_TransparentVisibleDepth`, 0.5 to 25.
@@ -2578,9 +2584,15 @@ fn surface_uniform(b: &Body, debug: f32) -> SurfaceU {
         o.and_then(|o| o.get("ShallowColor")),
         [0.08, 0.36, 0.38, 1.0],
     );
-    let max_depth = o
+    // the depth over which the shallow colour gives way to the deep one: _ShallowMaxDepth scaled by
+    // _ShallowColorDistribution (Kerbin 343 m x 0.01: only right at the shore, so its open seas are the deep
+    // azure the original shows; Eve 25 m x 0.49, Laythe 500 m x 0.08)
+    let max_depth = (o
         .and_then(|o| o["ShallowMaxDepth"].as_f64())
-        .unwrap_or(343.0) as f32;
+        .unwrap_or(343.0)
+        * o.and_then(|o| o["ShallowColorDistribution"].as_f64())
+            .unwrap_or(0.01)
+            .clamp(0.01, 1.0)) as f32;
     let smooth = o.and_then(|o| o["Smoothness"].as_f64()).unwrap_or(0.86) as f32;
     u.deep = [deep[0], deep[1], deep[2], max_depth];
     u.foam = [

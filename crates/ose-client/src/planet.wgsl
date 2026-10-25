@@ -243,6 +243,10 @@ fn combined_scattering(r: f32, mu: f32, mu_s: f32, nu: f32, hits_ground: bool) -
     return s;
 }
 
+// The Rayleigh in-scatter a little bluer than the LUT gives: Kerbin's sky and haze in Josh's KSP2 screenshots
+// measure about 20 to 30 % more blue than ours at the same view (sky 104, 147, 204 against 101, 135, 172 at the pad).
+const RAYLEIGH_TINT: vec3<f32> = vec3<f32>(1.0, 1.05, 1.3);
+
 fn rayleigh_phase(nu: f32) -> f32 { return 3.0 / (16.0 * PI) * (1.0 + nu * nu); }
 
 fn mie_phase(g: f32, nu: f32) -> f32 {
@@ -279,7 +283,7 @@ fn sky_radiance(camera_in: vec3<f32>, view: vec3<f32>, sun: vec3<f32>) -> Sky {
         out.transmittance = transmittance_to_top(r, mu);
     }
     let s = combined_scattering(r, mu, mu_s, nu, hits);
-    out.radiance = s.rayleigh * rayleigh_phase(nu) + s.mie * mie_phase(frame.atmo.w, nu);
+    out.radiance = s.rayleigh * RAYLEIGH_TINT * rayleigh_phase(nu) + s.mie * mie_phase(frame.atmo.w, nu);
     return out;
 }
 
@@ -350,7 +354,7 @@ fn in_scatter_share(r: f32, mu: f32, mu_s: f32, nu: f32, d: f32) -> Sky {
     }
     let share = (vec3<f32>(1.0) - out.transmittance) / max(vec3<f32>(1.0) - full_t, vec3<f32>(1e-4));
     let mie = s0.mie * smoothstep(0.0, 0.01, mu_s);
-    out.radiance = (s0.rayleigh * rayleigh_phase(nu) + mie * mie_phase(frame.atmo.w, nu))
+    out.radiance = (s0.rayleigh * RAYLEIGH_TINT * rayleigh_phase(nu) + mie * mie_phase(frame.atmo.w, nu))
         * clamp(share, vec3<f32>(0.0), vec3<f32>(1.0));
     return out;
 }
@@ -368,7 +372,7 @@ fn in_scatter(r: f32, mu: f32, mu_s: f32, nu: f32, d: f32) -> Sky {
     let ray = max(s0.rayleigh - out.transmittance * s1.rayleigh, vec3<f32>(0.0));
     var mie = max(s0.mie - out.transmittance * s1.mie, vec3<f32>(0.0));
     mie = mie * smoothstep(0.0, 0.01, mu_s);
-    out.radiance = ray * rayleigh_phase(nu) + mie * mie_phase(frame.atmo.w, nu);
+    out.radiance = ray * RAYLEIGH_TINT * rayleigh_phase(nu) + mie * mie_phase(frame.atmo.w, nu);
     return out;
 }
 
@@ -472,6 +476,15 @@ fn water_light(depth_m: f32) -> vec3<f32> {
 fn water_fog(radiance: vec3<f32>, dist: f32) -> vec3<f32> {
     let f = 1.0 - exp(-dist / max(frame.water_col.w, 1.0));
     return mix(radiance, water_light(-frame.water.x) / PI * frame.solar.xyz, f);
+}
+
+// From high up the original's ground and sea keep their colour through the haze (its colour grading): give
+// back some of the saturation the air takes, as the camera climbs from 10 to 40 km (on bodies with air).
+fn regrade(radiance: vec3<f32>) -> vec3<f32> {
+    let alt_km = length(frame.cam_km.xyz) - bottom_r();
+    let lum = dot(radiance, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let sat = 1.0 + 0.35 * smoothstep(10.0, 40.0, alt_km) * frame.rayleigh.w;
+    return max(mix(vec3<f32>(lum), radiance, sat), vec3<f32>(0.0));
 }
 
 fn tonemap(radiance: vec3<f32>) -> vec3<f32> {
@@ -1174,12 +1187,7 @@ fn fs_terrain(in: VOut) -> @location(0) vec4<f32> {
         radiance = water_fog(radiance * exp(-max(-in.height, 0.0) / 80.0), dist);
     } else {
         radiance = through_air(radiance, p_km);
-        // From high up the original's land keeps its colour through the haze (its colour grading): give back
-        // some of the saturation the air takes, as the camera climbs from 10 to 40 km.
-        let alt_km = length(frame.cam_km.xyz) - bottom_r();
-        let lum = dot(radiance, vec3<f32>(0.2126, 0.7152, 0.0722));
-        let sat = 1.0 + 0.3 * smoothstep(10.0, 40.0, alt_km) * frame.rayleigh.w;
-        radiance = max(mix(vec3<f32>(lum), radiance, sat), vec3<f32>(0.0));
+        radiance = regrade(radiance);
     }
     return vec4<f32>(tonemap(radiance), 1.0);
 }
@@ -1278,16 +1286,16 @@ fn fs_ocean(in: VOut) -> @location(0) vec4<f32> {
     let shin = mix(64.0, 2048.0, smooth_ * smooth_);
     let spec = pow(max(dot(n, h), 0.0), shin) * (shin + 8.0) / (8.0 * PI);
     radiance = radiance + light.sun * spec * fres * 4.0;
-    // From high up the sea becomes the scaled albedo, as the original's _ScaleAlbedoStart/EndHeight (66 to
-    // 160 km): Kerbin's deep navy oceans from orbit, the glint fading with them.
-    let to_scaled = smoothstep(66000.0, 160000.0, dist);
+    // From far up the sea becomes the scaled albedo (the original's _ScaleAlbedoStart/EndHeight are 66 to
+    // 160 km, but its seas are still a bright azure at 90 km in Josh's screenshots, so the blend starts later).
+    let to_scaled = smoothstep(160000.0, 400000.0, dist);
     let suv = equi_uv(up);
     let scaled = sample_equi(albedo_tex, suv, equi_grad(suv)).rgb;
     radiance = mix(radiance, scaled / PI * (light.sun + light.sky), to_scaled);
     // Lagoons: in clear seas the sandy floor lights the shallows a bright turquoise around coasts and islands,
     // the rings the original shows even from orbit (not in murky seas such as Eve's).
     let clear = smoothstep(1.0, 10.0, surface.foam.w);
-    let lagoon = exp(-max(depth, 0.0) / max(0.08 * surface.deep.w, 2.0)) * clear * (1.0 - fres * 0.6);
+    let lagoon = exp(-max(depth, 0.0) / clamp(2.0 * surface.deep.w, 2.0, 8.0)) * clear * (1.0 - fres * 0.6);
     let turquoise = min(surface.shallow.rgb * 2.8, vec3<f32>(0.95));
     radiance = mix(radiance, turquoise / PI * (light.sun + light.sky) * 0.9, lagoon * 0.85);
     radiance = through_air(radiance, p_km);
@@ -1346,7 +1354,7 @@ fn fs_clouds(in: VOut) -> @location(0) vec4<f32> {
     let pf = up * (frame.solar.w / 1500.0);
     let nf = vnoise(pf, 1048576) * 0.6 + vnoise(pf * 2.0, 1048576) * 0.4;
     let kf = 1.0 - smoothstep(300.0, 1200.0, dist * 0.0012);
-    let far_cover = smoothstep(0.24, 0.74, base + (nf - 0.5) * 0.7 * kf);
+    let far_cover = smoothstep(0.12, 0.6, base + (nf - 0.5) * 0.7 * kf);
     let cover = clamp(mix(far_cover, smoothstep(0.35, 0.75, base + (n - 0.5) * 0.9), near), 0.0, 1.0);
     let p_km = frame.cam_km.xyz + in.rel * 0.001;
     let sun = frame.sun.xyz;

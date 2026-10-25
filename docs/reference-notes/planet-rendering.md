@@ -116,6 +116,20 @@ menus' (PPv2 `ColorGrading` with the Neutral tonemapper, temperature 5, bloom, v
 grading is set up elsewhere, perhaps in code. The Neutral tonemapper itself is not the difference: its curve is
 within 0.03 of our `1 - exp(-x)` from 0 to 3, so the gap is in the radiance (exposure or the LUT's colour).
 
+## 5c. Against Josh's in-game screenshots (2026-10-25)
+
+`D:\Projects\OpenSpaceExplorereference\ksp2-shots\` (outside git): the pad, the KSC from above with its
+lake ring, and the ascent at 30, 89 and 94 km. Changes made from them:
+- The original's seas at 89 km are a bright azure (about 120, 169, 226), not the scaled albedo's navy: the
+  sea now blends into the scaled albedo only from 160 to 400 km.
+- Deep colour: `_DiffuseColor` x 2.2 with its saturation doubled and blue x 1.25 (Kerbin lands on the
+  `_DeepWaterColor` default's azure, Eve a deep violet); the shallow colour gives way over `_ShallowMaxDepth` x
+  `_ShallowColorDistribution` (Kerbin 3.4 m, so its open sea is the deep colour), lagoons over 2 to 8 m.
+- Far cloud fields at about the original's coverage (smoothstep 0.12 to 0.6 of the baked coverage).
+- Rayleigh in-scatter x (1, 1.05, 1.3): the original's sky at the pad measures 104, 147, 204, ours was 101,
+  135, 172 (now 101, 137, 187).
+Still different: from 89 km our sea is more cyan (125, 174, 193).
+
 ## 6. Sunlight
 
 Directional light from the star; colour at a point = solar irradiance x atmosphere transmittance towards the sun;
