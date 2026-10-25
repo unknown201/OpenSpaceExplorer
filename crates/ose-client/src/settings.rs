@@ -35,6 +35,11 @@ pub const INPUT: &[(&str, &[Binding])] = &[
                 "Next / previous vessel: take control nearby in flight, follow on the map",
                 true,
             ),
+            (
+                "Right click a vessel (map)",
+                "Set or clear the target",
+                true,
+            ),
             ("Right mouse drag", "Look around", true),
             ("Mouse wheel", "Zoom", true),
             ("Home", "Reset the camera", true),

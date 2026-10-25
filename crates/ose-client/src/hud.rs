@@ -43,12 +43,12 @@ pub const SAS_BUTTONS: &[(&str, &str, &str)] = &[
     (
         "fh-sas-target",
         "Flight-ICO-Target",
-        "Target (not available yet)",
+        "Target: point at the target (set one by right-clicking a vessel on the map)",
     ),
     (
         "fh-sas-antitarget",
         "Flight-ICO-AntiTarget",
-        "Anti-target (not available yet)",
+        "Anti-target: point away from the target",
     ),
     (
         "fh-sas-maneuver",

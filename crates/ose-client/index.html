@@ -426,6 +426,9 @@
     #labels .mnv-h.prograde, #labels .mnv-h.retrograde { color: #e6e65a; } #labels .mnv-h.retrograde { background: #e6e65a55; }
     #labels .mnv-h.normal, #labels .mnv-h.antinormal { color: #c070ff; } #labels .mnv-h.antinormal { background: #c070ff55; }
     #labels .mnv-h.radialout, #labels .mnv-h.radialin { color: #5ae6e6; } #labels .mnv-h.radialin { background: #5ae6e655; }
+    #labels .vessel.target { color: #ff9ae6; font-weight: 600; } #labels .vessel.target::after { content: " \25CE"; }
+    #fh-target { color: #ff9ae6; }
+    #labels .apsis.target { color: #ff9ae6; border-color: #ff9ae655; } #labels .apsis.target::after { background: #ff9ae6; }
     #labels .apsis.event { color: #f0c060; border-color: #f0c06055; } #labels .apsis.event::after { background: #f0c060; }
     #toasts .toast.alert { border-left-color: #f0a070; } #toasts .toast.triumph { border-left-color: #7dff8a; }
     @keyframes toast-in { from { transform: translateX(30px); opacity: 0; } }
@@ -827,7 +830,7 @@
         <div class="fh-row"><span class="fh-label" id="fh-speed-mode" data-ose="flight-speed-mode" title="Speed relative to the surface or in orbit; click to switch">SURFACE</span><b id="fh-speed">--</b><span class="fh-label">VERTICAL</span><b id="fh-vspeed">--</b></div>
         <div class="fh-row fh-burn" id="fh-burn" data-ose="flight-burn" title="Burn timer: start burning when it reaches zero, pointed at the maneuver marker"></div>
         <div class="fh-row fh-orbit" data-ose="flight-apsides"><span class="fh-label" title="Apoapsis: highest point of the orbit and the time to it">AP</span><b id="fh-ap">--</b><span id="fh-ap-t" class="fh-small">--</span><span class="fh-label" title="Periapsis: lowest point of the orbit and the time to it">PE</span><b id="fh-pe">--</b><span id="fh-pe-t" class="fh-small">--</span></div>
-        <div class="fh-row"><span id="fh-attitude">--</span><span id="fh-twr" class="fh-small">--</span><span id="fh-aero" class="fh-small" data-ose="flight-aero" title="Lift from wings; jets: thrust follows speed and air, and needs an intake"></span></div>
+        <div class="fh-row"><span id="fh-attitude">--</span><span id="fh-twr" class="fh-small">--</span><span id="fh-target" class="fh-small" data-ose="flight-target" title="Target: distance and relative speed"></span><span id="fh-aero" class="fh-small" data-ose="flight-aero" title="Lift from wings; jets: thrust follows speed and air, and needs an intake"></span></div>
         <div class="fh-row"><button id="fh-science" data-ose="flight-science" title="run every experiment on board">Experiments</button><button id="fh-transmit" data-ose="flight-transmit" title="send the reports home">Transmit</button><button id="fh-recover" data-ose="flight-recover" title="recover the vessel (landed on Kerbin)">Recover</button></div>
         <div class="fh-row fh-crew"><button id="fh-eva" data-ose="flight-eva" class="hidden" title="a Kerbal climbs out">EVA</button><button id="fh-board" data-ose="flight-board" class="hidden" title="climb into the craft within reach">Board</button><button id="fh-flag" data-ose="flight-flag" class="hidden" title="plant the agency flag">Plant flag</button><button id="fh-undock" data-ose="flight-undock" class="hidden" title="release the last docking">Undock</button></div>
         <div class="fh-row"><button id="fh-full" data-ose="flight-throttle-full" title="Full throttle (Z)">Full</button><button id="fh-cut" data-ose="flight-throttle-cut" title="Cut the throttle (X)">Cut</button><button id="fh-map" title="Map view (M)">Map</button><button id="fh-ksc" title="Leave the vessel and go to the Kerbal Space Center">KSC</button></div>
