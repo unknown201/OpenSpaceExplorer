@@ -65,6 +65,7 @@ Camera rule that runs through every map: **the right button drags the camera, th
 | F17 | Flight staging stack with each stage's delta-v and TWR, and the vessel's total delta-v | each stage card shows delta-v, TWR and burn time where the vessel is now, the stage burning now stays at the bottom, and the stage line gives the vessel's total delta-v (protocol 38) | done |
 | F18 | Arrow keys turn the flight camera (cameraPan); Tab mouselook | same, outside the map; Tab makes the camera follow the mouse with no button held; both listed in Settings > Input | done |
 | F19 | F12 aero overlay; Alt + W/A/S/D/Q/E trim, Alt+X clears it | F12 draws each part's lift (blue) and drag (red) as arrows over the view; Alt with the steering keys sets a held trim (Caps Lock for fine steps), Alt+X clears it, with a toast (protocol 39) | done |
+| F20 | Flight HUD layout: readouts beside the navball, no button wall; throttle gauge on its own; view buttons at the top | the readout panel holds speed, apsides, attitude only; full/cut sit on the throttle gauge; Experiments / Transmit / Recover under the altimeter; EVA, board, flag and undock above the crew portraits; map and KSC as icons at the top right | done |
 
 ### Map view and Tracking Station
 

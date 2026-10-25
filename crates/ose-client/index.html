@@ -283,6 +283,15 @@
     .fh-bottom { position: absolute; bottom: calc(16 * var(--u)); left: 50%; transform: translateX(-50%); display: flex; gap: calc(12 * var(--u)); align-items: stretch; }
     .fh-core { background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(8 * var(--u)); padding: calc(10 * var(--u)) calc(16 * var(--u)); display: flex; flex-direction: column; gap: calc(8 * var(--u)); min-width: calc(420 * var(--u)); }
     .fh-row { display: flex; gap: calc(10 * var(--u)); align-items: center; justify-content: center; }
+    /* Throttle gauge with full / cut beside it; crew and vessel actions where the original keeps them. */
+    .fh-thr-col { display: flex; flex-direction: column; align-items: center; gap: calc(4 * var(--u)); }
+    .fh-thr-col .fh-throttle { flex: 1; min-height: calc(100 * var(--u)); }
+    .fh-bottom .fh-core { align-self: flex-end; }
+    #flight-hud .fh-thr-btn { margin: 0; width: calc(28 * var(--u)); height: calc(20 * var(--u)); padding: 0; font-size: calc(10 * var(--u)); line-height: 1; }
+    .fh-crew-acts { position: absolute; right: calc(16 * var(--u)); bottom: calc(250 * var(--u)); display: flex; gap: calc(4 * var(--u)); pointer-events: auto; }
+    .fh-vessel-acts { position: absolute; top: calc(116 * var(--u)); left: 50%; transform: translateX(-50%); display: flex; gap: calc(4 * var(--u)); pointer-events: auto; }
+    #flight-hud .fh-vessel-acts button { margin: 0; padding: calc(3 * var(--u)) calc(10 * var(--u)); font-size: calc(12 * var(--u)); background: #10141bd9; }
+    .fh-views { position: absolute; top: calc(12 * var(--u)); right: calc(150 * var(--u)); display: flex; gap: calc(4 * var(--u)); pointer-events: auto; }
     .fh-row b { font: 700 calc(18 * var(--u)) var(--ui-font); font-variant-numeric: tabular-nums; min-width: calc(90 * var(--u)); }
     .fh-throttle { position: relative; width: calc(28 * var(--u)); background: #10141bd9; border: 1px solid #ffffff33; border-radius: calc(6 * var(--u)); overflow: hidden; }
     #fh-throttle-fill { position: absolute; left: 0; right: 0; bottom: 0; height: 0; background: linear-gradient(#ffd060, #f08030); }
@@ -349,7 +358,7 @@
     #fh-missions-list li { padding: calc(4 * var(--u)) 0; border-top: 1px solid #ffffff14; }
     #fh-missions-list li b { display: block; color: #fff; } #fh-missions-list li.primary b { color: #ffd87a; }
     #fh-missions-list li small { color: #9fb0cc; } #fh-missions-list .done { color: #7dff8a; } #fh-missions-list li.empty { color: #9fb0cc; }
-    body.ui-hidden .fh-missions, body.ui-hidden .fh-appbar, body.ui-hidden .fh-parts, body.ui-hidden .fh-res, body.ui-hidden .fh-ag { display: none !important; }
+    body.ui-hidden .fh-missions, body.ui-hidden .fh-appbar, body.ui-hidden .fh-parts, body.ui-hidden .fh-res, body.ui-hidden .fh-ag, body.ui-hidden .fh-vessel-acts, body.ui-hidden .fh-views, body.ui-hidden .fh-crew-acts { display: none !important; }
     #fh-stages { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: calc(3 * var(--u)); max-height: calc(360 * var(--u)); overflow: auto; }
     #fh-stages li { display: flex; flex-wrap: wrap; align-items: center; gap: calc(3 * var(--u)); padding: calc(3 * var(--u)) calc(6 * var(--u)); border: 1px solid #ffffff22; border-left: 3px solid #e0a04066; border-radius: calc(4 * var(--u)); background: #06080fcc; }
     #fh-stages li b { font-size: calc(11 * var(--u)); color: #e0a040; min-width: calc(14 * var(--u)); }
@@ -525,7 +534,7 @@
     #aero-svg line.lift { stroke: #4aa8ff; } #aero-svg line.drag { stroke: #ff5a4a; }
     body:not(:has(#flight-hud.open)) #aero-svg, body.ui-hidden #aero-svg { display: none; }
     /* In flight it sits above the crew portraits and action bar. */
-    body:has(#flight-hud.open) #ftue { bottom: calc(250 * var(--u)); }
+    body:has(#flight-hud.open) #ftue { bottom: calc(290 * var(--u)); }
     #ftue img { width: 96px; height: 96px; object-fit: contain; flex: none; }
     #ftue .ftue-body { flex: 1; } #ftue .ftue-name { font-size: 11px; letter-spacing: 0.12em; color: #ffa114; font-weight: 700; }
     #ftue .ftue-text { margin: 4px 0 10px; line-height: 1.45; }
@@ -1009,7 +1018,7 @@
   <div id="flight-hud" data-ose="flight">
     <div class="fh-top"><div class="fh-label" id="fh-alt-mode" data-ose="flight-alt-mode" title="Altitude above sea level or above the terrain below; click to switch" style="cursor:pointer;pointer-events:auto;text-decoration:underline dotted">SEA LEVEL</div><div id="fh-altitude" data-ose="flight-altitude">--</div><div id="fh-situation" class="fh-small">--</div><div id="fh-met" class="fh-small" data-ose="flight-met" title="Mission elapsed time"></div><div id="fh-note" class="fh-small" style="color:#f0a070"></div><div id="fh-running" class="fh-small" data-ose="flight-running" style="color:#8fd08f"></div><div id="fh-control" data-ose="flight-control" style="color:#ff6a5a;font-weight:700"></div></div>
     <div class="fh-bottom">
-      <div class="fh-throttle" title="Throttle: hold Shift / Ctrl, Z full, X cut"><div id="fh-throttle-fill"></div><span>THR</span><span id="fh-throttle-pct">0%</span></div>
+      <div class="fh-thr-col"><button id="fh-full" class="fh-thr-btn" data-ose="flight-throttle-full" title="Full throttle (Z)">&#9650;</button><div class="fh-throttle" title="Throttle: hold Shift / Ctrl, Z full, X cut"><div id="fh-throttle-fill"></div><span>THR</span><span id="fh-throttle-pct">0%</span></div><button id="fh-cut" class="fh-thr-btn" data-ose="flight-throttle-cut" title="Cut the throttle (X)">&#9660;</button></div>
       <canvas id="fh-navball" data-ose="flight-navball" width="200" height="200"></canvas>
       <div class="fh-sas" id="fh-sas" data-ose="flight-sas"></div>
       <div class="fh-core">
@@ -1017,9 +1026,6 @@
         <div class="fh-row fh-burn" id="fh-burn" data-ose="flight-burn" title="Burn timer: start burning when it reaches zero, pointed at the maneuver marker"></div>
         <div class="fh-row fh-orbit" data-ose="flight-apsides"><span class="fh-label" title="Apoapsis: highest point of the orbit and the time to it">AP</span><b id="fh-ap">--</b><span id="fh-ap-t" class="fh-small">--</span><span class="fh-label" title="Periapsis: lowest point of the orbit and the time to it">PE</span><b id="fh-pe">--</b><span id="fh-pe-t" class="fh-small">--</span></div>
         <div class="fh-row"><span id="fh-attitude">--</span><span id="fh-twr" class="fh-small">--</span><span id="fh-target" class="fh-small" data-ose="flight-target" title="Target: distance and relative speed"></span><span id="fh-aero" class="fh-small" data-ose="flight-aero" title="Lift from wings; jets: thrust follows speed and air, and needs an intake"></span></div>
-        <div class="fh-row"><button id="fh-science" data-ose="flight-science" title="run every experiment on board">Experiments</button><button id="fh-transmit" data-ose="flight-transmit" title="send the reports home">Transmit</button><button id="fh-recover" data-ose="flight-recover" title="recover the vessel (landed on Kerbin)">Recover</button></div>
-        <div class="fh-row fh-crew"><button id="fh-eva" data-ose="flight-eva" class="hidden" title="a Kerbal climbs out">EVA</button><button id="fh-board" data-ose="flight-board" class="hidden" title="climb into the craft within reach">Board</button><button id="fh-flag" data-ose="flight-flag" class="hidden" title="plant the agency flag">Plant flag</button><button id="fh-undock" data-ose="flight-undock" class="hidden" title="release the last docking">Undock</button></div>
-        <div class="fh-row"><button id="fh-full" data-ose="flight-throttle-full" title="Full throttle (Z)">Full</button><button id="fh-cut" data-ose="flight-throttle-cut" title="Cut the throttle (X)">Cut</button><button id="fh-map" title="Map view (M)">Map</button><button id="fh-ksc" title="Leave the vessel and go to the Kerbal Space Center">KSC</button></div>
       </div>
     </div>
     <div class="fh-staging">
@@ -1034,6 +1040,9 @@
     </div>
     <div class="fh-actions" id="fh-actions" data-ose="flight-actions"></div>
     <div class="fh-crewbox" id="fh-crewbox" data-ose="flight-crew"></div>
+    <div class="fh-crew fh-crew-acts"><button id="fh-eva" data-ose="flight-eva" class="hidden" title="a Kerbal climbs out">EVA</button><button id="fh-board" data-ose="flight-board" class="hidden" title="climb into the craft within reach (F)">Board</button><button id="fh-flag" data-ose="flight-flag" class="hidden" title="plant the agency flag">Plant flag</button><button id="fh-undock" data-ose="flight-undock" class="hidden" title="release the last docking">Undock</button></div>
+    <div class="fh-vessel-acts"><button id="fh-science" data-ose="flight-science" title="Run every experiment on board">Experiments</button><button id="fh-transmit" data-ose="flight-transmit" title="Send the reports home">Transmit</button><button id="fh-recover" data-ose="flight-recover" title="Recover the vessel (landed or splashed down on Kerbin)">Recover</button></div>
+    <div class="fh-views"><button id="fh-map" class="fh-missions-btn" data-ose="flight-map" title="Map view (M)"><i style="--ico:url(assets/ui/hud/ICO-Flight-Map.png)"></i></button><button id="fh-ksc" class="fh-missions-btn" data-ose="flight-ksc" title="Leave the vessel and go to the Kerbal Space Center"><i style="--ico:url(assets/ui/ICO-Map-KSC-16x16.png)"></i></button></div>
     <div class="fh-appbar" id="fh-appbar" data-ose="flight-appbar">
       <button class="fh-missions-btn" id="fh-missions-btn" data-ose="flight-missions-btn" title="Mission tracker: the missions you have taken on"><i style="--ico:url(assets/ui/hud/ICO-AppBar-MissionTracker-24x24.png)"></i></button>
       <button class="fh-missions-btn" id="fh-report-btn" data-ose="flight-report-btn" title="Flight report: what this flight has done so far"><i style="--ico:url(assets/ui/hud/ICO-AppBar-FlightReport-24x24.png)"></i></button>
