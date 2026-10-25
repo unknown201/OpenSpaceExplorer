@@ -163,6 +163,84 @@ pub fn render_body_list(bodies: &[(usize, String, usize)], selected: Option<usiz
     html
 }
 
+/// What the map's information panel shows for a vessel beyond its station row (the original's Flight
+/// Situation, Orbital Characteristics and Manifest).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct VesselExtra {
+    pub speed_mps: f64,
+    pub inclination_deg: f64,
+    pub period_s: f64,
+    /// Delta-v left in the stages to fire, where the vessel is now; `None` without a readout.
+    pub delta_v_mps: Option<f64>,
+    /// Electric charge stored and capacity.
+    pub power: Option<(f64, f64)>,
+    pub crew: Vec<String>,
+}
+
+/// The map's information panel for a vessel.
+pub fn render_vessel_map_info(r: &Row, x: &VesselExtra) -> String {
+    let row = |k: &str, v: String| format!("<dt>{k}</dt><dd>{v}</dd>");
+    let mut sit = row("Situation", r.situation.into());
+    sit.push_str(&row(
+        "Trajectory Type",
+        match r.situation {
+            "Landed" | "Crashed" => "none",
+            "Escaping" => "escape",
+            "Sub-orbital" | "Flying" => "sub-orbital",
+            _ => "orbit",
+        }
+        .into(),
+    ));
+    sit.push_str(&row("Velocity", format!("{:.0} m/s", x.speed_mps)));
+    if let Some(dv) = x.delta_v_mps {
+        sit.push_str(&row("Delta-V Remaining", format!("{dv:.0} m/s")));
+    }
+    if let Some((now, cap)) = x.power {
+        sit.push_str(&row("Power Stored", format!("{now:.0} / {cap:.0}")));
+    }
+    let mut orb = row("Body", esc(&r.body));
+    orb.push_str(&row("Altitude", km(r.altitude_m)));
+    orb.push_str(&row(
+        "Apoapsis",
+        if r.apoapsis_m.is_finite() && r.apoapsis_m > 0.0 {
+            km(r.apoapsis_m)
+        } else {
+            "escape".into()
+        },
+    ));
+    orb.push_str(&row("Periapsis", km(r.periapsis_m)));
+    orb.push_str(&row(
+        "Inclination",
+        format!("{:.2}\u{b0}", x.inclination_deg),
+    ));
+    if x.period_s.is_finite() && x.period_s > 0.0 {
+        orb.push_str(&row("Period", duration(x.period_s)));
+    }
+    let crew = if x.crew.is_empty() {
+        "<div class=\"ts-owner\">no crew</div>".to_string()
+    } else {
+        format!(
+            "<dl>{}</dl>",
+            x.crew
+                .iter()
+                .map(|c| row("Crew", esc(c)))
+                .collect::<String>()
+        )
+    };
+    format!(
+        "<h3>{name}</h3><div class=\"ts-owner\">{owner}</div><h4>Flight Situation</h4><dl>{sit}</dl>\
+         <h4>Orbital Characteristics</h4><dl>{orb}</dl><h4>Manifest</h4>{crew}",
+        name = esc(&r.name),
+        owner = if r.mine {
+            "Your vessel".to_string()
+        } else if r.owner.is_empty() {
+            "Vessel".to_string()
+        } else {
+            format!("{}'s vessel", esc(&r.owner))
+        },
+    )
+}
+
 /// Gravitational constant, m^3 kg^-1 s^-2.
 const BIG_G: f64 = 6.674_30e-11;
 

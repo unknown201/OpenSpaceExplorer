@@ -410,6 +410,18 @@
     .fh-orbit b { min-width: calc(70 * var(--u)) !important; font-size: calc(15 * var(--u)) !important; }
     body:has(#flight-hud.open:not(.map)) #crumbs, body:has(#flight-hud.open:not(.map)) #labels { display: none; }
     #flight-hud.map .fh-top, #flight-hud.map .fh-staging { opacity: 0.85; }
+    /* The map's information panel (the original's Map/Info): the focused body or vessel. */
+    #fh-map-info { display: none; position: fixed; left: 12px; top: 64px; width: 300px; max-height: calc(100vh - 340px); z-index: 6; pointer-events: auto; }
+    body.map-view #fh-map-info { display: block; }
+    #fh-map-info-toggle { width: 28px; height: 28px; border-radius: 50%; border: 1px solid #6a718f; background: #10161fe6; color: #ffd25a; font: italic 700 15px Georgia, serif; cursor: pointer; }
+    #fh-map-info.closed #fh-map-info-body { display: none; }
+    #fh-map-info-body { margin-top: 6px; padding: 10px 12px; max-height: calc(100vh - 430px); overflow: auto; background: #10161fe6; color: #e6ecf7; border-radius: 4px; font-size: 13px; }
+    #fh-map-info-body h3 { margin: 0; font-size: 17px; } #fh-map-info-body .ts-owner { color: #9fb0cc; font-size: 12px; margin-bottom: 4px; }
+    #fh-map-info-body h4 { margin: 8px 0 4px; font-size: 12px; color: #ffd25a; text-transform: uppercase; letter-spacing: 0.05em; }
+    #fh-map-info-body dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin: 0; }
+    #fh-map-info-body dt { color: #9fb0cc; } #fh-map-info-body dd { margin: 0; text-align: right; }
+    #fh-map-info-body .ts-synopsis { margin: 4px 0; line-height: 1.35; color: #cdd6e6; }
+    #fh-map-info-body .ts-actions { display: none; }
     /* R&D Center after RDCenterUI.prefab: the tech tree on a dark blueprint canvas that scrolls, nodes at
        their authored positions with curved connectors, the selected node's info on the right. */
     #menu:has(#screen-rnd.open) { background: #070b12; align-items: stretch; justify-content: stretch; }
@@ -1117,6 +1129,7 @@
     <div class="fh-comm" id="fh-comm" data-ose="flight-comm" title="CommNet: transmitting science and controlling probes need a link to the KSC"><i style="--ico:url(assets/ui/hud/ICO-Flight-Cluster-Commnet.png)"></i><span id="fh-comm-text">--</span></div>
     <div class="fh-help">W/S/A/D steer (hold, Caps Lock fine), Shift/Ctrl throttle, Z/X full/cut, Space stage, T SAS on/off, G gear, B brakes, M map, right-drag to look, Home resets the camera</div>
   </div>
+  <div id="fh-map-info" data-ose="map-info"><button id="fh-map-info-toggle" data-ose="map-info-toggle" title="Information panel: the object in focus">i</button><div id="fh-map-info-body"></div></div>
   <div id="node-panel" data-ose="node-panel">
     <label>time <input id="node-dt" type="range" min="60" max="600" step="1" value="120" /><span id="node-dt-text">T-2:00</span></label>
     <label>prograde <input id="node-prograde" type="range" min="-1500" max="1500" step="1" value="0" /><span id="node-prograde-text">0 m/s</span></label>

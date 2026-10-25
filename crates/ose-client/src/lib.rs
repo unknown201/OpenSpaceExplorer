@@ -2382,6 +2382,15 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         }),
     )?;
     wire(
+        "fh-map-info-toggle",
+        Box::new(|a| {
+            let app = a.borrow();
+            if let Some(el) = app.doc.get_element_by_id("fh-map-info") {
+                el.class_list().toggle("closed").ok();
+            }
+        }),
+    )?;
+    wire(
         "vab-orient",
         Box::new(|a| {
             let mut app = a.borrow_mut();
@@ -7166,6 +7175,75 @@ impl App {
         }
     }
 
+    /// The map's information panel: the vessel followed, or the body in focus.
+    fn render_map_info(&self) {
+        let Some(el) = self.doc.get_element_by_id("fh-map-info-body") else {
+            return;
+        };
+        let html = match self.follow {
+            Some(id) => self.vessel_map_info(id).unwrap_or_default(),
+            None => self
+                .body_card(self.camera.focus)
+                .map(|c| tracking::render_body_info(&c, self.camera.focus))
+                .unwrap_or_default(),
+        };
+        let key = format!("{}:{}", html.len(), hud::fnv(&html));
+        if el.get_attribute("data-ose-key").as_deref() != Some(key.as_str()) {
+            el.set_inner_html(&html);
+            el.set_attribute("data-ose-key", &key).ok();
+        }
+    }
+
+    fn vessel_map_info(&self, id: u64) -> Option<String> {
+        let rows = self.tracking_rows();
+        let r = rows.iter().find(|r| r.id == id)?;
+        let scene = self.scene.as_ref()?;
+        let v = scene.vessel(id)?;
+        let body = scene.bodies.get(v.reference_body as usize)?;
+        let a = v.orbit.semi_major_axis_m;
+        let ut = self.time.ut_at(now_ms());
+        let f = v.flight.as_ref();
+        // In the air or on the ground the speed over the surface, as the HUD gives it; in space the
+        // orbital speed (vis-viva).
+        let low = f.is_some_and(|f| {
+            matches!(
+                f.situation,
+                ose_net::FlightSituation::Landed | ose_net::FlightSituation::Flying
+            )
+        });
+        let speed = match f {
+            Some(f) if low => f.surface_speed_mps,
+            _ => {
+                let rad = (scene.vessel_position(v, ut)
+                    - scene.position(v.reference_body as usize, ut))
+                .length();
+                (body.mu * (2.0 / rad - 1.0 / a)).max(0.0).sqrt()
+            }
+        };
+        let extra = tracking::VesselExtra {
+            speed_mps: speed,
+            inclination_deg: v.orbit.inclination_deg,
+            period_s: if a > 0.0 {
+                std::f64::consts::TAU * (a.powi(3) / body.mu).sqrt()
+            } else {
+                f64::NAN
+            },
+            delta_v_mps: f.map(|f| {
+                f.stage_list
+                    .iter()
+                    .map(|s| s.delta_v_now_mps.max(0.0))
+                    .sum()
+            }),
+            power: f
+                .filter(|f| f.electric_capacity > 0.0)
+                .map(|f| (f.electric_charge, f.electric_capacity)),
+            crew: f
+                .map(|f| f.crew.iter().map(|c| c.1.clone()).collect())
+                .unwrap_or_default(),
+        };
+        Some(tracking::render_vessel_map_info(r, &extra))
+    }
+
     /// Every celestial body in hierarchy order (each followed by its moons), with its depth.
     fn body_tree(&self) -> Vec<(usize, String, usize)> {
         let Some(scene) = &self.scene else {
@@ -7326,6 +7404,11 @@ impl App {
 
     /// Show or hide the station and refresh it twice a second while it is open.
     fn update_tracking(&mut self, now: f64) {
+        if let Some(b) = self.doc.body() {
+            b.class_list()
+                .toggle_with_force("map-view", self.map_mode && self.flying.is_some())
+                .ok();
+        }
         let visible = self.tracking_open && self.flying.is_none() && self.in_session;
         if let Some(el) = self.doc.get_element_by_id("tracking") {
             el.class_list().toggle_with_force("open", visible).ok();
@@ -9107,6 +9190,9 @@ impl App {
         let Some(id) = self.flying else { return };
         if let Some(el) = self.doc.get_element_by_id("flight-hud") {
             el.class_list().toggle_with_force("map", self.map_mode).ok();
+        }
+        if self.map_mode {
+            self.render_map_info();
         }
         let Some(v) = self.scene.as_ref().and_then(|s| s.vessel(id)) else {
             return;
