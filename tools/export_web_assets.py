@@ -484,9 +484,7 @@ class Exporter:
                 if name.startswith("col_") or renderer_material.get(go_id) == -1:
                     continue
                 # An engine's fairing (the shroud round its bell) shows in the original only when a part hangs
-                # below the engine; drawn always, it turns an LV-T45 into a fat cylinder.
-                if part_id.startswith("engine_") and "fairing" in name.lower():
-                    continue
+                # below the engine; the client hides it otherwise (mesh names containing "fairing").
                 # Exhaust plume meshes (exh_*, vfx_*) are effect geometry the original only shows while the
                 # engine burns; static, they stand as 20 m white cones under every engine.
                 if name.lower().startswith(("exh_", "vfx_")):

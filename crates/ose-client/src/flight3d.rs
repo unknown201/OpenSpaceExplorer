@@ -219,6 +219,21 @@ fn wheel_spinner(part_id: &str) -> Option<(&'static str, f64)> {
     })
 }
 
+/// Whether part `i` is an engine with nothing hanging from its bottom node: the original then leaves its
+/// shroud (the fairing round the bell) off.
+pub(crate) fn bare_engine(craft: &Craft, i: usize) -> bool {
+    craft
+        .parts
+        .get(i)
+        .is_some_and(|p| p.part_id.starts_with("engine_"))
+        && !craft.parts.iter().any(|q| {
+            q.parent == Some(i)
+                && q.parent_node
+                    .as_deref()
+                    .is_some_and(|n| n.contains("bottom"))
+        })
+}
+
 /// The original's most common Kerbal skin colour (looks SKINCOLOR BADA55).
 pub const DEFAULT_SKIN: [u8; 3] = [0xBA, 0xDA, 0x55];
 
@@ -1418,6 +1433,9 @@ impl FlightView {
                 let mut it = DrawItem::lit(name, wpos - cam, vessel_rot * lq, 1.0, sun);
                 it.animation = animation;
                 it.paint = part_paint(craft, i, inp.paint);
+                if bare_engine(craft, i) {
+                    it.hide_containing = Some("fairing");
+                }
                 // Wheels roll with the ground speed.
                 if let Some((bone, radius)) = wheel_spinner(pid) {
                     let turn = (self.wheel_travel / radius) as f32;
@@ -1596,7 +1614,9 @@ impl FlightView {
                             hi_all = hi_all.max(w);
                         }
                     }
-                    placed.push((name, lp, lq, part_paint(craft, placed.len(), near.paint)));
+                    let k = placed.len();
+                    let shroud = bare_engine(craft, k).then_some("fairing");
+                    placed.push((name, lp, lq, part_paint(craft, k, near.paint), shroud));
                 }
                 let anchor = if !lo_all.is_finite() {
                     DVec3::ZERO
@@ -1605,13 +1625,14 @@ impl FlightView {
                 } else {
                     (lo_all + hi_all) * 0.5
                 };
-                for (name, lp, lq, paint) in placed {
+                for (name, lp, lq, paint, shroud) in placed {
                     if !gpu.has_model(&name) {
                         continue;
                     }
                     let at = p + crot * (lp - anchor);
                     let mut it = DrawItem::lit(name, at - cam, crot * lq, 1.0, sun);
                     it.paint = paint;
+                    it.hide_containing = shroud;
                     it.ambient = part_ambient;
                     it.fill_dir = up;
                     it.fill = 0.25;

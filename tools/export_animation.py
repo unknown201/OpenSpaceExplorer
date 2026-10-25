@@ -88,7 +88,7 @@ def skinned_meshes(ex, env, glb, transforms, names, material_index, meshes_by_tf
             continue
         skin = obj.read()
         name = names.get(skin.m_GameObject.path_id, "").lower()
-        if name.startswith(("col_", "exh_", "vfx_")) or (part_id.startswith("engine_") and "fairing" in name):
+        if name.startswith(("col_", "exh_", "vfx_")):
             continue
         tf = tf_by_go.get(skin.m_GameObject.path_id)
         if tf is None or not skin.m_Mesh.path_id:

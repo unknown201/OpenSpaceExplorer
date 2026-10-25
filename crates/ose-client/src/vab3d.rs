@@ -474,6 +474,9 @@ impl VabView {
             let mut item = DrawItem::lit(name, wpos - cam_pos, wrot, 1.0, light);
             item.ambient = 0.45;
             item.paint = crate::flight3d::part_paint(craft, i, self.paint);
+            if crate::flight3d::bare_engine(craft, i) {
+                item.hide_containing = Some("fairing");
+            }
             item.fill_dir = -forward;
             item.fill = 0.35;
             if self.icon_mode {

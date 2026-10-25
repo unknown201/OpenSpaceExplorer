@@ -290,6 +290,8 @@ pub struct DrawItem {
     /// The vessel's base and accent paint colours (linear rgb) for KSP2's paint-masked parts; `None` leaves
     /// parts as authored.
     pub paint: Option<([f32; 3], [f32; 3])>,
+    /// Leave out this instance's meshes whose names contain this (an engine's shroud with nothing below it).
+    pub hide_containing: Option<&'static str>,
 }
 
 impl DrawItem {
@@ -319,6 +321,7 @@ impl DrawItem {
             sun: 1.0,
             glow: 0.0,
             paint: None,
+            hide_containing: None,
         }
     }
 }
@@ -1379,6 +1382,12 @@ impl Renderer {
             let world = model.rig.world_matrices(&pose);
             for (pi, (mesh_i, _, node)) in model.primitives.iter().enumerate() {
                 if hide.is_some_and(|h| h.contains(&model.mesh_names[*mesh_i])) {
+                    continue;
+                }
+                if item
+                    .hide_containing
+                    .is_some_and(|h| model.mesh_names[*mesh_i].to_ascii_lowercase().contains(h))
+                {
                     continue;
                 }
                 let m = base * world[*node].as_dmat4();
