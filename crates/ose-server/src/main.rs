@@ -883,6 +883,15 @@ fn flight_readout(
                     .collect()
             })
             .unwrap_or_default(),
+        control_surfaces: u
+            .structure(e)
+            .map(|st| {
+                st.surface_deflections(p.facing, p.steer_cmd)
+                    .into_iter()
+                    .map(|(i, d)| (i as u16, d as f32))
+                    .collect()
+            })
+            .unwrap_or_default(),
         shielded: u
             .structure(e)
             .map(|st| {

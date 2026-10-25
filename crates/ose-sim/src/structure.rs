@@ -188,6 +188,9 @@ pub enum Chute {
 const FAIRING_CD_FRONT: f64 = 0.3;
 const FAIRING_CD_SIDE: f64 = 0.6;
 
+/// How hard a leg's or wheel's suspension stops the craft over its travel, m/s^2.
+const SUSPENSION_DECEL: f64 = 30.0;
+
 /// Time constant of engine thrust reaching the structure, s.
 const THRUST_LAG_S: f64 = 0.4;
 
@@ -1205,7 +1208,17 @@ impl Structure {
             } else {
                 crate::flight::CRASH_SPEED_MPS
             };
-            if feet.is_empty() || speed <= tolerance {
+            // legs and wheels out take part of the blow on their suspension (decelerating at about 3 g over
+            // their travel: our own figure)
+            let travel = feet
+                .iter()
+                .filter(|&&i| self.gear_out[i])
+                .filter_map(|&i| self.gear_defs[i].as_ref().map(|g| g.suspension_m))
+                .fold(0.0, f64::max);
+            let speed_on_parts = (speed * speed - 2.0 * SUSPENSION_DECEL * travel)
+                .max(0.0)
+                .sqrt();
+            if feet.is_empty() || speed_on_parts <= tolerance {
                 break;
             }
             if feet.contains(&self.root) {
@@ -1562,6 +1575,34 @@ impl Structure {
             torque = torque + r.cross(f);
         }
         torque
+    }
+
+    /// How far each control surface deflects for steering command `cmd` (inertial, a share of full turning
+    /// about each axis): the surface turns so its lift's torque helps the command, up to its range, rad.
+    pub fn surface_deflections(&self, facing: DVec3, cmd: DVec3) -> Vec<(usize, f64)> {
+        let (bx, by, bz) = basis(facing);
+        let to_inertial = |v: DVec3| bx * v.x + by * v.y + bz * v.z;
+        let c = self.rigid.rest_centre();
+        (0..self.rigid.len())
+            .filter_map(|i| {
+                let (range, share) = self.ctrl[i];
+                let (l, _) = self.lift_defs[i].as_ref()?;
+                if range <= 0.0 || share <= 0.0 || !self.rigid.present[i] {
+                    return None;
+                }
+                let u = aero::rotate(self.part_rot[i], l.axis);
+                let axis = bx * u.x + by * u.y + bz * (-u.z);
+                let (centre, _) = self.part_box(i);
+                // the torque a push along the surface's axis gives
+                let lever = to_inertial(centre - c).cross(axis);
+                let along = if lever.length() > 1e-6 {
+                    cmd.dot(lever.normalized()).clamp(-1.0, 1.0)
+                } else {
+                    0.0
+                };
+                Some((i, along * range))
+            })
+            .collect()
     }
 
     /// How much torque the control surfaces can give at full deflection in this airflow, kN·m: each moving
@@ -2060,6 +2101,16 @@ mod tests {
             0.0,
             "no air, no authority"
         );
+        // asked to pitch, the surfaces deflect (some one way, some the other), never past their range
+        let pitch = DVec3::new(1.0, 0.0, 0.0);
+        let d = s.surface_deflections(facing, pitch);
+        assert!(!d.is_empty());
+        assert!(d.iter().any(|(_, a)| a.abs() > 0.01), "{d:?}");
+        assert!(d.iter().all(|(_, a)| a.abs() <= 30f64.to_radians() + 1e-9));
+        assert!(s
+            .surface_deflections(facing, DVec3::ZERO)
+            .iter()
+            .all(|(_, a)| *a == 0.0));
     }
 
     #[test]
@@ -2140,6 +2191,9 @@ mod tests {
         // 15 m/s: the legs take it; folded in, the engine breaks
         let (broken, _) = s.impact(15.0, DVec3::new(1.0, 0.0, 0.0)).unwrap();
         assert!(broken.is_empty());
+        // a bit over the legs' 20 m/s: their 0.95 m of suspension takes it
+        let (broken, _) = s.impact(21.0, DVec3::new(1.0, 0.0, 0.0)).unwrap();
+        assert!(broken.is_empty(), "the suspension soaks it up");
         s.deploy_gear(false);
         let (broken, _) = s.impact(15.0, DVec3::new(1.0, 0.0, 0.0)).unwrap();
         assert_eq!(broken, vec![3], "the engine breaks");

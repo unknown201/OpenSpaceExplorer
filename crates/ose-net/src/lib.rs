@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 36;
+pub const PROTOCOL_VERSION: u16 = 37;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -589,6 +589,9 @@ pub struct FlightReadout {
     pub fairings: Vec<(u16, bool)>,
     pub cargo_bays: Vec<(u16, bool)>,
     pub shielded: Vec<u16>,
+    /// Control surfaces and how far each is deflected now, rad (about its hinge; sign follows the
+    /// surface's lift axis).
+    pub control_surfaces: Vec<(u16, f32)>,
     /// The burning stage is jets (their thrust follows speed and air; `thrust_kn` shows it).
     pub jet: bool,
 }

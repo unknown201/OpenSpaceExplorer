@@ -252,9 +252,13 @@ pub struct Powered {
     pub lift_kn: DVec3,
     #[serde(default)]
     pub aero_torque_knm: DVec3,
-    /// Steering torque the control surfaces can give in the airflow now, kN·m.
+    /// Steering torque the control surfaces can give in the airflow now, kN·m, and the steering asked for
+    /// this step as a share of the full turning torque about each inertial axis (-1..1; the control surfaces
+    /// deflect to it).
     #[serde(default)]
     pub surface_torque_knm: f64,
+    #[serde(default)]
+    pub steer_cmd: DVec3,
     /// The burning stage's engines breathe air (jets), and whether the vessel has intakes.
     #[serde(default)]
     pub jet: Option<Jet>,
@@ -460,7 +464,7 @@ impl Drive {
 
     /// One step on the ground for a vessel of `mass_t` under gravity `g`: the speed it ends with and how far
     /// it went (m, along `direction`); the heading turns with the steering.
-    pub fn step(&mut self, mass_t: f64, g: f64, dt: f64) -> f64 {
+    pub fn step(&mut self, mass_t: f64, g: f64, slope_acc: f64, dt: f64) -> f64 {
         if self.wheels.is_empty() || mass_t <= 0.0 {
             self.speed_mps = 0.0;
             return 0.0;
@@ -483,7 +487,8 @@ impl Drive {
             .sum::<f64>()
             * input;
         let grip = WHEEL_GRIP * mass_t * g;
-        let push = push.clamp(-grip, grip);
+        // the slope pulls it downhill on top of what the motors do
+        let push = push.clamp(-grip, grip) + slope_acc * mass_t;
         let brake: f64 = if self.brakes {
             self.wheels
                 .iter()
@@ -686,6 +691,7 @@ impl Powered {
             lift_kn: DVec3::ZERO,
             aero_torque_knm: DVec3::ZERO,
             surface_torque_knm: 0.0,
+            steer_cmd: DVec3::ZERO,
             jet: None,
             intakes: false,
             level: false,
@@ -908,8 +914,10 @@ pub fn steer(p: &mut Powered, target: DVec3, thrust_fraction: f64, dt: f64) {
         if am > alpha_max {
             a = a * (alpha_max / am);
         }
+        p.steer_cmd = a * (1.0 / alpha_max);
         p.angvel = w + a * dt;
     } else {
+        p.steer_cmd = DVec3::ZERO;
         p.angvel = w;
     }
     p.facing = rotate(p.facing, p.angvel, dt);
@@ -960,6 +968,7 @@ pub fn spin(p: &mut Powered, thrust_fraction: f64, dt: f64) {
     let right = p.facing.cross(top);
     // pitch turns the nose toward the top: about -right; yaw toward the right: about +top
     let w_turn = p.angvel - p.facing * p.angvel.dot(p.facing);
+    p.steer_cmd = right * -i.x + top * i.y + p.facing * i.z;
     let w = w_turn + (right * -i.x + top * i.y) * (alpha * dt);
     let w = if w.length() > MAX_TURN_RATE {
         w * (MAX_TURN_RATE / w.length())
@@ -1206,7 +1215,12 @@ pub fn integrate(
                 if p.level {
                     p.drive.speed_mps += (thrust_acc + lift_acc).dot(dir) * dt;
                 }
-                let moved = p.drive.step(p.mass_t, g, dt);
+                // downhill along the way it drives: gravity times the slope's sine
+                let ahead = ground_radius(body, terrain, p.r + dir * 2.0, ut + dt);
+                let behind = ground_radius(body, terrain, p.r - dir * 2.0, ut + dt);
+                let rise = (ahead - behind) / 4.0;
+                let slope_acc = -g * rise / (1.0 + rise * rise).sqrt();
+                let moved = p.drive.step(p.mass_t, g, slope_acc, dt);
                 p.r = p.r + dir * moved;
                 rolling = dir * p.drive.speed_mps;
             }
@@ -1399,6 +1413,37 @@ pub fn surface_state_at(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_rover_rolls_down_a_slope_unless_its_brakes_hold_it() {
+        let wheel = DriveWheel {
+            radius_m: 0.3,
+            torque_knm: None,
+            ec_per_s: 0.0,
+            brake_knm: 2.0,
+            steers: false,
+        };
+        let mut d = Drive {
+            wheels: vec![wheel; 4],
+            ..Default::default()
+        };
+        // a 10 degree hill (downhill is backwards), 1 t, Kerbin gravity
+        let slope = -9.81 * 10f64.to_radians().sin();
+        for _ in 0..50 {
+            d.step(1.0, 9.81, slope, 0.02);
+        }
+        assert!(d.speed_mps < -1.0, "rolls back: {}", d.speed_mps);
+        d.speed_mps = 0.0;
+        d.brakes = true;
+        for _ in 0..50 {
+            d.step(1.0, 9.81, slope, 0.02);
+        }
+        assert_eq!(d.speed_mps, 0.0, "the brakes hold it");
+        // on the flat it stays put
+        d.brakes = false;
+        d.step(1.0, 9.81, 0.0, 0.02);
+        assert_eq!(d.speed_mps, 0.0);
+    }
 
     fn kerbin() -> Body {
         let mu = 1.00034160493135 * G0 * 600_000.0 * 600_000.0;
