@@ -537,7 +537,9 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
         if (!music.startsWith("music_kerbin")) return failed(`flight music is "${music}", not Kerbin's`);
       }
       let particles = "";
-      if (await hud.first().getAttribute("data-ose-particles") !== null) {
+      // The authored engine effects are game assets: a server without them (CI) has nothing to burn.
+      const fxAssets = (await page.request.get(`${baseURL}/assets/fx/effects.json`).catch(() => null))?.ok() ?? false;
+      if (fxAssets && (await hud.first().getAttribute("data-ose-particles")) !== null) {
         const count = async () => Number(await hud.first().getAttribute("data-ose-particles"));
         const layers = async () => Number(await hud.first().getAttribute("data-ose-engine-fx-layers"));
         const start = Date.now();
