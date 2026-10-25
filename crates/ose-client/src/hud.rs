@@ -86,6 +86,8 @@ pub fn sas_lit(att: &AttitudeMode) -> &'static str {
         AttitudeMode::Maneuver => "fh-sas-maneuver",
         // SAS off: no mode button lit
         AttitudeMode::Free => "",
+        AttitudeMode::Target => "fh-sas-target",
+        AttitudeMode::AntiTarget => "fh-sas-antitarget",
         AttitudeMode::Up | AttitudeMode::PitchHeading { .. } | AttitudeMode::Fixed(_) => {
             "fh-sas-stability"
         }

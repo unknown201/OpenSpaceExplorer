@@ -317,6 +317,7 @@ mod tests {
                 mean_anomaly_at_epoch_rad: 0.0,
                 epoch_s: 0.0,
             },
+            target: None,
             flight: None,
         };
         let kerbin = s.position(1, 0.0);

@@ -148,6 +148,9 @@ pub enum Attitude {
     Maneuver(DVec3),
     /// SAS off: nothing holds the attitude; the rotation input turns the vessel and it keeps spinning.
     Free,
+    /// Toward the vessel's target, or away from it (the universe keeps the direction current).
+    Target(DVec3),
+    AntiTarget(DVec3),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -809,15 +812,18 @@ pub fn attitude_direction(att: Attitude, r: DVec3, v: DVec3, omega: f64) -> DVec
             let (sh, ch) = heading_deg.to_radians().sin_cos();
             up * sp + (east * sh + north * ch) * cp
         }
-        // a maneuver hold with no burn to point at yet keeps to prograde
-        Attitude::Maneuver(d) if d.length_squared() < 1e-18 => {
+        // a maneuver or target hold with nothing to point at yet keeps to prograde
+        Attitude::Maneuver(d) | Attitude::Target(d) | Attitude::AntiTarget(d)
+            if d.length_squared() < 1e-18 =>
+        {
             if v.length() > 1e-6 {
                 v.normalized()
             } else {
                 up
             }
         }
-        Attitude::Fixed(d) | Attitude::Maneuver(d) => d,
+        Attitude::Fixed(d) | Attitude::Maneuver(d) | Attitude::Target(d) => d,
+        Attitude::AntiTarget(d) => -d,
         // nothing held: the vessel's own axis is not known here, so the local up stands in
         Attitude::Free => up,
     };

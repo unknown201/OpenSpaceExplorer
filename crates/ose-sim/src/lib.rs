@@ -398,6 +398,58 @@ impl Universe {
         }
     }
 
+    /// Position and velocity of a vessel or body in the star's frame at the current time.
+    pub fn star_state(&self, e: Entity) -> Option<(DVec3, DVec3)> {
+        let ut = self.ut();
+        if self.world.get::<bodies::Body>(e).is_some() {
+            return Some(bodies::star_space_state(&self.world, e, ut));
+        }
+        let body = self.world.get::<bodies::ReferenceBody>(e)?.0;
+        let (bp, bv) = bodies::star_space_state(&self.world, body, ut);
+        let (r, v) = match self.world.get::<flight::Powered>(e) {
+            Some(p) => (p.r, p.v),
+            None => self.world.get::<bodies::OnRails>(e)?.0.state_at(ut),
+        };
+        Some((bp + r, bv + v))
+    }
+
+    /// Set (or clear) a vessel's target: another vessel or a body.
+    pub fn set_target(&mut self, e: Entity, target: Option<Entity>) -> bool {
+        if self.world.get_entity(e).is_err() {
+            return false;
+        }
+        match target {
+            Some(t) if t != e && self.star_state(t).is_some() => {
+                self.world.entity_mut(e).insert(vessels::Target(t));
+                true
+            }
+            Some(_) => false,
+            None => {
+                self.world.entity_mut(e).remove::<vessels::Target>();
+                true
+            }
+        }
+    }
+
+    pub fn target(&self, e: Entity) -> Option<Entity> {
+        self.world.get::<vessels::Target>(e).map(|t| t.0)
+    }
+
+    /// Where a vessel's target is from it (inertial offset, m), how fast it moves relative to it (target
+    /// velocity minus the vessel's, m/s), and its distance to the target's surface (bodies) or centre.
+    pub fn target_relative(&self, e: Entity) -> Option<(DVec3, DVec3, f64)> {
+        let t = self.target(e)?;
+        let (p, v) = self.star_state(e)?;
+        let (tp, tv) = self.star_state(t)?;
+        let d = tp - p;
+        let surface = self
+            .world
+            .get::<bodies::Body>(t)
+            .map(|b| b.radius_m)
+            .unwrap_or(0.0);
+        Some((d, tv - v, (d.length() - surface).max(0.0)))
+    }
+
     /// Rotation input with SAS off (pitch, yaw, roll each -1..1, held until changed; see
     /// `Powered::rotation_input`); false without a powered vessel.
     pub fn set_rotation(&mut self, e: Entity, pitch: f64, yaw: f64, roll: f64) -> bool {
@@ -1003,6 +1055,21 @@ impl Universe {
                     let dv = vessels::burn_delta_v(&o, &b);
                     if dv.length() > 1e-9 {
                         p.attitude = flight::Attitude::Maneuver(dv.normalized());
+                    }
+                }
+            }
+            // a target hold points at the target as it stands now
+            if matches!(
+                p.attitude,
+                flight::Attitude::Target(_) | flight::Attitude::AntiTarget(_)
+            ) {
+                if let Some((d, _, _)) = self.target_relative(e) {
+                    if d.length() > 1e-6 {
+                        let u = d.normalized();
+                        p.attitude = match p.attitude {
+                            flight::Attitude::AntiTarget(_) => flight::Attitude::AntiTarget(u),
+                            _ => flight::Attitude::Target(u),
+                        };
                     }
                 }
             }
@@ -2156,6 +2223,50 @@ mod tests {
         let p3 = u.powered(v).unwrap();
         assert!(p3.angvel.length() < 0.01, "{:?}", p3.angvel);
         assert!(p3.facing.dot(hold) > 0.99, "holds where SAS caught it");
+    }
+
+    #[test]
+    fn a_target_hold_points_at_the_other_vessel_and_reads_its_distance() {
+        let (mut u, body, spec, st) = k1_on_real_kerbin();
+        let v = u.spawn_vessel_in_circular_orbit("K1", body, 100_000.0);
+        let mut p = flight::Powered::new(
+            spec,
+            DVec3::new(700_000.0, 0.0, 0.0),
+            DVec3::new(0.0, 2_246.0, 0.0),
+            false,
+        );
+        p.facing = DVec3::new(0.0, 1.0, 0.0);
+        u.set_powered(v, p);
+        u.set_structure(v, st);
+        // a probe 2 km ahead on the same orbit, drifting apart at 1 m/s
+        let other = u.spawn_vessel_in_circular_orbit("Probe", body, 100_000.0);
+        let mut q = u.powered(v).unwrap().clone();
+        q.r = DVec3::new(700_000.0 - 2.86, 2_000.0, 0.0);
+        q.v = DVec3::new(0.0, 2_247.0, 0.0);
+        u.set_powered(other, q);
+        assert!(!u.set_target(v, Some(v)), "not itself");
+        assert!(u.set_target(v, Some(other)));
+        let (d, rel, dist) = u.target_relative(v).unwrap();
+        assert!((dist - 2_000.0).abs() < 5.0, "{dist}");
+        assert!((rel.length() - 1.0).abs() < 0.05, "{rel:?}");
+        assert!(d.y > 1_990.0);
+        assert!(u.set_controls(v, 0.01, flight::Attitude::Target(DVec3::ZERO)));
+        for _ in 0..(20 * TICKS_PER_SECOND) {
+            u.step();
+        }
+        let (d, _, _) = u.target_relative(v).unwrap();
+        let p = u.powered(v).unwrap();
+        assert!(
+            p.facing.dot(d.normalized()) > 0.99,
+            "points at it: {:?}",
+            p.facing
+        );
+        // a body as target: the distance is to its surface
+        assert!(u.set_target(v, Some(body)));
+        let (_, _, dist) = u.target_relative(v).unwrap();
+        assert!((dist - 100_000.0).abs() < 2_000.0, "{dist}");
+        assert!(u.set_target(v, None));
+        assert!(u.target_relative(v).is_none());
     }
 
     #[test]

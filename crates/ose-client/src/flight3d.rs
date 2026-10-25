@@ -260,7 +260,7 @@ pub fn attitude_dir(att: &AttitudeMode, r: DVec3, v_rel: DVec3, spin: Spin) -> D
         // the server turns toward the burn; the readout's facing shows it
         AttitudeMode::Maneuver => or_up(v_rel),
         // SAS off holds nothing; the readout's facing shows where it points
-        AttitudeMode::Free => or_up(v_rel),
+        AttitudeMode::Free | AttitudeMode::Target | AttitudeMode::AntiTarget => or_up(v_rel),
     }
 }
 
