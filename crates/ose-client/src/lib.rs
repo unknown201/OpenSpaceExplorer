@@ -1989,7 +1989,7 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                 .and_then(|e| e.closest("#tl-start").ok().flatten())
                 .and_then(|e| e.get_attribute("data-lesson"));
             if let Some(id) = id {
-                a.borrow().play_lesson(&id);
+                a.borrow_mut().play_lesson(&id);
             }
         });
         info.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
@@ -4037,6 +4037,9 @@ impl App {
                 }
                 self.crafts = crafts;
                 self.render_crafts();
+                if self.tc_lessons {
+                    self.render_lessons();
+                }
                 self.render_vab_load();
             }
             ServerMessage::CraftDocument {
@@ -6192,6 +6195,8 @@ impl App {
         self.menu_screen("training");
         if let Some(ws) = &self.ws {
             send(ws, &ClientMessage::KerbalRoster);
+            // The lessons' rockets are stock crafts.
+            send(ws, &ClientMessage::CraftList);
         }
         self.render_training();
     }
@@ -6273,7 +6278,22 @@ impl App {
                 .lessons
                 .iter()
                 .find(|l| Some(l.id.as_str()) == sel)
-                .map(|l| tutorials::info_html(l, &self.loc))
+                .map(|l| {
+                    let n = l.id.trim_start_matches("Tutorial").trim();
+                    let rocket = self.crafts.iter().find(|c| {
+                        c.stock
+                            && (c.name == format!("Lesson {n} rocket")
+                                || c.name == format!("Lesson {n} rocket 1"))
+                    });
+                    let mut html = tutorials::info_html(l, &self.loc);
+                    if let Some(c) = rocket {
+                        html.push_str(&format!(
+                            "<p class=\"tl-meta\">Starts with {} on the pad.</p>",
+                            esc(&c.name)
+                        ));
+                    }
+                    html
+                })
                 .unwrap_or_default();
             el.set_inner_html(&html);
         }
@@ -6284,8 +6304,23 @@ impl App {
         );
     }
 
-    /// Play a lesson: PAIGE's messages, stage after stage, in the hint box (whatever the hint setting).
-    fn play_lesson(&self, id: &str) {
+    /// Play a lesson: PAIGE's messages, stage after stage, in the hint box (whatever the hint setting). A
+    /// lesson that comes with a rocket (the stock "Lesson 1.1 rocket" ...) rolls it out first, as the
+    /// original's lessons load their own save.
+    fn play_lesson(&mut self, id: &str) {
+        let n = id.trim_start_matches("Tutorial").trim();
+        let rocket = self
+            .crafts
+            .iter()
+            .find(|c| {
+                c.stock
+                    && (c.name == format!("Lesson {n} rocket")
+                        || c.name == format!("Lesson {n} rocket 1"))
+            })
+            .map(|c| c.id);
+        if let Some(c) = rocket {
+            self.launch_craft(c);
+        }
         let Some(l) = self
             .academy
             .as_ref()
@@ -6832,7 +6867,34 @@ impl App {
     }
 
     /// Roll a library craft out to the chosen launch site (the original's launch: landed, engines off).
+    /// Planes and rovers start level on the runway, as the original's do: a craft laid along the floor or
+    /// with rover wheels.
+    fn runway_craft(&self, id: u64) -> bool {
+        self.craft_docs.get(&id).is_some_and(|c| {
+            c.parts.iter().any(|p| p.part_id.starts_with("wheel_"))
+                || vab::Editor::from_craft(c.clone()).is_plane()
+        })
+    }
+
     fn launch_craft(&mut self, id: u64) {
+        let on_pad = !self
+            .launch_site
+            .as_deref()
+            .is_some_and(|s| s.starts_with("Runway"));
+        // This launch only: the chosen site stays for the next rocket.
+        let site = if on_pad
+            && self.runway_craft(id)
+            && self.launch_sites.iter().any(|s| s.id == "Runway_1")
+        {
+            hud::push(
+                &self.doc,
+                "Planes and rovers start on the runway",
+                "passive",
+            );
+            Some("Runway_1".to_string())
+        } else {
+            self.launch_site.clone()
+        };
         set_text(&self.doc, "menu-note", "rolling out to the launch pad...");
         self.pending_launch = Some(id);
         if let Some(ws) = &self.ws {
@@ -6840,7 +6902,7 @@ impl App {
                 ws,
                 &ClientMessage::LaunchSavedAt {
                     id,
-                    site: self.launch_site.clone(),
+                    site,
                     // The server fills the seats itself unless the player chose the crew for this craft (a
                     // client-side fill could name a Kerbal the server has just sent flying).
                     crew: (self.lp_crew_for == Some(id) && !self.roster.is_empty())

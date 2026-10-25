@@ -39,7 +39,7 @@ Camera rule that runs through every map: **the right button drags the camera, th
 | G8 | First-time hints: PAIGE explains each building on the first visit and the first map view, maneuver, EVA (FTUE scripts) | the original's hint scripts and PAIGE's portraits play on the first visit to the KSC, VAB, R&D, Mission Control, Tracking Station and flight, and on the first map view, maneuver node and EVA; Continue, No more hints, and Settings > Interface turns them back on from the start | done |
 | G9 | Numpad 1 mutes the game, Numpad 2 the music | same, with a toast; listed in Settings > Input | done |
 | G10 | EVA: W/S walk, A/D turn, Q/E strafe, Space jump, Shift run, Shift/Ctrl jetpack up/down | W/S walk ahead or back (0.8 m/s), A/D turn, Q/E step sideways, Shift runs (2.2 m/s), Space jumps (protocol 33); in the air Shift or Space fire the jetpack up, Ctrl down, W/S and Q/E push ahead and sideways; F boards | done |
-| G11 | Kerbal Space Academy: lessons in the Training Center, PAIGE walking through each step | a Lessons tab in the Training Center lists the original's 23 lessons by group with their titles and descriptions; Start Lesson plays PAIGE's messages step by step and each step waits for what it asks (launch, stage, reach an altitude or orbit, throttle, SAS mode, open the map, plan a maneuver, warp to it, place or pick a VAB part, parachutes); steps the client cannot watch (camera angles, picker categories) go on with Continue; the lessons' own saves and videos are not used | done |
+| G11 | Kerbal Space Academy: lessons in the Training Center, PAIGE walking through each step | a Lessons tab in the Training Center lists the original's 23 lessons by group with their titles and descriptions; Start Lesson plays PAIGE's messages step by step and each step waits for what it asks (launch, stage, reach an altitude or orbit, throttle, SAS mode, open the map, plan a maneuver, warp to it, place or pick a VAB part, parachutes); steps the client cannot watch (camera angles, picker categories) go on with Continue; a lesson with its own rocket (the stock Lesson 1.1 rocket ...) rolls it out on Start Lesson; videos are not used | done |
 
 ### Flight
 
@@ -98,7 +98,7 @@ Camera rule that runs through every map: **the right button drags the camera, th
 | # | KSP2 | Ours today | Status |
 |---|---|---|---|
 | K1 | Building hover tooltip and click, wheel zoom, M opens the Tracking Station map | hover/click, zoom, M, right or left drag | done |
-| K2 | Launch-site flyout (Launchpad 1-4, runway) | a site chooser in the launch pad dialog and the VAB header (protocol 30), remembered per browser | done |
+| K2 | Launch-site flyout (Launchpad 1-4, runway) | a site chooser in the launch pad dialog and the VAB header (protocol 30), remembered per browser; planes and rovers (rover wheels) go to the runway | done |
 | R1 | R&D tree pans by drag and arrows, zooms with the wheel, part tooltips | drag and arrow keys pan, the wheel zooms about the pointer; a node's parts show as pictures; hovering one shows the full part tooltip | done |
 | C1 | Mission Control: track a mission, in-flight mission tracker, turn-in button when complete | accept and turn in at Mission Control (other thread); in flight a mission tracker window lists the missions taken on with their current objective | done |
 | A1 | Main menu Settings, Extras/Credits | Settings works; Extras disabled | partly done |
