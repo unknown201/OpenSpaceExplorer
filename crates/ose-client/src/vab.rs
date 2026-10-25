@@ -534,6 +534,11 @@ impl History {
         true
     }
 
+    /// How many steps can be undone (what an action stamps on things it leaves outside the craft).
+    pub fn depth(&self) -> usize {
+        self.undo.len()
+    }
+
     pub fn can_undo(&self) -> bool {
         !self.undo.is_empty()
     }

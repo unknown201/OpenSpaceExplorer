@@ -307,6 +307,9 @@ struct App {
     /// The aero overlay (F12) and the control trim (Alt + W/A/S/D/Q/E, Alt+X clears it): pitch, yaw, roll.
     aero_overlay: bool,
     trim: (f32, f32, f32),
+    /// For each loose assembly, the undo depth when it was left on the floor (0 for ones loaded).
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    loose_stamps: Vec<usize>,
     /// A press on a loose assembly in the VAB (which, where), picked up whole once dragged.
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     vab_grab_loose: Option<(usize, f64, f64)>,
@@ -702,6 +705,7 @@ pub fn start() -> Result<(), JsValue> {
         rd_archive: false,
         players_asked_ms: std::cell::Cell::new(0.0),
         vab_grab_loose: None,
+        loose_stamps: Vec::new(),
         mouselook: false,
         aero_overlay: false,
         trim: (0.0, 0.0, 0.0),
@@ -3100,6 +3104,9 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                 if k < app.vab3d.loose.len() {
                     app.vab_record();
                     let (parts, _) = app.vab3d.loose.remove(k);
+                    if k < app.loose_stamps.len() {
+                        app.loose_stamps.remove(k);
+                    }
                     app.save_loose();
                     let frag = vab::Fragment { parts };
                     let nodes = vab_nodes(&app.catalog, frag.root_id());
@@ -3311,6 +3318,8 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                     match app.vab3d.held_at {
                         Some(at) if !app.editor.is_empty() => {
                             app.vab3d.loose.push((frag.parts.clone(), at));
+                            let depth = app.vab_history.depth();
+                            app.loose_stamps.push(depth);
                             app.save_loose();
                             set_text(
                                 &app.doc,
@@ -4996,6 +5005,7 @@ impl App {
                         .collect()
                 })
                 .unwrap_or_default();
+            self.loose_stamps = vec![0; self.vab3d.loose.len()];
         }
     }
 
@@ -6129,6 +6139,8 @@ impl App {
 
     /// Ctrl+Z / Ctrl+Y.
     fn vab_undo(&mut self, redo: bool) {
+        #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
+        let before = self.vab_history.depth();
         let mut h = std::mem::take(&mut self.vab_history);
         let done = if redo {
             h.redo(&mut self.editor)
@@ -6136,6 +6148,22 @@ impl App {
             h.undo(&mut self.editor)
         };
         self.vab_history = h;
+        // Undoing the move that left an assembly on the floor puts it back on the craft: the floor copy goes.
+        #[cfg(target_arch = "wasm32")]
+        if done && !redo {
+            let mut k = 0;
+            while k < self.vab3d.loose.len() {
+                if self.loose_stamps.get(k).copied().unwrap_or(0) >= before {
+                    self.vab3d.loose.remove(k);
+                    if k < self.loose_stamps.len() {
+                        self.loose_stamps.remove(k);
+                    }
+                } else {
+                    k += 1;
+                }
+            }
+            self.save_loose();
+        }
         if done {
             let cat = std::mem::take(&mut self.catalog);
             self.editor.rebuild_stages(&cat);
