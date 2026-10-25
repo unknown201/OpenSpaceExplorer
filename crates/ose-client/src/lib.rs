@@ -14,6 +14,7 @@
 pub mod audio;
 #[cfg(target_arch = "wasm32")]
 pub mod flight3d;
+pub mod input;
 pub mod kerbin_time;
 #[cfg(target_arch = "wasm32")]
 pub mod ksc3d;
@@ -168,6 +169,13 @@ struct App {
     /// Controls as last sent.
     throttle: f64,
     attitude: ose_net::AttitudeMode,
+    /// Keys held down (by physical code) for the flight keys that act while held, when the held keys last
+    /// moved the controls and were last sent, and the wheel input last sent (throttle, steer, brakes).
+    keys: input::Held,
+    keys_tick_ms: f64,
+    controls_sent_ms: f64,
+    controls_dirty: bool,
+    drive_sent: (f32, f32, bool),
     gpu_canvas: HtmlCanvasElement,
     /// 3D orbit camera: yaw and pitch (radians) around the focus, distance in kilometres.
     orbit_yaw: f64,
@@ -394,6 +402,11 @@ pub fn start() -> Result<(), JsValue> {
         ksc_on_pad: false,
         throttle: 0.0,
         attitude: ose_net::AttitudeMode::Up,
+        keys: input::Held::default(),
+        keys_tick_ms: 0.0,
+        controls_sent_ms: 0.0,
+        controls_dirty: false,
+        drive_sent: (0.0, 0.0, false),
         gpu_canvas: get("gpu")?.dyn_into()?,
         orbit_yaw: 0.6,
         orbit_pitch: 0.5,
@@ -1179,7 +1192,11 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
         let a = app.clone();
         let on_wheel = Closure::<dyn FnMut(WheelEvent)>::new(move |ev: WheelEvent| {
             ev.prevent_default();
-            let factor = if ev.delta_y() > 0.0 { 1.25 } else { 0.8 };
+            let mut factor: f64 = if ev.delta_y() > 0.0 { 1.25 } else { 0.8 };
+            // Shift zooms faster, as in the original's VAB (fastScrollModifier).
+            if ev.shift_key() {
+                factor = factor.powi(3);
+            }
             let mut app = a.borrow_mut();
             #[cfg(target_arch = "wasm32")]
             if app.in_session && app.ksc_active() {
@@ -1207,8 +1224,10 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
         on_wheel.forget();
 
         let a = app.clone();
+        // Left or right button drags the camera; the original drags with the right button everywhere and
+        // keeps the left for picking, so the right one must work too.
         let on_down = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
-            if ev.button() == 0 {
+            if ev.button() == 0 || ev.button() == 2 {
                 let mut app = a.borrow_mut();
                 app.drag = Some((ev.client_x() as f64, ev.client_y() as f64));
                 app.press = app.drag;
@@ -1218,6 +1237,9 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
         });
         target.add_event_listener_with_callback("mousedown", on_down.as_ref().unchecked_ref())?;
         on_down.forget();
+        let no_menu = Closure::<dyn FnMut(MouseEvent)>::new(|ev: MouseEvent| ev.prevent_default());
+        target.add_event_listener_with_callback("contextmenu", no_menu.as_ref().unchecked_ref())?;
+        no_menu.forget();
     }
 
     let a = app.clone();
@@ -1415,67 +1437,85 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                 .target()
                 .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
                 .is_some();
+            let typing = typing
+                || ev
+                    .target()
+                    .and_then(|t| t.dyn_into::<web_sys::HtmlSelectElement>().ok())
+                    .is_some();
             let menu_open = app
                 .doc
                 .get_element_by_id("menu")
                 .map(|m| !m.class_list().contains("hidden"))
                 .unwrap_or(false);
-            if app.flying.is_some() && !menu_open && !typing {
-                // The original's flight keys: Z full throttle, X cut, Shift/Ctrl up and down, Space
-                // stage, W/S pitch, A/D heading, T prograde hold, M map.
-                let handled = match ev.key().as_str() {
-                    "z" | "Z" => {
+            let code = ev.code();
+            if typing {
+                app.keys.clear();
+                return;
+            }
+            app.keys.down(&code);
+            if code == "CapsLock" {
+                app.keys.precision = ev.get_modifier_state("CapsLock");
+            }
+            if app.flying.is_some() && !menu_open {
+                // The original's flight bindings (KSP.Input/GameInput.cs). Rotation, throttle steps and wheels
+                // act while held and are read every frame (flight_keys_tick); these act once.
+                let handled = match code.as_str() {
+                    "KeyZ" => {
                         app.set_throttle(1.0);
                         true
                     }
-                    "x" | "X" => {
+                    "KeyX" => {
                         app.set_throttle(0.0);
                         true
                     }
-                    "Shift" => {
-                        let t = app.throttle + 0.1;
-                        app.set_throttle(t);
+                    "Space" => {
+                        if !ev.repeat() {
+                            app.flight_stage();
+                        }
                         true
                     }
-                    "Control" => {
-                        let t = app.throttle - 0.1;
-                        app.set_throttle(t);
+                    "KeyT" => {
+                        app.sas_hold();
                         true
                     }
-                    " " => {
-                        app.flight_stage();
+                    "KeyG" => {
+                        if !ev.repeat() {
+                            app.toggle_gear();
+                        }
                         true
                     }
-                    "w" | "W" => {
-                        app.nudge_attitude(-5.0, 0.0);
-                        true
-                    }
-                    "s" | "S" => {
-                        app.nudge_attitude(5.0, 0.0);
-                        true
-                    }
-                    "a" | "A" => {
-                        app.nudge_attitude(0.0, -5.0);
-                        true
-                    }
-                    "d" | "D" => {
-                        app.nudge_attitude(0.0, 5.0);
-                        true
-                    }
-                    "t" | "T" => {
-                        app.set_attitude(ose_net::AttitudeMode::SurfacePrograde);
-                        true
-                    }
-                    "m" | "M" => {
+                    "KeyM" => {
                         app.map_mode = !app.map_mode;
                         true
                     }
+                    "KeyW" | "KeyA" | "KeyS" | "KeyD" | "KeyQ" | "KeyE" | "KeyB" | "ShiftLeft"
+                    | "ShiftRight" | "ControlLeft" | "ControlRight" => true,
                     _ => false,
                 };
                 if handled {
                     ev.prevent_default();
                     return;
                 }
+            }
+            match code.as_str() {
+                "Slash" if app.in_session => app.request_warp(1),
+                "F2" => {
+                    ev.prevent_default();
+                    if let Some(b) = app.doc.body() {
+                        b.class_list().toggle("ui-hidden").ok();
+                    }
+                }
+                "F4" => {
+                    ev.prevent_default();
+                    if let Some(b) = app.doc.body() {
+                        b.class_list().toggle("labels-hidden").ok();
+                    }
+                }
+                "Home" => app.reset_camera(),
+                "KeyM" if app.in_session && !app.flying.is_some() && app.ksc_active() => {
+                    app.open_facility("TrackingCenter");
+                }
+                _ => {}
             }
             match ev.key().as_str() {
                 "f" | "F" => app.frame_focus(),
@@ -1503,6 +1543,19 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
         });
     window.add_event_listener_with_callback("keydown", on_key.as_ref().unchecked_ref())?;
     on_key.forget();
+
+    let a = app.clone();
+    let on_key_up =
+        Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |ev: web_sys::KeyboardEvent| {
+            a.borrow_mut().keys.up(&ev.code());
+        });
+    window.add_event_listener_with_callback("keyup", on_key_up.as_ref().unchecked_ref())?;
+    on_key_up.forget();
+    // A key released while the tab is in the background never sends keyup: forget all held keys.
+    let a = app.clone();
+    let on_blur = Closure::<dyn FnMut()>::new(move || a.borrow_mut().keys.clear());
+    window.add_event_listener_with_callback("blur", on_blur.as_ref().unchecked_ref())?;
+    on_blur.forget();
 
     let a = app.clone();
     let on_warp = Closure::<dyn FnMut()>::new(move || {
@@ -3109,19 +3162,158 @@ impl App {
         self.send_controls();
     }
 
-    /// Pitch/heading nudge: switches to a pitch-and-heading hold from the current one.
-    fn nudge_attitude(&mut self, dpitch: f64, dheading: f64) {
-        let (p, h) = match self.attitude {
-            ose_net::AttitudeMode::PitchHeading {
+    /// Where the vessel points now as pitch above the horizon and compass heading, from the flight view's
+    /// navball frame (None before the first flight frame).
+    fn facing_pitch_heading(&self) -> Option<(f64, f64)> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let nav = self.flight3d.nav?;
+            let f = nav.forward;
+            let pitch = f.dot(nav.up).clamp(-1.0, 1.0).asin().to_degrees();
+            // Straight up the heading is noise; take north, so D (yaw right) leans the rocket east as
+            // the original's pad orientation does for a gravity turn.
+            let heading = if pitch > 89.5 {
+                0.0
+            } else {
+                f.dot(nav.east).atan2(f.dot(nav.north)).to_degrees()
+            };
+            Some((pitch, heading.rem_euclid(360.0)))
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        None
+    }
+
+    /// T: SAS stability assist, holding the direction the vessel points now. (The server always holds some
+    /// direction, so there is no free-drifting "SAS off".)
+    fn sas_hold(&mut self) {
+        let (pitch_deg, heading_deg) = self.facing_pitch_heading().unwrap_or((90.0, 0.0));
+        self.set_attitude(ose_net::AttitudeMode::PitchHeading {
+            pitch_deg,
+            heading_deg,
+        });
+    }
+
+    /// G: fold the landing legs and wheels out, or in when any is out.
+    fn toggle_gear(&mut self) {
+        let Some(vessel) = self.flying else { return };
+        let out = self
+            .scene
+            .as_ref()
+            .and_then(|s| s.vessel(vessel))
+            .and_then(|v| v.flight.as_ref())
+            .map(|f| f.gear.iter().any(|(_, o)| *o))
+            .unwrap_or(false);
+        if let Some(ws) = &self.ws {
+            send(
+                ws,
+                &ClientMessage::DeployGear {
+                    vessel,
+                    deploy: !out,
+                },
+            );
+        }
+    }
+
+    /// Flight keys that act while held, once per frame: W/S/A/D turn the attitude target at a steady rate
+    /// (CapsLock for precision), Shift/Ctrl move the throttle at 100% a second, and on the ground W/S/A/D and
+    /// B also drive the wheels (the original binds both, `WheelThrottle`/`WheelSteer`/`WheelBrakes`).
+    fn flight_keys_tick(&mut self, now: f64) {
+        let dt = ((now - self.keys_tick_ms) / 1000.0).clamp(0.0, 0.1);
+        self.keys_tick_ms = now;
+        let menu_open = self
+            .doc
+            .get_element_by_id("menu")
+            .map(|m| !m.class_list().contains("hidden"))
+            .unwrap_or(false);
+        let Some(vessel) = self.flying else { return };
+        if menu_open {
+            self.keys.clear();
+        }
+        let k = &self.keys;
+        let (pitch_in, yaw_in, thr_in) = (k.pitch(), k.yaw(), k.throttle());
+        let scale = k.scale();
+        let drive = (
+            k.wheel_throttle() as f32 * scale as f32,
+            k.wheel_steer() as f32 * scale as f32,
+            k.brakes(),
+        );
+        if thr_in != 0.0 {
+            self.throttle = (self.throttle + thr_in * input::THROTTLE_RATE * dt).clamp(0.0, 1.0);
+            self.controls_dirty = true;
+        }
+        if pitch_in != 0.0 || yaw_in != 0.0 {
+            // Start turning from where the vessel points when the target is not a free direction yet.
+            let (p, h) = match self.attitude {
+                ose_net::AttitudeMode::PitchHeading {
+                    pitch_deg,
+                    heading_deg,
+                } => (pitch_deg, heading_deg),
+                _ => self.facing_pitch_heading().unwrap_or((90.0, 0.0)),
+            };
+            let step = input::TURN_RATE_DEG_S * scale * dt;
+            // W (-1) lowers the nose: positive pitch input is S.
+            let (pitch_deg, heading_deg) = input::turn(p, h, pitch_in * step, yaw_in * step);
+            self.attitude = ose_net::AttitudeMode::PitchHeading {
                 pitch_deg,
                 heading_deg,
-            } => (pitch_deg, heading_deg),
-            _ => (90.0, 90.0),
-        };
-        self.set_attitude(ose_net::AttitudeMode::PitchHeading {
-            pitch_deg: (p + dpitch).clamp(-90.0, 90.0),
-            heading_deg: (h + dheading).rem_euclid(360.0),
-        });
+            };
+            self.controls_dirty = true;
+        }
+        // At most ten control messages a second while keys are held, and one more when they let go.
+        if self.controls_dirty && now - self.controls_sent_ms >= 100.0 {
+            self.controls_dirty = false;
+            self.controls_sent_ms = now;
+            self.send_controls();
+        }
+        let landed = self
+            .scene
+            .as_ref()
+            .and_then(|s| s.vessel(vessel))
+            .and_then(|v| v.flight.as_ref())
+            .map(|f| f.situation == ose_net::FlightSituation::Landed)
+            .unwrap_or(false);
+        let drive = if landed { drive } else { (0.0, 0.0, drive.2) };
+        if drive != self.drive_sent {
+            self.drive_sent = drive;
+            if let Some(ws) = &self.ws {
+                send(
+                    ws,
+                    &ClientMessage::Drive {
+                        vessel,
+                        throttle: drive.0,
+                        steer: drive.1,
+                        brakes: drive.2,
+                    },
+                );
+            }
+        }
+    }
+
+    /// Home: put the camera of the current screen back where it starts.
+    fn reset_camera(&mut self) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            if self.flight_active() {
+                let d = flight3d::FlightView::new();
+                (
+                    self.flight3d.yaw,
+                    self.flight3d.pitch,
+                    self.flight3d.distance,
+                ) = (d.yaw, d.pitch, d.distance);
+                return;
+            }
+            if self.in_session && self.vab_active() {
+                let d = vab3d::VabView::new();
+                (self.vab3d.yaw, self.vab3d.pitch, self.vab3d.distance) =
+                    (d.yaw, d.pitch, d.distance);
+                return;
+            }
+            if self.in_session && self.ksc_active() {
+                self.ksc3d.focus(None);
+                return;
+            }
+        }
+        self.frame_focus();
     }
 
     fn show_sound_toggle(&self) {
@@ -3838,6 +4030,7 @@ impl App {
             self.update_hud(ut);
         }
         self.update_flight_hud();
+        self.flight_keys_tick(now);
         #[cfg(target_arch = "wasm32")]
         if let (Some(p), Some(gpu)) = (self.planet_preview.as_mut(), self.gpu.as_mut()) {
             if let Some(menu) = self.doc.get_element_by_id("menu") {
