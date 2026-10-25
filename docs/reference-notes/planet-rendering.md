@@ -109,6 +109,13 @@ in-scatter times the share of its extinction the point covers (well conditioned,
 nearly equal LUT values), blended across the LUT's horizon switch with the sky side sampled 0.03 above it (its
 rows next to the switch are blurred with the ground half).
 
+Open, on Laythe's surface against the beach screenshot: the original's sky is a clear saturated blue and its
+sand a light tan, ours grey-blue and darker brown. Not the Mie haze (a third of it changes little) nor the
+exposure alone (1.6x brighter is still grey). The only post-processing profiles in the install's scenes are the
+menus' (PPv2 `ColorGrading` with the Neutral tonemapper, temperature 5, bloom, vignette); the flight camera's
+grading is set up elsewhere, perhaps in code. A Neutral (filmic) tonemapper instead of our `1 - exp(-x)` would
+add contrast and saturation everywhere and is the next thing to try, checked across all bodies.
+
 ## 6. Sunlight
 
 Directional light from the star; colour at a point = solar irradiance x atmosphere transmittance towards the sun;
