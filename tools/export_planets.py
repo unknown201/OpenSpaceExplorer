@@ -191,7 +191,8 @@ OCEAN_FLOATS = ["_ShallowMaxDepth", "_ShallowColorDistribution", "_Smoothness", 
                 "_TransparentVisibleDepth", "_DetailNormalTilingSize", "_LargeNormalMapTilingSize_1",
                 "_LargeNormalMapTilingSize_2", "_LargeNormalMoveSpeed_1", "_LargeNormalStrength_1",
                 "_LargeNormalStrength_2", "_DetailNormalMoveSpeed", "_DetailNormalStrength",
-                "_ShorelineFoamMaxDepth", "_FoamShapeTilingSize", "_FoamSpeed", "_FoamVisibility"]
+                "_ShorelineFoamMaxDepth", "_FoamShapeTilingSize", "_FoamSpeed", "_FoamVisibility",
+                "_CausticsStrength", "_CausticsMaxVisibleDepth", "_CausticsTilingSize", "_CausticsAnimationSpeed"]
 
 
 def export_body(bid: str, bundles: Path, out_root: Path, args) -> dict | None:
@@ -328,10 +329,19 @@ def export_body(bid: str, bundles: Path, out_root: Path, args) -> dict | None:
         if "ocean" in tt["m_Name"] and "_DeepWaterColor" in {k for k, _ in tt["m_SavedProperties"]["m_Colors"]}:
             tex, floats, colors = material_props(tt)
             ocean = {"material": tt["m_Name"]}
+            # foam.png: the foam shape in red, the caustics pattern in green
+            from PIL import Image
+
             foam = a.get(tex.get("_FoamShapeTexture"))
+            caus = a.get(tex.get("_CausticsTexture"))
             if foam is not None:
-                save_image(foam.read().image, out / "foam.png", (1024, 1024), "L")
+                fr = foam.read().image.convert("L").resize((1024, 1024), Image.LANCZOS)
+                cg = (caus.read().image.convert("L").resize((1024, 1024), Image.LANCZOS) if caus is not None
+                      else Image.new("L", (1024, 1024), 0))
+                Image.merge("RGB", (fr, cg, Image.new("L", (1024, 1024), 0))).save(out / "foam.png", optimize=True)
                 ocean["foam"] = foam.read().m_Name
+                if caus is not None:
+                    ocean["caustics"] = caus.read().m_Name
             for k in OCEAN_COLORS:
                 if k in colors:
                     ocean[k.strip("_")] = colors[k]

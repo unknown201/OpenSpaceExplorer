@@ -61,7 +61,45 @@ pub struct Item {
     pub tint: Option<[[f64; 3]; 2]>,
     #[serde(default)]
     pub tint_scale_m: Option<f64>,
+    /// The original's Amplify impostor for drawing this prop far away.
+    #[serde(default)]
+    pub impostor: Option<Impostor>,
 }
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct Impostor {
+    pub texture: String,
+    pub frames: u32,
+    #[serde(default)]
+    pub hemi: bool,
+    pub size_m: f64,
+    /// Centre of the impostor's quad in the prop's own (Unity) frame.
+    pub offset: [f64; 3],
+    /// Colour scale that makes the atlas match the mesh's colour maps.
+    #[serde(default = "ones")]
+    pub colour_scale: [f64; 3],
+}
+
+fn ones() -> [f64; 3] {
+    [1.0; 3]
+}
+
+/// One far prop drawn as its impostor, relative to the placement origin.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Far {
+    pub pos: [f32; 3],
+    /// Impostor quad size and centre height (m), already scaled.
+    pub size: f32,
+    pub lift: f32,
+    /// Index into `ScatterFile::impostor_textures()`.
+    pub layer: f32,
+    pub frames: f32,
+    pub colour: [f32; 3],
+}
+
+/// Impostors are drawn out to this distance (m), at most this many.
+pub const FAR_RANGE_M: f64 = 2500.0;
+pub const MAX_FAR: usize = 40_000;
 
 /// One grass patch, relative to the placement origin.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -198,11 +236,8 @@ impl ScatterFile {
                 if item.kind == "grass" {
                     continue;
                 }
-                let range = item
-                    .render_distance_m
-                    .min(item.spacing_m * MAX_CELLS_ACROSS as f64 / 2.0)
-                    // a prop that would cover under a pixel or two is not worth a draw
-                    .min(item.size_m * 600.0);
+                // items with an impostor hand over to it where `place_far` starts
+                let range = Self::near_range(item);
                 if cam_alt > range || item.size_m < MIN_SIZE_M {
                     continue;
                 }
@@ -324,6 +359,184 @@ impl ScatterFile {
 }
 
 impl ScatterFile {
+    /// The impostor atlases, in order (the `layer` of a far prop).
+    pub fn impostor_textures(&self) -> Vec<&str> {
+        let mut out: Vec<&str> = Vec::new();
+        for i in self.packages.iter().flat_map(|p| &p.items) {
+            if let Some(t) = i.impostor.as_ref().map(|m| m.texture.as_str()) {
+                if !out.contains(&t) {
+                    out.push(t);
+                }
+            }
+        }
+        out
+    }
+
+    /// Where an item's meshes stop and its impostors take over (m): its mesh range, or nearer when the
+    /// per-item mesh cap runs out first.
+    pub fn near_range(item: &Item) -> f64 {
+        let range = item
+            .render_distance_m
+            .min(item.spacing_m * MAX_CELLS_ACROSS as f64 / 2.0)
+            .min(item.size_m * 600.0);
+        let cap = item.spacing_m
+            * (MAX_PER_ITEM as f64 / (std::f64::consts::PI * item.density.max(0.05))).sqrt();
+        range.min(cap * 0.95)
+    }
+
+    /// Far props (items with an impostor) between their mesh range and `FAR_RANGE_M`, positions relative to
+    /// `cam`. Heights come from a coarse grid of terrain samples; the biome, height, noise and exclusion rules
+    /// apply as for meshes.
+    pub fn place_far(
+        &self,
+        map: &TerrainMap,
+        radius: f64,
+        cam: V3,
+        exclude: &[Exclusion],
+    ) -> Vec<Far> {
+        let textures = self.impostor_textures();
+        let cam_dir = normalize(cam);
+        let height = |d: V3| planet_lod::map_height(Some(map), d);
+        if textures.is_empty() || length(cam) - radius - height(cam_dir) > FAR_RANGE_M {
+            return Vec::new();
+        }
+        let range = FAR_RANGE_M;
+        let east = normalize(planet_lod::cross([0.0, 1.0, 0.0], cam_dir));
+        let north = planet_lod::cross(cam_dir, east);
+        const N: usize = 48;
+        let step = 2.0 * range / N as f64;
+        let mut grid = vec![0.0f64; (N + 1) * (N + 1)];
+        for j in 0..=N {
+            for i in 0..=N {
+                let x = -range + i as f64 * step;
+                let y = -range + j as f64 * step;
+                let d = normalize(planet_lod::add(
+                    scale(cam_dir, radius),
+                    planet_lod::add(scale(east, x), scale(north, y)),
+                ));
+                grid[j * (N + 1) + i] = height(d);
+            }
+        }
+        let grid_h = |x: f64, y: f64| {
+            let fx = ((x + range) / step).clamp(0.0, N as f64 - 1e-9);
+            let fy = ((y + range) / step).clamp(0.0, N as f64 - 1e-9);
+            let (i, j) = (fx as usize, fy as usize);
+            let (tx, ty) = (fx - i as f64, fy - j as f64);
+            let g = |a: usize, b: usize| grid[b * (N + 1) + a];
+            let h0 = g(i, j) + (g(i + 1, j) - g(i, j)) * tx;
+            let h1 = g(i, j + 1) + (g(i + 1, j + 1) - g(i, j + 1)) * tx;
+            h0 + (h1 - h0) * ty
+        };
+        let (face, ca, cb) = planet_lod::face_ab(cam_dir);
+        let metres_per_unit = radius * std::f64::consts::FRAC_PI_4;
+        let mut out = Vec::new();
+        for pk in &self.packages {
+            let ch = match pk.channel.as_str() {
+                "R" => 0,
+                "G" => 1,
+                "B" => 2,
+                _ => 3,
+            };
+            for (item_i, item) in pk.items.iter().enumerate() {
+                let Some(imp) = &item.impostor else { continue };
+                let layer = textures.iter().position(|t| *t == imp.texture).unwrap_or(0) as f32;
+                let near = Self::near_range(item);
+                let step_u = item.spacing_m / metres_per_unit;
+                let n = (range / item.spacing_m).ceil() as i64 + 1;
+                let (ic, jc) = ((ca / step_u).round() as i64, (cb / step_u).round() as i64);
+                // the same seed as the meshes, so a prop keeps its place when it turns into an impostor
+                let seed = item.seed + item_i as i64 * 1009 + ch as i64 * 7919;
+                for i in ic - n..=ic + n {
+                    for j in jc - n..=jc + n {
+                        let h = hash(face as i64, i, j, seed);
+                        if unit(h, 1) > item.density {
+                            continue;
+                        }
+                        let a = (i as f64 + unit(h, 2) - 0.5) * step_u;
+                        let b = (j as f64 + unit(h, 3) - 0.5) * step_u;
+                        if a.abs() > 1.0 || b.abs() > 1.0 {
+                            continue;
+                        }
+                        let d = planet_lod::dir_from_ab(face, a, b);
+                        let rel = scale(sub(d, cam_dir), radius);
+                        let (x, y) = (dot(rel, east), dot(rel, north));
+                        let r2 = x * x + y * y;
+                        if r2 > range * range || r2 < near * near {
+                            continue;
+                        }
+                        let (lat, lon) = planet_lod::lat_lon(d);
+                        let w = map
+                            .biome_weights(lat, lon)
+                            .map(|w| {
+                                let s = w[0] + w[1] + w[2] + w[3];
+                                if s < 0.05 {
+                                    let mut f = w;
+                                    f[0] += 1.0 - s / 0.05;
+                                    f[ch]
+                                } else {
+                                    w[ch] / s
+                                }
+                            })
+                            .unwrap_or(if ch == 0 { 1.0 } else { 0.0 });
+                        if w <= pk.cutoff || unit(h, 4) > w {
+                            continue;
+                        }
+                        let hgt = grid_h(x, y);
+                        if map.has_ocean && hgt < self.sea_level {
+                            continue;
+                        }
+                        if let Some([lo, hi]) = item.height_rule {
+                            if hgt < lo || hgt > hi {
+                                continue;
+                            }
+                        }
+                        let (nx, ny) = (a * metres_per_unit, b * metres_per_unit);
+                        if let Some((sc, inverse)) = item.noise_density {
+                            let v = noise(nx / sc.max(1.0), ny / sc.max(1.0), seed);
+                            let v = if inverse { 1.0 - v } else { v };
+                            if unit(h, 5) > v {
+                                continue;
+                            }
+                        }
+                        if let Some((sc, cut, inverse)) = item.noise_cutoff {
+                            let v = noise(nx / sc.max(1.0), ny / sc.max(1.0), seed + 1);
+                            if (v < cut) != inverse {
+                                continue;
+                            }
+                        }
+                        let world = scale(d, radius + hgt);
+                        if excluded(exclude, world) {
+                            continue;
+                        }
+                        let pos = sub(world, cam);
+                        let s = item.scale[0] + (item.scale[1] - item.scale[0]) * unit(h, 6);
+                        out.push(Far {
+                            pos: [pos[0] as f32, pos[1] as f32, pos[2] as f32],
+                            size: (imp.size_m * s) as f32,
+                            lift: (imp.offset[1] * s) as f32,
+                            layer,
+                            frames: imp.frames as f32,
+                            colour: [
+                                imp.colour_scale[0] as f32,
+                                imp.colour_scale[1] as f32,
+                                imp.colour_scale[2] as f32,
+                            ],
+                        });
+                    }
+                }
+            }
+        }
+        if out.len() > MAX_FAR {
+            out.sort_by(|p, q| {
+                let dp = p.pos[0] * p.pos[0] + p.pos[1] * p.pos[1] + p.pos[2] * p.pos[2];
+                let dq = q.pos[0] * q.pos[0] + q.pos[1] * q.pos[1] + q.pos[2] * q.pos[2];
+                dp.partial_cmp(&dq).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            out.truncate(MAX_FAR);
+        }
+        out
+    }
+
     /// The grass items' textures, in order (the `layer` of a patch).
     pub fn grass_textures(&self) -> Vec<&str> {
         let mut out: Vec<&str> = Vec::new();

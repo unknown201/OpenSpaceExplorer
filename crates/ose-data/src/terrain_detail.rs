@@ -570,3 +570,4 @@ mod real_data {
         assert!(m.max_m > 1_500.0 && m.max_m < 12_000.0);
     }
 }
+

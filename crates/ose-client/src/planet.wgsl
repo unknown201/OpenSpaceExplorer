@@ -62,6 +62,8 @@ struct Surface {
     ambient_night: vec4<f32>,
     // shoreline foam: max depth (m), tiling (m), has foam texture, 0
     foam: vec4<f32>,
+    // caustics: strength, max visible depth (m), tiling (m), animation speed
+    caustics: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> frame: Frame;
@@ -671,6 +673,19 @@ fn fs_terrain(in: VOut) -> @location(0) vec4<f32> {
     let p_km = frame.cam_km.xyz + in.rel * 0.001;
     let light = sun_and_sky(p_km, n, frame.sun.xyz);
     let shade = cloud_shadow(in.model, frame.sun.xyz);
+    // Caustics: the sea floor under shallow water catches the waves' focused sunlight (the original's
+    // _CausticsTexture, two drifting copies, the brighter where they meet), fading with depth.
+    if surface.caustics.x > 0.0 && in.height < 0.0 && dist < 3000.0 {
+        let depth = -in.height;
+        let tiling = max(surface.caustics.z, 0.5);
+        let t = frame.cam_km.w * 0.05 * surface.caustics.w;
+        let q = vec2<f32>(in.tile.x + in.tile.z * 0.31, in.tile.y + in.tile.z * 0.73) / tiling;
+        let c1 = textureSampleLevel(foam_tex, wrap_samp, q + vec2<f32>(t, t * 0.6), 0.0).g;
+        let c2 = textureSampleLevel(foam_tex, wrap_samp, q * 1.13 - vec2<f32>(t * 0.7, t * 0.2), 0.0).g;
+        let fade = (1.0 - smoothstep(0.0, max(surface.caustics.y, 1.0), depth))
+            * (1.0 - smoothstep(1500.0, 3000.0, dist));
+        albedo = albedo * (1.0 + min(c1, c2) * surface.caustics.x * 12.0 * fade * shade);
+    }
     if surface.flags.z > 3.5 && surface.flags.z < 4.5 {
         return vec4<f32>(albedo, 1.0);
     }
@@ -901,6 +916,100 @@ fn fs_grass(in: GOut) -> @location(0) vec4<f32> {
     let shade = cloud_shadow(model * frame.solar.w, frame.sun.xyz);
     // cards are thin: let some light through from behind
     var radiance = albedo / PI * (light.sun * shade * 0.85 + light.sky) + albedo * ambient(in.up, frame.sun.xyz);
+    radiance = through_air(radiance, p_km);
+    return vec4<f32>(tonemap(radiance), 1.0);
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Far props as the original's Amplify octahedral impostors: a camera-facing quad showing the atlas frame
+// whose view direction is closest to the camera's (frames x frames views over an octahedron, top view in the
+// middle). Shares the grass layout: group 3 holds the atlases as a texture array.
+
+struct FIn {
+    @location(0) pos: vec3<f32>,
+    // size (m), centre height (m), atlas layer, frames
+    @location(1) params: vec4<f32>,
+    // colour scale matching the mesh
+    @location(2) colour: vec3<f32>,
+};
+
+struct FOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) rel: vec3<f32>,
+    @location(1) uv: vec2<f32>,
+    @location(2) up: vec3<f32>,
+    @location(3) @interpolate(flat) layer: i32,
+    @location(4) facing: vec3<f32>,
+    @location(5) colour: vec3<f32>,
+};
+
+fn octa_encode(n_in: vec3<f32>) -> vec2<f32> {
+    var n = n_in / (abs(n_in.x) + abs(n_in.y) + abs(n_in.z));
+    var xz = n.xz;
+    if n.y < 0.0 {
+        xz = (1.0 - abs(n.zx)) * select(vec2<f32>(-1.0), vec2<f32>(1.0), n.xz >= vec2<f32>(0.0));
+    }
+    return xz;
+}
+
+@vertex
+fn vs_far(@builtin(vertex_index) vi: u32, f: FIn) -> FOut {
+    var out: FOut;
+    var corners = array<vec2<f32>, 6>(vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0),
+                                      vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 1.0), vec2<f32>(0.0, 1.0));
+    let c = corners[vi % 6u];
+    let base = chunk.offset.xyz + f.pos;
+    let up = normalize(frame.cam_km.xyz * 1000.0 + base);
+    let centre = base + up * f.params.y;
+    let to_cam = normalize(-centre);
+    var right = cross(up, to_cam);
+    if dot(right, right) < 1e-8 {
+        right = cross(vec3<f32>(1.0, 0.0, 0.0), to_cam);
+    }
+    right = normalize(right);
+    let bup = cross(to_cam, right);
+    let size = f.params.x;
+    let rel = centre + right * (c.x - 0.5) * size + bup * (c.y - 0.5) * size;
+    out.clip = frame.view_proj * vec4<f32>(rel, 1.0);
+    out.rel = rel;
+    out.up = up;
+    out.facing = to_cam;
+    // the camera's direction in the prop's own frame (up = Y, an east/north pair for X and Z)
+    var east = cross(vec3<f32>(0.0, 1.0, 0.0), up);
+    if dot(east, east) < 1e-8 {
+        east = vec3<f32>(1.0, 0.0, 0.0);
+    }
+    east = normalize(east);
+    let north = cross(up, east);
+    let d = vec3<f32>(dot(to_cam, east), dot(to_cam, up), dot(to_cam, north));
+    let frames = f.params.w;
+    let o = octa_encode(d) * 0.5 + 0.5;
+    let frame_xy = floor(o * (frames - 1.0) + 0.5);
+    out.uv = (frame_xy + vec2<f32>(c.x, 1.0 - c.y)) / frames;
+    out.uv.y = 1.0 - out.uv.y;
+    out.layer = i32(f.params.z + 0.5);
+    out.colour = f.colour;
+    return out;
+}
+
+@fragment
+fn fs_far(in: FOut) -> @location(0) vec4<f32> {
+    let tex = textureSampleLevel(grass_tex, grass_samp, in.uv, in.layer, 0.0);
+    if tex.a < 0.5 {
+        discard;
+    }
+    let dist = length(in.rel);
+    // fade in past the meshes and out at the far edge (dithered)
+    let dither = fract(sin(dot(in.clip.xy, vec2<f32>(12.9898, 78.233))) * 43758.547);
+    if dither > 1.0 - smoothstep(2000.0, 2500.0, dist) {
+        discard;
+    }
+    let n = normalize(in.up * 0.6 + in.facing * 0.4);
+    let p_km = frame.cam_km.xyz + in.rel * 0.001;
+    let light = sun_and_sky(p_km, n, frame.sun.xyz);
+    let shade = cloud_shadow(normalize(p_km) * frame.solar.w, frame.sun.xyz);
+    let albedo = min(tex.rgb * in.colour, vec3<f32>(1.0));
+    var radiance = albedo / PI * (light.sun * shade + light.sky) + albedo * ambient(in.up, frame.sun.xyz);
     radiance = through_air(radiance, p_km);
     return vec4<f32>(tonemap(radiance), 1.0);
 }

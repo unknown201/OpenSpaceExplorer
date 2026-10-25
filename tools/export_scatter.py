@@ -50,6 +50,111 @@ def submesh_arrays(mesh_obj):
     return out
 
 
+def mean_rgb(path: Path):
+    import numpy as np
+    from PIL import Image
+
+    try:
+        a = np.asarray(Image.open(path).convert("RGBA")).astype(np.float64) / 255.0
+    except Exception:  # noqa: BLE001
+        return None
+    m = a[..., 3] > 0.5
+    if m.sum() < 16:
+        m = np.ones(a.shape[:2], bool)
+    return a[m][:, :3].mean(axis=0)
+
+
+def colour_match(out: Path, base_uris: list[str], atlas: Path) -> list[float]:
+    import numpy as np
+    from PIL import Image
+
+    def transparent(u):
+        try:
+            a = np.asarray(Image.open(out / u).convert("RGBA"))[..., 3]
+        except Exception:  # noqa: BLE001
+            return 0.0
+        return float((a < 128).mean())
+
+    # foliage cards (largely transparent maps) set a tree's colour seen from afar, not its bark
+    leaves = [u for u in base_uris if transparent(u) > 0.1]
+    means = [m for m in (mean_rgb(out / u) for u in (leaves or base_uris)) if m is not None]
+    am = mean_rgb(atlas)
+    if not means or am is None:
+        return [1.0, 1.0, 1.0]
+    target = np.mean(means, axis=0)
+    # brightness only: a per-channel ratio shifts the hue of trunks and shadows the atlas also holds
+    lum = np.array([0.2126, 0.7152, 0.0722])
+    k = float(np.clip(target.dot(lum) / max(am.dot(lum), 0.02), 0.5, 2.0))
+    return [k, k, k]
+
+
+def impostor_assets(env) -> dict:
+    """AmplifyImpostorAsset by name ("tree_poplar_large_01_Impostor" ...) with their material."""
+    objs = {o.path_id: o for o in env.objects}
+    out = {}
+    for o in env.objects:
+        if o.type.name != "MonoBehaviour":
+            continue
+        try:
+            tt = o.read_typetree()
+        except Exception:  # noqa: BLE001
+            continue
+        if "ImpostorType" in tt and "Material" in tt:
+            mo = objs.get((tt["Material"] or {}).get("m_PathID"))
+            if mo is not None:
+                out[tt["m_Name"]] = (tt, mo.read_typetree(), objs)
+    # impostor materials whose asset is elsewhere: the material alone carries the atlas and its numbers
+    for o in env.objects:
+        if o.type.name != "Material":
+            continue
+        try:
+            mt = o.read_typetree()
+        except Exception:  # noqa: BLE001
+            continue
+        name = mt.get("m_Name", "")
+        if name in out or not name.endswith("_Impostor"):
+            continue
+        if "_Frames" in dict(mt["m_SavedProperties"]["m_Floats"]):
+            out[name] = ({"m_Name": name, "ImpostorType": 1}, mt, objs)
+    return out
+
+
+def export_impostor(imps: dict, prefab_name: str, png_path: Path) -> dict | None:
+    """The prefab's Amplify impostor (the original draws far props as these), matched by name: its octahedral
+    atlas of `frames` x `frames` views as a PNG, and its size and centre offset (object space, Unity)."""
+    base = prefab_name
+    found = None
+    for _ in range(4):
+        found = imps.get(base + "_Impostor")
+        if found or "_" not in base:
+            break
+        base = base.rsplit("_", 1)[0]
+    if not found:
+        return None
+    asset, mat, objs = found
+    sp = mat["m_SavedProperties"]
+    texs = {k: v["m_Texture"] for k, v in sp["m_TexEnvs"]}
+    floats = dict(sp["m_Floats"])
+    colors = {k: v for k, v in sp["m_Colors"]}
+    alb = objs.get((texs.get("_Albedo") or {}).get("m_PathID"))
+    if alb is None:
+        return None
+    try:
+        img = alb.read().image.convert("RGBA")
+    except Exception:  # noqa: BLE001
+        return None
+    img.resize((1024, 1024)).save(png_path, optimize=True)
+    off = colors.get("_Offset", {"r": 0.0, "g": 0.0, "b": 0.0})
+    return {
+        "frames": int(floats.get("_Frames", asset.get("HorizontalFrames", 16))),
+        "hemi": bool(floats.get("_Hemi", 0.0)),
+        "size_m": floats.get("_ImpostorSize", 10.0),
+        "offset": [off["r"], off["g"], off["b"]],
+        "type": asset.get("ImpostorType", 1),
+        "source": asset["m_Name"],
+    }
+
+
 def export_prefab(ex: Exporter, node, glb_path: Path) -> dict | None:
     """The prefab under `node` as a GLB: LOD0 renderers (all renderers when there is no LODGroup), each mesh
     placed relative to the prefab root."""
@@ -63,6 +168,7 @@ def export_prefab(ex: Exporter, node, glb_path: Path) -> dict | None:
                             lod_low.add(r["renderer"]["m_PathID"])
     glb = Glb()
     materials: dict[int, int | None] = {}
+    base_uris: list[str] = []
 
     def material_index(mp) -> int | None:
         if mp.path_id in materials:
@@ -87,6 +193,8 @@ def export_prefab(ex: Exporter, node, glb_path: Path) -> dict | None:
             uri = ex.export_texture_object(tex)
             if uri:
                 textures[slot] = glb.image_uri("../" + uri, Path(uri).stem)
+                if slot == "baseColor":
+                    base_uris.append(uri)
         idx = glb.material(m.m_Name, textures)
         # Foliage (leaf and branch cards) is alpha-tested in the original; the client blends it instead.
         if any(k in m.m_Name.lower() for k in ("leaves", "leaf", "branch", "fern", "bush", "plant", "flower",
@@ -132,7 +240,7 @@ def export_prefab(ex: Exporter, node, glb_path: Path) -> dict | None:
     root = glb.node(node.name, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0), (1.0, 1.0, 1.0), None, nodes)
     glb.roots = [root]
     glb.write(glb_path)
-    return {"meshes": len(nodes)}
+    return {"meshes": len(nodes), "base_colours": base_uris}
 
 
 def rules(v: dict) -> dict:
@@ -212,6 +320,7 @@ def export_body(ex: Exporter, bid: str, out: Path) -> dict | None:
             packages.append(tt)
     if system is None or not packages:
         return None
+    imps = impostor_assets(env)
     channel_of = {system[f"BiomeTextureMask{c}ChannelType"]: c for c in "RGBA"}
     settings = system.get("VegetationSettings", {})
     base_distance = {
@@ -253,12 +362,24 @@ def export_body(ex: Exporter, bid: str, out: Path) -> dict | None:
                 written[name] = export_prefab(ex, node, out / "scatter" / f"{name}.glb")
             if not written[name]:
                 continue
+            imp_key = "imp:" + name
+            if imp_key not in written:
+                imp = export_impostor(imps, node.name, out / "scatter" / f"imp_{name}.png")
+                if imp:
+                    imp["texture"] = f"scatter/imp_{name}.png"
+                    # The original grades its impostors in the shader (tint, hue, saturation, brightness); here
+                    # the atlas is scaled so its mean colour matches the mesh's colour maps, and the switch from
+                    # mesh to impostor does not show.
+                    imp["colour_scale"] = colour_match(out, written[name].get("base_colours", []),
+                                                       out / "scatter" / f"imp_{name}.png")
+                written[imp_key] = imp
             sm = v.get("ScaleMultiplier", {"x": 1, "y": 1, "z": 1})
             ext = (v.get("Bounds") or {}).get("m_Extent", {"x": 1.0, "y": 1.0, "z": 1.0})
             size_m = 2.0 * max(ext["x"], ext["y"], ext["z"]) * sm["y"] * v.get("MaxScale", 1.0)
             items.append({
                 "name": v.get("Name") or name,
                 "model": f"scatter/{name}.glb",
+                "impostor": written.get(imp_key),
                 "kind": kind,
                 "size_m": size_m,
                 "spacing_m": v["SampleDistance"],
@@ -281,7 +402,8 @@ def export_body(ex: Exporter, bid: str, out: Path) -> dict | None:
     pdir.mkdir(parents=True, exist_ok=True)
     (pdir / "scatter.json").write_text(json.dumps(result, indent=1), encoding="utf-8")
     return {"packages": len(result["packages"]), "items": sum(len(p["items"]) for p in result["packages"]),
-            "prefabs": sum(1 for v in written.values() if v)}
+            "prefabs": sum(1 for k, v in written.items() if v and not k.startswith("imp:")),
+            "impostors": sum(1 for k, v in written.items() if v and k.startswith("imp:"))}
 
 
 def main() -> int:
