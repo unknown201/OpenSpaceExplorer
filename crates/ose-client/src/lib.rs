@@ -14,6 +14,7 @@
 pub mod audio;
 #[cfg(target_arch = "wasm32")]
 pub mod flight3d;
+pub mod hud;
 pub mod input;
 pub mod kerbin_time;
 #[cfg(target_arch = "wasm32")]
@@ -176,6 +177,9 @@ struct App {
     controls_sent_ms: f64,
     controls_dirty: bool,
     drive_sent: (f32, f32, bool),
+    /// Flight HUD: speed readout in orbit (true) or surface mode, brakes latched from the action bar.
+    speed_orbit: bool,
+    brakes_latched: bool,
     gpu_canvas: HtmlCanvasElement,
     /// 3D orbit camera: yaw and pitch (radians) around the focus, distance in kilometres.
     orbit_yaw: f64,
@@ -407,6 +411,8 @@ pub fn start() -> Result<(), JsValue> {
         controls_sent_ms: 0.0,
         controls_dirty: false,
         drive_sent: (0.0, 0.0, false),
+        speed_orbit: false,
+        brakes_latched: false,
         gpu_canvas: get("gpu")?.dyn_into()?,
         orbit_yaw: 0.6,
         orbit_pitch: 0.5,
@@ -774,16 +780,32 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
             a.borrow().open_ksc()
         }),
     )?;
-    for (id, mode) in [
-        ("fh-att-up", ose_net::AttitudeMode::Up),
-        ("fh-att-pro", ose_net::AttitudeMode::SurfacePrograde),
-        ("fh-att-retro", ose_net::AttitudeMode::SurfaceRetrograde),
-        ("fh-att-oprog", ose_net::AttitudeMode::OrbitPrograde),
-        ("fh-att-normal", ose_net::AttitudeMode::Normal),
-        ("fh-att-radial", ose_net::AttitudeMode::RadialOut),
-    ] {
-        wire(id, Box::new(move |a| a.borrow_mut().set_attitude(mode)))?;
+    // SAS modes and the action bar: one listener per container, the button id says which.
+    hud::install(&doc);
+    for container in ["fh-sas", "fh-actions"] {
+        if let Some(el) = doc.get_element_by_id(container) {
+            let a = app.clone();
+            let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+                let id = ev
+                    .target()
+                    .and_then(|t| t.dyn_into::<Element>().ok())
+                    .and_then(|e| e.closest("button").ok().flatten())
+                    .map(|b| b.id());
+                if let Some(id) = id {
+                    a.borrow_mut().hud_button(&id);
+                }
+            });
+            el.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+            cb.forget();
+        }
     }
+    wire(
+        "fh-speed-mode",
+        Box::new(|a| {
+            let mut app = a.borrow_mut();
+            app.speed_orbit = !app.speed_orbit;
+        }),
+    )?;
     wire("ksc-button", Box::new(|a| a.borrow().open_ksc()))?;
     wire("ksc-tracking", Box::new(|a| a.borrow().show_menu(false)))?;
     wire(
@@ -3235,7 +3257,7 @@ impl App {
         let drive = (
             k.wheel_throttle() as f32 * scale as f32,
             k.wheel_steer() as f32 * scale as f32,
-            k.brakes(),
+            k.brakes() || self.brakes_latched,
         );
         if thr_in != 0.0 {
             self.throttle = (self.throttle + thr_in * input::THROTTLE_RATE * dt).clamp(0.0, 1.0);
@@ -3287,6 +3309,79 @@ impl App {
                 );
             }
         }
+    }
+
+    /// A SAS mode or action bar button.
+    fn hud_button(&mut self, id: &str) {
+        let Some(vessel) = self.flying else { return };
+        if id == "fh-sas-stability" {
+            self.sas_hold();
+            return;
+        }
+        if let Some(mode) = hud::sas_mode(id, self.speed_orbit) {
+            self.set_attitude(mode);
+            return;
+        }
+        let f = self
+            .scene
+            .as_ref()
+            .and_then(|s| s.vessel(vessel))
+            .and_then(|v| v.flight.clone());
+        let msg = match id {
+            "fh-act-gear" => {
+                self.toggle_gear();
+                return;
+            }
+            "fh-act-brakes" => {
+                // Latched brakes add to the held B key; the next frame sends them with the wheel input.
+                self.brakes_latched = !self.brakes_latched;
+                return;
+            }
+            "fh-act-science" => {
+                self.flight_science(0);
+                return;
+            }
+            "fh-act-solar" => ClientMessage::DeployPanels {
+                vessel,
+                deploy: !f.map(|f| f.panels_deployed).unwrap_or(false),
+            },
+            "fh-act-chutes" => ClientMessage::DeployParachutes { vessel },
+            _ => return,
+        };
+        if let Some(ws) = &self.ws {
+            send(ws, &msg);
+        }
+    }
+
+    /// The new flight instruments (`hud`): speed mode, apsides, SAS and action bar lights.
+    fn update_flight_instruments(&self) {
+        let Some(id) = self.flying else { return };
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        let Some(v) = scene.vessel(id) else { return };
+        let Some(f) = &v.flight else { return };
+        let body = scene.bodies.get(v.reference_body as usize);
+        let body_vel = scene
+            .snapshot
+            .get(v.reference_body as usize)
+            .map(|b| b.velocity_mps)
+            .unwrap_or_default();
+        let ut = self.time.ut_at(now_ms());
+        let apsides = body
+            .map(|b| hud::apsides(&v.orbit, b.radius_m, b.mu, ut))
+            .unwrap_or((None, (f64::NAN, f64::NAN)));
+        hud::update(
+            &self.doc,
+            &hud::HudState {
+                f,
+                attitude: &self.attitude,
+                orbit_speed: self.speed_orbit,
+                orbital_speed_mps: (v.velocity_mps - body_vel).length(),
+                apsides,
+                brakes_latched: self.brakes_latched,
+            },
+        );
     }
 
     /// Home: put the camera of the current screen back where it starts.
@@ -4030,6 +4125,7 @@ impl App {
             self.update_hud(ut);
         }
         self.update_flight_hud();
+        self.update_flight_instruments();
         self.flight_keys_tick(now);
         #[cfg(target_arch = "wasm32")]
         if let (Some(p), Some(gpu)) = (self.planet_preview.as_mut(), self.gpu.as_mut()) {
