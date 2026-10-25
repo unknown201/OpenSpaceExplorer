@@ -252,6 +252,8 @@ struct App {
     ts_body: Option<usize>,
     /// Object kinds the station's filters hide.
     ts_hidden: Vec<&'static str>,
+    /// The VAB Colors tool paints the selected part rather than the whole vehicle.
+    paint_part: bool,
     ts_mine_only: bool,
     ts_rendered_ms: f64,
     /// Whether the KSC camera is on the launch pad (glides there while the pad dialog is open).
@@ -679,6 +681,7 @@ pub fn start() -> Result<(), JsValue> {
         ts_selected: None,
         ts_body: None,
         ts_hidden: Vec::new(),
+        paint_part: false,
         ts_mine_only: false,
         ts_rendered_ms: 0.0,
         ksc_on_pad: false,
@@ -2499,6 +2502,57 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
             }
         });
         pam.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
+    wire(
+        "vab-paint-btn",
+        Box::new(|a| {
+            let app = a.borrow();
+            if let Some(el) = app.doc.get_element_by_id("vab-paint-pop") {
+                el.class_list().toggle("open").ok();
+            }
+            app.render_paint();
+        }),
+    )?;
+    if let Some(pop) = doc.get_element_by_id("vab-paint-pop") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |ev: web_sys::Event| {
+            let Some(t) = ev.target().and_then(|t| t.dyn_into::<Element>().ok()) else {
+                return;
+            };
+            let mut app = a.borrow_mut();
+            if let Some(target) = t.get_attribute("data-paint-target") {
+                app.paint_part = target == "part" && app.editor.selected.is_some();
+                app.render_paint();
+            } else if t.has_attribute("data-paint-reset") {
+                app.paint(None, None, true);
+            } else if let Some(c) = t
+                .get_attribute("data-paint-base")
+                .and_then(|s| vab::parse_hex(&s))
+            {
+                app.paint(Some(c), None, false);
+            } else if let Some(c) = t
+                .get_attribute("data-paint-accent")
+                .and_then(|s| vab::parse_hex(&s))
+            {
+                app.paint(None, Some(c), false);
+            } else if let Some(key) = t.get_attribute("data-paint-input") {
+                let c = t
+                    .dyn_ref::<web_sys::HtmlInputElement>()
+                    .and_then(|i| vab::parse_hex(&i.value()));
+                if let Some(c) = c {
+                    if key == "base" {
+                        app.paint(Some(c), None, false);
+                    } else {
+                        app.paint(None, Some(c), false);
+                    }
+                }
+            }
+        });
+        // Swatches on click; the colour wells as they change ("input" while dragging, "change" at the end).
+        for ev in ["click", "change"] {
+            pop.add_event_listener_with_callback(ev, cb.as_ref().unchecked_ref())?;
+        }
         cb.forget();
     }
     wire(
@@ -5931,6 +5985,82 @@ impl App {
     }
 
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    /// The agency's colours (the campaign member's flag colours), what an unpainted vehicle wears.
+    fn agency_paint(&self) -> ose_data::craft::Paint {
+        self.campaign
+            .as_ref()
+            .and_then(|(_, m)| m.iter().find(|m| Some(m.player_id) == self.player_id))
+            .and_then(|m| m.agency.as_ref())
+            .map(|a| (a.primary_rgb, a.secondary_rgb))
+            .unwrap_or(([0xf2, 0xf2, 0xf2], [0x2a, 0x2c, 0x30]))
+    }
+
+    /// The colours in effect for what the Colors tool paints now: the selected part's, else the vehicle's.
+    fn paint_now(&self) -> (ose_data::craft::Paint, bool) {
+        let craft = &self.editor.craft;
+        let part = self
+            .editor
+            .selected
+            .filter(|_| self.paint_part)
+            .and_then(|i| craft.parts.get(i));
+        match (part.and_then(|p| p.colors), craft.colors) {
+            (Some(c), _) => (c, true),
+            (None, Some(c)) => (c, part.is_none()),
+            (None, None) => (self.agency_paint(), false),
+        }
+    }
+
+    /// Paint the vehicle or the selected part (`base`, `accent`; either left as it is when `None`),
+    /// or with `reset` go back to the vehicle's (a part) or the agency's (the vehicle) colours.
+    fn paint(&mut self, base: Option<[u8; 3]>, accent: Option<[u8; 3]>, reset: bool) {
+        let target = self.editor.selected.filter(|_| self.paint_part);
+        let ((b0, a0), _) = self.paint_now();
+        self.vab_record();
+        let new = if reset {
+            None
+        } else {
+            Some((base.unwrap_or(b0), accent.unwrap_or(a0)))
+        };
+        match target {
+            Some(i) => {
+                if let Some(p) = self.editor.craft.parts.get_mut(i) {
+                    p.colors = new;
+                }
+            }
+            None => self.editor.craft.colors = new,
+        }
+        self.render_vab();
+        self.render_paint();
+    }
+
+    fn render_paint(&self) {
+        let ((b, a), own) = self.paint_now();
+        if let Some(i) = self.doc.get_element_by_id("vab-paint-ico") {
+            if let Some(i) = i.dyn_ref::<HtmlElement>() {
+                let st = i.style();
+                st.set_property("--pb", &vab::hex(b)).ok();
+                st.set_property("--pa", &vab::hex(a)).ok();
+            }
+        }
+        let Some(el) = self.doc.get_element_by_id("vab-paint-body") else {
+            return;
+        };
+        let open = self
+            .doc
+            .get_element_by_id("vab-paint-pop")
+            .is_some_and(|p| p.class_list().contains("open"));
+        if !open {
+            return;
+        }
+        let part = self.editor.selected.is_some();
+        let html = vab::paint_html(part, part && self.paint_part, b, a, own);
+        if el.get_attribute("data-ose-key").as_deref() != Some(&hud::fnv(&html).to_string()) {
+            el.set_inner_html(&html);
+            el.set_attribute("data-ose-key", &hud::fnv(&html).to_string())
+                .ok();
+        }
+    }
+
     fn vab_record(&mut self) {
         self.vab_history.record(&self.editor);
     }
@@ -6703,6 +6833,7 @@ impl App {
                 desc.set_value(d);
             }
         }
+        self.render_paint();
         let Some(canvas) = self
             .doc
             .get_element_by_id("vab-canvas")

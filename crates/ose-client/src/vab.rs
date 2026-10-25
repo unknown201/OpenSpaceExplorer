@@ -1313,6 +1313,73 @@ pub fn surface_pressure_atm(body: &str) -> f64 {
     }
 }
 
+/// The paint palette (the original's Colors swatches, as sRGB): whites and greys, then colours.
+pub const PAINT_SWATCHES: [[u8; 3]; 14] = [
+    [0xf2, 0xf2, 0xf2],
+    [0xb4, 0xb8, 0xbe],
+    [0x6c, 0x70, 0x78],
+    [0x2a, 0x2c, 0x30],
+    [0x0d, 0x0d, 0x0f],
+    [0xd6, 0x3a, 0x2f],
+    [0xf2, 0x8a, 0x1e],
+    [0xf2, 0xc9, 0x1e],
+    [0x5f, 0xa8, 0x3a],
+    [0x1f, 0x7a, 0x5a],
+    [0x2f, 0x8f, 0xe0],
+    [0x1d, 0x3f, 0x8f],
+    [0x7a, 0x3f, 0xb0],
+    [0xd9, 0xc8, 0xa0],
+];
+
+/// `#rrggbb` for a colour, and back.
+pub fn hex(c: [u8; 3]) -> String {
+    format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2])
+}
+
+pub fn parse_hex(s: &str) -> Option<[u8; 3]> {
+    let s = s.strip_prefix('#')?;
+    if s.len() != 6 {
+        return None;
+    }
+    let b = |i: usize| u8::from_str_radix(&s[i..i + 2], 16).ok();
+    Some([b(0)?, b(2)?, b(4)?])
+}
+
+/// The Colors pop-over: whether it paints one part (`part`: one is selected, `on_part`: it is the target),
+/// and the base and accent in effect, with whether they are the vehicle's own or the agency's.
+pub fn paint_html(part: bool, on_part: bool, base: [u8; 3], accent: [u8; 3], own: bool) -> String {
+    let row = |label: &str, key: &str, cur: [u8; 3]| {
+        let mut h = format!("<div class=\"pt-row\"><span>{label}</span>");
+        for c in PAINT_SWATCHES {
+            h.push_str(&format!(
+                "<button class=\"pt-sw{on}\" data-paint-{key}=\"{x}\" title=\"{x}\" style=\"background:{x}\"></button>",
+                on = if c == cur { " on" } else { "" },
+                x = hex(c),
+            ));
+        }
+        h.push_str(&format!(
+            "<input type=\"color\" data-paint-input=\"{key}\" value=\"{}\" title=\"Any colour\" /></div>",
+            hex(cur)
+        ));
+        h
+    };
+    format!(
+        "<div class=\"pt-tabs\"><button data-paint-target=\"craft\" class=\"{v}\">Vehicle</button>\
+         <button data-paint-target=\"part\" class=\"{p}\"{dis}>Selected part</button></div>{base}{accent}\
+         <button class=\"pt-reset\" data-paint-reset=\"1\">{reset}</button>",
+        v = if on_part { "" } else { "on" },
+        p = if on_part { "on" } else { "" },
+        dis = if part { "" } else { " disabled title=\"select a part first\"" },
+        base = row("Base", "base", base),
+        accent = row("Accent", "accent", accent),
+        reset = match (on_part, own) {
+            (true, _) => "Use the vehicle's colours",
+            (false, true) => "Use the agency's colours",
+            (false, false) => "Agency colours in use",
+        },
+    )
+}
+
 /// A stage's delta-v and thrust-to-weight in a situation (the delta-v tool): thrust and Isp move from their
 /// vacuum to their sea-level values with the pressure (`p_atm`, on past 1 atm), and the propellant flow
 /// stays the same, so delta-v scales with the thrust. `g` is the surface gravity, m/s^2.
@@ -1340,6 +1407,22 @@ pub fn stage_in_situation(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn paint_swatches_and_hex() {
+        assert_eq!(parse_hex("#d63a2f"), Some([0xd6, 0x3a, 0x2f]));
+        assert_eq!(parse_hex("d63a2f"), None);
+        assert_eq!(hex([0xd6, 0x3a, 0x2f]), "#d63a2f");
+        let h = paint_html(false, false, PAINT_SWATCHES[5], PAINT_SWATCHES[0], true);
+        // the red base and white accent swatches are lit; no part selected, so the part tab is off
+        assert!(h.contains("pt-sw on\" data-paint-base=\"#d63a2f\""), "{h}");
+        assert!(
+            h.contains("pt-sw on\" data-paint-accent=\"#f2f2f2\""),
+            "{h}"
+        );
+        assert!(h.contains("data-paint-target=\"part\" class=\"\" disabled"));
+        assert!(h.contains("Use the agency's colours"));
+    }
+
     use super::*;
 
     #[test]
