@@ -150,6 +150,11 @@ struct App {
     vab_stages_readout: Vec<ose_net::StageReadout>,
     /// A part pressed on a stage card, to drop on another card.
     vab_stage_drag: Option<usize>,
+    /// The server's centre of mass and centre/direction of thrust, and whether their markers show.
+    vab_com: Option<ose_math::DVec3>,
+    vab_cot: Option<(ose_math::DVec3, ose_math::DVec3)>,
+    vab_show_com: bool,
+    vab_show_cot: bool,
     vab_report_due: Option<f64>,
     vab_dragged: bool,
     /// The flight view (the vessel in 3D near its body).
@@ -443,6 +448,10 @@ pub fn start() -> Result<(), JsValue> {
         vab_yaw: vab::NO_TURN,
         vab_stages_readout: Vec::new(),
         vab_stage_drag: None,
+        vab_com: None,
+        vab_cot: None,
+        vab_show_com: stored("ose.vab.com").as_deref() != Some("off"),
+        vab_show_cot: stored("ose.vab.cot").as_deref() != Some("off"),
         vab_report_due: None,
         vab_dragged: false,
         #[cfg(target_arch = "wasm32")]
@@ -1383,6 +1392,26 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
     )?;
     wire("vab-save", Box::new(|a| a.borrow_mut().vab_save(false)))?;
     wire("vab-undo", Box::new(|a| a.borrow_mut().vab_undo(false)))?;
+    for (id, com) in [("vab-com", true), ("vab-cot", false)] {
+        wire(
+            id,
+            Box::new(move |a| {
+                let mut app = a.borrow_mut();
+                let on = if com {
+                    app.vab_show_com = !app.vab_show_com;
+                    app.vab_show_com
+                } else {
+                    app.vab_show_cot = !app.vab_show_cot;
+                    app.vab_show_cot
+                };
+                store(
+                    if com { "ose.vab.com" } else { "ose.vab.cot" },
+                    if on { "on" } else { "off" },
+                );
+                app.render_vab_view();
+            }),
+        )?;
+    }
     wire(
         "vab-load",
         Box::new(|a| {
@@ -3226,9 +3255,13 @@ impl App {
             ServerMessage::StageReport {
                 stages,
                 delta_v_vacuum_mps,
-                ..
+                com_m,
+                cot_m,
+                thrust_dir,
             } => {
                 self.vab_stages_readout = stages;
+                self.vab_com = Some(com_m);
+                self.vab_cot = (thrust_dir.length() > 0.5).then_some((cot_m, thrust_dir));
                 set_text(
                     &self.doc,
                     "vab-dv",
@@ -4253,6 +4286,14 @@ impl App {
             "vab-sym",
             &format!("\u{d7}{}", self.vab_symmetry),
         );
+        for (id, on) in [
+            ("vab-com", self.vab_show_com),
+            ("vab-cot", self.vab_show_cot),
+        ] {
+            if let Some(b) = self.doc.get_element_by_id(id) {
+                b.class_list().toggle_with_force("on", on).ok();
+            }
+        }
         if let Some(b) = self.doc.get_element_by_id("vab-snap") {
             b.class_list().toggle_with_force("on", self.vab_snap).ok();
         }
@@ -6249,6 +6290,9 @@ impl App {
         }
         #[cfg(target_arch = "wasm32")]
         if self.in_session && self.vab_active() {
+            let empty = self.editor.is_empty();
+            self.vab3d.com = self.vab_com.filter(|_| self.vab_show_com && !empty);
+            self.vab3d.cot = self.vab_cot.filter(|_| self.vab_show_cot && !empty);
             self.vab3d.ghosts = self
                 .vab3d
                 .held

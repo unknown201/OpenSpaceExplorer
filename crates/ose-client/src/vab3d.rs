@@ -58,6 +58,10 @@ pub struct VabView {
     /// screen each frame; drawn when no stack node is in reach.
     pub ghosts: Vec<(ose_math::DVec3, ose_data::craft::Quat)>,
     /// The held part's turn (W/A/S/D/Q/E) for the floating preview, and its yaw alone for a stack snap.
+    /// Centre of mass and centre/direction of thrust (craft frame) from the server's StageReport, drawn
+    /// when their toolbar toggles are on (the original's CoM and CoT markers).
+    pub com: Option<ose_math::DVec3>,
+    pub cot: Option<(ose_math::DVec3, ose_math::DVec3)>,
     pub held_turn: ose_data::craft::Quat,
     pub held_yaw: ose_data::craft::Quat,
     /// Vertical camera offset from the craft's centre, metres (arrow keys and middle drag, Home resets).
@@ -89,6 +93,8 @@ impl VabView {
             snap: None,
             ghosts: Vec::new(),
             pan_y: 0.0,
+            com: None,
+            cot: None,
             held_turn: crate::vab::NO_TURN,
             held_yaw: crate::vab::NO_TURN,
         }
@@ -331,6 +337,71 @@ impl VabView {
         // The part held from the picker: snap to the free attach node nearest the cursor on screen (within
         // 80 px), else float under the cursor at the craft's depth.
         let mut lines = Vec::new();
+        // CoM: a yellow ball of three rings; CoT: a magenta ring with the thrust line. Rings are wider than the
+        // craft so they show outside the parts (lines are depth-tested).
+        let half = if lo_all.is_finite() {
+            ((hi_all.x - lo_all.x).max(hi_all.z - lo_all.z) * 0.5).max(0.4)
+        } else {
+            0.5
+        };
+        let ring = |key: String, at: DVec3, a: DVec3, b: DVec3, r: f64, color: [f32; 4]| {
+            let pts = (0..=32)
+                .map(|k| {
+                    let t = k as f64 / 32.0 * std::f64::consts::TAU;
+                    (a * t.cos() + b * t.sin()) * r
+                })
+                .collect();
+            crate::render::LineItem {
+                key,
+                points_km: pts,
+                rel_origin_km: at - cam_pos,
+                color,
+            }
+        };
+        if let Some(c) = self.com {
+            let at = centre + to_gltf(c);
+            for (k, (a, b)) in [
+                (DVec3::X, DVec3::Y),
+                (DVec3::Y, DVec3::Z),
+                (DVec3::Z, DVec3::X),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                lines.push(ring(
+                    format!("vab-com:{k}"),
+                    at,
+                    a,
+                    b,
+                    half * 1.3,
+                    [1.0, 0.85, 0.2, 1.0],
+                ));
+            }
+        }
+        if let Some((c, d)) = self.cot {
+            let at = centre + to_gltf(c);
+            let dir = to_gltf(d).normalize_or_zero();
+            if dir.length() > 0.5 {
+                let side = dir.cross(DVec3::Y).normalize_or_zero();
+                let side = if side.length() > 0.5 { side } else { DVec3::X };
+                let up = dir.cross(side);
+                lines.push(ring(
+                    "vab-cot:ring".into(),
+                    at,
+                    side,
+                    up,
+                    half * 1.15,
+                    [1.0, 0.35, 0.9, 1.0],
+                ));
+                lines.push(crate::render::LineItem {
+                    key: "vab-cot:line".into(),
+                    // Along the exhaust, as the original draws the thrust arrow.
+                    points_km: vec![DVec3::ZERO, -dir * (half * 4.0 + 2.0)],
+                    rel_origin_km: at - cam_pos,
+                    color: [1.0, 0.35, 0.9, 1.0],
+                });
+            }
+        }
         self.snap = None;
         if let Some((id, nodes)) = self.held.clone() {
             let name = format!("part:{id}");
