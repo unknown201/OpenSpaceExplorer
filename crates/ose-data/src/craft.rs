@@ -54,6 +54,10 @@ pub struct Craft {
     /// Stages by index; each lists part indices activated by that stage. The highest index fires first (as
     /// the original numbers them; `staging::delta_v_by_stage` and the sim follow this).
     pub stages: Vec<Vec<usize>>,
+    /// Loose assemblies kept beside the craft in the editor (each its own tree, with its own stages): saved
+    /// and loaded with it, left on the ground by a launch.
+    #[serde(default)]
+    pub loose: Vec<Craft>,
 }
 
 /// Mass summary of a craft against a part and resource catalog.

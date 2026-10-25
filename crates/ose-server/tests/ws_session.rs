@@ -390,6 +390,7 @@ async fn hello_catalog_and_snapshots() {
 
     // Launch a tiny craft: a pod with charge and a Terrier; it appears as a second owned vessel.
     let craft = ose_data::craft::Craft {
+        loose: Vec::new(),
         name: "Tiny".into(),
         description: String::new(),
         parts: vec![
@@ -888,6 +889,7 @@ fn starter_craft() -> ose_data::craft::Craft {
         }
     };
     ose_data::craft::Craft {
+        loose: Vec::new(),
         name: "Starter".into(),
         description: String::new(),
         parts: vec![

@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 40;
+pub const PROTOCOL_VERSION: u16 = 41;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -169,6 +169,33 @@ pub enum ClientMessage {
     Undock {
         vessel: u64,
         port: Option<u16>,
+    },
+    /// Extend (`deploy`) or retract the vessel's deployable antennas and dishes; answers `FlightAck`. Their
+    /// state shows in `FlightReadout::antennas`.
+    DeployAntennas {
+        vessel: u64,
+        deploy: bool,
+    },
+    /// Move a part (index into the vessel's craft as `GetVesselCraft` gives it) to another stage (index
+    /// into its `stages`, as `StageReadout::stage_id` counts them; one past the end adds a stage that fires
+    /// first). Stages that have fired neither give nor take parts. Answers `FlightAck`; `craft_rev` changes.
+    MoveToStage {
+        vessel: u64,
+        part: u16,
+        stage: u32,
+    },
+    /// Control the vessel from one of its parts (a command part or docking port; the root to go back):
+    /// SAS, the navball and `facing` then follow that part's axis. The craft is turned to match (ask
+    /// `GetVesselCraft` again: `craft_rev` changes) but the vessel does not move. Refused on the ground and
+    /// for planes. Answers `FlightAck`.
+    ControlFrom {
+        vessel: u64,
+        part: u16,
+    },
+    /// Rename one of the player's vessels (1..=64 characters, trimmed); answers `FlightAck`.
+    RenameVessel {
+        vessel: u64,
+        name: String,
     },
     /// Fold the vessel's deployable solar panels out (`deploy`) or in; answers `FlightAck`.
     DeployPanels {
@@ -579,6 +606,10 @@ pub struct FlightReadout {
     pub panels_deployed: bool,
     /// Each attached deployable panel's command state, by craft part index (animation instances).
     pub panels: Vec<(u16, bool)>,
+    /// Each attached deployable antenna's state (extended), by craft part index.
+    pub antennas: Vec<(u16, bool)>,
+    /// The part the vessel is controlled from, when not its root (`ControlFrom`).
+    pub control_part: Option<u16>,
     /// Fell over on landing and lies on its side.
     pub tipped: bool,
     /// Parachutes: (craft part index, state, how far open 0..1).

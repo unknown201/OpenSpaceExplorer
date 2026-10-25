@@ -134,6 +134,7 @@ impl Editor {
     pub fn new(name: &str) -> Editor {
         Editor {
             craft: Craft {
+                loose: Vec::new(),
                 name: name.into(),
                 description: String::new(),
                 parts: Vec::new(),

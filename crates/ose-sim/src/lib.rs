@@ -644,6 +644,24 @@ impl Universe {
         })
     }
 
+    /// Extend or retract a vessel's deployable antennas; how many moved, `None` without a structure.
+    pub fn deploy_antennas(&mut self, e: Entity, out: bool) -> Option<usize> {
+        self.world
+            .get_mut::<structure::Structure>(e)
+            .map(|mut st| st.deploy_antennas(out))
+    }
+
+    /// Rename a vessel; false for anything that is not one.
+    pub fn rename_vessel(&mut self, e: Entity, name: &str) -> bool {
+        match self.world.get_mut::<vessels::Vessel>(e) {
+            Some(mut v) => {
+                v.name = name.to_string();
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Fold a vessel's deployable solar panels out or in; how many moved, `None` without a structure.
     pub fn deploy_panels(&mut self, e: Entity, out: bool) -> Option<usize> {
         self.world
@@ -2319,6 +2337,116 @@ mod tests {
             "on its wheels: {}",
             p.ground_clearance_m
         );
+    }
+
+    #[test]
+    fn control_from_a_part_turns_the_frame_but_not_the_vessel() {
+        let (mut u, body, _, _) = k1_on_real_kerbin();
+        let crafts: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let defs: Vec<ose_data::PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let res: Vec<ose_data::ResourceDef> =
+            serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
+        // the truck's cab is turned a quarter about X in its craft
+        let c = crafts.iter().find(|c| c.name == "Stock09_Truck").unwrap();
+        let spec_for = |c: &ose_data::craft::Craft| {
+            let report = ose_data::staging::delta_v_by_stage(c, &defs, &res);
+            flight::FlightSpec::from_report(&report, &[], &[], 1.5)
+        };
+        let v = u.spawn_vessel_in_circular_orbit("Truck", body, 100_000.0);
+        let mut p = flight::Powered::new(
+            spec_for(c),
+            DVec3::new(700_000.0, 0.0, 0.0),
+            DVec3::new(0.0, 2_246.0, 0.0),
+            false,
+        );
+        p.facing = DVec3::new(0.2, 0.6, 0.77).normalized();
+        p.throttle = 0.001;
+        p.attitude = flight::Attitude::Free;
+        u.set_powered(v, p);
+        u.set_craft(v, c.clone());
+        u.set_structure(v, structure::Structure::build(c, &defs, &res));
+        u.step();
+        let axes = |u: &Universe| -> Vec<(DVec3, DVec3)> {
+            let st = u.structure(v).unwrap();
+            let f = u.powered(v).unwrap().facing;
+            (0..st.rigid.len())
+                .map(|i| {
+                    let q = st.part_rot[i];
+                    (
+                        st.axis_inertial(f, aero::rotate(q, DVec3::new(0.0, 1.0, 0.0))),
+                        st.axis_inertial(f, aero::rotate(q, DVec3::new(1.0, 0.0, 0.0))),
+                    )
+                })
+                .collect()
+        };
+        let before = axes(&u);
+        let rev = u.craft_rev(v);
+        let cab = 0;
+        u.control_from(v, cab, &defs, &res, &spec_for).unwrap();
+        assert_eq!(u.control_part(v), Some(cab));
+        assert_ne!(u.craft_rev(v), rev);
+        let after = axes(&u);
+        for (i, (a, b)) in before.iter().zip(&after).enumerate() {
+            assert!(
+                a.0.dot(b.0) > 0.999 && a.1.dot(b.1) > 0.999,
+                "part {i} kept its place: {a:?} -> {b:?}"
+            );
+        }
+        // the vessel now points along the cab's axis
+        let f = u.powered(v).unwrap().facing;
+        assert!(f.dot(after[cab].0) > 0.999, "{f:?}");
+        u.step();
+        let again = axes(&u);
+        assert!(again[3].0.dot(after[3].0) > 0.999, "and stays put");
+    }
+
+    #[test]
+    fn a_part_moves_to_a_stage_that_has_not_fired() {
+        let (mut u, body, _, _) = k1_on_real_kerbin();
+        let crafts: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let defs: Vec<ose_data::PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let res: Vec<ose_data::ResourceDef> =
+            serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
+        let c = crafts.iter().find(|c| c.name == "Kerbal K1").unwrap();
+        let spec_for = |c: &ose_data::craft::Craft| {
+            let report = ose_data::staging::delta_v_by_stage(c, &defs, &res);
+            flight::FlightSpec::from_report(&report, &[], &[], 1.5)
+        };
+        let v = u.spawn_powered_on_surface("K1", body, spec_for(c), 0.0, 0.0);
+        u.set_craft(v, c.clone());
+        u.set_structure(v, structure::Structure::build(c, &defs, &res));
+        u.step();
+        let craft = u.current_craft(v).unwrap();
+        let (from, part) = craft
+            .stages
+            .iter()
+            .enumerate()
+            .find_map(|(s, l)| l.first().map(|&p| (s, p)))
+            .expect("a staged part");
+        let to = craft.stages.len();
+        u.move_to_stage(v, part, to, &defs, &res, &spec_for)
+            .unwrap();
+        let moved = u.current_craft(v).unwrap();
+        // the new stage fires first (stages left empty drop out of the list)
+        assert!(
+            moved.stages.last().unwrap().contains(&part),
+            "{:?}",
+            moved.stages
+        );
+        assert_eq!(
+            moved.stages.iter().filter(|l| l.contains(&part)).count(),
+            1,
+            "moved from {from}"
+        );
+        // once lit, the stage fired is out of reach
+        u.stage(v);
+        let lit = u.powered(v).unwrap().spec.stages[0].stage_id as usize;
+        assert!(u.move_to_stage(v, 0, lit, &defs, &res, &spec_for).is_err());
+        assert!(u.powered(v).unwrap().ignited, "still lit after the refit");
     }
 
     #[test]

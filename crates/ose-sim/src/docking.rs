@@ -187,6 +187,7 @@ pub fn merge(a: &Craft, pa: &Port, b: &Craft, pb: &Port) -> Craft {
             .map(|s| s.iter().map(|i| i + off).collect::<Vec<usize>>()),
     );
     Craft {
+        loose: Vec::new(),
         name: a.name.clone(),
         description: a.description.clone(),
         parts,
@@ -222,6 +223,7 @@ pub fn subset(craft: &Craft, keep: &[usize]) -> (Craft, Vec<Option<usize>>) {
         .collect();
     (
         Craft {
+            loose: Vec::new(),
             name: craft.name.clone(),
             description: craft.description.clone(),
             parts,
@@ -306,9 +308,256 @@ pub struct Latch {
     pub distance_m: f64,
 }
 
+/// Counts changes to a vessel's craft (`VesselState::craft_rev`).
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct CraftRev(pub u32);
+
+/// The part a vessel is controlled from (its guid), when not the root.
+#[derive(Component, Clone, Debug)]
+pub struct ControlPart(pub String);
+
 impl Universe {
-    pub fn set_craft(&mut self, e: Entity, craft: Craft) {
-        self.world.entity_mut(e).insert(CraftDoc(craft));
+    pub fn set_craft(&mut self, e: Entity, mut craft: Craft) {
+        // a vessel flies its craft, not the editor's loose assemblies
+        craft.loose.clear();
+        let rev = self.world.get::<CraftRev>(e).map(|r| r.0).unwrap_or(0);
+        self.world
+            .entity_mut(e)
+            .insert(CraftDoc(craft))
+            .insert(CraftRev(rev.wrapping_add(1)));
+    }
+
+    /// Changes whenever the vessel's craft does: parts lost or gained, staging edited, control moved.
+    pub fn craft_rev(&self, e: Entity) -> u32 {
+        let lost = self
+            .world
+            .get::<structure::Structure>(e)
+            .map(|st| st.rigid.present.iter().filter(|x| !**x).count() as u32)
+            .unwrap_or(0);
+        self.world
+            .get::<CraftRev>(e)
+            .map(|r| r.0)
+            .unwrap_or(0)
+            .wrapping_mul(1024)
+            .wrapping_add(lost)
+    }
+
+    /// The part (index into `current_craft`) the vessel is controlled from, when it is not the root.
+    pub fn control_part(&self, e: Entity) -> Option<usize> {
+        let g = &self.world.get::<ControlPart>(e)?.0;
+        self.current_craft(e)?
+            .parts
+            .iter()
+            .position(|p| &p.guid == g)
+    }
+
+    /// The stage lit last, as an index into `current_craft().stages` (it and those above it have fired);
+    /// `None` before the first stage press.
+    fn lit_stage(&self, e: Entity) -> Option<usize> {
+        let p = match self.world.get::<flight::Powered>(e) {
+            Some(p) => p,
+            None => &self.world.get::<flight::Dormant>(e)?.0,
+        };
+        if !p.ignited {
+            return None;
+        }
+        let Some(id) = p.spec.stages.get(p.stage).map(|s| s.stage_id as usize) else {
+            return Some(0);
+        };
+        let doc = &self.world.get::<CraftDoc>(e)?.0;
+        let present = |i: usize| {
+            self.world
+                .get::<structure::Structure>(e)
+                .is_none_or(|st| st.rigid.present.get(i).copied().unwrap_or(false))
+        };
+        // `current_craft` leaves out the stages left empty
+        Some(
+            doc.stages
+                .iter()
+                .take(id)
+                .filter(|l| l.iter().any(|&i| present(i)))
+                .count(),
+        )
+    }
+
+    /// Give a vessel `craft` (its current one, edited) in place of the one it flies, keeping its flight
+    /// state, stage, crew and what its parts are doing.
+    #[allow(clippy::too_many_arguments)]
+    fn refit(
+        &mut self,
+        e: Entity,
+        craft: Craft,
+        facing: DVec3,
+        own_top: DVec3,
+        defs: &[PartDef],
+        resources: &[ose_data::ResourceDef],
+        spec_for: &dyn Fn(&Craft) -> flight::FlightSpec,
+    ) -> Result<(), &'static str> {
+        let old = match self.world.get::<flight::Powered>(e) {
+            Some(p) => p.clone(),
+            None => self
+                .world
+                .get::<flight::Dormant>(e)
+                .map(|d| d.0.clone())
+                .ok_or("not under power")?,
+        };
+        let len = self
+            .world
+            .get::<CraftDoc>(e)
+            .map(|c| c.0.parts.len())
+            .unwrap_or(0);
+        let map = self.present_map(e, len);
+        let crew: Vec<(usize, String)> = self
+            .crew(e)
+            .into_iter()
+            .filter_map(|(i, n)| Some((map.get(i).copied().flatten()?, n)))
+            .collect();
+        let lit = self.lit_stage(e);
+        let old_st = self.world.entity_mut(e).take::<structure::Structure>();
+        let mut p = old.clone();
+        p.spec = spec_for(&craft);
+        p.stage = match lit {
+            None => 0,
+            Some(lit) => {
+                let ids: Vec<usize> = p.spec.stages.iter().map(|s| s.stage_id as usize).collect();
+                match ids.iter().position(|&i| i == lit) {
+                    Some(k) => k,
+                    // the lit stage has nothing left in it: the next press fires the one below
+                    None => ids
+                        .iter()
+                        .position(|&i| i < lit)
+                        .map(|k| k.saturating_sub(1))
+                        .unwrap_or(ids.len()),
+                }
+            }
+        };
+        p.facing = facing;
+        p.own_top = own_top;
+        if self.world.get::<flight::Powered>(e).is_some() {
+            self.world.entity_mut(e).insert(p);
+        } else {
+            self.world.entity_mut(e).insert(flight::Dormant(p));
+        }
+        self.set_craft(e, craft.clone());
+        self.set_crew(e, crew);
+        let mut st = structure::Structure::build(&craft, defs, resources);
+        if let Some(old_st) = &old_st {
+            st.carry_state_from(old_st, &map);
+        }
+        if own_top.length_squared() > 0.0 {
+            st.frame_top = own_top;
+        }
+        self.set_structure(e, st);
+        Ok(())
+    }
+
+    /// Move a part (index into `current_craft`) to another stage (index into its `stages`, as
+    /// `StageReadout::stage_id` counts them) in flight. Only stages that have not fired yet take part or give
+    /// one up.
+    pub fn move_to_stage(
+        &mut self,
+        e: Entity,
+        part: usize,
+        stage: usize,
+        defs: &[PartDef],
+        resources: &[ose_data::ResourceDef],
+        spec_for: &dyn Fn(&Craft) -> flight::FlightSpec,
+    ) -> Result<(), &'static str> {
+        let mut craft = self.current_craft(e).ok_or("vessel has no parts")?;
+        if part >= craft.parts.len() {
+            return Err("no such part");
+        }
+        if stage > craft.stages.len() + 1 {
+            return Err("no such stage");
+        }
+        let p = match self.world.get::<flight::Powered>(e) {
+            Some(p) => p.clone(),
+            None => self
+                .world
+                .get::<flight::Dormant>(e)
+                .map(|d| d.0.clone())
+                .ok_or("not under power")?,
+        };
+        // stages fire from the highest index down; the one lit and those above it are spent
+        let lit = self.lit_stage(e).unwrap_or(usize::MAX);
+        let from = craft.stages.iter().position(|s| s.contains(&part));
+        if from.is_some_and(|f| f >= lit) || stage >= lit {
+            return Err("that stage has already fired");
+        }
+        if from == Some(stage) {
+            return Ok(());
+        }
+        for s in &mut craft.stages {
+            s.retain(|&x| x != part);
+        }
+        while craft.stages.len() <= stage {
+            craft.stages.push(Vec::new());
+        }
+        craft.stages[stage].push(part);
+        self.refit(e, craft, p.facing, p.own_top, defs, resources, spec_for)
+    }
+
+    /// Control the vessel from one of its parts (index into `current_craft`; the root to go back): the
+    /// craft is turned so that part's axis is the craft's +Y, so SAS, the navball and thrust all read
+    /// from it. The vessel does not move. Not on the ground.
+    pub fn control_from(
+        &mut self,
+        e: Entity,
+        part: usize,
+        defs: &[PartDef],
+        resources: &[ose_data::ResourceDef],
+        spec_for: &dyn Fn(&Craft) -> flight::FlightSpec,
+    ) -> Result<(), &'static str> {
+        let craft = self.current_craft(e).ok_or("vessel has no parts")?;
+        let target = craft.parts.get(part).ok_or("no such part")?;
+        let p = self
+            .world
+            .get::<flight::Powered>(e)
+            .ok_or("not under power")?
+            .clone();
+        if p.landed || p.level {
+            return Err("not while on the ground or flying level");
+        }
+        let st = self
+            .world
+            .get::<structure::Structure>(e)
+            .ok_or("vessel has no parts")?;
+        let q = unit(target.local_rotation);
+        let qa = [q.x, q.y, q.z, q.w];
+        // where the part's axes point now
+        let facing = st
+            .axis_inertial(p.facing, crate::aero::rotate(qa, DVec3::new(0.0, 1.0, 0.0)))
+            .normalized();
+        let top = st
+            .axis_inertial(
+                p.facing,
+                crate::aero::rotate(qa, DVec3::new(0.0, 0.0, -1.0)),
+            )
+            .normalized();
+        let guid = target.guid.clone();
+        // the part's own frame becomes the craft's
+        let turned = structure::rotated(
+            &craft,
+            Quat {
+                x: -q.x,
+                y: -q.y,
+                z: -q.z,
+                w: q.w,
+            },
+        );
+        self.refit(e, turned, facing, top, defs, resources, spec_for)?;
+        if let Some(mut p) = self.world.get_mut::<flight::Powered>(e) {
+            // a hold keeps pointing where it did
+            if let flight::Attitude::Fixed(_) = p.attitude {
+                p.attitude = flight::Attitude::Fixed(facing);
+            }
+        }
+        if craft.parts.iter().position(|x| x.parent.is_none()) == Some(part) && q.w.abs() > 0.9999 {
+            self.world.entity_mut(e).remove::<ControlPart>();
+        } else {
+            self.world.entity_mut(e).insert(ControlPart(guid));
+        }
+        Ok(())
     }
 
     /// The vessel's craft as it is now: parts it has lost left out, tanks holding what they hold.
@@ -698,6 +947,7 @@ mod tests {
     /// probe core with a docking port on top
     fn ship(name: &str) -> Craft {
         Craft {
+            loose: Vec::new(),
             name: name.into(),
             description: String::new(),
             parts: vec![

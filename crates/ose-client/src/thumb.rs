@@ -163,6 +163,7 @@ mod tests {
 
     fn stack() -> Craft {
         Craft {
+            loose: Vec::new(),
             name: "stack".into(),
             description: String::new(),
             parts: vec![

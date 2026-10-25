@@ -184,6 +184,7 @@ pub fn craft_from_value(v: &Value) -> anyhow::Result<Craft> {
     }
     stages.sort_by_key(|(id, _)| *id);
     Ok(Craft {
+        loose: Vec::new(),
         name,
         description,
         parts,

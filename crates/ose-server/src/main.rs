@@ -701,10 +701,7 @@ fn vessels_message(s: &Shared, u: &Universe, tick: Tick) -> ServerMessage {
                     f
                 }),
                 // the count of parts still on: it changes when a stage drops or a part breaks or docks
-                craft_rev: u
-                    .structure(e)
-                    .map(|st| st.rigid.present.iter().filter(|x| **x).count() as u32)
-                    .unwrap_or(0),
+                craft_rev: u.craft_rev(e),
                 target: u.target(e).and_then(|t| {
                     let id = match list.iter().find(|x| x.0 == t) {
                         Some(&(_, vid, _)) => ose_net::TargetId::Vessel(vid),
@@ -1020,7 +1017,17 @@ fn flight_readout(
         comm_connected: u.comm_link(e).connected,
         comm_hops: u.comm_link(e).hops,
         comm_range_m: u.comm_link(e).range_m,
+        control_part: u.control_part(e).map(|i| i as u16),
         panels_deployed: u.panels_deployed(e),
+        antennas: u
+            .structure(e)
+            .map(|st| {
+                (0..st.antenna_deployable.len())
+                    .filter(|&i| st.antenna_deployable[i] && st.rigid.present[i])
+                    .map(|i| (i as u16, st.deployed[i]))
+                    .collect()
+            })
+            .unwrap_or_default(),
         panels: u
             .structure(e)
             .map(|st| {
@@ -1368,6 +1375,8 @@ fn launch_on_pad_now(
     crew: Option<&[String]>,
 ) -> ServerMessage {
     let mut filled = craft.clone();
+    // loose assemblies stay in the editor
+    filled.loose.clear();
     fill_default_resources(s, &mut filled);
     // a craft built nose-forward (a plane) is turned to point along +Y and lies level
     let level = ose_sim::structure::level_layout(&filled);
@@ -3229,6 +3238,51 @@ async fn session(mut socket: WebSocket, s: AppState) {
                                     Some(_) => ServerMessage::FlightAck { vessel, accepted: false, reason: Some(if deploy { "no folded gear" } else { "no gear out" }.into()) },
                                     None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("vessel has no parts".into()) },
                                 },
+                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
+                            };
+                            if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::DeployAntennas { vessel, deploy }) => {
+                            let reply = match owned_vessel(&s, vessel, player_id) {
+                                Some(e) => match s.universe.lock().expect("sim lock").deploy_antennas(e, deploy) {
+                                    Some(n) if n > 0 => ServerMessage::FlightAck { vessel, accepted: true, reason: None },
+                                    Some(_) => ServerMessage::FlightAck { vessel, accepted: false, reason: Some(if deploy { "no retracted antennas" } else { "no antennas extended" }.into()) },
+                                    None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("vessel has no parts".into()) },
+                                },
+                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
+                            };
+                            if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::MoveToStage { vessel, part, stage }) => {
+                            let reply = match owned_vessel(&s, vessel, player_id) {
+                                Some(e) => {
+                                    let spec_for = |c: &ose_data::craft::Craft| flight_spec_for(&s, c);
+                                    let r = s.universe.lock().expect("sim lock").move_to_stage(e, part as usize, stage as usize, &s.parts, &s.resources, &spec_for);
+                                    ServerMessage::FlightAck { vessel, accepted: r.is_ok(), reason: r.err().map(String::from) }
+                                }
+                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
+                            };
+                            if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::ControlFrom { vessel, part }) => {
+                            let reply = match owned_vessel(&s, vessel, player_id) {
+                                Some(e) => {
+                                    let spec_for = |c: &ose_data::craft::Craft| flight_spec_for(&s, c);
+                                    let r = s.universe.lock().expect("sim lock").control_from(e, part as usize, &s.parts, &s.resources, &spec_for);
+                                    ServerMessage::FlightAck { vessel, accepted: r.is_ok(), reason: r.err().map(String::from) }
+                                }
+                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
+                            };
+                            if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::RenameVessel { vessel, name }) => {
+                            let name = name.trim().to_string();
+                            let reply = match owned_vessel(&s, vessel, player_id) {
+                                Some(_) if name.is_empty() || name.chars().count() > 64 => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("a name is 1 to 64 characters".into()) },
+                                Some(e) => {
+                                    let ok = s.universe.lock().expect("sim lock").rename_vessel(e, &name);
+                                    ServerMessage::FlightAck { vessel, accepted: ok, reason: (!ok).then(|| "not a vessel".into()) }
+                                }
                                 None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
                             };
                             if !send(&mut socket, &reply).await { break; }

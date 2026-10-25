@@ -46,8 +46,10 @@ pub struct Structure {
     pub crew: Vec<u32>,
     /// Each part's crash tolerance, m/s.
     pub crash_tolerance: Vec<f64>,
-    /// Deployable solar panels folded out.
+    /// Deployable solar panels (and antennas) folded out.
     pub deployed: Vec<bool>,
+    /// Antennas that extend and retract (`Data_Deployable` beside `Data_Transmitter`); they start retracted.
+    pub antenna_deployable: Vec<bool>,
     /// Each part's id and family (like "0010-Probe").
     pub part_ids: Vec<String>,
     pub families: Vec<String>,
@@ -157,6 +159,11 @@ pub fn level_layout(craft: &Craft) -> Option<Craft> {
         z: axis.z * sh,
         w: ch,
     };
+    Some(rotated(craft, r))
+}
+
+/// The craft turned by `r` about its origin: every part's position and rotation.
+pub fn rotated(craft: &Craft, r: ose_data::craft::Quat) -> Craft {
     let mut out = craft.clone();
     for part in &mut out.parts {
         part.local_position = aero::rotate([r.x, r.y, r.z, r.w], part.local_position);
@@ -173,7 +180,7 @@ pub fn level_layout(craft: &Craft) -> Option<Craft> {
         };
         part.local_rotation = quat_mul(r, pq);
     }
-    Some(out)
+    out
 }
 
 /// A parachute's state (`DeploymentStates`).
@@ -251,6 +258,34 @@ fn basis(facing: DVec3) -> (DVec3, DVec3, DVec3) {
 }
 
 impl Structure {
+    /// A part axis (craft coordinates, as the part data gives it) in the inertial frame.
+    pub fn axis_inertial(&self, facing: DVec3, u: DVec3) -> DVec3 {
+        let (bx, by, bz) = self.frame(facing);
+        bx * u.x + by * u.y + bz * (-u.z)
+    }
+
+    /// Take over what the parts of `old` were doing (`map`: old part index to this structure's): panels,
+    /// chutes, heat, gear, converters, fairings, bays.
+    pub fn carry_state_from(&mut self, old: &Structure, map: &[Option<usize>]) {
+        for (i, j) in map.iter().enumerate() {
+            let Some(j) = *j else { continue };
+            if i >= old.rigid.len() || j >= self.rigid.len() {
+                continue;
+            }
+            self.deployed[j] = old.deployed[i];
+            self.chutes[j] = old.chutes[i];
+            self.chute_open[j] = old.chute_open[i];
+            self.temperature_k[j] = old.temperature_k[i];
+            self.ablating[j] = old.ablating[i];
+            self.gear_out[j] = old.gear_out[i];
+            self.converter_on[j] = old.converter_on[i];
+            self.fairing_deployed[j] = old.fairing_deployed[i];
+            self.bay_open[j] = old.bay_open[i];
+        }
+        self.frame_top = old.frame_top;
+        self.update_shielding();
+    }
+
     /// The craft's axes in the inertial frame: +Y along `facing`, +Z toward `frame_top`.
     fn frame(&self, facing: DVec3) -> (DVec3, DVec3, DVec3) {
         let y = facing.normalized();
@@ -358,6 +393,16 @@ impl Structure {
                     .map(|e| e.propellant_mixture.clone())
             })
             .collect();
+        let antenna_deployable = (0..n)
+            .map(|i| {
+                def_of(i).is_some_and(|d| {
+                    d.electric.comm_range_m > 0.0
+                        && d.module_names
+                            .iter()
+                            .any(|m| m == "PartComponentModule_Deployable")
+                })
+            })
+            .collect();
         let electric = (0..n)
             .map(|i| def_of(i).map(|d| d.electric).unwrap_or_default())
             .collect();
@@ -390,6 +435,7 @@ impl Structure {
                 .map(|i| def_of(i).map(|d| d.crash_tolerance).unwrap_or(0.0))
                 .collect(),
             electric,
+            antenna_deployable,
             crew,
             experiments,
             part_ids: craft.parts.iter().map(|p| p.part_id.clone()).collect(),
@@ -1462,6 +1508,18 @@ impl Structure {
         }
     }
 
+    /// Extend all deployable antennas (or retract them); returns how many changed.
+    pub fn deploy_antennas(&mut self, out: bool) -> usize {
+        let mut n = 0;
+        for i in 0..self.antenna_deployable.len() {
+            if self.antenna_deployable[i] && self.rigid.present[i] && self.deployed[i] != out {
+                self.deployed[i] = out;
+                n += 1;
+            }
+        }
+        n
+    }
+
     /// Fold all deployable solar panels out (or back in); returns how many changed.
     pub fn deploy_panels(&mut self, out: bool) -> usize {
         let mut n = 0;
@@ -1923,6 +1981,7 @@ pub(crate) fn test_capsule(shield: bool) -> (Craft, Vec<PartDef>, Vec<ResourceDe
     chute.parent = Some(0);
     parts.push(chute);
     let craft = Craft {
+        loose: Vec::new(),
         name: "Capsule".into(),
         description: String::new(),
         stages: vec![vec![parts.len() - 1]],
