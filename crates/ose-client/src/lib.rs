@@ -11514,7 +11514,8 @@ impl App {
         }
         // Trajectory events (Map3DTrajectoryEvents): where the planning vessel enters or leaves a sphere of
         // influence or hits the ground, and the periapsis around each body it is captured by, with countdowns.
-        let mut events: Vec<(GV, String)> = Vec::new();
+        // (where, label, when): a click on one warps to it.
+        let mut events: Vec<(GV, String, f64)> = Vec::new();
         if let Some(patches) = planner.and_then(|id| scene.trajectories.get(&id)) {
             for (k, p) in patches.iter().enumerate() {
                 let Some(body) = scene.bodies.get(p.body as usize) else {
@@ -11534,7 +11535,7 @@ impl App {
                         _ => None,
                     };
                     if let Some(text) = text {
-                        events.push((at(p.end_ut), text));
+                        events.push((at(p.end_ut), text, p.end_ut));
                     }
                 }
                 // Periapsis inside a later patch around another body (a flyby or capture).
@@ -11550,6 +11551,7 @@ impl App {
                                 hud::fmt_dist(pe_alt),
                                 hud::fmt_dt(pe_dt)
                             ),
+                            pe_ut,
                         ));
                     }
                 }
@@ -11576,9 +11578,11 @@ impl App {
             let style = el.style();
             match events
                 .get(k)
-                .and_then(|(p, t)| project(*p).map(|xy| (xy, t)))
+                .and_then(|(p, t, when)| project(*p).map(|xy| (xy, t, when)))
             {
-                Some(((x, y), text)) => {
+                Some(((x, y), text, when)) => {
+                    el.set_attribute("data-ose-ut", &format!("{when:.1}")).ok();
+                    el.set_title(&format!("{text} (click to warp there)"));
                     style.set_property("left", &format!("{x:.1}px")).ok();
                     style.set_property("top", &format!("{y:.1}px")).ok();
                     style.set_property("visibility", "visible").ok();
@@ -11906,14 +11910,31 @@ fn install_focus_clicks(app: &Shared, target: &Element) -> Result<(), JsValue> {
     on_dbl.forget();
     let a = app.clone();
     let on_apsis = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
-        let id = ev
-            .target()
-            .and_then(|t| t.dyn_into::<Element>().ok())
-            .map(|e| e.id())
-            .unwrap_or_default();
+        let ev_target = ev.target().and_then(|t| t.dyn_into::<Element>().ok());
+        let ev_text = ev_target.as_ref().and_then(|e| e.text_content());
+        let id = ev_target.as_ref().map(|e| e.id()).unwrap_or_default();
         let k = match id.as_str() {
             "map-ap" => 0,
             "map-pe" => 1,
+            ev if ev.starts_with("map-ev-") => {
+                // An encounter, escape, impact or periapsis on the way: warp to just before it.
+                let el = ev_target.clone();
+                let ut = el
+                    .and_then(|e| e.get_attribute("data-ose-ut"))
+                    .and_then(|s| s.parse::<f64>().ok());
+                let text = ev_text.clone().unwrap_or_default();
+                if let Some(ut) = ut {
+                    // "Mun encounter 2h 3m" -> "Mun encounter", "Impact 5m" -> "impact".
+                    let words: Vec<&str> = text.split_whitespace().collect();
+                    let what = if words.first() == Some(&"Impact") {
+                        "impact".to_string()
+                    } else {
+                        words.iter().take(2).copied().collect::<Vec<_>>().join(" ")
+                    };
+                    a.borrow_mut().start_warp_to(ut - 30.0, &what);
+                }
+                return;
+            }
             _ => return,
         };
         let mut app = a.borrow_mut();
