@@ -474,6 +474,32 @@ impl Universe {
         }
     }
 
+    /// Control trim for a vessel (pitch, yaw, roll each -1..1, held); false without a powered vessel.
+    pub fn set_trim(&mut self, e: Entity, trim: DVec3) -> bool {
+        match self.world.get_mut::<flight::Powered>(e) {
+            Some(mut p) => {
+                p.trim = DVec3::new(
+                    trim.x.clamp(-1.0, 1.0),
+                    trim.y.clamp(-1.0, 1.0),
+                    trim.z.clamp(-1.0, 1.0),
+                );
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Ask for (or stop) a vessel's per-part lift and drag in its readout; false without a powered vessel.
+    pub fn set_aero_overlay(&mut self, e: Entity, on: bool) -> bool {
+        match self.world.get_mut::<flight::Powered>(e) {
+            Some(mut p) => {
+                p.aero_overlay = on;
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Roll input for a vessel (-1..1, held until changed); false without a powered vessel.
     pub fn set_roll(&mut self, e: Entity, input: f64) -> bool {
         match self.world.get_mut::<flight::Powered>(e) {

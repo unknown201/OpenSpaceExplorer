@@ -366,6 +366,7 @@ mod tests {
                 epoch_s: 0.0,
             },
             target: None,
+            craft_rev: 0,
             flight: None,
         };
         let kerbin = s.position(1, 0.0);

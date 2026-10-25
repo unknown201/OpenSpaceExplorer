@@ -92,6 +92,8 @@ pub struct Structure {
     pub cargo_bay: Vec<bool>,
     pub bay_open: Vec<bool>,
     pub shielded: Vec<bool>,
+    /// Each part's lift and drag at the last `aero_torque` call, kN, inertial (the aero overlay).
+    pub part_aero_kn: Vec<(DVec3, DVec3)>,
     /// RCS thrusters on the parts.
     pub rcs_defs: Vec<Option<ose_data::Rcs>>,
     /// Lifting surfaces (their curves resolved), intake areas, and each engine's jet curves.
@@ -485,6 +487,7 @@ impl Structure {
                 .collect(),
             bay_open: vec![false; n],
             shielded: vec![false; n],
+            part_aero_kn: vec![(DVec3::ZERO, DVec3::ZERO); n],
             ejection_force: (0..n)
                 .map(|i| def_of(i).map(|d| d.ejection_force).unwrap_or(0.0))
                 .collect(),
@@ -1539,7 +1542,10 @@ impl Structure {
     /// Torque of the airflow about the centre of mass, kN·m, inertial: each part's drag (from the last `aero`
     /// call) and each lifting surface's force at its place. A craft whose drag sits ahead of its centre of
     /// mass wants to turn round; fins behind it keep it pointing into the flow.
-    pub fn aero_torque(&self, facing: DVec3, v_air: DVec3, rho: f64, mach: f64) -> DVec3 {
+    pub fn aero_torque(&mut self, facing: DVec3, v_air: DVec3, rho: f64, mach: f64) -> DVec3 {
+        self.part_aero_kn
+            .iter_mut()
+            .for_each(|f| *f = (DVec3::ZERO, DVec3::ZERO));
         let speed = v_air.length();
         if speed <= 0.0 || rho <= 0.0 {
             return DVec3::ZERO;
@@ -1556,7 +1562,8 @@ impl Structure {
             }
             let (centre, _) = self.part_box(i);
             let r = to_inertial(centre - c);
-            let mut f = -travel * (q * self.part_cda_m2[i] / 1000.0);
+            let drag = -travel * (q * self.part_cda_m2[i] / 1000.0);
+            let mut f = drag;
             if let Some((l, curves)) = &self.lift_defs[i] {
                 if l.deflection_lift_coeff > 0.0 && !self.shielded[i] {
                     let u = aero::rotate(self.part_rot[i], l.axis);
@@ -1573,6 +1580,7 @@ impl Structure {
                 }
             }
             torque = torque + r.cross(f);
+            self.part_aero_kn[i] = (f - drag, drag);
         }
         torque
     }

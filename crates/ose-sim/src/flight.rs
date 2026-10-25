@@ -235,6 +235,13 @@ pub struct Powered {
     pub rotation_input: DVec3,
     #[serde(default)]
     pub roll_rate: f64,
+    /// Control trim (Alt+WASD/QE): pitch, yaw, roll, each -1..1, held; added to the rotation input and to
+    /// the control surfaces' deflection.
+    #[serde(default)]
+    pub trim: DVec3,
+    /// Someone asked for this vessel's per-part lift and drag (the aero overlay).
+    #[serde(default)]
+    pub aero_overlay: bool,
     /// RCS thrusters (with the RCS group on they translate the vessel and help turn it).
     #[serde(default)]
     pub rcs: RcsState,
@@ -684,6 +691,8 @@ impl Powered {
             groups: ActionGroups::default(),
             rotation_input: DVec3::ZERO,
             roll_rate: 0.0,
+            trim: DVec3::ZERO,
+            aero_overlay: false,
             eva_run: false,
             eva_jump: false,
             eva_hop: false,
@@ -914,7 +923,10 @@ pub fn steer(p: &mut Powered, target: DVec3, thrust_fraction: f64, dt: f64) {
         if am > alpha_max {
             a = a * (alpha_max / am);
         }
-        p.steer_cmd = a * (1.0 / alpha_max);
+        let top = vessel_top(p);
+        let right = p.facing.cross(top);
+        let trim = right * -p.trim.x + top * p.trim.y + p.facing * p.trim.z;
+        p.steer_cmd = a * (1.0 / alpha_max) + trim;
         p.angvel = w + a * dt;
     } else {
         p.steer_cmd = DVec3::ZERO;
@@ -958,7 +970,7 @@ pub fn spin(p: &mut Powered, thrust_fraction: f64, dt: f64) {
         Some((t, moi)) => (t / moi, moi),
         None => (0.0, 1.0),
     };
-    let i = p.rotation_input;
+    let i = p.rotation_input + p.trim;
     let i = DVec3::new(
         i.x.clamp(-1.0, 1.0),
         i.y.clamp(-1.0, 1.0),
@@ -1079,7 +1091,7 @@ pub fn integrate(
         p.angvel = DVec3::ZERO;
         // on the ground the control surfaces still follow the pilot's keys (they can be checked before
         // take-off)
-        let i = p.rotation_input;
+        let i = p.rotation_input + p.trim;
         let top = vessel_top(p);
         let right = p.facing.cross(top);
         p.steer_cmd = right * -i.x.clamp(-1.0, 1.0)

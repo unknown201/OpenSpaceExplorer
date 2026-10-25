@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 38;
+pub const PROTOCOL_VERSION: u16 = 39;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -201,6 +201,25 @@ pub enum ClientMessage {
         run: bool,
         jump: bool,
     },
+    /// Control trim (Alt+W/S, A/D, Q/E): pitch, yaw, roll, each -1..1 and held; it adds to the rotation
+    /// input and to the control surfaces' deflection. Answers `FlightAck`.
+    SetTrim {
+        vessel: u64,
+        pitch: f32,
+        yaw: f32,
+        roll: f32,
+    },
+    /// Turn the aero overlay (F12) on or off for a vessel: its readout then carries `aero_forces`.
+    /// Answers `FlightAck`.
+    AeroOverlay {
+        vessel: u64,
+        on: bool,
+    },
+    /// The craft of any vessel as it stands now (after staging, decoupling, breaking); answers
+    /// `VesselCraft`. `VesselState::craft_rev` changes whenever it does.
+    GetVesselCraft {
+        vessel: u64,
+    },
     /// Roll input (-1..1, Q/E), held until changed; answers `FlightAck`.
     SetRoll {
         vessel: u64,
@@ -371,6 +390,8 @@ pub struct VesselState {
     pub flight: Option<FlightReadout>,
     /// The vessel's target, if it has one.
     pub target: Option<TargetReadout>,
+    /// Changes whenever the vessel's craft does (parts lost or gained); ask `GetVesselCraft` again then.
+    pub craft_rev: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -596,6 +617,8 @@ pub struct FlightReadout {
     /// its tanks hold, here), first to fire first; and their total delta-v here.
     pub stage_list: Vec<StageReadout>,
     pub delta_v_now_mps: f64,
+    /// With the aero overlay on: (part, lift kN, drag kN) for the parts the air pushes, inertial.
+    pub aero_forces: Vec<(u16, DVec3, DVec3)>,
     /// The burning stage is jets (their thrust follows speed and air; `thrust_kn` shows it).
     pub jet: bool,
 }
@@ -912,6 +935,11 @@ pub enum ServerMessage {
     /// The campaign's astronauts (answer to `KerbalRoster`, and whenever it changes).
     KerbalRoster {
         kerbals: Vec<KerbalInfo>,
+    },
+    /// Answer to `GetVesselCraft` (`None` for a vessel without parts, like a bare probe or a flag).
+    VesselCraft {
+        vessel: u64,
+        craft: Option<ose_data::craft::Craft>,
     },
     /// The launch sites, sent after `DifficultyOptions`.
     LaunchSites {

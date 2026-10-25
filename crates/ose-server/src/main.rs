@@ -697,6 +697,11 @@ fn vessels_message(s: &Shared, u: &Universe, tick: Tick) -> ServerMessage {
                     }
                     f
                 }),
+                // the count of parts still on: it changes when a stage drops or a part breaks or docks
+                craft_rev: u
+                    .structure(e)
+                    .map(|st| st.rigid.present.iter().filter(|x| **x).count() as u32)
+                    .unwrap_or(0),
                 target: u.target(e).and_then(|t| {
                     let id = match list.iter().find(|x| x.0 == t) {
                         Some(&(_, vid, _)) => ose_net::TargetId::Vessel(vid),
@@ -912,6 +917,22 @@ fn flight_readout(
         // filled in by `vessels_message`, which knows the craft
         stage_list: Vec::new(),
         delta_v_now_mps: 0.0,
+        aero_forces: if p.aero_overlay {
+            u.structure(e)
+                .map(|st| {
+                    st.part_aero_kn
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, (l, d))| {
+                            st.rigid.present[*i] && (l.length() > 1e-3 || d.length() > 1e-3)
+                        })
+                        .map(|(i, (l, d))| (i as u16, *l, *d))
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        },
         control_surfaces: u
             .structure(e)
             .map(|st| {
@@ -3008,6 +3029,30 @@ async fn session(mut socket: WebSocket, s: AppState) {
                                 }
                                 None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
                             };
+                            if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::SetTrim { vessel, pitch, yaw, roll }) => {
+                            let reply = match owned_vessel(&s, vessel, player_id) {
+                                Some(e) => {
+                                    let t = ose_math::DVec3::new(pitch as f64, yaw as f64, roll as f64);
+                                    let ok = s.universe.lock().expect("sim lock").set_trim(e, t);
+                                    ServerMessage::FlightAck { vessel, accepted: ok, reason: (!ok).then(|| "not under power".into()) }
+                                }
+                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
+                            };
+                            if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::AeroOverlay { vessel, on }) => {
+                            // anyone may look at any vessel's airflow
+                            let e = s.vessels.lock().expect("vessels lock").iter().find(|x| x.1 == vessel).map(|x| x.0);
+                            let ok = e.is_some_and(|e| s.universe.lock().expect("sim lock").set_aero_overlay(e, on));
+                            let reply = ServerMessage::FlightAck { vessel, accepted: ok, reason: (!ok).then(|| "no such vessel under power".into()) };
+                            if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::GetVesselCraft { vessel }) => {
+                            let e = s.vessels.lock().expect("vessels lock").iter().find(|x| x.1 == vessel).map(|x| x.0);
+                            let craft = e.and_then(|e| s.universe.lock().expect("sim lock").current_craft(e));
+                            let reply = ServerMessage::VesselCraft { vessel, craft };
                             if !send(&mut socket, &reply).await { break; }
                         }
                         Ok(ClientMessage::SetRoll { vessel, input }) => {
