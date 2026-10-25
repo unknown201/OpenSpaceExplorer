@@ -119,6 +119,27 @@ pub fn fairing_shells(bottom: f64, top: f64, radius: f64) -> Vec<(&'static str, 
     shells
 }
 
+/// The pose of an animated Kerbal model playing one of its clips (idle, walk, run, air), looping in page
+/// time; `None` for any other model.
+fn kerbal_sample(
+    gpu: &Renderer,
+    model: &str,
+    clip: &str,
+    now_ms: f64,
+) -> Option<crate::animation::ClipSample> {
+    if !model.starts_with("kerbal:anim") {
+        return None;
+    }
+    let rig = &gpu.model(model)?.rig;
+    let i = rig.clips.iter().position(|c| c.name == clip)?;
+    let duration = rig.clips[i].duration.max(1e-3);
+    Some(crate::animation::ClipSample {
+        clip: i,
+        time: ((now_ms / 1000.0) % duration as f64) as f32,
+        looping: true,
+    })
+}
+
 /// The original's most common Kerbal skin colour (looks SKINCOLOR BADA55).
 pub const DEFAULT_SKIN: [u8; 3] = [0xBA, 0xDA, 0x55];
 
@@ -165,6 +186,19 @@ impl Stand {
     /// eyes, helmet, tools/export_kerbal.py) and planted flag, with the procedural stand-ins while they load
     /// or when a server has no game assets.
     fn models(self, gpu: &mut Renderer) -> Vec<ModelRef> {
+        // The animated Kerbal (tools/export_kerbal_anim.py): one skinned model with the head, eyes and helmet
+        // on its bones and the original's EVA clips; the rigid pieces stand in while it loads.
+        if let Stand::Kerbal { round, .. } = self {
+            let anim: ModelRef = if round {
+                ("kerbal:anim_f", "assets/kerbal/kerbal_f.glb", 1.0)
+            } else {
+                ("kerbal:anim_m", "assets/kerbal/kerbal_m.glb", 1.0)
+            };
+            gpu.request_model(anim.0, anim.1);
+            if gpu.has_model(anim.0) {
+                return vec![anim];
+            }
+        }
         let (real, stand_in): (&[ModelRef], ModelRef) = match self {
             Stand::Kerbal { round: false, .. } => (
                 &[
@@ -1291,6 +1325,7 @@ impl FlightView {
             // A walking Kerbal bobs and sways with its stride (the original animates a walk cycle; this
             // rigid model moves as a whole).
             let (mut at, mut rot) = (pos, rot);
+            let mut kerbal_clip: Option<&str> = None;
             if matches!(inp.stand, Stand::Kerbal { .. }) {
                 let landed = inp
                     .vessel
@@ -1304,7 +1339,18 @@ impl FlightView {
                     self.walk_phase += self.walk_speed * dt * 5.0;
                 }
                 self.walk_last = Some((pos, inp.now_ms));
-                if landed && self.walk_speed > 0.2 {
+                kerbal_clip = Some(if !landed {
+                    "air"
+                } else if self.walk_speed > 1.6 {
+                    "run"
+                } else if self.walk_speed > 0.2 {
+                    "walk"
+                } else {
+                    "idle"
+                });
+                // The rigid stand-in bobs with its stride; the animated Kerbal walks.
+                let animated = gpu.has_model("kerbal:anim_m") || gpu.has_model("kerbal:anim_f");
+                if landed && self.walk_speed > 0.2 && !animated {
                     let s = self.walk_phase.sin();
                     at += up * (0.035 * s.abs());
                     rot = (rot * DQuat::from_rotation_z(0.07 * s)).normalize();
@@ -1314,6 +1360,9 @@ impl FlightView {
                 let mut it = DrawItem::lit(name.to_string(), at - cam, rot, scale, sun);
                 it.ambient = part_ambient;
                 it.sun = sun_share;
+                if let Some(key) = kerbal_clip {
+                    it.animation = kerbal_sample(gpu, name, key, inp.now_ms);
+                }
                 if let Some(c) = inp.stand.tint(name) {
                     it.color = c;
                 }
@@ -1331,6 +1380,7 @@ impl FlightView {
                 let mut it = DrawItem::lit(name.to_string(), p - cam, rot, scale, sun);
                 it.ambient = part_ambient;
                 it.sun = sun_share;
+                it.animation = kerbal_sample(gpu, name, "idle", inp.now_ms);
                 if let Some(c) = stand.tint(name) {
                     it.color = c;
                 }
