@@ -1,8 +1,9 @@
 #!/usr/bin/env python
 """Export the original's Kerbal Space Academy lessons (data/tutorials/KSP2Tutorial_*.json, grouped by
 KSP2MainTutorial_*.json) to assets/web/ui/tutorials.json for the Training Center's Lessons tab: each group's
-title and description, and each lesson's title, description and PAIGE's messages stage by stage (loc keys
-and emotes). The lessons' conditions and video clips are left out. Push with `push_assets.py ui`.
+title and description, and each lesson's title, description and its stages: PAIGE's messages (loc keys and
+emotes) and what the player has to do to move on (the stage's condition, simplified). Video clips are left
+out. Push with `push_assets.py ui`.
 
     .venv/Scripts/python tools/export_tutorials.py
 """
@@ -33,6 +34,28 @@ def messages(node, out):
             messages(v, out)
 
 
+def condition(c):
+    """A stage's condition, simplified: {"e": event} | {"p": watcher, "op", "num", "str", "int"} |
+    {"and": [...]} | {"or": [...]} | None."""
+    if not isinstance(c, dict):
+        return None
+    kind = c.get("ConditionType")
+    if kind == "EventCondition":
+        return {"e": c.get("EventTypeAQN", "").split(",")[0].split(".")[-1]}
+    if kind == "PropertyCondition":
+        return {
+            "p": c.get("PropertyTypeAQN", "").split(",")[0].split(".")[-1],
+            "op": c.get("propOperator", "EQUAL"),
+            "num": c.get("TestWatchedValue", 0.0),
+            "str": c.get("TestWatchedstring", ""),
+            "int": c.get("TestWatchedInt", 0),
+        }
+    if kind == "ConditionSet":
+        children = [x for x in (condition(ch) for ch in c.get("Children") or []) if x]
+        return {"and" if c.get("ConditionMode") == "AND" else "or": children}
+    return None
+
+
 def main() -> int:
     src = ROOT / "assets" / "ksp2" / "data" / "tutorials"
     if not src.is_dir():
@@ -49,9 +72,8 @@ def main() -> int:
         for st in t.get("missionStages", []):
             out: list = []
             messages(st.get("actions", []), out)
-            if out:
-                stages.append({"messages": out})
-        if not stages or t.get("hidden"):
+            stages.append({"messages": out, "cond": condition(st.get("scriptableCondition"))})
+        if not any(st["messages"] for st in stages) or t.get("hidden"):
             continue
         lessons.append({
             "id": t["ID"],

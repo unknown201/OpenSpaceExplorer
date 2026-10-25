@@ -1,11 +1,12 @@
 //! Kerbal Space Academy lessons (`data/tutorials`, the original's Training Center lessons): the groups and
 //! lessons from assets/ui/tutorials.json (tools/export_tutorials.py), listed in the Training Center's Lessons
-//! tab; a lesson plays PAIGE's messages stage by stage in the first-time hint box (`ftue.rs`). The lessons'
-//! conditions are not checked yet: the player moves on with Continue.
+//! tab; a lesson plays PAIGE's messages stage by stage in the first-time hint box (`ftue.rs`). A stage moves
+//! on when its condition holds (`eval`): Continue, or something done in the game (launch, stage, reach an
+//! altitude, open the map, pick a part ...). Conditions the client cannot watch let Continue through.
 
 use crate::ftue::Message;
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct Academy {
@@ -32,6 +33,159 @@ pub struct Lesson {
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct Stage {
     pub messages: Vec<Message>,
+    #[serde(default)]
+    pub cond: Option<Cond>,
+}
+
+/// A stage's condition as exported: an event, a watched property against a value, or all / any of several.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(untagged)]
+pub enum Cond {
+    Event {
+        e: String,
+    },
+    Prop {
+        p: String,
+        op: String,
+        #[serde(default)]
+        num: f64,
+        #[serde(default)]
+        str: String,
+        #[serde(default)]
+        int: i64,
+    },
+    All {
+        and: Vec<Cond>,
+    },
+    Any {
+        or: Vec<Cond>,
+    },
+}
+
+/// What a lesson can watch: the events seen since the stage began and the state of the game now.
+#[derive(Clone, Debug, Default)]
+pub struct World {
+    /// Event names as the original's messages (`StageActivatedMessage`, `MapViewEnteredMessage` ...),
+    /// `GoToNextTutorialStep` for Continue.
+    pub events: HashSet<String>,
+    pub altitude_sea_m: Option<f64>,
+    pub altitude_ground_m: Option<f64>,
+    pub surface_speed_mps: Option<f64>,
+    pub throttle: Option<f64>,
+    /// Stage propellant left, percent.
+    pub stage_fuel_pct: Option<f64>,
+    pub apoapsis_m: Option<f64>,
+    pub periapsis_m: Option<f64>,
+    /// The original's SAS mode numbers (0 stability, 1 prograde, 2 retrograde ... 9 maneuver).
+    pub sas_mode: Option<i64>,
+    pub map: bool,
+    /// The VAB's last part placed and the part in hand or selected.
+    pub last_placed: Option<String>,
+    pub last_selected: Option<String>,
+}
+
+fn compare(op: &str, have: f64, want: f64) -> bool {
+    match op {
+        "GREATER" => have > want,
+        "LESSER" => have < want,
+        _ => (have - want).abs() <= 1e-3 * want.abs().max(1.0),
+    }
+}
+
+/// Whether `c` holds in `w`: `None` when it watches something the client cannot see.
+pub fn eval(c: &Cond, w: &World) -> Option<bool> {
+    match c {
+        Cond::Event { e } => {
+            const KNOWN: &[&str] = &[
+                "GoToNextTutorialStep",
+                "StageActivatedMessage",
+                "MapViewEnteredMessage",
+                "ManeuverCreatedMessage",
+                "OrbitClickedMessage",
+                "VesselLaunchedMessage",
+                "LaunchSequenceInitiatedMessage",
+                "VesselCreatedMessage",
+                "VABLaunchButtonPressedMessage",
+                "PartPlacedOnMainAssemblyMessage",
+                "ParachuteDeployedMessage",
+                "ParachuteSemiDeployedMessage",
+                "TimeWarpToLocationInitializedMessage",
+                "TimeWarpToLocationCompletedMessage",
+            ];
+            if w.events.contains(e) {
+                Some(true)
+            } else if KNOWN.contains(&e.as_str()) {
+                Some(false)
+            } else {
+                None
+            }
+        }
+        Cond::Prop {
+            p,
+            op,
+            num,
+            str,
+            int,
+        } => {
+            let n = |v: Option<f64>| v.map(|v| compare(op, v, *num));
+            match p.as_str() {
+                "VesselSeaLevelAltitudePropertyWatcher" => n(w.altitude_sea_m),
+                "VesselGroundLevelAltitudePropertyWatcher" => n(w.altitude_ground_m),
+                "VesselSurfaceSpeedPropertyWatcher" => n(w.surface_speed_mps),
+                "Throttle" => n(w.throttle),
+                "StageFuelLevelPropertyWatcher" => n(w.stage_fuel_pct),
+                "VehicleApoapsisAltitudePropertyWatcher" => n(w.apoapsis_m),
+                "VehiclePeriapsisAltitudePropertyWatcher" => n(w.periapsis_m),
+                "SASMode" => w.sas_mode.map(|m| m == *int),
+                "MapEnabled" => Some(w.map),
+                "OABLastPartPlacedPropertyWatcher" => {
+                    Some(w.last_placed.as_deref() == Some(str.as_str()))
+                }
+                "OABLastPartSelectedPropertyWatcher" => {
+                    Some(w.last_selected.as_deref() == Some(str.as_str()))
+                }
+                _ => None,
+            }
+        }
+        Cond::All { and } => {
+            let r: Vec<Option<bool>> = and.iter().map(|c| eval(c, w)).collect();
+            if r.contains(&Some(false)) {
+                Some(false)
+            } else if r.iter().all(|x| *x == Some(true)) {
+                Some(true)
+            } else {
+                None
+            }
+        }
+        Cond::Any { or } => {
+            let r: Vec<Option<bool>> = or.iter().map(|c| eval(c, w)).collect();
+            if r.contains(&Some(true)) {
+                Some(true)
+            } else if r.iter().all(|x| *x == Some(false)) {
+                Some(false)
+            } else {
+                None
+            }
+        }
+    }
+}
+
+impl Stage {
+    /// Whether the stage is over: its condition holds, or the player pressed Continue (`continued`) and the
+    /// condition is none, Continue itself, or one the client cannot watch.
+    pub fn done(&self, w: &World, continued: bool) -> bool {
+        let Some(c) = &self.cond else {
+            return continued;
+        };
+        let mut w2 = w.clone();
+        if continued {
+            w2.events.insert("GoToNextTutorialStep".into());
+        }
+        match eval(c, &w2) {
+            Some(v) => v,
+            None => continued,
+        }
+    }
 }
 
 pub fn parse(text: &str) -> Option<Academy> {
@@ -145,5 +299,50 @@ mod tests {
         assert!(html.contains("Launch a Test Rocket"));
         assert_eq!(a.lessons[0].messages().len(), 2);
         assert!(info_html(&a.lessons[0], &loc).contains("Start Lesson"));
+    }
+
+    #[test]
+    fn stages_wait_for_what_they_watch() {
+        let st: Stage = serde_json::from_str(
+            r#"{"messages":[],"cond":{"or":[{"e":"VesselLaunchedMessage"},
+                {"p":"VesselSeaLevelAltitudePropertyWatcher","op":"GREATER","num":200.0,"str":"","int":0}]}}"#,
+        )
+        .unwrap();
+        let mut w = World {
+            altitude_sea_m: Some(80.0),
+            ..Default::default()
+        };
+        // Continue alone does not launch the rocket.
+        assert!(!st.done(&w, true));
+        w.altitude_sea_m = Some(250.0);
+        assert!(st.done(&w, false));
+        w.altitude_sea_m = Some(80.0);
+        w.events.insert("VesselLaunchedMessage".into());
+        assert!(st.done(&w, false));
+        // Continue moves on, or anything Continue is one way through.
+        let c: Stage =
+            serde_json::from_str(r#"{"messages":[],"cond":{"e":"GoToNextTutorialStep"}}"#).unwrap();
+        assert!(!c.done(&World::default(), false));
+        assert!(c.done(&World::default(), true));
+        // A camera heading the client does not watch lets Continue through.
+        let cam: Stage = serde_json::from_str(
+            r#"{"messages":[],"cond":{"and":[{"e":"CameraRotatedMessage"},
+                {"p":"CameraGimbalHeadingPropertyWatcher","op":"GREATER","num":20.0}]}}"#,
+        )
+        .unwrap();
+        let mut w = World::default();
+        w.events.insert("CameraRotatedMessage".into());
+        assert!(!cam.done(&w, false));
+        assert!(cam.done(&w, true));
+        // SAS prograde.
+        let sas: Stage = serde_json::from_str(
+            r#"{"messages":[],"cond":{"p":"SASMode","op":"EQUAL","num":0.0,"str":"","int":1}}"#,
+        )
+        .unwrap();
+        let w = World {
+            sas_mode: Some(1),
+            ..Default::default()
+        };
+        assert!(sas.done(&w, false));
     }
 }

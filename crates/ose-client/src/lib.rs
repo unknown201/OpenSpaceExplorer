@@ -298,6 +298,7 @@ struct App {
     tc_lessons: bool,
     lesson_selected: Option<String>,
     academy: Option<tutorials::Academy>,
+    lesson_run: std::cell::RefCell<Option<LessonRun>>,
     lp_crew: Vec<String>,
     lp_crew_for: Option<u64>,
     /// The loading screen: the place it last saw (None on the main menu) and when it went up.
@@ -342,6 +343,18 @@ struct FtueState {
     enabled: bool,
     /// The queue is a Training Center lesson (End Tutorial instead of No more hints).
     lesson: bool,
+}
+
+/// A lesson being played: its stage, whether PAIGE has said her piece and the stage waits on the game, and
+/// the events seen since the stage began; the VAB's last part placed and picked.
+#[derive(Default)]
+struct LessonRun {
+    id: String,
+    stage: usize,
+    waiting: bool,
+    events: std::collections::HashSet<String>,
+    last_placed: Option<String>,
+    last_selected: Option<String>,
 }
 
 /// The campaign's science as the server last sent it.
@@ -653,6 +666,7 @@ pub fn start() -> Result<(), JsValue> {
         tc_lessons: false,
         lesson_selected: None,
         academy: None,
+        lesson_run: std::cell::RefCell::new(None),
         lp_crew: Vec::new(),
         lp_crew_for: None,
         loading_since: None,
@@ -1582,6 +1596,7 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
             app.map_mode = !app.map_mode;
             if app.map_mode {
                 app.ftue("FTUE_Map");
+                app.lesson_event("MapViewEnteredMessage");
             }
         }),
     )?;
@@ -2080,17 +2095,24 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                 .unwrap_or_default();
             let app = a.borrow();
             match id.as_str() {
+                "ftue-next" if app.ftue_state.borrow().lesson => {
+                    let last = app.ftue_state.borrow().queue.len() <= 1;
+                    if last {
+                        app.lesson_continue();
+                    } else {
+                        app.ftue_state.borrow_mut().queue.pop_front();
+                        app.ftue_show();
+                    }
+                }
                 "ftue-next" => {
                     {
                         let mut st = app.ftue_state.borrow_mut();
                         st.queue.pop_front();
-                        if st.queue.is_empty() {
-                            st.lesson = false;
-                        }
                     }
                     app.ftue_show();
                 }
                 "ftue-off" if app.ftue_state.borrow().lesson => {
+                    *app.lesson_run.borrow_mut() = None;
                     {
                         let mut st = app.ftue_state.borrow_mut();
                         st.queue.clear();
@@ -2522,7 +2544,13 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         parts.add_event_listener_with_callback("mouseleave", cb.as_ref().unchecked_ref())?;
         cb.forget();
     }
-    wire("vab-launch", Box::new(|a| a.borrow_mut().vab_save(true)))?;
+    wire(
+        "vab-launch",
+        Box::new(|a| {
+            a.borrow().lesson_event("VABLaunchButtonPressedMessage");
+            a.borrow_mut().vab_save(true)
+        }),
+    )?;
     if let Some(cats) = doc.get_element_by_id("vab-cats") {
         let a = app.clone();
         let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
@@ -2969,6 +2997,7 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                             .collect()
                     })
                     .unwrap_or_default();
+                app.lesson_part(&id, false);
                 app.vab3d.held = Some((id, nodes));
                 app.vab_turn = vab::NO_TURN;
                 app.vab_yaw = vab::NO_TURN;
@@ -3165,8 +3194,9 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                         (None, _) => Err(format!("unknown part {id}")),
                     };
                     app.catalog = cat;
-                    if let Err(e) = result {
-                        set_text(&app.doc, "vab-report", &e);
+                    match result {
+                        Ok(()) => app.lesson_part(&id, true),
+                        Err(e) => set_text(&app.doc, "vab-report", &e),
                     }
                     app.render_vab();
                 }
@@ -3434,6 +3464,7 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                         app.map_mode = !app.map_mode;
                         if app.map_mode {
                             app.ftue("FTUE_Map");
+                            app.lesson_event("MapViewEnteredMessage");
                         }
                         true
                     }
@@ -5021,8 +5052,9 @@ impl App {
             None => Err(format!("unknown part {part_id}")),
         };
         self.catalog = cat;
-        if let Err(e) = result {
-            set_text(&self.doc, "vab-report", &e);
+        match result {
+            Ok(()) => self.lesson_part(part_id, true),
+            Err(e) => set_text(&self.doc, "vab-report", &e),
         }
         self.render_vab();
     }
@@ -5434,6 +5466,8 @@ impl App {
             el.class_list().remove_1("open").ok();
             return;
         };
+        // A lesson stage waiting on the game: PAIGE's last line stays up until it is done.
+        let waiting = st.lesson && self.lesson_run.borrow().as_ref().is_some_and(|r| r.waiting);
         let text = self
             .loc
             .get(&m.key)
@@ -5445,9 +5479,16 @@ impl App {
             m.image.as_str()
         };
         el.set_inner_html(&format!(
-            "<img src=\"assets/ui/hud/{image}.png\" alt=\"\" onerror=\"this.style.display='none'\" /><div class=\"ftue-body\"><div class=\"ftue-name\">PAIGE</div><div class=\"ftue-text\">{text}</div><div class=\"ftue-acts\"><button id=\"ftue-off\" class=\"secondary\">{off}</button><button id=\"ftue-next\">{next}</button></div></div>",
-            next = if st.queue.len() > 1 { "Continue" } else if st.lesson { "Finish" } else { "Got it" },
+            "<img src=\"assets/ui/hud/{image}.png\" alt=\"\" onerror=\"this.style.display='none'\" /><div class=\"ftue-body\"><div class=\"ftue-name\">PAIGE</div><div class=\"ftue-text\">{text}</div><div class=\"ftue-acts\"><button id=\"ftue-off\" class=\"secondary\">{off}</button><button id=\"ftue-next\"{dis}>{next}</button></div></div>",
+            next = if waiting {
+                "Waiting for you\u{2026}"
+            } else if st.queue.len() > 1 || st.lesson {
+                "Continue"
+            } else {
+                "Got it"
+            },
             off = if st.lesson { "End Tutorial" } else { "No more hints" },
+            dis = if waiting { " disabled" } else { "" },
         ));
         el.class_list().add_1("open").ok();
     }
@@ -6118,13 +6159,179 @@ impl App {
         else {
             return;
         };
-        {
+        let id = l.id.clone();
+        *self.lesson_run.borrow_mut() = Some(LessonRun {
+            id,
+            ..Default::default()
+        });
+        self.ftue_state.borrow_mut().lesson = true;
+        self.lesson_enter_stage();
+    }
+
+    /// The lesson stage now running, if a lesson is.
+    fn lesson_stage(&self) -> Option<tutorials::Stage> {
+        let run = self.lesson_run.borrow();
+        let run = run.as_ref()?;
+        self.academy
+            .as_ref()?
+            .lessons
+            .iter()
+            .find(|l| l.id == run.id)?
+            .stages
+            .get(run.stage)
+            .cloned()
+    }
+
+    /// Show the current stage's messages; past the last stage the lesson is over.
+    fn lesson_enter_stage(&self) {
+        let Some(stage) = self.lesson_stage() else {
+            *self.lesson_run.borrow_mut() = None;
+            {
+                let mut st = self.ftue_state.borrow_mut();
+                st.queue.clear();
+                st.lesson = false;
+            }
+            self.ftue_show();
+            hud::push(&self.doc, "Lesson complete", "triumph");
+            return;
+        };
+        if let Some(run) = self.lesson_run.borrow_mut().as_mut() {
+            run.waiting = stage.messages.is_empty();
+            run.events.clear();
+        }
+        // A stage with nothing to say keeps PAIGE's last line up while it waits.
+        if !stage.messages.is_empty() {
             let mut st = self.ftue_state.borrow_mut();
             st.queue.clear();
-            st.queue.extend(l.messages());
-            st.lesson = true;
+            st.queue.extend(stage.messages.iter().cloned());
         }
         self.ftue_show();
+    }
+
+    /// Continue on the stage's last message: on to the next stage if its condition allows, else wait for the
+    /// game (the box says so).
+    fn lesson_continue(&self) {
+        let Some(stage) = self.lesson_stage() else {
+            return;
+        };
+        let world = self.lesson_world();
+        if stage.done(&world, true) {
+            self.lesson_next();
+        } else {
+            if let Some(run) = self.lesson_run.borrow_mut().as_mut() {
+                run.waiting = true;
+            }
+            self.ftue_show();
+        }
+    }
+
+    fn lesson_next(&self) {
+        if let Some(run) = self.lesson_run.borrow_mut().as_mut() {
+            run.stage += 1;
+        }
+        self.lesson_enter_stage();
+    }
+
+    /// A lesson event (the original's message name) seen in the game.
+    fn lesson_event(&self, name: &str) {
+        if let Some(run) = self.lesson_run.borrow_mut().as_mut() {
+            run.events.insert(name.to_string());
+        }
+    }
+
+    /// The VAB part picked or placed, for lessons that ask for one.
+    fn lesson_part(&self, id: &str, placed: bool) {
+        if let Some(run) = self.lesson_run.borrow_mut().as_mut() {
+            run.last_selected = Some(id.to_string());
+            if placed {
+                run.last_placed = Some(id.to_string());
+                run.events.insert("PartPlacedOnMainAssemblyMessage".into());
+            }
+        }
+    }
+
+    /// What a lesson can watch now: the flown vessel's readout and orbit, the map, the VAB and the events.
+    fn lesson_world(&self) -> tutorials::World {
+        let mut w = tutorials::World::default();
+        if let Some(run) = self.lesson_run.borrow().as_ref() {
+            w.events = run.events.clone();
+            w.last_placed = run.last_placed.clone();
+            w.last_selected = run.last_selected.clone();
+        }
+        w.map = self.map_mode;
+        // Not flying: nothing is up or moving yet (so "fly above 200 m" waits for a flight).
+        w.altitude_sea_m = Some(0.0);
+        w.altitude_ground_m = Some(0.0);
+        w.surface_speed_mps = Some(0.0);
+        w.throttle = Some(0.0);
+        let Some(scene) = &self.scene else {
+            return w;
+        };
+        let Some(v) = self.flying.and_then(|id| scene.vessel(id)) else {
+            return w;
+        };
+        if let Some(f) = &v.flight {
+            w.altitude_sea_m = Some(f.altitude_m);
+            w.altitude_ground_m = Some(f.altitude_m);
+            w.surface_speed_mps = Some(f.surface_speed_mps);
+            w.throttle = Some(f.throttle);
+            w.stage_fuel_pct = Some(f.propellant_fraction * 100.0);
+            w.sas_mode = Some(match f.attitude {
+                ose_net::AttitudeMode::OrbitPrograde | ose_net::AttitudeMode::SurfacePrograde => 1,
+                ose_net::AttitudeMode::OrbitRetrograde
+                | ose_net::AttitudeMode::SurfaceRetrograde => 2,
+                ose_net::AttitudeMode::Normal => 3,
+                ose_net::AttitudeMode::AntiNormal => 4,
+                ose_net::AttitudeMode::RadialIn => 5,
+                ose_net::AttitudeMode::RadialOut => 6,
+                ose_net::AttitudeMode::Target => 7,
+                ose_net::AttitudeMode::AntiTarget => 8,
+                ose_net::AttitudeMode::Maneuver => 9,
+                _ => 0,
+            });
+        }
+        if let Some(b) = scene.bodies.get(v.reference_body as usize) {
+            let ut = self.time.ut_at(now_ms());
+            let (ap, pe) = hud::apsides(&v.orbit, b.radius_m, b.mu, ut);
+            w.apoapsis_m = ap.map(|a| a.0);
+            w.periapsis_m = Some(pe.0);
+        }
+        w
+    }
+
+    /// Every frame while a lesson waits on the game: move on once the stage's condition holds. Lift-off and
+    /// parachutes opening are seen here from the readout.
+    fn lesson_tick(&self) {
+        if self.lesson_run.borrow().is_none() {
+            return;
+        }
+        if let Some(f) = self
+            .flying
+            .and_then(|id| self.scene.as_ref()?.vessel(id))
+            .and_then(|v| v.flight.as_ref())
+        {
+            if f.situation != ose_net::FlightSituation::Landed {
+                self.lesson_event("VesselLaunchedMessage");
+            }
+            for (_, st, _) in &f.parachutes {
+                match st {
+                    ose_net::ChuteState::Deployed => self.lesson_event("ParachuteDeployedMessage"),
+                    ose_net::ChuteState::SemiDeployed => {
+                        self.lesson_event("ParachuteSemiDeployedMessage")
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let waiting = self.lesson_run.borrow().as_ref().is_some_and(|r| r.waiting);
+        if !waiting {
+            return;
+        }
+        if let Some(stage) = self.lesson_stage() {
+            if stage.done(&self.lesson_world(), false) {
+                self.lesson_next();
+            }
+        }
     }
 
     /// Seats on a saved craft: the crew capacity of its parts (0 until its document arrives).
@@ -6536,6 +6743,8 @@ impl App {
 
     fn start_flight(&mut self, vessel: u64, craft_id: Option<u64>) {
         self.ftue("FTUE_Flight");
+        self.lesson_event("VesselCreatedMessage");
+        self.lesson_event("LaunchSequenceInitiatedMessage");
         self.flying = Some(vessel);
         // The server keeps a target per vessel; the one picked carries over to the vessel flown now.
         if self.target == Some(ose_net::TargetId::Vessel(vessel)) {
@@ -6869,6 +7078,7 @@ impl App {
 
     fn flight_stage(&mut self) {
         let Some(vessel) = self.flying else { return };
+        self.lesson_event("StageActivatedMessage");
         self.staged.insert(vessel);
         if let Some(ws) = &self.ws {
             send(ws, &ClientMessage::Stage { vessel });
@@ -7239,6 +7449,7 @@ impl App {
         }
         self.warp_to = Some((ut, what.to_string()));
         self.warp_to_sent_ms = 0.0;
+        self.lesson_event("TimeWarpToLocationInitializedMessage");
         hud::push(&self.doc, &format!("Warping to {what}"), "passive");
     }
 
@@ -7255,6 +7466,7 @@ impl App {
                 self.request_warp(1);
             }
             hud::push(&self.doc, &format!("Arrived: {what}"), "triumph");
+            self.lesson_event("TimeWarpToLocationCompletedMessage");
             return;
         }
         let want = kerbin_time::warp_toward(remaining);
@@ -8475,6 +8687,8 @@ impl App {
             return;
         };
         self.ftue("FTUE_First_Maneuver");
+        self.lesson_event("ManeuverCreatedMessage");
+        self.lesson_event("OrbitClickedMessage");
         let now = self.time.ut_at(now_ms());
         let dt = 120.0;
         self.node = Some(Node {
@@ -8836,6 +9050,7 @@ impl App {
             set_text(&self.doc, "fps", &format!("{fps:.0} FPS"));
         }
         self.warp_to_tick(now);
+        self.lesson_tick();
         if self.in_session && self.vab_active() {
             self.vab_report_tick(now);
         }
