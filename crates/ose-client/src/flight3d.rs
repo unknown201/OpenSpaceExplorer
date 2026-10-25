@@ -938,12 +938,40 @@ impl FlightView {
         let cam_up = b_u;
         let offs = self.pitch.cos() * (self.yaw.cos() * b_n + self.yaw.sin() * b_e)
             + self.pitch.sin() * b_u;
-        let cam = pos + offs * self.distance;
+        // After a crash the vessel point is the impact: look at the wreck scattered round it instead, from
+        // far enough out to take it all in, and never from under the ground.
+        let crashed = inp
+            .vessel
+            .flight
+            .as_ref()
+            .is_some_and(|f| f.situation == ose_net::FlightSituation::Crashed);
+        let (mut focus, mut distance) = (pos, self.distance);
+        if crashed {
+            let pieces: Vec<DVec3> = inp
+                .nearby_vessels
+                .iter()
+                .map(|n| to_model(n.pos - inp.body_pos, spin, inp.ut))
+                .filter(|p| (*p - pos).length() < 1_500.0)
+                .collect();
+            if !pieces.is_empty() {
+                focus = pieces.iter().copied().sum::<DVec3>() / pieces.len() as f64;
+                let spread = pieces
+                    .iter()
+                    .map(|p| (*p - focus).length())
+                    .fold(0.0, f64::max);
+                distance = distance.max((spread * 2.5 + 25.0).min(800.0));
+            }
+        }
+        let mut cam = focus + offs * distance;
+        if crashed && self.ground_radius > 0.0 && cam.length() < self.ground_radius + 3.0 {
+            cam = cam.normalize_or_zero() * (self.ground_radius + 3.0);
+        }
+        let look = (focus - cam).normalize_or_zero();
         let alt = r.length() - inp.body_radius;
-        let near = (self.distance * 0.02).clamp(0.3, 5_000.0);
-        let far = (self.distance * 50.0).clamp(4.0e6, 5.0e8);
-        gpu.set_camera(-offs, cam_up, 60f64.to_radians(), near, far);
-        self.pick_cam = (-offs.normalize_or_zero(), cam_up);
+        let near = (distance * 0.02).clamp(0.3, 5_000.0);
+        let far = (distance * 50.0).clamp(4.0e6, 5.0e8);
+        gpu.set_camera(look, cam_up, 60f64.to_radians(), near, far);
+        self.pick_cam = (look, cam_up);
         self.pick_boxes.clear();
 
         let sun = dir_to_model(
