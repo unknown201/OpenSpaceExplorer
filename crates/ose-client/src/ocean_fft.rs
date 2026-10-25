@@ -455,7 +455,7 @@ mod tests {
         let n = 8;
         let mut fft = Fft::new(n);
         let mut g = vec![C::default(); n * n];
-        g[1 * n + 2] = C::new(1.0, 0.5);
+        g[n + 2] = C::new(1.0, 0.5);
         g[3 * n + 7] = C::new(-0.25, 2.0);
         let src = g.clone();
         fft.grid(&mut g, n);
