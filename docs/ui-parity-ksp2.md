@@ -106,6 +106,7 @@ Camera rule that runs through every map: **the right button drags the camera, th
 | V12 | Workspaces: several assemblies in the hall, merged by dragging one onto another's attach point; Launch takes the main craft | a part or subtree dropped where it attaches to nothing stays on the floor as a loose assembly (drawn beside the craft); drag it back onto a green attach point to merge it; New clears them; they are saved in the craft (`Craft::loose`, protocol 41), so they come back for anyone who opens it and stay behind at launch | done |
 | V13 | Vehicle name and description (the save dialog) | clicking the name in the VAB header opens the vehicle description under it; it is saved with the craft and shown on the launch pad | done |
 | V14 | Colors: base and accent paint for the vehicle or one part | a Colors button in the VAB header (showing the colours in use) opens swatches and a free colour well for base and accent, for the vehicle or the selected part, with a reset to the agency's (vehicle) or the vehicle's (part) colours; undoable; saved in the craft (protocol 42) | done |
+| V15 | Set Launch Assembly among the workspace's assemblies | right-click a loose assembly: its part count and root, Make launch assembly (it and the vehicle trade places; the undo history restarts) and Delete assembly | done |
 
 ### KSC, R&D, Mission Control, main menu
 
