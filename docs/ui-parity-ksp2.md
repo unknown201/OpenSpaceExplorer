@@ -69,9 +69,9 @@ Camera rule that runs through every map: **the right button drags the camera, th
 | # | KSP2 | Ours today | Status |
 |---|---|---|---|
 | V1 | Header: vehicle name, New/Save/Load, launch site, Launch with total Δv | header bar: New, undo, redo, name, Δv after saving, Save, Launch, close; no Load or launch site yet | partly done |
-| V2 | Toolbar: undo/redo, symmetry flyout, angle snap, frame of reference, CoM/CoT/CoL markers, engineer's report | undo/redo in the header; no symmetry, snap or markers yet | partly done |
+| V2 | Toolbar: undo/redo, symmetry flyout, angle snap, frame of reference, CoM/CoT/CoL markers, engineer's report | undo/redo, symmetry (×1 to ×8, X / Shift+X) and angle snap (C) in the header; no CoM/CoT/CoL markers or engineer's report window yet | partly done |
 | V3 | Right-drag orbits, wheel zooms (Shift faster), arrows pan, Home resets | right-drag orbits, wheel zooms (Shift faster), Home resets; no pan | partly done |
-| V4 | Delete key, Ctrl+Z/Y, Ctrl+C/V, WASDQE rotate the held part, Space resets, X symmetry, C snap; grab a placed part and move it with its subtree | Delete/Backspace, Ctrl+Z/Y, Ctrl+F, Ctrl+N, Ctrl+S; grabbing a placed part carries its subtree, dropped nowhere it goes back; no copy, rotate, symmetry or snap yet | partly done |
+| V4 | Delete key, Ctrl+Z/Y, Ctrl+C/V, WASDQE rotate the held part, Space resets, X symmetry, C snap; grab a placed part and move it with its subtree | Delete/Backspace, Ctrl+Z/Y, Ctrl+F, Ctrl+N, Ctrl+S; grabbing a placed part carries its subtree, dropped nowhere it goes back; parts with a surface node go on a part's side where you point, facing in, with symmetry copies around the axis and 15° snap; no copy/paste or free rotation yet | partly done |
 | V5 | Picker part tooltip (mass, cost, size, stats, description), Shift expands | tooltip with title, subtitle, maker, mass, size, crew, tanks, thrust, Isp, description, research lock | done (no cost in our data) |
 | V6 | Staging stack panel with per-stage Δv/TWR/burn time, drag a part between stages | stage cards with icons (last to fire on top), click selects, earlier/later buttons; no per-stage Δv or drag | partly done |
 | V7 | Parts manager on right click (part settings) | none | later |

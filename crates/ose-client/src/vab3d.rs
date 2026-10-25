@@ -54,6 +54,9 @@ pub struct VabView {
     pub held: Option<(String, Vec<(DVec3, DVec3)>)>,
     pub cursor: (f64, f64),
     pub snap: Option<(usize, String)>,
+    /// Surface attachment previews (craft frame poses, one per symmetry copy) for the held part, set by the
+    /// screen each frame; drawn when no stack node is in reach.
+    pub ghosts: Vec<(ose_math::DVec3, ose_data::craft::Quat)>,
 }
 
 impl Default for VabView {
@@ -79,6 +82,7 @@ impl VabView {
             held: None,
             cursor: (0.0, 0.0),
             snap: None,
+            ghosts: Vec::new(),
         }
     }
 
@@ -169,6 +173,22 @@ impl VabView {
             pos,
             (forward + right * (ndc_x * t * aspect) + cam_up * (ndc_y * t)).normalize(),
         )
+    }
+
+    /// The craft part under the cursor and the point hit on it, in the craft frame (for surface attachment).
+    pub fn surface_hit(&self, gpu: &Renderer) -> Option<(usize, ose_math::DVec3)> {
+        let (ro, rd) = self.cursor_ray(gpu);
+        let mut best: Option<(f64, usize)> = None;
+        for (i, lo, hi) in &self.boxes {
+            if let Some(d) = crate::ksc3d::ray_box(ro, rd, *lo, *hi) {
+                if best.map(|(bd, _)| d < bd).unwrap_or(true) {
+                    best = Some((d, *i));
+                }
+            }
+        }
+        let (d, i) = best?;
+        let w = ro + rd * d - self.centre();
+        Some((i, ose_math::DVec3::new(-w.x, w.y, w.z)))
     }
 
     /// Craft part under a pixel (ray against part boxes, nearest first).
@@ -327,7 +347,20 @@ impl VabView {
                     ro + rd * self.distance
                 }
             };
-            if gpu.has_model(&name) {
+            if gpu.has_model(&name) && self.snap.is_none() && !self.ghosts.is_empty() {
+                for (p, q) in &self.ghosts {
+                    let mut ghost = DrawItem::lit(
+                        name.clone(),
+                        centre + to_gltf(*p) - cam_pos,
+                        quat_to_gltf(*q),
+                        1.0,
+                        light,
+                    );
+                    ghost.ambient = 0.6;
+                    ghost.color = [0.7, 1.0, 0.75, 1.0];
+                    items.push(ghost);
+                }
+            } else if gpu.has_model(&name) {
                 let mut ghost = DrawItem::lit(name, at - cam_pos, DQuat::IDENTITY, 1.0, light);
                 ghost.ambient = 0.6;
                 ghost.color = if self.snap.is_some() {

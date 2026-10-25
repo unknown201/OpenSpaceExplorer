@@ -641,6 +641,205 @@ impl Editor {
     }
 }
 
+/// A spot on a part's side for surface attachment: the part, the angle around its vertical axis (radians,
+/// 0 = +X, towards +Z) and the height in the craft frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SurfaceSpot {
+    pub target: usize,
+    pub azimuth: f64,
+    pub height: f64,
+}
+
+/// Symmetry counts the original offers (`BuilderSymmetryMode` X1..X8), in X-key order.
+pub const SYMMETRY: [u32; 6] = [1, 2, 3, 4, 6, 8];
+
+/// The part's surface attach node, if it can go on another part's side.
+pub fn surface_node(spec: &PartSpec) -> Option<&NodeSpec> {
+    spec.attach_nodes
+        .iter()
+        .find(|n| !PartSpec::is_stack_node(n))
+}
+
+fn quat_mul(a: Quat, b: Quat) -> Quat {
+    Quat {
+        w: a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+        x: a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+        y: a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+        z: a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+    }
+}
+
+fn quat_conj(q: Quat) -> Quat {
+    Quat {
+        x: -q.x,
+        y: -q.y,
+        z: -q.z,
+        w: q.w,
+    }
+}
+
+/// Rotation about the craft's vertical axis that turns a part's +X (where surface nodes face, toward what
+/// they hang on) to point inward from the outward direction at `azimuth`.
+fn facing_in(azimuth: f64) -> Quat {
+    let phi = std::f64::consts::PI - azimuth;
+    Quat {
+        x: 0.0,
+        y: (phi * 0.5).sin(),
+        z: 0.0,
+        w: (phi * 0.5).cos(),
+    }
+}
+
+impl Editor {
+    /// Where a surface attachment at craft-frame point `hit` on part `target` goes: the angle around the
+    /// part's axis (snapped to `snap_deg` steps when given) and the height of the hit.
+    pub fn surface_spot(
+        &self,
+        target: usize,
+        hit: DVec3,
+        catalog: &Catalog,
+        snap_deg: Option<f64>,
+    ) -> Option<SurfaceSpot> {
+        let p = self.craft.parts.get(target)?;
+        let spec = catalog.get(&p.part_id)?;
+        let axis = p.local_position + quat_rotate(p.local_rotation, spec.centre());
+        let mut azimuth = (hit.z - axis.z).atan2(hit.x - axis.x);
+        if let Some(step) = snap_deg.filter(|s| *s > 0.0) {
+            let s = step.to_radians();
+            azimuth = (azimuth / s).round() * s;
+        }
+        Some(SurfaceSpot {
+            target,
+            azimuth,
+            height: hit.y,
+        })
+    }
+
+    /// Poses (craft frame) of `spec` placed at `spot` and its symmetry copies around the target's axis.
+    pub fn surface_poses(
+        &self,
+        spec: &PartSpec,
+        catalog: &Catalog,
+        spot: SurfaceSpot,
+        symmetry: u32,
+    ) -> Vec<(DVec3, Quat)> {
+        let Some(p) = self.craft.parts.get(spot.target) else {
+            return Vec::new();
+        };
+        let Some(tspec) = catalog.get(&p.part_id) else {
+            return Vec::new();
+        };
+        let node = surface_node(spec).map(|n| n.position).unwrap_or_default();
+        let axis = p.local_position + quat_rotate(p.local_rotation, tspec.centre());
+        let radius = tspec.size().x.min(tspec.size().z) * 0.5;
+        (0..symmetry.max(1))
+            .map(|k| {
+                let az = spot.azimuth + std::f64::consts::TAU * k as f64 / symmetry.max(1) as f64;
+                let out = DVec3::new(az.cos(), 0.0, az.sin());
+                let contact = DVec3::new(axis.x, spot.height, axis.z) + out * radius;
+                let q = facing_in(az);
+                (contact - quat_rotate(q, node), q)
+            })
+            .collect()
+    }
+
+    /// Put `spec` on the side of `spot.target`, with `symmetry` copies around it sharing one stage. Returns
+    /// the new parts' indices.
+    pub fn add_surface(
+        &mut self,
+        spec: &PartSpec,
+        catalog: &Catalog,
+        spot: SurfaceSpot,
+        symmetry: u32,
+    ) -> Result<Vec<usize>, String> {
+        let node = surface_node(spec)
+            .ok_or_else(|| format!("{} cannot go on another part's side", spec.display_title()))?
+            .id
+            .clone();
+        let poses = self.surface_poses(spec, catalog, spot, symmetry);
+        if poses.is_empty() {
+            return Err("no part to attach to there".into());
+        }
+        let stage_index = if spec.is_stageable() {
+            self.next_stage_index()
+        } else {
+            0
+        };
+        let mut out = Vec::new();
+        for (guid, (pos, q)) in (self.next_guid()..).zip(poses) {
+            let resources = spec
+                .resource_containers
+                .iter()
+                .map(|c| StoredResource {
+                    resource: c.resource.clone(),
+                    stored_units: c.capacity_units,
+                    capacity_units: c.capacity_units,
+                })
+                .collect();
+            out.push(self.craft.parts.len());
+            self.craft.parts.push(CraftPart {
+                guid: format!("p{guid}"),
+                part_id: spec.id.clone(),
+                parent: Some(spot.target),
+                own_node: Some(node.clone()),
+                parent_node: None,
+                local_position: pos,
+                local_rotation: q,
+                stage_index,
+                fuel_crossfeed: true,
+                resources,
+                fuel_line_target: None,
+            });
+        }
+        self.selected = out.first().copied();
+        self.rebuild_stages(catalog);
+        Ok(out)
+    }
+
+    /// Put a lifted fragment on the side of `spot.target` (no symmetry): the fragment turns with its root.
+    pub fn attach_surface(
+        &mut self,
+        frag: &Fragment,
+        catalog: &Catalog,
+        spot: SurfaceSpot,
+    ) -> Result<usize, String> {
+        let spec = catalog
+            .get(frag.root_id())
+            .ok_or_else(|| format!("unknown part {}", frag.root_id()))?;
+        let root = *self
+            .add_surface(spec, catalog, spot, 1)?
+            .first()
+            .ok_or("nothing placed")?;
+        let placed = self.craft.parts[root].clone();
+        let turn = quat_mul(
+            placed.local_rotation,
+            quat_conj(frag.parts[0].local_rotation),
+        );
+        let mut r = frag.parts[0].clone();
+        r.parent = placed.parent;
+        r.own_node = placed.own_node;
+        r.parent_node = None;
+        r.local_position = placed.local_position;
+        r.local_rotation = placed.local_rotation;
+        r.guid = placed.guid;
+        self.craft.parts[root] = r;
+        let base = self.craft.parts.len();
+        let at = |n: usize| if n == 0 { root } else { base + n - 1 };
+        for (guid, p) in (self.next_guid()..).zip(&frag.parts[1..]) {
+            let mut p = p.clone();
+            p.parent = p.parent.map(at);
+            p.fuel_line_target = p.fuel_line_target.map(at);
+            p.local_position = placed.local_position + quat_rotate(turn, p.local_position);
+            p.local_rotation = quat_mul(turn, p.local_rotation);
+            p.guid = format!("p{guid}");
+            self.craft.parts.push(p);
+        }
+        self.selected = Some(root);
+        self.rebuild_stages(catalog);
+        Ok(root)
+    }
+}
+
 /// Categories in the order the original's picker shows them; anything else goes at the end.
 pub const CATEGORY_ORDER: [&str; 13] = [
     "Pods",
@@ -867,6 +1066,67 @@ mod tests {
         assert!(e.attach(&frag, &cat, None).is_ok());
         assert_eq!(e.craft.parts.len(), 2);
         assert!(e.craft.is_tree());
+    }
+
+    #[test]
+    fn surface_parts_face_in_and_copy_around_the_axis() {
+        let mut cat = catalog();
+        cat.insert(
+            "booster".into(),
+            PartSpec {
+                id: "booster".into(),
+                category: "Engine".into(),
+                mass_t: 1.0,
+                stage_type: "SolidEngine".into(),
+                has_engine: true,
+                size_m: Some(DVec3::new(0.6, 2.0, 0.6)),
+                attach_nodes: vec![NodeSpec {
+                    id: "srfAttach".into(),
+                    node_type: "Surface".into(),
+                    position: DVec3::new(0.3, 0.0, 0.0),
+                    orientation: DVec3::new(1.0, 0.0, 0.0),
+                    size: 1,
+                }],
+                ..Default::default()
+            },
+        );
+        let mut e = Editor::new("test");
+        e.add_part(&cat["pod"], &cat).unwrap();
+        let t = e.add_part(&cat["tank"], &cat).unwrap();
+        // A hit on the tank's +X side, slightly off: snapped to 15 degree steps it is straight +X.
+        let spot = e
+            .surface_spot(t, DVec3::new(0.62, -1.5, 0.05), &cat, Some(15.0))
+            .unwrap();
+        assert!(spot.azimuth.abs() < 1e-9);
+        let made = e.add_surface(&cat["booster"], &cat, spot, 4).unwrap();
+        assert_eq!(made.len(), 4);
+        let tank_x = e.craft.parts[t].local_position.x;
+        for (k, &i) in made.iter().enumerate() {
+            let p = &e.craft.parts[i];
+            assert_eq!(p.parent, Some(t));
+            // The node (+X in the part frame) points back at the tank's axis.
+            let face = quat_rotate(p.local_rotation, DVec3::new(1.0, 0.0, 0.0));
+            let node_world =
+                p.local_position + quat_rotate(p.local_rotation, DVec3::new(0.3, 0.0, 0.0));
+            let out = DVec3::new(node_world.x - tank_x, 0.0, node_world.z);
+            assert!(
+                (out.length() - 0.625).abs() < 1e-9,
+                "copy {k} touches the tank side"
+            );
+            assert!(face.dot(out) < -0.6, "copy {k} faces the tank");
+        }
+        // One stage for the whole symmetry group.
+        assert_eq!(e.craft.stages.len(), 1);
+        assert_eq!(e.craft.stages[0].len(), 4);
+        assert!(e.craft.is_tree());
+        // A booster lifted and hung back on the side keeps its kids turned with it.
+        let frag = e.detach(made[1], &cat).unwrap();
+        let spot = e
+            .surface_spot(t, DVec3::new(0.0, -1.0, 0.7), &cat, None)
+            .unwrap();
+        let r = e.attach_surface(&frag, &cat, spot).unwrap();
+        let face = quat_rotate(e.craft.parts[r].local_rotation, DVec3::new(1.0, 0.0, 0.0));
+        assert!(face.z < -0.99);
     }
 
     #[test]

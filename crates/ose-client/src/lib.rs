@@ -135,6 +135,9 @@ struct App {
     vab_grab: Option<(usize, f64, f64)>,
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     vab_frag: Option<vab::Fragment>,
+    /// Symmetry count for surface parts (X / Shift+X) and angle snap (C), as the original's toolbar.
+    vab_symmetry: u32,
+    vab_snap: bool,
     vab_dragged: bool,
     /// The flight view (the vessel in 3D near its body).
     #[cfg(target_arch = "wasm32")]
@@ -401,6 +404,8 @@ pub fn start() -> Result<(), JsValue> {
         vab_history: vab::History::default(),
         vab_grab: None,
         vab_frag: None,
+        vab_symmetry: 1,
+        vab_snap: true,
         vab_dragged: false,
         #[cfg(target_arch = "wasm32")]
         flight3d: flight3d::FlightView::new(),
@@ -1253,6 +1258,18 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
     )?;
     wire("vab-save", Box::new(|a| a.borrow_mut().vab_save(false)))?;
     wire("vab-undo", Box::new(|a| a.borrow_mut().vab_undo(false)))?;
+    wire(
+        "vab-sym",
+        Box::new(|a| a.borrow_mut().vab_cycle_symmetry(false)),
+    )?;
+    wire(
+        "vab-snap",
+        Box::new(|a| {
+            let mut app = a.borrow_mut();
+            app.vab_snap = !app.vab_snap;
+            app.render_vab();
+        }),
+    )?;
     wire("vab-redo", Box::new(|a| a.borrow_mut().vab_undo(true)))?;
     // A part named on a stage card selects it.
     if let Some(list) = doc.get_element_by_id("vab-stages") {
@@ -1802,10 +1819,19 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                     .as_ref()
                     .and_then(|g| app.vab3d.snap_now(g, &free))
                     .or_else(|| app.vab3d.snap.take());
+                let surface = if snap.is_none() {
+                    app.vab_surface(frag.root_id())
+                } else {
+                    None
+                };
                 let cat = std::mem::take(&mut app.catalog);
-                let result =
-                    app.editor
-                        .attach(&frag, &cat, snap.as_ref().map(|(t, n)| (*t, n.as_str())));
+                let result = match surface {
+                    Some((spot, _)) => app.editor.attach_surface(&frag, &cat, spot),
+                    None => {
+                        app.editor
+                            .attach(&frag, &cat, snap.as_ref().map(|(t, n)| (*t, n.as_str())))
+                    }
+                };
                 app.catalog = cat;
                 if let Err(e) = result {
                     // Nowhere to hang it: it goes back where it was, as the original does.
@@ -1839,6 +1865,11 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                     .and_then(|g| app.vab3d.snap_now(g, &free))
                     .or_else(|| app.vab3d.snap.take());
                 if !over_panel {
+                    let surface = if snap.is_none() {
+                        app.vab_surface(&id)
+                    } else {
+                        None
+                    };
                     app.vab_record();
                     let cat = std::mem::take(&mut app.catalog);
                     let result = match (cat.get(&id), snap) {
@@ -1846,6 +1877,10 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                             .editor
                             .add_part_on(spec, &cat, target, &node)
                             .map(|_| ()),
+                        (Some(spec), None) if surface.is_some() => {
+                            let (spot, sym) = surface.unwrap();
+                            app.editor.add_surface(spec, &cat, spot, sym).map(|_| ())
+                        }
                         (Some(spec), None) if app.editor.is_empty() => {
                             app.editor.add_part(spec, &cat).map(|_| ())
                         }
@@ -1966,6 +2001,15 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                     }
                     "KeyN" if ctrl => {
                         app.vab_clear();
+                        true
+                    }
+                    "KeyX" if !ctrl => {
+                        app.vab_cycle_symmetry(ev.shift_key());
+                        true
+                    }
+                    "KeyC" if !ctrl => {
+                        app.vab_snap = !app.vab_snap;
+                        app.render_vab();
                         true
                     }
                     "KeyS" if ctrl => {
@@ -3313,6 +3357,47 @@ impl App {
     }
 
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    /// Where the held part would go on a part's side under the cursor, and how many symmetry copies (a
+    /// lifted fragment goes on alone). `None` when the part has no surface node or the cursor is on no part.
+    fn vab_surface(&self, id: &str) -> Option<(vab::SurfaceSpot, u32)> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let spec = self.catalog.get(id)?;
+            vab::surface_node(spec)?;
+            let (target, hit) = self.vab3d.surface_hit(self.gpu.as_ref()?)?;
+            let spot = self.editor.surface_spot(
+                target,
+                hit,
+                &self.catalog,
+                self.vab_snap.then_some(15.0),
+            )?;
+            let sym = if self.vab_frag.is_some() {
+                1
+            } else {
+                self.vab_symmetry
+            };
+            Some((spot, sym))
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = id;
+            None
+        }
+    }
+
+    /// X / Shift+X: the next or previous symmetry count.
+    fn vab_cycle_symmetry(&mut self, back: bool) {
+        let n = vab::SYMMETRY.len();
+        let i = vab::SYMMETRY
+            .iter()
+            .position(|s| *s == self.vab_symmetry)
+            .unwrap_or(0);
+        let j = if back { (i + n - 1) % n } else { (i + 1) % n };
+        self.vab_symmetry = vab::SYMMETRY[j];
+        self.render_vab();
+    }
+
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     fn vab_record(&mut self) {
         self.vab_history.record(&self.editor);
     }
@@ -3462,6 +3547,14 @@ impl App {
                 html = "<li class=\"empty\">No stages yet: engines, decouplers and parachutes get one each.</li>".into();
             }
             list.set_inner_html(&html);
+        }
+        set_text(
+            &self.doc,
+            "vab-sym",
+            &format!("\u{d7}{}", self.vab_symmetry),
+        );
+        if let Some(b) = self.doc.get_element_by_id("vab-snap") {
+            b.class_list().toggle_with_force("on", self.vab_snap).ok();
         }
         for (id, on) in [
             ("vab-undo", self.vab_history.can_undo()),
@@ -5007,6 +5100,17 @@ impl App {
         }
         #[cfg(target_arch = "wasm32")]
         if self.in_session && self.vab_active() {
+            self.vab3d.ghosts = self
+                .vab3d
+                .held
+                .as_ref()
+                .map(|(id, _)| id.clone())
+                .and_then(|id| {
+                    let (spot, sym) = self.vab_surface(&id)?;
+                    let spec = self.catalog.get(&id)?;
+                    Some(self.editor.surface_poses(spec, &self.catalog, spot, sym))
+                })
+                .unwrap_or_default();
             if let Some(gpu) = &mut self.gpu {
                 let was_ready = self.vab3d.is_ready();
                 let free = self.editor.free_nodes(&self.catalog);

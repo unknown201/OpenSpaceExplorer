@@ -346,6 +346,8 @@
     #vab-header .vh-launch { background: #2f6b2f; border-color: #5aa05a; color: #fff; display: flex; gap: 6px; align-items: center; font-weight: 700; }
     #vab-header .vh-launch:hover { background: #3a823a; }
     #vab-header button:disabled { opacity: 0.4; }
+    #vab-header #vab-sym { min-width: 44px; font-variant-numeric: tabular-nums; }
+    #vab-header #vab-snap.on { background: #1f3d6b; border-color: #3b63a8; color: #fff; }
     #vab-dv { font-size: 13px; color: #9fb0cc; margin-right: 6px; }
     body.webgpu #vab-header { position: relative; pointer-events: auto; background: #10141bf0; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)); padding: calc(6 * var(--u)) calc(10 * var(--u)); margin: 0 0 calc(8 * var(--u)); }
     body.webgpu #screen-vab #vab { height: calc(100vh - 92 * var(--u)) !important; }
@@ -649,6 +651,8 @@
             <button id="vab-clear" class="secondary" data-ose="vab-clear" title="New vehicle: clear the workspace (Ctrl+N)">New</button>
             <button id="vab-undo" class="secondary vh-ico" data-ose="vab-undo" title="Undo (Ctrl+Z)"><i style="--ico:url(assets/ui/hud/ToolsBar-ICO-Undo-onRest.png)"></i></button>
             <button id="vab-redo" class="secondary vh-ico vh-flip" data-ose="vab-redo" title="Redo (Ctrl+Y)"><i style="--ico:url(assets/ui/hud/ToolsBar-ICO-Undo-onRest.png)"></i></button>
+            <button id="vab-sym" class="secondary" data-ose="vab-sym" title="Symmetry for parts on a side: 1, 2, 3, 4, 6 or 8 copies around the part (X, Shift+X back)">&#215;1</button>
+            <button id="vab-snap" class="secondary on" data-ose="vab-snap" title="Angle snap: side parts go at 15 degree steps (C)">Snap</button>
           </div>
           <input id="vab-name" data-ose="vab-name" type="text" maxlength="48" value="Untitled craft" title="Vehicle name" />
           <div class="vh-group">
