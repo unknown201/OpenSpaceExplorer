@@ -298,6 +298,8 @@ struct App {
     tc_lessons: bool,
     /// VAB offset tool (2): arrows and Q/E move the selected part.
     vab_offset: bool,
+    /// VAB frame of reference (F): turn the held part about its own axes instead of the craft's.
+    vab_local_frame: bool,
     lesson_selected: Option<String>,
     academy: Option<tutorials::Academy>,
     lesson_run: std::cell::RefCell<Option<LessonRun>>,
@@ -667,6 +669,7 @@ pub fn start() -> Result<(), JsValue> {
         tc_selected: None,
         tc_lessons: false,
         vab_offset: false,
+        vab_local_frame: false,
         lesson_selected: None,
         academy: None,
         lesson_run: std::cell::RefCell::new(None),
@@ -2569,6 +2572,14 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         cb.forget();
     }
     wire(
+        "vab-frame",
+        Box::new(|a| {
+            let mut app = a.borrow_mut();
+            app.vab_local_frame = !app.vab_local_frame;
+            app.render_vab();
+        }),
+    )?;
+    wire(
         "vab-offset",
         Box::new(|a| {
             let mut app = a.borrow_mut();
@@ -3444,6 +3455,11 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                     }
                     "KeyC" if !ctrl => {
                         app.vab_snap = !app.vab_snap;
+                        app.render_vab();
+                        true
+                    }
+                    "KeyF" if !ctrl => {
+                        app.vab_local_frame = !app.vab_local_frame;
                         app.render_vab();
                         true
                     }
@@ -5298,7 +5314,12 @@ impl App {
             }
         };
         let t = vab::axis_turn(axis, sign * step);
-        self.vab_turn = vab::turn_then(t, self.vab_turn);
+        // The frame of reference (F): about the craft's fixed axes, or about the part's own.
+        self.vab_turn = if self.vab_local_frame {
+            vab::turn_then(self.vab_turn, t)
+        } else {
+            vab::turn_then(t, self.vab_turn)
+        };
         if axis == 1 {
             self.vab_yaw = vab::turn_then(t, self.vab_yaw);
         }
@@ -6006,6 +6027,15 @@ impl App {
                 b.class_list().toggle_with_force("on", on).ok();
             }
         }
+        set_text(
+            &self.doc,
+            "vab-frame",
+            if self.vab_local_frame {
+                "Local"
+            } else {
+                "Absolute"
+            },
+        );
         if let Some(b) = self.doc.get_element_by_id("vab-offset") {
             b.class_list().toggle_with_force("on", self.vab_offset).ok();
         }
