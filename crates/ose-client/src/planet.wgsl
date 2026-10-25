@@ -409,15 +409,15 @@ fn under_water() -> bool {
 }
 
 // Light under the sea (the original's _UnderWaterDiffuseColor, darker with depth) and the fog it puts between
-// the camera and what it sees (_UnderWaterMaxVisibleDistance-like, 60 m).
+// the camera and what it sees (frame.water_col.w m: 60 % of the body's _TransparentVisibleDepth).
 fn water_light(depth_m: f32) -> vec3<f32> {
     let sun_up = max(dot(normalize(frame.cam_km.xyz), frame.sun.xyz), 0.0);
     let col = frame.water_col.rgb;
-    return col * (0.08 + 0.6 * sun_up) * exp(-max(depth_m, 0.0) / 60.0);
+    return col * (0.08 + 0.6 * sun_up) * exp(-max(depth_m, 0.0) / max(frame.water_col.w, 8.0));
 }
 
 fn water_fog(radiance: vec3<f32>, dist: f32) -> vec3<f32> {
-    let f = 1.0 - exp(-dist / 60.0);
+    let f = 1.0 - exp(-dist / max(frame.water_col.w, 1.0));
     return mix(radiance, water_light(-frame.water.x) / PI * frame.solar.xyz, f);
 }
 
@@ -1216,7 +1216,7 @@ fn fs_ocean(in: VOut) -> @location(0) vec4<f32> {
     let spec = pow(max(dot(n, h), 0.0), shin) * (shin + 8.0) / (8.0 * PI);
     radiance = radiance + light.sun * spec * fres * 4.0;
     radiance = through_air(radiance, p_km);
-    let alpha = mix(0.55, 1.0, smoothstep(0.0, 25.0, depth)) * smoothstep(-2.0, 0.5, depth);
+    let alpha = mix(0.55, 1.0, smoothstep(0.0, max(surface.foam.w, 0.5), depth)) * smoothstep(-2.0, 0.5, depth);
     return vec4<f32>(tonemap(radiance), alpha);
 }
 

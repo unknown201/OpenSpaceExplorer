@@ -18,6 +18,24 @@ use std::rc::Rc;
 
 const SHADER: &str = include_str!("planet.wgsl");
 const BASE: &str = "assets/planets";
+/// The sea's deep colour from a body's `_DiffuseColor`, scaled by one factor for every body: the one that
+/// brings Kerbin's to the luminance of the shared `_DeepWaterColor` default (0, 0.34, 0.62), so darker seas
+/// (Eve's) stay darker.
+fn ocean_deep_colour(diffuse: [f32; 4]) -> [f32; 4] {
+    const K: f32 = 2.2;
+    [diffuse[0] * K, diffuse[1] * K, diffuse[2] * K, 1.0]
+}
+
+/// Depth (m) where the sea surface stops showing the floor: a quarter of `_TransparentVisibleDepth`, 0.5 to 25.
+fn ocean_opaque_depth(visible_m: Option<f64>) -> f32 {
+    (visible_m.unwrap_or(100.0) * 0.25).clamp(0.5, 25.0) as f32
+}
+
+/// Fog distance under water (m): 60 % of `_TransparentVisibleDepth`, 2 to 120 (Kerbin 60 m, Laythe 120 m, Eve 2 m).
+fn underwater_view_m(visible_m: Option<f64>) -> f32 {
+    (visible_m.unwrap_or(100.0) * 0.6).clamp(2.0, 120.0) as f32
+}
+
 /// Segments around a ring, as `RING_SEGMENTS` in the shader.
 const RING_SEGMENTS: u32 = 256;
 
@@ -1967,11 +1985,14 @@ impl PlanetRenderer {
             ],
             water_col: {
                 let s = surface_uniform(b, 0.0);
+                let o = b.info.as_ref().and_then(|v| v.get("ocean"));
+                let visible = o.and_then(|o| o["TransparentVisibleDepth"].as_f64());
+                // w: how far one sees under water (m)
                 [
                     s.shallow[0] * 0.6 + s.deep[0] * 0.4,
                     s.shallow[1] * 0.6 + s.deep[1] * 0.4,
                     s.shallow[2] * 0.6 + s.deep[2] * 0.4,
-                    1.0,
+                    underwater_view_m(visible),
                 ]
             },
         };
@@ -2543,10 +2564,16 @@ fn surface_uniform(b: &Body, debug: f32) -> SurfaceU {
         );
     }
     let o = info.and_then(|v| v.get("ocean"));
-    let deep = v4(
-        o.and_then(|o| o.get("DeepWaterColor")),
-        [0.0, 0.34, 0.62, 1.0],
-    );
+    // The deep colour: the body's own _DiffuseColor (Kerbin teal, Laythe blue, Eve purple). _DeepWaterColor is
+    // the same default on every ocean material, so it says nothing about the body; the diffuse colour is
+    // scaled to about its brightness, which is what the shading here was tuned with.
+    let deep = match o.and_then(|o| o.get("DiffuseColor")) {
+        Some(d) => ocean_deep_colour(v4(Some(d), [0.0; 4])),
+        None => v4(
+            o.and_then(|o| o.get("DeepWaterColor")),
+            [0.0, 0.34, 0.62, 1.0],
+        ),
+    };
     let shallow = v4(
         o.and_then(|o| o.get("ShallowColor")),
         [0.08, 0.36, 0.38, 1.0],
@@ -2562,7 +2589,9 @@ fn surface_uniform(b: &Body, debug: f32) -> SurfaceU {
         o.and_then(|o| o["FoamShapeTilingSize"].as_f64())
             .unwrap_or(10.0) as f32,
         flag_f(b.tex.contains_key(&Tex::Foam)),
-        0.0,
+        // depth (m) at which the sea is opaque: a quarter of _TransparentVisibleDepth (Kerbin 100 m -> 25 m,
+        // Eve's 0.5 m soup is opaque at once)
+        ocean_opaque_depth(o.and_then(|o| o["TransparentVisibleDepth"].as_f64())),
     ];
     let has_caustics =
         o.and_then(|o| o.get("caustics")).is_some() && b.tex.contains_key(&Tex::Foam);
