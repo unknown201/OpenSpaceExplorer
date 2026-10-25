@@ -113,6 +113,25 @@ pub struct NearVessel<'a> {
     /// On the ground: it stands on its lowest point there. In flight the vessel point is its centre (the
     /// server places a piece that comes off at the parent's point plus the piece's offset).
     pub landed: bool,
+    /// The owner's agency colours, for parts and crafts without their own.
+    pub paint: Option<ose_data::craft::Paint>,
+}
+
+/// The paint a part is drawn in (linear rgb base and accent): its own colours, else its craft's, else the
+/// owner's agency colours (sRGB in all three).
+pub(crate) fn part_paint(
+    craft: &Craft,
+    part: usize,
+    fallback: Option<ose_data::craft::Paint>,
+) -> Option<([f32; 3], [f32; 3])> {
+    let (a, b) = craft
+        .parts
+        .get(part)
+        .and_then(|p| p.colors)
+        .or(craft.colors)
+        .or(fallback)?;
+    let lin = |c: [u8; 3]| c.map(|v| crate::render::srgb_to_linear(v as f64 / 255.0) as f32);
+    Some((lin(a), lin(b)))
 }
 
 /// A model to draw: renderer name, file and scale.
@@ -517,6 +536,8 @@ pub struct FlightInput<'a> {
     /// The guids of the parts the server says the vessel still has (its current craft); parts of `craft`
     /// not among them have been staged away or broken off. `None` before it arrives: stage counting then.
     pub present: Option<&'a std::collections::HashSet<String>>,
+    /// The owner's agency colours, for parts and crafts without their own.
+    pub paint: Option<ose_data::craft::Paint>,
     pub is_decoupler: &'a dyn Fn(&str) -> bool,
     /// Planned maneuver for this vessel: prograde, normal and radial delta-v, m/s.
     pub maneuver: Option<(f64, f64, f64)>,
@@ -1396,6 +1417,7 @@ impl FlightView {
                 let pid = craft.parts[i].part_id.as_str();
                 let mut it = DrawItem::lit(name, wpos - cam, vessel_rot * lq, 1.0, sun);
                 it.animation = animation;
+                it.paint = part_paint(craft, i, inp.paint);
                 // Wheels roll with the ground speed.
                 if let Some((bone, radius)) = wheel_spinner(pid) {
                     let turn = (self.wheel_travel / radius) as f32;
@@ -1574,7 +1596,7 @@ impl FlightView {
                             hi_all = hi_all.max(w);
                         }
                     }
-                    placed.push((name, lp, lq));
+                    placed.push((name, lp, lq, part_paint(craft, placed.len(), near.paint)));
                 }
                 let anchor = if !lo_all.is_finite() {
                     DVec3::ZERO
@@ -1583,12 +1605,13 @@ impl FlightView {
                 } else {
                     (lo_all + hi_all) * 0.5
                 };
-                for (name, lp, lq) in placed {
+                for (name, lp, lq, paint) in placed {
                     if !gpu.has_model(&name) {
                         continue;
                     }
                     let at = p + crot * (lp - anchor);
                     let mut it = DrawItem::lit(name, at - cam, crot * lq, 1.0, sun);
+                    it.paint = paint;
                     it.ambient = part_ambient;
                     it.fill_dir = up;
                     it.fill = 0.25;

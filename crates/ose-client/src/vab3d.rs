@@ -58,6 +58,8 @@ pub struct VabView {
     loose_boxes: Vec<(usize, DVec3, DVec3)>,
     /// Where the held part floats when it snaps to nothing (glTF frame), for dropping it there.
     pub held_at: Option<DVec3>,
+    /// The builder's agency colours, for parts and crafts without their own.
+    pub paint: Option<ose_data::craft::Paint>,
     pub cursor: (f64, f64),
     pub snap: Option<(usize, String)>,
     /// Surface attachment previews (craft frame poses, one per symmetry copy) for the held part, set by the
@@ -113,6 +115,7 @@ impl VabView {
             loose: Vec::new(),
             loose_boxes: Vec::new(),
             held_at: None,
+            paint: None,
             pan_y: 0.0,
             com: None,
             cot: None,
@@ -470,6 +473,7 @@ impl VabView {
             }
             let mut item = DrawItem::lit(name, wpos - cam_pos, wrot, 1.0, light);
             item.ambient = 0.45;
+            item.paint = crate::flight3d::part_paint(craft, i, self.paint);
             item.fill_dir = -forward;
             item.fill = 0.35;
             if self.icon_mode {

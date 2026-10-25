@@ -41,11 +41,15 @@ struct ObjectUniform {
     params: [f32; 4],
     /// x: how strongly the material's emissive map lights up (window lights at night), yzw unused.
     extra: [f32; 4],
+    /// The vessel's base and accent paint (linear rgb), w = 1 when painted: KSP2's paint mask tints its
+    /// green channel with the base colour and its red channel with the accent.
+    paint_a: [f32; 4],
+    paint_b: [f32; 4],
 }
 
 const SHADER: &str = r#"
 struct Camera { view_proj: mat4x4<f32> };
-struct Object { model: mat4x4<f32>, color: vec4<f32>, light_dir: vec4<f32>, light2: vec4<f32>, params: vec4<f32>, extra: vec4<f32> };
+struct Object { model: mat4x4<f32>, color: vec4<f32>, light_dir: vec4<f32>, light2: vec4<f32>, params: vec4<f32>, extra: vec4<f32>, paint_a: vec4<f32>, paint_b: vec4<f32> };
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(1) @binding(0) var<uniform> object: Object;
 @group(2) @binding(0) var tex: texture_2d<f32>;
@@ -53,6 +57,7 @@ struct Object { model: mat4x4<f32>, color: vec4<f32>, light_dir: vec4<f32>, ligh
 @group(2) @binding(2) var normal_tex: texture_2d<f32>;
 @group(2) @binding(3) var mg_tex: texture_2d<f32>;
 @group(2) @binding(4) var em_tex: texture_2d<f32>;
+@group(2) @binding(5) var paint_tex: texture_2d<f32>;
 
 struct VsIn { @location(0) pos: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv: vec2<f32> };
 struct VsOut { @builtin(position) clip: vec4<f32>, @location(0) normal: vec3<f32>, @location(1) uv: vec2<f32>, @location(2) world: vec3<f32> };
@@ -80,7 +85,11 @@ fn fs_mesh(in: VsOut) -> @location(0) vec4<f32> {
     let nm = textureSample(normal_tex, samp, in.uv);
     let mg = textureSample(mg_tex, samp, in.uv);
     let em = textureSample(em_tex, samp, in.uv).rgb * object.extra.x;
-    let base = mix(object.color, texel * object.color, object.params.y);
+    let pm = textureSample(paint_tex, samp, in.uv);
+    var base = mix(object.color, texel * object.color, object.params.y);
+    // Vessel paint (KSP2's _PaintMaskGlossMap): green takes the base colour, red the accent.
+    let painted_a = mix(base.rgb, base.rgb * object.paint_a.rgb, pm.g * object.paint_a.w);
+    base = vec4<f32>(mix(painted_a, base.rgb * object.paint_b.rgb, pm.r * object.paint_b.w), base.a);
     let n0 = normalize(in.normal);
     // Normal map: the original's maps are DXT5nm-style (x in alpha, y in green). The tangent frame comes
     // from screen-space derivatives of position and uv, so mirrored and flipped uvs work as they are; the
@@ -151,7 +160,7 @@ struct GpuPrimitive {
     indices: wgpu::Buffer,
     index_count: u32,
     /// Indices into `Model::textures` of the base colour, normal and metallic-gloss images.
-    textures: [Option<usize>; 4],
+    textures: [Option<usize>; 5],
     /// Bind group for those textures (defaults where missing or not loaded yet); rebuilt as images arrive.
     bind: Option<wgpu::BindGroup>,
     /// glTF `alphaMode: BLEND`: drawn after the opaque primitives without writing depth.
@@ -232,7 +241,7 @@ struct PendingTexture {
 /// Parsed GLB before GPU upload.
 /// Vertices, indices, base-colour / normal / metallic-gloss image indices, alpha blending and base colour
 /// factor of one mesh primitive before upload.
-type CpuMesh = (Vec<Vertex>, Vec<u32>, [Option<usize>; 4], bool, [f32; 4]);
+type CpuMesh = (Vec<Vertex>, Vec<u32>, [Option<usize>; 5], bool, [f32; 4]);
 type Influences = Vec<([u16; 4], [f32; 4])>;
 
 struct CpuModel {
@@ -278,6 +287,9 @@ pub struct DrawItem {
     pub sun: f32,
     /// Emissive map strength, 0 (off) to 1: the KSC's window and flood lights at night.
     pub glow: f32,
+    /// The vessel's base and accent paint colours (linear rgb) for KSP2's paint-masked parts; `None` leaves
+    /// parts as authored.
+    pub paint: Option<([f32; 3], [f32; 3])>,
 }
 
 impl DrawItem {
@@ -306,6 +318,7 @@ impl DrawItem {
             mirror_z: false,
             sun: 1.0,
             glow: 0.0,
+            paint: None,
         }
     }
 }
@@ -370,7 +383,7 @@ pub struct Renderer {
     sampler: wgpu::Sampler,
     white: wgpu::BindGroup,
     /// Default texture views: white colour, flat normal, no metal or gloss.
-    default_views: [wgpu::TextureView; 4],
+    default_views: [wgpu::TextureView; 5],
     depth: wgpu::TextureView,
     objects: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
     models: HashMap<String, Model>,
@@ -506,6 +519,16 @@ impl Renderer {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: true },
@@ -736,6 +759,8 @@ impl Renderer {
             solid([0, 0, 0, 0], wgpu::TextureFormat::Rgba8Unorm),
             // No emission.
             solid([0, 0, 0, 255], wgpu::TextureFormat::Rgba8UnormSrgb),
+            // No paint mask: nothing painted.
+            solid([0, 0, 0, 0], wgpu::TextureFormat::Rgba8Unorm),
         ];
         let white = Self::bind_views(
             &device,
@@ -746,6 +771,7 @@ impl Renderer {
                 &default_views[1],
                 &default_views[2],
                 &default_views[3],
+                &default_views[4],
             ],
         );
         let depth = Self::make_depth(&device, width, height);
@@ -799,7 +825,7 @@ impl Renderer {
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
         sampler: &wgpu::Sampler,
-        views: [&wgpu::TextureView; 4],
+        views: [&wgpu::TextureView; 5],
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("material"),
@@ -825,6 +851,10 @@ impl Renderer {
                     binding: 4,
                     resource: wgpu::BindingResource::TextureView(views[3]),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(views[4]),
+                },
             ],
         })
     }
@@ -845,7 +875,7 @@ impl Renderer {
                     .and_then(|v| v.as_ref())
                     .unwrap_or(&self.default_views[k])
             };
-            let views = [pick(0), pick(1), pick(2), pick(3)];
+            let views = [pick(0), pick(1), pick(2), pick(3), pick(4)];
             prim.bind = Some(Self::bind_views(
                 &self.device,
                 &self.texture_layout,
@@ -1408,6 +1438,14 @@ impl Renderer {
                         item.ambient,
                     ],
                     extra: [item.glow, 0.0, 0.0, 0.0],
+                    paint_a: item
+                        .paint
+                        .map(|p| [p.0[0], p.0[1], p.0[2], 1.0])
+                        .unwrap_or([1.0, 1.0, 1.0, 0.0]),
+                    paint_b: item
+                        .paint
+                        .map(|p| [p.1[0], p.1[1], p.1[2], 1.0])
+                        .unwrap_or([1.0, 1.0, 1.0, 0.0]),
                 };
                 self.queue
                     .write_buffer(&self.objects[slot].0, 0, bytemuck::bytes_of(&u));
@@ -1432,6 +1470,8 @@ impl Renderer {
                 light2: [0.0; 4],
                 params: [1.0, 0.0, 0.0, 0.0],
                 extra: [0.0; 4],
+                paint_a: [1.0, 1.0, 1.0, 0.0],
+                paint_b: [1.0, 1.0, 1.0, 0.0],
             };
             self.queue
                 .write_buffer(&self.objects[slot].0, 0, bytemuck::bytes_of(&u));
@@ -1783,6 +1823,8 @@ fn parse_glb(bytes: &[u8]) -> Result<CpuModel, String> {
             &m["normalTexture"]
         } else if which == "emissive" {
             &m["emissiveTexture"]
+        } else if which == "paint" {
+            &m["extras"]["ose_paint_mask"]
         } else {
             &m["pbrMetallicRoughness"]["metallicRoughnessTexture"]
         };
@@ -1917,6 +1959,7 @@ fn parse_glb(bytes: &[u8]) -> Result<CpuModel, String> {
                 mat.and_then(|m| material_data_image(m, "normal")),
                 mat.and_then(|m| material_data_image(m, "mg")),
                 mat.and_then(|m| material_data_image(m, "emissive")),
+                mat.and_then(|m| material_data_image(m, "paint")),
             ];
             let blend = prim["material"]
                 .as_u64()
@@ -1935,7 +1978,7 @@ fn parse_glb(bytes: &[u8]) -> Result<CpuModel, String> {
     let mesh_radius = json["extras"]["mesh_radius"].as_f64().unwrap_or(1.0);
     let mut image_linear = vec![false; image_uris.len()];
     for (_, _, tex, _, _) in &cpu_meshes {
-        for k in [1, 2] {
+        for k in [1, 2, 4] {
             if let Some(i) = tex[k] {
                 if i < image_linear.len() {
                     image_linear[i] = true;

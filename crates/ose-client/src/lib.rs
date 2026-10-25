@@ -10392,6 +10392,16 @@ impl App {
                 .unwrap_or_default();
             let held = self.vab3d.held.as_ref().map(|(id, _)| id.clone());
             let free = self.snap_nodes(held.as_deref());
+            // The builder's agency colours paint parts without colours of their own.
+            self.vab3d.paint = self
+                .player_id
+                .and_then(|me| {
+                    self.campaign
+                        .as_ref()
+                        .and_then(|c| c.1.iter().find(|m| m.player_id == me))
+                })
+                .and_then(|m| m.agency.as_ref())
+                .map(|a| (a.primary_rgb, a.secondary_rgb));
             if let Some(gpu) = &mut self.gpu {
                 let was_ready = self.vab3d.is_ready();
                 if self
@@ -10620,6 +10630,19 @@ impl App {
             .unwrap_or(0.0);
         let catalog = &self.catalog;
         let is_dec = |pid: &str| catalog.get(pid).map(|p| p.is_decoupler).unwrap_or(false);
+        // A vessel's owner's agency colours (primary as base, secondary as accent).
+        let members = self
+            .campaign
+            .as_ref()
+            .map(|c| c.1.clone())
+            .unwrap_or_default();
+        let agency_paint = |owner: Option<u64>| {
+            members
+                .iter()
+                .find(|m| Some(m.player_id) == owner)
+                .and_then(|m| m.agency.as_ref())
+                .map(|a| (a.primary_rgb, a.secondary_rgb))
+        };
         // Vessels within a few kilometres are drawn in full: their crafts come from the server
         // (GetVesselCraft, asked again whenever craft_rev changes).
         let mut ask: Vec<(u64, u32)> = Vec::new();
@@ -10647,6 +10670,7 @@ impl App {
                         .as_ref()
                         .filter(|f| g(f.facing).length() > 0.5)
                         .map(|f| (g(f.facing), g(f.roll_ref))),
+                    paint: agency_paint(o.owner),
                     landed: o
                         .flight
                         .as_ref()
@@ -10718,6 +10742,7 @@ impl App {
                 })
                 .or(self.flight_craft.as_ref()),
             present: present.as_ref(),
+            paint: agency_paint(v.owner),
             is_decoupler: &is_dec,
             maneuver: self
                 .node
@@ -10867,6 +10892,7 @@ impl App {
                     mirror_z: true,
                     sun: 1.0,
                     glow: 0.0,
+                    paint: None,
                 });
             }
             if let (Some(orbit), Some(p)) = (scene.orbit(i), b.parent) {

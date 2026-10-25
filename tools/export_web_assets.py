@@ -111,6 +111,8 @@ class Glb:
         if "emissive" in textures:
             mat["emissiveTexture"] = {"index": textures["emissive"]}
             mat["emissiveFactor"] = [1, 1, 1]
+        if "paintMask" in textures:
+            mat["extras"] = {"ose_paint_mask": {"index": textures["paintMask"]}}
         self.materials.append(mat)
         return len(self.materials) - 1
 
@@ -358,7 +360,9 @@ class Exporter:
         self.texture_files[name] = rel
         return rel
 
-    MATERIAL_SLOTS = {"_MainTex": "baseColor", "_BumpMap": "normal", "_EmissionMap": "emissive", "_MetallicGlossMap": "metallicRoughness", "_OcclusionMap": "occlusion"}
+    # _PaintMaskGlossMap: KSP2's paint mask (G base colour, R accent colour, B painted gloss), tinted with the
+    # vessel's colours at runtime; it travels as the material's extras.ose_paint_mask.
+    MATERIAL_SLOTS = {"_MainTex": "baseColor", "_BumpMap": "normal", "_EmissionMap": "emissive", "_MetallicGlossMap": "metallicRoughness", "_OcclusionMap": "occlusion", "_PaintMaskGlossMap": "paintMask"}
     SKIP_MATERIALS = ("ReentryShockwave", "Default-Material")
 
     def export_part(self, part_id: str) -> dict | None:
