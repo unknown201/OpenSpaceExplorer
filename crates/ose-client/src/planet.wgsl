@@ -456,6 +456,8 @@ struct VIn {
     @location(1) normal: vec3<f32>,
     @location(2) height: f32,
     @location(3) extra: f32,
+    // offset to the parent quad's surface (geomorphing)
+    @location(4) morph: vec3<f32>,
 };
 
 struct VOut {
@@ -478,7 +480,14 @@ fn vs_quad(in: VIn) -> VOut {
 
 fn quad_out(in: VIn) -> VOut {
     var out: VOut;
-    let rel = chunk.offset.xyz + in.pos;
+    // Geomorphing: a quad of level L is drawn while the camera is within 2 T of it (its parent split there) and
+    // splits itself inside T = radius x 2.5 / 2^L (planet_lod::select); its vertices slide onto the parent's
+    // surface as the camera nears 2 T, so neither the switch to the parent nor to the children pops.
+    let lvl = chunk.center.w;
+    let t_split = frame.solar.w * 2.5 / exp2(lvl);
+    let d0 = length(chunk.offset.xyz + in.pos);
+    let m = select(smoothstep(1.4 * t_split, 1.9 * t_split, d0), 0.0, lvl < 2.5);
+    let rel = chunk.offset.xyz + in.pos + in.morph * m;
     out.clip = frame.view_proj * vec4<f32>(rel, 1.0);
     out.rel = rel;
     out.normal = in.normal;

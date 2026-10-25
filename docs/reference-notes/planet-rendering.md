@@ -88,7 +88,7 @@ in the renderer).
 
 | # | Feature | Original | v1 here |
 |---|---|---|---|
-| 1 | Planet surface you can descend to without popping | PQS quadtree, levels 3..12, thresholds above | Cube-sphere quadtree with the same thresholds; 33 x 33 vertices per quad with skirts, built on the CPU over frames |
+| 1 | Planet surface you can descend to without popping | PQS quadtree, levels 3..12, thresholds above | Cube-sphere quadtree with the same thresholds; 33 x 33 vertices per quad with skirts, built on the CPU over frames; vertices geomorph onto the parent quad's surface between 1.4 and 1.9 x the split distance, so level changes do not pop (the nearest ~500 m never morphs and matches the physics ground) |
 | 2 | Ground where the physics puts it | `GetSurfaceHeight` | Vertex heights from `ose_data::terrain::TerrainMap::height_m`, the server's own function: the terrain pack's global map, tiled layers and decals (terrain.md), or the embedded global map without a pack |
 | 3 | Planet colour from orbit to ground | scaled albedo + biome detail | Scaled albedo (no-water version) everywhere, faded to 30 % at the ground under biome detail |
 | 4 | Ground texture up close | biome mask, small arrays, rules, distance resampling | Biome mask picks the four small slices (land with no biome weight takes the first biome); height and slope windows weight them; tiled at 8, 64 and 512 m like the distance resampling; the slices' normal maps within 600 m; detail modulates the albedo so large-scale colour stays the original's |
@@ -150,3 +150,10 @@ azimuthal caps (30 deg around each pole, rows box-filtered by latitude first) th
 about 20 deg of each pole. Clouds: the baked cubemaps (Kerbin and Laythe 6 x 2048², Eve and Duna 1024²) are
 unwrapped bilinearly to 4096 x 2048 (nearest sampling had aliased the noisy coverage into speckle), alpha only,
 and the shell samples them with a cubic B-spline so they stay soft when magnified from low orbit.
+
+Ground colour (open): `_AlbedoScaledFadeParams` weights the scaled albedo at the ground (Kerbin 0.3, Eve 0.2,
+Mun 0.5) and the biome detail takes the rest, but the detail slices are not in true colour (their linear mean is
+15x Minmus's scaled albedo, 9x Moho's, 1x the Mun's), so the original tints them in a way the material data does
+not show. A straight lerp gives white Minmus and tan patches on the Mun along biome mask edges; detail stays a
+luminance ratio on the scaled colour here. Eve's ground therefore stays as dark as its scaled map.
+

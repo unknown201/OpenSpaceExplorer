@@ -233,8 +233,9 @@ pub fn distance_to_quad(q: &QuadKey, cam: V3, radius: f64) -> f64 {
     surface + (cam_r - radius).abs()
 }
 
-/// One vertex: position relative to the quad's centre point (m), normal, height above the radius (m), and an
-/// extra value (the terrain height under ocean vertices).
+/// One vertex: position relative to the quad's centre point (m), normal, height above the radius (m), an
+/// extra value (the terrain height under ocean vertices), and the offset that moves it to where the parent quad's
+/// surface lies (zero on vertices the parent shares), which the vertex shader blends in as the parent takes over.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct TerrainVertex {
@@ -242,6 +243,20 @@ pub struct TerrainVertex {
     pub normal: [f32; 3],
     pub height: f32,
     pub extra: f32,
+    pub morph: [f32; 3],
+}
+
+/// Where the parent quad's surface lies under grid vertex (x, y): the parent has every other vertex, so odd
+/// vertices sit midway along an edge or, for odd x and y, midway along the parent cell's diagonal (the index
+/// order splits cells from (x, y) to (x + 1, y + 1)).
+pub fn parent_point(x: usize, y: usize, at: &dyn Fn(usize, usize) -> V3) -> V3 {
+    let mid = |a: V3, b: V3| scale(add(a, b), 0.5);
+    match (x % 2 == 1, y % 2 == 1) {
+        (false, false) => at(x, y),
+        (true, false) => mid(at(x - 1, y), at(x + 1, y)),
+        (false, true) => mid(at(x, y - 1), at(x, y + 1)),
+        (true, true) => mid(at(x - 1, y - 1), at(x + 1, y + 1)),
+    }
 }
 
 pub struct QuadMesh {
@@ -340,11 +355,14 @@ pub fn build_quad(q: &QuadKey, radius: f64, ocean: bool, height: &dyn Fn(V3) -> 
             let nf = [nr[0] as f32, nr[1] as f32, nr[2] as f32];
             normals[y * g + x] = nf;
             let rel = sub(p, center);
+            let parent = parent_point(x, y, &|a, b| pts[(b + 1) * n + a + 1]);
+            let m = sub(parent, p);
             terrain.push(TerrainVertex {
                 pos: [rel[0] as f32, rel[1] as f32, rel[2] as f32],
                 normal: nf,
                 height: h as f32,
                 extra: 0.0,
+                morph: [m[0] as f32, m[1] as f32, m[2] as f32],
             });
         }
     }
@@ -363,6 +381,7 @@ pub fn build_quad(q: &QuadKey, radius: f64, ocean: bool, height: &dyn Fn(V3) -> 
                 normal: v.normal,
                 height: v.height - skirt as f32,
                 extra: 0.0,
+                morph: v.morph,
             });
         }
     }
@@ -377,6 +396,7 @@ pub fn build_quad(q: &QuadKey, radius: f64, ocean: bool, height: &dyn Fn(V3) -> 
                     normal: [d[0] as f32, d[1] as f32, d[2] as f32],
                     height: 0.0,
                     extra: hs[(y + 1) * n + x + 1] as f32,
+                    morph: [0.0; 3],
                 });
             }
         }
@@ -390,6 +410,7 @@ pub fn build_quad(q: &QuadKey, radius: f64, ocean: bool, height: &dyn Fn(V3) -> 
                     normal: [d[0] as f32, d[1] as f32, d[2] as f32],
                     height: -skirt as f32 * 0.5,
                     extra: hs[(y + 1) * n + x + 1] as f32,
+                    morph: [0.0; 3],
                 });
             }
         }
@@ -418,6 +439,41 @@ pub fn map_height(map: Option<&TerrainMap>, d: V3) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn morph_targets_lie_on_the_parent_surface() {
+        // A bumpy height field: shared (even) vertices stay, odd ones move to the parent's edge or diagonal.
+        let r = 600_000.0;
+        let q = QuadKey::roots().next().unwrap().children()[0].children()[1];
+        let h = |d: V3| 500.0 * (d[0] * 40.0).sin() * (d[2] * 33.0).cos();
+        let m = build_quad(&q, r, false, &h);
+        let g = GRID;
+        let p = |x: usize, y: usize| {
+            let v = m.terrain[y * g + x];
+            add(
+                m.center,
+                [v.pos[0] as f64, v.pos[1] as f64, v.pos[2] as f64],
+            )
+        };
+        let moved = |x: usize, y: usize| {
+            let v = m.terrain[y * g + x];
+            add(
+                p(x, y),
+                [v.morph[0] as f64, v.morph[1] as f64, v.morph[2] as f64],
+            )
+        };
+        let close = |a: V3, b: V3| length(sub(a, b)) < 0.05;
+        assert_eq!(m.terrain[2 * g + 4].morph, [0.0; 3]);
+        assert!(close(moved(3, 4), scale(add(p(2, 4), p(4, 4)), 0.5)));
+        assert!(close(moved(6, 5), scale(add(p(6, 4), p(6, 6)), 0.5)));
+        assert!(close(moved(7, 9), scale(add(p(6, 8), p(8, 10)), 0.5)));
+        // some odd vertex really moves on this terrain
+        assert!(m
+            .terrain
+            .iter()
+            .take(g * g)
+            .any(|v| v.morph.iter().any(|c| c.abs() > 1.0)));
+    }
 
     #[test]
     fn lat_lon_round_trip() {

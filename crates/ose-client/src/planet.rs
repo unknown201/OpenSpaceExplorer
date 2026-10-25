@@ -356,9 +356,14 @@ impl PlanetRenderer {
                 offset: 28,
                 shader_location: 3,
             },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x3,
+                offset: 32,
+                shader_location: 4,
+            },
         ];
         let vbl = [Some(wgpu::VertexBufferLayout {
-            array_stride: 32,
+            array_stride: 44,
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &vertex_attrs,
         })];
@@ -1358,6 +1363,9 @@ impl PlanetRenderer {
                         t.normal[2],
                         t.height,
                         t.extra,
+                        t.morph[0],
+                        t.morph[1],
+                        t.morph[2],
                     ]
                 })
                 .collect();
