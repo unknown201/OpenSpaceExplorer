@@ -475,6 +475,68 @@ pub fn burn_text(to_node_s: f64, dv_mps: f64, mass_t: f64, full_thrust_kn: f64) 
     }
 }
 
+/// What the flight events watch, as last seen: vessel, CommNet link, control, reference body, situation, and
+/// whether the charge was low.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FlightWatch {
+    pub vessel: u64,
+    pub comm: bool,
+    pub control: bool,
+    pub body: u16,
+    pub situation: Option<ose_net::FlightSituation>,
+    pub charge_low: bool,
+}
+
+/// The original's `NotificationEvents` the client can tell from two readouts of the same vessel: lost and
+/// regained signal, lost control, out of charge, a new sphere of influence, reaching orbit, landing,
+/// splashing down and crashing. Returns (text, tier) for each.
+pub fn flight_events(
+    before: &FlightWatch,
+    now: &FlightWatch,
+    body_name: &str,
+) -> Vec<(String, &'static str)> {
+    use ose_net::FlightSituation as S;
+    let mut out = Vec::new();
+    if before.vessel != now.vessel {
+        return out;
+    }
+    if before.comm && !now.comm {
+        out.push(("Lost connection to the KSC".to_string(), "alert"));
+    } else if !before.comm && now.comm {
+        out.push(("Connection to the KSC restored".to_string(), "passive"));
+    }
+    if before.control && !now.control {
+        out.push((
+            "No control: the probe has no charge or signal".to_string(),
+            "alert",
+        ));
+    }
+    if !before.charge_low && now.charge_low {
+        out.push(("Electric charge is running out".to_string(), "alert"));
+    }
+    if before.body != now.body {
+        out.push((
+            format!("Entered {body_name}'s sphere of influence"),
+            "passive",
+        ));
+    }
+    if before.situation != now.situation {
+        match now.situation {
+            Some(S::Orbit) => out.push((format!("Stable orbit around {body_name}"), "triumph")),
+            Some(S::Landed)
+                if before.situation == Some(S::Flying)
+                    || before.situation == Some(S::SubOrbital) =>
+            {
+                out.push((format!("Landed on {body_name}"), "triumph"))
+            }
+            Some(S::Crashed) => out.push(("The vessel crashed".to_string(), "alert")),
+            Some(S::Escaping) => out.push((format!("Escaping {body_name}"), "passive")),
+            _ => {}
+        }
+    }
+    out
+}
+
 /// Notification toasts (`NotificationManager`): short messages stacked at the top right that fade after a few
 /// seconds. Flight messages still land in `#fh-note` (the tests read it); `watch` turns each new one into a toast.
 #[derive(Default)]
@@ -574,6 +636,35 @@ mod tests {
         assert!(t.starts_with("Burn T-1:00"), "{t}");
         assert!(t.contains("20 s"));
         assert!(burn_text(70.0, 100.0, 10.0, 0.0).starts_with("Node T-1:10"));
+    }
+
+    #[test]
+    fn flight_events_from_two_readouts() {
+        use ose_net::FlightSituation as S;
+        let a = FlightWatch {
+            vessel: 1,
+            comm: true,
+            control: true,
+            body: 1,
+            situation: Some(S::SubOrbital),
+            charge_low: false,
+        };
+        let b = FlightWatch {
+            comm: false,
+            situation: Some(S::Orbit),
+            ..a.clone()
+        };
+        let ev = flight_events(&a, &b, "Kerbin");
+        assert!(ev
+            .iter()
+            .any(|(t, k)| t == "Lost connection to the KSC" && *k == "alert"));
+        assert!(ev.iter().any(|(t, _)| t == "Stable orbit around Kerbin"));
+        // Another vessel: nothing (switching is not an event).
+        let c = FlightWatch {
+            vessel: 2,
+            ..b.clone()
+        };
+        assert!(flight_events(&a, &c, "Kerbin").is_empty());
     }
 
     #[test]
