@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 26;
+pub const PROTOCOL_VERSION: u16 = 27;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -158,6 +158,14 @@ pub enum ClientMessage {
     DeployPanels {
         vessel: u64,
         deploy: bool,
+    },
+    /// RCS translation in craft axes, each -1..1 and held until changed (x right J/L, y fore H/N, z top
+    /// I/K); it fires only with the RCS action group on. Answers `FlightAck`.
+    Translate {
+        vessel: u64,
+        x: f32,
+        y: f32,
+        z: f32,
     },
     /// Roll input (-1..1, Q/E), held until changed; answers `FlightAck`.
     SetRoll {
@@ -502,6 +510,10 @@ pub struct FlightReadout {
     pub rcs: bool,
     pub abort: bool,
     pub custom_groups: [bool; 10],
+    /// RCS: thrust available along one direction (kN, 0 without thrusters) and how hard it is firing
+    /// (share of full thrust, translation plus turning).
+    pub rcs_thrust_kn: f32,
+    pub rcs_firing: f32,
 }
 
 /// Action groups (keys U, R, Backspace, 1..0).

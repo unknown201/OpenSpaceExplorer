@@ -224,6 +224,62 @@ pub struct Powered {
     /// Action groups (lights, RCS, abort, custom 1..10).
     #[serde(default)]
     pub groups: ActionGroups,
+    /// RCS thrusters (with the RCS group on they translate the vessel and help turn it).
+    #[serde(default)]
+    pub rcs: RcsState,
+}
+
+/// A vessel's RCS: what its thrusters can do (from its parts) and how they are used.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RcsState {
+    /// Thrust the thrusters give along any one direction, kN, and the torque they give about the centre
+    /// of mass, kN·m.
+    pub thrust_kn: f64,
+    pub torque_knm: f64,
+    /// Isp in vacuum and at sea level, s.
+    pub isp_vac_s: f64,
+    pub isp_asl_s: f64,
+    /// Translation input in craft axes (x right, y fore along the nose, z top), each -1..1, held.
+    pub translate: DVec3,
+    /// Share of full thrust used this step (translation plus turning), and the share of the propellant
+    /// that was delivered last step (0..1).
+    pub usage: f64,
+    pub powered: f64,
+}
+
+impl Default for RcsState {
+    fn default() -> Self {
+        RcsState {
+            thrust_kn: 0.0,
+            torque_knm: 0.0,
+            isp_vac_s: 0.0,
+            isp_asl_s: 0.0,
+            translate: DVec3::ZERO,
+            usage: 0.0,
+            powered: 1.0,
+        }
+    }
+}
+
+/// Local north (east when the vessel axis is north-south) made perpendicular to `facing`: the craft's top
+/// with no roll.
+pub fn roll_reference(facing: DVec3, up: DVec3) -> DVec3 {
+    let (_, east, north) = surface_frame(up);
+    for d in [north, east] {
+        let across = d - facing * d.dot(facing);
+        if across.length_squared() > 1e-6 {
+            return across.normalized();
+        }
+    }
+    up
+}
+
+/// The craft's top (+Z) in flight: the roll reference turned by its roll.
+pub fn vessel_top(p: &Powered) -> DVec3 {
+    let base = roll_reference(p.facing, p.r.normalized());
+    let side = p.facing.cross(base);
+    let (sr, cr) = p.roll_rad.sin_cos();
+    base * cr + side * sr
 }
 
 /// How fast a vessel rolls at full input, rad/s (scaled by its reaction wheels' power).
@@ -508,6 +564,7 @@ impl Powered {
             roll_rad: 0.0,
             roll_input: 0.0,
             groups: ActionGroups::default(),
+            rcs: RcsState::default(),
         }
     }
 
@@ -682,9 +739,15 @@ pub fn steer(p: &mut Powered, target: DVec3, thrust_fraction: f64, dt: f64) {
         1.0
     };
     let moi = s.moi_tm2 * mass_ratio;
+    let rcs_torque = if p.groups.rcs {
+        p.rcs.torque_knm * p.rcs.powered.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
     let torque = if p.controlled {
         s.wheel_torque_knm * p.wheel_scale.clamp(0.0, 1.0)
             + s.gimbal_torque_knm * thrust_fraction.clamp(0.0, 1.0)
+            + rcs_torque
     } else {
         0.0
     };
@@ -843,6 +906,33 @@ pub fn integrate(
         out.thrust_kn = thrust_kn * frac;
         p.propellant_t -= burn;
         p.mass_t -= burn;
+    }
+
+    // RCS translation (the RCS group on), in the craft's axes
+    p.rcs.usage = 0.0;
+    if p.groups.rcs && p.controlled && p.rcs.thrust_kn > 0.0 && p.mass_t > 0.0 {
+        let t = p.rcs.translate;
+        let t = DVec3::new(
+            t.x.clamp(-1.0, 1.0),
+            t.y.clamp(-1.0, 1.0),
+            t.z.clamp(-1.0, 1.0),
+        );
+        let amount = t.length().min(1.0);
+        if amount > 0.0 {
+            let top = vessel_top(p);
+            let right = p.facing.cross(top);
+            let dir = (right * t.x + p.facing * t.y + top * t.z).normalized();
+            let isp = p.rcs.isp_vac_s
+                + (p.rcs.isp_asl_s - p.rcs.isp_vac_s) * pressure_atm.clamp(0.0, 1.0);
+            let scale = if p.rcs.isp_vac_s > 0.0 {
+                (isp / p.rcs.isp_vac_s).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let thrust = p.rcs.thrust_kn * amount * scale * p.rcs.powered.clamp(0.0, 1.0);
+            thrust_acc = thrust_acc + dir * (thrust / p.mass_t);
+            p.rcs.usage += amount;
+        }
     }
 
     if p.landed {

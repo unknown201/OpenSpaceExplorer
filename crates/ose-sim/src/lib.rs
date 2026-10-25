@@ -373,6 +373,18 @@ impl Universe {
         }
     }
 
+    /// RCS translation input in craft axes (x right, y fore, z top; -1..1 each, held until changed); false
+    /// without a powered vessel.
+    pub fn set_translate(&mut self, e: Entity, t: DVec3) -> bool {
+        match self.world.get_mut::<flight::Powered>(e) {
+            Some(mut p) => {
+                p.rcs.translate = t;
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Roll input for a vessel (-1..1, held until changed); false without a powered vessel.
     pub fn set_roll(&mut self, e: Entity, input: f64) -> bool {
         match self.world.get_mut::<flight::Powered>(e) {
@@ -1004,6 +1016,11 @@ impl Universe {
                     // the propellant burned comes out of the tanks through the flow graph
                     let burned = (mass_before - p.mass_t).max(0.0);
                     st.burn(&mut p, burned, step_dt);
+                    let pressure = atmo
+                        .as_ref()
+                        .map(|a| a.pressure_kpa(p.r.length() - body.radius_m) / 101.325)
+                        .unwrap_or(0.0);
+                    st.rcs_burn(&mut p, pressure, step_dt);
                     // wheels work in proportion to how fast the vessel is being turned
                     let turning = (p.angvel.length() / 0.2).clamp(0.0, 1.0);
                     st.electric(&mut p, sun, turning, step_dt);
@@ -1830,6 +1847,63 @@ mod tests {
         // a 1.25 m decoupler (ejectionForce 50): 0.5 kN s each way
         assert!(dv_ship > 0.1 && dv_ship < 2.0, "pod pushed {dv_ship} m/s");
         assert!(dv_debris < -0.1, "stage pushed back {dv_debris} m/s");
+    }
+
+    #[test]
+    fn rcs_translates_the_k2_on_monopropellant_only_with_the_group_on() {
+        let crafts: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let defs: Vec<ose_data::PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let res: Vec<ose_data::ResourceDef> =
+            serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
+        let c = crafts.iter().find(|c| c.name == "Kerbal K2").unwrap();
+        let report = ose_data::staging::delta_v_by_stage(c, &defs, &res);
+        let spec = flight::FlightSpec::from_report(&report, &[], &[], 1.5);
+        let run = |rcs_on: bool| -> (f64, f64) {
+            let (mut u, body, _, _) = k1_on_real_kerbin();
+            let v = u.spawn_vessel_in_circular_orbit("K2", body, 100_000.0);
+            let mut p = flight::Powered::new(
+                spec.clone(),
+                DVec3::new(700_000.0, 0.0, 0.0),
+                DVec3::new(0.0, 2_246.0, 0.0),
+                false,
+            );
+            p.facing = DVec3::new(1.0, 0.0, 0.0);
+            p.attitude = flight::Attitude::Fixed(DVec3::new(1.0, 0.0, 0.0));
+            u.set_powered(v, p);
+            u.set_structure(v, structure::Structure::build(c, &defs, &res));
+            u.action_group(v, ActionGroup::Rcs, Some(rcs_on));
+            let mono = |u: &Universe| -> f64 {
+                let st = u.structure(v).unwrap();
+                let m = st.net.resource("MonoPropellant").unwrap();
+                st.net
+                    .tanks
+                    .iter()
+                    .filter(|t| t.resource == m)
+                    .map(|t| t.stored)
+                    .sum()
+            };
+            let m0 = mono(&u);
+            // fore along the nose (radially out here) for 5 s
+            assert!(u.set_translate(v, DVec3::new(0.0, 1.0, 0.0)));
+            let r0 = u.powered(v).unwrap().r;
+            let v0 = u.powered(v).unwrap().v;
+            for _ in 0..(5 * TICKS_PER_SECOND) {
+                u.step();
+            }
+            let p = u.powered(v).unwrap();
+            // radial speed gained (gravity pulls both runs the same)
+            let gained = (p.v - v0).dot(r0.normalized());
+            (gained, m0 - mono(&u))
+        };
+        let (dv_on, used_on) = run(true);
+        let (dv_off, used_off) = run(false);
+        assert!(dv_on > dv_off + 0.2, "RCS pushed: {dv_on} vs {dv_off} m/s");
+        assert!(
+            used_on > 0.0 && used_off == 0.0,
+            "monoprop {used_on} / {used_off}"
+        );
     }
 
     #[test]

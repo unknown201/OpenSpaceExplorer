@@ -801,11 +801,10 @@ fn flight_readout(
             p.drive.roll_ref(p.r)
         } else {
             // rolled about the axis from the horizon reference
-            let base = roll_reference(p.facing, up);
-            let side = p.facing.cross(base);
-            let (sr, cr) = p.roll_rad.sin_cos();
-            base * cr + side * sr
+            ose_sim::flight::vessel_top(p)
         },
+        rcs_thrust_kn: p.rcs.thrust_kn as f32,
+        rcs_firing: p.rcs.usage as f32,
         lights: p.groups.lights,
         rcs: p.groups.rcs,
         abort: p.groups.abort,
@@ -923,18 +922,6 @@ fn flight_readout(
             })
             .unwrap_or_default(),
     })
-}
-
-/// Local north (east when the vessel axis is north-south) made perpendicular to `facing`.
-fn roll_reference(facing: ose_math::DVec3, up: ose_math::DVec3) -> ose_math::DVec3 {
-    let (_, east, north) = ose_sim::flight::surface_frame(up);
-    for d in [north, east] {
-        let across = d - facing * d.dot(facing);
-        if across.length_squared() > 1e-6 {
-            return across.normalized();
-        }
-    }
-    up
 }
 
 /// Fallback launch pad (Kerbin) when the terrain index has no pad site, degrees.
@@ -2395,6 +2382,17 @@ async fn session(mut socket: WebSocket, s: AppState) {
                                     Some(n) if n > 0 => ServerMessage::FlightAck { vessel, accepted: true, reason: None },
                                     _ => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("no packed parachutes".into()) },
                                 },
+                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
+                            };
+                            if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::Translate { vessel, x, y, z }) => {
+                            let reply = match owned_vessel(&s, vessel, player_id) {
+                                Some(e) => {
+                                    let t = ose_math::DVec3::new(x as f64, y as f64, z as f64);
+                                    let ok = s.universe.lock().expect("sim lock").set_translate(e, t);
+                                    ServerMessage::FlightAck { vessel, accepted: ok, reason: (!ok).then(|| "not under power".into()) }
+                                }
                                 None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
                             };
                             if !send(&mut socket, &reply).await { break; }

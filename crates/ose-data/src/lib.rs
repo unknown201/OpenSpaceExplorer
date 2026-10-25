@@ -265,6 +265,9 @@ pub struct PartDef {
     /// A decoupler's push when it fires (`Data_Decouple.ejectionForce`).
     #[serde(default)]
     pub ejection_force: f64,
+    /// RCS thrusters (`Data_RCS`).
+    #[serde(default)]
+    pub rcs: Option<Rcs>,
     /// Names of every module on the part, in order, so the sim knows what else to implement.
     pub module_names: Vec<String>,
     /// Module data not yet mapped into typed fields, keyed by module name.
@@ -311,6 +314,15 @@ pub struct Converter {
     pub inputs: Vec<(String, f64)>,
     pub outputs: Vec<(String, f64)>,
     pub conversion_rate: f64,
+}
+
+/// RCS thrusters as the original defines them (`Data_RCS`): thrust per thruster, kN, the propellant
+/// (mixture) and Isp against pressure.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Rcs {
+    pub thrust_kn: f64,
+    pub propellant: String,
+    pub isp_curve: Curve,
 }
 
 /// A landing leg or wheel as the original defines it.
