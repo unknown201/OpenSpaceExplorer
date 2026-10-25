@@ -1397,14 +1397,21 @@ async fn the_editor_gets_a_stage_report_with_sea_level_twr() {
         },
     )
     .await;
-    let (stages, dv) = wait_for(&mut ws, |m| match m {
+    let (stages, dv, com, cot, dir) = wait_for(&mut ws, |m| match m {
         ServerMessage::StageReport {
             stages,
             delta_v_vacuum_mps,
-        } => Some((stages, delta_v_vacuum_mps)),
+            com_m,
+            cot_m,
+            thrust_dir,
+        } => Some((stages, delta_v_vacuum_mps, com_m, cot_m, thrust_dir)),
         _ => None,
     })
     .await;
+    // the stack hangs below the pod: mass between pod and engine, thrust at the engine pushing up
+    assert!(com.y < 0.0 && com.y > -2.2, "{com:?}");
+    assert!((cot.y + 2.2).abs() < 1e-6, "{cot:?}");
+    assert!(dir.y > 0.99, "{dir:?}");
     assert!(dv > 500.0, "{dv} m/s");
     let s = stages
         .iter()
@@ -1419,87 +1426,56 @@ async fn the_editor_gets_a_stage_report_with_sea_level_twr() {
 }
 
 #[tokio::test]
-async fn deployment_snapshots_identify_panel_and_gear_instances() {
-    let (_server, addr) = spawn_server().await;
-    let mut ws = connect_ws(&addr).await;
-    hello(&mut ws, None, "rig pilot").await;
+async fn resuming_the_shared_campaign_brings_back_its_mode_and_tech_tree() {
+    let (_server, addr) = spawn_server_with(&["--db", ":memory:", "--save", "none"], None).await;
+    // someone starts a sandbox straight away (nobody ever joined the shared campaign) and leaves
+    let mut a = connect_ws(&addr).await;
+    hello(&mut a, None, "a").await;
     send_msg(
-        &mut ws,
+        &mut a,
         &ClientMessage::CreateSession {
-            name: "Rigs".into(),
+            name: "Box".into(),
             mode: ose_net::SessionMode::Sandbox,
             difficulty: Vec::new(),
         },
     )
     .await;
-    wait_for(&mut ws, |m| {
-        matches!(m, ServerMessage::CampaignState { .. }).then_some(())
+    wait_for(&mut a, |m| {
+        matches!(m, ServerMessage::CampaignState { created: true, .. }).then_some(())
     })
     .await;
-    let mut craft = starter_craft();
-    for (i, id) in ["solararray_1v_1x6", "solararray_1v_1x6", "landingleg_0v"]
+    drop(a);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    // a new page resumes the shared campaign and asks for its science
+    let mut b = connect_ws(&addr).await;
+    hello(&mut b, None, "b").await;
+    send_msg(&mut b, &ClientMessage::ListSessions).await;
+    let list = wait_for(&mut b, |m| match m {
+        ServerMessage::SessionList { sessions } => Some(sessions),
+        _ => None,
+    })
+    .await;
+    let shared = list
         .iter()
-        .enumerate()
-    {
-        let mut part = craft.parts[0].clone();
-        part.guid = format!("rig-{i}");
-        part.part_id = (*id).into();
-        part.parent = Some(0);
-        part.local_position = ose_math::DVec3::new(i as f64 - 1.0, -0.5, 0.0);
-        craft.parts.push(part);
-    }
-    send_msg(&mut ws, &ClientMessage::LaunchOnPad { craft }).await;
-    let vessel = wait_for(&mut ws, |m| match m {
-        ServerMessage::CraftLaunched { vessel, reason, .. } => {
-            assert!(reason.is_none(), "{reason:?}");
-            vessel
-        }
+        .find(|x| x.name == "Shared campaign")
+        .expect("listed")
+        .id
+        .clone();
+    send_msg(&mut b, &ClientMessage::SelectSession { id: shared }).await;
+    let mode = wait_for(&mut b, |m| match m {
+        ServerMessage::CampaignState { mode, .. } => Some(mode),
+        ServerMessage::Rejected { reason } => panic!("{reason}"),
         _ => None,
     })
     .await;
-    let flight = |m: ServerMessage| match m {
-        ServerMessage::Vessels { vessels, .. } => vessels
-            .into_iter()
-            .find(|v| v.id == vessel)
-            .and_then(|v| v.flight),
+    assert_eq!(mode, ose_net::SessionMode::Exploration);
+    send_msg(&mut b, &ClientMessage::ScienceInfo).await;
+    let tree = wait_for(&mut b, |m| match m {
+        ServerMessage::ScienceState { tech_tree, .. } => Some(tech_tree),
         _ => None,
-    };
-    let initial = wait_for(&mut ws, flight).await;
-    assert_eq!(initial.panels, vec![(3, false), (4, false)]);
-    assert_eq!(initial.gear.len(), 1);
-    assert_eq!(initial.gear[0].0, 5);
-    for deploy in [true, false] {
-        send_msg(&mut ws, &ClientMessage::DeployPanels { vessel, deploy }).await;
-        wait_for(&mut ws, |m| match m {
-            ServerMessage::FlightAck {
-                vessel: v,
-                accepted,
-                reason,
-            } if v == vessel => {
-                assert!(accepted, "{reason:?}");
-                Some(())
-            }
-            _ => None,
-        })
-        .await;
-        let f = wait_for(&mut ws, |m| {
-            flight(m).filter(|f| f.panels.iter().all(|(_, out)| *out == deploy))
-        })
-        .await;
-        assert_eq!(f.panels, vec![(3, deploy), (4, deploy)]);
-        assert_eq!(f.panels_deployed, deploy);
-        assert_eq!(
-            f.gear, initial.gear,
-            "solar commands must not move landing gear"
-        );
-    }
-    let deploy = !initial.gear[0].1;
-    send_msg(&mut ws, &ClientMessage::DeployGear { vessel, deploy }).await;
-    let f = wait_for(&mut ws, |m| {
-        flight(m).filter(|f| f.gear == vec![(5, deploy)])
     })
     .await;
-    assert_eq!(f.panels, vec![(3, false), (4, false)]);
+    assert!(tree, "an exploration campaign has its tech tree");
 }
 
 async fn http_get_json(addr: &str, path: &str) -> serde_json::Value {
@@ -1862,4 +1838,88 @@ mod save {
                 .collect(),
         }
     }
+}
+
+#[tokio::test]
+async fn deployment_snapshots_identify_panel_and_gear_instances() {
+    let (_server, addr) = spawn_server().await;
+    let mut ws = connect_ws(&addr).await;
+    hello(&mut ws, None, "rig pilot").await;
+    send_msg(
+        &mut ws,
+        &ClientMessage::CreateSession {
+            name: "Rigs".into(),
+            mode: ose_net::SessionMode::Sandbox,
+            difficulty: Vec::new(),
+        },
+    )
+    .await;
+    wait_for(&mut ws, |m| {
+        matches!(m, ServerMessage::CampaignState { .. }).then_some(())
+    })
+    .await;
+    let mut craft = starter_craft();
+    for (i, id) in ["solararray_1v_1x6", "solararray_1v_1x6", "landingleg_0v"]
+        .iter()
+        .enumerate()
+    {
+        let mut part = craft.parts[0].clone();
+        part.guid = format!("rig-{i}");
+        part.part_id = (*id).into();
+        part.parent = Some(0);
+        part.local_position = ose_math::DVec3::new(i as f64 - 1.0, -0.5, 0.0);
+        craft.parts.push(part);
+    }
+    send_msg(&mut ws, &ClientMessage::LaunchOnPad { craft }).await;
+    let vessel = wait_for(&mut ws, |m| match m {
+        ServerMessage::CraftLaunched { vessel, reason, .. } => {
+            assert!(reason.is_none(), "{reason:?}");
+            vessel
+        }
+        _ => None,
+    })
+    .await;
+    let flight = |m: ServerMessage| match m {
+        ServerMessage::Vessels { vessels, .. } => vessels
+            .into_iter()
+            .find(|v| v.id == vessel)
+            .and_then(|v| v.flight),
+        _ => None,
+    };
+    let initial = wait_for(&mut ws, flight).await;
+    assert_eq!(initial.panels, vec![(3, false), (4, false)]);
+    assert_eq!(initial.gear.len(), 1);
+    assert_eq!(initial.gear[0].0, 5);
+    for deploy in [true, false] {
+        send_msg(&mut ws, &ClientMessage::DeployPanels { vessel, deploy }).await;
+        wait_for(&mut ws, |m| match m {
+            ServerMessage::FlightAck {
+                vessel: v,
+                accepted,
+                reason,
+            } if v == vessel => {
+                assert!(accepted, "{reason:?}");
+                Some(())
+            }
+            _ => None,
+        })
+        .await;
+        let f = wait_for(&mut ws, |m| {
+            flight(m).filter(|f| f.panels.iter().all(|(_, out)| *out == deploy))
+        })
+        .await;
+        assert_eq!(f.panels, vec![(3, deploy), (4, deploy)]);
+        assert_eq!(f.panels_deployed, deploy);
+        assert_eq!(
+            f.gear, initial.gear,
+            "solar commands must not move landing gear"
+        );
+    }
+    let deploy = !initial.gear[0].1;
+    send_msg(&mut ws, &ClientMessage::DeployGear { vessel, deploy }).await;
+    let f = wait_for(&mut ws, |m| {
+        flight(m).filter(|f| f.gear == vec![(5, deploy)])
+    })
+    .await;
+    assert_eq!(f.panels, vec![(3, false), (4, false)]);
 }

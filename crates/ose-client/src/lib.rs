@@ -162,6 +162,11 @@ struct App {
     vab_stages_readout: Vec<ose_net::StageReadout>,
     /// A part pressed on a stage card, to drop on another card.
     vab_stage_drag: Option<usize>,
+    /// The server's centre of mass and centre/direction of thrust, and whether their markers show.
+    vab_com: Option<ose_math::DVec3>,
+    vab_cot: Option<(ose_math::DVec3, ose_math::DVec3)>,
+    vab_show_com: bool,
+    vab_show_cot: bool,
     vab_report_due: Option<f64>,
     vab_dragged: bool,
     /// The flight view (the vessel in 3D near its body).
@@ -455,6 +460,10 @@ pub fn start() -> Result<(), JsValue> {
         vab_yaw: vab::NO_TURN,
         vab_stages_readout: Vec::new(),
         vab_stage_drag: None,
+        vab_com: None,
+        vab_cot: None,
+        vab_show_com: stored("ose.vab.com").as_deref() != Some("off"),
+        vab_show_cot: stored("ose.vab.cot").as_deref() != Some("off"),
         vab_report_due: None,
         vab_dragged: false,
         #[cfg(target_arch = "wasm32")]
@@ -1395,6 +1404,34 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
     )?;
     wire("vab-save", Box::new(|a| a.borrow_mut().vab_save(false)))?;
     wire("vab-undo", Box::new(|a| a.borrow_mut().vab_undo(false)))?;
+    wire(
+        "vab-report-btn",
+        Box::new(|a| {
+            if let Some(el) = a.borrow().doc.get_element_by_id("vab-report-pop") {
+                el.class_list().toggle("open").ok();
+            }
+        }),
+    )?;
+    for (id, com) in [("vab-com", true), ("vab-cot", false)] {
+        wire(
+            id,
+            Box::new(move |a| {
+                let mut app = a.borrow_mut();
+                let on = if com {
+                    app.vab_show_com = !app.vab_show_com;
+                    app.vab_show_com
+                } else {
+                    app.vab_show_cot = !app.vab_show_cot;
+                    app.vab_show_cot
+                };
+                store(
+                    if com { "ose.vab.com" } else { "ose.vab.cot" },
+                    if on { "on" } else { "off" },
+                );
+                app.render_vab_view();
+            }),
+        )?;
+    }
     wire(
         "vab-load",
         Box::new(|a| {
@@ -2389,6 +2426,10 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                         app.map_mode = !app.map_mode;
                         true
                     }
+                    "BracketRight" | "BracketLeft" if !app.map_mode => {
+                        app.switch_vessel(code == "BracketLeft");
+                        true
+                    }
                     "KeyV" if !ev.repeat() => {
                         #[cfg(target_arch = "wasm32")]
                         {
@@ -3234,8 +3275,13 @@ impl App {
             ServerMessage::StageReport {
                 stages,
                 delta_v_vacuum_mps,
+                com_m,
+                cot_m,
+                thrust_dir,
             } => {
                 self.vab_stages_readout = stages;
+                self.vab_com = Some(com_m);
+                self.vab_cot = (thrust_dir.length() > 0.5).then_some((cot_m, thrust_dir));
                 set_text(
                     &self.doc,
                     "vab-dv",
@@ -3381,6 +3427,37 @@ impl App {
     }
 
     /// Centre the camera on a vessel: focus its reference body (so orbits draw around it) and follow.
+    /// `]` / `[` in flight: take control of the next or previous of your vessels within 2.5 km (the
+    /// original's FocusNext/FocusPrev over the vessels loaded around you: stages dropped, Kerbals on EVA).
+    fn switch_vessel(&mut self, back: bool) {
+        let Some(cur) = self.flying else { return };
+        let Some(scene) = &self.scene else { return };
+        let ut = self.time.ut_at(now_ms());
+        let Some(here) = scene.vessel(cur).map(|v| scene.vessel_position(v, ut)) else {
+            return;
+        };
+        let mut ids: Vec<u64> = scene
+            .vessels
+            .iter()
+            .filter(|v| v.owner.is_some() && v.owner == self.player_id && v.flight.is_some())
+            .filter(|v| (scene.vessel_position(v, ut) - here).length() < 2500.0)
+            .map(|v| v.id)
+            .collect();
+        ids.sort();
+        if ids.len() < 2 {
+            hud::push(&self.doc, "No other vessel of yours nearby", "passive");
+            return;
+        }
+        let i = ids.iter().position(|id| *id == cur).unwrap_or(0);
+        let n = ids.len();
+        let next = ids[if back { (i + n - 1) % n } else { (i + 1) % n }];
+        let craft = stored(&format!("ose.flight.{next}")).and_then(|c| c.parse::<u64>().ok());
+        self.start_flight(next, craft);
+        if let Some(v) = self.scene.as_ref().and_then(|s| s.vessel(next)) {
+            hud::push(&self.doc, &format!("Switched to {}", v.name), "passive");
+        }
+    }
+
     /// `]` / `[` on the map: follow the next or previous vessel (yours first), as the original's FocusNext.
     fn cycle_vessel(&mut self, back: bool) {
         let Some(scene) = &self.scene else { return };
@@ -4224,11 +4301,55 @@ impl App {
             }
             list.set_inner_html(&html);
         }
+        // Engineer's report: the flaw count on the header button and the list in its pop-over.
+        let readout = |f: &dyn Fn(&ose_net::StageReadout) -> f64| -> Vec<(usize, f64)> {
+            self.vab_stages_readout
+                .iter()
+                .map(|r| (r.stage_id as usize, f(r)))
+                .collect()
+        };
+        let flaws = vab::engineer_report(
+            &self.editor.craft,
+            &self.catalog,
+            &readout(&|r| r.twr_asl),
+            &readout(&|r| r.delta_v_vacuum_mps),
+        );
+        let worst = flaws.iter().map(|f| f.severity).max().unwrap_or(0);
+        let count = flaws.iter().filter(|f| f.severity > 0).count();
+        if let Some(b) = self.doc.get_element_by_id("vab-report-btn") {
+            b.set_attribute("data-ose-flaws", &count.to_string()).ok();
+            b.class_list().toggle_with_force("warn", worst == 1).ok();
+            b.class_list().toggle_with_force("bad", worst == 2).ok();
+        }
+        set_text(
+            &self.doc,
+            "vab-report-count",
+            &if count > 0 {
+                count.to_string()
+            } else {
+                String::new()
+            },
+        );
+        if let Some(list) = self.doc.get_element_by_id("vab-flaws") {
+            let html: String = flaws
+                .iter()
+                .map(|f| format!("<li class=\"sev{}\">{}</li>", f.severity, esc(&f.text)))
+                .collect();
+            list.set_inner_html(&html);
+        }
         set_text(
             &self.doc,
             "vab-sym",
             &format!("\u{d7}{}", self.vab_symmetry),
         );
+        for (id, on) in [
+            ("vab-com", self.vab_show_com),
+            ("vab-cot", self.vab_show_cot),
+        ] {
+            if let Some(b) = self.doc.get_element_by_id(id) {
+                b.class_list().toggle_with_force("on", on).ok();
+            }
+        }
         if let Some(b) = self.doc.get_element_by_id("vab-snap") {
             b.class_list().toggle_with_force("on", self.vab_snap).ok();
         }
@@ -5710,7 +5831,7 @@ impl App {
         let name = input_string(&self.doc, "create-name")
             .map(|n| n.trim().to_string())
             .filter(|n| !n.is_empty())
-            .unwrap_or_else(|| "Shared campaign".into());
+            .unwrap_or_else(|| "New campaign".into());
         let mode = match select_value(&self.doc, "create-mode").as_deref() {
             Some("Sandbox") => SessionMode::Sandbox,
             _ => SessionMode::Exploration,
@@ -6225,6 +6346,9 @@ impl App {
         }
         #[cfg(target_arch = "wasm32")]
         if self.in_session && self.vab_active() {
+            let empty = self.editor.is_empty();
+            self.vab3d.com = self.vab_com.filter(|_| self.vab_show_com && !empty);
+            self.vab3d.cot = self.vab_cot.filter(|_| self.vab_show_cot && !empty);
             self.vab3d.ghosts = self
                 .vab3d
                 .held

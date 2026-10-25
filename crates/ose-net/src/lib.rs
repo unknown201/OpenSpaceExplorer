@@ -767,6 +767,11 @@ pub enum ServerMessage {
     StageReport {
         stages: Vec<StageReadout>,
         delta_v_vacuum_mps: f64,
+        /// Wet centre of mass, and the centre and direction of thrust of the first stage to fire's engines
+        /// (zero without engines); craft frame, like `CraftPart::local_position`.
+        com_m: DVec3,
+        cot_m: DVec3,
+        thrust_dir: DVec3,
     },
     /// Answer to `QuickSave`, `QuickLoad`, `RevertToLaunch` and `RevertToEditor`; `craft` is the reverted
     /// craft for the editor.

@@ -1717,6 +1717,63 @@ fn save_request(s: &Shared, player_id: u64, msg: &ClientMessage) -> ServerMessag
     }
 }
 
+/// A craft's wet centre of mass, and the thrust centre and direction of its first stage to fire (craft
+/// frame; an engine pushes along its own +Y).
+fn balance(
+    s: &Shared,
+    craft: &ose_data::craft::Craft,
+    report: &ose_data::staging::DeltaVReport,
+) -> (ose_math::DVec3, ose_math::DVec3, ose_math::DVec3) {
+    use ose_math::DVec3;
+    let unit = |id: &str| {
+        s.resources
+            .iter()
+            .find(|r| r.id == id)
+            .and_then(|r| match &r.kind {
+                ose_data::ResourceKind::Basic {
+                    mass_per_unit_t, ..
+                } => Some(*mass_per_unit_t),
+                _ => None,
+            })
+            .unwrap_or(0.0)
+    };
+    let def = |i: usize| s.parts.iter().find(|d| d.id == craft.parts[i].part_id);
+    let (mut m, mut c) = (0.0, DVec3::ZERO);
+    for (i, p) in craft.parts.iter().enumerate() {
+        let wet = def(i).map(|d| d.mass_t).unwrap_or(0.0)
+            + p.resources
+                .iter()
+                .map(|r| r.stored_units * unit(&r.resource))
+                .sum::<f64>();
+        m += wet;
+        c = c + p.local_position * wet;
+    }
+    let com = if m > 0.0 { c * (1.0 / m) } else { DVec3::ZERO };
+    let rotate = |q: ose_data::craft::Quat, v: DVec3| {
+        let u = DVec3::new(q.x, q.y, q.z);
+        let t = u.cross(v) * 2.0;
+        v + t * q.w + u.cross(t)
+    };
+    let (mut thrust, mut at, mut dir) = (0.0, DVec3::ZERO, DVec3::ZERO);
+    if let Some(stage) = report.stages.iter().find(|st| st.thrust_kn > 0.0) {
+        for &i in &stage.engines {
+            let t = def(i)
+                .and_then(|d| d.engines.first())
+                .map(|e| e.max_thrust_kn)
+                .unwrap_or(0.0);
+            let p = &craft.parts[i];
+            thrust += t;
+            at = at + p.local_position * t;
+            dir = dir + rotate(p.local_rotation, DVec3::new(0.0, 1.0, 0.0)) * t;
+        }
+    }
+    if thrust > 0.0 {
+        (com, at * (1.0 / thrust), dir.normalized())
+    } else {
+        (com, DVec3::ZERO, DVec3::ZERO)
+    }
+}
+
 /// The staging report as the protocol carries it, with sea-level thrust and TWR.
 fn stage_readouts(
     s: &Shared,
@@ -2453,9 +2510,13 @@ async fn session(mut socket: WebSocket, s: AppState) {
                             let mut filled = craft;
                             fill_default_resources(&s, &mut filled);
                             let report = ose_data::staging::delta_v_by_stage(&filled, &s.parts, &s.resources);
+                            let (com_m, cot_m, thrust_dir) = balance(&s, &filled, &report);
                             let reply = ServerMessage::StageReport {
                                 stages: stage_readouts(&s, &filled, &report),
                                 delta_v_vacuum_mps: report.total_vacuum_mps,
+                                com_m,
+                                cot_m,
+                                thrust_dir,
                             };
                             if !send(&mut socket, &reply).await { break; }
                         }

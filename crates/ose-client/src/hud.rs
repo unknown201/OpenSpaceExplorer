@@ -267,6 +267,17 @@ pub fn update(doc: &Document, s: &HudState) {
     if s.orbit_speed {
         set(doc, "fh-speed", &format!("{:.1} m/s", s.orbital_speed_mps));
     }
+    if let Some(bar) = doc
+        .get_element_by_id("fh-fuel-fill")
+        .and_then(|e| wasm_bindgen::JsCast::dyn_into::<web_sys::HtmlElement>(e).ok())
+    {
+        bar.style()
+            .set_property(
+                "width",
+                &format!("{:.0}%", (f.propellant_fraction * 100.0).clamp(0.0, 100.0)),
+            )
+            .ok();
+    }
     set(
         doc,
         "fh-throttle-pct",

@@ -289,6 +289,8 @@
     .fh-comm { position: absolute; top: calc(12 * var(--u)); right: calc(16 * var(--u)); display: flex; align-items: center; gap: calc(6 * var(--u)); background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)); padding: calc(4 * var(--u)) calc(10 * var(--u)); font-size: calc(12 * var(--u)); color: #f0a070; pointer-events: auto; }
     .fh-comm i { width: calc(18 * var(--u)); height: calc(18 * var(--u)); background: currentColor; -webkit-mask: var(--ico) center / contain no-repeat; mask: var(--ico) center / contain no-repeat; }
     .fh-comm.on { color: #7dff8a; }
+    .fh-fuelbar { height: calc(8 * var(--u)); background: #ffffff22; border-radius: calc(4 * var(--u)); overflow: hidden; }
+    #fh-fuel-fill { height: 100%; width: 0; background: linear-gradient(90deg, #e0a040, #ffd060); }
     .fh-burn { display: none !important; color: #9fb8ff; font-size: calc(13 * var(--u)); font-weight: 600; }
     .fh-burn.on { display: flex !important; }
     #flight-hud .fh-missions-btn { position: absolute; top: calc(48 * var(--u)); right: calc(16 * var(--u)); width: calc(36 * var(--u)); height: calc(36 * var(--u)); padding: 0; display: grid; place-items: center; }
@@ -368,13 +370,23 @@
     #vab-header .vh-pop-wrap { position: relative; }
     #vab-header .vh-pop { display: none; position: absolute; top: calc(100% + 6px); left: 0; z-index: 20; width: 360px; max-height: 60vh; overflow: auto; background: #0b1020f8; border: 1px solid #3b63a8; border-radius: 6px; box-shadow: 0 8px 24px #000c; }
     #vab-header .vh-pop.open { display: block; }
+    #vab-header .vh-pop.right { left: auto; right: 0; }
+    #vab-header .vh-pop-title { padding: 8px 10px 0; font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: #9fb0cc; }
+    #vab-header #vab-report-btn { display: flex; gap: 4px; align-items: center; }
+    #vab-header #vab-report-btn.warn { color: #f0c060; border-color: #f0c06099; } #vab-header #vab-report-btn.bad { color: #ff7a6a; border-color: #ff7a6a99; }
+    #vab-report-count { font-size: 12px; }
+    #vab-flaws { list-style: none; margin: 0; padding: 6px 10px 10px; font-size: 13px; }
+    #vab-flaws li { padding: 5px 0 5px 18px; position: relative; color: #e6ecf7; border-top: 1px solid #ffffff10; }
+    #vab-flaws li::before { content: ""; position: absolute; left: 2px; top: 10px; width: 8px; height: 8px; border-radius: 50%; background: #7dff8a; }
+    #vab-flaws li.sev1::before { background: #f0c060; } #vab-flaws li.sev2::before { background: #ff7a6a; }
     #vab-load-list { list-style: none; margin: 0; padding: 4px; }
     #vab-load-list li { padding: 6px 8px; border-radius: 4px; cursor: pointer; color: #e6ecf7; font-size: 13px; }
     #vab-load-list li:hover { background: #1f3d6b; }
     #vab-load-list li small { display: block; color: #9fb0cc; font-size: 11px; } #vab-load-list li i { color: #9fb0cc; font-size: 11px; }
     #vab-load-list li.empty { color: #9fb0cc; cursor: default; }
     #vab-header #vab-sym { min-width: 44px; font-variant-numeric: tabular-nums; }
-    #vab-header #vab-snap.on { background: #1f3d6b; border-color: #3b63a8; color: #fff; }
+    #vab-header #vab-snap.on, #vab-header #vab-com.on, #vab-header #vab-cot.on { background: #1f3d6b; border-color: #3b63a8; color: #fff; }
+    #vab-header #vab-com.on { color: #ffd84a; } #vab-header #vab-cot.on { color: #ff6ae6; }
     #vab-dv { font-size: 13px; color: #9fb0cc; margin-right: 6px; }
     body.webgpu #vab-header { position: relative; pointer-events: auto; background: #10141bf0; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)); padding: calc(6 * var(--u)) calc(10 * var(--u)); margin: 0 0 calc(8 * var(--u)); }
     body.webgpu #screen-vab #vab { height: calc(100vh - 92 * var(--u)) !important; }
@@ -633,7 +645,7 @@
             <div class="field"><span>Game Mode</span>
               <select id="create-mode" data-ose="create-mode"><option value="Sandbox">Sandbox</option><option value="Exploration" selected>Exploration</option></select></div>
             <div class="field"><span>Difficulty</span><select id="create-preset" data-ose="create-preset"></select></div>
-            <div class="field"><span>Campaign Name</span><input id="create-name" data-ose="create-name" type="text" maxlength="48" value="Shared campaign" /></div>
+            <div class="field"><span>Campaign Name</span><input id="create-name" data-ose="create-name" type="text" maxlength="48" value="New campaign" /></div>
             <details class="sub"><summary>Difficulty options</summary><div id="difficulty" data-ose="difficulty"></div></details>
             <div class="start"><button id="create" data-ose="create">Start Campaign</button></div>
             <div class="info">Each campaign stays on the list after you exit, to resume later.</div>
@@ -694,9 +706,13 @@
             <button id="vab-redo" class="secondary vh-ico vh-flip" data-ose="vab-redo" title="Redo (Ctrl+Y)"><i style="--ico:url(assets/ui/hud/ToolsBar-ICO-Undo-onRest.png)"></i></button>
             <button id="vab-sym" class="secondary" data-ose="vab-sym" title="Symmetry for parts on a side: 1, 2, 3, 4, 6 or 8 copies around the part (X, Shift+X back)">&#215;1</button>
             <button id="vab-snap" class="secondary on" data-ose="vab-snap" title="Angle snap: side parts go at 15 degree steps (C)">Snap</button>
+            <button id="vab-com" class="secondary on" data-ose="vab-com" title="Centre of mass marker (yellow), full tanks">CoM</button>
+            <button id="vab-cot" class="secondary on" data-ose="vab-cot" title="Centre of thrust marker (magenta) of the first stage's engines, with the thrust line">CoT</button>
           </div>
           <input id="vab-name" data-ose="vab-name" type="text" maxlength="48" value="Untitled craft" title="Vehicle name" />
           <div class="vh-group">
+            <span class="vh-pop-wrap"><button id="vab-report-btn" class="secondary vh-ico" data-ose="vab-report-btn" title="Engineer's report: what the vehicle lacks"><i style="--ico:url(assets/ui/hud/WB-ICO-EngineersReport.png)"></i><b id="vab-report-count"></b></button>
+              <div id="vab-report-pop" class="vh-pop right"><div class="vh-pop-title">Engineer's report</div><ul id="vab-flaws" data-ose="vab-flaws"></ul></div></span>
             <span id="vab-dv" data-ose="vab-dv" title="Total delta-v in vacuum, from the server's report when the craft is saved"></span>
             <button id="vab-save" data-ose="vab-save" class="secondary" title="Save to the craft library (Ctrl+S)">Save</button>
             <button id="vab-launch" data-ose="vab-launch" class="vh-launch" title="Save and roll out to the launch pad"><i style="--ico:url(assets/ui/hud/Workspace-ICO-LaunchVessel-Normal-Active.png)"></i>Launch</button>
@@ -806,6 +822,7 @@
       <ul id="fh-stages" data-ose="flight-stages" title="Stages still to fire; the bottom one goes next (Space)"></ul>
       <div id="fh-stage" class="fh-small">--</div>
       <div id="fh-fuel" class="fh-small">--</div>
+      <div class="fh-fuelbar" title="Propellant left in the stage burning now"><div id="fh-fuel-fill" data-ose="flight-fuel"></div></div>
       <div id="fh-ec" class="fh-small" data-ose="flight-ec">--</div>
       <div class="fh-small" title="worst joint load against its break limit">STRESS</div>
       <div class="fh-stress" data-ose="flight-stress"><div id="fh-stress-fill"></div></div>
