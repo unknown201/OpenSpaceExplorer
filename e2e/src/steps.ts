@@ -237,6 +237,7 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
       await sleep(1500);
       const gpu = page.locator('[data-ose="gpu"]').first();
       const renderer = (await gpu.getAttribute("data-ose-renderer")) ?? "canvas2d";
+      if (process.env.OSE_REQUIRE_WEBGPU && renderer !== "webgpu") return failed("WebGPU rendering required for particle validation");
       const backdrop = (await gpu.getAttribute("data-ose-menu-vessel")) ?? "none (no menu assets on this server)";
       return passed(`canvas ${Math.round(box.width)}x${Math.round(box.height)}, renderer ${renderer}, menu backdrop ${backdrop}`);
     }),
@@ -275,8 +276,12 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
         return blocked('universal-time readout in the HUD ([data-ose="ut"]); Phase 3');
       }
       const a = (await ut.first().textContent()) ?? "";
-      await sleep(1500);
-      const b = (await ut.first().textContent()) ?? "";
+      const deadline = Date.now() + 5000;
+      let b = a;
+      while (b === a && Date.now() < deadline) {
+        await sleep(200);
+        b = (await ut.first().textContent()) ?? "";
+      }
       if (a === b) return failed(`time readout did not advance (${JSON.stringify(a)})`);
       return passed(`UT ${a.trim()} -> ${b.trim()}`);
     }),
@@ -494,7 +499,34 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
         const note = ((await page.locator("#fh-note").textContent().catch(() => "")) ?? "").trim();
         return failed(`the craft did not climb after full throttle and stage (${before.toFixed(0)} m -> ${after.toFixed(0)} m, ${situation}${note ? `; ${note}` : ""})`);
       }
-      return passed(`lifted off: ${before.toFixed(0)} m -> ${after.toFixed(0)} m, ${situation}`);
+      let particles = "";
+      if (await hud.first().getAttribute("data-ose-particles") !== null) {
+        const count = async () => Number(await hud.first().getAttribute("data-ose-particles"));
+        const layers = async () => Number(await hud.first().getAttribute("data-ose-engine-fx-layers"));
+        const start = Date.now();
+        while (await layers() === 0 && Date.now() - start < 20_000) await sleep(100);
+        const burning = await count();
+        const authored = await layers();
+        if (authored === 0 || !Number.isFinite(burning) || burning < 0) return failed(`engine FX unavailable: ${authored} authored layers, ${burning} particles`);
+        // Leave enough altitude and upward momentum to coast while the smoke finishes its lifetime.
+        const climb = Date.now();
+        while (await altOf() < before + 200 && Date.now() - climb < 20_000) await sleep(150);
+        if (await altOf() < before + 200) return failed("could not reach cutoff-test altitude");
+        await page.locator('[data-ose="flight-throttle-cut"]').first().click();
+        const cutoff = Date.now();
+        while (Date.now() - cutoff < 6500 && (await count() > 0 || await layers() > 0)) await sleep(150);
+        if (await count() !== 0) return failed("particles did not expire after engine cutoff");
+        if (await layers() !== 0) return failed("mesh plumes did not turn off at engine cutoff");
+        await page.locator('[data-ose="flight-throttle-full"]').first().click();
+        const restart = Date.now();
+        while (await layers() === 0 && Date.now() - restart < 5000) await sleep(100);
+        if (await layers() === 0) return failed("plumes did not resume after restoring throttle");
+        await sleep(1000);
+        particles = `; ${authored} authored layers, ${burning} particles, cutoff cleared`;
+      }
+      if (probe.pageErrors.length) return failed(probe.pageErrors.join("; "));
+      if (probe.consoleErrors.length) return failed(probe.consoleErrors.join("; "));
+      return passed(`lifted off: ${before.toFixed(0)} m -> ${after.toFixed(0)} m, ${situation}${particles}`);
     }),
   );
 

@@ -676,6 +676,19 @@ fn flight_readout(
             0.0
         },
         dynamic_pressure_kpa: 0.0005 * rho * v_surf.length_squared(),
+        static_pressure_kpa: pressure_kpa,
+        firing_engines: if thrust > 0.0 {
+            u.structure(e)
+                .map(|st| {
+                    st.fed_engines(p.stage)
+                        .into_iter()
+                        .filter_map(|i| u16::try_from(i).ok())
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        },
         facing: p.facing,
         roll_ref: roll_reference(p.facing, up),
         electric_charge: ec.0,

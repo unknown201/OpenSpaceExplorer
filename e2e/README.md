@@ -20,6 +20,18 @@ OSE_E2E_HEADED=1 npm test                # with browser windows; Firefox only ha
 The gameplay table for each browser is printed in the run and attached to the test as
 `gameplay-report` and `gameplay-results.json` (`npx playwright show-report` after a CI run).
 
+For particle verification, set `OSE_REQUIRE_WEBGPU=1` to reject Canvas fallback. Set
+`OSE_CHROMIUM_EXECUTABLE` to a local Chromium executable when the pinned browser cannot create a GPU
+device (some Windows installs lack its DXIL DLL). With WebGPU, the flight step checks authored plume
+layers and particle emission, coasts until smoke expires after cutoff, then checks restart and saves
+`flight-particles.png`. The flight HUD's `data-ose-particles` attribute reports the live particle count;
+each emitter retains its original prefab limit. `data-ose-engine-fx-layers` counts ready mesh layers.
+
+`node scripts/check-fx-parity.mjs` captures 36 deterministic HDR frames from the production renderer.
+`tools/check_fx_parity.py` compares those pixels with the original exhaust shader bytecode executed
+independently in Direct3D11. See [particle reference notes](../docs/reference-notes/particles.md) for
+asset export, the Windows reference build, thresholds, and the limits of this comparison.
+
 ## Client hooks
 
 The steps find features through a small set of attributes the client is asked to render. A new feature

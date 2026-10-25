@@ -4,6 +4,8 @@ Updated 2026-10-24.
 
 ## What works
 
+- Flight engine effects (protocol v12): original engine plume meshes/morphs, exhaust shader arithmetic, full-resolution compressed textures/mips, and authored ignition/shutdown/smoke recipes. Heat refraction and HDR bloom are integrated with the scene. Static pressure and fuel-fed engine indices come from the server. `tools/export_particles.py` exports 35 engines, 53 nozzles and two contextual prefabs into `assets/web/fx/`. A 36-frame comparison against original Direct3D shader bytecode passed with worst effect-relative RMSE below 0.005%; this verifies plume shaders, not full Unity particle lighting or whole-game parity. See `docs/reference-notes/particles.md` for reproduction and remaining limits.
+
 - Cargo workspace with seven crates (`ose-math`, `ose-data`, `ose-sim`, `ose-net`, `ose-server`, `ose-client`, `ose-importer`). `cargo test --workspace`, `cargo clippy -D warnings` and the wasm check all pass. `trunk build` in `crates/ose-client` produces a loadable page (no game logic in the client, see ADR-0002).
 - `ose-math::Orbit`: Keplerian elements <-> state vectors, the original's anomaly solvers and tolerances, propagation, time to true anomaly, true anomaly at radius; 7 tests including elliptic/hyperbolic round trips.
 - `ose-sim::bodies`: bodies as ECS entities with `OnRails` orbits, star-space position by walking the parent chain, `main_body_at` (SOI containment). `cargo run -p ose-sim --example kerbol` loads the converted data and prints every body; Kerbin comes out at 13,599,840 km and 9284.5 m/s, Mun at 12,000 km, Minmus at 47,000 km.

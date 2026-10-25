@@ -258,6 +258,13 @@ pub struct Renderer {
     mirror_pipeline: wgpu::RenderPipeline,
     blend_pipeline: wgpu::RenderPipeline,
     line_pipeline: wgpu::RenderPipeline,
+    engine_fx: crate::engine_fx_gpu::EngineFxGpu,
+    post: crate::fx_post::FxPost,
+    view: DMat4,
+    near: f64,
+    fixture_grid: bool,
+    camera_forward: DVec3,
+    camera_up: DVec3,
     camera_buf: wgpu::Buffer,
     camera_bind: wgpu::BindGroup,
     object_layout: wgpu::BindGroupLayout,
@@ -306,7 +313,7 @@ impl Renderer {
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("ose"),
-                required_features: wgpu::Features::empty(),
+                required_features: adapter.features() & wgpu::Features::TEXTURE_COMPRESSION_BC,
                 required_limits: wgpu::Limits::downlevel_webgl2_defaults()
                     .using_resolution(adapter.limits()),
                 ..Default::default()
@@ -333,6 +340,8 @@ impl Renderer {
             desired_maximum_frame_latency: 2,
         };
         surface.configure(&device, &config);
+        let surface_format = format;
+        let format = crate::fx_post::FORMAT;
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("ose shader"),
@@ -623,6 +632,9 @@ impl Renderer {
             [&default_views[0], &default_views[1], &default_views[2]],
         );
         let depth = Self::make_depth(&device, width, height);
+        let post = crate::fx_post::FxPost::new(&device, width, height, surface_format);
+        let engine_fx =
+            crate::engine_fx_gpu::EngineFxGpu::new(&device, &queue, &depth, &post.snapshot_view);
         Some(Renderer {
             device,
             queue,
@@ -632,6 +644,13 @@ impl Renderer {
             mirror_pipeline,
             blend_pipeline,
             line_pipeline,
+            engine_fx,
+            post,
+            view: DMat4::IDENTITY,
+            near: 0.3,
+            fixture_grid: false,
+            camera_forward: -DVec3::Z,
+            camera_up: DVec3::Y,
             camera_buf,
             camera_bind,
             object_layout,
@@ -721,7 +740,8 @@ impl Renderer {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Depth32Float,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             })
             .create_view(&wgpu::TextureViewDescriptor::default())
@@ -738,6 +758,9 @@ impl Renderer {
         self.config.height = height;
         self.surface.configure(&self.device, &self.config);
         self.depth = Self::make_depth(&self.device, width, height);
+        self.post = crate::fx_post::FxPost::new(&self.device, width, height, self.config.format);
+        self.engine_fx
+            .resize(&self.device, &self.depth, &self.post.snapshot_view);
     }
 
     pub fn has_model(&self, name: &str) -> bool {
@@ -950,8 +973,12 @@ impl Renderer {
     /// Set the camera: it sits at the origin of the relative world looking along `forward` with `up`.
     /// `near` and `far` in kilometres.
     pub fn set_camera(&mut self, forward: DVec3, up: DVec3, fov_y_rad: f64, near: f64, far: f64) {
+        self.camera_forward = forward.normalize();
+        self.camera_up = up.normalize();
         let aspect = self.width as f64 / self.height.max(1) as f64;
         let view = look_to_rh(forward.normalize(), up.normalize());
+        self.view = view;
+        self.near = near;
         let proj = perspective_rh(fov_y_rad, aspect, near, far);
         self.view_proj = proj * view;
         let u = CameraUniform {
@@ -982,7 +1009,33 @@ impl Renderer {
         lines: &[LineItem],
         clear: [f64; 3],
     ) {
+        self.frame_effects(asset_base, items, lines, clear, DVec3::ZERO, &[]);
+    }
+
+    pub fn frame_effects(
+        &mut self,
+        asset_base: &str,
+        items: &[DrawItem],
+        lines: &[LineItem],
+        clear: [f64; 3],
+        camera: DVec3,
+        engines: &[crate::engine_fx_gpu::EngineDraw],
+    ) {
         self.drain_inbox(asset_base);
+        self.engine_fx.prepare(
+            &self.device,
+            &self.queue,
+            engines,
+            &crate::engine_fx_gpu::FxView {
+                view_proj: self.view_proj,
+                view: self.view,
+                near: self.near,
+                width: self.width,
+                height: self.height,
+                camera,
+                light: items.first().map(|i| i.light_dir).unwrap_or(DVec3::Y),
+            },
+        );
         let output = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(t)
             | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
@@ -1108,7 +1161,7 @@ impl Renderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("main"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view: &self.post.view,
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
@@ -1166,8 +1219,108 @@ impl Renderer {
                 pass.draw(0..*n, 0..1);
             }
         }
+        if self.fixture_grid {
+            self.post.reference_grid(&mut encoder);
+        }
+        self.post.snapshot(&mut encoder);
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("authored engine effects"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.post.view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth,
+                    depth_ops: None,
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            self.engine_fx.draw(&mut pass);
+        }
+        self.post.finish(&mut encoder, &view);
         self.queue.submit(Some(encoder.finish()));
         self.queue.present(output);
+    }
+
+    pub fn engine_fx_layers(&self) -> usize {
+        self.engine_fx.ready_layers()
+    }
+    pub fn engine_particle_count(&self) -> usize {
+        self.engine_fx.particle_count()
+    }
+    pub fn enable_fx_capture(&mut self) {
+        self.engine_fx.enable_capture();
+        self.fixture_grid = true;
+    }
+    pub fn engine_fx_capture(&self) -> String {
+        serde_json::to_string(self.engine_fx.capture()).unwrap_or_default()
+    }
+
+    /// Linear HDR readback for comparing the WGSL port with the original compiled D3D shaders.
+    pub async fn read_fx_pixels(&self) -> Result<Vec<u8>, String> {
+        let row = (self.width * 8).div_ceil(256) * 256;
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("FX parity readback"),
+            size: (row * self.height) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.post.scene,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(row),
+                    rows_per_image: None,
+                },
+            },
+            wgpu::Extent3d {
+                width: self.width,
+                height: self.height,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.queue.submit(Some(encoder.finish()));
+        let promise = js_sys::Promise::new(&mut |resolve, reject| {
+            buffer.map_async(wgpu::MapMode::Read, .., move |result| match result {
+                Ok(()) => {
+                    let _ = resolve.call0(&wasm_bindgen::JsValue::NULL);
+                }
+                Err(e) => {
+                    let _ = reject.call1(&wasm_bindgen::JsValue::NULL, &e.to_string().into());
+                }
+            });
+        });
+        wasm_bindgen_futures::JsFuture::from(promise)
+            .await
+            .map_err(|e| format!("{e:?}"))?;
+        let mapped = buffer
+            .slice(..)
+            .get_mapped_range()
+            .map_err(|e| e.to_string())?;
+        let mut output = Vec::with_capacity((self.width * self.height * 8) as usize);
+        for line in mapped.chunks(row as usize) {
+            output.extend_from_slice(&line[..self.width as usize * 8]);
+        }
+        drop(mapped);
+        buffer.unmap();
+        Ok(output)
     }
 }
 
@@ -1230,7 +1383,7 @@ pub(crate) async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     Ok(js_sys::Uint8Array::new(&buf).to_vec())
 }
 
-async fn fetch_bitmap(url: &str) -> Result<web_sys::ImageBitmap, String> {
+pub(crate) async fn fetch_bitmap(url: &str) -> Result<web_sys::ImageBitmap, String> {
     let window = web_sys::window().ok_or("no window")?;
     let resp = wasm_bindgen_futures::JsFuture::from(window.fetch_with_str(url))
         .await

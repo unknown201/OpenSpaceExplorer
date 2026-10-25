@@ -11,8 +11,18 @@
 
 #![forbid(unsafe_code)]
 
+pub mod authored_particles;
+#[cfg(target_arch = "wasm32")]
+mod authored_sprite_gpu;
+pub mod engine_fx;
+#[cfg(target_arch = "wasm32")]
+mod engine_fx_gpu;
 #[cfg(target_arch = "wasm32")]
 pub mod flight3d;
+#[cfg(target_arch = "wasm32")]
+mod fx_fixture;
+#[cfg(target_arch = "wasm32")]
+mod fx_post;
 pub mod kerbin_time;
 #[cfg(target_arch = "wasm32")]
 pub mod ksc3d;
@@ -20,6 +30,7 @@ pub mod ksc3d;
 pub mod menu3d;
 #[cfg(target_arch = "wasm32")]
 pub mod navball;
+pub mod particles;
 #[cfg(target_arch = "wasm32")]
 pub mod render;
 pub mod scene;
@@ -3054,7 +3065,6 @@ impl App {
         let g = |d: ose_math::DVec3| glam::DVec3::new(d.x, d.y, d.z);
         let catalog = &self.catalog;
         let is_dec = |pid: &str| catalog.get(pid).map(|p| p.is_decoupler).unwrap_or(false);
-        let is_eng = |pid: &str| catalog.get(pid).map(|p| p.has_engine).unwrap_or(false);
         let inp = flight3d::FlightInput {
             vessel: v,
             vessel_pos: g(vp),
@@ -3072,7 +3082,6 @@ impl App {
             ut,
             craft: self.flight_craft.as_ref(),
             is_decoupler: &is_dec,
-            is_engine: &is_eng,
             now_ms: now_ms(),
             spin: self.body_spins.get(rb).map(|b| flight3d::Spin {
                 period_s: b.rotation_period_s,
@@ -3081,6 +3090,18 @@ impl App {
         };
         let drawn = self.flight3d.frame(gpu, &inp);
         if drawn {
+            if let Some(hud) = self.doc.query_selector("[data-ose=flight]").ok().flatten() {
+                hud.set_attribute(
+                    "data-ose-particles",
+                    &gpu.engine_particle_count().to_string(),
+                )
+                .ok();
+                hud.set_attribute(
+                    "data-ose-engine-fx-layers",
+                    &gpu.engine_fx_layers().to_string(),
+                )
+                .ok();
+            }
             if let (Some(nav), Some(canvas)) = (
                 self.flight3d.nav,
                 self.doc

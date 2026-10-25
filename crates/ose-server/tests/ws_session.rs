@@ -653,6 +653,11 @@ async fn hello_catalog_and_snapshots() {
             assert!((f.roll_ref.length() - 1.0).abs() < 1e-6);
             assert!(f.facing.dot(f.roll_ref).abs() < 1e-6);
             assert!(f.has_control);
+            assert!(f.static_pressure_kpa > 90.0 && f.static_pressure_kpa < 102.0);
+            assert!(
+                f.firing_engines.is_empty(),
+                "idle engines must not emit particles"
+            );
             assert!(f.joint_stress < 1.0);
             landed_seen = true;
             break;
@@ -680,6 +685,10 @@ async fn hello_catalog_and_snapshots() {
                 let v = vessels.iter().find(|v| v.id == pad_vessel).unwrap();
                 let f = v.flight.as_ref().unwrap();
                 if f.situation == ose_net::FlightSituation::Flying && f.altitude_m > 120.0 {
+                    assert!(
+                        !f.firing_engines.is_empty(),
+                        "burning engines must be identified for FX"
+                    );
                     assert!(f.vertical_speed_mps > 0.0);
                     assert!(f.throttle == 1.0);
                     flying = true;

@@ -48,7 +48,7 @@ export default defineConfig({
       use: {
         ...devices["Desktop Chrome"],
         channel: "chromium", // the full browser, not the headless shell: WebGPU needs it
-        launchOptions: { args: chromiumArgs },
+        launchOptions: { args: chromiumArgs, executablePath: process.env.OSE_CHROMIUM_EXECUTABLE },
       },
     },
     {
