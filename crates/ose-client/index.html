@@ -424,6 +424,12 @@
     .mc-objectives { padding-left: calc(22 * var(--u)); font-size: calc(16 * var(--u)); line-height: 1.6; }
     .mc-reward { margin-top: calc(18 * var(--u)); font-size: calc(16 * var(--u)); } .mc-reward b { color: #8fd08f; }
     .mc-state { margin-top: calc(8 * var(--u)); font-size: calc(13 * var(--u)); color: #9fb0cc; }
+    #mc-briefing button.mc-accept, #mc-briefing button.mc-turnin { margin-top: calc(14 * var(--u)); width: auto; padding: calc(8 * var(--u)) calc(20 * var(--u)); font-size: calc(16 * var(--u)); font-weight: 700; }
+    #mc-briefing button.mc-turnin { background: #4f8f1f; border-color: #3d7016; }
+    #mc-note { margin-top: calc(8 * var(--u)); font-size: calc(14 * var(--u)); color: #ffd87a; min-height: 1.2em; }
+    .mc-mission.ready { border-left-color: #8fd08f; color: #fff; } .mc-mission.ready .name::after { content: "  ready to turn in"; font-size: calc(11 * var(--u)); color: #8fd08f; }
+    .mc-mission.offered .name::after { content: "  offered"; font-size: calc(11 * var(--u)); color: #ffd87a; }
+    .mc-mission.complete { opacity: 0.65; }
     /* Launch pad after the original's LaunchpadDialog: a window at the top left over the KSC in 3D, flag and
        title, the vehicle list on the left and the selected vehicle's blueprint and engineering report on the
        right, light panels as the KSC menu. */

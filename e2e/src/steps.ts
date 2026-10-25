@@ -47,6 +47,7 @@ export const STEP_NAMES = [
   "flight",
   "rnd",
   "tracking_station",
+  "missions",
   "campaign_cycle",
   "vab_rocket",
 ] as const;
@@ -593,6 +594,51 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
       if ((await focus.count()) === 0) return failed("the vessel card has no Focus button");
       await focus.first().click();
       return passed(`${n} vessels tracked; selected ${JSON.stringify(name)}`);
+    }),
+  );
+
+  // 15b. Mission Control: open it from the KSC, pick an offered mission and accept it (protocol 18).
+  results.push(
+    await timed("missions", async () => {
+      if (!pageUp) return notLoaded;
+      if (await page.locator('[data-ose="ts-back"]').first().isVisible()) await page.locator('[data-ose="ts-back"]').first().click();
+      const open = page.locator('[data-ose="ksc-mission"]');
+      if ((await open.count()) === 0 || !(await open.first().isVisible())) return skipped("not on the KSC screen");
+      await open.first().click();
+      const list = page.locator('[data-ose="mc-mission"]');
+      try {
+        await list.first().waitFor({ timeout: 5_000 });
+      } catch {
+        return failed("Mission Control listed no missions");
+      }
+      let offered = page.locator('[data-ose="mc-mission"].offered');
+      if ((await offered.count()) === 0) {
+        await page.locator('[data-ose="mc-tab-secondary"]').first().click();
+        offered = page.locator('[data-ose="mc-mission"].offered');
+      }
+      if ((await offered.count()) === 0) {
+        await page.locator('[data-ose="mc-back"]').first().click();
+        return passed(`${await list.count()} missions listed, none offered to accept`);
+      }
+      const name = ((await offered.first().locator(".name").textContent()) ?? "").trim();
+      await offered.first().click();
+      const accept = page.locator('[data-ose="mc-accept"]');
+      try {
+        await accept.first().waitFor({ timeout: 3_000 });
+      } catch {
+        return failed(`the offered mission ${JSON.stringify(name)} has no Accept button`);
+      }
+      await accept.first().click();
+      const note = page.locator('[data-ose="mc-note"]');
+      try {
+        await note.filter({ hasText: /accepted|refused|not|already/i }).first().waitFor({ timeout: 5_000 });
+      } catch {
+        return failed(`no answer after accepting ${JSON.stringify(name)}`);
+      }
+      const text = ((await note.first().textContent()) ?? "").trim();
+      await page.locator('[data-ose="mc-back"]').first().click();
+      if (text !== "Mission accepted") return failed(`accepting ${JSON.stringify(name)}: ${text}`);
+      return passed(`accepted ${JSON.stringify(name)}`);
     }),
   );
 

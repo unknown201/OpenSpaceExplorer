@@ -162,6 +162,8 @@ struct App {
     missions: Vec<missions::Mission>,
     mc_primary: bool,
     mc_selected: Option<String>,
+    /// The last Mission Control answer (accepted, turned in, or why not).
+    mc_note: String,
     /// Music and sound effects, and the last stage seen in flight (vessel, stage, parts jettisoned) to play
     /// staging and decoupling sounds once.
     audio: audio::Audio,
@@ -417,6 +419,7 @@ pub fn start() -> Result<(), JsValue> {
         missions: missions::all(),
         mc_primary: true,
         mc_selected: None,
+        mc_note: String::new(),
         audio: audio::Audio::new(stored("ose.sound").as_deref() == Some("off")),
         last_stage: None,
         last_situation: None,
@@ -1186,6 +1189,23 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
             app.render_missions();
         }),
     )?;
+    if let Some(panel) = doc.get_element_by_id("mc-briefing") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let Some(el) = ev.target().and_then(|t| t.dyn_into::<Element>().ok()) else {
+                return;
+            };
+            let app = a.borrow();
+            let Some(ws) = &app.ws else { return };
+            if let Some(id) = el.get_attribute("data-ose-mission-accept") {
+                send(ws, &ClientMessage::AcceptMission { id });
+            } else if let Some(id) = el.get_attribute("data-ose-mission-turnin") {
+                send(ws, &ClientMessage::TurnInMission { id });
+            }
+        });
+        panel.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
     if let Some(list) = doc.get_element_by_id("mc-list") {
         let a = app.clone();
         let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
@@ -2555,6 +2575,24 @@ impl App {
                 };
                 set_text(&self.doc, "rd-note", &msg);
             }
+            ServerMessage::MissionAck {
+                accepted,
+                reason,
+                science,
+                ..
+            } => {
+                let msg = match (accepted, reason) {
+                    (true, _) if science > 0.0 => format!("Turned in: {science:.0} science"),
+                    (true, _) => "Mission accepted".to_string(),
+                    (false, r) => r.unwrap_or_else(|| "refused".into()),
+                };
+                if accepted {
+                    self.audio.play("rd_research");
+                }
+                // The ScienceState that follows re-renders the log; keep the note across it.
+                self.mc_note = msg.clone();
+                set_text(&self.doc, "mc-note", &msg);
+            }
             ServerMessage::ScienceReports {
                 new,
                 skipped,
@@ -2957,6 +2995,7 @@ impl App {
         ) {
             let info = progress.and_then(|p| p.iter().find(|i| i.id == m.id));
             el.set_inner_html(&missions::render_briefing(m, &self.loc, info));
+            set_text(&self.doc, "mc-note", &self.mc_note);
         }
     }
 
