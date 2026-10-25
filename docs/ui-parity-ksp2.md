@@ -60,7 +60,7 @@ Camera rule that runs through every map: **the right button drags the camera, th
 |---|---|---|---|
 | M1 | Right-drag rotates, Home resets, M back to flight, `]` `[` cycle focus | right-drag (and left) rotates, Home and F frame, `]` `[` follow the next or previous vessel (yours first) | done |
 | M2 | Click an orbit to add a node; six-handle gizmo dragged in 3D; warp-to and trash on the node | clicking your orbit on the map puts a node there; six handles around the node (prograde, retrograde, normal, anti-normal, radial out/in) add delta-v as you drag them outward (1 m/s per pixel, Shift 0.1); drag the node itself to slide it along the orbit; sliders still fine-tune; no warp-to yet (the server has no warp-to-time) | partly done |
-| M3 | Ap/Pe/SOI markers with tooltips (time and altitude) | Ap and Pe markers with altitude and countdown on the flown vessel's orbit; no SOI or closest-approach markers yet | partly done |
+| M3 | Ap/Pe/SOI markers with tooltips (time and altitude) | Ap and Pe markers with altitude and countdown; encounter, escape and impact markers at patch ends; the periapsis around each body met on the way; no closest-approach or target markers (no targets yet) | partly done |
 | M4 | Vessel labels drawn once | not a bug: the test pilot had joined twice and owned two probes | closed |
 | M5 | Tracking Station object list, filters, focus/control/recover | rebuilt by "Build 3D world and menu replica" (unpushed) | other thread |
 
@@ -68,12 +68,12 @@ Camera rule that runs through every map: **the right button drags the camera, th
 
 | # | KSP2 | Ours today | Status |
 |---|---|---|---|
-| V1 | Header: vehicle name, New/Save/Load, launch site, Launch with total Δv | header bar: New, undo, redo, name, Δv after saving, Save, Launch, close; no Load or launch site yet | partly done |
+| V1 | Header: vehicle name, New/Save/Load, launch site, Launch with total Δv | header bar: New, Load (your and stock vehicles), undo, redo, name, live total Δv, Save, Launch, close; no launch-site choice yet | partly done |
 | V2 | Toolbar: undo/redo, symmetry flyout, angle snap, frame of reference, CoM/CoT/CoL markers, engineer's report | undo/redo, symmetry (×1 to ×8, X / Shift+X) and angle snap (C) in the header; no CoM/CoT/CoL markers or engineer's report window yet | partly done |
 | V3 | Right-drag orbits, wheel zooms (Shift faster), arrows pan, Home resets | right-drag orbits, wheel zooms (Shift faster), Up/Down arrows move the camera along the craft, Home resets | done |
 | V4 | Delete key, Ctrl+Z/Y, Ctrl+C/V, WASDQE rotate the held part, Space resets, X symmetry, C snap; grab a placed part and move it with its subtree | Delete/Backspace, Ctrl+Z/Y, Ctrl+C/V, Ctrl+F, Ctrl+N, Ctrl+S; grabbing a placed part carries its subtree, dropped nowhere it goes back; parts with a surface node go on a part's side where you point, facing in, with symmetry copies around the axis and 15° snap; W/A/S/D/Q/E turn the held part (90° with snap, 15° without, Shift 5°), Space puts it upright; stack parts keep only the yaw | done |
 | V5 | Picker part tooltip (mass, cost, size, stats, description), Shift expands | tooltip with title, subtitle, maker, mass, size, crew, tanks, thrust, Isp, description, research lock | done (no cost in our data) |
-| V6 | Staging stack panel with per-stage Δv/TWR/burn time, drag a part between stages | stage cards with icons (next to fire at the bottom), per-stage vacuum Δv, sea-level TWR and burn time from the server's StageReport, total Δv in the header, click selects, earlier/later buttons; no drag between stages | partly done |
+| V6 | Staging stack panel with per-stage Δv/TWR/burn time, drag a part between stages | stage cards with icons (next to fire at the bottom), per-stage vacuum Δv, sea-level TWR and burn time from the server's StageReport, total Δv in the header, click selects, drag a part onto another stage card to move it, earlier/later buttons | done |
 | V7 | Parts manager on right click (part settings) | none | later |
 
 ### KSC, R&D, Mission Control, main menu

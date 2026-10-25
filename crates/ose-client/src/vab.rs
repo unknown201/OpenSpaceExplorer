@@ -409,6 +409,22 @@ impl Editor {
         self.rebuild_stages(catalog);
     }
 
+    /// Put stageable part `i` into the stage at `stages` index `stage` (the drop of a part on a stage card).
+    pub fn move_to_stage(&mut self, i: usize, stage: usize, catalog: &Catalog) {
+        let stageable = self
+            .craft
+            .parts
+            .get(i)
+            .and_then(|p| catalog.get(&p.part_id))
+            .is_some_and(|s| s.is_stageable());
+        if !stageable {
+            return;
+        }
+        // After rebuild_stages the stage at index n has stage_index n + 1.
+        self.craft.parts[i].stage_index = stage as i32 + 1;
+        self.rebuild_stages(catalog);
+    }
+
     /// `Craft::stages`: stageable parts grouped by `stage_index`, lowest first, renumbered densely. The last
     /// stage (highest index) fires first.
     pub fn rebuild_stages(&mut self, catalog: &Catalog) {
@@ -1074,6 +1090,21 @@ mod tests {
         assert_eq!(e.craft.parts.len(), 1);
         assert_eq!(e.selected, Some(0));
         assert!(e.craft.stages.is_empty());
+    }
+
+    #[test]
+    fn a_part_moves_onto_another_stage() {
+        let cat = catalog();
+        let mut e = Editor::new("test");
+        e.add_part(&cat["pod"], &cat).unwrap();
+        e.add_part(&cat["decoupler"], &cat).unwrap();
+        e.add_part(&cat["tank"], &cat).unwrap();
+        let en = e.add_part(&cat["engine"], &cat).unwrap();
+        assert_eq!(e.craft.stages, vec![vec![1], vec![en]]);
+        e.move_to_stage(en, 0, &cat);
+        assert_eq!(e.craft.stages, vec![vec![1, en]]);
+        e.move_to_stage(0, 0, &cat); // the pod is not stageable: nothing changes
+        assert_eq!(e.craft.stages, vec![vec![1, en]]);
     }
 
     #[test]

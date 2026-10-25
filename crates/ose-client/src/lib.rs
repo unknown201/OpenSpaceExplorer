@@ -160,6 +160,8 @@ struct App {
     /// The server's staging readout of the craft in the editor (StageReport, protocol 26), and when to ask
     /// again after an edit (ms; asked 300 ms after the last change).
     vab_stages_readout: Vec<ose_net::StageReadout>,
+    /// A part pressed on a stage card, to drop on another card.
+    vab_stage_drag: Option<usize>,
     vab_report_due: Option<f64>,
     vab_dragged: bool,
     /// The flight view (the vessel in 3D near its body).
@@ -452,6 +454,7 @@ pub fn start() -> Result<(), JsValue> {
         vab_turn: vab::NO_TURN,
         vab_yaw: vab::NO_TURN,
         vab_stages_readout: Vec::new(),
+        vab_stage_drag: None,
         vab_report_due: None,
         vab_dragged: false,
         #[cfg(target_arch = "wasm32")]
@@ -1393,6 +1396,42 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
     wire("vab-save", Box::new(|a| a.borrow_mut().vab_save(false)))?;
     wire("vab-undo", Box::new(|a| a.borrow_mut().vab_undo(false)))?;
     wire(
+        "vab-load",
+        Box::new(|a| {
+            let app = a.borrow();
+            if let Some(el) = app.doc.get_element_by_id("vab-load-pop") {
+                let open = el.class_list().toggle("open").unwrap_or(false);
+                if open {
+                    app.render_vab_load();
+                    if let Some(ws) = &app.ws {
+                        send(ws, &ClientMessage::CraftList);
+                    }
+                }
+            }
+        }),
+    )?;
+    if let Some(list) = doc.get_element_by_id("vab-load-list") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let id = ev
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .and_then(|e| e.closest("[data-ose-id]").ok().flatten())
+                .and_then(|e| e.get_attribute("data-ose-id"))
+                .and_then(|v| v.parse::<u64>().ok());
+            if let Some(id) = id {
+                let mut app = a.borrow_mut();
+                if let Some(el) = app.doc.get_element_by_id("vab-load-pop") {
+                    el.class_list().remove_1("open").ok();
+                }
+                app.vab_record();
+                app.open_vab(Some(id));
+            }
+        });
+        list.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
+    wire(
         "vab-sym",
         Box::new(|a| a.borrow_mut().vab_cycle_symmetry(false)),
     )?;
@@ -1405,6 +1444,49 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         }),
     )?;
     wire("vab-redo", Box::new(|a| a.borrow_mut().vab_undo(true)))?;
+    // A part dragged from one stage card to another changes stage (the original's moveStagePartGroup).
+    if let Some(list) = doc.get_element_by_id("vab-stages") {
+        let a = app.clone();
+        let down = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let i = ev
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .and_then(|e| e.closest("[data-ose-index]").ok().flatten())
+                .and_then(|e| e.get_attribute("data-ose-index"))
+                .and_then(|v| v.parse::<usize>().ok());
+            if ev.button() == 0 {
+                if let Some(i) = i {
+                    ev.prevent_default();
+                    a.borrow_mut().vab_stage_drag = Some(i);
+                }
+            }
+        });
+        list.add_event_listener_with_callback("mousedown", down.as_ref().unchecked_ref())?;
+        down.forget();
+        let a = app.clone();
+        let up = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let mut app = a.borrow_mut();
+            let Some(i) = app.vab_stage_drag.take() else {
+                return;
+            };
+            let stage = ev
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .and_then(|e| e.closest("[data-ose-stage]").ok().flatten())
+                .and_then(|e| e.get_attribute("data-ose-stage"))
+                .and_then(|v| v.parse::<usize>().ok());
+            let current = app.editor.craft.stages.iter().position(|s| s.contains(&i));
+            if let Some(stage) = stage.filter(|s| Some(*s) != current) {
+                app.vab_record();
+                let cat = std::mem::take(&mut app.catalog);
+                app.editor.move_to_stage(i, stage, &cat);
+                app.catalog = cat;
+                app.render_vab();
+            }
+        });
+        list.add_event_listener_with_callback("mouseup", up.as_ref().unchecked_ref())?;
+        up.forget();
+    }
     // A part named on a stage card selects it.
     if let Some(list) = doc.get_element_by_id("vab-stages") {
         let a = app.clone();
@@ -1961,6 +2043,8 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
     let a = app.clone();
     let on_up = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
         let mut app = a.borrow_mut();
+        // A stage-card drag released anywhere else is dropped (the card list handles its own mouseup first).
+        app.vab_stage_drag = None;
         if app.mnv_drag.take().is_some() {
             app.send_node();
             app.press = None;
@@ -2654,6 +2738,7 @@ impl App {
                 }
                 self.crafts = crafts;
                 self.render_crafts();
+                self.render_vab_load();
             }
             ServerMessage::CraftDocument {
                 id,
@@ -3977,6 +4062,32 @@ impl App {
         self.render_vab_view();
     }
 
+    /// The header's Load list (OABLoadDialog): your crafts first, then the stock ones, newest first.
+    fn render_vab_load(&self) {
+        let Some(list) = self.doc.get_element_by_id("vab-load-list") else {
+            return;
+        };
+        let mut rows: Vec<&ose_net::CraftSummary> = self.crafts.iter().collect();
+        rows.sort_by_key(|c| (c.stock, std::cmp::Reverse(c.id)));
+        let mut html = String::new();
+        for c in rows {
+            html.push_str(&format!(
+                "<li data-ose=\"vab-load-craft\" data-ose-id=\"{}\"><b>{}</b>{}<small>{} parts \u{b7} {} stages \u{b7} {:.1} t \u{b7} \u{394}v {:.0} m/s</small></li>",
+                c.id,
+                esc(&c.name),
+                if c.stock { " <i>stock</i>" } else { "" },
+                c.parts,
+                c.stages,
+                c.wet_mass_t,
+                c.delta_v_vacuum_mps
+            ));
+        }
+        if html.is_empty() {
+            html = "<li class=\"empty\">No saved vehicles yet.</li>".into();
+        }
+        list.set_inner_html(&html);
+    }
+
     /// Ask the server for the staging readout of the craft being built, once edits settle.
     fn vab_report_tick(&mut self, now: f64) {
         let Some(due) = self.vab_report_due else {
@@ -4071,12 +4182,12 @@ impl App {
                     .map(|r| {
                         format!(
                             "<span class=\"sv\" title=\"vacuum delta-v, thrust-to-weight at Kerbin's sea level, burn time\">\u{394}v {:.0} m/s \u{b7} TWR {:.2} \u{b7} {:.0} s</span>",
-                            r.delta_v_vacuum_mps, r.twr_asl, r.burn_time_s
+                            r.delta_v_vacuum_mps.max(0.0), r.twr_asl.max(0.0), r.burn_time_s.max(0.0)
                         )
                     })
                     .unwrap_or_default();
                 html.push_str(&format!(
-                    "<li><span class=\"st\">STAGE {}</span>{stats}{}</li>",
+                    "<li data-ose-stage=\"{n}\"><span class=\"st\">STAGE {}</span>{stats}{}</li>",
                     count - n,
                     parts.join("")
                 ));
@@ -6604,6 +6715,85 @@ impl App {
                             self.orbit_pick.push((x, y, t));
                         }
                     }
+                }
+            }
+        }
+        // Trajectory events (Map3DTrajectoryEvents): where the planning vessel enters or leaves a sphere of
+        // influence or hits the ground, and the periapsis around each body it is captured by, with countdowns.
+        let mut events: Vec<(GV, String)> = Vec::new();
+        if let Some(patches) = planner.and_then(|id| scene.trajectories.get(&id)) {
+            for (k, p) in patches.iter().enumerate() {
+                let Some(body) = scene.bodies.get(p.body as usize) else {
+                    continue;
+                };
+                let orbit = scene::orbit_from(body.mu, &p.orbit);
+                let at = |t: f64| to_km(positions[p.body as usize] + orbit.position_at(t));
+                if p.end_ut.is_finite() && p.end_ut > ut {
+                    let when = hud::fmt_dt(p.end_ut - ut);
+                    let text = match p.end {
+                        PatchEnd::Encounter => patches
+                            .get(k + 1)
+                            .and_then(|n| scene.bodies.get(n.body as usize))
+                            .map(|b| format!("{} encounter {when}", b.id)),
+                        PatchEnd::Escape => Some(format!("{} escape {when}", body.id)),
+                        PatchEnd::Collision => Some(format!("Impact {when}")),
+                        _ => None,
+                    };
+                    if let Some(text) = text {
+                        events.push((at(p.end_ut), text));
+                    }
+                }
+                // Periapsis inside a later patch around another body (a flyby or capture).
+                if k > 0 && Some(p.body) != patches.first().map(|f| f.body) {
+                    let (_, (pe_alt, pe_dt)) = hud::apsides(&p.orbit, body.radius_m, body.mu, ut);
+                    let pe_ut = ut + pe_dt;
+                    if pe_dt.is_finite() && pe_ut >= p.start_ut && pe_ut <= p.end_ut {
+                        events.push((
+                            at(pe_ut),
+                            format!(
+                                "{} Pe {} {}",
+                                body.id,
+                                hud::fmt_dist(pe_alt),
+                                hud::fmt_dt(pe_dt)
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+        for k in 0..8 {
+            let id = format!("map-ev-{k}");
+            let el = match self.doc.get_element_by_id(&id) {
+                Some(e) => e,
+                None => {
+                    let Ok(e) = self.doc.create_element("div") else {
+                        continue;
+                    };
+                    e.set_id(&id);
+                    e.set_class_name("apsis event");
+                    e.set_attribute("data-ose", "trajectory-event").ok();
+                    self.labels.append_child(&e).ok();
+                    e
+                }
+            };
+            let Some(el) = el.dyn_ref::<HtmlElement>() else {
+                continue;
+            };
+            let style = el.style();
+            match events
+                .get(k)
+                .and_then(|(p, t)| project(*p).map(|xy| (xy, t)))
+            {
+                Some(((x, y), text)) => {
+                    style.set_property("left", &format!("{x:.1}px")).ok();
+                    style.set_property("top", &format!("{y:.1}px")).ok();
+                    style.set_property("visibility", "visible").ok();
+                    if el.text_content().as_deref() != Some(text.as_str()) {
+                        el.set_text_content(Some(text));
+                    }
+                }
+                None => {
+                    style.set_property("visibility", "hidden").ok();
                 }
             }
         }
