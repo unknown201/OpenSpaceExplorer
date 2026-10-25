@@ -386,6 +386,7 @@
     #labels .apsis { position: absolute; transform: translate(-50%, -130%); font: 600 11px var(--ui-font, system-ui); color: #9ef0c0; background: #06080fcc; border: 1px solid #9ef0c055; border-radius: 3px; padding: 1px 5px; white-space: nowrap; pointer-events: none; }
     #labels .apsis::after { content: ""; position: absolute; left: 50%; bottom: -6px; width: 6px; height: 6px; margin-left: -3px; border-radius: 50%; background: #9ef0c0; }
     /* Maneuver gizmo handles around the node: prograde/retrograde green-yellow, normal violet, radial cyan. */
+    #labels .node { pointer-events: auto; cursor: grab; z-index: 3; }
     #labels .mnv-h { pointer-events: auto; z-index: 3; position: absolute; width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%; border: 2px solid currentColor; background: #06080fcc; cursor: grab; box-shadow: 0 0 6px currentColor; }
     #labels .mnv-h.prograde, #labels .mnv-h.retrograde { color: #e6e65a; } #labels .mnv-h.retrograde { background: #e6e65a55; }
     #labels .mnv-h.normal, #labels .mnv-h.antinormal { color: #c070ff; } #labels .mnv-h.antinormal { background: #c070ff55; }

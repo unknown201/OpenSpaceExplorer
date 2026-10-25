@@ -637,16 +637,34 @@ fn install_audio(app: &Shared) -> Result<(), JsValue> {
     if let Some(labels) = app.borrow().doc.get_element_by_id("labels") {
         let a = app.clone();
         let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
-            let on_handle = ev
-                .target()
-                .and_then(|t| t.dyn_into::<Element>().ok())
-                .and_then(|e| e.closest(".mnv-h").ok().flatten())
-                .is_some();
-            if on_handle && ev.button() == 0 {
+            let target = ev.target().and_then(|t| t.dyn_into::<Element>().ok());
+            let on = |sel: &str| {
+                target
+                    .as_ref()
+                    .and_then(|e| e.closest(sel).ok().flatten())
+                    .is_some()
+            };
+            if ev.button() != 0 {
+                return;
+            }
+            if on(".mnv-h") {
                 ev.prevent_default();
                 ev.stop_propagation();
                 a.borrow_mut()
                     .mnv_press(ev.client_x() as f64, ev.client_y() as f64);
+            } else if on(".node") {
+                // The node itself slides along the orbit (the original's DoMove).
+                ev.prevent_default();
+                ev.stop_propagation();
+                let mut app = a.borrow_mut();
+                if let Some(n) = app.node {
+                    app.mnv_drag = Some((
+                        6,
+                        ev.client_x() as f64,
+                        ev.client_y() as f64,
+                        [n.prograde_mps, n.normal_mps, n.radial_mps],
+                    ));
+                }
             }
         });
         labels.add_event_listener_with_callback("mousedown", cb.as_ref().unchecked_ref())?;
@@ -5665,6 +5683,10 @@ impl App {
         let Some((k, x0, y0, start)) = self.mnv_drag else {
             return;
         };
+        if k == 6 {
+            self.mnv_slide(x, y);
+            return;
+        }
         let (ux, uy) = self.mnv_dirs[k];
         let along = (x - x0) * ux + (y - y0) * uy;
         let dv = along * if fine { 0.1 } else { 1.0 };
@@ -5692,6 +5714,41 @@ impl App {
         }
         set_input_value(&self.doc, id, v);
         set_text(&self.doc, &format!("{id}-text"), &format!("{v:.1} m/s"));
+        let now = now_ms();
+        if now - self.mnv_sent_ms > 100.0 {
+            self.mnv_sent_ms = now;
+            self.send_node();
+        }
+    }
+
+    /// Slide the node along the orbit to the sampled point nearest the pointer (screen px).
+    fn mnv_slide(&mut self, x: f64, y: f64) {
+        let rect = self.gpu_canvas.get_bounding_client_rect();
+        let (x, y) = (x - rect.left(), y - rect.top());
+        let Some((_, t)) = self
+            .orbit_pick
+            .iter()
+            .map(|(px, py, t)| ((px - x).powi(2) + (py - y).powi(2), *t))
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+        else {
+            return;
+        };
+        let Some(node) = self.node.as_mut() else {
+            return;
+        };
+        node.ut = t;
+        let dt = t - node.anchor_ut;
+        if let Some(el) = self
+            .doc
+            .get_element_by_id("node-dt")
+            .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+        {
+            let max: f64 = el.max().parse().unwrap_or(600.0);
+            if dt > max {
+                el.set_max(&format!("{:.0}", dt.ceil()));
+            }
+        }
+        set_input_value(&self.doc, "node-dt", dt);
         let now = now_ms();
         if now - self.mnv_sent_ms > 100.0 {
             self.mnv_sent_ms = now;
@@ -6391,7 +6448,16 @@ impl App {
         if let Some(v) = planner.and_then(|id| scene.vessel(id)) {
             let (bi, elements, start, end) =
                 match scene.trajectories.get(&v.id).and_then(|p| p.first()) {
-                    Some(p) => (p.body as usize, p.orbit, p.start_ut.max(ut), p.end_ut),
+                    Some(p) => (
+                        p.body as usize,
+                        p.orbit,
+                        p.start_ut.max(ut),
+                        if p.end == PatchEnd::Maneuver {
+                            f64::INFINITY
+                        } else {
+                            p.end_ut
+                        },
+                    ),
                     None => (v.reference_body as usize, v.orbit, ut, f64::INFINITY),
                 };
             if let Some(body) = scene.bodies.get(bi) {
