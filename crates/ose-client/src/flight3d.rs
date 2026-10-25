@@ -97,6 +97,9 @@ impl Spin {
     }
 }
 
+/// A model to draw: renderer name, file and scale.
+type ModelRef = (&'static str, &'static str, f64);
+
 /// What stands in for a vessel the flight view has no craft for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Stand {
@@ -117,14 +120,44 @@ impl Stand {
         }
     }
 
-    fn model(self) -> (&'static str, &'static str) {
-        match self {
-            Stand::Kerbal => ("fx:kerbal", "assets/fx/kerbal.glb"),
-            Stand::Flag => ("fx:flag", "assets/fx/flag.glb"),
-            Stand::Craft => (
-                "part:probe_0v_octagonal_electricity_1x1",
-                "assets/parts/probe_0v_octagonal_electricity_1x1.glb",
+    /// The models to draw (name, file, scale), requested from the renderer: the original's Kerbal (suit, head,
+    /// eyes, helmet, tools/export_kerbal.py) and planted flag, with the procedural stand-ins while they load
+    /// or when a server has no game assets.
+    fn models(self, gpu: &mut Renderer) -> Vec<ModelRef> {
+        let (real, stand_in): (&[ModelRef], ModelRef) = match self {
+            Stand::Kerbal => (
+                &[
+                    ("kerbal:body", "assets/kerbal/body_spacesuit_01.glb", 1.0),
+                    ("kerbal:head", "assets/kerbal/head_m_01.glb", 1.0),
+                    ("kerbal:eyes", "assets/kerbal/eyes_m_01.glb", 1.0),
+                    ("kerbal:helmet", "assets/kerbal/helm_spacesuit_01.glb", 1.0),
+                ],
+                ("fx:kerbal", "assets/fx/kerbal.glb", 1.0),
             ),
+            Stand::Flag => (
+                &[("kerbal:flag", "assets/kerbal/flag_portable.glb", 1.5)],
+                ("fx:flag", "assets/fx/flag.glb", 1.0),
+            ),
+            Stand::Craft => (
+                &[],
+                (
+                    "part:probe_0v_octagonal_electricity_1x1",
+                    "assets/parts/probe_0v_octagonal_electricity_1x1.glb",
+                    1.0,
+                ),
+            ),
+        };
+        for (name, file, _) in real {
+            gpu.request_model(name, file);
+        }
+        if !real.is_empty() && real.iter().all(|(name, _, _)| gpu.has_model(name)) {
+            return real.to_vec();
+        }
+        gpu.request_model(stand_in.0, stand_in.1);
+        if gpu.has_model(stand_in.0) {
+            vec![stand_in]
+        } else {
+            Vec::new()
         }
     }
 }
@@ -915,15 +948,23 @@ impl FlightView {
             }
         } else {
             // No craft document: a Kerbal on EVA, a flag, or a craft launched elsewhere (a probe core).
-            let (name, file) = inp.stand.model();
-            gpu.request_model(name, file);
-            if gpu.has_model(name) {
-                // Kerbals and flags stand up from the ground; a stand-in probe keeps the vessel's attitude.
-                let rot = match inp.stand {
-                    Stand::Craft => vessel_rot,
-                    _ => DQuat::from_rotation_arc(DVec3::Y, up),
-                };
-                let mut it = DrawItem::lit(name.to_string(), pos - cam, rot, 1.0, sun);
+            // Kerbals and flags stand up from the ground (a Kerbal faces where it walks); a stand-in probe
+            // keeps the vessel's attitude.
+            let rot = match inp.stand {
+                Stand::Craft => vessel_rot,
+                Stand::Kerbal => {
+                    let ahead = vessel_rot * DVec3::Y;
+                    let level = (ahead - up * ahead.dot(up)).normalize_or_zero();
+                    if level.length() > 0.5 {
+                        quat_from_basis(up.cross(level), up, level)
+                    } else {
+                        DQuat::from_rotation_arc(DVec3::Y, up)
+                    }
+                }
+                Stand::Flag => DQuat::from_rotation_arc(DVec3::Y, up),
+            };
+            for (name, _, scale) in inp.stand.models(gpu) {
+                let mut it = DrawItem::lit(name.to_string(), pos - cam, rot, scale, sun);
                 it.ambient = part_ambient;
                 it.sun = sun_share;
                 items.push(it);
@@ -935,11 +976,9 @@ impl FlightView {
             if (p - pos).length() > 5_000.0 {
                 continue;
             }
-            let (name, file) = stand.model();
-            gpu.request_model(name, file);
-            if gpu.has_model(name) {
-                let rot = DQuat::from_rotation_arc(DVec3::Y, p.normalize_or_zero());
-                let mut it = DrawItem::lit(name.to_string(), p - cam, rot, 1.0, sun);
+            let rot = DQuat::from_rotation_arc(DVec3::Y, p.normalize_or_zero());
+            for (name, _, scale) in stand.models(gpu) {
+                let mut it = DrawItem::lit(name.to_string(), p - cam, rot, scale, sun);
                 it.ambient = part_ambient;
                 it.sun = sun_share;
                 items.push(it);

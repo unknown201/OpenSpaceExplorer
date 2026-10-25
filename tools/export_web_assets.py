@@ -198,6 +198,10 @@ class Exporter:
         self.aa = install / "KSP2_x64_Data/StreamingAssets/aa"
         self.bdir = self.aa / "StandaloneWindows64"
         self.cat = Catalog(str(self.aa / "catalog.json"))
+        # Bone name -> world matrix (Unity space) of a reference character skeleton, see tools/export_kerbal.py.
+        self.skeleton: dict | None = None
+        # World matrix of the bone a worn prop (a helmet prefab) is attached to, with `skeleton`.
+        self.attach = None
         self.out = out
         self.max_texture = max_texture
         self.verbose = verbose
@@ -259,8 +263,8 @@ class Exporter:
 
         h = MeshHandler(mesh_obj)
         h.process()
-        verts = [tuple(v) for v in h.m_Vertices]
-        norms = [tuple(n) for n in h.m_Normals] if h.m_Normals else []
+        verts = [tuple(v)[:3] for v in h.m_Vertices]
+        norms = [tuple(n)[:3] for n in h.m_Normals] if h.m_Normals else []
         if bake is not None:
             import numpy as np
 
@@ -461,7 +465,30 @@ class Exporter:
                 # Rest pose: the first bone's world matrix times its bind pose, relative to the renderer.
                 b0 = mf.m_Bones[0].path_id
                 if b0 in transforms:
-                    bake = np.linalg.inv(world_of(tf_id)) @ world_of(b0) @ mat44(mesh.m_BindPose[0])
+                    # With a reference skeleton (pieces of one character, each prefab holding its own bones at
+                    # different poses), the bone's world matrix comes from the reference by bone name.
+                    bone_name = go_name.get(transforms[b0].m_GameObject.path_id, "")
+                    w_bone = (self.skeleton or {}).get(bone_name)
+                    if w_bone is None:
+                        w_bone = world_of(b0)
+                    bake = np.linalg.inv(world_of(tf_id)) @ w_bone @ mat44(mesh.m_BindPose[0])
+            elif self.skeleton and o.type.name == "MeshFilter":
+                # A rigid mesh hanging under one of the character's bones follows the reference pose of the
+                # nearest such bone.
+                cur, hops = tf_id, 0
+                while cur in transforms and hops < 64:
+                    name = go_name.get(transforms[cur].m_GameObject.path_id, "")
+                    if cur != tf_id and name in self.skeleton:
+                        w_tf = world_of(tf_id)
+                        bake = np.linalg.inv(w_tf) @ self.skeleton[name] @ np.linalg.inv(world_of(cur)) @ w_tf
+                        break
+                    cur = transforms[cur].m_Father.path_id if transforms[cur].m_Father else 0
+                    hops += 1
+                else:
+                    # Not under a bone: a prop the character wears (the helmet) hangs from `attach`.
+                    if self.attach is not None:
+                        w_tf = world_of(tf_id)
+                        bake = np.linalg.inv(w_tf) @ self.attach @ w_tf
             positions, normals, uvs, tris = self.mesh_arrays(mesh, bake)
             if not positions or not tris:
                 continue
