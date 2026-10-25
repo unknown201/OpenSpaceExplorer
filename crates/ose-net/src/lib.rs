@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 23;
+pub const PROTOCOL_VERSION: u16 = 24;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -158,6 +158,11 @@ pub enum ClientMessage {
     DeployPanels {
         vessel: u64,
         deploy: bool,
+    },
+    /// Switch the vessel's resource converters (fuel cells, reactor) on or off; answers `FlightAck`.
+    SetConverters {
+        vessel: u64,
+        on: bool,
     },
     /// Drive a vessel on its wheels: wheel throttle (-1 back .. 1 forward), steering (-1 left .. 1 right)
     /// and brakes, held until changed; answers `FlightAck`.
@@ -464,6 +469,8 @@ pub struct FlightReadout {
     /// Driving on wheels: speed along the drive direction (m/s, negative backing up) and brakes on.
     pub drive_speed_mps: f32,
     pub brakes: bool,
+    /// Resource converters: (craft part index, switched on, share of its rate it is running at 0..1).
+    pub converters: Vec<(u16, bool, f32)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

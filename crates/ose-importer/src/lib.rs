@@ -358,11 +358,35 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
     let mut motor: Option<ose_data::WheelMotor> = None;
     let mut brake_torque = 0.0;
     let mut steerable = false;
+    let mut converter: Option<ose_data::Converter> = None;
     if let Some(mods) = d["serializedPartModules"].as_array() {
         for m in mods {
             if let Some(entries) = m["ModuleData"].as_array() {
                 for entry in entries.iter() {
                     let o = &entry["DataObject"];
+                    if entry["Name"] == "Data_ResourceConverter" {
+                        let pick = o["SelectedFormula"].as_u64().unwrap_or(0) as usize;
+                        if let Some(fm) =
+                            o["FormulaDefinitions"].as_array().and_then(|a| a.get(pick))
+                        {
+                            let list = |k: &str| -> Vec<(String, f64)> {
+                                fm[k]
+                                    .as_array()
+                                    .map(|a| {
+                                        a.iter()
+                                            .map(|r| (s(r, "ResourceName"), f(r, "Rate")))
+                                            .collect()
+                                    })
+                                    .unwrap_or_default()
+                            };
+                            converter = Some(ose_data::Converter {
+                                formula: s(fm, "InternalName"),
+                                inputs: list("InputResources"),
+                                outputs: list("OutputResources"),
+                                conversion_rate: f(&o["conversionRate"], "storedValue"),
+                            });
+                        }
+                    }
                     if entry["Name"] == "Data_WheelMotor" {
                         motor = Some(ose_data::WheelMotor {
                             torque_curve: curve(&o["torqueCurve"]),
@@ -599,6 +623,7 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
         },
         heatshield,
         landing_gear,
+        converter,
         drag_cubes,
         module_names,
         raw_modules,

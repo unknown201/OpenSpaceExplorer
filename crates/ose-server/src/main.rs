@@ -798,6 +798,15 @@ fn flight_readout(
         },
         drive_speed_mps: p.drive.speed_mps as f32,
         brakes: p.drive.brakes,
+        converters: u
+            .structure(e)
+            .map(|st| {
+                (0..st.converter_on.len())
+                    .filter(|&i| st.converter_defs[i].is_some() && st.rigid.present[i])
+                    .map(|i| (i as u16, st.converter_on[i], st.converter_running[i] as f32))
+                    .collect()
+            })
+            .unwrap_or_default(),
         electric_charge: ec.0,
         electric_capacity: ec.1,
         has_control: p.controlled,
@@ -2251,6 +2260,17 @@ async fn session(mut socket: WebSocket, s: AppState) {
                                 Some(e) => match s.universe.lock().expect("sim lock").arm_parachutes(e) {
                                     Some(n) if n > 0 => ServerMessage::FlightAck { vessel, accepted: true, reason: None },
                                     _ => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("no packed parachutes".into()) },
+                                },
+                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
+                            };
+                            if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::SetConverters { vessel, on }) => {
+                            let reply = match owned_vessel(&s, vessel, player_id) {
+                                Some(e) => match s.universe.lock().expect("sim lock").set_converters(e, on) {
+                                    Some(n) if n > 0 => ServerMessage::FlightAck { vessel, accepted: true, reason: None },
+                                    Some(_) => ServerMessage::FlightAck { vessel, accepted: false, reason: Some(if on { "no converters off" } else { "no converters on" }.into()) },
+                                    None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("vessel has no parts".into()) },
                                 },
                                 None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
                             };

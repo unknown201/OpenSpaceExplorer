@@ -259,6 +259,9 @@ pub struct PartDef {
     /// A landing leg or wheel (`Data_WheelBase`, `Data_WheelSuspension`, `Data_Deployable`).
     #[serde(default)]
     pub landing_gear: Option<LandingGear>,
+    /// A resource converter (`Data_ResourceConverter`: fuel cells, the fission reactor).
+    #[serde(default)]
+    pub converter: Option<Converter>,
     /// Names of every module on the part, in order, so the sim knows what else to implement.
     pub module_names: Vec<String>,
     /// Module data not yet mapped into typed fields, keyed by module name.
@@ -295,6 +298,16 @@ pub struct Electric {
 
 fn one() -> f64 {
     1.0
+}
+
+/// A resource converter as the original defines it (`Data_ResourceConverter`, its selected formula): while
+/// switched on it takes its inputs and makes its outputs, each at its rate times `conversion_rate`, units/s.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Converter {
+    pub formula: String,
+    pub inputs: Vec<(String, f64)>,
+    pub outputs: Vec<(String, f64)>,
+    pub conversion_rate: f64,
 }
 
 /// A landing leg or wheel as the original defines it.

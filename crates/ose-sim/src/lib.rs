@@ -363,6 +363,14 @@ impl Universe {
         }
     }
 
+    /// Switch a vessel's resource converters (fuel cells, reactors) on or off; how many changed, `None`
+    /// without a structure.
+    pub fn set_converters(&mut self, e: Entity, on: bool) -> Option<usize> {
+        self.world
+            .get_mut::<structure::Structure>(e)
+            .map(|mut st| st.set_converters(on))
+    }
+
     /// Wheel throttle, steering and brakes for a vessel; false without a powered vessel.
     pub fn set_drive(&mut self, e: Entity, throttle: f64, steer: f64, brakes: bool) -> bool {
         let Some(mut p) = self.world.get_mut::<flight::Powered>(e) else {

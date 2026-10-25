@@ -402,6 +402,7 @@ mod tests {
             thermal_mass_modifier: 1.0,
             heatshield: None,
             landing_gear: None,
+            converter: None,
             module_names: vec![],
             raw_modules: Default::default(),
         }

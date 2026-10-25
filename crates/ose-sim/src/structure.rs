@@ -78,6 +78,10 @@ pub struct Structure {
     /// Landing gear: definition and whether it is out.
     pub gear_defs: Vec<Option<ose_data::LandingGear>>,
     pub gear_out: Vec<bool>,
+    /// Resource converters: definition, switched on, and the share of their rate they ran at last step.
+    pub converter_defs: Vec<Option<ose_data::Converter>>,
+    pub converter_on: Vec<bool>,
+    pub converter_running: Vec<f64>,
     /// Flight stage the structure was last trimmed to.
     staged_to: usize,
 }
@@ -318,6 +322,11 @@ impl Structure {
                         .map(|b| vessel_box(q, b))
                 })
                 .collect(),
+            converter_defs: (0..n)
+                .map(|i| def_of(i).and_then(|d| d.converter.clone()))
+                .collect(),
+            converter_on: vec![false; n],
+            converter_running: vec![0.0; n],
             gear_defs: (0..n)
                 .map(|i| def_of(i).and_then(|d| d.landing_gear.clone()))
                 .collect(),
@@ -488,6 +497,21 @@ impl Structure {
         };
     }
 
+    /// Switch the resource converters (fuel cells, reactors) on or off; returns how many changed.
+    pub fn set_converters(&mut self, on: bool) -> usize {
+        let mut changed = 0;
+        for i in 0..self.converter_on.len() {
+            if self.converter_defs[i].is_some()
+                && self.rigid.present[i]
+                && self.converter_on[i] != on
+            {
+                self.converter_on[i] = on;
+                changed += 1;
+            }
+        }
+        changed
+    }
+
     /// Fold the landing gear out (or in); returns how many changed.
     pub fn deploy_gear(&mut self, out: bool) -> usize {
         let mut changed = 0;
@@ -649,6 +673,42 @@ impl Structure {
                 });
             }
         }
+        // converters that are on take their inputs and make their outputs in one go (none when the outputs
+        // have no room, so a fuel cell idles on full batteries)
+        let mut converting = Vec::new();
+        for i in 0..self.rigid.len() {
+            let Some(c) = self.converter_defs[i].as_ref() else {
+                continue;
+            };
+            self.converter_running[i] = 0.0;
+            if !self.converter_on[i] || !self.rigid.present[i] {
+                continue;
+            }
+            let mut instructions = Vec::new();
+            let mut known = true;
+            for (res, rate, sign) in c
+                .inputs
+                .iter()
+                .map(|(r, u)| (r, u, 1.0))
+                .chain(c.outputs.iter().map(|(r, u)| (r, u, -1.0)))
+            {
+                match self.net.resource(res) {
+                    Some(id) => instructions.push(Instruction {
+                        resource: id,
+                        units_per_s: sign * rate * c.conversion_rate,
+                    }),
+                    None => known = false,
+                }
+            }
+            if known && !instructions.is_empty() {
+                converting.push((requests.len(), i));
+                requests.push(Request {
+                    part: i,
+                    instructions,
+                    priority: 9,
+                });
+            }
+        }
         // wheel motors draw in proportion to the drive input
         let motor_use: f64 = p
             .drive
@@ -667,6 +727,9 @@ impl Structure {
             requests.len() - 1
         });
         let fractions = self.net.process(&requests, dt);
+        for &(r, i) in &converting {
+            self.converter_running[i] = fractions[r];
+        }
         p.drive.powered = match motors {
             Some(r) => fractions[r],
             None => {
@@ -1302,6 +1365,63 @@ mod tests {
             c.parts.push(leg);
         }
         (c, defs, res)
+    }
+
+    #[test]
+    fn a_fuel_cell_turns_methalox_into_charge_until_the_batteries_are_full() {
+        // the starter rocket with a fuel cell on its tank
+        let (crafts, defs, res) = assets();
+        let mut c = crafts
+            .iter()
+            .find(|c| c.name == "Stock12_StartRocket")
+            .unwrap()
+            .clone();
+        let mut cell = c.parts[2].clone();
+        cell.guid = "cell".into();
+        cell.part_id = "fuelcell_0v".into();
+        cell.parent = Some(2);
+        cell.own_node = None;
+        cell.parent_node = None;
+        cell.resources = Vec::new();
+        cell.local_position = DVec3::new(0.7, -0.9, 0.0);
+        c.parts.push(cell);
+        let mut s = Structure::build(&c, &defs, &res);
+        let mut p = flying(DVec3::new(1.0, 0.0, 0.0));
+        let ec = s.net.resource("ElectricCharge").unwrap();
+        let methane = s.net.resource("Methane").unwrap();
+        let stored = |s: &Structure, r: usize| -> f64 {
+            s.net
+                .tanks
+                .iter()
+                .filter(|t| t.resource == r)
+                .map(|t| t.stored)
+                .sum()
+        };
+        // flatten the batteries, in the dark
+        for t in s.net.tanks.iter_mut().filter(|t| t.resource == ec) {
+            t.stored = 0.0;
+        }
+        let fuel0 = stored(&s, methane);
+        assert!(fuel0 > 0.0, "the tank carries methalox");
+        // off: nothing happens
+        s.electric(&mut p, 0.0, 0.0, 10.0);
+        assert!(stored(&s, ec) < 1e-9);
+        assert_eq!(s.set_converters(true), 1);
+        s.electric(&mut p, 0.0, 0.0, 10.0);
+        let made = stored(&s, ec);
+        assert!(made > 1.0, "charge from the fuel cells: {made}");
+        assert!(stored(&s, methane) < fuel0, "methane burned");
+        assert!(s.converter_running.iter().any(|f| *f > 0.99));
+        // run until full: then they idle and burn nothing
+        for _ in 0..2_000 {
+            s.electric(&mut p, 0.0, 0.0, 10.0);
+        }
+        let full = stored(&s, methane);
+        s.electric(&mut p, 0.0, 0.0, 10.0);
+        assert!(
+            stored(&s, methane) >= full - 1e-12,
+            "full batteries: the cells idle"
+        );
     }
 
     #[test]
