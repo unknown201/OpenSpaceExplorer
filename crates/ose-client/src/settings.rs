@@ -30,7 +30,11 @@ pub const INPUT: &[(&str, &[Binding])] = &[
             ),
             ("M", "Map view", true),
             ("V", "Camera mode: auto, free, orbital, chase, locked", true),
-            ("] / [ (map)", "Next / previous vessel", true),
+            (
+                "] / [",
+                "Next / previous vessel: take control nearby in flight, follow on the map",
+                true,
+            ),
             ("Right mouse drag", "Look around", true),
             ("Mouse wheel", "Zoom", true),
             ("Home", "Reset the camera", true),

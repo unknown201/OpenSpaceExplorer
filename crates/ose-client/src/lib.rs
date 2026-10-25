@@ -2377,6 +2377,10 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                         app.map_mode = !app.map_mode;
                         true
                     }
+                    "BracketRight" | "BracketLeft" if !app.map_mode => {
+                        app.switch_vessel(code == "BracketLeft");
+                        true
+                    }
                     "KeyV" if !ev.repeat() => {
                         #[cfg(target_arch = "wasm32")]
                         {
@@ -3370,6 +3374,37 @@ impl App {
     }
 
     /// Centre the camera on a vessel: focus its reference body (so orbits draw around it) and follow.
+    /// `]` / `[` in flight: take control of the next or previous of your vessels within 2.5 km (the
+    /// original's FocusNext/FocusPrev over the vessels loaded around you: stages dropped, Kerbals on EVA).
+    fn switch_vessel(&mut self, back: bool) {
+        let Some(cur) = self.flying else { return };
+        let Some(scene) = &self.scene else { return };
+        let ut = self.time.ut_at(now_ms());
+        let Some(here) = scene.vessel(cur).map(|v| scene.vessel_position(v, ut)) else {
+            return;
+        };
+        let mut ids: Vec<u64> = scene
+            .vessels
+            .iter()
+            .filter(|v| v.owner.is_some() && v.owner == self.player_id && v.flight.is_some())
+            .filter(|v| (scene.vessel_position(v, ut) - here).length() < 2500.0)
+            .map(|v| v.id)
+            .collect();
+        ids.sort();
+        if ids.len() < 2 {
+            hud::push(&self.doc, "No other vessel of yours nearby", "passive");
+            return;
+        }
+        let i = ids.iter().position(|id| *id == cur).unwrap_or(0);
+        let n = ids.len();
+        let next = ids[if back { (i + n - 1) % n } else { (i + 1) % n }];
+        let craft = stored(&format!("ose.flight.{next}")).and_then(|c| c.parse::<u64>().ok());
+        self.start_flight(next, craft);
+        if let Some(v) = self.scene.as_ref().and_then(|s| s.vessel(next)) {
+            hud::push(&self.doc, &format!("Switched to {}", v.name), "passive");
+        }
+    }
+
     /// `]` / `[` on the map: follow the next or previous vessel (yours first), as the original's FocusNext.
     fn cycle_vessel(&mut self, back: bool) {
         let Some(scene) = &self.scene else { return };
