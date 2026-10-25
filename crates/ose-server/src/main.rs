@@ -809,8 +809,11 @@ fn flight_readout(
             Vec::new()
         },
         facing: p.facing,
-        // a craft standing on the ground keeps its own heading (rovers turn)
-        roll_ref: if p.landed && !p.tipped {
+        // a craft standing on the ground keeps its own heading (rovers turn); a plane's +Z (its belly)
+        // points down
+        roll_ref: if p.landed && !p.tipped && p.level {
+            -up
+        } else if p.landed && !p.tipped {
             p.drive.roll_ref(p.r)
         } else {
             // rolled about the axis from the horizon reference
@@ -989,6 +992,51 @@ fn terrain_index() -> ose_data::terrain::TerrainIndex {
     serde_json::from_str(EMBEDDED_TERRAIN_INDEX).expect("embedded terrain index")
 }
 
+/// The runway's take-off end and heading, placed as the client places the KSC campus (launch pad 1 on its
+/// site, turned so the pads line up): `Runway_spawn_01` of the KSC scene.
+const RUNWAY: (f64, f64, f64) = (-0.845_279, -75.312_016, 94.65);
+
+/// The KSC launch sites: pads 1..4 from the home world's terrain sites, and the runway.
+fn launch_sites(home: &str) -> Vec<ose_net::LaunchSite> {
+    let index = terrain_index();
+    let body = index.bodies.iter().find(|b| b.id == home);
+    let mut out: Vec<ose_net::LaunchSite> = (1..=4)
+        .filter_map(|k| {
+            let site = ose_data::terrain::TerrainMap::site(
+                body?,
+                &format!("kerbin_KSCLaunchpad_spawn_0{k}"),
+            )?;
+            Some(ose_net::LaunchSite {
+                id: format!("LaunchPad_{k}"),
+                name: format!("Launchpad {k}"),
+                runway: false,
+                lat_deg: site.lat_deg,
+                lon_deg: site.lon_deg,
+                heading_deg: 90.0,
+            })
+        })
+        .collect();
+    if out.is_empty() {
+        out.push(ose_net::LaunchSite {
+            id: "LaunchPad_1".into(),
+            name: "Launchpad 1".into(),
+            runway: false,
+            lat_deg: KSC_LAT_DEG,
+            lon_deg: KSC_LON_DEG,
+            heading_deg: 90.0,
+        });
+    }
+    out.push(ose_net::LaunchSite {
+        id: "Runway_1".into(),
+        name: "Runway".into(),
+        runway: true,
+        lat_deg: RUNWAY.0,
+        lon_deg: RUNWAY.1,
+        heading_deg: RUNWAY.2,
+    });
+    out
+}
+
 /// Latitude and longitude of the launch pad site on the home world.
 fn launch_pad(home: &str) -> (f64, f64) {
     terrain_index()
@@ -1114,8 +1162,18 @@ fn stage_inertia(
 
 /// Put a craft on the KSC pad and remember the moments before and after for revert.
 fn launch_on_pad(s: &Shared, player_id: u64, craft: &ose_data::craft::Craft) -> ServerMessage {
+    launch_at(s, player_id, craft, None)
+}
+
+/// Put a craft on a launch site (pad 1 without one) and remember the moments before and after for revert.
+fn launch_at(
+    s: &Shared,
+    player_id: u64,
+    craft: &ose_data::craft::Craft,
+    site: Option<&str>,
+) -> ServerMessage {
     let editor = campaigns::snapshot(s);
-    let reply = launch_on_pad_now(s, player_id, craft);
+    let reply = launch_on_pad_now(s, player_id, craft, site);
     if matches!(
         reply,
         ServerMessage::CraftLaunched {
@@ -1134,9 +1192,20 @@ fn launch_on_pad(s: &Shared, player_id: u64, craft: &ose_data::craft::Craft) -> 
 }
 
 /// Put a craft on the KSC pad as a landed, powered vessel.
-fn launch_on_pad_now(s: &Shared, player_id: u64, craft: &ose_data::craft::Craft) -> ServerMessage {
+fn launch_on_pad_now(
+    s: &Shared,
+    player_id: u64,
+    craft: &ose_data::craft::Craft,
+    site: Option<&str>,
+) -> ServerMessage {
     let mut filled = craft.clone();
     fill_default_resources(s, &mut filled);
+    // a craft built nose-forward (a plane) is turned to point along +Y and lies level
+    let level = ose_sim::structure::level_layout(&filled);
+    let is_level = level.is_some();
+    if let Some(l) = level {
+        filled = l;
+    }
     let craft = &filled;
     let name = craft.name.clone();
     let parts = craft.parts.len() as u32;
@@ -1187,13 +1256,28 @@ fn launch_on_pad_now(s: &Shared, player_id: u64, craft: &ose_data::craft::Craft)
     let Some(body) = u.body_entity(&home.id) else {
         return fail("home body missing".into());
     };
-    let (pad_lat, pad_lon) = launch_pad(&home.id);
+    let sites = launch_sites(&home.id);
+    let at = match site {
+        None => sites.first(),
+        Some(id) => sites.iter().find(|x| x.id == id),
+    };
+    let Some(at) = at.cloned() else {
+        return fail(format!("no launch site {}", site.unwrap_or("")));
+    };
+    let (pad_lat, pad_lon) = if at.id == "LaunchPad_1" {
+        launch_pad(&home.id)
+    } else {
+        (at.lat_deg, at.lon_deg)
+    };
     let e = u.spawn_powered_on_surface(&name, body, spec, pad_lat, pad_lon);
     u.set_craft(e, craft.clone());
     u.set_structure(
         e,
         ose_sim::structure::Structure::build(craft, &s.parts, &s.resources),
     );
+    if is_level {
+        u.set_level(e, at.heading_deg);
+    }
     let mut list = s.vessels.lock().expect("vessels lock");
     let id = list.iter().map(|&(_, id, _)| id).max().unwrap_or(0) + 1;
     list.push((e, id, Some(player_id)));
@@ -2172,6 +2256,16 @@ async fn session(mut socket: WebSocket, s: AppState) {
                         if !send(&mut socket, &s.difficulty).await {
                             return;
                         }
+                        if !send(
+                            &mut socket,
+                            &ServerMessage::LaunchSites {
+                                sites: launch_sites("Kerbin"),
+                            },
+                        )
+                        .await
+                        {
+                            return;
+                        }
                         if !has_vessel(&s, id) {
                             spawn_player_probe(&s, id, &display_name);
                         }
@@ -2399,6 +2493,26 @@ async fn session(mut socket: WebSocket, s: AppState) {
                         Ok(ClientMessage::GetCraft { id }) => {
                             let craft = find_craft(&s, id, player_id);
                             if !send(&mut socket, &ServerMessage::CraftDocument { id, craft }).await { break; }
+                        }
+                        Ok(ClientMessage::LaunchAt { craft, site }) => {
+                            let reply = launch_at(&s, player_id, &craft, site.as_deref());
+                            if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::LaunchSavedAt { id, site }) => {
+                            let reply = match find_craft(&s, id, player_id) {
+                                Some(c) => launch_at(&s, player_id, &c, site.as_deref()),
+                                None => ServerMessage::CraftLaunched {
+                                    vessel: None,
+                                    name: String::new(),
+                                    parts: 0,
+                                    wet_mass_t: 0.0,
+                                    dry_mass_t: 0.0,
+                                    delta_v_vacuum_mps: 0.0,
+                                    stages: Vec::new(),
+                                    reason: Some(format!("no craft {id} in your library")),
+                                },
+                            };
+                            if !send(&mut socket, &reply).await { break; }
                         }
                         Ok(ClientMessage::LaunchOnPad { craft }) => {
                             let reply = launch_on_pad(&s, player_id, &craft);

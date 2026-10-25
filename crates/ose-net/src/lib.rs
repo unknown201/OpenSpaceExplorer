@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 29;
+pub const PROTOCOL_VERSION: u16 = 30;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -99,6 +99,16 @@ pub enum ClientMessage {
     /// Put a listed craft on the launch pad; answers `CraftLaunched`.
     LaunchSavedOnPad {
         id: u64,
+    },
+    /// Like `LaunchOnPad` at a launch site from `LaunchSites` (`None`: launch pad 1).
+    LaunchAt {
+        craft: ose_data::craft::Craft,
+        site: Option<String>,
+    },
+    /// Like `LaunchSavedOnPad` at a launch site from `LaunchSites`.
+    LaunchSavedAt {
+        id: u64,
+        site: Option<String>,
     },
     /// Throttle (0..1) and attitude for one of the player's powered vessels; answers `FlightAck`.
     SetControls {
@@ -526,6 +536,18 @@ pub struct FlightReadout {
     pub jet: bool,
 }
 
+/// A place to launch from (KSC launch pads 1..4, the runway).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LaunchSite {
+    pub id: String,
+    pub name: String,
+    pub runway: bool,
+    pub lat_deg: f64,
+    pub lon_deg: f64,
+    /// Which way a plane faces there, compass degrees (90 = east).
+    pub heading_deg: f64,
+}
+
 /// Action groups (keys U, R, Backspace, 1..0).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ActionGroup {
@@ -765,6 +787,10 @@ pub enum ServerMessage {
         accepted: bool,
         reason: Option<String>,
         science: f64,
+    },
+    /// The launch sites, sent after `DifficultyOptions`.
+    LaunchSites {
+        sites: Vec<LaunchSite>,
     },
     /// Answer to `ClientMessage::StageReport`: per stage, first-firing first, and the whole craft's vacuum
     /// delta-v.

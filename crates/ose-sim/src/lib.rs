@@ -444,6 +444,42 @@ impl Universe {
         true
     }
 
+    /// Lay a powered vessel level (a plane, built nose-forward and turned by `structure::level_layout`):
+    /// on the ground it lies on its wheels pointing along compass heading `heading_deg`, and it holds that
+    /// heading level until told otherwise.
+    pub fn set_level(&mut self, e: Entity, heading_deg: f64) -> bool {
+        let Some(mut p) = self.world.get_mut::<flight::Powered>(e) else {
+            return false;
+        };
+        p.level = true;
+        p.drive.heading_rad = heading_deg.to_radians().rem_euclid(std::f64::consts::TAU);
+        p.facing = flight::heading_dir(p.r, p.drive.heading_rad);
+        p.attitude = flight::Attitude::PitchHeading {
+            pitch_deg: 0.0,
+            heading_deg,
+        };
+        let mut p = p.clone();
+        if let Some(mut st) = self.world.entity_mut(e).take::<structure::Structure>() {
+            st.level = true;
+            st.sync(&mut p);
+            self.world.entity_mut(e).insert(st);
+        }
+        // stand on the wheels at the new clearance
+        let body = self.world.get::<bodies::ReferenceBody>(e).map(|b| b.0);
+        if let Some(b) = body
+            .and_then(|b| self.world.get::<bodies::Body>(b))
+            .cloned()
+        {
+            let terrain = body
+                .and_then(|b| self.world.get::<flight::Terrain>(b))
+                .map(|t| t.0.clone());
+            let ground = flight::ground_radius(&b, terrain.as_deref(), p.r, self.ut());
+            p.r = p.r.normalized() * (ground + p.ground_clearance_m);
+        }
+        self.world.entity_mut(e).insert(p);
+        true
+    }
+
     /// Set the heat difficulty options.
     pub fn set_heat_settings(&mut self, settings: thermal::HeatSettings) {
         self.world.insert_resource(settings);
@@ -497,8 +533,10 @@ impl Universe {
     /// Give a vessel a part structure so flight loads its joints and pieces can break off.
     pub fn set_structure(&mut self, e: Entity, mut s: structure::Structure) {
         if let Some(mut p) = self.world.get_mut::<flight::Powered>(e) {
+            s.level = p.level;
             s.sync(&mut p);
         } else if let Some(mut d) = self.world.get_mut::<flight::Dormant>(e) {
+            s.level = d.0.level;
             s.sync(&mut d.0);
         }
         self.world.entity_mut(e).insert(s);
@@ -1910,6 +1948,76 @@ mod tests {
         assert!(
             used_on > 0.0 && used_off == 0.0,
             "monoprop {used_on} / {used_off}"
+        );
+    }
+
+    #[test]
+    fn a_jet_lies_level_on_the_runway_rolls_rotates_and_flies() {
+        let (mut u, body, _, _) = k1_on_real_kerbin();
+        let crafts: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let defs: Vec<ose_data::PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let res: Vec<ose_data::ResourceDef> =
+            serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
+        let c = crafts.iter().find(|c| c.name == "Stock04_Jet").unwrap();
+        let c = structure::level_layout(c).expect("built nose-forward");
+        assert!(
+            structure::level_layout(crafts.iter().find(|c| c.name == "Kerbal K1").unwrap())
+                .is_none(),
+            "rockets already point up"
+        );
+        let report = ose_data::staging::delta_v_by_stage(&c, &defs, &res);
+        let spec = flight::FlightSpec::from_report(&report, &[], &[], 1.5);
+        let v = u.spawn_powered_on_surface("Jet", body, spec, 0.0, 0.0);
+        u.set_structure(v, structure::Structure::build(&c, &defs, &res));
+        assert!(u.set_level(v, 90.0));
+        u.step();
+        let p = u.powered(v).unwrap().clone();
+        let up = p.r.normalized();
+        assert!(p.landed && !p.tipped && !p.crashed, "{p:?}");
+        assert!(p.facing.dot(up).abs() < 0.05, "lies level: {:?}", p.facing);
+        assert!(
+            p.ground_clearance_m < 3.0,
+            "on its wheels: {} m",
+            p.ground_clearance_m
+        );
+        assert!(!p.drive.wheels.is_empty(), "rolls on its gear");
+        assert!(p.jet.is_some() && p.intakes);
+        let alt0 = p.r.length() - 600_000.0;
+        // full throttle, nose up 10 degrees: it rolls, rotates and lifts off
+        u.stage(v);
+        u.set_controls(
+            v,
+            1.0,
+            flight::Attitude::PitchHeading {
+                pitch_deg: 10.0,
+                heading_deg: 90.0,
+            },
+        );
+        let mut lifted_at = None;
+        for i in 0..(90 * TICKS_PER_SECOND) {
+            u.step();
+            let p = u.powered(v).unwrap();
+            assert!(!p.crashed, "crashed at step {i}");
+            if !p.landed && lifted_at.is_none() {
+                lifted_at = Some((i, p.drive.speed_mps));
+            }
+            if lifted_at.is_some() && p.r.length() - 600_000.0 > alt0 + 100.0 {
+                break;
+            }
+        }
+        let (step, speed) = lifted_at.expect("took off");
+        let p = u.powered(v).unwrap();
+        assert!(
+            p.r.length() - 600_000.0 > alt0 + 100.0,
+            "climbing: {} m above the runway",
+            p.r.length() - 600_000.0 - alt0
+        );
+        assert!(
+            speed > 20.0,
+            "lifted off at {speed} m/s after {} s",
+            step as f64 / 50.0
         );
     }
 

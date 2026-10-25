@@ -166,6 +166,10 @@ async fn hello_catalog_and_snapshots() {
     };
     assert!(definitions.iter().any(|d| d.id == "InfiniteFuel"));
     assert!(presets.iter().any(|p| p.name == "Normal"));
+    let ServerMessage::LaunchSites { sites } = recv(&mut ws).await else {
+        panic!("expected LaunchSites")
+    };
+    assert!(sites.iter().any(|x| x.runway));
     assert!(bodies.len() >= 17, "catalog has {} bodies", bodies.len());
     let kerbin = bodies
         .iter()
@@ -1484,6 +1488,117 @@ async fn resuming_the_shared_campaign_brings_back_its_mode_and_tech_tree() {
     })
     .await;
     assert!(tree, "an exploration campaign has its tech tree");
+}
+
+#[tokio::test]
+async fn a_plane_launched_on_the_runway_lies_level_facing_down_it() {
+    let (_server, addr) = spawn_server_with(&["--db", ":memory:", "--save", "none"], None).await;
+    let mut ws = connect_ws(&addr).await;
+    hello(&mut ws, None, "pilot").await;
+    let sites = wait_for(&mut ws, |m| match m {
+        ServerMessage::LaunchSites { sites } => Some(sites),
+        _ => None,
+    })
+    .await;
+    let ids: Vec<&str> = sites.iter().map(|x| x.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        [
+            "LaunchPad_1",
+            "LaunchPad_2",
+            "LaunchPad_3",
+            "LaunchPad_4",
+            "Runway_1"
+        ]
+    );
+    send_msg(
+        &mut ws,
+        &ClientMessage::CreateSession {
+            name: "Planes".into(),
+            mode: ose_net::SessionMode::Sandbox,
+            difficulty: Vec::new(),
+        },
+    )
+    .await;
+    wait_for(&mut ws, |m| {
+        matches!(m, ServerMessage::CampaignState { .. }).then_some(())
+    })
+    .await;
+    send_msg(&mut ws, &ClientMessage::CraftList).await;
+    let jet = wait_for(&mut ws, |m| match m {
+        ServerMessage::CraftList { crafts } => crafts
+            .iter()
+            .find(|c| c.name == "Stock04_Jet")
+            .map(|c| c.id),
+        _ => None,
+    })
+    .await;
+    send_msg(
+        &mut ws,
+        &ClientMessage::LaunchSavedAt {
+            id: jet,
+            site: Some("Runway_1".into()),
+        },
+    )
+    .await;
+    let vessel = wait_for(&mut ws, |m| match m {
+        ServerMessage::CraftLaunched { vessel, reason, .. } => {
+            assert!(reason.is_none(), "{reason:?}");
+            vessel
+        }
+        _ => None,
+    })
+    .await;
+    // body positions from the snapshot, then the vessel from the vessels list sent with it
+    let mut bodies = Vec::new();
+    let (f, up) = wait_for(&mut ws, |m| match m {
+        ServerMessage::Snapshot { bodies: b, .. } => {
+            bodies = b;
+            None
+        }
+        ServerMessage::Vessels { vessels, .. } if !bodies.is_empty() => {
+            vessels.iter().find(|v| v.id == vessel).and_then(|v| {
+                let body = bodies[v.reference_body as usize].position_m;
+                v.flight
+                    .clone()
+                    .map(|f| (f, (v.position_m - body).normalized()))
+            })
+        }
+        _ => None,
+    })
+    .await;
+    assert_eq!(f.situation, ose_net::FlightSituation::Landed);
+    assert!(
+        f.facing.dot(up).abs() < 0.05,
+        "nose level: {:?} up {up:?}",
+        f.facing
+    );
+    assert!(f.roll_ref.dot(up) < -0.95, "belly down: {:?}", f.roll_ref);
+    // standing, the nose would be the local up; lying level its belly (+Z, the roll reference) points
+    // straight down and the nose across it
+    assert!(
+        f.facing.dot(f.roll_ref).abs() < 0.05,
+        "nose level: {:?} roll {:?}",
+        f.facing,
+        f.roll_ref
+    );
+    assert!(!f.tipped);
+    assert!(f.jet);
+    // a bad site is refused
+    send_msg(
+        &mut ws,
+        &ClientMessage::LaunchSavedAt {
+            id: jet,
+            site: Some("Moon".into()),
+        },
+    )
+    .await;
+    let reason = wait_for(&mut ws, |m| match m {
+        ServerMessage::CraftLaunched { reason, .. } => reason,
+        _ => None,
+    })
+    .await;
+    assert!(reason.contains("no launch site"), "{reason}");
 }
 
 async fn http_get_json(addr: &str, path: &str) -> serde_json::Value {

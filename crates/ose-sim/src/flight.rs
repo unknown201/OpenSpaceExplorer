@@ -235,6 +235,10 @@ pub struct Powered {
     pub jet: Option<Jet>,
     #[serde(default)]
     pub intakes: bool,
+    /// Lies level on the ground (a plane): its axis along its compass heading (`drive.heading_rad`), its
+    /// craft +Z down.
+    #[serde(default)]
+    pub level: bool,
 }
 
 /// How a jet's thrust follows the flight: against Mach and against air density (kg/m^3).
@@ -309,9 +313,20 @@ pub fn roll_reference(facing: DVec3, up: DVec3) -> DVec3 {
     up
 }
 
-/// The craft's top (+Z) in flight: the roll reference turned by its roll.
+/// The craft's +Z in flight: the roll reference turned by its roll. For a level craft (a plane, whose +Z
+/// is its belly) the reference is down across the axis, so it flies wings level.
 pub fn vessel_top(p: &Powered) -> DVec3 {
-    let base = roll_reference(p.facing, p.r.normalized());
+    let up = p.r.normalized();
+    let base = if p.level {
+        let down = -up - p.facing * (-up).dot(p.facing);
+        if down.length_squared() > 1e-6 {
+            down.normalized()
+        } else {
+            roll_reference(p.facing, up)
+        }
+    } else {
+        roll_reference(p.facing, up)
+    };
     let side = p.facing.cross(base);
     let (sr, cr) = p.roll_rad.sin_cos();
     base * cr + side * sr
@@ -384,6 +399,24 @@ pub const MAX_STEER_RAD: f64 = 0.5;
 /// Tyre grip (share of the weight a wheel can push with) and rolling resistance.
 pub const WHEEL_GRIP: f64 = 1.0;
 pub const ROLLING_RESISTANCE: f64 = 0.02;
+
+/// A plane on its wheels rotates its nose up above this ground speed, at most this far, rad.
+pub const ROTATE_SPEED_MPS: f64 = 20.0;
+pub const MAX_ROTATE_RAD: f64 = 0.21;
+
+/// The horizontal direction of compass heading `heading_rad` (clockwise from north) at `r`.
+pub fn heading_dir(r: DVec3, heading_rad: f64) -> DVec3 {
+    let (_, east, north) = surface_frame(r);
+    north * heading_rad.cos() + east * heading_rad.sin()
+}
+
+/// The compass heading (clockwise from north) of a direction at `r`.
+pub fn heading_of(r: DVec3, d: DVec3) -> f64 {
+    let (_, east, north) = surface_frame(r);
+    d.dot(east)
+        .atan2(d.dot(north))
+        .rem_euclid(std::f64::consts::TAU)
+}
 
 impl Drive {
     /// The craft's +Z axis on the ground at `r` (the roll reference of a standing craft).
@@ -605,6 +638,7 @@ impl Powered {
             lift_kn: DVec3::ZERO,
             jet: None,
             intakes: false,
+            level: false,
         }
     }
 
@@ -897,7 +931,24 @@ pub fn integrate(
     };
     if p.landed {
         if !p.tipped {
-            p.facing = p.r.normalized();
+            p.facing = if p.level {
+                // a plane rolls along its heading and, fast enough for the elevators to bite, rotates its
+                // nose up toward the commanded pitch (as far as its tail clears the runway)
+                let up = p.r.normalized();
+                let flat = heading_dir(p.r, p.drive.heading_rad);
+                let want = attitude_direction(p.attitude, p.r, p.v, omega);
+                let pitch = if p.drive.speed_mps.abs() > ROTATE_SPEED_MPS {
+                    want.dot(up)
+                        .clamp(-1.0, 1.0)
+                        .asin()
+                        .clamp(0.0, MAX_ROTATE_RAD)
+                } else {
+                    0.0
+                };
+                (flat * pitch.cos() + up * pitch.sin()).normalized()
+            } else {
+                p.r.normalized()
+            };
         }
         p.angvel = DVec3::ZERO;
     } else {
@@ -948,7 +999,7 @@ pub fn integrate(
         } else {
             0.0
         };
-        let dir = if p.landed {
+        let dir = if p.landed && !p.level {
             attitude_direction(p.attitude, p.r, p.v, omega)
         } else {
             p.facing
@@ -1001,10 +1052,17 @@ pub fn integrate(
             if let Some(dir) = walk_dir {
                 p.r = p.r + dir * (WALK_SPEED_MPS * p.throttle * dt);
             }
-            // on wheels: drive along the ground
+            // on wheels: drive along the ground (a level craft along its nose, pushed by its engines too)
             let mut rolling = DVec3::ZERO;
             if !p.tipped && !p.drive.wheels.is_empty() {
-                let dir = p.drive.direction(p.r);
+                let dir = if p.level {
+                    heading_dir(p.r, p.drive.heading_rad)
+                } else {
+                    p.drive.direction(p.r)
+                };
+                if p.level {
+                    p.drive.speed_mps += (thrust_acc + lift_acc).dot(dir) * dt;
+                }
                 let moved = p.drive.step(p.mass_t, g, dt);
                 p.r = p.r + dir * moved;
                 rolling = dir * p.drive.speed_mps;
@@ -1054,7 +1112,12 @@ pub fn integrate(
         let slope = terrain
             .map(|t| slope_rad(body, t, p.r, ut + dt))
             .unwrap_or(0.0);
-        let lean = p.facing.dot(up).clamp(-1.0, 1.0).acos() + slope;
+        // a level craft leans by how far its nose is off the horizon
+        let lean = if p.level {
+            p.facing.dot(up).clamp(-1.0, 1.0).asin().abs() + slope
+        } else {
+            p.facing.dot(up).clamp(-1.0, 1.0).acos() + slope
+        };
         if p.ground_clearance_m > 0.0 && lean.tan() > p.footprint_m / p.ground_clearance_m {
             p.tipped = true;
             let side = p.facing - up * p.facing.dot(up);
@@ -1063,14 +1126,34 @@ pub fn integrate(
             } else {
                 surface_frame(p.r).1
             };
+        } else if p.level {
+            // a plane touches down rolling along its nose
+            let flat = p.facing - up * p.facing.dot(up);
+            if flat.length() > 1e-6 {
+                p.facing = flat.normalized();
+                p.drive.heading_rad = heading_of(p.r, p.facing);
+            }
         } else {
             p.facing = up;
         }
+        // what hits the ground: the whole speed standing, the sink rate for a plane on its wheels
+        let impact = if p.level && !p.tipped && !p.drive.wheels.is_empty() {
+            (-v_surf.dot(up)).max(0.0)
+        } else {
+            speed
+        };
+        let rolling = if p.level && !p.tipped && !p.drive.wheels.is_empty() {
+            p.drive.speed_mps = v_surf.dot(p.facing);
+            p.facing * p.drive.speed_mps
+        } else {
+            DVec3::ZERO
+        };
         p.r = up * (ground + stand_height(p));
-        p.v = omega_v.cross(p.r);
+        p.v = omega_v.cross(p.r) + rolling;
         p.landed = true;
         p.angvel = DVec3::ZERO;
         out.touched_down = true;
+        let speed = impact;
         out.impact_mps = speed;
         let tolerance = if p.crash_tolerance_mps > 0.0 {
             p.crash_tolerance_mps

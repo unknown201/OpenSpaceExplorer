@@ -90,8 +90,75 @@ pub struct Structure {
     lift_defs: Vec<Option<(ose_data::LiftingSurface, aero::LiftCurves)>>,
     pub intake_area_m2: Vec<f64>,
     engine_jet: Vec<Option<crate::flight::Jet>>,
+    /// Built nose-forward (a plane): the craft lies level on the ground, on its craft -Z... side (its top,
+    /// craft -Z after `level_layout`, faces up) instead of standing on its tail.
+    pub level: bool,
     /// Flight stage the structure was last trimmed to.
     staged_to: usize,
+}
+
+fn quat_mul(a: ose_data::craft::Quat, b: ose_data::craft::Quat) -> ose_data::craft::Quat {
+    ose_data::craft::Quat {
+        w: a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+        x: a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+        y: a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+        z: a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+    }
+}
+
+/// A craft built nose-forward (the root part pointing along the floor, as planes and rovers are built in
+/// the hangar) turned so its pointing direction is craft +Y like a rocket's: the flight model thrusts and
+/// steers along +Y. Its old top (+Y) becomes -Z. `None` for a craft that already points up.
+pub fn level_layout(craft: &Craft) -> Option<Craft> {
+    let root = craft.parts.iter().position(|p| p.parent.is_none())?;
+    let q = craft.parts[root].local_rotation;
+    let q = if q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w < 1e-12 {
+        ose_data::craft::Quat {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+            w: 1.0,
+        }
+    } else {
+        q
+    };
+    let c = aero::rotate([q.x, q.y, q.z, q.w], DVec3::new(0.0, 1.0, 0.0));
+    if c.y.abs() >= 0.5 {
+        return None;
+    }
+    // the shortest turn from `c` to +Y
+    let y = DVec3::new(0.0, 1.0, 0.0);
+    let axis = c.cross(y);
+    let angle = c.dot(y).clamp(-1.0, 1.0).acos();
+    let axis = if axis.length() > 1e-9 {
+        axis.normalized()
+    } else {
+        DVec3::new(1.0, 0.0, 0.0)
+    };
+    let (sh, ch) = (angle * 0.5).sin_cos();
+    let r = ose_data::craft::Quat {
+        x: axis.x * sh,
+        y: axis.y * sh,
+        z: axis.z * sh,
+        w: ch,
+    };
+    let mut out = craft.clone();
+    for part in &mut out.parts {
+        part.local_position = aero::rotate([r.x, r.y, r.z, r.w], part.local_position);
+        let pq = part.local_rotation;
+        let pq = if pq.x * pq.x + pq.y * pq.y + pq.z * pq.z + pq.w * pq.w < 1e-12 {
+            ose_data::craft::Quat {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                w: 1.0,
+            }
+        } else {
+            pq
+        };
+        part.local_rotation = quat_mul(r, pq);
+    }
+    Some(out)
 }
 
 /// A parachute's state (`DeploymentStates`).
@@ -312,6 +379,7 @@ impl Structure {
                 .map(|i| def_of(i).and_then(|d| d.heatshield.clone()))
                 .collect(),
             ablating: vec![false; n],
+            level: false,
             stowed_box: (0..n)
                 .map(|i| {
                     let q = craft.parts[i].local_rotation;
@@ -593,12 +661,17 @@ impl Structure {
         } else {
             [0.0, 1.0]
         };
-        // wheel spread along that direction (positions in craft axes: vessel z is craft -Z)
+        // wheel spread along that direction (positions in craft axes: vessel z is craft -Z); a level craft
+        // drives along its nose
         let along: Vec<f64> = wheels
             .iter()
             .map(|&i| {
                 let r = self.rigid.rest_position(i);
-                r.x * p.drive.forward[0] - r.z * p.drive.forward[1]
+                if self.level {
+                    r.y
+                } else {
+                    r.x * p.drive.forward[0] - r.z * p.drive.forward[1]
+                }
             })
             .collect();
         let spread = along.iter().cloned().fold(f64::MIN, f64::max)
@@ -647,9 +720,11 @@ impl Structure {
             return (0.0, 0.0, 0.0, Vec::new());
         }
         let c = self.rigid.rest_centre();
+        // up in the vessel frame: +Y standing, +Z lying level (craft -Z; the vessel frame negates Z)
+        let u = self.up_axis();
         let bottom = |i: usize| {
             let (centre, half) = self.part_box(i);
-            centre.y - half.y
+            centre.dot(u) - (half.x * u.x.abs() + half.y * u.y.abs() + half.z * u.z.abs())
         };
         let lowest = present
             .iter()
@@ -666,7 +741,13 @@ impl Structure {
             .map(|&i| {
                 let (centre, half) = self.part_box(i);
                 let p = centre - c;
-                (p.x * p.x + p.z * p.z).sqrt() + half.x.max(half.z)
+                let across = p - u * p.dot(u);
+                let spread = if self.level {
+                    half.x.max(half.y)
+                } else {
+                    half.x.max(half.z)
+                };
+                across.length() + spread
             })
             .fold(0.0, f64::max);
         // the impact lands on the parts that touch first (within 15 cm of the lowest point)
@@ -681,7 +762,7 @@ impl Structure {
             .filter(|t| *t > 0.0)
             .fold(f64::INFINITY, f64::min);
         (
-            (c.y - lowest).max(0.0),
+            (c.dot(u) - lowest).max(0.0),
             footprint,
             if tolerance.is_finite() {
                 tolerance
@@ -690,6 +771,15 @@ impl Structure {
             },
             contact,
         )
+    }
+
+    /// Which way is up on the ground, vessel frame: the axis standing (+Y), or the craft's top lying level.
+    fn up_axis(&self) -> DVec3 {
+        if self.level {
+            DVec3::new(0.0, 0.0, 1.0)
+        } else {
+            DVec3::new(0.0, 1.0, 0.0)
+        }
     }
 
     /// Bring a flight state in line with the structure: trimmed to its stage, mass from what the tanks hold,
