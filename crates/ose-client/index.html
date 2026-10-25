@@ -209,6 +209,8 @@
     #sessions li { grid-template-columns: calc(75 * var(--u)) 1fr auto; min-height: calc(72 * var(--u)); margin-bottom: calc(5 * var(--u)); padding: calc(8 * var(--u)) calc(10 * var(--u)); background: #000; border: 0; border-bottom: calc(6 * var(--u)) solid transparent; border-radius: 0;
       border-image: repeating-linear-gradient(90deg, #f2f2f233 0 calc(4 * var(--u)), transparent calc(4 * var(--u)) calc(8 * var(--u))) 0 0 1 0 / 0 0 calc(6 * var(--u)) 0; }
     #sessions li::before { content: ""; width: calc(75 * var(--u)); height: calc(40 * var(--u)); background: url(assets/ui/ELE-Placeholder-Flag.png) center / contain no-repeat; }
+    #sessions li.has-thumb::before { display: none; }
+    #sessions .sess-thumb { width: calc(75 * var(--u)); height: calc(46 * var(--u)); background: center / cover no-repeat; border: 1px solid #ffffff33; }
     #sessions .name { font-size: calc(18 * var(--u)); font-weight: 600; color: #f2f2f2; }
     #sessions .meta { font-size: calc(12 * var(--u)); color: #ffffff99; }
     #sessions button { padding: calc(6 * var(--u)) calc(14 * var(--u)); font-size: calc(14 * var(--u)); }

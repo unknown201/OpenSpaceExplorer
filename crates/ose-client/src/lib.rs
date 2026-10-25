@@ -8851,8 +8851,19 @@ impl App {
         };
         let mut html = String::new();
         for s in sessions {
+            // A picture for each campaign (the original shows one of its screenshots), steady per campaign.
+            const ART: [&str; 7] = [
+                "ksc",
+                "launchpad",
+                "runway",
+                "tracking",
+                "mission",
+                "rnd",
+                "game2",
+            ];
+            let art = ART[(hud::fnv(&s.id) % ART.len() as u64) as usize];
             html.push_str(&format!(
-                "<li data-ose=\"session\" data-ose-id=\"{id}\"><div><div class=\"name\">{name}</div>\
+                "<li data-ose=\"session\" data-ose-id=\"{id}\" class=\"has-thumb\"><i class=\"sess-thumb\" style=\"background-image:url(assets/loading/{art}.jpg)\"></i><div><div class=\"name\">{name}</div>\
                  <div class=\"meta\">{mode} \u{b7} {ut} \u{b7} {players} {pl}</div></div>\
                  <button data-ose=\"session-join\" data-ose-session=\"{id}\">Resume</button></li>",
                 id = esc(&s.id),

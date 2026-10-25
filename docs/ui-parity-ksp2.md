@@ -106,6 +106,7 @@ Camera rule that runs through every map: **the right button drags the camera, th
 | R1 | R&D tree pans by drag and arrows, zooms with the wheel, part tooltips | drag and arrow keys pan, the wheel zooms about the pointer; a node's parts show as pictures; hovering one shows the full part tooltip; Science archive lists the reports submitted by body with place and worth | done |
 | C1 | Mission Control: track a mission, in-flight mission tracker, turn-in button when complete | accept and turn in at Mission Control (other thread); in flight a mission tracker window lists the missions taken on with their current objective | done |
 | A1 | Main menu Settings, Extras/Credits | Settings works; Extras disabled | partly done |
+| A2 | Campaign list rows with a picture of the campaign | each campaign gets one of the original's loading-screen pictures (steady per campaign) instead of the empty placeholder | done |
 
 ## 3. Order of work
 
