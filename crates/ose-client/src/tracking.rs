@@ -18,7 +18,7 @@ pub struct Row {
     /// Whose it is (multiplayer) and their colour, `#rrggbb`; empty for nobody's.
     pub owner: String,
     pub owner_rgb: String,
-    /// What it is, for its map icon: "vessel", "eva" or "flag".
+    /// What it is, for its map icon and the station's filters: "vessel", "debris", "eva" or "flag".
     pub kind: &'static str,
 }
 
@@ -59,9 +59,40 @@ pub fn km(m: f64) -> String {
     }
 }
 
-/// The vessel list: yours first, then by name; `mine_only` hides other players' vessels.
-pub fn render_list(rows: &[Row], selected: Option<u64>, mine_only: bool) -> String {
-    let mut rows: Vec<&Row> = rows.iter().filter(|r| r.mine || !mine_only).collect();
+/// The station's object filters (the original's Filters): kind, label.
+pub const FILTERS: [(&str, &str); 4] = [
+    ("vessel", "Vessels"),
+    ("debris", "Debris"),
+    ("eva", "Kerbals"),
+    ("flag", "Flags"),
+];
+
+/// The filter toggles, lit for kinds shown, with how many of each there are.
+pub fn render_filters(rows: &[Row], hidden: &[&str]) -> String {
+    FILTERS
+        .iter()
+        .map(|(kind, label)| {
+            format!(
+                "<button class=\"ts-filter {kind}{on}\" data-ose=\"ts-filter\" data-ose-kind=\"{kind}\">{label} <span>{n}</span></button>",
+                on = if hidden.contains(kind) { "" } else { " on" },
+                n = rows.iter().filter(|r| r.kind == *kind).count(),
+            )
+        })
+        .collect()
+}
+
+/// The vessel list: yours first, then by name; `mine_only` hides other players' vessels, `hidden` kinds
+/// filtered out.
+pub fn render_list(
+    rows: &[Row],
+    selected: Option<u64>,
+    mine_only: bool,
+    hidden: &[&str],
+) -> String {
+    let mut rows: Vec<&Row> = rows
+        .iter()
+        .filter(|r| (r.mine || !mine_only) && !hidden.contains(&r.kind))
+        .collect();
     rows.sort_by(|a, b| b.mine.cmp(&a.mine).then(a.name.cmp(&b.name)));
     let mut html = String::new();
     for r in rows {
@@ -403,9 +434,9 @@ mod tests {
             row(1, "Alpha", false, "Orbiting"),
             row(2, "Zulu", true, "Landed"),
         ];
-        let html = render_list(&rows, Some(2), false);
+        let html = render_list(&rows, Some(2), false, &[]);
         assert!(html.find("Zulu").unwrap() < html.find("Alpha").unwrap());
-        assert!(!render_list(&rows, None, true).contains("Alpha"));
+        assert!(!render_list(&rows, None, true, &[]).contains("Alpha"));
         let mine = render_info(&rows[1]);
         assert!(!mine.contains("data-ose-ts-fly=\"2\" disabled"));
         assert!(!mine.contains("data-ose-ts-recover=\"2\" disabled"));

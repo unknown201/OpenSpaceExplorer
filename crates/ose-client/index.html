@@ -29,6 +29,7 @@
     body.webgpu #labels .vessel { font-size: 0; }
     body.webgpu #labels .vessel:hover, body.webgpu #labels .vessel.target, body.webgpu #labels .vessel.flown { font-size: 12px; z-index: 2; }
     body.webgpu #labels .vessel.eva::before { -webkit-mask-image: url(assets/ui/hud/ICO-Map-Kerbal-16x16.png); mask-image: url(assets/ui/hud/ICO-Map-Kerbal-16x16.png); }
+    body.webgpu #labels .vessel.debris::before { -webkit-mask-image: url(assets/ui/hud/ICO-Map-Debris-16x16.png); mask-image: url(assets/ui/hud/ICO-Map-Debris-16x16.png); }
     body.webgpu #labels .vessel.flag::before { -webkit-mask-image: url(assets/ui/hud/ICO-Map-Flag-16x16.png); mask-image: url(assets/ui/hud/ICO-Map-Flag-16x16.png); }
     #labels .body::before { background: currentColor; -webkit-mask-image: url(assets/ui/hud/ICO-Map-Planet-16x16.png); mask-image: url(assets/ui/hud/ICO-Map-Planet-16x16.png); }
     #labels .body.star::before { -webkit-mask-image: url(assets/ui/hud/ICO-Map-StarSystem-16x16.png); mask-image: url(assets/ui/hud/ICO-Map-StarSystem-16x16.png); }
@@ -789,6 +790,11 @@
     #ts-info dl { display: grid; grid-template-columns: auto 1fr; gap: calc(2 * var(--u)) calc(12 * var(--u)); margin: 0 0 calc(8 * var(--u)); }
     #ts-info dt { color: #9fb0cc; } #ts-info dd { margin: 0; text-align: right; }
     #ts-info .ts-actions { display: flex; gap: calc(6 * var(--u)); }
+    .ts-filters { display: flex; gap: calc(4 * var(--u)); margin: calc(6 * var(--u)) 0; }
+    .ts-filters button { flex: 1; margin: 0; padding: calc(4 * var(--u)) calc(2 * var(--u)); font-size: calc(12 * var(--u)); background: #ebf0ff; color: #6a718f; border: 1px solid #6a718f; border-radius: calc(3 * var(--u)); cursor: pointer; }
+    .ts-filters button.on { background: #cde6ff; color: #0a0a0a; border-color: #2f8fff; }
+    .ts-filters button span { color: #4a5068; font-size: calc(11 * var(--u)); }
+    .ts-vessel.debris .name::before { -webkit-mask-image: url(assets/ui/hud/ICO-Map-Debris-16x16.png); mask-image: url(assets/ui/hud/ICO-Map-Debris-16x16.png); }
     .ts-section { padding: calc(8 * var(--u)) calc(6 * var(--u)) calc(4 * var(--u)); font-weight: 700; font-size: calc(12 * var(--u)); letter-spacing: 0.06em; text-transform: uppercase; color: #4a5068; }
     .ts-body { padding-top: calc(4 * var(--u)); padding-bottom: calc(4 * var(--u)); margin-bottom: calc(2 * var(--u)); background: #fff; border-left: calc(4 * var(--u)) solid #fff; cursor: pointer; font-size: calc(14 * var(--u)); }
     .ts-body:hover { background: #e3eeff; } .ts-body.selected { background: #cde6ff; border-left-color: #2f8fff; }
@@ -1078,6 +1084,7 @@
   <div id="tracking" data-ose="tracking">
     <div class="ts-head"><span class="flag"><img src="assets/ui/ICO-Tracking-Station-Med.png" alt="" /></span><h2>Tracking Station</h2></div>
     <div class="ts-tabs"><button id="ts-tab-all" data-ose="ts-tab-all" class="on">All vessels</button><button id="ts-tab-mine" data-ose="ts-tab-mine">Mine</button></div>
+    <div id="ts-filters" class="ts-filters" data-ose="ts-filters"></div>
     <ul id="ts-list" data-ose="ts-list"></ul>
     <div id="ts-info" data-ose="ts-info"></div>
     <button id="ts-back" data-ose="ts-back">Back to KSC</button>

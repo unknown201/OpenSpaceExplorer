@@ -250,6 +250,8 @@ struct App {
     ts_selected: Option<u64>,
     /// The celestial body selected in the Tracking Station (its information panel).
     ts_body: Option<usize>,
+    /// Object kinds the station's filters hide.
+    ts_hidden: Vec<&'static str>,
     ts_mine_only: bool,
     ts_rendered_ms: f64,
     /// Whether the KSC camera is on the launch pad (glides there while the pad dialog is open).
@@ -676,6 +678,7 @@ pub fn start() -> Result<(), JsValue> {
         tracking_open: false,
         ts_selected: None,
         ts_body: None,
+        ts_hidden: Vec::new(),
         ts_mine_only: false,
         ts_rendered_ms: 0.0,
         ksc_on_pad: false,
@@ -1946,6 +1949,22 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                     .and_then(|s| s.parse::<u64>().ok())
             };
             let mut app = a.borrow_mut();
+            if let Some(kind) = el
+                .closest("[data-ose-kind]")
+                .ok()
+                .flatten()
+                .and_then(|e| e.get_attribute("data-ose-kind"))
+            {
+                if let Some((k, _)) = tracking::FILTERS.iter().find(|(k, _)| *k == kind) {
+                    if let Some(at) = app.ts_hidden.iter().position(|h| h == k) {
+                        app.ts_hidden.remove(at);
+                    } else {
+                        app.ts_hidden.push(k);
+                    }
+                    app.render_tracking();
+                }
+                return;
+            }
             if let Some(id) = num("data-ose-ts-focus") {
                 app.track_focus(id);
             } else if let Some(i) = num("data-ose-ts-body-focus") {
@@ -4925,11 +4944,13 @@ impl App {
                 continue;
             };
             let mine = v.owner.is_some() && v.owner == self.player_id;
-            // The original's map markers: a Kerbal on EVA, a flag, or a vessel.
+            // The original's map markers: a Kerbal on EVA, a flag, debris, or a vessel.
             let kind = if v.flight.as_ref().is_some_and(|f| f.eva) {
                 " eva"
             } else if v.name.ends_with(" flag") {
                 " flag"
+            } else if v.name.ends_with(" debris") {
+                " debris"
             } else {
                 ""
             };
@@ -7250,18 +7271,21 @@ impl App {
             return Vec::new();
         };
         let mut out = Vec::new();
-        // Depth-first, children in catalog order (outward from the parent as the catalog lists them).
+        // Depth-first, each body's moons outward from it (by semi-major axis), as the original lists them.
         fn walk(
             bodies: &[ose_net::BodyInfo],
             parent: Option<u16>,
             depth: usize,
             out: &mut Vec<(usize, String, usize)>,
         ) {
-            for (i, b) in bodies.iter().enumerate() {
-                if b.parent == parent {
-                    out.push((i, b.id.clone(), depth));
-                    walk(bodies, Some(i as u16), depth + 1, out);
-                }
+            let sma = |b: &ose_net::BodyInfo| b.orbit.map(|o| o.semi_major_axis_m).unwrap_or(0.0);
+            let mut kids: Vec<usize> = (0..bodies.len())
+                .filter(|&i| bodies[i].parent == parent)
+                .collect();
+            kids.sort_by(|&a, &b| sma(&bodies[a]).total_cmp(&sma(&bodies[b])));
+            for i in kids {
+                out.push((i, bodies[i].id.clone(), depth));
+                walk(bodies, Some(i as u16), depth + 1, out);
             }
         }
         walk(&scene.bodies, None, 0, &mut out);
@@ -7355,6 +7379,8 @@ impl App {
                         "eva"
                     } else if v.name.ends_with(" flag") {
                         "flag"
+                    } else if v.name.ends_with(" debris") {
+                        "debris"
                     } else {
                         "vessel"
                     },
@@ -7367,13 +7393,20 @@ impl App {
         self.ts_rendered_ms = now_ms();
         let rows = self.tracking_rows();
         if let Some(el) = self.doc.get_element_by_id("ts-list") {
-            let mut html = tracking::render_list(&rows, self.ts_selected, self.ts_mine_only);
+            let mut html =
+                tracking::render_list(&rows, self.ts_selected, self.ts_mine_only, &self.ts_hidden);
             html.push_str(&tracking::render_body_list(&self.body_tree(), self.ts_body));
             // The list is redrawn twice a second; only touch the page when it changed (keeps hover and scroll).
             let key = format!("{}:{}", html.len(), hud::fnv(&html));
             if el.get_attribute("data-ose-key").as_deref() != Some(key.as_str()) {
                 el.set_inner_html(&html);
                 el.set_attribute("data-ose-key", &key).ok();
+            }
+        }
+        if let Some(el) = self.doc.get_element_by_id("ts-filters") {
+            let html = tracking::render_filters(&rows, &self.ts_hidden);
+            if el.inner_html() != html {
+                el.set_inner_html(&html);
             }
         }
         for (id, on) in [
