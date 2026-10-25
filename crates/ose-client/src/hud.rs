@@ -1039,8 +1039,9 @@ pub fn archive_html(reports: &[ose_net::ReportInfo], name: &dyn Fn(&str) -> Stri
     bodies.dedup();
     let total: f64 = reports.iter().map(|r| r.value).sum();
     let mut html = format!(
-        "<h3>Science archive</h3><p class=\"ar-sum\">{} reports \u{b7} {:.0} science</p>",
+        "<h3>Science archive</h3><p class=\"ar-sum\">{} report{} \u{b7} {:.0} science</p>",
         reports.len(),
+        if reports.len() == 1 { "" } else { "s" },
         total
     );
     for b in bodies {
