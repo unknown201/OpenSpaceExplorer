@@ -9995,6 +9995,14 @@ impl App {
                 &format!("{:.1}", deflection.to_degrees()),
             )
             .ok();
+            // Test hook: the largest engine gimbal angle in the readout, degrees.
+            let gimbal = f
+                .gimbals
+                .iter()
+                .map(|g| g.1.abs().max(g.2.abs()))
+                .fold(0.0f32, f32::max);
+            el.set_attribute("data-ose-gimbal", &format!("{:.2}", gimbal.to_degrees()))
+                .ok();
         }
     }
 

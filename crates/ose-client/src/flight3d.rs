@@ -150,7 +150,8 @@ pub fn fairing_shells(bottom: f64, top: f64, radius: f64) -> Vec<(&'static str, 
     shells
 }
 
-/// The pose of an animated Kerbal model playing one of its clips (idle, walk, run, air), looping in page
+/// The pose of an animated Kerbal model playing one of its clips (idle, walk, run, air), or of a planted flag
+/// in the wind, looping in page
 /// time; `None` for any other model.
 fn kerbal_sample(
     gpu: &Renderer,
@@ -158,9 +159,14 @@ fn kerbal_sample(
     clip: &str,
     now_ms: f64,
 ) -> Option<crate::animation::ClipSample> {
-    if !model.starts_with("kerbal:anim") {
+    // A planted flag flies in the wind (the original's flag_wind loop).
+    let clip = if model == "kerbal:flag" {
+        "flag_wind"
+    } else if model.starts_with("kerbal:anim") {
+        clip
+    } else {
         return None;
-    }
+    };
     let rig = &gpu.model(model)?.rig;
     let i = rig.clips.iter().position(|c| c.name == clip)?;
     let duration = rig.clips[i].duration.max(1e-3);
@@ -1464,6 +1470,17 @@ impl FlightView {
                 if bare_engine(craft, i) {
                     it.hide_containing = Some("fairing");
                 }
+                // A gimballing engine's nozzle swivels with the steering (protocol 44): angles about the part's
+                // own X and Z, applied to its "gimbal" node; mirroring X keeps a turn about X and reverses Z.
+                if let Some((_, gx, gz)) =
+                    readout.and_then(|f| f.gimbals.iter().find(|g| g.0 as usize == i))
+                {
+                    it.node_turns.push((
+                        "gimbal",
+                        glam::Quat::from_rotation_x(*gx) * glam::Quat::from_rotation_z(-*gz),
+                        glam::Vec3::ZERO,
+                    ));
+                }
                 // Wheels roll with the ground speed.
                 if let Some((bone, radius)) = wheel_spinner(pid) {
                     let turn = (self.wheel_travel / radius) as f32;
@@ -1581,9 +1598,7 @@ impl FlightView {
                 let mut it = DrawItem::lit(name.to_string(), at - cam, rot, scale, sun);
                 it.ambient = part_ambient;
                 it.sun = sun_share;
-                if let Some(key) = kerbal_clip {
-                    it.animation = kerbal_sample(gpu, name, key, inp.now_ms);
-                }
+                it.animation = kerbal_sample(gpu, name, kerbal_clip.unwrap_or("idle"), inp.now_ms);
                 if let Some(c) = inp.stand.tint(name) {
                     it.color = c;
                 }
