@@ -581,6 +581,23 @@ impl Editor {
         Some(Fragment { parts })
     }
 
+    /// Turn a stack-attached part by `q` about its own attach node, so it stays on the node it hangs from.
+    pub fn turn_on_own_node(&mut self, i: usize, q: Quat, catalog: &Catalog) {
+        let Some(p) = self.craft.parts.get(i) else {
+            return;
+        };
+        let own = catalog.get(&p.part_id).and_then(|s| {
+            s.attach_nodes
+                .iter()
+                .find(|n| Some(&n.id) == p.own_node.as_ref())
+                .map(|n| n.position)
+        });
+        let n = own.unwrap_or_default();
+        let p = &mut self.craft.parts[i];
+        p.local_position = p.local_position + n - quat_rotate(q, n);
+        p.local_rotation = q;
+    }
+
     /// A copy of part `i` and everything under it, the craft left as it is (Ctrl+C).
     pub fn copy(&self, i: usize, catalog: &Catalog) -> Option<Fragment> {
         self.clone().detach(i, catalog)
@@ -653,6 +670,42 @@ pub struct SurfaceSpot {
     pub target: usize,
     pub azimuth: f64,
     pub height: f64,
+    /// The held part's own turn (W/A/S/D/Q/E in the original), applied after it is turned to face the side.
+    pub turn: Quat,
+}
+
+/// No rotation.
+pub const NO_TURN: Quat = IDENTITY;
+
+/// A turn of `deg` degrees about craft axis 0 (X, pitch), 1 (Y, yaw) or 2 (Z, roll).
+pub fn axis_turn(axis: usize, deg: f64) -> Quat {
+    let h = deg.to_radians() * 0.5;
+    let (s, c) = (h.sin(), h.cos());
+    match axis {
+        0 => Quat {
+            x: s,
+            y: 0.0,
+            z: 0.0,
+            w: c,
+        },
+        1 => Quat {
+            x: 0.0,
+            y: s,
+            z: 0.0,
+            w: c,
+        },
+        _ => Quat {
+            x: 0.0,
+            y: 0.0,
+            z: s,
+            w: c,
+        },
+    }
+}
+
+/// `a` then... in quaternion terms `a * b` (apply `b` first, then `a`).
+pub fn turn_then(a: Quat, b: Quat) -> Quat {
+    quat_mul(a, b)
 }
 
 /// Symmetry counts the original offers (`BuilderSymmetryMode` X1..X8), in X-key order.
@@ -717,6 +770,7 @@ impl Editor {
             target,
             azimuth,
             height: hit.y,
+            turn: IDENTITY,
         })
     }
 
@@ -742,7 +796,7 @@ impl Editor {
                 let az = spot.azimuth + std::f64::consts::TAU * k as f64 / symmetry.max(1) as f64;
                 let out = DVec3::new(az.cos(), 0.0, az.sin());
                 let contact = DVec3::new(axis.x, spot.height, axis.z) + out * radius;
-                let q = facing_in(az);
+                let q = quat_mul(facing_in(az), spot.turn);
                 (contact - quat_rotate(q, node), q)
             })
             .collect()
@@ -1058,6 +1112,33 @@ mod tests {
         assert_eq!(e.craft.parts[t].parent_node.as_deref(), Some("bottom"));
         assert!(h.redo(&mut e));
         assert_eq!(e.craft.parts.len(), 3);
+    }
+
+    #[test]
+    fn held_turns_apply_to_surface_and_stack_parts() {
+        let cat = catalog();
+        let mut e = Editor::new("test");
+        e.add_part(&cat["pod"], &cat).unwrap();
+        let t = e.add_part(&cat["tank"], &cat).unwrap();
+        let mut spot = e
+            .surface_spot(t, DVec3::new(1.0, -1.6, 0.0), &cat, None)
+            .unwrap();
+        spot.turn = axis_turn(2, 90.0);
+        let l = e.add_surface(&cat["light"], &cat, spot, 1).unwrap()[0];
+        // Turned, but its attach node still touches the tank's side.
+        let p = &e.craft.parts[l];
+        assert!((p.local_rotation.w - 1.0).abs() > 1e-6);
+        let node = p.local_position + quat_rotate(p.local_rotation, DVec3::ZERO);
+        let tank_x = e.craft.parts[t].local_position.x;
+        assert!(((node.x - tank_x).hypot(node.z) - 0.625).abs() < 1e-9);
+        // A stack part yawed about its own top node stays on the node.
+        let en = e.add_part(&cat["engine"], &cat).unwrap();
+        let before = e.craft.parts[en].local_position;
+        e.turn_on_own_node(en, axis_turn(1, 90.0), &cat);
+        let after = e.craft.parts[en].local_position;
+        assert!((after.y - before.y).abs() < 1e-9 && (after.x - before.x).abs() < 1e-9);
+        let w = turn_then(axis_turn(1, 90.0), axis_turn(1, 90.0));
+        assert!((quat_rotate(w, DVec3::new(1.0, 0.0, 0.0)).x + 1.0).abs() < 1e-9);
     }
 
     #[test]

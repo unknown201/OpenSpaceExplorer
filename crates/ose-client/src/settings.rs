@@ -60,7 +60,11 @@ pub const INPUT: &[(&str, &[Binding])] = &[
                 "Copy the selected part and what hangs on it / paste (click to place, Esc drops)",
                 true,
             ),
-            ("W A S D Q E", "Rotate the held part", false),
+            (
+                "W A S D Q E / Space",
+                "Rotate the held part (90 degrees with snap, 15 without, Shift 5) / upright",
+                true,
+            ),
         ],
     ),
     (

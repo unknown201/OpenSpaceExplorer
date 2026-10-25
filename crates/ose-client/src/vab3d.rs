@@ -57,6 +57,9 @@ pub struct VabView {
     /// Surface attachment previews (craft frame poses, one per symmetry copy) for the held part, set by the
     /// screen each frame; drawn when no stack node is in reach.
     pub ghosts: Vec<(ose_math::DVec3, ose_data::craft::Quat)>,
+    /// The held part's turn (W/A/S/D/Q/E) for the floating preview, and its yaw alone for a stack snap.
+    pub held_turn: ose_data::craft::Quat,
+    pub held_yaw: ose_data::craft::Quat,
     /// Vertical camera offset from the craft's centre, metres (arrow keys and middle drag, Home resets).
     pub pan_y: f64,
 }
@@ -86,6 +89,8 @@ impl VabView {
             snap: None,
             ghosts: Vec::new(),
             pan_y: 0.0,
+            held_turn: crate::vab::NO_TURN,
+            held_yaw: crate::vab::NO_TURN,
         }
     }
 
@@ -371,7 +376,12 @@ impl VabView {
                     items.push(ghost);
                 }
             } else if gpu.has_model(&name) {
-                let mut ghost = DrawItem::lit(name, at - cam_pos, DQuat::IDENTITY, 1.0, light);
+                let turn = if self.snap.is_some() {
+                    self.held_yaw
+                } else {
+                    self.held_turn
+                };
+                let mut ghost = DrawItem::lit(name, at - cam_pos, quat_to_gltf(turn), 1.0, light);
                 ghost.ambient = 0.6;
                 ghost.color = if self.snap.is_some() {
                     [0.7, 1.0, 0.75, 1.0]

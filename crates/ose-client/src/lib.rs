@@ -141,6 +141,9 @@ struct App {
     /// Ctrl+C clipboard, and whether the fragment in hand is a paste (dropped nowhere it just goes away).
     vab_clipboard: Option<vab::Fragment>,
     vab_pasting: bool,
+    /// The held part's turn and its yaw part (W/A/S/D/Q/E while holding, Space resets).
+    vab_turn: ose_data::craft::Quat,
+    vab_yaw: ose_data::craft::Quat,
     vab_dragged: bool,
     /// The flight view (the vessel in 3D near its body).
     #[cfg(target_arch = "wasm32")]
@@ -423,6 +426,8 @@ pub fn start() -> Result<(), JsValue> {
         vab_snap: true,
         vab_clipboard: None,
         vab_pasting: false,
+        vab_turn: vab::NO_TURN,
+        vab_yaw: vab::NO_TURN,
         vab_dragged: false,
         #[cfg(target_arch = "wasm32")]
         flight3d: flight3d::FlightView::new(),
@@ -1411,6 +1416,14 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
             while let Some(el) = t.clone() {
                 if let Some(id) = el.get_attribute("data-ose-part") {
                     ev.prevent_default();
+                    // The search box lets go, so W/A/S/D/Q/E turn the part in hand instead of typing.
+                    if let Some(active) = web_sys::window()
+                        .and_then(|w| w.document())
+                        .and_then(|d| d.active_element())
+                        .and_then(|e| e.dyn_into::<HtmlElement>().ok())
+                    {
+                        active.blur().ok();
+                    }
                     a.borrow_mut().vab_press =
                         Some((id, ev.client_x() as f64, ev.client_y() as f64));
                     break;
@@ -1792,6 +1805,9 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                     })
                     .unwrap_or_default();
                 app.vab3d.held = Some((id, nodes));
+                app.vab_turn = vab::NO_TURN;
+                app.vab_yaw = vab::NO_TURN;
+                app.vab_sync_turn();
                 if let Some(b) = app.doc.body() {
                     b.class_list().add_1("vab-holding").ok();
                 }
@@ -1939,10 +1955,14 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                     app.vab_record();
                     let cat = std::mem::take(&mut app.catalog);
                     let result = match (cat.get(&id), snap) {
-                        (Some(spec), Some((target, node))) => app
-                            .editor
-                            .add_part_on(spec, &cat, target, &node)
-                            .map(|_| ()),
+                        (Some(spec), Some((target, node))) => {
+                            let yaw = app.vab_yaw;
+                            app.editor.add_part_on(spec, &cat, target, &node).map(|i| {
+                                if yaw != vab::NO_TURN {
+                                    app.editor.turn_on_own_node(i, yaw, &cat);
+                                }
+                            })
+                        }
                         (Some(spec), None) if surface.is_some() => {
                             let (spot, sym) = surface.unwrap();
                             app.editor.add_surface(spec, &cat, spot, sym).map(|_| ())
@@ -2111,6 +2131,12 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                     }
                     "KeyX" if !ctrl => {
                         app.vab_cycle_symmetry(ev.shift_key());
+                        true
+                    }
+                    "KeyW" | "KeyS" | "KeyA" | "KeyD" | "KeyQ" | "KeyE" | "Space"
+                        if !ctrl && app.vab_holding() =>
+                    {
+                        app.vab_turn_held(&code, ev.shift_key());
                         true
                     }
                     "KeyC" if !ctrl => {
@@ -3644,12 +3670,69 @@ impl App {
             } else {
                 self.vab_symmetry
             };
-            Some((spot, sym))
+            Some((
+                vab::SurfaceSpot {
+                    turn: self.vab_turn,
+                    ..spot
+                },
+                sym,
+            ))
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
             let _ = id;
             None
+        }
+    }
+
+    fn vab_holding(&self) -> bool {
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.vab3d.held.is_some()
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            false
+        }
+    }
+
+    /// W/S pitch, A/D yaw, Q/E roll the held part: 90 degrees a press with angle snap, 15 without (5 with
+    /// Shift), as the original's rotate keys; Space puts it back upright.
+    fn vab_turn_held(&mut self, code: &str, fine: bool) {
+        let step = if fine {
+            5.0
+        } else if self.vab_snap {
+            90.0
+        } else {
+            15.0
+        };
+        let (axis, sign) = match code {
+            "KeyW" => (0, 1.0),
+            "KeyS" => (0, -1.0),
+            "KeyA" => (1, 1.0),
+            "KeyD" => (1, -1.0),
+            "KeyQ" => (2, 1.0),
+            "KeyE" => (2, -1.0),
+            _ => {
+                self.vab_turn = vab::NO_TURN;
+                self.vab_yaw = vab::NO_TURN;
+                self.vab_sync_turn();
+                return;
+            }
+        };
+        let t = vab::axis_turn(axis, sign * step);
+        self.vab_turn = vab::turn_then(t, self.vab_turn);
+        if axis == 1 {
+            self.vab_yaw = vab::turn_then(t, self.vab_yaw);
+        }
+        self.vab_sync_turn();
+    }
+
+    fn vab_sync_turn(&mut self) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.vab3d.held_turn = self.vab_turn;
+            self.vab3d.held_yaw = self.vab_yaw;
         }
     }
 
@@ -3670,6 +3753,9 @@ impl App {
         }
         self.vab_frag = Some(frag);
         self.vab_pasting = true;
+        self.vab_turn = vab::NO_TURN;
+        self.vab_yaw = vab::NO_TURN;
+        self.vab_sync_turn();
     }
 
     fn vab_cancel_paste(&mut self) {
