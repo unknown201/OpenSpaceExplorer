@@ -114,6 +114,15 @@ pub fn delta_v_by_stage(
             adj[par].push(i);
         }
     }
+    // a fuel line (the part, hung on its source tank) lets the part it feeds draw from that tank, one way
+    let mut lines: Vec<Vec<(usize, usize)>> = vec![Vec::new(); n];
+    for (i, p) in craft.parts.iter().enumerate() {
+        if let (Some(target), Some(source)) = (p.fuel_line_target, p.parent) {
+            if target < n {
+                lines[target].push((source, i));
+            }
+        }
+    }
 
     let mut alive: Vec<bool> = vec![true; n];
     let mut running: HashSet<usize> = HashSet::new();
@@ -230,6 +239,12 @@ pub fn delta_v_by_stage(
                 out.push(x);
                 for &y in &adj[x] {
                     if !seen[y] && alive[y] && crossfeed_ok(x) && crossfeed_ok(y) {
+                        seen[y] = true;
+                        q.push_back(y);
+                    }
+                }
+                for &(y, line) in &lines[x] {
+                    if !seen[y] && alive[y] && alive[line] {
                         seen[y] = true;
                         q.push_back(y);
                     }
@@ -451,6 +466,59 @@ mod tests {
                 .collect(),
             fuel_line_target: None,
         }
+    }
+
+    #[test]
+    fn a_fuel_line_feeds_the_lower_engine_from_the_upper_tank() {
+        let parts = vec![
+            part("pod", 1.0, true, "None", None),
+            part("tank", 0.5, true, "None", None),
+            part(
+                "eng",
+                0.5,
+                true,
+                "LiquidEngine",
+                Some((60.0, 300.0, "Fuel")),
+            ),
+            part("dec", 0.1, false, "DecouplerVertical", None),
+            part("line", 0.05, true, "None", None),
+        ];
+        let resources = vec![ResourceDef {
+            id: "Fuel".into(),
+            display_name_key: String::new(),
+            abbreviation_key: String::new(),
+            kind: ResourceKind::Basic {
+                mass_per_unit_t: 0.005,
+                volume_per_unit: 1.0,
+                specific_heat_capacity_per_unit: 0.0,
+                flow_mode: crate::FlowMode::StackPrioritySearch,
+                pumpable: true,
+                cost_per_unit: 0.0,
+                non_stageable: false,
+            },
+        }];
+        let mut craft = Craft {
+            name: "lined".into(),
+            description: String::new(),
+            parts: vec![
+                cp("a", "pod", None, -1, &[]),
+                cp("b", "tank", Some(0), -1, &[("Fuel", 400.0)]),
+                cp("c", "eng", Some(1), 1, &[]),
+                cp("d", "dec", Some(2), 1, &[]),
+                cp("e", "tank", Some(3), -1, &[("Fuel", 800.0)]),
+                cp("f", "eng", Some(4), 2, &[]),
+                cp("g", "line", Some(1), -1, &[]),
+            ],
+            stages: vec![vec![], vec![2, 3], vec![5]],
+        };
+        let lower = |c: &Craft| delta_v_by_stage(c, &parts, &resources).stages[0].end_mass_t;
+        // without the line the decoupler keeps the upper tank to itself
+        let alone = lower(&craft);
+        assert!((alone - 5.15).abs() < 1e-9, "{alone}");
+        // the line from the upper tank to the lower one: the lower engine burns the upper tank too
+        craft.parts[6].fuel_line_target = Some(4);
+        let fed = lower(&craft);
+        assert!((fed - 3.15).abs() < 1e-9, "burns all 6 t: {fed}");
     }
 
     #[test]

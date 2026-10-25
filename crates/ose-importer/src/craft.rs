@@ -20,6 +20,21 @@ fn guid(v: &Value) -> String {
 }
 const NIL: &str = "00000000-0000-0000-0000-000000000000";
 
+/// The part at the far end of a two-anchor part (fuel line, strut): `Data_CompoundPart.OtherEndAnchor`.
+fn compound_other_end(v: &Value) -> Option<String> {
+    match v {
+        Value::Object(m) => {
+            if m.get("Name").and_then(|n| n.as_str()) == Some("Data_CompoundPart") {
+                let g = guid(&m.get("DataObject")?["OtherEndAnchor"]);
+                return (!g.is_empty() && g != NIL).then_some(g);
+            }
+            m.values().find_map(compound_other_end)
+        }
+        Value::Array(a) => a.iter().find_map(compound_other_end),
+        _ => None,
+    }
+}
+
 pub fn craft_from_value(v: &Value) -> anyhow::Result<Craft> {
     let meta = &v["Metadata"];
     let name = meta["VehicleName"]
@@ -131,7 +146,12 @@ pub fn craft_from_value(v: &Value) -> anyhow::Result<Craft> {
             stage_index: ps["StageIndex"].as_i64().unwrap_or(-1) as i32,
             fuel_crossfeed: ps["FuelCrossfeed"].as_bool().unwrap_or(true),
             resources,
-            fuel_line_target: None,
+            // a fuel line (not a strut) feeds the part at its other end
+            fuel_line_target: if s(p, "partName").starts_with("fuelline") {
+                compound_other_end(p).and_then(|g| index.get(g.as_str()).copied())
+            } else {
+                None
+            },
         });
     }
     // parts not reached from the root become roots of their own; report rather than hide
@@ -205,5 +225,38 @@ mod tests {
         assert_eq!(c.parts[1].parent_node.as_deref(), Some("bottom"));
         assert_eq!(c.parts[0].resources[0].stored_units, 150.0);
         assert_eq!(c.stages, vec![vec![1]]);
+    }
+
+    #[test]
+    fn a_fuel_line_points_at_the_part_it_feeds_and_a_strut_does_not() {
+        let at = |id: &str, to: &str, node: &str, other: &str| json!({"nodeId": node, "AttachedPartGuid": {"Guid": to}, "attachedPartNodeID": other, "_": id});
+        let compound = |to: &str| {
+            json!([{"ModuleData": [{"Name": "Data_CompoundPart",
+                "DataObject": {"OtherEndAnchor": {"Guid": to, "DebugName": "x"}}}]}])
+        };
+        let part = |name: &str,
+                    g: &str,
+                    nodes: Vec<serde_json::Value>,
+                    modules: serde_json::Value| {
+            json!({"partName": name, "PartGuid": {"Guid": g}, "partState": {
+                "attachNodeStates": nodes, "resources": null,
+                "localPosition": {"x": 0, "y": 0, "z": 0}, "localRotation": {"x": 0, "y": 0, "z": 0, "w": 1},
+                "StageIndex": -1, "FuelCrossfeed": true, "PartModulesState": modules}})
+        };
+        let v = json!({
+            "Metadata": {"VehicleName": "Lined"},
+            "Assemblies": [{"Assembly": {"parts": [
+                part("tank", "a", vec![at("a", "b", "bottom", "top"), at("a", "c", "srfAttach", "srfAttach"),
+                    at("a", "d", "srfAttach2", "srfAttach")], json!(null)),
+                part("tank", "b", vec![at("b", "a", "top", "bottom")], json!(null)),
+                part("fuelline_0v_external", "c", vec![at("c", "a", "srfAttach", "srfAttach")], compound("b")),
+                part("strut_1v_extensible", "d", vec![at("d", "a", "srfAttach", "srfAttach2")], compound("b")),
+            ]}}]
+        });
+        let c = craft_from_value(&v).unwrap();
+        assert!(c.is_tree());
+        assert_eq!(c.parts[2].parent, Some(0));
+        assert_eq!(c.parts[2].fuel_line_target, Some(1));
+        assert_eq!(c.parts[3].fuel_line_target, None);
     }
 }
