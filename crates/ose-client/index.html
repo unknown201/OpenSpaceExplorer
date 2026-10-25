@@ -553,6 +553,11 @@
     #crafts li.locked { opacity: 0.5; } #crafts li.locked .name::after { content: "  needs research"; font-size: 11px; color: #f0a070; }
     .rd-parts { list-style: none; margin: calc(6 * var(--u)) 0 0; padding: 0; }
     .rd-parts li { padding: calc(6 * var(--u)) calc(8 * var(--u)); margin-bottom: calc(4 * var(--u)); background: #141c2c; border: 1px solid #2c3d63; border-radius: 4px; font-size: calc(13 * var(--u)); }
+    /* With part pictures: a grid of tiles, as the original's node panel. */
+    .rd-parts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: calc(4 * var(--u)); }
+    .rd-parts li { margin: 0; padding: calc(3 * var(--u)); text-align: center; font-size: calc(11 * var(--u)); line-height: 1.2; }
+    .rd-parts li img.pi { display: block; width: 100%; aspect-ratio: 1; border-radius: 3px; }
+    .rd-parts li.noicon { grid-column: 1 / -1; text-align: left; padding: calc(6 * var(--u)) calc(8 * var(--u)); font-size: calc(13 * var(--u)); }
     /* Mission Control after the original's mission log: tabs and missions on the left, the briefing card on the
        right, over a dim room backdrop. */
     #menu:has(#screen-mission.open) { background: #070b12f5; align-items: stretch; justify-content: stretch; }

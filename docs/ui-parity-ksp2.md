@@ -95,7 +95,7 @@ Camera rule that runs through every map: **the right button drags the camera, th
 |---|---|---|---|
 | K1 | Building hover tooltip and click, wheel zoom, M opens the Tracking Station map | hover/click, zoom, M, right or left drag | done |
 | K2 | Launch-site flyout (Launchpad 1-4, runway) | a site chooser in the launch pad dialog and the VAB header (protocol 30), remembered per browser | done |
-| R1 | R&D tree pans by drag and arrows, zooms with the wheel, part tooltips | drag and arrow keys pan, the wheel zooms about the pointer; hovering a part in a node's list shows the full part tooltip | done |
+| R1 | R&D tree pans by drag and arrows, zooms with the wheel, part tooltips | drag and arrow keys pan, the wheel zooms about the pointer; a node's parts show as pictures; hovering one shows the full part tooltip | done |
 | C1 | Mission Control: track a mission, in-flight mission tracker, turn-in button when complete | accept and turn in at Mission Control (other thread); in flight a mission tracker window lists the missions taken on with their current objective | done |
 | A1 | Main menu Settings, Extras/Credits | Settings works; Extras disabled | partly done |
 
