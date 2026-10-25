@@ -248,6 +248,8 @@ struct App {
     /// The Tracking Station: open, the selected vessel, the "mine only" filter and the last list refresh (ms).
     tracking_open: bool,
     ts_selected: Option<u64>,
+    /// The celestial body selected in the Tracking Station (its information panel).
+    ts_body: Option<usize>,
     ts_mine_only: bool,
     ts_rendered_ms: f64,
     /// Whether the KSC camera is on the launch pad (glides there while the pad dialog is open).
@@ -673,6 +675,7 @@ pub fn start() -> Result<(), JsValue> {
         crew_pending: std::cell::Cell::new(None),
         tracking_open: false,
         ts_selected: None,
+        ts_body: None,
         ts_mine_only: false,
         ts_rendered_ms: 0.0,
         ksc_on_pad: false,
@@ -1945,6 +1948,13 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
             let mut app = a.borrow_mut();
             if let Some(id) = num("data-ose-ts-focus") {
                 app.track_focus(id);
+            } else if let Some(i) = num("data-ose-ts-body-focus") {
+                app.set_focus(i as usize);
+            } else if let Some(i) = num("data-ose-body") {
+                app.ts_body = Some(i as usize);
+                app.ts_selected = None;
+                app.set_focus(i as usize);
+                app.render_tracking();
             } else if let Some(id) = num("data-ose-ts-fly") {
                 app.tracking_open = false;
                 let craft = stored(&app.craft_link_key(id)).and_then(|s| s.parse::<u64>().ok());
@@ -1961,6 +1971,7 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                 .and_then(|s| s.parse::<u64>().ok())
             {
                 app.ts_selected = Some(id);
+                app.ts_body = None;
                 app.track_focus(id);
                 app.render_tracking();
             }
@@ -7155,6 +7166,71 @@ impl App {
         }
     }
 
+    /// Every celestial body in hierarchy order (each followed by its moons), with its depth.
+    fn body_tree(&self) -> Vec<(usize, String, usize)> {
+        let Some(scene) = &self.scene else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        // Depth-first, children in catalog order (outward from the parent as the catalog lists them).
+        fn walk(
+            bodies: &[ose_net::BodyInfo],
+            parent: Option<u16>,
+            depth: usize,
+            out: &mut Vec<(usize, String, usize)>,
+        ) {
+            for (i, b) in bodies.iter().enumerate() {
+                if b.parent == parent {
+                    out.push((i, b.id.clone(), depth));
+                    walk(bodies, Some(i as u16), depth + 1, out);
+                }
+            }
+        }
+        walk(&scene.bodies, None, 0, &mut out);
+        out
+    }
+
+    /// The information panel's figures for body `i`.
+    fn body_card(&self, i: usize) -> Option<tracking::BodyCard> {
+        let scene = self.scene.as_ref()?;
+        let b = scene.bodies.get(i)?;
+        let synopsis = self
+            .loc
+            .get(&format!("Menu/TrackingStation/Synopsis/{}", b.id))
+            .cloned()
+            .unwrap_or_default();
+        Some(tracking::BodyCard {
+            name: b.id.clone(),
+            synopsis,
+            is_star: b.is_star,
+            radius_m: b.radius_m,
+            mu: b.mu,
+            soi_m: b.soi_radius_m,
+            rotation_s: self
+                .body_spins
+                .get(i)
+                .map(|s| s.rotation_period_s)
+                .unwrap_or(0.0),
+            atmosphere: b.has_atmosphere.then(|| {
+                (
+                    b.atmosphere_depth_m,
+                    vab::surface_pressure_atm(&b.id),
+                    matches!(b.id.as_str(), "Kerbin" | "Laythe"),
+                )
+            }),
+            orbit: b.orbit.as_ref().and_then(|o| {
+                let p = scene.bodies.get(usize::from(b.parent?))?;
+                Some((
+                    p.id.clone(),
+                    p.mu,
+                    o.semi_major_axis_m,
+                    o.eccentricity,
+                    o.inclination_deg,
+                ))
+            }),
+        })
+    }
+
     fn tracking_rows(&self) -> Vec<tracking::Row> {
         let Some(scene) = &self.scene else {
             return Vec::new();
@@ -7213,11 +7289,14 @@ impl App {
         self.ts_rendered_ms = now_ms();
         let rows = self.tracking_rows();
         if let Some(el) = self.doc.get_element_by_id("ts-list") {
-            el.set_inner_html(&tracking::render_list(
-                &rows,
-                self.ts_selected,
-                self.ts_mine_only,
-            ));
+            let mut html = tracking::render_list(&rows, self.ts_selected, self.ts_mine_only);
+            html.push_str(&tracking::render_body_list(&self.body_tree(), self.ts_body));
+            // The list is redrawn twice a second; only touch the page when it changed (keeps hover and scroll).
+            let key = format!("{}:{}", html.len(), hud::fnv(&html));
+            if el.get_attribute("data-ose-key").as_deref() != Some(key.as_str()) {
+                el.set_inner_html(&html);
+                el.set_attribute("data-ose-key", &key).ok();
+            }
         }
         for (id, on) in [
             ("ts-tab-all", !self.ts_mine_only),
@@ -7228,14 +7307,19 @@ impl App {
             }
         }
         if let Some(el) = self.doc.get_element_by_id("ts-info") {
-            match self
-                .ts_selected
-                .and_then(|id| rows.iter().find(|r| r.id == id))
-            {
-                Some(r) => el.set_inner_html(&tracking::render_info(r)),
-                None => {
-                    el.set_inner_html("<div class=\"ts-hint\">Select a vessel to track it</div>")
-                }
+            let html = match (
+                self.ts_selected
+                    .and_then(|id| rows.iter().find(|r| r.id == id)),
+                self.ts_body.and_then(|i| self.body_card(i)),
+            ) {
+                (Some(r), _) => tracking::render_info(r),
+                (None, Some(card)) => tracking::render_body_info(&card, self.ts_body.unwrap_or(0)),
+                _ => "<div class=\"ts-hint\">Select a vessel or a celestial body</div>".to_string(),
+            };
+            let key = format!("{}:{}", html.len(), hud::fnv(&html));
+            if el.get_attribute("data-ose-key").as_deref() != Some(key.as_str()) {
+                el.set_inner_html(&html);
+                el.set_attribute("data-ose-key", &key).ok();
             }
         }
     }

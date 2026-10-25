@@ -777,6 +777,13 @@
     #ts-info dl { display: grid; grid-template-columns: auto 1fr; gap: calc(2 * var(--u)) calc(12 * var(--u)); margin: 0 0 calc(8 * var(--u)); }
     #ts-info dt { color: #9fb0cc; } #ts-info dd { margin: 0; text-align: right; }
     #ts-info .ts-actions { display: flex; gap: calc(6 * var(--u)); }
+    .ts-section { padding: calc(8 * var(--u)) calc(6 * var(--u)) calc(4 * var(--u)); font-weight: 700; font-size: calc(12 * var(--u)); letter-spacing: 0.06em; text-transform: uppercase; color: #4a5068; }
+    .ts-body { padding-top: calc(4 * var(--u)); padding-bottom: calc(4 * var(--u)); margin-bottom: calc(2 * var(--u)); background: #fff; border-left: calc(4 * var(--u)) solid #fff; cursor: pointer; font-size: calc(14 * var(--u)); }
+    .ts-body:hover { background: #e3eeff; } .ts-body.selected { background: #cde6ff; border-left-color: #2f8fff; }
+    .ts-body .name::before { content: ""; display: inline-block; width: 12px; height: 12px; margin-right: 5px; vertical-align: -1px; background: #3d4560; -webkit-mask: url(assets/ui/hud/ICO-Map-Planet-16x16.png) center / contain no-repeat; mask: url(assets/ui/hud/ICO-Map-Planet-16x16.png) center / contain no-repeat; }
+    #ts-info { max-height: 52vh; overflow: auto; }
+    #ts-info h4 { margin: calc(8 * var(--u)) 0 calc(4 * var(--u)); font-size: calc(13 * var(--u)); color: #ffd25a; text-transform: uppercase; letter-spacing: 0.05em; }
+    #ts-info .ts-synopsis { margin: calc(4 * var(--u)) 0; font-size: calc(13 * var(--u)); line-height: 1.35; color: #cdd6e6; }
     #ts-info .ts-actions button { flex: 1; margin: 0; padding: calc(6 * var(--u)); font-size: calc(14 * var(--u)); background: #ebf0ff; color: #0a0a0a; border: 1px solid #6a718f; border-radius: calc(4 * var(--u)); cursor: pointer; }
     #ts-info .ts-actions button:hover:not([disabled]) { background: #cde6ff; }
     #ts-info .ts-actions button[disabled] { opacity: 0.4; }
