@@ -474,7 +474,11 @@
     #vab-parts li .fav { color: #ffd84a; }
     /* VAB after the original's OAB: header bar with the vehicle name, New/undo/redo on the left and
        Save/Launch on the right; the staging stack on the right with one card per stage, last to fire on top. */
-    #vab-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; }
+    #vab-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; position: relative; }
+    /* The vehicle's description, as the original's save dialog keeps it: under the name while it is being edited. */
+    #vab-header #vab-desc-pop { left: 50%; right: auto; top: 100%; transform: translateX(-50%); width: 360px; }
+    #vab-header #vab-name:focus ~ #vab-desc-pop, #vab-header #vab-desc-pop:hover, #vab-header #vab-desc-pop:focus-within { display: block; }
+    #vab-header #vab-desc { display: block; margin: 6px 10px 10px; width: calc(100% - 20px); box-sizing: border-box; resize: vertical; font: 13px var(--ui-font, inherit); background: #06080fcc; color: #fff; border: 1px solid #2c3d63; border-radius: 4px; padding: 6px; }
     #vab-header .vh-group { display: flex; gap: 6px; align-items: center; }
     #vab-header button { margin: 0; width: auto; padding: 6px 12px; font-size: 13px; }
     #vab-header #vab-name { flex: 0 1 360px; text-align: center; font: 600 16px var(--ui-font, inherit); padding: 6px 10px; background: #06080fcc; color: #fff; border: 1px solid #2c3d63; border-radius: 4px; }
@@ -958,7 +962,8 @@
             <button id="vab-col" class="secondary on" data-ose="vab-col" title="Centre of lift marker (blue), from wings and control surfaces">CoL</button>
             <button id="vab-cot" class="secondary on" data-ose="vab-cot" title="Centre of thrust marker (magenta) of the first stage's engines, with the thrust line">CoT</button>
           </div>
-          <input id="vab-name" data-ose="vab-name" type="text" maxlength="48" value="Untitled craft" title="Vehicle name" />
+          <input id="vab-name" data-ose="vab-name" type="text" maxlength="48" value="Untitled craft" title="Vehicle name (click for its description)" />
+          <div id="vab-desc-pop" class="vh-pop"><div class="vh-pop-title">Vehicle description</div><textarea id="vab-desc" data-ose="vab-desc" maxlength="400" rows="4" placeholder="What this vehicle is for, how to fly it"></textarea></div>
           <div class="vh-group">
             <span class="vh-pop-wrap"><button id="vab-trip" class="secondary" data-ose="vab-trip" style="display:none" title="Trip planner: the delta-v a trip needs, from the original's map">Trip</button>
               <div id="vab-trip-pop" class="vh-pop right"><div class="vh-pop-title">Trip planner</div>

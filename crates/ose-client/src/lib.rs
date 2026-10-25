@@ -2832,6 +2832,21 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         name.add_event_listener_with_callback("input", cb.as_ref().unchecked_ref())?;
         cb.forget();
     }
+    if let Some(desc) = doc.get_element_by_id("vab-desc") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut()>::new(move || {
+            let mut app = a.borrow_mut();
+            if let Some(t) = app
+                .doc
+                .get_element_by_id("vab-desc")
+                .and_then(|e| e.dyn_into::<web_sys::HtmlTextAreaElement>().ok())
+            {
+                app.editor.craft.description = t.value();
+            }
+        });
+        desc.add_event_listener_with_callback("input", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
     if let Some(cb_el) = doc.get_element_by_id("launch-stock") {
         let a = app.clone();
         let cb = Closure::<dyn FnMut()>::new(move || a.borrow().render_crafts());
@@ -3564,6 +3579,10 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                 || ev
                     .target()
                     .and_then(|t| t.dyn_into::<web_sys::HtmlSelectElement>().ok())
+                    .is_some()
+                || ev
+                    .target()
+                    .and_then(|t| t.dyn_into::<web_sys::HtmlTextAreaElement>().ok())
                     .is_some();
             let menu_open = app
                 .doc
@@ -6610,6 +6629,20 @@ impl App {
         {
             if name.value() != self.editor.craft.name {
                 name.set_value(&self.editor.craft.name);
+            }
+        }
+        if let Some(desc) = self
+            .doc
+            .get_element_by_id("vab-desc")
+            .and_then(|e| e.dyn_into::<web_sys::HtmlTextAreaElement>().ok())
+        {
+            // The stock crafts' untranslated placeholder reads as no description.
+            let d = match self.editor.craft.description.as_str() {
+                "This should be a localized string" => "",
+                d => d,
+            };
+            if desc.value() != d {
+                desc.set_value(d);
             }
         }
         let Some(canvas) = self
