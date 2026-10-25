@@ -386,6 +386,16 @@ def export_body(bid: str, bundles: Path, out_root: Path, args) -> dict | None:
             light["exposure_day_ev"] = [day["minLuminance"], day["maxLuminance"], day["keyValue"]]
         if light:
             info["lighting"] = light
+    # The scaled material's flow (Jool's bands drift: `_FlowmapSpeed1`, `_FlowmapStrength1`)
+    for o in list(a.env.objects) + (list(sa.env.objects) if scaled.exists() else []):
+        if o.type.name != "Material":
+            continue
+        mt = o.read_typetree()
+        if mt.get("m_Name") != f"{low}_scaled":
+            continue
+        fl = dict(mt["m_SavedProperties"]["m_Floats"])
+        if fl.get("_FlowmapSpeed1", 0.0) > 0.0 and "surface" in info:
+            info["surface"]["flow"] = {"speed": fl["_FlowmapSpeed1"], "strength": fl.get("_FlowmapStrength1", 0.0)}
     (out / "planet.json").write_text(json.dumps(info, indent=1), encoding="utf-8")
     print(f"{bid}: surface={'surface' in info} atmosphere={'atmosphere' in info} clouds={'clouds' in info} "
           f"ocean={'ocean' in info}")
