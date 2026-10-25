@@ -3026,7 +3026,7 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                     .map(|e| e.closest("#vab-picker, #vab-side").ok().flatten().is_some())
                     .unwrap_or(false);
                 // Where the cursor is now decides, not the last frame (frames may lag behind the mouse).
-                let free = app.editor.free_nodes(&app.catalog);
+                let free = app.snap_nodes(Some(&id));
                 let rect = app.gpu_canvas.get_bounding_client_rect();
                 app.vab3d.cursor = (
                     (ev.client_x() as f64 - rect.left()) * app.dpr,
@@ -3036,7 +3036,8 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                     .gpu
                     .as_ref()
                     .and_then(|g| app.vab3d.snap_now(g, &free))
-                    .or_else(|| app.vab3d.snap.take());
+                    .or_else(|| app.vab3d.snap.take())
+                    .filter(|_| !free.is_empty());
                 if !over_panel {
                     let surface = if snap.is_none() {
                         app.vab_surface(&id)
@@ -3822,7 +3823,7 @@ impl App {
                     set_text(
                         &self.doc,
                         "vab-dv",
-                        &format!("\u{394}v {:.0} m/s", s.delta_v_vacuum_mps),
+                        &format!("\u{394}v {:.0} m/s", s.delta_v_vacuum_mps.max(0.0) + 0.0),
                     );
                     set_text(
                             &self.doc,
@@ -4292,7 +4293,8 @@ impl App {
                 set_text(
                     &self.doc,
                     "vab-dv",
-                    &format!("\u{394}v {delta_v_vacuum_mps:.0} m/s"),
+                    // `+ 0.0` turns -0 into 0, which `{:.0}` would print as "-0".
+                    &format!("\u{394}v {:.0} m/s", delta_v_vacuum_mps.max(0.0) + 0.0),
                 );
                 if self.vab_active() {
                     self.render_vab_view();
@@ -6520,6 +6522,22 @@ impl App {
         }
     }
 
+    /// The free stack nodes a held part can snap to: none for a part that only goes on another's side
+    /// (wings, radial decouplers), which goes where the pointer meets a part instead.
+    fn snap_nodes(
+        &self,
+        held: Option<&str>,
+    ) -> Vec<(usize, String, ose_math::DVec3, ose_math::DVec3)> {
+        let stacks = held
+            .and_then(|id| self.catalog.get(id))
+            .is_none_or(|s| s.attach_nodes.iter().any(vab::PartSpec::is_stack_node));
+        if stacks {
+            self.editor.free_nodes(&self.catalog)
+        } else {
+            Vec::new()
+        }
+    }
+
     /// The parts manager window: the parts still on the flown vessel (staged-off ones gone), by name.
     fn render_parts_manager(&self) {
         let Some(el) = self.doc.get_element_by_id("fh-parts-list") else {
@@ -8689,9 +8707,10 @@ impl App {
                     Some(self.editor.surface_poses(spec, &self.catalog, spot, sym))
                 })
                 .unwrap_or_default();
+            let held = self.vab3d.held.as_ref().map(|(id, _)| id.clone());
+            let free = self.snap_nodes(held.as_deref());
             if let Some(gpu) = &mut self.gpu {
                 let was_ready = self.vab3d.is_ready();
-                let free = self.editor.free_nodes(&self.catalog);
                 if self
                     .vab3d
                     .frame(gpu, &self.editor.craft, self.editor.selected, &free)

@@ -843,11 +843,11 @@ fn quat_conj(q: Quat) -> Quat {
 }
 
 /// The mirror image of a pose across the plane through `centre` with unit `normal`: the position reflected,
-/// and the rotation that reflects the part's +X (where a side part's node points) and +Y; a rotation cannot
-/// flip handedness, so the part's own +Z turns the other way (side parts are alike on both faces). As
-/// reflections are a half turn and an inversion, that is a half turn about the normal after the part's own
-/// rotation and a half turn about its +Z before it.
-fn mirror_pose(pos: DVec3, q: Quat, centre: DVec3, normal: DVec3) -> (DVec3, Quat) {
+/// and the rotation that reflects every part axis but `own` (a unit axis of the part's frame across which the
+/// part looks the same); a rotation cannot flip handedness, so that one turns the other way. As reflections
+/// are a half turn and an inversion, that is a half turn about the normal after the part's own rotation and a
+/// half turn about `own` before it.
+fn mirror_pose(pos: DVec3, q: Quat, centre: DVec3, normal: DVec3, own: DVec3) -> (DVec3, Quat) {
     let d = (pos - centre).dot(normal);
     let half_n = Quat {
         x: normal.x,
@@ -855,15 +855,15 @@ fn mirror_pose(pos: DVec3, q: Quat, centre: DVec3, normal: DVec3) -> (DVec3, Qua
         z: normal.z,
         w: 0.0,
     };
-    let half_z = Quat {
-        x: 0.0,
-        y: 0.0,
-        z: 1.0,
+    let half_own = Quat {
+        x: own.x,
+        y: own.y,
+        z: own.z,
         w: 0.0,
     };
     (
         pos - normal * (2.0 * d),
-        quat_mul(quat_mul(half_n, q), half_z),
+        quat_mul(quat_mul(half_n, q), half_own),
     )
 }
 
@@ -923,6 +923,22 @@ impl Editor {
             return Vec::new();
         };
         let node = surface_node(spec).map(|n| n.position).unwrap_or_default();
+        // A node that faces along the part's +Z (wings, which span away from it) is first turned to face +X,
+        // the way the placement below turns toward the part hung on.
+        let o = surface_node(spec)
+            .map(|n| n.orientation)
+            .unwrap_or_default();
+        let align = if o.y.abs() < 0.9 && (o.x.abs() + o.z.abs()) > 1e-9 {
+            let th = o.z.atan2(o.x);
+            Quat {
+                x: 0.0,
+                y: (th * 0.5).sin(),
+                z: 0.0,
+                w: (th * 0.5).cos(),
+            }
+        } else {
+            IDENTITY
+        };
         // Worked out in the target's own frame (`spot.height` is along its +Y), then turned into the craft's.
         let pq = unit_or_identity(p.local_rotation);
         let axis = tspec.centre();
@@ -935,14 +951,24 @@ impl Editor {
                 return one;
             };
             let (centre, normal) = self.mirror_plane();
-            return vec![(pos, q), mirror_pose(pos, q, centre, normal)];
+            // The part's own face it is alike on both sides of: a wing (its node faces along +Z, the way it
+            // spans) across its thickness (+Y); a booster or decoupler (node along +X, long along +Y) across +Z.
+            let node_dir = surface_node(spec)
+                .map(|n| n.orientation)
+                .unwrap_or_default();
+            let own = if node_dir.z.abs() > node_dir.x.abs().max(node_dir.y.abs()) {
+                DVec3::new(0.0, 1.0, 0.0)
+            } else {
+                DVec3::new(0.0, 0.0, 1.0)
+            };
+            return vec![(pos, q), mirror_pose(pos, q, centre, normal, own)];
         }
         (0..symmetry.max(1))
             .map(|k| {
                 let az = spot.azimuth + std::f64::consts::TAU * k as f64 / symmetry.max(1) as f64;
                 let out = DVec3::new(az.cos(), 0.0, az.sin());
                 let contact = DVec3::new(axis.x, spot.height, axis.z) + out * radius;
-                let q = quat_mul(facing_in(az), spot.turn);
+                let q = quat_mul(quat_mul(facing_in(az), spot.turn), align);
                 let local = contact - quat_rotate(q, node);
                 (p.local_position + quat_rotate(pq, local), quat_mul(pq, q))
             })
@@ -1284,7 +1310,7 @@ pub fn stage_in_situation(
     } else {
         0.0
     };
-    (dv.max(0.0), twr)
+    (dv.max(0.0) + 0.0, twr)
 }
 
 #[cfg(test)]

@@ -122,6 +122,12 @@ pub const ACTIONS: &[(&str, &str, &str, bool)] = &[
         true,
     ),
     (
+        "fh-act-bays",
+        "ICO-AppBar-Tray-24x24",
+        "Cargo bays: open or close",
+        true,
+    ),
+    (
         "fh-act-chutes",
         "Staging-ICO-Chute-Stowed",
         "Arm the parachutes",
@@ -323,6 +329,18 @@ pub fn update(doc: &Document, s: &HudState) {
         "fh-act-converters",
         f.converters.iter().any(|(_, on, _)| *on),
     );
+    lit(
+        doc,
+        "fh-act-bays",
+        f.cargo_bays.iter().any(|(_, open)| *open),
+    );
+    if let Some(b) = doc.get_element_by_id("fh-act-bays") {
+        if f.cargo_bays.is_empty() {
+            b.set_attribute("disabled", "").ok();
+        } else {
+            b.remove_attribute("disabled").ok();
+        }
+    }
     if let Some(b) = doc.get_element_by_id("fh-act-converters") {
         if f.converters.is_empty() {
             b.set_attribute("disabled", "").ok();
