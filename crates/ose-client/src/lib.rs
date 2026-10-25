@@ -5775,11 +5775,13 @@ impl App {
                 "Rocket"
             },
         );
-        set_text(
-            &self.doc,
-            "vab-sym",
-            &format!("\u{d7}{}", self.vab_symmetry),
-        );
+        // A plane's pair is a mirror image (vab.rs), which the button says.
+        let sym = if self.vab_symmetry == 2 && self.editor.is_plane() {
+            "Mirror".to_string()
+        } else {
+            format!("\u{d7}{}", self.vab_symmetry)
+        };
+        set_text(&self.doc, "vab-sym", &sym);
         for (id, on) in [
             ("vab-com", self.vab_show_com),
             ("vab-cot", self.vab_show_cot),

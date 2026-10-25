@@ -842,6 +842,31 @@ fn quat_conj(q: Quat) -> Quat {
     }
 }
 
+/// The mirror image of a pose across the plane through `centre` with unit `normal`: the position reflected,
+/// and the rotation that reflects the part's +X (where a side part's node points) and +Y; a rotation cannot
+/// flip handedness, so the part's own +Z turns the other way (side parts are alike on both faces). As
+/// reflections are a half turn and an inversion, that is a half turn about the normal after the part's own
+/// rotation and a half turn about its +Z before it.
+fn mirror_pose(pos: DVec3, q: Quat, centre: DVec3, normal: DVec3) -> (DVec3, Quat) {
+    let d = (pos - centre).dot(normal);
+    let half_n = Quat {
+        x: normal.x,
+        y: normal.y,
+        z: normal.z,
+        w: 0.0,
+    };
+    let half_z = Quat {
+        x: 0.0,
+        y: 0.0,
+        z: 1.0,
+        w: 0.0,
+    };
+    (
+        pos - normal * (2.0 * d),
+        quat_mul(quat_mul(half_n, q), half_z),
+    )
+}
+
 /// Rotation about the craft's vertical axis that turns a part's +X (where surface nodes face, toward what
 /// they hang on) to point inward from the outward direction at `azimuth`.
 fn facing_in(azimuth: f64) -> Quat {
@@ -902,6 +927,16 @@ impl Editor {
         let pq = unit_or_identity(p.local_rotation);
         let axis = tspec.centre();
         let radius = tspec.size().x.min(tspec.size().z) * 0.5;
+        // A plane's pair is a mirror image across its vertical middle (the original's mirror symmetry), not a
+        // copy turned half way round the part it hangs on.
+        if symmetry == 2 && self.is_plane() {
+            let one = self.surface_poses(spec, catalog, spot, 1);
+            let Some(&(pos, q)) = one.first() else {
+                return one;
+            };
+            let (centre, normal) = self.mirror_plane();
+            return vec![(pos, q), mirror_pose(pos, q, centre, normal)];
+        }
         (0..symmetry.max(1))
             .map(|k| {
                 let az = spot.azimuth + std::f64::consts::TAU * k as f64 / symmetry.max(1) as f64;
@@ -912,6 +947,27 @@ impl Editor {
                 (p.local_position + quat_rotate(pq, local), quat_mul(pq, q))
             })
             .collect()
+    }
+
+    /// A plane's middle: a point on it (the root part) and its normal, across both the nose and the craft's up.
+    fn mirror_plane(&self) -> (DVec3, DVec3) {
+        let root = self.craft.parts.iter().find(|p| p.parent.is_none());
+        let centre = root.map(|p| p.local_position).unwrap_or_default();
+        let nose = root
+            .map(|p| {
+                quat_rotate(
+                    unit_or_identity(p.local_rotation),
+                    DVec3::new(0.0, 1.0, 0.0),
+                )
+            })
+            .unwrap_or(DVec3::new(0.0, 0.0, 1.0));
+        let n = DVec3::new(0.0, 1.0, 0.0).cross(nose);
+        let n = if n.length() > 1e-9 {
+            n * (1.0 / n.length())
+        } else {
+            DVec3::new(1.0, 0.0, 0.0)
+        };
+        (centre, n)
     }
 
     /// Put `spec` on the side of `spot.target`, with `symmetry` copies around it sharing one stage. Returns
@@ -1485,6 +1541,43 @@ mod tests {
         assert!((after.y - before.y).abs() < 1e-9 && (after.x - before.x).abs() < 1e-9);
         let w = turn_then(axis_turn(1, 90.0), axis_turn(1, 90.0));
         assert!((quat_rotate(w, DVec3::new(1.0, 0.0, 0.0)).x + 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_plane_pairs_side_parts_as_mirror_images() {
+        let cat = catalog();
+        let mut e = Editor::new("test");
+        e.add_part(&cat["pod"], &cat).unwrap();
+        let t = e.add_part(&cat["tank"], &cat).unwrap();
+        e.set_plane(true);
+        let p = e.craft.parts[t].local_position;
+        // A side part a little above the fuselage's middle on its right.
+        let spot = e
+            .surface_spot(t, DVec3::new(0.5, 0.3, p.z), &cat, None)
+            .unwrap();
+        let made = e.add_surface(&cat["light"], &cat, spot, 2).unwrap();
+        let (a, b) = (&e.craft.parts[made[0]], &e.craft.parts[made[1]]);
+        // The pair sits at the same height and along the nose, on opposite sides.
+        assert!(
+            (a.local_position.y - b.local_position.y).abs() < 1e-9,
+            "{a:?} {b:?}"
+        );
+        assert!((a.local_position.z - b.local_position.z).abs() < 1e-9);
+        assert!((a.local_position.x + b.local_position.x).abs() < 1e-9);
+        // Each faces the fuselage: the node direction (+X) and the part's up (+Y) mirrored.
+        for axis in [DVec3::new(1.0, 0.0, 0.0), DVec3::new(0.0, 1.0, 0.0)] {
+            let fa = quat_rotate(a.local_rotation, axis);
+            let fb = quat_rotate(b.local_rotation, axis);
+            assert!(
+                (fa.x + fb.x).abs() < 1e-9
+                    && (fa.y - fb.y).abs() < 1e-9
+                    && (fa.z - fb.z).abs() < 1e-9,
+                "{fa:?} {fb:?}"
+            );
+        }
+        // A rocket keeps turning its pairs round the axis.
+        e.set_plane(false);
+        assert_eq!(e.mirror_plane().1, DVec3::new(1.0, 0.0, 0.0));
     }
 
     #[test]
