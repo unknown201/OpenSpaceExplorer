@@ -66,6 +66,16 @@ EVENTS: dict[str, tuple[str, object, bool, float, str | None]] = {
     "engine_srb": ("Play_u_ENGINE_boosters_1v", "loop", True, 0.8, None),
     "explosion": ("Play_A_explosion_v_00", "first", False, 0.9, None),
     "parachute": ("Play_parachutes_deployed", "first", False, 0.7, None),
+    "chute_cut": ("Play_parachutes_cut", "first", False, 0.6, None),
+    "reentry": ("Play_reentry_on", "first", True, 0.6, None),
+    "sonic_boom": ("Play_sonic_boom", "first", False, 0.8, None),
+    "overheat": ("Play_overheat_part_start", "first", False, 0.6, None),
+    "leg_deploy": ("Play_An_Landing_Leg_Small_Extensible_LT_1_deploy_1", "first", False, 0.6, None),
+    "leg_retract": ("Play_An_Landing_Leg_Small_Extensible_LT_1_retract_1", "first", False, 0.6, None),
+    "panel_open": ("Play_An_SolarArray_1x6_Shielded_open_1", "first", False, 0.5, None),
+    "panel_close": ("Play_An_SolarArray_1x6_Shielded_close_1", "first", False, 0.5, None),
+    # The wind bank's events carry no names in the assets: its longest looping gust by id.
+    "wind": ("wem:222060491", "first", True, 0.6, None),
 }
 
 
@@ -321,7 +331,7 @@ def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     manifest = {}
     for key, (event, pick, loop, gain, states_from) in EVENTS.items():
-        wems = banks.event_wems(event, states_from)
+        wems = [int(event[4:])] if event.startswith("wem:") else banks.event_wems(event, states_from)
         if not wems:
             print(f"{key}: {event} resolved to no sounds, skipped", file=sys.stderr)
             continue

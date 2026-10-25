@@ -60,6 +60,8 @@ pub struct Audio {
     current: Option<Track>,
     fading: Vec<Track>,
     engine: Option<(AudioBufferSourceNode, GainNode)>,
+    /// Other level-driven loops (wind, re-entry), by sound key.
+    loops: HashMap<String, (AudioBufferSourceNode, GainNode)>,
     engine_level: f64,
     /// The scene's ambience bed (the KSC's launch pad emitter, the VAB hall) and which one it is.
     ambience: Option<(String, AudioBufferSourceNode, GainNode)>,
@@ -273,6 +275,45 @@ impl Audio {
         src.start().ok();
     }
 
+    /// A loop that follows a level, 0 (stopped) to 1, at a playback rate: wind with dynamic pressure, the
+    /// re-entry roar with heat flux.
+    pub fn level_loop(&mut self, key: &str, level: f64, rate: f64) {
+        let level = level.clamp(0.0, 1.0);
+        if level <= 0.01 {
+            if let Some((src, _)) = self.loops.remove(key) {
+                AsRef::<web_sys::AudioScheduledSourceNode>::as_ref(&src)
+                    .stop()
+                    .ok();
+            }
+            return;
+        }
+        let (Some(ctx), Some(master)) = (&self.ctx, &self.master) else {
+            return;
+        };
+        if !self.loops.contains_key(key) {
+            let Some(buf) = self.buffers.borrow().get(key).cloned() else {
+                return;
+            };
+            let (Ok(src), Ok(g)) = (ctx.create_buffer_source(), ctx.create_gain()) else {
+                return;
+            };
+            src.set_buffer(Some(&buf));
+            src.set_loop(true);
+            g.gain().set_value(0.0);
+            src.connect_with_audio_node(&g).ok();
+            g.connect_with_audio_node(master).ok();
+            src.start().ok();
+            self.loops.insert(key.to_string(), (src, g));
+        }
+        if let Some((src, g)) = self.loops.get(key) {
+            let gain = self.sounds.get(key).map(|s| s.gain).unwrap_or(1.0);
+            g.gain()
+                .set_target_at_time((gain * level) as f32, ctx.current_time(), 0.15)
+                .ok();
+            src.playback_rate().set_value(rate as f32);
+        }
+    }
+
     /// The engine loop: `level` 0 (silent) to 1 (full thrust), `rate` its playback rate (lower for big engines).
     pub fn engine(&mut self, key: &str, level: f64, rate: f64) {
         let level = level.clamp(0.0, 1.0);
@@ -389,6 +430,9 @@ impl Audio {
                 .ok();
             el.set_attribute("data-ose-muted", if self.muted { "1" } else { "0" })
                 .ok();
+            let mut loops: Vec<&str> = self.loops.keys().map(String::as_str).collect();
+            loops.sort_unstable();
+            el.set_attribute("data-ose-loops", &loops.join(" ")).ok();
             el.set_attribute(
                 "data-ose-ambience",
                 self.want_ambience.as_deref().unwrap_or(""),

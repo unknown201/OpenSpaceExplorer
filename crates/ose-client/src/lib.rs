@@ -213,6 +213,8 @@ struct App {
     running_since_ms: f64,
     /// The live campaign's id (CampaignState), so stored per-vessel data stays with its campaign.
     campaign_id: String,
+    /// What the flight sounds last saw, to play each transition once.
+    flight_sound_state: Option<FlightSoundState>,
     /// The library craft the flown vessel was launched from, to fill `flight_craft` when its document arrives.
     flight_craft_id: Option<u64>,
     /// The craft a Kerbal asked to board, flown once the server accepts.
@@ -506,6 +508,7 @@ pub fn start() -> Result<(), JsValue> {
         running_since_ms: 0.0,
         lp_selected: None,
         campaign_id: String::new(),
+        flight_sound_state: None,
         flight_craft_id: None,
         board_target: std::cell::Cell::new(None),
         crew_pending: std::cell::Cell::new(None),
@@ -1027,6 +1030,16 @@ fn settings_open(doc: &Document) -> bool {
     doc.get_element_by_id("settings")
         .map(|e| e.class_list().contains("open"))
         .unwrap_or(false)
+}
+
+/// The flown vessel's state the flight sounds react to.
+struct FlightSoundState {
+    vessel: u64,
+    supersonic: bool,
+    gear_out: bool,
+    panels: bool,
+    hot: Vec<u16>,
+    chutes: Vec<(u16, ose_net::ChuteState)>,
 }
 
 /// An experiment id as a readable name: "TemperatureScan" reads "Temperature Scan".
@@ -5699,6 +5712,78 @@ impl App {
         self.frame_focus();
     }
 
+    /// The flight's other sounds: wind rising with dynamic pressure, the re-entry roar with heat flux, a sonic
+    /// boom through Mach 1, a part overheating, chutes opening and cut, legs and panels moving.
+    fn flight_sounds(&mut self, flight: Option<(u64, &ose_net::FlightReadout)>, menu_open: bool) {
+        let Some((id, f)) = flight.filter(|_| !menu_open) else {
+            self.audio.level_loop("wind", 0.0, 1.0);
+            self.audio.level_loop("reentry", 0.0, 1.0);
+            self.flight_sound_state = None;
+            return;
+        };
+        let wind = (f.dynamic_pressure_kpa / 25.0).clamp(0.0, 1.0);
+        self.audio.level_loop("wind", wind, 0.8 + 0.4 * wind);
+        let flux = f.heat.iter().map(|h| h.3).fold(0.0f32, f32::max) as f64;
+        self.audio
+            .level_loop("reentry", (flux / 300.0).clamp(0.0, 1.0), 1.0);
+        let chutes: Vec<(u16, ose_net::ChuteState)> =
+            f.parachutes.iter().map(|c| (c.0, c.1)).collect();
+        let now = FlightSoundState {
+            vessel: id,
+            supersonic: f.surface_speed_mps > 343.0 && f.dynamic_pressure_kpa > 1.0,
+            gear_out: f.gear.iter().any(|g| g.1),
+            panels: f.panels_deployed,
+            hot: f
+                .heat
+                .iter()
+                .filter(|h| h.2 > 0.0 && h.1 / h.2 > 0.8)
+                .map(|h| h.0)
+                .collect(),
+            chutes,
+        };
+        if let Some(was) = self.flight_sound_state.as_ref().filter(|w| w.vessel == id) {
+            if now.supersonic && !was.supersonic {
+                self.audio.play("sonic_boom");
+            }
+            if now.gear_out != was.gear_out {
+                self.audio.play(if now.gear_out {
+                    "leg_deploy"
+                } else {
+                    "leg_retract"
+                });
+            }
+            if now.panels != was.panels {
+                self.audio.play(if now.panels {
+                    "panel_open"
+                } else {
+                    "panel_close"
+                });
+            }
+            if now.hot.iter().any(|p| !was.hot.contains(p)) {
+                self.audio.play("overheat");
+            }
+            for (part, state) in &now.chutes {
+                let before = was.chutes.iter().find(|c| c.0 == *part).map(|c| c.1);
+                if before != Some(*state) {
+                    match state {
+                        ose_net::ChuteState::Deployed | ose_net::ChuteState::SemiDeployed
+                            if !matches!(
+                                before,
+                                Some(ose_net::ChuteState::Deployed)
+                                    | Some(ose_net::ChuteState::SemiDeployed)
+                            ) =>
+                        {
+                            self.audio.play("parachute")
+                        }
+                        ose_net::ChuteState::Cut => self.audio.play("chute_cut"),
+                        _ => {}
+                    }
+                }
+            }
+        }
+        self.flight_sound_state = Some(now);
+    }
+
     fn show_sound_toggle(&self) {
         for id in ["sound-toggle", "main-sound", "settings-sound"] {
             if let Some(el) = self.doc.get_element_by_id(id) {
@@ -5802,6 +5887,12 @@ impl App {
         let rate = (1.15 - 0.08 * mass.max(1.0).ln()).clamp(0.75, 1.15);
         let key = if solid { "engine_srb" } else { "engine_liquid" };
         self.audio.engine(key, level, rate);
+        self.flight_sounds(
+            flight
+                .as_ref()
+                .and_then(|(id, _, f)| f.as_ref().map(|f| (*id, f))),
+            menu_open,
+        );
         self.audio.tick(now, &self.doc);
     }
 

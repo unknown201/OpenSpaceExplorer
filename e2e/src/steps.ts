@@ -519,6 +519,7 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
       let situation = "";
       let engineMax = 0;
       let thrustSeen = false;
+      let windSeen = false;
       const audio = page.locator('[data-ose="audio"]');
       const t1 = Date.now();
       while (Date.now() - t1 < 20_000) {
@@ -526,6 +527,7 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
         if ((await audio.count()) > 0) {
           engineMax = Math.max(engineMax, Number((await audio.first().getAttribute("data-ose-engine")) ?? "0"));
           thrustSeen ||= !/ 0 kN/.test((await page.locator("#fh-twr").textContent()) ?? " 0 kN");
+          windSeen ||= ((await audio.first().getAttribute("data-ose-loops")) ?? "").includes("wind");
         }
         after = await altOf();
         situation = (await hud.first().getAttribute("data-ose-situation")) ?? "";
@@ -540,6 +542,9 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
         const music = (await audio.first().getAttribute("data-ose-music")) ?? "";
         if (thrustSeen && !(engineMax > 0)) return failed("the engine sound stayed silent under thrust (data-ose-engine 0)");
         if (!music.startsWith("music_kerbin")) return failed(`flight music is "${music}", not Kerbin's`);
+        // With the game's sounds served, air rushing past a climbing rocket plays the wind loop.
+        const windServed = (await page.request.get(`${baseURL}/assets/audio/wind.ogg`).catch(() => null))?.headers()["content-type"]?.includes("ogg") ?? false;
+        if (windServed && thrustSeen && !windSeen) return failed("no wind sound during the climb (data-ose-loops)");
       }
       let particles = "";
       // The authored engine effects are game assets: a server without them (CI) has nothing to burn.
