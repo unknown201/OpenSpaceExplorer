@@ -9933,10 +9933,25 @@ impl App {
                 cls.remove_1("focus").ok();
             }
         }
+        // A marker behind a planet or moon is hidden, as the original's are.
+        let hidden_by_body = |p: GV| {
+            scene.bodies.iter().enumerate().any(|(i, b)| {
+                let c = to_km(positions[i]);
+                let r = b.radius_m / 1000.0 * 0.995;
+                let d = p - cam_km;
+                let len2 = d.length_squared();
+                if len2 <= 0.0 {
+                    return false;
+                }
+                let t = ((c - cam_km).dot(d) / len2).clamp(0.0, 1.0);
+                t < 0.999 && (cam_km + d * t - c).length() < r
+            })
+        };
         for v in &scene.vessels {
             if let Some((_, el)) = self.vessel_els.iter().find(|(id, _)| *id == v.id) {
                 let style = el.style();
-                match project(to_km(scene.vessel_position(v, ut))) {
+                let at = to_km(scene.vessel_position(v, ut));
+                match project(at).filter(|_| !hidden_by_body(at)) {
                     Some((x, y)) => {
                         style
                             .set_property("left", &format!("{:.1}px", x + 8.0))

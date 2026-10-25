@@ -44,6 +44,8 @@ export default defineConfig({
     headless,
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
+    // A click on something off screen or covered fails after 15 s instead of hanging the run.
+    actionTimeout: 15_000,
   },
   projects: [
     {
