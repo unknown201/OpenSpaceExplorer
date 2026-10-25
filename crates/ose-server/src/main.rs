@@ -2866,10 +2866,27 @@ async fn session(mut socket: WebSocket, s: AppState) {
                                 if !send(&mut socket, &msg).await { break 'session; }
                             }
                         }
+                        Ok(ClientMessage::ScheduleBurns { vessel, burns }) => {
+                            let reply = match owned_vessel(&s, vessel, player_id) {
+                                Some(e) => {
+                                    let burns = burns
+                                        .iter()
+                                        .map(|b| ose_sim::vessels::ScheduledBurn { ut: b.ut, prograde_mps: b.prograde_mps, normal_mps: b.normal_mps, radial_mps: b.radial_mps })
+                                        .collect();
+                                    let ok = s.universe.lock().expect("sim lock").schedule_burns(e, burns);
+                                    ServerMessage::BurnState { vessel, scheduled: ok, reason: (!ok).then(|| "a burn time is in the past".to_string()) }
+                                }
+                                None => ServerMessage::BurnState { vessel, scheduled: false, reason: Some("not your vessel".into()) },
+                            };
+                            if !send(&mut socket, &reply).await { break; }
+                            for msg in trajectories(&s) {
+                                if !send(&mut socket, &msg).await { break 'session; }
+                            }
+                        }
                         Ok(ClientMessage::ClearBurn { vessel }) => {
                             let reply = match owned_vessel(&s, vessel, player_id) {
                                 Some(e) => {
-                                    s.universe.lock().expect("sim lock").world.entity_mut(e).remove::<ose_sim::vessels::ScheduledBurn>();
+                                    s.universe.lock().expect("sim lock").schedule_burns(e, Vec::new());
                                     ServerMessage::BurnState { vessel, scheduled: false, reason: None }
                                 }
                                 None => ServerMessage::BurnState { vessel, scheduled: false, reason: Some("not your vessel".into()) },

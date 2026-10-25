@@ -1114,49 +1114,83 @@ impl Universe {
         self.world.get::<vessels::ScheduledBurn>(e).copied()
     }
 
-    /// Predicted trajectory of a vessel from the current time. With a scheduled burn, the patches up to the
-    /// burn end with `Transition::Maneuver` and the prediction continues on the post-burn orbit.
+    /// Plan a chain of burns (maneuver nodes) for a vessel: put in time order, each planned on the orbit
+    /// the one before leaves; all must be in the future. An empty list clears them.
+    pub fn schedule_burns(&mut self, e: Entity, mut burns: Vec<vessels::ScheduledBurn>) -> bool {
+        if self.vessel(e).is_none() || burns.iter().any(|b| b.ut < self.ut()) {
+            return false;
+        }
+        burns.sort_by(|a, b| a.ut.total_cmp(&b.ut));
+        let mut ent = self.world.entity_mut(e);
+        ent.remove::<vessels::ScheduledBurn>()
+            .remove::<vessels::LaterBurns>();
+        if !burns.is_empty() {
+            let first = burns.remove(0);
+            ent.insert(first);
+            if !burns.is_empty() {
+                ent.insert(vessels::LaterBurns(burns));
+            }
+        }
+        true
+    }
+
+    /// The vessel's planned burns in time order (the scheduled one first).
+    pub fn scheduled_burns(&self, e: Entity) -> Vec<vessels::ScheduledBurn> {
+        let mut out: Vec<vessels::ScheduledBurn> = self.scheduled_burn(e).into_iter().collect();
+        if let Some(l) = self.world.get::<vessels::LaterBurns>(e) {
+            out.extend(l.0.iter().copied());
+        }
+        out
+    }
+
+    /// Predicted trajectory of a vessel from the current time. With planned burns, the patches up to each
+    /// burn end with `Transition::Maneuver` and the prediction continues on the orbit it leaves, burn after
+    /// burn.
     pub fn predict(&self, e: Entity) -> Vec<trajectory::Patch> {
         let Some((_, body, orbit)) = self.vessel(e) else {
             return Vec::new();
         };
         let index = self.world.resource::<bodies::BodyIndex>();
-        let ut = self.ut();
-        let Some(burn) = self.scheduled_burn(e) else {
-            return trajectory::predict(&self.world, index, body, orbit, ut, &self.params);
-        };
-        let mut patches = trajectory::predict(&self.world, index, body, orbit, ut, &self.params);
-        // keep the patches before the burn; the one containing it is cut at the burn time
+        let mut burns = self.scheduled_burns(e).into_iter();
         let mut kept = Vec::new();
-        let mut burn_body = body;
-        let mut burn_orbit = orbit;
-        let mut cut_done = false;
-        for p in patches.drain(..) {
-            let repeats = p.end == trajectory::Transition::Final && p.orbit.eccentricity() < 1.0;
-            if p.start_ut <= burn.ut && (burn.ut < p.end_ut || repeats) {
-                let mut cut = p;
-                cut.end_ut = burn.ut;
-                cut.end = trajectory::Transition::Maneuver;
-                burn_body = p.body;
-                burn_orbit = p.orbit;
-                kept.push(cut);
-                cut_done = true;
-                break;
+        let (mut body, mut orbit, mut from_ut, mut after_burn) = (body, orbit, self.ut(), false);
+        loop {
+            let mut patches =
+                trajectory::predict(&self.world, index, body, orbit, from_ut, &self.params);
+            if after_burn {
+                if let Some(first) = patches.first_mut() {
+                    first.start = trajectory::Transition::Maneuver;
+                }
             }
-            kept.push(p);
+            let Some(burn) = burns.next() else {
+                kept.extend(patches);
+                return kept;
+            };
+            // keep the patches before the burn; the one containing it is cut at the burn time
+            let mut cut_done = false;
+            for p in patches {
+                let repeats =
+                    p.end == trajectory::Transition::Final && p.orbit.eccentricity() < 1.0;
+                if p.start_ut <= burn.ut && (burn.ut < p.end_ut || repeats) {
+                    let mut cut = p;
+                    cut.end_ut = burn.ut;
+                    cut.end = trajectory::Transition::Maneuver;
+                    body = p.body;
+                    orbit = p.orbit;
+                    kept.push(cut);
+                    cut_done = true;
+                    break;
+                }
+                kept.push(p);
+            }
+            if !cut_done {
+                // the burn lies beyond the predicted horizon (e.g. after an impact); nothing to add
+                return kept;
+            }
+            orbit = vessels::orbit_after_burn(&orbit, &burn);
+            from_ut = burn.ut;
+            after_burn = true;
         }
-        if !cut_done {
-            // the burn lies beyond the predicted horizon (e.g. after an impact); nothing to add
-            return kept;
-        }
-        let after = vessels::orbit_after_burn(&burn_orbit, &burn);
-        let mut rest =
-            trajectory::predict(&self.world, index, burn_body, after, burn.ut, &self.params);
-        if let Some(first) = rest.first_mut() {
-            first.start = trajectory::Transition::Maneuver;
-        }
-        kept.extend(rest);
-        kept
     }
 
     /// Advance by one simulation step covering up to `WarpFactor` ticks. The step is shortened so that no
@@ -1222,6 +1256,16 @@ impl Universe {
                 .get::<flight::Powered>(e)
                 .expect("powered")
                 .clone();
+            // under power the planned burns are flown by hand: once the next one's time comes, the one
+            // before is done
+            if self
+                .world
+                .get::<vessels::LaterBurns>(e)
+                .and_then(|l| l.0.first())
+                .is_some_and(|b| b.ut <= self.ut())
+            {
+                vessels::promote_next_burn(&mut self.world, e);
+            }
             // a maneuver hold points at the scheduled burn as it stands now
             if matches!(p.attitude, flight::Attitude::Maneuver(_)) {
                 let burn = self.world.get::<vessels::ScheduledBurn>(e).copied();
@@ -3232,5 +3276,46 @@ mod tests {
         assert!((orbit.apoapsis() - 12_000_000.0).abs() < 100_000.0);
         u.step();
         assert_eq!(u.tick(), Tick(150_000));
+        // two chained nodes: a small raise, then a circularising burn half an orbit on
+        let t0 = u.ut();
+        let (_, _, orbit) = u.vessel(v).unwrap();
+        let ap0 = orbit.apoapsis();
+        let raise = vessels::ScheduledBurn {
+            ut: t0 + 500.0,
+            prograde_mps: 50.0,
+            normal_mps: 0.0,
+            radial_mps: 0.0,
+        };
+        let more = vessels::ScheduledBurn {
+            ut: t0 + 900.0,
+            prograde_mps: 30.0,
+            normal_mps: 0.0,
+            radial_mps: 0.0,
+        };
+        assert!(
+            u.schedule_burns(v, vec![more, raise]),
+            "taken in time order"
+        );
+        assert_eq!(u.scheduled_burns(v), vec![raise, more]);
+        let p = u.predict(v);
+        let nodes: Vec<f64> = p
+            .iter()
+            .filter(|x| x.end == trajectory::Transition::Maneuver)
+            .map(|x| x.end_ut)
+            .collect();
+        assert_eq!(nodes, vec![t0 + 500.0, t0 + 900.0], "{p:?}");
+        let last = p.iter().find(|x| x.start_ut >= t0 + 900.0).unwrap();
+        assert!(
+            last.orbit.apoapsis() > ap0,
+            "the patches go on through both nodes"
+        );
+        u.set_warp(100_000);
+        u.step();
+        assert_eq!(u.scheduled_burns(v).len(), 1, "the first is done");
+        u.step();
+        assert!(u.scheduled_burns(v).is_empty(), "then the second");
+        let (_, _, orbit) = u.vessel(v).unwrap();
+        assert!((orbit.apoapsis() - last.orbit.apoapsis()).abs() < 1_000.0);
+        assert!(u.schedule_burns(v, vec![]));
     }
 }

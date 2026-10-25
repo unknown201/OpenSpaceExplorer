@@ -20,6 +20,9 @@ pub struct SavedVessel {
     pub body: String,
     pub elements: Elements,
     pub burn: Option<SavedBurn>,
+    /// The burns chained after it (maneuver nodes), in time order.
+    #[serde(default)]
+    pub later_burns: Vec<SavedBurn>,
     #[serde(default)]
     pub flight: Option<ose_sim::flight::Powered>,
     /// Flight state kept while on rails (stage, propellant), restored as dormant.
@@ -174,6 +177,17 @@ pub fn capture(
                 docked: u.docked_links(e),
                 eva: u.eva_kerbal(e).map(|k| k.name.clone()),
                 flag: u.flag_planter(e),
+                later_burns: u
+                    .scheduled_burns(e)
+                    .iter()
+                    .skip(1)
+                    .map(|b| SavedBurn {
+                        ut: b.ut,
+                        prograde_mps: b.prograde_mps,
+                        normal_mps: b.normal_mps,
+                        radial_mps: b.radial_mps,
+                    })
+                    .collect(),
                 burn: u.scheduled_burn(e).map(|b| SavedBurn {
                     ut: b.ut,
                     prograde_mps: b.prograde_mps,
@@ -240,16 +254,19 @@ pub fn restore(
         if let Some(by) = &v.flag {
             u.restore_flag(e, by);
         }
-        if let Some(b) = v.burn {
-            u.schedule_burn(
-                e,
-                ScheduledBurn {
-                    ut: b.ut,
-                    prograde_mps: b.prograde_mps,
-                    normal_mps: b.normal_mps,
-                    radial_mps: b.radial_mps,
-                },
-            );
+        let burns: Vec<ScheduledBurn> = v
+            .burn
+            .iter()
+            .chain(v.later_burns.iter())
+            .map(|b| ScheduledBurn {
+                ut: b.ut,
+                prograde_mps: b.prograde_mps,
+                normal_mps: b.normal_mps,
+                radial_mps: b.radial_mps,
+            })
+            .collect();
+        if !burns.is_empty() {
+            u.schedule_burns(e, burns);
         }
         registry.push((e, v.id, v.owner));
     }

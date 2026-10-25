@@ -289,6 +289,33 @@ pub struct ScheduledBurn {
     pub radial_mps: f64,
 }
 
+/// The burns planned after the vessel's `ScheduledBurn`, in time order (chained maneuver nodes): each
+/// becomes the scheduled one when the one before is done.
+#[derive(Component, Clone, Debug, Default, PartialEq)]
+pub struct LaterBurns(pub Vec<ScheduledBurn>);
+
+/// The next of the later burns becomes the scheduled one.
+pub fn promote_next_burn(world: &mut World, vessel: Entity) {
+    let next = world.get_mut::<LaterBurns>(vessel).and_then(|mut l| {
+        if l.0.is_empty() {
+            None
+        } else {
+            Some(l.0.remove(0))
+        }
+    });
+    let mut e = world.entity_mut(vessel);
+    e.remove::<ScheduledBurn>();
+    if let Some(b) = next {
+        e.insert(b);
+    }
+    if world
+        .get::<LaterBurns>(vessel)
+        .is_some_and(|l| l.0.is_empty())
+    {
+        world.entity_mut(vessel).remove::<LaterBurns>();
+    }
+}
+
 /// The delta-v vector in body-relative coordinates for a burn applied to `orbit` at `burn.ut`.
 pub fn burn_delta_v(orbit: &Orbit, burn: &ScheduledBurn) -> DVec3 {
     let (r, v) = orbit.state_at(burn.ut);
@@ -316,8 +343,7 @@ pub fn apply_due_burn(world: &mut World, vessel: Entity, ut: f64) -> bool {
         return false;
     };
     let new_orbit = orbit_after_burn(&orbit, &burn);
-    let mut e = world.entity_mut(vessel);
-    e.insert(OnRails(new_orbit));
-    e.remove::<ScheduledBurn>();
+    world.entity_mut(vessel).insert(OnRails(new_orbit));
+    promote_next_burn(world, vessel);
     true
 }

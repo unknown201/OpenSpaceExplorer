@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 45;
+pub const PROTOCOL_VERSION: u16 = 46;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -38,9 +38,17 @@ pub enum ClientMessage {
         normal_mps: f64,
         radial_mps: f64,
     },
-    /// Remove the scheduled burn from a vessel the player owns.
+    /// Remove the scheduled burns from a vessel the player owns.
     ClearBurn {
         vessel: u64,
+    },
+    /// Plan a chain of burns (maneuver nodes) on a vessel the player owns, replacing any: taken in time
+    /// order, each in the orbital frame of the trajectory the one before leaves. The trajectory goes on
+    /// through every node (`PatchEnd::Maneuver` at each); on rails each is applied at its time, under
+    /// power the next one's time ends the one before. An empty list clears them. Answers `BurnState`.
+    ScheduleBurns {
+        vessel: u64,
+        burns: Vec<Burn>,
     },
     /// Join the shared campaign (ADR-0001: one co-op save). Idempotent; answers `CampaignState`.
     JoinCampaign,
@@ -733,6 +741,15 @@ pub struct LaunchSite {
     pub lon_deg: f64,
     /// Which way a plane faces there, compass degrees (90 = east).
     pub heading_deg: f64,
+}
+
+/// One planned impulsive burn (a maneuver node), in the orbital frame at `ut`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Burn {
+    pub ut: f64,
+    pub prograde_mps: f64,
+    pub normal_mps: f64,
+    pub radial_mps: f64,
 }
 
 /// Something a vessel can target.
