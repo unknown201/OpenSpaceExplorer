@@ -258,6 +258,12 @@ fn basis(facing: DVec3) -> (DVec3, DVec3, DVec3) {
 }
 
 impl Structure {
+    /// A position offset in the vessel frame (as the rigid body keeps them) in the inertial frame.
+    pub fn offset_inertial(&self, facing: DVec3, v: DVec3) -> DVec3 {
+        let (bx, by, bz) = self.frame(facing);
+        bx * v.x + by * v.y + bz * v.z
+    }
+
     /// A part axis (craft coordinates, as the part data gives it) in the inertial frame.
     pub fn axis_inertial(&self, facing: DVec3, u: DVec3) -> DVec3 {
         let (bx, by, bz) = self.frame(facing);

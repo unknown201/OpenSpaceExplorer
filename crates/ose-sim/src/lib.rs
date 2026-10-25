@@ -77,6 +77,33 @@ impl Default for Universe {
     }
 }
 
+/// `parts` (indices into `craft`) split into the pieces they hold together as, over the craft's tree links.
+fn connected_groups(craft: &ose_data::craft::Craft, parts: &[usize]) -> Vec<Vec<usize>> {
+    let inside = |i: usize| parts.contains(&i);
+    let mut group_of: Vec<Option<usize>> = vec![None; craft.parts.len()];
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    for &i in parts {
+        // climb to the topmost part of the set above it
+        let mut top = i;
+        while let Some(par) = craft.parts.get(top).and_then(|p| p.parent) {
+            if !inside(par) {
+                break;
+            }
+            top = par;
+        }
+        let g = match group_of[top] {
+            Some(g) => g,
+            None => {
+                groups.push(Vec::new());
+                group_of[top] = Some(groups.len() - 1);
+                groups.len() - 1
+            }
+        };
+        groups[g].push(i);
+    }
+    groups
+}
+
 impl Universe {
     pub fn new() -> Self {
         let mut world = World::new();
@@ -834,16 +861,40 @@ impl Universe {
             };
         let mut outcome = outcome;
         let mut impulse = 0.0;
+        // what came off, in connected pieces: (parent craft parts, mass t, offset from the vessel m)
+        let mut dropped: Vec<(Vec<usize>, f64, DVec3)> = Vec::new();
         if outcome.fired {
             let mut st = self.world.entity_mut(e).take::<structure::Structure>();
             if let Some(st) = &mut st {
                 let before = st.net.mass_t();
+                let present = st.rigid.present.clone();
+                let part_mass: Vec<f64> =
+                    (0..present.len()).map(|i| st.net.mass_of(&[i])).collect();
                 if let Some(mut p) = self.world.get_mut::<flight::Powered>(e) {
                     st.sync(&mut p);
                 } else if let Some(mut d) = self.world.get_mut::<flight::Dormant>(e) {
                     st.sync(&mut d.0);
                 }
                 outcome.dropped_t = (before - st.net.mass_t()).max(0.0);
+                let gone: Vec<usize> = (0..present.len())
+                    .filter(|&i| present[i] && !st.rigid.present[i])
+                    .collect();
+                if let Some(doc) = self.world.get::<docking::CraftDoc>(e) {
+                    let keep_c = st.rigid.rest_centre();
+                    for g in connected_groups(&doc.0, &gone) {
+                        let m: f64 = g.iter().map(|&i| part_mass[i]).sum();
+                        // where it sat on the craft (the rest pose: the live one turns with the structure)
+                        let c = if m > 0.0 {
+                            g.iter()
+                                .map(|&i| st.rigid.rest_position(i) * part_mass[i])
+                                .fold(DVec3::ZERO, |a, b| a + b)
+                                * (1.0 / m)
+                        } else {
+                            st.rigid.rest_position(g[0])
+                        };
+                        dropped.push((g, m, st.offset_inertial(facing, c - keep_c)));
+                    }
+                }
                 // the new stage's parts fire (parachutes arm)
                 let stage = self
                     .world
@@ -877,14 +928,51 @@ impl Universe {
                     p.v = p.v + facing * (impulse / p.mass_t);
                 }
             }
-            self.spawn_debris(
-                e,
-                outcome.dropped_t,
-                r - facing * 3.0,
-                v - facing * away,
-                facing,
-                area,
-            )
+            if dropped.is_empty() {
+                self.spawn_debris(
+                    e,
+                    outcome.dropped_t,
+                    r - facing * 3.0,
+                    v - facing * away,
+                    facing,
+                    area,
+                    &[],
+                    DVec3::ZERO,
+                )
+            } else {
+                let mut first = None;
+                for (parts, m, offset) in dropped {
+                    // side pieces (radial boosters) are pushed out as well as back, and tip away
+                    let side = offset - facing * offset.dot(facing);
+                    let out = if side.length() > 0.5 {
+                        side.normalized()
+                    } else {
+                        DVec3::ZERO
+                    };
+                    let push = if impulse > 0.0 && m > 0.0 {
+                        impulse / outcome.dropped_t.max(m)
+                    } else {
+                        0.5
+                    };
+                    let tumble = facing.cross(out) * 0.15;
+                    let d = self.spawn_debris(
+                        e,
+                        m,
+                        r + offset,
+                        v - facing * push + out * (push * 0.5),
+                        facing,
+                        area,
+                        &parts,
+                        tumble,
+                    );
+                    match (first, d) {
+                        (None, Some(d)) => first = Some(d),
+                        (Some(_), Some(d)) => self.broken_off.push((e, d)),
+                        _ => {}
+                    }
+                }
+                first
+            }
         } else {
             None
         };
@@ -894,6 +982,9 @@ impl Universe {
         }
     }
 
+    /// A piece that came off `parent`: its `parts` (indices into the parent's craft) become its own craft,
+    /// re-rooted, posed as they were; it keeps the parent's attitude and turns at `angvel`.
+    #[allow(clippy::too_many_arguments)]
     fn spawn_debris(
         &mut self,
         parent: Entity,
@@ -902,7 +993,22 @@ impl Universe {
         v: DVec3,
         facing: DVec3,
         drag_area_m2: f64,
+        parts: &[usize],
+        angvel: DVec3,
     ) -> Option<Entity> {
+        let top = match self.world.get::<flight::Powered>(parent) {
+            Some(p) => flight::vessel_top(p),
+            None => self
+                .world
+                .get::<flight::Dormant>(parent)
+                .map(|d| flight::vessel_top(&d.0))
+                .unwrap_or(DVec3::ZERO),
+        };
+        let craft = self
+            .world
+            .get::<docking::CraftDoc>(parent)
+            .filter(|_| !parts.is_empty())
+            .map(|d| docking::subset(&d.0, parts).0);
         let body = self.world.get::<bodies::ReferenceBody>(parent)?.0;
         let mu = self.world.get::<bodies::Body>(body)?.mu;
         let name = format!(
@@ -924,18 +1030,25 @@ impl Universe {
         };
         let mut p = flight::Powered::new(spec, r2, v2, false);
         p.facing = facing;
+        // it tumbles freely in the frame it left with
+        p.attitude = flight::Attitude::Free;
+        p.own_top = top;
+        p.angvel = angvel;
         let orbit = Orbit::from_state_vectors(mu, r2, v2, ut);
-        Some(
-            self.world
-                .spawn((
-                    vessels::Vessel { name },
-                    bodies::ReferenceBody(body),
-                    bodies::OnRails(orbit),
-                    p,
-                    vessels::Debris,
-                ))
-                .id(),
-        )
+        let d = self
+            .world
+            .spawn((
+                vessels::Vessel { name },
+                bodies::ReferenceBody(body),
+                bodies::OnRails(orbit),
+                p,
+                vessels::Debris,
+            ))
+            .id();
+        if let Some(c) = craft {
+            self.set_craft(d, c);
+        }
+        Some(d)
     }
 
     /// Atmosphere of a body, if any.
@@ -1292,6 +1405,13 @@ impl Universe {
             }
             let area = p.spec.drag_area_m2;
             for (piece, r, v, facing) in pieces {
+                // a piece off the side tips away from the vessel
+                let side = piece.offset_m - facing * piece.offset_m.dot(facing);
+                let tumble = if side.length() > 0.5 {
+                    facing.cross(side.normalized()) * 0.15
+                } else {
+                    DVec3::ZERO
+                };
                 if let Some(d) = self.spawn_debris(
                     e,
                     piece.mass_t,
@@ -1299,6 +1419,8 @@ impl Universe {
                     v + piece.dv_mps,
                     facing,
                     area,
+                    &piece.parts,
+                    tumble,
                 ) {
                     self.broken_off.push((e, d));
                 }
@@ -2337,6 +2459,81 @@ mod tests {
             "on its wheels: {}",
             p.ground_clearance_m
         );
+    }
+
+    #[test]
+    fn dropped_boosters_fall_away_as_their_own_crafts() {
+        let (mut u, body, spec, st) = k1_on_real_kerbin();
+        let crafts: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let k1 = crafts.iter().find(|c| c.name == "Kerbal K1").unwrap();
+        let v = u.spawn_vessel_in_circular_orbit("K1", body, 100_000.0);
+        let mut p = flight::Powered::new(
+            spec,
+            DVec3::new(700_000.0, 0.0, 0.0),
+            DVec3::new(0.0, 2_246.0, 0.0),
+            false,
+        );
+        p.facing = DVec3::new(0.0, 1.0, 0.0);
+        p.throttle = 0.001;
+        u.set_powered(v, p);
+        u.set_craft(v, k1.clone());
+        u.set_structure(v, st);
+        u.step();
+        // press through the stages, keeping what falls off
+        let mut debris = Vec::new();
+        for _ in 0..4 {
+            let r = u.stage(v);
+            debris.extend(r.debris);
+            debris.extend(u.take_broken_off().into_iter().map(|(_, d)| d));
+        }
+        let boosters: Vec<Entity> = debris
+            .iter()
+            .copied()
+            .filter(|&d| {
+                u.current_craft(d).is_some_and(|c| {
+                    c.parts
+                        .iter()
+                        .any(|p| p.part_id == "booster_1v_solid_hammer")
+                })
+            })
+            .collect();
+        assert!(
+            debris.iter().all(|&d| u.current_craft(d).is_some()),
+            "every piece has a craft"
+        );
+        assert_eq!(boosters.len(), 4, "one piece per booster");
+        let debris = boosters;
+        let parent = u.powered(v).unwrap().clone();
+        for d in debris {
+            let c = u.current_craft(d).expect("debris has a craft");
+            assert!(
+                c.is_tree() && c.parts.len() == 3,
+                "{:?}",
+                c.parts.iter().map(|p| &p.part_id).collect::<Vec<_>>()
+            );
+            assert!(c
+                .parts
+                .iter()
+                .any(|p| p.part_id == "booster_1v_solid_hammer"));
+            let q = u.powered(d).unwrap();
+            assert!(
+                q.facing.dot(parent.facing) > 0.99,
+                "leaves with the rocket's attitude"
+            );
+            assert!(
+                q.angvel.length() > 0.01,
+                "and tips away: {:?} off {:?}",
+                q.angvel,
+                q.r - parent.r
+            );
+            // beside the rocket, not inside it
+            let off = q.r - parent.r;
+            assert!(
+                (off - parent.facing * off.dot(parent.facing)).length() > 0.5,
+                "to the side: {off:?}"
+            );
+        }
     }
 
     #[test]
