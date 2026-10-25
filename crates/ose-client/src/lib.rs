@@ -1529,17 +1529,63 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
     wire(
         "fh-missions-btn",
         Box::new(|a| {
-            if let Some(el) = a.borrow().doc.get_element_by_id("fh-missions") {
+            let doc = a.borrow().doc.clone();
+            if let Some(el) = doc.get_element_by_id("fh-missions") {
                 let open = el.class_list().toggle("open").unwrap_or(false);
                 store("ose.tracker", if open { "open" } else { "closed" });
+                if let Some(b) = doc.get_element_by_id("fh-missions-btn") {
+                    b.class_list().toggle_with_force("on", open).ok();
+                }
             }
         }),
     )?;
     if stored("ose.tracker").as_deref() == Some("open") {
-        if let Some(el) = doc.get_element_by_id("fh-missions") {
-            el.class_list().add_1("open").ok();
+        for id in ["fh-missions", "fh-missions-btn"] {
+            if let Some(el) = doc.get_element_by_id(id) {
+                el.class_list()
+                    .add_1(if id == "fh-missions" { "open" } else { "on" })
+                    .ok();
+            }
         }
     }
+    wire(
+        "fh-report-btn",
+        Box::new(|a| {
+            let app = a.borrow();
+            let open = app
+                .doc
+                .get_element_by_id("flight-report")
+                .is_some_and(|e| e.class_list().contains("open"));
+            if open {
+                if let Some(e) = app.doc.get_element_by_id("flight-report") {
+                    e.class_list().remove_1("open").ok();
+                }
+            } else {
+                app.show_flight_report("In flight", None);
+            }
+        }),
+    )?;
+    // Kerbal portraits: shown unless hidden from the app bar (kept per browser).
+    let crew_off = stored("ose.crewPortraits").as_deref() == Some("off");
+    if let Some(el) = doc.get_element_by_id("fh-crewbox") {
+        el.class_list().toggle_with_force("off", crew_off).ok();
+    }
+    if let Some(el) = doc.get_element_by_id("fh-crew-btn") {
+        el.class_list().toggle_with_force("on", !crew_off).ok();
+    }
+    wire(
+        "fh-crew-btn",
+        Box::new(|a| {
+            let doc = a.borrow().doc.clone();
+            if let Some(el) = doc.get_element_by_id("fh-crewbox") {
+                let off = el.class_list().toggle("off").unwrap_or(false);
+                store("ose.crewPortraits", if off { "off" } else { "on" });
+                if let Some(b) = doc.get_element_by_id("fh-crew-btn") {
+                    b.class_list().toggle_with_force("on", !off).ok();
+                }
+            }
+        }),
+    )?;
     wire(
         "fh-speed-mode",
         Box::new(|a| {

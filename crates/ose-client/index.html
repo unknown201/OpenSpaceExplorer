@@ -308,7 +308,11 @@
     #fh-fuel-fill { height: 100%; width: 0; background: linear-gradient(90deg, #e0a040, #ffd060); }
     .fh-burn { display: none !important; color: #9fb8ff; font-size: calc(13 * var(--u)); font-weight: 600; }
     .fh-burn.on { display: flex !important; }
-    #flight-hud .fh-missions-btn { position: absolute; top: calc(48 * var(--u)); right: calc(16 * var(--u)); width: calc(36 * var(--u)); height: calc(36 * var(--u)); padding: 0; display: grid; place-items: center; }
+    /* App bar (the original's flight AppBar): mission tracker, flight report, Kerbal portraits. */
+    .fh-appbar { position: absolute; top: calc(48 * var(--u)); right: calc(16 * var(--u)); display: flex; flex-direction: column; gap: calc(4 * var(--u)); pointer-events: auto; }
+    #flight-hud .fh-missions-btn { margin: 0; width: calc(36 * var(--u)); height: calc(36 * var(--u)); padding: 0; display: grid; place-items: center; color: #9fb0cc; }
+    #flight-hud .fh-missions-btn.on { color: #7dff8a; border-color: #7dff8a99; }
+    .fh-crewbox.off { display: none; }
     #flight-hud .fh-missions-btn i { width: 70%; height: 70%; background: currentColor; -webkit-mask: var(--ico) center / contain no-repeat; mask: var(--ico) center / contain no-repeat; }
     .fh-missions { display: none; position: absolute; top: calc(48 * var(--u)); right: calc(60 * var(--u)); width: calc(300 * var(--u)); background: #10141be6; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)); padding: calc(8 * var(--u)) calc(10 * var(--u)); pointer-events: auto; }
     .fh-missions.open { display: block; }
@@ -316,7 +320,7 @@
     #fh-missions-list li { padding: calc(4 * var(--u)) 0; border-top: 1px solid #ffffff14; }
     #fh-missions-list li b { display: block; color: #fff; } #fh-missions-list li.primary b { color: #ffd87a; }
     #fh-missions-list li small { color: #9fb0cc; } #fh-missions-list .done { color: #7dff8a; } #fh-missions-list li.empty { color: #9fb0cc; }
-    body.ui-hidden .fh-missions, body.ui-hidden .fh-missions-btn { display: none !important; }
+    body.ui-hidden .fh-missions, body.ui-hidden .fh-appbar { display: none !important; }
     #fh-stages { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: calc(3 * var(--u)); max-height: calc(360 * var(--u)); overflow: auto; }
     #fh-stages li { display: flex; flex-wrap: wrap; align-items: center; gap: calc(3 * var(--u)); padding: calc(3 * var(--u)) calc(6 * var(--u)); border: 1px solid #ffffff22; border-left: 3px solid #e0a04066; border-radius: calc(4 * var(--u)); background: #06080fcc; }
     #fh-stages li b { font-size: calc(11 * var(--u)); color: #e0a040; min-width: calc(14 * var(--u)); }
@@ -926,7 +930,11 @@
     </div>
     <div class="fh-actions" id="fh-actions" data-ose="flight-actions"></div>
     <div class="fh-crewbox" id="fh-crewbox" data-ose="flight-crew"></div>
-    <button class="fh-missions-btn" id="fh-missions-btn" data-ose="flight-missions-btn" title="Mission tracker: the missions you have taken on"><i style="--ico:url(assets/ui/hud/ICO-AppBar-MissionTracker-24x24.png)"></i></button>
+    <div class="fh-appbar" id="fh-appbar" data-ose="flight-appbar">
+      <button class="fh-missions-btn" id="fh-missions-btn" data-ose="flight-missions-btn" title="Mission tracker: the missions you have taken on"><i style="--ico:url(assets/ui/hud/ICO-AppBar-MissionTracker-24x24.png)"></i></button>
+      <button class="fh-missions-btn" id="fh-report-btn" data-ose="flight-report-btn" title="Flight report: what this flight has done so far"><i style="--ico:url(assets/ui/hud/ICO-AppBar-FlightReport-24x24.png)"></i></button>
+      <button class="fh-missions-btn on" id="fh-crew-btn" data-ose="flight-crew-btn" title="Kerbal portraits: show or hide the crew"><i style="--ico:url(assets/ui/hud/ICO-AppBar-KerbalManager-24x24.png)"></i></button>
+    </div>
     <div class="fh-missions" id="fh-missions" data-ose="flight-missions"><div class="fh-label">MISSIONS</div><ul id="fh-missions-list"></ul></div>
     <div class="fh-comm" id="fh-comm" data-ose="flight-comm" title="CommNet: transmitting science and controlling probes need a link to the KSC"><i style="--ico:url(assets/ui/hud/ICO-Flight-Cluster-Commnet.png)"></i><span id="fh-comm-text">--</span></div>
     <div class="fh-help">W/S/A/D steer (hold, Caps Lock fine), Shift/Ctrl throttle, Z/X full/cut, Space stage, T SAS on/off, G gear, B brakes, M map, right-drag to look, Home resets the camera</div>
