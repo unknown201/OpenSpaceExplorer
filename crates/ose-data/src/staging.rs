@@ -389,6 +389,9 @@ mod tests {
                         allow_restart: true,
                         allow_shutdown: true,
                         gimbal_range_deg: None,
+                        air_breathing: false,
+                        vel_curve: None,
+                        atm_curve: None,
                     }]
                 })
                 .unwrap_or_default(),
@@ -405,6 +408,8 @@ mod tests {
             converter: None,
             ejection_force: 0.0,
             rcs: None,
+            lifting_surface: None,
+            intake_area_m2: 0.0,
             module_names: vec![],
             raw_modules: Default::default(),
         }

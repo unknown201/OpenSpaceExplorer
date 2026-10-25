@@ -361,11 +361,37 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
     let mut converter: Option<ose_data::Converter> = None;
     let mut ejection_force = 0.0;
     let mut rcs: Option<ose_data::Rcs> = None;
+    let mut lifting_surface: Option<ose_data::LiftingSurface> = None;
+    let mut intake_area_m2 = 0.0;
     if let Some(mods) = d["serializedPartModules"].as_array() {
         for m in mods {
             if let Some(entries) = m["ModuleData"].as_array() {
                 for entry in entries.iter() {
                     let o = &entry["DataObject"];
+                    if entry["Name"] == "Data_LiftingSurface" {
+                        let sign = match f(o, "transformSign") {
+                            0.0 => 1.0,
+                            x => x,
+                        };
+                        let axis = match o["transformDir"].as_str() {
+                            Some("Z") => DVec3::new(0.0, 0.0, sign),
+                            Some("Y") => DVec3::new(0.0, sign, 0.0),
+                            _ => DVec3::new(sign, 0.0, 0.0),
+                        };
+                        lifting_surface = Some(ose_data::LiftingSurface {
+                            deflection_lift_coeff: f(o, "deflectionLiftCoeff"),
+                            axis,
+                            omnidirectional: b(o, "omnidirectional"),
+                            curve_set: s(o, "liftingSurfaceCurve"),
+                            lift_curve: curve(&o["liftCurve"]),
+                            lift_mach_curve: curve(&o["liftMachCurve"]),
+                            drag_curve: curve(&o["dragCurve"]),
+                            drag_mach_curve: curve(&o["dragMachCurve"]),
+                        });
+                    }
+                    if entry["Name"] == "Data_ResourceIntake" {
+                        intake_area_m2 = f(o, "area");
+                    }
                     if entry["Name"] == "Data_RCS" {
                         rcs = Some(ose_data::Rcs {
                             thrust_kn: f(o, "maxThrust"),
@@ -493,6 +519,11 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
                                 allow_restart: b(em, "allowRestart"),
                                 allow_shutdown: b(em, "allowShutdown"),
                                 gimbal_range_deg: None,
+                                air_breathing: em["propellant"]["ingredientOverrides"]
+                                    .as_array()
+                                    .is_some_and(|a| a.iter().any(|i| i["name"] == "IntakeAir")),
+                                vel_curve: b(em, "useVelCurve").then(|| curve(&em["velCurve"])),
+                                atm_curve: b(em, "useAtmCurve").then(|| curve(&em["atmCurve"])),
                             });
                         }
                     }
@@ -644,6 +675,8 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
         converter,
         ejection_force,
         rcs,
+        lifting_surface,
+        intake_area_m2,
         drag_cubes,
         module_names,
         raw_modules,
@@ -767,6 +800,51 @@ pub(crate) fn json_files(dir: &Path) -> anyhow::Result<Vec<std::path::PathBuf>> 
 }
 
 /// Converts an extracted data directory (`assets/ksp2/data`) into a `GameData`.
+/// An engine mixture that is no resource of its own (a jet's `MethaneAir`) becomes a recipe of the
+/// ingredients the engine lists, without intake air: jets take air from the atmosphere through intakes.
+fn mixture_recipes(v: &Value, resources: &mut Vec<ResourceDef>) {
+    let d = unwrap_data(v);
+    let Some(mods) = d["serializedPartModules"].as_array() else {
+        return;
+    };
+    for m in mods {
+        for entry in m["ModuleData"].as_array().into_iter().flatten() {
+            if entry["Name"] != "Data_Engine" {
+                continue;
+            }
+            for em in entry["DataObject"]["engineModes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+            {
+                let mix = s(&em["propellant"], "mixtureName");
+                if mix.is_empty() || resources.iter().any(|r| r.id.eq_ignore_ascii_case(&mix)) {
+                    continue;
+                }
+                let ingredients: Vec<ose_data::RecipeIngredient> = em["propellant"]
+                    ["ingredientOverrides"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|i| i["name"] != "IntakeAir")
+                    .map(|i| ose_data::RecipeIngredient {
+                        resource: s(i, "name"),
+                        units_per_recipe_unit: f(i, "unitsPerRecipeUnit"),
+                    })
+                    .collect();
+                if !ingredients.is_empty() {
+                    resources.push(ResourceDef {
+                        id: mix.clone(),
+                        display_name_key: format!("Resource/DisplayName/{mix}"),
+                        abbreviation_key: String::new(),
+                        kind: ose_data::ResourceKind::Recipe { ingredients },
+                    });
+                }
+            }
+        }
+    }
+}
+
 pub fn import_dir(data_dir: &Path, cov: &mut Coverage) -> anyhow::Result<GameData> {
     let gal = galaxy(&read_json(&data_dir.join("GalaxyDefinition_Default.json"))?);
     let mut bodies = Vec::new();
@@ -790,7 +868,9 @@ pub fn import_dir(data_dir: &Path, cov: &mut Coverage) -> anyhow::Result<GameDat
     }
     let mut parts = Vec::new();
     for p in json_files(&data_dir.join("parts"))? {
-        parts.push(part(&read_json(&p)?, cov));
+        let v = read_json(&p)?;
+        mixture_recipes(&v, &mut resources);
+        parts.push(part(&v, cov));
     }
     Ok(GameData {
         schema_version: SCHEMA_VERSION,

@@ -1021,6 +1021,50 @@ pub fn engineer_report(
     out
 }
 
+/// The part manager window for one part (`PartsManagerCore`, right click in the VAB): its name, stage,
+/// crossfeed switch and a fill slider per resource.
+pub fn pam_html(craft: &Craft, i: usize, catalog: &Catalog) -> String {
+    let esc = |s: &str| {
+        s.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('"', "&quot;")
+    };
+    let Some(p) = craft.parts.get(i) else {
+        return String::new();
+    };
+    let spec = catalog.get(&p.part_id);
+    let title = spec.map(|s| s.display_title()).unwrap_or(&p.part_id);
+    let stage = craft
+        .stages
+        .iter()
+        .position(|s| s.contains(&i))
+        .map(|n| {
+            format!(
+                "<div class=\"pam-sub\">Stage {}</div>",
+                craft.stages.len() - n
+            )
+        })
+        .unwrap_or_default();
+    let mut rows = String::new();
+    for (k, r) in p.resources.iter().enumerate() {
+        if r.capacity_units <= 0.0 {
+            continue;
+        }
+        rows.push_str(&format!(
+            "<label class=\"pam-row\"><span>{name}</span><input type=\"range\" data-res=\"{k}\" min=\"0\" max=\"{cap}\" step=\"any\" value=\"{v}\" /><b>{v:.0} / {cap:.0}</b></label>",
+            name = esc(&r.resource),
+            cap = r.capacity_units,
+            v = r.stored_units,
+        ));
+    }
+    format!(
+        "<div class=\"pam-head\"><b>{title}</b><button id=\"pam-close\" title=\"Close (Esc)\">&#10005;</button></div>{stage}\
+         <label class=\"pam-row\"><span>Fuel crossfeed</span><input type=\"checkbox\" id=\"pam-crossfeed\"{cf} /></label>{rows}",
+        title = esc(title),
+        cf = if p.fuel_crossfeed { " checked" } else { "" },
+    )
+}
+
 /// Categories in the order the original's picker shows them; anything else goes at the end.
 pub const CATEGORY_ORDER: [&str; 13] = [
     "Pods",

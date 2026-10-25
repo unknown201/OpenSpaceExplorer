@@ -228,5 +228,20 @@
         "non_stageable": false
       }
     }
+  },
+  {
+    "id": "MethaneAir",
+    "display_name_key": "Resource/DisplayName/MethaneAir",
+    "abbreviation_key": "",
+    "kind": {
+      "Recipe": {
+        "ingredients": [
+          {
+            "resource": "Methane",
+            "units_per_recipe_unit": 1.0
+          }
+        ]
+      }
+    }
   }
 ]

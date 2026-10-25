@@ -818,6 +818,8 @@ fn flight_readout(
         },
         rcs_thrust_kn: p.rcs.thrust_kn as f32,
         rcs_firing: p.rcs.usage as f32,
+        lift_kn: p.lift_kn.length() as f32,
+        jet: p.jet.is_some(),
         lights: p.groups.lights,
         rcs: p.groups.rcs,
         abort: p.groups.abort,
@@ -1774,6 +1776,27 @@ fn balance(
     }
 }
 
+/// The lifting surfaces' centre, weighted by their lift coefficient (craft frame; zero without any).
+fn centre_of_lift(s: &Shared, craft: &ose_data::craft::Craft) -> ose_math::DVec3 {
+    let (mut w, mut c) = (0.0, ose_math::DVec3::ZERO);
+    for p in &craft.parts {
+        let coeff = s
+            .parts
+            .iter()
+            .find(|d| d.id == p.part_id)
+            .and_then(|d| d.lifting_surface.as_ref())
+            .map(|l| l.deflection_lift_coeff)
+            .unwrap_or(0.0);
+        w += coeff;
+        c = c + p.local_position * coeff;
+    }
+    if w > 0.0 {
+        c * (1.0 / w)
+    } else {
+        ose_math::DVec3::ZERO
+    }
+}
+
 /// The staging report as the protocol carries it, with sea-level thrust and TWR.
 fn stage_readouts(
     s: &Shared,
@@ -2511,12 +2534,14 @@ async fn session(mut socket: WebSocket, s: AppState) {
                             fill_default_resources(&s, &mut filled);
                             let report = ose_data::staging::delta_v_by_stage(&filled, &s.parts, &s.resources);
                             let (com_m, cot_m, thrust_dir) = balance(&s, &filled, &report);
+                            let col_m = centre_of_lift(&s, &filled);
                             let reply = ServerMessage::StageReport {
                                 stages: stage_readouts(&s, &filled, &report),
                                 delta_v_vacuum_mps: report.total_vacuum_mps,
                                 com_m,
                                 cot_m,
                                 thrust_dir,
+                                col_m,
                             };
                             if !send(&mut socket, &reply).await { break; }
                         }

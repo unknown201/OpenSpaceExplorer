@@ -23,6 +23,85 @@ fn curve(keys: &[(f64, f64, f64, f64)]) -> Curve {
     }
 }
 
+/// Lift multipliers (`PhysicsSettings.LiftMultiplier`, `LiftDragMultiplier`).
+pub const LIFT_MULTIPLIER: f64 = 0.036;
+pub const LIFT_DRAG_MULTIPLIER: f64 = 0.015;
+
+/// A lifting surface's curves: lift and drag against |sin(angle of attack)|, and their Mach factors.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LiftCurves {
+    pub lift: Curve,
+    pub lift_mach: Curve,
+    pub drag: Curve,
+    pub drag_mach: Curve,
+}
+
+/// `PhysicsSettings.DefaultLiftingSurfaceCurve` (wings, fins, control surfaces).
+pub fn default_lift_curves() -> LiftCurves {
+    LiftCurves {
+        lift: curve(&[
+            (0.0, 0.0, 0.0, 1.965926),
+            (0.258819, 0.5114774, 1.990092, 1.905806),
+            (0.5, 0.9026583, 133.0 / 188.0, -133.0 / 188.0),
+            (
+                std::f64::consts::FRAC_1_SQRT_2,
+                0.5926583,
+                -2.087948,
+                -1.990095,
+            ),
+            (1.0, 0.0, -2.014386, -2.014386),
+        ]),
+        lift_mach: curve(&[
+            (0.0, 1.0, 0.0, 0.0),
+            (0.3, 0.5, -1.671345, -0.8273422),
+            (1.0, 0.125, -0.0005291355, -0.02625772),
+            (5.0, 0.0625, 0.0, 0.0),
+            (25.0, 0.05, 0.0, 0.0),
+        ]),
+        drag: curve(&[
+            (0.0, 0.01, 0.0, 0.0),
+            (0.3420201, 0.06, 0.1750731, 0.1750731),
+            (0.5, 0.24, 2.60928, 2.60928),
+            (std::f64::consts::FRAC_1_SQRT_2, 1.7, 3.349777, 3.349777),
+            (1.0, 2.4, 1.387938, 0.0),
+        ]),
+        drag_mach: curve(&[
+            (0.0, 0.35, 0.0, -0.8463008),
+            (0.15, 0.125, 0.0, 0.0),
+            (0.9, 0.275, 0.541598, 0.541598),
+            (1.1, 0.75, 0.0, 0.0),
+            (1.4, 0.4, -0.3626955, -0.3626955),
+            (1.6, 0.35, -0.1545923, -0.1545923),
+            (2.0, 0.3, -0.09013031, -0.09013031),
+            (5.0, 0.22, 0.0, 0.0),
+            (25.0, 0.3, 0.0006807274, 0.0),
+        ]),
+    }
+}
+
+/// Lift plus drag of one lifting surface, kN, for travel direction `travel` (unit) through air at dynamic
+/// pressure `q_pa` (`Module_LiftingSurface.GetLiftVector` / `GetDragVector`). `axis` is the surface's lift
+/// axis in the same frame.
+pub fn surface_force(
+    c: &LiftCurves,
+    coeff: f64,
+    omnidirectional: bool,
+    axis: DVec3,
+    travel: DVec3,
+    q_pa: f64,
+    mach: f64,
+) -> DVec3 {
+    let dot = travel.dot(axis);
+    let abs = if omnidirectional {
+        dot.abs()
+    } else {
+        dot.clamp(0.0, 1.0)
+    };
+    let lift = dot.signum() * c.lift.evaluate(abs) * c.lift_mach.evaluate(mach) * coeff;
+    let drag = c.drag.evaluate(abs) * c.drag_mach.evaluate(mach) * coeff;
+    axis * (-q_pa * LIFT_MULTIPLIER * lift) - travel * (q_pa * drag * LIFT_DRAG_MULTIPLIER)
+}
+
 /// The `PhysicsSettings` drag curves.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DragCurves {

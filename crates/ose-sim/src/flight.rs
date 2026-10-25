@@ -227,6 +227,41 @@ pub struct Powered {
     /// RCS thrusters (with the RCS group on they translate the vessel and help turn it).
     #[serde(default)]
     pub rcs: RcsState,
+    /// Force of the wings and other lifting surfaces this step (lift and their drag), kN, inertial.
+    #[serde(default)]
+    pub lift_kn: DVec3,
+    /// The burning stage's engines breathe air (jets), and whether the vessel has intakes.
+    #[serde(default)]
+    pub jet: Option<Jet>,
+    #[serde(default)]
+    pub intakes: bool,
+}
+
+/// How a jet's thrust follows the flight: against Mach and against air density (kg/m^3).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Jet {
+    pub vel_curve: Option<Curve>,
+    pub atm_curve: Option<Curve>,
+}
+
+impl Jet {
+    /// Share of rated thrust at `mach` in air of `density`; nothing without oxygen or intakes.
+    pub fn factor(&self, mach: f64, density: f64, oxygen: bool, intakes: bool) -> f64 {
+        if !oxygen || !intakes || density <= 0.0 {
+            return 0.0;
+        }
+        let v = self
+            .vel_curve
+            .as_ref()
+            .map(|c| c.evaluate(mach))
+            .unwrap_or(1.0);
+        let a = self
+            .atm_curve
+            .as_ref()
+            .map(|c| c.evaluate(density))
+            .unwrap_or(1.0);
+        (v * a).max(0.0)
+    }
 }
 
 /// A vessel's RCS: what its thrusters can do (from its parts) and how they are used.
@@ -438,6 +473,8 @@ pub struct Dormant(pub Powered);
 #[derive(Clone, Debug, PartialEq)]
 pub struct Atmo {
     pub depth_m: f64,
+    /// Jets breathe it.
+    pub oxygen: bool,
     pub pressure_kpa: Curve,
     pub temperature_k: Curve,
     pub molar_mass: f64,
@@ -565,6 +602,9 @@ impl Powered {
             roll_input: 0.0,
             groups: ActionGroups::default(),
             rcs: RcsState::default(),
+            lift_kn: DVec3::ZERO,
+            jet: None,
+            intakes: false,
         }
     }
 
@@ -842,7 +882,18 @@ pub fn integrate(
     let thrust_kn = if walk_dir.is_some() {
         0.0
     } else {
-        p.thrust_kn(pressure_atm)
+        // jets: their thrust follows the speed and the air
+        let air = match (&p.jet, atmo) {
+            (Some(j), Some(a)) => {
+                let sound = a.speed_of_sound(alt);
+                let v_air = (p.v - DVec3::new(0.0, 0.0, omega).cross(p.r)).length();
+                let mach = if sound > 0.0 { v_air / sound } else { 0.0 };
+                j.factor(mach, rho, a.oxygen, p.intakes)
+            }
+            (Some(_), None) => 0.0,
+            (None, _) => 1.0,
+        };
+        p.thrust_kn(pressure_atm) * air
     };
     if p.landed {
         if !p.tipped {
@@ -939,7 +990,12 @@ pub fn integrate(
         // sitting on the surface: co-rotate; lift off only when thrust beats gravity
         let g = body.mu / (r_mag * r_mag);
         let (up, _, _) = surface_frame(p.r);
-        if thrust_acc.dot(up) > g {
+        let lift_acc = if p.mass_t > 0.0 {
+            p.lift_kn * (1.0 / p.mass_t)
+        } else {
+            DVec3::ZERO
+        };
+        if (thrust_acc + lift_acc).dot(up) > g {
             p.landed = false;
         } else {
             if let Some(dir) = walk_dir {
@@ -977,8 +1033,13 @@ pub fn integrate(
     } else {
         DVec3::ZERO
     };
-    out.drag_kn = drag_acc * p.mass_t;
-    let acc = g_acc + thrust_acc + drag_acc;
+    let lift_acc = if p.mass_t > 0.0 {
+        p.lift_kn * (1.0 / p.mass_t)
+    } else {
+        DVec3::ZERO
+    };
+    out.drag_kn = drag_acc * p.mass_t + p.lift_kn;
+    let acc = g_acc + thrust_acc + drag_acc + lift_acc;
     p.v = p.v + acc * dt;
     p.r = p.r + p.v * dt;
 
@@ -1148,6 +1209,7 @@ mod tests {
         }
         Atmo {
             depth_m: 70_000.0,
+            oxygen: true,
             pressure_kpa: Curve { keys },
             temperature_k: Curve { keys: tkeys },
             molar_mass: 0.0289644,
