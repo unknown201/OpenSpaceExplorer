@@ -11,9 +11,20 @@
 
 #![forbid(unsafe_code)]
 
+pub mod animation;
 pub mod audio;
+pub mod authored_particles;
+#[cfg(target_arch = "wasm32")]
+mod authored_sprite_gpu;
+pub mod engine_fx;
+#[cfg(target_arch = "wasm32")]
+mod engine_fx_gpu;
 #[cfg(target_arch = "wasm32")]
 pub mod flight3d;
+#[cfg(target_arch = "wasm32")]
+mod fx_fixture;
+#[cfg(target_arch = "wasm32")]
+mod fx_post;
 pub mod hud;
 pub mod input;
 pub mod kerbin_time;
@@ -25,6 +36,7 @@ pub mod missions;
 #[cfg(target_arch = "wasm32")]
 pub mod navball;
 pub mod ocean_fft;
+pub mod particles;
 #[cfg(target_arch = "wasm32")]
 pub mod planet;
 pub mod planet_lod;
@@ -6452,7 +6464,6 @@ impl App {
             .unwrap_or(0.0);
         let catalog = &self.catalog;
         let is_dec = |pid: &str| catalog.get(pid).map(|p| p.is_decoupler).unwrap_or(false);
-        let is_eng = |pid: &str| catalog.get(pid).map(|p| p.has_engine).unwrap_or(false);
         let nearby_vessels: Vec<(glam::DVec3, flight3d::Stand)> = scene
             .vessels
             .iter()
@@ -6478,7 +6489,6 @@ impl App {
             ut,
             craft: self.flight_craft.as_ref(),
             is_decoupler: &is_dec,
-            is_engine: &is_eng,
             maneuver: self
                 .node
                 .as_ref()
@@ -6494,6 +6504,18 @@ impl App {
         };
         let drawn = self.flight3d.frame(gpu, &inp);
         if drawn {
+            if let Some(hud) = self.doc.query_selector("[data-ose=flight]").ok().flatten() {
+                hud.set_attribute(
+                    "data-ose-particles",
+                    &gpu.engine_particle_count().to_string(),
+                )
+                .ok();
+                hud.set_attribute(
+                    "data-ose-engine-fx-layers",
+                    &gpu.engine_fx_layers().to_string(),
+                )
+                .ok();
+            }
             if let (Some(nav), Some(canvas)) = (
                 self.flight3d.nav,
                 self.doc
@@ -6542,6 +6564,7 @@ impl App {
                 let scale = (b.radius_m / 1000.0) / model.mesh_radius.max(1e-9);
                 let light = if b.is_star { GV::Y } else { star_km - pos_km };
                 items.push(render::DrawItem {
+                    animation: None,
                     model: name.clone(),
                     rel_pos_km: pos_km - cam_km,
                     rotation: DQuat::IDENTITY,

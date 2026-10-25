@@ -603,6 +603,12 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
         }
     });
     let bounds = part_bounds(&drag_cubes, &attach_nodes);
+    // Data_Deployable is shared by legs, antennae and bays too. Its settings describe solar
+    // behavior only when this part actually contains a solar producer.
+    if electric.solar_output <= 0.0 {
+        electric.solar_deployable = false;
+        electric.solar_tracking = false;
+    }
     PartDef {
         id: s(d, "partName"),
         title_key: s(d, "Title"),
@@ -876,6 +882,23 @@ mod tests {
         assert_eq!(part.attach_nodes[0].position.y, 0.264);
         assert_eq!(part.module_names.len(), 3);
         assert!(part.raw_modules.contains_key("PartComponentModule_Color"));
+    }
+
+    #[test]
+    fn generic_deployables_are_solar_only_when_the_part_generates_solar_power() {
+        let mut p = json!({"data":{"partName":"deployable","serializedPartModules":[
+            {"Name":"PartComponentModule_Deployable","ModuleData":[{"Name":"Data_Deployable", "DataObject":{"isTracking":true,"extendable":true}}]}
+        ]}});
+        let imported = part(&p, &mut Coverage::default());
+        assert!(!imported.electric.solar_deployable);
+        assert!(!imported.electric.solar_tracking);
+        p["data"]["serializedPartModules"].as_array_mut().unwrap().push(json!({
+            "Name":"PartComponentModule_SolarPanel", "ModuleData":[{"Name":"Data_SolarPanel","DataObject":{"ResourceSettings":{"ResourceName":"ElectricCharge","Rate":2.0}}}]
+        }));
+        let imported = part(&p, &mut Coverage::default());
+        assert!(imported.electric.solar_deployable);
+        assert!(imported.electric.solar_tracking);
+        assert_eq!(imported.electric.solar_output, 2.0);
     }
 
     #[test]

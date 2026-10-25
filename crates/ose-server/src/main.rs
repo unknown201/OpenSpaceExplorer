@@ -795,6 +795,19 @@ fn flight_readout(
             0.0
         },
         dynamic_pressure_kpa: 0.0005 * rho * v_surf.length_squared(),
+        static_pressure_kpa: pressure_kpa,
+        firing_engines: if thrust > 0.0 {
+            u.structure(e)
+                .map(|st| {
+                    st.fed_engines(p.stage)
+                        .into_iter()
+                        .filter_map(|i| u16::try_from(i).ok())
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        },
         facing: p.facing,
         // a craft standing on the ground keeps its own heading (rovers turn)
         roll_ref: if p.landed && !p.tipped {
@@ -871,6 +884,19 @@ fn flight_readout(
         comm_hops: u.comm_link(e).hops,
         comm_range_m: u.comm_link(e).range_m,
         panels_deployed: u.panels_deployed(e),
+        panels: u
+            .structure(e)
+            .map(|st| {
+                st.electric
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, d)| {
+                        d.solar_deployable && d.solar_output > 0.0 && st.rigid.present[*i]
+                    })
+                    .map(|(i, _)| (i as u16, st.deployed[i]))
+                    .collect()
+            })
+            .unwrap_or_default(),
         tipped: p.tipped,
         parachutes: u
             .structure(e)

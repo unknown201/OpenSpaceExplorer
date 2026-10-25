@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 27;
+pub const PROTOCOL_VERSION: u16 = 28;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -459,6 +459,10 @@ pub struct FlightReadout {
     pub thrust_kn: f64,
     pub twr: f64,
     pub dynamic_pressure_kpa: f64,
+    /// Ambient static pressure, for atmosphere/vacuum visual effects.
+    pub static_pressure_kpa: f64,
+    /// Attached, fuel-fed engine part indices currently producing thrust.
+    pub firing_engines: Vec<u16>,
     /// Where the vessel actually points (the craft's +Y, its thrust axis): unit vector in the reference
     /// body's inertial frame (Z-up, the same frame as `VesselState`). It turns toward `attitude` at a
     /// limited rate.
@@ -491,6 +495,8 @@ pub struct FlightReadout {
     pub comm_range_m: f64,
     /// Deployable solar panels folded out.
     pub panels_deployed: bool,
+    /// Each attached deployable panel's command state, by craft part index (animation instances).
+    pub panels: Vec<(u16, bool)>,
     /// Fell over on landing and lies on its side.
     pub tipped: bool,
     /// Parachutes: (craft part index, state, how far open 0..1).

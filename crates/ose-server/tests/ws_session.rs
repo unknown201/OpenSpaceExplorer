@@ -1418,6 +1418,90 @@ async fn the_editor_gets_a_stage_report_with_sea_level_twr() {
     assert!(s.twr_asl > 1.0, "{s:?}");
 }
 
+#[tokio::test]
+async fn deployment_snapshots_identify_panel_and_gear_instances() {
+    let (_server, addr) = spawn_server().await;
+    let mut ws = connect_ws(&addr).await;
+    hello(&mut ws, None, "rig pilot").await;
+    send_msg(
+        &mut ws,
+        &ClientMessage::CreateSession {
+            name: "Rigs".into(),
+            mode: ose_net::SessionMode::Sandbox,
+            difficulty: Vec::new(),
+        },
+    )
+    .await;
+    wait_for(&mut ws, |m| {
+        matches!(m, ServerMessage::CampaignState { .. }).then_some(())
+    })
+    .await;
+    let mut craft = starter_craft();
+    for (i, id) in ["solararray_1v_1x6", "solararray_1v_1x6", "landingleg_0v"]
+        .iter()
+        .enumerate()
+    {
+        let mut part = craft.parts[0].clone();
+        part.guid = format!("rig-{i}");
+        part.part_id = (*id).into();
+        part.parent = Some(0);
+        part.local_position = ose_math::DVec3::new(i as f64 - 1.0, -0.5, 0.0);
+        craft.parts.push(part);
+    }
+    send_msg(&mut ws, &ClientMessage::LaunchOnPad { craft }).await;
+    let vessel = wait_for(&mut ws, |m| match m {
+        ServerMessage::CraftLaunched { vessel, reason, .. } => {
+            assert!(reason.is_none(), "{reason:?}");
+            vessel
+        }
+        _ => None,
+    })
+    .await;
+    let flight = |m: ServerMessage| match m {
+        ServerMessage::Vessels { vessels, .. } => vessels
+            .into_iter()
+            .find(|v| v.id == vessel)
+            .and_then(|v| v.flight),
+        _ => None,
+    };
+    let initial = wait_for(&mut ws, flight).await;
+    assert_eq!(initial.panels, vec![(3, false), (4, false)]);
+    assert_eq!(initial.gear.len(), 1);
+    assert_eq!(initial.gear[0].0, 5);
+    for deploy in [true, false] {
+        send_msg(&mut ws, &ClientMessage::DeployPanels { vessel, deploy }).await;
+        wait_for(&mut ws, |m| match m {
+            ServerMessage::FlightAck {
+                vessel: v,
+                accepted,
+                reason,
+            } if v == vessel => {
+                assert!(accepted, "{reason:?}");
+                Some(())
+            }
+            _ => None,
+        })
+        .await;
+        let f = wait_for(&mut ws, |m| {
+            flight(m).filter(|f| f.panels.iter().all(|(_, out)| *out == deploy))
+        })
+        .await;
+        assert_eq!(f.panels, vec![(3, deploy), (4, deploy)]);
+        assert_eq!(f.panels_deployed, deploy);
+        assert_eq!(
+            f.gear, initial.gear,
+            "solar commands must not move landing gear"
+        );
+    }
+    let deploy = !initial.gear[0].1;
+    send_msg(&mut ws, &ClientMessage::DeployGear { vessel, deploy }).await;
+    let f = wait_for(&mut ws, |m| {
+        flight(m).filter(|f| f.gear == vec![(5, deploy)])
+    })
+    .await;
+    assert_eq!(f.panels, vec![(3, false), (4, false)]);
+}
+
 async fn http_get_json(addr: &str, path: &str) -> serde_json::Value {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();

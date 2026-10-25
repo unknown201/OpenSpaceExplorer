@@ -246,6 +246,7 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
       await sleep(1500);
       const gpu = page.locator('[data-ose="gpu"]').first();
       const renderer = (await gpu.getAttribute("data-ose-renderer")) ?? "canvas2d";
+      if (process.env.OSE_REQUIRE_WEBGPU && renderer !== "webgpu") return failed("WebGPU rendering required for particle validation");
       const backdrop = (await gpu.getAttribute("data-ose-menu-vessel")) ?? "none (no menu assets on this server)";
       return passed(`canvas ${Math.round(box.width)}x${Math.round(box.height)}, renderer ${renderer}, menu backdrop ${backdrop}`);
     }),
@@ -284,10 +285,12 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
         return blocked('universal-time readout in the HUD ([data-ose="ut"]); Phase 3');
       }
       const a = (await ut.first().textContent()) ?? "";
-      // The readout shows whole seconds and a debug server with several structured vessels runs below real
-      // time, so give it a few seconds.
-      await sleep(3000);
-      const b = (await ut.first().textContent()) ?? "";
+      const deadline = Date.now() + 5000;
+      let b = a;
+      while (b === a && Date.now() < deadline) {
+        await sleep(200);
+        b = (await ut.first().textContent()) ?? "";
+      }
       if (a === b) return failed(`time readout did not advance (${JSON.stringify(a)})`);
       return passed(`UT ${a.trim()} -> ${b.trim()}`);
     }),
@@ -533,7 +536,45 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
         if (thrustSeen && !(engineMax > 0)) return failed("the engine sound stayed silent under thrust (data-ose-engine 0)");
         if (!music.startsWith("music_kerbin")) return failed(`flight music is "${music}", not Kerbin's`);
       }
-      return passed(`lifted off: ${before.toFixed(0)} m -> ${after.toFixed(0)} m, ${situation}`);
+      let particles = "";
+      if (await hud.first().getAttribute("data-ose-particles") !== null) {
+        const count = async () => Number(await hud.first().getAttribute("data-ose-particles"));
+        const layers = async () => Number(await hud.first().getAttribute("data-ose-engine-fx-layers"));
+        const start = Date.now();
+        while (await layers() === 0 && Date.now() - start < 20_000) await sleep(100);
+        const burning = await count();
+        const authored = await layers();
+        if (authored === 0 || !Number.isFinite(burning) || burning < 0) return failed(`engine FX unavailable: ${authored} authored layers, ${burning} particles`);
+        // Leave enough altitude and upward momentum to coast while the smoke finishes its lifetime.
+        const climb = Date.now();
+        while (await altOf() < before + 200 && Date.now() - climb < 20_000) await sleep(150);
+        if (await altOf() < before + 200) return failed("could not reach cutoff-test altitude");
+        await page.locator('[data-ose="flight-throttle-cut"]').first().click();
+        const cutoff = Date.now();
+        // The source launch-smoke recipe lives up to 11 simulation seconds; a debug server with
+        // detailed terrain/physics may advance more slowly than wall time. Shutdown bursts may
+        // start after the mesh disappears, so require a full quiet second rather than one empty frame.
+        let quietSince: number | undefined;
+        while (Date.now() - cutoff < 30_000) {
+          if (await count() === 0 && await layers() === 0) {
+            quietSince ??= Date.now();
+            if (Date.now() - quietSince >= 1000) break;
+          } else quietSince = undefined;
+          await sleep(150);
+        }
+        if (await count() !== 0) return failed(`particles did not expire after engine cutoff (${await count()} remain)`);
+        if (await layers() !== 0) return failed("mesh plumes did not turn off at engine cutoff");
+        if (quietSince === undefined || Date.now() - quietSince < 1000) return failed("engine effects did not settle after cutoff");
+        await page.locator('[data-ose="flight-throttle-full"]').first().click();
+        const restart = Date.now();
+        while (await layers() === 0 && Date.now() - restart < 5000) await sleep(100);
+        if (await layers() === 0) return failed("plumes did not resume after restoring throttle");
+        await sleep(1000);
+        particles = `; ${authored} authored layers, ${burning} particles, cutoff cleared`;
+      }
+      if (probe.pageErrors.length) return failed(probe.pageErrors.join("; "));
+      if (probe.consoleErrors.length) return failed(probe.consoleErrors.join("; "));
+      return passed(`lifted off: ${before.toFixed(0)} m -> ${after.toFixed(0)} m, ${situation}${particles}`);
     }),
   );
 

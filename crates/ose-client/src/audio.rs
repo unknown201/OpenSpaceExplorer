@@ -197,7 +197,13 @@ impl Audio {
         };
         el.set_loop(s.r#loop);
         el.set_volume(0.0);
-        let _ = el.play();
+        // A crossfade can pause a track before it starts; the browser then rejects play(), which is expected.
+        if let Ok(p) = el.play() {
+            let ignore =
+                wasm_bindgen::closure::Closure::<dyn FnMut(wasm_bindgen::JsValue)>::new(|_| {});
+            let _ = p.catch(&ignore);
+            ignore.forget();
+        }
         self.current = Some(Track {
             key: key.to_string(),
             el,
