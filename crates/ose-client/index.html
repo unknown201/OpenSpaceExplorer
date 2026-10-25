@@ -406,7 +406,8 @@
     body.webgpu #vab-header { position: relative; pointer-events: auto; background: #10141bf0; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)); padding: calc(6 * var(--u)) calc(10 * var(--u)); margin: 0 0 calc(8 * var(--u)); }
     body.webgpu #screen-vab #vab { height: calc(100vh - 92 * var(--u)) !important; }
     #vab-side .vs-title { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: #9fb0cc; margin: 10px 0 4px; }
-    #vab-side .vs-title:first-child { margin-top: 0; }
+    #vab-side .vs-title:first-child { margin-top: 0; display: flex; justify-content: space-between; align-items: center; }
+    #vab-twr-body { font-size: 11px; text-transform: none; letter-spacing: 0; background: #06080f; color: #e6ecf7; border: 1px solid #2c3d63; border-radius: 3px; padding: 1px 3px; max-width: 160px; }
     #vab-stages li { display: block; padding: 6px 8px; border: 1px solid #2c3d63; border-left: 3px solid #e0a040; border-radius: 4px; background: #06080f; margin-bottom: 4px; color: #e6ecf7; }
     #vab-stages li span.p { user-select: none; } #vab-stages li span.p:active { cursor: grabbing; }
     #vab-stages li .sv { float: right; font-size: 11px; color: #9fb0cc; }
@@ -784,7 +785,7 @@
           </div>
           <canvas id="vab-canvas" data-ose="vab-canvas" width="640" height="640"></canvas>
           <div id="vab-side">
-            <div class="vs-title">Staging</div>
+            <div class="vs-title">Staging <select id="vab-twr-body" data-ose="vab-twr-body" title="Delta-v tool: where the stages' thrust-to-weight is worked out"></select></div>
             <ul id="vab-stages" data-ose="vab-stages"></ul>
             <div id="vab-stats" data-ose="vab-stats"></div>
             <div class="vs-title">Selected part</div>

@@ -169,6 +169,8 @@ struct App {
     vab_stage_drag: Option<usize>,
     /// The trip planner's delta-v map, once loaded.
     trip: Option<trip::TripMap>,
+    /// The delta-v tool's body for stage TWR (`None`: Kerbin at sea level from the server).
+    vab_twr_body: Option<String>,
     /// The server's centre of mass and centre/direction of thrust, and whether their markers show.
     vab_com: Option<ose_math::DVec3>,
     vab_cot: Option<(ose_math::DVec3, ose_math::DVec3)>,
@@ -523,6 +525,7 @@ pub fn start() -> Result<(), JsValue> {
         vab_stages_readout: Vec::new(),
         vab_stage_drag: None,
         trip: None,
+        vab_twr_body: None,
         vab_com: None,
         vab_cot: None,
         vab_col: None,
@@ -1672,6 +1675,21 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
     )?;
     wire("vab-save", Box::new(|a| a.borrow_mut().vab_save(false)))?;
     wire("vab-undo", Box::new(|a| a.borrow_mut().vab_undo(false)))?;
+    if let Some(sel) = doc.get_element_by_id("vab-twr-body") {
+        let a = app.clone();
+        let s2 = sel.clone();
+        let cb = Closure::<dyn FnMut()>::new(move || {
+            let v = s2
+                .dyn_ref::<web_sys::HtmlSelectElement>()
+                .map(|s| s.value())
+                .unwrap_or_default();
+            let mut app = a.borrow_mut();
+            app.vab_twr_body = (!v.is_empty()).then_some(v);
+            app.render_vab_view();
+        });
+        sel.add_event_listener_with_callback("change", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
     wire(
         "vab-trip",
         Box::new(|a| {
@@ -4709,6 +4727,27 @@ impl App {
         el.class_list().add_1("open").ok();
     }
 
+    /// Fill the delta-v tool's body list: Kerbin at sea level, then every body with a surface, in vacuum.
+    fn render_twr_bodies(&self) {
+        let Some(el) = self.doc.get_element_by_id("vab-twr-body") else {
+            return;
+        };
+        let Some(scene) = &self.scene else { return };
+        let mut html = String::from("<option value=\"\">Kerbin, sea level</option>");
+        for b in scene.bodies.iter().filter(|b| !b.is_star) {
+            let sel = if self.vab_twr_body.as_deref() == Some(b.id.as_str()) {
+                " selected"
+            } else {
+                ""
+            };
+            html.push_str(&format!(
+                "<option value=\"{id}\"{sel}>{id}, vacuum</option>",
+                id = esc(&b.id)
+            ));
+        }
+        el.set_inner_html(&html);
+    }
+
     /// Fill the trip planner's from/to lists (surfaces and orbits of every body).
     fn render_trip_options(&self) {
         let Some(map) = &self.trip else { return };
@@ -5017,6 +5056,7 @@ impl App {
     /// Draw the craft side view, the selection, and refresh the side panel.
     fn render_vab(&mut self) {
         self.vab_report_due = Some(now_ms() + 300.0);
+        self.render_twr_bodies();
         self.render_vab_view();
     }
 
@@ -5132,15 +5172,27 @@ impl App {
                         )
                     })
                     .collect();
-                // The server's readout for this stage: delta-v, sea-level TWR at its start, burn time.
+                // The server's readout for this stage: delta-v, TWR at its start (Kerbin's sea level, or in
+                // vacuum on the surface the delta-v tool names), burn time.
+                let surface_g = self.vab_twr_body.as_ref().and_then(|b| {
+                    let s = self.scene.as_ref()?;
+                    let body = s.bodies.iter().find(|x| &x.id == b)?;
+                    Some(body.mu / (body.radius_m * body.radius_m))
+                });
                 let stats = self
                     .vab_stages_readout
                     .iter()
                     .find(|r| r.stage_id as usize == n)
                     .map(|r| {
+                        let twr = match surface_g {
+                            Some(g) if g > 0.0 && r.start_mass_t > 0.0 => {
+                                r.thrust_kn / (r.start_mass_t * g)
+                            }
+                            _ => r.twr_asl,
+                        };
                         format!(
-                            "<span class=\"sv\" title=\"vacuum delta-v, thrust-to-weight at Kerbin's sea level, burn time\">\u{394}v {:.0} m/s \u{b7} TWR {:.2} \u{b7} {:.0} s</span>",
-                            r.delta_v_vacuum_mps.max(0.0), r.twr_asl.max(0.0), r.burn_time_s.max(0.0)
+                            "<span class=\"sv\" title=\"vacuum delta-v, thrust-to-weight at the delta-v tool's body, burn time\">\u{394}v {:.0} m/s \u{b7} TWR {:.2} \u{b7} {:.0} s</span>",
+                            r.delta_v_vacuum_mps.max(0.0), twr.max(0.0), r.burn_time_s.max(0.0)
                         )
                     })
                     .unwrap_or_default();
