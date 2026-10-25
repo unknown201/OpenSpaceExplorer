@@ -431,8 +431,12 @@ fn through_air(radiance: vec3<f32>, p: vec3<f32>) -> vec3<f32> {
         return radiance;
     }
     let s = sky_to_point(frame.cam_km.xyz, p, frame.sun.xyz);
+    // From high up the original's ground stays vivid under its haze (its aerial perspective is a camera volume
+    // of limited reach): the in-scatter over the ground is eased to 60 % as the camera climbs from 10 to 40 km.
+    let alt_km = length(frame.cam_km.xyz) - bottom_r();
+    let haze = 1.0 - 0.4 * smoothstep(10.0, 40.0, alt_km);
     // an eclipse dims the sunlit air too
-    return radiance * s.transmittance + s.radiance * eclipse(frame.cam_km.xyz, frame.sun.xyz);
+    return radiance * s.transmittance + s.radiance * haze * eclipse(frame.cam_km.xyz, frame.sun.xyz);
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -1215,8 +1219,15 @@ fn fs_ocean(in: VOut) -> @location(0) vec4<f32> {
     let shin = mix(64.0, 2048.0, smooth_ * smooth_);
     let spec = pow(max(dot(n, h), 0.0), shin) * (shin + 8.0) / (8.0 * PI);
     radiance = radiance + light.sun * spec * fres * 4.0;
+    // From high up the sea becomes the scaled albedo, as the original's _ScaleAlbedoStart/EndHeight (66 to
+    // 160 km): Kerbin's deep navy oceans from orbit, the glint fading with them.
+    let to_scaled = smoothstep(66000.0, 160000.0, dist);
+    let suv = equi_uv(up);
+    let scaled = sample_equi(albedo_tex, suv, equi_grad(suv)).rgb;
+    radiance = mix(radiance, scaled / PI * (light.sun + light.sky), to_scaled);
     radiance = through_air(radiance, p_km);
-    let alpha = mix(0.55, 1.0, smoothstep(0.0, max(surface.foam.w, 0.5), depth)) * smoothstep(-2.0, 0.5, depth);
+    let alpha = mix(mix(0.55, 1.0, smoothstep(0.0, max(surface.foam.w, 0.5), depth)), 1.0, to_scaled)
+        * smoothstep(-2.0, 0.5, depth);
     return vec4<f32>(tonemap(radiance), alpha);
 }
 
@@ -1264,7 +1275,14 @@ fn fs_clouds(in: VOut) -> @location(0) vec4<f32> {
     let drift = vec3<f32>(frame.cam_km.w * 2.0, 0.0, frame.cam_km.w * 1.3);
     let q = in.tile + drift;
     let n = vnoise(q / 512.0, 8) * 0.55 + vnoise(q / 256.0, 16) * 0.3 + vnoise(q / 128.0, 32) * 0.15;
-    let cover = clamp(mix(base, smoothstep(0.35, 0.75, base + (n - 0.5) * 0.9), near), 0.0, 1.0);
+    // Farther out (and from orbit) the baked coverage alone is a soft blanket: sharpen it into cumulus fields
+    // with gaps, as the original's volume clouds read from orbit, broken by noise of 1.5 and 0.75 km on the
+    // sphere (not tiled), faded out once a pixel covers that much.
+    let pf = up * (frame.solar.w / 1500.0);
+    let nf = vnoise(pf, 1048576) * 0.6 + vnoise(pf * 2.0, 1048576) * 0.4;
+    let kf = 1.0 - smoothstep(300.0, 1200.0, dist * 0.0012);
+    let far_cover = smoothstep(0.24, 0.74, base + (nf - 0.5) * 0.7 * kf);
+    let cover = clamp(mix(far_cover, smoothstep(0.35, 0.75, base + (n - 0.5) * 0.9), near), 0.0, 1.0);
     let p_km = frame.cam_km.xyz + in.rel * 0.001;
     let sun = frame.sun.xyz;
     // Thin layer lit from either side: wrap the sun term so the edge of the day side is soft; seen from below
@@ -1276,7 +1294,8 @@ fn fs_clouds(in: VOut) -> @location(0) vec4<f32> {
     let self_shadow = mix(1.0, mix(1.0, 0.45, cover), below);
     let lit = light.sun / max(dot(up, sun), 0.05) * wrap * 0.8 * self_shadow + light.sky * 2.0;
     // the layer's colour map (Eve's purple and pink swirls), white elsewhere
-    let cloud_albedo = min(c.rgb * surface.cloud_col.x, vec3<f32>(1.0)) * 0.9;
+    // thin edges are greyer than the thick, sunlit tops, which gives the sharpened fields some body
+    let cloud_albedo = min(c.rgb * surface.cloud_col.x, vec3<f32>(1.0)) * 0.9 * (0.72 + 0.28 * cover);
     var radiance = cloud_albedo / PI * lit;
     radiance = through_air(radiance, p_km);
     // Fade the shell when the camera is close to its altitude (it would read as a flat sheet); with the volume

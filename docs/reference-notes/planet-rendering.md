@@ -90,6 +90,19 @@ around 80 km.
 - Far: `bakedScaledTexture` cubemaps (`kerbin_scaledclouds_01`, 2048² RGBA half; coverage in alpha) drawn on a
   shell, with a bottom texture for the view from below and a normal cubemap.
 
+## 5b. Against the original's screenshots (2026-10-25)
+
+Compared with the official KSP2 screenshots (OpenCritic media page: Kerbin from low orbit, the KSC from orbit,
+Laythe's beach, Eve and Duna from orbit). Changes made from it:
+- Far clouds: the baked coverage read as a soft blanket from orbit; it is now sharpened into cumulus fields with
+  gaps (smoothstep 0.24 to 0.74, broken by 1.5 and 0.75 km noise on the sphere), thin edges greyer.
+- The sea blends into the scaled albedo between 66 and 160 km (`_ScaleAlbedoStart/EndHeight`), so Kerbin's
+  oceans are the original's deep navy from orbit instead of a pale sky-tinted cyan.
+- Aerial perspective over the ground is eased to 60 % as the camera climbs from 10 to 40 km: the original's land
+  stays vivid green from orbit (its aerial perspective is a camera volume of limited reach). The sky is unchanged.
+Still different: the original's land is a little more saturated from orbit, and its shallow seas around islands
+are a bright turquoise ring.
+
 ## 6. Sunlight
 
 Directional light from the star; colour at a point = solar irradiance x atmosphere transmittance towards the sun;
