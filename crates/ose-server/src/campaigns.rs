@@ -40,6 +40,8 @@ impl WorldSetup {
             });
         }
         u.set_kerbal_part(self.kerbal_experiments.clone());
+        // craft at the KSC stand on the campus the client draws
+        u.set_site("Kerbin", crate::ksc_site());
         u.set_science(self.science.clone(), self.regions.clone());
         u
     }

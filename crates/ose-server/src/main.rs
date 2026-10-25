@@ -48,8 +48,6 @@ const EMBEDDED_TECH_TREE: &str = include_str!("../../../assets/own/tech-tree.jso
 const EMBEDDED_MISSIONS: &str = include_str!("../../../assets/own/missions.json");
 const EMBEDDED_TERRAIN_INDEX: &str = include_str!("../../../assets/own/terrain/index.json");
 const EMBEDDED_TERRAIN: &[u8] = include_bytes!("../../../assets/own/terrain/terrain.bin");
-/// The launch pad craft are placed on (from the Kerbin body data's LocalSimObjectsData).
-const LAUNCH_PAD_SITE: &str = "kerbin_KSCLaunchpad_spawn_01";
 /// Saved craft ids start here; stock crafts use 1..=999.
 const FIRST_SAVED_CRAFT_ID: u64 = 1000;
 pub const SHARED_SESSION_ID: &str = "shared";
@@ -995,60 +993,95 @@ fn terrain_index() -> ose_data::terrain::TerrainIndex {
     serde_json::from_str(EMBEDDED_TERRAIN_INDEX).expect("embedded terrain index")
 }
 
-/// The runway's take-off end and heading, placed as the client places the KSC campus (launch pad 1 on its
-/// site, turned so the pads line up): `Runway_spawn_01` of the KSC scene.
-const RUNWAY: (f64, f64, f64) = (-0.845_279, -75.312_016, 94.65);
+/// The KSC campus as the client draws it (`flight3d::ksc_pose` over `assets/web/ksc/scene.json`): the
+/// scene's launch pad 1 spawn on the pad site, turned so the pads line up best, rigid and unscaled. Its
+/// spawn points and flat areas (scene coordinates, glTF axes) follow.
+const KSC_ANCHOR: (f64, f64, f64) = (-0.6836, -74.8198, 115.2);
+const KSC_YAW_DEG: f64 = -4.655_211_045_966;
+const KSC_SPAWNS: [(&str, &str, bool, [f64; 3]); 5] = [
+    (
+        "LaunchPad_1",
+        "Launchpad 1",
+        false,
+        [10.088_055, -117.589_006, -2_104.040_008],
+    ),
+    (
+        "LaunchPad_2",
+        "Launchpad 2",
+        false,
+        [-1_626.699_936, -117.589_006, -4_039.800_016],
+    ),
+    (
+        "LaunchPad_3",
+        "Launchpad 3",
+        false,
+        [-3_286.311_939, -117.489_000, -2_101.540_008],
+    ),
+    (
+        "LaunchPad_4",
+        "Launchpad 4",
+        false,
+        [-4_989.200_180, -117.589_006, -4_039.749_967],
+    ),
+    (
+        "Runway_1",
+        "Runway",
+        true,
+        [-4_989.899_017, -125.833_997, 2.0],
+    ),
+];
+/// Facility footprints (min x, max x, min z, max z) and the surface a craft stands on there: the pads'
+/// decks, the runways, then the campus ground.
+const KSC_AREAS: [(f64, f64, f64, f64, f64); 7] = [
+    (-87.1, 107.2, -2_158.7, -1_948.1, -117.589),
+    (-1_723.8, -1_529.6, -4_094.4, -3_883.8, -117.589),
+    (-3_383.5, -3_189.2, -2_156.2, -1_945.6, -117.489),
+    (-5_086.3, -4_892.1, -4_094.4, -3_883.8, -117.589),
+    (-5_375.2, 2_048.0, -511.2, 58.1, -125.834),
+    (-5_375.2, 2_048.0, 184.3, 300.6, -125.834),
+    (-5_375.2, 2_048.0, -4_094.4, 300.6, -126.5),
+];
 
-/// The KSC launch sites: pads 1..4 from the home world's terrain sites, and the runway.
-fn launch_sites(home: &str) -> Vec<ose_net::LaunchSite> {
-    let index = terrain_index();
-    let body = index.bodies.iter().find(|b| b.id == home);
-    let mut out: Vec<ose_net::LaunchSite> = (1..=4)
-        .filter_map(|k| {
-            let site = ose_data::terrain::TerrainMap::site(
-                body?,
-                &format!("kerbin_KSCLaunchpad_spawn_0{k}"),
-            )?;
-            Some(ose_net::LaunchSite {
-                id: format!("LaunchPad_{k}"),
-                name: format!("Launchpad {k}"),
-                runway: false,
-                lat_deg: site.lat_deg,
-                lon_deg: site.lon_deg,
-                heading_deg: 90.0,
+/// The campus as a built site on Kerbin.
+fn ksc_site() -> ose_sim::campus::Site {
+    let s = KSC_SPAWNS[0].3;
+    ose_sim::campus::Site {
+        lat_deg: KSC_ANCHOR.0,
+        lon_deg: KSC_ANCHOR.1,
+        alt_m: KSC_ANCHOR.2,
+        yaw_rad: KSC_YAW_DEG.to_radians(),
+        anchor: ose_math::DVec3::new(s[0], s[1], s[2]),
+        areas: KSC_AREAS
+            .iter()
+            .map(|&(min_x, max_x, min_z, max_z, y)| ose_sim::campus::Area {
+                min_x,
+                max_x,
+                min_z,
+                max_z,
+                y,
             })
-        })
-        .collect();
-    if out.is_empty() {
-        out.push(ose_net::LaunchSite {
-            id: "LaunchPad_1".into(),
-            name: "Launchpad 1".into(),
-            runway: false,
-            lat_deg: KSC_LAT_DEG,
-            lon_deg: KSC_LON_DEG,
-            heading_deg: 90.0,
-        });
+            .collect(),
     }
-    out.push(ose_net::LaunchSite {
-        id: "Runway_1".into(),
-        name: "Runway".into(),
-        runway: true,
-        lat_deg: RUNWAY.0,
-        lon_deg: RUNWAY.1,
-        heading_deg: RUNWAY.2,
-    });
-    out
 }
 
-/// Latitude and longitude of the launch pad site on the home world.
-fn launch_pad(home: &str) -> (f64, f64) {
-    terrain_index()
-        .bodies
+/// The KSC launch sites: the campus scene's spawn points, placed as the client draws the campus.
+fn launch_sites(_home: &str) -> Vec<ose_net::LaunchSite> {
+    let site = ksc_site();
+    KSC_SPAWNS
         .iter()
-        .find(|b| b.id == home)
-        .and_then(|b| ose_data::terrain::TerrainMap::site(b, LAUNCH_PAD_SITE))
-        .map(|s| (s.lat_deg, s.lon_deg))
-        .unwrap_or((KSC_LAT_DEG, KSC_LON_DEG))
+        .map(|&(id, name, runway, p)| {
+            let (lat, lon, _) = site.place(600_000.0, ose_math::DVec3::new(p[0], p[1], p[2]));
+            ose_net::LaunchSite {
+                id: id.into(),
+                name: name.into(),
+                runway,
+                lat_deg: lat,
+                lon_deg: lon,
+                // planes face down the runway (the scene's +X)
+                heading_deg: site.x_heading_deg(),
+            }
+        })
+        .collect()
 }
 
 /// Reduce a craft to a flight spec: per-stage thrust/Isp/propellant from the staging report, sea-level Isp
@@ -1267,11 +1300,7 @@ fn launch_on_pad_now(
     let Some(at) = at.cloned() else {
         return fail(format!("no launch site {}", site.unwrap_or("")));
     };
-    let (pad_lat, pad_lon) = if at.id == "LaunchPad_1" {
-        launch_pad(&home.id)
-    } else {
-        (at.lat_deg, at.lon_deg)
-    };
+    let (pad_lat, pad_lon) = (at.lat_deg, at.lon_deg);
     let e = u.spawn_powered_on_surface(&name, body, spec, pad_lat, pad_lon);
     u.set_craft(e, craft.clone());
     u.set_structure(

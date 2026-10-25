@@ -579,13 +579,26 @@ pub fn ground_radius(
     r: DVec3,
     ut: f64,
 ) -> f64 {
-    match terrain {
-        Some(t) => {
-            let (lat, lon) = lat_lon(body, r, ut);
-            body.radius_m + t.ground_m(lat, lon)
-        }
-        None => body.radius_m,
+    let (lat, lon) = lat_lon(body, r, ut);
+    body.radius_m + ground_height_at(body, terrain, lat, lon)
+}
+
+/// Height of the ground above the nominal radius at a body-fixed latitude/longitude: a built site's
+/// surface where there is one (the KSC campus), else the terrain (or sea).
+pub fn ground_height_at(
+    body: &Body,
+    terrain: Option<&ose_data::terrain::TerrainMap>,
+    lat_deg: f64,
+    lon_deg: f64,
+) -> f64 {
+    if let Some(r) = body
+        .site
+        .as_ref()
+        .and_then(|s| s.ground_radius(body.radius_m, crate::campus::direction(lat_deg, lon_deg)))
+    {
+        return r - body.radius_m;
     }
+    terrain.map(|t| t.ground_m(lat_deg, lon_deg)).unwrap_or(0.0)
 }
 
 /// Atmosphere model attached to bodies that have one.
@@ -1345,6 +1358,7 @@ mod tests {
             rotation_period_s: 21_549.425,
             initial_rotation_deg: 0.0,
             is_star: false,
+            site: None,
         }
     }
 

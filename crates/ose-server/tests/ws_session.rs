@@ -1601,6 +1601,67 @@ async fn a_plane_launched_on_the_runway_lies_level_facing_down_it() {
     assert!(reason.contains("no launch site"), "{reason}");
 }
 
+#[tokio::test]
+async fn every_launch_site_stands_the_craft_on_the_drawn_campus() {
+    let (_server, addr) = spawn_server_with(&["--db", ":memory:", "--save", "none"], None).await;
+    let mut ws = connect_ws(&addr).await;
+    hello(&mut ws, None, "pilot").await;
+    send_msg(
+        &mut ws,
+        &ClientMessage::CreateSession {
+            name: "Sites".into(),
+            mode: ose_net::SessionMode::Sandbox,
+            difficulty: Vec::new(),
+        },
+    )
+    .await;
+    wait_for(&mut ws, |m| {
+        matches!(m, ServerMessage::CampaignState { .. }).then_some(())
+    })
+    .await;
+    // where the client draws each spawn (ksc_pose over the KSC scene), metres above sea level: a flat
+    // campus on a round world stands higher off the sphere further from pad 1
+    for (site, deck) in [
+        ("LaunchPad_1", 115.2),
+        ("LaunchPad_2", 120.55),
+        ("LaunchPad_3", 124.35),
+        ("LaunchPad_4", 139.15),
+        ("Runway_1", 131.48),
+    ] {
+        send_msg(
+            &mut ws,
+            &ClientMessage::LaunchAt {
+                craft: starter_craft(),
+                site: Some(site.into()),
+            },
+        )
+        .await;
+        let vessel = wait_for(&mut ws, |m| match m {
+            ServerMessage::CraftLaunched { vessel, reason, .. } => {
+                assert!(reason.is_none(), "{reason:?}");
+                vessel
+            }
+            _ => None,
+        })
+        .await;
+        let f = wait_for(&mut ws, |m| match m {
+            ServerMessage::Vessels { vessels, .. } => vessels
+                .iter()
+                .find(|v| v.id == vessel)
+                .and_then(|v| v.flight.clone()),
+            _ => None,
+        })
+        .await;
+        // the starter rocket's centre of mass stands a couple of metres over the deck
+        let above = f.altitude_m - deck;
+        assert!(
+            (0.5..6.0).contains(&above),
+            "{site}: centre of mass {above:.2} m over the deck ({} m)",
+            f.altitude_m
+        );
+    }
+}
+
 async fn http_get_json(addr: &str, path: &str) -> serde_json::Value {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();

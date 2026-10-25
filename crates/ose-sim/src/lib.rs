@@ -7,6 +7,7 @@
 
 pub mod aero;
 pub mod bodies;
+pub mod campus;
 pub mod commnet;
 pub mod crew;
 pub mod docking;
@@ -233,11 +234,8 @@ impl Universe {
     ) -> Entity {
         let ut = self.ut();
         let b = self.world.get::<bodies::Body>(body).expect("body").clone();
-        let ground = self
-            .world
-            .get::<flight::Terrain>(body)
-            .map(|t| t.0.ground_m(lat_deg, lon_deg))
-            .unwrap_or(0.0);
+        let terrain = self.world.get::<flight::Terrain>(body).map(|t| t.0.clone());
+        let ground = flight::ground_height_at(&b, terrain.as_deref(), lat_deg, lon_deg);
         let (r, v) = flight::surface_state_at(&b, lat_deg, lon_deg, ground, ut);
         let orbit = Orbit::from_state_vectors(b.mu, r, v, ut);
         let powered = flight::Powered::new(spec, r, v, true);
@@ -334,10 +332,25 @@ impl Universe {
 
     /// Ground height (terrain or sea) above the nominal radius at a body-fixed latitude/longitude.
     pub fn ground_height(&self, body: Entity, lat_deg: f64, lon_deg: f64) -> f64 {
-        self.world
-            .get::<flight::Terrain>(body)
-            .map(|t| t.0.ground_m(lat_deg, lon_deg))
-            .unwrap_or(0.0)
+        let Some(b) = self.world.get::<bodies::Body>(body) else {
+            return 0.0;
+        };
+        let terrain = self.world.get::<flight::Terrain>(body).map(|t| t.0.clone());
+        flight::ground_height_at(b, terrain.as_deref(), lat_deg, lon_deg)
+    }
+
+    /// Put a built site (the KSC campus) on a body: craft over it stand on its surfaces.
+    pub fn set_site(&mut self, id: &str, site: campus::Site) -> bool {
+        let Some(e) = self.body_entity(id) else {
+            return false;
+        };
+        match self.world.get_mut::<bodies::Body>(e) {
+            Some(mut b) => {
+                b.site = Some(std::sync::Arc::new(site));
+                true
+            }
+            None => false,
+        }
     }
 
     /// Attach a saved powered-flight state to an existing vessel (restore).

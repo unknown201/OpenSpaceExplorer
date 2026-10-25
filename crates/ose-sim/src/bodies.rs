@@ -21,6 +21,8 @@ pub struct Body {
     pub rotation_period_s: f64,
     pub initial_rotation_deg: f64,
     pub is_star: bool,
+    /// A built site on the surface (the KSC campus) that craft stand on instead of the terrain.
+    pub site: Option<std::sync::Arc<crate::campus::Site>>,
 }
 
 /// Which body an orbit is around.
@@ -52,6 +54,7 @@ pub fn spawn_bodies(world: &mut World, defs: &[BodyDef]) -> BodyIndex {
                 rotation_period_s: d.rotation_period_s,
                 initial_rotation_deg: d.initial_rotation_deg,
                 is_star: d.is_star,
+                site: None,
             })
             .id();
         if let Some(a) = &d.atmosphere {
