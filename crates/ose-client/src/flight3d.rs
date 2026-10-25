@@ -176,6 +176,18 @@ fn hinge_turn(axis: char, rad: f32) -> glam::Quat {
     }
 }
 
+/// A rover wheel's spin bone and rolling radius (m); the axle is the bone's X.
+fn wheel_spinner(part_id: &str) -> Option<(&'static str, f64)> {
+    Some(match part_id {
+        "wheel_0v_rover" => ("bone_wheel", 0.157),
+        "wheel_1v_rover" => ("bone_wheel_spinner", 0.474),
+        "wheel_2v_rover_ruggedized" => ("bone_wheel_spinner", 0.55),
+        "wheel_2v_truck" => ("bone_wheel_spinner", 0.55),
+        "wheel_3v_rover" => ("bone_wheel", 0.8),
+        _ => return None,
+    })
+}
+
 /// The original's most common Kerbal skin colour (looks SKINCOLOR BADA55).
 pub const DEFAULT_SKIN: [u8; 3] = [0xBA, 0xDA, 0x55];
 
@@ -441,6 +453,9 @@ pub struct FlightView {
     walk_last: Option<(DVec3, f64)>,
     walk_speed: f64,
     walk_phase: f64,
+    /// How far the flown vessel's wheels have rolled (m, signed by the drive direction) and when last updated.
+    wheel_travel: f64,
+    wheel_last_ms: f64,
     deployments: HashMap<(u64, usize), crate::animation::Deployment>,
     /// Craft axes and local horizon of the last frame, for the navball.
     pub nav: Option<crate::navball::NavFrame>,
@@ -520,6 +535,8 @@ impl FlightView {
             walk_last: None,
             walk_speed: 0.0,
             walk_phase: 0.0,
+            wheel_travel: 0.0,
+            wheel_last_ms: 0.0,
             deployments: HashMap::new(),
             nav: None,
             agl_m: None,
@@ -970,6 +987,14 @@ impl FlightView {
             }
         };
         let readout = inp.vessel.flight.as_ref();
+        if let Some(f) = readout {
+            let dt = ((inp.now_ms - self.wheel_last_ms) / 1000.0).clamp(0.0, 0.25);
+            if f.situation == ose_net::FlightSituation::Landed {
+                let sign = if f.drive_speed_mps < 0.0 { -1.0 } else { 1.0 };
+                self.wheel_travel += sign * f.surface_speed_mps * dt;
+            }
+        }
+        self.wheel_last_ms = inp.now_ms;
         // The vessel.
         if let Some(craft) = inp.craft {
             let fired = inp
@@ -1309,6 +1334,20 @@ impl FlightView {
                 let pid = craft.parts[i].part_id.as_str();
                 let mut it = DrawItem::lit(name, wpos - cam, vessel_rot * lq, 1.0, sun);
                 it.animation = animation;
+                // Wheels roll with the ground speed.
+                if let Some((bone, radius)) = wheel_spinner(pid) {
+                    let turn = (self.wheel_travel / radius) as f32;
+                    it.node_turns
+                        .push((bone, glam::Quat::from_rotation_x(turn), glam::Vec3::ZERO));
+                }
+                // Lights on (the Lights action group): lamps and cabin windows show their emissive maps.
+                if readout.is_some_and(|f| f.lights)
+                    && (pid.starts_with("light_")
+                        || pid.starts_with("pod_")
+                        || pid.starts_with("cockpit_"))
+                {
+                    it.glow = 1.0;
+                }
                 if let Some(d) =
                     readout.and_then(|f| f.control_surfaces.iter().find(|c| c.0 as usize == i))
                 {
