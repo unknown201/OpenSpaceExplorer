@@ -1051,11 +1051,12 @@ impl FlightView {
                 }
                 let mut animation = None;
                 if let Some(model) = gpu.model(&name) {
-                    if let Some((clip, _)) = model
-                        .rig
-                        .deployment
-                        .filter(|_| model.rig.default_sample().is_some())
-                    {
+                    if let Some((clip, _)) = model.rig.deployment.filter(|_| {
+                        // Legs, wheels and panels have a commanded rest pose; antennas unfold from
+                        // the readout's extended state (protocol 41).
+                        model.rig.default_sample().is_some()
+                            || readout.is_some_and(|f| f.antennas.iter().any(|a| a.0 as usize == i))
+                    }) {
                         let deployed = inp
                             .vessel
                             .flight
@@ -1064,6 +1065,7 @@ impl FlightView {
                                 f.gear
                                     .iter()
                                     .chain(&f.panels)
+                                    .chain(&f.antennas)
                                     .find(|(p, _)| *p as usize == i)
                                     .map(|(_, out)| *out)
                             })
