@@ -46,7 +46,171 @@ pub struct Flag {
     pub planted_by: String,
 }
 
+/// A resource transfer running on a vessel (the Resource Manager): from these tanks into those.
+#[derive(Component, Clone, Debug, PartialEq)]
+pub struct Transfer {
+    pub resource: String,
+    pub from: Vec<usize>,
+    pub to: Vec<usize>,
+    /// Units a second it moves.
+    pub rate: f64,
+}
+
+/// How long a transfer takes to move what it can, s (our own figure: the original's flow requests
+/// deliver over a few seconds), and the least it moves a second.
+pub const TRANSFER_TIME_S: f64 = 10.0;
+pub const TRANSFER_MIN_RATE: f64 = 0.01;
+
 impl Universe {
+    /// Move a Kerbal aboard to another crewed part of the same vessel (part index into the craft).
+    pub fn move_crew(
+        &mut self,
+        e: Entity,
+        kerbal: &str,
+        to_part: usize,
+    ) -> Result<(), &'static str> {
+        let st = self
+            .world
+            .get::<structure::Structure>(e)
+            .ok_or("vessel has no parts")?;
+        if to_part >= st.rigid.len() || !st.rigid.present[to_part] {
+            return Err("no such part");
+        }
+        let seats = st.crew[to_part] as usize;
+        if seats == 0 {
+            return Err("that part carries no crew");
+        }
+        let mut crew = self.crew(e);
+        let Some(k) = crew.iter().position(|(_, n)| n == kerbal) else {
+            return Err("no such Kerbal aboard");
+        };
+        if crew[k].0 == to_part {
+            return Ok(());
+        }
+        if crew.iter().filter(|(p, _)| *p == to_part).count() >= seats {
+            return Err("that part is full");
+        }
+        crew[k].0 = to_part;
+        self.set_crew(e, crew);
+        Ok(())
+    }
+
+    /// Start moving `resource` from the `from` tanks into the `to` tanks (part indices); empty lists stop
+    /// the vessel's transfer. Like the original's Resource Manager it fills the receiving tanks with what
+    /// the giving ones hold, then stops.
+    pub fn transfer_resource(
+        &mut self,
+        e: Entity,
+        resource: &str,
+        from: &[usize],
+        to: &[usize],
+    ) -> Result<(), &'static str> {
+        if from.is_empty() && to.is_empty() {
+            self.world.entity_mut(e).remove::<Transfer>();
+            return Ok(());
+        }
+        if from.iter().any(|p| to.contains(p)) {
+            return Err("a tank cannot give and take at once");
+        }
+        let st = self
+            .world
+            .get::<structure::Structure>(e)
+            .ok_or("vessel has no parts")?;
+        let ri = st
+            .net
+            .resources
+            .iter()
+            .position(|r| r.eq_ignore_ascii_case(resource))
+            .ok_or("the vessel holds none of that")?;
+        let tanks = |parts: &[usize]| {
+            st.net
+                .tanks
+                .iter()
+                .filter(|t| t.resource == ri && parts.contains(&t.part) && st.rigid.present[t.part])
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        let (out, into) = (tanks(from), tanks(to));
+        if out.is_empty() || into.is_empty() {
+            return Err("pick tanks of that resource on both sides");
+        }
+        let held: f64 = out.iter().map(|t| t.stored).sum();
+        let room: f64 = into.iter().map(|t| (t.capacity - t.stored).max(0.0)).sum();
+        let amount = held.min(room);
+        if amount <= 1e-9 {
+            return Err("nothing to move");
+        }
+        let resource = st.net.resources[ri].clone();
+        self.world.entity_mut(e).insert(Transfer {
+            resource,
+            from: from.to_vec(),
+            to: to.to_vec(),
+            rate: (amount / TRANSFER_TIME_S).max(TRANSFER_MIN_RATE),
+        });
+        Ok(())
+    }
+
+    /// The vessel's running transfer, if any.
+    pub fn transfer(&self, e: Entity) -> Option<&Transfer> {
+        self.world.get::<Transfer>(e)
+    }
+
+    /// Run the vessels' transfers for `dt` seconds: the giving tanks drain in proportion to what they hold,
+    /// the receiving ones fill in proportion to their room; a transfer ends when one side runs out.
+    pub(crate) fn run_transfers(&mut self, dt: f64) {
+        let running: Vec<(Entity, Transfer)> = self
+            .world
+            .query::<(Entity, &Transfer)>()
+            .iter(&self.world)
+            .map(|(e, t)| (e, t.clone()))
+            .collect();
+        for (e, t) in running {
+            let done = match self.world.get_mut::<structure::Structure>(e) {
+                None => true,
+                Some(mut st) => {
+                    let st = &mut *st;
+                    let Some(ri) = st.net.resources.iter().position(|r| r == &t.resource) else {
+                        self.world.entity_mut(e).remove::<Transfer>();
+                        continue;
+                    };
+                    let present = st.rigid.present.clone();
+                    let pick = |t2: &crate::resources::Tank, parts: &[usize]| {
+                        t2.resource == ri && parts.contains(&t2.part) && present[t2.part]
+                    };
+                    let held: f64 = st
+                        .net
+                        .tanks
+                        .iter()
+                        .filter(|x| pick(x, &t.from))
+                        .map(|x| x.stored)
+                        .sum();
+                    let room: f64 = st
+                        .net
+                        .tanks
+                        .iter()
+                        .filter(|x| pick(x, &t.to))
+                        .map(|x| (x.capacity - x.stored).max(0.0))
+                        .sum();
+                    let step = (t.rate * dt).min(held).min(room);
+                    if step > 0.0 {
+                        for x in st.net.tanks.iter_mut() {
+                            if pick(x, &t.from) && held > 0.0 {
+                                x.stored = (x.stored - step * x.stored / held).max(0.0);
+                            } else if pick(x, &t.to) && room > 0.0 {
+                                let free = (x.capacity - x.stored).max(0.0);
+                                x.stored = (x.stored + step * free / room).min(x.capacity);
+                            }
+                        }
+                    }
+                    held - step <= 1e-9 || room - step <= 1e-9
+                }
+            };
+            if done {
+                self.world.entity_mut(e).remove::<Transfer>();
+            }
+        }
+    }
+
     pub fn crew(&self, e: Entity) -> Vec<(usize, String)> {
         self.world
             .get::<Crew>(e)

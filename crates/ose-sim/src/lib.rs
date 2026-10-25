@@ -1520,6 +1520,7 @@ impl Universe {
             self.update_commnet();
         }
         self.charge_on_rails(ticks.max(1) as f64 * dt, ut);
+        self.run_transfers(ticks.max(1) as f64 * dt);
         // crashed debris is gone
         let wrecks: Vec<Entity> = {
             let mut q = self
@@ -1976,6 +1977,73 @@ mod tests {
         }
         let r = u.stage(v);
         assert!(r.fired && r.debris.is_some());
+    }
+
+    #[test]
+    fn crew_move_between_seats_and_fuel_moves_between_tanks() {
+        let (mut u, body, spec, st) = k1_on_real_kerbin();
+        let v = u.spawn_powered_on_surface("K1", body, spec, 0.0, 0.0);
+        u.set_structure(v, st);
+        u.set_crew(v, vec![(0, "Jebediah Kerman".into())]);
+        u.step();
+        assert_eq!(
+            u.move_crew(v, "Jebediah Kerman", 7),
+            Err("that part carries no crew")
+        );
+        assert_eq!(
+            u.move_crew(v, "Bob Kerman", 0),
+            Err("no such Kerbal aboard")
+        );
+        assert_eq!(u.move_crew(v, "Jebediah Kerman", 0), Ok(()));
+        // half empty the upper tank, then fill it from the lower one
+        let (upper, lower) = (7, 19);
+        let methalox = {
+            let mut st = u.world.get_mut::<structure::Structure>(v).unwrap();
+            let ri = st
+                .net
+                .tanks
+                .iter()
+                .find(|t| t.part == upper)
+                .map(|t| t.resource)
+                .unwrap();
+            for t in st.net.tanks.iter_mut().filter(|t| t.part == upper) {
+                t.stored *= 0.5;
+            }
+            st.net.resources[ri].clone()
+        };
+        let stored = |u: &Universe, part: usize| -> (f64, f64) {
+            let st = u.structure(v).unwrap();
+            st.net
+                .tanks
+                .iter()
+                .filter(|t| t.part == part && st.net.resources[t.resource] == methalox)
+                .fold((0.0, 0.0), |a, t| (a.0 + t.stored, a.1 + t.capacity))
+        };
+        let (before_lower, _) = stored(&u, lower);
+        let (before_upper, cap_upper) = stored(&u, upper);
+        assert!(u
+            .transfer_resource(v, &methalox, &[lower], &[upper])
+            .is_ok());
+        assert!(u.transfer(v).is_some());
+        for _ in 0..(12 * TICKS_PER_SECOND) {
+            u.step();
+        }
+        assert!(u.transfer(v).is_none(), "done by itself");
+        let (after_upper, _) = stored(&u, upper);
+        let (after_lower, _) = stored(&u, lower);
+        assert!(
+            (after_upper - cap_upper).abs() < 1e-6,
+            "full: {after_upper} / {cap_upper}, lower {before_lower} -> {after_lower}, upper was {before_upper}"
+        );
+        assert!(
+            ((before_lower - after_lower) - (after_upper - before_upper)).abs() < 1e-6,
+            "nothing lost"
+        );
+        assert!(
+            u.transfer_resource(v, &methalox, &[lower], &[upper])
+                .is_err(),
+            "nothing to move"
+        );
     }
 
     #[test]

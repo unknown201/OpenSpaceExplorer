@@ -1018,6 +1018,31 @@ fn flight_readout(
         comm_hops: u.comm_link(e).hops,
         comm_range_m: u.comm_link(e).range_m,
         control_part: u.control_part(e).map(|i| i as u16),
+        part_resources: u
+            .structure(e)
+            .map(|st| {
+                st.net
+                    .tanks
+                    .iter()
+                    .filter(|t| st.rigid.present[t.part] && t.capacity > 0.0)
+                    .map(|t| {
+                        (
+                            t.part as u16,
+                            st.net.resources[t.resource].clone(),
+                            t.stored,
+                            t.capacity,
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        transfer: u.transfer(e).map(|t| {
+            (
+                t.resource.clone(),
+                t.from.iter().map(|&i| i as u16).collect(),
+                t.to.iter().map(|&i| i as u16).collect(),
+            )
+        }),
         panels_deployed: u.panels_deployed(e),
         antennas: u
             .structure(e)
@@ -3272,6 +3297,28 @@ async fn session(mut socket: WebSocket, s: AppState) {
                                 Some(e) => {
                                     let spec_for = |c: &ose_data::craft::Craft| flight_spec_for(&s, c);
                                     let r = s.universe.lock().expect("sim lock").control_from(e, part as usize, &s.parts, &s.resources, &spec_for);
+                                    ServerMessage::FlightAck { vessel, accepted: r.is_ok(), reason: r.err().map(String::from) }
+                                }
+                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
+                            };
+                            if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::MoveCrew { vessel, kerbal, to_part }) => {
+                            let reply = match owned_vessel(&s, vessel, player_id) {
+                                Some(e) => {
+                                    let r = s.universe.lock().expect("sim lock").move_crew(e, &kerbal, to_part as usize);
+                                    ServerMessage::FlightAck { vessel, accepted: r.is_ok(), reason: r.err().map(String::from) }
+                                }
+                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
+                            };
+                            if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::TransferResource { vessel, resource, from, to }) => {
+                            let reply = match owned_vessel(&s, vessel, player_id) {
+                                Some(e) => {
+                                    let from: Vec<usize> = from.iter().map(|&i| i as usize).collect();
+                                    let to: Vec<usize> = to.iter().map(|&i| i as usize).collect();
+                                    let r = s.universe.lock().expect("sim lock").transfer_resource(e, &resource, &from, &to);
                                     ServerMessage::FlightAck { vessel, accepted: r.is_ok(), reason: r.err().map(String::from) }
                                 }
                                 None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },

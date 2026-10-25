@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 42;
+pub const PROTOCOL_VERSION: u16 = 43;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -191,6 +191,22 @@ pub enum ClientMessage {
     ControlFrom {
         vessel: u64,
         part: u16,
+    },
+    /// Move a Kerbal aboard to another crewed part (craft part index, as `FlightReadout::crew` counts);
+    /// refused when that part is full or carries no crew. Answers `FlightAck`.
+    MoveCrew {
+        vessel: u64,
+        kerbal: String,
+        to_part: u16,
+    },
+    /// Start moving `resource` from the `from` tanks into the `to` tanks (craft part indices, as
+    /// `FlightReadout::part_resources` counts): the receiving tanks fill with what the giving ones hold,
+    /// then it stops by itself. Empty lists stop it. Answers `FlightAck`; `FlightReadout::transfer` shows it.
+    TransferResource {
+        vessel: u64,
+        resource: String,
+        from: Vec<u16>,
+        to: Vec<u16>,
     },
     /// Rename one of the player's vessels (1..=64 characters, trimmed); answers `FlightAck`.
     RenameVessel {
@@ -610,6 +626,10 @@ pub struct FlightReadout {
     pub antennas: Vec<(u16, bool)>,
     /// The part the vessel is controlled from, when not its root (`ControlFrom`).
     pub control_part: Option<u16>,
+    /// Each attached tank: (part, resource, stored, capacity), units.
+    pub part_resources: Vec<(u16, String, f64, f64)>,
+    /// The resource transfer running: (resource, from parts, to parts).
+    pub transfer: Option<(String, Vec<u16>, Vec<u16>)>,
     /// Fell over on landing and lies on its side.
     pub tipped: bool,
     /// Parachutes: (craft part index, state, how far open 0..1).
