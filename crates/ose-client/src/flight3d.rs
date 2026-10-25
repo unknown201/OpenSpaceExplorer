@@ -103,6 +103,15 @@ impl Spin {
     }
 }
 
+/// Another vessel near the flown one: where it is (star space), what stands in for it, its craft as the
+/// server has it now, and its facing and roll reference (inertial) while it flies.
+pub struct NearVessel<'a> {
+    pub pos: DVec3,
+    pub stand: Stand,
+    pub craft: Option<&'a Craft>,
+    pub facing: Option<(DVec3, DVec3)>,
+}
+
 /// A model to draw: renderer name, file and scale.
 type ModelRef = (&'static str, &'static str, f64);
 
@@ -489,8 +498,8 @@ pub struct FlightInput<'a> {
     pub vessel: &'a VesselState,
     /// Vessel and body star-space positions, body star-space velocity, at `ut`.
     pub vessel_pos: DVec3,
-    /// Other vessels' star-space positions and what they are, drawn when they are near.
-    pub nearby_vessels: &'a [(DVec3, Stand)],
+    /// Other vessels near this one, drawn in full when their craft is known.
+    pub nearby_vessels: &'a [NearVessel<'a>],
     /// What the flown vessel is when it has no craft: a Kerbal on EVA, a flag, or an unknown craft.
     pub stand: Stand,
     pub vessel_vel: DVec3,
@@ -1488,12 +1497,71 @@ impl FlightView {
             }
         }
         // Other vessels within a few kilometres, as the original loads crafts around the active one.
-        for (o, stand) in inp.nearby_vessels {
-            let p = to_model(*o - inp.body_pos, spin, inp.ut);
+        for near in inp.nearby_vessels {
+            let (o, stand) = (&near.pos, &near.stand);
+            let r_o = *o - inp.body_pos;
+            let p = to_model(r_o, spin, inp.ut);
             if (p - pos).length() > 5_000.0 {
                 continue;
             }
             let rot = DQuat::from_rotation_arc(DVec3::Y, p.normalize_or_zero());
+            if let Some(craft) = near.craft.filter(|c| !c.parts.is_empty()) {
+                // The craft as it stands: its nose along its facing (upright on the ground otherwise), its
+                // lowest point on the vessel's position, as the flown craft is placed.
+                let up_o = p.normalize_or_zero();
+                let (dir, roll) = match near.facing {
+                    Some((f, r)) if f.length() > 0.5 => (
+                        dir_to_model(r_o, f, spin, inp.ut),
+                        if r.length() > 0.5 {
+                            dir_to_model(r_o, r, spin, inp.ut)
+                        } else {
+                            DVec3::ZERO
+                        },
+                    ),
+                    _ => (up_o, DVec3::ZERO),
+                };
+                let z = (roll - dir * roll.dot(dir)).normalize_or_zero();
+                let crot = if z.length() > 0.5 {
+                    quat_from_basis(dir.cross(z), dir, z)
+                } else {
+                    DQuat::from_rotation_arc(DVec3::Y, dir)
+                };
+                let poses = crate::thumb::poses(craft);
+                let mut placed = Vec::new();
+                let mut min_y = f64::INFINITY;
+                for (p_part, (pp, q)) in craft.parts.iter().zip(poses.iter()) {
+                    let name = format!("part:{}", p_part.part_id);
+                    gpu.request_model(&name, &format!("assets/parts/{}.glb", p_part.part_id));
+                    let lp = DVec3::new(-pp.x, pp.y, pp.z);
+                    let lq = DQuat::from_xyzw(q.x, -q.y, -q.z, q.w).normalize();
+                    if let Some(m) = gpu.model(&name) {
+                        let (lo, hi) = (m.bounds_min.as_dvec3(), m.bounds_max.as_dvec3());
+                        for c in 0..8 {
+                            let corner = DVec3::new(
+                                if c & 1 == 0 { lo.x } else { hi.x },
+                                if c & 2 == 0 { lo.y } else { hi.y },
+                                if c & 4 == 0 { lo.z } else { hi.z },
+                            );
+                            min_y = min_y.min((lp + lq * corner).y);
+                        }
+                    }
+                    placed.push((name, lp, lq));
+                }
+                let lift = if min_y.is_finite() { -min_y } else { 0.0 };
+                for (name, lp, lq) in placed {
+                    if !gpu.has_model(&name) {
+                        continue;
+                    }
+                    let at = p + crot * (lp + DVec3::Y * lift);
+                    let mut it = DrawItem::lit(name, at - cam, crot * lq, 1.0, sun);
+                    it.ambient = part_ambient;
+                    it.fill_dir = up;
+                    it.fill = 0.25;
+                    it.sun = sun_share;
+                    items.push(it);
+                }
+                continue;
+            }
             for (name, _, scale) in stand.models(gpu) {
                 let mut it = DrawItem::lit(name.to_string(), p - cam, rot, scale, sun);
                 it.ambient = part_ambient;

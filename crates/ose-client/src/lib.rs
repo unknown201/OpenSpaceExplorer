@@ -310,6 +310,10 @@ struct App {
     lesson_run: std::cell::RefCell<Option<LessonRun>>,
     lp_crew: Vec<String>,
     lp_crew_for: Option<u64>,
+    /// Other vessels' crafts from the server (protocol 39), with the craft_rev they were asked at, and
+    /// the rev last asked for each.
+    vessel_crafts: std::collections::HashMap<u64, (u32, Option<ose_data::craft::Craft>)>,
+    vessel_craft_asked: std::collections::HashMap<u64, u32>,
     /// The loading screen: the place it last saw (None on the main menu) and when it went up.
     loading_place: Option<&'static str>,
     loading_since: Option<f64>,
@@ -670,6 +674,8 @@ pub fn start() -> Result<(), JsValue> {
         launch_sites: Vec::new(),
         launch_site: stored("ose.launchSite"),
         loading_place: None,
+        vessel_crafts: Default::default(),
+        vessel_craft_asked: Default::default(),
         roster: Vec::new(),
         tc_selected: None,
         tc_lessons: false,
@@ -4616,6 +4622,10 @@ impl App {
                     self.render_vab_view();
                 }
                 self.render_trip();
+            }
+            ServerMessage::VesselCraft { vessel, craft } => {
+                let rev = self.vessel_craft_asked.get(&vessel).copied().unwrap_or(0);
+                self.vessel_crafts.insert(vessel, (rev, craft));
             }
             ServerMessage::KerbalRoster { kerbals } => {
                 self.roster = kerbals;
@@ -9632,12 +9642,42 @@ impl App {
             .unwrap_or(0.0);
         let catalog = &self.catalog;
         let is_dec = |pid: &str| catalog.get(pid).map(|p| p.is_decoupler).unwrap_or(false);
-        let nearby_vessels: Vec<(glam::DVec3, flight3d::Stand)> = scene
+        // Vessels within a few kilometres are drawn in full: their crafts come from the server
+        // (GetVesselCraft, asked again whenever craft_rev changes).
+        let mut ask: Vec<(u64, u32)> = Vec::new();
+        let nearby_vessels: Vec<flight3d::NearVessel> = scene
             .vessels
             .iter()
             .filter(|o| o.id != id && o.reference_body == v.reference_body)
-            .map(|o| (g(scene.vessel_position(o, ut)), stand_of(&self.roster, o)))
+            .map(|o| {
+                let pos = scene.vessel_position(o, ut);
+                let near = (pos - vp).length() < 5_000.0;
+                let known = self.vessel_crafts.get(&o.id);
+                if near
+                    && !matches!(stand_of(&self.roster, o), flight3d::Stand::Kerbal { .. })
+                    && known.map(|k| k.0) != Some(o.craft_rev)
+                    && self.vessel_craft_asked.get(&o.id) != Some(&o.craft_rev)
+                {
+                    ask.push((o.id, o.craft_rev));
+                }
+                flight3d::NearVessel {
+                    pos: g(pos),
+                    stand: stand_of(&self.roster, o),
+                    craft: known.and_then(|k| k.1.as_ref()),
+                    facing: o
+                        .flight
+                        .as_ref()
+                        .filter(|f| g(f.facing).length() > 0.5)
+                        .map(|f| (g(f.facing), g(f.roll_ref))),
+                }
+            })
             .collect();
+        if let Some(ws) = &self.ws {
+            for (vessel, rev) in &ask {
+                send(ws, &ClientMessage::GetVesselCraft { vessel: *vessel });
+                self.vessel_craft_asked.insert(*vessel, *rev);
+            }
+        }
         let inp = flight3d::FlightInput {
             vessel: v,
             attitude: scene.vessel_attitude(id, now_ms()),
