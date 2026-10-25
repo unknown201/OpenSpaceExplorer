@@ -29,6 +29,9 @@ struct Frame {
     eclipse: vec4<f32>,
     // FFT waves: x 1 when live, y/z long and short patch sizes (m), w: chop
     waves: vec4<f32>,
+    // the star skybox's x and z axes in the model frame (y is the body's north)
+    star_x: vec4<f32>,
+    star_z: vec4<f32>,
     // the camera's model-frame position modulo TILE_PERIOD (m)
     cam_tile: vec4<f32>,
 };
@@ -87,6 +90,9 @@ struct Surface {
 @group(0) @binding(2) var scattering_tex: texture_3d<f32>;
 @group(0) @binding(3) var irradiance_tex: texture_2d<f32>;
 @group(0) @binding(4) var lut_samp: sampler;
+// The sky pass's own group 1 (quads use binding 0 of group 1 for their chunk): the original's starfield skybox.
+@group(1) @binding(1) var star_tex: texture_2d<f32>;
+@group(1) @binding(2) var star_samp: sampler;
 // FFT waves (ocean_fft.rs): layer 0 x/z displacement, height, Jacobian of the long patch; layer 1 its slopes
 // and the short patch's slopes.
 @group(0) @binding(5) var waves_tex: texture_2d_array<f32>;
@@ -453,6 +459,12 @@ fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
         radiance = s.radiance * eclipse(frame.cam_km.xyz, sun);
         t = s.transmittance;
     }
+    // The stars behind the air: the skybox at about its own brightness after the tone map in space, seen through
+    // the atmosphere's transmittance and washed out by a daytime sky.
+    let sv = vec3<f32>(dot(view, frame.star_x.xyz), view.y, dot(view, frame.star_z.xyz));
+    let suv = vec2<f32>(atan2(sv.z, sv.x) / (2.0 * PI) + 0.5, 0.5 - asin(clamp(sv.y, -1.0, 1.0)) / PI);
+    let star = textureSampleLevel(star_tex, star_samp, suv, 0.0).rgb;
+    radiance = radiance + t * star / max(frame.sun.w, 0.1);
     // The sun's disc.
     let a = frame.mie.w;
     if dot(view, sun) > cos(a) {
@@ -1520,7 +1532,9 @@ fn fs_vclouds(in: SkyOut) -> VcOut {
         let p_km = p * 0.001;
         let l = sun_and_sky(p_km, normalize(p), sun);
         let sun_in = l.sun / max(dot(normalize(p), sun), 0.05) * select(1.0, 0.0, dot(normalize(p), sun) < -0.1);
-        let lum = sun_in * light_t * phase * 4.0 + l.sky * 1.2 + frame.solar.xyz * 0.01;
+        // (a little light from the rest of the lit cloud, by day only)
+        let daylit = smoothstep(-0.1, 0.1, dot(normalize(p), sun));
+        let lum = sun_in * light_t * phase * 4.0 + l.sky * 1.2 + frame.solar.xyz * 0.01 * daylit;
         let ext = d * sigma * dt;
         let step_t = exp(-ext);
         let tint = min(textureSampleLevel(clouds_tex, equi_samp, equi_uv(normalize(p)), 2.0).rgb

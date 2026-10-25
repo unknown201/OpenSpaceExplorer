@@ -178,3 +178,10 @@ its baked cloud coverage averages 76 % (Kerbin 11 %). Cloud colour: where the co
 `cloudColorMap` cubemap (Eve's purple and pink swirls, Duna's dust) goes into clouds.png RGB and tints the shell and the
 volume by `colorMapIntensity` (Eve 3, Duna 2); other bodies' clouds are white.
 
+Stars: the original's skybox (`skybox_spacescape_starfield`, 4096 x 2048 equirect, the menu scene's) draws behind the
+sky in the planet sky pass, on that pass's own bind group (the quad pipelines are at the texture limit). Its frame
+turns with the sun's direction in the body's equatorial plane, so stars cross the sky with the day; it is divided by
+the exposure so the tone map shows it at about its own brightness in space, and the daytime sky hides it.
+Ambient colours (CelestialBodyLighting) are decoded from sRGB like every Unity colour in a linear-space project;
+raw, Kerbin's night ambient lit the ground about nine times too bright. The volume clouds' fill light is day-only.
+

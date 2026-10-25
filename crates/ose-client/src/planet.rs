@@ -58,6 +58,9 @@ struct FrameU {
     eclipse: [f32; 4],
     /// FFT waves: x 1 when the wave texture is live, y/z the long and short patch sizes (m), w: chop
     waves: [f32; 4],
+    /// The star skybox's frame in the model frame: x axis (towards the sun, in the equatorial plane), z axis.
+    star_x: [f32; 4],
+    star_z: [f32; 4],
     /// the camera's model-frame position modulo TILE_PERIOD (m), for screen-space effects on the tiled maps
     cam_tile: [f32; 4],
 }
@@ -213,6 +216,10 @@ pub struct PlanetRenderer {
     cloud_pipeline: wgpu::RenderPipeline,
     vcloud_pipeline: wgpu::RenderPipeline,
     shaft_pipeline: wgpu::RenderPipeline,
+    /// The original's skybox (`skybox_spacescape_starfield`), drawn behind the sky: its bitmap until uploaded.
+    star_layout: wgpu::BindGroupLayout,
+    star_bind: wgpu::BindGroup,
+    stars: Rc<RefCell<Option<web_sys::ImageBitmap>>>,
     /// the camera is under the sea this frame: light shafts, and the sea surface without its skirts (they hang
     /// below it and would read as walls from underneath)
     under_water: bool,
@@ -331,9 +338,14 @@ impl PlanetRenderer {
                 tex_entry(13, D::D2),
             ],
         });
+        // The sky's own group 1: the star skybox (bindings 1 and 2, clear of the quads' chunk uniform at 0).
+        let star_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("planet stars"),
+            entries: &[tex_entry(1, D::D2), samp_entry(2)],
+        });
         let sky_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("planet sky"),
-            bind_group_layouts: &[Some(&frame_layout)],
+            bind_group_layouts: &[Some(&frame_layout), Some(&star_layout)],
             immediate_size: 0,
         });
         let quad_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -768,7 +780,34 @@ impl PlanetRenderer {
             dimension: Some(D::D2Array),
             ..Default::default()
         });
+        let star_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("planet stars (none yet)"),
+            layout: &star_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&defaults[&Tex::Foam]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&equi_sampler),
+                },
+            ],
+        });
+        let stars: Rc<RefCell<Option<web_sys::ImageBitmap>>> = Rc::new(RefCell::new(None));
+        {
+            let slot = stars.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                match fetch_bitmap("assets/textures/skybox_spacescape_starfield.png").await {
+                    Ok(b) => *slot.borrow_mut() = Some(b),
+                    Err(e) => log(&format!("planet stars: {e}")),
+                }
+            });
+        }
         PlanetRenderer {
+            star_layout,
+            star_bind,
+            stars,
             shaft_pipeline,
             under_water: false,
             waves_tex,
@@ -1467,6 +1506,7 @@ impl PlanetRenderer {
     /// is not loaded yet (the caller then draws its own stand-in).
     pub fn prepare(&mut self, gpu: &Renderer, view: &PlanetView) -> bool {
         self.frame_no += 1;
+        self.upload_stars();
         self.active = false;
         self.draws.clear();
         self.cloud_draws.clear();
@@ -1673,6 +1713,17 @@ impl PlanetRenderer {
             );
         let cam_km = view.cam / 1000.0;
         let sun = view.sun.normalize_or_zero();
+        // The stars stay put in space while the body turns: their x axis follows the sun's direction in the
+        // equatorial plane (the sun moves slowly against the stars over a year, the body turns daily).
+        let star_x = {
+            let e = DVec3::new(sun.x, 0.0, sun.z);
+            if e.length() > 1e-6 {
+                e.normalize()
+            } else {
+                DVec3::X
+            }
+        };
+        let star_z = star_x.cross(DVec3::Y);
         let fu = FrameU {
             view_proj: vp.as_mat4().to_cols_array_2d(),
             inv_view_proj: inv.as_mat4().to_cols_array_2d(),
@@ -1741,6 +1792,8 @@ impl PlanetRenderer {
                 0.0,
                 0.0,
             ],
+            star_x: [star_x.x as f32, star_x.y as f32, star_x.z as f32, 0.0],
+            star_z: [star_z.x as f32, star_z.y as f32, star_z.z as f32, 0.0],
             cam_tile: [
                 view.cam.x.rem_euclid(TILE_PERIOD) as f32,
                 view.cam.y.rem_euclid(TILE_PERIOD) as f32,
@@ -1770,6 +1823,32 @@ impl PlanetRenderer {
         self.under_water = has_ocean && fu.water[0] < 0.0;
         self.active = true;
         true
+    }
+
+    /// The skybox bitmap, once fetched: an sRGB texture with mips, bound for the sky pass.
+    fn upload_stars(&mut self) {
+        let Some(bitmap) = self.stars.borrow_mut().take() else {
+            return;
+        };
+        let t = self.texture_for(bitmap.width(), bitmap.height(), 1, true);
+        self.copy_bitmap(&bitmap, &t, 0);
+        self.mip
+            .generate(&self.device, &self.queue, &t, t.mip_level_count(), 1);
+        let view = t.create_view(&wgpu::TextureViewDescriptor::default());
+        self.star_bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("planet stars"),
+            layout: &self.star_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.equi_sampler),
+                },
+            ],
+        });
     }
 
     /// Ground under a model-frame direction (m above the radius; the sea surface on ocean worlds), from the same
@@ -2377,8 +2456,19 @@ fn surface_uniform(b: &Body, debug: f32) -> SurfaceU {
     let l = info.and_then(|v| v.get("lighting"));
     let airless = info.map(|v| v.get("atmosphere").is_none()).unwrap_or(true);
     let a3 = |k: &str, d: [f32; 4]| v4(l.and_then(|l| l.get(k)), d);
-    let day = a3("ambient_day", [0.05, 0.05, 0.06, 0.0]);
-    let night = a3("ambient_night", [0.02, 0.02, 0.025, 0.0]);
+    // Unity serialises colours in gamma space; the original renders in linear space, so they are decoded.
+    let lin = |c: [f32; 4]| {
+        let f = |v: f32| {
+            if v <= 0.04045 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        [f(c[0]), f(c[1]), f(c[2]), c[3]]
+    };
+    let day = lin(a3("ambient_day", [0.25, 0.25, 0.27, 0.0]));
+    let night = lin(a3("ambient_night", [0.15, 0.15, 0.17, 0.0]));
     u.ambient_day = [day[0], day[1], day[2], flag(airless)];
     u.ambient_night = [night[0], night[1], night[2], 0.0];
     u.flags = [
@@ -2403,6 +2493,7 @@ impl ExtraPass for PlanetRenderer {
         };
         pass.set_pipeline(&self.sky_pipeline);
         pass.set_bind_group(0, fb, &[]);
+        pass.set_bind_group(1, &self.star_bind, &[]);
         pass.draw(0..3, 0..1);
         pass.set_pipeline(&self.terrain_pipeline);
         pass.set_bind_group(0, fb, &[]);
