@@ -113,8 +113,8 @@ Open, on Laythe's surface against the beach screenshot: the original's sky is a 
 sand a light tan, ours grey-blue and darker brown. Not the Mie haze (a third of it changes little) nor the
 exposure alone (1.6x brighter is still grey). The only post-processing profiles in the install's scenes are the
 menus' (PPv2 `ColorGrading` with the Neutral tonemapper, temperature 5, bloom, vignette); the flight camera's
-grading is set up elsewhere, perhaps in code. A Neutral (filmic) tonemapper instead of our `1 - exp(-x)` would
-add contrast and saturation everywhere and is the next thing to try, checked across all bodies.
+grading is set up elsewhere, perhaps in code. The Neutral tonemapper itself is not the difference: its curve is
+within 0.03 of our `1 - exp(-x)` from 0 to 3, so the gap is in the radiance (exposure or the LUT's colour).
 
 ## 6. Sunlight
 
