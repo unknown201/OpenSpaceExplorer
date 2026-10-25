@@ -516,6 +516,8 @@
     /* First-time hints: PAIGE in a character box at the bottom right (CharacterDialogWindow). */
     #ftue { position: fixed; z-index: 55; right: 16px; bottom: calc(130 * var(--u, 1px)); width: min(460px, 92vw); display: none; gap: 12px; align-items: flex-start; background: #0b1020f5; border: 1px solid #ffa114aa; border-radius: 8px; padding: 12px 14px; color: #e6ecf7; font: 14px var(--ui-font, system-ui); box-shadow: 0 10px 30px #000c; }
     #ftue.open { display: flex; }
+    /* In flight it sits above the crew portraits and action bar. */
+    body:has(#flight-hud.open) #ftue { bottom: calc(250 * var(--u)); }
     #ftue img { width: 96px; height: 96px; object-fit: contain; flex: none; }
     #ftue .ftue-body { flex: 1; } #ftue .ftue-name { font-size: 11px; letter-spacing: 0.12em; color: #ffa114; font-weight: 700; }
     #ftue .ftue-text { margin: 4px 0 10px; line-height: 1.45; }
