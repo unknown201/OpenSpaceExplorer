@@ -3153,6 +3153,37 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                     }
                 }
                 "Home" => app.reset_camera(),
+                // The original's audio keys: Numpad 1 mutes the game, Numpad 2 the music.
+                "Numpad1" => {
+                    let muted = !app.audio.muted;
+                    app.audio.set_muted(muted);
+                    store("ose.sound", if muted { "off" } else { "on" });
+                    app.show_sound_toggle();
+                    hud::push(
+                        &app.doc,
+                        if muted { "Sound off" } else { "Sound on" },
+                        "passive",
+                    );
+                }
+                "Numpad2" => {
+                    let sfx = app.audio.sfx_scale;
+                    let on = app.audio.music_scale > 0.0;
+                    let level = if on {
+                        0.0
+                    } else {
+                        stored("ose.vol.music")
+                            .and_then(|v| v.parse::<f64>().ok())
+                            .filter(|v| *v > 0.0)
+                            .unwrap_or(100.0)
+                            / 100.0
+                    };
+                    app.audio.set_volumes(level, sfx);
+                    hud::push(
+                        &app.doc,
+                        if on { "Music off" } else { "Music on" },
+                        "passive",
+                    );
+                }
                 "F5" | "F9" if app.in_session => {
                     ev.prevent_default();
                     app.save_action(if code == "F5" {
