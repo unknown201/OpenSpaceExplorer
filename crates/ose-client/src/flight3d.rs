@@ -148,8 +148,20 @@ fn control_hinge(part_id: &str) -> Option<(&'static str, char)> {
         | "controlsurface_2v_procedural_heavy"
         | "controlsurface_3v_procedural_spaceplane" => ("bone_wing_pivot_ach", 'Y'),
         "gridfin_1v_radial" | "gridfin_2v_radial" => ("bone_rotator", 'Y'),
-        // The wings' and stabilizers' ailerons hinge on bones of the original's procedural rig, which the
-        // exports do not carry; their flaps stay put for now.
+        _ => return None,
+    })
+}
+
+/// A wing's or stabilizer's aileron: the original hinges it on a procedural-rig bone the export lacks, so the
+/// flap mesh turns about its leading edge (its least-x edge, mid-span; the span runs along the mesh's Y).
+fn flap_hinge(part_id: &str) -> Option<(&'static str, [f32; 3])> {
+    Some(match part_id {
+        "wing_1v_procedural_light" => ("mesh_wing_flap", [0.990, 0.000, 0.029]),
+        "wing_2v_procedural_heavy" => ("mesh_wing_flap", [0.545, -2.887, 0.021]),
+        "wing_3v_procedural_spaceplane" => ("mesh_wing_flap", [3.361, -7.382, 0.099]),
+        "stabilizer_1v_procedural_light" => ("mesh_stabilizer_elevon", [0.524, -1.500, -0.001]),
+        "stabilizer_2v_procedural_heavy" => ("mesh_flap", [0.630, -2.134, 0.001]),
+        "stabilizer_3v_procedural_spaceplane" => ("mesh_stabilizer_flap", [0.573, -2.564, 0.000]),
         _ => return None,
     })
 }
@@ -1297,9 +1309,18 @@ impl FlightView {
                 let pid = craft.parts[i].part_id.as_str();
                 let mut it = DrawItem::lit(name, wpos - cam, vessel_rot * lq, 1.0, sun);
                 it.animation = animation;
-                if let (Some((node, axis)), Some(f)) = (control_hinge(pid), readout) {
-                    if let Some(d) = f.control_surfaces.iter().find(|c| c.0 as usize == i) {
-                        it.node_turns.push((node, hinge_turn(axis, d.1)));
+                if let Some(d) =
+                    readout.and_then(|f| f.control_surfaces.iter().find(|c| c.0 as usize == i))
+                {
+                    if let Some((node, axis)) = control_hinge(pid) {
+                        it.node_turns
+                            .push((node, hinge_turn(axis, d.1), glam::Vec3::ZERO));
+                    } else if let Some((mesh, pivot)) = flap_hinge(pid) {
+                        it.node_turns.push((
+                            mesh,
+                            glam::Quat::from_rotation_y(d.1),
+                            glam::Vec3::from_array(pivot),
+                        ));
                     }
                 }
                 it.ambient = part_ambient;

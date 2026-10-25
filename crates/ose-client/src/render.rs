@@ -251,8 +251,9 @@ struct CpuModel {
 
 pub struct DrawItem {
     pub animation: Option<crate::animation::ClipSample>,
-    /// Extra turns on named nodes after the animation pose (a control surface on its hinge bone).
-    pub node_turns: Vec<(&'static str, glam::Quat)>,
+    /// Extra turns on named nodes after the animation pose, about a point in the node's own frame (a control
+    /// surface on its hinge bone, a wing's flap about its leading edge).
+    pub node_turns: Vec<(&'static str, glam::Quat, glam::Vec3)>,
     pub model: String,
     /// Position relative to the camera, kilometres.
     pub rel_pos_km: DVec3,
@@ -1311,9 +1312,13 @@ impl Renderer {
             let mut pose = model
                 .rig
                 .pose(item.animation.or_else(|| model.rig.default_sample()));
-            for (node, turn) in &item.node_turns {
+            for (node, turn, pivot) in &item.node_turns {
                 if let Some(i) = model.rig.nodes.iter().position(|n| n.name == *node) {
-                    pose[i].rotation = (pose[i].rotation * *turn).normalize();
+                    // L' = L * T(p) * turn * T(-p), for the node's (uniform) scale s.
+                    let t = &mut pose[i];
+                    let s = t.scale.x;
+                    t.translation += t.rotation * (*pivot - *turn * *pivot) * s;
+                    t.rotation = (t.rotation * *turn).normalize();
                 }
             }
             let world = model.rig.world_matrices(&pose);
