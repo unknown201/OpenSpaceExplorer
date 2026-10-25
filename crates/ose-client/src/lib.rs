@@ -1859,6 +1859,8 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
     }
     wire("fh-transmit", Box::new(|a| a.borrow().flight_science(1)))?;
     wire("fh-recover", Box::new(|a| a.borrow().flight_science(2)))?;
+    // The pause menu's Recover Vessel, as the flight HUD's.
+    wire("to-recover", Box::new(|a| a.borrow().flight_science(2)))?;
     wire("rnd-back", Box::new(|a| a.borrow().open_ksc()))?;
     wire("ksc-mission", Box::new(|a| a.borrow_mut().open_missions()))?;
     wire("ksc-training", Box::new(|a| a.borrow_mut().open_training()))?;
