@@ -144,6 +144,10 @@ struct App {
     /// The held part's turn and its yaw part (W/A/S/D/Q/E while holding, Space resets).
     vab_turn: ose_data::craft::Quat,
     vab_yaw: ose_data::craft::Quat,
+    /// The server's staging readout of the craft in the editor (StageReport, protocol 26), and when to ask
+    /// again after an edit (ms; asked 300 ms after the last change).
+    vab_stages_readout: Vec<ose_net::StageReadout>,
+    vab_report_due: Option<f64>,
     vab_dragged: bool,
     /// The flight view (the vessel in 3D near its body).
     #[cfg(target_arch = "wasm32")]
@@ -433,6 +437,8 @@ pub fn start() -> Result<(), JsValue> {
         vab_pasting: false,
         vab_turn: vab::NO_TURN,
         vab_yaw: vab::NO_TURN,
+        vab_stages_readout: Vec::new(),
+        vab_report_due: None,
         vab_dragged: false,
         #[cfg(target_arch = "wasm32")]
         flight3d: flight3d::FlightView::new(),
@@ -3105,6 +3111,20 @@ impl App {
                 }
             }
             ServerMessage::Pong { .. } => {}
+            ServerMessage::StageReport {
+                stages,
+                delta_v_vacuum_mps,
+            } => {
+                self.vab_stages_readout = stages;
+                set_text(
+                    &self.doc,
+                    "vab-dv",
+                    &format!("\u{394}v {delta_v_vacuum_mps:.0} m/s"),
+                );
+                if self.vab_active() {
+                    self.render_vab_view();
+                }
+            }
             ServerMessage::SaveAck {
                 action,
                 accepted,
@@ -3937,6 +3957,36 @@ impl App {
 
     /// Draw the craft side view, the selection, and refresh the side panel.
     fn render_vab(&mut self) {
+        self.vab_report_due = Some(now_ms() + 300.0);
+        self.render_vab_view();
+    }
+
+    /// Ask the server for the staging readout of the craft being built, once edits settle.
+    fn vab_report_tick(&mut self, now: f64) {
+        let Some(due) = self.vab_report_due else {
+            return;
+        };
+        if now < due {
+            return;
+        }
+        self.vab_report_due = None;
+        if self.editor.is_empty() || !self.editor.craft.is_tree() {
+            self.vab_stages_readout.clear();
+            set_text(&self.doc, "vab-dv", "");
+            return;
+        }
+        if let Some(ws) = &self.ws {
+            send(
+                ws,
+                &ClientMessage::StageReport {
+                    craft: self.editor.craft.clone(),
+                },
+            );
+        }
+    }
+
+    /// Draw the craft and the side panel without asking for a new staging readout.
+    fn render_vab_view(&mut self) {
         set_text(&self.doc, "vab-selected", "");
         let (parts_n, dry) = (
             self.editor.craft.parts.len(),
@@ -3997,8 +4047,20 @@ impl App {
                         )
                     })
                     .collect();
+                // The server's readout for this stage: delta-v, sea-level TWR at its start, burn time.
+                let stats = self
+                    .vab_stages_readout
+                    .iter()
+                    .find(|r| r.stage_id as usize == n)
+                    .map(|r| {
+                        format!(
+                            "<span class=\"sv\" title=\"vacuum delta-v, thrust-to-weight at Kerbin's sea level, burn time\">\u{394}v {:.0} m/s \u{b7} TWR {:.2} \u{b7} {:.0} s</span>",
+                            r.delta_v_vacuum_mps, r.twr_asl, r.burn_time_s
+                        )
+                    })
+                    .unwrap_or_default();
                 html.push_str(&format!(
-                    "<li><span class=\"st\">STAGE {}</span>{}</li>",
+                    "<li><span class=\"st\">STAGE {}</span>{stats}{}</li>",
                     count - n,
                     parts.join("")
                 ));
@@ -5959,6 +6021,9 @@ impl App {
         self.update_flight_instruments();
         self.toasts.watch(&self.doc, "fh-note", "alert");
         self.flight_keys_tick(now);
+        if self.in_session && self.vab_active() {
+            self.vab_report_tick(now);
+        }
         #[cfg(target_arch = "wasm32")]
         if let (Some(p), Some(gpu)) = (self.planet_preview.as_mut(), self.gpu.as_mut()) {
             if let Some(menu) = self.doc.get_element_by_id("menu") {
