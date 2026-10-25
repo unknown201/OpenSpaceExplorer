@@ -252,13 +252,28 @@ class Exporter:
 
     # -- meshes
 
-    def mesh_arrays(self, mesh_obj):
+    def mesh_arrays(self, mesh_obj, bake=None):
+        """Positions, normals, uvs and triangles in glTF space; `bake` (a 4x4 in Unity space) first moves the
+        vertices, for skinned meshes whose bind pose differs from their renderer's transform."""
         from UnityPy.helpers.MeshHelper import MeshHandler
 
         h = MeshHandler(mesh_obj)
         h.process()
-        positions = [to_gltf_pos(v) for v in h.m_Vertices]
-        normals = [to_gltf_pos(n) for n in h.m_Normals] if h.m_Normals else []
+        verts = [tuple(v) for v in h.m_Vertices]
+        norms = [tuple(n) for n in h.m_Normals] if h.m_Normals else []
+        if bake is not None:
+            import numpy as np
+
+            m = np.asarray(bake, float)
+            v = np.c_[np.asarray(verts, float), np.ones(len(verts))] @ m.T
+            verts = [tuple(r[:3]) for r in v]
+            if norms:
+                nm = np.linalg.inv(m[:3, :3]).T
+                n = np.asarray(norms, float) @ nm.T
+                n /= np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-12)
+                norms = [tuple(r) for r in n]
+        positions = [to_gltf_pos(v) for v in verts]
+        normals = [to_gltf_pos(n) for n in norms] if norms else []
         uvs = [(float(u[0]), 1.0 - float(u[1])) for u in h.m_UV0] if h.m_UV0 else []
         tris: list[int] = []
         for sub in h.get_triangles():
@@ -374,10 +389,34 @@ class Exporter:
                     go_name[o.path_id] = o.read().m_Name
                 except Exception:  # noqa: BLE001
                     pass
+        import numpy as np
+
+        def mat44(m) -> np.ndarray:
+            return np.array([[getattr(m, f"e{r}{c}") for c in range(4)] for r in range(4)], float)
+
+        def trs(tf) -> np.ndarray:
+            x, y, z, w = (tf.m_LocalRotation.x, tf.m_LocalRotation.y, tf.m_LocalRotation.z, tf.m_LocalRotation.w)
+            r = np.array([[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+                          [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+                          [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]])
+            m = np.eye(4)
+            m[:3, :3] = r * np.array([tf.m_LocalScale.x, tf.m_LocalScale.y, tf.m_LocalScale.z])
+            m[:3, 3] = (tf.m_LocalPosition.x, tf.m_LocalPosition.y, tf.m_LocalPosition.z)
+            return m
+
+        def world_of(tf_id: int) -> np.ndarray:
+            m = np.eye(4)
+            cur, hops = tf_id, 0
+            while cur in transforms and hops < 64:
+                m = trs(transforms[cur]) @ m
+                cur = transforms[cur].m_Father.path_id if transforms[cur].m_Father else 0
+                hops += 1
+            return m
+
         meshes_by_tf: dict[int, int] = {}
         renderer_material: dict[int, int | None] = {}  # GameObject path id -> material index
         for o in env.objects:
-            if o.type.name != "MeshRenderer":
+            if o.type.name not in ("MeshRenderer", "SkinnedMeshRenderer"):
                 continue
             try:
                 mr = o.read()
@@ -390,8 +429,10 @@ class Exporter:
             else:
                 renderer_material[mr.m_GameObject.path_id] = mat
         mesh_count = 0
+        # Meshes come from MeshFilters and from SkinnedMeshRenderers (wheels, dishes, chutes, legs), the latter
+        # drawn in their bind pose at the renderer's transform.
         for o in env.objects:
-            if o.type.name != "MeshFilter":
+            if o.type.name not in ("MeshFilter", "SkinnedMeshRenderer"):
                 continue
             try:
                 mf = o.read()
@@ -415,7 +456,13 @@ class Exporter:
             tf_id = next((k for k, v in transforms.items() if v.m_GameObject.path_id == go_id), None)
             if tf_id is None:
                 continue
-            positions, normals, uvs, tris = self.mesh_arrays(mesh)
+            bake = None
+            if o.type.name == "SkinnedMeshRenderer" and mf.m_Bones and mesh.m_BindPose:
+                # Rest pose: the first bone's world matrix times its bind pose, relative to the renderer.
+                b0 = mf.m_Bones[0].path_id
+                if b0 in transforms:
+                    bake = np.linalg.inv(world_of(tf_id)) @ world_of(b0) @ mat44(mesh.m_BindPose[0])
+            positions, normals, uvs, tris = self.mesh_arrays(mesh, bake)
             if not positions or not tris:
                 continue
             mat = renderer_material.get(go_id)
@@ -423,6 +470,28 @@ class Exporter:
             mesh_count += 1
         if mesh_count == 0:
             return None
+
+        # The environment also holds the dependency bundles (the source models, shared effects), whose own
+        # MeshFilters are not part of this prefab: keep only meshes under the prefab's root, the root-level
+        # transform named after the part. Without it, effect plumes and source-model copies at their authoring
+        # scale (cm) came along and drew 100 m cargo bays and antenna dishes.
+        roots = [
+            k for k, v in transforms.items()
+            if not (v.m_Father and v.m_Father.path_id in transforms) and go_name.get(v.m_GameObject.path_id) == part_id
+        ]
+        # The EVA Kerbal's prefab holds only its sample container; the body comes from its model bundles.
+        if roots and part_id != "eva_kerbal":
+            under: set[int] = set()
+            stack = list(roots)
+            while stack:
+                cur = stack.pop()
+                if cur in under or cur not in transforms:
+                    continue
+                under.add(cur)
+                stack.extend(c.path_id for c in transforms[cur].m_Children)
+            mine = {k: v for k, v in meshes_by_tf.items() if k in under}
+            if mine:
+                meshes_by_tf = mine
 
         # Only transforms that lead to a mesh are written, so the GLB stays small.
         keep: set[int] = set()
