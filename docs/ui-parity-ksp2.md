@@ -43,7 +43,7 @@ Camera rule that runs through every map: **the right button drags the camera, th
 |---|---|---|---|
 | F1 | W/S/A/D/Q/E rotate continuously while held; CapsLock precision | W/S/A/D turn the target at 25°/s while held, Q/E roll (protocol 25), Caps Lock x0.1 | done |
 | F2 | Shift/Ctrl held ramps the throttle at 100%/s | same | done |
-| F3 | T toggles SAS; SAS mode buttons around the navball (stability, prograde, retrograde, normal, anti-normal, radial in/out, target, anti-target, maneuver) | T holds the current direction; SAS buttons with the original's icons beside the navball, lit for the active mode | done, maneuver mode too (target modes wait for targets) |
+| F3 | T toggles SAS; SAS mode buttons around the navball (stability, prograde, retrograde, normal, anti-normal, radial in/out, target, anti-target, maneuver) | T holds the current direction; SAS buttons with the original's icons beside the navball, lit for the active mode | done, maneuver and target / anti-target modes too |
 | F4 | G gear, B brakes, U lights, R RCS, 1..0 action groups; action bar with state lights (gear, lights, brakes, solar, radiators, science, abort) | G, B (held) and an action bar with state lights for gear, brakes, solar, chutes, science | done, with lights (U), RCS (R), abort and custom groups 1..0 since protocol 25 |
 | F5 | Rovers: W/S wheel throttle, A/D steer, B brakes | same, through `Drive` while landed | done |
 | F6 | Staging stack: one card per stage with part icons and fuel bars, Space fires the next | one card per stage still to fire with part and parachute icons, the next one lit at the bottom, and a fuel bar for the stage burning now | done |
@@ -60,7 +60,7 @@ Camera rule that runs through every map: **the right button drags the camera, th
 |---|---|---|---|
 | M1 | Right-drag rotates, Home resets, M back to flight, `]` `[` cycle focus | right-drag (and left) rotates, Home and F frame, `]` `[` follow the next or previous vessel (yours first) | done |
 | M2 | Click an orbit to add a node; six-handle gizmo dragged in 3D; warp-to and trash on the node | clicking your orbit on the map puts a node there; six handles around the node (prograde, retrograde, normal, anti-normal, radial out/in) add delta-v as you drag them outward (1 m/s per pixel, Shift 0.1); drag the node itself to slide it along the orbit; sliders still fine-tune; no warp-to yet (the server has no warp-to-time) | partly done |
-| M3 | Ap/Pe/SOI markers with tooltips (time and altitude) | Ap and Pe markers with altitude and countdown; encounter, escape and impact markers at patch ends; the periapsis around each body met on the way; no closest-approach or target markers (no targets yet) | partly done |
+| M3 | Ap/Pe/SOI markers with tooltips (time and altitude) | Ap and Pe markers with altitude and countdown; encounter, escape and impact markers at patch ends; the periapsis around each body met on the way; right-click a vessel on the map to target it: closest-approach markers on both orbits, target distance and relative speed in flight, a TARGET speed mode, and SAS target / anti-target (held by refreshing a fixed direction) | done |
 | M4 | Vessel labels drawn once | not a bug: the test pilot had joined twice and owned two probes | closed |
 | M5 | Tracking Station object list, filters, focus/control/recover | rebuilt by "Build 3D world and menu replica" (unpushed) | other thread |
 

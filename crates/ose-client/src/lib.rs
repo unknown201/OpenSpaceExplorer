@@ -242,6 +242,12 @@ struct App {
     /// Flight HUD: speed readout in orbit (true) or surface mode, brakes latched from the action bar.
     speed_orbit: bool,
     brakes_latched: bool,
+    /// The target vessel (right click its label on the map), the target speed mode, and SAS pointing at the
+    /// target (true) or away from it (false), held by resending a fixed direction.
+    target: Option<u64>,
+    speed_target: bool,
+    sas_target: Option<bool>,
+    sas_target_sent_ms: f64,
     toasts: hud::Toasts,
     /// Vessels this client has staged at least once: their first stage is lit, so the next is the one after.
     staged: std::collections::HashSet<u64>,
@@ -517,6 +523,10 @@ pub fn start() -> Result<(), JsValue> {
         drive_sent: (0.0, 0.0, false),
         speed_orbit: false,
         brakes_latched: false,
+        target: None,
+        speed_target: false,
+        sas_target: None,
+        sas_target_sent_ms: 0.0,
         toasts: hud::Toasts::default(),
         staged: Default::default(),
         roll_sent: 0.0,
@@ -1274,7 +1284,18 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         "fh-speed-mode",
         Box::new(|a| {
             let mut app = a.borrow_mut();
-            app.speed_orbit = !app.speed_orbit;
+            // Surface, orbit, then target when one is set, as the original's speed mode button.
+            match (app.speed_orbit, app.speed_target) {
+                (false, false) => app.speed_orbit = true,
+                (true, false) if app.target.is_some() => {
+                    app.speed_orbit = false;
+                    app.speed_target = true;
+                }
+                _ => {
+                    app.speed_orbit = false;
+                    app.speed_target = false;
+                }
+            }
         }),
     )?;
     wire("ksc-button", Box::new(|a| a.borrow().open_ksc()))?;
@@ -3486,6 +3507,9 @@ impl App {
             };
             let mine = v.owner.is_some() && v.owner == self.player_id;
             el.set_class_name(if mine { "vessel mine" } else { "vessel" });
+            if Some(v.id) == self.target {
+                el.class_list().add_1("target").ok();
+            }
             el.set_attribute("data-ose", "vessel").ok();
             el.set_attribute("data-ose-id", &v.id.to_string()).ok();
             el.set_attribute("data-ose-vessel", &v.id.to_string()).ok();
@@ -5365,6 +5389,60 @@ impl App {
         }
     }
 
+    /// The direction from the flown vessel to the target (star frame, unit), if both exist.
+    fn target_dir(&self) -> Option<ose_math::DVec3> {
+        let scene = self.scene.as_ref()?;
+        let ut = self.time.ut_at(now_ms());
+        let me = scene.vessel(self.flying?)?;
+        let t = scene.vessel(self.target?)?;
+        let d = scene.vessel_position(t, ut) - scene.vessel_position(me, ut);
+        (d.length() > 1e-6).then(|| d * (1.0 / d.length()))
+    }
+
+    /// SAS target / anti-target: point along the line to the target, refreshed once a second as both move.
+    fn sas_target_tick(&mut self, now: f64) {
+        let Some(toward) = self.sas_target else {
+            return;
+        };
+        if now - self.sas_target_sent_ms < 1000.0 {
+            return;
+        }
+        let Some(d) = self.target_dir() else {
+            self.sas_target = None;
+            return;
+        };
+        self.sas_target_sent_ms = now;
+        let d = if toward { d } else { d * -1.0 };
+        self.set_attitude(ose_net::AttitudeMode::Fixed(d));
+    }
+
+    /// Right click on a vessel label: make it the target, or clear it when it already is.
+    fn toggle_target(&mut self, id: u64) {
+        if Some(id) == self.flying {
+            return;
+        }
+        let name = self
+            .scene
+            .as_ref()
+            .and_then(|s| s.vessel(id))
+            .map(|v| v.name.clone())
+            .unwrap_or_default();
+        if self.target == Some(id) {
+            self.target = None;
+            self.speed_target = false;
+            self.sas_target = None;
+            hud::push(&self.doc, "Target cleared", "passive");
+        } else {
+            self.target = Some(id);
+            hud::push(&self.doc, &format!("Target: {name}"), "passive");
+        }
+        for (vid, el) in &self.vessel_els {
+            el.class_list()
+                .toggle_with_force("target", Some(*vid) == self.target)
+                .ok();
+        }
+    }
+
     /// Toggle an action group of the flown vessel.
     fn action_group(&self, group: ose_net::ActionGroup) {
         let (Some(vessel), Some(ws)) = (self.flying, &self.ws) else {
@@ -5396,9 +5474,19 @@ impl App {
     fn hud_button(&mut self, id: &str) {
         let Some(vessel) = self.flying else { return };
         if id == "fh-sas-stability" {
+            self.sas_target = None;
             self.sas_hold();
             return;
         }
+        if id == "fh-sas-target" || id == "fh-sas-antitarget" {
+            if self.target.is_some() {
+                self.sas_target = Some(id == "fh-sas-target");
+                self.sas_target_sent_ms = 0.0;
+                self.sas_target_tick(now_ms());
+            }
+            return;
+        }
+        self.sas_target = None;
         if let Some(mode) = hud::sas_mode(id, self.speed_orbit) {
             self.set_attitude(mode);
             return;
@@ -5531,6 +5619,56 @@ impl App {
                 brakes_latched: self.brakes_latched,
             },
         );
+        // Target: distance and closing speed, the TARGET speed mode, and the SAS target buttons.
+        let tgt = self.target.and_then(|t| scene.vessel(t));
+        if self.target.is_some() && tgt.is_none() {
+            // The target is gone (recovered, crashed).
+            set_text(&self.doc, "fh-target", "");
+        }
+        let rel = tgt.map(|t| {
+            let d = scene.vessel_position(t, ut) - scene.vessel_position(v, ut);
+            (
+                t.name.clone(),
+                d.length(),
+                (t.velocity_mps - v.velocity_mps).length(),
+            )
+        });
+        match &rel {
+            Some((name, dist, speed)) => set_text(
+                &self.doc,
+                "fh-target",
+                &format!(
+                    "Target {name} \u{b7} {} \u{b7} {speed:.1} m/s",
+                    hud::fmt_dist(*dist)
+                ),
+            ),
+            None => set_text(&self.doc, "fh-target", ""),
+        }
+        if self.speed_target {
+            match &rel {
+                Some((_, _, speed)) => {
+                    set_text(&self.doc, "fh-speed-mode", "TARGET");
+                    set_text(&self.doc, "fh-speed", &format!("{speed:.1} m/s"));
+                }
+                None => set_text(&self.doc, "fh-speed-mode", "SURFACE"),
+            }
+        }
+        for id in ["fh-sas-target", "fh-sas-antitarget"] {
+            if let Some(b) = self.doc.get_element_by_id(id) {
+                if rel.is_some() {
+                    b.remove_attribute("disabled").ok();
+                } else {
+                    b.set_attribute("disabled", "").ok();
+                }
+                let on = self.sas_target == Some(id == "fh-sas-target");
+                b.class_list().toggle_with_force("on", on).ok();
+            }
+        }
+        if self.sas_target.is_some() {
+            if let Some(b) = self.doc.get_element_by_id("fh-sas-stability") {
+                b.class_list().remove_1("on").ok();
+            }
+        }
     }
 
     /// Home: put the camera of the current screen back where it starts.
@@ -6494,6 +6632,7 @@ impl App {
         self.update_flight_instruments();
         self.toasts.watch(&self.doc, "fh-note", "alert");
         self.flight_keys_tick(now);
+        self.sas_target_tick(now);
         if self.in_session && self.vab_active() {
             self.vab_report_tick(now);
         }
@@ -6840,6 +6979,7 @@ impl App {
     fn frame_3d(&mut self, ut: f64, positions: &[ose_math::DVec3], centre: ose_math::DVec3) {
         use glam::{DQuat, DVec3 as GV};
         let planner = self.my_vessel().map(|(id, _)| id);
+        let target = self.target;
         let Some(scene) = &self.scene else {
             return;
         };
@@ -7048,6 +7188,84 @@ impl App {
                             self.orbit_pick.push((x, y, t));
                         }
                     }
+                }
+            }
+        }
+        // Closest approach to the target over the next orbit (the original's ClosestApproach event), when both
+        // go around the same body: a marker on each orbit with the separation and the time.
+        let approach = (|| {
+            let me = scene.vessel(planner?)?;
+            let t = scene.vessel(target?)?;
+            let (bi, elements, end) = match scene.trajectories.get(&me.id).and_then(|p| p.first()) {
+                Some(p) => (p.body as usize, p.orbit, p.end_ut),
+                None => (me.reference_body as usize, me.orbit, f64::INFINITY),
+            };
+            if t.reference_body as usize != bi {
+                return None;
+            }
+            let body = scene.bodies.get(bi)?;
+            let mine = scene::orbit_from(body.mu, &elements);
+            let theirs = scene::orbit_from(body.mu, &t.orbit);
+            let span = if mine.period.is_finite() {
+                mine.period.min(end - ut)
+            } else {
+                (end - ut).min(6.0 * 3600.0)
+            };
+            if !(span.is_finite() && span > 0.0) {
+                return None;
+            }
+            let mut best = (f64::INFINITY, ut);
+            for k in 0..=720 {
+                let when = ut + span * k as f64 / 720.0;
+                let d = (mine.position_at(when) - theirs.position_at(when)).length();
+                if d < best.0 {
+                    best = (d, when);
+                }
+            }
+            let (d, when) = best;
+            Some((
+                to_km(positions[bi] + mine.position_at(when)),
+                to_km(positions[bi] + theirs.position_at(when)),
+                format!("Closest {} {}", hud::fmt_dist(d), hud::fmt_dt(when - ut)),
+            ))
+        })();
+        for (k, id) in ["map-ca-me", "map-ca-target"].iter().enumerate() {
+            let el = match self.doc.get_element_by_id(id) {
+                Some(e) => e,
+                None => {
+                    let Ok(e) = self.doc.create_element("div") else {
+                        continue;
+                    };
+                    e.set_id(id);
+                    e.set_class_name("apsis target");
+                    e.set_attribute("data-ose", "closest-approach").ok();
+                    self.labels.append_child(&e).ok();
+                    e
+                }
+            };
+            let Some(el) = el.dyn_ref::<HtmlElement>() else {
+                continue;
+            };
+            let style = el.style();
+            let at = approach.as_ref().and_then(|(a, b, text)| {
+                project(if k == 0 { *a } else { *b }).map(|xy| (xy, text))
+            });
+            match at {
+                Some(((x, y), text)) => {
+                    style.set_property("left", &format!("{x:.1}px")).ok();
+                    style.set_property("top", &format!("{y:.1}px")).ok();
+                    style.set_property("visibility", "visible").ok();
+                    let text = if k == 0 {
+                        text.clone()
+                    } else {
+                        "Target here".to_string()
+                    };
+                    if el.text_content().as_deref() != Some(text.as_str()) {
+                        el.set_text_content(Some(&text));
+                    }
+                }
+                None => {
+                    style.set_property("visibility", "hidden").ok();
                 }
             }
         }
@@ -7433,6 +7651,15 @@ fn install_focus_clicks(app: &Shared, target: &Element) -> Result<(), JsValue> {
     });
     target.add_event_listener_with_callback("click", on_click.as_ref().unchecked_ref())?;
     on_click.forget();
+    let a = app.clone();
+    let on_menu = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+        if let Some(id) = App::vessel_click_target(&ev) {
+            ev.prevent_default();
+            a.borrow_mut().toggle_target(id);
+        }
+    });
+    target.add_event_listener_with_callback("contextmenu", on_menu.as_ref().unchecked_ref())?;
+    on_menu.forget();
     Ok(())
 }
 
