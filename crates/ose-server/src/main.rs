@@ -1431,6 +1431,7 @@ fn launch_on_pad_now(
     // loose assemblies stay in the editor
     filled.loose.clear();
     fill_default_resources(s, &mut filled);
+    stage_stageless(&mut filled);
     // a craft built nose-forward (a plane) is turned to point along +Y and lies level
     let level = ose_sim::structure::level_layout(&filled);
     let is_level = level.is_some();
@@ -2550,6 +2551,14 @@ fn find_craft(s: &Shared, id: u64, player_id: u64) -> Option<ose_data::craft::Cr
 
 /// Parts that list no resources get their definition containers at `initial_units` (the editor default of
 /// full tanks); parts that list resources are left as sent.
+/// A craft with nothing staged (a rover, a station module) still flies, as in the original: it gets one
+/// empty stage, the whole craft, with nothing to fire.
+fn stage_stageless(craft: &mut ose_data::craft::Craft) {
+    if craft.stages.iter().all(|s| s.is_empty()) {
+        craft.stages = vec![Vec::new()];
+    }
+}
+
 fn fill_default_resources(s: &Shared, craft: &mut ose_data::craft::Craft) {
     let recipe_of = |id: &str| {
         s.resources
@@ -2662,6 +2671,7 @@ fn launch_craft(
 ) -> ServerMessage {
     let mut filled = craft.clone();
     fill_default_resources(s, &mut filled);
+    stage_stageless(&mut filled);
     let craft = &filled;
     let name = craft.name.clone();
     let parts = craft.parts.len() as u32;

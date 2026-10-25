@@ -1295,6 +1295,25 @@ async fn a_pad_launch_lights_while_a_teammate_is_connected() {
 }
 
 #[tokio::test]
+async fn crafts_with_nothing_staged_launch() {
+    let (_server, addr) = spawn_server().await;
+    let mut ws = connect_ws(&addr).await;
+    hello(&mut ws, None, "driver").await;
+    let crafts: Vec<ose_data::craft::Craft> =
+        serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+    for name in ["Inquisitive Rover", "KSS Hub"] {
+        let craft = crafts.iter().find(|c| c.name == name).unwrap().clone();
+        send_msg(&mut ws, &ClientMessage::LaunchOnPad { craft }).await;
+        let (vessel, reason) = wait_for(&mut ws, |m| match m {
+            ServerMessage::CraftLaunched { vessel, reason, .. } => Some((vessel, reason)),
+            _ => None,
+        })
+        .await;
+        assert!(vessel.is_some(), "{name}: {reason:?}");
+    }
+}
+
+#[tokio::test]
 async fn a_vab_built_rocket_sits_still_on_the_pad_and_lifts_off() {
     let (_server, addr) = spawn_server_with(&["--db", ":memory:", "--save", "none"], None).await;
     let mut ws = connect_ws(&addr).await;
