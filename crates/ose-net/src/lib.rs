@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 39;
+pub const PROTOCOL_VERSION: u16 = 40;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -478,6 +478,11 @@ pub struct CampaignMember {
     pub display_name: String,
     pub joined_tick: Tick,
     pub agency: Option<Agency>,
+    /// In the campaign right now (connected and joined). `CampaignState` is pushed to everyone in it
+    /// whenever someone joins or leaves.
+    pub online: bool,
+    /// The vessel the member last commanded, while it exists.
+    pub flying: Option<u64>,
 }
 
 /// Attitude hold modes for powered flight (mirrors `ose_sim::flight::Attitude`).

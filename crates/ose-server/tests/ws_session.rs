@@ -1114,6 +1114,74 @@ async fn exploration_science_tech_tree_and_recovery() {
 }
 
 #[tokio::test]
+async fn teammates_see_who_is_online_and_what_they_fly() {
+    let (_server, addr) = spawn_server().await;
+    let mut mate = connect_ws(&addr).await;
+    let (mate_id, _) = hello(&mut mate, None, "teammate").await;
+    send_msg(&mut mate, &ClientMessage::JoinCampaign).await;
+    wait_for(&mut mate, |m| {
+        matches!(m, ServerMessage::CampaignState { .. }).then_some(())
+    })
+    .await;
+    let mut ws = connect_ws(&addr).await;
+    let (pilot, _) = hello(&mut ws, None, "pilot").await;
+    send_msg(&mut ws, &ClientMessage::JoinCampaign).await;
+    // the teammate hears of the arrival without asking
+    let members = wait_for(&mut mate, |m| match m {
+        ServerMessage::CampaignState { members, .. } if members.len() == 2 => Some(members),
+        _ => None,
+    })
+    .await;
+    assert!(members.iter().all(|m| m.online), "{members:?}");
+    send_msg(
+        &mut ws,
+        &ClientMessage::LaunchOnPad {
+            craft: starter_craft(),
+        },
+    )
+    .await;
+    let vessel = wait_for(&mut ws, |m| match m {
+        ServerMessage::CraftLaunched { vessel, .. } => vessel,
+        _ => None,
+    })
+    .await;
+    send_msg(
+        &mut ws,
+        &ClientMessage::SetRotation {
+            vessel,
+            pitch: 0.0,
+            yaw: 0.0,
+            roll: 0.0,
+        },
+    )
+    .await;
+    wait_for(&mut ws, |m| {
+        matches!(m, ServerMessage::FlightAck { .. }).then_some(())
+    })
+    .await;
+    send_msg(&mut mate, &ClientMessage::CampaignInfo).await;
+    let members = wait_for(&mut mate, |m| match m {
+        ServerMessage::CampaignState { members, .. } => Some(members),
+        _ => None,
+    })
+    .await;
+    let p = members.iter().find(|m| m.player_id == pilot).unwrap();
+    assert_eq!(p.flying, Some(vessel));
+    // the pilot leaves: the teammate sees them go offline
+    drop(ws);
+    let members = wait_for(&mut mate, |m| match m {
+        ServerMessage::CampaignState { members, .. }
+            if members.iter().any(|m| m.player_id == pilot && !m.online) =>
+        {
+            Some(members)
+        }
+        _ => None,
+    })
+    .await;
+    assert!(members.iter().any(|m| m.player_id == mate_id && m.online));
+}
+
+#[tokio::test]
 async fn a_pad_launch_lights_while_a_teammate_is_connected() {
     let (_server, addr) = spawn_server().await;
     // a teammate joins the campaign and sits there

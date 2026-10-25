@@ -296,6 +296,8 @@ struct Shared {
     /// The original's Kerbals (veterans first), and the roster last pushed to the players.
     kerbals: Vec<ose_data::KerbalDef>,
     last_roster: Mutex<Option<ServerMessage>>,
+    /// The vessel each player last commanded (`CampaignMember::flying`).
+    flying: Mutex<std::collections::HashMap<u64, u64>>,
 }
 
 /// Apply lowest-wins warp arbitration. Returns (effective warp, the player holding it down, if any).
@@ -485,6 +487,7 @@ async fn main() -> anyhow::Result<()> {
         revert: Mutex::new(None),
         kerbals: serde_json::from_str(EMBEDDED_KERBALS)?,
         last_roster: Mutex::new(None),
+        flying: Mutex::new(std::collections::HashMap::new()),
     });
 
     streaming::start(shared.clone());
@@ -1779,12 +1782,18 @@ fn science_request(s: &Shared, player_id: u64, msg: ClientMessage) -> Vec<Server
 }
 
 fn owned_vessel(s: &Shared, id: u64, player: u64) -> Option<bevy_ecs::entity::Entity> {
-    s.vessels
+    let e = s
+        .vessels
         .lock()
         .expect("vessels lock")
         .iter()
         .find(|&&(_, vid, owner)| vid == id && owner == Some(player))
-        .map(|&(e, _, _)| e)
+        .map(|&(e, _, _)| e);
+    if e.is_some() {
+        // commanding a vessel is flying it
+        s.flying.lock().expect("flying lock").insert(player, id);
+    }
+    e
 }
 
 fn has_vessel(s: &Shared, player: u64) -> bool {
@@ -1864,6 +1873,7 @@ fn display_name_for(s: &Shared, player_id: u64) -> String {
 /// Campaign state; with `join = Some(name)` the player is added as a member first (idempotent).
 fn campaign_state(s: &Shared, player_id: u64, join: Option<&String>) -> ServerMessage {
     let tick = s.universe.lock().expect("sim lock").tick();
+    let mut arrived = false;
     let mut c = s.campaign.lock().expect("campaign lock");
     if let Some(name) = join {
         if !c.members.iter().any(|m| m.player_id == player_id) {
@@ -1876,10 +1886,15 @@ fn campaign_state(s: &Shared, player_id: u64, join: Option<&String>) -> ServerMe
             tracing::info!(player = player_id, "joined the campaign");
         }
         c.last_played_unix = now_unix();
-        s.playing.lock().expect("playing lock").insert(player_id);
+        arrived = s.playing.lock().expect("playing lock").insert(player_id);
     }
-    let vessels = s.vessels.lock().expect("vessels lock").len() as u32;
-    ServerMessage::CampaignState {
+    let (vessels, ids): (u32, std::collections::HashSet<u64>) = {
+        let list = s.vessels.lock().expect("vessels lock");
+        (list.len() as u32, list.iter().map(|v| v.1).collect())
+    };
+    let playing = s.playing.lock().expect("playing lock").clone();
+    let flying = s.flying.lock().expect("flying lock").clone();
+    let msg = ServerMessage::CampaignState {
         id: c.id.clone(),
         name: c.name.clone(),
         mode: c.mode,
@@ -1893,11 +1908,37 @@ fn campaign_state(s: &Shared, player_id: u64, join: Option<&String>) -> ServerMe
                 display_name: m.display_name.clone(),
                 joined_tick: m.joined_tick,
                 agency: m.agency.clone(),
+                online: playing.contains(&m.player_id),
+                flying: flying
+                    .get(&m.player_id)
+                    .copied()
+                    .filter(|v| ids.contains(v)),
             })
             .collect(),
         you_are_member: c.members.iter().any(|m| m.player_id == player_id),
         vessels,
         created: false,
+    };
+    drop(c);
+    if arrived {
+        push_campaign(s, player_id);
+    }
+    msg
+}
+
+/// Someone joined or left: everyone else in the campaign gets its state again.
+fn push_campaign(s: &Shared, except: u64) {
+    let players: Vec<u64> = s
+        .playing
+        .lock()
+        .expect("playing lock")
+        .iter()
+        .copied()
+        .filter(|&p| p != except)
+        .collect();
+    for p in players {
+        let msg = campaign_state(s, p, None);
+        s.pending.lock().expect("pending lock").push((p, msg));
     }
 }
 
@@ -2836,7 +2877,9 @@ async fn session(mut socket: WebSocket, s: AppState) {
                             if !send(&mut socket, &reply).await { break; }
                         }
                         Ok(ClientMessage::LeaveSession) => {
-                            s.playing.lock().expect("playing lock").remove(&player_id);
+                            if s.playing.lock().expect("playing lock").remove(&player_id) {
+                                push_campaign(&s, player_id);
+                            }
                             let reply = session_list(&s);
                             if !send(&mut socket, &reply).await { break; }
                         }
@@ -3221,7 +3264,9 @@ async fn session(mut socket: WebSocket, s: AppState) {
         .lock()
         .expect("warp lock")
         .remove(&player_id);
-    s.playing.lock().expect("playing lock").remove(&player_id);
+    if s.playing.lock().expect("playing lock").remove(&player_id) {
+        push_campaign(&s, player_id);
+    }
     apply_warp(&s);
     let _ = s.accounts.lock().expect("accounts lock").touch(player_id);
     tracing::info!(player = player_id, "player left");
