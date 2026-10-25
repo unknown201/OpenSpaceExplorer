@@ -77,6 +77,7 @@ Camera rule that runs through every map: **the right button drags the camera, th
 | V5b | Picker filters, sort and favourites | size chips (XS to XL), sort by size, name or mass, a Favorites tab filled by middle-clicking parts (kept per browser) | done |
 | V5 | Picker part tooltip (mass, cost, size, stats, description), Shift expands | tooltip with title, subtitle, maker, mass, size, crew, tanks, thrust, Isp, description, research lock | done (no cost in our data) |
 | V6 | Staging stack panel with per-stage Δv/TWR/burn time, drag a part between stages | stage cards with icons (next to fire at the bottom), per-stage vacuum Δv, sea-level TWR and burn time from the server's StageReport, total Δv in the header, click selects, drag a part onto another stage card to move it, earlier/later buttons | done |
+| V8 | Trip planner (delta-v budget between bodies) | Trip in the VAB header: from/to any body's surface or orbit, round trip, aerobraking allowance, transfer phase angle, against the vehicle's delta-v, from the original's TripPlanner.json | done |
 | V7 | Parts manager on right click (part settings) | right-click a part in the VAB: its stage, fuel crossfeed switch and a fill slider per tank resource (delta-v follows); in flight a right click on a part opens its window: temperature, re-entry heat, crew, parachute, gear, panels and converters with their actions | done |
 
 ### KSC, R&D, Mission Control, main menu

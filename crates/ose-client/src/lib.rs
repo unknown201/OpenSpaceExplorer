@@ -50,6 +50,7 @@ pub mod scene;
 pub mod settings;
 pub mod thumb;
 pub mod tracking;
+pub mod trip;
 pub mod vab;
 #[cfg(target_arch = "wasm32")]
 pub mod vab3d;
@@ -166,6 +167,8 @@ struct App {
     vab_stages_readout: Vec<ose_net::StageReadout>,
     /// A part pressed on a stage card, to drop on another card.
     vab_stage_drag: Option<usize>,
+    /// The trip planner's delta-v map, once loaded.
+    trip: Option<trip::TripMap>,
     /// The server's centre of mass and centre/direction of thrust, and whether their markers show.
     vab_com: Option<ose_math::DVec3>,
     vab_cot: Option<(ose_math::DVec3, ose_math::DVec3)>,
@@ -519,6 +522,7 @@ pub fn start() -> Result<(), JsValue> {
         vab_yaw: vab::NO_TURN,
         vab_stages_readout: Vec::new(),
         vab_stage_drag: None,
+        trip: None,
         vab_com: None,
         vab_cot: None,
         vab_col: None,
@@ -616,6 +620,7 @@ pub fn start() -> Result<(), JsValue> {
     install_menu(&app)?;
     load_part_sizes(app.clone());
     load_localization(app.clone());
+    load_trip_planner(app.clone());
     load_sounds(app.clone());
     install_audio(&app)?;
     #[cfg(target_arch = "wasm32")]
@@ -1196,6 +1201,38 @@ fn experiment_name(id: &str) -> String {
     out
 }
 
+/// The trip planner's delta-v map (assets/ui/trip_planner.json); the Trip button stays hidden without it.
+fn load_trip_planner(app: Shared) {
+    wasm_bindgen_futures::spawn_local(async move {
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let Ok(resp) = wasm_bindgen_futures::JsFuture::from(
+            window.fetch_with_str("assets/ui/trip_planner.json"),
+        )
+        .await
+        else {
+            return;
+        };
+        let Ok(resp) = resp.dyn_into::<web_sys::Response>() else {
+            return;
+        };
+        if !resp.ok() {
+            return;
+        }
+        let Ok(text) = resp.text() else { return };
+        let Ok(text) = wasm_bindgen_futures::JsFuture::from(text).await else {
+            return;
+        };
+        let Some(text) = text.as_string() else { return };
+        if let Some(map) = trip::TripMap::parse(&text) {
+            let mut a = app.borrow_mut();
+            a.trip = Some(map);
+            a.render_trip_options();
+        }
+    });
+}
+
 fn load_localization(app: Shared) {
     wasm_bindgen_futures::spawn_local(async move {
         let Some(window) = web_sys::window() else {
@@ -1635,6 +1672,24 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
     )?;
     wire("vab-save", Box::new(|a| a.borrow_mut().vab_save(false)))?;
     wire("vab-undo", Box::new(|a| a.borrow_mut().vab_undo(false)))?;
+    wire(
+        "vab-trip",
+        Box::new(|a| {
+            let app = a.borrow();
+            if let Some(el) = app.doc.get_element_by_id("vab-trip-pop") {
+                el.class_list().toggle("open").ok();
+            }
+            app.render_trip();
+        }),
+    )?;
+    for id in ["trip-from", "trip-to", "trip-round"] {
+        if let Some(el) = doc.get_element_by_id(id) {
+            let a = app.clone();
+            let cb = Closure::<dyn FnMut()>::new(move || a.borrow().render_trip());
+            el.add_event_listener_with_callback("change", cb.as_ref().unchecked_ref())?;
+            cb.forget();
+        }
+    }
     if let Some(fr) = doc.get_element_by_id("flight-report") {
         let f2 = fr.clone();
         let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
@@ -3793,6 +3848,7 @@ impl App {
                 if self.vab_active() {
                     self.render_vab_view();
                 }
+                self.render_trip();
             }
             ServerMessage::LaunchSites { sites } => {
                 self.launch_sites = sites;
@@ -4651,6 +4707,92 @@ impl App {
         let ut = self.time.ut_at(now_ms());
         el.set_inner_html(&hud::flight_report_html(&r, ended, ut, science));
         el.class_list().add_1("open").ok();
+    }
+
+    /// Fill the trip planner's from/to lists (surfaces and orbits of every body).
+    fn render_trip_options(&self) {
+        let Some(map) = &self.trip else { return };
+        let mut html = String::new();
+        for n in map.places() {
+            html.push_str(&format!(
+                "<option value=\"{}\">{}</option>",
+                esc(&n.name),
+                esc(&map.label(&n.name))
+            ));
+        }
+        for (id, default) in [("trip-from", "kerbin-surf"), ("trip-to", "mun-surf")] {
+            if let Some(el) = self
+                .doc
+                .get_element_by_id(id)
+                .and_then(|e| e.dyn_into::<web_sys::HtmlSelectElement>().ok())
+            {
+                el.set_inner_html(&html);
+                el.set_value(default);
+            }
+        }
+        if let Some(b) = self
+            .doc
+            .get_element_by_id("vab-trip")
+            .and_then(|e| e.dyn_into::<HtmlElement>().ok())
+        {
+            b.style().set_property("display", "").ok();
+        }
+        self.render_trip();
+    }
+
+    /// The trip planner's answer for the chosen trip, against the craft's delta-v.
+    fn render_trip(&self) {
+        let Some(map) = &self.trip else { return };
+        let value = |id: &str| {
+            self.doc
+                .get_element_by_id(id)
+                .and_then(|e| e.dyn_into::<web_sys::HtmlSelectElement>().ok())
+                .map(|s| s.value())
+                .unwrap_or_default()
+        };
+        let round = self
+            .doc
+            .get_element_by_id("trip-round")
+            .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+            .map(|i| i.checked())
+            .unwrap_or(false);
+        let (from, to) = (value("trip-from"), value("trip-to"));
+        let have: f64 = self
+            .vab_stages_readout
+            .iter()
+            .map(|r| r.delta_v_vacuum_mps.max(0.0))
+            .sum();
+        let text = match map.plan(&from, &to, round) {
+            Some(p) => {
+                let need = p.delta_v_mps + p.inclination_mps;
+                let mut s = format!("<b>\u{394}v {:.0} m/s</b>", need);
+                if p.aerobrake_mps > 0.0 {
+                    s.push_str(&format!(
+                        " <small>({:.0} m/s less with aerobraking)</small>",
+                        p.aerobrake_mps
+                    ));
+                }
+                if let Some(a) = p.phase_angle {
+                    s.push_str(&format!(
+                        "<br><small>Transfer window: phase angle {a:.0}\u{b0}</small>"
+                    ));
+                }
+                if have > 0.0 {
+                    let ok = have >= need - p.aerobrake_mps;
+                    s.push_str(&format!(
+                        "<br><span class=\"{}\">This vehicle: {:.0} m/s {}</span>",
+                        if ok { "ok" } else { "short" },
+                        have,
+                        if ok { "\u{2714}" } else { "(not enough)" }
+                    ));
+                }
+                s
+            }
+            None => "No route between these".into(),
+        };
+        if let Some(el) = self.doc.get_element_by_id("trip-result") {
+            el.set_inner_html(&text);
+        }
     }
 
     /// Settings > Input: each rebindable action with the key it is on now.
