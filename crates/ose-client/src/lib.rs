@@ -6524,6 +6524,7 @@ impl App {
 
     /// The free stack nodes a held part can snap to: none for a part that only goes on another's side
     /// (wings, radial decouplers), which goes where the pointer meets a part instead.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     fn snap_nodes(
         &self,
         held: Option<&str>,
