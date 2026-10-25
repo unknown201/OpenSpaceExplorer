@@ -468,12 +468,17 @@ fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
     let suv = vec2<f32>(atan2(sv.z, sv.x) / (2.0 * PI) + 0.5, 0.5 - asin(clamp(sv.y, -1.0, 1.0)) / PI);
     let star = textureSampleLevel(star_tex, star_samp, suv, 0.0).rgb;
     radiance = radiance + t * star / max(frame.sun.w, 0.1);
-    // The sun's disc.
+    // The sun: its disc written far above 1 into the HDR target, so the post bloom glows around it as the
+    // original's sun does, and a soft corona (glare in the eye or lens) tinted by the air it shines through.
     let a = frame.mie.w;
-    if dot(view, sun) > cos(a) {
-        radiance = radiance + t * frame.solar.xyz / (PI * a * a);
+    let ang = acos(clamp(dot(view, sun), -1.0, 1.0));
+    let tint = t / max(max(t.r, max(t.g, t.b)), 1e-4) * smoothstep(0.0, 0.2, max(max(t.r, t.g), t.b));
+    var hdr = vec3<f32>(0.0);
+    if ang < a {
+        hdr = tint * 24.0;
     }
-    return vec4<f32>(tonemap(radiance), 1.0);
+    let corona = tint * (0.55 * exp(-max(ang - a, 0.0) / 0.012) + 0.12 * exp(-max(ang - a, 0.0) / 0.08));
+    return vec4<f32>(tonemap(radiance) + corona + hdr, 1.0);
 }
 
 // ---------------------------------------------------------------------------------------------------------

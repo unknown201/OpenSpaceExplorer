@@ -210,3 +210,7 @@ masks of Minmus, Duna and Bop are sRGB, so the GPU decodes them in the original 
 now stores them decoded. Anti-tiling: the detail slices at the 8 m and 64 m tilings (albedo and normal) blend in a
 turned, shifted copy by low-frequency noise (the original's `_StochasticScale` sampling), on medium and high detail.
 
+Sun: the disc goes into the HDR target at 24 x (tinted by the air's transmittance) so fx_post's bloom glows around
+it, with a soft corona (0.55 e^(-a/0.012) + 0.12 e^(-a/0.08) beyond the disc's edge) in the sky pass; terrain and
+props hide both. Not done: the original's lens-flare ghosts (a post overlay with an occlusion query; fx_post).
+
