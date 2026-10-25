@@ -9858,6 +9858,12 @@ impl App {
                 }
             })
             .collect();
+        if self.vessel_crafts.get(&id).map(|k| k.0) != Some(v.craft_rev)
+            && self.vessel_craft_asked.get(&id) != Some(&v.craft_rev)
+            && !matches!(stand_of(&self.roster, v), flight3d::Stand::Kerbal { .. })
+        {
+            ask.push((id, v.craft_rev));
+        }
         if let Some(ws) = &self.ws {
             for (vessel, rev) in &ask {
                 send(ws, &ClientMessage::GetVesselCraft { vessel: *vessel });
@@ -9882,7 +9888,19 @@ impl App {
                 0.0
             },
             ut,
-            craft: self.flight_craft.as_ref(),
+            // The server's craft as it flies it (laid out wheels-down for a rover, say) while it still has
+            // every part of the launched one, so readout part indices agree; the launched document after
+            // staging, where the jettison logic hides what has gone.
+            craft: self
+                .vessel_crafts
+                .get(&id)
+                .and_then(|k| k.1.as_ref())
+                .filter(|c| {
+                    self.flight_craft
+                        .as_ref()
+                        .is_none_or(|d| d.parts.len() == c.parts.len())
+                })
+                .or(self.flight_craft.as_ref()),
             is_decoupler: &is_dec,
             maneuver: self
                 .node
