@@ -1,0 +1,1547 @@
+[
+  {
+    "name": "Jebediah Kerman",
+    "veteran": true,
+    "bravery": 1.0,
+    "stupidity": 1.0,
+    "optimism": 1.0,
+    "constitution": 1.0,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "55483F",
+      "HAIRSTYLE": "HAIR_JEB",
+      "HELMET": "HELM_SPACESUIT_01",
+      "SKINCOLOR": "BADA55",
+      "TEAMCOLOR1": "BF0000",
+      "TEAMCOLOR2": "BFBFBF",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Bill Kerman",
+    "veteran": true,
+    "bravery": 0.5,
+    "stupidity": 0.9,
+    "optimism": 1.0,
+    "constitution": 0.25,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "55483F",
+      "HAIRSTYLE": "HAIR_M_09",
+      "HELMET": "HELM_SPACESUIT_01",
+      "SKINCOLOR": "BADA55",
+      "TEAMCOLOR1": "0060BF",
+      "TEAMCOLOR2": "BFBFBF",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Bob Kerman",
+    "veteran": true,
+    "bravery": 0.5,
+    "stupidity": 0.05,
+    "optimism": 0.0,
+    "constitution": 0.9,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "55483F",
+      "HAIRSTYLE": "HAIR_M_09",
+      "HELMET": "HELM_SPACESUIT_01",
+      "SKINCOLOR": "BADA55",
+      "TEAMCOLOR1": "0060BF",
+      "TEAMCOLOR2": "BFBFBF",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Valentina Kerman",
+    "veteran": true,
+    "bravery": 1.0,
+    "stupidity": 0.5,
+    "optimism": 0.75,
+    "constitution": 1.0,
+    "looks": {
+      "EYES": "EYES_F_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "55483F",
+      "HAIRSTYLE": "HAIR_VAL",
+      "HELMET": "HELM_SPACESUIT_01",
+      "SKINCOLOR": "BADA55",
+      "TEAMCOLOR1": "C16100",
+      "TEAMCOLOR2": "B2B2B2",
+      "TYPE": "CIRCLE"
+    }
+  },
+  {
+    "name": "Aaron L Kerman",
+    "veteran": false,
+    "bravery": 0.89,
+    "stupidity": 0.33,
+    "optimism": 0.29,
+    "constitution": 0.72,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "DECO_FACE_GLASSES_NASA60S_01",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "CCCCCC",
+      "HAIRSTYLE": "HAIR_F_10",
+      "SKINCOLOR": "BADA55",
+      "TYPE": "CIRCLE"
+    }
+  },
+  {
+    "name": "Abel A Kerman",
+    "veteran": false,
+    "bravery": 0.85,
+    "stupidity": 0.24,
+    "optimism": 0.83,
+    "constitution": 0.75,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "CCCCCC",
+      "HAIRSTYLE": "HAIR_M_05",
+      "SKINCOLOR": "BADA55",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Adam J Kerman",
+    "veteran": false,
+    "bravery": 0.44,
+    "stupidity": 0.24,
+    "optimism": 0.91,
+    "constitution": 0.78,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "C3A873",
+      "HAIRSTYLE": "HAIR_F_04",
+      "SKINCOLOR": "BEDB6C",
+      "TYPE": "CIRCLE"
+    }
+  },
+  {
+    "name": "Alexandra E Kerman",
+    "veteran": false,
+    "bravery": 0.54,
+    "stupidity": 0.22,
+    "optimism": 0.73,
+    "constitution": 0.09,
+    "looks": {
+      "EYES": "EYES_F_01",
+      "FACEDECORATION": "DECO_FACE_GLASSES_WIDE_01",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "003C7D",
+      "HAIRSTYLE": "HAIR_F_03",
+      "SKINCOLOR": "99DA5B",
+      "TYPE": "CIRCLE"
+    }
+  },
+  {
+    "name": "Alyssa N Kerman",
+    "veteran": false,
+    "bravery": 0.57,
+    "stupidity": 0.08,
+    "optimism": 0.53,
+    "constitution": 0.32,
+    "looks": {
+      "EYES": "EYES_F_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "55483F",
+      "HAIRSTYLE": "HAIR_F_03",
+      "SKINCOLOR": "BEDB6C",
+      "TYPE": "CIRCLE"
+    }
+  },
+  {
+    "name": "Amaury E Kerman",
+    "veteran": false,
+    "bravery": 0.64,
+    "stupidity": 0.79,
+    "optimism": 0.9,
+    "constitution": 0.38,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "DECO_FACE_GLASSES_WIDE_01",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "F7F7F7",
+      "HAIRSTYLE": "HAIR_M_06",
+      "SKINCOLOR": "99DA5B",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Amelia W Kerman",
+    "veteran": false,
+    "bravery": 0.85,
+    "stupidity": 0.55,
+    "optimism": 0.51,
+    "constitution": 0.8,
+    "looks": {
+      "EYES": "EYES_F_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "DBD594",
+      "HAIRSTYLE": "HAIR_F_07",
+      "SKINCOLOR": "BEDB6C",
+      "TYPE": "CIRCLE"
+    }
+  },
+  {
+    "name": "Anth A Kerman",
+    "veteran": false,
+    "bravery": 0.91,
+    "stupidity": 0.06,
+    "optimism": 0.4,
+    "constitution": 0.68,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "987C68",
+      "HAIRSTYLE": "NONE",
+      "SKINCOLOR": "BEDB6C",
+      "TYPE": "CIRCLE"
+    }
+  },
+  {
+    "name": "Ara J Kerman",
+    "veteran": false,
+    "bravery": 0.92,
+    "stupidity": 0.49,
+    "optimism": 0.98,
+    "constitution": 0.99,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "55483F",
+      "HAIRSTYLE": "HAIR_M_02",
+      "SKINCOLOR": "BADA55",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Arzin C Kerman",
+    "veteran": false,
+    "bravery": 0.77,
+    "stupidity": 0.74,
+    "optimism": 0.89,
+    "constitution": 0.99,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "161514",
+      "HAIRSTYLE": "HAIR_M_08",
+      "SKINCOLOR": "BADA55",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Atticus C Kerman",
+    "veteran": false,
+    "bravery": 0.63,
+    "stupidity": 0.32,
+    "optimism": 0.62,
+    "constitution": 0.42,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "55483F",
+      "HAIRSTYLE": "HAIR_F_02",
+      "SKINCOLOR": "9DC137",
+      "TYPE": "CIRCLE"
+    }
+  },
+  {
+    "name": "Ayan S Kerman",
+    "veteran": false,
+    "bravery": 0.22,
+    "stupidity": 0.47,
+    "optimism": 0.82,
+    "constitution": 0.22,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "161514",
+      "HAIRSTYLE": "HAIR_F_01",
+      "SKINCOLOR": "97B050",
+      "TYPE": "CIRCLE"
+    }
+  },
+  {
+    "name": "Baebae J Kerman",
+    "veteran": false,
+    "bravery": 0.46,
+    "stupidity": 0.78,
+    "optimism": 0.62,
+    "constitution": 0.35,
+    "looks": {
+      "EYES": "EYES_F_01",
+      "FACEDECORATION": "DECO_FACE_GLASSES_CIRCULAR_01",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "e9dbfa",
+      "HAIRSTYLE": "HAIR_F_03",
+      "SKINCOLOR": "BEDB6C",
+      "TYPE": "CIRCLE"
+    }
+  },
+  {
+    "name": "Brian B Kerman",
+    "veteran": false,
+    "bravery": 0.08,
+    "stupidity": 0.84,
+    "optimism": 0.92,
+    "constitution": 0.47,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "DECO_FACE_GLASSES_RIMLESS_01",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "845026",
+      "HAIRSTYLE": "HAIR_M_05",
+      "SKINCOLOR": "9DC137",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Brooks K Kerman",
+    "veteran": false,
+    "bravery": 0.65,
+    "stupidity": 0.67,
+    "optimism": 0.84,
+    "constitution": 0.15,
+    "looks": {
+      "EYES": "EYES_F_01",
+      "FACEDECORATION": "DECO_FACE_GLASSES_CATEYE_01",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "003C7D",
+      "HAIRSTYLE": "HAIR_F_04",
+      "SKINCOLOR": "94C763",
+      "TYPE": "CIRCLE"
+    }
+  },
+  {
+    "name": "Bryan D Kerman",
+    "veteran": false,
+    "bravery": 0.9,
+    "stupidity": 0.59,
+    "optimism": 0.46,
+    "constitution": 0.76,
+    "looks": {
+      "EYES": "EYES_F_01",
+      "FACEDECORATION": "DECO_FACE_GLASSES_WAYFARERS_01",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "FFD37A",
+      "HAIRSTYLE": "HAIR_M_02",
+      "SKINCOLOR": "94C763",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Cecilia L Kerman",
+    "veteran": false,
+    "bravery": 0.98,
+    "stupidity": 0.3,
+    "optimism": 0.88,
+    "constitution": 0.23,
+    "looks": {
+      "EYES": "EYES_F_01",
+      "FACEDECORATION": "DECO_FACE_GLASSES_WAYFARERS_01",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "845026",
+      "HAIRSTYLE": "HAIR_F_10",
+      "SKINCOLOR": "BADA55",
+      "TYPE": "CIRCLE"
+    }
+  },
+  {
+    "name": "Celeste S Kerman",
+    "veteran": false,
+    "bravery": 0.9,
+    "stupidity": 0.07,
+    "optimism": 0.9,
+    "constitution": 0.81,
+    "looks": {
+      "EYES": "EYES_F_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "845026",
+      "HAIRSTYLE": "HAIR_F_07",
+      "SKINCOLOR": "99DA5B",
+      "TYPE": "CIRCLE"
+    }
+  },
+  {
+    "name": "Chris Q Kerman",
+    "veteran": false,
+    "bravery": 0.99,
+    "stupidity": 0.11,
+    "optimism": 0.8,
+    "constitution": 0.09,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "DECO_FACE_GLASSES_CATEYE_01",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "F7F7F7",
+      "HAIRSTYLE": "NONE",
+      "SKINCOLOR": "7C923C",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Coop R Kerman",
+    "veteran": false,
+    "bravery": 0.69,
+    "stupidity": 0.39,
+    "optimism": 0.3,
+    "constitution": 0.78,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "DECO_FACE_GLASSES_WIDE_01",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "161514",
+      "HAIRSTYLE": "HAIR_M_06",
+      "SKINCOLOR": "899E47",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Dan A Kerman",
+    "veteran": false,
+    "bravery": 0.85,
+    "stupidity": 0.67,
+    "optimism": 0.95,
+    "constitution": 0.32,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "DECO_FACE_GLASSES_AVIATORS_01",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "987C68",
+      "HAIRSTYLE": "HAIR_M_05",
+      "SKINCOLOR": "CBDA81",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Dana L Kerman",
+    "veteran": false,
+    "bravery": 0.99,
+    "stupidity": 0.56,
+    "optimism": 0.79,
+    "constitution": 0.05,
+    "looks": {
+      "EYES": "EYES_F_01",
+      "FACEDECORATION": "DECO_FACE_GLASSES_CATEYE_01",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "003C7D",
+      "HAIRSTYLE": "HAIR_F_03",
+      "SKINCOLOR": "9DC137",
+      "TYPE": "CIRCLE"
+    }
+  },
+  {
+    "name": "Dana M Kerman",
+    "veteran": false,
+    "bravery": 0.32,
+    "stupidity": 0.19,
+    "optimism": 0.98,
+    "constitution": 0.34,
+    "looks": {
+      "EYES": "EYES_F_01",
+      "FACEDECORATION": "DECO_FACE_GLASSES_WAYFARERS_01",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "987C68",
+      "HAIRSTYLE": "HAIR_F_03",
+      "SKINCOLOR": "94C763",
+      "TYPE": "CIRCLE"
+    }
+  },
+  {
+    "name": "Daniel S Kerman",
+    "veteran": false,
+    "bravery": 0.66,
+    "stupidity": 0.48,
+    "optimism": 0.68,
+    "constitution": 0.32,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "DECO_FACE_GLASSES_NERDY_01",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "55483F",
+      "HAIRSTYLE": "HAIR_M_08",
+      "SKINCOLOR": "BADA55",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Darrin K Kerman",
+    "veteran": false,
+    "bravery": 0.09,
+    "stupidity": 0.47,
+    "optimism": 0.97,
+    "constitution": 0.94,
+    "looks": {
+      "EYES": "EYES_F_01",
+      "FACEDECORATION": "DECO_FACE_GLASSES_WIDE_01",
+      "FACEDETAIL": "KERBAL_HEAD_FACEDETAILS_EXHAUSTED_01_D",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "988662",
+      "HAIRSTYLE": "HAIR_F_08",
+      "SKINCOLOR": "94C763",
+      "TYPE": "CIRCLE"
+    }
+  },
+  {
+    "name": "Deborah Z Kerman",
+    "veteran": false,
+    "bravery": 0.46,
+    "stupidity": 0.23,
+    "optimism": 0.87,
+    "constitution": 0.44,
+    "looks": {
+      "EYES": "EYES_F_01",
+      "FACEDECORATION": "DECO_FACE_GLASSES_CATEYE_01",
+      "FACEDETAIL": "KERBAL_HEAD_FACEDETAILS_ROUGE_01_WARM_D",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "462523",
+      "HAIRSTYLE": "HAIR_F_LEFTPARTROCKETPIN",
+      "SKINCOLOR": "9DC137",
+      "TYPE": "CIRCLE"
+    }
+  },
+  {
+    "name": "Drew K Kerman",
+    "veteran": false,
+    "bravery": 0.98,
+    "stupidity": 0.38,
+    "optimism": 0.47,
+    "constitution": 0.69,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "DECO_FACE_GLASSES_AVIATORS_01",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "845026",
+      "HAIRSTYLE": "HAIR_M_02",
+      "SKINCOLOR": "BADA55",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Durkin L Kerman",
+    "veteran": false,
+    "bravery": 0.94,
+    "stupidity": 0.1,
+    "optimism": 0.58,
+    "constitution": 0.41,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "845026",
+      "HAIRSTYLE": "HAIR_F_04",
+      "SKINCOLOR": "BADA55",
+      "TYPE": "CIRCLE"
+    }
+  },
+  {
+    "name": "Emiko S Kerman",
+    "veteran": false,
+    "bravery": 0.65,
+    "stupidity": 0.2,
+    "optimism": 0.4,
+    "constitution": 0.4,
+    "looks": {
+      "EYES": "EYES_F_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "161514",
+      "HAIRSTYLE": "HAIR_F_03",
+      "SKINCOLOR": "97B050",
+      "TYPE": "CIRCLE"
+    }
+  },
+  {
+    "name": "Erin H Kerman",
+    "veteran": false,
+    "bravery": 0.79,
+    "stupidity": 0.51,
+    "optimism": 0.87,
+    "constitution": 0.21,
+    "looks": {
+      "EYES": "EYES_F_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "E9C886",
+      "HAIRSTYLE": "HAIR_F_02",
+      "SKINCOLOR": "BEDB6C",
+      "TYPE": "CIRCLE"
+    }
+  },
+  {
+    "name": "Felipe P Kerman",
+    "veteran": false,
+    "bravery": 0.77,
+    "stupidity": 0.25,
+    "optimism": 0.28,
+    "constitution": 0.16,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "DECO_FACE_GLASSES_WIDE_01",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "55483F",
+      "HAIRSTYLE": "HAIR_F_02",
+      "SKINCOLOR": "BEDB6C",
+      "TYPE": "CIRCLE"
+    }
+  },
+  {
+    "name": "Fer D Kerman",
+    "veteran": false,
+    "bravery": 0.84,
+    "stupidity": 0.26,
+    "optimism": 0.51,
+    "constitution": 0.57,
+    "looks": {
+      "EYES": "EYES_F_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "003C7D",
+      "HAIRSTYLE": "HAIR_F_04",
+      "SKINCOLOR": "BEDB6C",
+      "TYPE": "CIRCLE"
+    }
+  },
+  {
+    "name": "Grayson K Kerman",
+    "veteran": false,
+    "bravery": 0.71,
+    "stupidity": 0.15,
+    "optimism": 0.03,
+    "constitution": 0.09,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "988662",
+      "HAIRSTYLE": "HAIR_M_10",
+      "SKINCOLOR": "BADA55",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Greg W Kerman",
+    "veteran": false,
+    "bravery": 0.49,
+    "stupidity": 0.84,
+    "optimism": 0.45,
+    "constitution": 0.88,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "161514",
+      "HAIRSTYLE": "HAIR_M_03",
+      "SKINCOLOR": "BEDB6C",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Jake S Kerman",
+    "veteran": false,
+    "bravery": 0.44,
+    "stupidity": 0.53,
+    "optimism": 0.78,
+    "constitution": 0.33,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "55483F",
+      "HAIRSTYLE": "HAIR_M_08",
+      "SKINCOLOR": "BEDB6C",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Jamie P Kerman",
+    "veteran": false,
+    "bravery": 0.65,
+    "stupidity": 0.58,
+    "optimism": 0.38,
+    "constitution": 0.76,
+    "looks": {
+      "EYES": "EYES_F_01",
+      "FACEDECORATION": "DECO_FACE_GLASSES_WIDE_02",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "55483F",
+      "HAIRSTYLE": "HAIR_M_01",
+      "SKINCOLOR": "BADA55",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Jay F Kerman",
+    "veteran": false,
+    "bravery": 0.49,
+    "stupidity": 0.75,
+    "optimism": 0.91,
+    "constitution": 0.94,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "161514",
+      "HAIRSTYLE": "HAIR_M_03",
+      "SKINCOLOR": "719E47",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Jessica Z Kerman",
+    "veteran": false,
+    "bravery": 0.46,
+    "stupidity": 0.44,
+    "optimism": 0.91,
+    "constitution": 0.23,
+    "looks": {
+      "EYES": "EYES_F_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "KERBAL_HEAD_FACEDETAILS_ROUGE_02_SUNKISSED_D",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "462523",
+      "HAIRSTYLE": "HAIR_F_LEFTPARTROCKETPIN",
+      "SKINCOLOR": "94C763",
+      "TYPE": "CIRCLE"
+    }
+  },
+  {
+    "name": "John K Kerman",
+    "veteran": false,
+    "bravery": 0.97,
+    "stupidity": 0.23,
+    "optimism": 0.92,
+    "constitution": 0.07,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "DECO_FACE_GLASSES_WIDE_01",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "55483F",
+      "HAIRSTYLE": "HAIR_M_04",
+      "SKINCOLOR": "BADA55",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Jon C Kerman",
+    "veteran": false,
+    "bravery": 0.79,
+    "stupidity": 0.57,
+    "optimism": 0.91,
+    "constitution": 0.23,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "55483F",
+      "HAIRSTYLE": "HAIR_F_08",
+      "SKINCOLOR": "BEDB6C",
+      "TYPE": "CIRCLE"
+    }
+  },
+  {
+    "name": "Joshua C Kerman",
+    "veteran": false,
+    "bravery": 0.55,
+    "stupidity": 0.12,
+    "optimism": 0.59,
+    "constitution": 0.82,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "C3A873",
+      "HAIRSTYLE": "HAIR_M_04",
+      "SKINCOLOR": "BADA55",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Keith P Kerman",
+    "veteran": false,
+    "bravery": 0.72,
+    "stupidity": 0.16,
+    "optimism": 0.59,
+    "constitution": 0.87,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "DECO_FACE_GLASSES_WIDE_02",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "55483F",
+      "HAIRSTYLE": "HAIR_F_05",
+      "SKINCOLOR": "CBDA81",
+      "TYPE": "CIRCLE"
+    }
+  },
+  {
+    "name": "Kevin F Kerman",
+    "veteran": false,
+    "bravery": 0.82,
+    "stupidity": 0.85,
+    "optimism": 0.54,
+    "constitution": 0.45,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "KERBAL_HEAD_FACEDETAILS_EXHAUSTED_01_D",
+      "FACIALHAIR": "FACIALHAIR_FULLBEARD",
+      "HAIRCOLOR": "161514",
+      "HAIRSTYLE": "HAIR_M_04",
+      "SKINCOLOR": "BADA55",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Kirwan A Kerman",
+    "veteran": false,
+    "bravery": 0.68,
+    "stupidity": 0.98,
+    "optimism": 0.35,
+    "constitution": 0.62,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "988662",
+      "HAIRSTYLE": "HAIR_M_RECEDING",
+      "SKINCOLOR": "BADA55",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Kota C Kerman",
+    "veteran": false,
+    "bravery": 0.44,
+    "stupidity": 0.7,
+    "optimism": 0.99,
+    "constitution": 0.27,
+    "looks": {
+      "EYES": "EYES_F_01",
+      "FACEDECORATION": "DECO_FACE_GLASSES_WAYFARERS_01",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "FFD37A",
+      "HAIRSTYLE": "HAIR_F_07",
+      "SKINCOLOR": "BEDB6C",
+      "TYPE": "CIRCLE"
+    }
+  },
+  {
+    "name": "Krista L Kerman",
+    "veteran": false,
+    "bravery": 0.26,
+    "stupidity": 0.57,
+    "optimism": 0.94,
+    "constitution": 0.09,
+    "looks": {
+      "EYES": "EYES_F_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "KERBAL_HEAD_FACEDETAILS_BEAUTYMARK_01_D",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "003C7D",
+      "HAIRSTYLE": "HAIR_F_LEFTPARTROCKETPIN",
+      "SKINCOLOR": "CBDA81",
+      "TYPE": "CIRCLE"
+    }
+  },
+  {
+    "name": "Lachlan R Kerman",
+    "veteran": false,
+    "bravery": 0.97,
+    "stupidity": 0.65,
+    "optimism": 0.58,
+    "constitution": 0.75,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "DECO_FACE_GLASSES_AVIATORS_01",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "161514",
+      "HAIRSTYLE": "HAIR_M_04",
+      "SKINCOLOR": "94C763",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Levin S Kerman",
+    "veteran": false,
+    "bravery": 0.68,
+    "stupidity": 0.47,
+    "optimism": 0.68,
+    "constitution": 0.64,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "DECO_FACE_GLASSES_WAYFARERS_01",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "161514",
+      "HAIRSTYLE": "HAIR_M_02",
+      "SKINCOLOR": "97B050",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Mar I Kerman",
+    "veteran": false,
+    "bravery": 0.42,
+    "stupidity": 0.47,
+    "optimism": 0.88,
+    "constitution": 0.9,
+    "looks": {
+      "EYES": "EYES_F_01",
+      "FACEDECORATION": "DECO_FACE_GLASSES_WAYFARERS_01",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "462523",
+      "HAIRSTYLE": "HAIR_F_10",
+      "SKINCOLOR": "97B050",
+      "TYPE": "CIRCLE"
+    }
+  },
+  {
+    "name": "Marc A Kerman",
+    "veteran": false,
+    "bravery": 0.41,
+    "stupidity": 0.3,
+    "optimism": 0.74,
+    "constitution": 0.28,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "C3A873",
+      "HAIRSTYLE": "NONE",
+      "SKINCOLOR": "BEDB6C",
+      "TYPE": "CIRCLE"
+    }
+  },
+  {
+    "name": "Marco S Kerman",
+    "veteran": false,
+    "bravery": 0.58,
+    "stupidity": 0.08,
+    "optimism": 0.11,
+    "constitution": 0.39,
+    "looks": {
+      "EYES": "EYES_F_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "55483F",
+      "HAIRSTYLE": "HAIR_M_03",
+      "SKINCOLOR": "BADA55",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Marie B Kerman",
+    "veteran": false,
+    "bravery": 0.64,
+    "stupidity": 0.8,
+    "optimism": 0.89,
+    "constitution": 0.15,
+    "looks": {
+      "EYES": "EYES_F_01",
+      "FACEDECORATION": "DECO_FACE_GLASSES_CATEYE_01",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "988662",
+      "HAIRSTYLE": "HAIR_F_03",
+      "SKINCOLOR": "BEDB6C",
+      "TYPE": "CIRCLE"
+    }
+  },
+  {
+    "name": "Mark J Kerman",
+    "veteran": false,
+    "bravery": 0.66,
+    "stupidity": 0.37,
+    "optimism": 0.19,
+    "constitution": 0.91,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "DECO_FACE_GLASSES_WIDE_01",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "55483F",
+      "HAIRSTYLE": "HAIR_F_02",
+      "SKINCOLOR": "BADA55",
+      "TYPE": "CIRCLE"
+    }
+  },
+  {
+    "name": "Mark Z Kerman",
+    "veteran": false,
+    "bravery": 0.84,
+    "stupidity": 0.61,
+    "optimism": 0.1,
+    "constitution": 0.39,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "FACIALHAIR_FULLBEARD",
+      "HAIRCOLOR": "464223",
+      "HAIRSTYLE": "NONE",
+      "SKINCOLOR": "BADA55",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Matt R Kerman",
+    "veteran": false,
+    "bravery": 0.42,
+    "stupidity": 0.6,
+    "optimism": 0.97,
+    "constitution": 0.53,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "DECO_FACE_GLASSES_WAYFARERS_01",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "987C68",
+      "HAIRSTYLE": "HAIR_M_05",
+      "SKINCOLOR": "9DC137",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Matthew A Kerman",
+    "veteran": false,
+    "bravery": 0.3,
+    "stupidity": 0.62,
+    "optimism": 0.74,
+    "constitution": 0.39,
+    "looks": {
+      "EYES": "EYES_F_01",
+      "FACEDECORATION": "DECO_FACE_GLASSES_RIMLESS_01",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "C3A873",
+      "HAIRSTYLE": "HAIR_M_02",
+      "SKINCOLOR": "BEDB6C",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Matthew D Kerman",
+    "veteran": false,
+    "bravery": 0.59,
+    "stupidity": 0.64,
+    "optimism": 0.3,
+    "constitution": 0.86,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "DECO_FACE_GLASSES_WAYFARERS_01",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "FACIALHAIR_FULLBEARD",
+      "HAIRCOLOR": "55483F",
+      "HAIRSTYLE": "NONE",
+      "SKINCOLOR": "BADA55",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Michael A Kerman",
+    "veteran": false,
+    "bravery": 0.22,
+    "stupidity": 0.15,
+    "optimism": 0.86,
+    "constitution": 0.7,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "DECO_FACE_GLASSES_WIDE_01",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "161514",
+      "HAIRSTYLE": "HAIR_M_02",
+      "SKINCOLOR": "99DA5B",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Michael C Kerman",
+    "veteran": false,
+    "bravery": 0.51,
+    "stupidity": 0.92,
+    "optimism": 0.81,
+    "constitution": 0.49,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "161514",
+      "HAIRSTYLE": "HAIR_M_03",
+      "SKINCOLOR": "BEDB6C",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Mike B Kerman",
+    "veteran": false,
+    "bravery": 0.72,
+    "stupidity": 0.13,
+    "optimism": 0.8,
+    "constitution": 0.51,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "C3A873",
+      "HAIRSTYLE": "HAIR_M_08",
+      "SKINCOLOR": "BEDB6C",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Mike S Kerman",
+    "veteran": false,
+    "bravery": 0.9,
+    "stupidity": 0.67,
+    "optimism": 0.39,
+    "constitution": 0.83,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "161514",
+      "HAIRSTYLE": "HAIR_M_04",
+      "SKINCOLOR": "BADA55",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Milota E Kerman",
+    "veteran": false,
+    "bravery": 0.78,
+    "stupidity": 0.42,
+    "optimism": 0.81,
+    "constitution": 0.49,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "161514",
+      "HAIRSTYLE": "HAIR_F_04",
+      "SKINCOLOR": "BADA55",
+      "TYPE": "CIRCLE"
+    }
+  },
+  {
+    "name": "Mim A Kerman",
+    "veteran": false,
+    "bravery": 0.87,
+    "stupidity": 0.2,
+    "optimism": 0.78,
+    "constitution": 0.45,
+    "looks": {
+      "EYES": "EYES_F_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "161514",
+      "HAIRSTYLE": "HAIR_F_03",
+      "SKINCOLOR": "9DC137",
+      "TYPE": "CIRCLE"
+    }
+  },
+  {
+    "name": "Nazario N Kerman",
+    "veteran": false,
+    "bravery": 0.03,
+    "stupidity": 0.19,
+    "optimism": 0.86,
+    "constitution": 0.02,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "DECO_FACE_GLASSES_CIRCULAR_01",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "F38D28",
+      "HAIRSTYLE": "HAIR_M_06",
+      "SKINCOLOR": "99DA5B",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Ness K Kerman",
+    "veteran": false,
+    "bravery": 0.93,
+    "stupidity": 1.0,
+    "optimism": 0.21,
+    "constitution": 0.63,
+    "looks": {
+      "EYES": "EYES_M_UNDERLASH",
+      "FACEDECORATION": "DECO_FACE_GLASSES_NERDY_01",
+      "FACEDETAIL": "KERBAL_HEAD_FACEDETAILS_BEAUTYMARK_01_D",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "464223",
+      "HAIRSTYLE": "HAIR_F_03",
+      "SKINCOLOR": "BEDB6C",
+      "TYPE": "CIRCLE"
+    }
+  },
+  {
+    "name": "Patrick A Kerman",
+    "veteran": false,
+    "bravery": 0.66,
+    "stupidity": 0.13,
+    "optimism": 0.97,
+    "constitution": 0.5,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "DECO_FACE_GLASSES_WIDE_02",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "55483F",
+      "HAIRSTYLE": "HAIR_M_02",
+      "SKINCOLOR": "BEDB6C",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Paul Z Kerman",
+    "veteran": false,
+    "bravery": 0.91,
+    "stupidity": 0.96,
+    "optimism": 0.61,
+    "constitution": 0.87,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "DECO_FACE_GLASSES_RIMLESS_01",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "FACIALHAIR_FULLBEARD",
+      "HAIRCOLOR": "55483F",
+      "HAIRSTYLE": "HAIR_M_BUZZCUT",
+      "SKINCOLOR": "BADA55",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Richard Z Kerman",
+    "veteran": false,
+    "bravery": 0.82,
+    "stupidity": 0.83,
+    "optimism": 0.57,
+    "constitution": 0.58,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "DECO_FACE_GLASSES_AVIATORS_01",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "464223",
+      "HAIRSTYLE": "HAIR_M_02",
+      "SKINCOLOR": "9DC137",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Riley G Kerman",
+    "veteran": false,
+    "bravery": 0.39,
+    "stupidity": 0.1,
+    "optimism": 0.76,
+    "constitution": 0.68,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "FFD37A",
+      "HAIRSTYLE": "HAIR_M_09",
+      "SKINCOLOR": "99DA5B",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Ruth C Kerman",
+    "veteran": false,
+    "bravery": 0.75,
+    "stupidity": 0.25,
+    "optimism": 1.0,
+    "constitution": 0.36,
+    "looks": {
+      "EYES": "EYES_F_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "FFD37A",
+      "HAIRSTYLE": "HAIR_F_07",
+      "SKINCOLOR": "BEDB6C",
+      "TYPE": "CIRCLE"
+    }
+  },
+  {
+    "name": "Scout F Kerman",
+    "veteran": false,
+    "bravery": 0.8,
+    "stupidity": 0.92,
+    "optimism": 0.77,
+    "constitution": 0.11,
+    "looks": {
+      "EYES": "EYES_F_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "FFBC73",
+      "HAIRSTYLE": "HAIR_F_04",
+      "SKINCOLOR": "BEDB6C",
+      "TYPE": "CIRCLE"
+    }
+  },
+  {
+    "name": "Smashley F Kerman",
+    "veteran": false,
+    "bravery": 0.64,
+    "stupidity": 0.19,
+    "optimism": 0.65,
+    "constitution": 0.32,
+    "looks": {
+      "EYES": "EYES_F_RAVEN",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "KERBAL_HEAD_FACEDETAILS_ROUGE_02_SUNKISSED_D",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "#740096",
+      "HAIRSTYLE": "HAIR_M_BANGSANDBOB",
+      "SKINCOLOR": "899E47",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Steverino L Kerman",
+    "veteran": false,
+    "bravery": 0.85,
+    "stupidity": 0.93,
+    "optimism": 0.89,
+    "constitution": 0.84,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "DECO_FACE_GLASSES_AVIATORS_01",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "C3A873",
+      "HAIRSTYLE": "HAIR_F_07",
+      "SKINCOLOR": "9DC137",
+      "TYPE": "CIRCLE"
+    }
+  },
+  {
+    "name": "Sydney A Kerman",
+    "veteran": false,
+    "bravery": 0.81,
+    "stupidity": 0.4,
+    "optimism": 0.74,
+    "constitution": 0.02,
+    "looks": {
+      "EYES": "EYES_F_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "003C7D",
+      "HAIRSTYLE": "HAIR_F_10",
+      "SKINCOLOR": "719E47",
+      "TYPE": "CIRCLE"
+    }
+  },
+  {
+    "name": "Thanicha L Kerman",
+    "veteran": false,
+    "bravery": 0.83,
+    "stupidity": 0.03,
+    "optimism": 0.93,
+    "constitution": 0.77,
+    "looks": {
+      "EYES": "EYES_F_01",
+      "FACEDECORATION": "DECO_FACE_GLASSES_CATEYE_01",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "845026",
+      "HAIRSTYLE": "HAIR_F_02",
+      "SKINCOLOR": "899E47",
+      "TYPE": "CIRCLE"
+    }
+  },
+  {
+    "name": "Thornton K Kerman",
+    "veteran": false,
+    "bravery": 0.96,
+    "stupidity": 0.74,
+    "optimism": 0.13,
+    "constitution": 0.56,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "KERBAL_HEAD_FACEDETAILS_EXHAUSTED_01_D",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "55483F",
+      "HAIRSTYLE": "HAIR_M_02",
+      "SKINCOLOR": "899E47",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Tim C Kerman",
+    "veteran": true,
+    "bravery": 1.0,
+    "stupidity": 0.0,
+    "optimism": 1.0,
+    "constitution": 1.0,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "KERBAL_HEAD_FACEDETAILS_EXHAUSTED_01_D",
+      "FACIALHAIR": "FACIALHAIR_TIMC",
+      "HAIRCOLOR": "55483F",
+      "HAIRSTYLE": "HAIR_TIMC",
+      "HELMET": "HELM_SPACESUIT_01",
+      "SKINCOLOR": "9DC137",
+      "TEAMCOLOR1": "262626",
+      "TEAMCOLOR2": "666666",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Tito R Kerman",
+    "veteran": false,
+    "bravery": 0.77,
+    "stupidity": 0.52,
+    "optimism": 0.76,
+    "constitution": 0.51,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "987C68",
+      "HAIRSTYLE": "HAIR_F_02",
+      "SKINCOLOR": "BADA55",
+      "TYPE": "CIRCLE"
+    }
+  },
+  {
+    "name": "Trigger Kerman",
+    "veteran": false,
+    "bravery": 0.24,
+    "stupidity": 0.27,
+    "optimism": 0.61,
+    "constitution": 0.6,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "DECO_FACE_GLASSES_NERDY_01",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "55483F",
+      "HAIRSTYLE": "NONE",
+      "SKINCOLOR": "BADA55",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Vinny S Kerman",
+    "veteran": false,
+    "bravery": 0.94,
+    "stupidity": 0.33,
+    "optimism": 0.93,
+    "constitution": 0.92,
+    "looks": {
+      "EYES": "EYES_M_01",
+      "FACEDECORATION": "DECO_FACE_GLASSES_AVIATORS_01_TINTED",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "26293A",
+      "HAIRSTYLE": "HAIR_M_01",
+      "SKINCOLOR": "719E47",
+      "TYPE": "SQUARE"
+    }
+  },
+  {
+    "name": "Zoe E Kerman",
+    "veteran": false,
+    "bravery": 0.91,
+    "stupidity": 0.59,
+    "optimism": 0.57,
+    "constitution": 0.5,
+    "looks": {
+      "EYES": "EYES_F_01",
+      "FACEDECORATION": "NONE",
+      "FACEDETAIL": "NONE",
+      "FACIALHAIR": "NONE",
+      "HAIRCOLOR": "FFC44F",
+      "HAIRSTYLE": "HAIR_F_03",
+      "SKINCOLOR": "BADA55",
+      "TYPE": "CIRCLE"
+    }
+  }
+]

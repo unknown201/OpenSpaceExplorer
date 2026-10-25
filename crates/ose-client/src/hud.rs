@@ -743,6 +743,26 @@ pub fn push(doc: &Document, text: &str, tier: &str) {
     }
 }
 
+/// The crew portraits (`KerbalPortraits`, bottom right in flight): each Kerbal aboard with a name plate and
+/// an EVA button that sends that Kerbal out.
+pub fn crew_html(crew: &[(u16, String)], can_eva: bool) -> String {
+    let mut html = String::new();
+    for (_, name) in crew {
+        let n = crate::esc(name);
+        let eva = if can_eva {
+            format!(
+                "<button data-ose=\"crew-eva\" data-eva=\"{n}\" title=\"{n} climbs out\">EVA</button>"
+            )
+        } else {
+            String::new()
+        };
+        html.push_str(&format!(
+            "<div class=\"fh-kerbal\" data-ose=\"crew-portrait\"><div class=\"pic\"><i style=\"--ico:url(assets/ui/hud/WB-ICO-Kerbal.png)\"></i>{eva}</div><div class=\"plate\" title=\"{n}\">{n}</div></div>"
+        ));
+    }
+    html
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

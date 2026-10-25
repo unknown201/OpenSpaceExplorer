@@ -51,6 +51,7 @@ pub mod scene;
 pub mod settings;
 pub mod thumb;
 pub mod tracking;
+pub mod training;
 pub mod trip;
 pub mod vab;
 #[cfg(target_arch = "wasm32")]
@@ -288,6 +289,12 @@ struct App {
     /// Launch sites from the server (protocol 30) and the one chosen (None: launch pad 1), kept per browser.
     launch_sites: Vec<ose_net::LaunchSite>,
     launch_site: Option<String>,
+    /// The campaign's astronauts (`KerbalRoster`), the one shown in the Training Center, and the launch
+    /// dialog's crew picks with the craft they were made for.
+    roster: Vec<ose_net::KerbalInfo>,
+    tc_selected: Option<String>,
+    lp_crew: Vec<String>,
+    lp_crew_for: Option<u64>,
     /// The loading screen: the place it last saw (None on the main menu) and when it went up.
     loading_place: Option<&'static str>,
     loading_since: Option<f64>,
@@ -627,6 +634,10 @@ pub fn start() -> Result<(), JsValue> {
         launch_sites: Vec::new(),
         launch_site: stored("ose.launchSite"),
         loading_place: None,
+        roster: Vec::new(),
+        tc_selected: None,
+        lp_crew: Vec::new(),
+        lp_crew_for: None,
         loading_since: None,
         adopt_attitude: false,
         lin_mode: false,
@@ -1529,17 +1540,63 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
     wire(
         "fh-missions-btn",
         Box::new(|a| {
-            if let Some(el) = a.borrow().doc.get_element_by_id("fh-missions") {
+            let doc = a.borrow().doc.clone();
+            if let Some(el) = doc.get_element_by_id("fh-missions") {
                 let open = el.class_list().toggle("open").unwrap_or(false);
                 store("ose.tracker", if open { "open" } else { "closed" });
+                if let Some(b) = doc.get_element_by_id("fh-missions-btn") {
+                    b.class_list().toggle_with_force("on", open).ok();
+                }
             }
         }),
     )?;
     if stored("ose.tracker").as_deref() == Some("open") {
-        if let Some(el) = doc.get_element_by_id("fh-missions") {
-            el.class_list().add_1("open").ok();
+        for id in ["fh-missions", "fh-missions-btn"] {
+            if let Some(el) = doc.get_element_by_id(id) {
+                el.class_list()
+                    .add_1(if id == "fh-missions" { "open" } else { "on" })
+                    .ok();
+            }
         }
     }
+    wire(
+        "fh-report-btn",
+        Box::new(|a| {
+            let app = a.borrow();
+            let open = app
+                .doc
+                .get_element_by_id("flight-report")
+                .is_some_and(|e| e.class_list().contains("open"));
+            if open {
+                if let Some(e) = app.doc.get_element_by_id("flight-report") {
+                    e.class_list().remove_1("open").ok();
+                }
+            } else {
+                app.show_flight_report("In flight", None);
+            }
+        }),
+    )?;
+    // Kerbal portraits: shown unless hidden from the app bar (kept per browser).
+    let crew_off = stored("ose.crewPortraits").as_deref() == Some("off");
+    if let Some(el) = doc.get_element_by_id("fh-crewbox") {
+        el.class_list().toggle_with_force("off", crew_off).ok();
+    }
+    if let Some(el) = doc.get_element_by_id("fh-crew-btn") {
+        el.class_list().toggle_with_force("on", !crew_off).ok();
+    }
+    wire(
+        "fh-crew-btn",
+        Box::new(|a| {
+            let doc = a.borrow().doc.clone();
+            if let Some(el) = doc.get_element_by_id("fh-crewbox") {
+                let off = el.class_list().toggle("off").unwrap_or(false);
+                store("ose.crewPortraits", if off { "off" } else { "on" });
+                if let Some(b) = doc.get_element_by_id("fh-crew-btn") {
+                    b.class_list().toggle_with_force("on", !off).ok();
+                }
+            }
+        }),
+    )?;
     wire(
         "fh-speed-mode",
         Box::new(|a| {
@@ -1652,10 +1709,66 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
     for id in ["fh-eva", "fh-board", "fh-flag", "fh-undock"] {
         wire(id, Box::new(move |a| a.borrow().crew_action(id)))?;
     }
+    // A crew portrait's EVA button sends that Kerbal out.
+    if let Some(box_el) = doc.get_element_by_id("fh-crewbox") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let name = ev
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .and_then(|e| e.get_attribute("data-eva"));
+            if let Some(name) = name {
+                a.borrow().crew_eva(Some(name));
+            }
+        });
+        box_el.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
     wire("fh-transmit", Box::new(|a| a.borrow().flight_science(1)))?;
     wire("fh-recover", Box::new(|a| a.borrow().flight_science(2)))?;
     wire("rnd-back", Box::new(|a| a.borrow().open_ksc()))?;
     wire("ksc-mission", Box::new(|a| a.borrow_mut().open_missions()))?;
+    wire("ksc-training", Box::new(|a| a.borrow_mut().open_training()))?;
+    wire("tc-back", Box::new(|a| a.borrow().open_ksc()))?;
+    if let Some(list) = doc.get_element_by_id("tc-list") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let name = ev
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .and_then(|e| e.closest("[data-ose-kerbal]").ok().flatten())
+                .and_then(|e| e.get_attribute("data-ose-kerbal"));
+            if let Some(name) = name {
+                let mut app = a.borrow_mut();
+                app.tc_selected = Some(name);
+                app.render_training();
+            }
+        });
+        list.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
+    if let Some(info) = doc.get_element_by_id("lp-info") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut()>::new(move || {
+            let mut app = a.borrow_mut();
+            let mut crew = Vec::new();
+            if let Ok(seats) = app.doc.query_selector_all("#lp-info [data-ose-seat]") {
+                for i in 0..seats.length() {
+                    if let Some(sel) = seats
+                        .get(i)
+                        .and_then(|n| n.dyn_into::<web_sys::HtmlSelectElement>().ok())
+                    {
+                        crew.push(sel.value());
+                    }
+                }
+            }
+            app.lp_crew = crew;
+            app.lp_crew_for = app.lp_selected;
+            app.render_launchpad_info();
+        });
+        info.add_event_listener_with_callback("change", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
     wire("mc-back", Box::new(|a| a.borrow().open_ksc()))?;
     wire(
         "mc-tab-primary",
@@ -3470,6 +3583,7 @@ impl App {
             "VAB" => self.open_vab(None),
             "ResearchCenter" => self.open_rnd(),
             "AstronautComplex" => self.open_missions(),
+            "TrainingCenter" => self.open_training(),
             "TrackingCenter" => self.open_tracking(),
             f if f.starts_with("Launchpad") => self.open_launchpad(),
             _ => {}
@@ -4039,6 +4153,15 @@ impl App {
                 }
                 self.render_trip();
             }
+            ServerMessage::KerbalRoster { kerbals } => {
+                self.roster = kerbals;
+                if self.screen_open("training") {
+                    self.render_training();
+                }
+                if self.screen_open("launchpad") {
+                    self.render_launchpad_info();
+                }
+            }
             ServerMessage::LaunchSites { sites } => {
                 self.launch_sites = sites;
                 if self
@@ -4298,6 +4421,7 @@ impl App {
             "vab",
             "rnd",
             "mission",
+            "training",
             "paused",
         ] {
             if let Some(el) = self.doc.get_element_by_id(&format!("screen-{id}")) {
@@ -5590,7 +5714,84 @@ impl App {
         self.menu_screen("launchpad");
         if let Some(ws) = &self.ws {
             send(ws, &ClientMessage::CraftList);
+            send(ws, &ClientMessage::KerbalRoster);
         }
+    }
+
+    // ---- Training Center
+
+    fn open_training(&mut self) {
+        if let Some(m) = self.doc.get_element_by_id("menu") {
+            m.class_list().remove_1("hidden").ok();
+        }
+        set_text(&self.doc, "menu-note", "");
+        self.menu_screen("training");
+        if let Some(ws) = &self.ws {
+            send(ws, &ClientMessage::KerbalRoster);
+        }
+        self.render_training();
+    }
+
+    fn vessel_name(&self, id: u64) -> Option<String> {
+        self.scene
+            .as_ref()
+            .and_then(|s| s.vessel(id))
+            .map(|v| v.name.clone())
+    }
+
+    fn render_training(&mut self) {
+        if !self
+            .roster
+            .iter()
+            .any(|k| Some(&k.name) == self.tc_selected.as_ref())
+        {
+            self.tc_selected = training::sorted(&self.roster)
+                .first()
+                .map(|k| k.name.clone());
+        }
+        let name = |id: u64| self.vessel_name(id);
+        let sel = self.tc_selected.as_deref();
+        if let Some(el) = self.doc.get_element_by_id("tc-list") {
+            el.set_inner_html(&training::render_list(&self.roster, sel, &name));
+        }
+        if let Some(el) = self.doc.get_element_by_id("tc-info") {
+            let k = self.roster.iter().find(|k| Some(k.name.as_str()) == sel);
+            el.set_inner_html(&training::render_info(k, &name));
+        }
+        let free = self
+            .roster
+            .iter()
+            .filter(|k| k.status == ose_net::KerbalStatus::Available)
+            .count();
+        set_text(
+            &self.doc,
+            "tc-count",
+            &format!("{} astronauts, {free} available", self.roster.len()),
+        );
+    }
+
+    /// Seats on a saved craft: the crew capacity of its parts (0 until its document arrives).
+    fn craft_seats(&self, id: u64) -> usize {
+        self.craft_docs
+            .get(&id)
+            .map(|d| {
+                d.parts
+                    .iter()
+                    .filter_map(|p| self.catalog.get(&p.part_id))
+                    .map(|cp| cp.crew_capacity as usize)
+                    .sum()
+            })
+            .unwrap_or(0)
+    }
+
+    /// Who flies craft `id`: the launch dialog's picks for it, else the roster's first available Kerbals.
+    fn launch_crew(&self, id: u64) -> Vec<String> {
+        let picks: &[String] = if self.lp_crew_for == Some(id) {
+            &self.lp_crew
+        } else {
+            &[]
+        };
+        training::fill_crew(picks, self.craft_seats(id), &self.roster)
     }
 
     fn render_crafts(&self) {
@@ -5700,15 +5901,16 @@ impl App {
         }
         el.set_inner_html(&format!(
             "<div class=\"lp-blueprint\"><canvas width=\"388\" height=\"220\" data-ose-thumb=\"{id}\"></canvas></div>\
-             <h3>{name}</h3><div class=\"lp-at\">At Launchpad 1</div>{desc}\
+             <h3>{name}</h3><div class=\"lp-at\">At {site}</div>{desc}\
              <div class=\"lp-report\"><b>Engineering Report</b><dl>\
              <dt>Parts</dt><dd>{parts}</dd><dt>Stages</dt><dd>{stages}</dd><dt>Mass</dt><dd>{wet:.1} t</dd>\
-             <dt>Delta-v (vacuum)</dt><dd>{dv:.0} m/s</dd></dl>{warn}</div>\
+             <dt>Delta-v (vacuum)</dt><dd>{dv:.0} m/s</dd></dl>{warn}</div>{crew}\
              <div class=\"lp-actions\"><button data-ose=\"lp-edit\" data-ose-craft-edit=\"{id}\">Edit Vehicle</button>\
              <button data-ose=\"lp-orbit\" data-ose-craft-orbit=\"{id}\" title=\"skip the ascent: put it straight into orbit\">Orbit</button>\
              <button class=\"go\" data-ose=\"lp-launch\" data-ose-craft-launch=\"{id}\">Launch</button></div>",
             id = c.id,
-            name = esc(&c.name),
+            site = esc(&self.launch_site_name()),
+                name = esc(&c.name),
             // Some stock crafts carry the original's untranslated placeholder.
             desc = if c.description.is_empty()
                 || c.description == "This should be a localized string"
@@ -5717,6 +5919,7 @@ impl App {
             } else {
                 format!("<p>{}</p>", esc(&c.description))
             },
+            crew = training::render_crew(&self.launch_crew(c.id), &self.roster),
             parts = c.parts,
             stages = c.stages,
             wet = c.wet_mass_t,
@@ -5889,6 +6092,16 @@ impl App {
             .ok();
     }
 
+    /// The chosen launch site's name (Launchpad 1 when none is chosen or the server has not listed them).
+    fn launch_site_name(&self) -> String {
+        let id = self.launch_site.as_deref().unwrap_or("LaunchPad_1");
+        self.launch_sites
+            .iter()
+            .find(|s| s.id == id)
+            .map(|s| s.name.clone())
+            .unwrap_or_else(|| "Launchpad 1".to_string())
+    }
+
     /// Fill the launch-site choosers (VAB header and launch pad dialog) from the server's list.
     fn render_launch_sites(&self) {
         let chosen = self.launch_site.clone().unwrap_or_default();
@@ -5905,6 +6118,9 @@ impl App {
                 name = esc(&s.name),
             ));
         }
+        // The launch dialog is titled after the site, as the original's is.
+        set_text(&self.doc, "lp-title", &self.launch_site_name());
+        self.render_launchpad_info();
         for id in ["vab-site", "lp-site"] {
             if let Some(el) = self.doc.get_element_by_id(id) {
                 el.set_inner_html(&html);
@@ -5927,6 +6143,9 @@ impl App {
                 &ClientMessage::LaunchSavedAt {
                     id,
                     site: self.launch_site.clone(),
+                    // Before the roster arrives the server picks the crew itself.
+                    crew: (!self.roster.is_empty() && self.craft_seats(id) > 0)
+                        .then(|| self.launch_crew(id)),
                 },
             );
         }
@@ -6051,11 +6270,8 @@ impl App {
         let Some(ws) = &self.ws else { return };
         let msg = match id {
             "fh-eva" => {
-                self.ftue("FTUE_First_EVA");
-                ClientMessage::GoEva {
-                    vessel,
-                    kerbal: None,
-                }
+                self.crew_eva(None);
+                return;
             }
             "fh-board" => {
                 let Some(target) = self.board_candidate() else {
@@ -6075,6 +6291,15 @@ impl App {
             _ => "fh-undock",
         }));
         send(ws, &msg);
+    }
+
+    /// Send a Kerbal of the flown vessel out on EVA (`None`: whoever the server picks).
+    fn crew_eva(&self, kerbal: Option<String>) {
+        let Some(vessel) = self.flying else { return };
+        let Some(ws) = &self.ws else { return };
+        self.ftue("FTUE_First_EVA");
+        self.crew_pending.set(Some("fh-eva"));
+        send(ws, &ClientMessage::GoEva { vessel, kerbal });
     }
 
     /// The nearest other vessel (not a Kerbal or a flag) within 10 m of the Kerbal flown.
@@ -6098,6 +6323,14 @@ impl App {
     /// the ground), Undock while docked.
     fn update_crew_buttons(&self, f: &ose_net::FlightReadout) {
         let landed = matches!(f.situation, ose_net::FlightSituation::Landed);
+        if let Some(el) = self.doc.get_element_by_id("fh-crewbox") {
+            let html = hud::crew_html(&f.crew, !f.eva);
+            let key = format!("{}:{}", html.len(), hud::fnv(&html));
+            if el.get_attribute("data-ose-key").as_deref() != Some(key.as_str()) {
+                el.set_inner_html(&html);
+                el.set_attribute("data-ose-key", &key).ok();
+            }
+        }
         for (id, show) in [
             ("fh-eva", !f.eva && !f.crew.is_empty()),
             ("fh-board", f.eva),
@@ -6216,30 +6449,38 @@ impl App {
             .is_some_and(|f| f.eva)
     }
 
-    /// A Kerbal on EVA, as the original's EVA keys: W walks ahead, S backs up, A/D turn, Space fires the
-    /// jetpack straight up. The server walks a Kerbal with throttle and a level heading, and flies the jetpack
-    /// when the attitude points steeply up.
+    /// A Kerbal on EVA, as the original's EVA keys: W walks ahead, S backs up, A/D turn, Q/E step sideways,
+    /// Space fires the jetpack straight up. The server walks a Kerbal with throttle and a level heading, and
+    /// flies the jetpack when the attitude points steeply up.
     fn eva_keys_tick(&mut self, now: f64, dt: f64) {
         let k = &self.keys;
-        let (walk, turn, jet) = (-k.pitch(), k.yaw(), k.is("Space"));
+        let (walk, strafe, turn, jet) = (-k.pitch(), k.roll(), k.yaw(), k.is("Space"));
         let heading = match self.attitude {
             ose_net::AttitudeMode::PitchHeading { heading_deg, .. } => heading_deg,
             _ => self.facing_pitch_heading().map(|(_, h)| h).unwrap_or(90.0),
         };
         let heading = (heading + turn * 90.0 * dt).rem_euclid(360.0);
+        // The walk direction relative to the Kerbal's own heading: ahead, back, to either side or between.
+        let moving = walk != 0.0 || strafe != 0.0;
         let (pitch_deg, heading_deg, throttle) = if jet {
             (85.0, heading, 1.0)
-        } else if walk < 0.0 {
-            (0.0, (heading + 180.0).rem_euclid(360.0), 1.0)
+        } else if moving {
+            let off = strafe.atan2(walk).to_degrees();
+            (
+                0.0,
+                (heading + off).rem_euclid(360.0),
+                walk.hypot(strafe).min(1.0),
+            )
         } else {
-            (0.0, heading, walk.max(0.0))
+            (0.0, heading, 0.0)
         };
         let attitude = ose_net::AttitudeMode::PitchHeading {
             pitch_deg,
-            // Backing up faces the walk direction for the server; the kept heading stays the Kerbal's own.
+            // Backing up or stepping sideways faces the walk direction for the server; the kept heading stays
+            // the Kerbal's own.
             heading_deg,
         };
-        if walk < 0.0 {
+        if moving && !jet {
             self.attitude = ose_net::AttitudeMode::PitchHeading {
                 pitch_deg: 0.0,
                 heading_deg: heading,
@@ -6247,7 +6488,7 @@ impl App {
         } else {
             self.attitude = attitude;
         }
-        let changed = throttle != self.throttle || turn != 0.0 || jet || walk != 0.0;
+        let changed = throttle != self.throttle || turn != 0.0 || jet || moving;
         if changed || self.controls_dirty {
             self.throttle = throttle;
             self.controls_dirty = true;
@@ -7017,6 +7258,7 @@ impl App {
             audio::Scene::Vab => Some("vab"),
             audio::Scene::Rnd => Some("rnd"),
             audio::Scene::Mission => Some("mission"),
+            _ if self.screen_open("training") => Some("training"),
             _ if self.flying.is_some() => Some("flight"),
             audio::Scene::Tracking => Some("tracking"),
             _ if self.tracking_open && menu_open => self.loading_place,

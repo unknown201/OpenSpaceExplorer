@@ -293,6 +293,13 @@
     #flight-hud .fh-sas button i, #flight-hud .fh-actions button i { width: 70%; height: 70%; background: currentColor; -webkit-mask: var(--ico) center / contain no-repeat; mask: var(--ico) center / contain no-repeat; }
     #flight-hud .fh-sas button.on, #flight-hud .fh-actions button.on { color: #7dff8a; border-color: #7dff8a99; background: #17321ce6; }
     #flight-hud .fh-sas button:disabled, #flight-hud .fh-actions button:disabled { opacity: 0.35; cursor: default; }
+    /* Crew portraits above the action bar, as the original's bottom-right Kerbal portraits. */
+    .fh-crewbox { position: absolute; right: calc(16 * var(--u)); bottom: calc(118 * var(--u)); display: flex; gap: calc(6 * var(--u)); pointer-events: auto; }
+    .fh-kerbal { width: calc(124 * var(--u)); background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)); overflow: hidden; }
+    .fh-kerbal .pic { position: relative; height: calc(78 * var(--u)); display: grid; place-items: center; background: repeating-linear-gradient(0deg, #0e2a1c 0 2px, #12361f 2px 4px); }
+    .fh-kerbal .pic i { width: 60%; height: 80%; background: #9fe8a6; -webkit-mask: var(--ico) center / contain no-repeat; mask: var(--ico) center / contain no-repeat; }
+    .fh-kerbal .plate { padding: calc(3 * var(--u)) calc(6 * var(--u)); font-size: calc(11 * var(--u)); color: #e6ecf7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; }
+    #flight-hud .fh-kerbal .pic button { position: absolute; top: calc(4 * var(--u)); right: calc(4 * var(--u)); margin: 0; width: auto; padding: 1px 6px; font-size: calc(10 * var(--u)); }
     .fh-actions { position: absolute; right: calc(16 * var(--u)); bottom: calc(64 * var(--u)); display: flex; gap: calc(4 * var(--u)); background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(8 * var(--u)); padding: calc(6 * var(--u)); }
     .fh-comm { position: absolute; top: calc(12 * var(--u)); right: calc(16 * var(--u)); display: flex; align-items: center; gap: calc(6 * var(--u)); background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)); padding: calc(4 * var(--u)) calc(10 * var(--u)); font-size: calc(12 * var(--u)); color: #f0a070; pointer-events: auto; }
     .fh-comm i { width: calc(18 * var(--u)); height: calc(18 * var(--u)); background: currentColor; -webkit-mask: var(--ico) center / contain no-repeat; mask: var(--ico) center / contain no-repeat; }
@@ -301,7 +308,11 @@
     #fh-fuel-fill { height: 100%; width: 0; background: linear-gradient(90deg, #e0a040, #ffd060); }
     .fh-burn { display: none !important; color: #9fb8ff; font-size: calc(13 * var(--u)); font-weight: 600; }
     .fh-burn.on { display: flex !important; }
-    #flight-hud .fh-missions-btn { position: absolute; top: calc(48 * var(--u)); right: calc(16 * var(--u)); width: calc(36 * var(--u)); height: calc(36 * var(--u)); padding: 0; display: grid; place-items: center; }
+    /* App bar (the original's flight AppBar): mission tracker, flight report, Kerbal portraits. */
+    .fh-appbar { position: absolute; top: calc(48 * var(--u)); right: calc(16 * var(--u)); display: flex; flex-direction: column; gap: calc(4 * var(--u)); pointer-events: auto; }
+    #flight-hud .fh-missions-btn { margin: 0; width: calc(36 * var(--u)); height: calc(36 * var(--u)); padding: 0; display: grid; place-items: center; color: #9fb0cc; }
+    #flight-hud .fh-missions-btn.on { color: #7dff8a; border-color: #7dff8a99; }
+    .fh-crewbox.off { display: none; }
     #flight-hud .fh-missions-btn i { width: 70%; height: 70%; background: currentColor; -webkit-mask: var(--ico) center / contain no-repeat; mask: var(--ico) center / contain no-repeat; }
     .fh-missions { display: none; position: absolute; top: calc(48 * var(--u)); right: calc(60 * var(--u)); width: calc(300 * var(--u)); background: #10141be6; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)); padding: calc(8 * var(--u)) calc(10 * var(--u)); pointer-events: auto; }
     .fh-missions.open { display: block; }
@@ -309,7 +320,7 @@
     #fh-missions-list li { padding: calc(4 * var(--u)) 0; border-top: 1px solid #ffffff14; }
     #fh-missions-list li b { display: block; color: #fff; } #fh-missions-list li.primary b { color: #ffd87a; }
     #fh-missions-list li small { color: #9fb0cc; } #fh-missions-list .done { color: #7dff8a; } #fh-missions-list li.empty { color: #9fb0cc; }
-    body.ui-hidden .fh-missions, body.ui-hidden .fh-missions-btn { display: none !important; }
+    body.ui-hidden .fh-missions, body.ui-hidden .fh-appbar { display: none !important; }
     #fh-stages { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: calc(3 * var(--u)); max-height: calc(360 * var(--u)); overflow: auto; }
     #fh-stages li { display: flex; flex-wrap: wrap; align-items: center; gap: calc(3 * var(--u)); padding: calc(3 * var(--u)) calc(6 * var(--u)); border: 1px solid #ffffff22; border-left: 3px solid #e0a04066; border-radius: calc(4 * var(--u)); background: #06080fcc; }
     #fh-stages li b { font-size: calc(11 * var(--u)); color: #e0a040; min-width: calc(14 * var(--u)); }
@@ -516,6 +527,34 @@
     /* Mission Control after the original's mission log: tabs and missions on the left, the briefing card on the
        right, over a dim room backdrop. */
     #menu:has(#screen-mission.open) { background: #070b12f5; align-items: stretch; justify-content: stretch; }
+    #menu:has(#screen-training.open) { background: #070b12f5; align-items: stretch; justify-content: stretch; }
+    #menu-card:has(#screen-training.open) { position: fixed; inset: 0; width: auto; max-height: none; padding: 0; background: none; border: 0; border-radius: 0; }
+    #menu-card:has(#screen-training.open) > h1, #menu-card:has(#screen-training.open) > .sub, #menu-card:has(#screen-training.open) > .info, #menu-card:has(#screen-training.open) > .note { display: none; }
+    body:has(#menu:not(.hidden) #screen-training.open) #hud { opacity: 0; pointer-events: none; }
+    #tc { display: flex; gap: calc(24 * var(--u)); height: 100vh; box-sizing: border-box; padding: calc(32 * var(--u)) calc(48 * var(--u)); font-family: var(--ui-font); }
+    #tc-roster { width: calc(460 * var(--u)); display: flex; flex-direction: column; background: #10161fe6; border: 1px solid #2c3d63; border-radius: calc(8 * var(--u)); padding: calc(16 * var(--u)); }
+    .tc-count { margin: calc(10 * var(--u)) 0; font-size: calc(13 * var(--u)); color: #8a94a8; }
+    #tc-list { list-style: none; margin: 0; padding: 0; overflow: auto; flex: 1; }
+    .tc-kerbal { display: flex; align-items: center; gap: calc(12 * var(--u)); padding: calc(8 * var(--u)) calc(12 * var(--u)); margin-bottom: calc(6 * var(--u)); background: #0b1020; border: 1px solid #2c3d63; border-left: calc(4 * var(--u)) solid #8fd08f; border-radius: 4px; cursor: pointer; color: #e6ecf7; font-size: calc(15 * var(--u)); }
+    .tc-kerbal.assigned { border-left-color: #8fb0ff; } .tc-kerbal.missing { border-left-color: #c05050; opacity: .7; }
+    .tc-kerbal.selected { background: #182641; border-color: #5b80c4; }
+    .tc-kerbal .where { font-size: calc(12 * var(--u)); color: #9fb0cc; }
+    .tc-vet { margin-left: calc(6 * var(--u)); padding: 0 calc(6 * var(--u)); border-radius: 3px; background: #e6b84a; color: #1a1406; font-size: calc(11 * var(--u)); font-weight: 700; }
+    .tc-face { width: calc(40 * var(--u)); height: calc(40 * var(--u)); flex: none; }
+    #tc-info { flex: 1; max-width: calc(760 * var(--u)); background: #10161fe6; border: 1px solid #2c3d63; border-radius: calc(8 * var(--u)); padding: calc(24 * var(--u)) calc(28 * var(--u)); overflow: auto; color: #cfd6e6; }
+    .tc-file { display: flex; gap: calc(20 * var(--u)); align-items: center; } .tc-file .tc-face { width: calc(110 * var(--u)); height: calc(110 * var(--u)); }
+    #tc-info h3 { margin: 0 0 calc(6 * var(--u)); font-size: calc(30 * var(--u)); color: #fff; }
+    .tc-status { font-size: calc(16 * var(--u)); font-weight: 600; } .tc-status.available { color: #8fd08f; } .tc-status.assigned { color: #8fb0ff; } .tc-status.missing { color: #e07070; }
+    .tc-enrolled { margin-top: calc(4 * var(--u)); font-size: calc(13 * var(--u)); color: #8a94a8; }
+    .tc-sub { margin-top: calc(24 * var(--u)); font-size: calc(12 * var(--u)); text-transform: uppercase; letter-spacing: 0.08em; color: #6f7f9c; }
+    .tc-traits { display: grid; grid-template-columns: max-content 1fr; gap: calc(10 * var(--u)) calc(16 * var(--u)); align-items: center; font-size: calc(15 * var(--u)); }
+    .tc-traits dt { color: #cfd6e6; } .tc-traits dd { margin: 0; }
+    .tc-bar { display: block; height: calc(10 * var(--u)); background: #0b1020; border: 1px solid #2c3d63; border-radius: 5px; overflow: hidden; } .tc-bar i { display: block; height: 100%; background: linear-gradient(90deg, #4f8f1f, #8fd08f); }
+    .tc-none, .tc-empty { color: #8a94a8; }
+    #lp-info .lp-crew { margin-top: calc(8 * var(--u)); padding: calc(8 * var(--u)) calc(10 * var(--u)); background: #ffffff80; border: 1px solid #6a718f; border-radius: calc(4 * var(--u)); display: flex; flex-wrap: wrap; gap: calc(6 * var(--u)) calc(12 * var(--u)); align-items: center; font-size: calc(13 * var(--u)); color: #0a0a0a; }
+    #lp-info .lp-crew b { width: 100%; }
+    #lp-info .lp-crew label { display: flex; gap: calc(6 * var(--u)); align-items: center; white-space: nowrap; color: #0a0a0a; font-weight: 600; }
+    #lp-info .lp-crew select { font: inherit; padding: calc(2 * var(--u)) calc(4 * var(--u)); }
     #menu-card:has(#screen-mission.open) { position: fixed; inset: 0; width: auto; max-height: none; padding: 0; background: none; border: 0; border-radius: 0; }
     #menu-card:has(#screen-mission.open) > h1, #menu-card:has(#screen-mission.open) > .sub, #menu-card:has(#screen-mission.open) > .info, #menu-card:has(#screen-mission.open) > .note { display: none; }
     body:has(#menu:not(.hidden) #screen-mission.open) #hud { opacity: 0; pointer-events: none; }
@@ -736,7 +775,7 @@
           <div class="ksc-title"><span class="flag"><img src="assets/ui/ICO-Map-KSC-16x16.png" alt="" /></span><h2>Kerbal Space Center (KSC)</h2></div>
           <div id="ksc-buildings">
             <button id="ksc-vab" data-ose="ksc-vab" title="Vehicle Assembly Building: design and build rockets"><img src="assets/ui/ICO-VAB-Med.png" alt="" />VAB</button>
-            <button id="ksc-training" data-ose="ksc-training" disabled title="not yet"><img src="assets/ui/ICO-Training-Center-Med.png" alt="" />Training Center</button>
+            <button id="ksc-training" data-ose="ksc-training"><img src="assets/ui/ICO-Training-Center-Med.png" alt="" />Training Center</button>
             <button id="ksc-rnd" data-ose="ksc-rnd" title="Research and Development: spend science on new technology"><img src="assets/ui/ICO-RDCenter-Med.png" alt="" />R&amp;D Center</button>
             <button id="ksc-tracking" data-ose="ksc-tracking" title="Tracking Station: every vessel and body in the system (M)"><img src="assets/ui/ICO-Tracking-Station-Med.png" alt="" />Tracking Station</button>
             <button id="ksc-mission" data-ose="ksc-mission" title="Mission Control: take on missions and hand them in for science"><img src="assets/ui/ICO-Mission-Control-Med.png" alt="" />Mission Control</button>
@@ -748,7 +787,7 @@
       <div class="screen" id="screen-launchpad" data-ose="launchpad">
         <div id="lp-window">
           <div class="lp-head">
-            <span class="flag"><img src="assets/ui/ICO-Launchpad-Med.png" alt="" /></span><h2>Launchpad 1</h2>
+            <span class="flag"><img src="assets/ui/ICO-Launchpad-Med.png" alt="" /></span><h2 id="lp-title" data-ose="lp-title">Launchpad 1</h2>
             <select id="lp-site" data-ose="lp-site" title="Launch site: a launch pad or the runway" style="display:none"></select>
             <label class="lp-stock"><input id="launch-stock" type="checkbox" checked /> Show stock</label>
             <button id="launchpad-back" class="lp-close" data-ose="launchpad-back" title="back to the KSC">&#10005;</button>
@@ -836,6 +875,16 @@
           <div id="mc-briefing" data-ose="mc-briefing"></div>
         </div>
       </div>
+      <div class="screen" id="screen-training" data-ose="training">
+        <div id="tc">
+          <div id="tc-roster">
+            <div class="mc-head"><h2>Training Center</h2><button id="tc-back" class="secondary" data-ose="tc-back">Back to KSC</button></div>
+            <div id="tc-count" class="tc-count"></div>
+            <ul id="tc-list" data-ose="tc-list"></ul>
+          </div>
+          <div id="tc-info" data-ose="tc-info"></div>
+        </div>
+      </div>
       <div class="screen" id="screen-paused" data-ose="menu-paused">
         <div class="pm-title"><img src="assets/ui/ICO-Map-KSC-16x16.png" alt="" /><h2>Game Menu</h2></div>
         <button id="resume" data-ose="resume">Resume</button>
@@ -918,7 +967,12 @@
       <button id="fh-stage-btn" data-ose="flight-stage" title="Space">STAGE</button>
     </div>
     <div class="fh-actions" id="fh-actions" data-ose="flight-actions"></div>
-    <button class="fh-missions-btn" id="fh-missions-btn" data-ose="flight-missions-btn" title="Mission tracker: the missions you have taken on"><i style="--ico:url(assets/ui/hud/ICO-AppBar-MissionTracker-24x24.png)"></i></button>
+    <div class="fh-crewbox" id="fh-crewbox" data-ose="flight-crew"></div>
+    <div class="fh-appbar" id="fh-appbar" data-ose="flight-appbar">
+      <button class="fh-missions-btn" id="fh-missions-btn" data-ose="flight-missions-btn" title="Mission tracker: the missions you have taken on"><i style="--ico:url(assets/ui/hud/ICO-AppBar-MissionTracker-24x24.png)"></i></button>
+      <button class="fh-missions-btn" id="fh-report-btn" data-ose="flight-report-btn" title="Flight report: what this flight has done so far"><i style="--ico:url(assets/ui/hud/ICO-AppBar-FlightReport-24x24.png)"></i></button>
+      <button class="fh-missions-btn on" id="fh-crew-btn" data-ose="flight-crew-btn" title="Kerbal portraits: show or hide the crew"><i style="--ico:url(assets/ui/hud/ICO-AppBar-KerbalManager-24x24.png)"></i></button>
+    </div>
     <div class="fh-missions" id="fh-missions" data-ose="flight-missions"><div class="fh-label">MISSIONS</div><ul id="fh-missions-list"></ul></div>
     <div class="fh-comm" id="fh-comm" data-ose="flight-comm" title="CommNet: transmitting science and controlling probes need a link to the KSC"><i style="--ico:url(assets/ui/hud/ICO-Flight-Cluster-Commnet.png)"></i><span id="fh-comm-text">--</span></div>
     <div class="fh-help">W/S/A/D steer (hold, Caps Lock fine), Shift/Ctrl throttle, Z/X full/cut, Space stage, T SAS on/off, G gear, B brakes, M map, right-drag to look, Home resets the camera</div>

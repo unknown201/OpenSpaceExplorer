@@ -114,6 +114,12 @@ fn main() -> anyhow::Result<()> {
             regions.len() / 1024,
             tech.len()
         );
+        let kerbals = ose_importer::import_kerbals(&args.data.join("kerbal_variety_text"))?;
+        println!("kerbals: {}", kerbals.len());
+        std::fs::write(
+            args.own_out.join("kerbals.json"),
+            serde_json::to_string_pretty(&kerbals)?,
+        )?;
         std::fs::write(
             args.own_out.join("resources.json"),
             serde_json::to_string_pretty(&game.resources)?,
