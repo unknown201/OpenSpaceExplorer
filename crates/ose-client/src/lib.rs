@@ -2594,13 +2594,25 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         cb.forget();
         let a = app.clone();
         let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
-            let close = ev
-                .target()
-                .and_then(|t| t.dyn_into::<Element>().ok())
+            let t = ev.target().and_then(|t| t.dyn_into::<Element>().ok());
+            let close = t
+                .as_ref()
                 .and_then(|e| e.closest("#pam-close").ok().flatten())
                 .is_some();
+            let num = |k: &str| {
+                t.as_ref()
+                    .and_then(|e| e.get_attribute(k))
+                    .and_then(|v| v.parse::<usize>().ok())
+            };
+            let mut app = a.borrow_mut();
             if close {
-                a.borrow_mut().vab_open_pam(None, 0.0, 0.0);
+                app.vab_open_pam(None, 0.0, 0.0);
+            } else if let Some(k) = num("data-loose-launch") {
+                app.vab_open_pam(None, 0.0, 0.0);
+                app.make_launch_assembly(k);
+            } else if let Some(k) = num("data-loose-delete") {
+                app.vab_open_pam(None, 0.0, 0.0);
+                app.delete_loose(k);
             }
         });
         pam.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
@@ -3737,6 +3749,16 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                     app.render_vab();
                 }
                 app.vab_open_pam(hit, nx, ny);
+                // On a loose assembly: its own window (make it the launch assembly, or delete it).
+                if hit.is_none() {
+                    if let Some(k) = app
+                        .gpu
+                        .as_ref()
+                        .and_then(|g| app.vab3d.pick_loose(g, px, py))
+                    {
+                        app.vab_open_loose(k, nx, ny);
+                    }
+                }
             }
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -6530,6 +6552,104 @@ impl App {
                 el.class_list().remove_1("open").ok();
             }
         }
+    }
+
+    /// The window of loose assembly `k` (the original's assembly context): what it is, Make launch assembly
+    /// and Delete.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    fn vab_open_loose(&mut self, k: usize, x: f64, y: f64) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let Some((parts, _)) = self.vab3d.loose.get(k) else {
+                return;
+            };
+            let Some(el) = self
+                .doc
+                .get_element_by_id("vab-pam")
+                .and_then(|e| e.dyn_into::<HtmlElement>().ok())
+            else {
+                return;
+            };
+            let root = parts
+                .first()
+                .map(|p| {
+                    self.catalog
+                        .get(&p.part_id)
+                        .map(|s| s.display_title().to_string())
+                        .unwrap_or_else(|| p.part_id.clone())
+                })
+                .unwrap_or_default();
+            el.set_inner_html(&format!(
+                "<div class=\"pam-head\"><b>Loose assembly</b><button id=\"pam-close\" title=\"Close (Esc)\">&#10005;</button></div>\
+                 <div class=\"pam-row\"><span>Parts</span><b>{n}</b></div><div class=\"pam-row\"><span>Root</span><b>{root}</b></div>\
+                 <div class=\"pam-acts\"><button data-loose-launch=\"{k}\" data-ose=\"loose-launch\" title=\"Launch this assembly; the current vehicle goes to the floor\">Make launch assembly</button>\
+                 <button data-loose-delete=\"{k}\" data-ose=\"loose-delete\">Delete assembly</button></div>",
+                n = parts.len(),
+                root = esc(&root),
+            ));
+            let w = web_sys::window()
+                .and_then(|w| w.inner_width().ok())
+                .and_then(|w| w.as_f64())
+                .unwrap_or(1600.0);
+            el.style()
+                .set_property("left", &format!("{}px", (x + 14.0).min(w - 320.0)))
+                .ok();
+            el.style()
+                .set_property("top", &format!("{}px", y.max(70.0)))
+                .ok();
+            el.class_list().add_1("open").ok();
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = (k, x, y);
+    }
+
+    /// Make loose assembly `k` the vehicle that launches and put the vehicle on the floor in its place, as
+    /// the original's Set Launch Assembly. The undo history starts again (it holds the old vehicle).
+    fn make_launch_assembly(&mut self, k: usize) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            if k >= self.vab3d.loose.len() {
+                return;
+            }
+            // The two trade places: the new launch assembly stands where vehicles are built, the old
+            // vehicle where the assembly stood.
+            let (parts, at) = self.vab3d.loose.remove(k);
+            if k < self.loose_stamps.len() {
+                self.loose_stamps.remove(k);
+            }
+            let old = std::mem::replace(&mut self.editor.craft.parts, parts);
+            if !old.is_empty() {
+                self.vab3d.loose.push((old, at));
+                self.loose_stamps.push(0);
+            }
+            self.editor.craft.stages.clear();
+            self.editor.selected = None;
+            self.vab_history = Default::default();
+            let cat = std::mem::take(&mut self.catalog);
+            self.editor.rebuild_stages(&cat);
+            self.catalog = cat;
+            self.save_loose();
+            self.render_vab();
+            hud::push(&self.doc, "Launch assembly set", "passive");
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = k;
+    }
+
+    fn delete_loose(&mut self, k: usize) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            if k < self.vab3d.loose.len() {
+                self.vab3d.loose.remove(k);
+                if k < self.loose_stamps.len() {
+                    self.loose_stamps.remove(k);
+                }
+                self.save_loose();
+                self.render_vab();
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = k;
     }
 
     /// A change in the part manager: a tank's fill (`res` index) or the crossfeed switch.
