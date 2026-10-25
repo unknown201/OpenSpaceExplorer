@@ -207,6 +207,9 @@ struct App {
     /// Vessels this client has staged at least once: their first stage is lit, so the next is the one after.
     staged: std::collections::HashSet<u64>,
     roll_sent: f32,
+    /// Screen points (CSS px) along the planning vessel's current orbit with their UT, from the last map
+    /// frame: a click near one adds a maneuver node there, as clicking an orbit does in the original.
+    orbit_pick: Vec<(f64, f64, f64)>,
     gpu_canvas: HtmlCanvasElement,
     /// 3D orbit camera: yaw and pitch (radians) around the focus, distance in kilometres.
     orbit_yaw: f64,
@@ -455,6 +458,7 @@ pub fn start() -> Result<(), JsValue> {
         toasts: hud::Toasts::default(),
         staged: Default::default(),
         roll_sent: 0.0,
+        orbit_pick: Vec::new(),
         gpu_canvas: get("gpu")?.dyn_into()?,
         orbit_yaw: 0.6,
         orbit_pitch: 0.5,
@@ -1929,6 +1933,28 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
         app.drag = None;
         app.canvas.class_list().remove_1("dragging").ok();
         app.gpu_canvas.class_list().remove_1("dragging").ok();
+        // A press and release within a few pixels on the map near the planning vessel's orbit adds a node.
+        if let Some((x, y)) = app.press {
+            let (nx, ny) = (ev.client_x() as f64, ev.client_y() as f64);
+            let menu_open = app
+                .doc
+                .get_element_by_id("menu")
+                .map(|m| !m.class_list().contains("hidden"))
+                .unwrap_or(false);
+            if ev.button() == 0
+                && (nx - x).abs() < 4.0
+                && (ny - y).abs() < 4.0
+                && app.in_session
+                && !menu_open
+                && !app.flight_active()
+                && app.is_3d()
+            {
+                let rect = app.gpu_canvas.get_bounding_client_rect();
+                if app.map_click(nx - rect.left(), ny - rect.top()) {
+                    app.press = None;
+                }
+            }
+        }
         // A press and release within a few pixels on the KSC scene is a click on a facility.
         #[cfg(target_arch = "wasm32")]
         if let Some((x, y)) = app.press.take() {
@@ -5139,6 +5165,43 @@ impl App {
         self.send_node();
     }
 
+    /// A click on the map near the planning vessel's orbit puts a maneuver node there (CSS px).
+    fn map_click(&mut self, x: f64, y: f64) -> bool {
+        let best = self
+            .orbit_pick
+            .iter()
+            .map(|(px, py, t)| ((px - x).powi(2) + (py - y).powi(2), *t))
+            .min_by(|a, b| a.0.total_cmp(&b.0));
+        let Some((d2, t)) = best else { return false };
+        if d2 > 14.0 * 14.0 {
+            return false;
+        }
+        // Keep the view where it is: add_node frames the vessel's orbit.
+        let (dist, focus, offset) = (self.orbit_dist_km, self.camera.focus, self.camera.offset);
+        let m_per_px = self.camera.m_per_px;
+        self.add_node();
+        (self.orbit_dist_km, self.camera.focus, self.camera.offset) = (dist, focus, offset);
+        self.camera.m_per_px = m_per_px;
+        if let Some(node) = self.node.as_mut() {
+            node.anchor_ut = self.time.ut_at(now_ms());
+            node.ut = t;
+            let dt = t - node.anchor_ut;
+            if let Some(el) = self
+                .doc
+                .get_element_by_id("node-dt")
+                .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+            {
+                let max: f64 = el.max().parse().unwrap_or(600.0);
+                if dt > max {
+                    el.set_max(&format!("{:.0}", dt.ceil()));
+                }
+            }
+            set_input_value(&self.doc, "node-dt", dt);
+        }
+        self.send_node();
+        true
+    }
+
     fn clear_node(&mut self) {
         if let (Some(node), Some(ws)) = (self.node.take(), &self.ws) {
             send(
@@ -5611,6 +5674,7 @@ impl App {
     #[cfg(target_arch = "wasm32")]
     fn frame_3d(&mut self, ut: f64, positions: &[ose_math::DVec3], centre: ose_math::DVec3) {
         use glam::{DQuat, DVec3 as GV};
+        let planner = self.my_vessel().map(|(id, _)| id);
         let Some(scene) = &self.scene else {
             return;
         };
@@ -5783,6 +5847,31 @@ impl App {
                     }
                     None => {
                         style.set_property("visibility", "hidden").ok();
+                    }
+                }
+            }
+        }
+        // Pick points along the planning vessel's first patch (one orbit ahead at most).
+        self.orbit_pick.clear();
+        if let Some(v) = planner.and_then(|id| scene.vessel(id)) {
+            let (bi, elements, start, end) =
+                match scene.trajectories.get(&v.id).and_then(|p| p.first()) {
+                    Some(p) => (p.body as usize, p.orbit, p.start_ut.max(ut), p.end_ut),
+                    None => (v.reference_body as usize, v.orbit, ut, f64::INFINITY),
+                };
+            if let Some(body) = scene.bodies.get(bi) {
+                let orbit = scene::orbit_from(body.mu, &elements);
+                let span = if orbit.period.is_finite() {
+                    orbit.period.min(end - start)
+                } else {
+                    (end - start).min(6.0 * 3600.0)
+                };
+                if span.is_finite() && span > 0.0 {
+                    for k in 1..=360 {
+                        let t = start + span * k as f64 / 360.0;
+                        if let Some((x, y)) = project(to_km(positions[bi] + orbit.position_at(t))) {
+                            self.orbit_pick.push((x, y, t));
+                        }
                     }
                 }
             }
