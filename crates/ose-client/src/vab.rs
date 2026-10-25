@@ -120,6 +120,8 @@ fn quat_rotate(q: Quat, v: DVec3) -> DVec3 {
 pub struct Editor {
     pub craft: Craft,
     pub selected: Option<usize>,
+    /// A new craft starts as a plane (its first part lying along the floor).
+    pub plane_new: bool,
 }
 
 impl Default for Editor {
@@ -138,6 +140,7 @@ impl Editor {
                 stages: Vec::new(),
             },
             selected: None,
+            plane_new: false,
         }
     }
 
@@ -147,7 +150,13 @@ impl Editor {
         } else {
             Some(0)
         };
-        Editor { craft, selected }
+        let mut e = Editor {
+            craft,
+            selected,
+            plane_new: false,
+        };
+        e.plane_new = e.is_plane();
+        e
     }
 
     pub fn is_empty(&self) -> bool {
@@ -243,7 +252,11 @@ impl Editor {
                 own_node: None,
                 parent_node: None,
                 local_position: DVec3::ZERO,
-                local_rotation: IDENTITY,
+                local_rotation: if self.plane_new {
+                    axis_turn(0, PLANE_TURN_DEG)
+                } else {
+                    IDENTITY
+                },
                 stage_index,
                 fuel_crossfeed: true,
                 resources,
@@ -314,8 +327,11 @@ impl Editor {
             )
         };
         // Positions are stored relative to the craft root, as KSP2 assemblies (and the stock crafts) store
-        // `partState.localPosition`; the editor never rotates parts, so the parent's position is its frame.
-        let local_position = self.craft.parts[target].local_position + local_position;
+        // `partState.localPosition`; the new part takes its parent's rotation (a plane's parts lie along it, a
+        // part under a radial decoupler hangs off its side), its node offset turned with it.
+        let pq = unit_or_identity(self.craft.parts[target].local_rotation);
+        let local_position =
+            self.craft.parts[target].local_position + quat_rotate(pq, local_position);
         let idx = self.craft.parts.len();
         self.craft.parts.push(CraftPart {
             guid: format!("p{}", idx + 1),
@@ -324,7 +340,7 @@ impl Editor {
             own_node,
             parent_node,
             local_position,
-            local_rotation: IDENTITY,
+            local_rotation: pq,
             stage_index,
             fuel_crossfeed: true,
             resources,
@@ -726,6 +742,78 @@ pub fn turn_then(a: Quat, b: Quat) -> Quat {
     quat_mul(a, b)
 }
 
+/// `q`, or no rotation for a zero (unset) quaternion.
+fn unit_or_identity(q: Quat) -> Quat {
+    let n = (q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w).sqrt();
+    if n < 1e-9 {
+        IDENTITY
+    } else {
+        Quat {
+            x: q.x / n,
+            y: q.y / n,
+            z: q.z / n,
+            w: q.w / n,
+        }
+    }
+}
+
+/// `v` turned by `q` (an unset quaternion turns nothing).
+pub fn rotate_by(q: Quat, v: DVec3) -> DVec3 {
+    quat_rotate(unit_or_identity(q), v)
+}
+
+/// The turn that lays a rocket-built craft down as a plane: its +Y (the nose) to +Z, along the hangar floor.
+pub const PLANE_TURN_DEG: f64 = 90.0;
+
+impl Editor {
+    /// Whether the craft is laid out as a plane (its root's +Y along the floor), as the server tells planes.
+    pub fn is_plane(&self) -> bool {
+        self.craft
+            .parts
+            .iter()
+            .find(|p| p.parent.is_none())
+            .map(|p| {
+                quat_rotate(
+                    unit_or_identity(p.local_rotation),
+                    DVec3::new(0.0, 1.0, 0.0),
+                )
+                .y
+                .abs()
+                    < 0.5
+            })
+            .unwrap_or(false)
+    }
+
+    /// Turn the whole craft about its root between standing (a rocket) and lying along the floor (a plane),
+    /// the original's VAB orientation switch.
+    pub fn set_plane(&mut self, plane: bool) {
+        if plane == self.is_plane() || self.craft.parts.is_empty() {
+            self.plane_new = plane;
+            return;
+        }
+        self.plane_new = plane;
+        let r = axis_turn(
+            0,
+            if plane {
+                PLANE_TURN_DEG
+            } else {
+                -PLANE_TURN_DEG
+            },
+        );
+        let origin = self
+            .craft
+            .parts
+            .iter()
+            .find(|p| p.parent.is_none())
+            .map(|p| p.local_position)
+            .unwrap_or_default();
+        for p in &mut self.craft.parts {
+            p.local_position = origin + quat_rotate(r, p.local_position - origin);
+            p.local_rotation = quat_mul(r, unit_or_identity(p.local_rotation));
+        }
+    }
+}
+
 /// Symmetry counts the original offers (`BuilderSymmetryMode` X1..X8), in X-key order.
 pub const SYMMETRY: [u32; 6] = [1, 2, 3, 4, 6, 8];
 
@@ -778,8 +866,11 @@ impl Editor {
     ) -> Option<SurfaceSpot> {
         let p = self.craft.parts.get(target)?;
         let spec = catalog.get(&p.part_id)?;
-        let axis = p.local_position + quat_rotate(p.local_rotation, spec.centre());
-        let mut azimuth = (hit.z - axis.z).atan2(hit.x - axis.x);
+        // In the part's own frame, where its long axis is +Y (a plane's fuselage lies along the floor).
+        let pq = unit_or_identity(p.local_rotation);
+        let h = quat_rotate(quat_conj(pq), hit - p.local_position);
+        let axis = spec.centre();
+        let mut azimuth = (h.z - axis.z).atan2(h.x - axis.x);
         if let Some(step) = snap_deg.filter(|s| *s > 0.0) {
             let s = step.to_radians();
             azimuth = (azimuth / s).round() * s;
@@ -787,7 +878,7 @@ impl Editor {
         Some(SurfaceSpot {
             target,
             azimuth,
-            height: hit.y,
+            height: h.y,
             turn: IDENTITY,
         })
     }
@@ -807,7 +898,9 @@ impl Editor {
             return Vec::new();
         };
         let node = surface_node(spec).map(|n| n.position).unwrap_or_default();
-        let axis = p.local_position + quat_rotate(p.local_rotation, tspec.centre());
+        // Worked out in the target's own frame (`spot.height` is along its +Y), then turned into the craft's.
+        let pq = unit_or_identity(p.local_rotation);
+        let axis = tspec.centre();
         let radius = tspec.size().x.min(tspec.size().z) * 0.5;
         (0..symmetry.max(1))
             .map(|k| {
@@ -815,7 +908,8 @@ impl Editor {
                 let out = DVec3::new(az.cos(), 0.0, az.sin());
                 let contact = DVec3::new(axis.x, spot.height, axis.z) + out * radius;
                 let q = quat_mul(facing_in(az), spot.turn);
-                (contact - quat_rotate(q, node), q)
+                let local = contact - quat_rotate(q, node);
+                (p.local_position + quat_rotate(pq, local), quat_mul(pq, q))
             })
             .collect()
     }
@@ -1340,6 +1434,41 @@ mod tests {
         assert!((after.y - before.y).abs() < 1e-9 && (after.x - before.x).abs() < 1e-9);
         let w = turn_then(axis_turn(1, 90.0), axis_turn(1, 90.0));
         assert!((quat_rotate(w, DVec3::new(1.0, 0.0, 0.0)).x + 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_plane_lies_along_the_floor_and_its_parts_follow() {
+        let cat = catalog();
+        let mut e = Editor::new("test");
+        e.add_part(&cat["pod"], &cat).unwrap();
+        let t = e.add_part(&cat["tank"], &cat).unwrap();
+        assert!(!e.is_plane());
+        let before = e.craft.parts[t].local_position;
+        e.set_plane(true);
+        assert!(e.is_plane());
+        // The tank hung 1.6 m below the pod; now 1.6 m behind it along -Z, turned the same way.
+        let p = e.craft.parts[t].local_position;
+        assert!(
+            (p.y).abs() < 1e-9 && (p.z + before.y.abs()).abs() < 1e-9,
+            "{p:?}"
+        );
+        // A part added under the tank keeps going along the fuselage.
+        let en = e.add_part(&cat["engine"], &cat).unwrap();
+        let q = e.craft.parts[en].local_position;
+        assert!(q.z < p.z - 1.0 && q.y.abs() < 1e-9, "{q:?}");
+        // A side part on the fuselage still faces it.
+        let spot = e
+            .surface_spot(t, DVec3::new(0.625, 0.0, p.z), &cat, Some(15.0))
+            .unwrap();
+        let l = e.add_surface(&cat["light"], &cat, spot, 1).unwrap()[0];
+        let lp = e.craft.parts[l].local_position;
+        assert!(
+            (lp.x - 0.625).abs() < 1e-6 && (lp.z - p.z).abs() < 1e-6,
+            "{lp:?}"
+        );
+        e.set_plane(false);
+        assert!(!e.is_plane());
+        assert!((e.craft.parts[t].local_position.y - before.y).abs() < 1e-9);
     }
 
     #[test]

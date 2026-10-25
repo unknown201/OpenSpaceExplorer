@@ -1538,6 +1538,23 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
     )?;
     wire("vab-save", Box::new(|a| a.borrow_mut().vab_save(false)))?;
     wire("vab-undo", Box::new(|a| a.borrow_mut().vab_undo(false)))?;
+    wire(
+        "vab-orient",
+        Box::new(|a| {
+            let mut app = a.borrow_mut();
+            app.vab_record();
+            let plane = !app.editor.plane_new;
+            app.editor.set_plane(plane);
+            // Planes go to the runway, rockets to the pad, as the original's hangar and VAB do.
+            let site = if plane { "Runway_1" } else { "LaunchPad_1" };
+            if app.launch_sites.iter().any(|s| s.id == site) {
+                app.launch_site = Some(site.to_string());
+                store("ose.launchSite", site);
+                app.render_launch_sites();
+            }
+            app.render_vab();
+        }),
+    )?;
     for id in ["vab-site", "lp-site"] {
         if let Some(sel) = doc.get_element_by_id(id) {
             let a = app.clone();
@@ -4767,6 +4784,15 @@ impl App {
                 .collect();
             list.set_inner_html(&html);
         }
+        set_text(
+            &self.doc,
+            "vab-orient",
+            if self.editor.plane_new {
+                "Plane"
+            } else {
+                "Rocket"
+            },
+        );
         set_text(
             &self.doc,
             "vab-sym",
