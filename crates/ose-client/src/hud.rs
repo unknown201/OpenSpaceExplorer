@@ -945,6 +945,85 @@ pub fn action_groups_html(lights: bool, rcs: bool, abort: bool, custom: &[bool; 
     html
 }
 
+/// A report's place as words: `Kerbin_HighOrbit` -> `Kerbin, High Orbit`, `Kerbin_Landed_KerbinKSC` ->
+/// `Kerbin, Landed, KSC` (a region drops its body's name).
+pub fn report_place(location: &str) -> String {
+    let words = |s: &str| {
+        let mut out = String::new();
+        for (i, c) in s.chars().enumerate() {
+            if i > 0 && c.is_ascii_uppercase() && !out.ends_with(' ') {
+                let prev_upper = out.chars().last().is_some_and(|p| p.is_ascii_uppercase());
+                if !prev_upper {
+                    out.push(' ');
+                }
+            }
+            out.push(c);
+        }
+        out
+    };
+    let mut parts = location.split('_');
+    let body = parts.next().unwrap_or_default();
+    let mut out = vec![body.to_string()];
+    for p in parts {
+        let p = p.strip_prefix(body).filter(|r| !r.is_empty()).unwrap_or(p);
+        out.push(words(p));
+    }
+    out.join(", ")
+}
+
+/// The Research Inventory app (`ReportInventory`): the reports the vessel carries, each with the experiment,
+/// data or sample, where it was taken, its worth and the original's flavour text, and Transmit All.
+pub fn inventory_html(
+    reports: &[ose_net::ReportInfo],
+    loc: &std::collections::HashMap<String, String>,
+    name: &dyn Fn(&str) -> String,
+    linked: bool,
+) -> String {
+    let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;");
+    if reports.is_empty() {
+        return "<div class=\"inv-empty\">No reports aboard. Run experiments (the science button on the action bar) to collect some.</div>".into();
+    }
+    let mut html = String::new();
+    for r in reports {
+        let exp = r.experiment.trim_start_matches("Experiment_");
+        let flavor = loc
+            .get(&format!(
+                "Science/Experiments/{exp}/{}/Flavor/{}",
+                if r.sample { "Sample" } else { "Data" },
+                r.location
+            ))
+            .or_else(|| {
+                loc.get(&format!(
+                    "Science/Experiments/{exp}/{}/Flavor/Default",
+                    if r.sample { "Sample" } else { "Data" }
+                ))
+            })
+            .map(|t| crate::ftue::rich_text(t))
+            .unwrap_or_default();
+        html.push_str(&format!(
+            "<div class=\"inv-report\" data-ose=\"inv-report\"><div class=\"inv-head\"><b>{}</b><span>{} \u{b7} {:.0} science</span></div><div class=\"inv-place\">{}</div><div class=\"inv-flavor\">{flavor}</div></div>",
+            esc(&name(&r.experiment)),
+            if r.sample { "Sample" } else { "Data" },
+            r.value,
+            esc(&report_place(&r.location)),
+        ));
+    }
+    html.push_str(&format!(
+        "<button id=\"inv-transmit\" data-ose=\"inv-transmit\"{}>{}</button>",
+        if linked {
+            ""
+        } else {
+            " disabled title=\"no link to the KSC\""
+        },
+        if linked {
+            "Transmit all"
+        } else {
+            "No connection"
+        }
+    ));
+    html
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -959,6 +1038,19 @@ mod tests {
             mean_anomaly_at_epoch_rad: m0,
             epoch_s: 0.0,
         }
+    }
+
+    #[test]
+    fn report_places_read_as_words() {
+        assert_eq!(report_place("Kerbin_HighOrbit"), "Kerbin, High Orbit");
+        assert_eq!(
+            report_place("Kerbin_Landed_KerbinKSC"),
+            "Kerbin, Landed, KSC"
+        );
+        assert_eq!(
+            report_place("Mun_Landed_MunHighlands"),
+            "Mun, Landed, Highlands"
+        );
     }
 
     #[test]

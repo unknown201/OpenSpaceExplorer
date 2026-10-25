@@ -225,6 +225,8 @@ struct App {
     last_situation: Option<(u64, ose_net::FlightSituation)>,
     /// Timed experiments running on the flown vessel and when the server reported them (ms), for the countdown.
     running: Vec<ose_net::RunningExperiment>,
+    /// The reports the flown vessel carries (Research Inventory), as the server last told.
+    carried: Vec<ose_net::ReportInfo>,
     running_since_ms: f64,
     /// The live campaign's id (CampaignState), so stored per-vessel data stays with its campaign.
     campaign_id: String,
@@ -634,6 +636,7 @@ pub fn start() -> Result<(), JsValue> {
         last_stage: None,
         last_situation: None,
         running: Vec::new(),
+        carried: Vec::new(),
         running_since_ms: 0.0,
         lp_selected: None,
         campaign_id: String::new(),
@@ -1682,12 +1685,12 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                 let open = el.class_list().toggle("open").unwrap_or(false);
                 store("ose.tracker", if open { "open" } else { "closed" });
                 if open {
-                    for id in ["fh-parts", "fh-res", "fh-ag"] {
+                    for id in ["fh-parts", "fh-res", "fh-ag", "fh-inv"] {
                         if let Some(e) = doc.get_element_by_id(id) {
                             e.class_list().remove_1("open").ok();
                         }
                     }
-                    for id in ["fh-parts-btn", "fh-res-btn", "fh-ag-btn"] {
+                    for id in ["fh-parts-btn", "fh-res-btn", "fh-ag-btn", "fh-inv-btn"] {
                         if let Some(e) = doc.get_element_by_id(id) {
                             e.class_list().remove_1("on").ok();
                         }
@@ -1733,16 +1736,18 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
     if let Some(el) = doc.get_element_by_id("fh-crew-btn") {
         el.class_list().toggle_with_force("on", !crew_off).ok();
     }
-    const APP_WINDOWS: [(&str, &str); 4] = [
+    const APP_WINDOWS: [(&str, &str); 5] = [
         ("fh-missions-btn", "fh-missions"),
         ("fh-parts-btn", "fh-parts"),
         ("fh-res-btn", "fh-res"),
         ("fh-ag-btn", "fh-ag"),
+        ("fh-inv-btn", "fh-inv"),
     ];
     for (btn, win) in [
         ("fh-parts-btn", "fh-parts"),
         ("fh-res-btn", "fh-res"),
         ("fh-ag-btn", "fh-ag"),
+        ("fh-inv-btn", "fh-inv"),
     ] {
         wire(
             btn,
@@ -1768,8 +1773,24 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                 app.render_parts_manager();
                 app.render_resource_manager();
                 app.render_action_groups();
+                app.render_inventory();
             }),
         )?;
+    }
+    if let Some(list) = doc.get_element_by_id("fh-inv-list") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let hit = ev
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .and_then(|e| e.closest("#inv-transmit").ok().flatten())
+                .is_some();
+            if hit {
+                a.borrow().flight_science(1);
+            }
+        });
+        list.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
     }
     // An action group button toggles that group, as its key does.
     if let Some(list) = doc.get_element_by_id("fh-ag-list") {
@@ -4449,6 +4470,8 @@ impl App {
             } => {
                 self.running = running;
                 self.running_since_ms = now_ms();
+                self.carried = carried.clone();
+                self.render_inventory();
                 let msg = match reason {
                     Some(r) => r,
                     None => format!(
@@ -4474,6 +4497,8 @@ impl App {
             } => {
                 self.running
                     .retain(|r| !(r.part == part && r.experiment == experiment));
+                self.carried.extend(reports.iter().cloned());
+                self.render_inventory();
                 let name = experiment_name(&experiment);
                 let msg = if interrupted {
                     format!("{name} stopped: the vessel left the situation it started in")
@@ -4513,6 +4538,9 @@ impl App {
                     ),
                 };
                 set_text(&self.doc, "fh-note", &msg);
+                self.carried
+                    .retain(|c| !reports.iter().any(|r| r.key == c.key));
+                self.render_inventory();
                 if recovered {
                     self.show_flight_report("Recovered", Some(earned));
                     self.tracking_open = false;
@@ -7036,6 +7064,7 @@ impl App {
 
     fn start_flight(&mut self, vessel: u64, craft_id: Option<u64>) {
         self.ftue("FTUE_Flight");
+        self.carried.clear();
         self.lesson_event("VesselCreatedMessage");
         self.lesson_event("LaunchSequenceInitiatedMessage");
         self.flying = Some(vessel);
@@ -7292,6 +7321,31 @@ impl App {
             return;
         };
         let html = hud::resources_html(&f.stage_resources, &f.resources);
+        let key = format!("{}:{}", html.len(), hud::fnv(&html));
+        if el.get_attribute("data-ose-key").as_deref() != Some(key.as_str()) {
+            el.set_inner_html(&html);
+            el.set_attribute("data-ose-key", &key).ok();
+        }
+    }
+
+    /// The Research Inventory window: the reports aboard and Transmit All (greyed without a link).
+    fn render_inventory(&self) {
+        let Some(el) = self.doc.get_element_by_id("fh-inv-list") else {
+            return;
+        };
+        let linked = self
+            .flying
+            .and_then(|id| self.scene.as_ref()?.vessel(id))
+            .and_then(|v| v.flight.as_ref())
+            .is_some_and(|f| f.comm_connected);
+        let loc = &self.loc;
+        let name = |id: &str| {
+            let exp = id.trim_start_matches("Experiment_");
+            loc.get(&format!("Science/Experiments/{exp}"))
+                .cloned()
+                .unwrap_or_else(|| experiment_name(id))
+        };
+        let html = hud::inventory_html(&self.carried, loc, &name, linked);
         let key = format!("{}:{}", html.len(), hud::fnv(&html));
         if el.get_attribute("data-ose-key").as_deref() != Some(key.as_str()) {
             el.set_inner_html(&html);

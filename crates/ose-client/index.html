@@ -359,6 +359,12 @@
     #flight-hud .fh-ag-grid button { margin: 0; width: auto; padding: 4px 0; font-size: calc(12 * var(--u)); color: #9fb0cc; }
     #flight-hud .fh-ag-grid button.on { color: #7dff8a; border-color: #7dff8a99; background: #17321ce6; }
     #flight-hud .fh-ag-grid button.wide { grid-column: span 5; }
+    .fh-inv .inv-report { margin: 6px 0; padding: 6px 8px; background: #0b1020; border: 1px solid #2c3d63; border-radius: 4px; }
+    .fh-inv .inv-head { display: flex; justify-content: space-between; gap: 8px; font-size: calc(12 * var(--u)); color: #e6ecf7; }
+    .fh-inv .inv-head span, .fh-inv .inv-place { color: #9fb0cc; font-size: calc(11 * var(--u)); }
+    .fh-inv .inv-flavor { margin-top: 4px; font-size: calc(11 * var(--u)); color: #cfd6e6; font-style: italic; }
+    .fh-inv .inv-empty { font-size: calc(12 * var(--u)); color: #9fb0cc; margin-top: 6px; }
+    #flight-hud .fh-inv #inv-transmit { margin: 6px 0 0; width: 100%; }
     .fh-res .rs-head { margin: 6px 0 2px; font-size: calc(10 * var(--u)); letter-spacing: 0.1em; color: #9fb0cc; }
     .fh-res .rs-row { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; font-size: calc(12 * var(--u)); color: #e6ecf7; margin: 3px 0; }
     .fh-res .rs-bar { grid-column: 1 / 3; height: 5px; background: #ffffff1a; border-radius: 3px; overflow: hidden; }
@@ -1063,11 +1069,13 @@
       <button class="fh-missions-btn" id="fh-report-btn" data-ose="flight-report-btn" title="Flight report: what this flight has done so far"><i style="--ico:url(assets/ui/hud/ICO-AppBar-FlightReport-24x24.png)"></i></button>
       <button class="fh-missions-btn" id="fh-parts-btn" data-ose="flight-parts-btn" title="Parts manager: every part on the vessel; click one for its window"><i style="--ico:url(assets/ui/hud/ICO-AppBar-PartsManager-24x24.png)"></i></button>
       <button class="fh-missions-btn" id="fh-ag-btn" data-ose="flight-ag-btn" title="Action groups: lights, RCS, abort and groups 1-10 (keys U, R, Backspace, 1-0)"><i style="--ico:url(assets/ui/hud/ICO-AppBar-ActionGroup-24x24.png)"></i></button>
+      <button class="fh-missions-btn" id="fh-inv-btn" data-ose="flight-inv-btn" title="Research Inventory: the reports this vessel carries"><i style="--ico:url(assets/ui/hud/ICO-AppBar-ResearchManager-24x24.png)"></i></button>
       <button class="fh-missions-btn" id="fh-res-btn" data-ose="flight-res-btn" title="Resource manager: what the vessel and the burning stage carry"><i style="--ico:url(assets/ui/hud/ICO-AppBar-ResourceManager-24x24.png)"></i></button>
       <button class="fh-missions-btn on" id="fh-crew-btn" data-ose="flight-crew-btn" title="Kerbal portraits: show or hide the crew"><i style="--ico:url(assets/ui/hud/ICO-AppBar-KerbalManager-24x24.png)"></i></button>
     </div>
     <div class="fh-missions fh-parts" id="fh-parts" data-ose="flight-parts"><div class="fh-label">PARTS</div><ul id="fh-parts-list"></ul></div>
     <div class="fh-missions fh-ag" id="fh-ag" data-ose="flight-action-groups"><div class="fh-label">ACTION GROUPS</div><div id="fh-ag-list"></div></div>
+    <div class="fh-missions fh-res fh-inv" id="fh-inv" data-ose="flight-inventory"><div class="fh-label">RESEARCH INVENTORY</div><div id="fh-inv-list"></div></div>
     <div class="fh-missions fh-res" id="fh-res" data-ose="flight-resources"><div class="fh-label">RESOURCES</div><div id="fh-res-list"></div></div>
     <div class="fh-missions" id="fh-missions" data-ose="flight-missions"><div class="fh-label">MISSIONS</div><ul id="fh-missions-list"></ul></div>
     <div class="fh-comm" id="fh-comm" data-ose="flight-comm" title="CommNet: transmitting science and controlling probes need a link to the KSC"><i style="--ico:url(assets/ui/hud/ICO-Flight-Cluster-Commnet.png)"></i><span id="fh-comm-text">--</span></div>
