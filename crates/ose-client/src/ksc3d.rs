@@ -296,6 +296,22 @@ impl KscView {
                 let k = (0.35 + 0.65 * day) as f32;
                 item.color = [k * 0.85, k * 0.9, k, 1.0];
             }
+            // The Tracking Station's big dish sweeps slowly back and forth in azimuth, about its own vertical.
+            if let Some(dish) = gpu.model("ksc").and_then(|m| {
+                m.rig
+                    .nodes
+                    .iter()
+                    .find(|n| n.name == "ksc_campus_trackingcenter_dish")
+            }) {
+                let up = (dish.rest.rotation.inverse() * glam::Vec3::Y).normalize();
+                let t = js_sys::Date::now() / 1000.0;
+                let sweep = (0.9 * (t * 0.04).sin()) as f32;
+                item.node_turns.push((
+                    "ksc_campus_trackingcenter_dish",
+                    glam::Quat::from_axis_angle(up, sweep),
+                    glam::Vec3::ZERO,
+                ));
+            }
             items.push(item);
         }
         // Dawn and dusk tint the sky orange near the horizon, night is deep blue.

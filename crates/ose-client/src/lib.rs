@@ -8582,6 +8582,17 @@ impl App {
                 .ok();
             el.set_attribute("data-ose-situation", &format!("{:?}", f.situation))
                 .ok();
+            // Test hook: the largest control surface deflection this readout carries, degrees.
+            let deflection = f
+                .control_surfaces
+                .iter()
+                .map(|c| c.1.abs())
+                .fold(0.0f32, f32::max);
+            el.set_attribute(
+                "data-ose-deflection",
+                &format!("{:.1}", deflection.to_degrees()),
+            )
+            .ok();
         }
     }
 
