@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 44;
+pub const PROTOCOL_VERSION: u16 = 45;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -236,13 +236,17 @@ pub enum ClientMessage {
         yaw: f32,
         roll: f32,
     },
-    /// A Kerbal on EVA: `run` (Shift) held until changed, `jump` (Space) once from the ground. Its jetpack
-    /// translates with `Translate` (always on for a Kerbal: y up along the Kerbal, Ctrl down). Answers
-    /// `FlightAck`.
+    /// A Kerbal on EVA: `run` (Shift) held until changed, `jump` (Space) once from the ground (on a ladder
+    /// it lets go). Its jetpack translates with `Translate` (always on for a Kerbal: y up along the Kerbal,
+    /// Ctrl down). `grab` (F, once) takes hold of the nearest ladder within reach (ladder parts and crewed
+    /// parts' built-in ladders) or lets go of the one held; `climb` (W/S, -1..1, held) climbs it at the
+    /// original's 0.8 m/s. Answers `FlightAck` (refused for a grab with no ladder near).
     EvaControls {
         vessel: u64,
         run: bool,
         jump: bool,
+        grab: bool,
+        climb: f32,
     },
     /// Control trim (Alt+W/S, A/D, Q/E): pitch, yaw, roll, each -1..1 and held; it adds to the rotation
     /// input and to the control surfaces' deflection. Answers `FlightAck`.
@@ -626,6 +630,10 @@ pub struct FlightReadout {
     pub antennas: Vec<(u16, bool)>,
     /// The part the vessel is controlled from, when not its root (`ControlFrom`).
     pub control_part: Option<u16>,
+    /// A Kerbal holding a ladder: (vessel, part).
+    pub on_ladder: Option<(u64, u16)>,
+    /// A Kerbal climbing in through a hatch (`Board`): the vessel is gone a moment later.
+    pub boarding: bool,
     /// Each gimballing engine of the stage running and how far it is turned now: (part, about the part's
     /// own X, about its own Z), rad, up to its gimbal range.
     pub gimbals: Vec<(u16, f32, f32)>,

@@ -46,6 +46,30 @@ pub struct Flag {
     pub planted_by: String,
 }
 
+/// A Kerbal holding on to a ladder: the vessel and part, and how far up it they are, m.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct OnLadder {
+    pub vessel: Entity,
+    pub part: usize,
+    pub along_m: f64,
+    /// Climb input, -1..1 (W up, S down), held.
+    pub climb: f64,
+}
+
+/// A Kerbal climbing in through the hatch (their seat is taken already); they leave when `until_ut` comes.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct Boarding {
+    pub vessel: Entity,
+    pub until_ut: f64,
+}
+
+/// How fast a Kerbal climbs a ladder (`ClimbMoveSpeed`), m/s; how near one they must be to grab it, m (our
+/// own figure); how far off its axis they hang, m; how long climbing in takes, s (our own figure).
+pub const CLIMB_SPEED_MPS: f64 = 0.8;
+pub const GRAB_RANGE_M: f64 = 1.5;
+pub const LADDER_STANDOFF_M: f64 = 0.4;
+pub const BOARDING_S: f64 = 1.0;
+
 /// A resource transfer running on a vessel (the Resource Manager): from these tanks into those.
 #[derive(Component, Clone, Debug, PartialEq)]
 pub struct Transfer {
@@ -398,6 +422,20 @@ impl Universe {
         let d = self
             .distance_between(kerbal, target)
             .ok_or("not near each other")?;
+        // from the nearest hatch (a crewed part) when the vessel has parts
+        let me = self.position_of(kerbal).ok_or("not near each other")?;
+        let at = self.position_of(target).ok_or("not near each other")?;
+        let hatch = self
+            .ladders(target)
+            .into_iter()
+            .filter(|l| {
+                self.world
+                    .get::<structure::Structure>(target)
+                    .is_some_and(|st| st.crew[l.0] > 0)
+            })
+            .map(|(_, a, b)| (at + (a + b) * 0.5 - me).length())
+            .fold(f64::INFINITY, f64::min);
+        let d = d.min(hatch);
         if d > BOARD_RANGE_M {
             return Err(format!("{d:.0} m away; get within {BOARD_RANGE_M:.0} m"));
         }
@@ -412,8 +450,170 @@ impl Universe {
             .ok_or("no free seat")?;
         crew.push((seat, name));
         self.set_crew(target, crew);
-        self.world.despawn(kerbal);
+        // they climb in for a moment before they are gone
+        let until_ut = self.ut() + BOARDING_S;
+        self.world
+            .entity_mut(kerbal)
+            .remove::<OnLadder>()
+            .insert(Boarding {
+                vessel: target,
+                until_ut,
+            });
         Ok(())
+    }
+
+    /// A Kerbal climbing in: the vessel they are boarding.
+    pub fn boarding(&self, kerbal: Entity) -> Option<Entity> {
+        self.world.get::<Boarding>(kerbal).map(|b| b.vessel)
+    }
+
+    /// The ladders of a vessel: (part, foot, top), inertial offsets from the vessel's position, m. Ladder
+    /// parts run along their own axis, and so does the built-in ladder of a crewed part (a pod's hatch
+    /// side is not in the data: the whole height of the part counts).
+    fn ladders(&self, e: Entity) -> Vec<(usize, DVec3, DVec3)> {
+        let (Some(st), Some(p)) = (
+            self.world.get::<structure::Structure>(e),
+            self.world.get::<flight::Powered>(e),
+        ) else {
+            return Vec::new();
+        };
+        let c = st.rigid.rest_centre();
+        (0..st.rigid.len())
+            .filter(|&i| st.rigid.present[i])
+            .filter(|&i| st.part_ids[i].starts_with("ladder_") || st.crew[i] > 0)
+            .map(|i| {
+                let (centre, half) = st.part_box(i);
+                let axis = st.axis_inertial(
+                    p.facing,
+                    crate::aero::rotate(st.part_rot[i], DVec3::new(0.0, 1.0, 0.0)),
+                );
+                let mid = st.offset_inertial(p.facing, centre - c);
+                // the box's extent along the part's axis
+                let a = crate::aero::rotate_inverse(st.part_rot[i], DVec3::new(0.0, 1.0, 0.0));
+                let reach = (half.x * a.x.abs() + half.y * a.y.abs() + half.z * a.z.abs()).max(0.3);
+                (i, mid - axis * reach, mid + axis * reach)
+            })
+            .collect()
+    }
+
+    /// Grab the nearest ladder within reach (F), or let go of the one held.
+    pub fn grab_ladder(&mut self, kerbal: Entity) -> Result<bool, &'static str> {
+        if self.world.get::<EvaKerbal>(kerbal).is_none() {
+            return Err("not a Kerbal on EVA");
+        }
+        if self.world.get::<OnLadder>(kerbal).is_some() {
+            self.world.entity_mut(kerbal).remove::<OnLadder>();
+            return Ok(false);
+        }
+        let me = self.position_of(kerbal).ok_or("not a Kerbal on EVA")?;
+        let mut best: Option<(f64, Entity, usize, f64)> = None;
+        for v in self.vessels() {
+            if v == kerbal || self.world.get::<EvaKerbal>(v).is_some() {
+                continue;
+            }
+            if self.distance_between(kerbal, v).is_none_or(|d| d > 60.0) {
+                continue;
+            }
+            let Some(at) = self.position_of(v) else {
+                continue;
+            };
+            for (part, foot, top) in self.ladders(v) {
+                let (a, b) = (at + foot, at + top);
+                let ab = b - a;
+                let t = ((me - a).dot(ab) / ab.length_squared().max(1e-9)).clamp(0.0, 1.0);
+                let d = (a + ab * t - me).length();
+                if best.is_none_or(|x| d < x.0) {
+                    best = Some((d, v, part, t * ab.length()));
+                }
+            }
+        }
+        match best {
+            Some((d, vessel, part, along_m)) if d <= GRAB_RANGE_M + LADDER_STANDOFF_M => {
+                self.world.entity_mut(kerbal).insert(OnLadder {
+                    vessel,
+                    part,
+                    along_m,
+                    climb: 0.0,
+                });
+                Ok(true)
+            }
+            _ => Err("no ladder within reach"),
+        }
+    }
+
+    /// The ladder a Kerbal holds: (vessel, part).
+    pub fn on_ladder(&self, kerbal: Entity) -> Option<(Entity, usize)> {
+        self.world
+            .get::<OnLadder>(kerbal)
+            .map(|l| (l.vessel, l.part))
+    }
+
+    /// Climb input on a ladder (-1..1); false when not on one.
+    pub fn set_climb(&mut self, kerbal: Entity, climb: f64) -> bool {
+        match self.world.get_mut::<OnLadder>(kerbal) {
+            Some(mut l) => {
+                l.climb = climb.clamp(-1.0, 1.0);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Kerbals on ladders move with them and climb; those climbing in leave when they are through.
+    pub(crate) fn run_ladders(&mut self, dt: f64) {
+        let ut = self.ut();
+        let done: Vec<Entity> = self
+            .world
+            .query::<(Entity, &Boarding)>()
+            .iter(&self.world)
+            .filter(|(_, b)| b.until_ut <= ut)
+            .map(|(e, _)| e)
+            .collect();
+        for e in done {
+            self.world.despawn(e);
+        }
+        let holding: Vec<(Entity, OnLadder)> = self
+            .world
+            .query::<(Entity, &OnLadder)>()
+            .iter(&self.world)
+            .map(|(e, l)| (e, *l))
+            .collect();
+        for (k, mut l) in holding {
+            let ladder = self.ladders(l.vessel).into_iter().find(|x| x.0 == l.part);
+            let (Some((_, foot, top)), Some(vp)) = (
+                ladder,
+                self.world
+                    .get::<flight::Powered>(l.vessel)
+                    .map(|p| (p.r, p.v, p.facing)),
+            ) else {
+                // the ladder went (staged, broken, on rails): let go
+                self.world.entity_mut(k).remove::<OnLadder>();
+                continue;
+            };
+            let (r, v, facing) = vp;
+            let axis = top - foot;
+            let len = axis.length().max(1e-6);
+            let up = axis * (1.0 / len);
+            l.along_m = (l.along_m + l.climb * CLIMB_SPEED_MPS * dt).clamp(0.0, len);
+            // hang off the ladder on the side away from the vessel's axis
+            let point = foot + up * l.along_m;
+            let side = point - facing * point.dot(facing);
+            let out = if side.length() > 1e-3 {
+                side.normalized()
+            } else {
+                facing.cross(up).normalized()
+            };
+            if let Some(mut p) = self.world.get_mut::<flight::Powered>(k) {
+                p.r = r + point + out * LADDER_STANDOFF_M;
+                p.v = v;
+                p.facing = up;
+                p.landed = false;
+                p.angvel = DVec3::ZERO;
+            }
+            if let Some(mut h) = self.world.get_mut::<OnLadder>(k) {
+                h.along_m = l.along_m;
+            }
+        }
     }
 
     /// Distance between two vessels around the same body, m.
@@ -590,9 +790,36 @@ mod tests {
             .science_carried(jeb)
             .iter()
             .any(|r| r.sample && r.location == "Kerbin_Landed_KerbinKSC"));
-        // and back in
+        // too far from the pod's ladder up on top of the rocket
+        assert!(u.grab_ladder(jeb).is_err());
+        // up beside it (as he would be stepping out of the hatch): grab it, climb, let go
+        let (_, foot, _) = u.ladders(v).into_iter().find(|l| l.0 == 0).unwrap();
+        let at = u.position_of(v).unwrap() + foot;
+        let out = at
+            .normalized()
+            .cross(DVec3::new(0.0, 0.0, 1.0))
+            .normalized();
+        u.world.get_mut::<flight::Powered>(jeb).unwrap().r = at + out * 1.0;
+        assert!(u.grab_ladder(jeb).unwrap(), "the pod is within reach");
+        assert_eq!(u.on_ladder(jeb).map(|l| l.0), Some(v));
+        u.step();
+        let low = u.position_of(jeb).unwrap() - u.position_of(v).unwrap();
+        assert!(u.set_climb(jeb, 1.0));
+        for _ in 0..crate::TICKS_PER_SECOND {
+            u.step();
+        }
+        let high = u.position_of(jeb).unwrap() - u.position_of(v).unwrap();
+        let up = u.position_of(v).unwrap().normalized();
+        assert!((high - low).dot(up) > 0.3, "climbed {:?}", high - low);
+        assert!(u.set_eva(jeb, false, true), "Space lets go");
+        assert!(u.on_ladder(jeb).is_none());
+        // and back in: the seat is taken at once, the Kerbal is gone once through the hatch
         u.board(jeb, v).unwrap();
         assert_eq!(u.crew(v).len(), 1);
+        assert_eq!(u.boarding(jeb), Some(v));
+        for _ in 0..(2 * crate::TICKS_PER_SECOND) {
+            u.step();
+        }
         assert!(u.vessel(jeb).is_none());
     }
 

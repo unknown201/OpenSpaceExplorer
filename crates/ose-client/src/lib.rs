@@ -8727,7 +8727,16 @@ impl App {
         if run != self.eva_run_sent || jump {
             self.eva_run_sent = run;
             if let Some(ws) = &self.ws {
-                send(ws, &ClientMessage::EvaControls { vessel, run, jump });
+                send(
+                    ws,
+                    &ClientMessage::EvaControls {
+                        vessel,
+                        run,
+                        jump,
+                        grab: false,
+                        climb: 0.0,
+                    },
+                );
             }
         }
         // The jetpack in the air.

@@ -698,6 +698,9 @@ fn vessels_message(s: &Shared, u: &Universe, tick: Tick) -> ServerMessage {
                         f.stage_list = stage_readouts_at(s, &craft, &report, Some((atm, g)));
                         f.delta_v_now_mps = f.stage_list.iter().map(|x| x.delta_v_now_mps).sum();
                     }
+                    f.on_ladder = u.on_ladder(e).and_then(|(v, part)| {
+                        list.iter().find(|x| x.0 == v).map(|x| (x.1, part as u16))
+                    });
                     f
                 }),
                 // the count of parts still on: it changes when a stage drops or a part breaks or docks
@@ -1018,6 +1021,9 @@ fn flight_readout(
         comm_hops: u.comm_link(e).hops,
         comm_range_m: u.comm_link(e).range_m,
         control_part: u.control_part(e).map(|i| i as u16),
+        // filled in by `vessels_message`, which knows the vessel ids
+        on_ladder: None,
+        boarding: u.boarding(e).is_some(),
         gimbals: u
             .structure(e)
             .map(|st| {
@@ -3110,11 +3116,17 @@ async fn session(mut socket: WebSocket, s: AppState) {
                             };
                             if !send(&mut socket, &reply).await { break; }
                         }
-                        Ok(ClientMessage::EvaControls { vessel, run, jump }) => {
+                        Ok(ClientMessage::EvaControls { vessel, run, jump, grab, climb }) => {
                             let reply = match owned_vessel(&s, vessel, player_id) {
                                 Some(e) => {
-                                    let ok = s.universe.lock().expect("sim lock").set_eva(e, run, jump);
-                                    ServerMessage::FlightAck { vessel, accepted: ok, reason: (!ok).then(|| "not a Kerbal on EVA".into()) }
+                                    let mut u = s.universe.lock().expect("sim lock");
+                                    let grabbed = if grab { u.grab_ladder(e).map(|_| ()) } else { Ok(()) };
+                                    u.set_climb(e, climb as f64);
+                                    let ok = u.set_eva(e, run, jump);
+                                    match grabbed {
+                                        Err(reason) => ServerMessage::FlightAck { vessel, accepted: false, reason: Some(reason.into()) },
+                                        Ok(()) => ServerMessage::FlightAck { vessel, accepted: ok, reason: (!ok).then(|| "not a Kerbal on EVA".into()) },
+                                    }
                                 }
                                 None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
                             };
