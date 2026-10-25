@@ -307,6 +307,9 @@ struct App {
     /// The aero overlay (F12) and the control trim (Alt + W/A/S/D/Q/E, Alt+X clears it): pitch, yaw, roll.
     aero_overlay: bool,
     trim: (f32, f32, f32),
+    /// A press on a loose assembly in the VAB (which, where), picked up whole once dragged.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    vab_grab_loose: Option<(usize, f64, f64)>,
     /// When the players window last asked for the campaign (what everyone flies is not pushed).
     players_asked_ms: std::cell::Cell<f64>,
     /// R&D: the science archive shows in the info panel instead of the node picked.
@@ -698,6 +701,7 @@ pub fn start() -> Result<(), JsValue> {
         vab_offset: false,
         rd_archive: false,
         players_asked_ms: std::cell::Cell::new(0.0),
+        vab_grab_loose: None,
         mouselook: false,
         aero_overlay: false,
         trim: (0.0, 0.0, 0.0),
@@ -3042,6 +3046,16 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                         app.press = Some((x, y));
                         return;
                     }
+                    // A loose assembly on the floor: dragging it picks it up whole.
+                    if let Some(k) = app
+                        .gpu
+                        .as_ref()
+                        .and_then(|g| app.vab3d.pick_loose(g, px, py))
+                    {
+                        app.vab_grab_loose = Some((k, x, y));
+                        app.press = Some((x, y));
+                        return;
+                    }
                 }
                 app.drag = Some((ev.client_x() as f64, ev.client_y() as f64));
                 app.press = app.drag;
@@ -3076,6 +3090,30 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                 (ev.client_x() as f64 - rect.left()) * app.dpr,
                 (ev.client_y() as f64 - rect.top()) * app.dpr,
             );
+            return;
+        }
+        // A loose assembly dragged off the floor is held whole, to put on the craft or elsewhere.
+        #[cfg(target_arch = "wasm32")]
+        if let Some((k, x0, y0)) = app.vab_grab_loose {
+            let (nx, ny) = (ev.client_x() as f64, ev.client_y() as f64);
+            if app.vab_frag.is_none() && ((nx - x0).abs() > 6.0 || (ny - y0).abs() > 6.0) {
+                if k < app.vab3d.loose.len() {
+                    app.vab_record();
+                    let (parts, _) = app.vab3d.loose.remove(k);
+                    let frag = vab::Fragment { parts };
+                    let nodes = vab_nodes(&app.catalog, frag.root_id());
+                    app.vab3d.held = Some((frag.root_id().to_string(), nodes));
+                    app.vab_frag = Some(frag);
+                    if let Some(b) = app.doc.body() {
+                        b.class_list().add_1("vab-holding").ok();
+                    }
+                }
+                app.render_vab();
+            }
+            if app.vab_frag.is_some() {
+                let rect = app.gpu_canvas.get_bounding_client_rect();
+                app.vab3d.cursor = ((nx - rect.left()) * app.dpr, (ny - rect.top()) * app.dpr);
+            }
             return;
         }
         // A placed part dragged with the left button comes off the craft with everything under it.
@@ -3232,6 +3270,7 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
             let held = app.vab3d.held.take();
             let pressed = app.vab_press.take();
             app.vab_grab = None;
+            app.vab_grab_loose = None;
             let pasting = std::mem::take(&mut app.vab_pasting);
             if let (Some(frag), Some(_)) = (app.vab_frag.take(), held.as_ref()) {
                 if pasting {
@@ -3266,12 +3305,26 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                 };
                 app.catalog = cat;
                 if let Err(e) = result {
-                    // Nowhere to hang it: a moved part goes back where it was, as the original does; a paste
-                    // is dropped.
-                    let mut history = std::mem::take(&mut app.vab_history);
-                    history.undo(&mut app.editor);
-                    app.vab_history = history;
-                    set_text(&app.doc, "vab-report", &e);
+                    // Nowhere to hang it: it stays on the floor of the workspace as a loose assembly (the
+                    // original's other assemblies), to drag onto the craft later; Launch takes the craft.
+                    match app.vab3d.held_at {
+                        Some(at) if !app.editor.is_empty() => {
+                            app.vab3d.loose.push((frag.parts.clone(), at));
+                            set_text(
+                                &app.doc,
+                                "vab-report",
+                                "left on the floor as a loose assembly: drag it onto a green attach point to add it",
+                            );
+                        }
+                        _ => {
+                            let mut history = std::mem::take(&mut app.vab_history);
+                            history.undo(&mut app.editor);
+                            app.vab_history = history;
+                            set_text(&app.doc, "vab-report", &e);
+                        }
+                    }
+                } else {
+                    set_text(&app.doc, "vab-report", "");
                 }
                 app.press = None;
                 app.render_vab();
@@ -5448,6 +5501,9 @@ impl App {
         let name = self.editor.craft.name.clone();
         self.editor = vab::Editor::new(&name);
         self.vab_craft_id = None;
+        // A new craft starts a new workspace: the loose assemblies go too.
+        #[cfg(target_arch = "wasm32")]
+        self.vab3d.loose.clear();
         set_text(&self.doc, "vab-report", "");
         self.render_vab();
     }

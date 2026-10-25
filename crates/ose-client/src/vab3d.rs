@@ -52,6 +52,12 @@ pub struct VabView {
     /// cursor in device
     /// pixels, and the free node it snaps to (part index, node id) when close enough.
     pub held: Option<(String, Vec<(DVec3, DVec3)>)>,
+    /// The workspace's loose assemblies (the original's other assemblies on the floor): their parts in the
+    /// craft frame they came from, and where their first part stands in the hall (glTF frame).
+    pub loose: Vec<(Vec<ose_data::craft::CraftPart>, DVec3)>,
+    loose_boxes: Vec<(usize, DVec3, DVec3)>,
+    /// Where the held part floats when it snaps to nothing (glTF frame), for dropping it there.
+    pub held_at: Option<DVec3>,
     pub cursor: (f64, f64),
     pub snap: Option<(usize, String)>,
     /// Surface attachment previews (craft frame poses, one per symmetry copy) for the held part, set by the
@@ -104,6 +110,9 @@ impl VabView {
             cursor: (0.0, 0.0),
             snap: None,
             ghosts: Vec::new(),
+            loose: Vec::new(),
+            loose_boxes: Vec::new(),
+            held_at: None,
             pan_y: 0.0,
             com: None,
             cot: None,
@@ -253,6 +262,28 @@ impl VabView {
         best.map(|(_, i)| i)
     }
 
+    /// The loose assembly under the cursor, if any.
+    pub fn pick_loose(&self, gpu: &Renderer, x_px: f64, y_px: f64) -> Option<usize> {
+        let (pos, forward) = self.camera();
+        let up = DVec3::Y;
+        let aspect = gpu.width as f64 / gpu.height.max(1) as f64;
+        let right = forward.cross(up).normalize();
+        let cam_up = right.cross(forward).normalize();
+        let ndc_x = x_px / gpu.width.max(1) as f64 * 2.0 - 1.0;
+        let ndc_y = 1.0 - y_px / gpu.height.max(1) as f64 * 2.0;
+        let t = (self.fov_rad * 0.5).tan();
+        let dir = (forward + right * (ndc_x * t * aspect) + cam_up * (ndc_y * t)).normalize();
+        let mut best: Option<(f64, usize)> = None;
+        for (k, lo, hi) in &self.loose_boxes {
+            if let Some(d) = crate::ksc3d::ray_box(pos, dir, *lo, *hi) {
+                if best.map(|(bd, _)| d < bd).unwrap_or(true) {
+                    best = Some((d, *k));
+                }
+            }
+        }
+        best.map(|(_, k)| k)
+    }
+
     /// Draw hall and craft. `selected` is tinted. Returns false while the hall is not loaded.
     pub fn frame(
         &mut self,
@@ -390,6 +421,37 @@ impl VabView {
                 it.fill_dir = -forward;
                 it.fill = 0.35;
                 items.push(it);
+            }
+        }
+        // Loose assemblies on the hall floor, a little dimmer than the craft being built.
+        self.loose_boxes.clear();
+        for (k, (parts, anchor)) in self.loose.iter().enumerate() {
+            let Some(first) = parts.first() else { continue };
+            let r0 = to_gltf(first.local_position);
+            for p in parts {
+                let name = format!("part:{}", p.part_id);
+                gpu.request_model(&name, &format!("assets/parts/{}.glb", p.part_id));
+                let wpos = *anchor + to_gltf(p.local_position) - r0;
+                let wrot = quat_to_gltf(p.local_rotation);
+                let Some(m) = gpu.model(&name) else { continue };
+                let (bmin, bmax) = (m.bounds_min.as_dvec3(), m.bounds_max.as_dvec3());
+                let mut lo = DVec3::splat(f64::INFINITY);
+                let mut hi = DVec3::splat(f64::NEG_INFINITY);
+                for c in 0..8 {
+                    let corner = DVec3::new(
+                        if c & 1 == 0 { bmin.x } else { bmax.x },
+                        if c & 2 == 0 { bmin.y } else { bmax.y },
+                        if c & 4 == 0 { bmin.z } else { bmax.z },
+                    );
+                    let w = wpos + wrot * corner;
+                    lo = lo.min(w);
+                    hi = hi.max(w);
+                }
+                self.loose_boxes.push((k, lo, hi));
+                let mut item = DrawItem::lit(name, wpos - cam_pos, wrot, 1.0, light);
+                item.ambient = 0.45;
+                item.color = [0.85, 0.88, 0.95, 1.0];
+                items.push(item);
             }
         }
         for (i, name, wpos, wrot) in placed {
@@ -535,6 +597,7 @@ impl VabView {
                     ro + rd * self.distance
                 }
             };
+            self.held_at = Some(at);
             if gpu.has_model(&name) && self.snap.is_none() && !self.ghosts.is_empty() {
                 for (p, q) in &self.ghosts {
                     let mut ghost = DrawItem::lit(
