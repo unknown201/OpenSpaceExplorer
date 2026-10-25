@@ -477,6 +477,97 @@ pub fn burn_text(to_node_s: f64, dv_mps: f64, mass_t: f64, full_thrust_kn: f64) 
     }
 }
 
+/// The part window in flight (right click a part, the original's PAM): name, temperature, crew, parachute
+/// and gear state, and the actions that apply to it (`data-act` names the action bar button they press).
+pub fn flight_pam_html(
+    title: &str,
+    idx: usize,
+    f: &FlightReadout,
+    is_engine: bool,
+    is_solar: bool,
+) -> String {
+    let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;");
+    let i = idx as u16;
+    let mut rows = String::new();
+    let mut acts = String::new();
+    let row =
+        |k: &str, v: String| format!("<div class=\"pam-row\"><span>{k}</span><b>{v}</b></div>");
+    if let Some((_, t, max, kw)) = f.heat.iter().find(|h| h.0 == i) {
+        rows.push_str(&row("Temperature", format!("{t:.0} / {max:.0} K")));
+        if *kw > 0.5 {
+            rows.push_str(&row("Re-entry heat", format!("{kw:.0} kW")));
+        }
+    }
+    let crew: Vec<&str> = f
+        .crew
+        .iter()
+        .filter(|c| c.0 == i)
+        .map(|c| c.1.as_str())
+        .collect();
+    if !crew.is_empty() {
+        rows.push_str(&row("Crew", esc(&crew.join(", "))));
+    }
+    if let Some((_, st, open)) = f.parachutes.iter().find(|c| c.0 == i) {
+        rows.push_str(&row("Parachute", format!("{st:?} {:.0}%", open * 100.0)));
+        if matches!(st, ChuteState::Stowed) {
+            acts.push_str("<button data-act=\"fh-act-chutes\">Arm parachutes</button>");
+        }
+    }
+    if let Some((_, out)) = f.gear.iter().find(|g| g.0 == i) {
+        rows.push_str(&row("Gear", if *out { "out" } else { "stowed" }.into()));
+        acts.push_str(&format!(
+            "<button data-act=\"fh-act-gear\">{}</button>",
+            if *out { "Retract gear" } else { "Deploy gear" }
+        ));
+    }
+    if let Some((_, on, rate)) = f.converters.iter().find(|c| c.0 == i) {
+        rows.push_str(&row(
+            "Converter",
+            if *on {
+                format!("running {:.0}%", rate * 100.0)
+            } else {
+                "off".into()
+            },
+        ));
+        acts.push_str(&format!(
+            "<button data-act=\"fh-act-converters\">{}</button>",
+            if *on { "Stop" } else { "Start" }
+        ));
+    }
+    if is_solar {
+        rows.push_str(&row(
+            "Panels",
+            if f.panels_deployed {
+                "deployed"
+            } else {
+                "folded"
+            }
+            .into(),
+        ));
+        acts.push_str(&format!(
+            "<button data-act=\"fh-act-solar\">{}</button>",
+            if f.panels_deployed {
+                "Retract panels"
+            } else {
+                "Extend panels"
+            }
+        ));
+    }
+    if is_engine {
+        rows.push_str(&row(
+            "Stage thrust",
+            format!("{:.0} kN at {:.0}%", f.thrust_kn, f.throttle * 100.0),
+        ));
+    }
+    if rows.is_empty() {
+        rows.push_str("<div class=\"pam-sub\">Nothing to set on this part.</div>");
+    }
+    format!(
+        "<div class=\"pam-head\"><b>{}</b><button id=\"fpam-close\" title=\"Close (Esc)\">&#10005;</button></div>{rows}<div class=\"pam-acts\">{acts}</div>",
+        esc(title)
+    )
+}
+
 /// What the flight events watch, as last seen: vessel, CommNet link, control, reference body, situation, and
 /// whether the charge was low.
 #[derive(Clone, Debug, Default, PartialEq)]

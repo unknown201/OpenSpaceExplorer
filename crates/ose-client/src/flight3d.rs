@@ -332,6 +332,10 @@ pub struct FlightView {
     pub nav: Option<crate::navball::NavFrame>,
     /// Height above the ground under the vessel (the altimeter's terrain mode), once the body's map is loaded.
     pub agl_m: Option<f64>,
+    /// Part boxes relative to the camera (craft part index, min, max) and the camera's forward and up from
+    /// the last frame, for picking a part under the pointer (the part window on right click).
+    pick_boxes: Vec<(usize, DVec3, DVec3)>,
+    pick_cam: (DVec3, DVec3),
     /// Terrain, ocean, sky and clouds of the body (planet.rs), created with the first frame.
     planet: Option<crate::planet::PlanetRenderer>,
     fx_nozzles: std::rc::Rc<std::cell::RefCell<HashMap<String, Vec<Nozzle>>>>,
@@ -403,6 +407,8 @@ impl FlightView {
             deployments: HashMap::new(),
             nav: None,
             agl_m: None,
+            pick_boxes: Vec::new(),
+            pick_cam: (DVec3::NEG_Z, DVec3::Y),
             planet: None,
             fx_nozzles: Default::default(),
             fx_requested: false,
@@ -458,6 +464,27 @@ impl FlightView {
     pub fn orbit(&mut self, dx: f64, dy: f64) {
         self.yaw -= dx * 0.005;
         self.pitch = (self.pitch + dy * 0.005).clamp(-1.45, 1.45);
+    }
+
+    /// The craft part under a pixel of the last frame (nearest box along the camera ray).
+    pub fn pick(&self, gpu: &Renderer, x_px: f64, y_px: f64) -> Option<usize> {
+        let (forward, up) = self.pick_cam;
+        let right = forward.cross(up).normalize_or_zero();
+        let cam_up = right.cross(forward).normalize_or_zero();
+        let aspect = gpu.width as f64 / gpu.height.max(1) as f64;
+        let ndc_x = x_px / gpu.width.max(1) as f64 * 2.0 - 1.0;
+        let ndc_y = 1.0 - y_px / gpu.height.max(1) as f64 * 2.0;
+        let t = (60f64.to_radians() * 0.5).tan();
+        let dir = (forward + right * (ndc_x * t * aspect) + cam_up * (ndc_y * t)).normalize();
+        let mut best: Option<(f64, usize)> = None;
+        for (i, lo, hi) in &self.pick_boxes {
+            if let Some(d) = crate::ksc3d::ray_box(DVec3::ZERO, dir, *lo, *hi) {
+                if best.map(|(bd, _)| d < bd).unwrap_or(true) {
+                    best = Some((d, *i));
+                }
+            }
+        }
+        best.map(|(_, i)| i)
     }
 
     pub fn zoom(&mut self, f: f64) {
@@ -712,6 +739,8 @@ impl FlightView {
         let near = (self.distance * 0.02).clamp(0.3, 5_000.0);
         let far = (self.distance * 50.0).clamp(4.0e6, 5.0e8);
         gpu.set_camera(-offs, cam_up, 60f64.to_radians(), near, far);
+        self.pick_cam = (-offs.normalize_or_zero(), cam_up);
+        self.pick_boxes.clear();
 
         let sun = dir_to_model(
             r,
@@ -1055,6 +1084,23 @@ impl FlightView {
                     continue;
                 }
                 let wpos = pos + vessel_rot * (lp + DVec3::Y * lift);
+                if let Some(m) = gpu.model(&name) {
+                    let (bmin, bmax) = (m.bounds_min.as_dvec3(), m.bounds_max.as_dvec3());
+                    let rot = vessel_rot * lq;
+                    let mut lo = DVec3::splat(f64::INFINITY);
+                    let mut hi = DVec3::splat(f64::NEG_INFINITY);
+                    for c in 0..8 {
+                        let corner = DVec3::new(
+                            if c & 1 == 0 { bmin.x } else { bmax.x },
+                            if c & 2 == 0 { bmin.y } else { bmax.y },
+                            if c & 4 == 0 { bmin.z } else { bmax.z },
+                        );
+                        let w = wpos - cam + rot * corner;
+                        lo = lo.min(w);
+                        hi = hi.max(w);
+                    }
+                    self.pick_boxes.push((i, lo, hi));
+                }
                 let pid = craft.parts[i].part_id.as_str();
                 let mut it = DrawItem::lit(name, wpos - cam, vessel_rot * lq, 1.0, sun);
                 it.animation = animation;

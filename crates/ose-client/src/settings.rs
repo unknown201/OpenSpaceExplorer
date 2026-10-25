@@ -50,6 +50,11 @@ pub const INPUT: &[(&str, &[Binding])] = &[
                 true,
             ),
             ("Right mouse drag", "Look around", true),
+            (
+                "Right click a part",
+                "Part window: temperature, crew, chutes, gear, panels",
+                true,
+            ),
             ("Mouse wheel", "Zoom", true),
             ("Home", "Reset the camera", true),
             ("F4", "Vessel labels", true),

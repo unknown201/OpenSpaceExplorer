@@ -275,6 +275,8 @@ struct App {
     /// Take the attitude the server holds from the next readout (after a launch or a vessel switch), so the
     /// first key press turns from there: a plane on the runway holds level along it.
     adopt_attitude: bool,
+    /// The flown vessel's part whose window is open (right click in flight).
+    flight_pam: Option<usize>,
     /// Docking mode (Delete, the original's ToggleRotLinControls): W/A/S/D and Shift/Ctrl translate instead of
     /// turning and throttling.
     lin_mode: bool,
@@ -577,6 +579,7 @@ pub fn start() -> Result<(), JsValue> {
         launch_site: stored("ose.launchSite"),
         adopt_attitude: false,
         lin_mode: false,
+        flight_pam: None,
         translate_sent: (0.0, 0.0, 0.0),
         orbit_pick: Vec::new(),
         mnv_dirs: [(0.0, 0.0); 6],
@@ -1541,6 +1544,28 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
     )?;
     wire("vab-save", Box::new(|a| a.borrow_mut().vab_save(false)))?;
     wire("vab-undo", Box::new(|a| a.borrow_mut().vab_undo(false)))?;
+    if let Some(pam) = doc.get_element_by_id("fh-pam") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let t = ev.target().and_then(|t| t.dyn_into::<Element>().ok());
+            let act = t
+                .as_ref()
+                .and_then(|e| e.closest("[data-act]").ok().flatten())
+                .and_then(|e| e.get_attribute("data-act"));
+            let close = t
+                .as_ref()
+                .and_then(|e| e.closest("#fpam-close").ok().flatten())
+                .is_some();
+            let mut app = a.borrow_mut();
+            if close {
+                app.flight_open_pam(None, 0.0, 0.0);
+            } else if let Some(act) = act {
+                app.hud_button(&act);
+            }
+        });
+        pam.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
     wire(
         "vab-orient",
         Box::new(|a| {
@@ -2543,6 +2568,16 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
             } else if ev.button() == 2
                 && (nx - x).abs() < 4.0
                 && (ny - y).abs() < 4.0
+                && app.flight_active()
+            {
+                // A right click on a part in flight opens its window.
+                let rect = app.gpu_canvas.get_bounding_client_rect();
+                let (px, py) = ((nx - rect.left()) * app.dpr, (ny - rect.top()) * app.dpr);
+                let hit = app.gpu.as_ref().and_then(|g| app.flight3d.pick(g, px, py));
+                app.flight_open_pam(hit, nx, ny);
+            } else if ev.button() == 2
+                && (nx - x).abs() < 4.0
+                && (ny - y).abs() < 4.0
                 && app.in_session
                 && app.vab_active()
             {
@@ -2587,6 +2622,10 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
             let code = ev.code();
             if code == "Escape" && settings_open(&app.doc) {
                 show_settings(&app.doc, false);
+                return;
+            }
+            if code == "Escape" && app.flight_pam.is_some() {
+                app.flight_open_pam(None, 0.0, 0.0);
                 return;
             }
             if typing {
@@ -4471,6 +4510,68 @@ impl App {
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     fn vab_record(&mut self) {
         self.vab_history.record(&self.editor);
+    }
+
+    /// Open the flight part window for craft part `i` at a screen point, or close it with `None`.
+    fn flight_open_pam(&mut self, i: Option<usize>, x: f64, y: f64) {
+        self.flight_pam = i;
+        let Some(el) = self
+            .doc
+            .get_element_by_id("fh-pam")
+            .and_then(|e| e.dyn_into::<HtmlElement>().ok())
+        else {
+            return;
+        };
+        if i.is_none() {
+            el.class_list().remove_1("open").ok();
+            return;
+        }
+        let w = web_sys::window()
+            .and_then(|w| w.inner_width().ok())
+            .and_then(|w| w.as_f64())
+            .unwrap_or(1600.0);
+        el.style()
+            .set_property("left", &format!("{}px", (x + 14.0).min(w - 300.0)))
+            .ok();
+        el.style()
+            .set_property("top", &format!("{}px", y.max(70.0)))
+            .ok();
+        el.class_list().add_1("open").ok();
+        self.flight_pam_refresh();
+    }
+
+    /// Redraw the flight part window from the latest readout (it follows the part's state).
+    fn flight_pam_refresh(&self) {
+        let Some(i) = self.flight_pam else { return };
+        let Some(el) = self.doc.get_element_by_id("fh-pam") else {
+            return;
+        };
+        let Some(f) = self
+            .flying
+            .and_then(|id| self.scene.as_ref()?.vessel(id))
+            .and_then(|v| v.flight.as_ref())
+        else {
+            return;
+        };
+        let Some(part) = self.flight_craft.as_ref().and_then(|c| c.parts.get(i)) else {
+            return;
+        };
+        let spec = self.catalog.get(&part.part_id);
+        let title = spec
+            .map(|s| s.display_title().to_string())
+            .unwrap_or_else(|| part.part_id.clone());
+        let html = hud::flight_pam_html(
+            &title,
+            i,
+            f,
+            spec.is_some_and(|s| s.has_engine),
+            part.part_id.contains("solar"),
+        );
+        let key = format!("{}:{}", html.len(), hud::fnv(&html));
+        if el.get_attribute("data-ose-key").as_deref() != Some(key.as_str()) {
+            el.set_inner_html(&html);
+            el.set_attribute("data-ose-key", &key).ok();
+        }
     }
 
     /// Open the part manager for part `i` at a screen point, or close it with `None`.
@@ -7140,6 +7241,13 @@ impl App {
         self.sas_target_tick(now);
         if self.in_session && self.vab_active() {
             self.vab_report_tick(now);
+        }
+        if self.flight_pam.is_some() {
+            if self.flying.is_none() {
+                self.flight_open_pam(None, 0.0, 0.0);
+            } else {
+                self.flight_pam_refresh();
+            }
         }
         #[cfg(target_arch = "wasm32")]
         if let (Some(p), Some(gpu)) = (self.planet_preview.as_mut(), self.gpu.as_mut()) {

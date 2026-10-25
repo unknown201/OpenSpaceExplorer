@@ -416,6 +416,14 @@
     /* Part manager window (right click a part in the VAB). */
     #vab-pam { position: fixed; z-index: 31; display: none; width: 300px; background: #0b1020f8; border: 1px solid #3b63a8; border-radius: 6px; padding: 8px 12px 10px; color: #e6ecf7; font: 13px var(--ui-font, system-ui); box-shadow: 0 6px 20px #000a; }
     #vab-pam.open { display: block; }
+    #fh-pam { position: fixed; z-index: 31; display: none; width: 280px; background: #0b1020f0; border: 1px solid #3b63a8; border-radius: 6px; padding: 8px 12px 10px; color: #e6ecf7; font: 13px var(--ui-font, system-ui); box-shadow: 0 6px 20px #000a; }
+    #fh-pam.open { display: block; }
+    body:not(:has(#flight-hud.open)) #fh-pam, body:has(#menu:not(.hidden)) #fh-pam, body.ui-hidden #fh-pam { display: none; }
+    #fh-pam .pam-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+    #fh-pam .pam-head button, #fh-pam .pam-acts button { margin: 0; width: auto; padding: 3px 9px; background: #16213a; color: #e6ecf7; border: 1px solid #2c3d63; border-radius: 4px; cursor: pointer; font: 600 12px var(--ui-font, system-ui); }
+    #fh-pam .pam-row { display: flex; justify-content: space-between; margin-top: 6px; font-size: 12px; } #fh-pam .pam-row b { font-weight: 500; color: #cfd6e6; }
+    #fh-pam .pam-sub { color: #9fb0cc; font-size: 12px; margin-top: 6px; }
+    #fh-pam .pam-acts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
     body:not(:has(#screen-vab.open)) #vab-pam { display: none; }
     #vab-pam .pam-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
     #vab-pam .pam-head button { margin: 0; width: auto; padding: 2px 8px; background: #16213a; color: #e6ecf7; border: 1px solid #2c3d63; border-radius: 4px; cursor: pointer; }
@@ -808,6 +816,7 @@
   <div id="ksc-tooltip" data-ose="ksc-tooltip"></div>
   <div id="vab-tip" data-ose="vab-tip"></div>
   <div id="vab-pam" data-ose="vab-pam"></div>
+  <div id="fh-pam" class="fh-pam" data-ose="flight-pam"></div>
   <div id="toasts" data-ose="toasts"></div>
   <div id="settings" data-ose="settings">
     <div class="set-card">
