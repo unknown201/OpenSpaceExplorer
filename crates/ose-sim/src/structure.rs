@@ -1018,7 +1018,10 @@ impl Structure {
     pub fn deploy_panels(&mut self, out: bool) -> usize {
         let mut n = 0;
         for i in 0..self.electric.len() {
-            if self.electric[i].solar_deployable && self.rigid.present[i] && self.deployed[i] != out
+            if self.electric[i].solar_deployable
+                && self.electric[i].solar_output > 0.0
+                && self.rigid.present[i]
+                && self.deployed[i] != out
             {
                 self.deployed[i] = out;
                 n += 1;

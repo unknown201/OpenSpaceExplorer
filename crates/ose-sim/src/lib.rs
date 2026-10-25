@@ -408,9 +408,13 @@ impl Universe {
 
     /// Whether any deployable panel of the vessel is out.
     pub fn panels_deployed(&self, e: Entity) -> bool {
-        self.world
-            .get::<structure::Structure>(e)
-            .is_some_and(|st| st.deployed.iter().any(|d| *d))
+        self.world.get::<structure::Structure>(e).is_some_and(|st| {
+            st.deployed.iter().enumerate().any(|(i, d)| {
+                *d && st.rigid.present[i]
+                    && st.electric[i].solar_deployable
+                    && st.electric[i].solar_output > 0.0
+            })
+        })
     }
 
     /// Fold a vessel's deployable solar panels out or in; how many moved, `None` without a structure.

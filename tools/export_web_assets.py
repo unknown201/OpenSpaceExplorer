@@ -56,6 +56,8 @@ class Glb:
         self.textures: list[dict] = []
         self.samplers = [{"magFilter": 9729, "minFilter": 9987, "wrapS": 10497, "wrapT": 10497}]
         self.roots: list[int] = []
+        self.skins: list[dict] = []
+        self.animations: list[dict] = []
 
     def _view(self, data: bytes, target: int | None) -> int:
         while len(self.bin) % 4:
@@ -157,6 +159,10 @@ class Glb:
             gltf["samplers"] = self.samplers
         if extras:
             gltf["extras"] = extras
+        if self.skins:
+            gltf["skins"] = self.skins
+        if self.animations:
+            gltf["animations"] = self.animations
         js = json.dumps(gltf, separators=(",", ":")).encode("utf-8")
         while len(js) % 4:
             js += b" "
@@ -329,6 +335,13 @@ class Exporter:
             return None
         glb = Glb()
         materials: dict[int, int | None] = {}  # material path_id -> glTF material index
+        self._excluded_lod_renderers = set()
+        for obj in env.objects:
+            if obj.type.name == "LODGroup":
+                lods = obj.read().m_LODs
+                if lods:
+                    first = {p.renderer.path_id for p in lods[0].renderers}
+                    self._excluded_lod_renderers.update(p.renderer.path_id for lod in lods[1:] for p in lod.renderers if p.renderer.path_id not in first)
         texture_slots_used: set[str] = set()
 
         def material_index(mat_pptr) -> int | None:
@@ -379,6 +392,9 @@ class Exporter:
         for o in env.objects:
             if o.type.name != "MeshRenderer":
                 continue
+            if o.path_id in self._excluded_lod_renderers:
+                renderer_material[o.read().m_GameObject.path_id] = -1
+                continue
             try:
                 mr = o.read()
                 mats = [material_index(mp) for mp in mr.m_Materials]
@@ -413,11 +429,14 @@ class Exporter:
             mat = renderer_material.get(go_id)
             meshes_by_tf[tf_id] = glb.mesh(mesh.m_Name, positions, normals, uvs, tris, mat if mat is not None and mat >= 0 else None)
             mesh_count += 1
+        from export_animation import skinned_meshes, export_rig
+        skins = skinned_meshes(self, env, glb, transforms, go_name, material_index, meshes_by_tf)
+        mesh_count = len(meshes_by_tf)
         if mesh_count == 0:
             return None
 
         # Only transforms that lead to a mesh are written, so the GLB stays small.
-        keep: set[int] = set()
+        keep: set[int] = set(transforms)  # Preserve bones, animation targets and procedural pivots too.
         for tf_id in meshes_by_tf:
             cur = tf_id
             hops = 0
@@ -427,6 +446,7 @@ class Exporter:
                 cur = father
                 hops += 1
 
+        node_by_tf: dict[int, int] = {}
         def build(tf_id: int) -> int:
             tf = transforms[tf_id]
             children = [build(c.path_id) for c in tf.m_Children if c.path_id in keep]
@@ -434,9 +454,11 @@ class Exporter:
             t = to_gltf_pos((tf.m_LocalPosition.x, tf.m_LocalPosition.y, tf.m_LocalPosition.z))
             r = to_gltf_quat(normalize((tf.m_LocalRotation.x, tf.m_LocalRotation.y, tf.m_LocalRotation.z, tf.m_LocalRotation.w)))
             sc = (float(tf.m_LocalScale.x), float(tf.m_LocalScale.y), float(tf.m_LocalScale.z))
-            return glb.node(name, t, r, sc, meshes_by_tf.get(tf_id), children)
+            node = glb.node(name, t, r, sc, meshes_by_tf.get(tf_id), children)
+            node_by_tf[tf_id] = node
+            return node
 
-        for tf_id in keep:
+        for tf_id in sorted(keep):
             tf = transforms[tf_id]
             father = tf.m_Father.path_id if tf.m_Father else 0
             if not father or father not in transforms:
@@ -444,7 +466,16 @@ class Exporter:
         if not glb.roots:
             return None
         path = self.out / "parts" / f"{part_id}.glb"
-        size = glb.write(path, {"part_id": part_id, "source": main})
+        metadata = export_rig(env, glb, transforms, go_name, node_by_tf, skins)
+        # Preserve semantic controller ownership. A state called OPEN on an engine can be a reverser
+        # or a mode animation; it must not be treated as landing gear or a solar deployment.
+        part_data = ROOT / "assets/ksp2/data/parts" / f"{part_id}.json"
+        if "ose_deployment" in metadata and part_data.exists():
+            modules = json.loads(part_data.read_text(encoding="utf-8"))["data"].get("serializedPartModules", [])
+            names = {m["Name"] for m in modules}
+            control = "panels" if "PartComponentModule_SolarPanel" in names else "gear" if any(n in names for n in ("PartComponentModule_LandingLeg", "PartComponentModule_WheelBase")) else ""
+            metadata["ose_deployment"]["control"] = control
+        size = glb.write(path, {"part_id": part_id, "source": main, **metadata})
         return {"id": part_id, "file": f"parts/{part_id}.glb", "bytes": size, "meshes": mesh_count, "textures": sorted(texture_slots_used)}
 
     # -- bodies

@@ -205,6 +205,7 @@ pub struct FlightView {
     flex_prev: FlexMap,
     flex_cur: FlexMap,
     flex_since_ms: f64,
+    deployments: HashMap<(u64, usize), crate::animation::Deployment>,
     /// Craft axes and local horizon of the last frame, for the navball.
     pub nav: Option<crate::navball::NavFrame>,
     /// Terrain, ocean, sky and clouds of the body (planet.rs), created with the first frame.
@@ -265,6 +266,7 @@ impl FlightView {
             flex_prev: HashMap::new(),
             flex_cur: HashMap::new(),
             flex_since_ms: 0.0,
+            deployments: HashMap::new(),
             nav: None,
             planet: None,
             fx_nozzles: Default::default(),
@@ -667,9 +669,42 @@ impl FlightView {
                     }
                     lp += DVec3::new(-(off[0] as f64), off[1] as f64, off[2] as f64);
                 }
+                let mut animation = None;
+                if let Some(model) = gpu.model(&name) {
+                    if let Some((clip, _)) = model
+                        .rig
+                        .deployment
+                        .filter(|_| model.rig.default_sample().is_some())
+                    {
+                        let deployed = inp
+                            .vessel
+                            .flight
+                            .as_ref()
+                            .and_then(|f| {
+                                f.gear
+                                    .iter()
+                                    .chain(&f.panels)
+                                    .find(|(p, _)| *p as usize == i)
+                                    .map(|(_, out)| *out)
+                            })
+                            .unwrap_or(false);
+                        let driver = self
+                            .deployments
+                            .entry((inp.vessel.id, i))
+                            .or_insert_with(|| crate::animation::Deployment::new(deployed, inp.ut));
+                        let fraction =
+                            driver.update(deployed, inp.ut, model.rig.clips[clip].duration);
+                        animation = model.rig.deployment_sample(fraction);
+                    }
+                }
                 if let Some(m) = gpu.model(&name) {
+                    let (lo, hi) = if animation.is_some() {
+                        m.pose_bounds(animation)
+                    } else {
+                        (m.bounds_min, m.bounds_max)
+                    };
+                    let (lo, hi) = (lo.as_dvec3(), hi.as_dvec3());
                     for c in 0..8 {
-                        let (lo, hi) = (m.bounds_min.as_dvec3(), m.bounds_max.as_dvec3());
                         let corner = DVec3::new(
                             if c & 1 == 0 { lo.x } else { hi.x },
                             if c & 2 == 0 { lo.y } else { hi.y },
@@ -678,7 +713,7 @@ impl FlightView {
                         min_y = min_y.min((lp + lq * corner).y);
                     }
                 }
-                parts.push((i, name, lp, lq));
+                parts.push((i, name, lp, lq, animation));
             }
             let lift = if min_y.is_finite() { -min_y } else { 0.0 };
             // Use the server's attached, fuel-fed engines, not just stage membership. Nozzles share
@@ -687,7 +722,7 @@ impl FlightView {
                 let pressure = crate::particles::pressure_multiplier(f.static_pressure_kpa);
                 let nozzles = self.fx_nozzles.borrow();
                 let mut launch_smoke_added = false;
-                for (pi, name, lp, lq) in &parts {
+                for (pi, name, lp, lq, _) in &parts {
                     let part_id = &craft.parts[*pi].part_id;
                     if part_id.starts_with("engine_") || part_id.starts_with("booster_") {
                         engine_draws.push(crate::engine_fx_gpu::EngineDraw {
@@ -791,12 +826,15 @@ impl FlightView {
                     }
                 }
             }
-            for (_, name, lp, lq) in parts {
+            self.deployments
+                .retain(|(v, i), _| *v == inp.vessel.id && parts.iter().any(|p| p.0 == *i));
+            for (_, name, lp, lq, animation) in parts {
                 if !gpu.has_model(&name) {
                     continue;
                 }
                 let wpos = pos + vessel_rot * (lp + DVec3::Y * lift);
                 let mut it = DrawItem::lit(name, wpos - cam, vessel_rot * lq, 1.0, sun);
+                it.animation = animation;
                 it.ambient = 0.25;
                 it.fill_dir = up;
                 it.fill = 0.25;

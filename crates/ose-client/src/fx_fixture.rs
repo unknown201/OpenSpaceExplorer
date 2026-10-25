@@ -69,6 +69,61 @@ pub fn fx_fixture_capture() -> String {
     FIXTURE.with(|f| f.borrow().as_ref().unwrap().engine_fx_capture())
 }
 
+/// Two instances of the same production model in opposing deployment poses. Used to catch shared
+/// vertex-buffer aliasing as well as missing clips, bones, or hierarchy transforms in browser tests.
+#[wasm_bindgen]
+pub fn rig_fixture_draw(part: String, fraction: f32) -> Result<bool, JsValue> {
+    rig_fixture_instances(part, fraction, 3)
+}
+
+#[wasm_bindgen]
+pub fn rig_fixture_instances(part: String, fraction: f32, instances: u8) -> Result<bool, JsValue> {
+    FIXTURE.with(|f| {
+        let mut state = f.borrow_mut();
+        let gpu = state
+            .as_mut()
+            .ok_or_else(|| JsValue::from_str("fixture not set up"))?;
+        gpu.set_fixture_grid(false);
+        let name = format!("rig:{part}");
+        gpu.request_model(&name, &format!("assets/parts/{part}.glb"));
+        let mut items = Vec::new();
+        let mut ready = false;
+        if let Some(model) = gpu.model(&name) {
+            let (lo, hi) = model.pose_bounds(model.rig.deployment_sample(0.0));
+            let (lo2, hi2) = model.pose_bounds(model.rig.deployment_sample(1.0));
+            let (lo, hi) = (lo.min(lo2).as_dvec3(), hi.max(hi2).as_dvec3());
+            let center = (lo + hi) * 0.5;
+            let size = hi - lo;
+            let spacing = size.x.max(size.z).max(1.0) * 1.4;
+            let distance = (spacing + size.length()).max(2.0) * 1.5;
+            let camera = center + DVec3::new(0.2, 0.9, 1.0).normalize() * distance;
+            gpu.set_camera(center - camera, DVec3::Y, 45f64.to_radians(), 0.05, 1e6);
+            let model = gpu.model(&name).unwrap();
+            for (i, (side, t)) in [(-0.5, fraction), (0.5, 1.0 - fraction)]
+                .into_iter()
+                .enumerate()
+            {
+                if instances & (1 << i) == 0 {
+                    continue;
+                }
+                let mut item = crate::render::DrawItem::lit(
+                    name.clone(),
+                    DVec3::X * spacing * side - camera,
+                    DQuat::IDENTITY,
+                    1.0,
+                    DVec3::new(1.0, 2.0, 2.0),
+                );
+                item.animation = model.rig.deployment_sample(t);
+                item.ambient = 0.35;
+                items.push(item);
+            }
+            ready = model.rig.deployment.is_some();
+        }
+        gpu.frame("assets/parts/", &items, &[], [0.025, 0.035, 0.06]);
+        Ok(ready)
+    })
+}
+
 #[wasm_bindgen]
 pub async fn fx_fixture_pixels() -> Result<Vec<u8>, JsValue> {
     // Take the fixture out of the RefCell so no borrow is held across the GPU mapping await.

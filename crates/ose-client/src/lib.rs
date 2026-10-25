@@ -11,6 +11,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod animation;
 pub mod audio;
 pub mod authored_particles;
 #[cfg(target_arch = "wasm32")]
@@ -4487,6 +4488,7 @@ impl App {
                 let scale = (b.radius_m / 1000.0) / model.mesh_radius.max(1e-9);
                 let light = if b.is_star { GV::Y } else { star_km - pos_km };
                 items.push(render::DrawItem {
+                    animation: None,
                     model: name.clone(),
                     rel_pos_km: pos_km - cam_km,
                     rotation: DQuat::IDENTITY,

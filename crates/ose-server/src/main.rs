@@ -871,6 +871,19 @@ fn flight_readout(
         comm_hops: u.comm_link(e).hops,
         comm_range_m: u.comm_link(e).range_m,
         panels_deployed: u.panels_deployed(e),
+        panels: u
+            .structure(e)
+            .map(|st| {
+                st.electric
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, d)| {
+                        d.solar_deployable && d.solar_output > 0.0 && st.rigid.present[*i]
+                    })
+                    .map(|(i, _)| (i as u16, st.deployed[i]))
+                    .collect()
+            })
+            .unwrap_or_default(),
         tipped: p.tipped,
         parachutes: u
             .structure(e)

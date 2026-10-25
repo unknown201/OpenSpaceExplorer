@@ -58,8 +58,13 @@ fn vs_mesh(in: VsIn) -> VsOut {
     var out: VsOut;
     let world = object.model * vec4<f32>(in.pos, 1.0);
     out.clip = camera.view_proj * world;
-    // Uniform scale is assumed, so the rotation part of the model matrix is enough for normals.
-    out.normal = normalize((object.model * vec4<f32>(in.normal, 0.0)).xyz);
+    // Animated rigs can contain nonuniform scale. Cofactors give the inverse-transpose normal
+    // transform; the determinant sign preserves outward normals on mirrored draws.
+    let a = object.model[0].xyz;
+    let b = object.model[1].xyz;
+    let c = object.model[2].xyz;
+    let cofactor = mat3x3<f32>(cross(b,c), cross(c,a), cross(a,b));
+    out.normal = normalize((cofactor * in.normal) * sign(dot(a,cross(b,c))));
     out.uv = in.uv;
     out.world = world.xyz;
     return out;
@@ -155,7 +160,10 @@ struct GpuPrimitive {
 pub struct Model {
     meshes: Vec<GpuPrimitive>,
     /// (index into `meshes`, world transform within the model) per drawn node.
-    primitives: Vec<(usize, Mat4)>,
+    primitives: Vec<(usize, Mat4, usize)>,
+    pub rig: crate::animation::Rig,
+    rest_vertices: Vec<Vec<Vertex>>,
+    influences: Vec<Option<Influences>>,
     textures: Vec<Option<wgpu::TextureView>>,
     /// glTF mesh name of each entry of `meshes` (for `hide_meshes`).
     mesh_names: Vec<String>,
@@ -164,6 +172,48 @@ pub struct Model {
     /// Bounds of all primitives in model units, for framing in the editor.
     pub bounds_min: Vec3,
     pub bounds_max: Vec3,
+}
+
+impl Model {
+    /// Pose bounds include skin deformation, so unfolding legs do not use the bind-pose ground anchor.
+    pub fn pose_bounds(&self, sample: Option<crate::animation::ClipSample>) -> (Vec3, Vec3) {
+        if self.rest_vertices.iter().all(Vec::is_empty) {
+            return (self.bounds_min, self.bounds_max);
+        }
+        let world = self.rig.world_matrices(&self.rig.pose(sample));
+        let mut lo = Vec3::splat(f32::INFINITY);
+        let mut hi = Vec3::splat(f32::NEG_INFINITY);
+        for (mesh, _, node) in &self.primitives {
+            let palette = self.rig.palette(*node, &world);
+            for (i, v) in self.rest_vertices[*mesh].iter().enumerate() {
+                let mut p = Vec3::from(v.pos);
+                if let (Some(palette), Some(influences)) = (&palette, &self.influences[*mesh]) {
+                    let (j, w) = influences[i];
+                    let mut skinned = Vec3::ZERO;
+                    let mut total = 0.0;
+                    for (j, w) in j.into_iter().zip(w) {
+                        if w > 0.0 {
+                            if let Some(m) = palette.get(j as usize) {
+                                skinned += m.transform_point3(p) * w;
+                                total += w;
+                            }
+                        }
+                    }
+                    if total > 1e-12 {
+                        p = skinned / total;
+                    }
+                }
+                let p = world[*node].transform_point3(p);
+                lo = lo.min(p);
+                hi = hi.max(p);
+            }
+        }
+        if lo.is_finite() {
+            (lo, hi)
+        } else {
+            (Vec3::ZERO, Vec3::ZERO)
+        }
+    }
 }
 
 struct PendingTexture {
@@ -178,13 +228,16 @@ struct PendingTexture {
 /// Vertices, indices, base-colour / normal / metallic-gloss image indices, alpha blending and base colour
 /// factor of one mesh primitive before upload.
 type CpuMesh = (Vec<Vertex>, Vec<u32>, [Option<usize>; 3], bool, [f32; 4]);
+type Influences = Vec<([u16; 4], [f32; 4])>;
 
 struct CpuModel {
     meshes: Vec<CpuMesh>,
     /// Per image: true when it is used as data (normal or metallic-gloss) rather than colour.
     image_linear: Vec<bool>,
     /// (mesh index, node transform) per instance.
-    primitives: Vec<(usize, Mat4)>,
+    primitives: Vec<(usize, Mat4, usize)>,
+    rig: crate::animation::Rig,
+    influences: Vec<Option<Influences>>,
     image_uris: Vec<String>,
     mesh_radius: f64,
     /// glTF mesh name of each entry of `meshes`.
@@ -192,6 +245,7 @@ struct CpuModel {
 }
 
 pub struct DrawItem {
+    pub animation: Option<crate::animation::ClipSample>,
     pub model: String,
     /// Position relative to the camera, kilometres.
     pub rel_pos_km: DVec3,
@@ -224,6 +278,7 @@ impl DrawItem {
         light_dir: DVec3,
     ) -> DrawItem {
         DrawItem {
+            animation: None,
             model,
             rel_pos_km,
             rotation,
@@ -857,7 +912,7 @@ impl Renderer {
             }
             let mut bounds_min = Vec3::splat(f32::INFINITY);
             let mut bounds_max = Vec3::splat(f32::NEG_INFINITY);
-            for (mi, transform) in &cpu.primitives {
+            for (mi, transform, _) in &cpu.primitives {
                 let Some((lo, hi)) = local_bounds.get(*mi) else {
                     continue;
                 };
@@ -899,18 +954,35 @@ impl Renderer {
                 bounds_min = Vec3::ZERO;
                 bounds_max = Vec3::ZERO;
             }
-            self.models.insert(
-                name,
-                Model {
-                    meshes,
-                    primitives,
-                    textures,
-                    mesh_names,
-                    mesh_radius: cpu.mesh_radius,
-                    bounds_min,
-                    bounds_max,
-                },
-            );
+            let retain_vertices = !cpu.rig.skins.is_empty() || !cpu.rig.clips.is_empty();
+            let rest_vertices = cpu
+                .meshes
+                .iter()
+                .map(|m| {
+                    if retain_vertices {
+                        m.0.clone()
+                    } else {
+                        Vec::new()
+                    }
+                })
+                .collect();
+            let mut model = Model {
+                rig: cpu.rig,
+                rest_vertices,
+                influences: cpu.influences,
+                meshes,
+                primitives,
+                textures,
+                mesh_names,
+                mesh_radius: cpu.mesh_radius,
+                bounds_min,
+                bounds_max,
+            };
+            if !model.rig.skins.is_empty() || model.rig.deployment.is_some() {
+                (model.bounds_min, model.bounds_max) =
+                    model.pose_bounds(model.rig.default_sample());
+            }
+            self.models.insert(name, model);
         }
         let textures: Vec<PendingTexture> = self.texture_inbox.borrow_mut().drain(..).collect();
         let mut touched: Vec<String> = Vec::new();
@@ -1180,7 +1252,7 @@ impl Renderer {
         self.ensure_slots(needed);
         let mut slot = 0usize;
         // (model, primitive, slot, mirrored)
-        let mut mesh_draws: Vec<(String, usize, usize, bool)> = Vec::new();
+        let mut mesh_draws: Vec<(String, usize, usize, bool, Option<wgpu::Buffer>)> = Vec::new();
         let hidden = std::mem::take(&mut self.hidden);
         for item in items {
             let Some(model) = self.models.get(&item.model) else {
@@ -1196,11 +1268,47 @@ impl Renderer {
                 item.rotation,
                 item.rel_pos_km,
             );
-            for (pi, (mesh_i, local)) in model.primitives.iter().enumerate() {
+            let pose = model
+                .rig
+                .pose(item.animation.or_else(|| model.rig.default_sample()));
+            let world = model.rig.world_matrices(&pose);
+            for (pi, (mesh_i, _, node)) in model.primitives.iter().enumerate() {
                 if hide.is_some_and(|h| h.contains(&model.mesh_names[*mesh_i])) {
                     continue;
                 }
-                let m = base * local.as_dmat4();
+                let m = base * world[*node].as_dmat4();
+                // Each skinned draw owns its buffer. Writing into the shared model's buffer would make
+                // every instance display the last instance's pose when the command buffer executes.
+                let skinned = model.influences[*mesh_i].as_ref().and_then(|influences| {
+                    let palette = model.rig.palette(*node, &world)?;
+                    let vertices: Vec<Vertex> = model.rest_vertices[*mesh_i]
+                        .iter()
+                        .zip(influences)
+                        .map(|(v, (joints, weights))| {
+                            let (p, n) = crate::animation::skin_vertex(
+                                v.pos.into(),
+                                v.normal.into(),
+                                *joints,
+                                *weights,
+                                &palette,
+                            );
+                            Vertex {
+                                pos: p.to_array(),
+                                normal: n.to_array(),
+                                uv: v.uv,
+                            }
+                        })
+                        .collect();
+                    let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("skinned instance"),
+                        size: std::mem::size_of_val(vertices.as_slice()) as u64,
+                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    });
+                    self.queue
+                        .write_buffer(&buf, 0, bytemuck::cast_slice(&vertices));
+                    Some(buf)
+                });
                 let fill = item.fill_dir.normalize_or_zero().as_vec3();
                 let factor = model.meshes[*mesh_i].color;
                 let u = ObjectUniform {
@@ -1227,7 +1335,7 @@ impl Renderer {
                 };
                 self.queue
                     .write_buffer(&self.objects[slot].0, 0, bytemuck::bytes_of(&u));
-                mesh_draws.push((item.model.clone(), pi, slot, m.determinant() < 0.0));
+                mesh_draws.push((item.model.clone(), pi, slot, m.determinant() < 0.0, skinned));
                 slot += 1;
             }
         }
@@ -1306,9 +1414,9 @@ impl Renderer {
                 } else {
                     &self.mesh_pipeline
                 });
-                for (model_name, pi, s, m) in &mesh_draws {
+                for (model_name, pi, s, m, skinned) in &mesh_draws {
                     let model = &self.models[model_name];
-                    let (mesh_i, _) = model.primitives[*pi];
+                    let (mesh_i, _, _) = model.primitives[*pi];
                     let prim = &model.meshes[mesh_i];
                     if prim.blend != blended || (!blended && *m != mirrored) {
                         continue;
@@ -1316,7 +1424,7 @@ impl Renderer {
                     let tex = prim.bind.as_ref().unwrap_or(&self.white);
                     pass.set_bind_group(1, &self.objects[*s].1, &[]);
                     pass.set_bind_group(2, tex, &[]);
-                    pass.set_vertex_buffer(0, prim.vertices.slice(..));
+                    pass.set_vertex_buffer(0, skinned.as_ref().unwrap_or(&prim.vertices).slice(..));
                     pass.set_index_buffer(prim.indices.slice(..), wgpu::IndexFormat::Uint32);
                     pass.draw_indexed(0..prim.index_count, 0, 0..1);
                 }
@@ -1371,6 +1479,10 @@ impl Renderer {
     pub fn enable_fx_capture(&mut self) {
         self.engine_fx.enable_capture();
         self.fixture_grid = true;
+    }
+
+    pub(crate) fn set_fixture_grid(&mut self, enabled: bool) {
+        self.fixture_grid = enabled;
     }
     pub fn engine_fx_capture(&self) -> String {
         serde_json::to_string(self.engine_fx.capture()).unwrap_or_default()
@@ -1530,28 +1642,16 @@ fn parse_glb(bytes: &[u8]) -> Result<CpuModel, String> {
         return Err("not a GLB".into());
     }
     let json_len = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+    let json_end = 20usize.checked_add(json_len).ok_or("GLB length overflow")?;
     let json: serde_json::Value =
-        serde_json::from_slice(&bytes[20..20 + json_len]).map_err(|e| e.to_string())?;
-    let bin_start = 20 + json_len + 8;
+        serde_json::from_slice(bytes.get(20..json_end).ok_or("truncated GLB JSON")?)
+            .map_err(|e| e.to_string())?;
+    let bin_start = json_end.checked_add(8).ok_or("GLB length overflow")?;
     let bin = bytes.get(bin_start..).unwrap_or(&[]);
     let views = json["bufferViews"].as_array().cloned().unwrap_or_default();
     let accessors = json["accessors"].as_array().cloned().unwrap_or_default();
-    let read_f32 = |acc: usize, ncomp: usize| -> Result<Vec<f32>, String> {
-        let a = accessors.get(acc).ok_or("accessor")?;
-        let v = &views[a["bufferView"].as_u64().ok_or("view")? as usize];
-        let off = v["byteOffset"].as_u64().unwrap_or(0) as usize
-            + a["byteOffset"].as_u64().unwrap_or(0) as usize;
-        let count = a["count"].as_u64().ok_or("count")? as usize;
-        let data = bin
-            .get(off..off + count * ncomp * 4)
-            .ok_or("accessor out of range")?;
-        Ok(data
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .map(|c| f32::from_le_bytes(*c))
-            .collect())
-    };
+    let access = crate::animation::Accessors { json: &json, bin };
+    let read_f32 = |acc: usize, ncomp: usize| access.floats(acc, ncomp);
     let read_indices = |acc: usize| -> Result<Vec<u32>, String> {
         let a = accessors.get(acc).ok_or("accessor")?;
         let v = &views[a["bufferView"].as_u64().ok_or("view")? as usize];
@@ -1622,75 +1722,22 @@ fn parse_glb(bytes: &[u8]) -> Result<CpuModel, String> {
         })
         .unwrap_or_default();
 
-    // Flatten the node tree into (mesh index, world transform).
-    let nodes = json["nodes"].as_array().cloned().unwrap_or_default();
-    let mut placed: Vec<(usize, Mat4)> = Vec::new();
-    fn walk(
-        nodes: &[serde_json::Value],
-        i: usize,
-        parent: Mat4,
-        out: &mut Vec<(usize, Mat4)>,
-        depth: usize,
-    ) {
-        if depth > 64 {
-            return;
-        }
-        let n = &nodes[i];
-        let f3 = |k: &str, d: [f32; 3]| -> Vec3 {
-            n[k].as_array()
-                .map(|a| {
-                    Vec3::new(
-                        a[0].as_f64().unwrap_or(0.0) as f32,
-                        a[1].as_f64().unwrap_or(0.0) as f32,
-                        a[2].as_f64().unwrap_or(0.0) as f32,
-                    )
-                })
-                .unwrap_or(Vec3::from(d))
-        };
-        let t = f3("translation", [0.0; 3]);
-        let s = f3("scale", [1.0; 3]);
-        let r = n["rotation"]
-            .as_array()
-            .map(|a| {
-                glam::Quat::from_xyzw(
-                    a[0].as_f64().unwrap_or(0.0) as f32,
-                    a[1].as_f64().unwrap_or(0.0) as f32,
-                    a[2].as_f64().unwrap_or(0.0) as f32,
-                    a[3].as_f64().unwrap_or(1.0) as f32,
-                )
-                .normalize()
-            })
-            .unwrap_or(glam::Quat::IDENTITY);
-        let local = Mat4::from_scale_rotation_translation(s, r, t);
-        let world = parent * local;
-        if let Some(m) = n["mesh"].as_u64() {
-            out.push((m as usize, world));
-        }
-        if let Some(children) = n["children"].as_array() {
-            for c in children {
-                if let Some(ci) = c.as_u64() {
-                    walk(nodes, ci as usize, world, out, depth + 1);
-                }
-            }
-        }
-    }
-    let roots: Vec<usize> = json["scenes"][0]["nodes"]
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(|v| v.as_u64().map(|x| x as usize))
-                .collect()
-        })
-        .unwrap_or_default();
-    for r in roots {
-        walk(&nodes, r, Mat4::IDENTITY, &mut placed, 0);
-    }
+    let rig = crate::animation::Rig::from_gltf(&json, bin)?;
+    let world = rig.world_matrices(&rig.pose(None));
+    let placed: Vec<_> = rig
+        .nodes
+        .iter()
+        .enumerate()
+        .filter_map(|(i, n)| n.mesh.filter(|_| n.visible).map(|m| (m, world[i], i)))
+        .collect();
+    let access = crate::animation::Accessors { json: &json, bin };
     let meshes = json["meshes"].as_array().cloned().unwrap_or_default();
     let mut cpu_meshes: Vec<CpuMesh> = Vec::new();
     let mut by_key: HashMap<(usize, usize), usize> = HashMap::new();
-    let mut primitives: Vec<(usize, Mat4)> = Vec::new();
+    let mut primitives: Vec<(usize, Mat4, usize)> = Vec::new();
+    let mut influences = Vec::new();
     let mut mesh_names: Vec<String> = Vec::new();
-    for (mi, world) in placed {
+    for (mi, world, node) in placed {
         let Some(mesh) = meshes.get(mi) else { continue };
         for (pi, prim) in mesh["primitives"]
             .as_array()
@@ -1700,7 +1747,7 @@ fn parse_glb(bytes: &[u8]) -> Result<CpuModel, String> {
             .enumerate()
         {
             if let Some(&idx) = by_key.get(&(mi, pi)) {
-                primitives.push((idx, world));
+                primitives.push((idx, world, node));
                 continue;
             }
             let pos = read_f32(
@@ -1717,6 +1764,43 @@ fn parse_glb(bytes: &[u8]) -> Result<CpuModel, String> {
                 .transpose()?;
             let indices = read_indices(prim["indices"].as_u64().ok_or("indices")? as usize)?;
             let n = pos.len() / 3;
+            if nrm.as_ref().is_some_and(|a| a.len() != n * 3)
+                || uv.as_ref().is_some_and(|a| a.len() != n * 2)
+                || indices.iter().any(|i| *i as usize >= n)
+            {
+                return Err("mesh attribute or index bounds".into());
+            }
+            let joints = prim["attributes"]["JOINTS_0"].as_u64();
+            let weights = prim["attributes"]["WEIGHTS_0"].as_u64();
+            let skin = match (joints, weights) {
+                (Some(j), Some(w)) => {
+                    let j = access.floats(j as usize, 4)?;
+                    let w = access.floats(w as usize, 4)?;
+                    if j.len() != n * 4
+                        || w.len() != n * 4
+                        || j.iter()
+                            .any(|v| *v < 0.0 || *v > 65535.0 || v.fract() != 0.0)
+                    {
+                        return Err("skin attributes".into());
+                    }
+                    Some(
+                        j.as_chunks::<4>()
+                            .0
+                            .iter()
+                            .zip(w.as_chunks::<4>().0.iter())
+                            .map(|(j, w)| {
+                                (
+                                    [j[0] as u16, j[1] as u16, j[2] as u16, j[3] as u16],
+                                    [w[0], w[1], w[2], w[3]],
+                                )
+                            })
+                            .collect(),
+                    )
+                }
+                (None, None) => None,
+                _ => return Err("skin needs joints and weights".into()),
+            };
+            influences.push(skin);
             let vertices: Vec<Vertex> = (0..n)
                 .map(|i| Vertex {
                     pos: [pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]],
@@ -1747,7 +1831,7 @@ fn parse_glb(bytes: &[u8]) -> Result<CpuModel, String> {
             cpu_meshes.push((vertices, indices, texture, blend, color));
             mesh_names.push(mesh["name"].as_str().unwrap_or("").to_string());
             by_key.insert((mi, pi), cpu_meshes.len() - 1);
-            primitives.push((cpu_meshes.len() - 1, world));
+            primitives.push((cpu_meshes.len() - 1, world, node));
         }
     }
     let mesh_radius = json["extras"]["mesh_radius"].as_f64().unwrap_or(1.0);
@@ -1762,6 +1846,8 @@ fn parse_glb(bytes: &[u8]) -> Result<CpuModel, String> {
         }
     }
     Ok(CpuModel {
+        rig,
+        influences,
         meshes: cpu_meshes,
         image_linear,
         primitives,

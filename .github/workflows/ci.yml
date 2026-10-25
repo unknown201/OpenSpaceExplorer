@@ -13,6 +13,7 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      - run: python -B -m unittest discover -s tools/tests
       - run: cargo check -p ose-client --target wasm32-unknown-unknown
 
   # Browser end-to-end: the trunk-built WASM client served by ose-server, driven by Playwright in Chromium
