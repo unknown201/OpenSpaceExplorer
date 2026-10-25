@@ -99,6 +99,11 @@
     #vab-cats { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
     #vab-cats button { margin: 0; width: auto; padding: 3px 8px; font-size: 11px; background: #16213a; border-color: #2c3d63; color: #cfd6e6; }
     #vab-cats button.on { background: #1f3d6b; border-color: #3b63a8; color: #fff; }
+    /* Icon tabs as the original's picker; the name shows under the icon of the open category. */
+    #vab-cats { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; }
+    #vab-cats button { display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 4px 0 2px; min-width: 0; }
+    #vab-cats button i { width: 22px; height: 22px; background: currentColor; -webkit-mask: var(--ico) center / contain no-repeat; mask: var(--ico) center / contain no-repeat; }
+    #vab-cats button span { font-size: 8.5px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.8; }
     #vab-search { width: 100%; box-sizing: border-box; padding: 5px 8px; font: inherit; font-size: 12px; background: #06080f; color: #e6ecf7; border: 1px solid #2c3d63; border-radius: 4px; }
     #vab-parts { margin: 6px 0 0; padding: 0; list-style: none; max-height: 56vh; overflow: auto; }
     #vab-parts li { padding: 5px 8px; margin-bottom: 3px; border: 1px solid #2c3d63; border-radius: 4px; background: #06080f; cursor: pointer; font-size: 12px; color: #e6ecf7; }

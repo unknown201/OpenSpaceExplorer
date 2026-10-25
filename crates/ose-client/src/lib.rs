@@ -5111,10 +5111,17 @@ impl App {
         all.extend(vab::categories(&self.catalog));
         for c in all {
             let on = if c == self.vab_category { " on" } else { "" };
+            // The original's category icons (PartCategories-ICO-*), the name on hover.
+            let icon = match c.as_str() {
+                "FuelTank" => "Fuel",
+                "Structural" => "Structure",
+                other => other,
+            };
             html.push_str(&format!(
-                "<button class=\"{on}\" data-ose-category=\"{c}\">{c}</button>",
+                "<button class=\"{on}\" data-ose-category=\"{c}\" title=\"{c}\"><i style=\"--ico:url(assets/ui/hud/PartCategories-ICO-{icon}.png)\"></i><span>{c}</span></button>",
                 on = on.trim(),
-                c = esc(&c)
+                c = esc(&c),
+                icon = esc(icon),
             ));
         }
         cats.set_inner_html(&html);

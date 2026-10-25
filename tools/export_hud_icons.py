@@ -16,7 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from export_web_assets import DEFAULT_INSTALL, ROOT, Exporter  # noqa: E402
 
-BUNDLES = ["hudinstruments_assets_all.bundle", "ui_assets_all.bundle"]
+BUNDLES = ["hudinstruments_assets_all.bundle", "ui_assets_all.bundle", "oab_assets_all.bundle"]
 ICONS = [
     # SAS modes around the navball.
     "Flight-ICO-StabilityAssist", "Flight-ICO-Prograde", "Flight-ICO-Retrograde", "Flight-ICO-Normal",
@@ -28,6 +28,11 @@ ICONS = [
     "ICO-AppBar-ResearchManager-24x24", "ICO-AppBar-MissionTracker-24x24", "ICO-AppBar-ActionGroup-24x24",
     "ICO-AppBar-ResourceManager-24x24", "ICO-AppBar-KerbalManager-24x24", "ICO-AppBar-FlightReport-24x24",
     "ICO-AppBar-PartsManager-24x24", "ICO-AppBar-Tray-24x24",
+    # VAB part picker category tabs.
+    "PartCategories-ICO-Pods", "PartCategories-ICO-Fuel", "PartCategories-ICO-Engine", "PartCategories-ICO-Coupling",
+    "PartCategories-ICO-Structure", "PartCategories-ICO-Aero", "PartCategories-ICO-Ground", "PartCategories-ICO-Thermal",
+    "PartCategories-ICO-Electrical", "PartCategories-ICO-Communication", "PartCategories-ICO-Science",
+    "PartCategories-ICO-Utility", "PartCategories-ICO-Payload",
     # Crew portraits.
     "WB-ICO-Kerbal",
     # Staging stack.
