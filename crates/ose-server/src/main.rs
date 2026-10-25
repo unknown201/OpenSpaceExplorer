@@ -671,6 +671,27 @@ fn vessels_message(s: &Shared, u: &Universe, tick: Tick) -> ServerMessage {
                 velocity_mps: bv + rv,
                 orbit: elements(&orbit),
                 flight: flight_readout(u, e, body, &s.parts),
+                target: u.target(e).and_then(|t| {
+                    let id = match list.iter().find(|x| x.0 == t) {
+                        Some(&(_, vid, _)) => ose_net::TargetId::Vessel(vid),
+                        None if u.body_id(t).is_some() => {
+                            ose_net::TargetId::Body(catalog_index(s, u, t))
+                        }
+                        None => return None,
+                    };
+                    let (d, rel, dist) = u.target_relative(e)?;
+                    let closing = if d.length() > 0.0 {
+                        -rel.dot(d.normalized())
+                    } else {
+                        0.0
+                    };
+                    Some(ose_net::TargetReadout {
+                        target: id,
+                        distance_m: dist,
+                        relative_velocity_mps: rel,
+                        closing_mps: closing,
+                    })
+                }),
             })
         })
         .collect();
@@ -699,6 +720,8 @@ fn to_net_attitude(a: Attitude) -> ose_net::AttitudeMode {
         Attitude::Fixed(d) => M::Fixed(d),
         Attitude::Maneuver(_) => M::Maneuver,
         Attitude::Free => M::Free,
+        Attitude::Target(_) => M::Target,
+        Attitude::AntiTarget(_) => M::AntiTarget,
     }
 }
 
@@ -725,6 +748,8 @@ fn from_net_attitude(a: ose_net::AttitudeMode) -> Attitude {
         // the universe points it at the burn on its next step
         M::Maneuver => Attitude::Maneuver(ose_math::DVec3::ZERO),
         M::Free => Attitude::Free,
+        M::Target => Attitude::Target(ose_math::DVec3::ZERO),
+        M::AntiTarget => Attitude::AntiTarget(ose_math::DVec3::ZERO),
     }
 }
 
@@ -2771,6 +2796,11 @@ async fn session(mut socket: WebSocket, s: AppState) {
                                 {
                                     ServerMessage::FlightAck { vessel, accepted: false, reason: Some("no maneuver planned".into()) }
                                 }
+                                Some(e) if matches!(attitude, ose_net::AttitudeMode::Target | ose_net::AttitudeMode::AntiTarget)
+                                    && s.universe.lock().expect("sim lock").target(e).is_none() =>
+                                {
+                                    ServerMessage::FlightAck { vessel, accepted: false, reason: Some("no target set".into()) }
+                                }
                                 Some(e) => {
                                     let ok = s.universe.lock().expect("sim lock").set_controls(e, throttle, from_net_attitude(attitude));
                                     ServerMessage::FlightAck { vessel, accepted: ok, reason: (!ok).then(|| "vessel has no flight state (bare probe), has crashed, or has no power for its probe core".to_string()) }
@@ -2914,6 +2944,40 @@ async fn session(mut socket: WebSocket, s: AppState) {
                         | ClientMessage::RevertToLaunch
                         | ClientMessage::RevertToEditor)) => {
                             let reply = save_request(&s, player_id, &msg);
+                            if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::SetTarget { vessel, target }) => {
+                            let reply = match owned_vessel(&s, vessel, player_id) {
+                                Some(e) => {
+                                    let t = match target {
+                                        None => Ok(None),
+                                        Some(ose_net::TargetId::Vessel(id)) => s
+                                            .vessels
+                                            .lock()
+                                            .expect("vessels lock")
+                                            .iter()
+                                            .find(|x| x.1 == id)
+                                            .map(|x| Some(x.0))
+                                            .ok_or("no such vessel"),
+                                        Some(ose_net::TargetId::Body(i)) => {
+                                            let u = s.universe.lock().expect("sim lock");
+                                            s.catalog
+                                                .get(i as usize)
+                                                .and_then(|b| u.body_entity(&b.id))
+                                                .map(Some)
+                                                .ok_or("no such body")
+                                        }
+                                    };
+                                    match t {
+                                        Ok(t) => {
+                                            let ok = s.universe.lock().expect("sim lock").set_target(e, t);
+                                            ServerMessage::FlightAck { vessel, accepted: ok, reason: (!ok).then(|| "cannot target that".into()) }
+                                        }
+                                        Err(reason) => ServerMessage::FlightAck { vessel, accepted: false, reason: Some(reason.into()) },
+                                    }
+                                }
+                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
+                            };
                             if !send(&mut socket, &reply).await { break; }
                         }
                         Ok(ClientMessage::DeployFairings { vessel }) => {

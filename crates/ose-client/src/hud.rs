@@ -86,6 +86,8 @@ pub fn sas_lit(att: &AttitudeMode) -> &'static str {
         AttitudeMode::Maneuver => "fh-sas-maneuver",
         // SAS off: no mode button lit
         AttitudeMode::Free => "",
+        AttitudeMode::Target => "fh-sas-target",
+        AttitudeMode::AntiTarget => "fh-sas-antitarget",
         AttitudeMode::Up | AttitudeMode::PitchHeading { .. } | AttitudeMode::Fixed(_) => {
             "fh-sas-stability"
         }
@@ -552,6 +554,29 @@ pub fn flight_pam_html(
                 "Extend panels"
             }
         ));
+    }
+    // Fairings and cargo bays (protocol 35): jettison, open or close; parts they enclose say so.
+    if let Some((_, gone)) = f.fairings.iter().find(|x| x.0 == i) {
+        rows.push_str(&row(
+            "Fairing",
+            if *gone { "jettisoned" } else { "closed" }.into(),
+        ));
+        if !gone {
+            acts.push_str("<button data-act=\"fh-act-fairings\">Deploy fairing</button>");
+        }
+    }
+    if let Some((_, open)) = f.cargo_bays.iter().find(|x| x.0 == i) {
+        rows.push_str(&row(
+            "Cargo bay",
+            if *open { "open" } else { "closed" }.into(),
+        ));
+        acts.push_str(&format!(
+            "<button data-act=\"fh-act-bays\">{}</button>",
+            if *open { "Close bay" } else { "Open bay" }
+        ));
+    }
+    if f.shielded.contains(&i) {
+        rows.push_str(&row("Shielded", "no drag or re-entry heat".into()));
     }
     if is_engine {
         rows.push_str(&row(

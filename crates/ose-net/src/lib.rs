@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 35;
+pub const PROTOCOL_VERSION: u16 = 36;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -225,6 +225,12 @@ pub enum ClientMessage {
     /// Back to just before the player's last launch, with its craft for the editor (needs `AllowRevert`);
     /// answers `SaveAck` with `craft`.
     RevertToEditor,
+    /// Target another vessel or a body for one of the player's vessels (`None` clears it); answers
+    /// `FlightAck`. The target shows in `VesselState::target`.
+    SetTarget {
+        vessel: u64,
+        target: Option<TargetId>,
+    },
     /// Jettison the vessel's fairings (also done by staging them); answers `FlightAck`.
     DeployFairings {
         vessel: u64,
@@ -363,6 +369,8 @@ pub struct VesselState {
     pub orbit: OrbitElements,
     /// Present while the vessel is under powered flight (landed, ascending, descending).
     pub flight: Option<FlightReadout>,
+    /// The vessel's target, if it has one.
+    pub target: Option<TargetReadout>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -474,6 +482,9 @@ pub enum AttitudeMode {
     Maneuver,
     /// SAS off: nothing holds the attitude; `SetRotation` turns the vessel and its spin carries on.
     Free,
+    /// Toward / away from the vessel's target (`SetTarget`; refused without one).
+    Target,
+    AntiTarget,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -625,6 +636,25 @@ pub struct LaunchSite {
     pub lon_deg: f64,
     /// Which way a plane faces there, compass degrees (90 = east).
     pub heading_deg: f64,
+}
+
+/// Something a vessel can target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TargetId {
+    Vessel(u64),
+    /// A body by its `BodyCatalog` index.
+    Body(u16),
+}
+
+/// A vessel's target as seen from it.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TargetReadout {
+    pub target: TargetId,
+    /// Distance, m (to a body's surface), and the target's velocity relative to the vessel, m/s, inertial.
+    pub distance_m: f64,
+    pub relative_velocity_mps: DVec3,
+    /// How fast they close, m/s (negative moving apart).
+    pub closing_mps: f64,
 }
 
 /// Action groups (keys U, R, Backspace, 1..0).

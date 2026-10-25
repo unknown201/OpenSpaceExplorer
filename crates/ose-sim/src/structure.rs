@@ -1514,6 +1514,47 @@ impl Structure {
         total
     }
 
+    /// Torque of the airflow about the centre of mass, kN·m, inertial: each part's drag (from the last `aero`
+    /// call) and each lifting surface's force at its place. A craft whose drag sits ahead of its centre of
+    /// mass wants to turn round; fins behind it keep it pointing into the flow.
+    pub fn aero_torque(&self, facing: DVec3, v_air: DVec3, rho: f64, mach: f64) -> DVec3 {
+        let speed = v_air.length();
+        if speed <= 0.0 || rho <= 0.0 {
+            return DVec3::ZERO;
+        }
+        let (bx, by, bz) = basis(facing);
+        let to_inertial = |v: DVec3| bx * v.x + by * v.y + bz * v.z;
+        let travel = v_air * (1.0 / speed);
+        let q = 0.5 * rho * speed * speed;
+        let c = self.rigid.rest_centre();
+        let mut torque = DVec3::ZERO;
+        for i in 0..self.rigid.len() {
+            if !self.rigid.present[i] {
+                continue;
+            }
+            let (centre, _) = self.part_box(i);
+            let r = to_inertial(centre - c);
+            let mut f = -travel * (q * self.part_cda_m2[i] / 1000.0);
+            if let Some((l, curves)) = &self.lift_defs[i] {
+                if l.deflection_lift_coeff > 0.0 && !self.shielded[i] {
+                    let u = aero::rotate(self.part_rot[i], l.axis);
+                    let axis = bx * u.x + by * u.y + bz * (-u.z);
+                    f = f + aero::surface_force(
+                        curves,
+                        l.deflection_lift_coeff,
+                        l.omnidirectional,
+                        axis,
+                        travel,
+                        q,
+                        mach,
+                    );
+                }
+            }
+            torque = torque + r.cross(f);
+        }
+        torque
+    }
+
     /// Drag of the attached parts for travel through the air at `v_air` (inertial, m/s) with the vessel axis
     /// along `facing`: sets each part's `Cd * A` and returns the total, m^2. Parts without a cube add none.
     pub fn aero(&mut self, stage: usize, facing: DVec3, v_air: DVec3, rho: f64, mach: f64) -> f64 {
@@ -1931,6 +1972,36 @@ mod tests {
         assert!(!s.shielded[pod]);
         s.aero(0, facing, sideways, 1.0, 0.6);
         assert!(s.part_cda_m2[pod] > 0.0);
+    }
+
+    #[test]
+    fn fins_turn_a_rocket_back_into_the_airflow() {
+        let (crafts, defs, res) = assets();
+        let flea = crafts.iter().find(|c| c.name == "Jumping Flea").unwrap();
+        let mut bare = flea.clone();
+        bare.parts.retain(|p| p.part_id != "fin_0v_procedural");
+        bare.stages = vec![vec![1], vec![2]];
+        // nose up, flying 10 degrees off its axis (in the plane its two fins face) at 150 m/s near the ground
+        let facing = DVec3::new(0.0, 1.0, 0.0);
+        let a = 10f64.to_radians();
+        let travel = DVec3::new(0.0, a.cos(), a.sin());
+        let restoring = |c: &Craft| {
+            let mut s = Structure::build(c, &defs, &res);
+            s.aero(0, facing, travel * 150.0, 1.2, 0.45);
+            let t = s.aero_torque(facing, travel * 150.0, 1.2, 0.45);
+            // positive: it turns the nose toward the direction of flight
+            t.dot(facing.cross(travel).normalized())
+        };
+        let with_fins = restoring(flea);
+        let without = restoring(&bare);
+        assert!(
+            with_fins > 0.0,
+            "fins keep it pointing into the flow: {with_fins} kN m"
+        );
+        assert!(
+            with_fins > without + 0.1,
+            "fins {with_fins} vs none {without} kN m"
+        );
     }
 
     #[test]

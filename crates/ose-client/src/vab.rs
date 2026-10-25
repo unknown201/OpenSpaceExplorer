@@ -1194,9 +1194,60 @@ pub fn categories(catalog: &Catalog) -> Vec<String> {
     seen
 }
 
+/// Surface pressure of the bodies with an atmosphere, atm (the original's: Kerbin 1, Eve 5, Duna 0.0666,
+/// Laythe 0.6); every other surface is vacuum.
+pub fn surface_pressure_atm(body: &str) -> f64 {
+    match body {
+        "Kerbin" => 1.0,
+        "Eve" => 5.0,
+        "Duna" => 0.0666,
+        "Laythe" => 0.6,
+        _ => 0.0,
+    }
+}
+
+/// A stage's delta-v and thrust-to-weight in a situation (the delta-v tool): thrust and Isp move from their
+/// vacuum to their sea-level values with the pressure (`p_atm`, on past 1 atm), and the propellant flow
+/// stays the same, so delta-v scales with the thrust. `g` is the surface gravity, m/s^2.
+pub fn stage_in_situation(
+    dv_vacuum_mps: f64,
+    thrust_vacuum_kn: f64,
+    thrust_asl_kn: f64,
+    start_mass_t: f64,
+    g: f64,
+    p_atm: f64,
+) -> (f64, f64) {
+    let thrust = (thrust_vacuum_kn + (thrust_asl_kn - thrust_vacuum_kn) * p_atm).max(0.0);
+    let dv = if thrust_vacuum_kn > 0.0 {
+        dv_vacuum_mps * thrust / thrust_vacuum_kn
+    } else {
+        dv_vacuum_mps
+    };
+    let twr = if start_mass_t > 0.0 && g > 0.0 {
+        thrust / (start_mass_t * g)
+    } else {
+        0.0
+    };
+    (dv.max(0.0), twr)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn delta_v_at_sea_level_and_in_vacuum() {
+        // An engine with 215 kN in vacuum and 168 kN at sea level.
+        let (dv, twr) = stage_in_situation(3000.0, 215.0, 168.0, 10.0, 9.81, 1.0);
+        assert!((dv - 3000.0 * 168.0 / 215.0).abs() < 1e-9);
+        assert!((twr - 168.0 / 98.1).abs() < 1e-9);
+        let (dv, _) = stage_in_situation(3000.0, 215.0, 168.0, 10.0, 1.63, 0.0);
+        assert_eq!(dv, 3000.0);
+        // Eve's 5 atm takes more than sea level does.
+        let (eve, _) = stage_in_situation(3000.0, 215.0, 168.0, 10.0, 16.7, 5.0);
+        assert!(eve < 3000.0 * 168.0 / 215.0);
+        assert_eq!(surface_pressure_atm("Mun"), 0.0);
+    }
 
     fn node(id: &str, y: f64, dir: f64) -> NodeSpec {
         NodeSpec {

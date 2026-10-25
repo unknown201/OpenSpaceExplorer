@@ -275,6 +275,10 @@ pub fn refresh_next_transition(
     }
 }
 
+/// What a vessel has targeted (another vessel or a body).
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Target(pub Entity);
+
 /// An impulsive burn scheduled on rails, expressed in the vessel's orbital frame at `ut`:
 /// prograde (along velocity), normal (along the orbit normal), radial (outward).
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
