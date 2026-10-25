@@ -60,6 +60,7 @@ Camera rule that runs through every map: **the right button drags the camera, th
 | F13 | Kerbal portraits at the bottom right: each Kerbal aboard with a name plate, EVA from the portrait | a portrait per Kerbal aboard (the original's Kerbal icon on a TV-lines screen, no live IVA camera) with its name and an EVA button that sends that Kerbal out | done |
 | F14 | Resource Manager app: every resource on the vessel and in the current stage, with bars | Resource manager window from the app bar: the burning stage's and the whole vessel's resources with amount, capacity and a bar (orange under 10%), protocol 34 | done |
 | F15 | App bar: mission tracker, flight report, Kerbal manager, resource and parts managers | an app bar at the top right: mission tracker, parts manager (parts still aboard by name; a row opens that part's window), resource manager, the flight report so far and the Kerbal portraits toggle; one app window open at a time | done |
+| F16 | Fairings and cargo bays: deploy the fairing, open and close bays from the part window | the part window shows a fairing's state with Deploy fairing, a bay's with Open/Close bay, and Shielded on parts they enclose (protocol 35) | done |
 
 ### Map view and Tracking Station
 
@@ -83,9 +84,10 @@ Camera rule that runs through every map: **the right button drags the camera, th
 | V5b | Picker filters, sort and favourites | size chips (XS to XL), sort by size, name or mass, a Favorites tab filled by middle-clicking parts (kept per browser) | done |
 | V5 | Picker part tooltip (mass, cost, size, stats, description), Shift expands | tooltip with title, subtitle, maker, mass, size, crew, tanks, thrust, Isp, description, research lock | done (no cost in our data) |
 | V6 | Staging stack panel with per-stage Δv/TWR/burn time, drag a part between stages | stage cards with icons (next to fire at the bottom), per-stage vacuum Δv, sea-level TWR and burn time from the server's StageReport, total Δv in the header, click selects, drag a part onto another stage card to move it, earlier/later buttons | done |
-| V9 | Delta-v tool: stage readouts for a chosen body and situation | a chooser on the staging panel: TWR at Kerbin's sea level (server) or in vacuum on any body's surface; delta-v stays vacuum (no per-situation Isp from the server) | partly done |
+| V9 | Delta-v tool: stage readouts for a chosen body and situation | a chooser on the staging panel: Kerbin at sea level (default) or in vacuum, or any body's surface at its air pressure (Eve 5 atm, Duna, Laythe; others vacuum); each stage's delta-v and TWR follow the situation (thrust and Isp from vacuum to sea level with pressure) | done |
 | V8 | Trip planner (delta-v budget between bodies) | Trip in the VAB header: from/to any body's surface or orbit, round trip, aerobraking allowance, transfer phase angle, against the vehicle's delta-v, from the original's TripPlanner.json | done |
 | V7 | Parts manager on right click (part settings) | right-click a part in the VAB: its stage, fuel crossfeed switch and a fill slider per tank resource (delta-v follows); in flight a right click on a part opens its window: temperature, re-entry heat, crew, parachute, gear, panels and converters with their actions | done |
+| V10 | Part picker as a grid of part pictures with names | a three-column grid of pictures of every part (rendered by the client's own VAB renderer in icon mode, e2e/export-part-icons.mjs, 128 px in assets/ui/parts), name under each; a part without a picture keeps a text row | done |
 
 ### KSC, R&D, Mission Control, main menu
 

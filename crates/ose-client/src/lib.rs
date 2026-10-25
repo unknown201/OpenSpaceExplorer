@@ -534,7 +534,12 @@ pub fn start() -> Result<(), JsValue> {
         #[cfg(target_arch = "wasm32")]
         ksc3d: ksc3d::KscView::new(),
         #[cfg(target_arch = "wasm32")]
-        vab3d: vab3d::VabView::new(),
+        vab3d: vab3d::VabView::new().with_icon_mode(
+            window
+                .location()
+                .search()
+                .is_ok_and(|q| q.contains("particons")),
+        ),
         press: None,
         vab_press: None,
         vab_history: vab::History::default(),
@@ -4823,7 +4828,7 @@ impl App {
         for p in parts {
             let lock = locked.contains(p.id.as_str());
             html.push_str(&format!(
-                "<li data-ose=\"vab-part\" data-ose-part=\"{id}\"{lock}>{fav}{title}<small>{cat} \u{b7} size {size} \u{b7} {mass:.2} t{extra}</small></li>",
+                "<li data-ose=\"vab-part\" data-ose-part=\"{id}\"{lock}><img class=\"pi\" src=\"assets/ui/parts/{id}.png\" alt=\"\" loading=\"lazy\" draggable=\"false\" onerror=\"this.parentNode.classList.add('noicon');this.remove()\" /><span class=\"pt\">{fav}{title}</span><small>{cat} \u{b7} size {size} \u{b7} {mass:.2} t{extra}</small></li>",
                 id = esc(&p.id),
                 lock = if lock {
                     " class=\"locked\" title=\"not researched yet: the launch pad will refuse it\""
@@ -5134,16 +5139,32 @@ impl App {
             return;
         };
         let Some(scene) = &self.scene else { return };
-        let mut html = String::from("<option value=\"\">Kerbin, sea level</option>");
-        for b in scene.bodies.iter().filter(|b| !b.is_star) {
-            let sel = if self.vab_twr_body.as_deref() == Some(b.id.as_str()) {
+        let sel = |v: &str| {
+            if self.vab_twr_body.as_deref() == Some(v) {
                 " selected"
             } else {
                 ""
-            };
+            }
+        };
+        let mut html = format!(
+            "<option value=\"\">Kerbin, sea level</option><option value=\"Kerbin@vacuum\"{}>Kerbin, vacuum</option>",
+            sel("Kerbin@vacuum")
+        );
+        for b in scene
+            .bodies
+            .iter()
+            .filter(|b| !b.is_star && b.id != "Kerbin")
+        {
+            let air = vab::surface_pressure_atm(&b.id);
             html.push_str(&format!(
-                "<option value=\"{id}\"{sel}>{id}, vacuum</option>",
-                id = esc(&b.id)
+                "<option value=\"{id}\"{s}>{id}, {what}</option>",
+                id = esc(&b.id),
+                s = sel(&b.id),
+                what = if air > 0.0 {
+                    format!("surface ({air} atm)")
+                } else {
+                    "surface (vacuum)".into()
+                }
             ));
         }
         el.set_inner_html(&html);
@@ -5622,25 +5643,40 @@ impl App {
                     .collect();
                 // The server's readout for this stage: delta-v, TWR at its start (Kerbin's sea level, or in
                 // vacuum on the surface the delta-v tool names), burn time.
-                let surface_g = self.vab_twr_body.as_ref().and_then(|b| {
-                    let s = self.scene.as_ref()?;
-                    let body = s.bodies.iter().find(|x| &x.id == b)?;
+                // The delta-v tool's situation: a body's surface (its air pressure) or Kerbin's vacuum.
+                let (body_id, vacuum) = match self.vab_twr_body.as_deref() {
+                    None => ("Kerbin", false),
+                    Some("Kerbin@vacuum") => ("Kerbin", true),
+                    Some(b) => (b, false),
+                };
+                let surface_g = self.scene.as_ref().and_then(|s| {
+                    let body = s.bodies.iter().find(|x| x.id == body_id)?;
                     Some(body.mu / (body.radius_m * body.radius_m))
                 });
+                let p_atm = if vacuum {
+                    0.0
+                } else {
+                    vab::surface_pressure_atm(body_id)
+                };
                 let stats = self
                     .vab_stages_readout
                     .iter()
                     .find(|r| r.stage_id as usize == n)
                     .map(|r| {
-                        let twr = match surface_g {
-                            Some(g) if g > 0.0 && r.start_mass_t > 0.0 => {
-                                r.thrust_kn / (r.start_mass_t * g)
-                            }
-                            _ => r.twr_asl,
+                        let (dv, twr) = match surface_g {
+                            Some(g) => vab::stage_in_situation(
+                                r.delta_v_vacuum_mps,
+                                r.thrust_kn,
+                                r.thrust_asl_kn,
+                                r.start_mass_t,
+                                g,
+                                p_atm,
+                            ),
+                            None => (r.delta_v_vacuum_mps, r.twr_asl),
                         };
                         format!(
-                            "<span class=\"sv\" title=\"vacuum delta-v, thrust-to-weight at the delta-v tool's body, burn time\">\u{394}v {:.0} m/s \u{b7} TWR {:.2} \u{b7} {:.0} s</span>",
-                            r.delta_v_vacuum_mps.max(0.0), twr.max(0.0), r.burn_time_s.max(0.0)
+                            "<span class=\"sv\" title=\"delta-v, thrust-to-weight and burn time in the delta-v tool's situation\">\u{394}v {:.0} m/s \u{b7} TWR {:.2} \u{b7} {:.0} s</span>",
+                            dv.max(0.0), twr.max(0.0), r.burn_time_s.max(0.0)
                         )
                     })
                     .unwrap_or_default();
@@ -7064,6 +7100,13 @@ impl App {
                 deploy: !f.map(|f| f.panels_deployed).unwrap_or(false),
             },
             "fh-act-chutes" => ClientMessage::DeployParachutes { vessel },
+            "fh-act-fairings" => ClientMessage::DeployFairings { vessel },
+            "fh-act-bays" => ClientMessage::SetCargoBays {
+                vessel,
+                open: !f
+                    .map(|f| f.cargo_bays.iter().any(|(_, open)| *open))
+                    .unwrap_or(false),
+            },
             "fh-act-lights" => ClientMessage::ActionGroup {
                 vessel,
                 group: ose_net::ActionGroup::Lights,

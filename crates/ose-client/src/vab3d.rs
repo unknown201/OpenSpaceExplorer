@@ -72,7 +72,13 @@ pub struct VabView {
     pub held_yaw: ose_data::craft::Quat,
     /// Vertical camera offset from the craft's centre, metres (arrow keys and middle drag, Home resets).
     pub pan_y: f64,
+    /// Part icon mode (`?particons`, tools/export_part_icons.mjs): no hall, markers or tints, a plain
+    /// backdrop, and the camera framing the craft to fill a 600 px square at the centre of the view.
+    pub icon_mode: bool,
 }
+
+/// The part icons' backdrop (the picker tile colour, #141a26).
+pub const ICON_BACKDROP: [f64; 3] = [0.078, 0.102, 0.149];
 
 impl Default for VabView {
     fn default() -> Self {
@@ -106,7 +112,13 @@ impl VabView {
             held_turn: crate::vab::NO_TURN,
             snap_turn: crate::vab::NO_TURN,
             held_yaw: crate::vab::NO_TURN,
+            icon_mode: false,
         }
+    }
+
+    pub fn with_icon_mode(mut self, on: bool) -> VabView {
+        self.icon_mode = on;
+        self
     }
 
     pub fn is_ready(&self) -> bool {
@@ -320,12 +332,20 @@ impl VabView {
         } else {
             centre
         };
+        if self.icon_mode && lo_all.is_finite() {
+            // The original's picker angle: a little above, turned to show the side.
+            self.pitch = 0.35;
+            self.yaw = 0.6;
+            self.pan_y = 0.0;
+            self.target = (lo_all + hi_all) * 0.5;
+            self.distance = ((hi_all - lo_all).length() * 0.5).max(0.05) * 2.7;
+        }
         let (cam_pos, forward) = self.camera();
         self.cam_pos = cam_pos;
         gpu.set_camera(forward, DVec3::Y, self.fov_rad, 0.1, 2000.0);
 
         gpu.request_model("vab", &format!("assets/{}", scene.file));
-        if gpu.has_model("vab") {
+        if gpu.has_model("vab") && !self.icon_mode {
             let mut hall = DrawItem::lit("vab".into(), -cam_pos, DQuat::IDENTITY, 1.0, light);
             hall.ambient = 0.55;
             items.push(hall);
@@ -338,7 +358,8 @@ impl VabView {
             item.ambient = 0.45;
             item.fill_dir = -forward;
             item.fill = 0.35;
-            if Some(i) == selected {
+            if self.icon_mode {
+            } else if Some(i) == selected {
                 item.color = [0.65, 1.0, 0.7, 1.0];
             } else if Some(i) == self.hovered && self.held.is_none() {
                 item.color = [1.0, 1.0, 0.75, 1.0];
@@ -501,7 +522,15 @@ impl VabView {
                 items.push(ghost);
             }
         }
-        gpu.frame("assets/vab/", &items, &lines, [0.12, 0.13, 0.15]);
+        if self.icon_mode {
+            lines.clear();
+        }
+        let clear = if self.icon_mode {
+            ICON_BACKDROP
+        } else {
+            [0.12, 0.13, 0.15]
+        };
+        gpu.frame("assets/vab/", &items, &lines, clear);
         true
     }
 }
