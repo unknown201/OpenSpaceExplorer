@@ -28,8 +28,9 @@ fn ocean_deep_colour(diffuse: [f32; 4]) -> [f32; 4] {
     let c = [diffuse[0] * K, diffuse[1] * K, diffuse[2] * K];
     let lum = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
     let s = |v: f32| (lum + (v - lum) * SATURATION).max(0.0);
-    // and a quarter more blue: Kerbin's lands on the default's azure (0.04, 0.35, 0.64 against 0, 0.34, 0.62)
-    [s(c[0]), s(c[1]), s(c[2]) * 1.25, 1.0]
+    // and shifted towards blue (green x 0.8, blue x 1.25): Kerbin's comes out near the default's azure (0.04,
+    // 0.28, 0.64 against 0, 0.34, 0.62), which reads as the original's sea at 90 km once lit through the air
+    [s(c[0]), s(c[1]) * 0.8, s(c[2]) * 1.25, 1.0]
 }
 
 /// Depth (m) where the sea surface stops showing the floor: a quarter of `_TransparentVisibleDepth`, 0.5 to 25.
