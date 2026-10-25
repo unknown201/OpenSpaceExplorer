@@ -290,6 +290,8 @@ impl KscView {
         if gpu.has_model("ksc") {
             let mut item = DrawItem::lit("ksc".into(), -pos, DQuat::IDENTITY, 1.0, light);
             item.ambient = (0.12 + 0.26 * day) as f32;
+            // The campus lights (windows, floodlights: the original's emissive maps) come on at dusk.
+            item.glow = (1.0 - day) as f32;
             if day < 1.0 {
                 let k = (0.35 + 0.65 * day) as f32;
                 item.color = [k * 0.85, k * 0.9, k, 1.0];

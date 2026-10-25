@@ -39,17 +39,20 @@ struct ObjectUniform {
     /// x: emissive strength (1 = unlit, show the texture as is), y: use texture (1) or colour (0),
     /// z: 1 draws an atmosphere shell (rim glow from `color`, alpha by view angle), w: ambient level.
     params: [f32; 4],
+    /// x: how strongly the material's emissive map lights up (window lights at night), yzw unused.
+    extra: [f32; 4],
 }
 
 const SHADER: &str = r#"
 struct Camera { view_proj: mat4x4<f32> };
-struct Object { model: mat4x4<f32>, color: vec4<f32>, light_dir: vec4<f32>, light2: vec4<f32>, params: vec4<f32> };
+struct Object { model: mat4x4<f32>, color: vec4<f32>, light_dir: vec4<f32>, light2: vec4<f32>, params: vec4<f32>, extra: vec4<f32> };
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(1) @binding(0) var<uniform> object: Object;
 @group(2) @binding(0) var tex: texture_2d<f32>;
 @group(2) @binding(1) var samp: sampler;
 @group(2) @binding(2) var normal_tex: texture_2d<f32>;
 @group(2) @binding(3) var mg_tex: texture_2d<f32>;
+@group(2) @binding(4) var em_tex: texture_2d<f32>;
 
 struct VsIn { @location(0) pos: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv: vec2<f32> };
 struct VsOut { @builtin(position) clip: vec4<f32>, @location(0) normal: vec3<f32>, @location(1) uv: vec2<f32>, @location(2) world: vec3<f32> };
@@ -76,6 +79,7 @@ fn fs_mesh(in: VsOut) -> @location(0) vec4<f32> {
     let texel = textureSample(tex, samp, in.uv);
     let nm = textureSample(normal_tex, samp, in.uv);
     let mg = textureSample(mg_tex, samp, in.uv);
+    let em = textureSample(em_tex, samp, in.uv).rgb * object.extra.x;
     let base = mix(object.color, texel * object.color, object.params.y);
     let n0 = normalize(in.normal);
     // Normal map: the original's maps are DXT5nm-style (x in alpha, y in green). The tangent frame comes
@@ -121,7 +125,7 @@ fn fs_mesh(in: VsOut) -> @location(0) vec4<f32> {
     let spec = pow(max(dot(n, h), 0.0), spec_pow) * smooth_ * diffuse * (spec_pow + 8.0) / 64.0;
     let spec_col = mix(vec3<f32>(0.04), base.rgb, metal);
     let shaded = lit * (1.0 - metal * 0.5) + spec_col * spec;
-    let rgb = mix(shaded, base.rgb, object.params.x);
+    let rgb = mix(shaded, base.rgb, object.params.x) + em;
     return vec4<f32>(rgb, base.a);
 }
 
@@ -147,7 +151,7 @@ struct GpuPrimitive {
     indices: wgpu::Buffer,
     index_count: u32,
     /// Indices into `Model::textures` of the base colour, normal and metallic-gloss images.
-    textures: [Option<usize>; 3],
+    textures: [Option<usize>; 4],
     /// Bind group for those textures (defaults where missing or not loaded yet); rebuilt as images arrive.
     bind: Option<wgpu::BindGroup>,
     /// glTF `alphaMode: BLEND`: drawn after the opaque primitives without writing depth.
@@ -228,7 +232,7 @@ struct PendingTexture {
 /// Parsed GLB before GPU upload.
 /// Vertices, indices, base-colour / normal / metallic-gloss image indices, alpha blending and base colour
 /// factor of one mesh primitive before upload.
-type CpuMesh = (Vec<Vertex>, Vec<u32>, [Option<usize>; 3], bool, [f32; 4]);
+type CpuMesh = (Vec<Vertex>, Vec<u32>, [Option<usize>; 4], bool, [f32; 4]);
 type Influences = Vec<([u16; 4], [f32; 4])>;
 
 struct CpuModel {
@@ -269,6 +273,8 @@ pub struct DrawItem {
     pub mirror_z: bool,
     /// Share of the light reaching the model, 0..1: 1 in full sun, less while a body eclipses the star.
     pub sun: f32,
+    /// Emissive map strength, 0 (off) to 1: the KSC's window and flood lights at night.
+    pub glow: f32,
 }
 
 impl DrawItem {
@@ -295,6 +301,7 @@ impl DrawItem {
             atmosphere: false,
             mirror_z: false,
             sun: 1.0,
+            glow: 0.0,
         }
     }
 }
@@ -351,7 +358,7 @@ pub struct Renderer {
     sampler: wgpu::Sampler,
     white: wgpu::BindGroup,
     /// Default texture views: white colour, flat normal, no metal or gloss.
-    default_views: [wgpu::TextureView; 3],
+    default_views: [wgpu::TextureView; 4],
     depth: wgpu::TextureView,
     objects: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
     models: HashMap<String, Model>,
@@ -477,6 +484,16 @@ impl Renderer {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: true },
@@ -705,12 +722,19 @@ impl Renderer {
             // Flat normal in the DXT5nm layout: x (alpha) and y (green) at the middle.
             solid([255, 128, 128, 128], wgpu::TextureFormat::Rgba8Unorm),
             solid([0, 0, 0, 0], wgpu::TextureFormat::Rgba8Unorm),
+            // No emission.
+            solid([0, 0, 0, 255], wgpu::TextureFormat::Rgba8UnormSrgb),
         ];
         let white = Self::bind_views(
             &device,
             &texture_layout,
             &sampler,
-            [&default_views[0], &default_views[1], &default_views[2]],
+            [
+                &default_views[0],
+                &default_views[1],
+                &default_views[2],
+                &default_views[3],
+            ],
         );
         let depth = Self::make_depth(&device, width, height);
         let post = crate::fx_post::FxPost::new(&device, width, height, surface_format);
@@ -757,7 +781,7 @@ impl Renderer {
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
         sampler: &wgpu::Sampler,
-        views: [&wgpu::TextureView; 3],
+        views: [&wgpu::TextureView; 4],
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("material"),
@@ -779,6 +803,10 @@ impl Renderer {
                     binding: 3,
                     resource: wgpu::BindingResource::TextureView(views[2]),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(views[3]),
+                },
             ],
         })
     }
@@ -799,7 +827,7 @@ impl Renderer {
                     .and_then(|v| v.as_ref())
                     .unwrap_or(&self.default_views[k])
             };
-            let views = [pick(0), pick(1), pick(2)];
+            let views = [pick(0), pick(1), pick(2), pick(3)];
             prim.bind = Some(Self::bind_views(
                 &self.device,
                 &self.texture_layout,
@@ -1336,6 +1364,7 @@ impl Renderer {
                         if item.atmosphere { 1.0 } else { 0.0 },
                         item.ambient,
                     ],
+                    extra: [item.glow, 0.0, 0.0, 0.0],
                 };
                 self.queue
                     .write_buffer(&self.objects[slot].0, 0, bytemuck::bytes_of(&u));
@@ -1359,6 +1388,7 @@ impl Renderer {
                 light_dir: [0.0; 4],
                 light2: [0.0; 4],
                 params: [1.0, 0.0, 0.0, 0.0],
+                extra: [0.0; 4],
             };
             self.queue
                 .write_buffer(&self.objects[slot].0, 0, bytemuck::bytes_of(&u));
@@ -1693,6 +1723,8 @@ fn parse_glb(bytes: &[u8]) -> Result<CpuModel, String> {
         let m = json["materials"].as_array()?.get(mi)?;
         let slot = if which == "normal" {
             &m["normalTexture"]
+        } else if which == "emissive" {
+            &m["emissiveTexture"]
         } else {
             &m["pbrMetallicRoughness"]["metallicRoughnessTexture"]
         };
@@ -1823,6 +1855,7 @@ fn parse_glb(bytes: &[u8]) -> Result<CpuModel, String> {
                 mat.and_then(material_image),
                 mat.and_then(|m| material_data_image(m, "normal")),
                 mat.and_then(|m| material_data_image(m, "mg")),
+                mat.and_then(|m| material_data_image(m, "emissive")),
             ];
             let blend = prim["material"]
                 .as_u64()

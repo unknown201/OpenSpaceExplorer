@@ -7365,6 +7365,7 @@ impl App {
                     atmosphere: false,
                     mirror_z: true,
                     sun: 1.0,
+                    glow: 0.0,
                 });
             }
             if let (Some(orbit), Some(p)) = (scene.orbit(i), b.parent) {
