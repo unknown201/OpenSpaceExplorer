@@ -700,14 +700,22 @@ impl FlightView {
         // Tangent basis at the pad: east-ish reference from the model's north pole.
         let north = (DVec3::Y - up * up.dot(DVec3::Y)).normalize_or_zero();
         let east = north.cross(up);
-        // Best yaw: average the angle between local (campus x, z) and world (east, north) pad offsets.
+        // Best yaw: average the angle between local (campus x, z) and world (east, north) offsets between
+        // pads 2-4. Their install sites keep the campus layout exactly (pad 2 to pad 4 is 3361 m east in
+        // both), while pad 1's site sits about 850 m off that layout, so offsets from pad 1 skewed the yaw
+        // by about 4.7 degrees and swung the far pads hundreds of metres.
         let (mut s, mut c) = (0.0, 0.0);
-        for (k, lk) in local.iter().enumerate().skip(1) {
-            let Some(lk) = lk else { continue };
+        let world = |k: usize| {
             let (la, lo, al) = KSC_PADS[k];
-            let w = model_point(la, lo, radius + al) - p1;
+            model_point(la, lo, radius + al)
+        };
+        for (k, kl) in [(1usize, 2usize), (1, 3), (2, 3)] {
+            let (Some(lk), Some(ll)) = (local[k], local[kl]) else {
+                continue;
+            };
+            let w = world(kl) - world(k);
             let (we, wn) = (w.dot(east), w.dot(north));
-            let d = *lk - l1;
+            let d = ll - lk;
             // Campus horizontal plane: x and -z (glTF, Y up) as a right-handed (e, n) pair.
             let (le, ln) = (d.x, -d.z);
             let a_w = wn.atan2(we);
