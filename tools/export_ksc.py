@@ -111,7 +111,9 @@ def main() -> int:
             elif "lake" in low or "water" in low:
                 flat = [0.10, 0.28, 0.45]
             elif "campus_mat" in low or "ground" in low:
-                flat = [0.42, 0.40, 0.33]
+                # The campus terrain is vertex-painted grass with dirt in the original (paths are separate
+                # decals); without the vertex colours it reads as the grass.
+                flat = [0.34, 0.43, 0.22]
             if flat:
                 glb.materials[idx]["pbrMetallicRoughness"]["baseColorFactor"] = flat + [1.0]
         materials[key] = idx
