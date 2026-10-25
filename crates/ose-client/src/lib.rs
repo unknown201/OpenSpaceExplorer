@@ -4718,7 +4718,23 @@ impl App {
                 continue;
             };
             let mine = v.owner.is_some() && v.owner == self.player_id;
-            el.set_class_name(if mine { "vessel mine" } else { "vessel" });
+            // The original's map markers: a Kerbal on EVA, a flag, or a vessel.
+            let kind = if v.flight.as_ref().is_some_and(|f| f.eva) {
+                " eva"
+            } else if v.name.ends_with(" flag") {
+                " flag"
+            } else {
+                ""
+            };
+            el.set_class_name(&format!(
+                "vessel{}{kind}{}",
+                if mine { " mine" } else { "" },
+                if Some(v.id) == self.flying {
+                    " flown"
+                } else {
+                    ""
+                }
+            ));
             if Some(ose_net::TargetId::Vessel(v.id)) == self.target {
                 el.class_list().add_1("target").ok();
             }

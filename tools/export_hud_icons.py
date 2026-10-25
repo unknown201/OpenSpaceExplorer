@@ -33,6 +33,9 @@ ICONS = [
     "PartCategories-ICO-Structure", "PartCategories-ICO-Aero", "PartCategories-ICO-Ground", "PartCategories-ICO-Thermal",
     "PartCategories-ICO-Electrical", "PartCategories-ICO-Communication", "PartCategories-ICO-Science",
     "PartCategories-ICO-Utility", "PartCategories-ICO-Payload",
+    # Map markers.
+    "ICO-Map-Vessel-16x16", "ICO-Map-Kerbal-16x16", "ICO-Map-Flag-16x16", "ICO-Map-Planet-16x16",
+    "ICO-Map-StarSystem-16x16", "ICO-Map-Debris-16x16",
     # Crew portraits.
     "WB-ICO-Kerbal",
     # Staging stack.

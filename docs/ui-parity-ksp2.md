@@ -76,6 +76,7 @@ Camera rule that runs through every map: **the right button drags the camera, th
 | M3 | Ap/Pe/SOI markers with tooltips (time and altitude) | Ap and Pe markers with altitude and countdown; encounter, escape and impact markers at patch ends; the periapsis around each body met on the way; right-click a vessel, planet or moon on the map to target it: closest-approach markers on both orbits, target distance and relative speed in flight, a TARGET speed mode, and SAS target / anti-target (held by refreshing a fixed direction) | done |
 | M4 | Vessel labels drawn once | not a bug: the test pilot had joined twice and owned two probes | closed |
 | M5 | Tracking Station object list, filters, focus/control/recover | rebuilt by "Build 3D world and menu replica" (unpushed) | other thread |
+| M6 | Map markers: icons for vessels, Kerbals, flags, planets and the star; names on hover | the original's ICO-Map icons; a vessel's name shows on hover, for the vessel flown and for the target | done |
 
 ### VAB (Josh's #6)
 
