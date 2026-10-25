@@ -1132,10 +1132,11 @@ fn terrain_index() -> ose_data::terrain::TerrainIndex {
 }
 
 /// The KSC campus as the client draws it (`flight3d::ksc_pose` over `assets/web/ksc/scene.json`): the
-/// scene's launch pad 1 spawn on the pad site, turned so the pads line up best, rigid and unscaled. Its
-/// spawn points and flat areas (scene coordinates, glTF axes) follow.
+/// scene's launch pad 1 spawn on the pad site, turned by the yaw that lines pads 2 to 4 up with their
+/// offsets in the campus model (pad 1's install site is some 850 m off the layout, so it does not set the
+/// yaw), rigid and unscaled. Its spawn points and flat areas (scene coordinates, glTF axes) follow.
 const KSC_ANCHOR: (f64, f64, f64) = (-0.6836, -74.8198, 115.2);
-const KSC_YAW_DEG: f64 = -4.655_211_045_966;
+const KSC_YAW_DEG: f64 = 0.0410;
 const KSC_SPAWNS: [(&str, &str, bool, [f64; 3]); 5] = [
     (
         "LaunchPad_1",
@@ -3330,6 +3331,27 @@ async fn session(mut socket: WebSocket, s: AppState) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_launch_sites_stand_where_the_campus_model_puts_them() {
+        let sites = super::launch_sites("Kerbin");
+        let want = [
+            (-0.68360, -74.81980),
+            (-0.49889, -74.97621),
+            (-0.68405, -75.13454),
+            (-0.49911, -75.29724),
+            (-0.88499, -75.29708),
+        ];
+        for (s, (lat, lon)) in sites.iter().zip(want) {
+            assert!(
+                (s.lat_deg - lat).abs() < 2e-4 && (s.lon_deg - lon).abs() < 2e-4,
+                "{}: {} {} vs {lat} {lon}",
+                s.id,
+                s.lat_deg,
+                s.lon_deg
+            );
+        }
+    }
+
     #[test]
     fn the_campus_ground_reaches_the_boat_launch() {
         let site = super::ksc_site();
