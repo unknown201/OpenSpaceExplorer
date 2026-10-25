@@ -476,7 +476,9 @@ impl EngineFxGpu {
                         .insert(id, texture.create_view(&Default::default()));
                 }
                 Loaded::Error(error) => {
-                    web_sys::console::error_1(&error.clone().into());
+                    // A server without game assets (CI) answers the effect files with the page itself; the
+                    // flight goes on without authored effects, so this is a warning, not a page error.
+                    web_sys::console::warn_1(&error.clone().into());
                     self.error = Some(error);
                 }
             }
