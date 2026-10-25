@@ -289,6 +289,8 @@
     .fh-comm { position: absolute; top: calc(12 * var(--u)); right: calc(16 * var(--u)); display: flex; align-items: center; gap: calc(6 * var(--u)); background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)); padding: calc(4 * var(--u)) calc(10 * var(--u)); font-size: calc(12 * var(--u)); color: #f0a070; pointer-events: auto; }
     .fh-comm i { width: calc(18 * var(--u)); height: calc(18 * var(--u)); background: currentColor; -webkit-mask: var(--ico) center / contain no-repeat; mask: var(--ico) center / contain no-repeat; }
     .fh-comm.on { color: #7dff8a; }
+    .fh-burn { display: none !important; color: #9fb8ff; font-size: calc(13 * var(--u)); font-weight: 600; }
+    .fh-burn.on { display: flex !important; }
     #flight-hud .fh-missions-btn { position: absolute; top: calc(48 * var(--u)); right: calc(16 * var(--u)); width: calc(36 * var(--u)); height: calc(36 * var(--u)); padding: 0; display: grid; place-items: center; }
     #flight-hud .fh-missions-btn i { width: 70%; height: 70%; background: currentColor; -webkit-mask: var(--ico) center / contain no-repeat; mask: var(--ico) center / contain no-repeat; }
     .fh-missions { display: none; position: absolute; top: calc(48 * var(--u)); right: calc(60 * var(--u)); width: calc(300 * var(--u)); background: #10141be6; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)); padding: calc(8 * var(--u)) calc(10 * var(--u)); pointer-events: auto; }
@@ -779,6 +781,7 @@
       <div class="fh-sas" id="fh-sas" data-ose="flight-sas"></div>
       <div class="fh-core">
         <div class="fh-row"><span class="fh-label" id="fh-speed-mode" data-ose="flight-speed-mode" title="Speed relative to the surface or in orbit; click to switch">SURFACE</span><b id="fh-speed">--</b><span class="fh-label">VERTICAL</span><b id="fh-vspeed">--</b></div>
+        <div class="fh-row fh-burn" id="fh-burn" data-ose="flight-burn" title="Burn timer: start burning when it reaches zero, pointed at the maneuver marker"></div>
         <div class="fh-row fh-orbit" data-ose="flight-apsides"><span class="fh-label" title="Apoapsis: highest point of the orbit and the time to it">AP</span><b id="fh-ap">--</b><span id="fh-ap-t" class="fh-small">--</span><span class="fh-label" title="Periapsis: lowest point of the orbit and the time to it">PE</span><b id="fh-pe">--</b><span id="fh-pe-t" class="fh-small">--</span></div>
         <div class="fh-row"><span id="fh-attitude">--</span><span id="fh-twr" class="fh-small">--</span></div>
         <div class="fh-row"><button id="fh-science" data-ose="flight-science" title="run every experiment on board">Experiments</button><button id="fh-transmit" data-ose="flight-transmit" title="send the reports home">Transmit</button><button id="fh-recover" data-ose="flight-recover" title="recover the vessel (landed on Kerbin)">Recover</button></div>

@@ -4963,6 +4963,25 @@ impl App {
             }
         }
         let ut = self.time.ut_at(now_ms());
+        // Burn timer for a node planned on the flown vessel.
+        if let Some(el) = self.doc.get_element_by_id("fh-burn") {
+            match self.node.filter(|n| n.vessel == id) {
+                Some(n) => {
+                    let dv = (n.prograde_mps.powi(2) + n.normal_mps.powi(2) + n.radial_mps.powi(2))
+                        .sqrt();
+                    let full = if f.throttle > 0.01 {
+                        f.thrust_kn / f.throttle
+                    } else {
+                        0.0
+                    };
+                    el.set_text_content(Some(&hud::burn_text(n.ut - ut, dv, f.mass_t, full)));
+                    el.class_list().add_1("on").ok();
+                }
+                None => {
+                    el.class_list().remove_1("on").ok();
+                }
+            }
+        }
         let apsides = body
             .map(|b| hud::apsides(&v.orbit, b.radius_m, b.mu, ut))
             .unwrap_or((None, (f64::NAN, f64::NAN)));
@@ -5574,8 +5593,10 @@ impl App {
             .iter()
             .filter(|v| v.owner.is_some() && v.owner == self.player_id)
             .collect();
+        // The vessel being flown first: nodes and the orbit pick belong to it.
         mine.iter()
-            .find(|v| Some(v.id) == self.follow)
+            .find(|v| Some(v.id) == self.flying)
+            .or_else(|| mine.iter().find(|v| Some(v.id) == self.follow))
             .or_else(|| mine.iter().find(|v| v.flight.is_none()))
             .or_else(|| mine.first())
             .map(|v| (v.id, v.reference_body as usize))
