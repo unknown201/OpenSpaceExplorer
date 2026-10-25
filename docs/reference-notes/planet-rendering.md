@@ -185,3 +185,10 @@ the exposure so the tone map shows it at about its own brightness in space, and 
 Ambient colours (CelestialBodyLighting) are decoded from sRGB like every Unity colour in a linear-space project;
 raw, Kerbin's night ambient lit the ground about nine times too bright. The volume clouds' fill light is day-only.
 
+The terrain shader is `KSP2/Environment/CelestialBody/CelestialBody_Local` (sharedshaders_assets_all.bundle, path id
+7486954214038344636). Its properties have no tint, hue or saturation for the small albedo array
+(`kerbin_textureconfig_albedoHeight_tarray`: albedo RGB, height A for height blending), and
+`_AlbedoScaledFadeParams` defaults to (0, 20000, 0.5, 1), so the scaled albedo is most likely lerped in with weight
+min..max over start..end; the 16 passes' compiled programs are in the packed per-platform blob, which UnityPy does
+not unpack, so the exact blend is unconfirmed.
+
