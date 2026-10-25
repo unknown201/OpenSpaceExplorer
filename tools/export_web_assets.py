@@ -183,6 +183,17 @@ class Glb:
 # Unity readers
 
 
+def resize_bands(img, size):
+    """Resize each band on its own. Pillow resizes RGBA with premultiplied alpha, which zeroes R, G and B
+    wherever alpha is 0 and so corrupts maps whose alpha carries data (DXT5nm normals keep x in alpha,
+    metallic maps smoothness, masks)."""
+    if img.mode in ("RGBA", "LA"):
+        from PIL import Image
+
+        return Image.merge(img.mode, [b.resize(size) for b in img.split()])
+    return img.resize(size)
+
+
 def to_gltf_pos(v) -> tuple[float, float, float]:
     return (-float(v[0]), float(v[1]), float(v[2]))
 
@@ -251,7 +262,7 @@ class Exporter:
                 return None
             if img.width > self.max_texture or img.height > self.max_texture:
                 s = self.max_texture / max(img.width, img.height)
-                img = img.resize((max(1, int(img.width * s)), max(1, int(img.height * s))))
+                img = resize_bands(img, (max(1, int(img.width * s)), max(1, int(img.height * s))))
             if img.mode not in ("RGB", "RGBA"):
                 img = img.convert("RGBA")
             rel = f"textures/{stem}.png"
@@ -334,13 +345,15 @@ class Exporter:
             if self.verbose:
                 print(f"  texture {name}: cannot decode ({e})")
             return None
-        if img.width > self.max_texture or img.height > self.max_texture:
+        resized = img.width > self.max_texture or img.height > self.max_texture
+        if resized:
             sc = self.max_texture / max(img.width, img.height)
-            img = img.resize((max(1, int(img.width * sc)), max(1, int(img.height * sc))))
+            img = resize_bands(img, (max(1, int(img.width * sc)), max(1, int(img.height * sc))))
         if img.mode not in ("RGB", "RGBA"):
             img = img.convert("RGBA")
         rel = f"textures/{name}.png"
-        if not (self.out / rel).exists():
+        # Resized textures are written again (earlier exports resized them with premultiplied alpha).
+        if resized or not (self.out / rel).exists():
             img.save(self.out / rel, optimize=False)
         self.texture_files[name] = rel
         return rel
