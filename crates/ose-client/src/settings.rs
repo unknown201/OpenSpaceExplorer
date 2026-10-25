@@ -149,6 +149,15 @@ pub fn render_scale(stored: Option<&str>) -> f64 {
         / 100.0
 }
 
+/// Planet detail (Settings > Graphics): 0 low, 1 medium, 2 high (the default) from the stored value.
+pub fn planet_quality(stored: Option<&str>) -> u8 {
+    match stored {
+        Some("low") => 0,
+        Some("medium") => 1,
+        _ => 2,
+    }
+}
+
 /// UI scale from the stored percentage (50..150, default 100).
 pub fn ui_scale(stored: Option<&str>) -> f64 {
     stored
@@ -166,6 +175,14 @@ mod tests {
         assert_eq!(ui_scale(None), 100.0);
         assert_eq!(ui_scale(Some("300")), 150.0);
         assert_eq!(ui_scale(Some("x")), 100.0);
+    }
+
+    #[test]
+    fn planet_quality_defaults_to_high() {
+        assert_eq!(planet_quality(None), 2);
+        assert_eq!(planet_quality(Some("low")), 0);
+        assert_eq!(planet_quality(Some("medium")), 1);
+        assert_eq!(planet_quality(Some("bogus")), 2);
     }
 
     #[test]

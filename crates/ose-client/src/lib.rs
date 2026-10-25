@@ -851,6 +851,27 @@ fn install_audio(app: &Shared) -> Result<(), JsValue> {
         el.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
         cb.forget();
     }
+    // Graphics: planet detail (low, medium, high), applied at once.
+    #[cfg(target_arch = "wasm32")]
+    {
+        let doc = app.borrow().doc.clone();
+        let q = stored("ose.planetQuality");
+        crate::planet::set_quality(settings::planet_quality(q.as_deref()));
+        if let Some(sel) = doc
+            .get_element_by_id("settings-quality")
+            .and_then(|e| e.dyn_into::<web_sys::HtmlSelectElement>().ok())
+        {
+            sel.set_value(q.as_deref().unwrap_or("high"));
+            let s2 = sel.clone();
+            let cb = Closure::<dyn FnMut()>::new(move || {
+                let v = s2.value();
+                store("ose.planetQuality", &v);
+                crate::planet::set_quality(settings::planet_quality(Some(&v)));
+            });
+            sel.add_event_listener_with_callback("change", cb.as_ref().unchecked_ref())?;
+            cb.forget();
+        }
+    }
     // Graphics: render resolution (applied at once) and the FPS counter.
     {
         let doc = app.borrow().doc.clone();

@@ -30,6 +30,21 @@ fn log(s: &str) {
     web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(s));
 }
 
+thread_local! {
+    /// Settings > Graphics > Planet detail: 0 low, 1 medium, 2 high (lib.rs sets it from storage).
+    static QUALITY: std::cell::Cell<u8> = const { std::cell::Cell::new(2) };
+}
+
+/// Planet detail. Low draws no volume clouds, terrain shadows, per-pixel relief, FFT sea, light shafts, grass or
+/// far impostors; medium halves the shadow and cloud march steps and the grass range.
+pub fn set_quality(q: u8) {
+    QUALITY.with(|c| c.set(q.min(2)));
+}
+
+fn quality() -> u8 {
+    QUALITY.with(|c| c.get())
+}
+
 fn now_ms() -> f64 {
     web_sys::window()
         .and_then(|w| w.performance())
@@ -63,6 +78,8 @@ struct FrameU {
     star_z: [f32; 4],
     /// the camera's model-frame position modulo TILE_PERIOD (m), for screen-space effects on the tiled maps
     cam_tile: [f32; 4],
+    /// planet detail: x terrain shadow steps, y volume cloud steps, z per-pixel relief (0/1)
+    quality: [f32; 4],
 }
 
 #[repr(C)]
@@ -223,6 +240,8 @@ pub struct PlanetRenderer {
     /// the camera is under the sea this frame: light shafts, and the sea surface without its skirts (they hang
     /// below it and would read as walls from underneath)
     under_water: bool,
+    /// draw the underwater light shafts (not on low detail)
+    shafts: bool,
     grass_pipeline: wgpu::RenderPipeline,
     far_pipeline: wgpu::RenderPipeline,
     far_chunk_buf: wgpu::Buffer,
@@ -810,6 +829,7 @@ impl PlanetRenderer {
             stars,
             shaft_pipeline,
             under_water: false,
+            shafts: false,
             waves_tex,
             waves_view,
             ocean: None,
@@ -1702,6 +1722,7 @@ impl PlanetRenderer {
         };
         // FFT waves while the camera is low over an ocean world with a spectrum
         let waves_live = has_ocean
+            && quality() > 0
             && view.cam.length() - radius < 60_000.0
             && update_waves(
                 &mut self.ocean,
@@ -1770,6 +1791,7 @@ impl PlanetRenderer {
                 // (not on a gas giant, whose cloud deck is its surface)
                 if b.tex.contains_key(&Tex::Clouds)
                     && !gas_giant(b)
+                    && quality() > 0
                     && view.cam.length() - radius < 40_000.0
                 {
                     1.0
@@ -1794,6 +1816,15 @@ impl PlanetRenderer {
             ],
             star_x: [star_x.x as f32, star_x.y as f32, star_x.z as f32, 0.0],
             star_z: [star_z.x as f32, star_z.y as f32, star_z.z as f32, 0.0],
+            quality: {
+                let q = quality();
+                [
+                    [0.0, 10.0, 20.0][q as usize],
+                    [0.0, 24.0, 48.0][q as usize],
+                    f32::from(u8::from(q > 0)),
+                    q as f32,
+                ]
+            },
             cam_tile: [
                 view.cam.x.rem_euclid(TILE_PERIOD) as f32,
                 view.cam.y.rem_euclid(TILE_PERIOD) as f32,
@@ -1821,6 +1852,7 @@ impl PlanetRenderer {
         self.draws = draws;
         self.cloud_draws = cloud_draws;
         self.under_water = has_ocean && fu.water[0] < 0.0;
+        self.shafts = self.under_water && quality() > 0;
         self.active = true;
         true
     }
@@ -1888,12 +1920,20 @@ impl PlanetRenderer {
             .map(|p| (p - view.cam).length())
             .unwrap_or(f64::INFINITY);
         if gmoved > 8.0 {
-            let g = f.place_grass(
+            let mut g = f.place_grass(
                 map,
                 view.radius_m,
                 [view.cam.x, view.cam.y, view.cam.z],
                 &self.exclusions,
             );
+            // medium keeps the nearer half of the range, low draws none
+            match quality() {
+                0 => g.clear(),
+                1 => g.retain(|p| {
+                    p.pos[0] * p.pos[0] + p.pos[1] * p.pos[1] + p.pos[2] * p.pos[2] < 55.0 * 55.0
+                }),
+                _ => {}
+            }
             b.grass_at = Some(view.cam);
             b.grass = (!g.is_empty()).then(|| {
                 let floats: Vec<f32> = g
@@ -1943,12 +1983,15 @@ impl PlanetRenderer {
             .map(|p| (p - view.cam).length())
             .unwrap_or(f64::INFINITY);
         if fmoved > 60.0 {
-            let g = f.place_far(
+            let mut g = f.place_far(
                 map,
                 view.radius_m,
                 [view.cam.x, view.cam.y, view.cam.z],
                 &self.exclusions,
             );
+            if quality() == 0 {
+                g.clear();
+            }
             b.far_at = Some(view.cam);
             b.far = (!g.is_empty()).then(|| {
                 let floats: Vec<f32> = g
@@ -2549,7 +2592,7 @@ impl ExtraPass for PlanetRenderer {
             };
             pass.draw_indexed(0..n, 0, 0..1);
         }
-        if self.under_water {
+        if self.shafts {
             pass.set_pipeline(&self.shaft_pipeline);
             pass.set_bind_group(0, fb, &[]);
             pass.set_bind_group(1, &self.chunk_bind, &[0]);

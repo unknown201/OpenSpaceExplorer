@@ -192,3 +192,8 @@ The terrain shader is `KSP2/Environment/CelestialBody/CelestialBody_Local` (shar
 min..max over start..end; the 16 passes' compiled programs are in the packed per-platform blob, which UnityPy does
 not unpack, so the exact blend is unconfirmed.
 
+Planet detail (Settings > Graphics, `ose.planetQuality`, preview `quality=`): high draws everything; medium halves
+the terrain shadow and volume cloud march steps and keeps grass within 55 m; low draws no volume clouds (the shell
+only), terrain shadows, per-pixel relief, FFT sea (the analytic waves), light shafts, grass or far impostors. At 5K
+on the dev machine: Kerbin meadow 314 / 214 / 183 fps (low / medium / high), Mun 505 / - / 345.
+

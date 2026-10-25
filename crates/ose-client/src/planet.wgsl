@@ -34,6 +34,8 @@ struct Frame {
     star_z: vec4<f32>,
     // the camera's model-frame position modulo TILE_PERIOD (m)
     cam_tile: vec4<f32>,
+    // planet detail: x terrain shadow steps, y volume cloud steps, z per-pixel relief (0/1), w level
+    quality: vec4<f32>,
 };
 
 struct Chunk {
@@ -745,7 +747,11 @@ fn terrain_shadow(model: vec3<f32>, sun: vec3<f32>) -> f32 {
     let p = up * (r + global_height(up, 0.0) + 2.0);
     var lit = 1.0;
     var t = texel * 0.5;
-    for (var i = 0; i < 20; i = i + 1) {
+    let shadow_steps = i32(frame.quality.x);
+    if shadow_steps <= 0 {
+        return 1.0;
+    }
+    for (var i = 0; i < shadow_steps; i = i + 1) {
         let q = p + sun * t;
         let lq = length(q);
         let lod = clamp(log2(max(t * 0.03 / texel, 1.0)), 0.0, last);
@@ -755,7 +761,8 @@ fn terrain_shadow(model: vec3<f32>, sun: vec3<f32>) -> f32 {
         if lit <= 0.0 {
             break;
         }
-        t = t * 1.45;
+        // the same ~90 km reach with fewer steps on medium detail
+        t = t * pow(1.45, 20.0 / f32(shadow_steps));
     }
     return lit;
 }
@@ -966,7 +973,7 @@ fn fs_terrain(in: VOut) -> @location(0) vec4<f32> {
     }
     let p_km = frame.cam_km.xyz + in.rel * 0.001;
     // the tiled layers' relief finer than the mesh shows
-    if surface.layer_info.x > 0.5 {
+    if surface.layer_info.x > 0.5 && frame.quality.z > 0.5 {
         let spacing = frame.solar.w * 1.5708 / exp2(chunk.center.w) / 32.0;
         let mask_uv = vec2<f32>(fract(uv.x), 1.0 - uv.y);
         let mask = textureSampleGrad(layer_mask_tex, equi_samp, mask_uv, eg.dx * vec2<f32>(1.0, -1.0),
@@ -1496,8 +1503,8 @@ fn fs_vclouds(in: SkyOut) -> VcOut {
         discard;
     }
     // 48 steps of at most 500 m: grazing rays through the layer stop early rather than stepping coarsely
-    let steps = 48;
-    let dt = min((t1 - t0) / f32(steps), 500.0);
+    let steps = max(i32(frame.quality.y), 8);
+    let dt = min((t1 - t0) / f32(steps), 500.0 * 48.0 / f32(steps));
     let jitter = fract(sin(dot(in.clip.xy, vec2<f32>(12.9898, 78.233))) * 43758.547);
     let sun = frame.sun.xyz;
     let time = frame.cam_km.w;
