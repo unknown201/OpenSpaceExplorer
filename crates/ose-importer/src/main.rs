@@ -22,13 +22,31 @@ struct Args {
     /// modules, resources, stock craft). Skipped when empty.
     #[arg(long, default_value = "assets/own")]
     own_out: PathBuf,
+    /// The client's exported localisation table (`assets/web/loc/en.json`): parts without a title of their
+    /// own take `Parts/Title/<id>` from it. Skipped when missing.
+    #[arg(long, default_value = "assets/web/loc/en.json")]
+    loc: PathBuf,
 }
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let mut cov = ose_importer::Coverage::default();
-    let game = ose_importer::import_dir(&args.data, &mut cov)
+    let mut game = ose_importer::import_dir(&args.data, &mut cov)
         .with_context(|| format!("importing {}", args.data.display()))?;
+    if let Ok(text) = std::fs::read_to_string(&args.loc) {
+        let loc: std::collections::HashMap<String, String> = serde_json::from_str(&text)?;
+        let mut titled = 0;
+        for p in &mut game.parts {
+            if p.title_key.is_empty() || p.title_key == p.id {
+                if let Some(t) = loc.get(&format!("Parts/Title/{}", p.id)) {
+                    // the exported table lost its curly quotes (U+FFFD)
+                    p.title_key = t.replace('\u{FFFD}', "\"");
+                    titled += 1;
+                }
+            }
+        }
+        println!("titles from {}: {titled}", args.loc.display());
+    }
     std::fs::create_dir_all(&args.out)?;
     std::fs::write(
         args.out.join("game_data.json"),

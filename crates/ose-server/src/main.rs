@@ -1325,7 +1325,7 @@ fn launch_on_pad_now(
         parts,
         wet_mass_t: m.wet_t(),
         dry_mass_t: m.dry_t,
-        delta_v_vacuum_mps: report.total_vacuum_mps,
+        delta_v_vacuum_mps: vacuum_dv(s, craft, &report),
         stages: stages.clone(),
         reason: Some(reason),
     };
@@ -1395,7 +1395,7 @@ fn launch_on_pad_now(
         parts,
         wet_mass_t: m.wet_t(),
         dry_mass_t: m.dry_t,
-        delta_v_vacuum_mps: report.total_vacuum_mps,
+        delta_v_vacuum_mps: vacuum_dv(s, craft, &report),
         stages,
         reason: None,
     }
@@ -1988,6 +1988,37 @@ fn centre_of_lift(s: &Shared, craft: &ose_data::craft::Craft) -> ose_math::DVec3
     }
 }
 
+/// The craft's delta-v in vacuum: jets breathe air, so their stages count nothing (never negative).
+fn vacuum_dv(
+    s: &Shared,
+    craft: &ose_data::craft::Craft,
+    report: &ose_data::staging::DeltaVReport,
+) -> f64 {
+    let dv: f64 = report
+        .stages
+        .iter()
+        .filter(|st| !jet_stage(s, craft, st))
+        .map(|st| st.delta_v_vacuum_mps)
+        .sum();
+    dv.max(0.0)
+}
+
+/// A stage whose engines all breathe air (jets): no thrust and no delta-v in vacuum.
+fn jet_stage(
+    s: &Shared,
+    craft: &ose_data::craft::Craft,
+    st: &ose_data::staging::StageDeltaV,
+) -> bool {
+    !st.engines.is_empty()
+        && st.engines.iter().all(|&i| {
+            s.parts
+                .iter()
+                .find(|d| d.id == craft.parts[i].part_id)
+                .and_then(|d| d.engines.first())
+                .is_some_and(|e| e.air_breathing)
+        })
+}
+
 /// The staging report as the protocol carries it, with sea-level thrust and TWR.
 fn stage_readouts(
     s: &Shared,
@@ -2018,7 +2049,11 @@ fn stage_readouts(
                 stage_id: st.stage_id as u32,
                 start_mass_t: st.start_mass_t,
                 end_mass_t: st.end_mass_t,
-                delta_v_vacuum_mps: st.delta_v_vacuum_mps,
+                delta_v_vacuum_mps: if jet_stage(s, craft, st) {
+                    0.0
+                } else {
+                    st.delta_v_vacuum_mps
+                },
                 burn_time_s: st.burn_time_s,
                 thrust_kn: st.thrust_kn,
                 thrust_asl_kn,
@@ -2187,6 +2222,7 @@ fn craft_summary(
 ) -> ose_net::CraftSummary {
     let m = craft.mass(&s.parts, &s.resources);
     let report = ose_data::staging::delta_v_by_stage(craft, &s.parts, &s.resources);
+    let dv = vacuum_dv(s, craft, &report);
     ose_net::CraftSummary {
         id,
         name: craft.name.clone(),
@@ -2195,7 +2231,7 @@ fn craft_summary(
         stages: craft.stages.len() as u32,
         dry_mass_t: m.dry_t,
         wet_mass_t: m.wet_t(),
-        delta_v_vacuum_mps: report.total_vacuum_mps,
+        delta_v_vacuum_mps: dv,
         owner,
         stock: owner.is_none(),
     }
@@ -2931,7 +2967,7 @@ async fn session(mut socket: WebSocket, s: AppState) {
                             let col_m = centre_of_lift(&s, &filled);
                             let reply = ServerMessage::StageReport {
                                 stages: stage_readouts(&s, &filled, &report),
-                                delta_v_vacuum_mps: report.total_vacuum_mps,
+                                delta_v_vacuum_mps: vacuum_dv(&s, &filled, &report),
                                 com_m,
                                 cot_m,
                                 thrust_dir,
