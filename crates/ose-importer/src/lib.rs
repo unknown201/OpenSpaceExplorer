@@ -365,6 +365,7 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
     let mut rcs: Option<ose_data::Rcs> = None;
     let mut lifting_surface: Option<ose_data::LiftingSurface> = None;
     let mut intake_area_m2 = 0.0;
+    let mut ctrl = (0.0, 0.0);
     if let Some(mods) = d["serializedPartModules"].as_array() {
         for m in mods {
             if let Some(entries) = m["ModuleData"].as_array() {
@@ -390,6 +391,13 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
                             drag_curve: curve(&o["dragCurve"]),
                             drag_mach_curve: curve(&o["dragMachCurve"]),
                         });
+                    }
+                    if entry["Name"] == "Data_ControlSurface" && !b(o, "DisableLiftingSurfaceForce")
+                    {
+                        ctrl = (
+                            f(o, "CtrlSurfaceRange"),
+                            f(o, "CtrlSurfaceArea").clamp(0.0, 1.0),
+                        );
                     }
                     if entry["Name"] == "Data_ResourceIntake" {
                         intake_area_m2 = f(o, "area");
@@ -687,6 +695,8 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
         cargo_bay,
         rcs,
         lifting_surface,
+        ctrl_range_deg: ctrl.0,
+        ctrl_area: ctrl.1,
         intake_area_m2,
         drag_cubes,
         module_names,

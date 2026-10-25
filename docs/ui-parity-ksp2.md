@@ -59,7 +59,7 @@ Camera rule that runs through every map: **the right button drags the camera, th
 | F13 | Vessel status: mission elapsed time; flight report on recovery or loss | MET under the altimeter; a flight report (mission time, highest altitude, fastest speed, bodies visited, science) when the vessel is recovered or lost | done |
 | F13 | Kerbal portraits at the bottom right: each Kerbal aboard with a name plate, EVA from the portrait | a portrait per Kerbal aboard (the original's Kerbal icon on a TV-lines screen, no live IVA camera) with its name and an EVA button that sends that Kerbal out | done |
 | F14 | Resource Manager app: every resource on the vessel and in the current stage, with bars | Resource manager window from the app bar: the burning stage's and the whole vessel's resources with amount, capacity and a bar (orange under 10%), protocol 34 | done |
-| F15 | App bar: mission tracker, flight report, Kerbal manager, resource and parts managers | an app bar at the top right: mission tracker, parts manager (parts still aboard by name; a row opens that part's window), resource manager, the flight report so far and the Kerbal portraits toggle; one app window open at a time | done |
+| F15 | App bar: mission tracker, flight report, Kerbal manager, resource and parts managers | an app bar at the top right: mission tracker, parts manager (parts still aboard by name; a row opens that part's window), resource manager, action groups (lights, RCS, abort, 1-10 lit while on, click to toggle), the flight report so far and the Kerbal portraits toggle; one app window open at a time | done |
 | F16 | Fairings and cargo bays: deploy the fairing, open and close bays from the part window | the part window shows a fairing's state with Deploy fairing, a bay's with Open/Close bay, and Shielded on parts they enclose (protocol 35) | done |
 
 ### Map view and Tracking Station
@@ -68,7 +68,7 @@ Camera rule that runs through every map: **the right button drags the camera, th
 |---|---|---|---|
 | M1 | Right-drag rotates, Home resets, M back to flight, `]` `[` cycle focus | right-drag (and left) rotates, Home and F frame, `]` `[` follow the next or previous vessel (yours first) | done |
 | M2 | Click an orbit to add a node; six-handle gizmo dragged in 3D; warp-to and trash on the node | clicking your orbit on the map puts a node there; six handles around the node (prograde, retrograde, normal, anti-normal, radial out/in) add delta-v as you drag them outward (1 m/s per pixel, Shift 0.1); drag the node itself to slide it along the orbit; sliders still fine-tune; Warp to on the node panel (to just before the burn) and clicking an Ap/Pe marker warp there, stepping down the warp on arrival (the server's warp limits still apply) | done |
-| M3 | Ap/Pe/SOI markers with tooltips (time and altitude) | Ap and Pe markers with altitude and countdown; encounter, escape and impact markers at patch ends; the periapsis around each body met on the way; right-click a vessel on the map to target it: closest-approach markers on both orbits, target distance and relative speed in flight, a TARGET speed mode, and SAS target / anti-target (held by refreshing a fixed direction) | done |
+| M3 | Ap/Pe/SOI markers with tooltips (time and altitude) | Ap and Pe markers with altitude and countdown; encounter, escape and impact markers at patch ends; the periapsis around each body met on the way; right-click a vessel, planet or moon on the map to target it: closest-approach markers on both orbits, target distance and relative speed in flight, a TARGET speed mode, and SAS target / anti-target (held by refreshing a fixed direction) | done |
 | M4 | Vessel labels drawn once | not a bug: the test pilot had joined twice and owned two probes | closed |
 | M5 | Tracking Station object list, filters, focus/control/recover | rebuilt by "Build 3D world and menu replica" (unpushed) | other thread |
 
@@ -95,7 +95,7 @@ Camera rule that runs through every map: **the right button drags the camera, th
 |---|---|---|---|
 | K1 | Building hover tooltip and click, wheel zoom, M opens the Tracking Station map | hover/click, zoom, M, right or left drag | done |
 | K2 | Launch-site flyout (Launchpad 1-4, runway) | a site chooser in the launch pad dialog and the VAB header (protocol 30), remembered per browser | done |
-| R1 | R&D tree pans by drag and arrows, zooms with the wheel, part tooltips | drag and arrow keys pan, the wheel zooms about the pointer; hovering a part in a node's list shows the full part tooltip | done |
+| R1 | R&D tree pans by drag and arrows, zooms with the wheel, part tooltips | drag and arrow keys pan, the wheel zooms about the pointer; a node's parts show as pictures; hovering one shows the full part tooltip | done |
 | C1 | Mission Control: track a mission, in-flight mission tracker, turn-in button when complete | accept and turn in at Mission Control (other thread); in flight a mission tracker window lists the missions taken on with their current objective | done |
 | A1 | Main menu Settings, Extras/Credits | Settings works; Extras disabled | partly done |
 

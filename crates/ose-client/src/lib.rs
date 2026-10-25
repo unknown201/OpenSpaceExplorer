@@ -265,7 +265,7 @@ struct App {
     brakes_latched: bool,
     /// The target vessel (right click its label on the map), the target speed mode, and SAS pointing at the
     /// target (true) or away from it (false), held by resending a fixed direction.
-    target: Option<u64>,
+    target: Option<ose_net::TargetId>,
     speed_target: bool,
     /// Altimeter in terrain mode (height above the ground below) instead of sea level.
     alt_terrain: bool,
@@ -1366,6 +1366,7 @@ fn load_localization(app: Shared) {
         if let Ok(map) = serde_json::from_str::<std::collections::HashMap<String, String>>(&text) {
             let mut a = app.borrow_mut();
             a.loc = map;
+            a.name_untitled_parts();
             if a.rd_selected.is_some() {
                 a.render_rnd();
             }
@@ -1421,6 +1422,7 @@ fn load_part_sizes(app: Shared) {
                     }
                     a.catalog.insert(p.id.clone(), p);
                 }
+                a.name_untitled_parts();
                 log(&format!(
                     "part catalog loaded for {} parts",
                     a.catalog.len()
@@ -1581,12 +1583,12 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                 let open = el.class_list().toggle("open").unwrap_or(false);
                 store("ose.tracker", if open { "open" } else { "closed" });
                 if open {
-                    for id in ["fh-parts", "fh-res"] {
+                    for id in ["fh-parts", "fh-res", "fh-ag"] {
                         if let Some(e) = doc.get_element_by_id(id) {
                             e.class_list().remove_1("open").ok();
                         }
                     }
-                    for id in ["fh-parts-btn", "fh-res-btn"] {
+                    for id in ["fh-parts-btn", "fh-res-btn", "fh-ag-btn"] {
                         if let Some(e) = doc.get_element_by_id(id) {
                             e.class_list().remove_1("on").ok();
                         }
@@ -1632,12 +1634,17 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
     if let Some(el) = doc.get_element_by_id("fh-crew-btn") {
         el.class_list().toggle_with_force("on", !crew_off).ok();
     }
-    const APP_WINDOWS: [(&str, &str); 3] = [
+    const APP_WINDOWS: [(&str, &str); 4] = [
         ("fh-missions-btn", "fh-missions"),
         ("fh-parts-btn", "fh-parts"),
         ("fh-res-btn", "fh-res"),
+        ("fh-ag-btn", "fh-ag"),
     ];
-    for (btn, win) in [("fh-parts-btn", "fh-parts"), ("fh-res-btn", "fh-res")] {
+    for (btn, win) in [
+        ("fh-parts-btn", "fh-parts"),
+        ("fh-res-btn", "fh-res"),
+        ("fh-ag-btn", "fh-ag"),
+    ] {
         wire(
             btn,
             Box::new(move |a| {
@@ -1661,8 +1668,33 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                 }
                 app.render_parts_manager();
                 app.render_resource_manager();
+                app.render_action_groups();
             }),
         )?;
+    }
+    // An action group button toggles that group, as its key does.
+    if let Some(list) = doc.get_element_by_id("fh-ag-list") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let g = ev
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .and_then(|e| e.closest("[data-ag]").ok().flatten())
+                .and_then(|e| e.get_attribute("data-ag"));
+            let group = match g.as_deref() {
+                Some("lights") => ose_net::ActionGroup::Lights,
+                Some("rcs") => ose_net::ActionGroup::Rcs,
+                Some("abort") => ose_net::ActionGroup::Abort,
+                Some(n) => match n.parse::<u8>() {
+                    Ok(n) => ose_net::ActionGroup::Custom(n),
+                    Err(_) => return,
+                },
+                None => return,
+            };
+            a.borrow().action_group(group);
+        });
+        list.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
     }
     // A parts manager row opens that part's window beside the list.
     if let Some(list) = doc.get_element_by_id("fh-parts-list") {
@@ -4362,7 +4394,7 @@ impl App {
             };
             let mine = v.owner.is_some() && v.owner == self.player_id;
             el.set_class_name(if mine { "vessel mine" } else { "vessel" });
-            if Some(v.id) == self.target {
+            if Some(ose_net::TargetId::Vessel(v.id)) == self.target {
                 el.class_list().add_1("target").ok();
             }
             el.set_attribute("data-ose", "vessel").ok();
@@ -6324,7 +6356,7 @@ impl App {
         self.ftue("FTUE_Flight");
         self.flying = Some(vessel);
         // The server keeps a target per vessel; the one picked carries over to the vessel flown now.
-        if self.target == Some(vessel) {
+        if self.target == Some(ose_net::TargetId::Vessel(vessel)) {
             self.target = None;
         }
         self.send_target();
@@ -6472,6 +6504,18 @@ impl App {
 
     /// Show the crew buttons that apply: EVA with crew aboard, Board and Plant Flag for a Kerbal (the flag on
     /// the ground), Undock while docked.
+    /// Parts the catalog has no title for take theirs from the localization table (`Parts/Title/<id>`).
+    fn name_untitled_parts(&mut self) {
+        let loc = &self.loc;
+        for p in self.catalog.values_mut() {
+            if p.display_title() == p.id {
+                if let Some(t) = loc.get(&format!("Parts/Title/{}", p.id)) {
+                    p.title = t.clone();
+                }
+            }
+        }
+    }
+
     /// The parts manager window: the parts still on the flown vessel (staged-off ones gone), by name.
     fn render_parts_manager(&self) {
         let Some(el) = self.doc.get_element_by_id("fh-parts-list") else {
@@ -6552,9 +6596,37 @@ impl App {
         }
     }
 
+    /// The action groups window: each group's state from the readout.
+    fn render_action_groups(&self) {
+        let Some(el) = self.doc.get_element_by_id("fh-ag-list") else {
+            return;
+        };
+        let open = self
+            .doc
+            .get_element_by_id("fh-ag")
+            .is_some_and(|e| e.class_list().contains("open"));
+        if !open {
+            return;
+        }
+        let Some(f) = self
+            .flying
+            .and_then(|id| self.scene.as_ref()?.vessel(id))
+            .and_then(|v| v.flight.as_ref())
+        else {
+            return;
+        };
+        let html = hud::action_groups_html(f.lights, f.rcs, f.abort, &f.custom_groups);
+        let key = format!("{}:{}", html.len(), hud::fnv(&html));
+        if el.get_attribute("data-ose-key").as_deref() != Some(key.as_str()) {
+            el.set_inner_html(&html);
+            el.set_attribute("data-ose-key", &key).ok();
+        }
+    }
+
     fn update_crew_buttons(&self, f: &ose_net::FlightReadout) {
         self.render_parts_manager();
         self.render_resource_manager();
+        self.render_action_groups();
         let landed = matches!(f.situation, ose_net::FlightSituation::Landed);
         if let Some(el) = self.doc.get_element_by_id("fh-crewbox") {
             let face = |name: &str| {
@@ -6992,8 +7064,11 @@ impl App {
         let scene = self.scene.as_ref()?;
         let ut = self.time.ut_at(now_ms());
         let me = scene.vessel(self.flying?)?;
-        let t = scene.vessel(self.target?)?;
-        let d = scene.vessel_position(t, ut) - scene.vessel_position(me, ut);
+        let there = match self.target? {
+            ose_net::TargetId::Vessel(id) => scene.vessel_position(scene.vessel(id)?, ut),
+            ose_net::TargetId::Body(b) => scene.position(b as usize, ut),
+        };
+        let d = there - scene.vessel_position(me, ut);
         (d.length() > 1e-6).then(|| d * (1.0 / d.length()))
     }
 
@@ -7006,22 +7081,29 @@ impl App {
             ws,
             &ClientMessage::SetTarget {
                 vessel,
-                target: self.target.map(ose_net::TargetId::Vessel),
+                target: self.target,
             },
         );
     }
 
-    /// Right click on a vessel label: make it the target, or clear it when it already is.
-    fn toggle_target(&mut self, id: u64) {
-        if Some(id) == self.flying {
+    /// The target's name: the vessel's, or the body's.
+    fn target_name(&self, t: ose_net::TargetId) -> String {
+        let Some(scene) = &self.scene else {
+            return String::new();
+        };
+        match t {
+            ose_net::TargetId::Vessel(id) => scene.vessel(id).map(|v| v.name.clone()),
+            ose_net::TargetId::Body(b) => scene.bodies.get(b as usize).map(|b| b.id.clone()),
+        }
+        .unwrap_or_default()
+    }
+
+    /// Right click on a vessel or body label: make it the target, or clear it when it already is.
+    fn toggle_target(&mut self, id: ose_net::TargetId) {
+        if Some(id) == self.flying.map(ose_net::TargetId::Vessel) {
             return;
         }
-        let name = self
-            .scene
-            .as_ref()
-            .and_then(|s| s.vessel(id))
-            .map(|v| v.name.clone())
-            .unwrap_or_default();
+        let name = self.target_name(id);
         if self.target == Some(id) {
             self.target = None;
             self.speed_target = false;
@@ -7040,7 +7122,10 @@ impl App {
         self.send_target();
         for (vid, el) in &self.vessel_els {
             el.class_list()
-                .toggle_with_force("target", Some(*vid) == self.target)
+                .toggle_with_force(
+                    "target",
+                    Some(ose_net::TargetId::Vessel(*vid)) == self.target,
+                )
                 .ok();
         }
     }
@@ -7291,25 +7376,43 @@ impl App {
             _ => set_text(&self.doc, "fh-alt-mode", "SEA LEVEL"),
         }
         // Target: distance and closing speed, the TARGET speed mode, and the SAS target buttons.
-        let tgt = self.target.and_then(|t| scene.vessel(t));
-        if self.target.is_some() && tgt.is_none() {
+        let tgt = match self.target {
+            Some(ose_net::TargetId::Vessel(t)) => scene.vessel(t),
+            _ => None,
+        };
+        if matches!(self.target, Some(ose_net::TargetId::Vessel(_))) && tgt.is_none() {
             // The target is gone (recovered, crashed).
             set_text(&self.doc, "fh-target", "");
         }
-        let rel = tgt.map(|t| match v.target {
-            Some(r) if r.target == ose_net::TargetId::Vessel(t.id) => (
-                t.name.clone(),
-                r.distance_m,
-                r.relative_velocity_mps.length(),
-            ),
-            _ => {
-                let d = scene.vessel_position(t, ut) - scene.vessel_position(v, ut);
-                (
-                    t.name.clone(),
-                    d.length(),
-                    (t.velocity_mps - v.velocity_mps).length(),
-                )
+        // A body target: the server's distance to its surface and speed relative to it.
+        let body_rel = match (self.target, v.target) {
+            (Some(ose_net::TargetId::Body(b)), Some(r))
+                if r.target == ose_net::TargetId::Body(b) =>
+            {
+                Some((
+                    self.target_name(ose_net::TargetId::Body(b)),
+                    r.distance_m,
+                    r.relative_velocity_mps.length(),
+                ))
             }
+            _ => None,
+        };
+        let rel = body_rel.or_else(|| {
+            tgt.map(|t| match v.target {
+                Some(r) if r.target == ose_net::TargetId::Vessel(t.id) => (
+                    t.name.clone(),
+                    r.distance_m,
+                    r.relative_velocity_mps.length(),
+                ),
+                _ => {
+                    let d = scene.vessel_position(t, ut) - scene.vessel_position(v, ut);
+                    (
+                        t.name.clone(),
+                        d.length(),
+                        (t.velocity_mps - v.velocity_mps).length(),
+                    )
+                }
+            })
         });
         match &rel {
             Some((name, dist, speed)) => set_text(
@@ -8882,7 +8985,10 @@ impl App {
     fn frame_3d(&mut self, ut: f64, positions: &[ose_math::DVec3], centre: ose_math::DVec3) {
         use glam::{DQuat, DVec3 as GV};
         let planner = self.my_vessel().map(|(id, _)| id);
-        let target = self.target;
+        let target = match self.target {
+            Some(ose_net::TargetId::Vessel(id)) => Some(id),
+            _ => None,
+        };
         let Some(scene) = &self.scene else {
             return;
         };
@@ -9579,7 +9685,19 @@ fn install_focus_clicks(app: &Shared, target: &Element) -> Result<(), JsValue> {
     let on_menu = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
         if let Some(id) = App::vessel_click_target(&ev) {
             ev.prevent_default();
-            a.borrow_mut().toggle_target(id);
+            a.borrow_mut().toggle_target(ose_net::TargetId::Vessel(id));
+        } else if let Some(i) = App::label_click_target(&ev) {
+            // A planet or moon (not the Sun) on the map.
+            ev.prevent_default();
+            let mut app = a.borrow_mut();
+            let star = app
+                .scene
+                .as_ref()
+                .and_then(|s| s.bodies.get(i))
+                .is_none_or(|b| b.is_star);
+            if !star && app.flying.is_some() {
+                app.toggle_target(ose_net::TargetId::Body(i as u16));
+            }
         }
     });
     target.add_event_listener_with_callback("contextmenu", on_menu.as_ref().unchecked_ref())?;

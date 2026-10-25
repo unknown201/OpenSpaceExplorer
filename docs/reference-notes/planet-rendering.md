@@ -171,3 +171,8 @@ never shadows itself (the tiled layers and decals shade through the relief norma
 one `poles.png` (albedo RGB, cloud coverage A): the grass and impostor pipelines were at WebGPU's 16 sampled
 textures per stage.
 
+Exposure after the sRGB fix (fx_post compose now encodes): bodies with an atmosphere use their AtmosphereModel
+`Exposure` x 0.1 as Bruneton's tone map intends (Kerbin 4.12, Duna 4.04, Eve 3, Jool 5), floored at 2 (Laythe's
+0.9 relies on the original's auto exposure); airless bodies keep the mean-albedo rule. Eve stays largely overcast:
+its baked cloud coverage averages 76 % (Kerbin 11 %) and its config colour-maps the clouds, which is not drawn yet.
+

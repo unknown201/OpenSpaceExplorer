@@ -296,6 +296,10 @@
     body:has(#flight-hud.open) #help { display: none; }
     body:has(#flight-hud.open:not(.map)) #hud > :not(#ut):not(.warp) { opacity: 0; pointer-events: none; }
     body:has(#flight-hud.open:not(.map)) #hud { background: none; border: 0; }
+    /* The map from flight keeps the original's clean top: time, warp and Add node; the session details stay in
+       the Esc menu and the Tracking Station. */
+    body:has(#flight-hud.open.map) #hud > :is(#focus, #warp-holder, #player, #campaign, #ksc-button, #status) { opacity: 0; pointer-events: none; }
+    body:has(#flight-hud.open.map) #hud { background: none; border: 0; }
     /* SAS modes beside the navball and the action bar, icons from the original's HUD masked in the text colour. */
     .fh-sas { display: grid; grid-template-columns: repeat(2, calc(34 * var(--u))); grid-auto-rows: calc(34 * var(--u)); gap: calc(4 * var(--u)); align-self: flex-end; }
     #flight-hud .fh-sas button, #flight-hud .fh-actions button { padding: 0; display: grid; place-items: center; width: calc(34 * var(--u)); height: calc(34 * var(--u)); color: #9fb0cc; }
@@ -329,6 +333,10 @@
     .fh-parts li { display: flex; justify-content: space-between; gap: 8px; padding: 3px 4px; border-radius: 3px; cursor: pointer; font-size: calc(12 * var(--u)); color: #e6ecf7; }
     .fh-parts li:hover { background: #ffffff14; }
     .fh-parts li .n { color: #9fb0cc; }
+    .fh-ag-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; margin-top: 6px; }
+    #flight-hud .fh-ag-grid button { margin: 0; width: auto; padding: 4px 0; font-size: calc(12 * var(--u)); color: #9fb0cc; }
+    #flight-hud .fh-ag-grid button.on { color: #7dff8a; border-color: #7dff8a99; background: #17321ce6; }
+    #flight-hud .fh-ag-grid button.wide { grid-column: span 5; }
     .fh-res .rs-head { margin: 6px 0 2px; font-size: calc(10 * var(--u)); letter-spacing: 0.1em; color: #9fb0cc; }
     .fh-res .rs-row { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; font-size: calc(12 * var(--u)); color: #e6ecf7; margin: 3px 0; }
     .fh-res .rs-bar { grid-column: 1 / 3; height: 5px; background: #ffffff1a; border-radius: 3px; overflow: hidden; }
@@ -341,7 +349,7 @@
     #fh-missions-list li { padding: calc(4 * var(--u)) 0; border-top: 1px solid #ffffff14; }
     #fh-missions-list li b { display: block; color: #fff; } #fh-missions-list li.primary b { color: #ffd87a; }
     #fh-missions-list li small { color: #9fb0cc; } #fh-missions-list .done { color: #7dff8a; } #fh-missions-list li.empty { color: #9fb0cc; }
-    body.ui-hidden .fh-missions, body.ui-hidden .fh-appbar, body.ui-hidden .fh-parts, body.ui-hidden .fh-res { display: none !important; }
+    body.ui-hidden .fh-missions, body.ui-hidden .fh-appbar, body.ui-hidden .fh-parts, body.ui-hidden .fh-res, body.ui-hidden .fh-ag { display: none !important; }
     #fh-stages { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: calc(3 * var(--u)); max-height: calc(360 * var(--u)); overflow: auto; }
     #fh-stages li { display: flex; flex-wrap: wrap; align-items: center; gap: calc(3 * var(--u)); padding: calc(3 * var(--u)) calc(6 * var(--u)); border: 1px solid #ffffff22; border-left: 3px solid #e0a04066; border-radius: calc(4 * var(--u)); background: #06080fcc; }
     #fh-stages li b { font-size: calc(11 * var(--u)); color: #e0a040; min-width: calc(14 * var(--u)); }
@@ -545,6 +553,11 @@
     #crafts li.locked { opacity: 0.5; } #crafts li.locked .name::after { content: "  needs research"; font-size: 11px; color: #f0a070; }
     .rd-parts { list-style: none; margin: calc(6 * var(--u)) 0 0; padding: 0; }
     .rd-parts li { padding: calc(6 * var(--u)) calc(8 * var(--u)); margin-bottom: calc(4 * var(--u)); background: #141c2c; border: 1px solid #2c3d63; border-radius: 4px; font-size: calc(13 * var(--u)); }
+    /* With part pictures: a grid of tiles, as the original's node panel. */
+    .rd-parts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: calc(4 * var(--u)); }
+    .rd-parts li { margin: 0; padding: calc(3 * var(--u)); text-align: center; font-size: calc(11 * var(--u)); line-height: 1.2; }
+    .rd-parts li img.pi { display: block; width: 100%; aspect-ratio: 1; border-radius: 3px; }
+    .rd-parts li.noicon { grid-column: 1 / -1; text-align: left; padding: calc(6 * var(--u)) calc(8 * var(--u)); font-size: calc(13 * var(--u)); }
     /* Mission Control after the original's mission log: tabs and missions on the left, the briefing card on the
        right, over a dim room backdrop. */
     #menu:has(#screen-mission.open) { background: #070b12f5; align-items: stretch; justify-content: stretch; }
@@ -993,10 +1006,12 @@
       <button class="fh-missions-btn" id="fh-missions-btn" data-ose="flight-missions-btn" title="Mission tracker: the missions you have taken on"><i style="--ico:url(assets/ui/hud/ICO-AppBar-MissionTracker-24x24.png)"></i></button>
       <button class="fh-missions-btn" id="fh-report-btn" data-ose="flight-report-btn" title="Flight report: what this flight has done so far"><i style="--ico:url(assets/ui/hud/ICO-AppBar-FlightReport-24x24.png)"></i></button>
       <button class="fh-missions-btn" id="fh-parts-btn" data-ose="flight-parts-btn" title="Parts manager: every part on the vessel; click one for its window"><i style="--ico:url(assets/ui/hud/ICO-AppBar-PartsManager-24x24.png)"></i></button>
+      <button class="fh-missions-btn" id="fh-ag-btn" data-ose="flight-ag-btn" title="Action groups: lights, RCS, abort and groups 1-10 (keys U, R, Backspace, 1-0)"><i style="--ico:url(assets/ui/hud/ICO-AppBar-ActionGroup-24x24.png)"></i></button>
       <button class="fh-missions-btn" id="fh-res-btn" data-ose="flight-res-btn" title="Resource manager: what the vessel and the burning stage carry"><i style="--ico:url(assets/ui/hud/ICO-AppBar-ResourceManager-24x24.png)"></i></button>
       <button class="fh-missions-btn on" id="fh-crew-btn" data-ose="flight-crew-btn" title="Kerbal portraits: show or hide the crew"><i style="--ico:url(assets/ui/hud/ICO-AppBar-KerbalManager-24x24.png)"></i></button>
     </div>
     <div class="fh-missions fh-parts" id="fh-parts" data-ose="flight-parts"><div class="fh-label">PARTS</div><ul id="fh-parts-list"></ul></div>
+    <div class="fh-missions fh-ag" id="fh-ag" data-ose="flight-action-groups"><div class="fh-label">ACTION GROUPS</div><div id="fh-ag-list"></div></div>
     <div class="fh-missions fh-res" id="fh-res" data-ose="flight-resources"><div class="fh-label">RESOURCES</div><div id="fh-res-list"></div></div>
     <div class="fh-missions" id="fh-missions" data-ose="flight-missions"><div class="fh-label">MISSIONS</div><ul id="fh-missions-list"></ul></div>
     <div class="fh-comm" id="fh-comm" data-ose="flight-comm" title="CommNet: transmitting science and controlling probes need a link to the KSC"><i style="--ico:url(assets/ui/hud/ICO-Flight-Cluster-Commnet.png)"></i><span id="fh-comm-text">--</span></div>

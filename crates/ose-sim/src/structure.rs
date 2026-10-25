@@ -97,6 +97,8 @@ pub struct Structure {
     /// Lifting surfaces (their curves resolved), intake areas, and each engine's jet curves.
     lift_defs: Vec<Option<(ose_data::LiftingSurface, aero::LiftCurves)>>,
     pub intake_area_m2: Vec<f64>,
+    /// Control surfaces: deflection range (rad) and moving share of the surface.
+    ctrl: Vec<(f64, f64)>,
     engine_jet: Vec<Option<crate::flight::Jet>>,
     /// Built nose-forward (a plane): the craft lies level on the ground, on its craft -Z... side (its top,
     /// craft -Z after `level_layout`, faces up) instead of standing on its tail.
@@ -429,6 +431,13 @@ impl Structure {
                         };
                         (l, curves)
                     })
+                })
+                .collect(),
+            ctrl: (0..n)
+                .map(|i| {
+                    def_of(i)
+                        .map(|d| (d.ctrl_range_deg.to_radians(), d.ctrl_area))
+                        .unwrap_or((0.0, 0.0))
                 })
                 .collect(),
             intake_area_m2: (0..n)
@@ -1555,6 +1564,37 @@ impl Structure {
         torque
     }
 
+    /// How much torque the control surfaces can give at full deflection in this airflow, kN·m: each moving
+    /// surface's extra lift at its deflection range (dynamic pressure × 0.036 × lift coefficient × moving share
+    /// × the lift curve at the range × its Mach curve) at its distance from the centre of mass.
+    pub fn control_authority(&self, v_air: DVec3, rho: f64, mach: f64) -> f64 {
+        let speed = v_air.length();
+        if speed <= 0.0 || rho <= 0.0 {
+            return 0.0;
+        }
+        let q = 0.5 * rho * speed * speed;
+        let c = self.rigid.rest_centre();
+        let mut total = 0.0;
+        for i in 0..self.rigid.len() {
+            let (range, share) = self.ctrl[i];
+            let Some((l, curves)) = &self.lift_defs[i] else {
+                continue;
+            };
+            if range <= 0.0 || share <= 0.0 || !self.rigid.present[i] || self.shielded[i] {
+                continue;
+            }
+            let lift = q
+                * aero::LIFT_MULTIPLIER
+                * l.deflection_lift_coeff
+                * share
+                * curves.lift.evaluate(range.sin())
+                * curves.lift_mach.evaluate(mach);
+            let (centre, _) = self.part_box(i);
+            total += lift.max(0.0) * (centre - c).length();
+        }
+        total
+    }
+
     /// Drag of the attached parts for travel through the air at `v_air` (inertial, m/s) with the vessel axis
     /// along `facing`: sets each part's `Cd * A` and returns the total, m^2. Parts without a cube add none.
     pub fn aero(&mut self, stage: usize, facing: DVec3, v_air: DVec3, rho: f64, mach: f64) -> f64 {
@@ -2001,6 +2041,24 @@ mod tests {
         assert!(
             with_fins > without + 0.1,
             "fins {with_fins} vs none {without} kN m"
+        );
+    }
+
+    #[test]
+    fn control_surfaces_steer_harder_the_faster_the_plane_flies() {
+        let (crafts, defs, res) = assets();
+        let c = crafts.iter().find(|c| c.name == "Stock04_Jet").unwrap();
+        let c = level_layout(c).unwrap();
+        let s = Structure::build(&c, &defs, &res);
+        let facing = DVec3::new(0.0, 1.0, 0.0);
+        let slow = s.control_authority(facing * 50.0, 1.2, 0.15);
+        let fast = s.control_authority(facing * 150.0, 1.2, 0.45);
+        assert!(slow > 1.0, "elevators bite at 50 m/s: {slow} kN m");
+        assert!(fast > 4.0 * slow, "and more with speed: {slow} -> {fast}");
+        assert_eq!(
+            s.control_authority(facing * 150.0, 0.0, 0.0),
+            0.0,
+            "no air, no authority"
         );
     }
 

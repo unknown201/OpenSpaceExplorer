@@ -173,7 +173,7 @@ pub fn render_info(
     let mut parts = String::new();
     for p in &node.parts {
         parts.push_str(&format!(
-            "<li data-ose-part=\"{id}\">{title}</li>",
+            "<li data-ose-part=\"{id}\"><img class=\"pi\" src=\"assets/ui/parts/{id}.png\" alt=\"\" loading=\"lazy\" onerror=\"this.parentNode.classList.add('noicon');this.remove()\" /><span>{title}</span></li>",
             id = esc(p),
             title = esc(&part_title(p))
         ));

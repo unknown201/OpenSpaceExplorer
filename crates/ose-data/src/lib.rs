@@ -277,6 +277,12 @@ pub struct PartDef {
     /// A wing, fin or control surface (`Data_LiftingSurface`).
     #[serde(default)]
     pub lifting_surface: Option<LiftingSurface>,
+    /// A control surface's deflection range, degrees, and the share of the surface that moves
+    /// (`Data_ControlSurface.CtrlSurfaceRange`, `CtrlSurfaceArea`); 0 for fixed surfaces.
+    #[serde(default)]
+    pub ctrl_range_deg: f64,
+    #[serde(default)]
+    pub ctrl_area: f64,
     /// An air intake's area, m^2 (`Data_ResourceIntake.area`; jets with their own intake have it too).
     #[serde(default)]
     pub intake_area_m2: f64,

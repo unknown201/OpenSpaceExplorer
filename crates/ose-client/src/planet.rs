@@ -1642,10 +1642,11 @@ impl PlanetRenderer {
         let mie = v3("MieScattering", [0.0; 3]);
         let ms = f("MieScatteringScale", 1.0) * 0.01;
         let solar = v3("SolarIrradiance", [1.0; 3]);
-        // Exposure stands in for the original's post-process auto exposure: a fixed value that puts the body's
-        // mean albedo in sunlight where Kerbin's sits (Kerbin: albedo 0.1, solar irradiance 2, its atmosphere
-        // model's exposure 4.12). Bodies with an atmosphere keep their model's exposure when it is brighter
-        // (Laythe's own 0.9 renders near black with this tone map).
+        // Exposure stands in for the original's post-process auto exposure. Bodies with an atmosphere use their
+        // model's own exposure, as Bruneton's tone map intends now that the frame is sRGB-encoded (Kerbin 4.12,
+        // Eve 3, Duna 4.04), with a floor of 2 (Laythe's own 0.9 is near black without the original's auto
+        // exposure on top). Airless bodies get a fixed value that puts their mean albedo in sunlight where
+        // Kerbin's sits (albedo 0.1, solar irradiance 2).
         let mean_albedo = b
             .info
             .as_ref()
@@ -1654,7 +1655,7 @@ impl PlanetRenderer {
         let solar_mean = solar.iter().sum::<f64>() / 3.0 * 2.0;
         let auto = 4.12 * (0.1 / mean_albedo.max(0.01)) * (2.0 / solar_mean.max(0.1));
         let exposure = match a.and_then(|a| a["Exposure"][0].as_f64()) {
-            Some(e) => (e * 0.1).max((auto * 0.75).min(6.0)),
+            Some(e) => (e * 0.1).max(2.0),
             None => auto.clamp(4.0, 20.0),
         };
         // FFT waves while the camera is low over an ocean world with a spectrum
