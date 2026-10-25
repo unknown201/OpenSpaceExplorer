@@ -262,6 +262,8 @@ struct App {
     sas_target: Option<bool>,
     sas_target_sent_ms: f64,
     toasts: hud::Toasts,
+    /// The flown vessel as last seen, for event toasts (signal, charge, sphere of influence, orbit, landing).
+    flight_watch: std::cell::RefCell<Option<hud::FlightWatch>>,
     /// Vessels this client has staged at least once: their first stage is lit, so the next is the one after.
     staged: std::collections::HashSet<u64>,
     roll_sent: f32,
@@ -559,6 +561,7 @@ pub fn start() -> Result<(), JsValue> {
         sas_target: None,
         sas_target_sent_ms: 0.0,
         toasts: hud::Toasts::default(),
+        flight_watch: std::cell::RefCell::new(None),
         staged: Default::default(),
         roll_sent: 0.0,
         lin_mode: false,
@@ -5851,6 +5854,22 @@ impl App {
                 brakes_latched: self.brakes_latched,
             },
         );
+        // Event toasts from what changed since the last frame.
+        let watch = hud::FlightWatch {
+            vessel: id,
+            comm: f.comm_connected || f.comm_range_m <= 0.0,
+            control: f.has_control,
+            body: v.reference_body,
+            situation: Some(f.situation),
+            charge_low: f.electric_capacity > 0.0 && f.electric_charge < f.electric_capacity * 0.05,
+        };
+        let before = self.flight_watch.replace(Some(watch.clone()));
+        if let Some(before) = before {
+            let name = body.map(|b| b.id.as_str()).unwrap_or("the body");
+            for (text, tier) in hud::flight_events(&before, &watch, name) {
+                hud::push(&self.doc, &text, tier);
+            }
+        }
         // Altimeter mode: sea level (the readout above) or terrain, from the planet map the ground is drawn from.
         #[cfg(target_arch = "wasm32")]
         let agl = self.flight3d.agl_m;
