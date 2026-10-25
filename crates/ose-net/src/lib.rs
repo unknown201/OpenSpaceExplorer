@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 30;
+pub const PROTOCOL_VERSION: u16 = 31;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -176,6 +176,16 @@ pub enum ClientMessage {
         x: f32,
         y: f32,
         z: f32,
+    },
+    /// Rotation input with SAS off (`AttitudeMode::Free`), each -1..1 and held until changed: pitch turns
+    /// the nose toward craft +Z (the navball's top), yaw toward craft +X, roll clockwise about the nose. The
+    /// reaction wheels (and RCS with its group on) set how fast the spin builds; nothing damps it. Answers
+    /// `FlightAck`.
+    SetRotation {
+        vessel: u64,
+        pitch: f32,
+        yaw: f32,
+        roll: f32,
     },
     /// Roll input (-1..1, Q/E), held until changed; answers `FlightAck`.
     SetRoll {
@@ -439,6 +449,8 @@ pub enum AttitudeMode {
     Fixed(DVec3),
     /// Toward the vessel's scheduled burn (refused when none is planned).
     Maneuver,
+    /// SAS off: nothing holds the attitude; `SetRotation` turns the vessel and its spin carries on.
+    Free,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -532,6 +544,8 @@ pub struct FlightReadout {
     pub rcs_firing: f32,
     /// Force of the wings and other lifting surfaces, kN (lift and their drag).
     pub lift_kn: f32,
+    /// Angular velocity, rad/s, inertial (with SAS off it is what the vessel keeps spinning at).
+    pub angvel: DVec3,
     /// The burning stage is jets (their thrust follows speed and air; `thrust_kn` shows it).
     pub jet: bool,
 }

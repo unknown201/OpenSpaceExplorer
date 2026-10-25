@@ -65,6 +65,8 @@ pub struct VabView {
     /// Centre of lift (wings and control surfaces), drawn in blue.
     pub col: Option<ose_math::DVec3>,
     pub held_turn: ose_data::craft::Quat,
+    /// The rotation of the part the held part snaps to (it takes it on).
+    snap_turn: ose_data::craft::Quat,
     pub held_yaw: ose_data::craft::Quat,
     /// Vertical camera offset from the craft's centre, metres (arrow keys and middle drag, Home resets).
     pub pan_y: f64,
@@ -99,6 +101,7 @@ impl VabView {
             cot: None,
             col: None,
             held_turn: crate::vab::NO_TURN,
+            snap_turn: crate::vab::NO_TURN,
             held_yaw: crate::vab::NO_TURN,
         }
     }
@@ -430,11 +433,22 @@ impl VabView {
                 Some((_, k)) => {
                     let (pi, nid, p, dir) = &free_nodes[k];
                     self.snap = Some((*pi, nid.clone()));
-                    // Put the held part's node that faces the other way on the target node.
+                    // Put the held part's node that faces the other way on the target node; the part takes
+                    // the target's rotation (a plane's fuselage), so compare and place in that frame.
+                    let pq = craft
+                        .parts
+                        .get(*pi)
+                        .map(|p| p.local_rotation)
+                        .unwrap_or(crate::vab::NO_TURN);
+                    self.snap_turn = pq;
+                    let turned = |v: DVec3| {
+                        let r = crate::vab::rotate_by(pq, ose_math::DVec3::new(v.x, v.y, v.z));
+                        DVec3::new(r.x, r.y, r.z)
+                    };
                     let own = nodes
                         .iter()
-                        .find(|(_, o)| o.dot(DVec3::new(dir.x, dir.y, dir.z)) < -0.5)
-                        .map(|(np, _)| *np)
+                        .find(|(_, o)| turned(*o).dot(DVec3::new(dir.x, dir.y, dir.z)) < -0.5)
+                        .map(|(np, _)| turned(*np))
                         .unwrap_or(DVec3::ZERO);
                     let wn = centre + to_gltf(*p);
                     for axis in [DVec3::X, DVec3::Y, DVec3::Z] {
@@ -467,7 +481,7 @@ impl VabView {
                 }
             } else if gpu.has_model(&name) {
                 let turn = if self.snap.is_some() {
-                    self.held_yaw
+                    crate::vab::turn_then(self.snap_turn, self.held_yaw)
                 } else {
                     self.held_turn
                 };

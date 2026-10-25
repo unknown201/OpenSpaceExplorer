@@ -691,6 +691,7 @@ fn to_net_attitude(a: Attitude) -> ose_net::AttitudeMode {
         },
         Attitude::Fixed(d) => M::Fixed(d),
         Attitude::Maneuver(_) => M::Maneuver,
+        Attitude::Free => M::Free,
     }
 }
 
@@ -716,6 +717,7 @@ fn from_net_attitude(a: ose_net::AttitudeMode) -> Attitude {
         M::Fixed(d) => Attitude::Fixed(d),
         // the universe points it at the burn on its next step
         M::Maneuver => Attitude::Maneuver(ose_math::DVec3::ZERO),
+        M::Free => Attitude::Free,
     }
 }
 
@@ -822,6 +824,7 @@ fn flight_readout(
         rcs_thrust_kn: p.rcs.thrust_kn as f32,
         rcs_firing: p.rcs.usage as f32,
         lift_kn: p.lift_kn.length() as f32,
+        angvel: p.angvel,
         jet: p.jet.is_some(),
         lights: p.groups.lights,
         rcs: p.groups.rcs,
@@ -2611,6 +2614,16 @@ async fn session(mut socket: WebSocket, s: AppState) {
                                 Some(e) => {
                                     let t = ose_math::DVec3::new(x as f64, y as f64, z as f64);
                                     let ok = s.universe.lock().expect("sim lock").set_translate(e, t);
+                                    ServerMessage::FlightAck { vessel, accepted: ok, reason: (!ok).then(|| "not under power".into()) }
+                                }
+                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
+                            };
+                            if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::SetRotation { vessel, pitch, yaw, roll }) => {
+                            let reply = match owned_vessel(&s, vessel, player_id) {
+                                Some(e) => {
+                                    let ok = s.universe.lock().expect("sim lock").set_rotation(e, pitch as f64, yaw as f64, roll as f64);
                                     ServerMessage::FlightAck { vessel, accepted: ok, reason: (!ok).then(|| "not under power".into()) }
                                 }
                                 None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },

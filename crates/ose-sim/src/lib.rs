@@ -385,6 +385,18 @@ impl Universe {
         }
     }
 
+    /// Rotation input with SAS off (pitch, yaw, roll each -1..1, held until changed; see
+    /// `Powered::rotation_input`); false without a powered vessel.
+    pub fn set_rotation(&mut self, e: Entity, pitch: f64, yaw: f64, roll: f64) -> bool {
+        match self.world.get_mut::<flight::Powered>(e) {
+            Some(mut p) => {
+                p.rotation_input = DVec3::new(pitch, yaw, roll);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Roll input for a vessel (-1..1, held until changed); false without a powered vessel.
     pub fn set_roll(&mut self, e: Entity, input: f64) -> bool {
         match self.world.get_mut::<flight::Powered>(e) {
@@ -2019,6 +2031,61 @@ mod tests {
             "lifted off at {speed} m/s after {} s",
             step as f64 / 50.0
         );
+    }
+
+    #[test]
+    fn with_sas_off_the_keys_spin_the_craft_and_it_keeps_spinning() {
+        let (mut u, body, spec, st) = k1_on_real_kerbin();
+        let v = u.spawn_vessel_in_circular_orbit("K1", body, 100_000.0);
+        let mut p = flight::Powered::new(
+            spec,
+            DVec3::new(700_000.0, 0.0, 0.0),
+            DVec3::new(0.0, 2_246.0, 0.0),
+            false,
+        );
+        p.facing = DVec3::new(0.0, 1.0, 0.0);
+        // a moment of inertia and reaction wheels to turn with
+        for s in &mut p.spec.stages {
+            s.moi_tm2 = 20.0;
+            s.wheel_torque_knm = 5.0;
+        }
+        u.set_powered(v, p);
+        u.set_structure(v, st);
+        // a whisper of throttle keeps it under power
+        assert!(u.set_controls(v, 0.01, flight::Attitude::Free));
+        let f0 = u.powered(v).unwrap().facing;
+        // pitch for two seconds, then let go
+        assert!(u.set_rotation(v, 1.0, 0.0, 0.5));
+        for _ in 0..(2 * TICKS_PER_SECOND) {
+            u.step();
+        }
+        let p1 = u.powered(v).unwrap().clone();
+        assert!(p1.angvel.length() > 0.01, "spinning: {:?}", p1.angvel);
+        assert!(p1.roll_rate > 0.01, "rolling: {}", p1.roll_rate);
+        u.set_rotation(v, 0.0, 0.0, 0.0);
+        for _ in 0..(3 * TICKS_PER_SECOND) {
+            u.step();
+        }
+        let p2 = u.powered(v).unwrap().clone();
+        assert!(
+            (p2.angvel.length() - p1.angvel.length()).abs() < 1e-6,
+            "nothing damps it: {:?} -> {:?}",
+            p1.angvel,
+            p2.angvel
+        );
+        assert!(
+            p2.facing.dot(f0) < p1.facing.dot(f0),
+            "and it keeps turning"
+        );
+        // SAS back on: it stops and holds
+        let hold = p2.facing;
+        u.set_controls(v, 0.01, flight::Attitude::Fixed(hold));
+        for _ in 0..(20 * TICKS_PER_SECOND) {
+            u.step();
+        }
+        let p3 = u.powered(v).unwrap();
+        assert!(p3.angvel.length() < 0.01, "{:?}", p3.angvel);
+        assert!(p3.facing.dot(hold) > 0.99, "holds where SAS caught it");
     }
 
     #[test]

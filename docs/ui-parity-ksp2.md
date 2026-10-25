@@ -68,6 +68,7 @@ Camera rule that runs through every map: **the right button drags the camera, th
 
 | # | KSP2 | Ours today | Status |
 |---|---|---|---|
+| V1b | VAB orientation switch (VAB vs horizontal, the SPH layout) | Rocket / Plane in the header lays the craft along the floor; parts take their parent's rotation, side parts attach in the parent's frame; Plane picks the runway | done |
 | V1 | Header: vehicle name, New/Save/Load, launch site, Launch with total Δv | header bar: New, Load (your and stock vehicles), undo, redo, name, live total Δv, Save, Launch, close; no launch-site choice yet | partly done |
 | V2 | Toolbar: undo/redo, symmetry flyout, angle snap, frame of reference, CoM/CoT/CoL markers, engineer's report | undo/redo, symmetry (×1 to ×8, X / Shift+X) and angle snap (C) in the header; CoM and CoT markers (from the server, protocol 28) with header toggles; an engineer's report pop-over (no command part, no engines, first stage TWR under 1, engines without reachable propellant, crew without a parachute, probe without antenna or charge) with a flaw count on its button; CoL marker (blue) since protocol 29 | done |
 | V3 | Right-drag orbits, wheel zooms (Shift faster), arrows pan, Home resets | right-drag orbits, wheel zooms (Shift faster), Up/Down arrows move the camera along the craft, Home resets | done |
