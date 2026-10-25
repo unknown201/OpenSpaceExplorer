@@ -1362,6 +1362,7 @@ fn load_localization(app: Shared) {
         if let Ok(map) = serde_json::from_str::<std::collections::HashMap<String, String>>(&text) {
             let mut a = app.borrow_mut();
             a.loc = map;
+            a.name_untitled_parts();
             if a.rd_selected.is_some() {
                 a.render_rnd();
             }
@@ -1417,6 +1418,7 @@ fn load_part_sizes(app: Shared) {
                     }
                     a.catalog.insert(p.id.clone(), p);
                 }
+                a.name_untitled_parts();
                 log(&format!(
                     "part catalog loaded for {} parts",
                     a.catalog.len()
@@ -6493,6 +6495,18 @@ impl App {
 
     /// Show the crew buttons that apply: EVA with crew aboard, Board and Plant Flag for a Kerbal (the flag on
     /// the ground), Undock while docked.
+    /// Parts the catalog has no title for take theirs from the localization table (`Parts/Title/<id>`).
+    fn name_untitled_parts(&mut self) {
+        let loc = &self.loc;
+        for p in self.catalog.values_mut() {
+            if p.display_title() == p.id {
+                if let Some(t) = loc.get(&format!("Parts/Title/{}", p.id)) {
+                    p.title = t.clone();
+                }
+            }
+        }
+    }
+
     /// The parts manager window: the parts still on the flown vessel (staged-off ones gone), by name.
     fn render_parts_manager(&self) {
         let Some(el) = self.doc.get_element_by_id("fh-parts-list") else {
