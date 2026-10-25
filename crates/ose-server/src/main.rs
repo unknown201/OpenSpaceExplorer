@@ -14,6 +14,7 @@ mod campaigns;
 mod crew_docking;
 mod save;
 mod science;
+mod streaming;
 
 use axum::{
     extract::{
@@ -28,7 +29,7 @@ use clap::Parser;
 use ose_data::{CelestialBody, Tick};
 use ose_net::{
     BodyInfo, BodyState, ClientMessage, OrbitElements, PatchEnd, ServerMessage, TrajectoryPatch,
-    VesselState, PROTOCOL_VERSION, SNAPSHOT_HZ, TRAJECTORY_HZ, WS_PATH,
+    VesselState, PROTOCOL_VERSION, WS_PATH,
 };
 use ose_sim::flight::{Attitude, Situation};
 use ose_sim::trajectory::Transition;
@@ -265,6 +266,7 @@ async fn json_route(body: Arc<String>) -> impl IntoResponse {
 
 struct Shared {
     universe: Mutex<Universe>,
+    streams: streaming::Streams,
     /// Messages for one player's connections (finished experiments), picked up by their stream.
     pending: Mutex<Vec<(u64, ServerMessage)>>,
     science: science::ScienceData,
@@ -362,7 +364,12 @@ fn catalog_from(defs: &[CelestialBody]) -> Vec<BodyInfo> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt().json().init();
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
+        .json()
+        .init();
     let args = Args::parse();
 
     let bodies_json = match &args.bodies {
@@ -450,6 +457,7 @@ async fn main() -> anyhow::Result<()> {
     }
     let shared: AppState = Arc::new(Shared {
         universe: Mutex::new(universe),
+        streams: streaming::Streams::default(),
         pending: Mutex::new(Vec::new()),
         science: science::ScienceData {
             tech: serde_json::from_str(EMBEDDED_TECH_TREE)?,
@@ -479,6 +487,7 @@ async fn main() -> anyhow::Result<()> {
         last_roster: Mutex::new(None),
     });
 
+    streaming::start(shared.clone());
     let sim = shared.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_millis(
@@ -640,7 +649,7 @@ async fn ws_upgrade(ws: WebSocketUpgrade, State(s): State<AppState>) -> impl Int
 
 async fn send(socket: &mut WebSocket, msg: &ServerMessage) -> bool {
     match ose_net::encode(msg) {
-        Ok(bytes) => socket.send(Message::Binary(bytes.into())).await.is_ok(),
+        Ok(bytes) => streaming::send_bytes(socket, bytes.into()).await,
         Err(e) => {
             tracing::error!(error = %e, "encode");
             false
@@ -2599,32 +2608,17 @@ async fn session(mut socket: WebSocket, s: AppState) {
         }
     };
 
-    // Stream.
-    let mut interval =
-        tokio::time::interval(std::time::Duration::from_millis(1000 / SNAPSHOT_HZ as u64));
+    // Subscribe after Hello has registered the player. Wait for fresh world state rather than
+    // replaying a cached snapshot from before their probe was created or a campaign was loaded.
+    let mut snapshots = s.streams.snapshots.subscribe();
+    let mut predictions = s.streams.trajectories.subscribe();
+    let subscribed_at = std::time::Instant::now();
     let mut science_rev = s.campaign.lock().expect("campaign lock").science.rev;
-    let mut traj_interval = tokio::time::interval(std::time::Duration::from_millis(
-        1000 / TRAJECTORY_HZ as u64,
-    ));
-    loop {
+    'session: loop {
         tokio::select! {
-            _ = interval.tick() => {
-                {
-                    let mut u = s.universe.lock().expect("sim lock");
-                    let mut list = s.vessels.lock().expect("vessels lock");
-                    // pieces that broke off belong to whoever flew the vessel
-                    for (from, debris) in u.take_broken_off() {
-                        let owner = list.iter().find(|v| v.0 == from).and_then(|v| v.2);
-                        let id = list.iter().map(|&(_, id, _)| id).max().unwrap_or(0) + 1;
-                        list.push((debris, id, owner));
-                    }
-                    list.retain(|&(e, _, _)| u.vessel(e).is_some());
-                }
-                let (time, snap, vessels) = snapshot(&s);
-                if !send(&mut socket, &time).await
-                    || !send(&mut socket, &snap).await
-                    || !send(&mut socket, &vessels).await
-                {
+            frames = streaming::next_batch(&mut snapshots, subscribed_at) => {
+                let Some(frames) = frames else { break; };
+                if !streaming::send_batch(&mut socket, &frames).await {
                     break;
                 }
                 let mine: Vec<ServerMessage> = {
@@ -2651,12 +2645,9 @@ async fn session(mut socket: WebSocket, s: AppState) {
                     }
                 }
             }
-            _ = traj_interval.tick() => {
-                for msg in trajectories(&s) {
-                    if !send(&mut socket, &msg).await {
-                        break;
-                    }
-                }
+            frames = streaming::next_batch(&mut predictions, subscribed_at) => {
+                let Some(frames) = frames else { break; };
+                if !streaming::send_batch(&mut socket, &frames).await { break; }
             }
             incoming = socket.recv() => {
                 match incoming {
@@ -2681,7 +2672,7 @@ async fn session(mut socket: WebSocket, s: AppState) {
                             };
                             if !send(&mut socket, &reply).await { break; }
                             for msg in trajectories(&s) {
-                                if !send(&mut socket, &msg).await { break; }
+                                if !send(&mut socket, &msg).await { break 'session; }
                             }
                         }
                         Ok(ClientMessage::ClearBurn { vessel }) => {

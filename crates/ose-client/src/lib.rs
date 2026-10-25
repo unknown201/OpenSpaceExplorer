@@ -37,6 +37,7 @@ pub mod missions;
 #[cfg(target_arch = "wasm32")]
 pub mod navball;
 pub mod ocean_fft;
+pub mod orientation;
 pub mod particles;
 #[cfg(target_arch = "wasm32")]
 pub mod planet;
@@ -255,7 +256,7 @@ struct App {
     remap: input::Remap,
     rebinding: Option<String>,
     keys_tick_ms: f64,
-    controls_sent_ms: f64,
+    control_cadence: input::ControlCadence,
     controls_dirty: bool,
     drive_sent: (f32, f32, bool),
     /// Frames counted since `fps_since_ms`, for the FPS counter (Settings > Graphics).
@@ -625,7 +626,7 @@ pub fn start() -> Result<(), JsValue> {
         remap: input::Remap::parse(&stored("ose.keys").unwrap_or_default()),
         rebinding: None,
         keys_tick_ms: 0.0,
-        controls_sent_ms: 0.0,
+        control_cadence: input::ControlCadence::default(),
         controls_dirty: false,
         drive_sent: (0.0, 0.0, false),
         fps_frames: 0,
@@ -4057,6 +4058,11 @@ impl App {
                     }
                 }
                 self.campaign = Some((name, members));
+                if self.campaign_id != campaign_id {
+                    if let Some(scene) = &mut self.scene {
+                        scene.reset_attitudes();
+                    }
+                }
                 self.campaign_id = campaign_id;
                 self.update_warp_holder();
                 if created {
@@ -4327,9 +4333,6 @@ impl App {
                 }
             }
             ServerMessage::Vessels { vessels, tick } => {
-                if let Some(scene) = &mut self.scene {
-                    scene.vessels_ut = tick.seconds();
-                }
                 let ids: Vec<u64> = vessels.iter().map(|v| v.id).collect();
                 let known: Vec<u64> = self.vessel_els.iter().map(|(id, _)| *id).collect();
                 let changed = ids != known;
@@ -4341,7 +4344,7 @@ impl App {
                     .find(|v| v.owner.is_some() && v.owner == self.player_id)
                     .map(|v| (v.id, v.reference_body as usize));
                 if let Some(scene) = &mut self.scene {
-                    scene.vessels = vessels;
+                    scene.update_vessels(vessels, tick.seconds(), now_ms(), self.time.warp);
                 }
                 // Follow the player's own vessel the first time it appears.
                 if changed && self.follow.is_none() {
@@ -4432,6 +4435,11 @@ impl App {
                     ose_net::SaveAction::RevertToEditor => "Revert to the VAB",
                 };
                 if accepted {
+                    if action != ose_net::SaveAction::QuickSave {
+                        if let Some(scene) = &mut self.scene {
+                            scene.reset_attitudes();
+                        }
+                    }
                     hud::push(&self.doc, &format!("{what} done"), "triumph");
                     if let (ose_net::SaveAction::RevertToEditor, Some(c)) = (action, craft) {
                         self.end_flight();
@@ -4546,6 +4554,7 @@ impl App {
         if let Some(scene) = &mut self.scene {
             scene.vessels.clear();
             scene.trajectories.clear();
+            scene.reset_attitudes();
         }
         let vessels: Vec<ose_net::VesselState> = Vec::new();
         self.build_vessel_labels(&vessels);
@@ -6566,6 +6575,7 @@ impl App {
     fn send_controls(&mut self) {
         let Some(vessel) = self.flying else { return };
         if let Some(ws) = &self.ws {
+            self.controls_dirty = false;
             send(
                 ws,
                 &ClientMessage::SetControls {
@@ -6867,11 +6877,13 @@ impl App {
 
     fn set_throttle(&mut self, t: f64) {
         self.throttle = t.clamp(0.0, 1.0);
+        self.control_cadence.sent(now_ms());
         self.send_controls();
     }
 
     fn set_attitude(&mut self, a: ose_net::AttitudeMode) {
         self.attitude = a;
+        self.control_cadence.sent(now_ms());
         self.send_controls();
     }
 
@@ -7043,9 +7055,11 @@ impl App {
             self.throttle = throttle;
             self.controls_dirty = true;
         }
-        if self.controls_dirty && now - self.controls_sent_ms >= 100.0 {
+        if self
+            .control_cadence
+            .due(now, self.controls_dirty, [walk, turn, strafe])
+        {
             self.controls_dirty = false;
-            self.controls_sent_ms = now;
             if let Some(ws) = &self.ws {
                 send(
                     ws,
@@ -7123,10 +7137,12 @@ impl App {
             };
             self.controls_dirty = true;
         }
-        // At most ten control messages a second while keys are held, and one more when they let go.
-        if self.controls_dirty && now - self.controls_sent_ms >= 100.0 {
+        // Twenty updates a second while held; input edges flush the newest target immediately.
+        if self
+            .control_cadence
+            .due(now, self.controls_dirty, [pitch_in, yaw_in, thr_in])
+        {
             self.controls_dirty = false;
-            self.controls_sent_ms = now;
             self.send_controls();
         }
         let landed = self
@@ -9113,6 +9129,7 @@ impl App {
             .collect();
         let inp = flight3d::FlightInput {
             vessel: v,
+            attitude: scene.vessel_attitude(id, now_ms()),
             nearby_vessels: &nearby_vessels,
             stand: stand_of(&self.roster, v),
             vessel_pos: g(vp),

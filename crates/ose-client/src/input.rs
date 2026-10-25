@@ -13,6 +13,39 @@ pub const PRECISION_SCALE: f64 = 0.1;
 /// Throttle change per second with Shift or Ctrl held (`FlightInputHandler.UpdateMainThrottle`: input x dt).
 pub const THROTTLE_RATE: f64 = 1.0;
 
+/// Continuous controls are small intents; their cadence is independent of world snapshot bandwidth.
+pub const CONTROL_INTERVAL_MS: f64 = 50.0;
+
+#[derive(Default)]
+pub struct ControlCadence {
+    next_send_ms: Option<f64>,
+    axes: [f64; 3],
+}
+
+impl ControlCadence {
+    /// Send starts, reversals and releases immediately, and coalesce intermediate held-key changes.
+    pub fn due(&mut self, now_ms: f64, dirty: bool, axes: [f64; 3]) -> bool {
+        let edge = axes != self.axes;
+        self.axes = axes;
+        let due = dirty && (edge || self.next_send_ms.is_none_or(|t| now_ms >= t));
+        if due {
+            // Keep the cadence anchored when a render frame lands just after the deadline. Scheduling
+            // from that late frame every time turns 20 Hz into 15 Hz on a 60 Hz display.
+            self.next_send_ms = Some(match self.next_send_ms {
+                Some(deadline) if !edge && now_ms - deadline < CONTROL_INTERVAL_MS => {
+                    deadline + CONTROL_INTERVAL_MS
+                }
+                _ => now_ms + CONTROL_INTERVAL_MS,
+            });
+        }
+        due
+    }
+
+    pub fn sent(&mut self, now_ms: f64) {
+        self.next_send_ms = Some(now_ms + CONTROL_INTERVAL_MS);
+    }
+}
+
 #[derive(Default)]
 pub struct Held {
     codes: HashSet<String>,
@@ -272,6 +305,32 @@ mod tests {
         assert!(r.custom.is_empty());
         assert_eq!(key_name("ShiftLeft"), "Left Shift");
         assert_eq!(key_name("KeyT"), "T");
+    }
+
+    #[test]
+    fn controls_coalesce_but_edges_and_final_values_are_immediate() {
+        let mut cadence = ControlCadence::default();
+        assert!(cadence.due(0.0, true, [1.0, 0.0, 0.0]));
+        assert!(!cadence.due(16.0, true, [1.0, 0.0, 0.0]));
+        assert!(!cadence.due(33.0, true, [1.0, 0.0, 0.0]));
+        assert!(cadence.due(50.0, true, [1.0, 0.0, 0.0]));
+        assert!(cadence.due(60.0, true, [-1.0, 0.0, 0.0]));
+        assert!(cadence.due(65.0, true, [0.0; 3]));
+        assert!(!cadence.due(200.0, false, [0.0; 3]));
+        // A pause does not create a catch-up burst.
+        assert!(cadence.due(2000.0, true, [0.0, 1.0, 0.0]));
+        assert!(!cadence.due(2001.0, true, [0.0, 1.0, 0.0]));
+    }
+
+    #[test]
+    fn control_cadence_does_not_drift_with_render_frame_jitter() {
+        let mut cadence = ControlCadence::default();
+        let mut sent = 0;
+        for frame in 0..120 {
+            let now = frame as f64 * 1000.0 / 60.0 + (frame as f64).sin() * 0.2;
+            sent += cadence.due(now, true, [1.0, 0.0, 0.0]) as usize;
+        }
+        assert_eq!(sent, 40);
     }
 
     fn close(a: (f64, f64), b: (f64, f64)) -> bool {

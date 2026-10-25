@@ -1,8 +1,12 @@
 # Status
 
-Updated 2026-10-24.
+Updated 2026-10-25.
 
 ## What works
+
+- Multiplayer control response: held flight/EVA inputs at 20 Hz with immediate key changes; bounded quaternion attitude prediction and correction for the flight model and navball, reset on discontinuities. Native regression tests and a browser launch/steering test with 30 ms added round-trip delay cover the changes; see [multiplayer performance](multiplayer-performance.md).
+
+- Multiplayer streaming builds and encodes periodic world snapshots and trajectories once for all players. Connections share encoded buffers, skip superseded pending updates, and disconnect after a five-second stalled write. Nine-connection consistency coverage and an optional 1/4/16-player latency probe are described in [multiplayer performance](multiplayer-performance.md).
 
 - Part rigs and animation (protocol v28): generic TRS clip import, retained bone hierarchies, four-weight skinning, interpolation/looping/seeking, masked pose blending and late aim/position constraint APIs. Solar-panel and retractable-gear flight state now drives the original part clips per instance, including reversal, pause/warp and late-join terminal poses. Deployment snapshots identify individual solar panels; generic deployables are no longer mistaken for solar producers. Original-asset deformation and a three-model Chromium/WebGPU instance-isolation test pass. Character retargeting/state machines and procedural gimbal/tracking/wheel animation remain incomplete. See [rig and animation comparison](reference-notes/rigs-and-animation.md) for evidence, reproduction and remaining gaps.
 

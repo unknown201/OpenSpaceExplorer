@@ -20,6 +20,11 @@ OSE_E2E_HEADED=1 npm test                # with browser windows; Firefox only ha
 The gameplay table for each browser is printed in the run and attached to the test as
 `gameplay-report` and `gameplay-results.json` (`npx playwright show-report` after a CI run).
 
+`npx playwright test multiplayer_controls.spec.ts` launches a starter rocket and holds steering with
+15 ms added to each WebSocket direction. It reports rendering cadence and outgoing control payload,
+and checks the 20 Hz control cadence when the browser's frame rate allows it. For representative visuals,
+serve the client with `--assets-dir assets/web`; missing models make the FPS result misleadingly high.
+
 For particle verification, set `OSE_REQUIRE_WEBGPU=1` to reject Canvas fallback. Set
 `OSE_CHROMIUM_EXECUTABLE` to a local Chromium executable when the pinned browser cannot create a GPU
 device (some Windows installs lack its DXIL DLL). With WebGPU, the flight step checks authored plume

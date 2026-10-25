@@ -455,6 +455,8 @@ impl Default for FlightView {
 
 /// What the flight view needs from the app for one frame.
 pub struct FlightInput<'a> {
+    /// Smoothed inertial nose/top for presentation; the vessel readout remains authoritative.
+    pub attitude: Option<(DVec3, DVec3)>,
     pub vessel: &'a VesselState,
     /// Vessel and body star-space positions, body star-space velocity, at `ut`.
     pub vessel_pos: DVec3,
@@ -749,10 +751,10 @@ impl FlightView {
         };
         // The server's actual facing and roll reference (protocol 9) when present; the hold otherwise.
         let g = |d: ose_math::DVec3| DVec3::new(d.x, d.y, d.z);
-        let (facing, roll) = match &inp.vessel.flight {
+        let (facing, roll) = inp.attitude.unwrap_or_else(|| match &inp.vessel.flight {
             Some(f) if g(f.facing).length() > 0.5 => (g(f.facing), g(f.roll_ref)),
             _ => (dir_i, DVec3::ZERO),
-        };
+        });
         let dir = dir_to_model(r, facing, spin, inp.ut);
         let dir = if dir.length() > 0.5 { dir } else { up };
         let roll_m = if roll.length() > 0.5 {

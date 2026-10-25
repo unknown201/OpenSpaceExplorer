@@ -21,6 +21,7 @@ pub struct Scene {
     pub spin_omega: Vec<f64>,
     /// Predicted patched-conic trajectory per vessel id, from the last `Trajectory` message.
     pub trajectories: HashMap<u64, Vec<TrajectoryPatch>>,
+    attitudes: HashMap<u64, crate::orientation::Track>,
 }
 
 /// `ose-math` orbit from wire elements around a body with gravitational parameter `mu`.
@@ -57,7 +58,54 @@ impl Scene {
             vessels_ut: 0.0,
             spin_omega: Vec::new(),
             trajectories: HashMap::new(),
+            attitudes: HashMap::new(),
         }
+    }
+
+    pub fn reset_attitudes(&mut self) {
+        self.attitudes.clear();
+    }
+
+    /// Ingest authoritative state once; drawing samples the small attitude tracks without cloning craft.
+    pub fn update_vessels(&mut self, vessels: Vec<VesselState>, ut: f64, now_ms: f64, warp: u32) {
+        use crate::orientation::{from_axes, Context, Track};
+        let live: std::collections::HashSet<_> = vessels
+            .iter()
+            .filter(|v| v.flight.is_some())
+            .map(|v| v.id)
+            .collect();
+        self.attitudes.retain(|id, _| live.contains(id));
+        for v in &vessels {
+            let Some(flight) = &v.flight else { continue };
+            let g = |v: DVec3| glam::DVec3::new(v.x, v.y, v.z);
+            let Some(rotation) = from_axes(g(flight.facing), g(flight.roll_ref)) else {
+                self.attitudes.remove(&v.id);
+                continue;
+            };
+            let context = Context {
+                body: v.reference_body,
+                warp,
+                grounded: matches!(
+                    flight.situation,
+                    ose_net::FlightSituation::Landed | ose_net::FlightSituation::Crashed
+                ),
+            };
+            match self.attitudes.entry(v.id) {
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    entry.get_mut().update(rotation, ut, now_ms, context);
+                }
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(Track::new(rotation, ut, now_ms, context));
+                }
+            }
+        }
+        self.vessels_ut = ut;
+        self.vessels = vessels;
+    }
+
+    pub fn vessel_attitude(&self, id: u64, now_ms: f64) -> Option<(glam::DVec3, glam::DVec3)> {
+        let rotation = self.attitudes.get(&id)?.sample(now_ms);
+        Some((rotation * glam::DVec3::Y, rotation * glam::DVec3::Z))
     }
 
     /// Star-space position of a vessel at `ut`: its reference body plus its orbit, so it moves smoothly

@@ -1989,6 +1989,151 @@ async fn hello(ws: &mut Ws, token: Option<String>, name: &str) -> (u64, String) 
 }
 
 #[tokio::test]
+async fn multiplayer_streams_share_consistent_world_updates() {
+    let (_server, addr) = spawn_server().await;
+    // This peer deliberately stops reading after Hello while the other players keep flying.
+    let mut idle = connect_ws(&addr).await;
+    hello(&mut idle, None, "idle").await;
+    let mut peers = Vec::new();
+    for i in 0..8 {
+        let mut ws = connect_ws(&addr).await;
+        let (id, _) = hello(&mut ws, None, &format!("pilot-{i}")).await;
+        peers.push((id, ws));
+    }
+    let collect_worlds =
+        futures_util::future::join_all(peers.into_iter().map(|(id, mut ws)| async move {
+            let mut time_tick = None;
+            let mut body_tick = None;
+            let mut worlds = std::collections::BTreeMap::new();
+            while worlds.len() < 5 {
+                match recv(&mut ws).await {
+                    ServerMessage::TimeState { tick, .. } => time_tick = Some(tick),
+                    ServerMessage::Snapshot { tick, .. } => body_tick = Some(tick),
+                    ServerMessage::Vessels { tick, vessels } if vessels.len() == 9 => {
+                        assert_eq!(time_tick, Some(tick));
+                        assert_eq!(body_tick, Some(tick));
+                        assert!(vessels.iter().any(|v| v.owner == Some(id)));
+                        worlds.insert(tick.0, vessels);
+                    }
+                    _ => {}
+                }
+            }
+            // Reliable command replies remain responsive alongside the shared state feed.
+            send_msg(
+                &mut ws,
+                &ClientMessage::Ping {
+                    sent_tick: ose_data::Tick(id),
+                },
+            )
+            .await;
+            let pong = wait_for(&mut ws, |m| match m {
+                ServerMessage::Pong { sent_tick } => Some(sent_tick),
+                _ => None,
+            })
+            .await;
+            assert_eq!(pong, ose_data::Tick(id));
+            worlds
+        }));
+    let worlds = tokio::time::timeout(Duration::from_secs(10), collect_worlds)
+        .await
+        .expect("all players should receive complete world updates and ping replies");
+    let common = worlds[0]
+        .keys()
+        .find(|tick| worlds.iter().all(|w| w.contains_key(tick)))
+        .expect("all peers should receive a common publication");
+    for world in &worlds[1..] {
+        assert_eq!(world[common], worlds[0][common]);
+    }
+}
+
+/// Reproducible loopback load probe; timing is reported, not used as a flaky CI threshold.
+/// cargo test -p ose-server --test ws_session multiplayer_latency_probe -- --ignored --nocapture
+#[tokio::test]
+#[ignore]
+async fn multiplayer_latency_probe() {
+    let powered = std::env::var_os("OSE_PERF_POWERED").is_some();
+    for count in [1, 4, 16] {
+        let (_server, addr) = spawn_server().await;
+        let mut peers = Vec::new();
+        for i in 0..count {
+            let mut ws = connect_ws(&addr).await;
+            hello(&mut ws, None, &format!("load-{i}")).await;
+            if powered {
+                send_msg(
+                    &mut ws,
+                    &ClientMessage::LaunchOnPad {
+                        craft: starter_craft(),
+                    },
+                )
+                .await;
+                wait_for(&mut ws, |m| match m {
+                    ServerMessage::CraftLaunched { vessel, reason, .. } => {
+                        assert!(reason.is_none(), "{reason:?}");
+                        vessel
+                    }
+                    _ => None,
+                })
+                .await;
+            }
+            peers.push(ws);
+        }
+        let results = futures_util::future::join_all(peers.into_iter().map(|mut ws| async move {
+            let mut samples = Vec::new();
+            let mut snapshots = 0;
+            let mut first_tick = None;
+            let mut last_tick = 0;
+            let mut stream_bytes = 0;
+            let started = std::time::Instant::now();
+            for sequence in 0..30 {
+                let sent = std::time::Instant::now();
+                let marker = ose_data::Tick(sequence);
+                send_msg(&mut ws, &ClientMessage::Ping { sent_tick: marker }).await;
+                loop {
+                    let message = recv(&mut ws).await;
+                    if matches!(
+                        &message,
+                        ServerMessage::TimeState { .. }
+                            | ServerMessage::Snapshot { .. }
+                            | ServerMessage::Vessels { .. }
+                            | ServerMessage::Trajectory { .. }
+                    ) {
+                        stream_bytes += ose_net::encode(&message).unwrap().len();
+                    }
+                    match message {
+                        ServerMessage::Pong { sent_tick } if sent_tick == marker => break,
+                        ServerMessage::Snapshot { tick, .. } => {
+                            first_tick.get_or_insert(tick.0);
+                            last_tick = tick.0;
+                            snapshots += 1;
+                        }
+                        _ => {}
+                    }
+                }
+                samples.push(sent.elapsed().as_secs_f64() * 1000.0);
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            assert!(last_tick > first_tick.unwrap_or(0));
+            (
+                samples,
+                snapshots,
+                started.elapsed().as_secs_f64(),
+                stream_bytes,
+            )
+        }))
+        .await;
+        let mut samples: Vec<f64> = results.iter().flat_map(|r| r.0.iter().copied()).collect();
+        samples.sort_by(f64::total_cmp);
+        let snapshot_hz = results.iter().map(|r| r.1 as f64 / r.2).sum::<f64>() / count as f64;
+        let payload_mbps = results
+            .iter()
+            .map(|r| r.3 as f64 * 8.0 / r.2 / 1_000_000.0)
+            .sum::<f64>();
+        eprintln!("players={count} powered={powered} total_payload_mbps={payload_mbps:.3} ping_ms p50={:.2} p95={:.2} max={:.2} snapshots_per_client_hz={snapshot_hz:.2}",
+            samples[samples.len() / 2], samples[samples.len() * 95 / 100], samples.last().unwrap());
+    }
+}
+
+#[tokio::test]
 async fn restart_keeps_time_vessels_and_burns() {
     let dir = std::env::temp_dir().join(format!("ose-save-test-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
