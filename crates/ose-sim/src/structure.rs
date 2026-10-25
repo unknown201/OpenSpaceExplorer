@@ -41,6 +41,8 @@ pub struct Structure {
     pub net: FlowNet,
     /// Each part's engine mixture (`None` for parts without an engine).
     pub engine_mixture: Vec<Option<String>>,
+    /// Each engine's gimbal range (`Data_Gimbal.gimbalRange`), rad; 0 for parts that do not gimbal.
+    pub gimbal_range_rad: Vec<f64>,
     /// Each part's electric charge use and production, and crew capacity.
     pub electric: Vec<ose_data::Electric>,
     pub crew: Vec<u32>,
@@ -394,6 +396,15 @@ impl Structure {
             })
             .collect();
         let n = craft.parts.len();
+        let gimbal_range_rad = (0..n)
+            .map(|i| {
+                def_of(i)
+                    .and_then(|d| d.engines.first())
+                    .and_then(|e| e.gimbal_range_deg)
+                    .unwrap_or(0.0)
+                    .to_radians()
+            })
+            .collect();
         let engine_mixture = (0..n)
             .map(|i| {
                 def_of(i)
@@ -438,6 +449,7 @@ impl Structure {
             curves: DragCurves::default(),
             net: FlowNet::build(craft, defs, resources),
             engine_mixture,
+            gimbal_range_rad,
             deployed: vec![false; n],
             crash_tolerance: (0..n)
                 .map(|i| def_of(i).map(|d| d.crash_tolerance).unwrap_or(0.0))
@@ -1761,6 +1773,44 @@ impl Structure {
             .collect()
     }
 
+    /// How far each engine of flight stage `stage` gimbals for steering command `cmd` (as
+    /// `surface_deflections`): (part, about its own X, about its own Z), rad, each up to its gimbal range,
+    /// turned so the thrust's torque helps the command.
+    pub fn gimbal_deflections(
+        &self,
+        stage: usize,
+        facing: DVec3,
+        cmd: DVec3,
+    ) -> Vec<(usize, f64, f64)> {
+        let c = self.rigid.rest_centre();
+        let engines = self.stage_engines.get(stage).cloned().unwrap_or_default();
+        engines
+            .into_iter()
+            .filter(|&i| self.rigid.present[i] && self.gimbal_range_rad[i] > 0.0)
+            .map(|i| {
+                let q = self.part_rot[i];
+                let thrust = self.axis_inertial(facing, aero::rotate(q, DVec3::new(0.0, 1.0, 0.0)));
+                let lever = self.offset_inertial(facing, self.rigid.rest_position(i) - c);
+                let range = self.gimbal_range_rad[i];
+                let about = |a: DVec3| {
+                    // tilting the thrust about `a` pushes it sideways along a x thrust
+                    let a = self.axis_inertial(facing, aero::rotate(q, a));
+                    let torque = lever.cross(a.cross(thrust));
+                    if torque.length() > 1e-6 {
+                        cmd.dot(torque.normalized()).clamp(-1.0, 1.0) * range
+                    } else {
+                        0.0
+                    }
+                };
+                (
+                    i,
+                    about(DVec3::new(1.0, 0.0, 0.0)),
+                    about(DVec3::new(0.0, 0.0, 1.0)),
+                )
+            })
+            .collect()
+    }
+
     /// How much torque the control surfaces can give at full deflection in this airflow, kN·m: each moving
     /// surface's extra lift at its deflection range (dynamic pressure × 0.036 × lift coefficient × moving share
     /// × the lift curve at the range × its Mach curve) at its distance from the centre of mass.
@@ -2242,6 +2292,26 @@ mod tests {
             with_fins > without + 0.1,
             "fins {with_fins} vs none {without} kN m"
         );
+    }
+
+    #[test]
+    fn engines_gimbal_with_the_steering_up_to_their_range() {
+        let (crafts, defs, res) = assets();
+        let c = crafts.iter().find(|c| c.name == "Kerbal K1").unwrap();
+        let s = Structure::build(c, &defs, &res);
+        let facing = DVec3::new(0.0, 0.0, 1.0);
+        let still = s.gimbal_deflections(0, facing, DVec3::ZERO);
+        assert!(!still.is_empty(), "the first stage gimbals");
+        assert!(still.iter().all(|g| g.1 == 0.0 && g.2 == 0.0));
+        let pitch = s.gimbal_deflections(0, facing, DVec3::new(1.0, 0.0, 0.0));
+        for (i, x, z) in &pitch {
+            let range = s.gimbal_range_rad[*i];
+            assert!(x.abs() <= range + 1e-9 && z.abs() <= range + 1e-9);
+            assert!(
+                x.abs().max(z.abs()) > 0.5 * range,
+                "{i}: {x} {z} of {range}"
+            );
+        }
     }
 
     #[test]

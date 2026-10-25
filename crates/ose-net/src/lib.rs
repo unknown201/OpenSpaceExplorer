@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 43;
+pub const PROTOCOL_VERSION: u16 = 44;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -626,6 +626,9 @@ pub struct FlightReadout {
     pub antennas: Vec<(u16, bool)>,
     /// The part the vessel is controlled from, when not its root (`ControlFrom`).
     pub control_part: Option<u16>,
+    /// Each gimballing engine of the stage running and how far it is turned now: (part, about the part's
+    /// own X, about its own Z), rad, up to its gimbal range.
+    pub gimbals: Vec<(u16, f32, f32)>,
     /// Each attached tank: (part, resource, stored, capacity), units.
     pub part_resources: Vec<(u16, String, f64, f64)>,
     /// The resource transfer running: (resource, from parts, to parts).

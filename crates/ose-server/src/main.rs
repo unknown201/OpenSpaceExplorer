@@ -1018,6 +1018,15 @@ fn flight_readout(
         comm_hops: u.comm_link(e).hops,
         comm_range_m: u.comm_link(e).range_m,
         control_part: u.control_part(e).map(|i| i as u16),
+        gimbals: u
+            .structure(e)
+            .map(|st| {
+                st.gimbal_deflections(p.stage, p.facing, p.steer_cmd)
+                    .into_iter()
+                    .map(|(i, x, z)| (i as u16, x as f32, z as f32))
+                    .collect()
+            })
+            .unwrap_or_default(),
         part_resources: u
             .structure(e)
             .map(|st| {
