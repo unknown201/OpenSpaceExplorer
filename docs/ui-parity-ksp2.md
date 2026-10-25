@@ -53,6 +53,7 @@ Camera rule that runs through every map: **the right button drags the camera, th
 | F10 | F to board/interact on EVA, EVA from the crew portrait | EVA, Board, Plant Flag and Undock buttons ("Build 3D world and menu replica"); F on EVA boards the craft within reach | done |
 | F11 | Vessel labels F4 | F4 toggles labels | done |
 | F12 | Go button / pre-launch throttle | not needed (no launch sequence) | skip |
+| F13 | Vessel status: mission elapsed time; flight report on recovery or loss | MET under the altimeter; a flight report (mission time, highest altitude, fastest speed, bodies visited, science) when the vessel is recovered or lost | done |
 
 ### Map view and Tracking Station
 

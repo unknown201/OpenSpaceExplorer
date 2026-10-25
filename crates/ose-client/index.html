@@ -454,6 +454,12 @@
     #fh-note { display: none; }
     #fps { display: none; position: fixed; left: 8px; bottom: 6px; z-index: 45; font: 600 11px var(--ui-font, system-ui); color: #7dff8a; background: #06080fb0; padding: 1px 5px; border-radius: 3px; pointer-events: none; }
     body.show-fps #fps { display: block; }
+    /* Flight report (FlightReportUIManager) after a recovery or a loss. */
+    #flight-report { position: fixed; z-index: 60; left: 50%; top: 18%; transform: translateX(-50%); width: 340px; display: none; background: #0b1020f8; border: 1px solid #3b63a8; border-radius: 8px; padding: 14px 18px; color: #e6ecf7; font: 14px var(--ui-font, system-ui); box-shadow: 0 10px 40px #000c; }
+    #flight-report.open { display: block; }
+    #flight-report h3 { margin: 0 0 4px; font-size: 18px; } #flight-report .fr-name { color: #9fb0cc; } #flight-report .fr-ended { color: #ffd84a; margin: 4px 0 8px; }
+    #flight-report table { width: 100%; border-collapse: collapse; } #flight-report td { padding: 3px 0; border-top: 1px solid #ffffff12; } #flight-report td:last-child { text-align: right; }
+    #flight-report button { margin-top: 12px; width: 100%; padding: 8px; background: #1f3d6b; color: #fff; border: 1px solid #3b63a8; border-radius: 4px; cursor: pointer; font: 600 14px var(--ui-font, system-ui); }
     /* Settings over everything (SettingsMenuManager): tabs on top, the original's binding list. */
     #settings { position: fixed; inset: 0; z-index: 50; display: none; place-items: center; background: #000a; font-family: var(--ui-font, system-ui); }
     #settings.open { display: grid; }
@@ -823,6 +829,7 @@
   <div id="fh-pam" class="fh-pam" data-ose="flight-pam"></div>
   <div id="toasts" data-ose="toasts"></div>
   <div id="fps" data-ose="fps"></div>
+  <div id="flight-report" data-ose="flight-report"></div>
   <div id="settings" data-ose="settings">
     <div class="set-card">
       <div class="set-head"><h2>Settings</h2><button id="settings-close" data-ose="settings-close" title="Close (Esc)">&#10005;</button></div>
@@ -854,7 +861,7 @@
     <button id="ts-back" data-ose="ts-back">Back to KSC</button>
   </div>
   <div id="flight-hud" data-ose="flight">
-    <div class="fh-top"><div class="fh-label" id="fh-alt-mode" data-ose="flight-alt-mode" title="Altitude above sea level or above the terrain below; click to switch" style="cursor:pointer;pointer-events:auto;text-decoration:underline dotted">SEA LEVEL</div><div id="fh-altitude" data-ose="flight-altitude">--</div><div id="fh-situation" class="fh-small">--</div><div id="fh-note" class="fh-small" style="color:#f0a070"></div><div id="fh-running" class="fh-small" data-ose="flight-running" style="color:#8fd08f"></div><div id="fh-control" data-ose="flight-control" style="color:#ff6a5a;font-weight:700"></div></div>
+    <div class="fh-top"><div class="fh-label" id="fh-alt-mode" data-ose="flight-alt-mode" title="Altitude above sea level or above the terrain below; click to switch" style="cursor:pointer;pointer-events:auto;text-decoration:underline dotted">SEA LEVEL</div><div id="fh-altitude" data-ose="flight-altitude">--</div><div id="fh-situation" class="fh-small">--</div><div id="fh-met" class="fh-small" data-ose="flight-met" title="Mission elapsed time"></div><div id="fh-note" class="fh-small" style="color:#f0a070"></div><div id="fh-running" class="fh-small" data-ose="flight-running" style="color:#8fd08f"></div><div id="fh-control" data-ose="flight-control" style="color:#ff6a5a;font-weight:700"></div></div>
     <div class="fh-bottom">
       <div class="fh-throttle" title="Throttle: hold Shift / Ctrl, Z full, X cut"><div id="fh-throttle-fill"></div><span>THR</span><span id="fh-throttle-pct">0%</span></div>
       <canvas id="fh-navball" data-ose="flight-navball" width="200" height="200"></canvas>

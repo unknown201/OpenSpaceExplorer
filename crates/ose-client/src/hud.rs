@@ -568,6 +568,65 @@ pub fn flight_pam_html(
     )
 }
 
+/// Mission elapsed time as the original's vessel status shows it: `1d 02:03:04` (Kerbin days of 6 h).
+pub fn fmt_met(s: f64) -> String {
+    if !s.is_finite() || s < 0.0 {
+        return "--".into();
+    }
+    let t = s.round() as u64;
+    let (d, h, m, sec) = (t / 21_600, t % 21_600 / 3600, t % 3600 / 60, t % 60);
+    if d > 0 {
+        format!("{d}d {h:02}:{m:02}:{sec:02}")
+    } else {
+        format!("{h:02}:{m:02}:{sec:02}")
+    }
+}
+
+/// The flight's records for the flight report (`FlightReportUIManager`): highest altitude, fastest speed,
+/// furthest from home is left out (no ground track yet).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FlightRecords {
+    pub vessel: u64,
+    pub name: String,
+    pub launch_ut: f64,
+    pub max_altitude_m: f64,
+    pub max_speed_mps: f64,
+    pub bodies: Vec<String>,
+}
+
+impl FlightRecords {
+    pub fn note(&mut self, altitude_m: f64, speed_mps: f64, body: &str) {
+        self.max_altitude_m = self.max_altitude_m.max(altitude_m);
+        self.max_speed_mps = self.max_speed_mps.max(speed_mps);
+        if !self.bodies.iter().any(|b| b == body) {
+            self.bodies.push(body.to_string());
+        }
+    }
+}
+
+/// The flight report window: how the flight ended, its records and the science it brought home.
+pub fn flight_report_html(r: &FlightRecords, ended: &str, ut: f64, science: Option<f64>) -> String {
+    let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;");
+    let row = |k: &str, v: String| format!("<tr><td>{k}</td><td>{v}</td></tr>");
+    let mut rows = String::new();
+    if r.launch_ut > 0.0 {
+        rows.push_str(&row("Mission time", fmt_met(ut - r.launch_ut)));
+    }
+    rows.push_str(&row("Highest altitude", fmt_dist(r.max_altitude_m)));
+    rows.push_str(&row("Fastest speed", format!("{:.0} m/s", r.max_speed_mps)));
+    if !r.bodies.is_empty() {
+        rows.push_str(&row("Visited", esc(&r.bodies.join(", "))));
+    }
+    if let Some(s) = science {
+        rows.push_str(&row("Science", format!("{s:.0}")));
+    }
+    format!(
+        "<h3>Flight report</h3><div class=\"fr-name\">{}</div><div class=\"fr-ended\">{}</div><table>{rows}</table><button id=\"fr-close\">Continue</button>",
+        esc(&r.name),
+        esc(ended)
+    )
+}
+
 /// What the flight events watch, as last seen: vessel, CommNet link, control, reference body, situation, and
 /// whether the charge was low.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -758,6 +817,20 @@ mod tests {
             ..b.clone()
         };
         assert!(flight_events(&a, &c, "Kerbin").is_empty());
+    }
+
+    #[test]
+    fn records_keep_the_highest_and_fastest() {
+        let mut r = FlightRecords::default();
+        r.note(1000.0, 200.0, "Kerbin");
+        r.note(500.0, 900.0, "Kerbin");
+        r.note(80_000.0, 2200.0, "Mun");
+        assert_eq!(r.max_altitude_m, 80_000.0);
+        assert_eq!(r.max_speed_mps, 2200.0);
+        assert_eq!(r.bodies, vec!["Kerbin", "Mun"]);
+        assert_eq!(fmt_met(3725.0), "01:02:05");
+        assert_eq!(fmt_met(21_600.0 + 61.0), "1d 00:01:01");
+        assert!(flight_report_html(&r, "Recovered", 100.0, Some(12.0)).contains("Fastest speed"));
     }
 
     #[test]

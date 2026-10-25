@@ -270,6 +270,8 @@ struct App {
     toasts: hud::Toasts,
     /// The flown vessel as last seen, for event toasts (signal, charge, sphere of influence, orbit, landing).
     flight_watch: std::cell::RefCell<Option<hud::FlightWatch>>,
+    /// The flown vessel's records for the flight report.
+    flight_records: std::cell::RefCell<Option<hud::FlightRecords>>,
     /// Vessels this client has staged at least once: their first stage is lit, so the next is the one after.
     staged: std::collections::HashSet<u64>,
     roll_sent: f32,
@@ -584,6 +586,7 @@ pub fn start() -> Result<(), JsValue> {
         sas_target_sent_ms: 0.0,
         toasts: hud::Toasts::default(),
         flight_watch: std::cell::RefCell::new(None),
+        flight_records: std::cell::RefCell::new(None),
         staged: Default::default(),
         roll_sent: 0.0,
         rotation_sent: (0.0, 0.0, 0.0),
@@ -1632,6 +1635,20 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
     )?;
     wire("vab-save", Box::new(|a| a.borrow_mut().vab_save(false)))?;
     wire("vab-undo", Box::new(|a| a.borrow_mut().vab_undo(false)))?;
+    if let Some(fr) = doc.get_element_by_id("flight-report") {
+        let f2 = fr.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let close = ev
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .is_some_and(|e| e.id() == "fr-close");
+            if close {
+                f2.class_list().remove_1("open").ok();
+            }
+        });
+        fr.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
     if let Some(pam) = doc.get_element_by_id("fh-pam") {
         let a = app.clone();
         let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
@@ -3363,6 +3380,9 @@ impl App {
                     if let Some(craft_id) = self.pending_launch.take() {
                         self.start_flight(id, Some(craft_id));
                     }
+                    // Mission elapsed time counts from the launch (kept per vessel in this browser).
+                    let ut = self.time.ut_at(now_ms());
+                    store(&format!("ose.launchUt.{id}"), &format!("{ut:.1}"));
                     self.audio.play("launch_seq");
                     set_text(
                         &self.doc,
@@ -3664,6 +3684,7 @@ impl App {
                 };
                 set_text(&self.doc, "fh-note", &msg);
                 if recovered {
+                    self.show_flight_report("Recovered", Some(earned));
                     self.tracking_open = false;
                     self.end_flight();
                     self.open_ksc();
@@ -4617,6 +4638,19 @@ impl App {
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     fn vab_record(&mut self) {
         self.vab_history.record(&self.editor);
+    }
+
+    /// The flight report window for the flight's records, how it ended and the science recovered.
+    fn show_flight_report(&self, ended: &str, science: Option<f64>) {
+        let Some(r) = self.flight_records.borrow().clone() else {
+            return;
+        };
+        let Some(el) = self.doc.get_element_by_id("flight-report") else {
+            return;
+        };
+        let ut = self.time.ut_at(now_ms());
+        el.set_inner_html(&hud::flight_report_html(&r, ended, ut, science));
+        el.class_list().add_1("open").ok();
     }
 
     /// Settings > Input: each rebindable action with the key it is on now.
@@ -6232,6 +6266,40 @@ impl App {
                 brakes_latched: self.brakes_latched,
             },
         );
+        // Mission elapsed time and the records for the flight report.
+        let launch_ut = stored(&format!("ose.launchUt.{id}"))
+            .and_then(|s| s.parse::<f64>().ok())
+            .unwrap_or(0.0);
+        set_text(
+            &self.doc,
+            "fh-met",
+            &if launch_ut > 0.0 {
+                format!("MET {}", hud::fmt_met(ut - launch_ut))
+            } else {
+                String::new()
+            },
+        );
+        {
+            let mut rec = self.flight_records.borrow_mut();
+            if rec.as_ref().map(|r| r.vessel) != Some(id) {
+                *rec = Some(hud::FlightRecords {
+                    vessel: id,
+                    name: v.name.clone(),
+                    launch_ut,
+                    ..Default::default()
+                });
+            }
+            if let (Some(r), Some(b)) = (rec.as_mut(), body) {
+                r.note(f.altitude_m, f.surface_speed_mps.max(0.0), &b.id);
+            }
+        }
+        if f.situation == ose_net::FlightSituation::Crashed
+            && self.flight_watch.borrow().as_ref().is_some_and(|w| {
+                w.vessel == id && w.situation != Some(ose_net::FlightSituation::Crashed)
+            })
+        {
+            self.show_flight_report("The vessel was lost", None);
+        }
         // Event toasts from what changed since the last frame.
         let watch = hud::FlightWatch {
             vessel: id,
