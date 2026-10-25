@@ -126,6 +126,11 @@ struct App {
     /// A press on a VAB picker row (part id, where), which becomes a drag after a few pixels; and a flag
     /// that swallows the row's click after a drag.
     vab_press: Option<(String, f64, f64)>,
+    /// VAB undo/redo, a placed part pressed with the left button (part index, where), and the subtree lifted
+    /// off the craft while it is carried.
+    vab_history: vab::History,
+    vab_grab: Option<(usize, f64, f64)>,
+    vab_frag: Option<vab::Fragment>,
     vab_dragged: bool,
     /// The flight view (the vessel in 3D near its body).
     #[cfg(target_arch = "wasm32")]
@@ -379,6 +384,9 @@ pub fn start() -> Result<(), JsValue> {
         vab3d: vab3d::VabView::new(),
         press: None,
         vab_press: None,
+        vab_history: vab::History::default(),
+        vab_grab: None,
+        vab_frag: None,
         vab_dragged: false,
         #[cfg(target_arch = "wasm32")]
         flight3d: flight3d::FlightView::new(),
@@ -907,6 +915,47 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         Box::new(|a| a.borrow_mut().vab_shift_stage(1)),
     )?;
     wire("vab-save", Box::new(|a| a.borrow_mut().vab_save(false)))?;
+    wire("vab-undo", Box::new(|a| a.borrow_mut().vab_undo(false)))?;
+    wire("vab-redo", Box::new(|a| a.borrow_mut().vab_undo(true)))?;
+    // A part named on a stage card selects it.
+    if let Some(list) = doc.get_element_by_id("vab-stages") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let i = ev
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .and_then(|e| e.closest("[data-ose-index]").ok().flatten())
+                .and_then(|e| e.get_attribute("data-ose-index"))
+                .and_then(|v| v.parse::<usize>().ok());
+            if let Some(i) = i {
+                let mut app = a.borrow_mut();
+                app.editor.selected = Some(i);
+                app.render_vab();
+            }
+        });
+        list.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
+    // Part tooltip (the original's part info overlay) while the pointer is over a picker row.
+    if let Some(parts) = doc.get_element_by_id("vab-parts") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let row = ev
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .and_then(|e| e.closest("li[data-ose-part]").ok().flatten());
+            let app = a.borrow();
+            app.vab_tooltip(row.as_ref());
+        });
+        parts.add_event_listener_with_callback("mouseover", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |_: MouseEvent| {
+            a.borrow().vab_tooltip(None);
+        });
+        parts.add_event_listener_with_callback("mouseleave", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
     wire("vab-launch", Box::new(|a| a.borrow_mut().vab_save(true)))?;
     if let Some(cats) = doc.get_element_by_id("vab-cats") {
         let a = app.clone();
@@ -1251,6 +1300,17 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
         let on_down = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
             if ev.button() == 0 || ev.button() == 2 {
                 let mut app = a.borrow_mut();
+                #[cfg(target_arch = "wasm32")]
+                if ev.button() == 0 && app.in_session && app.vab_active() {
+                    let rect = app.gpu_canvas.get_bounding_client_rect();
+                    let (x, y) = (ev.client_x() as f64, ev.client_y() as f64);
+                    let (px, py) = ((x - rect.left()) * app.dpr, (y - rect.top()) * app.dpr);
+                    if let Some(i) = app.gpu.as_ref().and_then(|g| app.vab3d.pick(g, px, py)) {
+                        app.vab_grab = Some((i, x, y));
+                        app.press = Some((x, y));
+                        return;
+                    }
+                }
                 app.drag = Some((ev.client_x() as f64, ev.client_y() as f64));
                 app.press = app.drag;
                 app.canvas.class_list().add_1("dragging").ok();
@@ -1267,6 +1327,31 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
     let a = app.clone();
     let on_move = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
         let mut app = a.borrow_mut();
+        // A placed part dragged with the left button comes off the craft with everything under it.
+        #[cfg(target_arch = "wasm32")]
+        if let Some((i, x0, y0)) = app.vab_grab {
+            let (nx, ny) = (ev.client_x() as f64, ev.client_y() as f64);
+            if app.vab_frag.is_none() && ((nx - x0).abs() > 6.0 || (ny - y0).abs() > 6.0) {
+                app.vab_record();
+                let cat = std::mem::take(&mut app.catalog);
+                let frag = app.editor.detach(i, &cat);
+                if let Some(frag) = frag {
+                    let nodes = vab_nodes(&cat, frag.root_id());
+                    app.vab3d.held = Some((frag.root_id().to_string(), nodes));
+                    app.vab_frag = Some(frag);
+                    if let Some(b) = app.doc.body() {
+                        b.class_list().add_1("vab-holding").ok();
+                    }
+                }
+                app.catalog = cat;
+                app.render_vab();
+            }
+            if app.vab_frag.is_some() {
+                let rect = app.gpu_canvas.get_bounding_client_rect();
+                app.vab3d.cursor = ((nx - rect.left()) * app.dpr, (ny - rect.top()) * app.dpr);
+            }
+            return;
+        }
         // A picker press that moves becomes a part held over the hall.
         #[cfg(target_arch = "wasm32")]
         if let Some((id, x0, y0)) = app.vab_press.clone() {
@@ -1364,7 +1449,37 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
         {
             let held = app.vab3d.held.take();
             let pressed = app.vab_press.take();
-            if let Some((id, _)) = held {
+            app.vab_grab = None;
+            if let (Some(frag), Some(_)) = (app.vab_frag.take(), held.as_ref()) {
+                if let Some(b) = app.doc.body() {
+                    b.class_list().remove_1("vab-holding").ok();
+                }
+                let free = app.editor.free_nodes(&app.catalog);
+                let rect = app.gpu_canvas.get_bounding_client_rect();
+                app.vab3d.cursor = (
+                    (ev.client_x() as f64 - rect.left()) * app.dpr,
+                    (ev.client_y() as f64 - rect.top()) * app.dpr,
+                );
+                let snap = app
+                    .gpu
+                    .as_ref()
+                    .and_then(|g| app.vab3d.snap_now(g, &free))
+                    .or_else(|| app.vab3d.snap.take());
+                let cat = std::mem::take(&mut app.catalog);
+                let result =
+                    app.editor
+                        .attach(&frag, &cat, snap.as_ref().map(|(t, n)| (*t, n.as_str())));
+                app.catalog = cat;
+                if let Err(e) = result {
+                    // Nowhere to hang it: it goes back where it was, as the original does.
+                    let mut history = std::mem::take(&mut app.vab_history);
+                    history.undo(&mut app.editor);
+                    app.vab_history = history;
+                    set_text(&app.doc, "vab-report", &e);
+                }
+                app.press = None;
+                app.render_vab();
+            } else if let Some((id, _)) = held {
                 app.vab_dragged = pressed.is_some();
                 if let Some(b) = app.doc.body() {
                     b.class_list().remove_1("vab-holding").ok();
@@ -1387,6 +1502,7 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                     .and_then(|g| app.vab3d.snap_now(g, &free))
                     .or_else(|| app.vab3d.snap.take());
                 if !over_panel {
+                    app.vab_record();
                     let cat = std::mem::take(&mut app.catalog);
                     let result = match (cat.get(&id), snap) {
                         (Some(spec), Some((target, node))) => app
@@ -1477,6 +1593,50 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
             app.keys.down(&code);
             if code == "CapsLock" {
                 app.keys.precision = ev.get_modifier_state("CapsLock");
+            }
+            if app.in_session && app.vab_active() {
+                let ctrl = ev.ctrl_key() || ev.meta_key();
+                let handled = match code.as_str() {
+                    "Delete" | "Backspace" => {
+                        app.vab_remove();
+                        true
+                    }
+                    "KeyZ" if ctrl && ev.shift_key() => {
+                        app.vab_undo(true);
+                        true
+                    }
+                    "KeyZ" if ctrl => {
+                        app.vab_undo(false);
+                        true
+                    }
+                    "KeyY" if ctrl => {
+                        app.vab_undo(true);
+                        true
+                    }
+                    "KeyF" if ctrl => {
+                        if let Some(el) = app
+                            .doc
+                            .get_element_by_id("vab-search")
+                            .and_then(|e| e.dyn_into::<HtmlElement>().ok())
+                        {
+                            el.focus().ok();
+                        }
+                        true
+                    }
+                    "KeyN" if ctrl => {
+                        app.vab_clear();
+                        true
+                    }
+                    "KeyS" if ctrl => {
+                        app.vab_save(false);
+                        true
+                    }
+                    _ => false,
+                };
+                if handled {
+                    ev.prevent_default();
+                    return;
+                }
             }
             if app.flying.is_some() && !menu_open {
                 // The original's flight bindings (KSP.Input/GameInput.cs). Rotation, throttle steps and wheels
@@ -1855,6 +2015,11 @@ impl App {
                 (Some(id), Some(s)) => {
                     self.vab_craft_id = Some(id);
                     self.craft_docs.remove(&id);
+                    set_text(
+                        &self.doc,
+                        "vab-dv",
+                        &format!("\u{394}v {:.0} m/s", s.delta_v_vacuum_mps),
+                    );
                     set_text(
                             &self.doc,
                             "vab-report",
@@ -2615,6 +2780,7 @@ impl App {
     }
 
     fn vab_add(&mut self, part_id: &str) {
+        self.vab_history.record(&self.editor);
         let cat = std::mem::take(&mut self.catalog);
         let result = match cat.get(part_id) {
             Some(spec) => self.editor.add_part(spec, &cat).map(|_| ()),
@@ -2628,6 +2794,10 @@ impl App {
     }
 
     fn vab_remove(&mut self) {
+        if self.editor.selected.is_none() {
+            return;
+        }
+        self.vab_history.record(&self.editor);
         let cat = std::mem::take(&mut self.catalog);
         self.editor.remove_selected(&cat);
         self.catalog = cat;
@@ -2635,6 +2805,7 @@ impl App {
     }
 
     fn vab_clear(&mut self) {
+        self.vab_history.record(&self.editor);
         let name = self.editor.craft.name.clone();
         self.editor = vab::Editor::new(&name);
         self.vab_craft_id = None;
@@ -2642,7 +2813,105 @@ impl App {
         self.render_vab();
     }
 
+    /// Show the part tooltip for a picker row (`None` hides it): the original's title, subtitle and
+    /// manufacturer, mass, size, crew, tanks, engine thrust and specific impulse, and the description.
+    fn vab_tooltip(&self, row: Option<&Element>) {
+        let Some(tip) = self.doc.get_element_by_id("vab-tip") else {
+            return;
+        };
+        let spec = row
+            .and_then(|r| r.get_attribute("data-ose-part"))
+            .and_then(|id| self.catalog.get(&id));
+        let (Some(row), Some(spec)) = (row, spec) else {
+            tip.class_list().remove_1("open").ok();
+            return;
+        };
+        let loc = |k: &str| self.loc.get(&format!("Parts/{k}/{}", spec.id)).cloned();
+        let mut rows = vec![
+            ("Mass".to_string(), format!("{:.3} t", spec.mass_t)),
+            ("Size".to_string(), spec.size_category.clone()),
+        ];
+        if spec.crew_capacity > 0 {
+            rows.push(("Crew".into(), spec.crew_capacity.to_string()));
+        }
+        for c in &spec.resource_containers {
+            rows.push((c.resource.clone(), format!("{:.0} units", c.capacity_units)));
+        }
+        for e in &spec.engines {
+            rows.push(("Thrust".into(), format!("{:.1} kN", e.max_thrust_kn)));
+            rows.push((
+                "Isp".into(),
+                format!(
+                    "{:.0} s vac / {:.0} s ASL",
+                    e.isp_vacuum_s, e.isp_sea_level_s
+                ),
+            ));
+        }
+        let table: String = rows
+            .iter()
+            .map(|(k, v)| format!("<tr><td>{}</td><td>{}</td></tr>", esc(k), esc(v)))
+            .collect();
+        let sub = [loc("Subtitle"), loc("Manufacturer")]
+            .into_iter()
+            .flatten()
+            .map(|s| esc(&s))
+            .collect::<Vec<_>>()
+            .join(" \u{b7} ");
+        let locked = if row.class_list().contains("locked") {
+            "<p style=\"color:#f0a070\">Not researched yet: the launch pad will refuse a craft with it.</p>"
+        } else {
+            ""
+        };
+        tip.set_inner_html(&format!(
+            "<h4>{}</h4><div class=\"sub\">{}</div><table>{}</table>{}<p>{}</p>",
+            esc(spec.display_title()),
+            sub,
+            table,
+            locked,
+            esc(&loc("Description").unwrap_or_default()),
+        ));
+        let r = row.get_bounding_client_rect();
+        if let Some(t) = tip.dyn_ref::<HtmlElement>() {
+            let top = r.top().min(
+                web_sys::window()
+                    .and_then(|w| w.inner_height().ok())
+                    .and_then(|h| h.as_f64())
+                    .unwrap_or(900.0)
+                    - 320.0,
+            );
+            t.style()
+                .set_property("left", &format!("{}px", r.right() + 12.0))
+                .ok();
+            t.style()
+                .set_property("top", &format!("{}px", top.max(8.0)))
+                .ok();
+        }
+        tip.class_list().add_1("open").ok();
+    }
+
+    fn vab_record(&mut self) {
+        self.vab_history.record(&self.editor);
+    }
+
+    /// Ctrl+Z / Ctrl+Y.
+    fn vab_undo(&mut self, redo: bool) {
+        let mut h = std::mem::take(&mut self.vab_history);
+        let done = if redo {
+            h.redo(&mut self.editor)
+        } else {
+            h.undo(&mut self.editor)
+        };
+        self.vab_history = h;
+        if done {
+            let cat = std::mem::take(&mut self.catalog);
+            self.editor.rebuild_stages(&cat);
+            self.catalog = cat;
+            self.render_vab();
+        }
+    }
+
     fn vab_shift_stage(&mut self, delta: i32) {
+        self.vab_history.record(&self.editor);
         let cat = std::mem::take(&mut self.catalog);
         self.editor.shift_stage(delta, &cat);
         self.catalog = cat;
@@ -2735,21 +3004,52 @@ impl App {
             );
         }
         if let Some(list) = self.doc.get_element_by_id("vab-stages") {
+            // One card per stage, the last to fire on top and the first (Space) at the bottom, as the
+            // original's staging stack.
             let mut html = String::new();
-            for (n, stage) in self.editor.craft.stages.iter().enumerate() {
-                let names: Vec<String> = stage
+            for (n, stage) in self.editor.craft.stages.iter().enumerate().rev() {
+                let parts: Vec<String> = stage
                     .iter()
-                    .filter_map(|&i| self.editor.craft.parts.get(i))
-                    .map(|p| {
-                        self.catalog
-                            .get(&p.part_id)
-                            .map(|s| esc(s.display_title()))
-                            .unwrap_or_else(|| esc(&p.part_id))
+                    .filter_map(|&i| self.editor.craft.parts.get(i).map(|p| (i, p)))
+                    .map(|(i, p)| {
+                        let spec = self.catalog.get(&p.part_id);
+                        let icon = match spec {
+                            Some(s) if s.has_engine => "Staging-Icon-Thruster",
+                            Some(s) if s.is_decoupler => "Staging-Icon-Inline",
+                            Some(s) if s.stage_type.contains("Parachute") => "Staging-ICO-Chute-Stowed",
+                            _ => "Staging-ICO-Structure01",
+                        };
+                        format!(
+                            "<span class=\"p{sel}\" data-ose-index=\"{i}\" title=\"select\"><i style=\"--ico:url(assets/ui/hud/{icon}.png)\"></i>{name}</span>",
+                            sel = if self.editor.selected == Some(i) { " sel" } else { "" },
+                            name = spec
+                                .map(|s| esc(s.display_title()))
+                                .unwrap_or_else(|| esc(&p.part_id)),
+                        )
                     })
                     .collect();
-                html.push_str(&format!("<li>stage {}: {}</li>", n + 1, names.join(", ")));
+                html.push_str(&format!(
+                    "<li><span class=\"st\">STAGE {}</span>{}</li>",
+                    n + 1,
+                    parts.join("")
+                ));
+            }
+            if html.is_empty() {
+                html = "<li class=\"empty\">No stages yet: engines, decouplers and parachutes get one each.</li>".into();
             }
             list.set_inner_html(&html);
+        }
+        for (id, on) in [
+            ("vab-undo", self.vab_history.can_undo()),
+            ("vab-redo", self.vab_history.can_redo()),
+        ] {
+            if let Some(b) = self.doc.get_element_by_id(id) {
+                if on {
+                    b.remove_attribute("disabled").ok();
+                } else {
+                    b.set_attribute("disabled", "").ok();
+                }
+            }
         }
         if let Some(name) = self
             .doc
@@ -4784,4 +5084,23 @@ fn install_focus_clicks(app: &Shared, target: &Element) -> Result<(), JsValue> {
     target.add_event_listener_with_callback("click", on_click.as_ref().unchecked_ref())?;
     on_click.forget();
     Ok(())
+}
+
+/// Attach nodes of a catalog part as (position, orientation) in its own frame, for the part held in the VAB.
+#[cfg(target_arch = "wasm32")]
+fn vab_nodes(catalog: &vab::Catalog, id: &str) -> Vec<(glam::DVec3, glam::DVec3)> {
+    catalog
+        .get(id)
+        .map(|s| {
+            s.attach_nodes
+                .iter()
+                .map(|n| {
+                    (
+                        glam::DVec3::new(n.position.x, n.position.y, n.position.z),
+                        glam::DVec3::new(n.orientation.x, n.orientation.y, n.orientation.z),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }

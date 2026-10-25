@@ -29,8 +29,8 @@ Camera rule that runs through every map: **the right button drags the camera, th
 
 | # | KSP2 | Ours today | Status |
 |---|---|---|---|
-| G1 | Warp `.` `,` `/` everywhere in session; the warp widget stays visible in flight (top left) | `.` `,` work; `/` missing; the warp widget and UT are hidden in flight | open |
-| G2 | F2 hides all UI (screenshots) | missing | open |
+| G1 | Warp `.` `,` `/` everywhere in session; the warp widget stays visible in flight (top left) | `.` `,` `/` work; UT and warp stay up in flight | done |
+| G2 | F2 hides all UI (screenshots) | F2 fades the interface | done |
 | G3 | Tooltips on every HUD control, naming the key; Shift expands | a few `title` attributes, many controls without | open |
 | G4 | Notification toasts (warp limited, out of charge, lost link, vessel lost ...) | one-line note inside the menu card; flight warnings in a small label | open |
 | G5 | F5/F9 quicksave/quickload | missing | server |
@@ -41,24 +41,24 @@ Camera rule that runs through every map: **the right button drags the camera, th
 
 | # | KSP2 | Ours today | Status |
 |---|---|---|---|
-| F1 | W/S/A/D/Q/E rotate continuously while held; CapsLock precision | each key press nudges the target 5° (repeat rate dependent); no roll; no precision | open (roll needs server) |
-| F2 | Shift/Ctrl held ramps the throttle at 100%/s | each keydown steps 10% | open |
-| F3 | T toggles SAS; SAS mode buttons around the navball (stability, prograde, retrograde, normal, anti-normal, radial in/out, target, anti-target, maneuver) | T sets surface prograde; six text buttons in a panel | open (target/maneuver modes: server) |
-| F4 | G gear, B brakes, U lights, R RCS, 1..0 action groups; action bar with state lights (gear, lights, brakes, solar, radiators, science, abort) | none bound; Experiments/Transmit/Recover buttons only | open for G/B/solar/chutes (protocol exists); lights, RCS, action groups: server |
-| F5 | Rovers: W/S wheel throttle, A/D steer, B brakes | protocol 23 `Drive` exists, no client keys | open |
+| F1 | W/S/A/D/Q/E rotate continuously while held; CapsLock precision | W/S/A/D turn the target at 25°/s while held, Caps Lock x0.1; no roll | done (roll needs server) |
+| F2 | Shift/Ctrl held ramps the throttle at 100%/s | same | done |
+| F3 | T toggles SAS; SAS mode buttons around the navball (stability, prograde, retrograde, normal, anti-normal, radial in/out, target, anti-target, maneuver) | T holds the current direction; SAS buttons with the original's icons beside the navball, lit for the active mode | done (target/maneuver modes: server) |
+| F4 | G gear, B brakes, U lights, R RCS, 1..0 action groups; action bar with state lights (gear, lights, brakes, solar, radiators, science, abort) | G, B (held) and an action bar with state lights for gear, brakes, solar, chutes, science | done; lights, RCS, abort, action groups: server |
+| F5 | Rovers: W/S wheel throttle, A/D steer, B brakes | same, through `Drive` while landed | done |
 | F6 | Staging stack: one card per stage with part icons and fuel bars, Space fires the next | "stage 1 of 3" text and a STAGE button | open |
-| F7 | Orbital readout Ap/Pe with time to each; altimeter sea level / terrain toggle; speed orbit / surface / target toggle | surface speed and vertical speed only | open |
-| F8 | Right-drag orbits the camera, wheel zooms, V cycles camera modes, Home resets | left-drag orbits; no V, no Home | open |
+| F7 | Orbital readout Ap/Pe with time to each; altimeter sea level / terrain toggle; speed orbit / surface / target toggle | Ap/Pe with countdowns, SURFACE/ORBIT speed toggle; no terrain altitude or target speed | done (AGL, target: later) |
+| F8 | Right-drag orbits the camera, wheel zooms, V cycles camera modes, Home resets | right-drag (and left) orbits, Home resets; no V camera modes yet | partly done |
 | F9 | `]` `[` switch to the next/previous vessel nearby | missing | open |
 | F10 | F to board/interact on EVA, EVA from the crew portrait | protocol has GoEva/Board/PlantFlag; no client keys | open |
-| F11 | Vessel labels F4 | missing | open |
+| F11 | Vessel labels F4 | F4 toggles labels | done |
 | F12 | Go button / pre-launch throttle | not needed (no launch sequence) | skip |
 
 ### Map view and Tracking Station
 
 | # | KSP2 | Ours today | Status |
 |---|---|---|---|
-| M1 | Right-drag rotates, Home resets, M back to flight, `]` `[` cycle focus | left-drag rotates; F frames; no Home, no cycling | open |
+| M1 | Right-drag rotates, Home resets, M back to flight, `]` `[` cycle focus | right-drag (and left) rotates, Home and F frame; no `]` `[` cycling yet | partly done |
 | M2 | Click an orbit to add a node; six-handle gizmo dragged in 3D; warp-to and trash on the node | "Add node" button and four sliders | open |
 | M3 | Ap/Pe/SOI markers with tooltips (time and altitude) | none | open |
 | M4 | Vessel labels drawn once | each vessel label appears twice in the map (screenshot 11) | open (bug) |
@@ -68,19 +68,19 @@ Camera rule that runs through every map: **the right button drags the camera, th
 
 | # | KSP2 | Ours today | Status |
 |---|---|---|---|
-| V1 | Header: vehicle name, New/Save/Load, launch site, Launch with total Δv | side panel with name, Save, Save and launch | open |
-| V2 | Toolbar: undo/redo, symmetry flyout, angle snap, frame of reference, CoM/CoT/CoL markers, engineer's report | none | open |
-| V3 | Right-drag orbits, wheel zooms (Shift faster), arrows pan, Home resets | left-drag orbits, wheel zooms | open |
-| V4 | Delete key, Ctrl+Z/Y, Ctrl+C/V, WASDQE rotate the held part, Space resets, X symmetry, C snap | none of these keys | open (symmetry needs editor work) |
-| V5 | Picker part tooltip (mass, cost, size, stats, description), Shift expands | name, size, mass line only | open |
-| V6 | Staging stack panel with per-stage Δv/TWR/burn time, drag a part between stages | stage earlier/later buttons, plain list | open |
+| V1 | Header: vehicle name, New/Save/Load, launch site, Launch with total Δv | header bar: New, undo, redo, name, Δv after saving, Save, Launch, close; no Load or launch site yet | partly done |
+| V2 | Toolbar: undo/redo, symmetry flyout, angle snap, frame of reference, CoM/CoT/CoL markers, engineer's report | undo/redo in the header; no symmetry, snap or markers yet | partly done |
+| V3 | Right-drag orbits, wheel zooms (Shift faster), arrows pan, Home resets | right-drag orbits, wheel zooms (Shift faster), Home resets; no pan | partly done |
+| V4 | Delete key, Ctrl+Z/Y, Ctrl+C/V, WASDQE rotate the held part, Space resets, X symmetry, C snap; grab a placed part and move it with its subtree | Delete/Backspace, Ctrl+Z/Y, Ctrl+F, Ctrl+N, Ctrl+S; grabbing a placed part carries its subtree, dropped nowhere it goes back; no copy, rotate, symmetry or snap yet | partly done |
+| V5 | Picker part tooltip (mass, cost, size, stats, description), Shift expands | tooltip with title, subtitle, maker, mass, size, crew, tanks, thrust, Isp, description, research lock | done (no cost in our data) |
+| V6 | Staging stack panel with per-stage Δv/TWR/burn time, drag a part between stages | stage cards with icons (last to fire on top), click selects, earlier/later buttons; no per-stage Δv or drag | partly done |
 | V7 | Parts manager on right click (part settings) | none | later |
 
 ### KSC, R&D, Mission Control, main menu
 
 | # | KSP2 | Ours today | Status |
 |---|---|---|---|
-| K1 | Building hover tooltip and click, wheel zoom, M opens the Tracking Station map | hover/click and zoom work; no M; left-drag only | open |
+| K1 | Building hover tooltip and click, wheel zoom, M opens the Tracking Station map | hover/click, zoom, M, right or left drag | done |
 | K2 | Launch-site flyout (Launchpad 1-4, runway) | single Launchpad button | later |
 | R1 | R&D tree pans by drag and arrows, zooms with the wheel, part tooltips | fixed layout with page scroll; part names only | open |
 | C1 | Mission Control: track a mission, in-flight mission tracker, turn-in button when complete | log and briefing only | open |

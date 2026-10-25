@@ -35,6 +35,21 @@ pub struct PartSpec {
     /// `(resource, capacity_units)`; filled to capacity when the part is placed.
     #[serde(default)]
     pub resource_containers: Vec<ContainerSpec>,
+    /// Engine modes (thrust and specific impulse), for the part tooltip.
+    #[serde(default)]
+    pub engines: Vec<EngineSpec>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, serde::Deserialize)]
+pub struct EngineSpec {
+    #[serde(default)]
+    pub max_thrust_kn: f64,
+    #[serde(default)]
+    pub isp_vacuum_s: f64,
+    #[serde(default)]
+    pub isp_sea_level_s: f64,
+    #[serde(default)]
+    pub propellant_mixture: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Deserialize)]
@@ -432,6 +447,200 @@ impl Editor {
     }
 }
 
+/// A part and everything attached below it, lifted off the craft (the original's grab in the VAB). `parts[0]` is
+/// the fragment's root; parents index into `parts`; positions are relative to the root.
+#[derive(Clone, Debug)]
+pub struct Fragment {
+    pub parts: Vec<CraftPart>,
+}
+
+impl Fragment {
+    pub fn root_id(&self) -> &str {
+        &self.parts[0].part_id
+    }
+}
+
+/// Undo and redo for the editor (`ObjectyAssemblyBuilderHistorian`): whole-craft snapshots, newest last.
+#[derive(Default)]
+pub struct History {
+    undo: Vec<(Craft, Option<usize>)>,
+    redo: Vec<(Craft, Option<usize>)>,
+}
+
+impl History {
+    const DEPTH: usize = 100;
+
+    /// Remember the editor as it is before a change; a new change forgets the redo list.
+    pub fn record(&mut self, e: &Editor) {
+        self.undo.push((e.craft.clone(), e.selected));
+        if self.undo.len() > Self::DEPTH {
+            self.undo.remove(0);
+        }
+        self.redo.clear();
+    }
+
+    pub fn undo(&mut self, e: &mut Editor) -> bool {
+        let Some((craft, sel)) = self.undo.pop() else {
+            return false;
+        };
+        let now = std::mem::replace(&mut e.craft, craft);
+        self.redo.push((now, e.selected));
+        e.selected = sel;
+        true
+    }
+
+    pub fn redo(&mut self, e: &mut Editor) -> bool {
+        let Some((craft, sel)) = self.redo.pop() else {
+            return false;
+        };
+        let now = std::mem::replace(&mut e.craft, craft);
+        self.undo.push((now, e.selected));
+        e.selected = sel;
+        true
+    }
+
+    pub fn can_undo(&self) -> bool {
+        !self.undo.is_empty()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        !self.redo.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.undo.clear();
+        self.redo.clear();
+    }
+}
+
+impl Editor {
+    /// Parts in the subtree under `i` (itself included), as a mask.
+    fn subtree(&self, i: usize) -> Vec<bool> {
+        let mut inside = vec![false; self.craft.parts.len()];
+        inside[i] = true;
+        loop {
+            let mut changed = false;
+            for (k, p) in self.craft.parts.iter().enumerate() {
+                if !inside[k] && p.parent.is_some_and(|pi| inside[pi]) {
+                    inside[k] = true;
+                    changed = true;
+                }
+            }
+            if !changed {
+                return inside;
+            }
+        }
+    }
+
+    /// Lift part `i` and everything under it off the craft. Grabbing the root lifts the whole craft.
+    pub fn detach(&mut self, i: usize, catalog: &Catalog) -> Option<Fragment> {
+        if i >= self.craft.parts.len() {
+            return None;
+        }
+        let inside = self.subtree(i);
+        let origin = self.craft.parts[i].local_position;
+        // Fragment order: the grabbed part first, then the rest in craft order.
+        let order: Vec<usize> = std::iter::once(i)
+            .chain((0..self.craft.parts.len()).filter(|&k| inside[k] && k != i))
+            .collect();
+        let mut to_frag = vec![None; self.craft.parts.len()];
+        for (n, &k) in order.iter().enumerate() {
+            to_frag[k] = Some(n);
+        }
+        let parts = order
+            .iter()
+            .map(|&k| {
+                let mut p = self.craft.parts[k].clone();
+                if k == i {
+                    p.parent = None;
+                    p.parent_node = None;
+                } else {
+                    p.parent = p.parent.and_then(|pi| to_frag[pi]);
+                }
+                p.local_position = p.local_position - origin;
+                p.fuel_line_target = p.fuel_line_target.and_then(|t| to_frag[t]);
+                p
+            })
+            .collect();
+        let mut remap = vec![None; self.craft.parts.len()];
+        let mut kept = Vec::new();
+        for (k, p) in self.craft.parts.iter().enumerate() {
+            if !inside[k] {
+                remap[k] = Some(kept.len());
+                kept.push(p.clone());
+            }
+        }
+        for p in &mut kept {
+            p.parent = p.parent.and_then(|pi| remap[pi]);
+            p.fuel_line_target = p.fuel_line_target.and_then(|t| remap[t]);
+        }
+        let parent = self.craft.parts[i].parent.and_then(|pi| remap[pi]);
+        self.craft.parts = kept;
+        self.selected = parent;
+        self.rebuild_stages(catalog);
+        Some(Fragment { parts })
+    }
+
+    fn next_guid(&self) -> usize {
+        self.craft
+            .parts
+            .iter()
+            .filter_map(|p| {
+                p.guid
+                    .strip_prefix('p')
+                    .and_then(|n| n.parse::<usize>().ok())
+            })
+            .max()
+            .unwrap_or(0)
+            + 1
+    }
+
+    /// Put a lifted fragment back: on `target`'s node (as a picker drop), or as the whole craft when the craft
+    /// is empty. Keeps the fragment's stages, resources and shape. Returns the new root's index.
+    pub fn attach(
+        &mut self,
+        frag: &Fragment,
+        catalog: &Catalog,
+        target: Option<(usize, &str)>,
+    ) -> Result<usize, String> {
+        let spec = catalog
+            .get(frag.root_id())
+            .ok_or_else(|| format!("unknown part {}", frag.root_id()))?;
+        let root = match target {
+            Some((t, node)) => self.add_part_on(spec, catalog, t, node)?,
+            None if self.is_empty() => self.add_part(spec, catalog)?,
+            None => return Err("drop the part on a green attach point".into()),
+        };
+        // The placed root keeps the fragment's state; only the link to its new parent is new.
+        let placed = self.craft.parts[root].clone();
+        let mut guid = self.next_guid();
+        let mut r = frag.parts[0].clone();
+        r.parent = placed.parent;
+        r.own_node = placed.own_node;
+        r.parent_node = placed.parent_node;
+        r.local_position = placed.local_position;
+        r.guid = format!("p{guid}");
+        guid += 1;
+        self.craft.parts[root] = r;
+        let base = self.craft.parts.len();
+        let origin = self.craft.parts[root].local_position;
+        // Fragment index n >= 1 lands at base + n - 1; the fragment root is `root`.
+        let at = |n: usize| if n == 0 { root } else { base + n - 1 };
+        for p in &frag.parts[1..] {
+            let mut p = p.clone();
+            p.parent = p.parent.map(at);
+            p.fuel_line_target = p.fuel_line_target.map(at);
+            p.local_position = p.local_position + origin;
+            p.guid = format!("p{guid}");
+            guid += 1;
+            self.craft.parts.push(p);
+        }
+        self.selected = Some(root);
+        self.rebuild_stages(catalog);
+        Ok(root)
+    }
+}
+
 /// Categories in the order the original's picker shows them; anything else goes at the end.
 pub const CATEGORY_ORDER: [&str; 13] = [
     "Pods",
@@ -605,6 +814,59 @@ mod tests {
         assert_eq!(e.craft.parts.len(), 1);
         assert_eq!(e.selected, Some(0));
         assert!(e.craft.stages.is_empty());
+    }
+
+    #[test]
+    fn grab_and_reattach_a_subtree() {
+        let cat = catalog();
+        let mut e = Editor::new("test");
+        e.add_part(&cat["pod"], &cat).unwrap();
+        let t = e.add_part(&cat["tank"], &cat).unwrap();
+        let en = e.add_part(&cat["engine"], &cat).unwrap();
+        let mut h = History::default();
+        h.record(&e);
+        let frag = e.detach(t, &cat).unwrap();
+        assert_eq!(frag.parts.len(), 2);
+        assert_eq!(frag.root_id(), "tank");
+        assert_eq!(frag.parts[1].parent, Some(0));
+        assert_eq!(e.craft.parts.len(), 1);
+        assert!(e.craft.stages.is_empty());
+        // Hang it on the pod's top instead: the engine comes along, 1.9 m under the tank.
+        let r = e.attach(&frag, &cat, Some((0, "top"))).unwrap();
+        assert_eq!(e.craft.parts.len(), 3);
+        assert_eq!(e.craft.parts[r].parent_node.as_deref(), Some("top"));
+        let engine = e
+            .craft
+            .parts
+            .iter()
+            .position(|p| p.part_id == "engine")
+            .unwrap();
+        assert_eq!(e.craft.parts[engine].parent, Some(r));
+        let gap = e.craft.parts[r].local_position.y - e.craft.parts[engine].local_position.y;
+        assert!((gap - 1.9).abs() < 1e-9);
+        assert!(e.craft.is_tree());
+        assert_eq!(e.craft.stages.len(), 1);
+        let guids: std::collections::HashSet<_> = e.craft.parts.iter().map(|p| &p.guid).collect();
+        assert_eq!(guids.len(), 3);
+        // Undo brings back the craft as it was before the grab.
+        assert!(h.undo(&mut e));
+        assert_eq!(e.craft.parts[en].part_id, "engine");
+        assert_eq!(e.craft.parts[t].parent_node.as_deref(), Some("bottom"));
+        assert!(h.redo(&mut e));
+        assert_eq!(e.craft.parts.len(), 3);
+    }
+
+    #[test]
+    fn grabbing_the_root_lifts_the_craft() {
+        let cat = catalog();
+        let mut e = Editor::new("test");
+        e.add_part(&cat["pod"], &cat).unwrap();
+        e.add_part(&cat["tank"], &cat).unwrap();
+        let frag = e.detach(0, &cat).unwrap();
+        assert!(e.is_empty());
+        assert!(e.attach(&frag, &cat, None).is_ok());
+        assert_eq!(e.craft.parts.len(), 2);
+        assert!(e.craft.is_tree());
     }
 
     #[test]
