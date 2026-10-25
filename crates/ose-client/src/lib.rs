@@ -1690,12 +1690,18 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                 let open = el.class_list().toggle("open").unwrap_or(false);
                 store("ose.tracker", if open { "open" } else { "closed" });
                 if open {
-                    for id in ["fh-parts", "fh-res", "fh-ag", "fh-inv"] {
+                    for id in ["fh-parts", "fh-res", "fh-ag", "fh-inv", "fh-players"] {
                         if let Some(e) = doc.get_element_by_id(id) {
                             e.class_list().remove_1("open").ok();
                         }
                     }
-                    for id in ["fh-parts-btn", "fh-res-btn", "fh-ag-btn", "fh-inv-btn"] {
+                    for id in [
+                        "fh-parts-btn",
+                        "fh-res-btn",
+                        "fh-ag-btn",
+                        "fh-inv-btn",
+                        "fh-players-btn",
+                    ] {
                         if let Some(e) = doc.get_element_by_id(id) {
                             e.class_list().remove_1("on").ok();
                         }
@@ -1741,18 +1747,20 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
     if let Some(el) = doc.get_element_by_id("fh-crew-btn") {
         el.class_list().toggle_with_force("on", !crew_off).ok();
     }
-    const APP_WINDOWS: [(&str, &str); 5] = [
+    const APP_WINDOWS: [(&str, &str); 6] = [
         ("fh-missions-btn", "fh-missions"),
         ("fh-parts-btn", "fh-parts"),
         ("fh-res-btn", "fh-res"),
         ("fh-ag-btn", "fh-ag"),
         ("fh-inv-btn", "fh-inv"),
+        ("fh-players-btn", "fh-players"),
     ];
     for (btn, win) in [
         ("fh-parts-btn", "fh-parts"),
         ("fh-res-btn", "fh-res"),
         ("fh-ag-btn", "fh-ag"),
         ("fh-inv-btn", "fh-inv"),
+        ("fh-players-btn", "fh-players"),
     ] {
         wire(
             btn,
@@ -1779,6 +1787,7 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                 app.render_resource_manager();
                 app.render_action_groups();
                 app.render_inventory();
+                app.render_players();
             }),
         )?;
     }
@@ -4795,6 +4804,21 @@ impl App {
             el.set_attribute("data-ose-id", &v.id.to_string()).ok();
             el.set_attribute("data-ose-vessel", &v.id.to_string()).ok();
             el.set_text_content(Some(&v.name));
+            // Multiplayer: another player's vessel takes their colour, and says whose it is on hover.
+            let owner = v.owner.and_then(|o| {
+                self.campaign
+                    .as_ref()
+                    .and_then(|(_, m)| m.iter().find(|m| m.player_id == o))
+            });
+            if let (Some(m), false) = (owner, mine) {
+                let [r, g, b] = hud::player_rgb(m);
+                el.style()
+                    .set_property("--owner", &format!("#{r:02x}{g:02x}{b:02x}"))
+                    .ok();
+                el.set_attribute("title", &format!("{} \u{2014} {}", v.name, m.display_name))
+                    .ok();
+                el.class_list().add_1("other").ok();
+            }
             self.labels.append_child(&el).ok();
             self.vessel_els.push((v.id, el));
         }
@@ -7363,6 +7387,42 @@ impl App {
         }
     }
 
+    /// The players window: who is in the campaign, their colour and their vessels.
+    fn render_players(&self) {
+        let Some(el) = self.doc.get_element_by_id("fh-players-list") else {
+            return;
+        };
+        let open = self
+            .doc
+            .get_element_by_id("fh-players")
+            .is_some_and(|e| e.class_list().contains("open"));
+        if !open {
+            return;
+        }
+        let Some((_, members)) = &self.campaign else {
+            return;
+        };
+        let vessels = |owner: u64| {
+            self.scene
+                .as_ref()
+                .map(|s| {
+                    s.vessels
+                        .iter()
+                        .filter(|v| v.owner == Some(owner))
+                        .filter(|v| !v.name.ends_with(" flag"))
+                        .map(|v| v.name.clone())
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let html = hud::players_html(members, self.player_id, &vessels);
+        let key = format!("{}:{}", html.len(), hud::fnv(&html));
+        if el.get_attribute("data-ose-key").as_deref() != Some(key.as_str()) {
+            el.set_inner_html(&html);
+            el.set_attribute("data-ose-key", &key).ok();
+        }
+    }
+
     /// The Research Inventory window: the reports aboard and Transmit All (greyed without a link).
     fn render_inventory(&self) {
         let Some(el) = self.doc.get_element_by_id("fh-inv-list") else {
@@ -7416,6 +7476,7 @@ impl App {
     }
 
     fn update_crew_buttons(&self, f: &ose_net::FlightReadout) {
+        self.render_players();
         self.render_parts_manager();
         self.render_resource_manager();
         self.render_action_groups();
