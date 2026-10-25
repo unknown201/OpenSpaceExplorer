@@ -101,6 +101,8 @@ struct SurfaceU {
     layer_info: [f32; 4],
     /// Terrain shadows from the global height map: x 1 when uploaded, y its scale (m), z its offset (m).
     shadow: [f32; 4],
+    /// x: the cloud colour map's intensity (clouds.png RGB; 1 for plain white clouds).
+    cloud_col: [f32; 4],
 }
 
 fn flag_f(x: bool) -> f32 {
@@ -2349,6 +2351,13 @@ fn surface_uniform(b: &Body, debug: f32) -> SurfaceU {
     {
         u.shadow = [1.0, m.scale_m as f32, m.offset_m as f32, 0.0];
     }
+    u.cloud_col = [
+        c.and_then(|c| c["color_map_intensity"].as_f64())
+            .unwrap_or(1.0) as f32,
+        0.0,
+        0.0,
+        0.0,
+    ];
     let poles = info.and_then(|v| v.get("poles"));
     u.poles = [
         flag_f(b.tex.contains_key(&Tex::PoleAlbedo)),

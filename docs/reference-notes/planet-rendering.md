@@ -174,5 +174,7 @@ textures per stage.
 Exposure after the sRGB fix (fx_post compose now encodes): bodies with an atmosphere use their AtmosphereModel
 `Exposure` x 0.1 as Bruneton's tone map intends (Kerbin 4.12, Duna 4.04, Eve 3, Jool 5), floored at 2 (Laythe's
 0.9 relies on the original's auto exposure); airless bodies keep the mean-albedo rule. Eve stays largely overcast:
-its baked cloud coverage averages 76 % (Kerbin 11 %) and its config colour-maps the clouds, which is not drawn yet.
+its baked cloud coverage averages 76 % (Kerbin 11 %). Cloud colour: where the config sets `enableColorMap`, the layer's
+`cloudColorMap` cubemap (Eve's purple and pink swirls, Duna's dust) goes into clouds.png RGB and tints the shell and the
+volume by `colorMapIntensity` (Eve 3, Duna 2); other bodies' clouds are white.
 
