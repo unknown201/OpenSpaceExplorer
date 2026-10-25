@@ -359,6 +359,12 @@ struct App {
     translate_sent: (f32, f32, f32),
     /// EVA: run as last sent, and a Space press not yet sent as a jump.
     eva_run_sent: bool,
+    /// EVA ladders (protocol 45): F asked to grab (a refusal then boards instead), the climb sent last,
+    /// and whether the Kerbal was on a ladder last frame.
+    eva_grab: bool,
+    eva_grab_pending: bool,
+    eva_climb_sent: f32,
+    eva_on_ladder: bool,
     eva_jump: bool,
     /// Screen points (CSS px) along the planning vessel's current orbit with their UT, from the last map
     /// frame: a click near one adds a maneuver node there, as clicking an orbit does in the original.
@@ -748,6 +754,10 @@ pub fn start() -> Result<(), JsValue> {
         flight_pam: None,
         translate_sent: (0.0, 0.0, 0.0),
         eva_run_sent: false,
+        eva_grab: false,
+        eva_grab_pending: false,
+        eva_climb_sent: 0.0,
+        eva_on_ladder: false,
         eva_jump: false,
         orbit_pick: Vec::new(),
         mnv_dirs: [(0.0, 0.0); 6],
@@ -4112,9 +4122,11 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                         }
                         true
                     }
-                    // Interact on EVA (the original's F): board the craft within reach.
+                    // Interact on EVA (the original's F): take or let go of the ladder within reach; with no
+                    // ladder there, board the craft within reach.
                     "KeyF" if !ev.repeat() && app.flying_eva() => {
-                        app.crew_action("fh-board");
+                        app.eva_grab = true;
+                        app.eva_grab_pending = true;
                         true
                     }
                     "KeyU" | "KeyR" if !ev.repeat() => {
@@ -4635,6 +4647,14 @@ impl App {
             ServerMessage::FlightAck {
                 accepted, reason, ..
             } => {
+                // F found no ladder: it boards instead (the original's one interact key).
+                if self.eva_grab_pending {
+                    self.eva_grab_pending = false;
+                    if !accepted && reason.as_deref().is_some_and(|r| r.contains("ladder")) {
+                        self.crew_action("fh-board");
+                        return;
+                    }
+                }
                 set_text(
                     &self.doc,
                     "fh-note",
@@ -8720,12 +8740,32 @@ impl App {
             _ => self.facing_pitch_heading().map(|(_, h)| h).unwrap_or(90.0),
         };
         let heading = (heading + turn * 90.0 * dt).rem_euclid(360.0);
+        // On a ladder (protocol 45): W/S climb while held, Space lets go; nothing else moves the Kerbal.
+        let on_ladder = self
+            .scene
+            .as_ref()
+            .and_then(|s| s.vessel(vessel))
+            .and_then(|v| v.flight.as_ref())
+            .is_some_and(|f| f.on_ladder.is_some());
+        if on_ladder != self.eva_on_ladder {
+            self.eva_on_ladder = on_ladder;
+            if on_ladder {
+                hud::push(
+                    &self.doc,
+                    "On the ladder: W/S climb, Space or F lets go",
+                    "passive",
+                );
+            }
+        }
         // Run and jump: run held while Shift is down on the ground, a jump on each new Space press there.
         let run = landed && shift;
         // A press is caught on key down, so a tap shorter than a frame still jumps.
-        let jump = landed && std::mem::take(&mut self.eva_jump);
-        if run != self.eva_run_sent || jump {
+        let jump = (landed || on_ladder) && std::mem::take(&mut self.eva_jump);
+        let grab = std::mem::take(&mut self.eva_grab);
+        let climb = if on_ladder { walk as f32 } else { 0.0 };
+        if run != self.eva_run_sent || jump || grab || climb != self.eva_climb_sent {
             self.eva_run_sent = run;
+            self.eva_climb_sent = climb;
             if let Some(ws) = &self.ws {
                 send(
                     ws,
@@ -8733,11 +8773,14 @@ impl App {
                         vessel,
                         run,
                         jump,
-                        grab: false,
-                        climb: 0.0,
+                        grab,
+                        climb,
                     },
                 );
             }
+        }
+        if on_ladder {
+            return;
         }
         // The jetpack in the air.
         let translate = if landed {
