@@ -64,6 +64,8 @@ pub struct VabView {
     pub cot: Option<(ose_math::DVec3, ose_math::DVec3)>,
     /// Centre of lift (wings and control surfaces), drawn in blue.
     pub col: Option<ose_math::DVec3>,
+    /// The part under the pointer, drawn lighter.
+    pub hovered: Option<usize>,
     pub held_turn: ose_data::craft::Quat,
     /// The rotation of the part the held part snaps to (it takes it on).
     snap_turn: ose_data::craft::Quat,
@@ -100,6 +102,7 @@ impl VabView {
             com: None,
             cot: None,
             col: None,
+            hovered: None,
             held_turn: crate::vab::NO_TURN,
             snap_turn: crate::vab::NO_TURN,
             held_yaw: crate::vab::NO_TURN,
@@ -337,6 +340,9 @@ impl VabView {
             item.fill = 0.35;
             if Some(i) == selected {
                 item.color = [0.65, 1.0, 0.7, 1.0];
+            } else if Some(i) == self.hovered && self.held.is_none() {
+                item.color = [1.0, 1.0, 0.75, 1.0];
+                item.ambient = 0.6;
             }
             items.push(item);
         }

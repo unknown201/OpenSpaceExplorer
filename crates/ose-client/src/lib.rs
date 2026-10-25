@@ -2522,6 +2522,23 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                 let (nx, ny) = (ev.client_x() as f64, ev.client_y() as f64);
                 app.vab3d.orbit(nx - x, ny - y);
                 app.drag = Some((nx, ny));
+            } else {
+                // The part under the pointer lights up, as the original's hover highlight.
+                let rect = app.gpu_canvas.get_bounding_client_rect();
+                let (px, py) = (
+                    (ev.client_x() as f64 - rect.left()) * app.dpr,
+                    (ev.client_y() as f64 - rect.top()) * app.dpr,
+                );
+                let over_hall = ev
+                    .target()
+                    .and_then(|t| t.dyn_into::<Element>().ok())
+                    .is_some_and(|e| e.id() == "gpu");
+                let hit = if over_hall {
+                    app.gpu.as_ref().and_then(|g| app.vab3d.pick(g, px, py))
+                } else {
+                    None
+                };
+                app.vab3d.hovered = hit;
             }
             return;
         }
