@@ -42,9 +42,6 @@ const EMBEDDED_PARTS: &str = include_str!("../../../assets/own/parts-catalog.jso
 const EMBEDDED_RESOURCES: &str = include_str!("../../../assets/own/resources.json");
 const EMBEDDED_DIFFICULTY: &str = include_str!("../../../assets/own/difficulty.json");
 const EMBEDDED_STOCK_CRAFT: &str = include_str!("../../../assets/own/stock-craft.json");
-const EMBEDDED_KERBALS: &str = include_str!("../../../assets/own/kerbals.json");
-/// How many Kerbals a new campaign starts with (the veterans and the next four).
-const STARTING_CREW: usize = 8;
 const EMBEDDED_SCIENCE: &str = include_str!("../../../assets/own/science/index.json");
 const EMBEDDED_REGIONS: &[u8] = include_bytes!("../../../assets/own/science/regions.bin");
 const EMBEDDED_TECH_TREE: &str = include_str!("../../../assets/own/tech-tree.json");
@@ -291,9 +288,6 @@ struct Shared {
     playing: Mutex<std::collections::HashSet<u64>>,
     /// The last pad launch, for revert.
     revert: Mutex<Option<campaigns::RevertPoint>>,
-    /// The original's Kerbals (veterans first), and the roster last pushed to the players.
-    kerbals: Vec<ose_data::KerbalDef>,
-    last_roster: Mutex<Option<ServerMessage>>,
 }
 
 /// Apply lowest-wins warp arbitration. Returns (effective warp, the player holding it down, if any).
@@ -475,8 +469,6 @@ async fn main() -> anyhow::Result<()> {
         shelf: Mutex::new(shelf),
         playing: Mutex::new(std::collections::HashSet::new()),
         revert: Mutex::new(None),
-        kerbals: serde_json::from_str(EMBEDDED_KERBALS)?,
-        last_roster: Mutex::new(None),
     });
 
     let sim = shared.clone();
@@ -499,7 +491,6 @@ async fn main() -> anyhow::Result<()> {
             }
             // missions look at the agency's vessels once a second
             if ticks.is_multiple_of(ose_sim::TICKS_PER_SECOND) {
-                push_roster(&sim);
                 science::evaluate_missions(&sim);
                 science::deliver_experiment_events(&sim);
                 let (required, heat) = {
@@ -1207,7 +1198,7 @@ fn stage_inertia(
 
 /// Put a craft on the KSC pad and remember the moments before and after for revert.
 fn launch_on_pad(s: &Shared, player_id: u64, craft: &ose_data::craft::Craft) -> ServerMessage {
-    launch_at(s, player_id, craft, None, None)
+    launch_at(s, player_id, craft, None)
 }
 
 /// Put a craft on a launch site (pad 1 without one) and remember the moments before and after for revert.
@@ -1216,10 +1207,9 @@ fn launch_at(
     player_id: u64,
     craft: &ose_data::craft::Craft,
     site: Option<&str>,
-    crew: Option<&[String]>,
 ) -> ServerMessage {
     let editor = campaigns::snapshot(s);
-    let reply = launch_on_pad_now(s, player_id, craft, site, crew);
+    let reply = launch_on_pad_now(s, player_id, craft, site);
     if matches!(
         reply,
         ServerMessage::CraftLaunched {
@@ -1243,7 +1233,6 @@ fn launch_on_pad_now(
     player_id: u64,
     craft: &ose_data::craft::Craft,
     site: Option<&str>,
-    crew: Option<&[String]>,
 ) -> ServerMessage {
     let mut filled = craft.clone();
     fill_default_resources(s, &mut filled);
@@ -1320,10 +1309,6 @@ fn launch_on_pad_now(
     );
     if is_level {
         u.set_level(e, at.heading_deg);
-    }
-    if let Err(reason) = crew_launch(s, &mut u, e, crew) {
-        u.despawn_vessel(e);
-        return fail(reason);
     }
     let mut list = s.vessels.lock().expect("vessels lock");
     let id = list.iter().map(|&(_, id, _)| id).max().unwrap_or(0) + 1;
@@ -1972,149 +1957,6 @@ fn stage_readouts(
         .collect()
 }
 
-/// The campaign's hired Kerbals (a new campaign hires the first few), then the rest of the original's in
-/// their order: who fills seats when nobody is chosen.
-fn crew_order(s: &Shared, c: &mut save::Campaign) -> Vec<String> {
-    if c.roster.is_empty() {
-        c.roster = s
-            .kerbals
-            .iter()
-            .take(STARTING_CREW)
-            .map(|k| (k.name.clone(), 0.0))
-            .collect();
-    }
-    let mut out: Vec<String> = c.roster.iter().map(|(n, _)| n.clone()).collect();
-    out.extend(
-        s.kerbals
-            .iter()
-            .map(|k| k.name.clone())
-            .filter(|n| !c.roster.iter().any(|(r, _)| r == n)),
-    );
-    out
-}
-
-/// Crew a freshly launched vessel: the chosen Kerbal per seat, or the roster in order. Kerbals new to the
-/// campaign are hired.
-fn crew_launch(
-    s: &Shared,
-    u: &mut Universe,
-    e: bevy_ecs::entity::Entity,
-    chosen: Option<&[String]>,
-) -> Result<(), String> {
-    let ut = u.ut();
-    let mut c = s.campaign.lock().expect("campaign lock");
-    let order = crew_order(s, &mut c);
-    // the sim's default fill is replaced
-    u.set_crew(e, Vec::new());
-    let members = match chosen {
-        None => u.crew_vessel(e, &order),
-        Some(names) => {
-            let seats = u.crew_seats(e);
-            let busy = u.kerbals_in_use();
-            let mut members = Vec::new();
-            for (seat, name) in seats.iter().zip(names) {
-                if name.is_empty() {
-                    continue;
-                }
-                if !c.roster.iter().any(|(n, _)| n == name) {
-                    return Err(format!("{name} is not on the roster"));
-                }
-                if busy.contains(name) || members.iter().any(|(_, n)| n == name) {
-                    return Err(format!("{name} is not available"));
-                }
-                members.push((*seat, name.clone()));
-            }
-            if names.iter().filter(|n| !n.is_empty()).count() > seats.len() {
-                return Err(format!("only {} seats", seats.len()));
-            }
-            u.set_crew(e, members.clone());
-            members
-        }
-    };
-    for (_, name) in members {
-        if !c.roster.iter().any(|(n, _)| *n == name) {
-            c.roster.push((name, ut));
-        }
-    }
-    Ok(())
-}
-
-/// The campaign's astronauts with where each one is.
-fn kerbal_roster(s: &Shared) -> ServerMessage {
-    let u = s.universe.lock().expect("sim lock");
-    let list = s.vessels.lock().expect("vessels lock").clone();
-    let mut c = s.campaign.lock().expect("campaign lock");
-    crew_order(s, &mut c);
-    let mut status: std::collections::HashMap<String, ose_net::KerbalStatus> = Default::default();
-    for &(e, id, _) in &list {
-        if let Some(k) = u.eva_kerbal(e) {
-            status.insert(k.name.clone(), ose_net::KerbalStatus::Eva { vessel: id });
-        }
-        let crashed = u.powered(e).is_some_and(|p| p.crashed);
-        for (_, name) in u.crew(e) {
-            status.insert(
-                name,
-                if crashed {
-                    ose_net::KerbalStatus::Missing
-                } else {
-                    ose_net::KerbalStatus::Assigned { vessel: id }
-                },
-            );
-        }
-    }
-    let kerbals = c
-        .roster
-        .iter()
-        .map(|(name, enrolled)| {
-            let def = s.kerbals.iter().find(|k| k.name == *name);
-            ose_net::KerbalInfo {
-                name: name.clone(),
-                status: status
-                    .get(name)
-                    .copied()
-                    .unwrap_or(ose_net::KerbalStatus::Available),
-                veteran: def.is_some_and(|d| d.veteran),
-                enrolled_ut: *enrolled,
-                bravery: def.map(|d| d.bravery as f32).unwrap_or(0.5),
-                stupidity: def.map(|d| d.stupidity as f32).unwrap_or(0.5),
-                optimism: def.map(|d| d.optimism as f32).unwrap_or(0.5),
-                constitution: def.map(|d| d.constitution as f32).unwrap_or(0.5),
-                looks: def
-                    .map(|d| {
-                        d.looks
-                            .iter()
-                            .map(|(k, v)| (k.clone(), v.clone()))
-                            .collect()
-                    })
-                    .unwrap_or_default(),
-            }
-        })
-        .collect();
-    ServerMessage::KerbalRoster { kerbals }
-}
-
-/// Push the roster to every connected player when it has changed.
-fn push_roster(s: &Shared) {
-    let msg = kerbal_roster(s);
-    let mut last = s.last_roster.lock().expect("roster lock");
-    if last.as_ref() == Some(&msg) {
-        return;
-    }
-    *last = Some(msg.clone());
-    drop(last);
-    let players: Vec<u64> = s
-        .warp_requests
-        .lock()
-        .expect("warp lock")
-        .keys()
-        .copied()
-        .collect();
-    let mut q = s.pending.lock().expect("pending lock");
-    for p in players {
-        q.push((p, msg.clone()));
-    }
-}
-
 fn session_list(s: &Shared) -> ServerMessage {
     campaigns::list(s)
 }
@@ -2341,7 +2183,6 @@ fn launch_craft(
                 e,
                 ose_sim::structure::Structure::build(craft, &s.parts, &s.resources),
             );
-            let _ = crew_launch(s, &mut u, e, None);
         }
     }
     let mut list = s.vessels.lock().expect("vessels lock");
@@ -2685,17 +2526,13 @@ async fn session(mut socket: WebSocket, s: AppState) {
                             let craft = find_craft(&s, id, player_id);
                             if !send(&mut socket, &ServerMessage::CraftDocument { id, craft }).await { break; }
                         }
-                        Ok(ClientMessage::KerbalRoster) => {
-                            let reply = kerbal_roster(&s);
+                        Ok(ClientMessage::LaunchAt { craft, site }) => {
+                            let reply = launch_at(&s, player_id, &craft, site.as_deref());
                             if !send(&mut socket, &reply).await { break; }
                         }
-                        Ok(ClientMessage::LaunchAt { craft, site, crew }) => {
-                            let reply = launch_at(&s, player_id, &craft, site.as_deref(), crew.as_deref());
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::LaunchSavedAt { id, site, crew }) => {
+                        Ok(ClientMessage::LaunchSavedAt { id, site }) => {
                             let reply = match find_craft(&s, id, player_id) {
-                                Some(c) => launch_at(&s, player_id, &c, site.as_deref(), crew.as_deref()),
+                                Some(c) => launch_at(&s, player_id, &c, site.as_deref()),
                                 None => ServerMessage::CraftLaunched {
                                     vessel: None,
                                     name: String::new(),
@@ -2817,16 +2654,6 @@ async fn session(mut socket: WebSocket, s: AppState) {
                                 Some(e) => {
                                     let ok = s.universe.lock().expect("sim lock").set_rotation(e, pitch as f64, yaw as f64, roll as f64);
                                     ServerMessage::FlightAck { vessel, accepted: ok, reason: (!ok).then(|| "not under power".into()) }
-                                }
-                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
-                            };
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::EvaControls { vessel, run, jump }) => {
-                            let reply = match owned_vessel(&s, vessel, player_id) {
-                                Some(e) => {
-                                    let ok = s.universe.lock().expect("sim lock").set_eva(e, run, jump);
-                                    ServerMessage::FlightAck { vessel, accepted: ok, reason: (!ok).then(|| "not a Kerbal on EVA".into()) }
                                 }
                                 None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
                             };

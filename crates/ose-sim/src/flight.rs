@@ -235,14 +235,6 @@ pub struct Powered {
     /// RCS thrusters (with the RCS group on they translate the vessel and help turn it).
     #[serde(default)]
     pub rcs: RcsState,
-    /// A Kerbal on EVA: running (held) and a jump asked for (taken on the ground).
-    #[serde(default)]
-    pub eva_run: bool,
-    #[serde(default)]
-    pub eva_jump: bool,
-    /// In the air from a jump (the throttle still walks, it does not fire the pack).
-    #[serde(default)]
-    pub eva_hop: bool,
     /// Force of the wings and other lifting surfaces this step (lift and their drag), kN, inertial.
     #[serde(default)]
     pub lift_kn: DVec3,
@@ -503,12 +495,7 @@ impl Drive {
 }
 
 /// A Kerbal's walking speed at full throttle, m/s (the original's run is about this).
-pub const WALK_SPEED_MPS: f64 = 0.8;
-/// Running (Shift) and the jump: the original's `RunMoveSpeed`; the jump's push up is our own (the original
-/// pushes for `JumpInitialForceDuration`), forward it carries the run times `JumpRunMoveForceMagnitudeMultiplier`.
-pub const RUN_SPEED_MPS: f64 = 2.2;
-pub const JUMP_SPEED_MPS: f64 = 2.5;
-pub const JUMP_RUN_MULTIPLIER: f64 = 1.2;
+pub const WALK_SPEED_MPS: f64 = 2.5;
 
 fn yes() -> bool {
     true
@@ -670,9 +657,6 @@ impl Powered {
             groups: ActionGroups::default(),
             rotation_input: DVec3::ZERO,
             roll_rate: 0.0,
-            eva_run: false,
-            eva_jump: false,
-            eva_hop: false,
             rcs: RcsState::default(),
             lift_kn: DVec3::ZERO,
             jet: None,
@@ -1011,7 +995,7 @@ pub fn integrate(
         None
     };
     // attitude: landed vessels stand upright; otherwise turn toward the commanded attitude with torque
-    let thrust_kn = if walk_dir.is_some() || p.eva_hop {
+    let thrust_kn = if walk_dir.is_some() {
         0.0
     } else {
         // jets: their thrust follows the speed and the air
@@ -1156,24 +1140,8 @@ pub fn integrate(
         if (thrust_acc + lift_acc).dot(up) > g {
             p.landed = false;
         } else {
-            let pace = if p.eva_run {
-                RUN_SPEED_MPS
-            } else {
-                WALK_SPEED_MPS
-            };
             if let Some(dir) = walk_dir {
-                p.r = p.r + dir * (pace * p.throttle.min(1.0) * dt);
-            }
-            // a Kerbal jumps off the ground, carrying the walk forward
-            if p.walker && p.eva_jump && !p.crashed {
-                p.eva_jump = false;
-                p.eva_hop = true;
-                let ahead =
-                    walk_dir.map(|d| d * (pace * p.throttle.min(1.0) * JUMP_RUN_MULTIPLIER));
-                p.landed = false;
-                p.v = omega_v.cross(p.r) + up * JUMP_SPEED_MPS + ahead.unwrap_or(DVec3::ZERO);
-                p.r = p.r + up * 0.01;
-                return out;
+                p.r = p.r + dir * (WALK_SPEED_MPS * p.throttle * dt);
             }
             // on wheels: drive along the ground (a level craft along its nose, pushed by its engines too)
             let mut rolling = DVec3::ZERO;
@@ -1274,7 +1242,6 @@ pub fn integrate(
         p.r = up * (ground + stand_height(p));
         p.v = omega_v.cross(p.r) + rolling;
         p.landed = true;
-        p.eva_hop = false;
         p.angvel = DVec3::ZERO;
         out.touched_down = true;
         let speed = impact;

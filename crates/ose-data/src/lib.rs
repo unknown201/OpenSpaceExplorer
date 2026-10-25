@@ -380,19 +380,6 @@ pub struct WheelMotor {
     pub ec_per_s: f64,
 }
 
-/// A Kerbal of the original's roster (`kerbal_variety_text`): full name, the veterans first, personality
-/// (0..1) and looks (head type, hair, eyes, skin, colours ... by the original's keys).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct KerbalDef {
-    pub name: String,
-    pub veteran: bool,
-    pub bravery: f64,
-    pub stupidity: f64,
-    pub optimism: f64,
-    pub constitution: f64,
-    pub looks: BTreeMap<String, String>,
-}
-
 /// A heat shield as the original defines it (`Data_Heatshield`): above its ablation temperature it burns its
 /// ablator and turns away re-entry heat when it faces the airflow.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

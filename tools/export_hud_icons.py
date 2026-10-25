@@ -26,10 +26,6 @@ ICONS = [
     "ICO-Action-Abort-24x24", "ICO-Action-Brakes-24x24", "ICO-Action-LandingGear-24x24", "ICO-Action-Lights-24x24",
     "ICO-Action-Radiator-24x24", "ICO-Action-Solar-24x24", "ICO-Action-Jetpack-24x24",
     "ICO-AppBar-ResearchManager-24x24", "ICO-AppBar-MissionTracker-24x24", "ICO-AppBar-ActionGroup-24x24",
-    "ICO-AppBar-ResourceManager-24x24", "ICO-AppBar-KerbalManager-24x24", "ICO-AppBar-FlightReport-24x24",
-    "ICO-AppBar-PartsManager-24x24", "ICO-AppBar-Tray-24x24",
-    # Crew portraits.
-    "WB-ICO-Kerbal",
     # Staging stack.
     "Staging-ICO-Chute-Stowed", "Staging-ICO-Chute-Armed", "Staging-ICO-Chute-Deployed", "Staging-ICO-Chute-Cut",
     "Staging-ICO-Booster", "Staging-ICO-Radial", "Staging-Icon-Thruster", "Staging-Icon-Inline", "Staging-ICO-Port",

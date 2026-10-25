@@ -48,7 +48,6 @@ export const STEP_NAMES = [
   "rnd",
   "tracking_station",
   "missions",
-  "training_center",
   "campaign_cycle",
   "vab_rocket",
   "eva",
@@ -697,30 +696,6 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
       await page.locator('[data-ose="mc-back"]').first().click();
       if (text !== "Mission accepted") return failed(`accepting ${JSON.stringify(name)}: ${text}`);
       return passed(`accepted ${JSON.stringify(name)}`);
-    }),
-  );
-
-  // 15b. The Training Center lists the campaign's astronauts (KerbalRoster, protocol 32) with each one's status.
-  results.push(
-    await timed("training_center", async () => {
-      if (!pageUp) return notLoaded;
-      const open = page.locator('[data-ose="ksc-training"]');
-      if ((await open.count()) === 0 || !(await open.first().isVisible())) return skipped("not on the KSC screen");
-      await open.first().click();
-      const rows = page.locator('[data-ose="tc-kerbal"]');
-      try {
-        await rows.first().waitFor({ timeout: 5_000 });
-      } catch {
-        await page.locator('[data-ose="tc-back"]').first().click();
-        return failed("the Training Center listed no astronauts");
-      }
-      const n = await rows.count();
-      await rows.last().click();
-      const name = ((await page.locator('[data-ose="tc-name"]').first().textContent()) ?? "").trim();
-      const status = ((await page.locator('[data-ose="tc-status"]').first().textContent()) ?? "").trim();
-      await page.locator('[data-ose="tc-back"]').first().click();
-      if (!name || !status) return failed("selecting an astronaut showed no name or status");
-      return passed(`${n} astronauts; ${name}: ${status}`);
     }),
   );
 

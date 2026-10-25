@@ -80,9 +80,6 @@ pub struct Campaign {
     /// The agency's science, tech unlocks and missions.
     #[serde(default)]
     pub science: crate::science::ScienceProgress,
-    /// The astronauts the campaign has hired, in order, with when they joined (universal time, s).
-    #[serde(default)]
-    pub roster: Vec<(String, f64)>,
     /// The campaign's quicksave (F5).
     #[serde(default)]
     pub quicksave: Option<Box<SaveFile>>,
@@ -107,7 +104,6 @@ impl Default for Campaign {
             difficulty: Vec::new(),
             last_played_unix: 0,
             science: Default::default(),
-            roster: Vec::new(),
             quicksave: None,
         }
     }

@@ -95,6 +95,10 @@ struct SurfaceU {
     clouds2: [f32; 4],
     /// Polar caps (tools/export_poles.py): has albedo caps, has cloud caps, cap radius (rad), 0.
     poles: [f32; 4],
+    /// The terrain pack's eight tiled height layers for per-pixel relief: (uv scale, height scale) pairs.
+    layers: [[f32; 4]; 4],
+    /// x: 1 with layer slopes, y: side/top projection contrast.
+    layer_info: [f32; 4],
 }
 
 fn flag_f(x: bool) -> f32 {
@@ -134,6 +138,8 @@ enum Tex {
     Impostor,
     PoleAlbedo,
     PoleClouds,
+    Slopes,
+    LayerMask,
 }
 
 enum Loaded {
@@ -185,6 +191,8 @@ struct Body {
     /// Detail arrays: texture, layers expected, layers received.
     arrays: HashMap<Tex, (wgpu::Texture, u32, u32)>,
     luts: [Option<wgpu::TextureView>; 3],
+    /// The pack layers' (uv scale, height scale) pairs and projection contrast, once their slopes are uploaded.
+    layer_params: Option<([[f32; 4]; 4], f32)>,
     inbox: Rc<RefCell<Vec<Loaded>>>,
     surface_buf: wgpu::Buffer,
     surface_bind: Option<wgpu::BindGroup>,
@@ -240,8 +248,11 @@ pub struct PlanetRenderer {
     draws: Vec<(QuadKey, u32)>,
     cloud_draws: Vec<(QuadKey, u32)>,
     active: bool,
-    /// Shader debug view (preview `debug=`): 0 off, 1 biome mask, 2 detail ratio, 3 detail inputs.
+    /// Shader debug view (preview `debug=`): 0 off, 1 biome mask, 2 detail ratio, 3 detail inputs, 4 albedo,
+    /// 5 sunlight, 6 normals, 7 layer relief slopes.
     pub debug: f32,
+    /// Multiplies the exposure (preview `exp=`, for tuning).
+    pub exposure_scale: f32,
     /// Ground kept free of scatter (the KSC campus), set by the flight view.
     exclusions: Vec<Exclusion>,
 }
@@ -312,6 +323,8 @@ impl PlanetRenderer {
                 tex_entry(9, D::D2),
                 tex_entry(10, D::D2),
                 tex_entry(11, D::D2),
+                tex_entry(12, D::D2Array),
+                tex_entry(13, D::D2),
             ],
         });
         let sky_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -706,6 +719,8 @@ impl PlanetRenderer {
         defaults.insert(Tex::Foam, solid([0, 0, 0, 255], false, false));
         defaults.insert(Tex::PoleAlbedo, solid([128, 128, 128, 255], true, false));
         defaults.insert(Tex::PoleClouds, solid([0, 0, 0, 0], true, false));
+        defaults.insert(Tex::Slopes, solid([0, 0, 0, 0], false, true));
+        defaults.insert(Tex::LayerMask, solid([0, 0, 0, 0], false, false));
         let lut = |w, h, d| {
             let t = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("planet lut default"),
@@ -793,6 +808,7 @@ impl PlanetRenderer {
             cloud_draws: Vec::new(),
             active: false,
             debug: 0.0,
+            exposure_scale: 1.0,
             exclusions: Vec::new(),
         }
     }
@@ -900,6 +916,7 @@ impl PlanetRenderer {
                 tex: HashMap::new(),
                 arrays: HashMap::new(),
                 luts: [None, None, None],
+                layer_params: None,
                 inbox,
                 surface_buf,
                 surface_bind: None,
@@ -1241,6 +1258,53 @@ impl PlanetRenderer {
         if let Some(pack) = b.pack.take() {
             let (pack, blob) = *pack;
             b.map = TerrainMap::from_pack(&pack, &blob);
+            if let Some(d) = b.map.as_ref().and_then(|m| m.detail.as_ref()) {
+                if let Some((view, params)) =
+                    slope_texture(&self.device, &self.queue, &d.layer_slopes())
+                {
+                    b.tex.insert(Tex::Slopes, view);
+                    if let Some((w, h, texels)) = d.mask() {
+                        let t = self.device.create_texture(&wgpu::TextureDescriptor {
+                            label: Some("terrain layer mask"),
+                            size: wgpu::Extent3d {
+                                width: w as u32,
+                                height: h as u32,
+                                depth_or_array_layers: 1,
+                            },
+                            mip_level_count: 32 - (w.max(h) as u32).leading_zeros(),
+                            sample_count: 1,
+                            dimension: wgpu::TextureDimension::D2,
+                            format: wgpu::TextureFormat::Rgba8Unorm,
+                            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                                | wgpu::TextureUsages::COPY_DST
+                                | wgpu::TextureUsages::RENDER_ATTACHMENT,
+                            view_formats: &[],
+                        });
+                        self.queue.write_texture(
+                            t.as_image_copy(),
+                            bytemuck::cast_slice(texels),
+                            wgpu::TexelCopyBufferLayout {
+                                offset: 0,
+                                bytes_per_row: Some(w as u32 * 4),
+                                rows_per_image: Some(h as u32),
+                            },
+                            wgpu::Extent3d {
+                                width: w as u32,
+                                height: h as u32,
+                                depth_or_array_layers: 1,
+                            },
+                        );
+                        self.mip
+                            .generate(&self.device, &self.queue, &t, t.mip_level_count(), 1);
+                        b.tex.insert(
+                            Tex::LayerMask,
+                            t.create_view(&wgpu::TextureViewDescriptor::default()),
+                        );
+                    }
+                    b.layer_params = Some((params, d.contrast() as f32));
+                    b.dirty = true;
+                }
+            }
         }
         if b.map.is_none() {
             let Some((index, blob)) = terrain.as_ref() else {
@@ -1303,6 +1367,8 @@ impl PlanetRenderer {
                 tv(9, Tex::Foam),
                 tv(10, Tex::PoleAlbedo),
                 tv(11, Tex::PoleClouds),
+                tv(12, Tex::Slopes),
+                tv(13, Tex::LayerMask),
             ],
         });
         let atmo = Self::atmosphere_ready(b);
@@ -1605,7 +1671,12 @@ impl PlanetRenderer {
                 cam_km.z as f32,
                 (view.time_s % 10_000.0) as f32,
             ],
-            sun: [sun.x as f32, sun.y as f32, sun.z as f32, exposure as f32],
+            sun: [
+                sun.x as f32,
+                sun.y as f32,
+                sun.z as f32,
+                exposure as f32 * self.exposure_scale,
+            ],
             atmo: [
                 bottom as f32,
                 top as f32,
@@ -1988,6 +2059,99 @@ fn update_waves(
     true
 }
 
+/// The terrain pack's layer slopes as an eight-layer RG16F array with box-filtered mips (all stock layers are
+/// 1024 x 1024; others are skipped), and their (uv scale, height scale) pairs; `None` without any layer.
+fn slope_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    layers: &[Option<ose_data::terrain_detail::LayerSlopes>],
+) -> Option<(wgpu::TextureView, [[f32; 4]; 4])> {
+    const N: usize = 1024;
+    const MIPS: u32 = 8;
+    let mut params = [[0.0f32; 4]; 4];
+    let mut any = false;
+    for (k, l) in layers.iter().enumerate().take(8) {
+        if let Some(l) = l.as_ref().filter(|l| l.width == N && l.height == N) {
+            params[k / 2][(k % 2) * 2] = l.uv_scale as f32;
+            params[k / 2][(k % 2) * 2 + 1] = l.height_scale as f32;
+            any = true;
+        }
+    }
+    if !any {
+        return None;
+    }
+    let tex = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("terrain layer slopes"),
+        size: wgpu::Extent3d {
+            width: N as u32,
+            height: N as u32,
+            depth_or_array_layers: 8,
+        },
+        mip_level_count: MIPS,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rg16Float,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    for k in 0..8 {
+        let mut cur: Vec<[f32; 2]> = match layers.get(k).and_then(|l| l.as_ref()) {
+            Some(l) if l.width == N && l.height == N => l.slopes.clone(),
+            _ => vec![[0.0; 2]; N * N],
+        };
+        let mut n = N;
+        for level in 0..MIPS {
+            let bytes: Vec<u16> = cur
+                .iter()
+                .flat_map(|s| [ocean_fft::f16_bits(s[0]), ocean_fft::f16_bits(s[1])])
+                .collect();
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &tex,
+                    mip_level: level,
+                    origin: wgpu::Origin3d {
+                        x: 0,
+                        y: 0,
+                        z: k as u32,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                bytemuck::cast_slice(&bytes),
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(n as u32 * 4),
+                    rows_per_image: Some(n as u32),
+                },
+                wgpu::Extent3d {
+                    width: n as u32,
+                    height: n as u32,
+                    depth_or_array_layers: 1,
+                },
+            );
+            let m = n / 2;
+            let mut next = vec![[0.0f32; 2]; m * m];
+            for y in 0..m {
+                for x in 0..m {
+                    let mut s = [0.0f32; 2];
+                    for (a, b) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                        let t = cur[(2 * y + b) * n + 2 * x + a];
+                        s[0] += t[0] * 0.25;
+                        s[1] += t[1] * 0.25;
+                    }
+                    next[y * m + x] = s;
+                }
+            }
+            cur = next;
+            n = m;
+        }
+    }
+    let view = tex.create_view(&wgpu::TextureViewDescriptor {
+        dimension: Some(wgpu::TextureViewDimension::D2Array),
+        ..Default::default()
+    });
+    Some((view, params))
+}
+
 /// The atmosphere model's IsGasGiant (Jool): no ground under the cloud deck.
 fn gas_giant(b: &Body) -> bool {
     b.info
@@ -2101,6 +2265,10 @@ fn surface_uniform(b: &Body, debug: f32) -> SurfaceU {
         ff("speed"),
         ff("strength"),
     ];
+    if let Some((p, contrast)) = b.layer_params.filter(|_| !gas_giant(b)) {
+        u.layers = p;
+        u.layer_info = [1.0, contrast, 0.0, 0.0];
+    }
     let poles = info.and_then(|v| v.get("poles"));
     u.poles = [
         flag_f(b.tex.contains_key(&Tex::PoleAlbedo)),

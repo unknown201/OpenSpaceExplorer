@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 33;
+pub const PROTOCOL_VERSION: u16 = 31;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -100,22 +100,16 @@ pub enum ClientMessage {
     LaunchSavedOnPad {
         id: u64,
     },
-    /// Like `LaunchOnPad` at a launch site from `LaunchSites` (`None`: launch pad 1). `crew` names the
-    /// Kerbal for each seat in order (an empty name leaves the seat empty; fewer names leave the rest
-    /// empty); `None` fills the seats from the roster.
+    /// Like `LaunchOnPad` at a launch site from `LaunchSites` (`None`: launch pad 1).
     LaunchAt {
         craft: ose_data::craft::Craft,
         site: Option<String>,
-        crew: Option<Vec<String>>,
     },
-    /// Like `LaunchSavedOnPad` at a launch site from `LaunchSites`, crewed like `LaunchAt`.
+    /// Like `LaunchSavedOnPad` at a launch site from `LaunchSites`.
     LaunchSavedAt {
         id: u64,
         site: Option<String>,
-        crew: Option<Vec<String>>,
     },
-    /// The campaign's astronauts; answers `KerbalRoster` (which also comes whenever it changes).
-    KerbalRoster,
     /// Throttle (0..1) and attitude for one of the player's powered vessels; answers `FlightAck`.
     SetControls {
         vessel: u64,
@@ -192,14 +186,6 @@ pub enum ClientMessage {
         pitch: f32,
         yaw: f32,
         roll: f32,
-    },
-    /// A Kerbal on EVA: `run` (Shift) held until changed, `jump` (Space) once from the ground. Its jetpack
-    /// translates with `Translate` (always on for a Kerbal: y up along the Kerbal, Ctrl down). Answers
-    /// `FlightAck`.
-    EvaControls {
-        vessel: u64,
-        run: bool,
-        jump: bool,
     },
     /// Roll input (-1..1, Q/E), held until changed; answers `FlightAck`.
     SetRoll {
@@ -564,39 +550,6 @@ pub struct FlightReadout {
     pub jet: bool,
 }
 
-/// Where a Kerbal is.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum KerbalStatus {
-    Available,
-    /// Aboard a vessel (its id).
-    Assigned {
-        vessel: u64,
-    },
-    /// Out on EVA as vessel `vessel`.
-    Eva {
-        vessel: u64,
-    },
-    /// Aboard a vessel that crashed.
-    Missing,
-}
-
-/// One of the campaign's astronauts. KSP2 has no traits or experience: a Kerbal is a name, a looks
-/// and a personality (0..1 each), as the original's `KerbalAttributes`.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct KerbalInfo {
-    pub name: String,
-    pub status: KerbalStatus,
-    pub veteran: bool,
-    /// When they joined, universal time, s.
-    pub enrolled_ut: f64,
-    pub bravery: f32,
-    pub stupidity: f32,
-    pub optimism: f32,
-    pub constitution: f32,
-    /// The original's variety keys: TYPE, HAIRSTYLE, HAIRCOLOR, EYES, SKINCOLOR, HELMET, TEAMCOLOR1 ...
-    pub looks: Vec<(String, String)>,
-}
-
 /// A place to launch from (KSC launch pads 1..4, the runway).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LaunchSite {
@@ -848,10 +801,6 @@ pub enum ServerMessage {
         accepted: bool,
         reason: Option<String>,
         science: f64,
-    },
-    /// The campaign's astronauts (answer to `KerbalRoster`, and whenever it changes).
-    KerbalRoster {
-        kerbals: Vec<KerbalInfo>,
     },
     /// The launch sites, sent after `DifficultyOptions`.
     LaunchSites {

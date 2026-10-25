@@ -157,3 +157,10 @@ Mun 0.5) and the biome detail takes the rest, but the detail slices are not in t
 not show. A straight lerp gives white Minmus and tan patches on the Mun along biome mask edges; detail stays a
 luminance ratio on the scaled colour here. Eve's ground therefore stays as dark as its scaled map.
 
+Relief: the original shades its tiled height layers with matching normal maps (`_LargeNormalR..A`,
+`_MidNormalR..A`, e.g. `rock_mun_crater_01_n`). Here the same layers' slopes come from the terrain pack itself
+(`ose_data::terrain_detail::Detail::layer_slopes`, an 8-layer RG16F array with mips) and the pack's own layer
+mask (not the scaled biome mask; they differ), projected and blended exactly as the physics heights; the shader
+adds only the slope finer than twice the mesh spacing, so craters and ridges stay crisp at any LOD and agree with
+the ground the server simulates. `debug=7` shows it; preview `exp=` scales the exposure for tuning.
+
