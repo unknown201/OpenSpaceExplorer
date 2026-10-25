@@ -195,6 +195,22 @@ OCEAN_FLOATS = ["_ShallowMaxDepth", "_ShallowColorDistribution", "_Smoothness", 
                 "_CausticsStrength", "_CausticsMaxVisibleDepth", "_CausticsTilingSize", "_CausticsAnimationSpeed"]
 
 
+def ocean_spectrum(a: Assets) -> dict | None:
+    """The body's Crest `OceanWaveSpectrum` (the FFT waves' source): wind, fetch, direction spread and the log10
+    power of each of 14 wavelength octaves from 2^-4 m (disabled octaves dropped to the floor)."""
+    for tt in a.find_mono("_powerLog"):
+        return {
+            "name": tt.get("m_Name"),
+            "wind_speed": tt.get("_windSpeed", 10.0),
+            "fetch_m": tt.get("_fetch", 500000.0),
+            "direction_variance_deg": tt.get("_waveDirectionVariance", 90.0),
+            "power_log": [(-8.0 if d else p) for p, d in zip(tt["_powerLog"], tt.get("_powerDisabled", []))],
+            "chop_scales": tt.get("_chopScales"),
+            "multiplier": tt.get("_multiplier", 1.0),
+        }
+    return None
+
+
 def export_body(bid: str, bundles: Path, out_root: Path, args) -> dict | None:
     low = bid.lower()
     paths = [bundles / f"celestialbody-{k}-{low}_assets_all.bundle" for k in ("shared", "simulation")]
@@ -348,6 +364,9 @@ def export_body(bid: str, bundles: Path, out_root: Path, args) -> dict | None:
             for k in OCEAN_FLOATS:
                 if k in floats:
                     ocean[k.strip("_")] = floats[k]
+            spectrum = ocean_spectrum(a)
+            if spectrum:
+                ocean["spectrum"] = spectrum
             info["ocean"] = ocean
             break
     # The original's per-body lighting (scaled bundle: CelestialBodyLighting ambient colours, the

@@ -92,7 +92,7 @@ in the renderer).
 | 2 | Ground where the physics puts it | `GetSurfaceHeight` | Vertex heights from `ose_data::terrain::TerrainMap::height_m`, the server's own function: the terrain pack's global map, tiled layers and decals (terrain.md), or the embedded global map without a pack |
 | 3 | Planet colour from orbit to ground | scaled albedo + biome detail | Scaled albedo (no-water version) everywhere, faded to 30 % at the ground under biome detail |
 | 4 | Ground texture up close | biome mask, small arrays, rules, distance resampling | Biome mask picks the four small slices (land with no biome weight takes the first biome); height and slope windows weight them; tiled at 8, 64 and 512 m like the distance resampling; the slices' normal maps within 600 m; detail modulates the albedo so large-scale colour stays the original's |
-| 5 | Water | ocean sphere, waves, colours, Fresnel, glint, shoreline foam | Sea-level shell where terrain is below it; depth colour from the material's shallow/deep colours; Fresnel sky reflection; sun glint; twelve animated wave trains from swell to ripples; the material's foam texture where the sea is shallower than `_ShorelineFoamMaxDepth` |
+| 5 | Water | ocean sphere, FFT waves from `OceanWaveSpectrum`, colours, Fresnel, glint, shoreline foam | Sea-level shell where terrain is below it; FFT waves synthesised on the CPU each frame from the body's own Crest spectrum (two patches, 256 m and 32 m, ocean_fft.rs) displacing the sea within 1.5 km and giving its normals and crest foam, mipped by distance, with the analytic swell beyond; depth colour from the material's shallow/deep colours; Fresnel sky reflection; sun glint; the material's foam texture where the sea is shallower than `_ShorelineFoamMaxDepth` |
 | 6 | Sky and aerial perspective | Bruneton LUTs | The body's own LUTs, Bruneton's `GetSkyRadiance` / `GetSkyRadianceToPoint` in WGSL, exposure tone map |
 | 7 | Clouds | volumetric + scaled shell, cloud shadows | Below 40 km a ray march through the layer (coverage from the baked map eroded by noise, lit by a short march towards the sun, two-lobe phase, depth-tested against craft and terrain) out to 24 km; beyond that the baked shell; the cover along the sun ray shades the ground and sea; no god rays (Kerbin's `enableGodray` is 0) |
 | 8 | Sunlight and exposure | light + transmittance, CelestialBodyLighting ambient, post-process auto exposure | Sun colour through the transmittance LUT, sky light from the irradiance LUT; the body's own ambient colours (day on airless bodies, night everywhere); a fixed exposure per body that puts its mean albedo where Kerbin's sits, standing in for the auto exposure |
@@ -122,7 +122,7 @@ weight as probability, and the rules; at most 120 per item and 900 in all, neare
 to the ground texture. Grass is not drawn. The original's PQS texture sample rules are unused on the stock bodies.
 
 Since v1: grass (Vegetation Studio's grass items: the patch texture between the dry and healthy tints, drawn as
-crossed cards in one instanced batch within 55 m); under water (fog and light falling off with depth, the surface
+crossed cards in one instanced batch within 100 m); under water (fog and light falling off with depth, the surface
 from below with Snell's window); eclipses (the disc overlap of up to four bodies with the star, on ground, sea,
 clouds, grass, sky and props); terrain packs and atmosphere LUTs served gzip-compressed.
 
@@ -131,4 +131,9 @@ material, fading with depth); far trees and rocks out to 2.5 km as the original'
 (atlas frame chosen by view direction, brightness matched to the meshes); volumetric clouds (table row 7); gas
 giants (row 11).
 
-Not yet: FFT waves, god rays, drifting gas-giant bands.
+FFT waves: `OceanWaveSpectrum` is Crest's: 14 octaves from 2^-4 m, each a log10 variance density per rad/s
+(`_powerLog`, disabled octaves at the floor), wind 10 m/s, fetch 500 km, direction spread `_waveDirectionVariance`
+(Kerbin 90 deg, Eve 122, Laythe 97). Exported as planet.json `ocean.spectrum`; Kerbin's gives a significant wave
+height of about 0.7 m. Gravity is 9.81 for every sea (the spectrum is tuned for it; `_gravityScale` unused).
+
+Not yet: god rays, drifting gas-giant bands.

@@ -6,6 +6,7 @@
 //! Frame: the flight view's body model frame (metres, camera-relative for geometry). Quads are kept per body and
 //! built a few per frame, nearest first; until a quad's children exist the quad itself is drawn.
 
+use crate::ocean_fft;
 use crate::planet_lod::{self, QuadKey, TerrainVertex};
 use crate::planet_scatter::{Exclusion, Far, Grass, Instance, ScatterFile};
 use crate::render::{fetch_bitmap, fetch_bytes, DrawItem, ExtraPass, Renderer};
@@ -55,6 +56,8 @@ struct FrameU {
     occluders: [[f32; 4]; 4],
     /// x: the star's angular radius (rad), y: number of occluders
     eclipse: [f32; 4],
+    /// FFT waves: x 1 when the wave texture is live, y/z the long and short patch sizes (m), w: chop
+    waves: [f32; 4],
 }
 
 #[repr(C)]
@@ -214,6 +217,10 @@ pub struct PlanetRenderer {
     mip: Mipmapper,
     defaults: HashMap<Tex, wgpu::TextureView>,
     default_luts: [wgpu::TextureView; 3],
+    /// FFT ocean: the packed wave texture (ocean_fft.rs) and the body whose spectrum it runs.
+    waves_tex: wgpu::Texture,
+    waves_view: wgpu::TextureView,
+    ocean: Option<(String, ocean_fft::OceanFft)>,
     terrain: SharedTerrain,
     terrain_requested: bool,
     bodies: HashMap<String, Body>,
@@ -240,7 +247,7 @@ impl PlanetRenderer {
         });
         let tex_entry = |binding, dim| wgpu::BindGroupLayoutEntry {
             binding,
-            visibility: wgpu::ShaderStages::FRAGMENT,
+            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
             ty: wgpu::BindingType::Texture {
                 sample_type: wgpu::TextureSampleType::Float { filterable: true },
                 view_dimension: dim,
@@ -250,7 +257,7 @@ impl PlanetRenderer {
         };
         let samp_entry = |binding| wgpu::BindGroupLayoutEntry {
             binding,
-            visibility: wgpu::ShaderStages::FRAGMENT,
+            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
             ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
             count: None,
         };
@@ -273,6 +280,7 @@ impl PlanetRenderer {
                 tex_entry(2, D::D3),
                 tex_entry(3, D::D2),
                 samp_entry(4),
+                tex_entry(5, D::D2Array),
             ],
         });
         let chunk_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -342,13 +350,13 @@ impl PlanetRenderer {
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &vertex_attrs,
         })];
-        let quad_pipeline = |label, fs, blend: bool, write: bool, cull| {
+        let quad_pipeline = |label, vs, fs, blend: bool, write: bool, cull| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&quad_layout),
                 vertex: wgpu::VertexState {
                     module: &shader,
-                    entry_point: Some("vs_quad"),
+                    entry_point: Some(vs),
                     compilation_options: Default::default(),
                     buffers: &vbl,
                 },
@@ -376,14 +384,17 @@ impl PlanetRenderer {
         };
         let terrain_pipeline = quad_pipeline(
             "planet terrain",
+            "vs_quad",
             "fs_terrain",
             false,
             true,
             Some(wgpu::Face::Back),
         );
         // no culling: the sea is seen from below when the camera is under water
-        let ocean_pipeline = quad_pipeline("planet ocean", "fs_ocean", true, true, None);
-        let cloud_pipeline = quad_pipeline("planet clouds", "fs_clouds", true, false, None);
+        let ocean_pipeline =
+            quad_pipeline("planet ocean", "vs_ocean", "fs_ocean", true, true, None);
+        let cloud_pipeline =
+            quad_pipeline("planet clouds", "vs_quad", "fs_clouds", true, false, None);
         // Volumetric clouds: a full-screen ray march through the cloud layer, writing the depth of where it
         // enters the cloud so nearer craft and terrain stay in front; premultiplied colour.
         let vcloud_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -668,7 +679,28 @@ impl PlanetRenderer {
             })
         };
         let default_luts = [lut(1, 1, 1), lut(1, 1, 2), lut(1, 1, 1)];
+        let waves_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("ocean waves"),
+            size: wgpu::Extent3d {
+                width: ocean_fft::N as u32,
+                height: ocean_fft::N as u32,
+                depth_or_array_layers: 2,
+            },
+            mip_level_count: ocean_fft::MIPS,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let waves_view = waves_tex.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(D::D2Array),
+            ..Default::default()
+        });
         PlanetRenderer {
+            waves_tex,
+            waves_view,
+            ocean: None,
             device,
             queue,
             sky_pipeline,
@@ -1237,6 +1269,10 @@ impl PlanetRenderer {
                     binding: 4,
                     resource: wgpu::BindingResource::Sampler(&self.lut_sampler),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&self.waves_view),
+                },
             ],
         });
         let surf = surface_uniform(b, self.debug);
@@ -1479,6 +1515,17 @@ impl PlanetRenderer {
             Some(e) => (e * 0.1).max((auto * 0.75).min(6.0)),
             None => auto.clamp(4.0, 20.0),
         };
+        // FFT waves while the camera is low over an ocean world with a spectrum
+        let waves_live = has_ocean
+            && view.cam.length() - radius < 60_000.0
+            && update_waves(
+                &mut self.ocean,
+                &self.queue,
+                &self.waves_tex,
+                &id,
+                b.info.as_ref(),
+                view.time_s,
+            );
         let cam_km = view.cam / 1000.0;
         let sun = view.sun.normalize_or_zero();
         let fu = FrameU {
@@ -1544,6 +1591,12 @@ impl PlanetRenderer {
                 0.0,
                 0.0,
             ],
+            waves: [
+                f32::from(u8::from(waves_live)),
+                ocean_fft::PATCH_LONG as f32,
+                ocean_fft::PATCH_SHORT as f32,
+                ocean_fft::CHOP as f32,
+            ],
             water_col: {
                 let s = surface_uniform(b, 0.0);
                 [
@@ -1593,12 +1646,12 @@ impl PlanetRenderer {
 
             b.placed_at = Some(view.cam);
         }
-        // Grass: re-placed around the camera when it has moved a few metres.
+        // Grass: re-placed around the camera when it has moved 8 m (it fades out 12 m inside its range).
         let gmoved = b
             .grass_at
             .map(|p| (p - view.cam).length())
             .unwrap_or(f64::INFINITY);
-        if gmoved > 3.0 {
+        if gmoved > 8.0 {
             let g = f.place_grass(
                 map,
                 view.radius_m,
@@ -1808,6 +1861,56 @@ pub fn eclipse_visible(p: DVec3, sun: DVec3, occluders: &[(DVec3, f64)], sun_rad
         vis *= 1.0 - deepest * (1.0 - t);
     }
     vis
+}
+
+/// Run the body's ocean spectrum to time `t` and upload the packed waves with their mips; false when the body
+/// has none. Gravity is Kerbin's for every sea (the spectrum's frequencies are tuned for it).
+fn update_waves(
+    ocean: &mut Option<(String, ocean_fft::OceanFft)>,
+    queue: &wgpu::Queue,
+    tex: &wgpu::Texture,
+    id: &str,
+    info: Option<&serde_json::Value>,
+    t: f64,
+) -> bool {
+    if ocean.as_ref().map(|o| o.0.as_str()) != Some(id) {
+        let spec = info
+            .and_then(|v| v.get("ocean"))
+            .and_then(|o| o.get("spectrum"))
+            .and_then(|s| serde_json::from_value::<ocean_fft::Spectrum>(s.clone()).ok());
+        let Some(spec) = spec else {
+            *ocean = None;
+            return false;
+        };
+        *ocean = Some((id.to_string(), ocean_fft::OceanFft::new(&spec, 9.81)));
+    }
+    let Some((_, fft)) = ocean.as_mut() else {
+        return false;
+    };
+    fft.update(t);
+    for (level, texels) in fft.texels().iter().enumerate() {
+        let n = (ocean_fft::N >> level) as u32;
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: tex,
+                mip_level: level as u32,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            bytemuck::cast_slice(texels),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(n * 8),
+                rows_per_image: Some(n),
+            },
+            wgpu::Extent3d {
+                width: n,
+                height: n,
+                depth_or_array_layers: 2,
+            },
+        );
+    }
+    true
 }
 
 /// The atmosphere model's IsGasGiant (Jool): no ground under the cloud deck.

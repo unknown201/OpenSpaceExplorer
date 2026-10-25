@@ -115,8 +115,8 @@ pub struct Grass {
 }
 
 /// Grass is drawn this far out at most (m), and at most this many patches.
-pub const GRASS_RANGE_M: f64 = 55.0;
-pub const MAX_GRASS: usize = 14_000;
+pub const GRASS_RANGE_M: f64 = 100.0;
+pub const MAX_GRASS: usize = 45_000;
 
 /// A rectangle on the ground kept free of scatter (the KSC campus, its runway and pads): `origin` and the two
 /// horizontal axes of its own frame (model frame, unit), and its extent along them (m).
@@ -571,7 +571,7 @@ impl ScatterFile {
         // local tangent frame and height grid
         let east = normalize(planet_lod::cross([0.0, 1.0, 0.0], cam_dir));
         let north = planet_lod::cross(cam_dir, east);
-        const N: usize = 24;
+        const N: usize = 40;
         let step = 2.0 * range / N as f64;
         let mut grid = vec![0.0f64; (N + 1) * (N + 1)];
         for j in 0..=N {
@@ -788,11 +788,11 @@ mod tests {
         .unwrap();
         let cam = scale(planet_lod::direction(-0.7, -74.8), r + 2.0);
         let g = f.place_grass(&map, r, cam, &[]);
-        // pi 55^2 / 1.4^2: about 4,800 patches
-        assert!(g.len() > 3_500 && g.len() < 6_500, "{}", g.len());
+        // pi 100^2 / 1.4^2: about 16,000 patches
+        assert!(g.len() > 12_000 && g.len() < 21_000, "{}", g.len());
         for p in &g {
             let d = (p.pos[0] * p.pos[0] + p.pos[1] * p.pos[1] + p.pos[2] * p.pos[2]).sqrt();
-            assert!(d < 60.0);
+            assert!(d < 105.0);
         }
         // props skip grass items
         assert!(f.place(&map, r, cam, &[]).is_empty());

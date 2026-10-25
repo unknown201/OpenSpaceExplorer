@@ -27,6 +27,8 @@ struct Frame {
     occluders: array<vec4<f32>, 4>,
     // x: the star's angular radius (rad), y: number of occluders
     eclipse: vec4<f32>,
+    // FFT waves: x 1 when live, y/z long and short patch sizes (m), w: chop
+    waves: vec4<f32>,
 };
 
 struct Chunk {
@@ -73,6 +75,9 @@ struct Surface {
 @group(0) @binding(2) var scattering_tex: texture_3d<f32>;
 @group(0) @binding(3) var irradiance_tex: texture_2d<f32>;
 @group(0) @binding(4) var lut_samp: sampler;
+// FFT waves (ocean_fft.rs): layer 0 x/z displacement, height, Jacobian of the long patch; layer 1 its slopes
+// and the short patch's slopes.
+@group(0) @binding(5) var waves_tex: texture_2d_array<f32>;
 
 @group(1) @binding(0) var<uniform> chunk: Chunk;
 
@@ -460,6 +465,10 @@ struct VOut {
 
 @vertex
 fn vs_quad(in: VIn) -> VOut {
+    return quad_out(in);
+}
+
+fn quad_out(in: VIn) -> VOut {
     var out: VOut;
     let rel = chunk.offset.xyz + in.pos;
     out.clip = frame.view_proj * vec4<f32>(rel, 1.0);
@@ -469,6 +478,78 @@ fn vs_quad(in: VIn) -> VOut {
     out.height = in.height;
     out.extra = in.extra;
     out.model = chunk.center.xyz + in.pos;
+    return out;
+}
+
+// The sea's vertices move with the FFT waves near the camera (up and sideways, the original's displacement
+// textures); the fragment still samples the waves at the undisplaced tile position.
+@vertex
+fn vs_ocean(in: VIn) -> VOut {
+    var out = quad_out(in);
+    if frame.waves.x > 0.5 {
+        let dist = length(out.rel);
+        let fade = 1.0 - smoothstep(600.0, 1500.0, dist);
+        if fade > 0.0 {
+            // the mip whose texels match the vertex spacing (33 vertices across a quad)
+            let spacing = frame.solar.w * 1.5708 / exp2(chunk.center.w) / 32.0;
+            let lod_l = log2(max(spacing / (frame.waves.y / 128.0), 1.0));
+            let w = ocean_waves(out.tile, normalize(out.model), lod_l, 8.0);
+            let rel = out.rel + w.disp * fade;
+            out.rel = rel;
+            out.clip = frame.view_proj * vec4<f32>(rel, 1.0);
+        }
+    }
+    return out;
+}
+
+struct Wave {
+    // surface gradient (model frame), displacement (m), Jacobian, weight of the long and short patches
+    grad: vec3<f32>,
+    disp: vec3<f32>,
+    jac: f32,
+    w_long: f32,
+    w_short: f32,
+};
+
+// The FFT patches on the sphere: projected along the axis closest to `up` (blended where two are close), at
+// mip levels chosen by the caller; each patch fades out as its last mip is reached.
+fn ocean_waves(p: vec3<f32>, up: vec3<f32>, lod_l: f32, lod_s: f32) -> Wave {
+    var out: Wave;
+    out.grad = vec3<f32>(0.0);
+    out.disp = vec3<f32>(0.0);
+    out.jac = 1.0;
+    let last = f32(textureNumLevels(waves_tex) - 1u);
+    out.w_long = 1.0 - smoothstep(last - 1.0, last, lod_l);
+    out.w_short = 1.0 - smoothstep(last - 1.0, last, lod_s);
+    var bw = pow(abs(up), vec3<f32>(8.0));
+    bw = bw / (bw.x + bw.y + bw.z);
+    var jac = 0.0;
+    for (var a = 0; a < 3; a = a + 1) {
+        let wgt = bw[a];
+        if wgt < 0.01 {
+            continue;
+        }
+        var e1 = vec3<f32>(0.0, 1.0, 0.0);
+        var e2 = vec3<f32>(0.0, 0.0, 1.0);
+        if a == 1 {
+            e1 = vec3<f32>(0.0, 0.0, 1.0);
+            e2 = vec3<f32>(1.0, 0.0, 0.0);
+        } else if a == 2 {
+            e1 = vec3<f32>(1.0, 0.0, 0.0);
+            e2 = vec3<f32>(0.0, 1.0, 0.0);
+        }
+        let xy = vec2<f32>(dot(p, e1), dot(p, e2));
+        let uv_l = xy / frame.waves.y;
+        let uv_s = xy / frame.waves.z;
+        let d = textureSampleLevel(waves_tex, wrap_samp, uv_l, 0, min(lod_l, last));
+        let sl = textureSampleLevel(waves_tex, wrap_samp, uv_l, 1, min(lod_l, last));
+        let ss = textureSampleLevel(waves_tex, wrap_samp, uv_s, 1, min(lod_s, last));
+        let g2 = sl.xy * out.w_long + ss.zw * out.w_short;
+        out.grad = out.grad + (e1 * g2.x + e2 * g2.y) * wgt;
+        out.disp = out.disp + (e1 * d.x + e2 * d.z + up * d.y) * (wgt * out.w_long);
+        jac = jac + mix(1.0, d.w, out.w_long) * wgt;
+    }
+    out.jac = jac;
     return out;
 }
 
@@ -734,8 +815,21 @@ fn fs_ocean(in: VOut) -> @location(0) vec4<f32> {
     }
     let up = normalize(in.model);
     let dist = length(in.rel);
-    let n = wave_normal(in.tile, up, frame.cam_km.w, dist);
     let view = normalize(in.rel);
+    var n = wave_normal(in.tile, up, frame.cam_km.w, dist);
+    // FFT waves near the camera (the analytic swell stays beyond), mips by the pixel footprint on the sea
+    var crest = 0.0;
+    if frame.waves.x > 0.5 {
+        let foot = dist * 0.0012 / max(abs(dot(view, up)), 0.12);
+        let lod_l = log2(max(foot / (frame.waves.y / 128.0), 1.0));
+        let lod_s = log2(max(foot / (frame.waves.z / 128.0), 1.0));
+        let w = ocean_waves(in.tile, up, lod_l, lod_s);
+        let g = w.grad - up * dot(w.grad, up);
+        let nf = normalize(up - g);
+        n = normalize(mix(n, nf, max(w.w_long, w.w_short)));
+        // breaking crests where the choppy displacement folds the surface (Jacobian near or below 0)
+        crest = (1.0 - smoothstep(0.35, 0.9, w.jac)) * w.w_long;
+    }
     if under_water() {
         // The surface from below: Snell's window (bright, the sky through the waves) inside 48.6 degrees of
         // straight up, the water's own colour reflected outside it.
@@ -766,6 +860,9 @@ fn fs_ocean(in: VOut) -> @location(0) vec4<f32> {
         let foam = clamp((f1 * f2 * 2.0) * shallow * (1.0 - smoothstep(1500.0, 4000.0, dist)), 0.0, 1.0);
         radiance = mix(radiance, vec3<f32>(0.85) / PI * (light.sun + light.sky), foam);
     }
+    if crest > 0.0 {
+        radiance = mix(radiance, vec3<f32>(0.8) / PI * (light.sun + light.sky), crest * 0.8);
+    }
     // Fresnel reflection of the sky (rays that would point into the sea are bent back to the horizon).
     let cos_v = max(dot(-view, n), 0.0);
     let fres = 0.02 + 0.98 * pow(1.0 - cos_v, 5.0);
@@ -777,7 +874,7 @@ fn fs_ocean(in: VOut) -> @location(0) vec4<f32> {
     if frame.rayleigh.w > 0.5 {
         sky = sky_radiance(p_km, refl, sun).radiance;
     }
-    radiance = mix(radiance, sky, fres);
+    radiance = mix(radiance, sky, fres * (1.0 - crest * 0.8));
     // Sun glint.
     let h = normalize(sun - view);
     let smooth_ = surface.shallow.w;
@@ -909,7 +1006,7 @@ fn fs_grass(in: GOut) -> @location(0) vec4<f32> {
     let dist = length(in.rel);
     let tex = textureSample(grass_tex, grass_samp, in.uv, i32(in.params.z + 0.5));
     // thin out towards the edge of the patch field (dithered) so there is no hard line
-    let fade = 1.0 - smoothstep(35.0, 55.0, dist);
+    let fade = 1.0 - smoothstep(65.0, 88.0, dist);
     let dither = fract(sin(dot(in.clip.xy, vec2<f32>(12.9898, 78.233))) * 43758.547);
     if tex.a < 0.45 || dither > fade {
         discard;

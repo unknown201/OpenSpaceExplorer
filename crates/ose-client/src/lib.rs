@@ -24,6 +24,7 @@ pub mod menu3d;
 pub mod missions;
 #[cfg(target_arch = "wasm32")]
 pub mod navball;
+pub mod ocean_fft;
 #[cfg(target_arch = "wasm32")]
 pub mod planet;
 pub mod planet_lod;
