@@ -7,17 +7,32 @@ use axum::{
 };
 use ose_net::{ServerMessage, SNAPSHOT_HZ, TRAJECTORY_HZ};
 use std::{
-    sync::Arc,
-    time::{Duration, Instant},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::Duration,
 };
 use tokio::{
     sync::watch,
     time::{interval, timeout, MissedTickBehavior},
 };
 
+/// A point in the order of stream builds and joins. A counter rather than a clock: on a coarse clock a
+/// build begun before a join can read the same `Instant` as the join.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Mark(u64);
+
+static MARKS: AtomicU64 = AtomicU64::new(0);
+
+/// The current point in that order (taken when a connection subscribes).
+pub fn mark() -> Mark {
+    Mark(MARKS.fetch_add(1, Ordering::SeqCst))
+}
+
 pub struct Batch {
-    /// Captured before reading the world, so a joining player can skip work begun before they joined.
-    started: Instant,
+    /// Taken before reading the world, so a joining player can skip work begun before they joined.
+    started: Mark,
     messages: Box<[Bytes]>,
 }
 
@@ -32,7 +47,7 @@ pub struct Streams {
 impl Default for Streams {
     fn default() -> Self {
         let empty = Arc::new(Batch {
-            started: Instant::now(),
+            started: mark(),
             messages: Box::new([]),
         });
         Self {
@@ -105,7 +120,7 @@ fn publish<M: IntoIterator<Item = ServerMessage>>(
     sender: &watch::Sender<Frames>,
     build: impl FnOnce() -> M,
 ) {
-    let started = Instant::now();
+    let started = mark();
     if let Some(messages) = encode(build()) {
         // send() drops the batch if the last client left while it was being built.
         let _ = sender.send(Arc::new(Batch { started, messages }));
@@ -114,7 +129,7 @@ fn publish<M: IntoIterator<Item = ServerMessage>>(
 
 /// Ignore an in-flight build begun before this connection subscribed (for example before its probe
 /// was spawned), even if that build finishes publishing after the subscription was created.
-pub async fn next_batch(receiver: &mut watch::Receiver<Frames>, since: Instant) -> Option<Frames> {
+pub async fn next_batch(receiver: &mut watch::Receiver<Frames>, since: Mark) -> Option<Frames> {
     loop {
         receiver.changed().await.ok()?;
         let frames = receiver.borrow_and_update().clone();
@@ -159,7 +174,7 @@ mod tests {
         publish(&streams.snapshots, || {
             // The world was captured before this player arrived, but publication is still in flight.
             subscription = Some(streams.snapshots.subscribe());
-            joined = Some(Instant::now());
+            joined = Some(mark());
             [ServerMessage::Snapshot {
                 tick: Tick(1),
                 bodies: vec![],

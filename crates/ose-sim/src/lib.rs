@@ -1101,6 +1101,9 @@ impl Universe {
             }
             let comm_blocked = self.commnet_blocks_control(e);
             let mut structure = self.world.entity_mut(e).take::<structure::Structure>();
+            if let Some(st) = structure.as_mut() {
+                st.frame_top = flight::vessel_top(&p);
+            }
             let sun = if structure.is_some() {
                 self.sunlight(body_e, p.r, ut)
             } else {
@@ -1149,6 +1152,7 @@ impl Universe {
                             v_air.length(),
                             step_dt,
                         );
+                        st.frame_top = flight::vessel_top(&p);
                         let cda = st.aero(p.stage, p.facing, v_air, a.density(alt), mach);
                         lift = st.lift(p.facing, v_air, a.density(alt), mach);
                         torque = st.aero_torque(p.facing, v_air, a.density(alt), mach);
@@ -1199,7 +1203,9 @@ impl Universe {
                 // a hard landing breaks the parts it lands on; the rest may come through
                 if out.crashed {
                     if let Some(st) = &mut structure {
-                        if let Some((_, off)) = st.impact(out.impact_mps, p.facing) {
+                        if let Some((_, off)) =
+                            st.impact(out.impact_mps, p.facing, out.impact_against)
+                        {
                             p.crashed = false;
                             out.crashed = false;
                             for piece in off {
@@ -1792,6 +1798,64 @@ mod tests {
     }
 
     #[test]
+    fn crashing_at_speed_destroys_the_craft_whichever_way_it_hits() {
+        let (mut u, body, spec, st) = k1_on_real_kerbin();
+        let v = u.spawn_powered_on_surface("K1", body, spec.clone(), 0.0, 0.0);
+        u.set_structure(v, st);
+        u.step();
+        let p = u.powered(v).unwrap().clone();
+        let omega = DVec3::new(0.0, 0.0, 2.0 * std::f64::consts::PI / 21_549.425);
+        // (nose angle from up, sink m/s, sideways m/s)
+        for (lean, sink, side) in [
+            (0.0, 150.0, 0.0),
+            (std::f64::consts::PI, 150.0, 0.0),
+            (1.5, 40.0, 200.0),
+            (0.3, 60.0, 100.0),
+        ] {
+            u.world.despawn(v);
+            let v = u.spawn_powered_on_surface("K1", body, spec.clone(), 0.0, 0.0);
+            u.set_structure(v, k1_on_real_kerbin().3);
+            let mut q = p.clone();
+            let up = p.r.normalized();
+            let east = DVec3::new(0.0, 0.0, 1.0).cross(up).normalized();
+            q.landed = false;
+            q.r = up * (p.r.length() + 30.0);
+            q.v = omega.cross(q.r) - up * sink + east * side;
+            q.facing = (up * f64::cos(lean) + east * f64::sin(lean)).normalized();
+            q.attitude = flight::Attitude::Free;
+            q.throttle = 0.0;
+            u.set_powered(v, q);
+            let mut seen = Vec::new();
+            for i in 0..(3 * TICKS_PER_SECOND) {
+                u.step();
+                match u.powered(v) {
+                    Some(q) => {
+                        if i % 10 == 0 {
+                            seen.push((
+                                i,
+                                (q.r.length() - 600_000.0) as i64,
+                                q.landed,
+                                q.crashed,
+                                (q.v - omega.cross(q.r)).length() as i64,
+                            ));
+                        }
+                    }
+                    None => {
+                        seen.push((i, 0, false, true, 0));
+                        break;
+                    }
+                }
+            }
+            let q = u.powered(v);
+            eprintln!("lean {lean} sink {sink} side {side}: {seen:?}");
+            assert!(
+                q.is_none_or(|q| q.crashed),
+                "lean {lean} sink {sink} side {side}: survived {seen:?}"
+            );
+        }
+    }
+
+    #[test]
     fn a_craft_stands_on_its_lowest_part_and_tips_over_when_it_lands_leaning() {
         let (mut u, body, spec, st) = k1_on_real_kerbin();
         let v = u.spawn_powered_on_surface("K1", body, spec.clone(), 0.0, 0.0);
@@ -2130,6 +2194,171 @@ mod tests {
             used_on > 0.0 && used_off == 0.0,
             "monoprop {used_on} / {used_off}"
         );
+    }
+
+    #[test]
+    fn a_landed_jets_control_surfaces_follow_the_keys() {
+        let (mut u, body, _, _) = k1_on_real_kerbin();
+        let crafts: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let defs: Vec<ose_data::PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let res: Vec<ose_data::ResourceDef> =
+            serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
+        let c = crafts.iter().find(|c| c.name == "Stock04_Jet").unwrap();
+        let c = structure::level_layout(c).unwrap();
+        let report = ose_data::staging::delta_v_by_stage(&c, &defs, &res);
+        let spec = flight::FlightSpec::from_report(&report, &[], &[], 1.5);
+        let v = u.spawn_powered_on_surface("Craft", body, spec, 0.0, 0.0);
+        u.set_structure(v, structure::Structure::build(&c, &defs, &res));
+        assert!(u.set_level(v, 90.0));
+        u.step();
+        for (input, what) in [
+            (DVec3::new(1.0, 0.0, 0.0), "pitch"),
+            (DVec3::new(0.0, 1.0, 0.0), "yaw"),
+            (DVec3::new(0.0, 0.0, 1.0), "roll"),
+        ] {
+            assert!(u.set_rotation(v, input.x, input.y, input.z));
+            u.step();
+            let p = u.powered(v).unwrap().clone();
+            assert!(p.landed, "{what}");
+            let d = u
+                .structure(v)
+                .unwrap()
+                .surface_deflections(p.facing, p.steer_cmd);
+            let most = d.iter().map(|x| x.1.abs()).fold(0.0, f64::max);
+            assert!(
+                most > 0.1,
+                "{what}: surfaces move on the ground: {d:?} cmd {:?}",
+                p.steer_cmd
+            );
+        }
+    }
+
+    #[test]
+    fn a_plane_flying_into_the_ground_nose_first_crashes() {
+        let (mut u, body, _, _) = k1_on_real_kerbin();
+        let crafts: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let defs: Vec<ose_data::PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let res: Vec<ose_data::ResourceDef> =
+            serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
+        let c = crafts.iter().find(|c| c.name == "Stock04_Jet").unwrap();
+        let c = structure::level_layout(c).unwrap();
+        let report = ose_data::staging::delta_v_by_stage(&c, &defs, &res);
+        let spec = flight::FlightSpec::from_report(&report, &[], &[], 1.5);
+        let v = u.spawn_powered_on_surface("Craft", body, spec, 0.0, 0.0);
+        u.set_structure(v, structure::Structure::build(&c, &defs, &res));
+        assert!(u.set_level(v, 90.0));
+        u.step();
+        let p0 = u.powered(v).unwrap().clone();
+        let up = p0.r.normalized();
+        let omega = DVec3::new(0.0, 0.0, 2.0 * std::f64::consts::PI / 21_549.425);
+        // (nose below the horizon, rad; sink m/s; crashes)
+        for (dip, sink, crashes) in [(0.0, 2.0, false), (0.6, 100.0, true)] {
+            let mut q = p0.clone();
+            q.landed = false;
+            q.r = up * (p0.r.length() + 10.0);
+            q.facing = (p0.facing * f64::cos(dip) - up * f64::sin(dip)).normalized();
+            q.v = omega.cross(q.r) + p0.facing * 120.0 - up * sink;
+            q.throttle = 0.0;
+            q.attitude = flight::Attitude::Free;
+            u.set_powered(v, q);
+            for _ in 0..(3 * TICKS_PER_SECOND) {
+                u.step();
+            }
+            let q = u.powered(v);
+            assert_eq!(
+                q.is_none_or(|q| q.crashed),
+                crashes,
+                "dip {dip} sink {sink}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_truck_on_the_runway_stands_on_its_wheels() {
+        let (mut u, body, _, _) = k1_on_real_kerbin();
+        let crafts: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let defs: Vec<ose_data::PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let res: Vec<ose_data::ResourceDef> =
+            serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
+        let c = crafts.iter().find(|c| c.name == "Stock09_Truck").unwrap();
+        let c = structure::level_layout(c).unwrap();
+        let report = ose_data::staging::delta_v_by_stage(&c, &defs, &res);
+        let spec = flight::FlightSpec::from_report(&report, &[], &[], 1.5);
+        let v = u.spawn_powered_on_surface("Craft", body, spec, 0.0, 0.0);
+        u.set_structure(v, structure::Structure::build(&c, &defs, &res));
+        assert!(u.set_level(v, 90.0));
+        u.step();
+        for _ in 0..TICKS_PER_SECOND {
+            u.step();
+        }
+        let p = u.powered(v).unwrap().clone();
+        let up = p.r.normalized();
+        assert!(p.landed && !p.tipped && p.level, "{p:?}");
+        assert!(p.facing.dot(up).abs() < 0.05, "lies along the ground");
+        assert_eq!(p.drive.wheels.len(), 8);
+        // its wheels are on the craft's +Z side once laid out: the belly, which a level craft keeps down
+        let wheels: Vec<f64> = c
+            .parts
+            .iter()
+            .filter(|x| x.part_id == "wheel_2v_truck")
+            .map(|x| x.local_position.z)
+            .collect();
+        let cockpit = c.parts.iter().find(|x| x.parent.is_none()).unwrap();
+        assert!(
+            wheels.iter().all(|z| *z > cockpit.local_position.z + 0.5),
+            "wheels below the cab: {wheels:?}"
+        );
+        assert!(
+            p.ground_clearance_m < 3.0,
+            "on its wheels: {}",
+            p.ground_clearance_m
+        );
+    }
+
+    #[test]
+    fn a_held_yaw_with_sas_off_keeps_turning_about_the_same_axis() {
+        let (mut u, body, spec, st) = k1_on_real_kerbin();
+        let v = u.spawn_vessel_in_circular_orbit("K1", body, 100_000.0);
+        let mut p = flight::Powered::new(
+            spec,
+            DVec3::new(700_000.0, 0.0, 0.0),
+            DVec3::new(0.0, 2_246.0, 0.0),
+            false,
+        );
+        p.facing = DVec3::new(0.3, 0.5, 0.81).normalized();
+        for s in &mut p.spec.stages {
+            s.moi_tm2 = 5.0;
+            s.wheel_torque_knm = 5.0;
+        }
+        u.set_powered(v, p);
+        u.set_structure(v, st);
+        // a whisper of throttle keeps it off rails
+        assert!(u.set_controls(v, 0.001, flight::Attitude::Free));
+        u.step();
+        let top0 = flight::vessel_top(u.powered(v).unwrap());
+        assert!(u.set_rotation(v, 0.0, 1.0, 0.0));
+        let mut turned = 0.0;
+        let mut last = u.powered(v).unwrap().facing;
+        for _ in 0..(20 * TICKS_PER_SECOND) {
+            u.step();
+            let p = u.powered(v).unwrap();
+            assert!(
+                p.facing.dot(top0).abs() < 0.02,
+                "the nose stays in the yaw plane: {:?}",
+                p.facing
+            );
+            let top = flight::vessel_top(p);
+            assert!(top.dot(top0) > 0.999, "no roll creeps in: {top:?}");
+            turned += last.dot(p.facing).clamp(-1.0, 1.0).acos();
+            last = p.facing;
+        }
+        assert!(turned > 1.0, "it turned {turned} rad");
     }
 
     #[test]

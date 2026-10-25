@@ -92,6 +92,9 @@ pub struct Structure {
     pub cargo_bay: Vec<bool>,
     pub bay_open: Vec<bool>,
     pub shielded: Vec<bool>,
+    /// The craft's +Z in flight (`flight::vessel_top`), inertial, kept current by the universe: with the
+    /// facing it places the parts (a plane's belly down). Zero falls back to the unrolled frame.
+    pub frame_top: DVec3,
     /// Each part's lift and drag at the last `aero_torque` call, kN, inertial (the aero overlay).
     pub part_aero_kn: Vec<(DVec3, DVec3)>,
     /// RCS thrusters on the parts.
@@ -248,6 +251,17 @@ fn basis(facing: DVec3) -> (DVec3, DVec3, DVec3) {
 }
 
 impl Structure {
+    /// The craft's axes in the inertial frame: +Y along `facing`, +Z toward `frame_top`.
+    fn frame(&self, facing: DVec3) -> (DVec3, DVec3, DVec3) {
+        let y = facing.normalized();
+        let z = self.frame_top - y * self.frame_top.dot(y);
+        if z.length_squared() < 0.25 {
+            return basis(facing);
+        }
+        let z = z.normalized();
+        (y.cross(z), y, z)
+    }
+
     pub fn build(craft: &Craft, defs: &[PartDef], resources: &[ResourceDef]) -> Structure {
         let rigid = RigidVessel::build(craft, defs, resources);
         let report = ose_data::staging::delta_v_by_stage(craft, defs, resources);
@@ -487,6 +501,7 @@ impl Structure {
                 .collect(),
             bay_open: vec![false; n],
             shielded: vec![false; n],
+            frame_top: DVec3::ZERO,
             part_aero_kn: vec![(DVec3::ZERO, DVec3::ZERO); n],
             ejection_force: (0..n)
                 .map(|i| def_of(i).map(|d| d.ejection_force).unwrap_or(0.0))
@@ -804,6 +819,11 @@ impl Structure {
 
     /// `ground_profile` and the parts that touch the ground first.
     fn feet(&self) -> (f64, f64, f64, Vec<usize>) {
+        self.feet_along(self.up_axis())
+    }
+
+    /// `feet` with "up" along `u` (vessel frame): the parts first in line when the blow comes from -`u`.
+    fn feet_along(&self, u: DVec3) -> (f64, f64, f64, Vec<usize>) {
         let present: Vec<usize> = (0..self.rigid.len())
             .filter(|&i| self.rigid.present[i])
             .collect();
@@ -811,8 +831,6 @@ impl Structure {
             return (0.0, 0.0, 0.0, Vec::new());
         }
         let c = self.rigid.rest_centre();
-        // up in the vessel frame: +Y standing, +Z lying level (craft -Z; the vessel frame negates Z)
-        let u = self.up_axis();
         let bottom = |i: usize| {
             let (centre, half) = self.part_box(i);
             centre.dot(u) - (half.x * u.x.abs() + half.y * u.y.abs() + half.z * u.z.abs())
@@ -1087,7 +1105,7 @@ impl Structure {
         let present: Vec<usize> = (0..self.rigid.len())
             .filter(|&i| self.rigid.present[i])
             .collect();
-        let (bx, by, bz) = basis(facing);
+        let (bx, by, bz) = self.frame(facing);
         let speed = v_air.length();
         let d = if speed > 0.0 {
             DVec3::new(v_air.dot(bx), v_air.dot(by), v_air.dot(bz)) * (1.0 / speed)
@@ -1200,12 +1218,24 @@ impl Structure {
     /// break, taking up the impact their tolerance allows (speed² less tolerance²), and the next parts down
     /// meet what is left. Returns the broken parts and the pieces that came loose, or `None` when the root
     /// broke (the vessel is lost).
-    pub fn impact(&mut self, mut speed: f64, facing: DVec3) -> Option<(Vec<usize>, Vec<Piece>)> {
-        let (bx, by, bz) = basis(facing);
+    ///
+    /// `against` is where the blow comes from in the vessel frame (the parts furthest the other way take it
+    /// first); `None` takes it on the parts the vessel stands on.
+    pub fn impact(
+        &mut self,
+        mut speed: f64,
+        facing: DVec3,
+        against: Option<DVec3>,
+    ) -> Option<(Vec<usize>, Vec<Piece>)> {
+        let (bx, by, bz) = self.frame(facing);
         let mut broken = Vec::new();
         let mut pieces = Vec::new();
+        let u = against
+            .filter(|a| a.length_squared() > 1e-12)
+            .map(|a| a.normalized())
+            .unwrap_or_else(|| self.up_axis());
         loop {
-            let (_, _, tolerance, feet) = self.feet();
+            let (_, _, tolerance, feet) = self.feet_along(u);
             let tolerance = if tolerance > 0.0 {
                 tolerance
             } else {
@@ -1244,7 +1274,7 @@ impl Structure {
         }
         self.rigid.remove_parts(parts);
         self.net.remove_parts(parts);
-        let (bx, by, bz) = basis(facing);
+        let (bx, by, bz) = self.frame(facing);
         Some(self.split_off(bx, by, bz))
     }
 
@@ -1511,7 +1541,7 @@ impl Structure {
         if speed <= 0.0 || rho <= 0.0 {
             return DVec3::ZERO;
         }
-        let (bx, by, bz) = basis(facing);
+        let (bx, by, bz) = self.frame(facing);
         let travel = v_air * (1.0 / speed);
         let q = 0.5 * rho * speed * speed;
         let mut total = DVec3::ZERO;
@@ -1550,7 +1580,7 @@ impl Structure {
         if speed <= 0.0 || rho <= 0.0 {
             return DVec3::ZERO;
         }
-        let (bx, by, bz) = basis(facing);
+        let (bx, by, bz) = self.frame(facing);
         let to_inertial = |v: DVec3| bx * v.x + by * v.y + bz * v.z;
         let travel = v_air * (1.0 / speed);
         let q = 0.5 * rho * speed * speed;
@@ -1588,7 +1618,7 @@ impl Structure {
     /// How far each control surface deflects for steering command `cmd` (inertial, a share of full turning
     /// about each axis): the surface turns so its lift's torque helps the command, up to its range, rad.
     pub fn surface_deflections(&self, facing: DVec3, cmd: DVec3) -> Vec<(usize, f64)> {
-        let (bx, by, bz) = basis(facing);
+        let (bx, by, bz) = self.frame(facing);
         let to_inertial = |v: DVec3| bx * v.x + by * v.y + bz * v.z;
         let c = self.rigid.rest_centre();
         (0..self.rigid.len())
@@ -1655,7 +1685,7 @@ impl Structure {
         if speed <= 0.0 {
             return 0.0;
         }
-        let (bx, by, bz) = basis(facing);
+        let (bx, by, bz) = self.frame(facing);
         let d = v_air * (1.0 / speed);
         // vessel frame, then the craft's Unity axes (Z negated)
         let du = DVec3::new(d.dot(bx), d.dot(by), -d.dot(bz));
@@ -1708,7 +1738,7 @@ impl Structure {
         if p.stage != self.staged_to {
             self.trim_to(p.stage);
         }
-        let (bx, by, bz) = basis(p.facing);
+        let (bx, by, bz) = self.frame(p.facing);
         let to_vessel = |v: DVec3| DVec3::new(v.dot(bx), v.dot(by), v.dot(bz));
         let alpha = to_vessel(out.angular_accel);
         let turning = alpha.length() > 1e-4 || out.angvel.length() > 1e-3;
@@ -2197,17 +2227,17 @@ mod tests {
         );
         assert_eq!(tol_out, 20.0, "it lands on the legs");
         // 15 m/s: the legs take it; folded in, the engine breaks
-        let (broken, _) = s.impact(15.0, DVec3::new(1.0, 0.0, 0.0)).unwrap();
+        let (broken, _) = s.impact(15.0, DVec3::new(1.0, 0.0, 0.0), None).unwrap();
         assert!(broken.is_empty());
         // a bit over the legs' 20 m/s: their 0.95 m of suspension takes it
-        let (broken, _) = s.impact(21.0, DVec3::new(1.0, 0.0, 0.0)).unwrap();
+        let (broken, _) = s.impact(21.0, DVec3::new(1.0, 0.0, 0.0), None).unwrap();
         assert!(broken.is_empty(), "the suspension soaks it up");
         s.deploy_gear(false);
-        let (broken, _) = s.impact(15.0, DVec3::new(1.0, 0.0, 0.0)).unwrap();
+        let (broken, _) = s.impact(15.0, DVec3::new(1.0, 0.0, 0.0), None).unwrap();
         assert_eq!(broken, vec![3], "the engine breaks");
         // with the engine gone the vessel stands on its tank and legs
         assert!(
-            s.impact(200.0, DVec3::new(1.0, 0.0, 0.0)).is_none(),
+            s.impact(200.0, DVec3::new(1.0, 0.0, 0.0), None).is_none(),
             "far too fast"
         );
     }

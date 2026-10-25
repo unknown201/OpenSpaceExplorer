@@ -239,6 +239,11 @@ pub struct Powered {
     /// the control surfaces' deflection.
     #[serde(default)]
     pub trim: DVec3,
+    /// The craft's +Z, inertial, while the pilot turns it about its own axes (SAS off, or keys held over a
+    /// hold): it turns with the craft, so a held yaw stays a yaw. Zero otherwise (`vessel_top` then works
+    /// it out from the horizon and `roll_rad`).
+    #[serde(default)]
+    pub own_top: DVec3,
     /// Someone asked for this vessel's per-part lift and drag (the aero overlay).
     #[serde(default)]
     pub aero_overlay: bool,
@@ -352,6 +357,17 @@ pub fn roll_reference(facing: DVec3, up: DVec3) -> DVec3 {
 /// The craft's +Z in flight: the roll reference turned by its roll. For a level craft (a plane, whose +Z
 /// is its belly) the reference is down across the axis, so it flies wings level.
 pub fn vessel_top(p: &Powered) -> DVec3 {
+    let own = p.own_top - p.facing * p.own_top.dot(p.facing);
+    if own.length_squared() > 0.25 {
+        return own.normalized();
+    }
+    let (base, side) = top_reference(p);
+    let (sr, cr) = p.roll_rad.sin_cos();
+    base * cr + side * sr
+}
+
+/// The craft's +Z with no roll, and the way roll turns it (`facing` x that).
+fn top_reference(p: &Powered) -> (DVec3, DVec3) {
     let up = p.r.normalized();
     let base = if p.level {
         let down = -up - p.facing * (-up).dot(p.facing);
@@ -363,9 +379,20 @@ pub fn vessel_top(p: &Powered) -> DVec3 {
     } else {
         roll_reference(p.facing, up)
     };
-    let side = p.facing.cross(base);
-    let (sr, cr) = p.roll_rad.sin_cos();
-    base * cr + side * sr
+    (base, p.facing.cross(base))
+}
+
+/// Hand the craft's own frame back to the horizon one: the roll that keeps its +Z where it is.
+fn settle_own_top(p: &mut Powered) {
+    if p.own_top.length_squared() > 0.0 {
+        let top = vessel_top(p);
+        p.own_top = DVec3::ZERO;
+        let (base, side) = top_reference(p);
+        p.roll_rad = top
+            .dot(side)
+            .atan2(top.dot(base))
+            .rem_euclid(std::f64::consts::TAU);
+    }
 }
 
 /// How fast a vessel rolls at full input, rad/s (scaled by its reaction wheels' power).
@@ -692,6 +719,7 @@ impl Powered {
             rotation_input: DVec3::ZERO,
             roll_rate: 0.0,
             trim: DVec3::ZERO,
+            own_top: DVec3::ZERO,
             aero_overlay: false,
             eva_run: false,
             eva_jump: false,
@@ -976,7 +1004,10 @@ pub fn spin(p: &mut Powered, thrust_fraction: f64, dt: f64) {
         i.y.clamp(-1.0, 1.0),
         i.z.clamp(-1.0, 1.0),
     );
+    // the craft's own axes, turned with it from here on (not re-derived from the horizon, which would
+    // twist a held yaw into a circle)
     let top = vessel_top(p);
+    p.own_top = top;
     let right = p.facing.cross(top);
     // pitch turns the nose toward the top: about -right; yaw toward the right: about +top
     let w_turn = p.angvel - p.facing * p.angvel.dot(p.facing);
@@ -988,10 +1019,17 @@ pub fn spin(p: &mut Powered, thrust_fraction: f64, dt: f64) {
         w
     };
     p.angvel = w;
-    p.facing = rotate(p.facing, p.angvel, dt).normalized();
     // roll about the nose: its own rate, built up by the input and kept
     p.roll_rate = (p.roll_rate + i.z * alpha * dt).clamp(-MAX_TURN_RATE, MAX_TURN_RATE);
-    p.roll_rad = (p.roll_rad + p.roll_rate * dt).rem_euclid(std::f64::consts::TAU);
+    let facing = rotate(p.facing, p.angvel, dt).normalized();
+    let top = rotate(rotate(top, p.angvel, dt), facing * p.roll_rate, dt);
+    p.facing = facing;
+    let top = top - facing * top.dot(facing);
+    p.own_top = if top.length_squared() > 1e-12 {
+        top.normalized()
+    } else {
+        DVec3::ZERO
+    };
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -1009,6 +1047,9 @@ pub struct StepOutcome {
     pub wheel_share: f64,
     /// Speed over the ground at touchdown, m/s.
     pub impact_mps: f64,
+    /// Where the blow came from, vessel frame (+Y the axis, +Z the craft's top): `None` when it came
+    /// through the parts it stands on (a plane on its wheels).
+    pub impact_against: Option<DVec3>,
 }
 
 /// Integrate one `dt` of powered flight around `body`.
@@ -1065,6 +1106,7 @@ pub fn integrate(
         p.thrust_kn(pressure_atm) * air
     };
     if p.landed {
+        p.own_top = DVec3::ZERO;
         if !p.tipped {
             p.facing = if p.level {
                 // a plane rolls along its heading and, fast enough for the elevators to bite, rotates its
@@ -1113,10 +1155,20 @@ pub fn integrate(
         if let Some((_, moi)) = turning_authority(p, frac) {
             p.angvel = p.angvel + p.aero_torque_knm * (dt / moi);
         }
+        let held = p.rotation_input.x.abs() > 1e-3 || p.rotation_input.y.abs() > 1e-3;
         if p.attitude == Attitude::Free {
             spin(p, frac, dt);
+        } else if held {
+            // SAS on with the keys held: they turn the craft as with SAS off; a stability hold then keeps
+            // where it was let go
+            spin(p, frac, dt);
+            p.roll_rate = 0.0;
+            if let Attitude::Fixed(_) = p.attitude {
+                p.attitude = Attitude::Fixed(p.facing);
+            }
         } else {
             p.roll_rate = 0.0;
+            settle_own_top(p);
             steer(p, target, frac, dt);
             // roll about the axis at the reaction wheels' pace
             let rate =
@@ -1285,6 +1337,21 @@ pub fn integrate(
         let v_surf = p.v - omega_v.cross(p.r);
         let (up, _, _) = surface_frame(p.r);
         let speed = v_surf.length();
+        let nose_down = p.facing.dot(up) < -0.26;
+        // the way it was moving, in its own frame before it is set down
+        let against = {
+            let top = vessel_top(p);
+            let hit = if speed > 1e-6 {
+                v_surf * (-1.0 / speed)
+            } else {
+                up
+            };
+            DVec3::new(
+                hit.dot(p.facing.cross(top)),
+                hit.dot(p.facing),
+                hit.dot(top),
+            )
+        };
         // it falls over when the lean (its own plus the slope's) puts its centre of mass outside its footprint
         let slope = terrain
             .map(|t| slope_rad(body, t, p.r, ut + dt))
@@ -1314,8 +1381,21 @@ pub fn integrate(
             p.facing = up;
         }
         // what hits the ground: the whole speed standing, the sink rate for a plane on its wheels
-        let impact = if p.level && !p.tipped && !p.drive.wheels.is_empty() {
-            (-v_surf.dot(up)).max(0.0)
+        let on_wheels = p.level && !p.tipped && !p.drive.wheels.is_empty() && !nose_down;
+        out.impact_against = (!on_wheels).then_some(against);
+        let impact = if on_wheels {
+            // the speed into the ground under it: the sink rate, and the rise it runs into
+            let h = v_surf - up * v_surf.dot(up);
+            let hs = h.length();
+            let rise = if hs > 1e-3 {
+                let d = h * (1.0 / hs);
+                (ground_radius(body, terrain, p.r + d * 2.0, ut + dt)
+                    - ground_radius(body, terrain, p.r - d * 2.0, ut + dt))
+                    / 4.0
+            } else {
+                0.0
+            };
+            (-v_surf.dot(up)).max(0.0) + hs * rise.max(0.0) / (1.0 + rise * rise).sqrt()
         } else {
             speed
         };
@@ -1328,6 +1408,7 @@ pub fn integrate(
         p.r = up * (ground + stand_height(p));
         p.v = omega_v.cross(p.r) + rolling;
         p.landed = true;
+        p.own_top = DVec3::ZERO;
         p.eva_hop = false;
         p.angvel = DVec3::ZERO;
         out.touched_down = true;

@@ -2710,7 +2710,7 @@ async fn session(mut socket: WebSocket, s: AppState) {
     // replaying a cached snapshot from before their probe was created or a campaign was loaded.
     let mut snapshots = s.streams.snapshots.subscribe();
     let mut predictions = s.streams.trajectories.subscribe();
-    let subscribed_at = std::time::Instant::now();
+    let subscribed_at = streaming::mark();
     let mut science_rev = s.campaign.lock().expect("campaign lock").science.rev;
     'session: loop {
         tokio::select! {
