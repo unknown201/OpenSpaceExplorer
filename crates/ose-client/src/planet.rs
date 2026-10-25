@@ -1136,6 +1136,13 @@ impl PlanetRenderer {
         if b.map.is_some() || b.no_terrain || !b.info_done || !b.pack_done {
             return;
         }
+        // A gas giant (the atmosphere model's IsGasGiant: Jool) has no ground to shape: the sphere under its
+        // cloud deck, without the height map's bumps or any scatter.
+        if gas_giant(b) {
+            b.no_terrain = true;
+            b.dirty = true;
+            return;
+        }
         if let Some(pack) = b.pack.take() {
             let (pack, blob) = *pack;
             b.map = TerrainMap::from_pack(&pack, &blob);
@@ -1345,10 +1352,12 @@ impl PlanetRenderer {
             self.bodies.get_mut(&id).unwrap().quads.insert(key, q);
         }
         // The cloud shell, once its texture is in.
+        // None on a gas giant: its layer starts at 0 m, on the sphere, and the banded albedo is the deck.
         let cloud_base = self.bodies[&id].info.as_ref().and_then(|v| {
             v.get("clouds")
                 .map(|c| c["height_range_m"][0].as_f64().unwrap_or(7000.0))
         });
+        let cloud_base = cloud_base.filter(|_| !gas_giant(&self.bodies[&id]));
         if let Some(h) = cloud_base {
             let b = &self.bodies[&id];
             if b.clouds.is_empty() && b.tex.contains_key(&Tex::Clouds) {
@@ -1510,7 +1519,11 @@ impl PlanetRenderer {
                 (view.cam.length() - radius) as f32,
                 if has_ocean { 1.0 } else { 0.0 },
                 // z: 1 draws the clouds as a volume (camera below 40 km over a cloudy body)
-                if b.tex.contains_key(&Tex::Clouds) && view.cam.length() - radius < 40_000.0 {
+                // (not on a gas giant, whose cloud deck is its surface)
+                if b.tex.contains_key(&Tex::Clouds)
+                    && !gas_giant(b)
+                    && view.cam.length() - radius < 40_000.0
+                {
                     1.0
                 } else {
                     0.0
@@ -1797,6 +1810,15 @@ pub fn eclipse_visible(p: DVec3, sun: DVec3, occluders: &[(DVec3, f64)], sun_rad
     vis
 }
 
+/// The atmosphere model's IsGasGiant (Jool): no ground under the cloud deck.
+fn gas_giant(b: &Body) -> bool {
+    b.info
+        .as_ref()
+        .and_then(|v| v["atmosphere"]["IsGasGiant"].as_i64())
+        .unwrap_or(0)
+        == 1
+}
+
 fn surface_uniform(b: &Body, debug: f32) -> SurfaceU {
     let mut u: SurfaceU = bytemuck::Zeroable::zeroed();
     let info = b.info.as_ref();
@@ -1883,7 +1905,12 @@ fn surface_uniform(b: &Body, debug: f32) -> SurfaceU {
             .unwrap_or(0.0) as f32,
         c.map(|c| c["density"].as_f64().unwrap_or(1.0))
             .unwrap_or(0.0) as f32,
-        if c.is_some() { 1.0 } else { 0.0 },
+        // no shell, shadow or volume on a gas giant (see gas_giant)
+        if c.is_some() && !gas_giant(b) {
+            1.0
+        } else {
+            0.0
+        },
         slices as f32,
     ];
     u.clouds2 = [
@@ -1904,8 +1931,9 @@ fn surface_uniform(b: &Body, debug: f32) -> SurfaceU {
     u.ambient_day = [day[0], day[1], day[2], flag(airless)];
     u.ambient_night = [night[0], night[1], night[2], 0.0];
     u.flags = [
-        flag(slices > 0 && b.tex.contains_key(&Tex::Biome)),
-        flag(b.tex.contains_key(&Tex::Normal)),
+        // a gas giant's deck takes no ground detail or normal map
+        flag(slices > 0 && b.tex.contains_key(&Tex::Biome) && !gas_giant(b)),
+        flag(b.tex.contains_key(&Tex::Normal) && !gas_giant(b)),
         debug,
         // the original's biome height rules count from the PQS radius, below the sea by its ocean altitude
         b.map.as_ref().map(|m| -m.offset_m).unwrap_or(0.0) as f32,

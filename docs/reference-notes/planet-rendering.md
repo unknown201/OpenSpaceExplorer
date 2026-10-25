@@ -94,10 +94,11 @@ in the renderer).
 | 4 | Ground texture up close | biome mask, small arrays, rules, distance resampling | Biome mask picks the four small slices (land with no biome weight takes the first biome); height and slope windows weight them; tiled at 8, 64 and 512 m like the distance resampling; the slices' normal maps within 600 m; detail modulates the albedo so large-scale colour stays the original's |
 | 5 | Water | ocean sphere, waves, colours, Fresnel, glint, shoreline foam | Sea-level shell where terrain is below it; depth colour from the material's shallow/deep colours; Fresnel sky reflection; sun glint; twelve animated wave trains from swell to ripples; the material's foam texture where the sea is shallower than `_ShorelineFoamMaxDepth` |
 | 6 | Sky and aerial perspective | Bruneton LUTs | The body's own LUTs, Bruneton's `GetSkyRadiance` / `GetSkyRadianceToPoint` in WGSL, exposure tone map |
-| 7 | Clouds | volumetric + scaled shell, cloud shadows | The scaled shell at the layer's base height with the baked coverage cubemap, broken into puffs up close by drifting noise, darker underneath; the cover along the sun ray shades the ground and sea; no volumetrics |
+| 7 | Clouds | volumetric + scaled shell, cloud shadows | Below 40 km a ray march through the layer (coverage from the baked map eroded by noise, lit by a short march towards the sun, two-lobe phase, depth-tested against craft and terrain) out to 24 km; beyond that the baked shell; the cover along the sun ray shades the ground and sea; no god rays (Kerbin's `enableGodray` is 0) |
 | 8 | Sunlight and exposure | light + transmittance, CelestialBodyLighting ambient, post-process auto exposure | Sun colour through the transmittance LUT, sky light from the irradiance LUT; the body's own ambient colours (day on airless bodies, night everywhere); a fixed exposure per body that puts its mean albedo where Kerbin's sits, standing in for the auto exposure |
 | 9 | Scaled vs local | swap at 5,000 km | One path: the quadtree at low levels is the scaled body |
 | 10 | Rocks, plants, trees | Vegetation Studio Pro packages per biome | The packages' prefabs placed by their spacing, density, scale, height, steepness and noise rules near the camera (section 7) |
+| 11 | Gas giant (Jool) | `IsGasGiant`, no PQS surface, banded scaled map | A smooth sphere with the banded albedo under the atmosphere; no height map, scatter, ground detail or cloud layer (Jool's layer starts at 0 m) |
 
 Checking: `?planet=<Body>&lat=..&lon=..&alt=..&heading=..&pitch=..&sunaz=..&sunel=..` opens the client on a planet
 preview (planet_preview.rs) that draws only that body from the viewpoint, the way flight would; `debug=1..6` shows
@@ -125,4 +126,9 @@ crossed cards in one instanced batch within 55 m); under water (fog and light fa
 from below with Snell's window); eclipses (the disc overlap of up to four bodies with the star, on ground, sea,
 clouds, grass, sky and props); terrain packs and atmosphere LUTs served gzip-compressed.
 
-Not yet: FFT waves, caustics, volumetric clouds, the gas giant mode of the atmosphere.
+Then: caustics on the sea floor (the foam texture's caustics channel, tiled and animated per the ocean
+material, fading with depth); far trees and rocks out to 2.5 km as the original's Amplify octahedral impostors
+(atlas frame chosen by view direction, brightness matched to the meshes); volumetric clouds (table row 7); gas
+giants (row 11).
+
+Not yet: FFT waves, god rays, drifting gas-giant bands.
