@@ -6494,7 +6494,7 @@ impl App {
             m.image.as_str()
         };
         el.set_inner_html(&format!(
-            "<img src=\"assets/ui/hud/{image}.png\" alt=\"\" onerror=\"this.style.display='none'\" /><div class=\"ftue-body\"><div class=\"ftue-name\">PAIGE</div><div class=\"ftue-text\">{text}</div><div class=\"ftue-acts\"><button id=\"ftue-off\" class=\"secondary\">{off}</button><button id=\"ftue-next\"{dis}>{next}</button></div></div>",
+            "<img src=\"assets/ui/hud/{image}.png\" alt=\"\" onerror=\"this.style.display='none'\" /><div class=\"ftue-body\"><div class=\"ftue-name\">[p.a.i.g.e]</div><div class=\"ftue-text\">{text}</div><div class=\"ftue-acts\"><button id=\"ftue-off\" class=\"secondary\">{off}</button><button id=\"ftue-next\"{dis}>{next}</button></div></div>",
             next = if waiting {
                 "Waiting for you\u{2026}"
             } else if st.queue.len() > 1 || st.lesson {

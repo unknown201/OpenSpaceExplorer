@@ -900,9 +900,21 @@
     #fh-map-info { left: calc(64 * var(--u)) !important; font-family: var(--hud-font); }
     body:has(#flight-hud.open) #ftue { bottom: auto; top: calc(210 * var(--u)); }
     /* Time warp and the clock leave the top bar for the bottom centre, as the original's TIME.WARP widget. */
-    body:has(#flight-hud.open) #hud > #ut, body:has(#flight-hud.open) #hud > .warp { position: fixed; left: 50%; transform: translateX(-50%); font-family: var(--hud-font); z-index: 12; }
-    body:has(#flight-hud.open) #hud > #ut { bottom: calc(52 * var(--u)); background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)) calc(6 * var(--u)) 0 0; padding: calc(2 * var(--u)) calc(14 * var(--u)); font-size: calc(16 * var(--u)); }
-    body:has(#flight-hud.open) #hud > .warp { bottom: calc(12 * var(--u)); background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)); padding: calc(4 * var(--u)) calc(8 * var(--u)); }
+    body:is(:has(#flight-hud.open), :has(#screen-ksc.open), :has(#tracking.open)) #hud > :is(#ut, .warp) { position: fixed; left: 50%; transform: translateX(-50%); font-family: var(--hud-font); z-index: 12; }
+    body:is(:has(#flight-hud.open), :has(#screen-ksc.open), :has(#tracking.open)) #hud > #ut { bottom: calc(52 * var(--u)); background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)) calc(6 * var(--u)) 0 0; padding: calc(2 * var(--u)) calc(14 * var(--u)); font-size: calc(16 * var(--u)); }
+    body:is(:has(#flight-hud.open), :has(#screen-ksc.open), :has(#tracking.open)) #hud > .warp { bottom: calc(12 * var(--u)); background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)); padding: calc(4 * var(--u)) calc(8 * var(--u)); }
+    /* The KSC hub, PAIGE and the breadcrumbs in the original's type: uppercase, spaced, Realtime Rounded. */
+    #ksc-panel, #ksc-panel h2, #ksc-buildings button { font-family: var(--hud-font) !important; }
+    #ksc-panel h2 { text-transform: uppercase; letter-spacing: 0.12em; font-size: calc(26 * var(--u)); line-height: 1.15; }
+    #ksc-buildings button { text-transform: uppercase; letter-spacing: 0.08em; border: 0 !important; border-bottom: 2px dotted #6a718f88 !important; border-radius: 0 !important; background: transparent !important; color: #0a0a0a !important; }
+    #ksc-buildings button:last-child { border-bottom: 0 !important; }
+    #ksc-buildings button img { filter: brightness(0.2); }
+    #ksc-buildings button:hover { background: #cde6ff !important; }
+    #crumbs { font-family: var(--hud-font); background: #10141bd9; border: 1px solid #ffffff22; border-radius: 4px; padding: 3px 10px; color: #cfd6e6; top: 6px !important; }
+    #ftue .ftue-name { font-family: var(--hud-font); font-size: 18px; letter-spacing: 0.08em; color: #4fd8ff; }
+    #loading .loading-bar { left: 50%; right: auto; width: min(640px, 80vw); transform: translateX(-50%); bottom: 24px; flex-direction: column; align-items: stretch; gap: 6px; padding: 0; background: none; font-family: var(--hud-font); }
+    #loading .loading-bar::after { content: ""; height: 6px; background: linear-gradient(90deg, #ff4a1a, #ff8a1a); border-radius: 2px; animation: ldpulse 1.2s ease-in-out infinite; }
+    #loading #loading-tip { order: 0; text-align: right; font-size: 14px; } #loading .loading-word { order: -1; font-size: 22px; text-transform: none; color: #fff; }
   </style>
 </head>
 <body>
