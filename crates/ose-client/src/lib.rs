@@ -4853,10 +4853,39 @@ impl App {
                 el.style()
                     .set_property("--owner", &format!("#{r:02x}{g:02x}{b:02x}"))
                     .ok();
-                el.set_attribute("title", &format!("{} \u{2014} {}", v.name, m.display_name))
-                    .ok();
                 el.class_list().add_1("other").ok();
             }
+            // Hover: whose it is and its orbit, as the original's map tooltip.
+            let orbit = self
+                .scene
+                .as_ref()
+                .and_then(|sc| sc.bodies.get(v.reference_body as usize))
+                .map(|b| {
+                    let ut = self.time.ut_at(now_ms());
+                    let (ap, pe) = hud::apsides(&v.orbit, b.radius_m, b.mu, ut);
+                    format!(
+                        "{} \u{b7} Ap {} \u{b7} Pe {}",
+                        b.id,
+                        ap.map(|a| hud::fmt_dist(a.0))
+                            .unwrap_or_else(|| "escape".into()),
+                        hud::fmt_dist(pe.0)
+                    )
+                });
+            let who = match (owner, mine) {
+                (_, true) => "yours".to_string(),
+                (Some(m), _) => m.display_name.clone(),
+                _ => String::new(),
+            };
+            el.set_attribute(
+                "title",
+                &[v.name.clone(), who, orbit.unwrap_or_default()]
+                    .iter()
+                    .filter(|t| !t.is_empty())
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            )
+            .ok();
             self.labels.append_child(&el).ok();
             self.vessel_els.push((v.id, el));
         }
