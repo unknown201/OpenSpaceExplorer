@@ -365,6 +365,14 @@
     #vab-header .vh-launch { background: #2f6b2f; border-color: #5aa05a; color: #fff; display: flex; gap: 6px; align-items: center; font-weight: 700; }
     #vab-header .vh-launch:hover { background: #3a823a; }
     #vab-header button:disabled { opacity: 0.4; }
+    #vab-header .vh-pop-wrap { position: relative; }
+    #vab-header .vh-pop { display: none; position: absolute; top: calc(100% + 6px); left: 0; z-index: 20; width: 360px; max-height: 60vh; overflow: auto; background: #0b1020f8; border: 1px solid #3b63a8; border-radius: 6px; box-shadow: 0 8px 24px #000c; }
+    #vab-header .vh-pop.open { display: block; }
+    #vab-load-list { list-style: none; margin: 0; padding: 4px; }
+    #vab-load-list li { padding: 6px 8px; border-radius: 4px; cursor: pointer; color: #e6ecf7; font-size: 13px; }
+    #vab-load-list li:hover { background: #1f3d6b; }
+    #vab-load-list li small { display: block; color: #9fb0cc; font-size: 11px; } #vab-load-list li i { color: #9fb0cc; font-size: 11px; }
+    #vab-load-list li.empty { color: #9fb0cc; cursor: default; }
     #vab-header #vab-sym { min-width: 44px; font-variant-numeric: tabular-nums; }
     #vab-header #vab-snap.on { background: #1f3d6b; border-color: #3b63a8; color: #fff; }
     #vab-dv { font-size: 13px; color: #9fb0cc; margin-right: 6px; }
@@ -373,6 +381,7 @@
     #vab-side .vs-title { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: #9fb0cc; margin: 10px 0 4px; }
     #vab-side .vs-title:first-child { margin-top: 0; }
     #vab-stages li { display: block; padding: 6px 8px; border: 1px solid #2c3d63; border-left: 3px solid #e0a040; border-radius: 4px; background: #06080f; margin-bottom: 4px; color: #e6ecf7; }
+    #vab-stages li span.p { user-select: none; } #vab-stages li span.p:active { cursor: grabbing; }
     #vab-stages li .sv { float: right; font-size: 11px; color: #9fb0cc; }
     #vab-stages li .st { font-size: 11px; color: #e0a040; font-weight: 700; display: block; margin-bottom: 3px; }
     #vab-stages li span.p { display: inline-flex; align-items: center; gap: 4px; margin: 0 6px 2px 0; padding: 1px 4px; border-radius: 3px; cursor: pointer; }
@@ -678,6 +687,8 @@
         <div id="vab-header" data-ose="vab-header">
           <div class="vh-group">
             <button id="vab-clear" class="secondary" data-ose="vab-clear" title="New vehicle: clear the workspace (Ctrl+N)">New</button>
+            <span class="vh-pop-wrap"><button id="vab-load" class="secondary" data-ose="vab-load" title="Load a saved vehicle into the workspace">Load</button>
+              <div id="vab-load-pop" class="vh-pop"><ul id="vab-load-list" data-ose="vab-load-list"></ul></div></span>
             <button id="vab-undo" class="secondary vh-ico" data-ose="vab-undo" title="Undo (Ctrl+Z)"><i style="--ico:url(assets/ui/hud/ToolsBar-ICO-Undo-onRest.png)"></i></button>
             <button id="vab-redo" class="secondary vh-ico vh-flip" data-ose="vab-redo" title="Redo (Ctrl+Y)"><i style="--ico:url(assets/ui/hud/ToolsBar-ICO-Undo-onRest.png)"></i></button>
             <button id="vab-sym" class="secondary" data-ose="vab-sym" title="Symmetry for parts on a side: 1, 2, 3, 4, 6 or 8 copies around the part (X, Shift+X back)">&#215;1</button>
