@@ -29,6 +29,8 @@ struct Frame {
     eclipse: vec4<f32>,
     // FFT waves: x 1 when live, y/z long and short patch sizes (m), w: chop
     waves: vec4<f32>,
+    // the camera's model-frame position modulo TILE_PERIOD (m)
+    cam_tile: vec4<f32>,
 };
 
 struct Chunk {
@@ -422,7 +424,8 @@ fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
     if under_water() {
         let up = normalize(frame.cam_km.xyz);
         let looking_up = clamp(dot(view, up), 0.0, 1.0);
-        let c = water_light(-frame.water.x) / PI * frame.solar.xyz * (0.5 + 1.5 * looking_up);
+        // the fog colour far away (so the sea floor fades into it without an edge), brighter towards the surface
+        let c = water_light(-frame.water.x) / PI * frame.solar.xyz * (1.0 + 1.5 * looking_up * looking_up);
         return vec4<f32>(tonemap(c), 1.0);
     }
     var radiance = vec3<f32>(0.0);
@@ -565,7 +568,9 @@ fn equi_uv(d: vec3<f32>) -> vec2<f32> {
 struct EquiGrad { dx: vec2<f32>, dy: vec2<f32> };
 
 fn equi_grad(uv: vec2<f32>) -> EquiGrad {
-    let u2 = fract(uv.x + 0.5) - 0.5;
+    // u runs -0.5..0.5 and wraps where atan2 does; u2 wraps half a turn away (at u = 0), so one of them is
+    // continuous across any pixel quad
+    let u2 = fract(uv.x);
     var g: EquiGrad;
     g.dx = dpdx(uv);
     g.dy = dpdy(uv);
@@ -580,6 +585,24 @@ fn equi_grad(uv: vec2<f32>) -> EquiGrad {
 
 fn sample_equi(t: texture_2d<f32>, uv: vec2<f32>, g: EquiGrad) -> vec4<f32> {
     return textureSampleGrad(t, equi_samp, uv, g.dx, g.dy);
+}
+
+// Drifting bands on a gas giant (the original's scaled-material flow, `_FlowmapSpeed1` / `_FlowmapStrength1`,
+// whose flow texture is unset): alternating zonal jets by latitude advect the albedo along longitude, two
+// phases half a cycle apart cross-faded so the shear never builds up.
+fn flowed_albedo(uv: vec2<f32>, g: EquiGrad, y: f32) -> vec3<f32> {
+    let lat = asin(clamp(y, -1.0, 1.0));
+    // jets: a dozen bands, strongest at the equator, nothing at the poles
+    let jet = sin(lat * 12.0 + 0.6) * cos(lat) + 0.35 * cos(lat) * cos(lat);
+    // one cycle every 1 / (speed * 0.05) s (about 90 s for Jool), moving a texel band of strength * 0.01 in u
+    let t = frame.cam_km.w * surface.clouds2.z * 0.05;
+    let shift = jet * surface.clouds2.w * 0.01;
+    let p0 = fract(t);
+    let p1 = fract(t + 0.5);
+    let a = sample_equi(albedo_tex, uv + vec2<f32>(shift * (p0 - 0.5), 0.0), g).rgb;
+    let b = sample_equi(albedo_tex, uv + vec2<f32>(shift * (p1 - 0.5), 0.0), g).rgb;
+    let w = abs(p0 - 0.5) * 2.0;
+    return mix(a, b, w);
 }
 
 fn window(x: f32, lo: f32, hi: f32, blend: f32) -> f32 {
@@ -633,6 +656,9 @@ fn fs_terrain(in: VOut) -> @location(0) vec4<f32> {
     let dpy = dpdy(in.tile);
     let dist = length(in.rel);
     var albedo = sample_equi(albedo_tex, uv, eg).rgb;
+    if surface.clouds2.z > 0.0 {
+        albedo = flowed_albedo(uv, eg, up.y);
+    }
 
     // The scaled normal map (far): perturb in the east/north/up frame.
     if surface.flags.y > 0.5 {
@@ -1124,6 +1150,57 @@ fn fs_far(in: FOut) -> @location(0) vec4<f32> {
 // the shell takes over beyond.
 
 const VCLOUD_RANGE: f32 = 24000.0;
+
+// Underwater light shafts (the original's ocean god rays, `OceanFeatures.GodRayQuality`): march the water in
+// front of the camera; each sample is lit by the sunlight the waves focused where its refracted sun ray crossed
+// the surface (the caustics texture, softened), dimmed by the water above it and between it and the camera.
+@fragment
+fn fs_shafts(in: SkyOut) -> VcOut {
+    var out: VcOut;
+    out.colour = vec4<f32>(0.0);
+    out.depth = 0.0;
+    let up = normalize(frame.cam_km.xyz);
+    let sun = frame.sun.xyz;
+    let sun_up = dot(sun, up);
+    if !under_water() || surface.caustics.x <= 0.0 || sun_up < 0.05 {
+        discard;
+    }
+    let p4 = frame.inv_view_proj * vec4<f32>(in.ndc, 0.5, 1.0);
+    let view = normalize(p4.xyz / p4.w);
+    // the sunlight's direction of travel in the water
+    let sd = refract(-sun, up, 1.0 / 1.33);
+    let sd_up = min(dot(sd, up), -0.05);
+    let cam_depth = -frame.water.x;
+    let tiling = max(surface.caustics.z, 0.5) * 3.0;
+    let t_anim = frame.cam_km.w * 0.05 * surface.caustics.w;
+    let jitter = fract(sin(dot(in.ndc, vec2<f32>(12.9898, 78.233))) * 43758.547);
+    let steps = 32;
+    let dt = 1.5;
+    var acc = 0.0;
+    for (var i = 0; i < steps; i = i + 1) {
+        let t = (f32(i) + jitter) * dt;
+        let p = view * t;
+        let depth = cam_depth - dot(p, up);
+        if depth < 0.0 {
+            break;
+        }
+        // where this sample's sunlight came through the surface
+        let q = frame.cam_tile.xyz + p - sd * (depth / -sd_up);
+        let uv = vec2<f32>(q.x + q.z * 0.31, q.y + q.z * 0.73) / tiling;
+        let c1 = textureSampleLevel(foam_tex, wrap_samp, uv + vec2<f32>(t_anim, t_anim * 0.6), 2.5).g;
+        let c2 = textureSampleLevel(foam_tex, wrap_samp, uv * 1.13 - vec2<f32>(t_anim * 0.7, t_anim * 0.2), 2.5).g;
+        let focus = max(min(c1, c2) - 0.08, 0.0);
+        acc = acc + focus * exp(-depth / 25.0) * exp(-t / 20.0) * dt;
+    }
+    // looking towards the sun the shafts are brightest (forward scattering)
+    let phase = 0.4 + 1.6 * pow(max(dot(view, sd * -1.0), 0.0), 4.0);
+    let rad = frame.water_col.rgb * frame.solar.xyz * sun_up * acc * phase * surface.caustics.x * 0.6;
+    out.colour = vec4<f32>(tonemap(rad), 0.0);
+    // in front of anything further than a few metres
+    let clip = frame.view_proj * vec4<f32>(view * 4.0, 1.0);
+    out.depth = clamp(clip.z / clip.w, 0.0, 1.0);
+    return out;
+}
 
 struct VcOut {
     @location(0) colour: vec4<f32>,

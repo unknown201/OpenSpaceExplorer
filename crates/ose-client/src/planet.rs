@@ -58,6 +58,8 @@ struct FrameU {
     eclipse: [f32; 4],
     /// FFT waves: x 1 when the wave texture is live, y/z the long and short patch sizes (m), w: chop
     waves: [f32; 4],
+    /// the camera's model-frame position modulo TILE_PERIOD (m), for screen-space effects on the tiled maps
+    cam_tile: [f32; 4],
 }
 
 #[repr(C)]
@@ -194,6 +196,10 @@ pub struct PlanetRenderer {
     ocean_pipeline: wgpu::RenderPipeline,
     cloud_pipeline: wgpu::RenderPipeline,
     vcloud_pipeline: wgpu::RenderPipeline,
+    shaft_pipeline: wgpu::RenderPipeline,
+    /// the camera is under the sea this frame: light shafts, and the sea surface without its skirts (they hang
+    /// below it and would read as walls from underneath)
+    under_water: bool,
     grass_pipeline: wgpu::RenderPipeline,
     far_pipeline: wgpu::RenderPipeline,
     far_chunk_buf: wgpu::Buffer,
@@ -397,6 +403,39 @@ impl PlanetRenderer {
             quad_pipeline("planet clouds", "vs_quad", "fs_clouds", true, false, None);
         // Volumetric clouds: a full-screen ray march through the cloud layer, writing the depth of where it
         // enters the cloud so nearer craft and terrain stay in front; premultiplied colour.
+        // Underwater light shafts: a full-screen march through the water in front of the camera, added on top.
+        let shaft_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("planet light shafts"),
+            layout: Some(&quad_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_sky"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_shafts"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState {
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::One,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent::OVER,
+                    }),
+                    write_mask: wgpu::ColorWrites::COLOR,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(depth(false, wgpu::CompareFunction::Greater)),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
         let vcloud_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("planet volume clouds"),
             layout: Some(&quad_layout),
@@ -698,6 +737,8 @@ impl PlanetRenderer {
             ..Default::default()
         });
         PlanetRenderer {
+            shaft_pipeline,
+            under_water: false,
             waves_tex,
             waves_view,
             ocean: None,
@@ -1591,6 +1632,12 @@ impl PlanetRenderer {
                 0.0,
                 0.0,
             ],
+            cam_tile: [
+                view.cam.x.rem_euclid(TILE_PERIOD) as f32,
+                view.cam.y.rem_euclid(TILE_PERIOD) as f32,
+                view.cam.z.rem_euclid(TILE_PERIOD) as f32,
+                0.0,
+            ],
             waves: [
                 f32::from(u8::from(waves_live)),
                 ocean_fft::PATCH_LONG as f32,
@@ -1611,6 +1658,7 @@ impl PlanetRenderer {
             .write_buffer(&self.frame_buf, 0, bytemuck::bytes_of(&fu));
         self.draws = draws;
         self.cloud_draws = cloud_draws;
+        self.under_water = has_ocean && fu.water[0] < 0.0;
         self.active = true;
         true
     }
@@ -2016,12 +2064,15 @@ fn surface_uniform(b: &Body, debug: f32) -> SurfaceU {
         },
         slices as f32,
     ];
+    // z/w: the scaled material's flow speed and strength (Jool's drifting bands), 0 without
+    let flow = info.and_then(|v| v["surface"].get("flow"));
+    let ff = |k: &str| flow.and_then(|f| f[k].as_f64()).unwrap_or(0.0) as f32;
     u.clouds2 = [
         c.and_then(|c| c["height_range_m"][1].as_f64())
             .unwrap_or(9500.0) as f32,
         8.0,
-        0.0,
-        0.0,
+        ff("speed"),
+        ff("strength"),
     ];
     let flag = |x: bool| if x { 1.0 } else { 0.0 };
     // The original's CelestialBodyLighting ambient colours; w: 1 when the body has no atmosphere (the ambient
@@ -2103,7 +2154,19 @@ impl ExtraPass for PlanetRenderer {
             let Some(ocean) = &q.ocean else { continue };
             pass.set_bind_group(1, &self.chunk_bind, &[(*slot as u64 * SLOT) as u32]);
             pass.set_vertex_buffer(0, ocean.slice(..));
-            pass.draw_indexed(0..self.index_count, 0, 0..1);
+            let n = if self.under_water {
+                planet_lod::GRID_INDICES
+            } else {
+                self.index_count
+            };
+            pass.draw_indexed(0..n, 0, 0..1);
+        }
+        if self.under_water {
+            pass.set_pipeline(&self.shaft_pipeline);
+            pass.set_bind_group(0, fb, &[]);
+            pass.set_bind_group(1, &self.chunk_bind, &[0]);
+            pass.set_bind_group(2, sb, &[]);
+            pass.draw(0..3, 0..1);
         }
         if !self.cloud_draws.is_empty() {
             pass.set_pipeline(&self.vcloud_pipeline);

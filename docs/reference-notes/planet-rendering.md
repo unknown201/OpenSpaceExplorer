@@ -136,4 +136,13 @@ FFT waves: `OceanWaveSpectrum` is Crest's: 14 octaves from 2^-4 m, each a log10 
 (Kerbin 90 deg, Eve 122, Laythe 97). Exported as planet.json `ocean.spectrum`; Kerbin's gives a significant wave
 height of about 0.7 m. Gravity is 9.81 for every sea (the spectrum is tuned for it; `_gravityScale` unused).
 
-Not yet: god rays, drifting gas-giant bands.
+God rays: every stock cloud configuration has `enableGodray` 0 (Kerbin, Jool, ...); the original's god rays are
+the ocean's underwater ones (`OceanFeatures.GodRayQuality` 3 on high). Here: a full-screen march through the water
+in front of the camera, each sample lit by the caustics where its refracted sun ray crossed the surface. Under
+water the sea surface draws without its LOD skirts (they hang below it).
+
+Jool: `jool_scaled` has `_FlowmapSpeed1` 0.22 and `_FlowmapStrength1` 0.25 but no flow texture assigned; the
+bands drift here by alternating zonal jets by latitude (two cross-faded phases), exported as `surface.flow`.
+Its north and south pole textures are the main map again, so no pole blend is needed.
+
+Not yet: the equirect maps still pinch at the poles (a starburst seen from straight above).
