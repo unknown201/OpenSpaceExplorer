@@ -1456,6 +1456,25 @@ async fn campaigns_can_be_left_resumed_and_started_again() {
     let (id, name, _, member) = wait_for(&mut ws, state).await;
     assert_eq!((id.as_str(), name.as_str()), (alpha.as_str(), "Alpha"));
     assert!(member);
+    // a teammate who never played Alpha resumes it with a pilot probe of their own
+    let mut late = connect_ws(&addr).await;
+    let (late_id, _) = hello(&mut late, None, "bob").await;
+    send_msg(
+        &mut late,
+        &ClientMessage::SelectSession { id: alpha.clone() },
+    )
+    .await;
+    let (id, _, _, _) = wait_for(&mut late, state).await;
+    assert_eq!(id, alpha, "every CampaignState carries the campaign id");
+    wait_for(&mut late, |m| match m {
+        ServerMessage::Vessels { vessels, .. } => vessels
+            .iter()
+            .any(|v| v.owner == Some(late_id))
+            .then_some(()),
+        _ => None,
+    })
+    .await;
+    drop(late);
     // a teammate playing it keeps another campaign from being started under them
     let mut mate = connect_ws(&addr).await;
     hello(&mut mate, None, "val").await;

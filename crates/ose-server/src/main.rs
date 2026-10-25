@@ -2109,6 +2109,10 @@ async fn session(mut socket: WebSocket, s: AppState) {
                             let reply = match switched {
                                 Ok(()) => {
                                     let name = display_name_for(&s, player_id);
+                                    // a pilot probe for a player who has nothing in this campaign yet
+                                    if !has_vessel(&s, player_id) {
+                                        spawn_player_probe(&s, player_id, &name);
+                                    }
                                     campaign_state(&s, player_id, Some(&name))
                                 }
                                 Err(reason) => ServerMessage::Rejected { reason },
