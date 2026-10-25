@@ -146,6 +146,8 @@ pub enum Attitude {
     Fixed(DVec3),
     /// Toward the scheduled burn (the universe keeps the direction current; normalised on use).
     Maneuver(DVec3),
+    /// SAS off: nothing holds the attitude; the rotation input turns the vessel and it keeps spinning.
+    Free,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -224,6 +226,12 @@ pub struct Powered {
     /// Action groups (lights, RCS, abort, custom 1..10).
     #[serde(default)]
     pub groups: ActionGroups,
+    /// Rotation input with SAS off (`Attitude::Free`), each -1..1, held: pitch turns the nose toward
+    /// craft +Z, yaw toward craft +X, roll is clockwise about the nose. And the roll rate it builds, rad/s.
+    #[serde(default)]
+    pub rotation_input: DVec3,
+    #[serde(default)]
+    pub roll_rate: f64,
     /// RCS thrusters (with the RCS group on they translate the vessel and help turn it).
     #[serde(default)]
     pub rcs: RcsState,
@@ -634,6 +642,8 @@ impl Powered {
             roll_rad: 0.0,
             roll_input: 0.0,
             groups: ActionGroups::default(),
+            rotation_input: DVec3::ZERO,
+            roll_rate: 0.0,
             rcs: RcsState::default(),
             lift_kn: DVec3::ZERO,
             jet: None,
@@ -779,6 +789,8 @@ pub fn attitude_direction(att: Attitude, r: DVec3, v: DVec3, omega: f64) -> DVec
             }
         }
         Attitude::Fixed(d) | Attitude::Maneuver(d) => d,
+        // nothing held: the vessel's own axis is not known here, so the local up stands in
+        Attitude::Free => up,
     };
     dir.normalized()
 }
@@ -859,6 +871,63 @@ pub fn steer(p: &mut Powered, target: DVec3, thrust_fraction: f64, dt: f64) {
     p.facing = rotate(p.facing, p.angvel, dt);
 }
 
+/// The torque available to turn the vessel, kN·m, and its moment of inertia now, t·m² (reaction wheels,
+/// engine gimbals at `thrust_fraction`, RCS with the group on).
+fn turning_authority(p: &Powered, thrust_fraction: f64) -> Option<(f64, f64)> {
+    let s = p.rotation_stage()?;
+    if s.moi_tm2 <= 0.0 {
+        return None;
+    }
+    let mass_ratio = if s.start_mass_t > 0.0 {
+        (p.mass_t / s.start_mass_t).clamp(0.05, 1.5)
+    } else {
+        1.0
+    };
+    let rcs = if p.groups.rcs {
+        p.rcs.torque_knm * p.rcs.powered.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let torque = if p.controlled {
+        s.wheel_torque_knm * p.wheel_scale.clamp(0.0, 1.0)
+            + s.gimbal_torque_knm * thrust_fraction.clamp(0.0, 1.0)
+            + rcs
+    } else {
+        0.0
+    };
+    Some((torque, s.moi_tm2 * mass_ratio))
+}
+
+/// SAS off: the rotation input accelerates the vessel's spin about its own axes at the torque it has, and
+/// nothing damps it.
+pub fn spin(p: &mut Powered, thrust_fraction: f64, dt: f64) {
+    let (alpha, _) = match turning_authority(p, thrust_fraction) {
+        Some((t, moi)) => (t / moi, moi),
+        None => (0.0, 1.0),
+    };
+    let i = p.rotation_input;
+    let i = DVec3::new(
+        i.x.clamp(-1.0, 1.0),
+        i.y.clamp(-1.0, 1.0),
+        i.z.clamp(-1.0, 1.0),
+    );
+    let top = vessel_top(p);
+    let right = p.facing.cross(top);
+    // pitch turns the nose toward the top: about -right; yaw toward the right: about +top
+    let w_turn = p.angvel - p.facing * p.angvel.dot(p.facing);
+    let w = w_turn + (right * -i.x + top * i.y) * (alpha * dt);
+    let w = if w.length() > MAX_TURN_RATE {
+        w * (MAX_TURN_RATE / w.length())
+    } else {
+        w
+    };
+    p.angvel = w;
+    p.facing = rotate(p.facing, p.angvel, dt).normalized();
+    // roll about the nose: its own rate, built up by the input and kept
+    p.roll_rate = (p.roll_rate + i.z * alpha * dt).clamp(-MAX_TURN_RATE, MAX_TURN_RATE);
+    p.roll_rad = (p.roll_rad + p.roll_rate * dt).rem_euclid(std::f64::consts::TAU);
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct StepOutcome {
     pub crashed: bool,
@@ -937,11 +1006,14 @@ pub fn integrate(
                 let up = p.r.normalized();
                 let flat = heading_dir(p.r, p.drive.heading_rad);
                 let want = attitude_direction(p.attitude, p.r, p.v, omega);
+                let wanted_pitch = if p.attitude == Attitude::Free {
+                    // a plane's +Z is its belly: nose up is pitch toward -Z
+                    (-p.rotation_input.x).clamp(0.0, 1.0) * MAX_ROTATE_RAD
+                } else {
+                    want.dot(up).clamp(-1.0, 1.0).asin()
+                };
                 let pitch = if p.drive.speed_mps.abs() > ROTATE_SPEED_MPS {
-                    want.dot(up)
-                        .clamp(-1.0, 1.0)
-                        .asin()
-                        .clamp(0.0, MAX_ROTATE_RAD)
+                    wanted_pitch.clamp(0.0, MAX_ROTATE_RAD)
                 } else {
                     0.0
                 };
@@ -963,10 +1035,16 @@ pub fn integrate(
             0.0
         };
         let w0 = p.angvel;
-        steer(p, target, frac, dt);
-        // roll about the axis at the reaction wheels' pace
-        let rate = ROLL_RATE_RAD_S * p.wheel_scale.clamp(0.0, 1.0) * p.roll_input.clamp(-1.0, 1.0);
-        p.roll_rad = (p.roll_rad + rate * dt).rem_euclid(std::f64::consts::TAU);
+        if p.attitude == Attitude::Free {
+            spin(p, frac, dt);
+        } else {
+            p.roll_rate = 0.0;
+            steer(p, target, frac, dt);
+            // roll about the axis at the reaction wheels' pace
+            let rate =
+                ROLL_RATE_RAD_S * p.wheel_scale.clamp(0.0, 1.0) * p.roll_input.clamp(-1.0, 1.0);
+            p.roll_rad = (p.roll_rad + rate * dt).rem_euclid(std::f64::consts::TAU);
+        }
         out.angular_accel = (p.angvel - w0) * (1.0 / dt);
         out.angvel = p.angvel;
         out.wheel_share = p
