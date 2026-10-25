@@ -307,6 +307,8 @@ struct App {
     /// The aero overlay (F12) and the control trim (Alt + W/A/S/D/Q/E, Alt+X clears it): pitch, yaw, roll.
     aero_overlay: bool,
     trim: (f32, f32, f32),
+    /// When the players window last asked for the campaign (what everyone flies is not pushed).
+    players_asked_ms: std::cell::Cell<f64>,
     /// R&D: the science archive shows in the info panel instead of the node picked.
     rd_archive: bool,
     /// VAB offset tool (2): arrows and Q/E move the selected part.
@@ -695,6 +697,7 @@ pub fn start() -> Result<(), JsValue> {
         tc_lessons: false,
         vab_offset: false,
         rd_archive: false,
+        players_asked_ms: std::cell::Cell::new(0.0),
         mouselook: false,
         aero_overlay: false,
         trim: (0.0, 0.0, 0.0),
@@ -7454,7 +7457,15 @@ impl App {
                 })
                 .unwrap_or_default()
         };
-        let html = hud::players_html(members, self.player_id, &vessels);
+        let vessel_name = |id: u64| self.scene.as_ref()?.vessel(id).map(|v| v.name.clone());
+        let html = hud::players_html(members, self.player_id, &vessels, &vessel_name);
+        // What each player flies is not pushed: ask again every few seconds while the window is open.
+        if now_ms() - self.players_asked_ms.get() > 3000.0 {
+            self.players_asked_ms.set(now_ms());
+            if let Some(ws) = &self.ws {
+                send(ws, &ClientMessage::CampaignInfo);
+            }
+        }
         let key = format!("{}:{}", html.len(), hud::fnv(&html));
         if el.get_attribute("data-ose-key").as_deref() != Some(key.as_str()) {
             el.set_inner_html(&html);

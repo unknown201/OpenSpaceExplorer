@@ -1084,29 +1084,42 @@ pub fn player_rgb(m: &ose_net::CampaignMember) -> [u8; 3] {
     PALETTE[(m.player_id as usize) % PALETTE.len()]
 }
 
-/// The players window (multiplayer; the original has none): everyone in the campaign with their colour and
-/// the vessels they own, you first.
+/// The players window (multiplayer; the original has none): everyone in the campaign with their colour,
+/// whether they are online and what they fly, and the vessels they own; you first, then who is online.
 pub fn players_html(
     members: &[ose_net::CampaignMember],
     me: Option<u64>,
     vessels: &dyn Fn(u64) -> Vec<String>,
+    vessel_name: &dyn Fn(u64) -> Option<String>,
 ) -> String {
     let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;");
     let mut list: Vec<&ose_net::CampaignMember> = members.iter().collect();
-    list.sort_by_key(|m| (Some(m.player_id) != me, m.display_name.to_lowercase()));
+    list.sort_by_key(|m| {
+        (
+            Some(m.player_id) != me,
+            !m.online,
+            m.display_name.to_lowercase(),
+        )
+    });
     let mut html = String::new();
     for m in list {
         let [r, g, b] = player_rgb(m);
         let owned = vessels(m.player_id);
         html.push_str(&format!(
-            "<div class=\"pl-row\" data-ose=\"player-row\"><i class=\"pl-dot\" style=\"background:#{r:02x}{g:02x}{b:02x}\"></i><b>{}</b>{}<div class=\"pl-vessels\">{}</div></div>",
+            "<div class=\"pl-row{off}\" data-ose=\"player-row\"><i class=\"pl-dot\" style=\"background:#{r:02x}{g:02x}{b:02x}\"></i><b>{}</b>{}<span class=\"pl-state\">{}</span><div class=\"pl-vessels\">{}</div></div>",
             esc(&m.display_name),
             if Some(m.player_id) == me { " <span class=\"pl-you\">you</span>" } else { "" },
+            match (m.online, m.flying.and_then(vessel_name)) {
+                (true, Some(v)) => format!("online \u{b7} flying {}", esc(&v)),
+                (true, None) => "online".to_string(),
+                (false, _) => "offline".to_string(),
+            },
             if owned.is_empty() {
                 "no vessels".to_string()
             } else {
                 owned.iter().map(|n| esc(n)).collect::<Vec<_>>().join(" \u{b7} ")
-            }
+            },
+            off = if m.online { "" } else { " offline" },
         ));
     }
     html
