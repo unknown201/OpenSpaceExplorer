@@ -93,6 +93,8 @@ struct App {
     /// The planned burn on the player's vessel, if any (ADR-0005).
     node: Option<Node>,
     node_el: Option<HtmlElement>,
+    /// The other planned maneuver nodes (protocol 46 chains them), not the one being edited (`node`).
+    nodes: Vec<Node>,
     player_name: String,
     /// True once the server confirmed us as a campaign member (the map is "in session").
     in_session: bool,
@@ -430,6 +432,27 @@ struct Node {
     radial_mps: f64,
 }
 
+/// Where vessel `vessel` will be at `t` on its planned path (the patch the time falls in, so a node after
+/// another sits on the orbit the first one leaves): (body, position from the body, velocity).
+fn path_state(
+    scene: &Scene,
+    vessel: u64,
+    t: f64,
+) -> Option<(usize, ose_math::DVec3, ose_math::DVec3)> {
+    let v = scene.vessel(vessel)?;
+    let patch = scene.trajectories.get(&vessel).and_then(|ps| {
+        ps.iter()
+            .find(|p| p.start_ut <= t + 1e-3 && t <= p.end_ut + 1e-3)
+    });
+    let (body, elements) = match patch {
+        Some(p) => (p.body as usize, p.orbit),
+        None => (v.reference_body as usize, v.orbit),
+    };
+    let mu = scene.bodies.get(body)?.mu;
+    let (r, vel) = scene::orbit_from(mu, &elements).state_at(t);
+    Some((body, r, vel))
+}
+
 fn local_storage() -> Option<web_sys::Storage> {
     web_sys::window()?.local_storage().ok()?
 }
@@ -560,6 +583,7 @@ pub fn start() -> Result<(), JsValue> {
         follow: None,
         node: None,
         node_el: None,
+        nodes: Vec::new(),
         player_name: String::new(),
         in_session: false,
         campaign: None,
@@ -4399,9 +4423,15 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
         btn.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
         cb.forget();
     }
+    if let Some(btn) = doc.get_element_by_id("add-next-node") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut()>::new(move || a.borrow_mut().add_node());
+        btn.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
     if let Some(btn) = doc.get_element_by_id("clear-node") {
         let a = app.clone();
-        let cb = Closure::<dyn FnMut()>::new(move || a.borrow_mut().clear_node());
+        let cb = Closure::<dyn FnMut()>::new(move || a.borrow_mut().delete_node());
         btn.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
         cb.forget();
     }
@@ -10443,7 +10473,19 @@ impl App {
         self.lesson_event("ManeuverCreatedMessage");
         self.lesson_event("OrbitClickedMessage");
         let now = self.time.ut_at(now_ms());
-        let dt = 120.0;
+        // Another node goes after the last one planned (the original chains them); the first two minutes ahead.
+        if let Some(n) = self.node.take() {
+            if n.vessel == vessel {
+                self.nodes.push(n);
+            }
+        }
+        self.nodes.retain(|n| n.vessel == vessel);
+        let last = self.nodes.iter().map(|n| n.ut).fold(f64::NAN, f64::max);
+        let dt = if last.is_finite() {
+            (last - now).max(0.0) + 600.0
+        } else {
+            120.0
+        };
         self.node = Some(Node {
             vessel,
             anchor_ut: now,
@@ -10649,7 +10691,76 @@ impl App {
         true
     }
 
+    /// Delete the node being edited; the nearest other one becomes the one edited (the original's trash).
+    fn delete_node(&mut self) {
+        let Some(node) = self.node else { return };
+        self.nodes.retain(|n| n.vessel == node.vessel);
+        if self.nodes.is_empty() {
+            self.clear_node();
+            return;
+        }
+        let k = (0..self.nodes.len())
+            .min_by(|&a, &b| {
+                (self.nodes[a].ut - node.ut)
+                    .abs()
+                    .total_cmp(&(self.nodes[b].ut - node.ut).abs())
+            })
+            .unwrap_or(0);
+        let next = self.nodes.remove(k);
+        self.node = Some(next);
+        self.show_node_inputs();
+        self.send_node();
+    }
+
+    /// Edit another planned node (a click on its marker): the one edited joins the others.
+    fn select_node(&mut self, k: usize) {
+        if k >= self.nodes.len() {
+            return;
+        }
+        let picked = self.nodes.remove(k);
+        if let Some(cur) = self.node.replace(picked) {
+            self.nodes.push(cur);
+        }
+        self.show_node_inputs();
+    }
+
+    /// The node panel's sliders and labels for the node being edited.
+    fn show_node_inputs(&mut self) {
+        let Some(mut node) = self.node else { return };
+        let now = self.time.ut_at(now_ms());
+        node.anchor_ut = now;
+        self.node = Some(node);
+        let dt = node.ut - now;
+        if let Some(el) = self
+            .doc
+            .get_element_by_id("node-dt")
+            .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+        {
+            let max: f64 = el.max().parse().unwrap_or(600.0);
+            if dt > max {
+                el.set_max(&format!("{:.0}", dt.ceil()));
+            }
+        }
+        set_input_value(&self.doc, "node-dt", dt);
+        set_input_value(&self.doc, "node-prograde", node.prograde_mps);
+        set_input_value(&self.doc, "node-normal", node.normal_mps);
+        set_input_value(&self.doc, "node-radial", node.radial_mps);
+        for (id, v) in [
+            ("node-prograde-text", node.prograde_mps),
+            ("node-normal-text", node.normal_mps),
+            ("node-radial-text", node.radial_mps),
+        ] {
+            set_text(&self.doc, id, &format!("{v:.0} m/s"));
+        }
+    }
+
+    /// `path_state` in the scene shown.
+    fn path_state(&self, vessel: u64, t: f64) -> Option<(usize, ose_math::DVec3, ose_math::DVec3)> {
+        path_state(self.scene.as_ref()?, vessel, t)
+    }
+
     fn clear_node(&mut self) {
+        self.nodes.clear();
         if let (Some(node), Some(ws)) = (self.node.take(), &self.ws) {
             send(
                 ws,
@@ -10691,15 +10802,27 @@ impl App {
         let Some(node) = self.node else {
             return;
         };
+        // Every node of the vessel, in time order; ones already passed are done and left out.
+        let now = self.time.ut_at(now_ms());
+        let mut burns: Vec<ose_net::Burn> = self
+            .nodes
+            .iter()
+            .chain(std::iter::once(&node))
+            .filter(|n| n.vessel == node.vessel && n.ut > now)
+            .map(|n| ose_net::Burn {
+                ut: n.ut,
+                prograde_mps: n.prograde_mps,
+                normal_mps: n.normal_mps,
+                radial_mps: n.radial_mps,
+            })
+            .collect();
+        burns.sort_by(|a, b| a.ut.total_cmp(&b.ut));
         if let Some(ws) = &self.ws {
             send(
                 ws,
-                &ClientMessage::ScheduleBurn {
+                &ClientMessage::ScheduleBurns {
                     vessel: node.vessel,
-                    ut: node.ut,
-                    prograde_mps: node.prograde_mps,
-                    normal_mps: node.normal_mps,
-                    radial_mps: node.radial_mps,
+                    burns,
                 },
             );
         }
@@ -10733,14 +10856,12 @@ impl App {
 
     /// Place the node marker on the vessel's current orbit at the burn time and refresh its countdown.
     fn draw_node(&self, ut: f64, positions: &[ose_math::DVec3], centre: ose_math::DVec3) {
-        let (Some(node), Some(el), Some(scene)) = (self.node, &self.node_el, &self.scene) else {
+        let (Some(node), Some(el)) = (self.node, &self.node_el) else {
             return;
         };
-        let Some(v) = scene.vessel(node.vessel) else {
+        let Some((rb, rel, _)) = self.path_state(node.vessel, node.ut) else {
             return;
         };
-        let rb = v.reference_body as usize;
-        let rel = scene::orbit_from(scene.bodies[rb].mu, &v.orbit).position_at(node.ut);
         let (x, y) = self.camera.to_screen(positions[rb] + rel, centre);
         let style = el.style();
         style.set_property("left", &format!("{x:.1}px")).ok();
@@ -11542,24 +11663,34 @@ impl App {
                 }
             }
         }
-        // Pick points along the planning vessel's first patch (one orbit ahead at most).
+        // Pick points along the planning vessel's path (one orbit of each patch at most): a click puts a node
+        // there, also after another node (protocol 46 chains them). The patch that ends at the node being
+        // edited runs on past it, so the node slides along its orbit.
         self.orbit_pick.clear();
         if let Some(v) = planner.and_then(|id| scene.vessel(id)) {
-            let (bi, elements, start, end) =
-                match scene.trajectories.get(&v.id).and_then(|p| p.first()) {
-                    Some(p) => (
-                        p.body as usize,
-                        p.orbit,
-                        p.start_ut.max(ut),
-                        if p.end == PatchEnd::Maneuver {
-                            f64::INFINITY
-                        } else {
-                            p.end_ut
-                        },
-                    ),
-                    None => (v.reference_body as usize, v.orbit, ut, f64::INFINITY),
+            let edited = self.node.filter(|n| n.vessel == v.id).map(|n| n.ut);
+            let spans: Vec<(usize, ose_net::OrbitElements, f64, f64)> =
+                match scene.trajectories.get(&v.id) {
+                    Some(ps) if !ps.is_empty() => ps
+                        .iter()
+                        .take(8)
+                        .map(|p| {
+                            let open = p.end == PatchEnd::Maneuver
+                                && edited.is_some_and(|e| (e - p.end_ut).abs() < 1.0);
+                            (
+                                p.body as usize,
+                                p.orbit,
+                                p.start_ut.max(ut),
+                                if open { f64::INFINITY } else { p.end_ut },
+                            )
+                        })
+                        .collect(),
+                    _ => vec![(v.reference_body as usize, v.orbit, ut, f64::INFINITY)],
                 };
-            if let Some(body) = scene.bodies.get(bi) {
+            for (bi, elements, start, end) in spans {
+                let Some(body) = scene.bodies.get(bi) else {
+                    continue;
+                };
                 let orbit = scene::orbit_from(body.mu, &elements);
                 let span = if orbit.period.is_finite() {
                     orbit.period.min(end - start)
@@ -11800,10 +11931,7 @@ impl App {
         // The maneuver gizmo (MapManeuverGizmo): six handles around the node along prograde, retrograde,
         // normal, anti-normal, radial out and radial in, in the burn frame flight3d uses for the node marker.
         let gizmo = self.node.and_then(|node| {
-            let v = scene.vessel(node.vessel)?;
-            let rb = v.reference_body as usize;
-            let orbit = scene::orbit_from(scene.bodies[rb].mu, &v.orbit);
-            let (r, vel) = orbit.state_at(node.ut);
+            let (rb, r, vel) = path_state(scene, node.vessel, node.ut)?;
             let pro = to_km(vel).normalize_or_zero();
             let nrm = to_km(r.cross(vel)).normalize_or_zero();
             let rad = nrm.cross(pro);
@@ -11870,10 +11998,53 @@ impl App {
                 }
             }
         }
+        // Nodes whose time has passed are done (the server burned them): the next one is edited.
+        self.nodes.retain(|n| n.ut > ut - 5.0);
+        if self.node.is_some_and(|n| n.ut < ut - 5.0) && !self.nodes.is_empty() {
+            let k = (0..self.nodes.len())
+                .min_by(|&a, &b| self.nodes[a].ut.total_cmp(&self.nodes[b].ut))
+                .unwrap_or(0);
+            self.node = Some(self.nodes.remove(k));
+        }
+        // The other planned nodes, each where the path will be at its time.
+        for k in 0..8 {
+            let id = format!("node-other-{k}");
+            let el = match self.doc.get_element_by_id(&id) {
+                Some(e) => e,
+                None => {
+                    let Ok(e) = self.doc.create_element("div") else {
+                        continue;
+                    };
+                    e.set_id(&id);
+                    e.set_class_name("node-other");
+                    e.set_attribute("data-ose", "maneuver-node-other").ok();
+                    e.set_attribute("title", "another maneuver node: click to edit it")
+                        .ok();
+                    self.labels.append_child(&e).ok();
+                    e
+                }
+            };
+            let Some(el) = el.dyn_ref::<HtmlElement>() else {
+                continue;
+            };
+            let at = self.nodes.get(k).and_then(|n| {
+                let (rb, rel, _) = path_state(scene, n.vessel, n.ut)?;
+                project(to_km(positions[rb] + rel))
+            });
+            let style = el.style();
+            match at {
+                Some((x, y)) => {
+                    style.set_property("left", &format!("{x:.1}px")).ok();
+                    style.set_property("top", &format!("{y:.1}px")).ok();
+                    style.set_property("visibility", "visible").ok();
+                }
+                None => {
+                    style.set_property("visibility", "hidden").ok();
+                }
+            }
+        }
         if let (Some(node), Some(el)) = (self.node, &self.node_el) {
-            if let Some(v) = scene.vessel(node.vessel) {
-                let rb = v.reference_body as usize;
-                let rel = scene::orbit_from(scene.bodies[rb].mu, &v.orbit).position_at(node.ut);
+            if let Some((rb, rel, _)) = path_state(scene, node.vessel, node.ut) {
                 if let Some((x, y)) = project(to_km(positions[rb] + rel)) {
                     let style = el.style();
                     style.set_property("left", &format!("{x:.1}px")).ok();
@@ -12056,6 +12227,12 @@ fn install_focus_clicks(app: &Shared, target: &Element) -> Result<(), JsValue> {
         let ev_text = ev_target.as_ref().and_then(|e| e.text_content());
         let id = ev_target.as_ref().map(|e| e.id()).unwrap_or_default();
         let k = match id.as_str() {
+            other if other.starts_with("node-other-") => {
+                if let Ok(k) = other["node-other-".len()..].parse::<usize>() {
+                    a.borrow_mut().select_node(k);
+                }
+                return;
+            }
             "map-ap" => 0,
             "map-pe" => 1,
             ev if ev.starts_with("map-ev-") => {

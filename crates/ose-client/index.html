@@ -602,6 +602,9 @@
     #toasts { position: fixed; top: calc(92 * var(--u, 1px)); right: calc(16 * var(--u, 1px)); z-index: 40; display: flex; flex-direction: column; gap: 6px; pointer-events: none; max-width: 360px; }
     #toasts .toast { background: #10141bf0; border: 1px solid #ffffff2a; border-left: 4px solid #9fb0cc; border-radius: 6px; padding: 8px 12px; color: #e6ecf7; font: 13px var(--ui-font, system-ui); box-shadow: 0 4px 14px #0008; animation: toast-in 0.2s ease-out, toast-out 0.6s ease-in 5.4s forwards; }
     #labels #map-ap, #labels #map-pe, #labels .apsis.event { pointer-events: auto; cursor: pointer; }
+    /* The other planned maneuver nodes: a click edits that one. */
+    #labels .node-other { position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px; border: 2px solid #96aaff; border-radius: 50%; background: #10141bcc; pointer-events: auto; cursor: pointer; }
+    #labels .node-other:hover { background: #2f4f9f; }
     #labels .apsis { position: absolute; transform: translate(-50%, -130%); font: 600 11px var(--ui-font, system-ui); color: #9ef0c0; background: #06080fcc; border: 1px solid #9ef0c055; border-radius: 3px; padding: 1px 5px; white-space: nowrap; pointer-events: none; }
     #labels .apsis::after { content: ""; position: absolute; left: 50%; bottom: -6px; width: 6px; height: 6px; margin-left: -3px; border-radius: 50%; background: #9ef0c0; }
     /* Maneuver gizmo handles around the node: prograde/retrograde green-yellow, normal violet, radial cyan. */
@@ -1238,7 +1241,8 @@
     <label>radial <input id="node-radial" type="range" min="-1500" max="1500" step="1" value="0" /><span id="node-radial-text">0 m/s</span></label>
     <div class="reason" id="node-reason"></div>
     <button id="node-warp" data-ose="node-warp" title="Warp to just before the burn: the warp steps down as it gets close (any warp key cancels)">Warp to</button>
-    <button id="clear-node" data-ose="clear-node" title="Delete the maneuver node">Clear node</button>
+    <button id="clear-node" data-ose="clear-node" title="Delete this maneuver node (the others stay)">Delete node</button>
+    <button id="add-next-node" data-ose="add-next-node" title="Plan another node after the last one; or click the orbit after a node">Add next</button>
   </div>
   <div id="help">drag to pan, wheel to zoom, click a name to focus, F to frame the system</div>
 </body>
