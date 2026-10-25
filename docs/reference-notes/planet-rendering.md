@@ -101,7 +101,11 @@ Laythe's beach, Eve and Duna from orbit). Changes made from it:
 - Aerial perspective over the ground is eased to 60 % as the camera climbs from 10 to 40 km: the original's land
   stays vivid green from orbit (its aerial perspective is a camera volume of limited reach). The sky is unchanged.
 Still different: the original's land is a little more saturated from orbit, and its shallow seas around islands
-are a bright turquoise ring.
+are a bright turquoise ring. On Laythe, standing on raised ground, a thin purple line crosses the ground where
+the view meets the sea-level horizon: the original's scattering LUT is purple on its sky side at that angle
+from low altitude (its dense low Mie haze and the 10 to 40 km absorption layer), and the switch to the
+ground-hitting side is abrupt. Interpolating across the switch, or looking points up on the sky side, made it
+wider rather than better, so it is left as is for now.
 
 ## 6. Sunlight
 
