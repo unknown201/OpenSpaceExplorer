@@ -917,6 +917,110 @@ impl Editor {
     }
 }
 
+/// One finding of the engineer's report (`ObjectAssemblyEngineerReport`): severity 2 stops a launch going
+/// well, 1 is worth a look, 0 is fine.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Flaw {
+    pub severity: u8,
+    pub text: String,
+}
+
+/// The original's flaw checkers that the editor can run with what it knows: a command part, engines and the
+/// propellant they need, thrust to lift off, a parachute for crew, an antenna for probes, charge storage.
+/// `stage_twr` and `stage_dv` are the server's readout per `Craft::stages` index (empty before it arrives).
+pub fn engineer_report(
+    craft: &Craft,
+    catalog: &Catalog,
+    stage_twr: &[(usize, f64)],
+    stage_dv: &[(usize, f64)],
+) -> Vec<Flaw> {
+    let mut out = Vec::new();
+    if craft.parts.is_empty() {
+        return out;
+    }
+    let specs: Vec<&PartSpec> = craft
+        .parts
+        .iter()
+        .filter_map(|p| catalog.get(&p.part_id))
+        .collect();
+    let crewed = specs.iter().any(|s| s.crew_capacity > 0);
+    let command = specs.iter().any(|s| s.category == "Pods");
+    let probe = command && !crewed;
+    let has = |f: &dyn Fn(&PartSpec) -> bool| specs.iter().any(|s| f(s));
+    let flaw = |severity: u8, text: &str| Flaw {
+        severity,
+        text: text.to_string(),
+    };
+    if !command {
+        out.push(flaw(
+            2,
+            "No command part: add a pod or a probe core to control the vessel.",
+        ));
+    }
+    if !has(&|s| s.has_engine) {
+        out.push(flaw(
+            1,
+            "No engines: the vessel cannot move under its own power.",
+        ));
+    }
+    // The first stage to fire is the highest index.
+    if let Some(first) = craft.stages.len().checked_sub(1) {
+        if let Some((_, twr)) = stage_twr.iter().find(|(i, _)| *i == first) {
+            if *twr > 0.0 && *twr < 1.0 {
+                out.push(Flaw {
+                    severity: 2,
+                    text: format!(
+                        "Not enough thrust to lift off: the first stage's TWR is {twr:.2} at Kerbin's sea level."
+                    ),
+                });
+            }
+        }
+    }
+    for (i, stage) in craft.stages.iter().enumerate() {
+        let engines = stage.iter().any(|&p| {
+            craft
+                .parts
+                .get(p)
+                .and_then(|p| catalog.get(&p.part_id))
+                .is_some_and(|s| s.has_engine)
+        });
+        if engines && stage_dv.iter().any(|(k, dv)| *k == i && *dv <= 0.5) {
+            out.push(Flaw {
+                severity: 1,
+                text: format!(
+                    "Stage {}: its engines have no propellant they can reach.",
+                    craft.stages.len() - i
+                ),
+            });
+        }
+    }
+    if crewed && !has(&|s| s.stage_type.contains("Parachute")) {
+        out.push(flaw(1, "Crewed, but no parachute to come home with."));
+    }
+    if probe && !has(&|s| s.category == "Communication") && !has(&|s| s.id.contains("antenna")) {
+        out.push(flaw(
+            1,
+            "Probe without an antenna: out of the KSC's range it loses control and cannot transmit.",
+        ));
+    }
+    if probe
+        && !has(&|s| {
+            s.resource_containers
+                .iter()
+                .any(|c| c.resource.eq_ignore_ascii_case("ElectricCharge"))
+        })
+    {
+        out.push(flaw(
+            2,
+            "Probe without electric charge storage: it cannot be controlled.",
+        ));
+    }
+    if out.is_empty() {
+        out.push(flaw(0, "No problems found."));
+    }
+    out
+}
+
 /// Categories in the order the original's picker shows them; anything else goes at the end.
 pub const CATEGORY_ORDER: [&str; 13] = [
     "Pods",
@@ -1090,6 +1194,26 @@ mod tests {
         assert_eq!(e.craft.parts.len(), 1);
         assert_eq!(e.selected, Some(0));
         assert!(e.craft.stages.is_empty());
+    }
+
+    #[test]
+    fn engineer_report_flags_what_a_craft_lacks() {
+        let cat = catalog();
+        let mut e = Editor::new("test");
+        assert!(engineer_report(&e.craft, &cat, &[], &[]).is_empty());
+        e.add_part(&cat["pod"], &cat).unwrap();
+        let r = engineer_report(&e.craft, &cat, &[], &[]);
+        let text: Vec<&str> = r.iter().map(|f| f.text.as_str()).collect();
+        assert!(text.iter().any(|t| t.starts_with("No engines")), "{text:?}");
+        assert!(text.iter().any(|t| t.contains("antenna")));
+        e.add_part(&cat["tank"], &cat).unwrap();
+        let en = e.add_part(&cat["engine"], &cat).unwrap();
+        let stage = e.craft.stages.iter().position(|s| s.contains(&en)).unwrap();
+        let r = engineer_report(&e.craft, &cat, &[(stage, 0.6)], &[(stage, 900.0)]);
+        assert!(r
+            .iter()
+            .any(|f| f.severity == 2 && f.text.contains("TWR is 0.60")));
+        assert!(!r.iter().any(|f| f.text.starts_with("No engines")));
     }
 
     #[test]

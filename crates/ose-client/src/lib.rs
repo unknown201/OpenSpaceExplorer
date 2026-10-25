@@ -1392,6 +1392,14 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
     )?;
     wire("vab-save", Box::new(|a| a.borrow_mut().vab_save(false)))?;
     wire("vab-undo", Box::new(|a| a.borrow_mut().vab_undo(false)))?;
+    wire(
+        "vab-report-btn",
+        Box::new(|a| {
+            if let Some(el) = a.borrow().doc.get_element_by_id("vab-report-pop") {
+                el.class_list().toggle("open").ok();
+            }
+        }),
+    )?;
     for (id, com) in [("vab-com", true), ("vab-cot", false)] {
         wire(
             id,
@@ -4279,6 +4287,42 @@ impl App {
             if html.is_empty() {
                 html = "<li class=\"empty\">No stages yet: engines, decouplers and parachutes get one each.</li>".into();
             }
+            list.set_inner_html(&html);
+        }
+        // Engineer's report: the flaw count on the header button and the list in its pop-over.
+        let readout = |f: &dyn Fn(&ose_net::StageReadout) -> f64| -> Vec<(usize, f64)> {
+            self.vab_stages_readout
+                .iter()
+                .map(|r| (r.stage_id as usize, f(r)))
+                .collect()
+        };
+        let flaws = vab::engineer_report(
+            &self.editor.craft,
+            &self.catalog,
+            &readout(&|r| r.twr_asl),
+            &readout(&|r| r.delta_v_vacuum_mps),
+        );
+        let worst = flaws.iter().map(|f| f.severity).max().unwrap_or(0);
+        let count = flaws.iter().filter(|f| f.severity > 0).count();
+        if let Some(b) = self.doc.get_element_by_id("vab-report-btn") {
+            b.set_attribute("data-ose-flaws", &count.to_string()).ok();
+            b.class_list().toggle_with_force("warn", worst == 1).ok();
+            b.class_list().toggle_with_force("bad", worst == 2).ok();
+        }
+        set_text(
+            &self.doc,
+            "vab-report-count",
+            &if count > 0 {
+                count.to_string()
+            } else {
+                String::new()
+            },
+        );
+        if let Some(list) = self.doc.get_element_by_id("vab-flaws") {
+            let html: String = flaws
+                .iter()
+                .map(|f| format!("<li class=\"sev{}\">{}</li>", f.severity, esc(&f.text)))
+                .collect();
             list.set_inner_html(&html);
         }
         set_text(
