@@ -3830,6 +3830,8 @@ impl App {
                         self.open_ksc();
                         if let Some(ws) = &self.ws {
                             send(ws, &ClientMessage::ScienceInfo);
+                            // The crew portraits and the launch dialog need the roster from the start.
+                            send(ws, &ClientMessage::KerbalRoster);
                         }
                     }
                     if !self.agency_sent {
@@ -6324,7 +6326,13 @@ impl App {
     fn update_crew_buttons(&self, f: &ose_net::FlightReadout) {
         let landed = matches!(f.situation, ose_net::FlightSituation::Landed);
         if let Some(el) = self.doc.get_element_by_id("fh-crewbox") {
-            let html = hud::crew_html(&f.crew, !f.eva);
+            let face = |name: &str| {
+                self.roster
+                    .iter()
+                    .find(|k| k.name == name)
+                    .map(|k| training::face(k, "fh-face"))
+            };
+            let html = hud::crew_html(&f.crew, !f.eva, &face);
             let key = format!("{}:{}", html.len(), hud::fnv(&html));
             if el.get_attribute("data-ose-key").as_deref() != Some(key.as_str()) {
                 el.set_inner_html(&html);

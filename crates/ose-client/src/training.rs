@@ -37,20 +37,59 @@ fn status_class(k: &KerbalInfo) -> &'static str {
     }
 }
 
-/// A small Kerbal head: the green face, the suit's collar gold for veterans.
-fn portrait(k: &KerbalInfo) -> String {
-    let collar = if k.veteran { "#e6b84a" } else { "#e8ecf2" };
+/// One of the original's looks keys (SKINCOLOR, HAIRSTYLE, ...).
+fn look<'a>(k: &'a KerbalInfo, key: &str) -> Option<&'a str> {
+    k.looks
+        .iter()
+        .find(|(a, _)| a == key)
+        .map(|(_, b)| b.as_str())
+}
+
+/// A looks colour ("BADA55") as CSS, or `fallback`.
+fn hex(k: &KerbalInfo, key: &str, fallback: &str) -> String {
+    match look(k, key) {
+        Some(h) if h.len() == 6 && h.chars().all(|c| c.is_ascii_hexdigit()) => format!("#{h}"),
+        _ => fallback.to_string(),
+    }
+}
+
+/// A Kerbal's face from the original's looks: skin and hair colour, the square or round head type, the suit
+/// in the team colour (gold trim for veterans), and a grin as wide as their optimism.
+pub fn portrait(k: &KerbalInfo) -> String {
+    face(k, "tc-face")
+}
+
+pub fn face(k: &KerbalInfo, class: &str) -> String {
+    let skin = hex(k, "SKINCOLOR", "#8fd16a");
+    let hair = hex(k, "HAIRCOLOR", "#55483f");
+    let suit = hex(k, "TEAMCOLOR2", "#e8ecf2");
+    let team = hex(k, "TEAMCOLOR1", "#bf0000");
+    let trim = if k.veteran { "#e6b84a" } else { team.as_str() };
+    let round = look(k, "TYPE") == Some("CIRCLE");
+    let head = if round {
+        format!(
+            "<ellipse cx=\"20\" cy=\"19\" rx=\"12\" ry=\"13\" fill=\"{skin}\" stroke=\"#0005\"/>"
+        )
+    } else {
+        format!("<rect x=\"7\" y=\"6\" width=\"26\" height=\"26\" rx=\"10\" fill=\"{skin}\" stroke=\"#0005\"/>")
+    };
+    let hair_shape = if round {
+        // A bun and a fringe.
+        format!("<circle cx=\"20\" cy=\"5.5\" r=\"4\" fill=\"{hair}\"/><path d=\"M8.5 15 Q12 6 20 6 Q28 6 31.5 15 Q26 9.5 20 10 Q13 9.5 8.5 15Z\" fill=\"{hair}\"/>")
+    } else {
+        format!("<path d=\"M10 12 Q14 4 22 5 Q30 6 31 12 Q25 8.5 18 9.5 Q13 10 10 12Z\" fill=\"{hair}\"/>")
+    };
     let grin = 6.0 + 8.0 * k.optimism as f64;
     format!(
-        "<svg class=\"tc-face\" viewBox=\"0 0 40 40\" aria-hidden=\"true\">\
-         <path d=\"M6 40 Q20 30 34 40\" fill=\"{collar}\"/>\
-         <ellipse cx=\"20\" cy=\"19\" rx=\"13\" ry=\"14\" fill=\"#8fd16a\" stroke=\"#4d7d34\"/>\
-         <circle cx=\"15\" cy=\"16\" r=\"3.4\" fill=\"#fff\"/><circle cx=\"25\" cy=\"16\" r=\"3.4\" fill=\"#fff\"/>\
-         <circle cx=\"15.6\" cy=\"16.4\" r=\"1.5\" fill=\"#222\"/><circle cx=\"24.4\" cy=\"16.4\" r=\"1.5\" fill=\"#222\"/>\
-         <path d=\"M{x0:.1} 24 Q20 {y:.1} {x1:.1} 24\" stroke=\"#2d4a1e\" stroke-width=\"1.6\" fill=\"none\"/></svg>",
+        "<svg class=\"{class}\" viewBox=\"0 0 40 40\" aria-hidden=\"true\">\
+         <path d=\"M4 40 Q20 29 36 40\" fill=\"{suit}\"/><path d=\"M11 35.5 Q20 31 29 35.5\" stroke=\"{trim}\" stroke-width=\"2\" fill=\"none\"/>\
+         {head}{hair_shape}\
+         <circle cx=\"15\" cy=\"18\" r=\"3.4\" fill=\"#fff\"/><circle cx=\"25\" cy=\"18\" r=\"3.4\" fill=\"#fff\"/>\
+         <circle cx=\"15.6\" cy=\"18.4\" r=\"1.5\" fill=\"#222\"/><circle cx=\"24.4\" cy=\"18.4\" r=\"1.5\" fill=\"#222\"/>\
+         <path d=\"M{x0:.1} 25.5 Q20 {y:.1} {x1:.1} 25.5\" stroke=\"#0009\" stroke-width=\"1.6\" fill=\"none\"/></svg>",
         x0 = 20.0 - grin / 2.0,
         x1 = 20.0 + grin / 2.0,
-        y = 24.0 + grin / 2.5,
+        y = 25.5 + grin / 2.5,
     )
 }
 
