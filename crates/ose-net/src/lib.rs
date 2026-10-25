@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 32;
+pub const PROTOCOL_VERSION: u16 = 33;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -192,6 +192,14 @@ pub enum ClientMessage {
         pitch: f32,
         yaw: f32,
         roll: f32,
+    },
+    /// A Kerbal on EVA: `run` (Shift) held until changed, `jump` (Space) once from the ground. Its jetpack
+    /// translates with `Translate` (always on for a Kerbal: y up along the Kerbal, Ctrl down). Answers
+    /// `FlightAck`.
+    EvaControls {
+        vessel: u64,
+        run: bool,
+        jump: bool,
     },
     /// Roll input (-1..1, Q/E), held until changed; answers `FlightAck`.
     SetRoll {

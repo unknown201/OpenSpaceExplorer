@@ -202,6 +202,11 @@ impl Universe {
             // a jetpack fires on the throttle without staging; on the ground the Kerbal walks
             p.ignited = true;
             p.walker = true;
+            // the jetpack also translates (Space/Shift up, Ctrl down, sideways) like RCS, always on
+            p.rcs.thrust_kn = JETPACK_THRUST_KN;
+            p.rcs.isp_vac_s = JETPACK_ISP_S;
+            p.rcs.isp_asl_s = JETPACK_ISP_S;
+            p.groups.rcs = true;
             p.ground_clearance_m = 0.55;
             p.footprint_m = 0.3;
             p.crash_tolerance_mps = 50.0;
@@ -450,12 +455,43 @@ mod tests {
         let p = u.powered(jeb).unwrap();
         assert!(p.landed);
         assert_eq!(p.propellant_t, JETPACK_PROPELLANT_T);
-        // across the surface (the body turns under it too): about 10 m north
+        // across the surface (the body turns under it too): 0.8 m/s, about 3.2 m north
         let end = here(&u);
         let north_m = (end.0 - start.0).to_radians() * b.radius_m;
         let east_m = (end.1 - start.1).to_radians() * b.radius_m;
-        assert!((7.0..12.0).contains(&north_m), "walked {north_m} m north");
+        assert!((2.8..3.6).contains(&north_m), "walked {north_m} m north");
         assert!(east_m.abs() < 1.0, "{east_m} m east");
+        // running: 2.2 m/s
+        assert!(u.set_eva(jeb, true, false));
+        for _ in 0..(4 * crate::TICKS_PER_SECOND) {
+            u.step();
+        }
+        let ran = (here(&u).0 - end.0).to_radians() * b.radius_m;
+        assert!((8.0..9.6).contains(&ran), "ran {ran} m");
+        // a jump leaves the ground, carries on forward and comes back down
+        assert!(u.set_eva(jeb, true, true));
+        u.step();
+        u.step();
+        assert!(!u.powered(jeb).unwrap().landed, "in the air");
+        for _ in 0..(3 * crate::TICKS_PER_SECOND) {
+            u.step();
+        }
+        let p = u.powered(jeb).unwrap();
+        assert!(p.landed && !p.crashed);
+        assert_eq!(
+            p.propellant_t, JETPACK_PROPELLANT_T,
+            "walking and jumping burn nothing"
+        );
+        // the jetpack lifts it straight up (Translate along the Kerbal's axis)
+        u.set_controls(jeb, 0.0, flight::Attitude::Up);
+        assert!(u.set_translate(jeb, DVec3::new(0.0, 1.0, 0.0)));
+        for _ in 0..crate::TICKS_PER_SECOND {
+            u.step();
+        }
+        let p = u.powered(jeb).unwrap();
+        assert!(p.propellant_t < JETPACK_PROPELLANT_T, "the pack fires");
+        // 0.25 kN on a Kerbal is too weak to lift off Kerbin (as in the original); it is for low gravity
+        assert!(p.landed);
     }
 
     #[test]

@@ -2822,6 +2822,16 @@ async fn session(mut socket: WebSocket, s: AppState) {
                             };
                             if !send(&mut socket, &reply).await { break; }
                         }
+                        Ok(ClientMessage::EvaControls { vessel, run, jump }) => {
+                            let reply = match owned_vessel(&s, vessel, player_id) {
+                                Some(e) => {
+                                    let ok = s.universe.lock().expect("sim lock").set_eva(e, run, jump);
+                                    ServerMessage::FlightAck { vessel, accepted: ok, reason: (!ok).then(|| "not a Kerbal on EVA".into()) }
+                                }
+                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
+                            };
+                            if !send(&mut socket, &reply).await { break; }
+                        }
                         Ok(ClientMessage::SetRoll { vessel, input }) => {
                             let reply = match owned_vessel(&s, vessel, player_id) {
                                 Some(e) => {

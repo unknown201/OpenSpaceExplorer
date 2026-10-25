@@ -410,6 +410,18 @@ impl Universe {
         }
     }
 
+    /// A Kerbal on EVA runs (held) and jumps (once, from the ground); false for anything else.
+    pub fn set_eva(&mut self, e: Entity, run: bool, jump: bool) -> bool {
+        match self.world.get_mut::<flight::Powered>(e) {
+            Some(mut p) if p.walker => {
+                p.eva_run = run;
+                p.eva_jump |= jump && p.landed;
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Roll input for a vessel (-1..1, held until changed); false without a powered vessel.
     pub fn set_roll(&mut self, e: Entity, input: f64) -> bool {
         match self.world.get_mut::<flight::Powered>(e) {
@@ -1103,6 +1115,15 @@ impl Universe {
                             log.activated(&id);
                         }
                     }
+                }
+                if structure.is_none() && p.walker && p.rcs.usage > 0.0 {
+                    // a Kerbal's jetpack translation burns the pack
+                    let flow = p.rcs.thrust_kn * p.rcs.usage.min(1.0)
+                        / (p.rcs.isp_vac_s.max(1.0) * ose_data::G0);
+                    let burn = (flow * step_dt).min(p.propellant_t);
+                    p.propellant_t -= burn;
+                    p.mass_t -= burn;
+                    p.rcs.powered = if p.propellant_t > 0.0 { 1.0 } else { 0.0 };
                 }
                 if let Some(st) = &mut structure {
                     // the propellant burned comes out of the tanks through the flow graph
