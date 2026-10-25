@@ -47,6 +47,7 @@ pub mod planet_lod;
 #[cfg(target_arch = "wasm32")]
 pub mod planet_preview;
 pub mod planet_scatter;
+pub mod reentry;
 #[cfg(target_arch = "wasm32")]
 pub mod render;
 pub mod rnd;

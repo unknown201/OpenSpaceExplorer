@@ -27,6 +27,9 @@ pub struct Preview {
     occ: Option<(f64, f64, f64)>,
     /// `part=<part id>`: draw that part 6 m in front of the camera (checks that the planet never covers craft).
     part: Option<String>,
+    /// `plasma=<0..1>`: the re-entry sheath around that part (then 30 m away) at this strength, the air streaming away from the
+    /// camera's right and a little down, seen from the side (reentry.rs).
+    plasma: f64,
     planet: Option<PlanetRenderer>,
 }
 
@@ -69,6 +72,7 @@ impl Preview {
                 .get("quality")
                 .map(|q| crate::settings::planet_quality(Some(q))),
             part: get.get("part").cloned(),
+            plasma: num("plasma", 0.0),
             occ: get.get("occ").and_then(|s| {
                 let v: Vec<f64> = s.split(',').filter_map(|x| x.parse().ok()).collect();
                 (v.len() == 3).then(|| (v[0], v[1], v[2]))
@@ -143,12 +147,23 @@ impl Preview {
         };
         if let Some(part) = &self.part {
             let name = format!("part:{part}");
+            // farther off with a plasma sheath, so the camera is outside it
+            let dist = if self.plasma > 0.0 { 30.0 } else { 6.0 };
             gpu.request_model(&name, &format!("assets/parts/{part}.glb"));
             if gpu.has_model(&name) {
                 let mut it =
-                    crate::render::DrawItem::lit(name, fwd * 6.0, glam::DQuat::IDENTITY, 1.0, sun);
+                    crate::render::DrawItem::lit(name, fwd * dist, glam::DQuat::IDENTITY, 1.0, sun);
                 it.ambient = 0.25;
                 items.push(it);
+                if self.plasma > 0.0 {
+                    gpu.add_plasma(crate::reentry::Sheath {
+                        centre: fwd * dist,
+                        trail: (fwd.cross(up).normalize() - up * 0.3).normalize(),
+                        radius: 1.5,
+                        strength: self.plasma,
+                        time_s: now_ms / 1000.0,
+                    });
+                }
             }
         }
         let extra = self

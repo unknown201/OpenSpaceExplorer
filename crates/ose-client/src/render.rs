@@ -352,6 +352,9 @@ pub struct Renderer {
     post: crate::fx_post::FxPost,
     /// The sun's lens flare (lens_flare.rs), drawn into the HDR scene before the post pass.
     lens_flare: crate::lens_flare::LensFlare,
+    /// Re-entry plasma around craft (reentry.rs), drawn after the engine effects; requests for this frame.
+    plasma: crate::reentry::PlasmaPass,
+    plasma_req: std::cell::RefCell<Vec<crate::reentry::Sheath>>,
     /// This frame's flare: sun direction (camera-relative world), strength, tint, angular radius (rad); set by
     /// the planet renderer, cleared after each frame.
     flare: std::cell::Cell<Option<crate::lens_flare::FlareRequest>>,
@@ -750,8 +753,11 @@ impl Renderer {
         let engine_fx =
             crate::engine_fx_gpu::EngineFxGpu::new(&device, &queue, &depth, &post.snapshot_view);
         let lens_flare = crate::lens_flare::LensFlare::new(&device, &depth);
+        let plasma = crate::reentry::PlasmaPass::new(&device, wgpu::TextureFormat::Depth32Float);
         Some(Renderer {
             lens_flare,
+            plasma,
+            plasma_req: std::cell::RefCell::new(Vec::new()),
             flare: std::cell::Cell::new(None),
             device,
             queue,
@@ -884,6 +890,11 @@ impl Renderer {
         self.engine_fx
             .resize(&self.device, &self.depth, &self.post.snapshot_view);
         self.lens_flare.resize(&self.device, &self.depth);
+    }
+
+    /// Draw a craft's re-entry plasma this frame (flight view; at most `reentry::MAX_SHEATHS`).
+    pub fn add_plasma(&self, s: crate::reentry::Sheath) {
+        self.plasma_req.borrow_mut().push(s);
     }
 
     /// Ask for the sun's lens flare this frame (the planet renderer does, while a body is drawn).
@@ -1531,6 +1542,9 @@ impl Renderer {
                 multiview_mask: None,
             });
             self.engine_fx.draw(&mut pass);
+            let sheaths = std::mem::take(&mut *self.plasma_req.borrow_mut());
+            self.plasma
+                .draw(&self.queue, &mut pass, self.view_proj(), &sheaths);
         }
         if let Some((dir, strength, tint, radius)) = self.flare.take() {
             self.lens_flare.draw(
