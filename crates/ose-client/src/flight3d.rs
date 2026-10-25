@@ -339,6 +339,14 @@ pub struct FlightView {
     flex_prev: FlexMap,
     flex_cur: FlexMap,
     flex_since_ms: f64,
+    /// Landing legs: how far each is deployed (0 stowed, 1 out), easing toward the server's gear state, and when
+    /// that was last advanced (ms).
+    leg_fold: HashMap<u16, f64>,
+    leg_fold_ms: f64,
+    /// A walking Kerbal: last model-frame position and time (ms), smoothed speed (m/s) and stride phase.
+    walk_last: Option<(DVec3, f64)>,
+    walk_speed: f64,
+    walk_phase: f64,
     /// Craft axes and local horizon of the last frame, for the navball.
     pub nav: Option<crate::navball::NavFrame>,
     /// Terrain, ocean, sky and clouds of the body (planet.rs), created with the first frame.
@@ -400,6 +408,11 @@ impl FlightView {
             flex_prev: HashMap::new(),
             flex_cur: HashMap::new(),
             flex_since_ms: 0.0,
+            leg_fold: HashMap::new(),
+            leg_fold_ms: 0.0,
+            walk_last: None,
+            walk_speed: 0.0,
+            walk_phase: 0.0,
             nav: None,
             planet: None,
         }
@@ -804,6 +817,16 @@ impl FlightView {
                 None => FlexMap::new(),
             };
             let poses = crate::thumb::poses(craft);
+            // Landing legs swing in against the craft when stowed (protocol 21: legs start folded) and out when
+            // deployed, over about a second, as the original animates them.
+            let gear_out: HashMap<u16, bool> = inp
+                .vessel
+                .flight
+                .as_ref()
+                .map(|f| f.gear.iter().copied().collect())
+                .unwrap_or_default();
+            let fold_dt = ((inp.now_ms - self.leg_fold_ms) / 1000.0).clamp(0.0, 0.2);
+            self.leg_fold_ms = inp.now_ms;
             // Bottom anchor: the craft's lowest point (along its own +Y) sits at the vessel point.
             let mut min_y = f64::INFINITY;
             let mut parts = Vec::new();
@@ -815,6 +838,18 @@ impl FlightView {
                 gpu.request_model(&name, &format!("assets/parts/{}.glb", p.part_id));
                 let mut lp = DVec3::new(-pp.x, pp.y, pp.z);
                 let mut lq = DQuat::from_xyzw(q.x, -q.y, -q.z, q.w).normalize();
+                if p.part_id.starts_with("landingleg") {
+                    let target = if gear_out.get(&(i as u16)).copied().unwrap_or(false) {
+                        1.0
+                    } else {
+                        0.0
+                    };
+                    let f = self.leg_fold.entry(i as u16).or_insert(target);
+                    *f += (target - *f).clamp(-fold_dt, fold_dt);
+                    // The exported leg stands in its stowed pose, down along the hull; deployed, it turns about
+                    // its own X so the foot swings out and down, splayed as the original's.
+                    lq = (lq * DQuat::from_rotation_x(*f * 0.6)).normalize();
+                }
                 // Wobble: rotate about the part's own origin, then shift, both given in the craft's Unity
                 // frame; mirroring X turns a rotation vector (x, y, z) into (x, -y, -z).
                 if let Some((rv, off)) = flex.get(&(i as u16)) {
@@ -963,8 +998,30 @@ impl FlightView {
                 }
                 Stand::Flag => DQuat::from_rotation_arc(DVec3::Y, up),
             };
+            // A walking Kerbal bobs and sways with its stride (the original animates a walk cycle; this
+            // rigid model moves as a whole).
+            let (mut at, mut rot) = (pos, rot);
+            if inp.stand == Stand::Kerbal {
+                let landed = inp
+                    .vessel
+                    .flight
+                    .as_ref()
+                    .is_some_and(|f| f.situation == ose_net::FlightSituation::Landed);
+                if let Some((p0, t0)) = self.walk_last {
+                    let dt = ((inp.now_ms - t0) / 1000.0).max(1e-3);
+                    let v = ((pos - p0).length() / dt).min(10.0);
+                    self.walk_speed += (v - self.walk_speed) * (dt * 6.0).min(1.0);
+                    self.walk_phase += self.walk_speed * dt * 5.0;
+                }
+                self.walk_last = Some((pos, inp.now_ms));
+                if landed && self.walk_speed > 0.2 {
+                    let s = self.walk_phase.sin();
+                    at += up * (0.035 * s.abs());
+                    rot = (rot * DQuat::from_rotation_z(0.07 * s)).normalize();
+                }
+            }
             for (name, _, scale) in inp.stand.models(gpu) {
-                let mut it = DrawItem::lit(name.to_string(), pos - cam, rot, scale, sun);
+                let mut it = DrawItem::lit(name.to_string(), at - cam, rot, scale, sun);
                 it.ambient = part_ambient;
                 it.sun = sun_share;
                 items.push(it);
