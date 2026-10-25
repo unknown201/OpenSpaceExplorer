@@ -1121,6 +1121,12 @@ fn fs_terrain(in: VOut) -> @location(0) vec4<f32> {
         radiance = water_fog(radiance * exp(-max(-in.height, 0.0) / 80.0), dist);
     } else {
         radiance = through_air(radiance, p_km);
+        // From high up the original's land keeps its colour through the haze (its colour grading): give back
+        // some of the saturation the air takes, as the camera climbs from 10 to 40 km.
+        let alt_km = length(frame.cam_km.xyz) - bottom_r();
+        let lum = dot(radiance, vec3<f32>(0.2126, 0.7152, 0.0722));
+        let sat = 1.0 + 0.3 * smoothstep(10.0, 40.0, alt_km) * frame.rayleigh.w;
+        radiance = max(mix(vec3<f32>(lum), radiance, sat), vec3<f32>(0.0));
     }
     return vec4<f32>(tonemap(radiance), 1.0);
 }
@@ -1225,6 +1231,12 @@ fn fs_ocean(in: VOut) -> @location(0) vec4<f32> {
     let suv = equi_uv(up);
     let scaled = sample_equi(albedo_tex, suv, equi_grad(suv)).rgb;
     radiance = mix(radiance, scaled / PI * (light.sun + light.sky), to_scaled);
+    // Lagoons: in clear seas the sandy floor lights the shallows a bright turquoise around coasts and islands,
+    // the rings the original shows even from orbit (not in murky seas such as Eve's).
+    let clear = smoothstep(1.0, 10.0, surface.foam.w);
+    let lagoon = exp(-max(depth, 0.0) / max(0.08 * surface.deep.w, 2.0)) * clear * (1.0 - fres * 0.6);
+    let turquoise = min(surface.shallow.rgb * 2.8, vec3<f32>(0.95));
+    radiance = mix(radiance, turquoise / PI * (light.sun + light.sky) * 0.9, lagoon * 0.85);
     radiance = through_air(radiance, p_km);
     let alpha = mix(mix(0.55, 1.0, smoothstep(0.0, max(surface.foam.w, 0.5), depth)), 1.0, to_scaled)
         * smoothstep(-2.0, 0.5, depth);

@@ -100,8 +100,10 @@ Laythe's beach, Eve and Duna from orbit). Changes made from it:
   oceans are the original's deep navy from orbit instead of a pale sky-tinted cyan.
 - Aerial perspective over the ground is eased to 60 % as the camera climbs from 10 to 40 km: the original's land
   stays vivid green from orbit (its aerial perspective is a camera volume of limited reach). The sky is unchanged.
-Still different: the original's land is a little more saturated from orbit, and its shallow seas around islands
-are a bright turquoise ring. On Laythe, standing on raised ground, a thin purple line crosses the ground where
+- Lagoons: clear seas (opaque depth over 1 m) light their shallows turquoise around coasts and islands, falling
+  off over 8 % of `_ShallowMaxDepth` (Kerbin 27 m), visible from orbit as in the original.
+- Land from high up gets back 30 % saturation as the camera climbs from 10 to 40 km (the original's grading).
+Still different: the original's open sea is a brighter blue from 40 to 70 km. On Laythe, standing on raised ground, a thin purple line crosses the ground where
 the view meets the sea-level horizon: the original's scattering LUT is purple on its sky side at that angle
 from low altitude (its dense low Mie haze and the 10 to 40 km absorption layer), and the switch to the
 ground-hitting side is abrupt. Interpolating across the switch, or looking points up on the sky side, made it
