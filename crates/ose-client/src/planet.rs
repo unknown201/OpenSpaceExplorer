@@ -1042,10 +1042,19 @@ impl PlanetRenderer {
         {
             let url = format!("{base}/scatter.json");
             let inbox = inbox.clone();
+            let base = base.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 if let Ok(b) = fetch_bytes(&url).await {
                     match serde_json::from_slice::<ScatterFile>(&b) {
-                        Ok(f) => inbox.borrow_mut().push(Loaded::Scatter(f)),
+                        Ok(mut f) => {
+                            // the vegetation system's own biome mask, before placing anything
+                            if let Some(m) = &f.mask {
+                                if let Ok(raw) = fetch_bytes(&format!("{base}/{}", m.file)).await {
+                                    f.mask_data = raw.as_chunks::<4>().0.to_vec();
+                                }
+                            }
+                            inbox.borrow_mut().push(Loaded::Scatter(f))
+                        }
                         Err(e) => log(&format!("planet {url}: {e}")),
                     }
                 }

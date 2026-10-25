@@ -993,8 +993,18 @@ fn fs_terrain(in: VOut) -> @location(0) vec4<f32> {
                     let c0 = mix(near.rgb, mid.rgb, smoothstep(30.0, 400.0, dist));
                     let c1 = mix(c0, far.rgb, smoothstep(400.0, 4000.0, dist));
                     ratio = ratio + w * c1 / mean;
-                    if dist < 600.0 {
-                        bump = bump + w * tri_normal(s, in.tile, dpx, dpy, tw, 8.0);
+                    // normals resampled with distance like the albedo (8 m near, 64 m beyond ~30 m), so the
+                    // 8 m pattern does not repeat in rows across the ground
+                    if dist < 2000.0 {
+                        let nmix = smoothstep(30.0, 250.0, dist);
+                        var nb = vec3<f32>(0.0);
+                        if nmix < 0.99 {
+                            nb = tri_normal(s, in.tile, dpx, dpy, tw, 8.0) * (1.0 - nmix);
+                        }
+                        if nmix > 0.01 {
+                            nb = nb + tri_normal(s, in.tile, dpx, dpy, tw, 64.0) * nmix;
+                        }
+                        bump = bump + w * nb;
                     }
                     total = total + w;
                 }
@@ -1002,7 +1012,7 @@ fn fs_terrain(in: VOut) -> @location(0) vec4<f32> {
                     let r = clamp(ratio / total, vec3<f32>(0.0), vec3<f32>(3.0));
                     dbg = r * 0.5;
                     albedo = albedo * mix(vec3<f32>(1.0), r, k);
-                    let nk = k * (1.0 - smoothstep(150.0, 600.0, dist));
+                    let nk = k * (1.0 - smoothstep(600.0, 2000.0, dist));
                     n = normalize(n + bump / total * nk);
                 }
             }

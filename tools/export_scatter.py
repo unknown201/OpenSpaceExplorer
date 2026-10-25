@@ -292,6 +292,39 @@ def grass_item(ex: Exporter, env, v: dict, distance: float) -> dict | None:
     }
 
 
+MASK_W, MASK_H = 1024, 512
+
+
+def export_scatter_mask(install: Path, bid: str, pdir: Path) -> dict | None:
+    """The vegetation system's own biome mask (`VegetationSystemPro.BiomeTextureMask`: kerbin_scatter_mask, or
+    the scaled mask on most bodies), the weights its packages are placed by, as raw RGBA (`scatter_mask.bin`,
+    MASK_W x MASK_H, row 0 at the north pole, column 0 at -180 deg) plus a gzip copy. Decoded when the texture
+    is imported as sRGB, as the GPU samples it in the original."""
+    import gzip
+    import sys
+
+    import numpy as np
+    from PIL import Image
+
+    sys.path.insert(0, str(Path(__file__).parent))
+    import export_planets as ep
+
+    bdir = install / "KSP2_x64_Data/StreamingAssets/aa/StandaloneWindows64"
+    a = ep.Assets([bdir / f"celestialbody-{k}-{bid.lower()}_assets_all.bundle" for k in ("shared", "simulation")])
+    for tt in a.find_mono("BiomeTextureMaskRChannelType"):
+        o = a.get(tt.get("BiomeTextureMask"))
+        if o is None:
+            return None
+        img = o.read().image.convert("RGBA").resize((MASK_W, MASK_H), Image.BILINEAR)
+        if o.read_typetree().get("m_ColorSpace", 0) == 1:
+            img = ep.srgb_to_linear_image(img, alpha=True)
+        raw = np.asarray(img, dtype=np.uint8).tobytes()
+        (pdir / "scatter_mask.bin").write_bytes(raw)
+        (pdir / "scatter_mask.bin.gz").write_bytes(gzip.compress(raw, compresslevel=6))
+        return {"file": "scatter_mask.bin", "width": MASK_W, "height": MASK_H, "source": o.read().m_Name}
+    return None
+
+
 def export_body(ex: Exporter, bid: str, out: Path) -> dict | None:
     bundle = f"celestialbody-simulation-{bid.lower()}_assets_all.bundle"
     if not (ex.bdir / bundle).exists():
@@ -333,6 +366,14 @@ def export_body(ex: Exporter, bid: str, out: Path) -> dict | None:
         * settings.get("MediumObjectDistanceFactor", 0.5),
         "large_object": settings.get("AdditionalBillboardDistance", 2500.0)
         * settings.get("LargeObjectDistanceFactor", 0.5),
+    }
+    kind_density = {
+        "grass": settings.get("GrassDensity", 1.0),
+        "plant": settings.get("PlantDensity", 1.0),
+        "tree": settings.get("TreeDensity", 1.0),
+        "object": settings.get("ObjectDensity", 1.0),
+        "medium_object": settings.get("MediumObjectDensity", 1.0),
+        "large_object": settings.get("LargeObjectDensity", 1.0),
     }
     (out / "scatter").mkdir(parents=True, exist_ok=True)
     written: dict[str, dict | None] = {}
@@ -383,7 +424,8 @@ def export_body(ex: Exporter, bid: str, out: Path) -> dict | None:
                 "kind": kind,
                 "size_m": size_m,
                 "spacing_m": v["SampleDistance"],
-                "density": v.get("Density", 1.0),
+                # the item's density times the system's global one for its kind (Duna: objects 0.5, medium 0.4)
+                "density": v.get("Density", 1.0) * kind_density.get(kind, 1.0),
                 "scale": [v.get("MinScale", 1.0) * sm["y"], v.get("MaxScale", 1.0) * sm["y"]],
                 "y_offset": [v.get("MinYOffset", 0.0), v.get("MaxYOffset", 0.0)],
                 "seed": v.get("Seed", 0),
@@ -400,6 +442,9 @@ def export_body(ex: Exporter, bid: str, out: Path) -> dict | None:
                                        "cutoff": pk.get("BiomeCutoffWeight", 0.0), "items": items})
     pdir = out / "planets" / bid
     pdir.mkdir(parents=True, exist_ok=True)
+    mask = export_scatter_mask(ex.aa.parent.parent.parent, bid, pdir)
+    if mask:
+        result["mask"] = mask
     (pdir / "scatter.json").write_text(json.dumps(result, indent=1), encoding="utf-8")
     return {"packages": len(result["packages"]), "items": sum(len(p["items"]) for p in result["packages"]),
             "prefabs": sum(1 for k, v in written.items() if v and not k.startswith("imp:")),

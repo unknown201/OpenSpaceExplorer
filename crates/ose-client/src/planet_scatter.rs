@@ -21,6 +21,19 @@ pub struct ScatterFile {
     #[serde(default)]
     pub sea_level: f64,
     pub packages: Vec<Package>,
+    /// The vegetation system's own biome mask (tools/export_scatter.py `export_scatter_mask`).
+    #[serde(default)]
+    pub mask: Option<MaskRef>,
+    /// Its RGBA texels once fetched (row 0 at the north pole, column 0 at -180 deg).
+    #[serde(skip)]
+    pub mask_data: Vec<[u8; 4]>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct MaskRef {
+    pub file: String,
+    pub width: usize,
+    pub height: usize,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -199,6 +212,40 @@ fn noise(x: f64, y: f64, seed: i64) -> f64 {
 }
 
 impl ScatterFile {
+    /// Biome weights at a latitude/longitude: the vegetation system's own mask (bilinear) when loaded, else the
+    /// terrain pack's layer mask.
+    pub fn weights(&self, map: &TerrainMap, lat: f64, lon: f64) -> Option<[f64; 4]> {
+        let Some(m) = self
+            .mask
+            .as_ref()
+            .filter(|m| self.mask_data.len() == m.width * m.height)
+        else {
+            return map.biome_weights(lat, lon);
+        };
+        let fx = (lon + 180.0) / 360.0 * m.width as f64 - 0.5;
+        let fy = ((90.0 - lat) / 180.0 * m.height as f64 - 0.5).clamp(0.0, m.height as f64 - 1.0);
+        let (x0, y0) = (fx.floor(), fy.floor());
+        let (tx, ty) = (fx - x0, fy - y0);
+        let at = |x: f64, y: f64| {
+            let xi = (x as i64).rem_euclid(m.width as i64) as usize;
+            let yi = (y as i64).clamp(0, m.height as i64 - 1) as usize;
+            self.mask_data[yi * m.width + xi]
+        };
+        let (a, b, c, d) = (
+            at(x0, y0),
+            at(x0 + 1.0, y0),
+            at(x0, y0 + 1.0),
+            at(x0 + 1.0, y0 + 1.0),
+        );
+        let mut out = [0.0; 4];
+        for k in 0..4 {
+            let top = a[k] as f64 + (b[k] as f64 - a[k] as f64) * tx;
+            let bot = c[k] as f64 + (d[k] as f64 - c[k] as f64) * tx;
+            out[k] = (top + (bot - top) * ty) / 255.0;
+        }
+        Some(out)
+    }
+
     /// Every item's model path, in package and item order (the `model` index of an instance).
     pub fn models(&self) -> Vec<&str> {
         self.packages
@@ -265,8 +312,8 @@ impl ScatterFile {
                             continue;
                         }
                         let (lat, lon) = planet_lod::lat_lon(d);
-                        let w = map
-                            .biome_weights(lat, lon)
+                        let w = self
+                            .weights(map, lat, lon)
                             .map(|w| {
                                 let s = w[0] + w[1] + w[2] + w[3];
                                 // as the shader: land with no biome weight takes the first biome
@@ -465,8 +512,8 @@ impl ScatterFile {
                             continue;
                         }
                         let (lat, lon) = planet_lod::lat_lon(d);
-                        let w = map
-                            .biome_weights(lat, lon)
+                        let w = self
+                            .weights(map, lat, lon)
                             .map(|w| {
                                 let s = w[0] + w[1] + w[2] + w[3];
                                 if s < 0.05 {
@@ -638,8 +685,8 @@ impl ScatterFile {
                             continue;
                         }
                         let (lat, lon) = planet_lod::lat_lon(d);
-                        let w = map
-                            .biome_weights(lat, lon)
+                        let w = self
+                            .weights(map, lat, lon)
                             .map(|w| {
                                 let s = w[0] + w[1] + w[2] + w[3];
                                 if s < 0.05 {

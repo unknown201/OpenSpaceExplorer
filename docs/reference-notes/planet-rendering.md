@@ -218,3 +218,10 @@ screen centre, a thin horizontal streak and a faint glare, hidden by the depth b
 (terrain, craft, the limb) and faded and reddened by the air near the horizon. The planet renderer requests it
 each frame (`Renderer::set_flare`).
 
+Scatter biomes: Vegetation Studio places by its own `BiomeTextureMask` (kerbin_scatter_mask, dres/vall_scatter_mask,
+else the body's scaled or biome mask), not the terrain pack's layer mask; it is exported per body as
+`scatter_mask.bin` (1024 x 512 RGBA, decoded where imported as sRGB) and `ScatterFile::weights` reads it. Items'
+densities are multiplied by `VegetationSettings` <Kind>Density (Duna objects 0.5 / medium 0.4 / large 0.5, Minmus
+0.5 / 0.2 / 0.25, Eve 0.5, Laythe/Tylo/Vall large 0.5), which had been missing: Duna was a boulder field.
+Detail normals are resampled with distance like the albedo (8 m near, 64 m beyond ~30 m, out to 2 km).
+
