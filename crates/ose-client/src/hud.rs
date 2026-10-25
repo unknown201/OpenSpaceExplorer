@@ -390,10 +390,23 @@ pub fn staging_html(
     let stages = &craft.stages;
     // The highest index fires first: firing step k is craft stage len - 1 - k. Cards run from the last to
     // fire (index 0) at the top to the next one at the bottom, numbered from the bottom up.
-    let Some(next) = stages.len().checked_sub(next_stage + 1) else {
+    // Once something has fired, the stage burning now (fired last) stays at the bottom, as the original's
+    // active stage does, until its engines are dropped.
+    let burning = (next_stage > 0)
+        .then(|| stages.len().checked_sub(next_stage))
+        .flatten();
+    let Some(next) = stages
+        .len()
+        .checked_sub(next_stage + 1)
+        .or(burning.map(|_| usize::MAX))
+    else {
         return html;
     };
-    for (n, stage) in stages.iter().enumerate().take(next + 1) {
+    let shown = burning.map(|b| b + 1).unwrap_or(next.wrapping_add(1));
+    for (n, stage) in stages.iter().enumerate().take(shown) {
+        if stage.is_empty() && Some(n) == burning {
+            continue;
+        }
         let mut icons = String::new();
         for &i in stage {
             let Some(p) = craft.parts.get(i) else {
@@ -434,7 +447,13 @@ pub fn staging_html(
             .unwrap_or_default();
         html.push_str(&format!(
             "<li class=\"{}\"><b>{}</b>{icons}{stats}</li>",
-            if n == next { "next" } else { "" },
+            if n == next {
+                "next"
+            } else if Some(n) == burning {
+                "burning"
+            } else {
+                ""
+            },
             stages.len() - n
         ));
     }
