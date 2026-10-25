@@ -74,6 +74,15 @@ EVENTS: dict[str, tuple[str, object, bool, float, str | None]] = {
     "leg_retract": ("Play_An_Landing_Leg_Small_Extensible_LT_1_retract_1", "first", False, 0.6, None),
     "panel_open": ("Play_An_SolarArray_1x6_Shielded_open_1", "first", False, 0.5, None),
     "panel_close": ("Play_An_SolarArray_1x6_Shielded_close_1", "first", False, 0.5, None),
+    # EVA: footsteps while walking, climbing out and in, the flag going in, the jetpack.
+    "footstep": ("Play_An_Kerbal_footsteps", "first", False, 0.5, None),
+    "eva_exit": ("Play_EM_Eva_exited", "first", False, 0.6, None),
+    "eva_enter": ("Play_EM_Eva_entered", "first", False, 0.6, None),
+    "flag_plant": ("Play_An_Kerbal_FlagPlant_09_impact", "first", False, 0.7, None),
+    "jetpack": ("Play_u_ENGINE_monoprop_0v_puff", "first", True, 0.5, None),
+    # Cargo bay doors.
+    "bay_open": ("Play_An_Cargo_Bay_Mk2_open_1", "first", False, 0.6, None),
+    "bay_close": ("Play_An_Cargo_Bay_Mk2_close_1", "first", False, 0.6, None),
     # The wind bank's events carry no names in the assets: its longest looping gust by id.
     "wind": ("wem:222060491", "first", True, 0.6, None),
 }

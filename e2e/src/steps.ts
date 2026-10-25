@@ -887,8 +887,22 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
       await sleep(1000);
       const [la0, lo0] = await latlon();
       // Kerbals walk at the original's 0.8 m/s (protocol 33), so hold long enough to clear the threshold.
+      // With the game's sounds served, walking plays the original's footsteps.
+      const hasStep = await page.evaluate(async () => {
+        try {
+          const r = await fetch("assets/audio/sounds.json");
+          return r.ok && (await r.text()).includes('"footstep"');
+        } catch {
+          return false;
+        }
+      });
+      let stepped = false;
       await page.keyboard.down("KeyW");
-      await sleep(2000);
+      const tw = Date.now();
+      while (Date.now() - tw < 2000) {
+        if ((await page.locator("#audio").getAttribute("data-ose-sfx")) === "footstep") stepped = true;
+        await sleep(100);
+      }
       await page.keyboard.up("KeyW");
       await sleep(500);
       const [la1, lo1] = await latlon();
@@ -901,6 +915,10 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
       if (!(walked > 0.5)) {
         await restore();
         return failed(`holding W did not walk the Kerbal (moved ${walked.toFixed(2)} m)`);
+      }
+      if (hasStep && !stepped) {
+        await restore();
+        return failed("the Kerbal walked without footsteps (#audio data-ose-sfx never read footstep)");
       }
       await sleep(1500);
       const flag = page.locator('[data-ose="flight-flag"]');

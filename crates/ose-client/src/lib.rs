@@ -1259,6 +1259,10 @@ struct FlightSoundState {
     panels: bool,
     hot: Vec<u16>,
     chutes: Vec<(u16, ose_net::ChuteState)>,
+    bays: Vec<(u16, bool)>,
+    fairings_gone: usize,
+    /// When the last footstep played (page ms).
+    step_at: f64,
 }
 
 /// An experiment id as a readable name: "TemperatureScan" reads "Temperature Scan".
@@ -4013,11 +4017,16 @@ impl App {
                         // Out of the hatch: fly the Kerbal.
                         (Some("fh-eva"), Some(nv)) => {
                             set_text(&self.doc, "fh-note", "");
+                            self.audio.play("eva_exit");
                             self.start_flight(nv, None);
                         }
-                        (Some("fh-flag"), _) => set_text(&self.doc, "fh-note", "flag planted"),
+                        (Some("fh-flag"), _) => {
+                            set_text(&self.doc, "fh-note", "flag planted");
+                            self.audio.play("flag_plant");
+                        }
                         // Boarded: fly the craft the Kerbal climbed into.
                         (Some("fh-board"), _) if self.flying == Some(vessel) => {
+                            self.audio.play("eva_enter");
                             if let Some(target) = self.board_target.take() {
                                 let craft = stored(&self.craft_link_key(target))
                                     .and_then(|s| s.parse::<u64>().ok());
@@ -7439,6 +7448,7 @@ impl App {
         let Some((id, f)) = flight.filter(|_| !menu_open) else {
             self.audio.level_loop("wind", 0.0, 1.0);
             self.audio.level_loop("reentry", 0.0, 1.0);
+            self.audio.level_loop("jetpack", 0.0, 1.0);
             self.flight_sound_state = None;
             return;
         };
@@ -7461,8 +7471,48 @@ impl App {
                 .map(|h| h.0)
                 .collect(),
             chutes,
+            bays: f.cargo_bays.clone(),
+            fairings_gone: f.fairings.iter().filter(|x| x.1).count(),
+            step_at: self
+                .flight_sound_state
+                .as_ref()
+                .filter(|w| w.vessel == id)
+                .map(|w| w.step_at)
+                .unwrap_or(0.0),
         };
+        // A Kerbal on EVA: footsteps while walking, the jetpack while flying it.
+        let landed = matches!(f.situation, ose_net::FlightSituation::Landed);
+        // Walking moves the Kerbal without a surface speed, so the keys say when it walks (and runs).
+        let k = &self.keys;
+        let moving = k.pitch() != 0.0 || k.roll() != 0.0;
+        let thrusting = moving || k.is("Space") || k.is("ShiftLeft") || k.is("ControlLeft");
+        let running = k.is("ShiftLeft") || k.is("ShiftRight");
+        self.audio.level_loop(
+            "jetpack",
+            if f.eva && !landed && thrusting {
+                1.0
+            } else {
+                0.0
+            },
+            1.0,
+        );
+        let mut now = now;
+        let t = now_ms();
+        let pace = if running { 300.0 } else { 450.0 };
+        if f.eva && landed && moving && t - now.step_at > pace {
+            self.audio.play("footstep");
+            now.step_at = t;
+        }
         if let Some(was) = self.flight_sound_state.as_ref().filter(|w| w.vessel == id) {
+            for (part, open) in &now.bays {
+                if was.bays.iter().any(|b| b.0 == *part && b.1 != *open) {
+                    self.audio
+                        .play(if *open { "bay_open" } else { "bay_close" });
+                }
+            }
+            if now.fairings_gone > was.fairings_gone {
+                self.audio.play("decouple");
+            }
             if now.supersonic && !was.supersonic {
                 self.audio.play("sonic_boom");
             }
