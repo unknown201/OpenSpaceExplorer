@@ -110,6 +110,9 @@ pub struct NearVessel<'a> {
     pub stand: Stand,
     pub craft: Option<&'a Craft>,
     pub facing: Option<(DVec3, DVec3)>,
+    /// On the ground: it stands on its lowest point there. In flight the vessel point is its centre (the
+    /// server places a piece that comes off at the parent's point plus the piece's offset).
+    pub landed: bool,
 }
 
 /// A model to draw: renderer name, file and scale.
@@ -1536,7 +1539,8 @@ impl FlightView {
                 };
                 let poses = crate::thumb::poses(craft);
                 let mut placed = Vec::new();
-                let mut min_y = f64::INFINITY;
+                let mut lo_all = DVec3::splat(f64::INFINITY);
+                let mut hi_all = DVec3::splat(f64::NEG_INFINITY);
                 for (p_part, (pp, q)) in craft.parts.iter().zip(poses.iter()) {
                     let name = format!("part:{}", p_part.part_id);
                     gpu.request_model(&name, &format!("assets/parts/{}.glb", p_part.part_id));
@@ -1550,17 +1554,25 @@ impl FlightView {
                                 if c & 2 == 0 { lo.y } else { hi.y },
                                 if c & 4 == 0 { lo.z } else { hi.z },
                             );
-                            min_y = min_y.min((lp + lq * corner).y);
+                            let w = lp + lq * corner;
+                            lo_all = lo_all.min(w);
+                            hi_all = hi_all.max(w);
                         }
                     }
                     placed.push((name, lp, lq));
                 }
-                let lift = if min_y.is_finite() { -min_y } else { 0.0 };
+                let anchor = if !lo_all.is_finite() {
+                    DVec3::ZERO
+                } else if near.landed {
+                    DVec3::new(0.0, lo_all.y, 0.0)
+                } else {
+                    (lo_all + hi_all) * 0.5
+                };
                 for (name, lp, lq) in placed {
                     if !gpu.has_model(&name) {
                         continue;
                     }
-                    let at = p + crot * (lp + DVec3::Y * lift);
+                    let at = p + crot * (lp - anchor);
                     let mut it = DrawItem::lit(name, at - cam, crot * lq, 1.0, sun);
                     it.ambient = part_ambient;
                     it.fill_dir = up;

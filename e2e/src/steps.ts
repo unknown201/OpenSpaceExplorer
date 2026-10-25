@@ -801,8 +801,10 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
         return failed(`Save and launch did not open the flight view on the pad: ${why.trim()}`);
       }
       const altOf = async () => Number((await hud.first().getAttribute("data-ose-altitude")) ?? "NaN");
+      // Wait for the new craft's own readout: just after the switch the HUD can still show the previous
+      // flight's altitude (still climbing from the flight step), which then reads as a fall.
       const t0 = Date.now();
-      while (!Number.isFinite(await altOf()) && Date.now() - t0 < 5_000) await sleep(200);
+      while (!(await altOf() < 1_000) && Date.now() - t0 < 8_000) await sleep(200);
       const before = await altOf();
       await page.keyboard.press("z");
       await sleep(300);

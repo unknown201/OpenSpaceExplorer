@@ -10071,6 +10071,10 @@ impl App {
                         .as_ref()
                         .filter(|f| g(f.facing).length() > 0.5)
                         .map(|f| (g(f.facing), g(f.roll_ref))),
+                    landed: o
+                        .flight
+                        .as_ref()
+                        .is_some_and(|f| f.situation == ose_net::FlightSituation::Landed),
                 }
             })
             .collect();
