@@ -5893,12 +5893,17 @@ impl App {
                 .position(|x| *x == s)
                 .unwrap_or(9)
         };
+        // The default order groups by the original's families (Group By: Type), each under a heading.
+        let grouped = self.vab_sort == 0;
         match self.vab_sort {
             1 => parts.sort_by(|a, b| a.display_title().cmp(b.display_title())),
             2 => parts.sort_by(|a, b| a.mass_t.total_cmp(&b.mass_t)),
             _ => parts.sort_by(|a, b| {
-                size_rank(&a.size_category)
-                    .cmp(&size_rank(&b.size_category))
+                vab::part_group(&a.family)
+                    .1
+                    .cmp(&vab::part_group(&b.family).1)
+                    .then_with(|| a.family.cmp(&b.family))
+                    .then(size_rank(&a.size_category).cmp(&size_rank(&b.size_category)))
                     .then(a.mass_t.total_cmp(&b.mass_t))
                     .then_with(|| a.display_title().cmp(b.display_title()))
             }),
@@ -5934,7 +5939,15 @@ impl App {
                 Default::default()
             };
         let mut html = String::new();
+        let mut group = String::new();
         for p in parts {
+            if grouped && p.family != group {
+                group = p.family.clone();
+                html.push_str(&format!(
+                    "<li class=\"pg-head\" data-ose=\"vab-part-group\">{}</li>",
+                    esc(&vab::part_group(&group).0)
+                ));
+            }
             let lock = locked.contains(p.id.as_str());
             html.push_str(&format!(
                 "<li data-ose=\"vab-part\" data-ose-part=\"{id}\"{lock}><img class=\"pi\" src=\"assets/ui/parts/{id}.png\" alt=\"\" loading=\"lazy\" draggable=\"false\" onerror=\"this.parentNode.classList.add('noicon');this.remove()\" /><span class=\"pt\">{fav}{title}</span><small>{cat} \u{b7} size {size} \u{b7} {mass:.2} t{extra}</small></li>",

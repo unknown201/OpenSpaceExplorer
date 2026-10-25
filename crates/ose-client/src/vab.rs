@@ -16,6 +16,9 @@ pub struct PartSpec {
     pub category: String,
     #[serde(default)]
     pub size_category: String,
+    /// The original's part family, "0040-Methalox": the picker groups by it, in that order.
+    #[serde(default)]
+    pub family: String,
     #[serde(default)]
     pub mass_t: f64,
     #[serde(default)]
@@ -1310,6 +1313,18 @@ pub fn surface_pressure_atm(body: &str) -> f64 {
         "Duna" => 0.0666,
         "Laythe" => 0.6,
         _ => 0.0,
+    }
+}
+
+/// A part's group in the picker (the original's Group By: Type): its family's name and place in the
+/// order, `("Methalox", 40)` for "0040-Methalox"; families without a number go last.
+pub fn part_group(family: &str) -> (String, u32) {
+    match family.split_once('-') {
+        Some((n, name)) if n.chars().all(|c| c.is_ascii_digit()) => {
+            (name.to_string(), n.parse().unwrap_or(u32::MAX))
+        }
+        _ if family.is_empty() => ("Other".to_string(), u32::MAX),
+        _ => (family.to_string(), u32::MAX - 1),
     }
 }
 

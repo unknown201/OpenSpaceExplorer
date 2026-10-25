@@ -138,6 +138,8 @@ struct PartInfo {
     id: String,
     title: String,
     category: String,
+    /// The original's part family ("0040-Methalox": picker order, then the group the picker shows it under).
+    family: String,
     size_category: String,
     mass_t: f64,
     crew_capacity: u32,
@@ -201,6 +203,7 @@ fn part_infos(parts: &[ose_data::PartDef]) -> Vec<PartInfo> {
                     p.title_key.clone()
                 },
                 category: p.category.clone(),
+                family: p.family.clone(),
                 size_category: p.size_category.clone(),
                 mass_t: p.mass_t,
                 crew_capacity: p.crew_capacity,

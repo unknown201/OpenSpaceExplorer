@@ -909,6 +909,9 @@
     #ksc-buildings button { text-transform: uppercase; letter-spacing: 0.08em; border: 0 !important; border-bottom: 2px dotted #6a718f88 !important; border-radius: 0 !important; background: transparent !important; color: #0a0a0a !important; }
     #ksc-buildings button:last-child { border-bottom: 0 !important; }
     #ksc-buildings button img { filter: brightness(0.2); }
+    /* The picker's family headings (the original's Group By: Type). */
+    #vab-parts li.pg-head { grid-column: 1 / -1; list-style: none; margin: 8px 0 2px; padding: 0 2px; border: 0 !important; background: none !important; cursor: default; display: block; text-align: left; font: 600 13px var(--hud-font); letter-spacing: 0.14em; text-transform: uppercase; color: #e6ecf7; min-height: 0; height: auto; }
+    #vab-parts li.pg-head::before { content: "\25BE  "; color: #9fb0cc; }
     /* Map labels as the original's: event markers in blue capitals without a box, body names in a dark tag. */
     #labels .apsis { text-transform: uppercase; letter-spacing: 0.06em; color: #8cc4ff; background: #06080f99; border-color: #8cc4ff44; }
     #labels .apsis::after { background: #8cc4ff; }
@@ -1076,7 +1079,7 @@
             <div id="vab-cats" data-ose="vab-categories"></div>
             <input id="vab-search" data-ose="vab-search" type="search" placeholder="search parts (Ctrl+F)" />
             <div id="vab-filter"><span id="vab-sizes" data-ose="vab-sizes"></span>
-              <select id="vab-sort" data-ose="vab-sort" title="Sort the parts"><option value="0">Size</option><option value="1">Name</option><option value="2">Mass</option></select></div>
+              <select id="vab-sort" data-ose="vab-sort" title="Group or sort the parts"><option value="0">Group by type</option><option value="1">Name</option><option value="2">Mass</option></select></div>
             <ul id="vab-parts" data-ose="vab-parts"></ul>
           </div>
           <canvas id="vab-canvas" data-ose="vab-canvas" width="640" height="640"></canvas>
