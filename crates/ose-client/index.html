@@ -386,6 +386,7 @@
     #vab-load-list li.empty { color: #9fb0cc; cursor: default; }
     #vab-header #vab-sym { min-width: 44px; font-variant-numeric: tabular-nums; }
     #vab-header #vab-snap.on, #vab-header #vab-com.on, #vab-header #vab-cot.on { background: #1f3d6b; border-color: #3b63a8; color: #fff; }
+    #vab-header #vab-col.on { background: #1f3d6b; border-color: #3b63a8; color: #6aaaff; }
     #vab-header #vab-com.on { color: #ffd84a; } #vab-header #vab-cot.on { color: #ff6ae6; }
     #vab-dv { font-size: 13px; color: #9fb0cc; margin-right: 6px; }
     body.webgpu #vab-header { position: relative; pointer-events: auto; background: #10141bf0; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)); padding: calc(6 * var(--u)) calc(10 * var(--u)); margin: 0 0 calc(8 * var(--u)); }
@@ -717,6 +718,7 @@
             <button id="vab-sym" class="secondary" data-ose="vab-sym" title="Symmetry for parts on a side: 1, 2, 3, 4, 6 or 8 copies around the part (X, Shift+X back)">&#215;1</button>
             <button id="vab-snap" class="secondary on" data-ose="vab-snap" title="Angle snap: side parts go at 15 degree steps (C)">Snap</button>
             <button id="vab-com" class="secondary on" data-ose="vab-com" title="Centre of mass marker (yellow), full tanks">CoM</button>
+            <button id="vab-col" class="secondary on" data-ose="vab-col" title="Centre of lift marker (blue), from wings and control surfaces">CoL</button>
             <button id="vab-cot" class="secondary on" data-ose="vab-cot" title="Centre of thrust marker (magenta) of the first stage's engines, with the thrust line">CoT</button>
           </div>
           <input id="vab-name" data-ose="vab-name" type="text" maxlength="48" value="Untitled craft" title="Vehicle name" />
@@ -825,7 +827,7 @@
         <div class="fh-row"><span class="fh-label" id="fh-speed-mode" data-ose="flight-speed-mode" title="Speed relative to the surface or in orbit; click to switch">SURFACE</span><b id="fh-speed">--</b><span class="fh-label">VERTICAL</span><b id="fh-vspeed">--</b></div>
         <div class="fh-row fh-burn" id="fh-burn" data-ose="flight-burn" title="Burn timer: start burning when it reaches zero, pointed at the maneuver marker"></div>
         <div class="fh-row fh-orbit" data-ose="flight-apsides"><span class="fh-label" title="Apoapsis: highest point of the orbit and the time to it">AP</span><b id="fh-ap">--</b><span id="fh-ap-t" class="fh-small">--</span><span class="fh-label" title="Periapsis: lowest point of the orbit and the time to it">PE</span><b id="fh-pe">--</b><span id="fh-pe-t" class="fh-small">--</span></div>
-        <div class="fh-row"><span id="fh-attitude">--</span><span id="fh-twr" class="fh-small">--</span></div>
+        <div class="fh-row"><span id="fh-attitude">--</span><span id="fh-twr" class="fh-small">--</span><span id="fh-aero" class="fh-small" data-ose="flight-aero" title="Lift from wings; jets: thrust follows speed and air, and needs an intake"></span></div>
         <div class="fh-row"><button id="fh-science" data-ose="flight-science" title="run every experiment on board">Experiments</button><button id="fh-transmit" data-ose="flight-transmit" title="send the reports home">Transmit</button><button id="fh-recover" data-ose="flight-recover" title="recover the vessel (landed on Kerbin)">Recover</button></div>
         <div class="fh-row fh-crew"><button id="fh-eva" data-ose="flight-eva" class="hidden" title="a Kerbal climbs out">EVA</button><button id="fh-board" data-ose="flight-board" class="hidden" title="climb into the craft within reach">Board</button><button id="fh-flag" data-ose="flight-flag" class="hidden" title="plant the agency flag">Plant flag</button><button id="fh-undock" data-ose="flight-undock" class="hidden" title="release the last docking">Undock</button></div>
         <div class="fh-row"><button id="fh-full" data-ose="flight-throttle-full" title="Full throttle (Z)">Full</button><button id="fh-cut" data-ose="flight-throttle-cut" title="Cut the throttle (X)">Cut</button><button id="fh-map" title="Map view (M)">Map</button><button id="fh-ksc" title="Leave the vessel and go to the Kerbal Space Center">KSC</button></div>
