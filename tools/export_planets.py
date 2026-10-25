@@ -175,9 +175,19 @@ def cubemap_to_equirect(cube, width: int):
     ]:
         s = (u / np.maximum(mag, 1e-9) + 1) * 0.5
         t = 1 - (v / np.maximum(mag, 1e-9) + 1) * 0.5
-        col = np.clip((s * size).astype(np.int32), 0, size - 1)
-        row = np.clip((t * size).astype(np.int32), 0, size - 1)
-        out[mask] = faces[face][row[mask], col[mask]]
+        # bilinear within the face (nearest texels alias the noisy coverage into speckle)
+        fx = np.clip(s[mask] * size - 0.5, 0, size - 1)
+        fy = np.clip(t[mask] * size - 0.5, 0, size - 1)
+        x0 = np.floor(fx).astype(np.int32)
+        y0 = np.floor(fy).astype(np.int32)
+        x1 = np.minimum(x0 + 1, size - 1)
+        y1 = np.minimum(y0 + 1, size - 1)
+        ax_ = (fx - x0)[:, None]
+        ay_ = (fy - y0)[:, None]
+        f = faces[face].astype(np.float32)
+        top = f[y0, x0] * (1 - ax_) + f[y0, x1] * ax_
+        bot = f[y1, x0] * (1 - ax_) + f[y1, x1] * ax_
+        out[mask] = np.clip(top * (1 - ay_) + bot * ay_ + 0.5, 0, 255).astype(np.uint8)
     return Image.fromarray(out, "RGBA")
 
 
@@ -323,7 +333,11 @@ def export_body(bid: str, bundles: Path, out_root: Path, args) -> dict | None:
             if not layer.get("isEnable") or cube is None:
                 continue
             img = cubemap_to_equirect(cube.read(), args.clouds)
-            img.save(out / "clouds.png", optimize=True)
+            # only the coverage (alpha) is drawn: grey RGB from it compresses far better
+            from PIL import Image
+
+            a_ = img.getchannel("A")
+            Image.merge("RGBA", (a_, a_, a_, a_)).save(out / "clouds.png", optimize=True)
             info["clouds"] = {
                 "config": cfg["m_Name"],
                 "layer": layer["layerName"],
@@ -410,7 +424,7 @@ def main() -> int:
     ap.add_argument("--bodies", default=",".join(BODIES))
     ap.add_argument("--albedo", type=int, default=4096)
     ap.add_argument("--detail", type=int, default=512)
-    ap.add_argument("--clouds", type=int, default=2048)
+    ap.add_argument("--clouds", type=int, default=4096)
     args = ap.parse_args()
     bundles = Path(args.install) / "KSP2_x64_Data/StreamingAssets/aa/StandaloneWindows64"
     out = Path(args.out)

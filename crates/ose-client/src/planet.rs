@@ -91,8 +91,10 @@ struct SurfaceU {
     foam: [f32; 4],
     /// Caustics on the sea floor: strength, max visible depth (m), tiling (m), animation speed.
     caustics: [f32; 4],
-    /// Cloud layer top (m), wind speed (m/s), 0, 0.
+    /// Cloud layer top (m), wind speed (m/s), flow speed, flow strength.
     clouds2: [f32; 4],
+    /// Polar caps (tools/export_poles.py): has albedo caps, has cloud caps, cap radius (rad), 0.
+    poles: [f32; 4],
 }
 
 fn flag_f(x: bool) -> f32 {
@@ -130,6 +132,8 @@ enum Tex {
     Foam,
     Grass,
     Impostor,
+    PoleAlbedo,
+    PoleClouds,
 }
 
 enum Loaded {
@@ -306,6 +310,8 @@ impl PlanetRenderer {
                 samp_entry(7),
                 samp_entry(8),
                 tex_entry(9, D::D2),
+                tex_entry(10, D::D2),
+                tex_entry(11, D::D2),
             ],
         });
         let sky_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -693,6 +699,8 @@ impl PlanetRenderer {
         defaults.insert(Tex::DetailN, solid([128, 128, 255, 128], false, true));
         defaults.insert(Tex::Clouds, solid([255, 255, 255, 0], true, false));
         defaults.insert(Tex::Foam, solid([0, 0, 0, 255], false, false));
+        defaults.insert(Tex::PoleAlbedo, solid([128, 128, 128, 255], true, false));
+        defaults.insert(Tex::PoleClouds, solid([0, 0, 0, 0], true, false));
         let lut = |w, h, d| {
             let t = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("planet lut default"),
@@ -931,6 +939,12 @@ impl PlanetRenderer {
         if info["ocean"].get("foam").is_some() {
             images.push((Tex::Foam, format!("{base}/foam.png")));
         }
+        if info["poles"]["albedo"].as_bool() == Some(true) {
+            images.push((Tex::PoleAlbedo, format!("{base}/poles_albedo.jpg")));
+        }
+        if info["poles"]["clouds"].as_bool() == Some(true) {
+            images.push((Tex::PoleClouds, format!("{base}/poles_clouds.png")));
+        }
         for (tex, url) in images {
             let inbox = inbox.clone();
             wasm_bindgen_futures::spawn_local(async move {
@@ -1082,7 +1096,10 @@ impl PlanetRenderer {
                     b.dirty = true;
                 }
                 Loaded::Image(tex, bitmap) => {
-                    let srgb = matches!(tex, Tex::Albedo | Tex::Clouds);
+                    let srgb = matches!(
+                        tex,
+                        Tex::Albedo | Tex::Clouds | Tex::PoleAlbedo | Tex::PoleClouds
+                    );
                     let t = self.texture_for(bitmap.width(), bitmap.height(), 1, srgb);
                     self.copy_bitmap(&bitmap, &t, 0);
                     self.mip
@@ -1279,6 +1296,8 @@ impl PlanetRenderer {
                     resource: wgpu::BindingResource::Sampler(&self.equi_sampler),
                 },
                 tv(9, Tex::Foam),
+                tv(10, Tex::PoleAlbedo),
+                tv(11, Tex::PoleClouds),
             ],
         });
         let atmo = Self::atmosphere_ready(b);
@@ -2073,6 +2092,16 @@ fn surface_uniform(b: &Body, debug: f32) -> SurfaceU {
         8.0,
         ff("speed"),
         ff("strength"),
+    ];
+    let poles = info.and_then(|v| v.get("poles"));
+    u.poles = [
+        flag_f(b.tex.contains_key(&Tex::PoleAlbedo)),
+        flag_f(b.tex.contains_key(&Tex::PoleClouds)),
+        poles
+            .and_then(|p| p["cap_deg"].as_f64())
+            .unwrap_or(30.0)
+            .to_radians() as f32,
+        0.0,
     ];
     let flag = |x: bool| if x { 1.0 } else { 0.0 };
     // The original's CelestialBodyLighting ambient colours; w: 1 when the body has no atmosphere (the ambient
