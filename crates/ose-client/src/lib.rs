@@ -2879,11 +2879,13 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
             #[cfg(target_arch = "wasm32")]
             if app.in_session && app.vab_active() {
                 app.vab3d.zoom(factor);
+                app.lesson_event("CameraZoomedMessage");
                 return;
             }
             #[cfg(target_arch = "wasm32")]
             if app.flight_active() && app.gpu.is_some() {
                 app.flight3d.zoom(factor);
+                app.lesson_event("CameraZoomedMessage");
                 return;
             }
             if app.is_3d() {
@@ -3017,6 +3019,7 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
             if let Some((x, y)) = app.drag {
                 let (nx, ny) = (ev.client_x() as f64, ev.client_y() as f64);
                 app.vab3d.orbit(nx - x, ny - y);
+                app.lesson_event("CameraRotatedMessage");
                 app.drag = Some((nx, ny));
             } else {
                 // The part under the pointer lights up, as the original's hover highlight.
@@ -3043,6 +3046,7 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
             if let Some((x, y)) = app.drag {
                 let (nx, ny) = (ev.client_x() as f64, ev.client_y() as f64);
                 app.flight3d.orbit(nx - x, ny - y);
+                app.lesson_event("CameraRotatedMessage");
                 app.drag = Some((nx, ny));
             }
             return;

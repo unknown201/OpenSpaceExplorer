@@ -111,6 +111,8 @@ pub fn eval(c: &Cond, w: &World) -> Option<bool> {
                 "ParachuteSemiDeployedMessage",
                 "TimeWarpToLocationInitializedMessage",
                 "TimeWarpToLocationCompletedMessage",
+                "CameraRotatedMessage",
+                "CameraZoomedMessage",
             ];
             if w.events.contains(e) {
                 Some(true)
