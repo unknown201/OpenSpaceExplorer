@@ -38,6 +38,9 @@ test("frontier names every step in order", () => {
 test("a player gets as far as the client allows", async ({ page, baseURL }, testInfo) => {
   const results = await runGameplaySession(page, baseURL!.replace(/\/$/, ""));
   const report = formatReport(testInfo.project.name, results);
+  if (await page.locator('[data-ose="flight"][data-ose-particles]').count()) {
+    await testInfo.attach("flight-particles", { body: await page.screenshot({ path: testInfo.outputPath("flight-particles.png") }), contentType: "image/png" });
+  }
   console.log(report);
   await testInfo.attach("gameplay-report", { body: report, contentType: "text/plain" });
   await testInfo.attach("gameplay-results.json", {

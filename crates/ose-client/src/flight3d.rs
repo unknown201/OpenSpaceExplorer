@@ -21,6 +21,12 @@ use ose_data::craft::Craft;
 use ose_net::{AttitudeMode, VesselState};
 use std::collections::HashMap;
 
+#[derive(Clone, serde::Deserialize)]
+struct Nozzle {
+    position: [f64; 3],
+    direction: [f64; 3],
+}
+
 /// Launch pad 1 (`kerbin_KSCLaunchpad_spawn_01`, docs/reference-notes/terrain.md) and the other pads used to
 /// orient the campus.
 const KSC_PADS: [(f64, f64, f64); 4] = [
@@ -148,30 +154,6 @@ pub fn attitude_dir(att: &AttitudeMode, r: DVec3, v_rel: DVec3, spin: Spin) -> D
     }
 }
 
-/// Engines lit after `fired` stages: engines in the fired stages that are still attached.
-pub fn lit_engines(
-    craft: &Craft,
-    fired: usize,
-    gone: &[bool],
-    is_engine: &dyn Fn(&str) -> bool,
-) -> Vec<usize> {
-    let mut order: Vec<usize> = (0..craft.stages.len()).collect();
-    order.sort_by(|a, b| b.cmp(a));
-    order.retain(|&s| !craft.stages[s].is_empty());
-    let mut out = Vec::new();
-    for &s in order.iter().take(fired) {
-        for &pi in &craft.stages[s] {
-            if pi < craft.parts.len()
-                && !gone.get(pi).copied().unwrap_or(false)
-                && is_engine(&craft.parts[pi].part_id)
-            {
-                out.push(pi);
-            }
-        }
-    }
-    out
-}
-
 /// Parts gone after `fired` stages: decouplers in the fired stages and everything hanging below them.
 /// Stages fire from the highest stage id down (`ose_data::staging`).
 pub fn jettisoned(craft: &Craft, fired: usize, is_decoupler: &dyn Fn(&str) -> bool) -> Vec<bool> {
@@ -227,6 +209,11 @@ pub struct FlightView {
     pub nav: Option<crate::navball::NavFrame>,
     /// Terrain, ocean, sky and clouds of the body (planet.rs), created with the first frame.
     planet: Option<crate::planet::PlanetRenderer>,
+    fx_nozzles: std::rc::Rc<std::cell::RefCell<HashMap<String, Vec<Nozzle>>>>,
+    fx_requested: bool,
+    fx_context: Option<(u64, String)>,
+    ground_radius: f64,
+    launch_origin: Option<DVec3>,
 }
 
 impl Default for FlightView {
@@ -250,7 +237,6 @@ pub struct FlightInput<'a> {
     pub ut: f64,
     pub craft: Option<&'a Craft>,
     pub is_decoupler: &'a dyn Fn(&str) -> bool,
-    pub is_engine: &'a dyn Fn(&str) -> bool,
     /// Planned maneuver for this vessel: prograde, normal and radial delta-v, m/s.
     pub maneuver: Option<(f64, f64, f64)>,
     /// Body spin from the server's `BodyRotation` (protocol 9); the embedded system file otherwise.
@@ -281,6 +267,11 @@ impl FlightView {
             flex_since_ms: 0.0,
             nav: None,
             planet: None,
+            fx_nozzles: Default::default(),
+            fx_requested: false,
+            fx_context: None,
+            ground_radius: 0.0,
+            launch_origin: None,
         }
     }
 
@@ -557,7 +548,28 @@ impl FlightView {
             inp.ut,
         );
         let mut items: Vec<DrawItem> = Vec::new();
-        let mut flames: Vec<DrawItem> = Vec::new();
+        let context = (inp.vessel.id, inp.body_id.to_string());
+        if self.fx_context.as_ref() != Some(&context) {
+            self.fx_context = Some(context);
+            self.ground_radius = inp.body_radius;
+            self.launch_origin = None;
+        }
+        if landed {
+            self.ground_radius = pos.length();
+            self.launch_origin = Some(pos);
+        }
+        if !self.fx_requested {
+            self.fx_requested = true;
+            let slot = self.fx_nozzles.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                if let Ok(bytes) = crate::render::fetch_bytes("assets/fx/engines.json").await {
+                    if let Ok(nozzles) = serde_json::from_slice(&bytes) {
+                        *slot.borrow_mut() = nozzles;
+                    }
+                }
+            });
+        }
+        let mut engine_draws = Vec::new();
 
         // The body: the planet renderer's terrain, ocean, sky and clouds once its assets are in; until then the
         // scaled sphere, sunk by 1.5 km so its facets stay under the campus ground near the KSC.
@@ -666,45 +678,120 @@ impl FlightView {
                         min_y = min_y.min((lp + lq * corner).y);
                     }
                 }
-                parts.push((name, lp, lq));
+                parts.push((i, name, lp, lq));
             }
             let lift = if min_y.is_finite() { -min_y } else { 0.0 };
-            // Engine flames: a glowing cone under each lit engine's nozzle, longer with throttle.
-            let (throttle, thrust) = inp
-                .vessel
-                .flight
-                .as_ref()
-                .map(|f| (f.throttle, f.thrust_kn))
-                .unwrap_or((0.0, 0.0));
-            if throttle > 0.01 && thrust > 0.1 {
-                gpu.request_model("fx:flame", "assets/fx/flame.glb");
-                let lit = lit_engines(craft, fired, &gone, inp.is_engine);
-                for pi in lit {
-                    let p = &craft.parts[pi];
-                    let (pp, q) = poses[pi];
-                    let name = format!("part:{}", p.part_id);
-                    let Some(m) = gpu.model(&name) else { continue };
+            // Use the server's attached, fuel-fed engines, not just stage membership. Nozzles share
+            // the exact flexed pose used by the part mesh (including radial/multi-nozzle engines).
+            if let Some(f) = &inp.vessel.flight {
+                let pressure = crate::particles::pressure_multiplier(f.static_pressure_kpa);
+                let nozzles = self.fx_nozzles.borrow();
+                let mut launch_smoke_added = false;
+                for (pi, name, lp, lq) in &parts {
+                    let part_id = &craft.parts[*pi].part_id;
+                    if part_id.starts_with("engine_") || part_id.starts_with("booster_") {
+                        engine_draws.push(crate::engine_fx_gpu::EngineDraw {
+                            instance: (inp.vessel.id << 16) | *pi as u64,
+                            part: part_id.clone(),
+                            model: glam::DMat4::from_rotation_translation(
+                                vessel_rot * *lq,
+                                pos - cam + vessel_rot * (*lp + DVec3::Y * lift),
+                            ),
+                            throttle: if f.firing_engines.contains(&(*pi as u16)) {
+                                f.throttle
+                            } else {
+                                0.0
+                            },
+                            pressure,
+                            mode: 0,
+                            time: inp.now_ms * 0.001,
+                            simulation_time: inp.ut,
+                            commanded: f.throttle,
+                            thrust_kn: f.thrust_kn,
+                            distance_from_spawn: 0.0,
+                            vertical_deviation: 1.0,
+                        });
+                    }
+                    if !f.firing_engines.contains(&(*pi as u16)) || f.thrust_kn <= 0.0 {
+                        continue;
+                    }
+                    let Some(m) = gpu.model(name) else {
+                        continue;
+                    };
                     let (lo, hi) = (m.bounds_min.as_dvec3(), m.bounds_max.as_dvec3());
-                    let width = ((hi.x - lo.x).min(hi.z - lo.z) * 0.7).max(0.3);
-                    let nozzle = DVec3::new((lo.x + hi.x) * 0.5, lo.y, (lo.z + hi.z) * 0.5);
-                    let lp = DVec3::new(-pp.x, pp.y, pp.z);
-                    let lq = DQuat::from_xyzw(q.x, -q.y, -q.z, q.w).normalize();
-                    let at = pos + vessel_rot * (lp + lq * nozzle + DVec3::Y * lift);
-                    // Flicker a little so the flame lives.
-                    let flicker = 1.0 + 0.06 * ((inp.now_ms * 0.031 + pi as f64).sin());
-                    let mut it = DrawItem::lit(
-                        "fx:flame".into(),
-                        at - cam,
-                        vessel_rot * lq,
-                        width * (1.0 + 2.5 * throttle) * flicker,
-                        sun,
-                    );
-                    it.emissive = 1.0;
-                    it.color = [1.0, 0.72, 0.38, 0.85];
-                    flames.push(it);
+                    let part_id = &craft.parts[*pi].part_id;
+                    let fallback = [Nozzle {
+                        position: [(lo.x + hi.x) * 0.5, lo.y, (lo.z + hi.z) * 0.5],
+                        direction: [0.0, -1.0, 0.0],
+                    }];
+                    let jets = nozzles.get(part_id).map(Vec::as_slice).unwrap_or(&fallback);
+                    let width = ((hi.x - lo.x).min(hi.z - lo.z) * 0.55
+                        / (jets.len().max(1) as f64).sqrt())
+                    .clamp(0.08, 12.0);
+                    for (j, nozzle) in jets.iter().enumerate() {
+                        let at = pos
+                            + vessel_rot
+                                * (*lp
+                                    + *lq * DVec3::from_array(nozzle.position)
+                                    + DVec3::Y * lift);
+                        let direction = (vessel_rot * *lq * DVec3::from_array(nozzle.direction))
+                            .normalize_or_zero();
+                        let down = -direction.dot(up);
+                        let height = (at.length() - self.ground_radius).max(0.0);
+                        if pressure > 0.01 && down > 0.3 && height / down < width * 25.0 {
+                            let ground = at + direction * (height / down);
+                            let rotation = DQuat::from_rotation_arc(DVec3::Y, up);
+                            engine_draws.push(crate::engine_fx_gpu::EngineDraw {
+                                instance: 0x8000000000000000
+                                    | (inp.vessel.id << 24)
+                                    | ((*pi as u64) << 8)
+                                    | j as u64,
+                                part: "fx_groundblast_atmosphere_01".into(),
+                                model: glam::DMat4::from_rotation_translation(
+                                    rotation,
+                                    ground - cam,
+                                ),
+                                throttle: f.throttle,
+                                commanded: f.throttle,
+                                pressure,
+                                mode: 0,
+                                time: inp.now_ms * 0.001,
+                                simulation_time: inp.ut,
+                                thrust_kn: f.thrust_kn,
+                                distance_from_spawn: 0.0,
+                                vertical_deviation: down,
+                            });
+                            let distance = self
+                                .launch_origin
+                                .map(|origin| origin.distance(pos))
+                                .unwrap_or(f64::INFINITY);
+                            if inp.body_id == "Kerbin" && distance < 40.0 && !launch_smoke_added {
+                                launch_smoke_added = true;
+                                engine_draws.push(crate::engine_fx_gpu::EngineDraw {
+                                    instance: 0x4000000000000000 | inp.vessel.id,
+                                    part: "fx_launchsmoke_default".into(),
+                                    model: glam::DMat4::from_rotation_translation(
+                                        rotation,
+                                        self.launch_origin.unwrap().normalize()
+                                            * self.ground_radius
+                                            - cam,
+                                    ),
+                                    throttle: f.throttle,
+                                    commanded: f.throttle,
+                                    pressure,
+                                    mode: 0,
+                                    time: inp.now_ms * 0.001,
+                                    simulation_time: inp.ut,
+                                    thrust_kn: f.thrust_kn,
+                                    distance_from_spawn: distance,
+                                    vertical_deviation: down,
+                                });
+                            }
+                        }
+                    }
                 }
             }
-            for (name, lp, lq) in parts {
+            for (_, name, lp, lq) in parts {
                 if !gpu.has_model(&name) {
                     continue;
                 }
@@ -723,7 +810,6 @@ impl FlightView {
                 items.push(DrawItem::lit(name, pos - cam, vessel_rot, 1.0, sun));
             }
         }
-        items.append(&mut flames);
         // Sky: blue low in the atmosphere, black above it.
         let t = if inp.atmosphere_m > 0.0 {
             (alt / inp.atmosphere_m).clamp(0.0, 1.0)
@@ -755,7 +841,17 @@ impl FlightView {
             .as_ref()
             .filter(|_| planet_ready)
             .map(|p| p as &dyn crate::render::ExtraPass);
-        gpu.frame_with("assets/parts/", &items, &[], clear, extra);
+        gpu.frame_with_effects(
+            "assets/parts/",
+            &items,
+            &[],
+            clear,
+            crate::render::FrameEffects {
+                camera: cam,
+                engines: &engine_draws,
+                extra,
+            },
+        );
         true
     }
 }
