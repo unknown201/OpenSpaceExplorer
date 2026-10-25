@@ -1425,6 +1425,59 @@ async fn the_editor_gets_a_stage_report_with_sea_level_twr() {
     assert!(s.twr_asl > 1.0, "{s:?}");
 }
 
+#[tokio::test]
+async fn resuming_the_shared_campaign_brings_back_its_mode_and_tech_tree() {
+    let (_server, addr) = spawn_server_with(&["--db", ":memory:", "--save", "none"], None).await;
+    // someone starts a sandbox straight away (nobody ever joined the shared campaign) and leaves
+    let mut a = connect_ws(&addr).await;
+    hello(&mut a, None, "a").await;
+    send_msg(
+        &mut a,
+        &ClientMessage::CreateSession {
+            name: "Box".into(),
+            mode: ose_net::SessionMode::Sandbox,
+            difficulty: Vec::new(),
+        },
+    )
+    .await;
+    wait_for(&mut a, |m| {
+        matches!(m, ServerMessage::CampaignState { created: true, .. }).then_some(())
+    })
+    .await;
+    drop(a);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    // a new page resumes the shared campaign and asks for its science
+    let mut b = connect_ws(&addr).await;
+    hello(&mut b, None, "b").await;
+    send_msg(&mut b, &ClientMessage::ListSessions).await;
+    let list = wait_for(&mut b, |m| match m {
+        ServerMessage::SessionList { sessions } => Some(sessions),
+        _ => None,
+    })
+    .await;
+    let shared = list
+        .iter()
+        .find(|x| x.name == "Shared campaign")
+        .expect("listed")
+        .id
+        .clone();
+    send_msg(&mut b, &ClientMessage::SelectSession { id: shared }).await;
+    let mode = wait_for(&mut b, |m| match m {
+        ServerMessage::CampaignState { mode, .. } => Some(mode),
+        ServerMessage::Rejected { reason } => panic!("{reason}"),
+        _ => None,
+    })
+    .await;
+    assert_eq!(mode, ose_net::SessionMode::Exploration);
+    send_msg(&mut b, &ClientMessage::ScienceInfo).await;
+    let tree = wait_for(&mut b, |m| match m {
+        ServerMessage::ScienceState { tech_tree, .. } => Some(tech_tree),
+        _ => None,
+    })
+    .await;
+    assert!(tree, "an exploration campaign has its tech tree");
+}
+
 async fn http_get_json(addr: &str, path: &str) -> serde_json::Value {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();

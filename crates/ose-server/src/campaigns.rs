@@ -84,7 +84,7 @@ pub enum Target {
     New(NewCampaign),
 }
 
-/// Put the live campaign on the shelf (unless nobody ever joined it) and make `target` live. Refused while
+/// Put the live campaign on the shelf and make `target` live. Refused while
 /// another player is playing the live campaign.
 pub fn switch(s: &Shared, player_id: u64, target: Target) -> Result<(), String> {
     {
@@ -103,7 +103,8 @@ pub fn switch(s: &Shared, player_id: u64, target: Target) -> Result<(), String> 
             return Err(format!("no campaign {id}"));
         }
     }
-    if !c.members.is_empty() {
+    // the live campaign goes on the shelf, even one nobody has joined yet (it stays listed)
+    {
         let id = c.id.clone();
         let file = save::capture(&u, &v, &c, &[]);
         shelf.retain(|x| x.id != id);
