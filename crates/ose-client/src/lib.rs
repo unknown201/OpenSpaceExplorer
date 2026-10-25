@@ -2012,6 +2012,11 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                         app.render_vab();
                         true
                     }
+                    "ArrowUp" | "ArrowDown" => {
+                        #[cfg(target_arch = "wasm32")]
+                        app.vab3d.pan(if code == "ArrowUp" { 60.0 } else { -60.0 });
+                        true
+                    }
                     "KeyS" if ctrl => {
                         app.vab_save(false);
                         true
@@ -2079,6 +2084,9 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                     }
                 }
                 "Home" => app.reset_camera(),
+                "BracketRight" | "BracketLeft" if app.in_session && !app.flight_active() => {
+                    app.cycle_vessel(code == "BracketLeft");
+                }
                 "KeyM" if app.in_session && !app.flying.is_some() && app.ksc_active() => {
                     app.open_facility("TrackingCenter");
                 }
@@ -2905,6 +2913,37 @@ impl App {
     }
 
     /// Centre the camera on a vessel: focus its reference body (so orbits draw around it) and follow.
+    /// `]` / `[` on the map: follow the next or previous vessel (yours first), as the original's FocusNext.
+    fn cycle_vessel(&mut self, back: bool) {
+        let Some(scene) = &self.scene else { return };
+        let mut ids: Vec<(bool, u64, usize)> = scene
+            .vessels
+            .iter()
+            .map(|v| {
+                (
+                    !(v.owner.is_some() && v.owner == self.player_id),
+                    v.id,
+                    v.reference_body as usize,
+                )
+            })
+            .collect();
+        if ids.is_empty() {
+            return;
+        }
+        ids.sort();
+        let n = ids.len();
+        let i = self
+            .follow
+            .and_then(|f| ids.iter().position(|(_, id, _)| *id == f));
+        let j = match (i, back) {
+            (None, _) => 0,
+            (Some(i), false) => (i + 1) % n,
+            (Some(i), true) => (i + n - 1) % n,
+        };
+        let (_, id, body) = ids[j];
+        self.follow_vessel(id, body);
+    }
+
     fn follow_vessel(&mut self, id: u64, reference_body: usize) {
         self.follow = Some(id);
         self.camera.focus = reference_body;
@@ -4320,6 +4359,7 @@ impl App {
                 let d = vab3d::VabView::new();
                 (self.vab3d.yaw, self.vab3d.pitch, self.vab3d.distance) =
                     (d.yaw, d.pitch, d.distance);
+                self.vab3d.pan_y = 0.0;
                 return;
             }
             if self.in_session && self.ksc_active() {

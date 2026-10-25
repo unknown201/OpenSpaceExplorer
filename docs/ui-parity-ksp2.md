@@ -49,7 +49,7 @@ Camera rule that runs through every map: **the right button drags the camera, th
 | F6 | Staging stack: one card per stage with part icons and fuel bars, Space fires the next | "stage 1 of 3" text and a STAGE button | open |
 | F7 | Orbital readout Ap/Pe with time to each; altimeter sea level / terrain toggle; speed orbit / surface / target toggle | Ap/Pe with countdowns, SURFACE/ORBIT speed toggle; no terrain altitude or target speed | done (AGL, target: later) |
 | F8 | Right-drag orbits the camera, wheel zooms, V cycles camera modes, Home resets | right-drag (and left) orbits, Home resets; no V camera modes yet | partly done |
-| F9 | `]` `[` switch to the next/previous vessel nearby | missing | open |
+| F9 | `]` `[` switch to the next/previous vessel nearby | on the map `]` `[` change the followed vessel; switching control in flight needs the flight view to load another craft | partly done |
 | F10 | F to board/interact on EVA, EVA from the crew portrait | protocol has GoEva/Board/PlantFlag; no client keys | open |
 | F11 | Vessel labels F4 | F4 toggles labels | done |
 | F12 | Go button / pre-launch throttle | not needed (no launch sequence) | skip |
@@ -58,7 +58,7 @@ Camera rule that runs through every map: **the right button drags the camera, th
 
 | # | KSP2 | Ours today | Status |
 |---|---|---|---|
-| M1 | Right-drag rotates, Home resets, M back to flight, `]` `[` cycle focus | right-drag (and left) rotates, Home and F frame; no `]` `[` cycling yet | partly done |
+| M1 | Right-drag rotates, Home resets, M back to flight, `]` `[` cycle focus | right-drag (and left) rotates, Home and F frame, `]` `[` follow the next or previous vessel (yours first) | done |
 | M2 | Click an orbit to add a node; six-handle gizmo dragged in 3D; warp-to and trash on the node | "Add node" button and four sliders | open |
 | M3 | Ap/Pe/SOI markers with tooltips (time and altitude) | Ap and Pe markers with altitude and countdown on the flown vessel's orbit; no SOI or closest-approach markers yet | partly done |
 | M4 | Vessel labels drawn once | not a bug: the test pilot had joined twice and owned two probes | closed |
@@ -70,7 +70,7 @@ Camera rule that runs through every map: **the right button drags the camera, th
 |---|---|---|---|
 | V1 | Header: vehicle name, New/Save/Load, launch site, Launch with total Δv | header bar: New, undo, redo, name, Δv after saving, Save, Launch, close; no Load or launch site yet | partly done |
 | V2 | Toolbar: undo/redo, symmetry flyout, angle snap, frame of reference, CoM/CoT/CoL markers, engineer's report | undo/redo, symmetry (×1 to ×8, X / Shift+X) and angle snap (C) in the header; no CoM/CoT/CoL markers or engineer's report window yet | partly done |
-| V3 | Right-drag orbits, wheel zooms (Shift faster), arrows pan, Home resets | right-drag orbits, wheel zooms (Shift faster), Home resets; no pan | partly done |
+| V3 | Right-drag orbits, wheel zooms (Shift faster), arrows pan, Home resets | right-drag orbits, wheel zooms (Shift faster), Up/Down arrows move the camera along the craft, Home resets | done |
 | V4 | Delete key, Ctrl+Z/Y, Ctrl+C/V, WASDQE rotate the held part, Space resets, X symmetry, C snap; grab a placed part and move it with its subtree | Delete/Backspace, Ctrl+Z/Y, Ctrl+F, Ctrl+N, Ctrl+S; grabbing a placed part carries its subtree, dropped nowhere it goes back; parts with a surface node go on a part's side where you point, facing in, with symmetry copies around the axis and 15° snap; no copy/paste or free rotation yet | partly done |
 | V5 | Picker part tooltip (mass, cost, size, stats, description), Shift expands | tooltip with title, subtitle, maker, mass, size, crew, tanks, thrust, Isp, description, research lock | done (no cost in our data) |
 | V6 | Staging stack panel with per-stage Δv/TWR/burn time, drag a part between stages | stage cards with icons (last to fire on top), click selects, earlier/later buttons; no per-stage Δv or drag | partly done |

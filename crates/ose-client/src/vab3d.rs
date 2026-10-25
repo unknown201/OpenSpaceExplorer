@@ -57,6 +57,8 @@ pub struct VabView {
     /// Surface attachment previews (craft frame poses, one per symmetry copy) for the held part, set by the
     /// screen each frame; drawn when no stack node is in reach.
     pub ghosts: Vec<(ose_math::DVec3, ose_data::craft::Quat)>,
+    /// Vertical camera offset from the craft's centre, metres (arrow keys and middle drag, Home resets).
+    pub pan_y: f64,
 }
 
 impl Default for VabView {
@@ -83,6 +85,7 @@ impl VabView {
             cursor: (0.0, 0.0),
             snap: None,
             ghosts: Vec::new(),
+            pan_y: 0.0,
         }
     }
 
@@ -105,6 +108,11 @@ impl VabView {
     pub fn orbit(&mut self, dx_px: f64, dy_px: f64) {
         self.yaw -= dx_px * 0.005;
         self.pitch = (self.pitch + dy_px * 0.005).clamp(-1.2, 1.4);
+    }
+
+    /// Move the camera up (positive) or down along the craft, in screen pixels of a drag.
+    pub fn pan(&mut self, dy_px: f64) {
+        self.pan_y += dy_px * self.distance * 0.002;
     }
 
     pub fn zoom(&mut self, factor: f64) {
@@ -286,7 +294,9 @@ impl VabView {
         }
         // Orbit the craft's centre (the build centre while empty).
         self.target = if lo_all.is_finite() {
-            (lo_all + hi_all) * 0.5
+            let half = (hi_all.y - lo_all.y) * 0.5 + 2.0;
+            self.pan_y = self.pan_y.clamp(-half, half);
+            (lo_all + hi_all) * 0.5 + DVec3::Y * self.pan_y
         } else {
             centre
         };
