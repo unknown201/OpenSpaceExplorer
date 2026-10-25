@@ -581,6 +581,11 @@ impl Editor {
         Some(Fragment { parts })
     }
 
+    /// A copy of part `i` and everything under it, the craft left as it is (Ctrl+C).
+    pub fn copy(&self, i: usize, catalog: &Catalog) -> Option<Fragment> {
+        self.clone().detach(i, catalog)
+    }
+
     fn next_guid(&self) -> usize {
         self.craft
             .parts
@@ -1053,6 +1058,24 @@ mod tests {
         assert_eq!(e.craft.parts[t].parent_node.as_deref(), Some("bottom"));
         assert!(h.redo(&mut e));
         assert_eq!(e.craft.parts.len(), 3);
+    }
+
+    #[test]
+    fn copy_leaves_the_craft_and_pastes_a_second_set() {
+        let cat = catalog();
+        let mut e = Editor::new("test");
+        e.add_part(&cat["pod"], &cat).unwrap();
+        let t = e.add_part(&cat["tank"], &cat).unwrap();
+        e.add_part(&cat["engine"], &cat).unwrap();
+        let frag = e.copy(t, &cat).unwrap();
+        assert_eq!(e.craft.parts.len(), 3);
+        assert_eq!(frag.parts.len(), 2);
+        e.attach(&frag, &cat, Some((0, "top"))).unwrap();
+        assert_eq!(e.craft.parts.len(), 5);
+        assert!(e.craft.is_tree());
+        // The copy keeps its stage: both engines fire together.
+        assert_eq!(e.craft.stages.len(), 1);
+        assert_eq!(e.craft.stages[0].len(), 2);
     }
 
     #[test]

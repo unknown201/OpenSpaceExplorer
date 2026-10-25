@@ -138,6 +138,9 @@ struct App {
     /// Symmetry count for surface parts (X / Shift+X) and angle snap (C), as the original's toolbar.
     vab_symmetry: u32,
     vab_snap: bool,
+    /// Ctrl+C clipboard, and whether the fragment in hand is a paste (dropped nowhere it just goes away).
+    vab_clipboard: Option<vab::Fragment>,
+    vab_pasting: bool,
     vab_dragged: bool,
     /// The flight view (the vessel in 3D near its body).
     #[cfg(target_arch = "wasm32")]
@@ -414,6 +417,8 @@ pub fn start() -> Result<(), JsValue> {
         vab_frag: None,
         vab_symmetry: 1,
         vab_snap: true,
+        vab_clipboard: None,
+        vab_pasting: false,
         vab_dragged: false,
         #[cfg(target_arch = "wasm32")]
         flight3d: flight3d::FlightView::new(),
@@ -1689,6 +1694,9 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
         let on_down = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
             if ev.button() == 0 || ev.button() == 2 {
                 let mut app = a.borrow_mut();
+                if ev.button() == 0 && app.vab_pasting {
+                    return;
+                }
                 #[cfg(target_arch = "wasm32")]
                 if ev.button() == 0 && app.in_session && app.vab_active() {
                     let rect = app.gpu_canvas.get_bounding_client_rect();
@@ -1716,6 +1724,15 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
     let a = app.clone();
     let on_move = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
         let mut app = a.borrow_mut();
+        #[cfg(target_arch = "wasm32")]
+        if app.vab_pasting {
+            let rect = app.gpu_canvas.get_bounding_client_rect();
+            app.vab3d.cursor = (
+                (ev.client_x() as f64 - rect.left()) * app.dpr,
+                (ev.client_y() as f64 - rect.top()) * app.dpr,
+            );
+            return;
+        }
         // A placed part dragged with the left button comes off the craft with everything under it.
         #[cfg(target_arch = "wasm32")]
         if let Some((i, x0, y0)) = app.vab_grab {
@@ -1839,7 +1856,11 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
             let held = app.vab3d.held.take();
             let pressed = app.vab_press.take();
             app.vab_grab = None;
+            let pasting = std::mem::take(&mut app.vab_pasting);
             if let (Some(frag), Some(_)) = (app.vab_frag.take(), held.as_ref()) {
+                if pasting {
+                    app.vab_record();
+                }
                 if let Some(b) = app.doc.body() {
                     b.class_list().remove_1("vab-holding").ok();
                 }
@@ -1869,7 +1890,8 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                 };
                 app.catalog = cat;
                 if let Err(e) = result {
-                    // Nowhere to hang it: it goes back where it was, as the original does.
+                    // Nowhere to hang it: a moved part goes back where it was, as the original does; a paste
+                    // is dropped.
                     let mut history = std::mem::take(&mut app.vab_history);
                     history.undo(&mut app.editor);
                     app.vab_history = history;
@@ -2058,6 +2080,24 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                     }
                     "KeyN" if ctrl => {
                         app.vab_clear();
+                        true
+                    }
+                    "KeyC" if ctrl => {
+                        let cat = std::mem::take(&mut app.catalog);
+                        let frag = app.editor.selected.and_then(|i| app.editor.copy(i, &cat));
+                        app.catalog = cat;
+                        if frag.is_some() {
+                            app.vab_clipboard = frag;
+                            hud::push(&app.doc, "Copied", "passive");
+                        }
+                        true
+                    }
+                    "KeyV" if ctrl => {
+                        app.vab_paste();
+                        true
+                    }
+                    "Escape" if app.vab_pasting => {
+                        app.vab_cancel_paste();
                         true
                     }
                     "KeyX" if !ctrl => {
@@ -3536,6 +3576,37 @@ impl App {
         {
             let _ = id;
             None
+        }
+    }
+
+    /// Ctrl+V: a copy of the clipboard in hand, following the cursor until a click puts it down.
+    fn vab_paste(&mut self) {
+        let Some(frag) = self.vab_clipboard.clone() else {
+            return;
+        };
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.vab3d.held = Some((
+                frag.root_id().to_string(),
+                vab_nodes(&self.catalog, frag.root_id()),
+            ));
+            if let Some(b) = self.doc.body() {
+                b.class_list().add_1("vab-holding").ok();
+            }
+        }
+        self.vab_frag = Some(frag);
+        self.vab_pasting = true;
+    }
+
+    fn vab_cancel_paste(&mut self) {
+        self.vab_frag = None;
+        self.vab_pasting = false;
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.vab3d.held = None;
+        }
+        if let Some(b) = self.doc.body() {
+            b.class_list().remove_1("vab-holding").ok();
         }
     }
 

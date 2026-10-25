@@ -55,7 +55,11 @@ pub const INPUT: &[(&str, &[Binding])] = &[
             ("Ctrl+Z / Ctrl+Y", "Undo / redo", true),
             ("Ctrl+F", "Search parts", true),
             ("Ctrl+N / Ctrl+S", "New vehicle / save", true),
-            ("Ctrl+C / Ctrl+V", "Copy / paste", false),
+            (
+                "Ctrl+C / Ctrl+V",
+                "Copy the selected part and what hangs on it / paste (click to place, Esc drops)",
+                true,
+            ),
             ("W A S D Q E", "Rotate the held part", false),
         ],
     ),
