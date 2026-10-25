@@ -872,6 +872,28 @@ pub fn resources_html(stage: &[(String, f64, f64)], vessel: &[(String, f64, f64)
     html
 }
 
+/// The action groups app (`ActionGroupManager`): lights, RCS and abort, then groups 1-10, each lit while on;
+/// a click toggles it as its key does.
+pub fn action_groups_html(lights: bool, rcs: bool, abort: bool, custom: &[bool; 10]) -> String {
+    let on = |b: bool| if b { " on" } else { "" };
+    let mut html = format!(
+        "<div class=\"fh-ag-grid\"><button class=\"wide{}\" data-ag=\"lights\" title=\"U\">Lights</button><button class=\"wide{}\" data-ag=\"rcs\" title=\"R\">RCS</button><button class=\"wide{}\" data-ag=\"abort\" title=\"Backspace\">Abort</button>",
+        on(lights),
+        on(rcs),
+        on(abort)
+    );
+    for (k, g) in custom.iter().enumerate() {
+        let n = k + 1;
+        html.push_str(&format!(
+            "<button class=\"{}\" data-ag=\"{n}\" data-ose=\"ag-{n}\" title=\"key {}\">{n}</button>",
+            on(*g).trim(),
+            n % 10
+        ));
+    }
+    html.push_str("</div>");
+    html
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

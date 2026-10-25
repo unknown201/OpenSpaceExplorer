@@ -1577,12 +1577,12 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                 let open = el.class_list().toggle("open").unwrap_or(false);
                 store("ose.tracker", if open { "open" } else { "closed" });
                 if open {
-                    for id in ["fh-parts", "fh-res"] {
+                    for id in ["fh-parts", "fh-res", "fh-ag"] {
                         if let Some(e) = doc.get_element_by_id(id) {
                             e.class_list().remove_1("open").ok();
                         }
                     }
-                    for id in ["fh-parts-btn", "fh-res-btn"] {
+                    for id in ["fh-parts-btn", "fh-res-btn", "fh-ag-btn"] {
                         if let Some(e) = doc.get_element_by_id(id) {
                             e.class_list().remove_1("on").ok();
                         }
@@ -1628,12 +1628,17 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
     if let Some(el) = doc.get_element_by_id("fh-crew-btn") {
         el.class_list().toggle_with_force("on", !crew_off).ok();
     }
-    const APP_WINDOWS: [(&str, &str); 3] = [
+    const APP_WINDOWS: [(&str, &str); 4] = [
         ("fh-missions-btn", "fh-missions"),
         ("fh-parts-btn", "fh-parts"),
         ("fh-res-btn", "fh-res"),
+        ("fh-ag-btn", "fh-ag"),
     ];
-    for (btn, win) in [("fh-parts-btn", "fh-parts"), ("fh-res-btn", "fh-res")] {
+    for (btn, win) in [
+        ("fh-parts-btn", "fh-parts"),
+        ("fh-res-btn", "fh-res"),
+        ("fh-ag-btn", "fh-ag"),
+    ] {
         wire(
             btn,
             Box::new(move |a| {
@@ -1657,8 +1662,33 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                 }
                 app.render_parts_manager();
                 app.render_resource_manager();
+                app.render_action_groups();
             }),
         )?;
+    }
+    // An action group button toggles that group, as its key does.
+    if let Some(list) = doc.get_element_by_id("fh-ag-list") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let g = ev
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .and_then(|e| e.closest("[data-ag]").ok().flatten())
+                .and_then(|e| e.get_attribute("data-ag"));
+            let group = match g.as_deref() {
+                Some("lights") => ose_net::ActionGroup::Lights,
+                Some("rcs") => ose_net::ActionGroup::Rcs,
+                Some("abort") => ose_net::ActionGroup::Abort,
+                Some(n) => match n.parse::<u8>() {
+                    Ok(n) => ose_net::ActionGroup::Custom(n),
+                    Err(_) => return,
+                },
+                None => return,
+            };
+            a.borrow().action_group(group);
+        });
+        list.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
     }
     // A parts manager row opens that part's window beside the list.
     if let Some(list) = doc.get_element_by_id("fh-parts-list") {
@@ -6543,9 +6573,37 @@ impl App {
         }
     }
 
+    /// The action groups window: each group's state from the readout.
+    fn render_action_groups(&self) {
+        let Some(el) = self.doc.get_element_by_id("fh-ag-list") else {
+            return;
+        };
+        let open = self
+            .doc
+            .get_element_by_id("fh-ag")
+            .is_some_and(|e| e.class_list().contains("open"));
+        if !open {
+            return;
+        }
+        let Some(f) = self
+            .flying
+            .and_then(|id| self.scene.as_ref()?.vessel(id))
+            .and_then(|v| v.flight.as_ref())
+        else {
+            return;
+        };
+        let html = hud::action_groups_html(f.lights, f.rcs, f.abort, &f.custom_groups);
+        let key = format!("{}:{}", html.len(), hud::fnv(&html));
+        if el.get_attribute("data-ose-key").as_deref() != Some(key.as_str()) {
+            el.set_inner_html(&html);
+            el.set_attribute("data-ose-key", &key).ok();
+        }
+    }
+
     fn update_crew_buttons(&self, f: &ose_net::FlightReadout) {
         self.render_parts_manager();
         self.render_resource_manager();
+        self.render_action_groups();
         let landed = matches!(f.situation, ose_net::FlightSituation::Landed);
         if let Some(el) = self.doc.get_element_by_id("fh-crewbox") {
             let face = |name: &str| {
