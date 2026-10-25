@@ -225,3 +225,9 @@ densities are multiplied by `VegetationSettings` <Kind>Density (Duna objects 0.5
 0.5 / 0.2 / 0.25, Eve 0.5, Laythe/Tylo/Vall large 0.5), which had been missing: Duna was a boulder field.
 Detail normals are resampled with distance like the albedo (8 m near, 64 m beyond ~30 m, out to 2 km).
 
+Rings, aurora, city lights: the stock system's only ring is Dres's (scaled bundle: a ring component with
+`innerRadius` 414 km, `outerRadius` 440 km, `alphaEdge` 0.1 and a 512 x 4 radial texture `dres_scaled_ring_01_d`, in
+the equatorial plane; plus an asteroid particle field, not drawn). `tools/export_rings.py` writes ring.png and planet.json
+`ring`; the client draws a 256-segment strip (vs_ring / fs_ring) lit from either side and in the body's shadow. No
+body has aurora or night lights (Kerbin's `_EmissionScaledTex` is unset).
+

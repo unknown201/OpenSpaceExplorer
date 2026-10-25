@@ -96,6 +96,12 @@ struct Surface {
 // The sky pass's own group 1 (quads use binding 0 of group 1 for their chunk): the original's starfield skybox.
 @group(1) @binding(1) var star_tex: texture_2d<f32>;
 @group(1) @binding(2) var star_samp: sampler;
+// A ring pass's own group 1 (Dres): inner and outer radius (m), alpha edge; the radial texture.
+struct RingU { radii: vec4<f32> };
+@group(1) @binding(3) var<uniform> ring: RingU;
+@group(1) @binding(4) var ring_tex: texture_2d<f32>;
+@group(1) @binding(5) var ring_samp: sampler;
+const RING_SEGMENTS: u32 = 256u;
 // FFT waves (ocean_fft.rs): layer 0 x/z displacement, height, Jacobian of the long patch; layer 1 its slopes
 // and the short patch's slopes.
 @group(0) @binding(5) var waves_tex: texture_2d_array<f32>;
@@ -479,6 +485,43 @@ fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
     }
     let corona = tint * (0.55 * exp(-max(ang - a, 0.0) / 0.012) + 0.12 * exp(-max(ang - a, 0.0) / 0.08));
     return vec4<f32>(tonemap(radiance) + corona + hdr, 1.0);
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Rings (the original's planet ring: Dres, 414 to 440 km, a radial colour and alpha texture): a flat strip in the
+// equatorial plane, lit by the sun from either side, in the body's shadow where the sun ray crosses it.
+
+struct RingOut { @builtin(position) clip: vec4<f32>, @location(0) model: vec3<f32> };
+
+@vertex
+fn vs_ring(@builtin(vertex_index) i: u32) -> RingOut {
+    var out: RingOut;
+    let a = f32(i / 2u) / f32(RING_SEGMENTS) * 2.0 * PI;
+    let r = select(ring.radii.x, ring.radii.y, (i % 2u) == 1u);
+    let model = vec3<f32>(cos(a) * r, 0.0, sin(a) * r);
+    out.model = model;
+    out.clip = frame.view_proj * vec4<f32>(model - frame.cam_km.xyz * 1000.0, 1.0);
+    return out;
+}
+
+@fragment
+fn fs_ring(in: RingOut) -> @location(0) vec4<f32> {
+    let r = length(in.model.xz);
+    let t = clamp((r - ring.radii.x) / max(ring.radii.y - ring.radii.x, 1.0), 0.0, 1.0);
+    let c = textureSampleLevel(ring_tex, ring_samp, vec2<f32>(t, 0.5), 0.0);
+    let e = ring.radii.z;
+    let alpha = c.a * smoothstep(0.0, e, t) * smoothstep(0.0, e, 1.0 - t);
+    if alpha < 0.002 {
+        discard;
+    }
+    let sun = frame.sun.xyz;
+    // the body's shadow: the sun ray from here passes within its radius, in front of the ring point
+    let b = dot(in.model, sun);
+    let closest = length(in.model - sun * b);
+    let shadow = select(1.0, smoothstep(frame.solar.w * 0.97, frame.solar.w * 1.03, closest), b < 0.0);
+    let lit = frame.solar.xyz * (0.25 + 0.75 * abs(sun.y)) * shadow * eclipse(in.model * 0.001, sun);
+    let radiance = c.rgb / PI * lit + c.rgb * 0.01;
+    return vec4<f32>(tonemap(radiance) * alpha, alpha);
 }
 
 // ---------------------------------------------------------------------------------------------------------

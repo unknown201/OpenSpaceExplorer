@@ -18,6 +18,9 @@ use std::rc::Rc;
 
 const SHADER: &str = include_str!("planet.wgsl");
 const BASE: &str = "assets/planets";
+/// Segments around a ring, as `RING_SEGMENTS` in the shader.
+const RING_SEGMENTS: u32 = 256;
+
 /// Tiling period of detail textures and waves (m), as `TILE_PERIOD` in the shader.
 const TILE_PERIOD: f64 = 4096.0;
 /// Quad builds allowed per frame, in milliseconds of CPU time.
@@ -163,6 +166,7 @@ enum Tex {
     PoleAlbedo,
     GlobalHeight,
     Slopes,
+    Ring,
     LayerMask,
 }
 
@@ -217,6 +221,8 @@ struct Body {
     luts: [Option<wgpu::TextureView>; 3],
     /// The pack layers' (uv scale, height scale) pairs and projection contrast, once their slopes are uploaded.
     layer_params: Option<([[f32; 4]; 4], f32)>,
+    /// The ring (Dres): its own bind group (radii uniform, texture), once the texture is in.
+    ring_bind: Option<wgpu::BindGroup>,
     inbox: Rc<RefCell<Vec<Loaded>>>,
     surface_buf: wgpu::Buffer,
     surface_bind: Option<wgpu::BindGroup>,
@@ -235,6 +241,8 @@ pub struct PlanetRenderer {
     shaft_pipeline: wgpu::RenderPipeline,
     /// The original's skybox (`skybox_spacescape_starfield`), drawn behind the sky: its bitmap until uploaded.
     star_layout: wgpu::BindGroupLayout,
+    ring_layout: wgpu::BindGroupLayout,
+    ring_pipeline: wgpu::RenderPipeline,
     star_bind: wgpu::BindGroup,
     stars: Rc<RefCell<Option<web_sys::ImageBitmap>>>,
     /// the camera is under the sea this frame: light shafts, and the sea surface without its skirts (they hang
@@ -363,6 +371,17 @@ impl PlanetRenderer {
         let star_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("planet stars"),
             entries: &[tex_entry(1, D::D2), samp_entry(2)],
+        });
+        // Rings (Dres): group 1 of their own (radii uniform, radial texture, sampler at 3..5, clear of the chunk's 0
+        // and the stars' 1..2).
+        let ring_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("planet ring"),
+            entries: &[uniform_entry(3, false), tex_entry(4, D::D2), samp_entry(5)],
+        });
+        let ring_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("planet ring"),
+            bind_group_layouts: &[Some(&frame_layout), Some(&ring_layout)],
+            immediate_size: 0,
         });
         let sky_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("planet sky"),
@@ -801,6 +820,35 @@ impl PlanetRenderer {
             dimension: Some(D::D2Array),
             ..Default::default()
         });
+        let ring_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("planet ring"),
+            layout: Some(&ring_pl),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_ring"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_ring"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(depth(false, wgpu::CompareFunction::Greater)),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
         let star_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("planet stars (none yet)"),
             layout: &star_layout,
@@ -826,6 +874,8 @@ impl PlanetRenderer {
             });
         }
         PlanetRenderer {
+            ring_layout,
+            ring_pipeline,
             star_layout,
             star_bind,
             stars,
@@ -983,6 +1033,7 @@ impl PlanetRenderer {
                 arrays: HashMap::new(),
                 luts: [None, None, None],
                 layer_params: None,
+                ring_bind: None,
                 inbox,
                 surface_buf,
                 surface_bind: None,
@@ -1026,6 +1077,9 @@ impl PlanetRenderer {
         }
         if info["ocean"].get("foam").is_some() {
             images.push((Tex::Foam, format!("{base}/foam.png")));
+        }
+        if let Some(t) = info["ring"]["texture"].as_str() {
+            images.push((Tex::Ring, format!("{base}/{t}")));
         }
         if info["poles"]["albedo"].as_bool() == Some(true) {
             images.push((Tex::PoleAlbedo, format!("{base}/poles.png")));
@@ -1190,7 +1244,8 @@ impl PlanetRenderer {
                     b.dirty = true;
                 }
                 Loaded::Image(tex, bitmap) => {
-                    let srgb = matches!(tex, Tex::Albedo | Tex::Clouds | Tex::PoleAlbedo);
+                    let srgb =
+                        matches!(tex, Tex::Albedo | Tex::Clouds | Tex::PoleAlbedo | Tex::Ring);
                     let t = self.texture_for(bitmap.width(), bitmap.height(), 1, srgb);
                     self.copy_bitmap(&bitmap, &t, 0);
                     self.mip
@@ -1452,6 +1507,46 @@ impl PlanetRenderer {
                 tv(13, Tex::LayerMask),
             ],
         });
+        let ring_bind = match (b.tex.get(&Tex::Ring), b.info.as_ref().map(|v| &v["ring"])) {
+            (Some(view), Some(r)) if r.is_object() => {
+                let f = |k: &str| r[k].as_f64().unwrap_or(0.0) as f32;
+                let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("planet ring"),
+                    size: 16,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                self.queue.write_buffer(
+                    &buf,
+                    0,
+                    bytemuck::cast_slice(&[
+                        f("inner_m"),
+                        f("outer_m"),
+                        f("alpha_edge").max(0.001),
+                        0.0,
+                    ]),
+                );
+                Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("planet ring"),
+                    layout: &self.ring_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: buf.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 4,
+                            resource: wgpu::BindingResource::TextureView(view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 5,
+                            resource: wgpu::BindingResource::Sampler(&self.equi_sampler),
+                        },
+                    ],
+                }))
+            }
+            _ => None,
+        };
         let atmo = Self::atmosphere_ready(b);
         let lut = |i: usize| match (&b.luts[i], atmo) {
             (Some(v), true) => v,
@@ -1492,6 +1587,7 @@ impl PlanetRenderer {
             .write_buffer(&b.surface_buf, 0, bytemuck::bytes_of(&surf));
         let b = self.bodies.get_mut(id).unwrap();
         b.surface_bind = Some(surface_bind);
+        b.ring_bind = ring_bind;
         b.frame_bind = Some(frame_bind);
         b.dirty = false;
     }
@@ -2627,6 +2723,12 @@ impl ExtraPass for PlanetRenderer {
                 self.index_count
             };
             pass.draw_indexed(0..n, 0, 0..1);
+        }
+        if let Some(rb) = &b.ring_bind {
+            pass.set_pipeline(&self.ring_pipeline);
+            pass.set_bind_group(0, fb, &[]);
+            pass.set_bind_group(1, rb, &[]);
+            pass.draw(0..(RING_SEGMENTS + 1) * 2, 0..1);
         }
         if self.shafts {
             pass.set_pipeline(&self.shaft_pipeline);
