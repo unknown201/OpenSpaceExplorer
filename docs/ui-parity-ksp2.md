@@ -35,7 +35,7 @@ Camera rule that runs through every map: **the right button drags the camera, th
 | G4 | Notification toasts (warp limited, out of charge, lost link, vessel lost ...) | flight messages and refusals come up as toasts at the top right, plus events: lost and restored signal, lost control, charge running out, a new sphere of influence, stable orbit, landing, escaping, crashing | done |
 | G5 | F5/F9 quicksave/quickload | F5/F9 with toasts; any `[data-save-action]` button (the pause menu's revert buttons) reverts to launch or to the VAB | done |
 | G6 | Settings screen: input bindings, audio sliders, UI scale, tooltips on/off, graphics | Settings from the main menu (any `[data-open-settings]` element opens it): Input lists the original's bindings and which work, Interface has UI scale and key hints, Audio the sound switch and music and effects volume, Graphics the render resolution (50-100%) and an FPS counter; Input rebinds 30 flight and global keys (kept per browser, Reset all) | done |
-| G7 | Esc menu: resume, save, load, revert to launch/VAB, recover, KSC, Tracking Station, Mission Control, R&D, VAB, settings, quit | resume, KSC, sessions, sound, leave | other thread (restyle in progress); revert/save/load server |
+| G7 | Esc menu: resume, save, load, revert to launch/VAB, recover, KSC, Tracking Station, Mission Control, R&D, VAB, settings, quit | resume, KSC, Tracking Station, revert to launch / VAB, settings, exit ("Build 3D world and menu replica"); F5/F9 quicksave and quickload | done (restyle in progress); revert/save/load server |
 
 ### Flight
 
@@ -50,7 +50,7 @@ Camera rule that runs through every map: **the right button drags the camera, th
 | F7 | Orbital readout Ap/Pe with time to each; altimeter sea level / terrain toggle; speed orbit / surface / target toggle | Ap/Pe with countdowns, SURFACE/ORBIT/TARGET speed toggle, SEA LEVEL/TERRAIN altimeter toggle | done |
 | F8 | Right-drag orbits the camera, wheel zooms, V cycles camera modes, Home resets | right-drag (and left) orbits, Home resets, V cycles Auto, Free, Orbital, Chase and Locked | done |
 | F9 | `]` `[` switch to the next/previous vessel nearby | in flight `]` `[` take control of your other vessels within 2.5 km (dropped stages, Kerbals on EVA); on the map they change the followed vessel | done |
-| F10 | F to board/interact on EVA, EVA from the crew portrait | protocol has GoEva/Board/PlantFlag; no client keys | open |
+| F10 | F to board/interact on EVA, EVA from the crew portrait | EVA, Board, Plant Flag and Undock buttons ("Build 3D world and menu replica"); F on EVA boards the craft within reach | done |
 | F11 | Vessel labels F4 | F4 toggles labels | done |
 | F12 | Go button / pre-launch throttle | not needed (no launch sequence) | skip |
 

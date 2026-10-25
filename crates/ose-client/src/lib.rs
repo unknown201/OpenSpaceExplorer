@@ -2868,6 +2868,11 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                         }
                         true
                     }
+                    // Interact on EVA (the original's F): board the craft within reach.
+                    "KeyF" if !ev.repeat() && app.flying_eva() => {
+                        app.crew_action("fh-board");
+                        true
+                    }
                     "KeyU" | "KeyR" if !ev.repeat() => {
                         app.hud_button(if code == "KeyU" {
                             "fh-act-lights"

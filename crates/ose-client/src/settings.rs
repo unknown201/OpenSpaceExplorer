@@ -37,6 +37,7 @@ pub const INPUT: &[(&str, &[Binding])] = &[
                 "Docking mode: W/A/S/D and Shift/Ctrl translate",
                 true,
             ),
+            ("F (on EVA)", "Board the craft within reach", true),
             ("M", "Map view", true),
             ("V", "Camera mode: auto, free, orbital, chase, locked", true),
             (
