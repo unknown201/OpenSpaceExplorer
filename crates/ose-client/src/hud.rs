@@ -771,6 +771,82 @@ pub fn crew_html(
     html
 }
 
+/// The parts manager list (`PartsManager`): the vessel's parts grouped by name with their count; a row opens
+/// the window of its first part.
+pub fn parts_html(groups: &[(String, Vec<usize>)]) -> String {
+    let mut html = String::new();
+    for (title, parts) in groups {
+        let Some(first) = parts.first() else { continue };
+        let n = if parts.len() > 1 {
+            format!("\u{d7}{}", parts.len())
+        } else {
+            String::new()
+        };
+        html.push_str(&format!(
+            "<li data-ose=\"parts-row\" data-part=\"{first}\"><span>{}</span><span class=\"n\">{n}</span></li>",
+            crate::esc(title)
+        ));
+    }
+    html
+}
+
+/// Readable name of a resource id (`MonoPropellant` -> `Mono Propellant`).
+pub fn resource_name(id: &str) -> String {
+    let mut out = String::new();
+    for (i, c) in id.chars().enumerate() {
+        if i > 0 && c.is_ascii_uppercase() {
+            out.push(' ');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// Resource units with the precision small tanks need.
+fn units(x: f64) -> String {
+    if x < 10.0 {
+        format!("{x:.2}")
+    } else if x < 1000.0 {
+        format!("{x:.1}")
+    } else {
+        format!("{x:.0}")
+    }
+}
+
+/// The resource manager (`ResourceManager`): the burning stage's and the whole vessel's resources, each with
+/// amount, capacity and a bar (orange under a tenth).
+pub fn resources_html(stage: &[(String, f64, f64)], vessel: &[(String, f64, f64)]) -> String {
+    let rows = |list: &[(String, f64, f64)]| {
+        let mut html = String::new();
+        for (id, amount, cap) in list.iter().filter(|r| r.2 > 0.0) {
+            let frac = (amount / cap).clamp(0.0, 1.0);
+            html.push_str(&format!(
+                "<div class=\"rs-row{low}\" data-ose=\"res-row\" data-res=\"{id}\"><span>{name}</span><span>{amount} / {cap}</span><div class=\"rs-bar\"><i style=\"width:{pct:.1}%\"></i></div></div>",
+                low = if frac < 0.1 { " low" } else { "" },
+                id = crate::esc(id),
+                name = crate::esc(&resource_name(id)),
+                amount = units(*amount),
+                cap = units(*cap),
+                pct = frac * 100.0,
+            ));
+        }
+        html
+    };
+    let (s, v) = (rows(stage), rows(vessel));
+    let mut html = String::new();
+    if !s.is_empty() {
+        html.push_str("<div class=\"rs-head\">STAGE</div>");
+        html.push_str(&s);
+    }
+    html.push_str("<div class=\"rs-head\">VESSEL</div>");
+    if v.is_empty() {
+        html.push_str("<div class=\"rs-row\"><span>nothing aboard</span></div>");
+    } else {
+        html.push_str(&v);
+    }
+    html
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -785,6 +861,16 @@ mod tests {
             mean_anomaly_at_epoch_rad: m0,
             epoch_s: 0.0,
         }
+    }
+
+    #[test]
+    fn resources_list_stage_then_vessel() {
+        let r = vec![("MonoPropellant".to_string(), 5.0, 100.0)];
+        let html = resources_html(&[], &r);
+        assert!(html.contains("Mono Propellant"));
+        assert!(html.contains("rs-row low"));
+        assert!(!html.contains("STAGE"));
+        assert_eq!(resource_name("ElectricCharge"), "Electric Charge");
     }
 
     #[test]

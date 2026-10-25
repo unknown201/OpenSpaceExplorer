@@ -1549,6 +1549,18 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
             if let Some(el) = doc.get_element_by_id("fh-missions") {
                 let open = el.class_list().toggle("open").unwrap_or(false);
                 store("ose.tracker", if open { "open" } else { "closed" });
+                if open {
+                    for id in ["fh-parts", "fh-res"] {
+                        if let Some(e) = doc.get_element_by_id(id) {
+                            e.class_list().remove_1("open").ok();
+                        }
+                    }
+                    for id in ["fh-parts-btn", "fh-res-btn"] {
+                        if let Some(e) = doc.get_element_by_id(id) {
+                            e.class_list().remove_1("on").ok();
+                        }
+                    }
+                }
                 if let Some(b) = doc.get_element_by_id("fh-missions-btn") {
                     b.class_list().toggle_with_force("on", open).ok();
                 }
@@ -1588,6 +1600,59 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
     }
     if let Some(el) = doc.get_element_by_id("fh-crew-btn") {
         el.class_list().toggle_with_force("on", !crew_off).ok();
+    }
+    const APP_WINDOWS: [(&str, &str); 3] = [
+        ("fh-missions-btn", "fh-missions"),
+        ("fh-parts-btn", "fh-parts"),
+        ("fh-res-btn", "fh-res"),
+    ];
+    for (btn, win) in [("fh-parts-btn", "fh-parts"), ("fh-res-btn", "fh-res")] {
+        wire(
+            btn,
+            Box::new(move |a| {
+                let app = a.borrow();
+                if let Some(el) = app.doc.get_element_by_id(win) {
+                    let open = el.class_list().toggle("open").unwrap_or(false);
+                    if let Some(b) = app.doc.get_element_by_id(btn) {
+                        b.class_list().toggle_with_force("on", open).ok();
+                    }
+                    // The app windows share a place: opening one closes the others.
+                    if open {
+                        for (b2, w2) in APP_WINDOWS.iter().filter(|(_, w)| *w != win) {
+                            for (id, class) in [(*w2, "open"), (*b2, "on")] {
+                                if let Some(e) = app.doc.get_element_by_id(id) {
+                                    e.class_list().remove_1(class).ok();
+                                }
+                            }
+                        }
+                        store("ose.tracker", "closed");
+                    }
+                }
+                app.render_parts_manager();
+                app.render_resource_manager();
+            }),
+        )?;
+    }
+    // A parts manager row opens that part's window beside the list.
+    if let Some(list) = doc.get_element_by_id("fh-parts-list") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let row = ev
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .and_then(|e| e.closest("[data-part]").ok().flatten());
+            let Some(i) = row
+                .and_then(|r| r.get_attribute("data-part"))
+                .and_then(|v| v.parse::<usize>().ok())
+            else {
+                return;
+            };
+            let x = (ev.client_x() as f64 - 620.0).max(10.0);
+            a.borrow_mut()
+                .flight_open_pam(Some(i), x, ev.client_y() as f64);
+        });
+        list.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
     }
     wire(
         "fh-crew-btn",
@@ -6332,7 +6397,89 @@ impl App {
 
     /// Show the crew buttons that apply: EVA with crew aboard, Board and Plant Flag for a Kerbal (the flag on
     /// the ground), Undock while docked.
+    /// The parts manager window: the parts still on the flown vessel (staged-off ones gone), by name.
+    fn render_parts_manager(&self) {
+        let Some(el) = self.doc.get_element_by_id("fh-parts-list") else {
+            return;
+        };
+        let open = self
+            .doc
+            .get_element_by_id("fh-parts")
+            .is_some_and(|e| e.class_list().contains("open"));
+        if !open {
+            return;
+        }
+        let Some(craft) = &self.flight_craft else {
+            el.set_inner_html("");
+            return;
+        };
+        let fired = self
+            .flying
+            .and_then(|id| self.scene.as_ref()?.vessel(id))
+            .and_then(|v| v.flight.as_ref())
+            .map(|f| f.stage as usize)
+            .unwrap_or(0);
+        let catalog = &self.catalog;
+        let is_dec = |pid: &str| catalog.get(pid).map(|p| p.is_decoupler).unwrap_or(false);
+        #[cfg(target_arch = "wasm32")]
+        let gone = flight3d::jettisoned(craft, fired, &is_dec);
+        #[cfg(not(target_arch = "wasm32"))]
+        let gone = {
+            let _ = (fired, &is_dec);
+            vec![false; craft.parts.len()]
+        };
+        let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
+        for (i, p) in craft.parts.iter().enumerate() {
+            if gone.get(i).copied().unwrap_or(false) {
+                continue;
+            }
+            let title = catalog
+                .get(&p.part_id)
+                .map(|s| s.display_title().to_string())
+                .unwrap_or_else(|| p.part_id.clone());
+            match groups.iter_mut().find(|(t, _)| *t == title) {
+                Some((_, v)) => v.push(i),
+                None => groups.push((title, vec![i])),
+            }
+        }
+        let html = hud::parts_html(&groups);
+        let key = format!("{}:{}", html.len(), hud::fnv(&html));
+        if el.get_attribute("data-ose-key").as_deref() != Some(key.as_str()) {
+            el.set_inner_html(&html);
+            el.set_attribute("data-ose-key", &key).ok();
+        }
+    }
+
+    /// The resource manager window: the burning stage's and the whole vessel's resources (protocol 34).
+    fn render_resource_manager(&self) {
+        let Some(el) = self.doc.get_element_by_id("fh-res-list") else {
+            return;
+        };
+        let open = self
+            .doc
+            .get_element_by_id("fh-res")
+            .is_some_and(|e| e.class_list().contains("open"));
+        if !open {
+            return;
+        }
+        let Some(f) = self
+            .flying
+            .and_then(|id| self.scene.as_ref()?.vessel(id))
+            .and_then(|v| v.flight.as_ref())
+        else {
+            return;
+        };
+        let html = hud::resources_html(&f.stage_resources, &f.resources);
+        let key = format!("{}:{}", html.len(), hud::fnv(&html));
+        if el.get_attribute("data-ose-key").as_deref() != Some(key.as_str()) {
+            el.set_inner_html(&html);
+            el.set_attribute("data-ose-key", &key).ok();
+        }
+    }
+
     fn update_crew_buttons(&self, f: &ose_net::FlightReadout) {
+        self.render_parts_manager();
+        self.render_resource_manager();
         let landed = matches!(f.situation, ose_net::FlightSituation::Landed);
         if let Some(el) = self.doc.get_element_by_id("fh-crewbox") {
             let face = |name: &str| {
