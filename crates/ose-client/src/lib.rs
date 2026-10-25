@@ -167,6 +167,9 @@ struct App {
     vab_cot: Option<(ose_math::DVec3, ose_math::DVec3)>,
     vab_show_com: bool,
     vab_show_cot: bool,
+    /// The part whose manager window is open, and whether this opening's first change went into the history.
+    vab_pam: Option<usize>,
+    vab_pam_recorded: bool,
     vab_report_due: Option<f64>,
     vab_dragged: bool,
     /// The flight view (the vessel in 3D near its body).
@@ -464,6 +467,8 @@ pub fn start() -> Result<(), JsValue> {
         vab_cot: None,
         vab_show_com: stored("ose.vab.com").as_deref() != Some("off"),
         vab_show_cot: stored("ose.vab.cot").as_deref() != Some("off"),
+        vab_pam: None,
+        vab_pam_recorded: false,
         vab_report_due: None,
         vab_dragged: false,
         #[cfg(target_arch = "wasm32")]
@@ -1404,6 +1409,38 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
     )?;
     wire("vab-save", Box::new(|a| a.borrow_mut().vab_save(false)))?;
     wire("vab-undo", Box::new(|a| a.borrow_mut().vab_undo(false)))?;
+    if let Some(pam) = doc.get_element_by_id("vab-pam") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |ev: web_sys::Event| {
+            let Some(input) = ev
+                .target()
+                .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+            else {
+                return;
+            };
+            let mut app = a.borrow_mut();
+            if input.id() == "pam-crossfeed" {
+                app.vab_pam_changed(None, 0.0, Some(input.checked()));
+            } else if let Some(k) = input.get_attribute("data-res").and_then(|v| v.parse().ok()) {
+                app.vab_pam_changed(Some(k), input.value_as_number(), None);
+            }
+        });
+        pam.add_event_listener_with_callback("input", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let close = ev
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .and_then(|e| e.closest("#pam-close").ok().flatten())
+                .is_some();
+            if close {
+                a.borrow_mut().vab_open_pam(None, 0.0, 0.0);
+            }
+        });
+        pam.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
     wire(
         "vab-report-btn",
         Box::new(|a| {
@@ -2269,6 +2306,22 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                     app.editor.selected = Some(i);
                     app.render_vab();
                 }
+                app.vab_open_pam(None, 0.0, 0.0);
+            } else if ev.button() == 2
+                && (nx - x).abs() < 4.0
+                && (ny - y).abs() < 4.0
+                && app.in_session
+                && app.vab_active()
+            {
+                // A right click (not a drag) on a part opens its manager window.
+                let rect = app.gpu_canvas.get_bounding_client_rect();
+                let (px, py) = ((nx - rect.left()) * app.dpr, (ny - rect.top()) * app.dpr);
+                let hit = app.gpu.as_ref().and_then(|g| app.vab3d.pick(g, px, py));
+                if let Some(i) = hit {
+                    app.editor.selected = Some(i);
+                    app.render_vab();
+                }
+                app.vab_open_pam(hit, nx, ny);
             }
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -2356,6 +2409,10 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                     }
                     "KeyV" if ctrl => {
                         app.vab_paste();
+                        true
+                    }
+                    "Escape" if app.vab_pam.is_some() => {
+                        app.vab_open_pam(None, 0.0, 0.0);
                         true
                     }
                     "Escape" if app.vab_pasting => {
@@ -4085,6 +4142,68 @@ impl App {
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     fn vab_record(&mut self) {
         self.vab_history.record(&self.editor);
+    }
+
+    /// Open the part manager for part `i` at a screen point, or close it with `None`.
+    fn vab_open_pam(&mut self, i: Option<usize>, x: f64, y: f64) {
+        self.vab_pam = i;
+        self.vab_pam_recorded = false;
+        let Some(el) = self
+            .doc
+            .get_element_by_id("vab-pam")
+            .and_then(|e| e.dyn_into::<HtmlElement>().ok())
+        else {
+            return;
+        };
+        match i {
+            Some(i) => {
+                el.set_inner_html(&vab::pam_html(&self.editor.craft, i, &self.catalog));
+                let w = web_sys::window()
+                    .and_then(|w| w.inner_width().ok())
+                    .and_then(|w| w.as_f64())
+                    .unwrap_or(1600.0);
+                el.style()
+                    .set_property("left", &format!("{}px", (x + 14.0).min(w - 320.0)))
+                    .ok();
+                el.style()
+                    .set_property("top", &format!("{}px", y.max(70.0)))
+                    .ok();
+                el.class_list().add_1("open").ok();
+            }
+            None => {
+                el.class_list().remove_1("open").ok();
+            }
+        }
+    }
+
+    /// A change in the part manager: a tank's fill (`res` index) or the crossfeed switch.
+    fn vab_pam_changed(&mut self, res: Option<usize>, value: f64, crossfeed: Option<bool>) {
+        let Some(i) = self.vab_pam else { return };
+        if i >= self.editor.craft.parts.len() {
+            return;
+        }
+        if !self.vab_pam_recorded {
+            self.vab_pam_recorded = true;
+            self.vab_record();
+        }
+        let p = &mut self.editor.craft.parts[i];
+        if let Some(k) = res {
+            if let Some(r) = p.resources.get_mut(k) {
+                r.stored_units = value.clamp(0.0, r.capacity_units);
+                let text = format!("{:.0} / {:.0}", r.stored_units, r.capacity_units);
+                if let Ok(Some(b)) = self
+                    .doc
+                    .query_selector(&format!("#vab-pam input[data-res=\"{k}\"] + b"))
+                {
+                    b.set_text_content(Some(&text));
+                }
+            }
+        }
+        if let Some(cf) = crossfeed {
+            p.fuel_crossfeed = cf;
+        }
+        // Ask for a fresh staging readout (delta-v follows the fill) without redrawing the window.
+        self.vab_report_due = Some(now_ms() + 300.0);
     }
 
     /// Ctrl+Z / Ctrl+Y.

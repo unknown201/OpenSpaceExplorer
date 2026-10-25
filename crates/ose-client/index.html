@@ -403,6 +403,16 @@
     #vab-side .vs-help { font-size: 11px; color: #6f7f9c; margin-top: 10px; line-height: 1.4; }
     #vab-tip { position: fixed; z-index: 30; display: none; width: 300px; background: #0b1020f5; border: 1px solid #3b63a8; border-radius: 6px; padding: 10px 12px; color: #e6ecf7; font-size: 12px; pointer-events: none; box-shadow: 0 6px 20px #000a; }
     #vab-tip.open { display: block; }
+    /* Part manager window (right click a part in the VAB). */
+    #vab-pam { position: fixed; z-index: 31; display: none; width: 300px; background: #0b1020f8; border: 1px solid #3b63a8; border-radius: 6px; padding: 8px 12px 10px; color: #e6ecf7; font: 13px var(--ui-font, system-ui); box-shadow: 0 6px 20px #000a; }
+    #vab-pam.open { display: block; }
+    body:not(:has(#screen-vab.open)) #vab-pam { display: none; }
+    #vab-pam .pam-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+    #vab-pam .pam-head button { margin: 0; width: auto; padding: 2px 8px; background: #16213a; color: #e6ecf7; border: 1px solid #2c3d63; border-radius: 4px; cursor: pointer; }
+    #vab-pam .pam-sub { color: #e0a040; font-size: 11px; margin-top: 2px; }
+    #vab-pam .pam-row { display: grid; grid-template-columns: 110px 1fr auto; gap: 8px; align-items: center; margin-top: 8px; font-size: 12px; }
+    #vab-pam .pam-row b { font-weight: 500; color: #9fb0cc; font-variant-numeric: tabular-nums; }
+    #vab-pam .pam-row input[type=checkbox] { justify-self: start; }
     /* Notification toasts, top right (the original's NotificationManager). Flight notes show here instead of
        under the altimeter. */
     #toasts { position: fixed; top: calc(92 * var(--u, 1px)); right: calc(16 * var(--u, 1px)); z-index: 40; display: flex; flex-direction: column; gap: 6px; pointer-events: none; max-width: 360px; }
@@ -777,6 +787,7 @@
   </div>
   <div id="ksc-tooltip" data-ose="ksc-tooltip"></div>
   <div id="vab-tip" data-ose="vab-tip"></div>
+  <div id="vab-pam" data-ose="vab-pam"></div>
   <div id="toasts" data-ose="toasts"></div>
   <div id="settings" data-ose="settings">
     <div class="set-card">

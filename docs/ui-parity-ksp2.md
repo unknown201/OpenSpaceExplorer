@@ -74,7 +74,7 @@ Camera rule that runs through every map: **the right button drags the camera, th
 | V4 | Delete key, Ctrl+Z/Y, Ctrl+C/V, WASDQE rotate the held part, Space resets, X symmetry, C snap; grab a placed part and move it with its subtree | Delete/Backspace, Ctrl+Z/Y, Ctrl+C/V, Ctrl+F, Ctrl+N, Ctrl+S; grabbing a placed part carries its subtree, dropped nowhere it goes back; parts with a surface node go on a part's side where you point, facing in, with symmetry copies around the axis and 15° snap; W/A/S/D/Q/E turn the held part (90° with snap, 15° without, Shift 5°), Space puts it upright; stack parts keep only the yaw | done |
 | V5 | Picker part tooltip (mass, cost, size, stats, description), Shift expands | tooltip with title, subtitle, maker, mass, size, crew, tanks, thrust, Isp, description, research lock | done (no cost in our data) |
 | V6 | Staging stack panel with per-stage Δv/TWR/burn time, drag a part between stages | stage cards with icons (next to fire at the bottom), per-stage vacuum Δv, sea-level TWR and burn time from the server's StageReport, total Δv in the header, click selects, drag a part onto another stage card to move it, earlier/later buttons | done |
-| V7 | Parts manager on right click (part settings) | none | later |
+| V7 | Parts manager on right click (part settings) | right-click a part in the VAB: its stage, fuel crossfeed switch and a fill slider per tank resource (delta-v follows); no in-flight part actions yet | partly done |
 
 ### KSC, R&D, Mission Control, main menu
 
