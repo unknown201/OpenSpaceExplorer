@@ -945,6 +945,29 @@ impl FlightView {
                         let fraction =
                             driver.update(deployed, inp.ut, model.rig.clips[clip].duration);
                         animation = model.rig.deployment_sample(fraction);
+                    } else if p.part_id.starts_with("cargobay_") {
+                        // The bays' controllers have several clips (open, close, the "min" variants);
+                        // the open clip runs from shut to open.
+                        let open_clip =
+                            model.rig.clips.iter().position(|c| {
+                                c.name.ends_with("_open") && !c.name.contains("_min")
+                            });
+                        if let Some(clip) = open_clip {
+                            let open = readout
+                                .and_then(|f| f.cargo_bays.iter().find(|b| b.0 as usize == i))
+                                .is_some_and(|b| b.1);
+                            let driver = self
+                                .deployments
+                                .entry((inp.vessel.id, i))
+                                .or_insert_with(|| crate::animation::Deployment::new(open, inp.ut));
+                            let duration = model.rig.clips[clip].duration;
+                            let fraction = driver.update(open, inp.ut, duration);
+                            animation = Some(crate::animation::ClipSample {
+                                clip,
+                                time: duration * fraction,
+                                looping: false,
+                            });
+                        }
                     }
                 }
                 if let Some(m) = gpu.model(&name) {
@@ -1110,6 +1133,79 @@ impl FlightView {
                         .collect()
                 })
                 .unwrap_or_default();
+            for (fi, fname, flp, _, _) in &parts {
+                if !craft.parts[*fi].part_id.starts_with("fairing_") {
+                    continue;
+                }
+                let jettisoned = readout
+                    .and_then(|f| f.fairings.iter().find(|x| x.0 as usize == *fi))
+                    .is_some_and(|x| x.1);
+                let Some(base) = gpu.model(fname) else {
+                    continue;
+                };
+                if jettisoned {
+                    continue;
+                }
+                let ext = (base.bounds_max - base.bounds_min).as_dvec3();
+                let mut radius = ext.max_element() * 0.5;
+                let bottom = flp.y + 0.05;
+                // What it covers: the server's shielded parts above the base, else whatever stands on the
+                // base within its width.
+                let shielded = readout.map(|f| f.shielded.as_slice()).unwrap_or(&[]);
+                let base_radius = radius;
+                let covers = |j: usize, at: DVec3| {
+                    if !shielded.is_empty() {
+                        return shielded.contains(&(j as u16));
+                    }
+                    DVec3::new(at.x - flp.x, 0.0, at.z - flp.z).length() < base_radius * 1.2
+                };
+                let mut top = bottom;
+                for (j, jname, jlp, jlq, _) in &parts {
+                    if *j == *fi || !covers(*j, *jlp) || jlp.y < bottom - 0.05 {
+                        continue;
+                    }
+                    let Some(m) = gpu.model(jname) else {
+                        continue;
+                    };
+                    let (lo, hi) = (m.bounds_min.as_dvec3(), m.bounds_max.as_dvec3());
+                    for c in 0..8 {
+                        let corner = DVec3::new(
+                            if c & 1 == 0 { lo.x } else { hi.x },
+                            if c & 2 == 0 { lo.y } else { hi.y },
+                            if c & 4 == 0 { lo.z } else { hi.z },
+                        );
+                        let w = *jlp + *jlq * corner;
+                        top = top.max(w.y);
+                        let side = DVec3::new(w.x - flp.x, 0.0, w.z - flp.z).length();
+                        radius = radius.max(side + 0.05);
+                    }
+                }
+                if top - bottom < 0.1 {
+                    continue;
+                }
+                gpu.request_model("fx:fairing_ring", "assets/fx/fairing_ring.glb");
+                gpu.request_model("fx:fairing_nose", "assets/fx/fairing_nose.glb");
+                if !gpu.has_model("fx:fairing_ring") || !gpu.has_model("fx:fairing_nose") {
+                    continue;
+                }
+                // Straight rings up to the payload's top (less the nose's rounded shoulder), then the nose.
+                let rings = ((top - bottom - 0.4 * radius) / radius).ceil().max(0.0) as usize;
+                let mut shells = Vec::new();
+                for k in 0..rings {
+                    shells.push(("fx:fairing_ring", bottom + k as f64 * radius));
+                }
+                shells.push(("fx:fairing_nose", bottom + rings as f64 * radius));
+                for (model, y) in shells {
+                    let at = DVec3::new(flp.x, y, flp.z);
+                    let wpos = pos + vessel_rot * (at + DVec3::Y * lift);
+                    let mut it = DrawItem::lit(model.into(), wpos - cam, vessel_rot, radius, sun);
+                    it.ambient = part_ambient;
+                    it.fill_dir = up;
+                    it.fill = 0.25;
+                    it.sun = sun_share;
+                    items.push(it);
+                }
+            }
             for (i, name, lp, lq, animation) in parts {
                 if !gpu.has_model(&name) {
                     continue;

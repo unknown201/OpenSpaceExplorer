@@ -105,6 +105,29 @@ def ellipsoid(c, r, segments: int = 16, rings: int = 10):
     return pos, nrm, uv, tris
 
 
+def lathe(profile, segments: int = 32):
+    """A surface of revolution about +Y from (radius, y) points, outward normals from the profile slope."""
+    pos, nrm, uv, tris = [], [], [], []
+    for k, (r, y) in enumerate(profile):
+        a = profile[max(k - 1, 0)]
+        b = profile[min(k + 1, len(profile) - 1)]
+        dr, dy = b[0] - a[0], b[1] - a[1]
+        ln = math.hypot(dr, dy) or 1.0
+        nr, ny = dy / ln, -dr / ln
+        for sg in range(segments + 1):
+            ph = 2 * math.pi * sg / segments
+            c, sn = math.cos(ph), math.sin(ph)
+            pos.append((r * c, y, r * sn))
+            nrm.append((nr * c, ny, nr * sn))
+            uv.append((sg / segments, k / (len(profile) - 1)))
+    row = segments + 1
+    for k in range(len(profile) - 1):
+        for sg in range(segments):
+            a = k * row + sg
+            tris += [a, a + row, a + 1, a + 1, a + row, a + row + 1]
+    return pos, nrm, uv, tris
+
+
 def box(lo, hi):
     """An axis-aligned box (one winding; `solid` adds the other side)."""
     pos, nrm, uv, tris = [], [], [], []
@@ -187,6 +210,18 @@ def main() -> int:
     ]
     g.roots.append(g.node("flag", (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0), (1.0, 1.0, 1.0), None, parts))
     print(f"fx/flag.glb: {g.write(out / 'flag.glb', {'source': 'tools/make_fx.py'})} bytes")
+
+    # Payload fairing shells (the original's are procedural): a tube of radius 1 and height 1 stacked as
+    # needed, and a rounded nose of radius 1 and height 1.6, both drawn at the fairing base's radius.
+    white = [0.86, 0.86, 0.84, 1.0]
+    g = Glb()
+    g.roots.append(solid(g, "fairing_ring", white, lathe([(1.0, 0.0), (1.0, 1.0)])))
+    print(f"fx/fairing_ring.glb: {g.write(out / 'fairing_ring.glb', {'source': 'tools/make_fx.py'})} bytes")
+    g = Glb()
+    h = 1.6
+    nose = [((1.0 - (k / 12) ** 2) ** 0.5 * 1.0 if k < 12 else 0.0, h * k / 12) for k in range(13)]
+    g.roots.append(solid(g, "fairing_nose", white, lathe(nose)))
+    print(f"fx/fairing_nose.glb: {g.write(out / 'fairing_nose.glb', {'source': 'tools/make_fx.py'})} bytes")
     return 0
 
 

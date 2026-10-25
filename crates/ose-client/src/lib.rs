@@ -6245,12 +6245,15 @@ impl App {
                 &ClientMessage::LaunchSavedAt {
                     id,
                     site: self.launch_site.clone(),
-                    // Before the roster arrives the server picks the crew itself.
-                    crew: (!self.roster.is_empty() && self.craft_seats(id) > 0)
+                    // The server fills the seats itself unless the player chose the crew for this craft (a
+                    // client-side fill could name a Kerbal the server has just sent flying).
+                    crew: (self.lp_crew_for == Some(id) && !self.roster.is_empty())
                         .then(|| self.launch_crew(id)),
                 },
             );
         }
+        // The picks were for this launch; the next one starts from the roster again.
+        self.lp_crew_for = None;
     }
 
     /// Put a library craft straight into orbit (the earlier shortcut, kept for testing orbits).
