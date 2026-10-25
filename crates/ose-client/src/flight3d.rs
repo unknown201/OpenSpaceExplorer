@@ -223,7 +223,46 @@ pub fn jettisoned(craft: &Craft, fired: usize, is_decoupler: &dyn Fn(&str) -> bo
     gone
 }
 
+/// The original's flight camera modes (`KSP.Sim/FlightCameraMode.cs`), cycled with V.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CameraMode {
+    /// Free near the ground and in the air, orbital above the atmosphere.
+    #[default]
+    Auto,
+    /// Turns with the local horizon: up is away from the body.
+    Free,
+    /// Up is the orbit normal, so the orbit stays level on screen.
+    Orbital,
+    /// Behind the vessel along its velocity.
+    Chase,
+    /// Turns with the vessel.
+    Locked,
+}
+
+impl CameraMode {
+    pub fn next(self) -> CameraMode {
+        match self {
+            CameraMode::Auto => CameraMode::Free,
+            CameraMode::Free => CameraMode::Orbital,
+            CameraMode::Orbital => CameraMode::Chase,
+            CameraMode::Chase => CameraMode::Locked,
+            CameraMode::Locked => CameraMode::Auto,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            CameraMode::Auto => "Auto",
+            CameraMode::Free => "Free",
+            CameraMode::Orbital => "Orbital",
+            CameraMode::Chase => "Chase",
+            CameraMode::Locked => "Locked",
+        }
+    }
+}
+
 pub struct FlightView {
+    pub mode: CameraMode,
     pub yaw: f64,
     pub pitch: f64,
     pub distance: f64,
@@ -283,6 +322,7 @@ fn quat_from_basis(x: DVec3, y: DVec3, z: DVec3) -> DQuat {
 impl FlightView {
     pub fn new() -> FlightView {
         FlightView {
+            mode: CameraMode::Auto,
             yaw: 0.8,
             pitch: 0.25,
             distance: 35.0,
@@ -556,13 +596,41 @@ impl FlightView {
                 }),
             });
         }
-        let offs = self.pitch.cos() * (self.yaw.cos() * north + self.yaw.sin() * east)
-            + self.pitch.sin() * up;
+        // The camera's frame for the mode: (forward-ish, right-ish, up) axes the yaw and pitch turn around.
+        let alt_m = r.length() - inp.body_radius;
+        let mode = match self.mode {
+            CameraMode::Auto if alt_m > inp.atmosphere_m.max(30_000.0) => CameraMode::Orbital,
+            CameraMode::Auto => CameraMode::Free,
+            m => m,
+        };
+        let orbit_up = dir_to_model(r, r.cross(v_rel), spin, inp.ut).normalize_or_zero();
+        let v_surf_m = dir_to_model(
+            r,
+            v_rel - DVec3::new(0.0, 0.0, spin.omega()).cross(r),
+            spin,
+            inp.ut,
+        )
+        .normalize_or_zero();
+        let frame = |b_up: DVec3, hint: DVec3| {
+            let b_n = (hint - b_up * b_up.dot(hint)).normalize_or_zero();
+            (b_up.length() > 0.5 && b_n.length() > 0.5).then(|| (b_n, b_up.cross(b_n), b_up))
+        };
+        let (b_n, b_e, b_u) = match mode {
+            CameraMode::Orbital => frame(orbit_up, north),
+            // Behind the vessel: the default yaw looks along the velocity.
+            CameraMode::Chase => frame(up, -v_surf_m).or_else(|| frame(up, -dir)),
+            CameraMode::Locked => frame(vessel_rot * DVec3::Y, vessel_rot * DVec3::Z),
+            _ => None,
+        }
+        .unwrap_or((north, east, up));
+        let cam_up = b_u;
+        let offs = self.pitch.cos() * (self.yaw.cos() * b_n + self.yaw.sin() * b_e)
+            + self.pitch.sin() * b_u;
         let cam = pos + offs * self.distance;
         let alt = r.length() - inp.body_radius;
         let near = (self.distance * 0.02).clamp(0.3, 5_000.0);
         let far = (self.distance * 50.0).clamp(4.0e6, 5.0e8);
-        gpu.set_camera(-offs, up, 60f64.to_radians(), near, far);
+        gpu.set_camera(-offs, cam_up, 60f64.to_radians(), near, far);
 
         let sun = dir_to_model(
             r,

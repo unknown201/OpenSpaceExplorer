@@ -48,7 +48,7 @@ Camera rule that runs through every map: **the right button drags the camera, th
 | F5 | Rovers: W/S wheel throttle, A/D steer, B brakes | same, through `Drive` while landed | done |
 | F6 | Staging stack: one card per stage with part icons and fuel bars, Space fires the next | one card per stage still to fire with part and parachute icons, the next one lit at the bottom; no per-stage fuel bars | partly done |
 | F7 | Orbital readout Ap/Pe with time to each; altimeter sea level / terrain toggle; speed orbit / surface / target toggle | Ap/Pe with countdowns, SURFACE/ORBIT speed toggle; no terrain altitude or target speed | done (AGL, target: later) |
-| F8 | Right-drag orbits the camera, wheel zooms, V cycles camera modes, Home resets | right-drag (and left) orbits, Home resets; no V camera modes yet | partly done |
+| F8 | Right-drag orbits the camera, wheel zooms, V cycles camera modes, Home resets | right-drag (and left) orbits, Home resets, V cycles Auto, Free, Orbital, Chase and Locked | done |
 | F9 | `]` `[` switch to the next/previous vessel nearby | on the map `]` `[` change the followed vessel; switching control in flight needs the flight view to load another craft | partly done |
 | F10 | F to board/interact on EVA, EVA from the crew portrait | protocol has GoEva/Board/PlantFlag; no client keys | open |
 | F11 | Vessel labels F4 | F4 toggles labels | done |

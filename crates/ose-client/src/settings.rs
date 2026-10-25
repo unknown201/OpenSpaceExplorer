@@ -25,7 +25,7 @@ pub const INPUT: &[(&str, &[Binding])] = &[
             ("W / S, A / D landed", "Wheel throttle and steering", true),
             ("I J K L H N", "Translate (RCS)", false),
             ("M", "Map view", true),
-            ("V", "Camera mode", false),
+            ("V", "Camera mode: auto, free, orbital, chase, locked", true),
             ("] / [ (map)", "Next / previous vessel", true),
             ("Right mouse drag", "Look around", true),
             ("Mouse wheel", "Zoom", true),

@@ -2157,6 +2157,15 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                         app.map_mode = !app.map_mode;
                         true
                     }
+                    "KeyV" if !ev.repeat() => {
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            app.flight3d.mode = app.flight3d.mode.next();
+                            let name = app.flight3d.mode.name();
+                            hud::push(&app.doc, &format!("Camera: {name}"), "passive");
+                        }
+                        true
+                    }
                     "KeyU" | "KeyR" if !ev.repeat() => {
                         app.hud_button(if code == "KeyU" {
                             "fh-act-lights"
