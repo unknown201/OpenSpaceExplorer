@@ -3497,6 +3497,22 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                 app.flight3d.orbit(nx - x, ny - y);
                 app.lesson_event("CameraRotatedMessage");
                 app.drag = Some((nx, ny));
+            } else {
+                // The part under the pointer lights up, as the original's hover highlight in flight.
+                let rect = app.gpu_canvas.get_bounding_client_rect();
+                let (px, py) = (
+                    (ev.client_x() as f64 - rect.left()) * app.dpr,
+                    (ev.client_y() as f64 - rect.top()) * app.dpr,
+                );
+                let over = ev
+                    .target()
+                    .and_then(|t| t.dyn_into::<Element>().ok())
+                    .is_some_and(|e| e.id() == "gpu");
+                app.flight3d.hovered = if over {
+                    app.gpu.as_ref().and_then(|g| app.flight3d.pick(g, px, py))
+                } else {
+                    None
+                };
             }
             return;
         }
@@ -11126,6 +11142,8 @@ impl App {
                 _ => &[],
             },
         };
+        // The part whose window is open stays lit while the window is.
+        self.flight3d.selected = self.flight_pam;
         let drawn = self.flight3d.frame(gpu, &inp);
         // The aero overlay's arrows, drawn over the view.
         if let Some(svg) = self.doc.get_element_by_id("aero-svg") {

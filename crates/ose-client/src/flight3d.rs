@@ -516,6 +516,10 @@ pub struct FlightView {
     /// Part boxes relative to the camera (craft part index, min, max) and the camera's forward and up from
     /// the last frame, for picking a part under the pointer (the part window on right click).
     pick_boxes: Vec<(usize, DVec3, DVec3)>,
+    /// The part under the pointer and the part whose window is open: both drawn lit, as the original's
+    /// highlights.
+    pub hovered: Option<usize>,
+    pub selected: Option<usize>,
     pick_cam: (DVec3, DVec3),
     /// Terrain, ocean, sky and clouds of the body (planet.rs), created with the first frame.
     planet: Option<crate::planet::PlanetRenderer>,
@@ -610,6 +614,8 @@ impl FlightView {
             nav: None,
             agl_m: None,
             pick_boxes: Vec::new(),
+            hovered: None,
+            selected: None,
             pick_cam: (DVec3::NEG_Z, DVec3::Y),
             planet: None,
             fx_nozzles: Default::default(),
@@ -1467,6 +1473,13 @@ impl FlightView {
                 let mut it = DrawItem::lit(name, wpos - cam, vessel_rot * lq, 1.0, sun);
                 it.animation = animation;
                 it.paint = part_paint(craft, i, inp.paint);
+                if self.selected == Some(i) {
+                    it.color = [0.65, 1.0, 0.7, 1.0];
+                    it.ambient = it.ambient.max(0.6);
+                } else if self.hovered == Some(i) {
+                    it.color = [0.75, 0.9, 1.2, 1.0];
+                    it.ambient = it.ambient.max(0.6);
+                }
                 if bare_engine(craft, i) {
                     it.hide_containing = Some("fairing");
                 }
