@@ -185,6 +185,7 @@ struct App {
     /// Flight HUD: speed readout in orbit (true) or surface mode, brakes latched from the action bar.
     speed_orbit: bool,
     brakes_latched: bool,
+    toasts: hud::Toasts,
     gpu_canvas: HtmlCanvasElement,
     /// 3D orbit camera: yaw and pitch (radians) around the focus, distance in kilometres.
     orbit_yaw: f64,
@@ -421,6 +422,7 @@ pub fn start() -> Result<(), JsValue> {
         drive_sent: (0.0, 0.0, false),
         speed_orbit: false,
         brakes_latched: false,
+        toasts: hud::Toasts::default(),
         gpu_canvas: get("gpu")?.dyn_into()?,
         orbit_yaw: 0.6,
         orbit_pitch: 0.5,
@@ -4426,6 +4428,7 @@ impl App {
         }
         self.update_flight_hud();
         self.update_flight_instruments();
+        self.toasts.watch(&self.doc, "fh-note", "alert");
         self.flight_keys_tick(now);
         #[cfg(target_arch = "wasm32")]
         if let (Some(p), Some(gpu)) = (self.planet_preview.as_mut(), self.gpu.as_mut()) {
@@ -4908,6 +4911,64 @@ impl App {
                     None => {
                         style.set_property("visibility", "hidden").ok();
                     }
+                }
+            }
+        }
+        // Apoapsis and periapsis markers on the followed vessel's current patch, with the altitude and the time
+        // to each (the original's Map3DTrajectoryEvents Ap/Pe markers).
+        let marked = self.flying.or(self.follow);
+        for (id, nu, label) in [
+            ("map-ap", std::f64::consts::PI, "Ap"),
+            ("map-pe", 0.0, "Pe"),
+        ] {
+            let el = match self.doc.get_element_by_id(id) {
+                Some(e) => e,
+                None => {
+                    let Ok(e) = self.doc.create_element("div") else {
+                        continue;
+                    };
+                    e.set_id(id);
+                    e.set_class_name("apsis");
+                    e.set_attribute("data-ose", id).ok();
+                    self.labels.append_child(&e).ok();
+                    e
+                }
+            };
+            let Some(el) = el.dyn_ref::<HtmlElement>() else {
+                continue;
+            };
+            let at = marked
+                .and_then(|vid| scene.vessel(vid))
+                .and_then(|v| {
+                    let patch = scene.trajectories.get(&v.id).and_then(|p| p.first());
+                    let (bi, elements) = match patch {
+                        Some(p) => (p.body as usize, p.orbit),
+                        None => (v.reference_body as usize, v.orbit),
+                    };
+                    let body = scene.bodies.get(bi)?;
+                    if nu > 0.0 && elements.eccentricity >= 1.0 {
+                        return None;
+                    }
+                    let orbit = scene::orbit_from(body.mu, &elements);
+                    let (rel, _) = orbit.state_at_true_anomaly(nu);
+                    let (ap, pe) = hud::apsides(&elements, body.radius_m, body.mu, ut);
+                    let (alt, t) = if nu > 0.0 { ap? } else { pe };
+                    Some((positions[bi] + rel, alt, t))
+                })
+                .and_then(|(p, alt, t)| project(to_km(p)).map(|xy| (xy, alt, t)));
+            let style = el.style();
+            match at {
+                Some(((x, y), alt, t)) => {
+                    style.set_property("left", &format!("{x:.1}px")).ok();
+                    style.set_property("top", &format!("{y:.1}px")).ok();
+                    style.set_property("visibility", "visible").ok();
+                    let text = format!("{label} {}  {}", hud::fmt_dist(alt), hud::fmt_dt(t));
+                    if el.text_content().as_deref() != Some(text.as_str()) {
+                        el.set_text_content(Some(&text));
+                    }
+                }
+                None => {
+                    style.set_property("visibility", "hidden").ok();
                 }
             }
         }

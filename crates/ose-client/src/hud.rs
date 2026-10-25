@@ -292,6 +292,60 @@ pub fn update(doc: &Document, s: &HudState) {
     );
 }
 
+/// Notification toasts (`NotificationManager`): short messages stacked at the top right that fade after a few
+/// seconds. Flight messages still land in `#fh-note` (the tests read it); `watch` turns each new one into a toast.
+#[derive(Default)]
+pub struct Toasts {
+    seen: std::collections::HashMap<String, String>,
+}
+
+impl Toasts {
+    /// Toast the text of element `id` when it changes to something new and non-empty.
+    pub fn watch(&mut self, doc: &Document, id: &str, tier: &str) {
+        let text = doc
+            .get_element_by_id(id)
+            .and_then(|e| e.text_content())
+            .unwrap_or_default();
+        let last = self.seen.entry(id.to_string()).or_default();
+        if *last != text {
+            *last = text.clone();
+            if !text.trim().is_empty() {
+                push(doc, &text, tier);
+            }
+        }
+    }
+}
+
+/// Show one toast; `tier` is a class: `alert`, `passive` or `triumph`, as the original's tiers.
+pub fn push(doc: &Document, text: &str, tier: &str) {
+    let Some(stack) = doc.get_element_by_id("toasts") else {
+        return;
+    };
+    let Ok(el) = doc.create_element("div") else {
+        return;
+    };
+    el.set_class_name(&format!("toast {tier}"));
+    el.set_attribute("data-ose", "toast").ok();
+    el.set_text_content(Some(text));
+    stack.append_child(&el).ok();
+    // At most four at once; the oldest goes first.
+    while stack.child_element_count() > 4 {
+        if let Some(first) = stack.first_element_child() {
+            first.remove();
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        use wasm_bindgen::JsCast;
+        let gone = el.clone();
+        let cb = wasm_bindgen::closure::Closure::once_into_js(move || gone.remove());
+        if let Some(w) = web_sys::window() {
+            w.set_timeout_with_callback_and_timeout_and_arguments_0(cb.unchecked_ref(), 6000)
+                .ok();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

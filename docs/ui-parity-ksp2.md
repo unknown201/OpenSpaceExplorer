@@ -32,7 +32,7 @@ Camera rule that runs through every map: **the right button drags the camera, th
 | G1 | Warp `.` `,` `/` everywhere in session; the warp widget stays visible in flight (top left) | `.` `,` `/` work; UT and warp stay up in flight | done |
 | G2 | F2 hides all UI (screenshots) | F2 fades the interface | done |
 | G3 | Tooltips on every HUD control, naming the key; Shift expands | a few `title` attributes, many controls without | open |
-| G4 | Notification toasts (warp limited, out of charge, lost link, vessel lost ...) | one-line note inside the menu card; flight warnings in a small label | open |
+| G4 | Notification toasts (warp limited, out of charge, lost link, vessel lost ...) | flight messages and refusals come up as toasts at the top right | done (more event sources later) |
 | G5 | F5/F9 quicksave/quickload | missing | server |
 | G6 | Settings screen: input bindings, audio sliders, UI scale, tooltips on/off, graphics | button disabled | open (client-only settings) |
 | G7 | Esc menu: resume, save, load, revert to launch/VAB, recover, KSC, Tracking Station, Mission Control, R&D, VAB, settings, quit | resume, KSC, sessions, sound, leave | other thread (restyle in progress); revert/save/load server |
@@ -60,8 +60,8 @@ Camera rule that runs through every map: **the right button drags the camera, th
 |---|---|---|---|
 | M1 | Right-drag rotates, Home resets, M back to flight, `]` `[` cycle focus | right-drag (and left) rotates, Home and F frame; no `]` `[` cycling yet | partly done |
 | M2 | Click an orbit to add a node; six-handle gizmo dragged in 3D; warp-to and trash on the node | "Add node" button and four sliders | open |
-| M3 | Ap/Pe/SOI markers with tooltips (time and altitude) | none | open |
-| M4 | Vessel labels drawn once | each vessel label appears twice in the map (screenshot 11) | open (bug) |
+| M3 | Ap/Pe/SOI markers with tooltips (time and altitude) | Ap and Pe markers with altitude and countdown on the flown vessel's orbit; no SOI or closest-approach markers yet | partly done |
+| M4 | Vessel labels drawn once | not a bug: the test pilot had joined twice and owned two probes | closed |
 | M5 | Tracking Station object list, filters, focus/control/recover | rebuilt by "Build 3D world and menu replica" (unpushed) | other thread |
 
 ### VAB (Josh's #6)
