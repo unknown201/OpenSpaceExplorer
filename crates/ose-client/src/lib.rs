@@ -2187,7 +2187,8 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                         true
                     }
                     "Space" => {
-                        if !ev.repeat() {
+                        // On EVA Space is the jetpack (held, flight_keys_tick); a Kerbal has nothing to stage.
+                        if !ev.repeat() && !app.flying_eva() {
                             app.flight_stage();
                         }
                         true
@@ -4622,6 +4623,66 @@ impl App {
     /// Flight keys that act while held, once per frame: W/S/A/D turn the attitude target at a steady rate
     /// (CapsLock for precision), Shift/Ctrl move the throttle at 100% a second, and on the ground W/S/A/D and
     /// B also drive the wheels (the original binds both, `WheelThrottle`/`WheelSteer`/`WheelBrakes`).
+    /// True while the flown vessel is a Kerbal on EVA.
+    fn flying_eva(&self) -> bool {
+        self.flying
+            .and_then(|id| self.scene.as_ref()?.vessel(id))
+            .and_then(|v| v.flight.as_ref())
+            .is_some_and(|f| f.eva)
+    }
+
+    /// A Kerbal on EVA, as the original's EVA keys: W walks ahead, S backs up, A/D turn, Space fires the
+    /// jetpack straight up. The server walks a Kerbal with throttle and a level heading, and flies the jetpack
+    /// when the attitude points steeply up.
+    fn eva_keys_tick(&mut self, now: f64, dt: f64) {
+        let k = &self.keys;
+        let (walk, turn, jet) = (-k.pitch(), k.yaw(), k.is("Space"));
+        let heading = match self.attitude {
+            ose_net::AttitudeMode::PitchHeading { heading_deg, .. } => heading_deg,
+            _ => self.facing_pitch_heading().map(|(_, h)| h).unwrap_or(90.0),
+        };
+        let heading = (heading + turn * 90.0 * dt).rem_euclid(360.0);
+        let (pitch_deg, heading_deg, throttle) = if jet {
+            (85.0, heading, 1.0)
+        } else if walk < 0.0 {
+            (0.0, (heading + 180.0).rem_euclid(360.0), 1.0)
+        } else {
+            (0.0, heading, walk.max(0.0))
+        };
+        let attitude = ose_net::AttitudeMode::PitchHeading {
+            pitch_deg,
+            // Backing up faces the walk direction for the server; the kept heading stays the Kerbal's own.
+            heading_deg,
+        };
+        if walk < 0.0 {
+            self.attitude = ose_net::AttitudeMode::PitchHeading {
+                pitch_deg: 0.0,
+                heading_deg: heading,
+            };
+        } else {
+            self.attitude = attitude;
+        }
+        let changed = throttle != self.throttle || turn != 0.0 || jet || walk != 0.0;
+        if changed || self.controls_dirty {
+            self.throttle = throttle;
+            self.controls_dirty = true;
+        }
+        if self.controls_dirty && now - self.controls_sent_ms >= 100.0 {
+            self.controls_dirty = false;
+            self.controls_sent_ms = now;
+            if let (Some(vessel), Some(ws)) = (self.flying, &self.ws) {
+                send(
+                    ws,
+                    &ClientMessage::SetControls {
+                        vessel,
+                        throttle,
+                        attitude,
+                    },
+                );
+            }
+        }
+    }
+
     fn flight_keys_tick(&mut self, now: f64) {
         let dt = ((now - self.keys_tick_ms) / 1000.0).clamp(0.0, 0.1);
         self.keys_tick_ms = now;
@@ -4633,6 +4694,10 @@ impl App {
         let Some(vessel) = self.flying else { return };
         if menu_open {
             self.keys.clear();
+        }
+        if self.flying_eva() {
+            self.eva_keys_tick(now, dt);
+            return;
         }
         let k = &self.keys;
         let (pitch_in, yaw_in, thr_in) = (k.pitch(), k.yaw(), k.throttle());
@@ -5038,6 +5103,33 @@ impl App {
         );
         set_text(&self.doc, "fh-situation", &format!("{:?}", f.situation));
         self.update_crew_buttons(f);
+        // Where the vessel stands on its body (latitude, longitude in degrees), for the walking test hook.
+        if let Some(scene) = &self.scene {
+            let rb = v.reference_body as usize;
+            let ut = self.time.ut_at(now_ms());
+            let r = scene.vessel_position(v, ut) - scene.position(rb, ut);
+            let spin = self
+                .body_spins
+                .get(rb)
+                .map(|b| {
+                    let w = if b.rotation_period_s > 0.0 {
+                        std::f64::consts::TAU / b.rotation_period_s
+                    } else {
+                        0.0
+                    };
+                    b.initial_rotation_deg.to_radians() + w * ut
+                })
+                .unwrap_or(0.0);
+            let lat = (r.z / r.length().max(1.0))
+                .clamp(-1.0, 1.0)
+                .asin()
+                .to_degrees();
+            let lon = (r.y.atan2(r.x) - spin).to_degrees().rem_euclid(360.0);
+            if let Some(el) = self.doc.get_element_by_id("flight-hud") {
+                el.set_attribute("data-ose-latlon", &format!("{lat:.6},{lon:.6}"))
+                    .ok();
+            }
+        }
         // Timed experiments counting down from the server's last report.
         let elapsed = (now_ms() - self.running_since_ms) / 1000.0;
         let running: Vec<String> = self

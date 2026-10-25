@@ -800,6 +800,23 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
         await restore();
         return failed(`EVA did not hand the view to a Kerbal (${why})`);
       }
+      // Walk: hold W and the Kerbal moves along the ground (data-ose-latlon, degrees; Kerbin's radius turns
+      // them into metres).
+      const latlon = async () => ((await hud.first().getAttribute("data-ose-latlon")) ?? "0,0").split(",").map(Number);
+      await sleep(1000);
+      const [la0, lo0] = await latlon();
+      await page.keyboard.down("KeyW");
+      await sleep(2500);
+      await page.keyboard.up("KeyW");
+      await sleep(500);
+      const [la1, lo1] = await latlon();
+      const deg = Math.hypot(la1 - la0, (lo1 - lo0) * Math.cos((la0 * Math.PI) / 180));
+      const walked = (deg * Math.PI * 600_000) / 180;
+      if (!(walked > 1)) {
+        await restore();
+        return failed(`holding W did not walk the Kerbal (moved ${walked.toFixed(2)} m)`);
+      }
+      await sleep(1500);
       const flag = page.locator('[data-ose="flight-flag"]');
       try {
         await flag.first().waitFor({ state: "visible", timeout: 8_000 });
@@ -822,7 +839,7 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
       const why = (await page.locator("#fh-note").textContent()) ?? "";
       await restore();
       if (!boarded) return failed(`boarding the capsule again: ${why}`);
-      return passed("EVA, flag planted, boarded the capsule again");
+      return passed(`EVA, walked ${walked.toFixed(1)} m, flag planted, boarded the capsule again`);
     }),
   );
 
