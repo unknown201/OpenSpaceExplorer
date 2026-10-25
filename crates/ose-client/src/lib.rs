@@ -1652,6 +1652,21 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
     for id in ["fh-eva", "fh-board", "fh-flag", "fh-undock"] {
         wire(id, Box::new(move |a| a.borrow().crew_action(id)))?;
     }
+    // A crew portrait's EVA button sends that Kerbal out.
+    if let Some(box_el) = doc.get_element_by_id("fh-crewbox") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let name = ev
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .and_then(|e| e.get_attribute("data-eva"));
+            if let Some(name) = name {
+                a.borrow().crew_eva(Some(name));
+            }
+        });
+        box_el.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
     wire("fh-transmit", Box::new(|a| a.borrow().flight_science(1)))?;
     wire("fh-recover", Box::new(|a| a.borrow().flight_science(2)))?;
     wire("rnd-back", Box::new(|a| a.borrow().open_ksc()))?;
@@ -6066,11 +6081,8 @@ impl App {
         let Some(ws) = &self.ws else { return };
         let msg = match id {
             "fh-eva" => {
-                self.ftue("FTUE_First_EVA");
-                ClientMessage::GoEva {
-                    vessel,
-                    kerbal: None,
-                }
+                self.crew_eva(None);
+                return;
             }
             "fh-board" => {
                 let Some(target) = self.board_candidate() else {
@@ -6090,6 +6102,15 @@ impl App {
             _ => "fh-undock",
         }));
         send(ws, &msg);
+    }
+
+    /// Send a Kerbal of the flown vessel out on EVA (`None`: whoever the server picks).
+    fn crew_eva(&self, kerbal: Option<String>) {
+        let Some(vessel) = self.flying else { return };
+        let Some(ws) = &self.ws else { return };
+        self.ftue("FTUE_First_EVA");
+        self.crew_pending.set(Some("fh-eva"));
+        send(ws, &ClientMessage::GoEva { vessel, kerbal });
     }
 
     /// The nearest other vessel (not a Kerbal or a flag) within 10 m of the Kerbal flown.
@@ -6113,6 +6134,14 @@ impl App {
     /// the ground), Undock while docked.
     fn update_crew_buttons(&self, f: &ose_net::FlightReadout) {
         let landed = matches!(f.situation, ose_net::FlightSituation::Landed);
+        if let Some(el) = self.doc.get_element_by_id("fh-crewbox") {
+            let html = hud::crew_html(&f.crew, !f.eva);
+            let key = format!("{}:{}", html.len(), hud::fnv(&html));
+            if el.get_attribute("data-ose-key").as_deref() != Some(key.as_str()) {
+                el.set_inner_html(&html);
+                el.set_attribute("data-ose-key", &key).ok();
+            }
+        }
         for (id, show) in [
             ("fh-eva", !f.eva && !f.crew.is_empty()),
             ("fh-board", f.eva),

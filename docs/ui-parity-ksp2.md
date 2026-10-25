@@ -57,6 +57,8 @@ Camera rule that runs through every map: **the right button drags the camera, th
 | F11 | Vessel labels F4 | F4 toggles labels | done |
 | F12 | Go button / pre-launch throttle | not needed (no launch sequence) | skip |
 | F13 | Vessel status: mission elapsed time; flight report on recovery or loss | MET under the altimeter; a flight report (mission time, highest altitude, fastest speed, bodies visited, science) when the vessel is recovered or lost | done |
+| F13 | Kerbal portraits at the bottom right: each Kerbal aboard with a name plate, EVA from the portrait | a portrait per Kerbal aboard (the original's Kerbal icon on a TV-lines screen, no live IVA camera) with its name and an EVA button that sends that Kerbal out | done |
+| F14 | Resource Manager app: every resource on the vessel and in the current stage, with bars | not yet: the server sends only the burning stage's propellant and electric charge (asked for per-resource totals) | to do |
 
 ### Map view and Tracking Station
 
