@@ -34,7 +34,8 @@ struct Frame {
     star_z: vec4<f32>,
     // the camera's model-frame position modulo TILE_PERIOD (m)
     cam_tile: vec4<f32>,
-    // planet detail: x terrain shadow steps, y volume cloud steps, z per-pixel relief (0/1), w level
+    // planet detail: x terrain shadow steps, y volume cloud steps, z per-pixel relief (0/1); w: the props'
+    // sunlight scale (matching the terrain's exposure)
     quality: vec4<f32>,
 };
 
@@ -1352,10 +1353,15 @@ fn fs_far(in: FOut) -> @location(0) vec4<f32> {
     }
     let n = normalize(in.up * 0.6 + in.facing * 0.4);
     let p_km = frame.cam_km.xyz + in.rel * 0.001;
-    let light = sun_and_sky(p_km, n, frame.sun.xyz);
-    let shade = cloud_shadow(normalize(p_km) * frame.solar.w, frame.sun.xyz);
+    let sun = frame.sun.xyz;
+    let shade = cloud_shadow(normalize(p_km) * frame.solar.w, sun);
     let albedo = min(tex.rgb * in.colour, vec3<f32>(1.0));
-    var radiance = albedo / PI * (light.sun * shade + light.sky) + albedo * ambient(in.up, frame.sun.xyz);
+    // Lit as the renderer lights the props' meshes (ambient 0.3, the rest by the sun, no exposure), so a prop
+    // keeps its brightness when it turns into its impostor; on a dark body the planet's exposure would blow
+    // bright rocks out to white. That colour is taken back through the tone map so the air can veil it.
+    let diffuse = max(dot(n, sun), 0.0) * eclipse(p_km, sun) * shade;
+    let lit = min(albedo * (0.3 + 0.7 * diffuse * frame.quality.w), vec3<f32>(0.95));
+    var radiance = -log(vec3<f32>(1.0) - lit) / max(frame.sun.w, 0.1);
     radiance = through_air(radiance, p_km);
     return vec4<f32>(tonemap(radiance), 1.0);
 }

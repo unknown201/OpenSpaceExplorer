@@ -242,6 +242,8 @@ pub struct PlanetRenderer {
     under_water: bool,
     /// draw the underwater light shafts (not on low detail)
     shafts: bool,
+    /// sunlight scale for props and their impostors, matching the terrain's exposure
+    prop_sun: f32,
     grass_pipeline: wgpu::RenderPipeline,
     far_pipeline: wgpu::RenderPipeline,
     far_chunk_buf: wgpu::Buffer,
@@ -830,6 +832,7 @@ impl PlanetRenderer {
             shaft_pipeline,
             under_water: false,
             shafts: false,
+            prop_sun: 1.0,
             waves_tex,
             waves_view,
             ocean: None,
@@ -1720,6 +1723,12 @@ impl PlanetRenderer {
             Some(e) => (e * 0.1).max(2.0),
             None => auto.clamp(4.0, 20.0),
         };
+        // Props (rocks, trees: the renderer's own lit shader, no exposure) get their sunlight scaled to what the
+        // terrain receives through this exposure, so they are not darker than the ground they stand on.
+        // Eased on very dark bodies (Moho's exposure is ~10): their rocks reuse bright stock textures that would
+        // blow out to white.
+        self.prop_sun = ((exposure * solar_mean / std::f64::consts::PI) as f32).clamp(1.0, 2.5)
+            * (6.0 / exposure as f32).min(1.0);
         // FFT waves while the camera is low over an ocean world with a spectrum
         let waves_live = has_ocean
             && quality() > 0
@@ -1822,7 +1831,7 @@ impl PlanetRenderer {
                     [0.0, 10.0, 20.0][q as usize],
                     [0.0, 24.0, 48.0][q as usize],
                     f32::from(u8::from(q > 0)),
-                    q as f32,
+                    self.prop_sun,
                 ]
             },
             cam_tile: [
@@ -2091,6 +2100,7 @@ impl PlanetRenderer {
                 view.sun,
             );
             it.ambient = 0.3;
+            it.sun = self.prop_sun;
             it.color = [dim, dim, dim, 1.0];
             out.push(it);
         }

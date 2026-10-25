@@ -197,3 +197,10 @@ the terrain shadow and volume cloud march steps and keeps grass within 55 m; low
 only), terrain shadows, per-pixel relief, FFT sea (the analytic waves), light shafts, grass or far impostors. At 5K
 on the dev machine: Kerbin meadow 314 / 214 / 183 fps (low / medium / high), Mun 505 / - / 345.
 
+Minmus's scaled albedo (`minmus_scaled_d`, BC7) is the only one imported as linear (`m_ColorSpace` 0); the export
+now sRGB-encodes linear-flagged albedo, which lifts Minmus from near-black teal to its pale grey-mint with teal flats
+(mean albedo 0.033 -> 0.19). Props: the renderer lights rock and tree meshes as albedo x (0.3 + 0.7 x sun) with no
+exposure, darker than the terrain beside them; their sunlight is now scaled to the terrain's exposure (x1..2.5,
+eased above exposure 6 because dark bodies' rocks reuse bright stock textures), and the far impostors are lit the
+same way (then taken back through the tone map for the aerial haze) so a prop keeps its brightness at the switch.
+

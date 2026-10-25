@@ -108,6 +108,17 @@ def half_bytes(tex_obj, shape: tuple[int, ...]) -> bytes:
 GRAPHICS_TO_TEXTURE_FORMAT = {97: 10, 96: 10, 100: 12, 101: 12, 102: 26, 8: 4, 4: 4}
 
 
+def linear_to_srgb_image(img):
+    """Encode an image's RGB from linear to sRGB (alpha untouched)."""
+    import numpy as np
+    from PIL import Image
+
+    a = np.asarray(img.convert("RGBA")).astype(np.float64) / 255.0
+    c = a[..., :3]
+    a[..., :3] = np.where(c <= 0.0031308, c * 12.92, 1.055 * np.power(c, 1.0 / 2.4) - 0.055)
+    return Image.fromarray(np.clip(a * 255.0 + 0.5, 0, 255).astype(np.uint8), "RGBA")
+
+
 def array_slices(arr):
     """Mip 0 of every slice of a Texture2DArray as PIL images (the data streams from the bundle's .resS)."""
     from UnityPy.enums import TextureFormat
@@ -285,6 +296,10 @@ def export_body(bid: str, bundles: Path, out_root: Path, args) -> dict | None:
         alb = tex_obj("_AlbedoScaledTex")
         if alb is not None:
             img = alb.read().image
+            # A texture imported as linear (m_ColorSpace 0: Minmus's) holds linear albedo; the client samples
+            # albedo.jpg as sRGB, so encode it (raw, Minmus rendered several times too dark).
+            if alb.read_typetree().get("m_ColorSpace", 1) == 0:
+                img = linear_to_srgb_image(img)
             save_image(img, out / "albedo.jpg", (args.albedo, args.albedo // 2), "RGB")
             # mean linear albedo, area-weighted (equirectangular rows shrink with cos(latitude)), for exposure
             import numpy as np
