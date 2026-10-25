@@ -6006,7 +6006,7 @@ impl App {
                 stages = c.stages,
                 st = if c.stages == 1 { "stage" } else { "stages" },
                 wet = c.wet_mass_t,
-                dv = c.delta_v_vacuum_mps,
+                dv = c.delta_v_vacuum_mps.max(0.0) + 0.0, // never "-0"
                 stock = if c.stock { 1 } else { 0 },
                 desc = if c.description.is_empty() {
                     String::new()
