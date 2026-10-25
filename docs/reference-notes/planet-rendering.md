@@ -164,3 +164,10 @@ mask (not the scaled biome mask; they differ), projected and blended exactly as 
 adds only the slope finer than twice the mesh spacing, so craters and ridges stay crisp at any LOD and agree with
 the ground the server simulates. `debug=7` shows it; preview `exp=` scales the exposure for tuning.
 
+Terrain shadows: the original casts terrain shadows with its shadow maps. Here each terrain pixel marches 20 steps
+towards the sun over the global height map (R16F with mips, `global_height` / `terrain_shadow` in planet.wgsl),
+from half a texel out to ~90 km, softened over 0.03 rad; start and samples both use the global map so the ground
+never shadows itself (the tiled layers and decals shade through the relief normals instead). The polar caps are now
+one `poles.png` (albedo RGB, cloud coverage A): the grass and impostor pipelines were at WebGPU's 16 sampled
+textures per stage.
+

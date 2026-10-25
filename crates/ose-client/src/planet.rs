@@ -99,6 +99,8 @@ struct SurfaceU {
     layers: [[f32; 4]; 4],
     /// x: 1 with layer slopes, y: side/top projection contrast.
     layer_info: [f32; 4],
+    /// Terrain shadows from the global height map: x 1 when uploaded, y its scale (m), z its offset (m).
+    shadow: [f32; 4],
 }
 
 fn flag_f(x: bool) -> f32 {
@@ -137,7 +139,7 @@ enum Tex {
     Grass,
     Impostor,
     PoleAlbedo,
-    PoleClouds,
+    GlobalHeight,
     Slopes,
     LayerMask,
 }
@@ -718,7 +720,7 @@ impl PlanetRenderer {
         defaults.insert(Tex::Clouds, solid([255, 255, 255, 0], true, false));
         defaults.insert(Tex::Foam, solid([0, 0, 0, 255], false, false));
         defaults.insert(Tex::PoleAlbedo, solid([128, 128, 128, 255], true, false));
-        defaults.insert(Tex::PoleClouds, solid([0, 0, 0, 0], true, false));
+        defaults.insert(Tex::GlobalHeight, solid([0, 0, 0, 0], false, false));
         defaults.insert(Tex::Slopes, solid([0, 0, 0, 0], false, true));
         defaults.insert(Tex::LayerMask, solid([0, 0, 0, 0], false, false));
         let lut = |w, h, d| {
@@ -962,10 +964,7 @@ impl PlanetRenderer {
             images.push((Tex::Foam, format!("{base}/foam.png")));
         }
         if info["poles"]["albedo"].as_bool() == Some(true) {
-            images.push((Tex::PoleAlbedo, format!("{base}/poles_albedo.jpg")));
-        }
-        if info["poles"]["clouds"].as_bool() == Some(true) {
-            images.push((Tex::PoleClouds, format!("{base}/poles_clouds.png")));
+            images.push((Tex::PoleAlbedo, format!("{base}/poles.png")));
         }
         for (tex, url) in images {
             let inbox = inbox.clone();
@@ -1118,10 +1117,7 @@ impl PlanetRenderer {
                     b.dirty = true;
                 }
                 Loaded::Image(tex, bitmap) => {
-                    let srgb = matches!(
-                        tex,
-                        Tex::Albedo | Tex::Clouds | Tex::PoleAlbedo | Tex::PoleClouds
-                    );
+                    let srgb = matches!(tex, Tex::Albedo | Tex::Clouds | Tex::PoleAlbedo);
                     let t = self.texture_for(bitmap.width(), bitmap.height(), 1, srgb);
                     self.copy_bitmap(&bitmap, &t, 0);
                     self.mip
@@ -1322,6 +1318,18 @@ impl PlanetRenderer {
             b.no_terrain = b.map.is_none();
         }
         if let Some(m) = &b.map {
+            if let std::collections::hash_map::Entry::Vacant(e) = b.tex.entry(Tex::GlobalHeight) {
+                e.insert(height_texture(
+                    &self.device,
+                    &self.queue,
+                    m.width,
+                    m.height,
+                    &m.data,
+                ));
+                b.dirty = true;
+            }
+        }
+        if let Some(m) = &b.map {
             // Lowest point from the global map less the tiled layers' and decals' reach; highest from the map.
             let lo =
                 m.data.iter().copied().min().unwrap_or(0) as f64 / 65535.0 * m.scale_m + m.offset_m;
@@ -1366,7 +1374,7 @@ impl PlanetRenderer {
                 },
                 tv(9, Tex::Foam),
                 tv(10, Tex::PoleAlbedo),
-                tv(11, Tex::PoleClouds),
+                tv(11, Tex::GlobalHeight),
                 tv(12, Tex::Slopes),
                 tv(13, Tex::LayerMask),
             ],
@@ -2152,6 +2160,70 @@ fn slope_texture(
     Some((view, params))
 }
 
+/// The global height map (normalised u16, row 0 at the south pole) as R16F with box-filtered mips, for the
+/// terrain shadow rays.
+fn height_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    w: usize,
+    h: usize,
+    data: &[u16],
+) -> wgpu::TextureView {
+    let mips = 32 - (w.max(h) as u32).leading_zeros();
+    let tex = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("terrain global heights"),
+        size: wgpu::Extent3d {
+            width: w as u32,
+            height: h as u32,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: mips,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::R16Float,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let mut cur: Vec<f32> = data.iter().map(|&v| v as f32 / 65535.0).collect();
+    let (mut cw, mut ch) = (w, h);
+    for level in 0..mips {
+        let bytes: Vec<u16> = cur.iter().map(|&v| ocean_fft::f16_bits(v)).collect();
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &tex,
+                mip_level: level,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            bytemuck::cast_slice(&bytes),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(cw as u32 * 2),
+                rows_per_image: Some(ch as u32),
+            },
+            wgpu::Extent3d {
+                width: cw as u32,
+                height: ch as u32,
+                depth_or_array_layers: 1,
+            },
+        );
+        let (nw, nh) = ((cw / 2).max(1), (ch / 2).max(1));
+        let mut next = vec![0.0f32; nw * nh];
+        for y in 0..nh {
+            for x in 0..nw {
+                let at = |a: usize, b: usize| {
+                    cur[(2 * y + b).min(ch - 1) * cw + (2 * x + a).min(cw - 1)]
+                };
+                next[y * nw + x] = (at(0, 0) + at(1, 0) + at(0, 1) + at(1, 1)) * 0.25;
+            }
+        }
+        cur = next;
+        cw = nw;
+        ch = nh;
+    }
+    tex.create_view(&wgpu::TextureViewDescriptor::default())
+}
+
 /// The atmosphere model's IsGasGiant (Jool): no ground under the cloud deck.
 fn gas_giant(b: &Body) -> bool {
     b.info
@@ -2269,10 +2341,20 @@ fn surface_uniform(b: &Body, debug: f32) -> SurfaceU {
         u.layers = p;
         u.layer_info = [1.0, contrast, 0.0, 0.0];
     }
+    if let Some(m) = b
+        .map
+        .as_ref()
+        .filter(|_| b.tex.contains_key(&Tex::GlobalHeight))
+    {
+        u.shadow = [1.0, m.scale_m as f32, m.offset_m as f32, 0.0];
+    }
     let poles = info.and_then(|v| v.get("poles"));
     u.poles = [
         flag_f(b.tex.contains_key(&Tex::PoleAlbedo)),
-        flag_f(b.tex.contains_key(&Tex::PoleClouds)),
+        flag_f(
+            b.tex.contains_key(&Tex::PoleAlbedo)
+                && poles.and_then(|p| p["clouds"].as_bool()) == Some(true),
+        ),
         poles
             .and_then(|p| p["cap_deg"].as_f64())
             .unwrap_or(30.0)

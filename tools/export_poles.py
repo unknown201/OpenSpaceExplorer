@@ -1,7 +1,7 @@
 """Polar caps for the planets' equirectangular maps (albedo.jpg, clouds.png), so the poles do not pinch.
 
 An equirectangular map squeezes a whole row of texels into a point at each pole; sampled there on the GPU it
-shows a starburst. This writes `poles_albedo.jpg` and `poles_clouds.png` next to them: two azimuthal equidistant
+shows a starburst. This writes `poles.png` next to them (albedo RGB, cloud coverage A): two azimuthal equidistant
 caps side by side (north left, south right), each covering `CAP_DEG` degrees from its pole, resampled from the
 full map with each row first box-filtered along longitude to the width a cap texel covers there. planet.json
 gets `poles: {cap_deg, albedo, clouds}`; the client (planet.wgsl `pole_uv`) blends the caps in near the poles.
@@ -102,14 +102,18 @@ def export(body_dir: Path) -> dict | None:
     info_path = body_dir / "planet.json"
     if not info_path.exists() or not (body_dir / "albedo.jpg").exists():
         return None
-    meta = {"cap_deg": CAP_DEG, "albedo": False, "clouds": False}
+    meta = {"cap_deg": CAP_DEG, "albedo": True, "clouds": False}
     alb = np.asarray(Image.open(body_dir / "albedo.jpg").convert("RGB"))
-    Image.fromarray(caps(alb)).save(body_dir / "poles_albedo.jpg", quality=90)
-    meta["albedo"] = True
+    rgb = caps(alb)
+    a = np.zeros(rgb.shape[:2], dtype=np.uint8)
     if (body_dir / "clouds.png").exists():
         cl = np.asarray(Image.open(body_dir / "clouds.png").convert("RGBA"))
-        Image.fromarray(caps(cl)).save(body_dir / "poles_clouds.png", optimize=True)
+        a = caps(cl)[..., 3]
         meta["clouds"] = True
+    # one texture (the client is at its sampled-texture limit): albedo in RGB, cloud coverage in alpha
+    Image.fromarray(np.dstack([rgb, a]), "RGBA").save(body_dir / "poles.png", optimize=True)
+    for old in ("poles_albedo.jpg", "poles_clouds.png"):
+        (body_dir / old).unlink(missing_ok=True)
     info = json.loads(info_path.read_text(encoding="utf-8"))
     info["poles"] = meta
     info_path.write_text(json.dumps(info, indent=1), encoding="utf-8")

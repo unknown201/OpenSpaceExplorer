@@ -76,6 +76,8 @@ struct Surface {
     layers: array<vec4<f32>, 4>,
     // x: 1 with layer slopes, y: side/top projection contrast
     layer_info: vec4<f32>,
+    // terrain shadows: x 1 with the global height map, y its scale (m), z its offset (m)
+    shadow: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> frame: Frame;
@@ -99,9 +101,10 @@ struct Surface {
 @group(2) @binding(7) var wrap_samp: sampler;
 @group(2) @binding(8) var equi_samp: sampler;
 @group(2) @binding(9) var foam_tex: texture_2d<f32>;
-// Polar caps of the albedo and cloud maps (tools/export_poles.py): north left, south right.
+// Polar caps of the albedo (RGB) and cloud (A) maps (tools/export_poles.py): north left, south right.
 @group(2) @binding(10) var pole_albedo_tex: texture_2d<f32>;
-@group(2) @binding(11) var pole_clouds_tex: texture_2d<f32>;
+// The global height map (normalised, row 0 at the south pole), for terrain shadows.
+@group(2) @binding(11) var global_height_tex: texture_2d<f32>;
 // The terrain pack's layer slopes (d height / d tile u, v per layer, ose_data LayerSlopes), with mips.
 @group(2) @binding(12) var slopes_tex: texture_2d_array<f32>;
 // The pack's own layer mask (not the scaled biome mask): row 0 at the south pole.
@@ -704,6 +707,45 @@ fn relief_slope(up: vec3<f32>, eg: EquiGrad, biome: vec4<f32>, dtx: vec2<f32>, d
     return vec2<f32>(se, sn);
 }
 
+// Terrain shadows: march from the ground towards the sun over the global height map (the large-scale
+// relief: crater rims, ridges, mountains) and darken where it rises above the ray, softened over a small angle.
+// Start and samples use the same map, so the ground never shadows itself.
+fn global_height(d: vec3<f32>, lod: f32) -> f32 {
+    let u = fract(atan2(-d.z, d.x) / (2.0 * PI));
+    let v = asin(clamp(d.y, -1.0, 1.0)) / PI + 0.5;
+    let h = textureSampleLevel(global_height_tex, equi_samp, vec2<f32>(u, v), lod).r;
+    return h * surface.shadow.y + surface.shadow.z;
+}
+
+fn terrain_shadow(model: vec3<f32>, sun: vec3<f32>) -> f32 {
+    if surface.shadow.x < 0.5 {
+        return 1.0;
+    }
+    let up = normalize(model);
+    if dot(up, sun) <= 0.0 {
+        return 1.0;
+    }
+    let r = frame.solar.w;
+    let texel = PI * r / f32(textureDimensions(global_height_tex, 0).y);
+    let last = f32(textureNumLevels(global_height_tex) - 1u);
+    let p = up * (r + global_height(up, 0.0) + 2.0);
+    var lit = 1.0;
+    var t = texel * 0.5;
+    for (var i = 0; i < 20; i = i + 1) {
+        let q = p + sun * t;
+        let lq = length(q);
+        let lod = clamp(log2(max(t * 0.03 / texel, 1.0)), 0.0, last);
+        let h = global_height(q / lq, lod);
+        // height of the ray above the terrain, as an angle seen from the start
+        lit = min(lit, clamp((lq - r - h) / (t * 0.03) + 0.5, 0.0, 1.0));
+        if lit <= 0.0 {
+            break;
+        }
+        t = t * 1.45;
+    }
+    return lit;
+}
+
 fn sample_equi(t: texture_2d<f32>, uv: vec2<f32>, g: EquiGrad) -> vec4<f32> {
     return textureSampleGrad(t, equi_samp, uv, g.dx, g.dy);
 }
@@ -926,7 +968,8 @@ fn fs_terrain(in: VOut) -> @location(0) vec4<f32> {
     if surface.flags.z > 6.5 && surface.flags.z < 7.5 {
         return vec4<f32>(0.0, 0.0, 1.0, 1.0);
     }
-    let light = sun_and_sky(p_km, n, frame.sun.xyz);
+    var light = sun_and_sky(p_km, n, frame.sun.xyz);
+    light.sun = light.sun * terrain_shadow(in.model, frame.sun.xyz);
     let shade = cloud_shadow(in.model, frame.sun.xyz);
     // Caustics: the sea floor under shallow water catches the waves' focused sunlight (the original's
     // _CausticsTexture, two drifting copies, the brighter where they meet), fading with depth.
@@ -1089,7 +1132,7 @@ fn fs_clouds(in: VOut) -> @location(0) vec4<f32> {
     let pu = pole_uv(up);
     var c = sample_bicubic(clouds_tex, uv, eg);
     if surface.poles.y > 0.5 && pu.w > 0.0 {
-        c = mix(c, textureSampleGrad(pole_clouds_tex, equi_samp, pu.uv, pu.dx, pu.dy), pu.w);
+        c.a = mix(c.a, textureSampleGrad(pole_albedo_tex, equi_samp, pu.uv, pu.dx, pu.dy).a, pu.w);
     }
     let base = clamp(c.a * surface.clouds.y, 0.0, 1.0);
     if base < 0.01 {
