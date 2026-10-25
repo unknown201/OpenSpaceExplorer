@@ -21,6 +21,7 @@ pub mod engine_fx;
 mod engine_fx_gpu;
 #[cfg(target_arch = "wasm32")]
 pub mod flight3d;
+pub mod ftue;
 #[cfg(target_arch = "wasm32")]
 mod fx_fixture;
 #[cfg(target_arch = "wasm32")]
@@ -50,6 +51,7 @@ pub mod scene;
 pub mod settings;
 pub mod thumb;
 pub mod tracking;
+pub mod trip;
 pub mod vab;
 #[cfg(target_arch = "wasm32")]
 pub mod vab3d;
@@ -166,6 +168,12 @@ struct App {
     vab_stages_readout: Vec<ose_net::StageReadout>,
     /// A part pressed on a stage card, to drop on another card.
     vab_stage_drag: Option<usize>,
+    /// The trip planner's delta-v map, once loaded.
+    trip: Option<trip::TripMap>,
+    /// First-time hints: the scripts, the ones already shown (kept per browser) and the messages queued.
+    ftue_state: std::cell::RefCell<FtueState>,
+    /// The delta-v tool's body for stage TWR (`None`: Kerbin at sea level from the server).
+    vab_twr_body: Option<String>,
     /// The server's centre of mass and centre/direction of thrust, and whether their markers show.
     vab_com: Option<ose_math::DVec3>,
     vab_cot: Option<(ose_math::DVec3, ose_math::DVec3)>,
@@ -270,6 +278,8 @@ struct App {
     toasts: hud::Toasts,
     /// The flown vessel as last seen, for event toasts (signal, charge, sphere of influence, orbit, landing).
     flight_watch: std::cell::RefCell<Option<hud::FlightWatch>>,
+    /// The flown vessel's records for the flight report.
+    flight_records: std::cell::RefCell<Option<hud::FlightRecords>>,
     /// Vessels this client has staged at least once: their first stage is lit, so the next is the one after.
     staged: std::collections::HashSet<u64>,
     roll_sent: f32,
@@ -308,6 +318,14 @@ struct App {
 }
 
 type Shared = Rc<RefCell<App>>;
+
+/// First-time hint state (see `ftue.rs`).
+struct FtueState {
+    scripts: Option<ftue::Scripts>,
+    seen: std::collections::HashSet<String>,
+    queue: std::collections::VecDeque<ftue::Message>,
+    enabled: bool,
+}
 
 /// The campaign's science as the server last sent it.
 struct SciencePoints {
@@ -520,6 +538,21 @@ pub fn start() -> Result<(), JsValue> {
         vab_yaw: vab::NO_TURN,
         vab_stages_readout: Vec::new(),
         vab_stage_drag: None,
+        trip: None,
+        ftue_state: std::cell::RefCell::new(FtueState {
+            scripts: None,
+            seen: stored("ose.ftue.seen")
+                .map(|s| {
+                    s.split(',')
+                        .filter(|x| !x.is_empty())
+                        .map(String::from)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            queue: Default::default(),
+            enabled: stored("ose.ftue").as_deref() != Some("off"),
+        }),
+        vab_twr_body: None,
         vab_com: None,
         vab_cot: None,
         vab_col: None,
@@ -587,6 +620,7 @@ pub fn start() -> Result<(), JsValue> {
         sas_target_sent_ms: 0.0,
         toasts: hud::Toasts::default(),
         flight_watch: std::cell::RefCell::new(None),
+        flight_records: std::cell::RefCell::new(None),
         staged: Default::default(),
         roll_sent: 0.0,
         rotation_sent: (0.0, 0.0, 0.0),
@@ -618,6 +652,8 @@ pub fn start() -> Result<(), JsValue> {
     install_menu(&app)?;
     load_part_sizes(app.clone());
     load_localization(app.clone());
+    load_trip_planner(app.clone());
+    load_ftue(app.clone());
     load_sounds(app.clone());
     install_audio(&app)?;
     #[cfg(target_arch = "wasm32")]
@@ -1198,6 +1234,67 @@ fn experiment_name(id: &str) -> String {
     out
 }
 
+/// The first-time hints (assets/ui/ftue.json); none show without it.
+fn load_ftue(app: Shared) {
+    wasm_bindgen_futures::spawn_local(async move {
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let Ok(resp) =
+            wasm_bindgen_futures::JsFuture::from(window.fetch_with_str("assets/ui/ftue.json"))
+                .await
+        else {
+            return;
+        };
+        let Ok(resp) = resp.dyn_into::<web_sys::Response>() else {
+            return;
+        };
+        if !resp.ok() {
+            return;
+        }
+        let Ok(text) = resp.text() else { return };
+        let Ok(text) = wasm_bindgen_futures::JsFuture::from(text).await else {
+            return;
+        };
+        let Some(text) = text.as_string() else { return };
+        if let Some(scripts) = ftue::parse(&text) {
+            app.borrow().ftue_state.borrow_mut().scripts = Some(scripts);
+        }
+    });
+}
+
+/// The trip planner's delta-v map (assets/ui/trip_planner.json); the Trip button stays hidden without it.
+fn load_trip_planner(app: Shared) {
+    wasm_bindgen_futures::spawn_local(async move {
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let Ok(resp) = wasm_bindgen_futures::JsFuture::from(
+            window.fetch_with_str("assets/ui/trip_planner.json"),
+        )
+        .await
+        else {
+            return;
+        };
+        let Ok(resp) = resp.dyn_into::<web_sys::Response>() else {
+            return;
+        };
+        if !resp.ok() {
+            return;
+        }
+        let Ok(text) = resp.text() else { return };
+        let Ok(text) = wasm_bindgen_futures::JsFuture::from(text).await else {
+            return;
+        };
+        let Some(text) = text.as_string() else { return };
+        if let Some(map) = trip::TripMap::parse(&text) {
+            let mut a = app.borrow_mut();
+            a.trip = Some(map);
+            a.render_trip_options();
+        }
+    });
+}
+
 fn load_localization(app: Shared) {
     wasm_bindgen_futures::spawn_local(async move {
         let Some(window) = web_sys::window() else {
@@ -1391,6 +1488,9 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         Box::new(|a| {
             let mut app = a.borrow_mut();
             app.map_mode = !app.map_mode;
+            if app.map_mode {
+                app.ftue("FTUE_Map");
+            }
         }),
     )?;
     wire(
@@ -1637,6 +1737,111 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
     )?;
     wire("vab-save", Box::new(|a| a.borrow_mut().vab_save(false)))?;
     wire("vab-undo", Box::new(|a| a.borrow_mut().vab_undo(false)))?;
+    if let Some(box_el) = doc.get_element_by_id("ftue") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let id = ev
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .map(|e| e.id())
+                .unwrap_or_default();
+            let app = a.borrow();
+            match id.as_str() {
+                "ftue-next" => {
+                    app.ftue_state.borrow_mut().queue.pop_front();
+                    app.ftue_show();
+                }
+                "ftue-off" => {
+                    {
+                        let mut st = app.ftue_state.borrow_mut();
+                        st.enabled = false;
+                        st.queue.clear();
+                    }
+                    store("ose.ftue", "off");
+                    if let Some(i) = app
+                        .doc
+                        .get_element_by_id("settings-ftue")
+                        .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+                    {
+                        i.set_checked(false);
+                    }
+                    app.ftue_show();
+                }
+                _ => {}
+            }
+        });
+        box_el.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
+    if let Some(input) = doc
+        .get_element_by_id("settings-ftue")
+        .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+    {
+        input.set_checked(app.borrow().ftue_state.borrow().enabled);
+        let a = app.clone();
+        let i2 = input.clone();
+        let cb = Closure::<dyn FnMut()>::new(move || {
+            let on = i2.checked();
+            store("ose.ftue", if on { "on" } else { "off" });
+            let app = a.borrow();
+            let mut st = app.ftue_state.borrow_mut();
+            st.enabled = on;
+            if on {
+                // Turning hints back on shows them all again, as a new player would see them.
+                st.seen.clear();
+                store("ose.ftue.seen", "");
+            }
+        });
+        input.add_event_listener_with_callback("change", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
+    if let Some(sel) = doc.get_element_by_id("vab-twr-body") {
+        let a = app.clone();
+        let s2 = sel.clone();
+        let cb = Closure::<dyn FnMut()>::new(move || {
+            let v = s2
+                .dyn_ref::<web_sys::HtmlSelectElement>()
+                .map(|s| s.value())
+                .unwrap_or_default();
+            let mut app = a.borrow_mut();
+            app.vab_twr_body = (!v.is_empty()).then_some(v);
+            app.render_vab_view();
+        });
+        sel.add_event_listener_with_callback("change", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
+    wire(
+        "vab-trip",
+        Box::new(|a| {
+            let app = a.borrow();
+            if let Some(el) = app.doc.get_element_by_id("vab-trip-pop") {
+                el.class_list().toggle("open").ok();
+            }
+            app.render_trip();
+        }),
+    )?;
+    for id in ["trip-from", "trip-to", "trip-round"] {
+        if let Some(el) = doc.get_element_by_id(id) {
+            let a = app.clone();
+            let cb = Closure::<dyn FnMut()>::new(move || a.borrow().render_trip());
+            el.add_event_listener_with_callback("change", cb.as_ref().unchecked_ref())?;
+            cb.forget();
+        }
+    }
+    if let Some(fr) = doc.get_element_by_id("flight-report") {
+        let f2 = fr.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let close = ev
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .is_some_and(|e| e.id() == "fr-close");
+            if close {
+                f2.class_list().remove_1("open").ok();
+            }
+        });
+        fr.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
     if let Some(pam) = doc.get_element_by_id("fh-pam") {
         let a = app.clone();
         let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
@@ -2437,6 +2642,23 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                 let (nx, ny) = (ev.client_x() as f64, ev.client_y() as f64);
                 app.vab3d.orbit(nx - x, ny - y);
                 app.drag = Some((nx, ny));
+            } else {
+                // The part under the pointer lights up, as the original's hover highlight.
+                let rect = app.gpu_canvas.get_bounding_client_rect();
+                let (px, py) = (
+                    (ev.client_x() as f64 - rect.left()) * app.dpr,
+                    (ev.client_y() as f64 - rect.top()) * app.dpr,
+                );
+                let over_hall = ev
+                    .target()
+                    .and_then(|t| t.dyn_into::<Element>().ok())
+                    .is_some_and(|e| e.id() == "gpu");
+                let hit = if over_hall {
+                    app.gpu.as_ref().and_then(|g| app.vab3d.pick(g, px, py))
+                } else {
+                    None
+                };
+                app.vab3d.hovered = hit;
             }
             return;
         }
@@ -2858,6 +3080,9 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                     }
                     "KeyM" => {
                         app.map_mode = !app.map_mode;
+                        if app.map_mode {
+                            app.ftue("FTUE_Map");
+                        }
                         true
                     }
                     "BracketRight" | "BracketLeft" if !app.map_mode => {
@@ -2871,6 +3096,11 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                             let name = app.flight3d.mode.name();
                             hud::push(&app.doc, &format!("Camera: {name}"), "passive");
                         }
+                        true
+                    }
+                    // Interact on EVA (the original's F): board the craft within reach.
+                    "KeyF" if !ev.repeat() && app.flying_eva() => {
+                        app.crew_action("fh-board");
                         true
                     }
                     "KeyU" | "KeyR" if !ev.repeat() => {
@@ -2928,6 +3158,37 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                     }
                 }
                 "Home" => app.reset_camera(),
+                // The original's audio keys: Numpad 1 mutes the game, Numpad 2 the music.
+                "Numpad1" => {
+                    let muted = !app.audio.muted;
+                    app.audio.set_muted(muted);
+                    store("ose.sound", if muted { "off" } else { "on" });
+                    app.show_sound_toggle();
+                    hud::push(
+                        &app.doc,
+                        if muted { "Sound off" } else { "Sound on" },
+                        "passive",
+                    );
+                }
+                "Numpad2" => {
+                    let sfx = app.audio.sfx_scale;
+                    let on = app.audio.music_scale > 0.0;
+                    let level = if on {
+                        0.0
+                    } else {
+                        stored("ose.vol.music")
+                            .and_then(|v| v.parse::<f64>().ok())
+                            .filter(|v| *v > 0.0)
+                            .unwrap_or(100.0)
+                            / 100.0
+                    };
+                    app.audio.set_volumes(level, sfx);
+                    hud::push(
+                        &app.doc,
+                        if on { "Music off" } else { "Music on" },
+                        "passive",
+                    );
+                }
                 "F5" | "F9" if app.in_session => {
                     ev.prevent_default();
                     app.save_action(if code == "F5" {
@@ -3363,6 +3624,9 @@ impl App {
                     if let Some(craft_id) = self.pending_launch.take() {
                         self.start_flight(id, Some(craft_id));
                     }
+                    // Mission elapsed time counts from the launch (kept per vessel in this browser).
+                    let ut = self.time.ut_at(now_ms());
+                    store(&format!("ose.launchUt.{id}"), &format!("{ut:.1}"));
                     self.audio.play("launch_seq");
                     set_text(
                         &self.doc,
@@ -3664,6 +3928,7 @@ impl App {
                 };
                 set_text(&self.doc, "fh-note", &msg);
                 if recovered {
+                    self.show_flight_report("Recovered", Some(earned));
                     self.tracking_open = false;
                     self.end_flight();
                     self.open_ksc();
@@ -3772,6 +4037,7 @@ impl App {
                 if self.vab_active() {
                     self.render_vab_view();
                 }
+                self.render_trip();
             }
             ServerMessage::LaunchSites { sites } => {
                 self.launch_sites = sites;
@@ -4068,6 +4334,7 @@ impl App {
     }
 
     fn open_ksc(&self) {
+        self.ftue("FTUE_New_Game");
         if let Some(m) = self.doc.get_element_by_id("menu") {
             m.class_list().remove_1("hidden").ok();
         }
@@ -4078,6 +4345,7 @@ impl App {
     // ---- Mission Control
 
     fn open_missions(&mut self) {
+        self.ftue("FTUE_Mission_Control");
         if let Some(m) = self.doc.get_element_by_id("menu") {
             m.class_list().remove_1("hidden").ok();
         }
@@ -4126,6 +4394,7 @@ impl App {
     // ---- Research and Development
 
     fn open_rnd(&mut self) {
+        self.ftue("FTUE_RND");
         if let Some(m) = self.doc.get_element_by_id("menu") {
             m.class_list().remove_1("hidden").ok();
         }
@@ -4209,6 +4478,7 @@ impl App {
 
     /// Open the editor, empty or on a library craft (its document is fetched if not cached).
     fn open_vab(&mut self, craft_id: Option<u64>) {
+        self.ftue("FTUE_VAB");
         if let Some(m) = self.doc.get_element_by_id("menu") {
             m.class_list().remove_1("hidden").ok();
         }
@@ -4619,6 +4889,173 @@ impl App {
         self.vab_history.record(&self.editor);
     }
 
+    /// The flight report window for the flight's records, how it ended and the science recovered.
+    fn show_flight_report(&self, ended: &str, science: Option<f64>) {
+        let Some(r) = self.flight_records.borrow().clone() else {
+            return;
+        };
+        let Some(el) = self.doc.get_element_by_id("flight-report") else {
+            return;
+        };
+        let ut = self.time.ut_at(now_ms());
+        el.set_inner_html(&hud::flight_report_html(&r, ended, ut, science));
+        el.class_list().add_1("open").ok();
+    }
+
+    /// Fill the delta-v tool's body list: Kerbin at sea level, then every body with a surface, in vacuum.
+    fn render_twr_bodies(&self) {
+        let Some(el) = self.doc.get_element_by_id("vab-twr-body") else {
+            return;
+        };
+        let Some(scene) = &self.scene else { return };
+        let mut html = String::from("<option value=\"\">Kerbin, sea level</option>");
+        for b in scene.bodies.iter().filter(|b| !b.is_star) {
+            let sel = if self.vab_twr_body.as_deref() == Some(b.id.as_str()) {
+                " selected"
+            } else {
+                ""
+            };
+            html.push_str(&format!(
+                "<option value=\"{id}\"{sel}>{id}, vacuum</option>",
+                id = esc(&b.id)
+            ));
+        }
+        el.set_inner_html(&html);
+    }
+
+    /// Fill the trip planner's from/to lists (surfaces and orbits of every body).
+    fn render_trip_options(&self) {
+        let Some(map) = &self.trip else { return };
+        let mut html = String::new();
+        for n in map.places() {
+            html.push_str(&format!(
+                "<option value=\"{}\">{}</option>",
+                esc(&n.name),
+                esc(&map.label(&n.name))
+            ));
+        }
+        for (id, default) in [("trip-from", "kerbin-surf"), ("trip-to", "mun-surf")] {
+            if let Some(el) = self
+                .doc
+                .get_element_by_id(id)
+                .and_then(|e| e.dyn_into::<web_sys::HtmlSelectElement>().ok())
+            {
+                el.set_inner_html(&html);
+                el.set_value(default);
+            }
+        }
+        if let Some(b) = self
+            .doc
+            .get_element_by_id("vab-trip")
+            .and_then(|e| e.dyn_into::<HtmlElement>().ok())
+        {
+            b.style().set_property("display", "").ok();
+        }
+        self.render_trip();
+    }
+
+    /// The trip planner's answer for the chosen trip, against the craft's delta-v.
+    fn render_trip(&self) {
+        let Some(map) = &self.trip else { return };
+        let value = |id: &str| {
+            self.doc
+                .get_element_by_id(id)
+                .and_then(|e| e.dyn_into::<web_sys::HtmlSelectElement>().ok())
+                .map(|s| s.value())
+                .unwrap_or_default()
+        };
+        let round = self
+            .doc
+            .get_element_by_id("trip-round")
+            .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+            .map(|i| i.checked())
+            .unwrap_or(false);
+        let (from, to) = (value("trip-from"), value("trip-to"));
+        let have: f64 = self
+            .vab_stages_readout
+            .iter()
+            .map(|r| r.delta_v_vacuum_mps.max(0.0))
+            .sum();
+        let text = match map.plan(&from, &to, round) {
+            Some(p) => {
+                let need = p.delta_v_mps + p.inclination_mps;
+                let mut s = format!("<b>\u{394}v {:.0} m/s</b>", need);
+                if p.aerobrake_mps > 0.0 {
+                    s.push_str(&format!(
+                        " <small>({:.0} m/s less with aerobraking)</small>",
+                        p.aerobrake_mps
+                    ));
+                }
+                if let Some(a) = p.phase_angle {
+                    s.push_str(&format!(
+                        "<br><small>Transfer window: phase angle {a:.0}\u{b0}</small>"
+                    ));
+                }
+                if have > 0.0 {
+                    let ok = have >= need - p.aerobrake_mps;
+                    s.push_str(&format!(
+                        "<br><span class=\"{}\">This vehicle: {:.0} m/s {}</span>",
+                        if ok { "ok" } else { "short" },
+                        have,
+                        if ok { "\u{2714}" } else { "(not enough)" }
+                    ));
+                }
+                s
+            }
+            None => "No route between these".into(),
+        };
+        if let Some(el) = self.doc.get_element_by_id("trip-result") {
+            el.set_inner_html(&text);
+        }
+    }
+
+    /// Show the first-time hints of script `id` (FTUE_VAB, FTUE_Flight, ...) once per browser, if hints are on.
+    fn ftue(&self, id: &str) {
+        let mut st = self.ftue_state.borrow_mut();
+        if !st.enabled || st.seen.contains(id) {
+            return;
+        }
+        let Some(script) = st.scripts.as_ref().and_then(|s| s.get(id)).cloned() else {
+            return;
+        };
+        st.seen.insert(id.to_string());
+        let list: Vec<&str> = st.seen.iter().map(|s| s.as_str()).collect();
+        store("ose.ftue.seen", &list.join(","));
+        let was_empty = st.queue.is_empty();
+        st.queue.extend(script.messages);
+        drop(st);
+        if was_empty {
+            self.ftue_show();
+        }
+    }
+
+    /// Show the next queued hint, or hide the window when none is left.
+    fn ftue_show(&self) {
+        let Some(el) = self.doc.get_element_by_id("ftue") else {
+            return;
+        };
+        let st = self.ftue_state.borrow();
+        let Some(m) = st.queue.front() else {
+            el.class_list().remove_1("open").ok();
+            return;
+        };
+        let text = self
+            .loc
+            .get(&m.key)
+            .map(|t| ftue::rich_text(t))
+            .unwrap_or_else(|| esc(&m.key));
+        let image = if m.image.is_empty() {
+            "PAIGE_emote_01_neutral_0001"
+        } else {
+            m.image.as_str()
+        };
+        el.set_inner_html(&format!(
+            "<img src=\"assets/ui/hud/{image}.png\" alt=\"\" onerror=\"this.style.display='none'\" /><div class=\"ftue-body\"><div class=\"ftue-name\">PAIGE</div><div class=\"ftue-text\">{text}</div><div class=\"ftue-acts\"><button id=\"ftue-off\" class=\"secondary\">No more hints</button><button id=\"ftue-next\">{next}</button></div></div>",
+            next = if st.queue.len() > 1 { "Continue" } else { "Got it" },
+        ));
+        el.class_list().add_1("open").ok();
+    }
+
     /// Settings > Input: each rebindable action with the key it is on now.
     fn render_rebind(&self) {
         let Some(el) = self.doc.get_element_by_id("settings-rebind") else {
@@ -4841,6 +5278,7 @@ impl App {
     /// Draw the craft side view, the selection, and refresh the side panel.
     fn render_vab(&mut self) {
         self.vab_report_due = Some(now_ms() + 300.0);
+        self.render_twr_bodies();
         self.render_vab_view();
     }
 
@@ -4956,15 +5394,27 @@ impl App {
                         )
                     })
                     .collect();
-                // The server's readout for this stage: delta-v, sea-level TWR at its start, burn time.
+                // The server's readout for this stage: delta-v, TWR at its start (Kerbin's sea level, or in
+                // vacuum on the surface the delta-v tool names), burn time.
+                let surface_g = self.vab_twr_body.as_ref().and_then(|b| {
+                    let s = self.scene.as_ref()?;
+                    let body = s.bodies.iter().find(|x| &x.id == b)?;
+                    Some(body.mu / (body.radius_m * body.radius_m))
+                });
                 let stats = self
                     .vab_stages_readout
                     .iter()
                     .find(|r| r.stage_id as usize == n)
                     .map(|r| {
+                        let twr = match surface_g {
+                            Some(g) if g > 0.0 && r.start_mass_t > 0.0 => {
+                                r.thrust_kn / (r.start_mass_t * g)
+                            }
+                            _ => r.twr_asl,
+                        };
                         format!(
-                            "<span class=\"sv\" title=\"vacuum delta-v, thrust-to-weight at Kerbin's sea level, burn time\">\u{394}v {:.0} m/s \u{b7} TWR {:.2} \u{b7} {:.0} s</span>",
-                            r.delta_v_vacuum_mps.max(0.0), r.twr_asl.max(0.0), r.burn_time_s.max(0.0)
+                            "<span class=\"sv\" title=\"vacuum delta-v, thrust-to-weight at the delta-v tool's body, burn time\">\u{394}v {:.0} m/s \u{b7} TWR {:.2} \u{b7} {:.0} s</span>",
+                            r.delta_v_vacuum_mps.max(0.0), twr.max(0.0), r.burn_time_s.max(0.0)
                         )
                     })
                     .unwrap_or_default();
@@ -5277,6 +5727,7 @@ impl App {
     // ---- Tracking Station
 
     fn open_tracking(&mut self) {
+        self.ftue("FTUE_Tracking_Station");
         self.tracking_open = true;
         self.show_menu(false);
         self.render_tracking();
@@ -5505,6 +5956,7 @@ impl App {
     }
 
     fn start_flight(&mut self, vessel: u64, craft_id: Option<u64>) {
+        self.ftue("FTUE_Flight");
         self.flying = Some(vessel);
         self.flight_craft = craft_id.and_then(|c| self.craft_docs.get(&c).cloned());
         self.flight_craft_id = craft_id;
@@ -5598,10 +6050,13 @@ impl App {
         let Some(vessel) = self.flying else { return };
         let Some(ws) = &self.ws else { return };
         let msg = match id {
-            "fh-eva" => ClientMessage::GoEva {
-                vessel,
-                kerbal: None,
-            },
+            "fh-eva" => {
+                self.ftue("FTUE_First_EVA");
+                ClientMessage::GoEva {
+                    vessel,
+                    kerbal: None,
+                }
+            }
             "fh-board" => {
                 let Some(target) = self.board_candidate() else {
                     set_text(&self.doc, "fh-note", "no craft within reach to board");
@@ -6232,6 +6687,40 @@ impl App {
                 brakes_latched: self.brakes_latched,
             },
         );
+        // Mission elapsed time and the records for the flight report.
+        let launch_ut = stored(&format!("ose.launchUt.{id}"))
+            .and_then(|s| s.parse::<f64>().ok())
+            .unwrap_or(0.0);
+        set_text(
+            &self.doc,
+            "fh-met",
+            &if launch_ut > 0.0 {
+                format!("MET {}", hud::fmt_met(ut - launch_ut))
+            } else {
+                String::new()
+            },
+        );
+        {
+            let mut rec = self.flight_records.borrow_mut();
+            if rec.as_ref().map(|r| r.vessel) != Some(id) {
+                *rec = Some(hud::FlightRecords {
+                    vessel: id,
+                    name: v.name.clone(),
+                    launch_ut,
+                    ..Default::default()
+                });
+            }
+            if let (Some(r), Some(b)) = (rec.as_mut(), body) {
+                r.note(f.altitude_m, f.surface_speed_mps.max(0.0), &b.id);
+            }
+        }
+        if f.situation == ose_net::FlightSituation::Crashed
+            && self.flight_watch.borrow().as_ref().is_some_and(|w| {
+                w.vessel == id && w.situation != Some(ose_net::FlightSituation::Crashed)
+            })
+        {
+            self.show_flight_report("The vessel was lost", None);
+        }
         // Event toasts from what changed since the last frame.
         let watch = hud::FlightWatch {
             vessel: id,
@@ -7089,6 +7578,7 @@ impl App {
             set_text(&self.doc, "node-reason", "no vessel to plan for yet");
             return;
         };
+        self.ftue("FTUE_First_Maneuver");
         let now = self.time.ut_at(now_ms());
         let dt = 120.0;
         self.node = Some(Node {

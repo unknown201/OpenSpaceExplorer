@@ -35,7 +35,9 @@ Camera rule that runs through every map: **the right button drags the camera, th
 | G4 | Notification toasts (warp limited, out of charge, lost link, vessel lost ...) | flight messages and refusals come up as toasts at the top right, plus events: lost and restored signal, lost control, charge running out, a new sphere of influence, stable orbit, landing, escaping, crashing | done |
 | G5 | F5/F9 quicksave/quickload | F5/F9 with toasts; any `[data-save-action]` button (the pause menu's revert buttons) reverts to launch or to the VAB | done |
 | G6 | Settings screen: input bindings, audio sliders, UI scale, tooltips on/off, graphics | Settings from the main menu (any `[data-open-settings]` element opens it): Input lists the original's bindings and which work, Interface has UI scale and key hints, Audio the sound switch and music and effects volume, Graphics the render resolution (50-100%) and an FPS counter; Input rebinds 30 flight and global keys (kept per browser, Reset all) | done |
-| G7 | Esc menu: resume, save, load, revert to launch/VAB, recover, KSC, Tracking Station, Mission Control, R&D, VAB, settings, quit | resume, KSC, sessions, sound, leave | other thread (restyle in progress); revert/save/load server |
+| G7 | Esc menu: resume, save, load, revert to launch/VAB, recover, KSC, Tracking Station, Mission Control, R&D, VAB, settings, quit | resume, KSC, Tracking Station, revert to launch / VAB, settings, exit ("Build 3D world and menu replica"); F5/F9 quicksave and quickload | done (restyle in progress); revert/save/load server |
+| G8 | First-time hints: PAIGE explains each building on the first visit and the first map view, maneuver, EVA (FTUE scripts) | the original's hint scripts and PAIGE's portraits play on the first visit to the KSC, VAB, R&D, Mission Control, Tracking Station and flight, and on the first map view, maneuver node and EVA; Continue, No more hints, and Settings > Interface turns them back on from the start | done |
+| G9 | Numpad 1 mutes the game, Numpad 2 the music | same, with a toast; listed in Settings > Input | done |
 
 ### Flight
 
@@ -50,9 +52,10 @@ Camera rule that runs through every map: **the right button drags the camera, th
 | F7 | Orbital readout Ap/Pe with time to each; altimeter sea level / terrain toggle; speed orbit / surface / target toggle | Ap/Pe with countdowns, SURFACE/ORBIT/TARGET speed toggle, SEA LEVEL/TERRAIN altimeter toggle | done |
 | F8 | Right-drag orbits the camera, wheel zooms, V cycles camera modes, Home resets | right-drag (and left) orbits, Home resets, V cycles Auto, Free, Orbital, Chase and Locked | done |
 | F9 | `]` `[` switch to the next/previous vessel nearby | in flight `]` `[` take control of your other vessels within 2.5 km (dropped stages, Kerbals on EVA); on the map they change the followed vessel | done |
-| F10 | F to board/interact on EVA, EVA from the crew portrait | protocol has GoEva/Board/PlantFlag; no client keys | open |
+| F10 | F to board/interact on EVA, EVA from the crew portrait | EVA, Board, Plant Flag and Undock buttons ("Build 3D world and menu replica"); F on EVA boards the craft within reach | done |
 | F11 | Vessel labels F4 | F4 toggles labels | done |
 | F12 | Go button / pre-launch throttle | not needed (no launch sequence) | skip |
+| F13 | Vessel status: mission elapsed time; flight report on recovery or loss | MET under the altimeter; a flight report (mission time, highest altitude, fastest speed, bodies visited, science) when the vessel is recovered or lost | done |
 
 ### Map view and Tracking Station
 
@@ -69,13 +72,15 @@ Camera rule that runs through every map: **the right button drags the camera, th
 | # | KSP2 | Ours today | Status |
 |---|---|---|---|
 | V1b | VAB orientation switch (VAB vs horizontal, the SPH layout) | Rocket / Plane in the header lays the craft along the floor; parts take their parent's rotation, side parts attach in the parent's frame; Plane picks the runway | done |
-| V1 | Header: vehicle name, New/Save/Load, launch site, Launch with total Δv | header bar: New, Load (your and stock vehicles), undo, redo, name, live total Δv, Save, Launch, close; no launch-site choice yet | partly done |
+| V1 | Header: vehicle name, New/Save/Load, launch site, Launch with total Δv | header bar: New, Load (your and stock vehicles), undo, redo, name, live total Δv, Save, launch-site chooser, Launch, close | done |
 | V2 | Toolbar: undo/redo, symmetry flyout, angle snap, frame of reference, CoM/CoT/CoL markers, engineer's report | undo/redo, symmetry (×1 to ×8, X / Shift+X) and angle snap (C) in the header; CoM and CoT markers (from the server, protocol 28) with header toggles; an engineer's report pop-over (no command part, no engines, first stage TWR under 1, engines without reachable propellant, crew without a parachute, probe without antenna or charge) with a flaw count on its button; CoL marker (blue) since protocol 29 | done |
 | V3 | Right-drag orbits, wheel zooms (Shift faster), arrows pan, Home resets | right-drag orbits, wheel zooms (Shift faster), Up/Down arrows move the camera along the craft, Home resets | done |
 | V4 | Delete key, Ctrl+Z/Y, Ctrl+C/V, WASDQE rotate the held part, Space resets, X symmetry, C snap; grab a placed part and move it with its subtree | Delete/Backspace, Ctrl+Z/Y, Ctrl+C/V, Ctrl+F, Ctrl+N, Ctrl+S; grabbing a placed part carries its subtree, dropped nowhere it goes back; parts with a surface node go on a part's side where you point, facing in, with symmetry copies around the axis and 15° snap; W/A/S/D/Q/E turn the held part (90° with snap, 15° without, Shift 5°), Space puts it upright; stack parts keep only the yaw | done |
 | V5b | Picker filters, sort and favourites | size chips (XS to XL), sort by size, name or mass, a Favorites tab filled by middle-clicking parts (kept per browser) | done |
 | V5 | Picker part tooltip (mass, cost, size, stats, description), Shift expands | tooltip with title, subtitle, maker, mass, size, crew, tanks, thrust, Isp, description, research lock | done (no cost in our data) |
 | V6 | Staging stack panel with per-stage Δv/TWR/burn time, drag a part between stages | stage cards with icons (next to fire at the bottom), per-stage vacuum Δv, sea-level TWR and burn time from the server's StageReport, total Δv in the header, click selects, drag a part onto another stage card to move it, earlier/later buttons | done |
+| V9 | Delta-v tool: stage readouts for a chosen body and situation | a chooser on the staging panel: TWR at Kerbin's sea level (server) or in vacuum on any body's surface; delta-v stays vacuum (no per-situation Isp from the server) | partly done |
+| V8 | Trip planner (delta-v budget between bodies) | Trip in the VAB header: from/to any body's surface or orbit, round trip, aerobraking allowance, transfer phase angle, against the vehicle's delta-v, from the original's TripPlanner.json | done |
 | V7 | Parts manager on right click (part settings) | right-click a part in the VAB: its stage, fuel crossfeed switch and a fill slider per tank resource (delta-v follows); in flight a right click on a part opens its window: temperature, re-entry heat, crew, parachute, gear, panels and converters with their actions | done |
 
 ### KSC, R&D, Mission Control, main menu

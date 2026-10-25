@@ -40,6 +40,9 @@ ICONS = [
     "WB-ICO-EngineersReport", "WB-ICO-Trash", "TrashBin-ICO-onRest", "ICO-Delete", "WB-ICO-Filter",
     "ICO-InfoPanel-Favorite-24x24-Active", "ICO-InfoPanel-Favorite-24x24-Inactive", "SearchButton-ICO-onRest",
     "PartCategories-ICO-Favorites",
+    # PAIGE, the first-time hints' host.
+    "PAIGE_emote_01_neutral_0001", "PAIGE_emote_02_happy_0001", "PAIGE_emote_03_shocked_0001",
+    "PAIGE_emote_04_teaching_a_0001", "PAIGE_emote_04_teaching_b_0001", "PAIGE_emote_04_teaching_c_0001",
 ]
 
 

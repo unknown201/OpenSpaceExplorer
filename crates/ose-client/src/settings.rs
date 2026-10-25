@@ -37,6 +37,7 @@ pub const INPUT: &[(&str, &[Binding])] = &[
                 "Docking mode: W/A/S/D and Shift/Ctrl translate",
                 true,
             ),
+            ("F (on EVA)", "Board the craft within reach", true),
             ("M", "Map view", true),
             ("V", "Camera mode: auto, free, orbital, chase, locked", true),
             (
@@ -100,6 +101,8 @@ pub const INPUT: &[(&str, &[Binding])] = &[
             ("Esc", "Pause menu", true),
             (". / , / /", "Time warp up / down / stop", true),
             ("F2", "Hide the interface", true),
+            ("Numpad 1", "Mute the game", true),
+            ("Numpad 2", "Mute the music", true),
             ("F5 / F9", "Quicksave / quickload", true),
             ("M (at the KSC)", "Tracking Station", true),
         ],

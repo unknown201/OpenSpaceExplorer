@@ -385,6 +385,11 @@
     #vab-header .vh-pop { display: none; position: absolute; top: calc(100% + 6px); left: 0; z-index: 20; width: 360px; max-height: 60vh; overflow: auto; background: #0b1020f8; border: 1px solid #3b63a8; border-radius: 6px; box-shadow: 0 8px 24px #000c; }
     #vab-header .vh-pop.open { display: block; }
     #vab-header .vh-pop.right { left: auto; right: 0; }
+    #vab-header .trip-form { padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #e6ecf7; }
+    #vab-header .trip-form label { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+    #vab-header .trip-form select { flex: 1; max-width: 230px; background: #06080f; color: #e6ecf7; border: 1px solid #2c3d63; border-radius: 4px; padding: 3px; }
+    #vab-header .trip-form .trip-round { justify-content: flex-start; }
+    #trip-result { margin-top: 4px; line-height: 1.5; } #trip-result .ok { color: #7dff8a; } #trip-result .short { color: #ff7a6a; } #trip-result small { color: #9fb0cc; }
     #vab-header .vh-pop-title { padding: 8px 10px 0; font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: #9fb0cc; }
     #vab-header #vab-report-btn { display: flex; gap: 4px; align-items: center; }
     #vab-header #vab-report-btn.warn { color: #f0c060; border-color: #f0c06099; } #vab-header #vab-report-btn.bad { color: #ff7a6a; border-color: #ff7a6a99; }
@@ -409,7 +414,8 @@
     body.webgpu #vab-header { position: relative; pointer-events: auto; background: #10141bf0; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)); padding: calc(6 * var(--u)) calc(10 * var(--u)); margin: 0 0 calc(8 * var(--u)); }
     body.webgpu #screen-vab #vab { height: calc(100vh - 92 * var(--u)) !important; }
     #vab-side .vs-title { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: #9fb0cc; margin: 10px 0 4px; }
-    #vab-side .vs-title:first-child { margin-top: 0; }
+    #vab-side .vs-title:first-child { margin-top: 0; display: flex; justify-content: space-between; align-items: center; }
+    #vab-twr-body { font-size: 11px; text-transform: none; letter-spacing: 0; background: #06080f; color: #e6ecf7; border: 1px solid #2c3d63; border-radius: 3px; padding: 1px 3px; max-width: 160px; }
     #vab-stages li { display: block; padding: 6px 8px; border: 1px solid #2c3d63; border-left: 3px solid #e0a040; border-radius: 4px; background: #06080f; margin-bottom: 4px; color: #e6ecf7; }
     #vab-stages li span.p { user-select: none; } #vab-stages li span.p:active { cursor: grabbing; }
     #vab-stages li .sv { float: right; font-size: 11px; color: #9fb0cc; }
@@ -462,6 +468,22 @@
     #fh-note { display: none; }
     #fps { display: none; position: fixed; left: 8px; bottom: 6px; z-index: 45; font: 600 11px var(--ui-font, system-ui); color: #7dff8a; background: #06080fb0; padding: 1px 5px; border-radius: 3px; pointer-events: none; }
     body.show-fps #fps { display: block; }
+    /* Flight report (FlightReportUIManager) after a recovery or a loss. */
+    #flight-report { position: fixed; z-index: 60; left: 50%; top: 18%; transform: translateX(-50%); width: 340px; display: none; background: #0b1020f8; border: 1px solid #3b63a8; border-radius: 8px; padding: 14px 18px; color: #e6ecf7; font: 14px var(--ui-font, system-ui); box-shadow: 0 10px 40px #000c; }
+    #flight-report.open { display: block; }
+    /* First-time hints: PAIGE in a character box at the bottom right (CharacterDialogWindow). */
+    #ftue { position: fixed; z-index: 55; right: 16px; bottom: calc(130 * var(--u, 1px)); width: min(460px, 92vw); display: none; gap: 12px; align-items: flex-start; background: #0b1020f5; border: 1px solid #ffa114aa; border-radius: 8px; padding: 12px 14px; color: #e6ecf7; font: 14px var(--ui-font, system-ui); box-shadow: 0 10px 30px #000c; }
+    #ftue.open { display: flex; }
+    #ftue img { width: 96px; height: 96px; object-fit: contain; flex: none; }
+    #ftue .ftue-body { flex: 1; } #ftue .ftue-name { font-size: 11px; letter-spacing: 0.12em; color: #ffa114; font-weight: 700; }
+    #ftue .ftue-text { margin: 4px 0 10px; line-height: 1.45; }
+    #ftue .ftue-acts { display: flex; justify-content: flex-end; gap: 8px; }
+    #ftue button { margin: 0; width: auto; padding: 6px 14px; border-radius: 4px; border: 1px solid #ffa114aa; background: #3a2a10; color: #fff; cursor: pointer; font: 600 13px var(--ui-font, system-ui); }
+    #ftue button.secondary { background: transparent; color: #cfd6e6; border-color: #2c3d63; }
+    body.ui-hidden #ftue { display: none; }
+    #flight-report h3 { margin: 0 0 4px; font-size: 18px; } #flight-report .fr-name { color: #9fb0cc; } #flight-report .fr-ended { color: #ffd84a; margin: 4px 0 8px; }
+    #flight-report table { width: 100%; border-collapse: collapse; } #flight-report td { padding: 3px 0; border-top: 1px solid #ffffff12; } #flight-report td:last-child { text-align: right; }
+    #flight-report button { margin-top: 12px; width: 100%; padding: 8px; background: #1f3d6b; color: #fff; border: 1px solid #3b63a8; border-radius: 4px; cursor: pointer; font: 600 14px var(--ui-font, system-ui); }
     /* Settings over everything (SettingsMenuManager): tabs on top, the original's binding list. */
     #settings { position: fixed; inset: 0; z-index: 50; display: none; place-items: center; background: #000a; font-family: var(--ui-font, system-ui); }
     #settings.open { display: grid; }
@@ -759,6 +781,10 @@
           </div>
           <input id="vab-name" data-ose="vab-name" type="text" maxlength="48" value="Untitled craft" title="Vehicle name" />
           <div class="vh-group">
+            <span class="vh-pop-wrap"><button id="vab-trip" class="secondary" data-ose="vab-trip" style="display:none" title="Trip planner: the delta-v a trip needs, from the original's map">Trip</button>
+              <div id="vab-trip-pop" class="vh-pop right"><div class="vh-pop-title">Trip planner</div>
+                <div class="trip-form"><label>From <select id="trip-from"></select></label><label>To <select id="trip-to"></select></label>
+                <label class="trip-round"><input type="checkbox" id="trip-round" /> Round trip</label><div id="trip-result" data-ose="trip-result"></div></div></div></span>
             <span class="vh-pop-wrap"><button id="vab-report-btn" class="secondary vh-ico" data-ose="vab-report-btn" title="Engineer's report: what the vehicle lacks"><i style="--ico:url(assets/ui/hud/WB-ICO-EngineersReport.png)"></i><b id="vab-report-count"></b></button>
               <div id="vab-report-pop" class="vh-pop right"><div class="vh-pop-title">Engineer's report</div><ul id="vab-flaws" data-ose="vab-flaws"></ul></div></span>
             <span id="vab-dv" data-ose="vab-dv" title="Total delta-v in vacuum, from the server's report when the craft is saved"></span>
@@ -778,7 +804,7 @@
           </div>
           <canvas id="vab-canvas" data-ose="vab-canvas" width="640" height="640"></canvas>
           <div id="vab-side">
-            <div class="vs-title">Staging</div>
+            <div class="vs-title">Staging <select id="vab-twr-body" data-ose="vab-twr-body" title="Delta-v tool: where the stages' thrust-to-weight is worked out"></select></div>
             <ul id="vab-stages" data-ose="vab-stages"></ul>
             <div id="vab-stats" data-ose="vab-stats"></div>
             <div class="vs-title">Selected part</div>
@@ -832,6 +858,8 @@
   <div id="fh-pam" class="fh-pam" data-ose="flight-pam"></div>
   <div id="toasts" data-ose="toasts"></div>
   <div id="fps" data-ose="fps"></div>
+  <div id="flight-report" data-ose="flight-report"></div>
+  <div id="ftue" data-ose="ftue"></div>
   <div id="settings" data-ose="settings">
     <div class="set-card">
       <div class="set-head"><h2>Settings</h2><button id="settings-close" data-ose="settings-close" title="Close (Esc)">&#10005;</button></div>
@@ -840,6 +868,7 @@
         <section data-tab="input" class="on" id="settings-input"></section>
         <section data-tab="interface">
           <label class="set-row"><span>Interface scale</span><input id="settings-scale" data-ose="settings-scale" type="range" min="50" max="150" step="5" value="100" /><b id="settings-scale-text">100%</b></label>
+          <label class="set-row"><span>First-time hints (PAIGE)</span><input id="settings-ftue" data-ose="settings-ftue" type="checkbox" checked /></label>
           <label class="set-row"><span>Show key hints on screen</span><input id="settings-hints" data-ose="settings-hints" type="checkbox" checked /></label>
         </section>
         <section data-tab="graphics">
@@ -863,7 +892,7 @@
     <button id="ts-back" data-ose="ts-back">Back to KSC</button>
   </div>
   <div id="flight-hud" data-ose="flight">
-    <div class="fh-top"><div class="fh-label" id="fh-alt-mode" data-ose="flight-alt-mode" title="Altitude above sea level or above the terrain below; click to switch" style="cursor:pointer;pointer-events:auto;text-decoration:underline dotted">SEA LEVEL</div><div id="fh-altitude" data-ose="flight-altitude">--</div><div id="fh-situation" class="fh-small">--</div><div id="fh-note" class="fh-small" style="color:#f0a070"></div><div id="fh-running" class="fh-small" data-ose="flight-running" style="color:#8fd08f"></div><div id="fh-control" data-ose="flight-control" style="color:#ff6a5a;font-weight:700"></div></div>
+    <div class="fh-top"><div class="fh-label" id="fh-alt-mode" data-ose="flight-alt-mode" title="Altitude above sea level or above the terrain below; click to switch" style="cursor:pointer;pointer-events:auto;text-decoration:underline dotted">SEA LEVEL</div><div id="fh-altitude" data-ose="flight-altitude">--</div><div id="fh-situation" class="fh-small">--</div><div id="fh-met" class="fh-small" data-ose="flight-met" title="Mission elapsed time"></div><div id="fh-note" class="fh-small" style="color:#f0a070"></div><div id="fh-running" class="fh-small" data-ose="flight-running" style="color:#8fd08f"></div><div id="fh-control" data-ose="flight-control" style="color:#ff6a5a;font-weight:700"></div></div>
     <div class="fh-bottom">
       <div class="fh-throttle" title="Throttle: hold Shift / Ctrl, Z full, X cut"><div id="fh-throttle-fill"></div><span>THR</span><span id="fh-throttle-pct">0%</span></div>
       <canvas id="fh-navball" data-ose="flight-navball" width="200" height="200"></canvas>

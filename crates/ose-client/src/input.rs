@@ -152,6 +152,7 @@ pub const REBINDABLE: &[(&str, &str)] = &[
     ("Translate down", "KeyK"),
     ("Translate forward", "KeyH"),
     ("Translate back", "KeyN"),
+    ("Interact on EVA (board)", "KeyF"),
     ("Map", "KeyM"),
     ("Camera mode", "KeyV"),
     ("Quicksave", "F5"),
