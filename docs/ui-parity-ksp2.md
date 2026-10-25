@@ -62,6 +62,7 @@ Camera rule that runs through every map: **the right button drags the camera, th
 | F14 | Resource Manager app: every resource on the vessel and in the current stage, with bars | Resource manager window from the app bar: the burning stage's and the whole vessel's resources with amount, capacity and a bar (orange under 10%), protocol 34 | done |
 | F15 | App bar: mission tracker, flight report, Kerbal manager, resource and parts managers | an app bar at the top right: mission tracker, parts manager (parts still aboard by name; a row opens that part's window), resource manager, action groups (lights, RCS, abort, 1-10 lit while on, click to toggle), the flight report so far and the Kerbal portraits toggle; one app window open at a time | done |
 | F16 | Fairings and cargo bays: deploy the fairing, open and close bays from the part window | the part window shows a fairing's state with Deploy fairing, a bay's with Open/Close bay, and Shielded on parts they enclose (protocol 35) | done |
+| F17 | Flight staging stack with each stage's delta-v and TWR, and the vessel's total delta-v | each stage card shows delta-v, TWR and burn time where the vessel is now, and the stage line the vessel's total delta-v (protocol 38) | done |
 
 ### Map view and Tracking Station
 

@@ -384,6 +384,7 @@ pub fn staging_html(
     catalog: &crate::vab::Catalog,
     next_stage: usize,
     chutes: &[(u16, ChuteState, f32)],
+    readouts: &[ose_net::StageReadout],
 ) -> String {
     let mut html = String::new();
     let stages = &craft.stages;
@@ -418,8 +419,21 @@ pub fn staging_html(
                 title.replace('"', "&quot;")
             ));
         }
+        // The server's figures for the stage as the vessel is now (protocol 38): delta-v and TWR where it is.
+        let stats = readouts
+            .iter()
+            .find(|r| r.stage_id as usize == n && r.delta_v_vacuum_mps > 0.0)
+            .map(|r| {
+                format!(
+                    "<span class=\"sv\" title=\"delta-v and thrust-to-weight here and now, burn time\">\u{394}v {:.0} m/s \u{b7} TWR {:.2} \u{b7} {:.0} s</span>",
+                    r.delta_v_now_mps.max(0.0) + 0.0,
+                    r.twr_now.max(0.0),
+                    r.burn_time_s.max(0.0)
+                )
+            })
+            .unwrap_or_default();
         html.push_str(&format!(
-            "<li class=\"{}\"><b>{}</b>{icons}</li>",
+            "<li class=\"{}\"><b>{}</b>{icons}{stats}</li>",
             if n == next { "next" } else { "" },
             stages.len() - n
         ));

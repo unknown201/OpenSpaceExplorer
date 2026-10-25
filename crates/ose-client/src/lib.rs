@@ -7682,7 +7682,7 @@ impl App {
                 || f.thrust_kn > 0.1
                 || f.situation != ose_net::FlightSituation::Landed;
             let next = f.stage as usize + usize::from(lit);
-            let html = hud::staging_html(craft, &self.catalog, next, &f.parachutes);
+            let html = hud::staging_html(craft, &self.catalog, next, &f.parachutes, &f.stage_list);
             // Compare with what was set last (the browser rewrites inner HTML, so it would never match).
             let key = format!("{}:{}", html.len(), hud::fnv(&html));
             if list.get_attribute("data-ose-key").as_deref() != Some(key.as_str()) {
@@ -8301,9 +8301,10 @@ impl App {
             &self.doc,
             "fh-stage",
             &format!(
-                "stage {} of {}",
+                "stage {} of {} \u{b7} \u{394}v {:.0} m/s",
                 (f.stage + 1).min(f.stages.max(1)),
-                f.stages.max(1)
+                f.stages.max(1),
+                f.delta_v_now_mps.max(0.0) + 0.0
             ),
         );
         set_text(
