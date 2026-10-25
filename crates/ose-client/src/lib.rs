@@ -10236,13 +10236,38 @@ impl App {
         // Ask for every body model once; draw the ones that have arrived.
         let star = scene.root();
         let star_km = star.map(|i| to_km(positions[i])).unwrap_or(GV::ZERO);
+        // The focused body through the planet renderer (clouds, air, terrain, the starfield behind), as in
+        // flight; its mesh stands in until the planet's assets are in. The map's frame is the body's model frame
+        // (bodies are not turned here).
+        let focus = self.camera.focus;
+        let planet_ready = match scene.bodies.get(focus) {
+            Some(fb) if !fb.is_star => {
+                let pos_km = to_km(positions[focus]);
+                let planet = self.flight3d.planet_renderer(gpu);
+                planet.prepare(
+                    gpu,
+                    &crate::planet::PlanetView {
+                        body_id: &fb.id,
+                        radius_m: fb.radius_m,
+                        cam: (cam_km - pos_km) * 1000.0,
+                        sun: (star_km - pos_km).normalize_or_zero(),
+                        time_s: ut,
+                        occluders: &[],
+                        sun_radius_rad: 0.004,
+                    },
+                )
+            }
+            _ => false,
+        };
         let mut items: Vec<render::DrawItem> = Vec::new();
         let mut lines: Vec<render::LineItem> = Vec::new();
         for (i, b) in scene.bodies.iter().enumerate() {
             let name = format!("body:{}", b.id);
             gpu.request_model(&name, &format!("assets/bodies/{}.glb", b.id));
             let pos_km = to_km(positions[i]);
-            if let Some(model) = gpu.model(&name) {
+            if planet_ready && i == focus {
+                // drawn by the planet renderer
+            } else if let Some(model) = gpu.model(&name) {
                 let scale = (b.radius_m / 1000.0) / model.mesh_radius.max(1e-9);
                 let light = if b.is_star { GV::Y } else { star_km - pos_km };
                 items.push(render::DrawItem {
@@ -10339,7 +10364,18 @@ impl App {
             }
         }
         lines.extend(traj);
-        gpu.frame("assets/bodies/", &items, &lines, [0.024, 0.031, 0.059]);
+        let extra: Option<&dyn render::ExtraPass> = if planet_ready {
+            Some(self.flight3d.planet_renderer(gpu) as &dyn render::ExtraPass)
+        } else {
+            None
+        };
+        gpu.frame_with(
+            "assets/bodies/",
+            &items,
+            &lines,
+            [0.024, 0.031, 0.059],
+            extra,
+        );
 
         // Labels and markers through the 3D camera.
         let (w, h) = (self.camera.width, self.camera.height);

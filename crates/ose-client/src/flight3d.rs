@@ -538,6 +538,13 @@ fn quat_from_basis(x: DVec3, y: DVec3, z: DVec3) -> DQuat {
 }
 
 impl FlightView {
+    /// The planet renderer (made on first use), shared with the map view so the focused body looks the same
+    /// there as in flight.
+    pub fn planet_renderer(&mut self, gpu: &Renderer) -> &mut crate::planet::PlanetRenderer {
+        self.planet
+            .get_or_insert_with(|| crate::planet::PlanetRenderer::new(gpu))
+    }
+
     pub fn new() -> FlightView {
         FlightView {
             aero_segments: Vec::new(),

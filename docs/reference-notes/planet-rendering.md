@@ -240,3 +240,7 @@ no biome, nothing grows (Vegetation Studio places nothing there; the first-biome
 terrain pack's mask). Streaming: a quad costs ~1.7 ms to build (native; 6 ms per frame budget in the browser), and one
 that arrives after the camera is already inside its range morphs in from its parent over 0.4 s instead of popping.
 
+Map view: the focused body is drawn by the flight view's planet renderer (`FlightView::planet_renderer`, as an
+extra pass of the map frame), so it has the same clouds, atmosphere, terrain and starfield as in flight; other
+bodies stay as their scaled meshes. The map does not turn the bodies, so the model frame is the map frame there.
+
