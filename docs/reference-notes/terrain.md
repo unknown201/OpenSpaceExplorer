@@ -84,6 +84,14 @@ surface radius = radius - oceanAltitude + height
   data's `MaxTerrainHeight` 1499 m is the global map's), eight tiled layers, 67 decals (mountain groups around
   the KSC, the desert mountains, the lake mask under the KSC). The highest point comes out at 2.7 km. Under the
   KSC campus the ground is near sea level: the campus model carries its own ground, as in the original.
+- The campus ground (`ksc_campus_VertexPaint_02`, 21 x 19 km, with `ksc_campus_final`) is not flat: a plateau
+  at about 107 m (scene y -126) with lake hollows near 40 m, whose skirts slope down to about -700 m at its
+  edges. The original draws it with the PQS terrain so that the higher shows, and it is the ground there. West
+  of the plateau it stands 20 to 40 m above the 39 m lake country, so with the terrain alone a craft fell
+  through it. `tools/export_campus_ground.py` rasterises it, placed as the server places the campus, into a
+  256 x 256 lat/lon grid (`assets/own/terrain/ksc_ground.*`, 128 KB, embedded in ose-data); `height_m` takes
+  the higher of terrain and that grid, `terrain_m` is the terrain alone (the client draws that under the model).
+  Re-export it whenever the campus pose (`KSC_ANCHOR`, `KSC_YAW_DEG`) changes.
 
 `tools/extract_terrain.py --packs assets/web/terrain` writes one pack per body (`<Body>.json` + `<Body>.bin`):
 the global map at 4096 x 2048 (Kerbin, Mun) or 2048 x 1024, the mask at 1024 x 512, layers at most 1024 square,

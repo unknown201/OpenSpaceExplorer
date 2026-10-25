@@ -1,0 +1,20 @@
+{
+ "body": "Kerbin",
+ "lat_deg": [
+  -1.3509972612535963,
+  0.4576707331016663
+ ],
+ "lon_deg": [
+  -76.04630625569517,
+  -73.99860962049362
+ ],
+ "width": 256,
+ "height": 256,
+ "units": "int16 decimetres above sea level, row 0 north, -32768 empty",
+ "site": {
+  "lat_deg": -0.6836,
+  "lon_deg": -74.8198,
+  "alt_m": 115.2,
+  "yaw_deg": 0.041
+ }
+}

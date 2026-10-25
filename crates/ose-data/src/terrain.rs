@@ -11,6 +11,11 @@
 //! never committed) adds the rest of the original's `PQSJobUtil.HeightSample`: a finer global map, the tiled
 //! large and medium height layers weighted by the biome mask, and the PQS height decals (the KSC plateau,
 //! mountain groups). `TerrainMap::from_pack` builds a map that samples all of it.
+//!
+//! On Kerbin the KSC campus model brings its own ground (`tools/export_campus_ground.py`): a plateau whose skirts
+//! slope down well below sea level, drawn together with the terrain so that the higher of the two shows, as in
+//! the original. `height_m` takes the higher of terrain and that overlay, so craft stand on what is drawn;
+//! `terrain_m` is the terrain alone, for drawing it under the campus model.
 
 use serde::{Deserialize, Serialize};
 
@@ -76,6 +81,91 @@ pub struct TerrainMap {
     pub max_m: f64,
     /// Tiled layers and decals from a terrain pack; `None` for the embedded global-only maps.
     pub detail: Option<Box<Detail>>,
+    /// Ground a site's own model brings (the KSC campus on Kerbin); the higher of it and the terrain counts.
+    pub overlay: Option<std::sync::Arc<Overlay>>,
+}
+
+/// A height field on a latitude/longitude rectangle (m above sea level, `None` where it has no ground).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Overlay {
+    pub lat_deg: [f64; 2],
+    pub lon_deg: [f64; 2],
+    pub width: usize,
+    pub height: usize,
+    /// decimetres, row 0 north; `i16::MIN` where empty
+    pub data: Vec<i16>,
+}
+
+#[derive(Deserialize)]
+struct OverlayMeta {
+    body: String,
+    lat_deg: [f64; 2],
+    lon_deg: [f64; 2],
+    width: usize,
+    height: usize,
+}
+
+impl Overlay {
+    /// The KSC campus ground for `body`, embedded from `assets/own/terrain/ksc_ground.*`.
+    pub fn for_body(body: &str) -> Option<Overlay> {
+        let meta: OverlayMeta =
+            serde_json::from_str(include_str!("../../../assets/own/terrain/ksc_ground.json"))
+                .ok()?;
+        if meta.body != body {
+            return None;
+        }
+        let bytes = include_bytes!("../../../assets/own/terrain/ksc_ground.bin");
+        let data: Vec<i16> = bytes
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| i16::from_le_bytes(*c))
+            .collect();
+        (data.len() == meta.width * meta.height).then_some(Overlay {
+            lat_deg: meta.lat_deg,
+            lon_deg: meta.lon_deg,
+            width: meta.width,
+            height: meta.height,
+            data,
+        })
+    }
+
+    /// Bilinear over the cells that have ground; `None` outside or where none of the four has any.
+    pub fn sample(&self, lat_deg: f64, lon_deg: f64) -> Option<f64> {
+        let [la0, la1] = self.lat_deg;
+        let [lo0, lo1] = self.lon_deg;
+        if lat_deg < la0 || lat_deg > la1 || lon_deg < lo0 || lon_deg > lo1 {
+            return None;
+        }
+        let fx = (lon_deg - lo0) / (lo1 - lo0) * self.width as f64 - 0.5;
+        let fy = (la1 - lat_deg) / (la1 - la0) * self.height as f64 - 0.5;
+        let (x0, y0) = (fx.floor(), fy.floor());
+        let (tx, ty) = (fx - x0, fy - y0);
+        let (mut sum, mut wsum) = (0.0, 0.0);
+        for (dx, dy, w) in [
+            (0, 0, (1.0 - tx) * (1.0 - ty)),
+            (1, 0, tx * (1.0 - ty)),
+            (0, 1, (1.0 - tx) * ty),
+            (1, 1, tx * ty),
+        ] {
+            let x = (x0 as i64 + dx).clamp(0, self.width as i64 - 1) as usize;
+            let y = (y0 as i64 + dy).clamp(0, self.height as i64 - 1) as usize;
+            let v = self.data[y * self.width + x];
+            if v != i16::MIN && w > 0.0 {
+                sum += w * v as f64 * 0.1;
+                wsum += w;
+            }
+        }
+        (wsum > 1e-9).then(|| sum / wsum)
+    }
+
+    fn max_m(&self) -> f64 {
+        self.data
+            .iter()
+            .filter(|&&v| v != i16::MIN)
+            .map(|&v| v as f64 * 0.1)
+            .fold(f64::MIN, f64::max)
+    }
 }
 
 /// Flatten a disc around each launch pad, held at the pad's altitude. Other sites (base anchors such as
@@ -114,6 +204,8 @@ impl TerrainMap {
         let raw_max =
             data.iter().copied().max().unwrap_or(0) as f64 / 65535.0 * m.scale_m + m.offset_m;
         let flat_max = flats.iter().map(|f| f.altitude_m).fold(f64::MIN, f64::max);
+        let overlay = Overlay::for_body(&entry.id).map(std::sync::Arc::new);
+        let overlay_max = overlay.as_ref().map(|o| o.max_m()).unwrap_or(f64::MIN);
         Some(TerrainMap {
             width: m.width,
             height: m.height,
@@ -123,8 +215,9 @@ impl TerrainMap {
             body_radius_m,
             data,
             flats,
-            max_m: raw_max.max(flat_max),
+            max_m: raw_max.max(flat_max).max(overlay_max),
             detail: None,
+            overlay,
         })
     }
 
@@ -181,8 +274,22 @@ impl TerrainMap {
         2.0 * self.body_radius_m * a.sqrt().min(1.0).asin()
     }
 
-    /// Terrain height including flattened sites, m above the nominal radius.
+    /// Ground height, m above the nominal radius: the terrain with its flattened sites, or a site model's own
+    /// ground (the KSC campus) where that is higher.
     pub fn height_m(&self, lat_deg: f64, lon_deg: f64) -> f64 {
+        let h = self.terrain_m(lat_deg, lon_deg);
+        match self
+            .overlay
+            .as_ref()
+            .and_then(|o| o.sample(lat_deg, lon_deg))
+        {
+            Some(o) => h.max(o),
+            None => h,
+        }
+    }
+
+    /// The terrain alone with its flattened sites (what the planet renderer draws), m above the nominal radius.
+    pub fn terrain_m(&self, lat_deg: f64, lon_deg: f64) -> f64 {
         let mut h = self.map_height_m(lat_deg, lon_deg);
         for f in &self.flats {
             let d = self.distance_m(lat_deg, lon_deg, f.lat_deg, f.lon_deg);
@@ -289,5 +396,34 @@ mod tests {
         let far = m.height_m(0.0, deg);
         assert!((far + 500.0).abs() < 1e-6, "far {far}");
         assert!(m.max_m >= 120.0);
+    }
+
+    #[test]
+    fn kerbin_stands_on_the_campus_ground_where_it_is_above_the_terrain() {
+        let o = Overlay::for_body("Kerbin").expect("embedded KSC ground");
+        assert!(Overlay::for_body("Mun").is_none());
+        // the plateau between the launch pad and the VAB is the campus height
+        let pad = o.sample(-0.66, -74.80).unwrap();
+        assert!((pad - 107.0).abs() < 5.0, "{pad}");
+        // nothing far from the KSC
+        assert!(o.sample(10.0, 10.0).is_none());
+        // the ground is the higher of the two
+        let entry = BodyTerrain {
+            id: "Kerbin".into(),
+            has_ocean: true,
+            sites: vec![],
+            map: Some(MapRef {
+                offset: 0,
+                width: 4,
+                height: 2,
+                scale_m: 1.0,
+                offset_m: 0.0,
+                source: String::new(),
+            }),
+        };
+        let m = TerrainMap::from_entry(&entry, &[0u8; 16], 600_000.0).unwrap();
+        assert!(m.terrain_m(-0.66, -74.80) < 1.0);
+        assert!((m.height_m(-0.66, -74.80) - pad).abs() < 1e-9);
+        assert!(m.max_m >= pad);
     }
 }
