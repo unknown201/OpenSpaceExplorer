@@ -106,6 +106,19 @@ impl Spin {
 /// A model to draw: renderer name, file and scale.
 type ModelRef = (&'static str, &'static str, f64);
 
+/// A fairing shell from `bottom` up over a payload reaching `top` (heights along the craft's axis, m) at
+/// `radius`: unit tube rings (fx:fairing_ring) stacked straight, then the rounded nose (fx:fairing_nose), each
+/// drawn at scale `radius` from the height given.
+pub fn fairing_shells(bottom: f64, top: f64, radius: f64) -> Vec<(&'static str, f64)> {
+    // Straight rings up to the payload's top (less the nose's rounded shoulder), then the nose.
+    let rings = ((top - bottom - 0.4 * radius) / radius).ceil().max(0.0) as usize;
+    let mut shells: Vec<(&'static str, f64)> = (0..rings)
+        .map(|k| ("fx:fairing_ring", bottom + k as f64 * radius))
+        .collect();
+    shells.push(("fx:fairing_nose", bottom + rings as f64 * radius));
+    shells
+}
+
 /// The original's most common Kerbal skin colour (looks SKINCOLOR BADA55).
 pub const DEFAULT_SKIN: [u8; 3] = [0xBA, 0xDA, 0x55];
 
@@ -1188,14 +1201,7 @@ impl FlightView {
                 if !gpu.has_model("fx:fairing_ring") || !gpu.has_model("fx:fairing_nose") {
                     continue;
                 }
-                // Straight rings up to the payload's top (less the nose's rounded shoulder), then the nose.
-                let rings = ((top - bottom - 0.4 * radius) / radius).ceil().max(0.0) as usize;
-                let mut shells = Vec::new();
-                for k in 0..rings {
-                    shells.push(("fx:fairing_ring", bottom + k as f64 * radius));
-                }
-                shells.push(("fx:fairing_nose", bottom + rings as f64 * radius));
-                for (model, y) in shells {
+                for (model, y) in fairing_shells(bottom, top, radius) {
                     let at = DVec3::new(flp.x, y, flp.z);
                     let wpos = pos + vessel_rot * (at + DVec3::Y * lift);
                     let mut it = DrawItem::lit(model.into(), wpos - cam, vessel_rot, radius, sun);

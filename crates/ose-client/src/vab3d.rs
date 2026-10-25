@@ -350,6 +350,48 @@ impl VabView {
             hall.ambient = 0.55;
             items.push(hall);
         }
+        // Fairings stand as built over what sits on them, as in the original's VAB.
+        if !self.icon_mode {
+            gpu.request_model("fx:fairing_ring", "assets/fx/fairing_ring.glb");
+            gpu.request_model("fx:fairing_nose", "assets/fx/fairing_nose.glb");
+        }
+        for (fi, fname, fpos, _) in placed.iter().filter(|p| p.1.starts_with("part:fairing_")) {
+            if self.icon_mode
+                || !gpu.has_model("fx:fairing_ring")
+                || !gpu.has_model("fx:fairing_nose")
+            {
+                break;
+            }
+            let Some(base) = gpu.model(fname) else {
+                continue;
+            };
+            let mut radius = (base.bounds_max - base.bounds_min).as_dvec3().max_element() * 0.5;
+            let base_radius = radius;
+            let bottom = fpos.y + 0.05;
+            let mut top = bottom;
+            for (j, lo, hi) in &self.boxes {
+                let c = (*lo + *hi) * 0.5;
+                let side = DVec3::new(c.x - fpos.x, 0.0, c.z - fpos.z).length();
+                if j == fi || c.y < bottom || side > base_radius * 1.2 {
+                    continue;
+                }
+                top = top.max(hi.y);
+                let half = (hi.x - lo.x).max(hi.z - lo.z) * 0.5;
+                radius = radius.max(side + half + 0.05);
+            }
+            if top - bottom < 0.1 {
+                continue;
+            }
+            for (model, y) in crate::flight3d::fairing_shells(bottom, top, radius) {
+                let at = DVec3::new(fpos.x, y, fpos.z);
+                let mut it =
+                    DrawItem::lit(model.into(), at - cam_pos, DQuat::IDENTITY, radius, light);
+                it.ambient = 0.45;
+                it.fill_dir = -forward;
+                it.fill = 0.35;
+                items.push(it);
+            }
+        }
         for (i, name, wpos, wrot) in placed {
             if !gpu.has_model(&name) {
                 continue;
