@@ -21,6 +21,7 @@ pub mod engine_fx;
 mod engine_fx_gpu;
 #[cfg(target_arch = "wasm32")]
 pub mod flight3d;
+pub mod ftue;
 #[cfg(target_arch = "wasm32")]
 mod fx_fixture;
 #[cfg(target_arch = "wasm32")]
@@ -169,6 +170,8 @@ struct App {
     vab_stage_drag: Option<usize>,
     /// The trip planner's delta-v map, once loaded.
     trip: Option<trip::TripMap>,
+    /// First-time hints: the scripts, the ones already shown (kept per browser) and the messages queued.
+    ftue_state: std::cell::RefCell<FtueState>,
     /// The delta-v tool's body for stage TWR (`None`: Kerbin at sea level from the server).
     vab_twr_body: Option<String>,
     /// The server's centre of mass and centre/direction of thrust, and whether their markers show.
@@ -312,6 +315,14 @@ struct App {
 }
 
 type Shared = Rc<RefCell<App>>;
+
+/// First-time hint state (see `ftue.rs`).
+struct FtueState {
+    scripts: Option<ftue::Scripts>,
+    seen: std::collections::HashSet<String>,
+    queue: std::collections::VecDeque<ftue::Message>,
+    enabled: bool,
+}
 
 /// The campaign's science as the server last sent it.
 struct SciencePoints {
@@ -525,6 +536,19 @@ pub fn start() -> Result<(), JsValue> {
         vab_stages_readout: Vec::new(),
         vab_stage_drag: None,
         trip: None,
+        ftue_state: std::cell::RefCell::new(FtueState {
+            scripts: None,
+            seen: stored("ose.ftue.seen")
+                .map(|s| {
+                    s.split(',')
+                        .filter(|x| !x.is_empty())
+                        .map(String::from)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            queue: Default::default(),
+            enabled: stored("ose.ftue").as_deref() != Some("off"),
+        }),
         vab_twr_body: None,
         vab_com: None,
         vab_cot: None,
@@ -624,6 +648,7 @@ pub fn start() -> Result<(), JsValue> {
     load_part_sizes(app.clone());
     load_localization(app.clone());
     load_trip_planner(app.clone());
+    load_ftue(app.clone());
     load_sounds(app.clone());
     install_audio(&app)?;
     #[cfg(target_arch = "wasm32")]
@@ -1204,6 +1229,35 @@ fn experiment_name(id: &str) -> String {
     out
 }
 
+/// The first-time hints (assets/ui/ftue.json); none show without it.
+fn load_ftue(app: Shared) {
+    wasm_bindgen_futures::spawn_local(async move {
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let Ok(resp) =
+            wasm_bindgen_futures::JsFuture::from(window.fetch_with_str("assets/ui/ftue.json"))
+                .await
+        else {
+            return;
+        };
+        let Ok(resp) = resp.dyn_into::<web_sys::Response>() else {
+            return;
+        };
+        if !resp.ok() {
+            return;
+        }
+        let Ok(text) = resp.text() else { return };
+        let Ok(text) = wasm_bindgen_futures::JsFuture::from(text).await else {
+            return;
+        };
+        let Some(text) = text.as_string() else { return };
+        if let Some(scripts) = ftue::parse(&text) {
+            app.borrow().ftue_state.borrow_mut().scripts = Some(scripts);
+        }
+    });
+}
+
 /// The trip planner's delta-v map (assets/ui/trip_planner.json); the Trip button stays hidden without it.
 fn load_trip_planner(app: Shared) {
     wasm_bindgen_futures::spawn_local(async move {
@@ -1429,6 +1483,9 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         Box::new(|a| {
             let mut app = a.borrow_mut();
             app.map_mode = !app.map_mode;
+            if app.map_mode {
+                app.ftue("FTUE_Map");
+            }
         }),
     )?;
     wire(
@@ -1675,6 +1732,64 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
     )?;
     wire("vab-save", Box::new(|a| a.borrow_mut().vab_save(false)))?;
     wire("vab-undo", Box::new(|a| a.borrow_mut().vab_undo(false)))?;
+    if let Some(box_el) = doc.get_element_by_id("ftue") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let id = ev
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .map(|e| e.id())
+                .unwrap_or_default();
+            let app = a.borrow();
+            match id.as_str() {
+                "ftue-next" => {
+                    app.ftue_state.borrow_mut().queue.pop_front();
+                    app.ftue_show();
+                }
+                "ftue-off" => {
+                    {
+                        let mut st = app.ftue_state.borrow_mut();
+                        st.enabled = false;
+                        st.queue.clear();
+                    }
+                    store("ose.ftue", "off");
+                    if let Some(i) = app
+                        .doc
+                        .get_element_by_id("settings-ftue")
+                        .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+                    {
+                        i.set_checked(false);
+                    }
+                    app.ftue_show();
+                }
+                _ => {}
+            }
+        });
+        box_el.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
+    if let Some(input) = doc
+        .get_element_by_id("settings-ftue")
+        .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+    {
+        input.set_checked(app.borrow().ftue_state.borrow().enabled);
+        let a = app.clone();
+        let i2 = input.clone();
+        let cb = Closure::<dyn FnMut()>::new(move || {
+            let on = i2.checked();
+            store("ose.ftue", if on { "on" } else { "off" });
+            let app = a.borrow();
+            let mut st = app.ftue_state.borrow_mut();
+            st.enabled = on;
+            if on {
+                // Turning hints back on shows them all again, as a new player would see them.
+                st.seen.clear();
+                store("ose.ftue.seen", "");
+            }
+        });
+        input.add_event_listener_with_callback("change", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
     if let Some(sel) = doc.get_element_by_id("vab-twr-body") {
         let a = app.clone();
         let s2 = sel.clone();
@@ -2960,6 +3075,9 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                     }
                     "KeyM" => {
                         app.map_mode = !app.map_mode;
+                        if app.map_mode {
+                            app.ftue("FTUE_Map");
+                        }
                         true
                     }
                     "BracketRight" | "BracketLeft" if !app.map_mode => {
@@ -4180,6 +4298,7 @@ impl App {
     }
 
     fn open_ksc(&self) {
+        self.ftue("FTUE_New_Game");
         if let Some(m) = self.doc.get_element_by_id("menu") {
             m.class_list().remove_1("hidden").ok();
         }
@@ -4190,6 +4309,7 @@ impl App {
     // ---- Mission Control
 
     fn open_missions(&mut self) {
+        self.ftue("FTUE_Mission_Control");
         if let Some(m) = self.doc.get_element_by_id("menu") {
             m.class_list().remove_1("hidden").ok();
         }
@@ -4238,6 +4358,7 @@ impl App {
     // ---- Research and Development
 
     fn open_rnd(&mut self) {
+        self.ftue("FTUE_RND");
         if let Some(m) = self.doc.get_element_by_id("menu") {
             m.class_list().remove_1("hidden").ok();
         }
@@ -4321,6 +4442,7 @@ impl App {
 
     /// Open the editor, empty or on a library craft (its document is fetched if not cached).
     fn open_vab(&mut self, craft_id: Option<u64>) {
+        self.ftue("FTUE_VAB");
         if let Some(m) = self.doc.get_element_by_id("menu") {
             m.class_list().remove_1("hidden").ok();
         }
@@ -4849,6 +4971,53 @@ impl App {
         if let Some(el) = self.doc.get_element_by_id("trip-result") {
             el.set_inner_html(&text);
         }
+    }
+
+    /// Show the first-time hints of script `id` (FTUE_VAB, FTUE_Flight, ...) once per browser, if hints are on.
+    fn ftue(&self, id: &str) {
+        let mut st = self.ftue_state.borrow_mut();
+        if !st.enabled || st.seen.contains(id) {
+            return;
+        }
+        let Some(script) = st.scripts.as_ref().and_then(|s| s.get(id)).cloned() else {
+            return;
+        };
+        st.seen.insert(id.to_string());
+        let list: Vec<&str> = st.seen.iter().map(|s| s.as_str()).collect();
+        store("ose.ftue.seen", &list.join(","));
+        let was_empty = st.queue.is_empty();
+        st.queue.extend(script.messages);
+        drop(st);
+        if was_empty {
+            self.ftue_show();
+        }
+    }
+
+    /// Show the next queued hint, or hide the window when none is left.
+    fn ftue_show(&self) {
+        let Some(el) = self.doc.get_element_by_id("ftue") else {
+            return;
+        };
+        let st = self.ftue_state.borrow();
+        let Some(m) = st.queue.front() else {
+            el.class_list().remove_1("open").ok();
+            return;
+        };
+        let text = self
+            .loc
+            .get(&m.key)
+            .map(|t| ftue::rich_text(t))
+            .unwrap_or_else(|| esc(&m.key));
+        let image = if m.image.is_empty() {
+            "PAIGE_emote_01_neutral_0001"
+        } else {
+            m.image.as_str()
+        };
+        el.set_inner_html(&format!(
+            "<img src=\"assets/ui/hud/{image}.png\" alt=\"\" onerror=\"this.style.display='none'\" /><div class=\"ftue-body\"><div class=\"ftue-name\">PAIGE</div><div class=\"ftue-text\">{text}</div><div class=\"ftue-acts\"><button id=\"ftue-off\" class=\"secondary\">No more hints</button><button id=\"ftue-next\">{next}</button></div></div>",
+            next = if st.queue.len() > 1 { "Continue" } else { "Got it" },
+        ));
+        el.class_list().add_1("open").ok();
     }
 
     /// Settings > Input: each rebindable action with the key it is on now.
@@ -5522,6 +5691,7 @@ impl App {
     // ---- Tracking Station
 
     fn open_tracking(&mut self) {
+        self.ftue("FTUE_Tracking_Station");
         self.tracking_open = true;
         self.show_menu(false);
         self.render_tracking();
@@ -5750,6 +5920,7 @@ impl App {
     }
 
     fn start_flight(&mut self, vessel: u64, craft_id: Option<u64>) {
+        self.ftue("FTUE_Flight");
         self.flying = Some(vessel);
         self.flight_craft = craft_id.and_then(|c| self.craft_docs.get(&c).cloned());
         self.flight_craft_id = craft_id;
@@ -5843,10 +6014,13 @@ impl App {
         let Some(vessel) = self.flying else { return };
         let Some(ws) = &self.ws else { return };
         let msg = match id {
-            "fh-eva" => ClientMessage::GoEva {
-                vessel,
-                kerbal: None,
-            },
+            "fh-eva" => {
+                self.ftue("FTUE_First_EVA");
+                ClientMessage::GoEva {
+                    vessel,
+                    kerbal: None,
+                }
+            }
             "fh-board" => {
                 let Some(target) = self.board_candidate() else {
                     set_text(&self.doc, "fh-note", "no craft within reach to board");
@@ -7291,6 +7465,7 @@ impl App {
             set_text(&self.doc, "node-reason", "no vessel to plan for yet");
             return;
         };
+        self.ftue("FTUE_First_Maneuver");
         let now = self.time.ut_at(now_ms());
         let dt = 120.0;
         self.node = Some(Node {

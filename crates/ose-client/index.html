@@ -463,6 +463,16 @@
     /* Flight report (FlightReportUIManager) after a recovery or a loss. */
     #flight-report { position: fixed; z-index: 60; left: 50%; top: 18%; transform: translateX(-50%); width: 340px; display: none; background: #0b1020f8; border: 1px solid #3b63a8; border-radius: 8px; padding: 14px 18px; color: #e6ecf7; font: 14px var(--ui-font, system-ui); box-shadow: 0 10px 40px #000c; }
     #flight-report.open { display: block; }
+    /* First-time hints: PAIGE in a character box at the bottom right (CharacterDialogWindow). */
+    #ftue { position: fixed; z-index: 55; right: 16px; bottom: calc(130 * var(--u, 1px)); width: min(460px, 92vw); display: none; gap: 12px; align-items: flex-start; background: #0b1020f5; border: 1px solid #ffa114aa; border-radius: 8px; padding: 12px 14px; color: #e6ecf7; font: 14px var(--ui-font, system-ui); box-shadow: 0 10px 30px #000c; }
+    #ftue.open { display: flex; }
+    #ftue img { width: 96px; height: 96px; object-fit: contain; flex: none; }
+    #ftue .ftue-body { flex: 1; } #ftue .ftue-name { font-size: 11px; letter-spacing: 0.12em; color: #ffa114; font-weight: 700; }
+    #ftue .ftue-text { margin: 4px 0 10px; line-height: 1.45; }
+    #ftue .ftue-acts { display: flex; justify-content: flex-end; gap: 8px; }
+    #ftue button { margin: 0; width: auto; padding: 6px 14px; border-radius: 4px; border: 1px solid #ffa114aa; background: #3a2a10; color: #fff; cursor: pointer; font: 600 13px var(--ui-font, system-ui); }
+    #ftue button.secondary { background: transparent; color: #cfd6e6; border-color: #2c3d63; }
+    body.ui-hidden #ftue { display: none; }
     #flight-report h3 { margin: 0 0 4px; font-size: 18px; } #flight-report .fr-name { color: #9fb0cc; } #flight-report .fr-ended { color: #ffd84a; margin: 4px 0 8px; }
     #flight-report table { width: 100%; border-collapse: collapse; } #flight-report td { padding: 3px 0; border-top: 1px solid #ffffff12; } #flight-report td:last-child { text-align: right; }
     #flight-report button { margin-top: 12px; width: 100%; padding: 8px; background: #1f3d6b; color: #fff; border: 1px solid #3b63a8; border-radius: 4px; cursor: pointer; font: 600 14px var(--ui-font, system-ui); }
@@ -840,6 +850,7 @@
   <div id="toasts" data-ose="toasts"></div>
   <div id="fps" data-ose="fps"></div>
   <div id="flight-report" data-ose="flight-report"></div>
+  <div id="ftue" data-ose="ftue"></div>
   <div id="settings" data-ose="settings">
     <div class="set-card">
       <div class="set-head"><h2>Settings</h2><button id="settings-close" data-ose="settings-close" title="Close (Esc)">&#10005;</button></div>
@@ -848,6 +859,7 @@
         <section data-tab="input" class="on" id="settings-input"></section>
         <section data-tab="interface">
           <label class="set-row"><span>Interface scale</span><input id="settings-scale" data-ose="settings-scale" type="range" min="50" max="150" step="5" value="100" /><b id="settings-scale-text">100%</b></label>
+          <label class="set-row"><span>First-time hints (PAIGE)</span><input id="settings-ftue" data-ose="settings-ftue" type="checkbox" checked /></label>
           <label class="set-row"><span>Show key hints on screen</span><input id="settings-hints" data-ose="settings-hints" type="checkbox" checked /></label>
         </section>
         <section data-tab="graphics">

@@ -36,6 +36,7 @@ Camera rule that runs through every map: **the right button drags the camera, th
 | G5 | F5/F9 quicksave/quickload | F5/F9 with toasts; any `[data-save-action]` button (the pause menu's revert buttons) reverts to launch or to the VAB | done |
 | G6 | Settings screen: input bindings, audio sliders, UI scale, tooltips on/off, graphics | Settings from the main menu (any `[data-open-settings]` element opens it): Input lists the original's bindings and which work, Interface has UI scale and key hints, Audio the sound switch and music and effects volume, Graphics the render resolution (50-100%) and an FPS counter; Input rebinds 30 flight and global keys (kept per browser, Reset all) | done |
 | G7 | Esc menu: resume, save, load, revert to launch/VAB, recover, KSC, Tracking Station, Mission Control, R&D, VAB, settings, quit | resume, KSC, Tracking Station, revert to launch / VAB, settings, exit ("Build 3D world and menu replica"); F5/F9 quicksave and quickload | done (restyle in progress); revert/save/load server |
+| G8 | First-time hints: PAIGE explains each building on the first visit and the first map view, maneuver, EVA (FTUE scripts) | the original's hint scripts and PAIGE's portraits play on the first visit to the KSC, VAB, R&D, Mission Control, Tracking Station and flight, and on the first map view, maneuver node and EVA; Continue, No more hints, and Settings > Interface turns them back on from the start | done |
 
 ### Flight
 
