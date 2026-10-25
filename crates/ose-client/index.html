@@ -395,6 +395,7 @@
     #vab-header #vab-col.on { background: #1f3d6b; border-color: #3b63a8; color: #6aaaff; }
     #vab-header #vab-com.on { color: #ffd84a; } #vab-header #vab-cot.on { color: #ff6ae6; }
     #vab-dv { font-size: 13px; color: #9fb0cc; margin-right: 6px; }
+    #vab-site, #lp-site { font: 13px var(--ui-font, inherit); background: #06080f; color: #e6ecf7; border: 1px solid #2c3d63; border-radius: 4px; padding: 5px 6px; }
     body.webgpu #vab-header { position: relative; pointer-events: auto; background: #10141bf0; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)); padding: calc(6 * var(--u)) calc(10 * var(--u)); margin: 0 0 calc(8 * var(--u)); }
     body.webgpu #screen-vab #vab { height: calc(100vh - 92 * var(--u)) !important; }
     #vab-side .vs-title { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: #9fb0cc; margin: 10px 0 4px; }
@@ -703,6 +704,7 @@
         <div id="lp-window">
           <div class="lp-head">
             <span class="flag"><img src="assets/ui/ICO-Launchpad-Med.png" alt="" /></span><h2>Launchpad 1</h2>
+            <select id="lp-site" data-ose="lp-site" title="Launch site: a launch pad or the runway" style="display:none"></select>
             <label class="lp-stock"><input id="launch-stock" type="checkbox" checked /> Show stock</label>
             <button id="launchpad-back" class="lp-close" data-ose="launchpad-back" title="back to the KSC">&#10005;</button>
           </div>
@@ -737,6 +739,7 @@
               <div id="vab-report-pop" class="vh-pop right"><div class="vh-pop-title">Engineer's report</div><ul id="vab-flaws" data-ose="vab-flaws"></ul></div></span>
             <span id="vab-dv" data-ose="vab-dv" title="Total delta-v in vacuum, from the server's report when the craft is saved"></span>
             <button id="vab-save" data-ose="vab-save" class="secondary" title="Save to the craft library (Ctrl+S)">Save</button>
+            <select id="vab-site" data-ose="vab-site" title="Where to launch from: a launch pad or the runway (planes)" style="display:none"></select>
             <button id="vab-launch" data-ose="vab-launch" class="vh-launch" title="Save and roll out to the launch pad"><i style="--ico:url(assets/ui/hud/Workspace-ICO-LaunchVessel-Normal-Active.png)"></i>Launch</button>
             <button id="vab-back" class="secondary vh-ico" data-ose="vab-back" title="Back to the Kerbal Space Center"><i style="--ico:url(assets/ui/WB-ICO-Close-X.png)"></i></button>
           </div>

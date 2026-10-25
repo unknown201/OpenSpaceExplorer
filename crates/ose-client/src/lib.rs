@@ -267,6 +267,12 @@ struct App {
     /// Vessels this client has staged at least once: their first stage is lit, so the next is the one after.
     staged: std::collections::HashSet<u64>,
     roll_sent: f32,
+    /// Launch sites from the server (protocol 30) and the one chosen (None: launch pad 1), kept per browser.
+    launch_sites: Vec<ose_net::LaunchSite>,
+    launch_site: Option<String>,
+    /// Take the attitude the server holds from the next readout (after a launch or a vessel switch), so the
+    /// first key press turns from there: a plane on the runway holds level along it.
+    adopt_attitude: bool,
     /// Docking mode (Delete, the original's ToggleRotLinControls): W/A/S/D and Shift/Ctrl translate instead of
     /// turning and throttling.
     lin_mode: bool,
@@ -564,6 +570,9 @@ pub fn start() -> Result<(), JsValue> {
         flight_watch: std::cell::RefCell::new(None),
         staged: Default::default(),
         roll_sent: 0.0,
+        launch_sites: Vec::new(),
+        launch_site: stored("ose.launchSite"),
+        adopt_attitude: false,
         lin_mode: false,
         translate_sent: (0.0, 0.0, 0.0),
         orbit_pick: Vec::new(),
@@ -1529,6 +1538,24 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
     )?;
     wire("vab-save", Box::new(|a| a.borrow_mut().vab_save(false)))?;
     wire("vab-undo", Box::new(|a| a.borrow_mut().vab_undo(false)))?;
+    for id in ["vab-site", "lp-site"] {
+        if let Some(sel) = doc.get_element_by_id(id) {
+            let a = app.clone();
+            let s2 = sel.clone();
+            let cb = Closure::<dyn FnMut()>::new(move || {
+                let v = s2
+                    .dyn_ref::<web_sys::HtmlSelectElement>()
+                    .map(|s| s.value())
+                    .unwrap_or_default();
+                let mut app = a.borrow_mut();
+                store("ose.launchSite", &v);
+                app.launch_site = (!v.is_empty()).then_some(v);
+                app.render_launch_sites();
+            });
+            sel.add_event_listener_with_callback("change", cb.as_ref().unchecked_ref())?;
+            cb.forget();
+        }
+    }
     if let Some(pam) = doc.get_element_by_id("vab-pam") {
         let a = app.clone();
         let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |ev: web_sys::Event| {
@@ -3580,6 +3607,17 @@ impl App {
                     self.render_vab_view();
                 }
             }
+            ServerMessage::LaunchSites { sites } => {
+                self.launch_sites = sites;
+                if self
+                    .launch_site
+                    .as_ref()
+                    .is_some_and(|s| !self.launch_sites.iter().any(|l| &l.id == s))
+                {
+                    self.launch_site = None;
+                }
+                self.render_launch_sites();
+            }
             ServerMessage::SaveAck {
                 action,
                 accepted,
@@ -5143,12 +5181,46 @@ impl App {
             .ok();
     }
 
-    /// Roll a library craft out to launch pad 1 (the original's launch: landed, engines off).
+    /// Fill the launch-site choosers (VAB header and launch pad dialog) from the server's list.
+    fn render_launch_sites(&self) {
+        let chosen = self.launch_site.clone().unwrap_or_default();
+        let mut html = String::new();
+        for s in &self.launch_sites {
+            html.push_str(&format!(
+                "<option value=\"{id}\"{sel}>{name}</option>",
+                id = esc(&s.id),
+                sel = if s.id == chosen || (chosen.is_empty() && s.id == "LaunchPad_1") {
+                    " selected"
+                } else {
+                    ""
+                },
+                name = esc(&s.name),
+            ));
+        }
+        for id in ["vab-site", "lp-site"] {
+            if let Some(el) = self.doc.get_element_by_id(id) {
+                el.set_inner_html(&html);
+                if let Ok(e) = el.clone().dyn_into::<HtmlElement>() {
+                    e.style()
+                        .set_property("display", if html.is_empty() { "none" } else { "" })
+                        .ok();
+                }
+            }
+        }
+    }
+
+    /// Roll a library craft out to the chosen launch site (the original's launch: landed, engines off).
     fn launch_craft(&mut self, id: u64) {
         set_text(&self.doc, "menu-note", "rolling out to the launch pad...");
         self.pending_launch = Some(id);
         if let Some(ws) = &self.ws {
-            send(ws, &ClientMessage::LaunchSavedOnPad { id });
+            send(
+                ws,
+                &ClientMessage::LaunchSavedAt {
+                    id,
+                    site: self.launch_site.clone(),
+                },
+            );
         }
     }
 
@@ -5190,6 +5262,7 @@ impl App {
         self.map_mode = false;
         self.throttle = 0.0;
         self.attitude = ose_net::AttitudeMode::Up;
+        self.adopt_attitude = true;
         self.follow = Some(vessel);
         if let Some(el) = self.doc.get_element_by_id("flight-hud") {
             el.class_list().add_1("open").ok();
@@ -5482,6 +5555,19 @@ impl App {
         let Some(vessel) = self.flying else { return };
         if menu_open {
             self.keys.clear();
+        }
+        if self.adopt_attitude {
+            let held = self
+                .scene
+                .as_ref()
+                .and_then(|s| s.vessel(vessel))
+                .and_then(|v| v.flight.as_ref())
+                .map(|f| (f.attitude, f.throttle));
+            if let Some((att, thr)) = held {
+                self.attitude = att;
+                self.throttle = thr;
+                self.adopt_attitude = false;
+            }
         }
         if self.flying_eva() {
             self.eva_keys_tick(now, dt);
