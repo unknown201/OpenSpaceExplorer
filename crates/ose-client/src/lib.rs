@@ -6695,6 +6695,85 @@ impl App {
                 }
             }
         }
+        // Trajectory events (Map3DTrajectoryEvents): where the planning vessel enters or leaves a sphere of
+        // influence or hits the ground, and the periapsis around each body it is captured by, with countdowns.
+        let mut events: Vec<(GV, String)> = Vec::new();
+        if let Some(patches) = planner.and_then(|id| scene.trajectories.get(&id)) {
+            for (k, p) in patches.iter().enumerate() {
+                let Some(body) = scene.bodies.get(p.body as usize) else {
+                    continue;
+                };
+                let orbit = scene::orbit_from(body.mu, &p.orbit);
+                let at = |t: f64| to_km(positions[p.body as usize] + orbit.position_at(t));
+                if p.end_ut.is_finite() && p.end_ut > ut {
+                    let when = hud::fmt_dt(p.end_ut - ut);
+                    let text = match p.end {
+                        PatchEnd::Encounter => patches
+                            .get(k + 1)
+                            .and_then(|n| scene.bodies.get(n.body as usize))
+                            .map(|b| format!("{} encounter {when}", b.id)),
+                        PatchEnd::Escape => Some(format!("{} escape {when}", body.id)),
+                        PatchEnd::Collision => Some(format!("Impact {when}")),
+                        _ => None,
+                    };
+                    if let Some(text) = text {
+                        events.push((at(p.end_ut), text));
+                    }
+                }
+                // Periapsis inside a later patch around another body (a flyby or capture).
+                if k > 0 && Some(p.body) != patches.first().map(|f| f.body) {
+                    let (_, (pe_alt, pe_dt)) = hud::apsides(&p.orbit, body.radius_m, body.mu, ut);
+                    let pe_ut = ut + pe_dt;
+                    if pe_dt.is_finite() && pe_ut >= p.start_ut && pe_ut <= p.end_ut {
+                        events.push((
+                            at(pe_ut),
+                            format!(
+                                "{} Pe {} {}",
+                                body.id,
+                                hud::fmt_dist(pe_alt),
+                                hud::fmt_dt(pe_dt)
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+        for k in 0..8 {
+            let id = format!("map-ev-{k}");
+            let el = match self.doc.get_element_by_id(&id) {
+                Some(e) => e,
+                None => {
+                    let Ok(e) = self.doc.create_element("div") else {
+                        continue;
+                    };
+                    e.set_id(&id);
+                    e.set_class_name("apsis event");
+                    e.set_attribute("data-ose", "trajectory-event").ok();
+                    self.labels.append_child(&e).ok();
+                    e
+                }
+            };
+            let Some(el) = el.dyn_ref::<HtmlElement>() else {
+                continue;
+            };
+            let style = el.style();
+            match events
+                .get(k)
+                .and_then(|(p, t)| project(*p).map(|xy| (xy, t)))
+            {
+                Some(((x, y), text)) => {
+                    style.set_property("left", &format!("{x:.1}px")).ok();
+                    style.set_property("top", &format!("{y:.1}px")).ok();
+                    style.set_property("visibility", "visible").ok();
+                    if el.text_content().as_deref() != Some(text.as_str()) {
+                        el.set_text_content(Some(text));
+                    }
+                }
+                None => {
+                    style.set_property("visibility", "hidden").ok();
+                }
+            }
+        }
         // Apoapsis and periapsis markers on the followed vessel's current patch, with the altitude and the time
         // to each (the original's Map3DTrajectoryEvents Ap/Pe markers).
         let marked = self.flying.or(self.follow);
