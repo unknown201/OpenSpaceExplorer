@@ -22,6 +22,18 @@ values, and says so below.
 - Vertex height: `PQS.GetSurfaceHeight` (see `terrain.md`): `radius - oceanAltitude + global map * heightMapScale +
   tiled detail layers + decals`. The tiled layers (`largeR..A`, `mediumR..A`, `subzone3/4R..A`: a height map, a
   `uvScale` repeat count and a `heightScale` in metres each) are weighted by the biome mask channel they belong to.
+- Collision fidelity (ours): the server and the client read the same terrain pack and the same
+  `TerrainMap::height_m`, so the only gap is the drawn mesh being linear between grid vertices.
+  `examples/terrain_fidelity.rs` measures it on Kerbin: level 12 (7.2 m vertices, drawn within about 730 m of
+  the camera) median 0.01 m, p99 0.10 m, max 0.4 m; level 11 p99 0.37 m, max 2.2 m; level 10 p99 1.3 m.
+  A landed craft therefore sits within half a metre of the ground it is drawn on.
+- The KSC campus: the server stands craft on the campus scene's own planes (`ose_sim::campus`, areas from
+  `KSC_AREAS`), the client draws the campus model there and sinks the terrain 20 m under it;
+  `examples/ksc_ground.rs` checks the spawns against the server (pad 1 exact). Two known gaps: the client's
+  sunk area (all facility boxes) reaches the Boat_Launch box (scene x 2048 to 3374) where the server's campus
+  ground stops at x 2048, so there the server uses the terrain; and the terrain pack's launch-pad flats for
+  pads 2 to 4 sit at the install's site coordinates, 400 to 900 m from the campus model's pads (pad 2's and
+  pad 4's partly outside the campus, as small plateaus), since the campus is fitted to all four pads at once.
 - Scaled space: beyond `heightMapInfo.scaledToLocalTransition` (Kerbin 5,000 km, blend 500 km) the body is the
   scaled-space sphere with `<body>_scaled` material (albedo `_MainTex`, normal, packed map, pole textures).
 
