@@ -296,6 +296,8 @@ struct App {
     /// Training Center's Lessons tab (Kerbal Space Academy): shown instead of the Kerbals, the lesson picked,
     /// and the lessons from assets/ui/tutorials.json.
     tc_lessons: bool,
+    /// VAB offset tool (2): arrows and Q/E move the selected part.
+    vab_offset: bool,
     lesson_selected: Option<String>,
     academy: Option<tutorials::Academy>,
     lesson_run: std::cell::RefCell<Option<LessonRun>>,
@@ -664,6 +666,7 @@ pub fn start() -> Result<(), JsValue> {
         roster: Vec::new(),
         tc_selected: None,
         tc_lessons: false,
+        vab_offset: false,
         lesson_selected: None,
         academy: None,
         lesson_run: std::cell::RefCell::new(None),
@@ -2566,6 +2569,14 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         cb.forget();
     }
     wire(
+        "vab-offset",
+        Box::new(|a| {
+            let mut app = a.borrow_mut();
+            app.vab_offset = !app.vab_offset;
+            app.render_vab();
+        }),
+    )?;
+    wire(
         "vab-launch",
         Box::new(|a| {
             a.borrow().lesson_event("VABLaunchButtonPressedMessage");
@@ -3434,6 +3445,34 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                     "KeyC" if !ctrl => {
                         app.vab_snap = !app.vab_snap;
                         app.render_vab();
+                        true
+                    }
+                    // The original's tool numbers: 1 places parts, 2 is the offset tool.
+                    "Digit1" | "Digit2" if !ctrl => {
+                        app.vab_offset = code == "Digit2";
+                        app.render_vab();
+                        true
+                    }
+                    "ArrowUp" | "ArrowDown" | "ArrowLeft" | "ArrowRight" | "KeyQ" | "KeyE"
+                        if app.vab_offset && app.editor.selected.is_some() && !ctrl =>
+                    {
+                        let step = if ev.shift_key() { 0.25 } else { 0.05 };
+                        let d = match code.as_str() {
+                            "ArrowUp" => ose_math::DVec3::new(0.0, step, 0.0),
+                            "ArrowDown" => ose_math::DVec3::new(0.0, -step, 0.0),
+                            "ArrowLeft" => ose_math::DVec3::new(-step, 0.0, 0.0),
+                            "ArrowRight" => ose_math::DVec3::new(step, 0.0, 0.0),
+                            "KeyQ" => ose_math::DVec3::new(0.0, 0.0, -step),
+                            _ => ose_math::DVec3::new(0.0, 0.0, step),
+                        };
+                        if let Some(i) = app.editor.selected {
+                            app.vab_record();
+                            if app.editor.offset(i, d) {
+                                app.render_vab();
+                            } else {
+                                set_text(&app.doc, "vab-report", "the root part stays put");
+                            }
+                        }
                         true
                     }
                     "ArrowUp" | "ArrowDown" => {
@@ -5967,6 +6006,9 @@ impl App {
                 b.class_list().toggle_with_force("on", on).ok();
             }
         }
+        if let Some(b) = self.doc.get_element_by_id("vab-offset") {
+            b.class_list().toggle_with_force("on", self.vab_offset).ok();
+        }
         if let Some(b) = self.doc.get_element_by_id("vab-snap") {
             b.class_list().toggle_with_force("on", self.vab_snap).ok();
         }
@@ -6942,7 +6984,8 @@ impl App {
     ) -> Vec<(usize, String, ose_math::DVec3, ose_math::DVec3)> {
         let stacks = held
             .and_then(|id| self.catalog.get(id))
-            .is_none_or(|s| s.attach_nodes.iter().any(vab::PartSpec::is_stack_node));
+            .is_none_or(|s| s.attach_nodes.iter().any(vab::PartSpec::is_stack_node))
+            && !(self.keys.is("AltLeft") || self.keys.is("AltRight"));
         if stacks {
             self.editor.free_nodes(&self.catalog)
         } else {

@@ -566,6 +566,21 @@ impl Editor {
         }
     }
 
+    /// The offset tool: move part `i` and everything under it by `delta` (craft frame, metres). The root
+    /// stays put (moving it would move the whole craft).
+    pub fn offset(&mut self, i: usize, delta: DVec3) -> bool {
+        if self.craft.parts.get(i).is_none_or(|p| p.parent.is_none()) {
+            return false;
+        }
+        let inside = self.subtree(i);
+        for (k, p) in self.craft.parts.iter_mut().enumerate() {
+            if inside[k] {
+                p.local_position = p.local_position + delta;
+            }
+        }
+        true
+    }
+
     /// Lift part `i` and everything under it off the craft. Grabbing the root lifts the whole craft.
     pub fn detach(&mut self, i: usize, catalog: &Catalog) -> Option<Fragment> {
         if i >= self.craft.parts.len() {
@@ -1567,6 +1582,24 @@ mod tests {
         assert!((after.y - before.y).abs() < 1e-9 && (after.x - before.x).abs() < 1e-9);
         let w = turn_then(axis_turn(1, 90.0), axis_turn(1, 90.0));
         assert!((quat_rotate(w, DVec3::new(1.0, 0.0, 0.0)).x + 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn the_offset_tool_moves_a_part_with_what_hangs_on_it() {
+        let cat = catalog();
+        let mut e = Editor::new("test");
+        let pod = e.add_part(&cat["pod"], &cat).unwrap();
+        let tank = e.add_part(&cat["tank"], &cat).unwrap();
+        let engine = e.add_part(&cat["engine"], &cat).unwrap();
+        let (t0, e0) = (
+            e.craft.parts[tank].local_position,
+            e.craft.parts[engine].local_position,
+        );
+        assert!(e.offset(tank, DVec3::new(0.1, 0.0, 0.0)));
+        assert!((e.craft.parts[tank].local_position.x - t0.x - 0.1).abs() < 1e-12);
+        assert!((e.craft.parts[engine].local_position.x - e0.x - 0.1).abs() < 1e-12);
+        // The root does not move.
+        assert!(!e.offset(pod, DVec3::new(1.0, 0.0, 0.0)));
     }
 
     #[test]
