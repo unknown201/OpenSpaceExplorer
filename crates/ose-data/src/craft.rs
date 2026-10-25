@@ -46,7 +46,7 @@ pub struct StoredResource {
     pub capacity_units: f64,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Craft {
     pub name: String,
     pub description: String,

@@ -308,6 +308,26 @@ pub struct Latch {
     pub distance_m: f64,
 }
 
+/// A vessel's parts as a save keeps them: its craft as launched (tanks holding what they hold now), which
+/// parts are still on, and what each part is doing.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SavedParts {
+    pub craft: Craft,
+    pub present: Vec<bool>,
+    pub deployed: Vec<bool>,
+    pub chutes: Vec<structure::Chute>,
+    pub chute_open: Vec<f64>,
+    pub temperature_k: Vec<f64>,
+    pub gear_out: Vec<bool>,
+    pub converter_on: Vec<bool>,
+    pub fairing_deployed: Vec<bool>,
+    pub bay_open: Vec<bool>,
+    #[serde(default)]
+    pub control_part: Option<String>,
+    #[serde(default)]
+    pub debris: bool,
+}
+
 /// Counts changes to a vessel's craft (`VesselState::craft_rev`).
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct CraftRev(pub u32);
@@ -340,6 +360,94 @@ impl Universe {
             .unwrap_or(0)
             .wrapping_mul(1024)
             .wrapping_add(lost)
+    }
+
+    /// What a save keeps of a vessel's parts (`None` without a craft).
+    pub fn saved_parts(&self, e: Entity) -> Option<SavedParts> {
+        let mut craft = self.world.get::<CraftDoc>(e)?.0.clone();
+        let debris = self.world.get::<crate::vessels::Debris>(e).is_some();
+        let control_part = self.world.get::<ControlPart>(e).map(|c| c.0.clone());
+        let Some(st) = self.world.get::<structure::Structure>(e) else {
+            return Some(SavedParts {
+                present: vec![true; craft.parts.len()],
+                craft,
+                control_part,
+                debris,
+                ..Default::default()
+            });
+        };
+        for t in &st.net.tanks {
+            let name = &st.net.resources[t.resource];
+            if let Some(r) = craft.parts[t.part]
+                .resources
+                .iter_mut()
+                .find(|r| r.resource.eq_ignore_ascii_case(name))
+            {
+                r.stored_units = t.stored;
+            }
+        }
+        Some(SavedParts {
+            craft,
+            present: st.rigid.present.clone(),
+            deployed: st.deployed.clone(),
+            chutes: st.chutes.clone(),
+            chute_open: st.chute_open.clone(),
+            temperature_k: st.temperature_k.clone(),
+            gear_out: st.gear_out.clone(),
+            converter_on: st.converter_on.clone(),
+            fairing_deployed: st.fairing_deployed.clone(),
+            bay_open: st.bay_open.clone(),
+            control_part,
+            debris,
+        })
+    }
+
+    /// Give a restored vessel its parts back as `saved_parts` kept them (its flight state set first: the
+    /// structure follows its stage).
+    pub fn restore_parts(
+        &mut self,
+        e: Entity,
+        saved: &SavedParts,
+        defs: &[PartDef],
+        resources: &[ose_data::ResourceDef],
+    ) {
+        self.set_craft(e, saved.craft.clone());
+        let mut st = structure::Structure::build(&saved.craft, defs, resources);
+        let n = st.rigid.len();
+        let gone: Vec<usize> = (0..n)
+            .filter(|&i| !saved.present.get(i).copied().unwrap_or(true))
+            .collect();
+        if !gone.is_empty() {
+            st.rigid.remove_parts(&gone);
+            st.net.remove_parts(&gone);
+        }
+        let copy = |dst: &mut Vec<bool>, src: &[bool]| {
+            if src.len() == dst.len() {
+                dst.copy_from_slice(src);
+            }
+        };
+        copy(&mut st.deployed, &saved.deployed);
+        copy(&mut st.gear_out, &saved.gear_out);
+        copy(&mut st.converter_on, &saved.converter_on);
+        copy(&mut st.fairing_deployed, &saved.fairing_deployed);
+        copy(&mut st.bay_open, &saved.bay_open);
+        if saved.chutes.len() == n {
+            st.chutes.clone_from(&saved.chutes);
+        }
+        if saved.chute_open.len() == n {
+            st.chute_open.clone_from(&saved.chute_open);
+        }
+        if saved.temperature_k.len() == n {
+            st.temperature_k.clone_from(&saved.temperature_k);
+        }
+        st.update_shielding();
+        self.set_structure(e, st);
+        if let Some(g) = &saved.control_part {
+            self.world.entity_mut(e).insert(ControlPart(g.clone()));
+        }
+        if saved.debris {
+            self.world.entity_mut(e).insert(crate::vessels::Debris);
+        }
     }
 
     /// The part (index into `current_craft`) the vessel is controlled from, when it is not the root.

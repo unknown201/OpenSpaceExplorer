@@ -184,7 +184,7 @@ pub fn rotated(craft: &Craft, r: ose_data::craft::Quat) -> Craft {
 }
 
 /// A parachute's state (`DeploymentStates`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Chute {
     #[default]
     Stowed,

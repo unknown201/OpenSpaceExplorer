@@ -35,6 +35,10 @@ pub struct SavedVessel {
     /// so a restored vessel gets its structure back.
     #[serde(default)]
     pub craft: Option<ose_data::craft::Craft>,
+    /// The parts as launched with which are still on and what each is doing (crew and docked joints count
+    /// in its indices). Older saves have only `craft`.
+    #[serde(default)]
+    pub parts: Option<ose_sim::docking::SavedParts>,
     #[serde(default)]
     pub crew: Vec<(usize, String)>,
     #[serde(default)]
@@ -165,6 +169,7 @@ pub fn capture(
                 science: u.science_carried(e),
                 experiments: u.running_experiments(e),
                 craft: u.current_craft(e),
+                parts: u.saved_parts(e),
                 crew: u.crew(e),
                 docked: u.docked_links(e),
                 eva: u.eva_kerbal(e).map(|k| k.name.clone()),
@@ -216,7 +221,11 @@ pub fn restore(
         if !v.experiments.is_empty() {
             u.set_running_experiments(e, v.experiments.clone());
         }
-        if let Some(craft) = &v.craft {
+        if let Some(saved) = &v.parts {
+            u.set_crew(e, v.crew.clone());
+            u.restore_parts(e, saved, parts, resources);
+            u.set_docked(e, v.docked.clone());
+        } else if let Some(craft) = &v.craft {
             u.set_craft(e, craft.clone());
             u.set_crew(e, v.crew.clone());
             u.set_structure(
@@ -266,4 +275,68 @@ pub fn read(path: &Path) -> anyhow::Result<Option<SaveFile>> {
         save.version
     );
     Ok(Some(save))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_save_keeps_what_the_parts_are_doing_and_which_are_gone() {
+        let bodies: Vec<ose_data::CelestialBody> =
+            serde_json::from_str(include_str!("../../../assets/own/kerbol-system.json")).unwrap();
+        let crafts: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let defs: Vec<ose_data::PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let res: Vec<ose_data::ResourceDef> =
+            serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
+        let k1 = crafts.iter().find(|c| c.name == "Kerbal K1").unwrap();
+        let spec = |c: &ose_data::craft::Craft| {
+            let r = ose_data::staging::delta_v_by_stage(c, &defs, &res);
+            ose_sim::flight::FlightSpec::from_report(&r, &[], &[], 1.5)
+        };
+        let mut u = Universe::with_bodies(&bodies);
+        let kerbin = u.body_entity("Kerbin").unwrap();
+        let v = u.spawn_vessel_in_circular_orbit("K1", kerbin, 100_000.0);
+        let (r, vel) = u.vessel(v).unwrap().2.state_at(u.ut());
+        let mut p = ose_sim::flight::Powered::new(spec(k1), r, vel, false);
+        p.throttle = 0.001;
+        p.facing = r.normalized();
+        u.set_powered(v, p);
+        u.set_craft(v, k1.clone());
+        u.set_structure(v, ose_sim::structure::Structure::build(k1, &defs, &res));
+        u.step();
+        u.stage(v);
+        u.stage(v);
+        let mut list = vec![(v, 1, None)];
+        for (_, d) in u.take_broken_off() {
+            list.push((d, list.len() as u64 + 1, None));
+        }
+        let before = u.saved_parts(v).unwrap();
+        let lost = before.present.iter().filter(|x| !**x).count();
+        assert!(lost > 0, "the boosters are gone");
+        let file = capture(&u, &list, &Campaign::default(), &[]);
+        let file: SaveFile = serde_json::from_str(&serde_json::to_string(&file).unwrap()).unwrap();
+        let mut nu = Universe::with_bodies(&bodies);
+        let reg = restore(&mut nu, &file, &defs, &res);
+        let e = reg.iter().find(|x| x.1 == 1).unwrap().0;
+        let after = nu.saved_parts(e).unwrap();
+        assert_eq!(after.present, before.present);
+        assert_eq!(after.deployed, before.deployed);
+        assert_eq!(
+            nu.current_craft(e).unwrap().parts.len(),
+            u.current_craft(v).unwrap().parts.len()
+        );
+        assert_eq!(
+            nu.powered(e).map(|p| p.stage),
+            u.powered(v).map(|p| p.stage),
+            "same stage"
+        );
+        let debris = reg.iter().find(|x| x.1 == 2).unwrap().0;
+        assert!(
+            nu.saved_parts(debris).unwrap().debris,
+            "debris stays debris"
+        );
+    }
 }
