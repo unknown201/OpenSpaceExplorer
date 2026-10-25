@@ -1150,6 +1150,25 @@ impl FlightView {
                 items.push(it);
             }
         }
+        // Re-entry: a glowing shock cone wraps the craft from its leading side and trails back into the
+        // airflow, brighter with the heat flux (the particle streaks are the effects system's; this is the
+        // sheath). The flame cone stands its base at the nose and its tip downstream.
+        let flux = readout
+            .map(|f| f.heat.iter().map(|h| h.3).fold(0.0f32, f32::max) as f64)
+            .unwrap_or(0.0);
+        let plasma = ((flux - 20.0) / 400.0).clamp(0.0, 1.0);
+        if plasma > 0.02 {
+            gpu.request_model("fx:flame", "assets/fx/flame.glb");
+            if gpu.has_model("fx:flame") {
+                let rot = DQuat::from_rotation_arc(DVec3::NEG_Y, trail);
+                let at = pos - trail * 1.5;
+                let mut it =
+                    DrawItem::lit("fx:flame".into(), at - cam, rot, 4.0 + 6.0 * plasma, sun);
+                it.emissive = 1.0;
+                it.color = [1.0, 0.55, 0.35, (0.25 + 0.5 * plasma) as f32];
+                items.push(it);
+            }
+        }
         // Sky: blue low in the atmosphere, black above it.
         let t = if inp.atmosphere_m > 0.0 {
             (alt / inp.atmosphere_m).clamp(0.0, 1.0)
