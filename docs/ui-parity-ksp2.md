@@ -86,6 +86,8 @@ Camera rule that runs through every map: **the right button drags the camera, th
 | M9 | Tracking Station object filters (vessel, debris, astronaut, flag) and the debris marker | filter toggles with counts above the list (Vessels, Debris, Kerbals, Flags); debris has the original's debris icon in the list and on the map | done |
 | M10 | Map: left click focuses, double click takes control | a click on a vessel follows it, a double click on one of yours takes control of it (staying on the map); a double click in the Tracking Station list flies it | done |
 | M11 | Warp to an orbital event from its marker | a click on Ap, Pe, an encounter, escape, impact or a periapsis on the way warps to just before it | done |
+| M12 | Several maneuver nodes, each planned on the orbit the one before leaves | Add next (node panel) or a click on the path after a node adds another; the others show as ringed markers, a click edits one; Delete node removes the one edited (protocol 46 ScheduleBurns) | done |
+| L1 | KSP2 layout and type (Josh's screenshots, 2026-10-25) | flight HUD: navball cluster bottom left, time warp bottom centre, views and app bar along the bottom, staging with a big green STAGE bottom right, vessel actions down the left edge, crew top right; VAB: tools in a bar at the bottom, name top left, reports, Save and a green Launch top right; Realtime Rounded from the install (tools/export_fonts.py) | done |
 
 ### VAB (Josh's #6)
 
