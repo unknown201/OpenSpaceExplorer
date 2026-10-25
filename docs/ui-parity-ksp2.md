@@ -38,6 +38,7 @@ Camera rule that runs through every map: **the right button drags the camera, th
 | G7 | Esc menu: resume, save, load, revert to launch/VAB, recover, KSC, Tracking Station, Mission Control, R&D, VAB, settings, quit | resume, KSC, Tracking Station, revert to launch / VAB, settings, exit ("Build 3D world and menu replica"); F5/F9 quicksave and quickload | done (restyle in progress); revert/save/load server |
 | G8 | First-time hints: PAIGE explains each building on the first visit and the first map view, maneuver, EVA (FTUE scripts) | the original's hint scripts and PAIGE's portraits play on the first visit to the KSC, VAB, R&D, Mission Control, Tracking Station and flight, and on the first map view, maneuver node and EVA; Continue, No more hints, and Settings > Interface turns them back on from the start | done |
 | G9 | Numpad 1 mutes the game, Numpad 2 the music | same, with a toast; listed in Settings > Input | done |
+| G10 | EVA: W/S walk, A/D turn, Q/E strafe, Space jump, Shift run, Shift/Ctrl jetpack up/down | W/S walk ahead or back, A/D turn, Q/E step sideways, Space fires the jetpack up, F boards; no run, jump or jetpack descent (the server walks at one pace) | partly done |
 
 ### Flight
 

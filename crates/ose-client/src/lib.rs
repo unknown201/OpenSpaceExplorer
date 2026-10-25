@@ -6216,30 +6216,38 @@ impl App {
             .is_some_and(|f| f.eva)
     }
 
-    /// A Kerbal on EVA, as the original's EVA keys: W walks ahead, S backs up, A/D turn, Space fires the
-    /// jetpack straight up. The server walks a Kerbal with throttle and a level heading, and flies the jetpack
-    /// when the attitude points steeply up.
+    /// A Kerbal on EVA, as the original's EVA keys: W walks ahead, S backs up, A/D turn, Q/E step sideways,
+    /// Space fires the jetpack straight up. The server walks a Kerbal with throttle and a level heading, and
+    /// flies the jetpack when the attitude points steeply up.
     fn eva_keys_tick(&mut self, now: f64, dt: f64) {
         let k = &self.keys;
-        let (walk, turn, jet) = (-k.pitch(), k.yaw(), k.is("Space"));
+        let (walk, strafe, turn, jet) = (-k.pitch(), k.roll(), k.yaw(), k.is("Space"));
         let heading = match self.attitude {
             ose_net::AttitudeMode::PitchHeading { heading_deg, .. } => heading_deg,
             _ => self.facing_pitch_heading().map(|(_, h)| h).unwrap_or(90.0),
         };
         let heading = (heading + turn * 90.0 * dt).rem_euclid(360.0);
+        // The walk direction relative to the Kerbal's own heading: ahead, back, to either side or between.
+        let moving = walk != 0.0 || strafe != 0.0;
         let (pitch_deg, heading_deg, throttle) = if jet {
             (85.0, heading, 1.0)
-        } else if walk < 0.0 {
-            (0.0, (heading + 180.0).rem_euclid(360.0), 1.0)
+        } else if moving {
+            let off = strafe.atan2(walk).to_degrees();
+            (
+                0.0,
+                (heading + off).rem_euclid(360.0),
+                walk.hypot(strafe).min(1.0),
+            )
         } else {
-            (0.0, heading, walk.max(0.0))
+            (0.0, heading, 0.0)
         };
         let attitude = ose_net::AttitudeMode::PitchHeading {
             pitch_deg,
-            // Backing up faces the walk direction for the server; the kept heading stays the Kerbal's own.
+            // Backing up or stepping sideways faces the walk direction for the server; the kept heading stays
+            // the Kerbal's own.
             heading_deg,
         };
-        if walk < 0.0 {
+        if moving && !jet {
             self.attitude = ose_net::AttitudeMode::PitchHeading {
                 pitch_deg: 0.0,
                 heading_deg: heading,
@@ -6247,7 +6255,7 @@ impl App {
         } else {
             self.attitude = attitude;
         }
-        let changed = throttle != self.throttle || turn != 0.0 || jet || walk != 0.0;
+        let changed = throttle != self.throttle || turn != 0.0 || jet || moving;
         if changed || self.controls_dirty {
             self.throttle = throttle;
             self.controls_dirty = true;
