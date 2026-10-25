@@ -35,6 +35,20 @@ pub fn next_warp(current: u32) -> u32 {
         .unwrap_or(WARP_LADDER[WARP_LADDER.len() - 1])
 }
 
+/// The warp to ask for with `remaining_s` of game time left before a warp-to point: the fastest rate that
+/// still leaves about four seconds of real time, down to 1x for the last ten seconds.
+pub fn warp_toward(remaining_s: f64) -> u32 {
+    if remaining_s <= 10.0 {
+        return 1;
+    }
+    WARP_LADDER
+        .iter()
+        .rev()
+        .copied()
+        .find(|&w| w as f64 * 4.0 <= remaining_s - 5.0)
+        .unwrap_or(1)
+}
+
 pub fn prev_warp(current: u32) -> u32 {
     WARP_LADDER
         .iter()
@@ -47,6 +61,14 @@ pub fn prev_warp(current: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn warp_steps_down_toward_the_point() {
+        assert_eq!(warp_toward(5.0), 1);
+        assert_eq!(warp_toward(30.0), 5);
+        assert_eq!(warp_toward(500.0), 100);
+        assert_eq!(warp_toward(1.0e7), 100_000);
+    }
 
     #[test]
     fn formats_like_the_original() {
