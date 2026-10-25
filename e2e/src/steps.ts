@@ -543,7 +543,8 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
       }
       let particles = "";
       // The authored engine effects are game assets: a server without them (CI) has nothing to burn.
-      const fxAssets = (await page.request.get(`${baseURL}/assets/fx/effects.json`).catch(() => null))?.ok() ?? false;
+      const fxResp = await page.request.get(`${baseURL}/assets/fx/effects.json`).catch(() => null);
+      const fxAssets = !!fxResp && fxResp.ok() && (fxResp.headers()["content-type"] ?? "").includes("json");
       // ...and they draw through WebGPU: on the 2D fallback (no adapter, or a device that failed) there are none.
       const webgpu = await page.evaluate(() => document.body.classList.contains("webgpu"));
       if (fxAssets && webgpu && (await hud.first().getAttribute("data-ose-particles")) !== null) {
