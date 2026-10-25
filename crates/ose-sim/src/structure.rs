@@ -84,6 +84,14 @@ pub struct Structure {
     pub converter_running: Vec<f64>,
     /// Each part's decoupler push (`ejectionForce`, 0 for other parts).
     pub ejection_force: Vec<f64>,
+    /// Fairings: for each fairing base, the parts it covers (everything stacked on its top node) and
+    /// whether it was jettisoned; cargo bays and whether they are open; and which parts the airflow cannot
+    /// reach (no drag, no re-entry heat).
+    pub fairing_payload: Vec<Option<Vec<usize>>>,
+    pub fairing_deployed: Vec<bool>,
+    pub cargo_bay: Vec<bool>,
+    pub bay_open: Vec<bool>,
+    pub shielded: Vec<bool>,
     /// RCS thrusters on the parts.
     pub rcs_defs: Vec<Option<ose_data::Rcs>>,
     /// Lifting surfaces (their curves resolved), intake areas, and each engine's jet curves.
@@ -173,6 +181,10 @@ pub enum Chute {
     /// Cut away (after landing) or torn off (opened too fast).
     Cut,
 }
+
+/// Drag coefficients of a fairing shell end on (a nose cone) and side on (a cylinder): our own figures.
+const FAIRING_CD_FRONT: f64 = 0.3;
+const FAIRING_CD_SIDE: f64 = 0.6;
 
 /// Time constant of engine thrust reaching the structure, s.
 const THRUST_LAG_S: f64 = 0.4;
@@ -436,6 +448,31 @@ impl Structure {
             rcs_defs: (0..n)
                 .map(|i| def_of(i).and_then(|d| d.rcs.clone()))
                 .collect(),
+            fairing_payload: (0..n)
+                .map(|i| {
+                    def_of(i).filter(|d| d.fairing).map(|_| {
+                        // the subtree on the fairing's top node
+                        let mut out = Vec::new();
+                        let mut stack: Vec<usize> = (0..n)
+                            .filter(|&j| {
+                                craft.parts[j].parent == Some(i)
+                                    && craft.parts[j].parent_node.as_deref() == Some("top")
+                            })
+                            .collect();
+                        while let Some(j) = stack.pop() {
+                            out.push(j);
+                            stack.extend((0..n).filter(|&k| craft.parts[k].parent == Some(j)));
+                        }
+                        out
+                    })
+                })
+                .collect(),
+            fairing_deployed: vec![false; n],
+            cargo_bay: (0..n)
+                .map(|i| def_of(i).is_some_and(|d| d.cargo_bay))
+                .collect(),
+            bay_open: vec![false; n],
+            shielded: vec![false; n],
             ejection_force: (0..n)
                 .map(|i| def_of(i).map(|d| d.ejection_force).unwrap_or(0.0))
                 .collect(),
@@ -828,6 +865,7 @@ impl Structure {
             self.trim_to(p.stage);
         }
         p.mass_t = self.net.mass_t().max(0.001);
+        self.update_shielding();
         self.sync_drive(p);
         self.sync_rcs(p);
         p.jet = self
@@ -1061,7 +1099,9 @@ impl Structure {
                     (0.0, 0.0, 2.0 * (s.x * s.y + s.y * s.z + s.x * s.z))
                 }
             };
-            let mut flux = thermal::reentry_flux(mach, exposed[k], airstream, density, cd);
+            // under a fairing or in a closed bay the airflow does not reach it
+            let reach = if self.shielded[i] { 0.0 } else { exposed[k] };
+            let mut flux = thermal::reentry_flux(mach, reach, airstream, density, cd);
             // a heat shield above its ablation temperature turns the heat away while it faces the flow
             // (`Module_Heatshield.ThermalUpdate`) and burns ablator for the heat it takes
             // (`PartComponentModule_Heatshield`)
@@ -1199,7 +1239,7 @@ impl Structure {
             * 0.02
     }
 
-    /// Fire flight stage `stage`'s activations: parachutes in it arm.
+    /// Fire flight stage `stage`'s activations: parachutes in it arm, fairings in it jettison.
     pub fn activate_stage(&mut self, stage: usize) {
         let parts = self
             .stage_activations
@@ -1208,7 +1248,95 @@ impl Structure {
             .unwrap_or_default();
         for i in parts {
             self.arm_chute(i);
+            if self.fairing_payload[i].is_some() && self.rigid.present[i] {
+                self.fairing_deployed[i] = true;
+            }
         }
+        self.update_shielding();
+    }
+
+    /// Jettison every fairing; returns how many.
+    pub fn deploy_fairings(&mut self) -> usize {
+        let mut n = 0;
+        for i in 0..self.fairing_deployed.len() {
+            if self.fairing_payload[i].is_some()
+                && self.rigid.present[i]
+                && !self.fairing_deployed[i]
+            {
+                self.fairing_deployed[i] = true;
+                n += 1;
+            }
+        }
+        self.update_shielding();
+        n
+    }
+
+    /// Open (or close) the cargo bays; returns how many changed.
+    pub fn open_bays(&mut self, open: bool) -> usize {
+        let mut n = 0;
+        for i in 0..self.bay_open.len() {
+            if self.cargo_bay[i] && self.rigid.present[i] && self.bay_open[i] != open {
+                self.bay_open[i] = open;
+                n += 1;
+            }
+        }
+        self.update_shielding();
+        n
+    }
+
+    /// Which parts the airflow cannot reach: under a fairing still on, or inside a closed cargo bay.
+    pub fn update_shielding(&mut self) {
+        let n = self.rigid.len();
+        let mut shielded = vec![false; n];
+        for f in 0..n {
+            if let Some(payload) = &self.fairing_payload[f] {
+                if self.rigid.present[f] && !self.fairing_deployed[f] {
+                    for &j in payload {
+                        shielded[j] = true;
+                    }
+                }
+            }
+            if self.cargo_bay[f] && self.rigid.present[f] && !self.bay_open[f] {
+                let (bc, bh) = self.part_box(f);
+                for (j, s) in shielded.iter_mut().enumerate() {
+                    if j == f || !self.rigid.present[j] {
+                        continue;
+                    }
+                    let (c, _) = self.part_box(j);
+                    let d = c - bc;
+                    if d.x.abs() <= bh.x && d.y.abs() <= bh.y && d.z.abs() <= bh.z {
+                        *s = true;
+                    }
+                }
+            }
+        }
+        self.shielded = shielded;
+    }
+
+    /// The fairings' shells still on, each around its payload: (frontal area, side area), m^2, about the
+    /// vessel axis.
+    fn fairing_shells(&self) -> Vec<(f64, f64)> {
+        (0..self.rigid.len())
+            .filter_map(|f| {
+                let payload = self.fairing_payload[f].as_ref()?;
+                if !self.rigid.present[f] || self.fairing_deployed[f] || payload.is_empty() {
+                    return None;
+                }
+                let (fc, _) = self.part_box(f);
+                let (mut radius, mut top) = (0.0_f64, fc.y);
+                for &j in payload.iter().filter(|&&j| self.rigid.present[j]) {
+                    let (pc, ph) = self.part_box(j);
+                    let d = pc - fc;
+                    radius = radius.max((d.x * d.x + d.z * d.z).sqrt() + ph.x.max(ph.z));
+                    top = top.max(pc.y + ph.y);
+                }
+                let height = (top - fc.y).max(0.1);
+                Some((
+                    std::f64::consts::PI * radius * radius,
+                    height * 2.0 * radius,
+                ))
+            })
+            .collect()
     }
 
     fn arm_chute(&mut self, i: usize) {
@@ -1406,6 +1534,9 @@ impl Structure {
             if !self.rigid.present[i] {
                 continue;
             }
+            if self.shielded[i] {
+                continue;
+            }
             let local = aero::rotate_inverse(self.part_rot[i], du);
             let mut area_drag = match &self.faces[i] {
                 Some(f) => f.area_drag(&self.curves, local, mach),
@@ -1431,6 +1562,12 @@ impl Structure {
             let cda = aero::cda_m2(&self.curves, area_drag, rho * speed);
             self.part_cda_m2[i] = cda;
             total += cda;
+        }
+        // fairing shells still on: a nose cone end on, a cylinder side on
+        let along = du.y.abs().min(1.0);
+        let across = (1.0 - along * along).max(0.0).sqrt();
+        for (front, side) in self.fairing_shells() {
+            total += front * FAIRING_CD_FRONT * along + side * FAIRING_CD_SIDE * across;
         }
         total
     }
@@ -1736,6 +1873,64 @@ mod tests {
         assert!(get(&stage, "Methane").is_some() && get(&stage, "Oxidizer").is_some());
         assert!(get(&stage, "ElectricCharge").is_none(), "{stage:?}");
         assert!(get(&stage, "Methane").unwrap().2 <= methane.2);
+    }
+
+    #[test]
+    fn a_fairing_shields_its_payload_until_it_is_jettisoned() {
+        let (crafts, defs, res) = assets();
+        // the starter rocket with a fairing between the decoupler and the pod: the pod and its parachute
+        // ride inside
+        let mut c = crafts
+            .iter()
+            .find(|c| c.name == "Stock12_StartRocket")
+            .unwrap()
+            .clone();
+        let pod = 0;
+        let fairing = c.parts.len();
+        let mut f = c.parts[1].clone();
+        f.guid = "fairing".into();
+        f.part_id = "fairing_1v_procedural".into();
+        c.parts.push(f);
+        // re-root: the decoupler holds the fairing, the fairing's top holds the pod
+        c.parts[fairing].parent = Some(1);
+        c.parts[fairing].own_node = Some("bottom".into());
+        c.parts[fairing].parent_node = Some("top".into());
+        c.parts[1].parent = None;
+        c.parts[pod].parent = Some(fairing);
+        c.parts[pod].own_node = Some("bottom".into());
+        c.parts[pod].parent_node = Some("top".into());
+        c.stages.push(vec![fairing]);
+        let mut s = Structure::build(&c, &defs, &res);
+        let mut p = flying(DVec3::new(1.0, 0.0, 0.0));
+        s.sync(&mut p);
+        assert_eq!(
+            s.fairing_payload[fairing].as_ref().map(|v| v.len()),
+            Some(2),
+            "pod and chute"
+        );
+        assert!(s.shielded[pod] && s.shielded[4], "inside");
+        let facing = DVec3::new(1.0, 0.0, 0.0);
+        let sideways = DVec3::new(0.0, 200.0, 0.0);
+        s.aero(0, facing, sideways, 1.0, 0.6);
+        assert_eq!(s.part_cda_m2[pod], 0.0, "no drag inside");
+        // re-entry heat does not reach it either
+        s.update_heat(
+            facing,
+            -facing * 2_300.0,
+            0.01,
+            7.0,
+            220.0,
+            0.026,
+            &thermal::HeatSettings::default(),
+            0.5,
+        );
+        assert_eq!(s.reentry_flux_kw[pod], 0.0);
+        // jettisoned: the pod is in the air again
+        assert_eq!(s.deploy_fairings(), 1);
+        assert_eq!(s.deploy_fairings(), 0);
+        assert!(!s.shielded[pod]);
+        s.aero(0, facing, sideways, 1.0, 0.6);
+        assert!(s.part_cda_m2[pod] > 0.0);
     }
 
     #[test]

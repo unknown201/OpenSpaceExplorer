@@ -265,6 +265,12 @@ pub struct PartDef {
     /// A decoupler's push when it fires (`Data_Decouple.ejectionForce`).
     #[serde(default)]
     pub ejection_force: f64,
+    /// A fairing base (`Data_Fairing`, shielding what it covers until jettisoned) or a cargo bay
+    /// (`Data_CargoBay`, shielding what is inside while closed).
+    #[serde(default)]
+    pub fairing: bool,
+    #[serde(default)]
+    pub cargo_bay: bool,
     /// RCS thrusters (`Data_RCS`).
     #[serde(default)]
     pub rcs: Option<Rcs>,

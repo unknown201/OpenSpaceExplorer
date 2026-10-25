@@ -462,6 +462,20 @@ impl Universe {
         Some(state)
     }
 
+    /// Jettison a vessel's fairings; how many, `None` without a structure.
+    pub fn deploy_fairings(&mut self, e: Entity) -> Option<usize> {
+        self.world
+            .get_mut::<structure::Structure>(e)
+            .map(|mut st| st.deploy_fairings())
+    }
+
+    /// Open or close a vessel's cargo bays; how many changed, `None` without a structure.
+    pub fn open_cargo_bays(&mut self, e: Entity, open: bool) -> Option<usize> {
+        self.world
+            .get_mut::<structure::Structure>(e)
+            .map(|mut st| st.open_bays(open))
+    }
+
     /// Switch a vessel's resource converters (fuel cells, reactors) on or off; how many changed, `None`
     /// without a structure.
     pub fn set_converters(&mut self, e: Entity, on: bool) -> Option<usize> {
