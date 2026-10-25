@@ -3222,6 +3222,7 @@ impl App {
             ServerMessage::StageReport {
                 stages,
                 delta_v_vacuum_mps,
+                ..
             } => {
                 self.vab_stages_readout = stages;
                 set_text(

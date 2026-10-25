@@ -1397,14 +1397,21 @@ async fn the_editor_gets_a_stage_report_with_sea_level_twr() {
         },
     )
     .await;
-    let (stages, dv) = wait_for(&mut ws, |m| match m {
+    let (stages, dv, com, cot, dir) = wait_for(&mut ws, |m| match m {
         ServerMessage::StageReport {
             stages,
             delta_v_vacuum_mps,
-        } => Some((stages, delta_v_vacuum_mps)),
+            com_m,
+            cot_m,
+            thrust_dir,
+        } => Some((stages, delta_v_vacuum_mps, com_m, cot_m, thrust_dir)),
         _ => None,
     })
     .await;
+    // the stack hangs below the pod: mass between pod and engine, thrust at the engine pushing up
+    assert!(com.y < 0.0 && com.y > -2.2, "{com:?}");
+    assert!((cot.y + 2.2).abs() < 1e-6, "{cot:?}");
+    assert!(dir.y > 0.99, "{dir:?}");
     assert!(dv > 500.0, "{dv} m/s");
     let s = stages
         .iter()
