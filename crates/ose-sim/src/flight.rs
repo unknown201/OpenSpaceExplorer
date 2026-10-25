@@ -246,9 +246,12 @@ pub struct Powered {
     /// In the air from a jump (the throttle still walks, it does not fire the pack).
     #[serde(default)]
     pub eva_hop: bool,
-    /// Force of the wings and other lifting surfaces this step (lift and their drag), kN, inertial.
+    /// Force of the wings and other lifting surfaces this step (lift and their drag), kN, inertial, and the
+    /// airflow's torque about the centre of mass, kN·m, inertial.
     #[serde(default)]
     pub lift_kn: DVec3,
+    #[serde(default)]
+    pub aero_torque_knm: DVec3,
     /// The burning stage's engines breathe air (jets), and whether the vessel has intakes.
     #[serde(default)]
     pub jet: Option<Jet>,
@@ -678,6 +681,7 @@ impl Powered {
             eva_hop: false,
             rcs: RcsState::default(),
             lift_kn: DVec3::ZERO,
+            aero_torque_knm: DVec3::ZERO,
             jet: None,
             intakes: false,
             level: false,
@@ -1070,6 +1074,10 @@ pub fn integrate(
             0.0
         };
         let w0 = p.angvel;
+        // the airflow turns the craft; SAS (or the pilot) has to hold against it
+        if let Some((_, moi)) = turning_authority(p, frac) {
+            p.angvel = p.angvel + p.aero_torque_knm * (dt / moi);
+        }
         if p.attitude == Attitude::Free {
             spin(p, frac, dt);
         } else {
