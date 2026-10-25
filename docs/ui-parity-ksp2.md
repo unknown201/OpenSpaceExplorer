@@ -43,7 +43,7 @@ Camera rule that runs through every map: **the right button drags the camera, th
 |---|---|---|---|
 | F1 | W/S/A/D/Q/E rotate continuously while held; CapsLock precision | W/S/A/D turn the target at 25°/s while held, Q/E roll (protocol 25), Caps Lock x0.1 | done |
 | F2 | Shift/Ctrl held ramps the throttle at 100%/s | same | done |
-| F3 | T toggles SAS; SAS mode buttons around the navball (stability, prograde, retrograde, normal, anti-normal, radial in/out, target, anti-target, maneuver) | T holds the current direction; SAS buttons with the original's icons beside the navball, lit for the active mode | done, maneuver and target / anti-target modes too |
+| F3 | T toggles SAS; SAS mode buttons around the navball (stability, prograde, retrograde, normal, anti-normal, radial in/out, target, anti-target, maneuver) | T toggles SAS: off sends W/A/S/D/Q/E as rotation (protocol 31) and the craft keeps spinning; on holds where it points; SAS buttons with the original's icons beside the navball, lit for the active mode | done, maneuver and target / anti-target modes too |
 | F4 | G gear, B brakes, U lights, R RCS, 1..0 action groups; action bar with state lights (gear, lights, brakes, solar, radiators, science, abort) | G, B (held) and an action bar with state lights for gear, brakes, solar, chutes, science | done, with lights (U), RCS (R), abort and custom groups 1..0 since protocol 25 |
 | F5 | Rovers: W/S wheel throttle, A/D steer, B brakes | same, through `Drive` while landed | done |
 | F6 | Staging stack: one card per stage with part icons and fuel bars, Space fires the next | one card per stage still to fire with part and parachute icons, the next one lit at the bottom, and a fuel bar for the stage burning now | done |

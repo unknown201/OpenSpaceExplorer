@@ -16,7 +16,11 @@ pub const INPUT: &[(&str, &[Binding])] = &[
             ("Shift / Ctrl", "Throttle up / down (held)", true),
             ("Z / X", "Full throttle / cut", true),
             ("Space", "Stage", true),
-            ("T", "SAS: hold the current direction", true),
+            (
+                "T",
+                "SAS on / off (off: the keys turn the craft directly and it keeps spinning)",
+                true,
+            ),
             ("R", "RCS", true),
             ("G", "Landing gear", true),
             ("B", "Brakes (held)", true),

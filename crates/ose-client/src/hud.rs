@@ -12,7 +12,7 @@ pub const SAS_BUTTONS: &[(&str, &str, &str)] = &[
     (
         "fh-sas-stability",
         "Flight-ICO-StabilityAssist",
-        "Stability assist: hold the current direction (T)",
+        "Stability assist: hold the current direction (T toggles SAS on and off)",
     ),
     (
         "fh-sas-prograde",

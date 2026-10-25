@@ -267,6 +267,8 @@ struct App {
     /// Vessels this client has staged at least once: their first stage is lit, so the next is the one after.
     staged: std::collections::HashSet<u64>,
     roll_sent: f32,
+    /// Rotation input last sent with SAS off (protocol 31 SetRotation): pitch, yaw, roll.
+    rotation_sent: (f32, f32, f32),
     /// Launch sites from the server (protocol 30) and the one chosen (None: launch pad 1), kept per browser.
     launch_sites: Vec<ose_net::LaunchSite>,
     launch_site: Option<String>,
@@ -570,6 +572,7 @@ pub fn start() -> Result<(), JsValue> {
         flight_watch: std::cell::RefCell::new(None),
         staged: Default::default(),
         roll_sent: 0.0,
+        rotation_sent: (0.0, 0.0, 0.0),
         launch_sites: Vec::new(),
         launch_site: stored("ose.launchSite"),
         adopt_attitude: false,
@@ -2699,8 +2702,8 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                         }
                         true
                     }
-                    "KeyT" => {
-                        app.sas_hold();
+                    "KeyT" if !ev.repeat() => {
+                        app.toggle_sas();
                         true
                     }
                     "KeyG" => {
@@ -5478,6 +5481,18 @@ impl App {
 
     /// T: SAS stability assist, holding the direction the vessel points now. (The server always holds some
     /// direction, so there is no free-drifting "SAS off".)
+    /// T: SAS off (the craft keeps turning as it was, keys apply torque) or back on, holding where it points.
+    fn toggle_sas(&mut self) {
+        if matches!(self.attitude, ose_net::AttitudeMode::Free) {
+            self.sas_hold();
+            hud::push(&self.doc, "SAS on", "passive");
+        } else {
+            self.sas_target = None;
+            self.set_attitude(ose_net::AttitudeMode::Free);
+            hud::push(&self.doc, "SAS off", "passive");
+        }
+    }
+
     fn sas_hold(&mut self) {
         let (pitch_deg, heading_deg) = self.facing_pitch_heading().unwrap_or((90.0, 0.0));
         self.set_attitude(ose_net::AttitudeMode::PitchHeading {
@@ -5615,7 +5630,8 @@ impl App {
             self.throttle = (self.throttle + thr_in * input::THROTTLE_RATE * dt).clamp(0.0, 1.0);
             self.controls_dirty = true;
         }
-        if pitch_in != 0.0 || yaw_in != 0.0 {
+        let free = matches!(self.attitude, ose_net::AttitudeMode::Free);
+        if (pitch_in != 0.0 || yaw_in != 0.0) && !free {
             // Start turning from where the vessel points when the target is not a free direction yet.
             let (p, h) = match self.attitude {
                 ose_net::AttitudeMode::PitchHeading {
@@ -5647,6 +5663,28 @@ impl App {
             .map(|f| f.situation == ose_net::FlightSituation::Landed)
             .unwrap_or(false);
         let roll = self.keys.roll() as f32 * self.keys.scale() as f32;
+        // SAS off: the keys turn the craft directly (pitch toward its top, yaw to its right, roll clockwise).
+        let s = self.keys.scale() as f32;
+        let rotation = if free {
+            (pitch_in as f32 * s, yaw_in as f32 * s, roll)
+        } else {
+            (0.0, 0.0, 0.0)
+        };
+        if rotation != self.rotation_sent {
+            self.rotation_sent = rotation;
+            if let Some(ws) = &self.ws {
+                send(
+                    ws,
+                    &ClientMessage::SetRotation {
+                        vessel,
+                        pitch: rotation.0,
+                        yaw: rotation.1,
+                        roll: rotation.2,
+                    },
+                );
+            }
+        }
+        let roll = if free { 0.0 } else { roll };
         if roll != self.roll_sent {
             self.roll_sent = roll;
             if let Some(ws) = &self.ws {
@@ -6391,6 +6429,7 @@ impl App {
             ose_net::AttitudeMode::AntiNormal => "Anti-normal".to_string(),
             ose_net::AttitudeMode::RadialOut => "Radial out".to_string(),
             ose_net::AttitudeMode::RadialIn => "Radial in".to_string(),
+            ose_net::AttitudeMode::Free => "SAS off".to_string(),
             other => format!("{other:?}"),
         };
         set_text(&self.doc, "fh-attitude", &att);
