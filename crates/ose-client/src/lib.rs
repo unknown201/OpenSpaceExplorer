@@ -261,6 +261,9 @@ struct App {
     /// Vessels this client has staged at least once: their first stage is lit, so the next is the one after.
     staged: std::collections::HashSet<u64>,
     roll_sent: f32,
+    /// Docking mode (Delete, the original's ToggleRotLinControls): W/A/S/D and Shift/Ctrl translate instead of
+    /// turning and throttling.
+    lin_mode: bool,
     translate_sent: (f32, f32, f32),
     /// Screen points (CSS px) along the planning vessel's current orbit with their UT, from the last map
     /// frame: a click near one adds a maneuver node there, as clicking an orbit does in the original.
@@ -544,6 +547,7 @@ pub fn start() -> Result<(), JsValue> {
         toasts: hud::Toasts::default(),
         staged: Default::default(),
         roll_sent: 0.0,
+        lin_mode: false,
         translate_sent: (0.0, 0.0, 0.0),
         orbit_pick: Vec::new(),
         mnv_dirs: [(0.0, 0.0); 6],
@@ -2619,6 +2623,19 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                         true
                     }
                     "KeyI" | "KeyJ" | "KeyK" | "KeyL" | "KeyH" | "KeyN" => true,
+                    "Delete" if !ev.repeat() => {
+                        app.lin_mode = !app.lin_mode;
+                        hud::push(
+                            &app.doc,
+                            if app.lin_mode {
+                                "Docking mode: W/A/S/D and Shift/Ctrl translate (RCS on)"
+                            } else {
+                                "Normal controls"
+                            },
+                            "passive",
+                        );
+                        true
+                    }
                     "KeyW" | "KeyA" | "KeyS" | "KeyD" | "KeyQ" | "KeyE" | "KeyB" | "ShiftLeft"
                     | "ShiftRight" | "ControlLeft" | "ControlRight" => true,
                     _ => false,
@@ -5359,7 +5376,11 @@ impl App {
             return;
         }
         let k = &self.keys;
-        let (pitch_in, yaw_in, thr_in) = (k.pitch(), k.yaw(), k.throttle());
+        let (pitch_in, yaw_in, thr_in) = if self.lin_mode {
+            (0.0, 0.0, 0.0)
+        } else {
+            (k.pitch(), k.yaw(), k.throttle())
+        };
         let scale = k.scale();
         let drive = (
             k.wheel_throttle() as f32 * scale as f32,
@@ -5415,6 +5436,16 @@ impl App {
             }
         }
         let (tx, ty, tz) = self.keys.translate();
+        // Docking mode adds W/S up and down, A/D left and right, Shift/Ctrl forward and back.
+        let (tx, ty, tz) = if self.lin_mode {
+            (
+                (tx + self.keys.yaw()).clamp(-1.0, 1.0),
+                (ty + self.keys.throttle()).clamp(-1.0, 1.0),
+                (tz - self.keys.pitch()).clamp(-1.0, 1.0),
+            )
+        } else {
+            (tx, ty, tz)
+        };
         let s = self.keys.scale() as f32;
         let translate = (tx as f32 * s, ty as f32 * s, tz as f32 * s);
         if translate != self.translate_sent {

@@ -28,6 +28,11 @@ pub const INPUT: &[(&str, &[Binding])] = &[
                 "RCS translate right / left, up / down, fore / aft (with RCS on)",
                 true,
             ),
+            (
+                "Delete",
+                "Docking mode: W/A/S/D and Shift/Ctrl translate",
+                true,
+            ),
             ("M", "Map view", true),
             ("V", "Camera mode: auto, free, orbital, chase, locked", true),
             (
