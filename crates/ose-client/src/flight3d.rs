@@ -97,6 +97,16 @@ impl Spin {
     }
 }
 
+/// Open canopy diameter for a chute part, m: the Mk16-XL main, the radial Mk16-R and the drogue.
+fn canopy_diameter(part_id: &str) -> f64 {
+    match part_id {
+        "parachute_1v" => 12.0,
+        "parachute_1v_radial" => 8.0,
+        "parachute_0v_radial_drogue" => 5.0,
+        _ => 8.0,
+    }
+}
+
 /// Model-frame point for body-fixed latitude, longitude (degrees) and radius (m).
 pub fn model_point(lat_deg: f64, lon_deg: f64, radius: f64) -> DVec3 {
     let lat = lat_deg.to_radians();
@@ -632,6 +642,19 @@ impl FlightView {
         } else {
             0.25
         };
+        // How much of the star the craft sees: a moon or planet in front of it dims its parts as it does the
+        // ground (planet.rs, the planet thread's eclipse test).
+        let sun_share = crate::planet::eclipse_visible(pos, sun, &occluders, sun_radius_rad) as f32;
+        // Air streams past opposite the surface velocity; open chutes trail into it.
+        let trail = {
+            let v_surf = v_rel - DVec3::new(0.0, 0.0, spin.omega()).cross(r);
+            if v_surf.length() > 1.0 {
+                dir_to_model(r, -v_surf, spin, inp.ut)
+            } else {
+                up
+            }
+        };
+        let readout = inp.vessel.flight.as_ref();
         // The vessel.
         if let Some(craft) = inp.craft {
             let fired = inp
@@ -677,7 +700,7 @@ impl FlightView {
                         min_y = min_y.min((lp + lq * corner).y);
                     }
                 }
-                parts.push((name, lp, lq));
+                parts.push((i, name, lp, lq));
             }
             let lift = if min_y.is_finite() { -min_y } else { 0.0 };
             // Engine flames: a glowing cone under each lit engine's nozzle, longer with throttle.
@@ -715,16 +738,78 @@ impl FlightView {
                     flames.push(it);
                 }
             }
-            for (name, lp, lq) in parts {
+            // The chute parts' own canopy meshes are skinned in their open pose; the canopy is drawn from the
+            // chute's state instead (below).
+            for name in [
+                "part:parachute_1v",
+                "part:parachute_1v_radial",
+                "part:parachute_0v_radial_drogue",
+            ] {
+                gpu.hide_meshes(
+                    name,
+                    &[
+                        "mesh_parachute_1v_m2_canopy",
+                        "mesh_parachute_1v_m3_radial_canopy",
+                        "mesh_parachute_0v_m1_drogue_canopy",
+                    ],
+                );
+            }
+            let chutes: HashMap<u16, (ose_net::ChuteState, f32)> = readout
+                .map(|f| {
+                    f.parachutes
+                        .iter()
+                        .map(|(i, s, o)| (*i, (*s, *o)))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let heat: HashMap<u16, f32> = readout
+                .map(|f| {
+                    f.heat
+                        .iter()
+                        .map(|(i, t, max, _)| (*i, if *max > 0.0 { t / max } else { 0.0 }))
+                        .collect()
+                })
+                .unwrap_or_default();
+            for (i, name, lp, lq) in parts {
                 if !gpu.has_model(&name) {
                     continue;
                 }
                 let wpos = pos + vessel_rot * (lp + DVec3::Y * lift);
+                let pid = craft.parts[i].part_id.as_str();
                 let mut it = DrawItem::lit(name, wpos - cam, vessel_rot * lq, 1.0, sun);
                 it.ambient = part_ambient;
                 it.fill_dir = up;
                 it.fill = 0.25;
+                it.sun = sun_share;
+                // Re-entry heat: a part past half its limit glows from dull red to orange-white.
+                if let Some(frac) = heat.get(&(i as u16)) {
+                    let g = ((frac - 0.5) / 0.5).clamp(0.0, 1.0);
+                    if g > 0.0 {
+                        it.color = [1.0, 1.0 - 0.55 * g, 1.0 - 0.85 * g, 1.0];
+                        it.emissive = 0.6 * g;
+                    }
+                }
                 items.push(it);
+                if let Some((state, open)) = chutes.get(&(i as u16)) {
+                    let open = match state {
+                        ose_net::ChuteState::SemiDeployed => open.clamp(0.05, 1.0) * 0.35,
+                        ose_net::ChuteState::Deployed => open.clamp(0.05, 1.0),
+                        _ => 0.0,
+                    };
+                    if open > 0.0 {
+                        gpu.request_model("fx:canopy", "assets/fx/canopy.glb");
+                        if gpu.has_model("fx:canopy") {
+                            let size = canopy_diameter(pid) * open as f64;
+                            let at = wpos
+                                + trail * (canopy_diameter(pid) * 0.8 * (0.4 + 0.6 * open as f64));
+                            let rot = DQuat::from_rotation_arc(DVec3::Y, trail);
+                            let mut c = DrawItem::lit("fx:canopy".into(), at - cam, rot, size, sun);
+                            c.ambient = part_ambient.max(0.35);
+                            c.sun = sun_share;
+                            items.push(c);
+                        }
+                    }
+                }
             }
         } else {
             // Unknown craft (launched from another browser): a probe core as a stand-in.

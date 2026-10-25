@@ -178,6 +178,8 @@ struct App {
     running_since_ms: f64,
     /// The live campaign's id (CampaignState), so stored per-vessel data stays with its campaign.
     campaign_id: String,
+    /// The library craft the flown vessel was launched from, to fill `flight_craft` when its document arrives.
+    flight_craft_id: Option<u64>,
     /// The vehicle selected on the launch pad.
     lp_selected: Option<u64>,
     /// The Tracking Station: open, the selected vessel, the "mine only" filter and the last list refresh (ms).
@@ -432,6 +434,7 @@ pub fn start() -> Result<(), JsValue> {
         running_since_ms: 0.0,
         lp_selected: None,
         campaign_id: String::new(),
+        flight_craft_id: None,
         tracking_open: false,
         ts_selected: None,
         ts_mine_only: false,
@@ -2401,6 +2404,9 @@ impl App {
                 id,
                 craft: Some(craft),
             } => {
+                if self.flying.is_some() && self.flight_craft_id == Some(id) {
+                    self.flight_craft = Some(craft.clone());
+                }
                 self.craft_docs.insert(id, craft);
                 self.draw_thumbnail(id);
                 self.mark_craft_research(id);
@@ -2416,7 +2422,12 @@ impl App {
             } => match (id, summary) {
                 (Some(id), Some(s)) => {
                     self.vab_craft_id = Some(id);
-                    self.craft_docs.remove(&id);
+                    // The saved craft is the editor's: keep it, so Save and launch can draw it on the pad
+                    // straight away, and ask for the server's copy to replace it.
+                    self.craft_docs.insert(id, self.editor.craft.clone());
+                    if let Some(ws) = &self.ws {
+                        send(ws, &ClientMessage::GetCraft { id });
+                    }
                     set_text(
                         &self.doc,
                         "vab-dv",
@@ -4027,6 +4038,12 @@ impl App {
     fn start_flight(&mut self, vessel: u64, craft_id: Option<u64>) {
         self.flying = Some(vessel);
         self.flight_craft = craft_id.and_then(|c| self.craft_docs.get(&c).cloned());
+        self.flight_craft_id = craft_id;
+        // A craft not fetched yet (launched from another screen, or after a reload): ask for it; the flight
+        // view draws it when it arrives.
+        if let (None, Some(c), Some(ws)) = (&self.flight_craft, craft_id, &self.ws) {
+            send(ws, &ClientMessage::GetCraft { id: c });
+        }
         if let Some(c) = craft_id {
             store(&self.craft_link_key(vessel), &c.to_string());
         }
@@ -5489,6 +5506,7 @@ impl App {
                     ambient: 0.0,
                     atmosphere: false,
                     mirror_z: true,
+                    sun: 1.0,
                 });
             }
             if let (Some(orbit), Some(p)) = (scene.orbit(i), b.parent) {

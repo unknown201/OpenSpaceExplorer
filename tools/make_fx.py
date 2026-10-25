@@ -3,6 +3,9 @@
     assets/web/fx/flame.glb   an engine flame: a cone 1 m wide at its base (y = 0), tapering to a point at
                               y = -1, open at the top, alpha blended; the client scales it per engine by
                               throttle and nozzle size and tints it
+    assets/web/fx/canopy.glb  a parachute canopy: a dome 1 m across at its rim (y = 0) rising to y = 0.42, in
+                              alternating orange and white gores, double sided; the client hangs it above each
+                              open chute, scaled by the chute's size and how far it has opened
 
     .venv/Scripts/python tools/make_fx.py
 """
@@ -43,6 +46,43 @@ def cone(segments: int = 24, rings: int = 6):
     return pos, nrm, uv, tris
 
 
+def canopy(gores: int = 12, rings: int = 8):
+    """Two meshes of alternating gores (orange, white) of a dome, rim radius 0.5 at y = 0."""
+    meshes = ([], [], [], []), ([], [], [], [])
+    for g in range(gores):
+        pos, nrm, uv, tris = meshes[g % 2]
+        base = len(pos)
+        steps = 4
+        for k in range(rings + 1):
+            phi = (k / rings) * (math.pi / 2) * 0.92  # 0 at the apex, short of the equator at the rim
+            r = 0.5 * math.sin(phi) / math.sin(math.pi / 2 * 0.92)
+            y = 0.42 * math.cos(phi) / 1.0 - 0.42 * math.cos(math.pi / 2 * 0.92)
+            for s_ in range(steps + 1):
+                a = 2 * math.pi * (g + s_ / steps) / gores
+                x, z = r * math.cos(a), r * math.sin(a)
+                pos.append((x, y, z))
+                n = (math.sin(phi) * math.cos(a), math.cos(phi), math.sin(phi) * math.sin(a))
+                nrm.append(n)
+                uv.append((s_ / steps, k / rings))
+        row = steps + 1
+        for k in range(rings):
+            for s_ in range(steps):
+                a = base + k * row + s_
+                b = a + 1
+                c = a + row
+                d = c + 1
+                tris += [a, c, b, b, c, d]
+    # The renderer culls back faces, so each gore also gets its inside: a copy facing the other way.
+    for pos, nrm, uv, tris in meshes:
+        n0, t0 = len(pos), len(tris)
+        pos += list(pos)
+        nrm += [(-x, -y, -z) for x, y, z in nrm[:n0]]
+        uv += list(uv)
+        for i in range(0, t0, 3):
+            tris += [tris[i] + n0, tris[i + 2] + n0, tris[i + 1] + n0]
+    return meshes
+
+
 def main() -> int:
     out = ROOT / "assets" / "web" / "fx"
     out.mkdir(parents=True, exist_ok=True)
@@ -56,6 +96,18 @@ def main() -> int:
     g.roots.append(g.node("flame", (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0), (1.0, 1.0, 1.0), m, []))
     size = g.write(out / "flame.glb", {"source": "tools/make_fx.py"})
     print(f"fx/flame.glb: {len(pos)} vertices, {size} bytes")
+
+    g = Glb()
+    nodes = []
+    for (pos, nrm, uv, tris), (name, rgba) in zip(canopy(), [("canopy_orange", [0.95, 0.45, 0.12, 1.0]), ("canopy_white", [0.92, 0.92, 0.9, 1.0])]):
+        mat = g.material(name, {})
+        g.materials[mat]["doubleSided"] = True
+        g.materials[mat]["pbrMetallicRoughness"]["baseColorFactor"] = rgba
+        m = g.mesh(name, pos, nrm, uv, tris, mat)
+        nodes.append(g.node(name, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0), (1.0, 1.0, 1.0), m, []))
+    g.roots.append(g.node("canopy", (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0), (1.0, 1.0, 1.0), None, nodes))
+    size = g.write(out / "canopy.glb", {"source": "tools/make_fx.py"})
+    print(f"fx/canopy.glb: {size} bytes")
     return 0
 
 

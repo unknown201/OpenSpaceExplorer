@@ -365,7 +365,7 @@ class Exporter:
             return idx
 
         # Transforms of the whole environment, keyed by path id; the prefab's roots are those whose father
-        # is missing. Collision ("col_*") and reentry LOD objects are skipped, and engine fairings.
+        # is missing. Collision ("col_*") and reentry LOD objects are skipped, and engine fairings and exhaust plumes.
         transforms = {o.path_id: o.read() for o in env.objects if o.type.name == "Transform"}
         go_name = {}
         for o in env.objects:
@@ -404,6 +404,10 @@ class Exporter:
                 # An engine's fairing (the shroud round its bell) shows in the original only when a part hangs
                 # below the engine; drawn always, it turns an LV-T45 into a fat cylinder.
                 if part_id.startswith("engine_") and "fairing" in name.lower():
+                    continue
+                # Exhaust plume meshes (exh_*, vfx_*) are effect geometry the original only shows while the
+                # engine burns; static, they stand as 20 m white cones under every engine.
+                if name.lower().startswith(("exh_", "vfx_")):
                     continue
                 mesh = mf.m_Mesh.read()
             except Exception:  # noqa: BLE001
