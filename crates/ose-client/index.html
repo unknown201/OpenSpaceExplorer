@@ -292,7 +292,7 @@
     #fh-navball { width: calc(200 * var(--u)); height: calc(200 * var(--u)); align-self: flex-end; border-radius: 50%; background: #10141b; box-shadow: 0 0 0 calc(3 * var(--u)) #2a3140, 0 0 calc(12 * var(--u)) #000a; }
     .fh-stress { height: calc(8 * var(--u)); background: #ffffff22; border-radius: calc(4 * var(--u)); overflow: hidden; }
     #fh-stress-fill { height: 100%; width: 0; background: hsl(120, 85%, 50%); transition: width 0.1s linear; }
-    .fh-help { position: absolute; right: calc(16 * var(--u)); bottom: calc(16 * var(--u)); font-size: calc(11 * var(--u)); color: #9fb0cc; max-width: calc(260 * var(--u)); text-align: right; }
+    .fh-help { position: absolute; right: calc(16 * var(--u)); bottom: calc(6 * var(--u)); font-size: calc(11 * var(--u)); color: #9fb0cc; max-width: calc(340 * var(--u)); text-align: right; }
     body:has(#flight-hud.open) #help { display: none; }
     body:has(#flight-hud.open:not(.map)) #hud > :not(#ut):not(.warp) { opacity: 0; pointer-events: none; }
     body:has(#flight-hud.open:not(.map)) #hud { background: none; border: 0; }
@@ -307,14 +307,14 @@
     #flight-hud .fh-sas button.on, #flight-hud .fh-actions button.on { color: #7dff8a; border-color: #7dff8a99; background: #17321ce6; }
     #flight-hud .fh-sas button:disabled, #flight-hud .fh-actions button:disabled { opacity: 0.35; cursor: default; }
     /* Crew portraits above the action bar, as the original's bottom-right Kerbal portraits. */
-    .fh-crewbox { position: absolute; right: calc(16 * var(--u)); bottom: calc(118 * var(--u)); display: flex; gap: calc(6 * var(--u)); pointer-events: auto; }
+    .fh-crewbox { position: absolute; right: calc(16 * var(--u)); bottom: calc(138 * var(--u)); display: flex; gap: calc(6 * var(--u)); pointer-events: auto; }
     .fh-kerbal { width: calc(124 * var(--u)); background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)); overflow: hidden; }
     .fh-kerbal .pic { position: relative; height: calc(78 * var(--u)); display: grid; place-items: center; background: repeating-linear-gradient(0deg, #0e2a1c 0 2px, #12361f 2px 4px); }
     .fh-kerbal .pic i { width: 60%; height: 80%; background: #9fe8a6; -webkit-mask: var(--ico) center / contain no-repeat; mask: var(--ico) center / contain no-repeat; }
     .fh-kerbal .pic .fh-face { width: auto; height: 92%; align-self: end; }
     .fh-kerbal .plate { padding: calc(3 * var(--u)) calc(6 * var(--u)); font-size: calc(11 * var(--u)); color: #e6ecf7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; }
     #flight-hud .fh-kerbal .pic button { position: absolute; top: calc(4 * var(--u)); right: calc(4 * var(--u)); margin: 0; width: auto; padding: 1px 6px; font-size: calc(10 * var(--u)); }
-    .fh-actions { position: absolute; right: calc(16 * var(--u)); bottom: calc(64 * var(--u)); display: flex; gap: calc(4 * var(--u)); background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(8 * var(--u)); padding: calc(6 * var(--u)); }
+    .fh-actions { position: absolute; right: calc(16 * var(--u)); bottom: calc(84 * var(--u)); display: flex; gap: calc(4 * var(--u)); background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(8 * var(--u)); padding: calc(6 * var(--u)); }
     .fh-comm { position: absolute; top: calc(12 * var(--u)); right: calc(16 * var(--u)); display: flex; align-items: center; gap: calc(6 * var(--u)); background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)); padding: calc(4 * var(--u)) calc(10 * var(--u)); font-size: calc(12 * var(--u)); color: #f0a070; pointer-events: auto; }
     .fh-comm i { width: calc(18 * var(--u)); height: calc(18 * var(--u)); background: currentColor; -webkit-mask: var(--ico) center / contain no-repeat; mask: var(--ico) center / contain no-repeat; }
     .fh-comm.on { color: #7dff8a; }
