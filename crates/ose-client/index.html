@@ -397,6 +397,11 @@
     #screen-launchpad #launch-opts { grid-template-columns: auto auto auto 1fr; margin-top: calc(10 * var(--u)); color: #2b2b2b; font-size: calc(13 * var(--u)); }
     #screen-launchpad #launch-opts input[type=number] { background: #fff; color: #0a0a0a; border-color: #6a718f; }
     #screen-launchpad #launch-opts button { margin: 0 0 0 auto; width: auto; background: #ffffffb0; border: 1px solid #6a718f; color: #0a0a0a; font-size: calc(13 * var(--u)); }
+    /* F2 hides the interface (screenshots), F4 the vessel labels; the HUD fades rather than leaving the layout. */
+    body.ui-hidden #hud, body.ui-hidden #flight-hud, body.ui-hidden #crumbs, body.ui-hidden #labels,
+    body.ui-hidden #node-panel, body.ui-hidden #help { opacity: 0 !important; pointer-events: none !important; }
+    body.ui-hidden #hud > *, body.ui-hidden #flight-hud * { pointer-events: none !important; }
+    body.labels-hidden #labels { visibility: hidden; }
   </style>
 </head>
 <body>
@@ -594,7 +599,7 @@
       <div class="fh-stress" data-ose="flight-stress"><div id="fh-stress-fill"></div></div>
       <button id="fh-stage-btn" data-ose="flight-stage" title="Space">STAGE</button>
     </div>
-    <div class="fh-help">Space stage, Z/X throttle, Shift/Ctrl adjust, W/S pitch, A/D heading, T prograde, M map, drag to look</div>
+    <div class="fh-help">W/S/A/D steer (hold, Caps Lock fine), Shift/Ctrl throttle, Z/X full/cut, Space stage, T hold direction, G gear, B brakes, M map, right-drag to look, Home resets the camera</div>
   </div>
   <div id="node-panel" data-ose="node-panel">
     <label>time <input id="node-dt" type="range" min="60" max="600" step="1" value="120" /><span id="node-dt-text">T-2:00</span></label>

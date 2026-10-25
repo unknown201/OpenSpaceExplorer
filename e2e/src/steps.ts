@@ -542,10 +542,19 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
         await page.locator('[data-ose="flight-throttle-cut"]').first().click();
         const cutoff = Date.now();
         // The source launch-smoke recipe lives up to 11 simulation seconds; a debug server with
-        // detailed terrain/physics may advance more slowly than wall time.
-        while (Date.now() - cutoff < 30_000 && (await count() > 0 || await layers() > 0)) await sleep(150);
+        // detailed terrain/physics may advance more slowly than wall time. Shutdown bursts may
+        // start after the mesh disappears, so require a full quiet second rather than one empty frame.
+        let quietSince: number | undefined;
+        while (Date.now() - cutoff < 30_000) {
+          if (await count() === 0 && await layers() === 0) {
+            quietSince ??= Date.now();
+            if (Date.now() - quietSince >= 1000) break;
+          } else quietSince = undefined;
+          await sleep(150);
+        }
         if (await count() !== 0) return failed(`particles did not expire after engine cutoff (${await count()} remain)`);
         if (await layers() !== 0) return failed("mesh plumes did not turn off at engine cutoff");
+        if (quietSince === undefined || Date.now() - quietSince < 1000) return failed("engine effects did not settle after cutoff");
         await page.locator('[data-ose="flight-throttle-full"]').first().click();
         const restart = Date.now();
         while (await layers() === 0 && Date.now() - restart < 5000) await sleep(100);
