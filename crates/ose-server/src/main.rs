@@ -832,6 +832,14 @@ fn flight_readout(
         rcs_firing: p.rcs.usage as f32,
         lift_kn: p.lift_kn.length() as f32,
         angvel: p.angvel,
+        resources: u
+            .structure(e)
+            .map(|st| st.resource_totals())
+            .unwrap_or_default(),
+        stage_resources: u
+            .structure(e)
+            .map(|st| st.stage_resource_totals(p.stage))
+            .unwrap_or_default(),
         jet: p.jet.is_some(),
         lights: p.groups.lights,
         rcs: p.groups.rcs,

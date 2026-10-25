@@ -504,6 +504,45 @@ impl Structure {
                 .all(|&(r, _)| self.net.available(engine, r) > 1e-9)
     }
 
+    /// Every resource aboard: (resource id, units stored, units of capacity), in the flow graph's order.
+    pub fn resource_totals(&self) -> Vec<(String, f64, f64)> {
+        self.totals(|t| self.net.present[self.net.tanks[t].part])
+    }
+
+    /// The same for the tanks the burning stage's engines draw from.
+    pub fn stage_resource_totals(&self, stage: usize) -> Vec<(String, f64, f64)> {
+        let mut reach = vec![false; self.net.tanks.len()];
+        for e in self.live_engines(stage) {
+            let Some(mix) = &self.engine_mixture[e] else {
+                continue;
+            };
+            for (r, _) in self.net.ingredients(mix) {
+                for t in self.net.groups(e, r).into_iter().flatten() {
+                    reach[t] = true;
+                }
+            }
+        }
+        self.totals(|t| reach[t])
+    }
+
+    fn totals(&self, take: impl Fn(usize) -> bool) -> Vec<(String, f64, f64)> {
+        let mut out: Vec<(String, f64, f64)> = Vec::new();
+        for (t, tank) in self.net.tanks.iter().enumerate() {
+            if !take(t) || tank.capacity <= 0.0 {
+                continue;
+            }
+            let id = &self.net.resources[tank.resource];
+            match out.iter_mut().find(|(n, _, _)| n == id) {
+                Some(e) => {
+                    e.1 += tank.stored;
+                    e.2 += tank.capacity;
+                }
+                None => out.push((id.clone(), tank.stored, tank.capacity)),
+            }
+        }
+        out
+    }
+
     /// Propellant the burning stage's engines can reach, t (each tank counted once).
     pub fn reachable_propellant_t(&self, stage: usize) -> f64 {
         let mut seen = vec![false; self.net.tanks.len()];
@@ -1679,6 +1718,24 @@ mod tests {
             "methane reaches the jet: {} t",
             p.propellant_t
         );
+    }
+
+    #[test]
+    fn the_resource_manager_totals_the_vessel_and_the_burning_stage() {
+        let (crafts, defs, res) = assets();
+        let c = crafts.iter().find(|c| c.name == "Kerbal K1").unwrap();
+        let s = Structure::build(c, &defs, &res);
+        let all = s.resource_totals();
+        let get = |v: &[(String, f64, f64)], id: &str| v.iter().find(|x| x.0 == id).cloned();
+        let ec = get(&all, "ElectricCharge").expect("batteries");
+        assert!(ec.1 > 0.0 && ec.1 <= ec.2);
+        let methane = get(&all, "Methane").expect("methalox tanks");
+        assert!((methane.1 - methane.2).abs() < 1e-9, "full at launch");
+        // the first stage's engines reach methane and oxidizer, not the charge
+        let stage = s.stage_resource_totals(0);
+        assert!(get(&stage, "Methane").is_some() && get(&stage, "Oxidizer").is_some());
+        assert!(get(&stage, "ElectricCharge").is_none(), "{stage:?}");
+        assert!(get(&stage, "Methane").unwrap().2 <= methane.2);
     }
 
     #[test]

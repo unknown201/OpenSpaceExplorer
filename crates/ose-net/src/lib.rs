@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 33;
+pub const PROTOCOL_VERSION: u16 = 34;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -560,6 +560,10 @@ pub struct FlightReadout {
     pub lift_kn: f32,
     /// Angular velocity, rad/s, inertial (with SAS off it is what the vessel keeps spinning at).
     pub angvel: DVec3,
+    /// Resource manager: (resource id, amount, capacity) in units for the whole vessel, and for the tanks
+    /// the burning stage's engines draw from.
+    pub resources: Vec<(String, f64, f64)>,
+    pub stage_resources: Vec<(String, f64, f64)>,
     /// The burning stage is jets (their thrust follows speed and air; `thrust_kn` shows it).
     pub jet: bool,
 }
