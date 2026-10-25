@@ -822,7 +822,7 @@
     <button id="ts-back" data-ose="ts-back">Back to KSC</button>
   </div>
   <div id="flight-hud" data-ose="flight">
-    <div class="fh-top"><div class="fh-label">ALTITUDE</div><div id="fh-altitude" data-ose="flight-altitude">--</div><div id="fh-situation" class="fh-small">--</div><div id="fh-note" class="fh-small" style="color:#f0a070"></div><div id="fh-running" class="fh-small" data-ose="flight-running" style="color:#8fd08f"></div><div id="fh-control" data-ose="flight-control" style="color:#ff6a5a;font-weight:700"></div></div>
+    <div class="fh-top"><div class="fh-label" id="fh-alt-mode" data-ose="flight-alt-mode" title="Altitude above sea level or above the terrain below; click to switch" style="cursor:pointer;pointer-events:auto;text-decoration:underline dotted">SEA LEVEL</div><div id="fh-altitude" data-ose="flight-altitude">--</div><div id="fh-situation" class="fh-small">--</div><div id="fh-note" class="fh-small" style="color:#f0a070"></div><div id="fh-running" class="fh-small" data-ose="flight-running" style="color:#8fd08f"></div><div id="fh-control" data-ose="flight-control" style="color:#ff6a5a;font-weight:700"></div></div>
     <div class="fh-bottom">
       <div class="fh-throttle" title="Throttle: hold Shift / Ctrl, Z full, X cut"><div id="fh-throttle-fill"></div><span>THR</span><span id="fh-throttle-pct">0%</span></div>
       <canvas id="fh-navball" data-ose="flight-navball" width="200" height="200"></canvas>

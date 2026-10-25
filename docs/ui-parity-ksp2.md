@@ -47,7 +47,7 @@ Camera rule that runs through every map: **the right button drags the camera, th
 | F4 | G gear, B brakes, U lights, R RCS, 1..0 action groups; action bar with state lights (gear, lights, brakes, solar, radiators, science, abort) | G, B (held) and an action bar with state lights for gear, brakes, solar, chutes, science | done, with lights (U), RCS (R), abort and custom groups 1..0 since protocol 25 |
 | F5 | Rovers: W/S wheel throttle, A/D steer, B brakes | same, through `Drive` while landed | done |
 | F6 | Staging stack: one card per stage with part icons and fuel bars, Space fires the next | one card per stage still to fire with part and parachute icons, the next one lit at the bottom, and a fuel bar for the stage burning now | done |
-| F7 | Orbital readout Ap/Pe with time to each; altimeter sea level / terrain toggle; speed orbit / surface / target toggle | Ap/Pe with countdowns, SURFACE/ORBIT speed toggle; no terrain altitude or target speed | done (AGL, target: later) |
+| F7 | Orbital readout Ap/Pe with time to each; altimeter sea level / terrain toggle; speed orbit / surface / target toggle | Ap/Pe with countdowns, SURFACE/ORBIT/TARGET speed toggle, SEA LEVEL/TERRAIN altimeter toggle | done |
 | F8 | Right-drag orbits the camera, wheel zooms, V cycles camera modes, Home resets | right-drag (and left) orbits, Home resets, V cycles Auto, Free, Orbital, Chase and Locked | done |
 | F9 | `]` `[` switch to the next/previous vessel nearby | in flight `]` `[` take control of your other vessels within 2.5 km (dropped stages, Kerbals on EVA); on the map they change the followed vessel | done |
 | F10 | F to board/interact on EVA, EVA from the crew portrait | protocol has GoEva/Board/PlantFlag; no client keys | open |

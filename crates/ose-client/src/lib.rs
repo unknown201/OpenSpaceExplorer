@@ -246,6 +246,8 @@ struct App {
     /// target (true) or away from it (false), held by resending a fixed direction.
     target: Option<u64>,
     speed_target: bool,
+    /// Altimeter in terrain mode (height above the ground below) instead of sea level.
+    alt_terrain: bool,
     /// Warp to a moment (UT) with a name for the toast, stepping the warp down on the way; the UT of the
     /// apoapsis and periapsis markers from the last map frame, for clicks on them.
     warp_to: Option<(f64, String)>,
@@ -530,6 +532,7 @@ pub fn start() -> Result<(), JsValue> {
         brakes_latched: false,
         target: None,
         speed_target: false,
+        alt_terrain: false,
         warp_to: None,
         warp_to_sent_ms: 0.0,
         apsis_ut: [f64::NAN; 2],
@@ -1274,6 +1277,13 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
             cb.forget();
         }
     }
+    wire(
+        "fh-alt-mode",
+        Box::new(|a| {
+            let mut app = a.borrow_mut();
+            app.alt_terrain = !app.alt_terrain;
+        }),
+    )?;
     wire(
         "fh-missions-btn",
         Box::new(|a| {
@@ -5688,6 +5698,18 @@ impl App {
                 brakes_latched: self.brakes_latched,
             },
         );
+        // Altimeter mode: sea level (the readout above) or terrain, from the planet map the ground is drawn from.
+        #[cfg(target_arch = "wasm32")]
+        let agl = self.flight3d.agl_m;
+        #[cfg(not(target_arch = "wasm32"))]
+        let agl: Option<f64> = None;
+        match (self.alt_terrain, agl) {
+            (true, Some(h)) => {
+                set_text(&self.doc, "fh-alt-mode", "TERRAIN");
+                set_text(&self.doc, "fh-altitude", &hud::fmt_dist(h.max(0.0)));
+            }
+            _ => set_text(&self.doc, "fh-alt-mode", "SEA LEVEL"),
+        }
         // Target: distance and closing speed, the TARGET speed mode, and the SAS target buttons.
         let tgt = self.target.and_then(|t| scene.vessel(t));
         if self.target.is_some() && tgt.is_none() {
