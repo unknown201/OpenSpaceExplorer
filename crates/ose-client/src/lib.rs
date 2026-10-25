@@ -4259,6 +4259,12 @@ impl App {
                 deploy: !f.map(|f| f.panels_deployed).unwrap_or(false),
             },
             "fh-act-chutes" => ClientMessage::DeployParachutes { vessel },
+            "fh-act-converters" => ClientMessage::SetConverters {
+                vessel,
+                on: !f
+                    .map(|f| f.converters.iter().any(|(_, on, _)| *on))
+                    .unwrap_or(false),
+            },
             _ => return,
         };
         if let Some(ws) = &self.ws {

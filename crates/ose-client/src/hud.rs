@@ -127,6 +127,12 @@ pub const ACTIONS: &[(&str, &str, &str, bool)] = &[
         true,
     ),
     (
+        "fh-act-converters",
+        "ICO-AppBar-ActionGroup-24x24",
+        "Fuel cells and reactors on or off",
+        true,
+    ),
+    (
         "fh-act-abort",
         "ICO-Action-Abort-24x24",
         "Abort (not available yet)",
@@ -283,6 +289,38 @@ pub fn update(doc: &Document, s: &HudState) {
     lit(doc, "fh-act-gear", f.gear.iter().any(|(_, out)| *out));
     lit(doc, "fh-act-brakes", f.brakes || s.brakes_latched);
     lit(doc, "fh-act-solar", f.panels_deployed);
+    lit(
+        doc,
+        "fh-act-converters",
+        f.converters.iter().any(|(_, on, _)| *on),
+    );
+    if let Some(b) = doc.get_element_by_id("fh-act-converters") {
+        if f.converters.is_empty() {
+            b.set_attribute("disabled", "").ok();
+        } else {
+            b.remove_attribute("disabled").ok();
+        }
+    }
+    // CommNet (the original's signal indicator in the flight cluster): linked to the KSC and over how many
+    // relays, or no signal.
+    if let Some(el) = doc.get_element_by_id("fh-comm") {
+        let (text, cls) = if f.comm_connected {
+            (
+                if f.comm_hops <= 1 {
+                    "Signal: KSC".to_string()
+                } else {
+                    format!("Signal: KSC via {} relays", f.comm_hops - 1)
+                },
+                "on",
+            )
+        } else if f.comm_range_m > 0.0 {
+            ("No signal".to_string(), "off")
+        } else {
+            ("No antenna".to_string(), "off")
+        };
+        set(doc, "fh-comm-text", &text);
+        el.class_list().toggle_with_force("on", cls == "on").ok();
+    }
     lit(
         doc,
         "fh-act-chutes",

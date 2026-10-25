@@ -286,6 +286,9 @@
     #flight-hud .fh-sas button.on, #flight-hud .fh-actions button.on { color: #7dff8a; border-color: #7dff8a99; background: #17321ce6; }
     #flight-hud .fh-sas button:disabled, #flight-hud .fh-actions button:disabled { opacity: 0.35; cursor: default; }
     .fh-actions { position: absolute; right: calc(16 * var(--u)); bottom: calc(64 * var(--u)); display: flex; gap: calc(4 * var(--u)); background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(8 * var(--u)); padding: calc(6 * var(--u)); }
+    .fh-comm { position: absolute; top: calc(12 * var(--u)); right: calc(16 * var(--u)); display: flex; align-items: center; gap: calc(6 * var(--u)); background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)); padding: calc(4 * var(--u)) calc(10 * var(--u)); font-size: calc(12 * var(--u)); color: #f0a070; pointer-events: auto; }
+    .fh-comm i { width: calc(18 * var(--u)); height: calc(18 * var(--u)); background: currentColor; -webkit-mask: var(--ico) center / contain no-repeat; mask: var(--ico) center / contain no-repeat; }
+    .fh-comm.on { color: #7dff8a; }
     #fh-speed-mode { cursor: pointer; text-decoration: underline dotted; pointer-events: auto; }
     #fh-throttle-pct { position: absolute; bottom: calc(4 * var(--u)); left: 0; right: 0; text-align: center; font-size: calc(9 * var(--u)); color: #fff; }
     .fh-orbit b { min-width: calc(70 * var(--u)) !important; font-size: calc(15 * var(--u)) !important; }
@@ -766,6 +769,7 @@
       <button id="fh-stage-btn" data-ose="flight-stage" title="Space">STAGE</button>
     </div>
     <div class="fh-actions" id="fh-actions" data-ose="flight-actions"></div>
+    <div class="fh-comm" id="fh-comm" data-ose="flight-comm" title="CommNet: transmitting science and controlling probes need a link to the KSC"><i style="--ico:url(assets/ui/hud/ICO-Flight-Cluster-Commnet.png)"></i><span id="fh-comm-text">--</span></div>
     <div class="fh-help">W/S/A/D steer (hold, Caps Lock fine), Shift/Ctrl throttle, Z/X full/cut, Space stage, T hold direction, G gear, B brakes, M map, right-drag to look, Home resets the camera</div>
   </div>
   <div id="node-panel" data-ose="node-panel">
