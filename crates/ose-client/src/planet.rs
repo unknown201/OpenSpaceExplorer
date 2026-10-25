@@ -86,6 +86,8 @@ struct SurfaceU {
     foam: [f32; 4],
     /// Caustics on the sea floor: strength, max visible depth (m), tiling (m), animation speed.
     caustics: [f32; 4],
+    /// Cloud layer top (m), wind speed (m/s), 0, 0.
+    clouds2: [f32; 4],
 }
 
 fn flag_f(x: bool) -> f32 {
@@ -188,6 +190,7 @@ pub struct PlanetRenderer {
     terrain_pipeline: wgpu::RenderPipeline,
     ocean_pipeline: wgpu::RenderPipeline,
     cloud_pipeline: wgpu::RenderPipeline,
+    vcloud_pipeline: wgpu::RenderPipeline,
     grass_pipeline: wgpu::RenderPipeline,
     far_pipeline: wgpu::RenderPipeline,
     far_chunk_buf: wgpu::Buffer,
@@ -381,6 +384,33 @@ impl PlanetRenderer {
         // no culling: the sea is seen from below when the camera is under water
         let ocean_pipeline = quad_pipeline("planet ocean", "fs_ocean", true, true, None);
         let cloud_pipeline = quad_pipeline("planet clouds", "fs_clouds", true, false, None);
+        // Volumetric clouds: a full-screen ray march through the cloud layer, writing the depth of where it
+        // enters the cloud so nearer craft and terrain stay in front; premultiplied colour.
+        let vcloud_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("planet volume clouds"),
+            layout: Some(&quad_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_sky"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_vclouds"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(depth(false, wgpu::CompareFunction::Greater)),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
         let grass_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("planet grass"),
             entries: &[tex_entry(0, D::D2Array), samp_entry(1)],
@@ -645,6 +675,7 @@ impl PlanetRenderer {
             terrain_pipeline,
             ocean_pipeline,
             cloud_pipeline,
+            vcloud_pipeline,
             grass_pipeline,
             far_pipeline,
             far_chunk_buf,
@@ -1478,7 +1509,12 @@ impl PlanetRenderer {
             water: [
                 (view.cam.length() - radius) as f32,
                 if has_ocean { 1.0 } else { 0.0 },
-                0.0,
+                // z: 1 draws the clouds as a volume (camera below 40 km over a cloudy body)
+                if b.tex.contains_key(&Tex::Clouds) && view.cam.length() - radius < 40_000.0 {
+                    1.0
+                } else {
+                    0.0
+                },
                 0.0,
             ],
             occluders: {
@@ -1850,6 +1886,13 @@ fn surface_uniform(b: &Body, debug: f32) -> SurfaceU {
         if c.is_some() { 1.0 } else { 0.0 },
         slices as f32,
     ];
+    u.clouds2 = [
+        c.and_then(|c| c["height_range_m"][1].as_f64())
+            .unwrap_or(9500.0) as f32,
+        8.0,
+        0.0,
+        0.0,
+    ];
     let flag = |x: bool| if x { 1.0 } else { 0.0 };
     // The original's CelestialBodyLighting ambient colours; w: 1 when the body has no atmosphere (the ambient
     // then lights the day side too, the sky does it otherwise).
@@ -1930,6 +1973,13 @@ impl ExtraPass for PlanetRenderer {
             pass.set_bind_group(1, &self.chunk_bind, &[(*slot as u64 * SLOT) as u32]);
             pass.set_vertex_buffer(0, ocean.slice(..));
             pass.draw_indexed(0..self.index_count, 0, 0..1);
+        }
+        if !self.cloud_draws.is_empty() {
+            pass.set_pipeline(&self.vcloud_pipeline);
+            pass.set_bind_group(0, fb, &[]);
+            pass.set_bind_group(1, &self.chunk_bind, &[0]);
+            pass.set_bind_group(2, sb, &[]);
+            pass.draw(0..3, 0..1);
         }
         pass.set_pipeline(&self.cloud_pipeline);
         pass.set_bind_group(0, fb, &[]);

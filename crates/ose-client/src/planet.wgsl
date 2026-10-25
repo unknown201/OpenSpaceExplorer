@@ -64,6 +64,8 @@ struct Surface {
     foam: vec4<f32>,
     // caustics: strength, max visible depth (m), tiling (m), animation speed
     caustics: vec4<f32>,
+    // cloud layer top (m), wind speed (m/s), 0, 0
+    clouds2: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> frame: Frame;
@@ -839,8 +841,12 @@ fn fs_clouds(in: VOut) -> @location(0) vec4<f32> {
     let lit = light.sun / max(dot(up, sun), 0.05) * wrap * 0.8 * self_shadow + light.sky * 2.0;
     var radiance = vec3<f32>(0.9) / PI * lit;
     radiance = through_air(radiance, p_km);
-    // Fade the shell when the camera is close to its altitude (it would read as a flat sheet).
-    let fade = smoothstep(300.0, 2500.0, abs(cam_alt - surface.clouds.x));
+    // Fade the shell when the camera is close to its altitude (it would read as a flat sheet); with the volume
+    // on, the shell only draws beyond the volume's reach.
+    var fade = smoothstep(300.0, 2500.0, abs(cam_alt - surface.clouds.x));
+    if frame.water.z > 0.5 {
+        fade = smoothstep(VCLOUD_RANGE * 0.8, VCLOUD_RANGE, dist);
+    }
     return vec4<f32>(tonemap(radiance), cover * fade);
 }
 
@@ -1012,4 +1018,160 @@ fn fs_far(in: FOut) -> @location(0) vec4<f32> {
     var radiance = albedo / PI * (light.sun * shade + light.sky) + albedo * ambient(in.up, frame.sun.xyz);
     radiance = through_air(radiance, p_km);
     return vec4<f32>(tonemap(radiance), 1.0);
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Volumetric clouds (the original's VolumeCloudConfiguration cumulus layer, simplified): the baked coverage
+// map sets where clouds are, a height profile rounds their bases and tops, value noise erodes them into
+// puffs, and the sun lights them through a short march towards it. Full-screen, within VCLOUD_RANGE metres;
+// the shell takes over beyond.
+
+const VCLOUD_RANGE: f32 = 24000.0;
+
+struct VcOut {
+    @location(0) colour: vec4<f32>,
+    @builtin(frag_depth) depth: f32,
+};
+
+fn vc_noise(p: vec3<f32>) -> f32 {
+    // big lattices so the pattern does not repeat over a cloud field
+    return vnoise(p / 900.0, 1 << 20) * 0.6 + vnoise(p / 330.0, 1 << 20) * 0.28 + vnoise(p / 120.0, 1 << 20) * 0.12;
+}
+
+fn vc_density(p: vec3<f32>, base_r: f32, top_r: f32, t: f32, detail: bool) -> f32 {
+    let r = length(p);
+    let hfrac = (r - base_r) / (top_r - base_r);
+    if hfrac < 0.0 || hfrac > 1.0 {
+        return 0.0;
+    }
+    let up = p / r;
+    // wind: the coverage drifts east
+    let drift = vec3<f32>(-up.z, 0.0, up.x) * (t * surface.clouds2.y);
+    let uv = equi_uv(normalize(p + drift));
+    let cover = textureSampleLevel(clouds_tex, equi_samp, uv, 1.0).a * surface.clouds.y;
+    if cover < 0.04 {
+        return 0.0;
+    }
+    // flat bases, rounded tops; thicker cover reaches higher
+    let profile = smoothstep(0.0, 0.08, hfrac) * (1.0 - smoothstep(cover * 0.9, cover, hfrac));
+    var d = cover * profile;
+    if detail && d > 0.0 {
+        let n = vc_noise(p + drift * 1.5);
+        d = clamp((d - (1.0 - n) * 0.65) * 2.2, 0.0, 1.0);
+    }
+    return d;
+}
+
+@fragment
+fn fs_vclouds(in: SkyOut) -> VcOut {
+    var out: VcOut;
+    out.colour = vec4<f32>(0.0);
+    out.depth = 0.0;
+    if frame.water.z < 0.5 || surface.clouds.z < 0.5 {
+        discard;
+    }
+    let p4 = frame.inv_view_proj * vec4<f32>(in.ndc, 0.5, 1.0);
+    let view = normalize(p4.xyz / p4.w);
+    let cam = frame.cam_km.xyz * 1000.0;
+    let radius = frame.solar.w;
+    let base_r = radius + surface.clouds.x;
+    let top_r = radius + max(surface.clouds2.x, surface.clouds.x + 500.0);
+    // the stretch of the ray inside the shell between the base and top spheres
+    let b = dot(cam, view);
+    let c_top = dot(cam, cam) - top_r * top_r;
+    let disc_top = b * b - c_top;
+    if disc_top <= 0.0 {
+        discard;
+    }
+    let sq_top = sqrt(disc_top);
+    var t0 = max(-b - sq_top, 0.0);
+    var t1 = -b + sq_top;
+    let c_base = dot(cam, cam) - base_r * base_r;
+    let disc_base = b * b - c_base;
+    let cam_r = length(cam);
+    if disc_base > 0.0 {
+        let sq_b = sqrt(disc_base);
+        let tb0 = -b - sq_b;
+        let tb1 = -b + sq_b;
+        if cam_r < base_r {
+            // below the layer: start where the ray leaves the base sphere (it hits the ground otherwise)
+            t0 = max(tb1, 0.0);
+        } else if tb0 > 0.0 {
+            // above or inside, looking down: stop at the base
+            t1 = min(t1, tb0);
+        }
+    }
+    // the planet's surface ends the ray too
+    let c_ground = dot(cam, cam) - radius * radius;
+    let disc_g = b * b - c_ground;
+    if disc_g > 0.0 && -b - sqrt(disc_g) > 0.0 {
+        t1 = min(t1, -b - sqrt(disc_g));
+    }
+    t1 = min(t1, VCLOUD_RANGE);
+    if t1 <= t0 {
+        discard;
+    }
+    // 48 steps of at most 500 m: grazing rays through the layer stop early rather than stepping coarsely
+    let steps = 48;
+    let dt = min((t1 - t0) / f32(steps), 500.0);
+    let jitter = fract(sin(dot(in.clip.xy, vec2<f32>(12.9898, 78.233))) * 43758.547);
+    let sun = frame.sun.xyz;
+    let time = frame.cam_km.w;
+    let cos_t = dot(view, sun);
+    // two-lobe phase: a forward silver lining and soft back scatter
+    let g1 = 0.6;
+    let g2 = -0.2;
+    let hg1 = (1.0 - g1 * g1) / pow(1.0 + g1 * g1 - 2.0 * g1 * cos_t, 1.5);
+    let hg2 = (1.0 - g2 * g2) / pow(1.0 + g2 * g2 - 2.0 * g2 * cos_t, 1.5);
+    let phase = mix(hg2, hg1, 0.4) / (4.0 * PI);
+    var trans = 1.0;
+    var col = vec3<f32>(0.0);
+    var first = -1.0;
+    let sigma = 0.012;
+    for (var i = 0; i < steps; i = i + 1) {
+        let t = t0 + (f32(i) + jitter) * dt;
+        let p = cam + view * t;
+        let d = vc_density(p, base_r, top_r, time, true);
+        if d <= 0.001 {
+            continue;
+        }
+        if first < 0.0 {
+            first = t;
+        }
+        // light reaching this point: a short march towards the sun
+        var od = 0.0;
+        for (var k = 1; k <= 3; k = k + 1) {
+            let q = p + sun * (f32(k * k) * 120.0);
+            od = od + vc_density(q, base_r, top_r, time, false) * f32(k * k) * 120.0;
+        }
+        let light_t = exp(-od * sigma * 0.6) * (1.0 - exp(-d * 2.0) * 0.5);
+        let p_km = p * 0.001;
+        let l = sun_and_sky(p_km, normalize(p), sun);
+        let sun_in = l.sun / max(dot(normalize(p), sun), 0.05) * select(1.0, 0.0, dot(normalize(p), sun) < -0.1);
+        let lum = sun_in * light_t * phase * 4.0 + l.sky * 1.2 + frame.solar.xyz * 0.01;
+        let ext = d * sigma * dt;
+        let step_t = exp(-ext);
+        col = col + trans * (1.0 - step_t) * lum * 0.9;
+        trans = trans * step_t;
+        if trans < 0.02 {
+            break;
+        }
+    }
+    if first < 0.0 || trans > 0.995 {
+        discard;
+    }
+    // the air between the camera and the cloud
+    let entry = cam + view * first;
+    let s_air = sky_to_point(frame.cam_km.xyz, entry * 0.001, sun);
+    var rad = col;
+    if frame.rayleigh.w > 0.5 {
+        rad = col * s_air.transmittance + s_air.radiance * (1.0 - trans) * eclipse(frame.cam_km.xyz, sun);
+    }
+    let alpha = 1.0 - trans;
+    // tone map the cloud's own colour and premultiply
+    let mapped = tonemap(rad / max(alpha, 1e-3));
+    out.colour = vec4<f32>(mapped * alpha, alpha);
+    let clip = frame.view_proj * vec4<f32>(entry - cam, 1.0);
+    out.depth = clamp(clip.z / clip.w, 0.0, 1.0);
+    return out;
 }
