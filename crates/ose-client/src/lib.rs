@@ -3302,7 +3302,12 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
         // Left or right button drags the camera; the original drags with the right button everywhere and
         // keeps the left for picking, so the right one must work too.
         let on_down = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
-            if ev.button() == 0 || ev.button() == 2 {
+            // The middle button turns the camera too (the original's free camera), without the
+            // browser's autoscroll.
+            if ev.button() == 1 {
+                ev.prevent_default();
+            }
+            if ev.button() <= 2 {
                 let mut app = a.borrow_mut();
                 if ev.button() == 0 && app.mnv_press(ev.client_x() as f64, ev.client_y() as f64) {
                     return;
