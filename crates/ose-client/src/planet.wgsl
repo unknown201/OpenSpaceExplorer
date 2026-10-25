@@ -78,6 +78,8 @@ struct Surface {
     layer_info: vec4<f32>,
     // terrain shadows: x 1 with the global height map, y its scale (m), z its offset (m)
     shadow: vec4<f32>,
+    // x: the cloud colour map's intensity (clouds RGB; 1 for white clouds)
+    cloud_col: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> frame: Frame;
@@ -1156,7 +1158,9 @@ fn fs_clouds(in: VOut) -> @location(0) vec4<f32> {
     let below = select(0.0, 1.0, cam_alt < surface.clouds.x);
     let self_shadow = mix(1.0, mix(1.0, 0.45, cover), below);
     let lit = light.sun / max(dot(up, sun), 0.05) * wrap * 0.8 * self_shadow + light.sky * 2.0;
-    var radiance = vec3<f32>(0.9) / PI * lit;
+    // the layer's colour map (Eve's purple and pink swirls), white elsewhere
+    let cloud_albedo = min(c.rgb * surface.cloud_col.x, vec3<f32>(1.0)) * 0.9;
+    var radiance = cloud_albedo / PI * lit;
     radiance = through_air(radiance, p_km);
     // Fade the shell when the camera is close to its altitude (it would read as a flat sheet); with the volume
     // on, the shell only draws beyond the volume's reach.
@@ -1519,7 +1523,9 @@ fn fs_vclouds(in: SkyOut) -> VcOut {
         let lum = sun_in * light_t * phase * 4.0 + l.sky * 1.2 + frame.solar.xyz * 0.01;
         let ext = d * sigma * dt;
         let step_t = exp(-ext);
-        col = col + trans * (1.0 - step_t) * lum * 0.9;
+        let tint = min(textureSampleLevel(clouds_tex, equi_samp, equi_uv(normalize(p)), 2.0).rgb
+            * surface.cloud_col.x, vec3<f32>(1.0));
+        col = col + trans * (1.0 - step_t) * lum * 0.9 * tint;
         trans = trans * step_t;
         if trans < 0.02 {
             break;

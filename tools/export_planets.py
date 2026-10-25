@@ -333,11 +333,17 @@ def export_body(bid: str, bundles: Path, out_root: Path, args) -> dict | None:
             if not layer.get("isEnable") or cube is None:
                 continue
             img = cubemap_to_equirect(cube.read(), args.clouds)
-            # only the coverage (alpha) is drawn: grey RGB from it compresses far better
+            # alpha: the coverage; RGB: the layer's colour map where the config enables one (Eve's purple and pink
+            # swirls, `cloudColorMap` x `colorMapIntensity`), else plain white (the baked RGB is not a colour)
             from PIL import Image
 
             a_ = img.getchannel("A")
-            Image.merge("RGBA", (a_, a_, a_, a_)).save(out / "clouds.png", optimize=True)
+            cmap = a.get(layer.get("cloudColorMap")) if cfg.get("enableColorMap") else None
+            if cmap is not None:
+                r_, g_, b_, _ = cubemap_to_equirect(cmap.read(), args.clouds).split()
+            else:
+                r_ = g_ = b_ = Image.new("L", a_.size, 255)
+            Image.merge("RGBA", (r_, g_, b_, a_)).save(out / "clouds.png", optimize=True)
             info["clouds"] = {
                 "config": cfg["m_Name"],
                 "layer": layer["layerName"],
@@ -347,6 +353,7 @@ def export_body(bid: str, bundles: Path, out_root: Path, args) -> dict | None:
                 "wind_direction": vec(layer.get("windDirection", {"x": 0, "y": 0})),
                 "density": layer.get("cloudsDensity"),
                 "source": cube.read().m_Name,
+                "color_map_intensity": cfg.get("colorMapIntensity") if cmap is not None else None,
             }
             break
         if "clouds" in info:
