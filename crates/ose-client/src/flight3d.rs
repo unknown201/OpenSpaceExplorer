@@ -240,6 +240,8 @@ pub struct FlightInput<'a> {
     pub vessel: &'a VesselState,
     /// Vessel and body star-space positions, body star-space velocity, at `ut`.
     pub vessel_pos: DVec3,
+    /// Other vessels' star-space positions, drawn when they are near (a probe core stands in for each).
+    pub nearby_vessels: &'a [DVec3],
     pub vessel_vel: DVec3,
     pub body_pos: DVec3,
     pub body_vel: DVec3,
@@ -621,6 +623,13 @@ impl FlightView {
                 }
             }
         }
+        // Parts in space get more ambient: with only the sun, a craft between it and the camera (or in the
+        // planet's shadow) went black against black, and players could not find their probes in orbit.
+        let part_ambient = if alt > inp.atmosphere_m.max(20_000.0) {
+            0.45
+        } else {
+            0.25
+        };
         // The vessel.
         if let Some(craft) = inp.craft {
             let fired = inp
@@ -710,7 +719,7 @@ impl FlightView {
                 }
                 let wpos = pos + vessel_rot * (lp + DVec3::Y * lift);
                 let mut it = DrawItem::lit(name, wpos - cam, vessel_rot * lq, 1.0, sun);
-                it.ambient = 0.25;
+                it.ambient = part_ambient;
                 it.fill_dir = up;
                 it.fill = 0.25;
                 items.push(it);
@@ -720,7 +729,31 @@ impl FlightView {
             let name = "part:probe_0v_octagonal_electricity_1x1".to_string();
             gpu.request_model(&name, "assets/parts/probe_0v_octagonal_electricity_1x1.glb");
             if gpu.has_model(&name) {
-                items.push(DrawItem::lit(name, pos - cam, vessel_rot, 1.0, sun));
+                let mut it = DrawItem::lit(name, pos - cam, vessel_rot, 1.0, sun);
+                it.ambient = part_ambient;
+                items.push(it);
+            }
+        }
+        // Other vessels within a few kilometres, as the original loads crafts around the active one.
+        let stand_in = "part:probe_0v_octagonal_electricity_1x1".to_string();
+        let near: Vec<DVec3> = inp
+            .nearby_vessels
+            .iter()
+            .map(|o| to_model(*o - inp.body_pos, spin, inp.ut))
+            .filter(|p| (*p - pos).length() < 5_000.0)
+            .collect();
+        if !near.is_empty() {
+            gpu.request_model(
+                &stand_in,
+                "assets/parts/probe_0v_octagonal_electricity_1x1.glb",
+            );
+            if gpu.has_model(&stand_in) {
+                for p in near {
+                    let mut it =
+                        DrawItem::lit(stand_in.clone(), p - cam, DQuat::IDENTITY, 1.0, sun);
+                    it.ambient = part_ambient;
+                    items.push(it);
+                }
             }
         }
         items.append(&mut flames);

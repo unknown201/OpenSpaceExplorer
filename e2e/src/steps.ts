@@ -47,6 +47,8 @@ export const STEP_NAMES = [
   "flight",
   "rnd",
   "tracking_station",
+  "campaign_cycle",
+  "vab_rocket",
 ] as const;
 export type StepName = (typeof STEP_NAMES)[number];
 
@@ -142,9 +144,12 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
       let joined = "";
       try {
         await join.first().waitFor({ timeout: 10_000 });
-        const entry = page.locator('[data-ose="session"]').first();
+        // The server's own campaign when it is listed: later steps start campaigns of their own, which a rerun
+        // against the same server would otherwise pick up first.
+        const shared = page.locator('[data-ose="session"]', { hasText: "Shared campaign" });
+        const entry = (await shared.count()) > 0 ? shared.first() : page.locator('[data-ose="session"]').first();
         joined = ((await entry.locator(".name").textContent().catch(() => "")) ?? "").trim();
-        await join.first().click();
+        await entry.locator('[data-ose="session-join"]').click();
       } catch {
         const note = ((await page.locator("#menu-note").textContent().catch(() => "")) ?? "").trim();
         return failed(`no session to join after Play${note ? `: ${note}` : ""}`);
@@ -365,7 +370,9 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
       try {
         await node.first().waitFor({ timeout: 3000 });
       } catch {
-        return failed("clicking add-node produced no maneuver node");
+        const why = ((await page.locator("#node-reason").textContent().catch(() => "")) ?? "").trim();
+        const n = await node.count();
+        return failed(`clicking add-node produced no maneuver node (${n} hidden markers${why ? `; ${why}` : ""})`);
       }
       const ut = await node.first().getAttribute("data-ose-ut");
       if (!ut || !Number.isFinite(Number(ut))) return failed(`node has no burn time (data-ose-ut=${ut})`);
@@ -586,6 +593,111 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
       if ((await focus.count()) === 0) return failed("the vessel card has no Focus button");
       await focus.first().click();
       return passed(`${n} vessels tracked; selected ${JSON.stringify(name)}`);
+    }),
+  );
+
+  // 16. Campaigns: exit to the main menu, find the campaign on the list and resume it, exit again and start a
+  // new Sandbox campaign (protocol 22: several campaigns per server, LeaveSession).
+  results.push(
+    await timed("campaign_cycle", async () => {
+      if (!pageUp) return notLoaded;
+      const exit = page.locator('[data-ose="ksc-sessions"]');
+      if ((await exit.count()) === 0) return blocked("Exit to Main Menu on the KSC screen; Phase 8");
+      if (!(await page.locator('[data-ose="ksc"]').first().isVisible())) {
+        if (!(await page.locator('[data-ose="menu"]').first().isVisible())) await page.keyboard.press("Escape");
+        if (await page.locator('[data-ose="to-ksc"]').first().isVisible()) await page.locator('[data-ose="to-ksc"]').first().click();
+        if (await page.locator('[data-ose="ts-back"]').first().isVisible()) await page.locator('[data-ose="ts-back"]').first().click();
+      }
+      const name = ((await page.locator('[data-ose="campaign"]').textContent()) ?? "").split(" (")[0].trim();
+      await exit.first().click();
+      const rows = page.locator('[data-ose="session"]').filter({ hasText: name || "campaign" });
+      try {
+        await rows.first().waitFor({ timeout: 5_000 });
+      } catch {
+        return failed(`after exiting, ${JSON.stringify(name)} is not on the campaign list`);
+      }
+      await rows.first().locator('[data-ose="session-join"]').click();
+      try {
+        await page.locator('[data-ose="ksc"]').first().waitFor({ state: "visible", timeout: 10_000 });
+      } catch {
+        return failed(`resuming ${JSON.stringify(name)} did not reach the KSC (${(await page.locator("#menu-note").textContent()) ?? ""})`);
+      }
+      await exit.first().click();
+      if (!(await page.locator("#create-name").isVisible())) await page.locator("#create-details > summary").click();
+      const presets = await page.locator("#create-preset option").count();
+      if (presets === 0) return failed("the new campaign form has no difficulty presets");
+      await page.selectOption("#create-mode", "Sandbox");
+      await page.fill("#create-name", "e2e sandbox");
+      await page.locator('[data-ose="create"]').click();
+      try {
+        await page.locator('[data-ose="ksc"]').first().waitFor({ state: "visible", timeout: 10_000 });
+      } catch {
+        return failed(`starting a second campaign did not reach the KSC (${(await page.locator("#menu-note").textContent()) ?? ""})`);
+      }
+      const now = ((await page.locator('[data-ose="campaign"]').textContent()) ?? "").trim();
+      if (!now.startsWith("e2e sandbox")) return failed(`the KSC shows ${JSON.stringify(now)}, not the new campaign`);
+      return passed(`exited ${JSON.stringify(name)}, resumed it, then started "e2e sandbox" (${presets} difficulty presets)`);
+    }),
+  );
+
+  // 17. A rocket built in the VAB (Mk1 pod, FL-T400 tank, LV-T45 engine): Save and launch to the pad, then Z and
+  // Space as a player presses them, and it lifts off.
+  results.push(
+    await timed("vab_rocket", async () => {
+      if (!pageUp) return notLoaded;
+      const vabButton = page.locator('[data-ose="ksc-vab"]');
+      if (!(await vabButton.first().isVisible())) return skipped("not on the KSC screen");
+      await vabButton.first().click();
+      await page.locator('[data-ose="vab"]').first().waitFor({ state: "visible", timeout: 5000 });
+      await page.locator('[data-ose="vab-clear"]').first().click();
+      const picked: string[] = [];
+      for (const q of ["Tin Can", "FL-T400", "LV-T45"]) {
+        await page.fill('[data-ose="vab-search"]', q);
+        const part = page.locator('[data-ose="vab-part"]').first();
+        try {
+          await part.waitFor({ timeout: 3000 });
+        } catch {
+          return failed(`no part found for ${JSON.stringify(q)}`);
+        }
+        picked.push(((await part.getAttribute("data-ose-part")) ?? "?").trim());
+        await part.click();
+      }
+      await page.fill('[data-ose="vab-search"]', "");
+      await page.fill('[data-ose="vab-name"]', "e2e rocket");
+      await page.locator('[data-ose="vab-launch"]').first().click();
+      const hud = page.locator('[data-ose="flight"]');
+      try {
+        await page.locator('[data-ose="flight"].open').first().waitFor({ timeout: 10_000 });
+      } catch {
+        const why = `${(await page.locator('[data-ose="vab-report"]').textContent()) ?? ""} ${(await page.locator("#menu-note").textContent()) ?? ""}`;
+        return failed(`Save and launch did not open the flight view on the pad: ${why.trim()}`);
+      }
+      const altOf = async () => Number((await hud.first().getAttribute("data-ose-altitude")) ?? "NaN");
+      const t0 = Date.now();
+      while (!Number.isFinite(await altOf()) && Date.now() - t0 < 5_000) await sleep(200);
+      const before = await altOf();
+      await page.keyboard.press("z");
+      await sleep(300);
+      await page.keyboard.press("Space");
+      let after = before;
+      let situation = "";
+      const t1 = Date.now();
+      while (Date.now() - t1 < 20_000) {
+        await sleep(500);
+        after = await altOf();
+        situation = (await hud.first().getAttribute("data-ose-situation")) ?? "";
+        if (after > before + 20 && situation === "Flying") break;
+      }
+      if (!(after > before + 20 && situation === "Flying")) {
+        return failed(`${picked.join(" + ")} did not lift off after Z and Space (${before.toFixed(0)} m -> ${after.toFixed(0)} m, ${situation}; ${(await page.locator("#fh-twr").textContent()) ?? ""})`);
+      }
+      // Leave the server's own campaign live again, as a later run (the other browser) expects to find it.
+      await page.keyboard.press("Escape");
+      await page.locator('[data-ose="to-sessions"]').first().click();
+      const shared = page.locator('[data-ose="session"]', { hasText: "Shared campaign" });
+      if (await shared.count()) await shared.first().locator('[data-ose="session-join"]').click();
+      await sleep(1500);
+      return passed(`${picked.join(" + ")}: ${before.toFixed(0)} m -> ${after.toFixed(0)} m, ${situation}`);
     }),
   );
 

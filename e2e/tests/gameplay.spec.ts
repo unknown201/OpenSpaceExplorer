@@ -30,6 +30,8 @@ const FRONTIER: [StepName, Expect][] = [
   ["flight", "Pass"],
   ["rnd", "Pass"],
   ["tracking_station", "Pass"],
+  ["campaign_cycle", "Pass"],
+  ["vab_rocket", "Pass"],
 ];
 
 test("frontier names every step in order", () => {

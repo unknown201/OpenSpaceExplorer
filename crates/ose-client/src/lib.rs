@@ -767,15 +767,9 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         "sessions-back",
         Box::new(|a| a.borrow().menu_screen("name")),
     )?;
-    wire(
-        "to-sessions",
-        Box::new(|a| a.borrow_mut().open_sessions_screen()),
-    )?;
+    wire("to-sessions", Box::new(|a| a.borrow_mut().leave_session()))?;
     wire("resume", Box::new(|a| a.borrow().show_menu(false)))?;
-    wire(
-        "ksc-sessions",
-        Box::new(|a| a.borrow_mut().open_sessions_screen()),
-    )?;
+    wire("ksc-sessions", Box::new(|a| a.borrow_mut().leave_session()))?;
     wire(
         "to-ksc",
         Box::new(|a| {
@@ -2116,12 +2110,8 @@ impl App {
                         );
                     if self.launch_after_save {
                         self.launch_after_save = false;
-                        let altitude_m =
-                            input_value(&self.doc, "launch-altitude").unwrap_or(100.0) * 1000.0;
-                        set_text(&self.doc, "menu-note", "launching...");
-                        if let Some(ws) = &self.ws {
-                            send(ws, &ClientMessage::LaunchSavedCraft { id, altitude_m });
-                        }
+                        set_text(&self.doc, "menu-note", "rolling out to the pad...");
+                        self.launch_craft(id);
                     }
                 }
                 _ => {
@@ -2177,14 +2167,15 @@ impl App {
                     self.show_menu(false);
                 }
                 (None, reason) => {
-                    set_text(
-                        &self.doc,
-                        "menu-note",
-                        &format!(
-                            "launch refused: {}",
-                            reason.unwrap_or_else(|| "unknown reason".into())
-                        ),
+                    let msg = format!(
+                        "launch refused: {}",
+                        reason.unwrap_or_else(|| "unknown reason".into())
                     );
+                    set_text(&self.doc, "menu-note", &msg);
+                    // From the VAB the refusal belongs next to the craft, where the player is looking.
+                    if self.vab_active() {
+                        set_text(&self.doc, "vab-report", &msg);
+                    }
                 }
             },
             ServerMessage::DifficultyOptions {
@@ -2394,6 +2385,7 @@ impl App {
             }
             ServerMessage::BodyRotation { bodies } => {
                 self.body_spins = bodies;
+                self.apply_spins();
             }
             ServerMessage::BodyCatalog { bodies } => {
                 let scene = Scene::new(bodies);
@@ -2405,6 +2397,7 @@ impl App {
                 // Frame the whole system first so the player sees everything, centred on the star.
                 let root = scene.root().unwrap_or(focus);
                 self.scene = Some(scene);
+                self.apply_spins();
                 self.set_focus(root);
             }
             ServerMessage::TimeState {
@@ -2423,7 +2416,10 @@ impl App {
                     scene.snapshot = bodies;
                 }
             }
-            ServerMessage::Vessels { vessels, .. } => {
+            ServerMessage::Vessels { vessels, tick } => {
+                if let Some(scene) = &mut self.scene {
+                    scene.vessels_ut = tick.seconds();
+                }
                 let ids: Vec<u64> = vessels.iter().map(|v| v.id).collect();
                 let known: Vec<u64> = self.vessel_els.iter().map(|(id, _)| *id).collect();
                 let changed = ids != known;
@@ -2523,6 +2519,50 @@ impl App {
             self.labels.append_child(&el).ok();
             self.vessel_els.push((v.id, el));
         }
+    }
+
+    fn apply_spins(&mut self) {
+        let omega: Vec<f64> = self
+            .body_spins
+            .iter()
+            .map(|b| {
+                if b.rotation_period_s > 0.0 {
+                    std::f64::consts::TAU / b.rotation_period_s
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+        if let Some(scene) = &mut self.scene {
+            scene.spin_omega = omega;
+        }
+    }
+
+    /// Leave the campaign for the main menu: the server keeps it on the list to resume (protocol 22).
+    fn leave_session(&mut self) {
+        if let Some(ws) = &self.ws {
+            send(ws, &ClientMessage::LeaveSession);
+        }
+        self.end_flight();
+        self.in_session = false;
+        self.tracking_open = false;
+        self.campaign = None;
+        self.science = None;
+        self.lp_selected = None;
+        self.last_stage = None;
+        self.last_situation = None;
+        if let Some(scene) = &mut self.scene {
+            scene.vessels.clear();
+            scene.trajectories.clear();
+        }
+        let vessels: Vec<ose_net::VesselState> = Vec::new();
+        self.build_vessel_labels(&vessels);
+        set_text(&self.doc, "campaign", "");
+        set_text(&self.doc, "menu-note", "");
+        if let Some(m) = self.doc.get_element_by_id("menu") {
+            m.class_list().remove_1("hidden").ok();
+        }
+        self.menu_screen("sessions");
     }
 
     /// Centre the camera on a vessel: focus its reference body (so orbits draw around it) and follow.
@@ -3941,7 +3981,6 @@ impl App {
         self.audio.music(Some(audio::scene_music(scene)));
         // Ambience under the music: the launch pad emitter around the KSC, the hall in the VAB.
         self.audio.ambience(match scene {
-            audio::Scene::Ksc if menu_open => Some("ksc_launchpad"),
             audio::Scene::Vab => Some("vab_ambience"),
             _ => None,
         });
@@ -4011,6 +4050,23 @@ impl App {
             return;
         };
         let Some(f) = &v.flight else {
+            // On rails: the readout's last values would be stale; altitude and speed from the orbit.
+            if let Some(scene) = &self.scene {
+                let rb = v.reference_body as usize;
+                if let Some(body) = scene.bodies.get(rb) {
+                    let ut = self.time.ut_at(now_ms());
+                    let alt = (scene.vessel_position(v, ut) - scene.position(rb, ut)).length()
+                        - body.radius_m;
+                    set_text(&self.doc, "fh-altitude", &tracking::km(alt));
+                    if let Some(el) = self.doc.get_element_by_id("flight-hud") {
+                        el.set_attribute("data-ose-altitude", &format!("{alt:.1}"))
+                            .ok();
+                    }
+                }
+            }
+            for id in ["fh-speed", "fh-vspeed", "fh-twr"] {
+                set_text(&self.doc, id, "--");
+            }
             set_text(&self.doc, "fh-situation", "on rails");
             return;
         };
@@ -4141,7 +4197,7 @@ impl App {
             html.push_str(&format!(
                 "<li data-ose=\"session\" data-ose-id=\"{id}\"><div><div class=\"name\">{name}</div>\
                  <div class=\"meta\">{mode} \u{b7} {ut} \u{b7} {players} {pl}</div></div>\
-                 <button data-ose=\"session-join\" data-ose-session=\"{id}\">Join</button></li>",
+                 <button data-ose=\"session-join\" data-ose-session=\"{id}\">Resume</button></li>",
                 id = esc(&s.id),
                 name = esc(&s.name),
                 mode = mode_name(s.mode),
@@ -4151,7 +4207,7 @@ impl App {
             ));
         }
         if html.is_empty() {
-            html = "<li class=\"empty\">no sessions yet; create one below</li>".into();
+            html = "<li class=\"empty\">no campaigns yet; start a new one</li>".into();
         }
         list.set_inner_html(&html);
     }
@@ -4408,12 +4464,19 @@ impl App {
     }
 
     /// The player's own vessel, if the server has sent one.
+    /// The vessel to plan for: the one followed if it is yours, else one of yours in orbit (on rails), else
+    /// any of yours. A craft standing on the pad has no orbit to put a node on.
     fn my_vessel(&self) -> Option<(u64, usize)> {
         let scene = self.scene.as_ref()?;
-        scene
+        let mine: Vec<&ose_net::VesselState> = scene
             .vessels
             .iter()
-            .find(|v| v.owner.is_some() && v.owner == self.player_id)
+            .filter(|v| v.owner.is_some() && v.owner == self.player_id)
+            .collect();
+        mine.iter()
+            .find(|v| Some(v.id) == self.follow)
+            .or_else(|| mine.iter().find(|v| v.flight.is_none()))
+            .or_else(|| mine.first())
             .map(|v| (v.id, v.reference_body as usize))
     }
 
@@ -4876,8 +4939,15 @@ impl App {
         let catalog = &self.catalog;
         let is_dec = |pid: &str| catalog.get(pid).map(|p| p.is_decoupler).unwrap_or(false);
         let is_eng = |pid: &str| catalog.get(pid).map(|p| p.has_engine).unwrap_or(false);
+        let nearby_vessels: Vec<glam::DVec3> = scene
+            .vessels
+            .iter()
+            .filter(|o| o.id != id && o.reference_body == v.reference_body)
+            .map(|o| g(scene.vessel_position(o, ut)))
+            .collect();
         let inp = flight3d::FlightInput {
             vessel: v,
+            nearby_vessels: &nearby_vessels,
             vessel_pos: g(vp),
             vessel_vel: g(vv),
             body_pos: g(bp),
