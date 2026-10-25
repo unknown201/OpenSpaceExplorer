@@ -924,6 +924,36 @@ impl FlightView {
                     ],
                 );
             }
+            // Folding solar panels (protocol 16) show their panels only when deployed; the large roll-out
+            // array shows its rolled panels instead while stowed. The single-mesh 1x6 and 3x2 stay as exported.
+            let deployed = readout.is_some_and(|f| f.panels_deployed);
+            let circular: Vec<String> = (1..=12)
+                .map(|k| format!("mesh_solararray_0v_circular_panel_{k:02}"))
+                .collect();
+            let circular: Vec<&str> = circular.iter().map(String::as_str).collect();
+            if deployed {
+                gpu.hide_meshes(
+                    "part:solararray_3v_large",
+                    &[
+                        "mesh_solararray_3v_large_rolledpanels_l",
+                        "mesh_solararray_3v_large_rolledpanels_r",
+                    ],
+                );
+            } else {
+                gpu.hide_meshes(
+                    "part:solararray_2v_accordion",
+                    &[
+                        "mesh_solararray_2v_accordion_panels",
+                        "mesh_solararray_2v_accordion_spine",
+                    ],
+                );
+                gpu.hide_meshes("part:solararray_1v_circular", &circular);
+                gpu.hide_meshes("part:solararray_1v_circular_shielded", &circular);
+                gpu.hide_meshes(
+                    "part:solararray_3v_large",
+                    &["mesh_solararray_3v_large_solarpanels"],
+                );
+            }
             let chutes: HashMap<u16, (ose_net::ChuteState, f32)> = readout
                 .map(|f| {
                     f.parachutes
