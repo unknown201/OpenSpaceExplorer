@@ -7,7 +7,8 @@ test('static first paint needs no JavaScript or exported assets',async({browser,
   try {
     const page=await context.newPage();await page.goto(baseURL!);
     await expect(page.locator('[data-ose="menu-poster"]')).toBeVisible();
-    await expect(page.locator('[data-ose="menu-poster"] svg')).toBeVisible();
+    await expect(page.locator('[data-ose="menu-poster"] > svg')).toBeVisible();
+    await expect(page.locator('[data-ose="scene-assembly"]')).not.toHaveAttribute('aria-valuenow');
     await expect(page.locator('.logo-title')).toBeVisible();
     await expect(page.locator('[data-ose="play"]')).toBeVisible();
     await page.screenshot({path:test.info().outputPath('first-paint-desktop.png')});
@@ -22,7 +23,7 @@ test('a slow bootstrap cannot block the first-paint artwork',async({page,baseURL
   await page.route('**/asset-packages.js',async route=>{await held;await route.continue();});
   try {
     await page.goto(baseURL!,{waitUntil:'commit'});
-    await expect(page.locator('[data-ose="menu-poster"] svg')).toBeVisible();
+    await expect(page.locator('[data-ose="menu-poster"] > svg')).toBeVisible();
     await expect(page.locator('[data-ose="play"]')).toBeVisible();
   } finally {release();}
 });
@@ -86,12 +87,20 @@ test('poster covers partial geometry until all visible menu models have previews
     await expect(page.locator('[data-ose="gpu"]')).toHaveAttribute('data-ose-menu-vessel','Fixture ship');
     await expect.poll(()=>previewStarted).toBe(true);
     await expect(page.locator('[data-ose="gpu"]')).toHaveAttribute('data-ose-menu-scene','loading');
+    const meter=page.locator('[data-ose="scene-assembly"]');
+    await expect.poll(async()=>Number(await meter.getAttribute('aria-valuenow'))).toBeGreaterThan(0);
+    expect(Number(await meter.getAttribute('aria-valuenow'))).toBeLessThan(100);
+    expect(await page.locator('.assembly-part.is-fitted').count()).toBeGreaterThan(0);
+    expect(await page.locator('.assembly-part.is-fitted').count()).toBeLessThan(7);
+    await page.screenshot({path:test.info().outputPath('ship-assembling.png')});
     await expect(page.locator('[data-ose="menu-poster"]')).toHaveCSS('opacity','1');
     await page.locator('[data-ose="player-name"]').fill('typing while scenery loads');
     await page.locator('[data-ose="play"]').click();
     await expect(page.locator('[data-ose="session-join"]').first()).toBeVisible();
     release();
     await expect(page.locator('[data-ose="gpu"]')).toHaveAttribute('data-ose-menu-scene','ready');
+    await expect(meter).toHaveAttribute('aria-valuenow','100');
+    await expect(page.locator('.assembly-part.is-fitted')).toHaveCount(7);
     await expect(page.locator('[data-ose="menu-poster"]')).toHaveCSS('opacity','0');
     await expect(page.locator('[data-ose="menu-poster"]')).toHaveCSS('transition-duration','0s');
     expect(inactive).toBe(0);expect(errors).toEqual([]);

@@ -21,8 +21,31 @@
     body:has(#menu:not(.hidden) #screen-name.open) #menu-poster,
     body:has(#menu:not(.hidden) #screen-sessions.open) #menu-poster { display: block; transition: opacity .65s ease; }
     body:has(#gpu[data-ose-menu-scene="ready"]) #menu-poster { opacity: 0; }
-    #menu-poster .poster-status { position: absolute; right: max(24px, 4vw); bottom: max(60px, 8vh); color: #b5c4d5; font: 13px system-ui, sans-serif; letter-spacing: .06em; }
+    #menu-poster .poster-status { position: absolute; right: max(24px, 4vw); bottom: 106px; width: min(300px, calc(100vw - 48px)); color: #c5d5df; font: 12px system-ui, sans-serif; }
     body:has(#gpu[data-ose-menu-scene="static"]) #menu-poster .poster-status { display: none; }
+    .assembly-title { font-size: 12px; letter-spacing: .12em; text-transform: uppercase; }
+    #menu-poster .assembly-ship { width: 100%; height: 88px; overflow: visible; margin: 4px 0; }
+    .assembly-outline { fill: none; stroke: #8299a7; stroke-width: 1; stroke-dasharray: 3 3; opacity: .45; }
+    .assembly-part { fill: #c7d4dc; stroke: #91a8b7; stroke-width: 1; opacity: 0; transform: translate(var(--dx, 0px), var(--dy, -12px)); transition: opacity .25s ease, transform .35s ease; transition-delay: var(--delay, 0ms); }
+    .assembly-part.is-fitted { opacity: 1; transform: translate(0, 0); }
+    .assembly-part.panel { fill: #467f9d; stroke: #8cb9cb; }
+    .assembly-part.engine { fill: #7e919e; }
+    .assembly-part.window { fill: #80d2df; stroke: #d6f1f5; }
+    .assembly-flame { fill: #edaa63; opacity: 0; transition: opacity .2s ease; }
+    #scene-assembly[data-stage="7"] .assembly-flame { opacity: 1; }
+    .assembly-track, .pack-track { position: relative; height: 3px; overflow: hidden; border-radius: 3px; background: #d0e3ee24; }
+    .assembly-fill, .pack-fill { height: 100%; width: 100%; transform: scaleX(0); transform-origin: left; transition: transform .2s ease; background: #edaa63; }
+    .assembly-scan { position: absolute; top: 0; left: 0; height: 100%; width: 28%; background: linear-gradient(90deg, transparent, #edaa63, transparent); animation: assembly-scan 1.7s ease-in-out infinite; }
+    #scene-assembly[data-progress] .assembly-scan { display: none; }
+    .assembly-caption { display: block; margin-top: 8px; color: #91a5b4; font-size: 11px; }
+    @keyframes assembly-scan { from { transform: translateX(-110%); } to { transform: translateX(460%); } }
+    #asset-downloads { position: fixed; right: 24px; bottom: 28px; z-index: 30; width: min(204px, calc(100vw - 48px)); box-sizing: border-box; padding: 9px 11px; background: #080e17cc; border: 1px solid #91a5b42b; border-radius: 6px; color: #91a5b4; font: 11px system-ui, sans-serif; pointer-events: none; }
+    #asset-downloads[hidden] { display: none; }
+    .pack-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 7px; }
+    .pack-count { font-variant-numeric: tabular-nums; color: #728998; white-space: nowrap; }
+    .pack-fill { background: #86afbe; }
+    body:has(#flight-hud.open) #asset-downloads { bottom: auto; top: 18px; right: 160px; }
+    @media (prefers-reduced-motion: reduce) { .assembly-part, .assembly-fill, .pack-fill, .assembly-flame { transition: none !important; } .assembly-scan { animation: none; } }
     @media (prefers-reduced-motion: reduce) { body #menu-poster, body #logo img, body #logo .logo-title { transition: none !important; } }
     #labels { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
     #labels .body { position: absolute; transform: translate(8px, -50%); white-space: nowrap;
@@ -942,8 +965,8 @@
 <body>
   <canvas id="gpu" data-ose="gpu" data-ose-menu-scene="loading"></canvas>
   <canvas id="map"></canvas>
-  <div id="menu-poster" data-ose="menu-poster" aria-hidden="true">
-    <svg viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg">
+  <div id="menu-poster" data-ose="menu-poster">
+    <svg viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
       <defs>
         <radialGradient id="poster-space"><stop stop-color="#13243c"/><stop offset="1" stop-color="#050810"/></radialGradient>
         <radialGradient id="poster-ocean" cx=".23" cy=".22" r=".85"><stop stop-color="#6793a9"/><stop offset=".32" stop-color="#244f6c"/><stop offset=".7" stop-color="#0c243e"/><stop offset="1" stop-color="#060b16"/></radialGradient>
@@ -972,7 +995,35 @@
       </g>
       <path fill="url(#poster-left)" d="M0 0h1920v1080H0z"/>
     </svg>
-    <span class="poster-status">Preparing scenery…</span>
+    <div id="scene-assembly" class="poster-status" data-ose="scene-assembly" data-stage="0" role="progressbar" aria-label="Loading menu scenery" aria-valuemin="0" aria-valuemax="100" aria-valuetext="Gathering the parts">
+      <div class="assembly-title" aria-hidden="true">Assembling your ship</div>
+      <svg class="assembly-ship" viewBox="0 0 320 88" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <g id="assembly-engine"><path d="m52 34-15-6v32l15-6z"/><rect x="52" y="33" width="21" height="22" rx="4"/></g>
+          <g id="assembly-fins"><path d="m80 28-12-15h27l12 15zm0 32-12 15h27l12-15z"/></g>
+          <g id="assembly-tank"><rect x="73" y="25" width="89" height="38" rx="10"/><path d="M88 26v36m59-36v36" fill="none"/></g>
+          <g id="assembly-capsule"><path d="M162 25h46l23 19-23 19h-46z"/></g>
+          <g id="assembly-panels"><path d="M117 25V8m0 55v17" fill="none"/><path d="M99 2h36v11H99zm0 73h36v11H99z"/><path d="M111 2v11m12-11v11m-12 62v11m12-11v11" fill="none"/></g>
+          <g id="assembly-nose"><path d="M208 25q35 3 58 19-23 16-58 19l22-19z"/></g>
+          <g id="assembly-window"><circle cx="192" cy="44" r="9"/><path d="m187 46 8-8" fill="none"/></g>
+        </defs>
+        <g class="assembly-outline"><use href="#assembly-engine"/><use href="#assembly-fins"/><use href="#assembly-tank"/><use href="#assembly-capsule"/><use href="#assembly-panels"/><use href="#assembly-nose"/><use href="#assembly-window"/></g>
+        <path class="assembly-flame" d="m36 35-26 9 26 9-7-9z"/>
+        <g class="assembly-part engine" data-assembly-step="1" style="--dx:-18px;--dy:0px"><use href="#assembly-engine"/></g>
+        <g class="assembly-part" data-assembly-step="2" style="--dy:12px;--delay:30ms"><use href="#assembly-fins"/></g>
+        <g class="assembly-part" data-assembly-step="3" style="--delay:60ms"><use href="#assembly-tank"/></g>
+        <g class="assembly-part" data-assembly-step="4" style="--dy:12px;--delay:90ms"><use href="#assembly-capsule"/></g>
+        <g class="assembly-part panel" data-assembly-step="5" style="--delay:120ms"><use href="#assembly-panels"/></g>
+        <g class="assembly-part" data-assembly-step="6" style="--dx:18px;--dy:0px;--delay:150ms"><use href="#assembly-nose"/></g>
+        <g class="assembly-part window" data-assembly-step="7" style="--delay:180ms"><use href="#assembly-window"/></g>
+      </svg>
+      <div class="assembly-track" aria-hidden="true"><div class="assembly-fill"></div><div class="assembly-scan"></div></div>
+      <span class="assembly-caption" aria-hidden="true">Gathering the parts</span>
+    </div>
+  </div>
+  <div id="asset-downloads" data-ose="asset-downloads" role="progressbar" aria-label="Downloading asset packs" aria-valuemin="0" aria-valuemax="100" hidden>
+    <div class="pack-heading" aria-hidden="true"><span class="pack-name">Loading destinations</span><span class="pack-count"></span></div>
+    <div class="pack-track" aria-hidden="true"><div class="pack-fill"></div></div>
   </div>
   <div id="labels"></div>
   <div id="hud">

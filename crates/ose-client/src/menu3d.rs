@@ -130,6 +130,7 @@ pub struct MenuBackdrop {
     start_ms: Option<f64>,
     /// Index of the vessel shown, chosen at random when the scene arrives.
     vessel: usize,
+    required_models: Vec<String>,
 }
 
 impl Default for MenuBackdrop {
@@ -147,6 +148,7 @@ impl MenuBackdrop {
             failed: false,
             start_ms: None,
             vessel: 0,
+            required_models: Vec::new(),
         }
     }
 
@@ -154,24 +156,16 @@ impl MenuBackdrop {
         self.scene.is_some()
     }
 
-    /// Keep the first-paint poster until a complete textured menu has actually been drawn.
-    pub fn presentation_ready(&self, gpu: &Renderer) -> bool {
-        let Some(scene) = &self.scene else {
-            return false;
-        };
-        gpu.model_textured("menu:kerbin")
-            && (scene.sky.is_none() || gpu.model_textured("menu:sky"))
-            && (scene
-                .clouds
-                .as_ref()
-                .is_none_or(|c| c.layers.is_empty() && scene.atmosphere.is_none())
-                || gpu.model_textured("menu:clouds"))
-            && scene.vessels.get(self.vessel).is_none_or(|v| {
-                v.parts
-                    .iter()
-                    .filter(|p| p.active)
-                    .all(|p| gpu.model_textured(&format!("part:{}", p.id)))
-            })
+    /// Two real steps per required model: geometry uploaded, then initial material previews ready.
+    /// Unknown before the scene description arrives; 100 means a complete textured frame was drawn.
+    pub fn presentation_progress(&self, gpu: &Renderer) -> Option<u8> {
+        self.scene.as_ref()?;
+        let done: usize = self
+            .required_models
+            .iter()
+            .map(|name| usize::from(gpu.has_model(name)) + usize::from(gpu.model_textured(name)))
+            .sum();
+        Some((done * 100 / (self.required_models.len() * 2).max(1)) as u8)
     }
 
     pub fn unavailable(&self) -> bool {
@@ -209,6 +203,28 @@ impl MenuBackdrop {
                     Ok(scene) => {
                         let n = scene.vessels.len().max(1);
                         self.vessel = ((js_sys::Math::random() * n as f64) as usize).min(n - 1);
+                        self.required_models = vec!["menu:kerbin".into()];
+                        if scene.sky.is_some() {
+                            self.required_models.push("menu:sky".into());
+                        }
+                        if scene
+                            .clouds
+                            .as_ref()
+                            .is_some_and(|c| !c.layers.is_empty() || scene.atmosphere.is_some())
+                        {
+                            self.required_models.push("menu:clouds".into());
+                        }
+                        if let Some(vessel) = scene.vessels.get(self.vessel) {
+                            self.required_models.extend(
+                                vessel
+                                    .parts
+                                    .iter()
+                                    .filter(|p| p.active)
+                                    .map(|p| format!("part:{}", p.id)),
+                            );
+                        }
+                        self.required_models.sort();
+                        self.required_models.dedup();
                         self.scene = Some(scene);
                         self.start_ms = Some(now_ms);
                     }

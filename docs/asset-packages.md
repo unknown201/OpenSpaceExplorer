@@ -44,6 +44,23 @@ adding about 1.5 KiB gzip in the local build. No image request, JavaScript execu
 asset is required to display it. The package bootstrap is deferred so a slow script download cannot
 block that paint. Pilot-name entry and campaign selection become usable independently of scenery.
 
+The scenery loader is a seven-piece ship assembly illustration with a progress track. It remains
+indeterminate until the menu description arrives, then follows actual required models: geometry
+uploaded and initial material previews ready. Reused part IDs count once. The final window/flame and
+100% appear only when every required model is textured, immediately before the existing backdrop fade.
+It does not advance on a timer, wait for full-resolution upgrades or block the campaign controls.
+Reduced-motion settings disable the assembly movement and scanning animation.
+
+A separate muted corner meter shows other asset packs, with friendly destination names and a ready
+count. Completed entries and bytes received within the current entry determine chunk progress; a small
+remainder is reserved until that entry has been cached. Chunk fractions are averaged within each
+destination, then across destinations: this is loading-work progress, not an ETA or a percentage of
+all compressed network bytes. The core/menu groups are omitted from this secondary meter. It appears
+only after 250 ms of pending work, stays still on a stalled link, and hides when no work remains.
+Cached instant loads avoid a flash. Demanded detail chunks also report after preloading completes.
+Updates are throttled to roughly ten per second, with serialized completion notifications delivered
+before the worker task settles. Worker upgrades reconnect the active usage and its progress listener.
+
 The sky, menu planet, clouds and their material previews form a `menu` package, prioritized ahead of
 speculative KSC/VAB transfers. The selected craft reuses its ordinary part assets on demand; unselected
 menu vessels are not downloaded. A separate presentation-ready check waits for every drawn backdrop

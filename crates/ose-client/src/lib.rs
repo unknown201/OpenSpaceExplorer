@@ -5634,6 +5634,9 @@ impl App {
             && !self.screen_open("sessions")
         {
             self.gpu_canvas
+                .remove_attribute("data-ose-menu-progress")
+                .ok();
+            self.gpu_canvas
                 .set_attribute(
                     "data-ose-menu-scene",
                     if self.gpu.is_some() {
@@ -11190,7 +11193,21 @@ impl App {
                             .ok();
                     }
                 }
-                let presentation = if self.menu3d.presentation_ready(gpu) {
+                let progress = self.menu3d.presentation_progress(gpu);
+                if let Some(value) = progress {
+                    let value = value.to_string();
+                    if self
+                        .gpu_canvas
+                        .get_attribute("data-ose-menu-progress")
+                        .as_deref()
+                        != Some(&value)
+                    {
+                        self.gpu_canvas
+                            .set_attribute("data-ose-menu-progress", &value)
+                            .ok();
+                    }
+                }
+                let presentation = if progress == Some(100) {
                     "ready"
                 } else if self.menu3d.unavailable() {
                     "static"

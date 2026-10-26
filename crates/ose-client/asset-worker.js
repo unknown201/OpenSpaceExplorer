@@ -5,6 +5,30 @@ const MAX_ENTRY = 64 * 1024 * 1024;
 let catalog, catalogAt = 0, failedAt = 0, catalogTask, diskTask, diskBytes = 0, memoryBytes = 0;
 const diskSizes = new Map(), memory = new Map(), assets = new Map(), jobs = new Map(), listeners = new Map();
 let writing = Promise.resolve(), active = 0;
+let progressPlan = new Map(), reportTimer, reporting = Promise.resolve();
+const progressState = new Map();
+function sendProgress() {
+  clearTimeout(reportTimer);reportTimer=undefined;
+  // Serialize deliveries so an older in-flight snapshot cannot overwrite completion.
+  reporting = reporting.then(async () => {
+    const packs = [...progressPlan.values()].map(chunk => ({
+      id:chunk.id, group:chunk.group || chunk.id.replace(/-\d+$/,''),
+      ...(progressState.get(chunk.url) || {fraction:0,state:'queued'}),
+    }));
+    for (const client of await self.clients.matchAll({type:'window'})) {
+      try {client.postMessage({type:'ose-asset-progress',packs});} catch { /* A tab closed. */ }
+    }
+  }).catch(() => {});
+  return reporting;
+}
+function reportProgress() {
+  if (!reportTimer) reportTimer=setTimeout(sendProgress,100);
+}
+function advance(job, fraction, state = 'loading') {
+  const old = progressState.get(job.chunk.url);
+  progressState.set(job.chunk.url,{fraction:Math.max(old?.fraction || 0, Math.min(1,fraction)),state});
+  reportProgress();
+}
 
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', event => event.waitUntil(self.clients.claim()));
@@ -32,6 +56,9 @@ async function manifest(force = false) {
         if (next.has(url.href)) throw new Error('Duplicate package asset');
         next.set(url.href, chunk);
       }
+    }
+    for (const [name, group] of Object.entries(index.groups)) {
+      for (const id of group.chunks || []) if (index.chunks[id]) index.chunks[id].group = name;
     }
     assets.clear(); for (const [url, chunk] of next) assets.set(url, chunk);
     catalog = index; catalogAt = Date.now();
@@ -116,7 +143,7 @@ function watch(url, revision) {
 // Decode one file at a time, without concatenating/decompressing a whole scene on the main thread.
 class Reader {
   constructor(stream) {this.reader = stream.getReader(); this.bytes = new Uint8Array(); this.offset = 0;}
-  async take(size) {
+  async take(size, progress) {
     const output = new Uint8Array(size); let at = 0;
     while (at < size) {
       if (this.offset === this.bytes.length) {
@@ -127,6 +154,7 @@ class Reader {
       const n = Math.min(size - at, this.bytes.length - this.offset);
       output.set(this.bytes.subarray(this.offset, this.offset+n), at);
       this.offset += n; at += n;
+      progress?.(size ? at/size : 1);
     }
     return output;
   }
@@ -141,6 +169,7 @@ async function transfer(job) {
   try {
     if (decoder.decode(await reader.take(8)) !== 'OSEPACK1') throw new Error('Invalid package');
     const expected = new Set(chunk.assets.map(absolute));
+    let completed = 0;
     for (;;) {
       const length = await reader.word();
       if (!length) {if (expected.size) throw new Error('Missing package entries'); break;}
@@ -148,8 +177,9 @@ async function transfer(job) {
       const meta = JSON.parse(decoder.decode(await reader.take(length)));
       const url = absolute(meta.url);
       if (!expected.delete(url) || !Number.isSafeInteger(meta.size) || meta.size < 0 || meta.size > MAX_ENTRY) throw new Error('Invalid package entry');
-      const bytes = await reader.take(meta.size);
+      const bytes = await reader.take(meta.size, fraction => advance(job,(completed + fraction*.95)/chunk.assets.length));
       await save(url, bytes, meta, chunk.revision);
+      completed++; advance(job, Math.min(.999,completed/chunk.assets.length));
     }
     return true;
   } finally {await reader.reader.cancel().catch(() => {});}
@@ -160,7 +190,11 @@ function pump() {
     // One speculative transfer. A demanded package may run alongside it with high fetch priority.
     if (!next || active >= 2 || !next.urgent && active) return;
     next.running = true; active++;
-    transfer(next).catch(() => false).then(next.resolve).finally(() => {
+    advance(next,next.fraction || 0);
+    transfer(next).catch(() => false).then(async ready => {
+      advance(next,ready ? 1 : 0,ready ? 'ready' : 'failed');
+      await sendProgress();next.resolve(ready);
+    }).finally(() => {
       jobs.delete(next.chunk.url); active--; pump();
     });
   }
@@ -170,7 +204,10 @@ function ensure(chunk, priority, urgent = false) {
   if (!job) {
     let resolve; const promise = new Promise(r => {resolve=r;});
     job = {chunk, priority, urgent, promise, resolve, running:false}; jobs.set(chunk.url, job);
+    progressState.set(chunk.url,{fraction:0,state:'queued'});
   } else {job.priority = Math.max(job.priority, priority); job.urgent ||= urgent;}
+  if (urgent) progressPlan.set(chunk.url,chunk);
+  reportProgress();
   // Let an entire usage plan enter the queue before choosing its first request.
   queueMicrotask(pump);
   return job.promise;
@@ -190,6 +227,9 @@ async function warm(usage) {
     for (const id of g.prefetch || []) wanted.set(id, Math.max(wanted.get(id) || 0, priority));
   }
   for (const [name, priority] of order) group(name, priority);
+  progressPlan = new Map([...wanted.keys()].map(id => [index.chunks[id].url,index.chunks[id]]));
+  for (const job of jobs.values()) if (job.urgent) progressPlan.set(job.chunk.url,job.chunk);
+  reportProgress();
   for (const [key, job] of jobs) {
     if (!job.urgent && !job.running && !wanted.has(job.chunk.id)) {
       jobs.delete(key); job.resolve(false);
@@ -197,14 +237,16 @@ async function warm(usage) {
   }
   return (await Promise.all([...wanted].map(([id,p]) => ensure(index.chunks[id],p)))).every(Boolean);
 }
-async function asset(request) {
+async function asset(request, event) {
   try {await manifest();} catch {return fetch(request);}
   const chunk = assets.get(request.url);
   if (!chunk) return fetch(request);
   let response = await cached(request.url, chunk.revision);
   if (!response) {
     const waiting = watch(request.url, chunk.revision);
-    try {await Promise.race([waiting.promise, ensure(chunk,100,true)]);}
+    const transfer = ensure(chunk,100,true);
+    event.waitUntil(transfer);
+    try {await Promise.race([waiting.promise, transfer]);}
     finally {waiting.cancel();}
     response = await cached(request.url, chunk.revision);
   }
@@ -218,7 +260,7 @@ async function asset(request) {
 self.addEventListener('fetch', event => {
   const request = event.request, url = new URL(request.url);
   if (request.method === 'GET' && url.origin === self.location.origin && url.pathname.startsWith('/assets/')
-      && assets.has(request.url) && !request.headers.has('range')) event.respondWith(asset(request));
+      && assets.has(request.url) && !request.headers.has('range')) event.respondWith(asset(request,event));
 });
 self.addEventListener('message', event => {
   const data = event.data, port = event.ports[0];

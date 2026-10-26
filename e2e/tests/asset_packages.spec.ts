@@ -10,7 +10,8 @@ test.use({serviceWorkers:'allow'});
 type Entry = {url:string; body:Buffer; type?:string};
 const model = Buffer.alloc(4*1024*1024,7);
 let server: Server, base: string, entries: Record<string,Entry[]>, requested: string[], individual: string[];
-let broken: boolean, blocked: boolean, holdVab: boolean, release: () => void, held: Promise<void>;
+let broken: boolean, blocked: boolean, holdVab: boolean, splitVab: boolean, holdDetail: boolean, release: () => void, held: Promise<void>;
+let workerGeneration:number;
 const date = 'Mon, 26 Oct 2026 10:00:00 GMT';
 const entry = (url:string, body:string|Buffer):Entry => ({url:`assets/${url}`,body:typeof body === 'string' ? Buffer.from(body) : body});
 const revision = (rows:Entry[]) => createHash('sha256').update(Buffer.concat(rows.map(e=>e.body))).digest('hex').slice(0,16);
@@ -34,7 +35,8 @@ test.beforeEach(async () => {
     'planet-Mun-0':[entry('planets/Mun/planet.json','Mun metadata'),entry('planets/Mun/albedo.jpg','Mun colour')],
     'planet-Mun-1':[entry('planets/Mun/detail_a0.png','Mun detail')],
   };
-  requested=[]; individual=[]; broken=false; blocked=false; holdVab=false;
+  requested=[]; individual=[]; broken=false; blocked=false; holdVab=false;splitVab=false;holdDetail=false;
+  workerGeneration=1;
   held=new Promise<void>(r=>{release=r;});
   const worker = await readFile(new URL('../../crates/ose-client/asset-worker.js',import.meta.url),'utf8');
   const bootstrap = await readFile(new URL('../../crates/ose-client/asset-packages.js',import.meta.url),'utf8');
@@ -45,12 +47,12 @@ test.beforeEach(async () => {
     if(path === '/health') {res.end('health'); return;}
     if(path === '/') {
       res.setHeader('content-type','text/html');
-      res.end('<!doctype html><title>Package test</title><canvas data-ose="gpu"></canvas><input data-ose="player-name"><script src="/asset-packages.js"></script>'); return;
+      res.end('<!doctype html><title>Package test</title><canvas data-ose="gpu"></canvas><input data-ose="player-name"><div id="asset-downloads" data-ose="asset-downloads" role="progressbar" hidden><span class="pack-name"></span><span class="pack-count"></span><div class="pack-fill"></div></div><script src="/asset-packages.js"></script>'); return;
     }
     if(path === '/asset-worker.js' || path === '/asset-packages.js') {
       res.setHeader('content-type','application/javascript');
       const prelude = blocked ? "Object.defineProperty(self,'caches',{get(){throw new Error('storage blocked');}});\n" : '';
-      res.end(path === '/asset-worker.js' ? prelude+worker : bootstrap); return;
+      res.end(path === '/asset-worker.js' ? prelude+worker+`\n// generation ${workerGeneration}\n` : bootstrap); return;
     }
     if(path === '/assets/packages/index.json') {
       res.setHeader('content-type','application/json'); res.end(JSON.stringify(catalog())); return;
@@ -64,10 +66,17 @@ test.beforeEach(async () => {
       const gzip = createGzip(); gzip.pipe(res); gzip.write('OSEPACK1');
       for(let i=0;i<rows.length;i++) {
         if(id==='vab-0' && i===1 && holdVab) await held;
+        if(id==='planet-Mun-1' && holdDetail) await held;
         if(res.destroyed) {gzip.destroy();return;}
         const e=rows[i], meta=Buffer.from(JSON.stringify({url:e.url,size:broken && id==='vab-0' && i===1 ? 1024**3 : e.body.length,
           type:e.type || 'application/octet-stream',preview:false,modified:date}));
-        const n=Buffer.alloc(4);n.writeUInt32LE(meta.length);gzip.write(n);gzip.write(meta);gzip.write(e.body);
+        const n=Buffer.alloc(4);n.writeUInt32LE(meta.length);gzip.write(n);gzip.write(meta);
+        if(id==='vab-0' && i===1 && splitVab) {
+          gzip.write(e.body.subarray(0,e.body.length/2));
+          await new Promise<void>(resolve=>gzip.flush(constants.Z_SYNC_FLUSH,resolve));await held;
+          if(res.destroyed){gzip.destroy();return;}
+          gzip.write(e.body.subarray(e.body.length/2));
+        } else gzip.write(e.body);
         await new Promise<void>(resolve=>gzip.flush(constants.Z_SYNC_FLUSH,resolve));
       }
       gzip.end(Buffer.alloc(4)); return;
@@ -118,6 +127,39 @@ test('mission control warms before VAB; both survive reload without redownloadin
 test('main menu scenery takes priority over speculative campus and VAB packages', async ({page}) => {
   await open(page);await warm(page,'menu');
   expect(requested).toEqual(['core-0','menu-0','ksc-0','vab-0']);
+});
+
+test('corner meter reflects bytes within an unfinished member, stays still on a stalled link and clears on completion',async({page})=>{
+  splitVab=true;await open(page);
+  const warming=page.evaluate(()=>(window as any).oseAssetPackages.prioritize('mission-control'));
+  const meter=page.locator('[data-ose="asset-downloads"]');
+  await expect(meter).toBeVisible();await expect(meter).toContainText('Vehicle Assembly');
+  await expect.poll(async()=>Number(await meter.getAttribute('aria-valuenow'))).toBeGreaterThan(50);
+  const value=Number(await meter.getAttribute('aria-valuenow'));expect(value).toBeLessThan(100);
+  await page.waitForTimeout(300);expect(Number(await meter.getAttribute('aria-valuenow'))).toBe(value);
+  release();await warming;await expect(meter).toBeHidden();
+  await warm(page,'mission-control');await page.waitForTimeout(400);await expect(meter).toBeHidden();
+});
+
+test('on-demand packs still report progress after the preload request has finished',async({page})=>{
+  await open(page);await warm(page,'planet-Mun');holdDetail=true;
+  const detail=asset(page,'planets/Mun/detail_a0.png');
+  const meter=page.locator('[data-ose="asset-downloads"]');
+  await expect(meter).toBeVisible();await expect(meter).toContainText('Mun scenery');
+  expect(Number(await meter.getAttribute('aria-valuenow'))).toBeLessThan(100);
+  release();expect((await detail).text).toBe('Mun detail');await expect(meter).toBeHidden();
+});
+
+test('a worker update reconnects the current usage and its progress without reloading the page',async({page})=>{
+  await open(page);await warm(page,'mission-control');
+  entries['vab-0'][1].body=Buffer.alloc(model.length,9);workerGeneration++;holdVab=true;
+  const changed=page.evaluate(()=>new Promise(resolve=>navigator.serviceWorker.addEventListener('controllerchange',()=>resolve(true),{once:true})));
+  await page.evaluate(async()=>{await(await navigator.serviceWorker.getRegistration())!.update();});
+  await changed;
+  const meter=page.locator('[data-ose="asset-downloads"]');
+  await expect(meter).toBeVisible();await expect(meter).toContainText('Vehicle Assembly');
+  release();await expect(meter).toBeHidden();
+  expect((await asset(page,'vab/vab.glb')).first).toBe(9);
 });
 
 test('selecting the Mun loads its essential package; surface detail is requested only when used', async ({page}) => {
