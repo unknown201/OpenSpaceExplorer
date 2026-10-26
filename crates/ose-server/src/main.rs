@@ -839,10 +839,28 @@ fn flight_readout(
         },
         dynamic_pressure_kpa: 0.0005 * rho * v_surf.length_squared(),
         static_pressure_kpa: pressure_kpa,
+        atmosphere_density: rho,
+        gravity_mps2: g,
+        atmosphere_temperature_k: atmo.map(|a| a.temperature_k.evaluate(alt)).unwrap_or(0.0),
+        lifting_surfaces: u
+            .structure(e)
+            .map(|st| {
+                st.lifting_fx(
+                    p.facing,
+                    v_surf,
+                    rho,
+                    atmo.map(|a| v_surf.length() / a.speed_of_sound(alt).max(1.0))
+                        .unwrap_or(0.0),
+                )
+            })
+            .unwrap_or_default(),
+        mach_number: atmo
+            .map(|a| v_surf.length() / a.speed_of_sound(alt).max(1.0))
+            .unwrap_or(0.0),
         firing_engines: if thrust > 0.0 {
             u.structure(e)
                 .map(|st| {
-                    st.fed_engines(p.stage)
+                    st.firing_engines(p.stage, p.throttle)
                         .into_iter()
                         .filter_map(|i| u16::try_from(i).ok())
                         .collect()
@@ -863,7 +881,20 @@ fn flight_readout(
             ose_sim::flight::vessel_top(p)
         },
         rcs_thrust_kn: p.rcs.thrust_kn as f32,
-        rcs_firing: p.rcs.usage as f32,
+        rcs_firing: (p.rcs.usage * p.rcs.powered.clamp(0.0, 1.0)) as f32,
+        rcs_translate: if p.groups.rcs && p.controlled && !p.crashed {
+            let top = ose_sim::flight::vessel_top(p);
+            let right = p.facing.cross(top);
+            (right * p.rcs.translate.x + p.facing * p.rcs.translate.y + top * p.rcs.translate.z)
+                * p.rcs.powered.clamp(0.0, 1.0)
+        } else {
+            ose_math::DVec3::ZERO
+        },
+        rcs_rotate: if p.groups.rcs && p.controlled && !p.crashed && p.rcs.torque_knm > 0.0 {
+            p.steer_cmd * p.rcs.powered.clamp(0.0, 1.0)
+        } else {
+            ose_math::DVec3::ZERO
+        },
         lift_kn: p.lift_kn.length() as f32,
         angvel: p.angvel,
         resources: u

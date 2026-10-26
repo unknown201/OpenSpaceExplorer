@@ -10,6 +10,10 @@ pub struct Context {
     pub normalized_thrust: f64,
     pub normalized_thrust_distance: f64,
     pub vertical_deviation: f64,
+    pub explosion_potential: f64,
+    pub atmosphere_density: f64,
+    pub relative_velocity: f64,
+    pub gravity: DVec3,
 }
 pub struct Input {
     pub key: Key,
@@ -90,25 +94,26 @@ fn vector(v: &Value) -> DVec3 {
 }
 
 /// VFXParameterMapping scales a captured prefab value, never the preceding frame's value.
+fn context_value(layer: &Layer, context: Context, throttle: f64, parameter: &str) -> Option<f64> {
+    layer.parameter_mappings.iter().rev().find_map(|mapping| {
+        if mapping["VFXParameter"]["Id"].as_str()? != parameter {
+            return None;
+        }
+        let time = match mapping["ContextVariable"]["Id"].as_str()? {
+            "vessel_throttle" => throttle,
+            "derived_normalized_thrust" => context.normalized_thrust,
+            "derived_normalized_thrustdistance" => context.normalized_thrust_distance,
+            "derived_vertical_deviation" => context.vertical_deviation,
+            "part_explosion_potential" => context.explosion_potential,
+            "env_atm_density" => context.atmosphere_density,
+            "part_relative_velocity" => context.relative_velocity,
+            _ => 0.0,
+        };
+        Some(fx::curve(&mapping["Curve"], time))
+    })
+}
 fn context_multiplier(layer: &Layer, context: Context, throttle: f64, parameter: &str) -> f64 {
-    layer
-        .parameter_mappings
-        .iter()
-        .rev()
-        .find_map(|mapping| {
-            if mapping["VFXParameter"]["Id"].as_str()? != parameter {
-                return None;
-            }
-            let time = match mapping["ContextVariable"]["Id"].as_str()? {
-                "vessel_throttle" => throttle,
-                "derived_normalized_thrust" => context.normalized_thrust,
-                "derived_normalized_thrustdistance" => context.normalized_thrust_distance,
-                "derived_vertical_deviation" => context.vertical_deviation,
-                _ => 0.0,
-            };
-            Some(fx::curve(&mapping["Curve"], time))
-        })
-        .unwrap_or(1.0)
+    context_value(layer, context, throttle, parameter).unwrap_or(1.0)
 }
 
 pub fn minmax(v: &Value, time: f64, random: f64) -> f64 {
@@ -124,6 +129,20 @@ pub fn minmax(v: &Value, time: f64, random: f64) -> f64 {
             a + (scalar - a) * random
         }
         _ => scalar,
+    }
+}
+/// SetMinMaxCurveMultiplier replaces curve multipliers but scales constant ranges.
+fn mapped_minmax(v: &Value, time: f64, random: f64, mapping: Option<f64>) -> f64 {
+    let Some(multiplier) = mapping else {
+        return minmax(v, time, random);
+    };
+    match fx::number(v, "minMaxState", 0.0) as u32 {
+        1 => multiplier * fx::curve(&v["maxCurve"], time),
+        2 => {
+            let a = fx::curve(&v["minCurve"], time);
+            multiplier * (a + (fx::curve(&v["maxCurve"], time) - a) * random)
+        }
+        _ => minmax(v, time, random) * multiplier,
     }
 }
 fn color(v: &Value, time: f64, random: f64) -> [f64; 4] {
@@ -184,13 +203,20 @@ impl System {
     }
     pub fn step(&mut self, dt: f64, inputs: &[Input]) {
         if !dt.is_finite() || !(0.0..=0.25).contains(&dt) {
-            self.clear();
+            // Discard trails after a clock jump, but retain action latches: a visible wreck or
+            // deployed parachute must not replay its one-shot burst after pause/warp correction.
+            self.particles.clear();
+            for source in self.sources.values_mut() {
+                source.playing = false;
+            }
             return;
         }
         // Update current emitter transforms before integrating local-space particles.
         for input in inputs {
             let layer = &input.layers[input.layer];
-            let active = input.throttle > 0.001;
+            let active = input.throttle > 0.001
+                && context_value(layer, input.context, input.throttle, "enabled")
+                    .is_none_or(|enabled| enabled >= 1.0);
             let source = self.sources.entry(input.key).or_insert_with(|| Source {
                 layers: input.layers.clone(),
                 layer: input.layer,
@@ -250,6 +276,16 @@ impl System {
             let mut additional = DVec3::ZERO;
             if let Some(source) = self.sources.get(&p.key) {
                 let layer = &source.layers[source.layer];
+                let gravity = source.context.gravity
+                    * layer.particle["InitialModule"]
+                        .get("gravityModifier")
+                        .map(|v| minmax(v, p.age / p.lifetime, p.random[0]))
+                        .unwrap_or(0.0);
+                p.velocity += if p.local {
+                    source.matrix.inverse().transform_vector3(gravity)
+                } else {
+                    gravity
+                } * dt;
                 let convert = |value: DVec3, module: &Value| {
                     let world = flag(module, "inWorldSpace");
                     if world && p.local {
@@ -389,11 +425,20 @@ impl System {
                                     && time < end
                                     && self.random() <= fx::number(burst, "probability", 1.0)
                                 {
-                                    let count =
+                                    // Unity replaces burst counts with the mapped value; unlike
+                                    // rate/lifetime mappings this is not a multiplier.
+                                    let count = context_value(
+                                        layer,
+                                        source.context,
+                                        source.throttle,
+                                        "emission_burst",
+                                    )
+                                    .unwrap_or_else(|| {
                                         minmax(&burst["countCurve"], normalized, self.random())
-                                            .round()
-                                            .max(0.0)
-                                            as usize;
+                                    })
+                                    .round()
+                                    .max(0.0)
+                                        as usize;
                                     for _ in
                                         0..count.min(max - alive - births.len().min(max - alive))
                                     {
@@ -413,27 +458,31 @@ impl System {
                     control,
                     "lifetime",
                     source.throttle,
-                    minmax(&initial["startLifetime"], normalized, r[0]),
+                    mapped_minmax(
+                        &initial["startLifetime"],
+                        normalized,
+                        r[0],
+                        context_value(layer, source.context, source.throttle, "start_lifetime"),
+                    ),
                     normalized,
                     r[0],
-                ) * context_multiplier(
-                    layer,
-                    source.context,
-                    source.throttle,
-                    "start_lifetime",
                 );
                 if life <= 0.0 {
                     continue;
                 }
-                let initial_speed =
-                    controlled(
-                        control,
-                        "speed",
-                        source.throttle,
-                        minmax(&initial["startSpeed"], normalized, r[1]),
+                let initial_speed = controlled(
+                    control,
+                    "speed",
+                    source.throttle,
+                    mapped_minmax(
+                        &initial["startSpeed"],
                         normalized,
                         r[1],
-                    ) * context_multiplier(layer, source.context, source.throttle, "start_speed");
+                        context_value(layer, source.context, source.throttle, "start_speed"),
+                    ),
+                    normalized,
+                    r[1],
+                );
                 let shape = &ps["ShapeModule"];
                 let az = r[2] * std::f64::consts::TAU;
                 let (mut position, mut direction) = (DVec3::ZERO, DVec3::Z);
@@ -455,6 +504,18 @@ impl System {
                     direction =
                         DVec3::new(az.cos() * angle.sin(), az.sin() * angle.sin(), angle.cos());
                     match fx::number(shape, "type", 4.0) as u32 {
+                        kind @ 0..=3 => {
+                            let z = if kind >= 2 { r[1] } else { r[1] * 2.0 - 1.0 };
+                            let xy = (1.0 - z * z).sqrt();
+                            direction = DVec3::new(az.cos() * xy, az.sin() * xy, z);
+                            let volume_radius = if kind % 2 == 1 {
+                                1.0
+                            } else {
+                                let inner = (1.0 - thickness).powi(3);
+                                (inner + (1.0 - inner) * r[3]).cbrt()
+                            };
+                            position = direction * radius * volume_radius;
+                        }
                         5 => {
                             position = DVec3::new(r[1] - 0.5, r[2] - 0.5, r[3] - 0.5);
                             direction = DVec3::Z;
@@ -478,8 +539,16 @@ impl System {
                         fx::number(&shape["m_Rotation"], "x", 0.0).to_radians(),
                         fx::number(&shape["m_Rotation"], "y", 0.0).to_radians(),
                     );
-                    position =
-                        q * (position * vector(&shape["m_Scale"])) + vector(&shape["m_Position"]);
+                    position = q
+                        * (position
+                            * vector(&shape["m_Scale"])
+                            * context_multiplier(
+                                layer,
+                                source.context,
+                                source.throttle,
+                                "shape_scale",
+                            ))
+                        + vector(&shape["m_Position"]);
                     direction = q * direction;
                 }
                 let local = fx::number(ps, "moveWithTransform", 0.0) == 1.0;
@@ -501,15 +570,19 @@ impl System {
                             * minmax(&inherit["m_Curve"], 0.0, r[0]);
                     }
                 }
-                let mut size =
-                    controlled(
-                        control,
-                        "size",
-                        source.throttle,
-                        minmax(&initial["startSize"], normalized, r[0]),
+                let mut size = controlled(
+                    control,
+                    "size",
+                    source.throttle,
+                    mapped_minmax(
+                        &initial["startSize"],
                         normalized,
                         r[0],
-                    ) * context_multiplier(layer, source.context, source.throttle, "start_size");
+                        context_value(layer, source.context, source.throttle, "start_size"),
+                    ),
+                    normalized,
+                    r[0],
+                );
                 if flag(control, "sizePressureMode") {
                     size *= fx::curve(&control["sizePressureCurve"], 1.0 - source.pressure);
                 }
@@ -598,8 +671,10 @@ impl System {
             let module = &ps["SizeModule"];
             let mut size = p.size;
             if enabled(module) {
-                size.x *= minmax(&module["curve"], t, p.random[0]);
-                size.y *= minmax(
+                let mapping =
+                    context_value(layer, source.context, source.throttle, "size_over_lifetime");
+                size.x *= mapped_minmax(&module["curve"], t, p.random[0], mapping);
+                size.y *= mapped_minmax(
                     if flag(module, "separateAxes") {
                         &module["y"]
                     } else {
@@ -607,8 +682,9 @@ impl System {
                     },
                     t,
                     p.random[1],
+                    mapping,
                 );
-                size.z *= minmax(
+                size.z *= mapped_minmax(
                     if flag(module, "separateAxes") {
                         &module["z"]
                     } else {
@@ -616,6 +692,7 @@ impl System {
                     },
                     t,
                     p.random[2],
+                    mapping,
                 );
             }
             let scale = DVec3::new(
@@ -665,7 +742,38 @@ impl System {
                 angle += minmax(&rotation["curve"], t, p.random[3]) * p.age;
             }
             let render_mode = fx::number(&layer.renderer, "m_RenderMode", 0.0) as u32;
+            if render_mode == 5 {
+                continue;
+            }
             let (mut x, mut y, mut z) = (right, up, -forward);
+            match fx::number(&layer.renderer, "m_RenderAlignment", 0.0) as u32 {
+                1 => {
+                    x = DVec3::X;
+                    y = DVec3::Y;
+                    z = DVec3::Z;
+                }
+                2 => {
+                    x = source.matrix.x_axis.truncate().normalize_or_zero();
+                    y = source.matrix.y_axis.truncate().normalize_or_zero();
+                    z = source.matrix.z_axis.truncate().normalize_or_zero();
+                }
+                3 => {
+                    z = (camera - position).normalize_or_zero();
+                    x = up.cross(z).normalize_or_zero();
+                    y = z.cross(x).normalize_or_zero();
+                }
+                _ => {}
+            }
+            if render_mode == 2 {
+                x = DVec3::X;
+                y = DVec3::Z;
+                z = DVec3::Y;
+            }
+            if render_mode == 3 {
+                y = DVec3::Y;
+                x = y.cross(camera - position).normalize_or_zero();
+                z = x.cross(y);
+            }
             if render_mode == 1 {
                 let velocity = if p.local {
                     source.matrix.transform_vector3(p.velocity)
@@ -685,13 +793,18 @@ impl System {
                 y = source.matrix.transform_vector3(q * DVec3::Y).normalize();
                 z = source.matrix.transform_vector3(q * DVec3::Z).normalize();
             } else {
-                let (s, c) = angle.sin_cos();
-                let previous = x;
-                x = previous * c + y * s;
-                y = y * c - previous * s;
+                let q = DQuat::from_euler(glam::EulerRot::ZXY, angle, p.rotation.x, p.rotation.y);
+                let basis = glam::DMat3::from_cols(x, y, z);
+                x = basis * (q * DVec3::X);
+                y = basis * (q * DVec3::Y);
+                z = basis * (q * DVec3::Z);
             }
+            let pivot = vector(&layer.renderer["m_Pivot"]);
             sprites.push(Sprite {
-                position,
+                position: position
+                    - x * size.x * pivot.x
+                    - y * size.y * pivot.y
+                    - z * size.z * pivot.z,
                 axis_x: x * size.x,
                 axis_y: y * size.y,
                 axis_z: z * size.z,
@@ -728,6 +841,14 @@ mod tests {
             ),
             1.0
         );
+    }
+    #[test]
+    fn mapped_curve_multiplier_replaces_the_prefab_multiplier_even_when_zero() {
+        for scalar in [0.0, 7.0] {
+            let curve = json!({"minMaxState":1,"scalar":scalar,"maxCurve":{"m_Curve":[{"time":0,"value":0.25},{"time":1,"value":0.25}]}});
+            assert_eq!(mapped_minmax(&curve, 0.5, 0.5, Some(0.8)), 0.2);
+        }
+        assert!((mapped_minmax(&json!({"scalar":7}), 0.5, 0.5, Some(0.8)) - 5.6).abs() < 1e-9);
     }
     fn recipe(events: Value, cap: usize) -> Rc<Vec<Layer>> {
         Rc::new(vec![serde_json::from_value(json!({"name":"source burst","kind":"particle","matrix":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],
@@ -828,5 +949,89 @@ mod tests {
         assert_eq!(system.particles.len(), 4);
         system.step(0.2, &[input(layers, 1.0)]);
         assert_eq!(system.particles.len(), 4);
+    }
+
+    #[test]
+    fn crash_burst_honors_delay_and_does_not_replay_while_wreck_is_visible() {
+        let mut layers = recipe(json!([[0, 6]]), 100);
+        Rc::get_mut(&mut layers).unwrap()[0].particle["startDelay"] = json!({"scalar":0.12});
+        let mut system = System::default();
+        for _ in 0..5 {
+            system.step(0.02, &[input(layers.clone(), 1.0)]);
+        }
+        assert!(system.particles.is_empty());
+        for _ in 0..3 {
+            system.step(0.02, &[input(layers.clone(), 1.0)]);
+        }
+        assert_eq!(system.particles.len(), 10);
+        for _ in 0..100 {
+            system.step(0.02, &[input(layers.clone(), 1.0)]);
+        }
+        assert!(system.particles.is_empty());
+    }
+    #[test]
+    fn clock_jump_does_not_replay_a_crash_burst() {
+        let layers = recipe(json!([[0, 6]]), 100);
+        let mut system = System::default();
+        system.step(0.02, &[input(layers.clone(), 1.0)]);
+        assert_eq!(system.particles.len(), 10);
+        system.step(f64::INFINITY, &[input(layers.clone(), 1.0)]);
+        for _ in 0..30 {
+            system.step(0.02, &[input(layers.clone(), 1.0)]);
+        }
+        assert!(system.particles.is_empty());
+    }
+
+    #[test]
+    fn explosion_context_replaces_burst_count_and_scales_shape_and_size() {
+        let mut layers = recipe(json!([[0, 6]]), 100);
+        let layer = &mut Rc::get_mut(&mut layers).unwrap()[0];
+        layer.particle["InitialModule"]["startSpeed"] = json!({"scalar":1});
+        layer.particle["ShapeModule"] =
+            json!({"enabled":true,"type":1,"radius":{"value":1},"m_Scale":{"x":1,"y":1,"z":1}});
+        layer.parameter_mappings = ["emission_burst", "shape_scale", "start_size"]
+            .iter()
+            .map(|id| {
+                json!({
+                    "VFXParameter":{"Id":id},"ContextVariable":{"Id":"part_explosion_potential"},
+                    "Curve":{"m_Curve":[{"time":0,"value":2},{"time":1,"value":2}]}
+                })
+            })
+            .collect();
+        let mut system = System::default();
+        let mut source = input(layers, 1.0);
+        source.context.explosion_potential = 0.5;
+        system.step(0.02, &[source]);
+        assert_eq!(
+            system.particles.len(),
+            2,
+            "mapped count replaces the original count of ten"
+        );
+        for p in &system.particles {
+            assert!((p.position.length() - 2.02).abs() < 1e-9);
+            assert_eq!(p.size, DVec3::splat(2.0));
+            assert!((p.velocity.length() - 1.0).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn spherical_explosions_emit_in_all_directions_and_hemispheres_stay_above_plane() {
+        for kind in [0, 2] {
+            let mut layers = recipe(json!([[0, 6]]), 100);
+            let layer = &mut Rc::get_mut(&mut layers).unwrap()[0];
+            layer.particle["InitialModule"]["startSpeed"] = json!({"scalar":1});
+            layer.particle["EmissionModule"]["m_Bursts"][0]["countCurve"] = json!({"scalar":100});
+            layer.particle["ShapeModule"] = json!({"enabled":true,"type":kind,"radius":{"value":1},"radiusThickness":1,"m_Scale":{"x":1,"y":1,"z":1}});
+            let mut system = System::default();
+            system.step(0.02, &[input(layers, 1.0)]);
+            assert!(system.particles.iter().any(|p| p.velocity.x < -0.5));
+            assert!(system.particles.iter().any(|p| p.velocity.x > 0.5));
+            assert!(system.particles.iter().any(|p| p.velocity.z > 0.5));
+            if kind == 0 {
+                assert!(system.particles.iter().any(|p| p.velocity.z < -0.5));
+            } else {
+                assert!(system.particles.iter().all(|p| p.velocity.z >= 0.0));
+            }
+        }
     }
 }

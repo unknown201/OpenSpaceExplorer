@@ -2242,6 +2242,17 @@ mod tests {
             false,
         );
         p.facing = DVec3::new(0.0, 1.0, 0.0);
+        // Orbiting upper stage: ignited solid launch boosters cannot hold 1% throttle.
+        p.stage = st
+            .stage_engines
+            .iter()
+            .position(|engines| {
+                !engines.is_empty()
+                    && engines
+                        .iter()
+                        .all(|&i| st.part_ids[i].starts_with("engine_"))
+            })
+            .unwrap();
         u.set_powered(v, p);
         u.set_structure(v, st);
         // a probe 2 km ahead on the same orbit, drifting apart at 1 m/s

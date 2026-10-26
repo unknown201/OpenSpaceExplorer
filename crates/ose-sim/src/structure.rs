@@ -30,6 +30,7 @@ pub struct Structure {
     pub stage_engines: Vec<Vec<usize>>,
     /// Rated vacuum thrust of each part's engine, kN (0 for parts without one).
     pub engine_thrust_kn: Vec<f64>,
+    engine_throttle_locked: Vec<bool>,
     /// Each part's drag faces after occlusion by stack neighbours (`None` without a drag cube), and its
     /// authored rotation (Unity quaternion x, y, z, w) to bring the airflow into part space.
     pub faces: Vec<Option<Faces>>,
@@ -363,6 +364,13 @@ impl Structure {
             stage_parts,
             stage_engines,
             engine_thrust_kn,
+            engine_throttle_locked: (0..n)
+                .map(|i| {
+                    def_of(i)
+                        .and_then(|d| d.engines.first())
+                        .is_some_and(|e| e.throttle_locked)
+                })
+                .collect(),
             faces,
             part_rot,
             part_cda_m2: vec![0.0; n],
@@ -539,6 +547,22 @@ impl Structure {
             .into_iter()
             .filter(|&i| self.fed(i))
             .collect()
+    }
+
+    /// Supplied engines producing thrust at this throttle setting.
+    pub fn firing_engines(&self, stage: usize, throttle: f64) -> Vec<usize> {
+        self.fed_engines(stage)
+            .into_iter()
+            .filter(|&i| self.engine_throttle_locked[i] || throttle > 0.0)
+            .collect()
+    }
+
+    fn engine_duty(&self, engine: usize, throttle: f64) -> f64 {
+        if self.engine_throttle_locked[engine] {
+            1.0
+        } else {
+            throttle
+        }
     }
 
     /// Whether an engine can reach every ingredient of its mixture.
@@ -891,6 +915,18 @@ impl Structure {
         p.footprint_m = footprint;
         p.crash_tolerance_mps = tolerance;
         p.propellant_t = self.reachable_propellant_t(p.stage);
+        let fed = self.fed_engines(p.stage);
+        let supplied: f64 = fed.iter().map(|&i| self.engine_thrust_kn[i]).sum();
+        let locked: f64 = fed
+            .iter()
+            .filter(|&&i| self.engine_throttle_locked[i])
+            .map(|&i| self.engine_thrust_kn[i])
+            .sum();
+        p.locked_thrust_fraction = if supplied > 0.0 {
+            locked / supplied
+        } else {
+            0.0
+        };
         p.thrust_scale = match self.stage_engines.get(p.stage) {
             Some(all) => {
                 let rated: f64 = all.iter().map(|&i| self.engine_thrust_kn[i]).sum();
@@ -920,7 +956,6 @@ impl Structure {
             return;
         };
         let live = self.live_engines(p.stage);
-        let running = p.throttle * p.thrust_scale;
         let mut requests = Vec::new();
         let mut wheels = Vec::new();
         let mut cores = Vec::new();
@@ -939,8 +974,8 @@ impl Structure {
             }
             if e.generator_output > 0.0 {
                 if self.engine_thrust_kn[i] > 0.0 {
-                    if live.contains(&i) && self.fed(i) {
-                        made += e.generator_output * running;
+                    if p.ignited && !p.crashed && live.contains(&i) && self.fed(i) {
+                        made += e.generator_output * self.engine_duty(i, p.throttle);
                     }
                 } else {
                     made += e.generator_output;
@@ -1449,12 +1484,11 @@ impl Structure {
     /// running engines by rated thrust, then `sync`.
     pub fn burn(&mut self, p: &mut Powered, burned_t: f64, dt: f64) {
         if burned_t > 0.0 && dt > 0.0 {
-            let engines: Vec<usize> = self
-                .live_engines(p.stage)
-                .into_iter()
-                .filter(|&i| self.fed(i))
-                .collect();
-            let rated: f64 = engines.iter().map(|&i| self.engine_thrust_kn[i]).sum();
+            let engines: Vec<usize> = self.firing_engines(p.stage, p.throttle);
+            let rated: f64 = engines
+                .iter()
+                .map(|&i| self.engine_thrust_kn[i] * self.engine_duty(i, p.throttle))
+                .sum();
             let mut requests = Vec::new();
             for &e in &engines {
                 let Some(mix) = &self.engine_mixture[e] else {
@@ -1464,7 +1498,11 @@ impl Structure {
                 if unit <= 0.0 || rated <= 0.0 {
                     continue;
                 }
-                let units_per_s = burned_t * self.engine_thrust_kn[e] / rated / dt / unit;
+                let units_per_s =
+                    burned_t * self.engine_thrust_kn[e] * self.engine_duty(e, p.throttle)
+                        / rated
+                        / dt
+                        / unit;
                 requests.push(Request {
                     part: e,
                     instructions: self
@@ -1534,6 +1572,54 @@ impl Structure {
                 );
         }
         total
+    }
+
+    /// Actual per-surface lift and coefficient for condensation effects, using the same curves and
+    /// attached-part mask as the flight force calculation.
+    pub fn lifting_fx(
+        &self,
+        facing: DVec3,
+        v_air: DVec3,
+        rho: f64,
+        mach: f64,
+    ) -> Vec<(u16, f32, f32)> {
+        let speed = v_air.length();
+        if speed <= 0.0 || rho <= 0.0 {
+            return Vec::new();
+        }
+        let (bx, by, bz) = basis(facing);
+        let travel = v_air * (1.0 / speed);
+        let q = 0.5 * rho * speed * speed;
+        self.lift_defs
+            .iter()
+            .enumerate()
+            .filter_map(|(i, def)| {
+                let (surface, curves) = def.as_ref()?;
+                if !self.rigid.present[i]
+                    || self.shielded[i]
+                    || surface.deflection_lift_coeff <= 0.0
+                {
+                    return None;
+                }
+                let u = aero::rotate(self.part_rot[i], surface.axis);
+                let axis = bx * u.x + by * u.y + bz * (-u.z);
+                let force = aero::surface_force(
+                    curves,
+                    surface.deflection_lift_coeff,
+                    surface.omnidirectional,
+                    axis,
+                    travel,
+                    q,
+                    mach,
+                );
+                let lift = force - travel * force.dot(travel);
+                Some((
+                    u16::try_from(i).ok()?,
+                    surface.deflection_lift_coeff as f32,
+                    lift.length() as f32,
+                ))
+            })
+            .collect()
     }
 
     /// Torque of the airflow about the centre of mass, kN·m, inertial: each part's drag (from the last `aero`
@@ -1728,10 +1814,14 @@ impl Structure {
                         self.rigid.present[i] && self.engine_thrust_kn[i] > 0.0 && self.fed(i)
                     })
                     .collect();
-                let rated: f64 = live.iter().map(|&i| self.engine_thrust_kn[i]).sum();
+                let rated: f64 = live
+                    .iter()
+                    .map(|&i| self.engine_thrust_kn[i] * self.engine_duty(i, p.throttle))
+                    .sum();
                 for &i in &live {
                     self.engine_load_target_kn[i] =
-                        out.thrust_kn * self.engine_thrust_kn[i] / rated;
+                        out.thrust_kn * self.engine_thrust_kn[i] * self.engine_duty(i, p.throttle)
+                            / rated;
                 }
             }
         }
@@ -2298,6 +2388,51 @@ mod tests {
             .filter(|t| t.resource == ec && s.net.present[t.part])
             .map(|t| t.stored)
             .sum()
+    }
+
+    #[test]
+    fn throttle_cut_keeps_solid_thrust_without_burning_liquid_fuel() {
+        let (crafts, defs, res) = assets();
+        let craft = crafts.iter().find(|c| c.name == "Kerbal K1").unwrap();
+        let mut s = Structure::build(craft, &defs, &res);
+        let mut p = flying(DVec3::new(1.0, 0.0, 0.0));
+        p.throttle = 1.0;
+        s.sync(&mut p);
+        let full = p.thrust_kn(0.0);
+        p.throttle = 0.0;
+        let cut = p.thrust_kn(0.0);
+        assert!(
+            cut > 0.0 && cut < full,
+            "only the boosters should keep pushing"
+        );
+        let before = s.resource_totals();
+        s.burn(&mut p, 0.01, 1.0);
+        let after = s.resource_totals();
+        assert!(before
+            .iter()
+            .zip(&after)
+            .any(|(a, b)| a.0 == "SolidFuel" && b.1 < a.1));
+        for (a, b) in before.iter().zip(&after) {
+            if a.0 == "Methane" || a.0 == "Oxidizer" {
+                assert_eq!(a.1, b.1);
+            }
+        }
+        let solid = s.net.resource("SolidFuel").unwrap();
+        for tank in s.net.tanks.iter_mut().filter(|t| t.resource == solid) {
+            tank.stored = 0.0;
+        }
+        s.sync(&mut p);
+        assert_eq!(
+            p.thrust_kn(0.0),
+            0.0,
+            "burned-out boosters produce no thrust"
+        );
+        assert!(s.firing_engines(p.stage, p.throttle).is_empty());
+        p.throttle = 1.0;
+        assert!(
+            p.thrust_kn(0.0) > 0.0,
+            "the liquid engine can still restart"
+        );
     }
 
     #[test]

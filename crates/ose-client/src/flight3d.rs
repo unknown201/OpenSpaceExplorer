@@ -25,6 +25,10 @@ use std::collections::HashMap;
 struct Nozzle {
     position: [f64; 3],
     direction: [f64; 3],
+    #[serde(default)]
+    mode: u32,
+    #[serde(default)]
+    rotate: bool,
 }
 
 /// Launch pad 1 (`kerbin_KSCLaunchpad_spawn_01`, docs/reference-notes/terrain.md) and the other pads used to
@@ -445,6 +449,11 @@ pub struct FlightView {
     fx_context: Option<(u64, String)>,
     ground_radius: f64,
     launch_origin: Option<DVec3>,
+    crash_fx: crate::particles::CrashFx,
+    effect_edges: crate::particles::EffectEdges,
+    bursts: crate::particles::Bursts,
+    last_surface_speed: f64,
+    last_footstep: f64,
 }
 
 impl Default for FlightView {
@@ -519,6 +528,11 @@ impl FlightView {
             fx_context: None,
             ground_radius: 0.0,
             launch_origin: None,
+            crash_fx: Default::default(),
+            effect_edges: Default::default(),
+            bursts: Default::default(),
+            last_surface_speed: 0.0,
+            last_footstep: 0.0,
         }
     }
 
@@ -858,6 +872,11 @@ impl FlightView {
             self.fx_context = Some(context);
             self.ground_radius = inp.body_radius;
             self.launch_origin = None;
+            self.crash_fx = Default::default();
+            self.effect_edges = Default::default();
+            self.bursts = Default::default();
+            self.last_surface_speed = 0.0;
+            self.last_footstep = inp.ut;
         }
         if landed {
             self.ground_radius = pos.length();
@@ -875,6 +894,74 @@ impl FlightView {
             });
         }
         let mut engine_draws = Vec::new();
+        if let Some(f) = &inp.vessel.flight {
+            let crashed = f.situation == ose_net::FlightSituation::Crashed;
+            // The source's surface-impact event is separate from its fuel explosion.
+            if self.effect_edges.rising(0, 0, landed || crashed) && self.last_surface_speed > 1.0 {
+                let environment = if f.atmosphere_density > 0.01 {
+                    "atmosphere"
+                } else {
+                    "vacuum"
+                };
+                let surface =
+                    if matches!(inp.body_id, "Kerbin" | "Laythe" | "Eve") && f.altitude_m < 1.0 {
+                        "liquid"
+                    } else {
+                        "solid"
+                    };
+                self.bursts.queue(
+                    format!("fx_surfaceImpact_{surface}_noFuel_{environment}"),
+                    glam::DMat4::from_rotation_translation(
+                        DQuat::from_rotation_arc(DVec3::Y, up),
+                        pos + up,
+                    ),
+                    inp.ut,
+                    self.last_surface_speed,
+                );
+            }
+            if let Some(hit) = self.crash_fx.update_fuel(
+                crashed,
+                crate::particles::fuel_type(&f.resources, f.propellant_t),
+                inp.ut,
+                pos.to_array(),
+            ) {
+                let impact = DVec3::from_array(hit.position);
+                engine_draws.push(crate::engine_fx_gpu::EngineDraw {
+                    instance: 0x2000000000000000 | inp.vessel.id,
+                    part: if f.eva {
+                        "fx_kerbal_poof_default".into()
+                    } else {
+                        format!(
+                            "fx_explosion_{}_{}",
+                            hit.fuel,
+                            if f.atmosphere_density > 0.01 {
+                                "atmosphere"
+                            } else {
+                                "vacuum"
+                            }
+                        )
+                    },
+                    model: glam::DMat4::from_rotation_translation(
+                        DQuat::from_rotation_arc(DVec3::Y, impact.normalize_or_zero()),
+                        impact + impact.normalize_or_zero() - cam,
+                    ),
+                    throttle: 1.0,
+                    commanded: 1.0,
+                    pressure: crate::particles::pressure_multiplier(f.static_pressure_kpa),
+                    atmosphere_density: f.atmosphere_density,
+                    gravity_mps2: f.gravity_mps2,
+                    relative_velocity: f.surface_speed_mps,
+                    mode: 0,
+                    time: inp.now_ms * 0.001,
+                    simulation_time: inp.ut,
+                    vapor: None,
+                    reentry: None,
+                    thrust_kn: 0.0,
+                    distance_from_spawn: 0.0,
+                    vertical_deviation: 1.0,
+                });
+            }
+        }
 
         // The body: the planet renderer's terrain, ocean, sky and clouds once its assets are in; until then the
         // scaled sphere, sunk by 1.5 km so its facets stay under the campus ground near the KSC.
@@ -1062,6 +1149,84 @@ impl FlightView {
                 parts.push((i, name, lp, lq, animation));
             }
             let lift = if min_y.is_finite() { -min_y } else { 0.0 };
+            if let Some(f) = readout {
+                let suffix = if f.atmosphere_density > 0.01 {
+                    "atm"
+                } else {
+                    "vacuum"
+                };
+                let fired_parts: Vec<_> = craft
+                    .stages
+                    .iter()
+                    .rev()
+                    .filter(|s| !s.is_empty())
+                    .take(fired)
+                    .flatten()
+                    .copied()
+                    .collect();
+                for (i, p) in craft.parts.iter().enumerate() {
+                    let (pp, q) = poses[i];
+                    let matrix = glam::DMat4::from_rotation_translation(
+                        vessel_rot * DQuat::from_xyzw(q.x, -q.y, -q.z, q.w).normalize(),
+                        pos + vessel_rot * DVec3::new(-pp.x, pp.y + lift, pp.z),
+                    );
+                    let separated = gone.get(i).copied().unwrap_or(false);
+                    if self.effect_edges.rising(1, i, separated) && (inp.is_decoupler)(&p.part_id) {
+                        self.bursts.queue(
+                            format!("fx_decouple_{suffix}"),
+                            matrix,
+                            inp.ut,
+                            f.surface_speed_mps,
+                        );
+                    }
+                    let fairing = f.fairings.iter().any(|x| x.0 as usize == i && x.1);
+                    if self.effect_edges.rising(2, i, fairing) {
+                        self.bursts.queue(
+                            format!("fx_decouple_{suffix}"),
+                            matrix,
+                            inp.ut,
+                            f.surface_speed_mps,
+                        );
+                    }
+                    let chute = f.parachutes.iter().any(|x| {
+                        x.0 as usize == i
+                            && matches!(
+                                x.1,
+                                ose_net::ChuteState::SemiDeployed | ose_net::ChuteState::Deployed
+                            )
+                    });
+                    if self.effect_edges.rising(3, i, chute) {
+                        self.bursts.queue(
+                            format!("fx_parachutedeploy_{suffix}"),
+                            matrix,
+                            inp.ut,
+                            f.surface_speed_mps,
+                        );
+                    }
+                    if self.effect_edges.rising(4, i, fired_parts.contains(&i))
+                        && p.part_id.contains("launchclamp")
+                    {
+                        self.bursts.queue(
+                            format!("fx_launchclamp_{suffix}"),
+                            matrix,
+                            inp.ut,
+                            f.surface_speed_mps,
+                        );
+                    }
+                    let docked = f
+                        .docked
+                        .iter()
+                        .any(|(a, b)| *a as usize == i || *b as usize == i);
+                    if self.effect_edges.rising(5, i, docked) {
+                        self.bursts
+                            .queue("fx_dock_00", matrix, inp.ut, f.surface_speed_mps);
+                    }
+                    if self.effect_edges.rising(6, i, !docked) {
+                        self.bursts
+                            .queue("fx_undock_00", matrix, inp.ut, f.surface_speed_mps);
+                    }
+                }
+            }
             // Use the server's attached, fuel-fed engines, not just stage membership. Nozzles share
             // the exact flexed pose used by the part mesh (including radial/multi-nozzle engines).
             if let Some(f) = &inp.vessel.flight {
@@ -1070,6 +1235,189 @@ impl FlightView {
                 let mut launch_smoke_added = false;
                 for (pi, name, lp, lq, _) in &parts {
                     let part_id = &craft.parts[*pi].part_id;
+                    if let Some((_, coefficient, lift_kn)) = f
+                        .lifting_surfaces
+                        .iter()
+                        .find(|s| s.0 as usize == *pi)
+                        .filter(|_| {
+                            part_id.starts_with("wing_") || part_id.starts_with("controlsurface_")
+                        })
+                    {
+                        if let Some(model) = gpu.model(name) {
+                            // OSE's current wings use their authored static shape. Anchor the ribbon
+                            // at that shape's outer trailing corner and use the exact rendered pose.
+                            let (lo, hi) =
+                                (model.bounds_min.as_dvec3(), model.bounds_max.as_dvec3());
+                            let tip = DVec3::new(
+                                if lo.x.abs() > hi.x.abs() { lo.x } else { hi.x },
+                                (lo.y + hi.y) * 0.5,
+                                hi.z,
+                            );
+                            engine_draws.push(crate::engine_fx_gpu::EngineDraw {
+                                instance: 0x0040000000000000 | (inp.vessel.id << 16) | *pi as u64,
+                                part: "fx_vapor_vortices".into(),
+                                model: glam::DMat4::from_rotation_translation(
+                                    vessel_rot * *lq,
+                                    pos - cam + vessel_rot * (*lp + DVec3::Y * lift + *lq * tip),
+                                ),
+                                throttle: if f.situation == ose_net::FlightSituation::Crashed {
+                                    0.0
+                                } else {
+                                    1.0
+                                },
+                                commanded: 0.0,
+                                pressure,
+                                atmosphere_density: f.atmosphere_density,
+                                gravity_mps2: f.gravity_mps2,
+                                relative_velocity: f.surface_speed_mps,
+                                mode: 0,
+                                time: inp.now_ms * 0.001,
+                                simulation_time: inp.ut,
+                                thrust_kn: 0.0,
+                                distance_from_spawn: 0.0,
+                                vertical_deviation: 1.0,
+                                reentry: None,
+                                vapor: Some(crate::vapor::State {
+                                    body: crate::vapor::BODIES
+                                        .iter()
+                                        .position(|body| *body == inp.body_id)
+                                        .unwrap_or(usize::MAX),
+                                    altitude: f.altitude_m,
+                                    temperature: f.atmosphere_temperature_k,
+                                    density: f.atmosphere_density,
+                                    pressure: f.static_pressure_kpa,
+                                    dynamic_pressure: f.dynamic_pressure_kpa,
+                                    lift: *lift_kn as f64,
+                                    coefficient: *coefficient as f64,
+                                }),
+                            });
+                        }
+                    }
+                    let air_velocity = v_rel - DVec3::new(0.0, 0.0, spin.omega()).cross(r);
+                    engine_draws.push(crate::engine_fx_gpu::EngineDraw {
+                        instance: 0x0080000000000000 | (inp.vessel.id << 16) | *pi as u64,
+                        part: format!("reentry:{part_id}"),
+                        model: glam::DMat4::from_rotation_translation(
+                            vessel_rot * *lq,
+                            pos - cam + vessel_rot * (*lp + DVec3::Y * lift),
+                        ),
+                        throttle: if f.situation == ose_net::FlightSituation::Crashed {
+                            0.0
+                        } else {
+                            1.0
+                        },
+                        commanded: 0.0,
+                        pressure,
+                        atmosphere_density: f.atmosphere_density,
+                        gravity_mps2: f.gravity_mps2,
+                        relative_velocity: f.surface_speed_mps,
+                        mode: 0,
+                        time: inp.now_ms * 0.001,
+                        simulation_time: inp.ut,
+                        thrust_kn: 0.0,
+                        distance_from_spawn: 0.0,
+                        vertical_deviation: 1.0,
+                        vapor: None,
+                        reentry: Some(crate::reentry::State {
+                            heading: dir_to_model(
+                                r,
+                                air_velocity.normalize_or_zero(),
+                                spin,
+                                inp.ut,
+                            ),
+                            density: f.atmosphere_density,
+                            altitude: f.altitude_m,
+                            speed: f.surface_speed_mps,
+                            mach: f.mach_number,
+                            gradient: match inp.body_id {
+                                "Eve" => 1,
+                                "Jool" => 2,
+                                "Laythe" => 3,
+                                _ => 0,
+                            },
+                        }),
+                    });
+                    if part_id.starts_with("wheel_") || part_id.starts_with("landinggear_") {
+                        let deployed = f
+                            .gear
+                            .iter()
+                            .find(|x| x.0 as usize == *pi)
+                            .is_none_or(|x| x.1);
+                        engine_draws.push(crate::engine_fx_gpu::EngineDraw {
+                            instance: 0x0200000000000000 | (inp.vessel.id << 16) | *pi as u64,
+                            part: "fx_wheel_default".into(),
+                            model: glam::DMat4::from_rotation_translation(
+                                DQuat::from_rotation_arc(DVec3::Y, up),
+                                pos - cam + vessel_rot * (*lp + DVec3::Y * lift),
+                            ),
+                            throttle: if landed
+                                && deployed
+                                && !f.brakes
+                                && f.drive_speed_mps.abs() > 0.1
+                            {
+                                1.0
+                            } else {
+                                0.0
+                            },
+                            commanded: 0.0,
+                            pressure,
+                            atmosphere_density: f.atmosphere_density,
+                            gravity_mps2: f.gravity_mps2,
+                            relative_velocity: f.drive_speed_mps.abs() as f64,
+                            mode: 0,
+                            time: inp.now_ms * 0.001,
+                            simulation_time: inp.ut,
+                            vapor: None,
+                            reentry: None,
+                            thrust_kn: 0.0,
+                            distance_from_spawn: 0.0,
+                            vertical_deviation: 1.0,
+                        });
+                    }
+                    if part_id.starts_with("rcs_") {
+                        if let Some(jets) = nozzles.get(part_id) {
+                            let pose = vessel_rot * *lq;
+                            let translation =
+                                pose.inverse() * dir_to_model(r, g(f.rcs_translate), spin, inp.ut);
+                            let rotation =
+                                pose.inverse() * dir_to_model(r, g(f.rcs_rotate), spin, inp.ut);
+                            for nozzle in jets {
+                                let throttle = crate::particles::rcs_nozzle_throttle(
+                                    *lp + *lq * DVec3::from_array(nozzle.position),
+                                    *lq * DVec3::from_array(nozzle.direction),
+                                    *lq * translation,
+                                    *lq * rotation,
+                                    false,
+                                    false,
+                                );
+                                engine_draws.push(crate::engine_fx_gpu::EngineDraw {
+                                    instance: 0x0800000000000000
+                                        | (inp.vessel.id << 24)
+                                        | ((*pi as u64) << 8)
+                                        | nozzle.mode as u64,
+                                    part: part_id.clone(),
+                                    model: glam::DMat4::from_rotation_translation(
+                                        pose,
+                                        pos - cam + vessel_rot * (*lp + DVec3::Y * lift),
+                                    ),
+                                    throttle,
+                                    commanded: throttle,
+                                    pressure,
+                                    atmosphere_density: f.atmosphere_density,
+                                    gravity_mps2: f.gravity_mps2,
+                                    relative_velocity: f.surface_speed_mps,
+                                    mode: nozzle.mode,
+                                    time: inp.now_ms * 0.001,
+                                    simulation_time: inp.ut,
+                                    vapor: None,
+                                    reentry: None,
+                                    thrust_kn: f.rcs_thrust_kn as f64 * throttle,
+                                    distance_from_spawn: 0.0,
+                                    vertical_deviation: 1.0,
+                                });
+                            }
+                        }
+                    }
                     if part_id.starts_with("engine_") || part_id.starts_with("booster_") {
                         engine_draws.push(crate::engine_fx_gpu::EngineDraw {
                             instance: (inp.vessel.id << 16) | *pi as u64,
@@ -1078,16 +1426,23 @@ impl FlightView {
                                 vessel_rot * *lq,
                                 pos - cam + vessel_rot * (*lp + DVec3::Y * lift),
                             ),
-                            throttle: if f.firing_engines.contains(&(*pi as u16)) {
-                                f.throttle
-                            } else {
-                                0.0
-                            },
+                            throttle: crate::particles::exhaust_throttle(
+                                f.firing_engines.contains(&(*pi as u16)),
+                                f.thrust_kn,
+                                f.throttle,
+                                part_id.starts_with("booster_"),
+                                f.situation == ose_net::FlightSituation::Crashed,
+                            ),
                             pressure,
+                            atmosphere_density: f.atmosphere_density,
+                            gravity_mps2: f.gravity_mps2,
+                            relative_velocity: f.surface_speed_mps,
                             mode: 0,
                             time: inp.now_ms * 0.001,
                             simulation_time: inp.ut,
                             commanded: f.throttle,
+                            vapor: None,
+                            reentry: None,
                             thrust_kn: f.thrust_kn,
                             distance_from_spawn: 0.0,
                             vertical_deviation: 1.0,
@@ -1104,6 +1459,8 @@ impl FlightView {
                     let fallback = [Nozzle {
                         position: [(lo.x + hi.x) * 0.5, lo.y, (lo.z + hi.z) * 0.5],
                         direction: [0.0, -1.0, 0.0],
+                        mode: 0,
+                        rotate: false,
                     }];
                     let jets = nozzles.get(part_id).map(Vec::as_slice).unwrap_or(&fallback);
                     let width = ((hi.x - lo.x).min(hi.z - lo.z) * 0.55
@@ -1132,12 +1489,21 @@ impl FlightView {
                                     rotation,
                                     ground - cam,
                                 ),
-                                throttle: f.throttle,
+                                throttle: if part_id.starts_with("booster_") {
+                                    1.0
+                                } else {
+                                    f.throttle
+                                },
                                 commanded: f.throttle,
                                 pressure,
+                                atmosphere_density: f.atmosphere_density,
+                                gravity_mps2: f.gravity_mps2,
+                                relative_velocity: f.surface_speed_mps,
                                 mode: 0,
                                 time: inp.now_ms * 0.001,
                                 simulation_time: inp.ut,
+                                vapor: None,
+                                reentry: None,
                                 thrust_kn: f.thrust_kn,
                                 distance_from_spawn: 0.0,
                                 vertical_deviation: down,
@@ -1157,12 +1523,21 @@ impl FlightView {
                                             * self.ground_radius
                                             - cam,
                                     ),
-                                    throttle: f.throttle,
+                                    throttle: if part_id.starts_with("booster_") {
+                                        1.0
+                                    } else {
+                                        f.throttle
+                                    },
                                     commanded: f.throttle,
                                     pressure,
+                                    atmosphere_density: f.atmosphere_density,
+                                    gravity_mps2: f.gravity_mps2,
+                                    relative_velocity: f.surface_speed_mps,
                                     mode: 0,
                                     time: inp.now_ms * 0.001,
                                     simulation_time: inp.ut,
+                                    vapor: None,
+                                    reentry: None,
                                     thrust_kn: f.thrust_kn,
                                     distance_from_spawn: distance,
                                     vertical_deviation: down,
@@ -1399,6 +1774,57 @@ impl FlightView {
                 }
                 items.push(it);
             }
+            if let Some(f) = readout.filter(|f| f.eva) {
+                let nozzles = self.fx_nozzles.borrow();
+                let translation = rot.inverse() * dir_to_model(r, g(f.rcs_translate), spin, inp.ut);
+                let rotation = rot.inverse() * dir_to_model(r, g(f.rcs_rotate), spin, inp.ut);
+                if let Some(jets) = nozzles.get("eva_kerbal") {
+                    for nozzle in jets {
+                        let throttle = if landed {
+                            0.0
+                        } else {
+                            crate::particles::rcs_nozzle_throttle(
+                                DVec3::from_array(nozzle.position),
+                                DVec3::from_array(nozzle.direction),
+                                translation,
+                                rotation,
+                                nozzle.rotate,
+                                true,
+                            )
+                        };
+                        engine_draws.push(crate::engine_fx_gpu::EngineDraw {
+                            instance: 0x0400000000000000
+                                | (inp.vessel.id << 8)
+                                | nozzle.mode as u64,
+                            part: "eva_kerbal".into(),
+                            model: glam::DMat4::from_rotation_translation(rot, at - cam),
+                            throttle,
+                            commanded: throttle,
+                            pressure: crate::particles::pressure_multiplier(f.static_pressure_kpa),
+                            atmosphere_density: f.atmosphere_density,
+                            gravity_mps2: f.gravity_mps2,
+                            relative_velocity: f.surface_speed_mps,
+                            mode: nozzle.mode,
+                            time: inp.now_ms * 0.001,
+                            simulation_time: inp.ut,
+                            vapor: None,
+                            reentry: None,
+                            thrust_kn: 0.0,
+                            distance_from_spawn: 0.0,
+                            vertical_deviation: 1.0,
+                        });
+                    }
+                }
+                if landed && self.walk_speed > 0.2 && inp.ut - self.last_footstep > 0.45 {
+                    self.last_footstep = inp.ut;
+                    self.bursts.queue(
+                        "fx_footstep_default",
+                        glam::DMat4::from_rotation_translation(rot, pos),
+                        inp.ut,
+                        self.walk_speed,
+                    );
+                }
+            }
         }
         // Other vessels within a few kilometres, as the original loads crafts around the active one.
         for (o, stand) in inp.nearby_vessels {
@@ -1418,25 +1844,44 @@ impl FlightView {
                 items.push(it);
             }
         }
-        // Re-entry: a glowing shock cone wraps the craft from its leading side and trails back into the
-        // airflow, brighter with the heat flux (the particle streaks are the effects system's; this is the
-        // sheath). The flame cone stands its base at the nose and its tip downstream.
-        let flux = readout
-            .map(|f| f.heat.iter().map(|h| h.3).fold(0.0f32, f32::max) as f64)
-            .unwrap_or(0.0);
-        let plasma = ((flux - 20.0) / 400.0).clamp(0.0, 1.0);
-        if plasma > 0.02 {
-            gpu.request_model("fx:flame", "assets/fx/flame.glb");
-            if gpu.has_model("fx:flame") {
-                let rot = DQuat::from_rotation_arc(DVec3::NEG_Y, trail);
-                let at = pos - trail * 1.5;
-                let mut it =
-                    DrawItem::lit("fx:flame".into(), at - cam, rot, 4.0 + 6.0 * plasma, sun);
-                it.emissive = 1.0;
-                it.color = [1.0, 0.55, 0.35, (0.25 + 0.5 * plasma) as f32];
-                items.push(it);
-            }
+        if let Some(mut fire) = engine_draws
+            .iter()
+            .find(|e| e.part == "fx_launchsmoke_default")
+            .cloned()
+        {
+            fire.instance = 0x0100000000000000 | inp.vessel.id;
+            fire.part = "fx_launchfire_default".into();
+            engine_draws.push(fire);
         }
+        self.bursts.expire(inp.ut);
+        if let Some(f) = readout {
+            for burst in &self.bursts.active {
+                let mut model = burst.model;
+                model.w_axis -= cam.extend(0.0);
+                engine_draws.push(crate::engine_fx_gpu::EngineDraw {
+                    instance: burst.instance,
+                    part: burst.asset.clone(),
+                    model,
+                    throttle: 1.0,
+                    commanded: 1.0,
+                    pressure: crate::particles::pressure_multiplier(f.static_pressure_kpa),
+                    atmosphere_density: f.atmosphere_density,
+                    gravity_mps2: f.gravity_mps2,
+                    relative_velocity: burst.relative_velocity,
+                    mode: 0,
+                    time: inp.now_ms * 0.001,
+                    simulation_time: inp.ut,
+                    vapor: None,
+                    reentry: None,
+                    thrust_kn: 0.0,
+                    distance_from_spawn: 0.0,
+                    vertical_deviation: 1.0,
+                });
+            }
+            self.last_surface_speed = f.surface_speed_mps;
+        }
+        // Heated parts retain their surface glow above. The legacy flame.glb cone was not a
+        // reentry effect: it also appeared after burnout and during low-speed unpowered descents.
         // Sky: blue low in the atmosphere, black above it.
         let t = if inp.atmosphere_m > 0.0 {
             (alt / inp.atmosphere_m).clamp(0.0, 1.0)

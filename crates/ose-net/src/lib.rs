@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 37;
+pub const PROTOCOL_VERSION: u16 = 38;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -517,6 +517,13 @@ pub struct FlightReadout {
     pub dynamic_pressure_kpa: f64,
     /// Ambient static pressure, for atmosphere/vacuum visual effects.
     pub static_pressure_kpa: f64,
+    /// Physical ambient density (kg/m³), separate from the artist's pressure curve.
+    pub atmosphere_density: f64,
+    pub mach_number: f64,
+    pub gravity_mps2: f64,
+    pub atmosphere_temperature_k: f64,
+    /// Attached, exposed lifting surfaces: (part index, deflection coefficient, lift kN).
+    pub lifting_surfaces: Vec<(u16, f32, f32)>,
     /// Attached, fuel-fed engine part indices currently producing thrust.
     pub firing_engines: Vec<u16>,
     /// Where the vessel actually points (the craft's +Y, its thrust axis): unit vector in the reference
@@ -576,6 +583,10 @@ pub struct FlightReadout {
     /// (share of full thrust, translation plus turning).
     pub rcs_thrust_kn: f32,
     pub rcs_firing: f32,
+    /// Fuel-fed RCS translation and torque requests in the reference body's inertial frame.
+    /// Magnitudes are fractions of the available thrust/torque, zero when inactive or dry.
+    pub rcs_translate: DVec3,
+    pub rcs_rotate: DVec3,
     /// Force of the wings and other lifting surfaces, kN (lift and their drag).
     pub lift_kn: f32,
     /// Angular velocity, rad/s, inertial (with SAS off it is what the vessel keeps spinning at).

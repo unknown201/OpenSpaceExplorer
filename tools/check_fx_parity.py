@@ -27,7 +27,7 @@ def prepare():
                 size=w*h*4 if compression=='rgba' else max(1,(w+3)//4)*max(1,(h+3)//4)*(8 if compression in ('bc1','bc4') else 16)
                 u32(f,size);f.write(raw[at:at+size]);at+=size
         for key in shaders:
-            u32(f,int(data['shaders'][key]['refraction']))
+            u32(f,int(data['shaders'][key]['refraction']) | (int(data['shaders'][key].get('reentry',False))<<1))
             for stage in ('vertex','fragment'):
                 b=(FX/f'shaders/{key}.{stage}.dxbc').read_bytes();u32(f,len(b));f.write(b)
         for key in meshes:

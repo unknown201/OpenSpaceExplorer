@@ -1,4 +1,4 @@
-# Authored engine effects
+# Authored flight effects
 
 The flight renderer imports the shipped KSP2 engine effects. The earlier shared billboard plume,
 atlas and mesh-bounds flame approximation have been replaced by the original per-engine mesh layers,
@@ -44,7 +44,7 @@ depth; luminous layers then use their source additive blend. `fx_post.rs` adds H
 presentation. Bloom is OSE's implementation, not a port of the game's complete post-processing stack.
 
 `authored_particles.rs` simulates source ignition/shutdown bursts, delays, lifetime/size/color curves,
-looping emission, cone/box/donut shapes, local/world space, inherited motion, force/velocity modules,
+looping emission, sphere/hemisphere/cone/box/donut shapes, local/world space, inherited motion, force/velocity modules,
 velocity limits, rotations and flipbook frames. Zero burst cycle counts repeat indefinitely, as in
 [Unity's burst API](https://docs.unity3d.com/ScriptReference/ParticleSystem.Burst-cycleCount.html).
 Each source keeps its original `maxNumParticles`;
@@ -59,10 +59,37 @@ stays at the launch origin. Ground ring/line selection uses impact angle. OSE cu
 the hit against a surface anchored at the last landed radius; it does not reproduce Unity's terrain
 and facility collision queries.
 
-Protocol **25** adds `static_pressure_kpa` and `firing_engines` to `FlightReadout`. The server sends
-attached, fuel-fed engine indices only while producing thrust. Client and server must ship together.
-The current simulator supplies aggregate throttle/thrust; independent spool, booster throttle and
-alternate engine modes remain limited by the existing engine simulation.
+Protocol **38** carries atmospheric density, Mach, temperature, gravity, per-surface lift and
+fuel-fed RCS translation/rotation alongside pressure and firing engine indices. Client and server
+must ship together. Solid boosters honor the source locked-throttle setting until their fuel is
+spent. A throttle cut stops liquid engines in a mixed stage without consuming their propellant.
+Independent spool and alternate engine modes remain limited by the existing engine simulation.
+
+Crash transitions latch the pre-impact resources and select the source dry, methalox, solid fuel,
+pressurized or metallic hydrogen explosion in atmosphere or vacuum. The burst stays at the impact
+position, fires once, and does not replay when loading a wreck or jumping the simulation clock.
+Wrecks co-rotate with the surface after impact, keeping the burst and wreck at the same site.
+Contextual prefab preview translations/rotations are removed as in the source event instantiator;
+child transforms and root scale remain authored. Source explosion potential defaults to 0.5.
+The automatic flight report waits 2.5 wall-clock seconds so it does not cover the initial explosion.
+
+Staging, fairing/clamp release, parachute deployment, docking/undocking, solid/liquid surface impact,
+launch fire, wheel dust and EVA footsteps/poof use their source recipes. RCS and EVA use all 46
+independently controlled nozzle groups and their original transforms rather than a shared plume.
+Parameter mappings preserve the source distinction between multiplying constant ranges and
+replacing curve multipliers; mapped burst counts replace the original counts.
+
+Reentry uses 606 original authored shockwave groups across the 400 inspected parts and the source
+`Shockwave` shader, with source heat gradients for Kerbin/default, Eve, Jool and Laythe. A separate
+R16Float radial-distance occlusion pass uses the actual body meshes. Activation follows the source
+Mach/density thermal curve. The old generic cone is no longer loaded in flight, including burnout.
+
+Vortices use original TrailRenderer width/color/lifetime data and material, with world-space history.
+Their source humidity, dewpoint, pressure and wing-lift conditions determine emission; dry/vacuum
+conditions do not emit. Existing OSE wing meshes do not expose the original procedural vortex
+anchors, so trails originate at the static wing bounds' outer trailing corner. The shipped science
+prefabs have emission disabled and no bursts; the export preserves their silence. Effects disabled
+by the source HighQuality settings (including contrails, shock cone and fuel ice) are not invented.
 
 ## Assets and reproduction
 
@@ -78,12 +105,13 @@ reads the game without modifying it. The current export contains:
 | Asset | Coverage |
 |---|---|
 | Engine/booster prefabs | 35 |
-| Contextual prefabs | Ground blast and KSC launch smoke |
-| Thrust transforms | 53 |
-| Meshes | 16, including the source spark mesh |
-| Plume materials / shader families | 28 / 2 |
-| Particle materials | 10 |
-| Full-resolution textures with source mips | 23 |
+| RCS / EVA prefabs | 3 / 1 |
+| Contextual prefabs | 34, including 10 explosion variants and vapor trails |
+| Nozzle transforms | 99: 53 engine, 6 RCS, 40 EVA |
+| Meshes | 1,194, including shockwaves and body occluders |
+| Mesh materials / shader families | 29 / 3 |
+| Particle materials | 31 |
+| Full-resolution textures with source mips | 61 |
 
 Generated files are under ignored `assets/web/fx/`: `effects.json` indexes resources; `engines/*.json`
 contains each hierarchy and recipe; `meshes/*.bin` stores original vertices/morphs/indices;
@@ -133,5 +161,30 @@ Native tests cover source curves/morph handoff, emission clocks, original caps, 
 bursts and throttle curves. Server WebSocket tests check idle/burning engine lists and pressure.
 The WebGPU gameplay test verifies authored layers, particle emission, liftoff, complete expiry after
 cutoff and restart, with a screenshot and no console errors. Firefox without WebGPU retains the
-existing Canvas fallback. Reentry, RCS, explosions and other contextual events need separate event
-sources and are outside this flight-engine integration.
+existing Canvas fallback.
+
+Additional browser checks exercise dry/fueled crashes in atmosphere/vacuum, all exported contextual
+recipes and RCS/EVA groups, particle expiry, clock jumps, wet/dry vapor trails, and actual server/UI
+flight through a fueled crash and solid-booster burnout:
+
+```powershell
+node e2e/scripts/check-crash-fx.mjs
+node e2e/scripts/check-flight-fx.mjs
+node e2e/scripts/check-flight-impact.mjs
+node e2e/scripts/check-reentry-fx.mjs
+.venv/Scripts/python tools/check_reentry_parity.py
+```
+
+The reentry comparison feeds the independently executed original DXBC the captured structured
+buffers and radial-depth map. Six frames cover a pod, Swivel and long fuel tank. Its separate
+0.5% effect-relative RMSE budget exposes differences at discontinuous point-sampled shadow edges;
+the measured worst frame was 0.28281%, with five frames exactly matching. Cold and vacuum
+fixtures also verify that plasma remains off. These checks measure shader output, not whole-game
+parity of atmospheric activation, occlusion rasterization or post-processing.
+
+Remaining fidelity gaps include RenderKit particle lighting/probes/shadows, particle lights,
+Unity's random particle/noise and particle ribbon modules, explosion-only distortion materials,
+the complete game post-processing stack, procedural wing vortex anchors, and exact terrain/facility
+collision queries. Explosion distortion is currently omitted rather than drawn as an opaque quad.
+The implementation and these measurements do not establish equal-or-higher fidelity for every
+effect in the original game.

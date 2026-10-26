@@ -1524,6 +1524,15 @@ impl Renderer {
     pub fn engine_particle_count(&self) -> usize {
         self.engine_fx.particle_count()
     }
+    pub fn effect_assets(&self) -> String {
+        self.engine_fx.active_assets()
+    }
+    pub(crate) fn fixture_fx_ready(&self, part: &str) -> bool {
+        self.engine_fx.asset_ready(part)
+    }
+    pub(crate) fn fixture_fx_reset(&mut self) {
+        self.engine_fx.reset_simulation();
+    }
     pub fn enable_fx_capture(&mut self) {
         self.engine_fx.enable_capture();
         self.fixture_grid = true;
@@ -1538,17 +1547,38 @@ impl Renderer {
 
     /// Linear HDR readback for comparing the WGSL port with the original compiled D3D shaders.
     pub async fn read_fx_pixels(&self) -> Result<Vec<u8>, String> {
-        let row = (self.width * 8).div_ceil(256) * 256;
+        self.read_effect_texture(&self.post.scene, self.width, self.height, 8)
+            .await
+    }
+    pub async fn read_reentry_pixels(&self) -> Result<Vec<u8>, String> {
+        self.read_effect_texture(
+            self.engine_fx
+                .occlusion_texture()
+                .ok_or("reentry not loaded")?,
+            2048,
+            2048,
+            2,
+        )
+        .await
+    }
+    async fn read_effect_texture(
+        &self,
+        texture: &wgpu::Texture,
+        width: u32,
+        height: u32,
+        pixel_bytes: u32,
+    ) -> Result<Vec<u8>, String> {
+        let row = (width * pixel_bytes).div_ceil(256) * 256;
         let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("FX parity readback"),
-            size: (row * self.height) as u64,
+            size: (row * height) as u64,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
         let mut encoder = self.device.create_command_encoder(&Default::default());
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
-                texture: &self.post.scene,
+                texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
@@ -1562,8 +1592,8 @@ impl Renderer {
                 },
             },
             wgpu::Extent3d {
-                width: self.width,
-                height: self.height,
+                width,
+                height,
                 depth_or_array_layers: 1,
             },
         );
@@ -1585,9 +1615,9 @@ impl Renderer {
             .slice(..)
             .get_mapped_range()
             .map_err(|e| e.to_string())?;
-        let mut output = Vec::with_capacity((self.width * self.height * 8) as usize);
+        let mut output = Vec::with_capacity((width * height * pixel_bytes) as usize);
         for line in mapped.chunks(row as usize) {
-            output.extend_from_slice(&line[..self.width as usize * 8]);
+            output.extend_from_slice(&line[..width as usize * pixel_bytes as usize]);
         }
         drop(mapped);
         buffer.unmap();

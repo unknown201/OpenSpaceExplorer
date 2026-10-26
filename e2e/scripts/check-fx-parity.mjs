@@ -13,6 +13,7 @@ try {
  page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});
  page.on('pageerror',e=>{throw e;});
  await page.goto(base);
+ await page.locator('#status').filter({hasText:'client loaded'}).waitFor();
  await page.evaluate(async()=>{window.fxFixture=await import('/ose-client.js');await window.fxFixture.fx_fixture_setup();});
  const savePixels=async name=>{
   const encoded=await page.evaluate(async()=>{const bytes=await window.fxFixture.fx_fixture_pixels();let s='';for(let i=0;i<bytes.length;i+=32768)s+=String.fromCharCode(...bytes.subarray(i,i+32768));return btoa(s);});
