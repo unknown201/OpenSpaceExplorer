@@ -29,6 +29,9 @@ The loading path now:
   binary pack request when its description is absent.
 - Enables the Campaign button and pilot-name input only once their handlers are ready, so a quick
   interaction during startup cannot silently disappear while the rest of the client initializes.
+- Opens the server WebSocket during menu startup, alongside scenery loading. Campaign sends Hello
+  with the chosen name over that connection; repeated clicks wait for the same handshake. A closed
+  connection can retry Campaign without reloading, retaining the stored player token.
 - Prefetches compressed KSC/VAB models and their small material previews as soon as WebGPU is ready
   on the main menu. Name entry and the campaign browser remain interactive. One background model or
   four small previews run at once; cosmetic full-resolution menu upgrades wait until prewarming ends.

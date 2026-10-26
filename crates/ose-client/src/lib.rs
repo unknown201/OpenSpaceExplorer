@@ -142,6 +142,8 @@ struct App {
     time: TimeSync,
     camera: Camera,
     ws: Option<WebSocket>,
+    /// Campaign was requested; send Hello once the background socket opens.
+    login_requested: bool,
     player_id: Option<u64>,
     drag: Option<(f64, f64)>,
     dpr: f64,
@@ -630,6 +632,7 @@ pub fn start() -> Result<(), JsValue> {
         time: TimeSync::default(),
         camera: Camera::new(0),
         ws: None,
+        login_requested: false,
         player_id: None,
         drag: None,
         // Settings > Graphics: render resolution as a share of the screen's pixels.
@@ -813,6 +816,15 @@ pub fn start() -> Result<(), JsValue> {
     install_input(&app)?;
     install_label_clicks(&app)?;
     install_menu(&app)?;
+    // Establish the transport while the pilot chooses a name and the menu scenery downloads.
+    // Hello still waits for Campaign so we register the name the pilot actually entered.
+    if let Err(e) = connect(&app) {
+        log(&format!("initial connection failed: {e:?}"));
+        app.borrow().connection_status(
+            "disconnected",
+            "Server unavailable. Select Campaign to retry.",
+        );
+    }
     // Static HTML can arrive before the client starts. Enable the first interaction only after its
     // handlers are attached, so a quick click on a remote load cannot silently disappear.
     for id in ["play", "player-name"] {
@@ -1704,7 +1716,7 @@ fn load_part_sizes(app: Shared) {
     });
 }
 
-/// The main menu: a name and Play. Play connects; Esc reopens the menu (then it only resumes).
+/// The main menu: a name and Campaign. Campaign signs in over the preconnected socket.
 fn install_menu(app: &Shared) -> Result<(), JsValue> {
     let doc = app.borrow().doc.clone();
     if let Some(name) = stored("ose.name") {
@@ -1718,8 +1730,10 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
     if let Some(btn) = doc.get_element_by_id("play") {
         let a = app.clone();
         let cb = Closure::<dyn FnMut()>::new(move || {
-            let connected = a.borrow().ws.is_some();
-            if connected {
+            if a.borrow().login_requested {
+                return;
+            }
+            if a.borrow().player_id.is_some() {
                 a.borrow_mut().open_sessions_screen();
                 return;
             }
@@ -1732,14 +1746,27 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                 .filter(|n| !n.is_empty())
                 .unwrap_or_else(|| "Pilot".into());
             store("ose.name", &name);
-            a.borrow_mut().player_name = name;
-            set_text(&a.borrow().doc, "menu-note", "connecting...");
+            {
+                let mut app = a.borrow_mut();
+                app.player_name = name;
+                app.login_requested = true;
+            }
             if let Err(e) = connect(&a) {
-                set_text(
-                    &a.borrow().doc,
-                    "menu-note",
-                    &format!("could not connect: {e:?}"),
+                log(&format!("connection failed: {e:?}"));
+                a.borrow_mut().login_requested = false;
+                a.borrow().connection_status(
+                    "disconnected",
+                    "Could not connect. Select Campaign to retry.",
                 );
+            } else {
+                let app = a.borrow();
+                if let Some(ws) = app
+                    .ws
+                    .as_ref()
+                    .filter(|ws| ws.ready_state() == WebSocket::OPEN)
+                {
+                    app.sign_in(ws);
+                }
             }
         });
         btn.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
@@ -3297,25 +3324,27 @@ fn send(ws: &WebSocket, msg: &ClientMessage) {
 }
 
 fn connect(app: &Shared) -> Result<(), JsValue> {
+    if app.borrow().ws.is_some() {
+        return Ok(());
+    }
     let url = ws_url()?;
     let ws = WebSocket::new(&url)?;
     ws.set_binary_type(web_sys::BinaryType::Arraybuffer);
     app.borrow().set_status(&format!("connecting to {url}"));
+    app.borrow()
+        .connection_status("connecting", "Connecting to server…");
 
     {
         let app = app.clone();
         let ws2 = ws.clone();
         let on_open = Closure::<dyn FnMut()>::new(move || {
-            let display_name = app.borrow().player_name.clone();
-            send(
-                &ws2,
-                &ClientMessage::Hello {
-                    protocol: PROTOCOL_VERSION,
-                    token: stored("ose.token"),
-                    display_name,
-                },
-            );
-            app.borrow().set_status("connected, waiting for the server");
+            let a = app.borrow();
+            if a.login_requested {
+                a.sign_in(&ws2);
+            } else {
+                a.connection_status("open", "");
+                a.set_status("connected to server");
+            }
         });
         ws.set_onopen(Some(on_open.as_ref().unchecked_ref()));
         on_open.forget();
@@ -3339,12 +3368,14 @@ fn connect(app: &Shared) -> Result<(), JsValue> {
         let on_close = Closure::<dyn FnMut()>::new(move || {
             let mut a = app.borrow_mut();
             a.ws = None;
-            a.in_session = false;
-            a.set_status("disconnected; reload to reconnect");
-            set_text(
-                &a.doc,
-                "menu-note",
-                "disconnected; reload the page to reconnect",
+            a.login_requested = false;
+            a.player_id = None;
+            // Clear the previous campaign/flight before a retry receives fresh server state.
+            a.leave_session();
+            a.set_status("disconnected; select Campaign to reconnect");
+            a.connection_status(
+                "disconnected",
+                "Connection lost. Select Campaign to reconnect.",
             );
             if let Some(m) = a.doc.get_element_by_id("menu") {
                 m.class_list().remove_1("hidden").ok();
@@ -4500,6 +4531,26 @@ fn request_frame(f: &Closure<dyn FnMut()>) {
 // App
 
 impl App {
+    fn connection_status(&self, state: &str, note: &str) {
+        if let Some(menu) = self.doc.get_element_by_id("menu") {
+            menu.set_attribute("data-ose-connection", state).ok();
+        }
+        set_text(&self.doc, "menu-note", note);
+    }
+
+    fn sign_in(&self, ws: &WebSocket) {
+        self.connection_status("authenticating", "Opening campaigns…");
+        self.set_status("connected, waiting for the server");
+        send(
+            ws,
+            &ClientMessage::Hello {
+                protocol: PROTOCOL_VERSION,
+                token: stored("ose.token"),
+                display_name: self.player_name.clone(),
+            },
+        );
+    }
+
     fn set_status(&self, s: &str) {
         self.status_el
             .set_text_content(Some(&format!("OpenSpaceExplorer client loaded; {s}")));
@@ -4663,6 +4714,7 @@ impl App {
                 token,
             } => {
                 self.player_id = Some(player_id);
+                self.login_requested = false;
                 store("ose.token", &token);
                 self.time.update(tick.seconds(), 1, now_ms());
                 self.set_status(&format!("player {player_id}"));
@@ -4671,7 +4723,7 @@ impl App {
                     "player",
                     &format!("{} (#{player_id})", self.player_name),
                 );
-                set_text(&self.doc, "menu-note", "");
+                self.connection_status("ready", "");
                 self.open_sessions_screen();
             }
             ServerMessage::Rejected { reason } => {
