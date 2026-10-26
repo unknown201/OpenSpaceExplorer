@@ -114,6 +114,54 @@ pub struct Far {
 pub const FAR_RANGE_M: f64 = 2500.0;
 pub const MAX_FAR: usize = 40_000;
 
+/// Distance travelled over the surface. Climbing over the same ground must not regenerate its props.
+pub fn surface_distance(a: V3, b: V3, radius: f64) -> f64 {
+    length(sub(normalize(a), normalize(b))) * radius
+}
+
+const FAR_GRID: usize = 48;
+
+/// A resumable placement. Heights and candidate cells share a work budget so a dense biome cannot
+/// block a render frame. Positions remain relative to the original camera while the camera moves on.
+pub struct FarPlacement {
+    pub origin: V3,
+    radius: f64,
+    grid: Vec<f64>,
+    grid_next: usize,
+    cell_next: usize,
+    out: Vec<Far>,
+    checked: bool,
+    complete: bool,
+}
+
+impl FarPlacement {
+    pub fn new(origin: V3, radius: f64) -> Self {
+        Self {
+            origin,
+            radius,
+            grid: vec![0.0; (FAR_GRID + 1) * (FAR_GRID + 1)],
+            grid_next: 0,
+            cell_next: 0,
+            out: Vec::new(),
+            checked: false,
+            complete: false,
+        }
+    }
+
+    pub fn finish(mut self) -> Vec<Far> {
+        assert!(self.complete, "placement must finish before publication");
+        if self.out.len() > MAX_FAR {
+            // Only the nearest set matters; sorting every discarded instance stalls large biomes.
+            self.out.select_nth_unstable_by(MAX_FAR, |p, q| {
+                let distance = |v: &Far| v.pos.iter().map(|x| x * x).sum::<f32>();
+                distance(p).total_cmp(&distance(q))
+            });
+            self.out.truncate(MAX_FAR);
+        }
+        self.out
+    }
+}
+
 /// One grass patch, relative to the placement origin.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Grass {
@@ -452,28 +500,58 @@ impl ScatterFile {
         cam: V3,
         exclude: &[Exclusion],
     ) -> Vec<Far> {
+        let mut job = FarPlacement::new(cam, radius);
+        while !self.advance_far(&mut job, map, exclude, 4096) {}
+        job.finish()
+    }
+
+    /// Process at most `budget` terrain samples/candidate cells. Keep the previous GPU placement until
+    /// this returns true; a moving camera must not restart an unfinished job each frame.
+    pub fn advance_far(
+        &self,
+        job: &mut FarPlacement,
+        map: &TerrainMap,
+        exclude: &[Exclusion],
+        mut budget: usize,
+    ) -> bool {
+        if job.complete {
+            return true;
+        }
+        if budget == 0 {
+            return false;
+        }
+        let (cam, radius) = (job.origin, job.radius);
         let textures = self.impostor_textures();
         let cam_dir = normalize(cam);
         let height = |d: V3| planet_lod::map_height(Some(map), d);
-        if textures.is_empty() || length(cam) - radius - height(cam_dir) > FAR_RANGE_M {
-            return Vec::new();
+        if !job.checked {
+            budget -= 1;
+            if textures.is_empty() || length(cam) - radius - height(cam_dir) > FAR_RANGE_M {
+                job.complete = true;
+                return true;
+            }
+            job.checked = true;
         }
         let range = FAR_RANGE_M;
         let east = normalize(planet_lod::cross([0.0, 1.0, 0.0], cam_dir));
         let north = planet_lod::cross(cam_dir, east);
-        const N: usize = 48;
+        const N: usize = FAR_GRID;
         let step = 2.0 * range / N as f64;
-        let mut grid = vec![0.0f64; (N + 1) * (N + 1)];
-        for j in 0..=N {
-            for i in 0..=N {
-                let x = -range + i as f64 * step;
-                let y = -range + j as f64 * step;
-                let d = normalize(planet_lod::add(
-                    scale(cam_dir, radius),
-                    planet_lod::add(scale(east, x), scale(north, y)),
-                ));
-                grid[j * (N + 1) + i] = height(d);
+        let grid = &mut job.grid;
+        while job.grid_next < grid.len() {
+            if budget == 0 {
+                return false;
             }
+            budget -= 1;
+            let (i, j) = (job.grid_next % (N + 1), job.grid_next / (N + 1));
+            let x = -range + i as f64 * step;
+            let y = -range + j as f64 * step;
+            let d = normalize(planet_lod::add(
+                scale(cam_dir, radius),
+                planet_lod::add(scale(east, x), scale(north, y)),
+            ));
+            grid[j * (N + 1) + i] = height(d);
+            job.grid_next += 1;
         }
         let grid_h = |x: f64, y: f64| {
             let fx = ((x + range) / step).clamp(0.0, N as f64 - 1e-9);
@@ -487,7 +565,8 @@ impl ScatterFile {
         };
         let (face, ca, cb) = planet_lod::face_ab(cam_dir);
         let metres_per_unit = radius * std::f64::consts::FRAC_PI_4;
-        let mut out = Vec::new();
+        let out = &mut job.out;
+        let mut offset = 0usize;
         for pk in &self.packages {
             let ch = match pk.channel.as_str() {
                 "R" => 0,
@@ -504,98 +583,103 @@ impl ScatterFile {
                 let (ic, jc) = ((ca / step_u).round() as i64, (cb / step_u).round() as i64);
                 // the same seed as the meshes, so a prop keeps its place when it turns into an impostor
                 let seed = item.seed + item_i as i64 * 1009 + ch as i64 * 7919;
-                for i in ic - n..=ic + n {
-                    for j in jc - n..=jc + n {
-                        let h = hash(face as i64, i, j, seed);
-                        if unit(h, 1) > item.density {
-                            continue;
-                        }
-                        let a = (i as f64 + unit(h, 2) - 0.5) * step_u;
-                        let b = (j as f64 + unit(h, 3) - 0.5) * step_u;
-                        if a.abs() > 1.0 || b.abs() > 1.0 {
-                            continue;
-                        }
-                        let d = planet_lod::dir_from_ab(face, a, b);
-                        let rel = scale(sub(d, cam_dir), radius);
-                        let (x, y) = (dot(rel, east), dot(rel, north));
-                        let r2 = x * x + y * y;
-                        if r2 > range * range || r2 < near * near {
-                            continue;
-                        }
-                        let (lat, lon) = planet_lod::lat_lon(d);
-                        let w = self
-                            .weights(map, lat, lon)
-                            .map(|w| {
-                                let s = w[0] + w[1] + w[2] + w[3];
-                                if s < 0.05 && self.has_mask() {
-                                    // no biome in the vegetation system's mask: nothing grows
-                                    0.0
-                                } else if s < 0.05 {
-                                    let mut f = w;
-                                    f[0] += 1.0 - s / 0.05;
-                                    f[ch]
-                                } else {
-                                    w[ch] / s
-                                }
-                            })
-                            .unwrap_or(if ch == 0 { 1.0 } else { 0.0 });
-                        if w <= pk.cutoff || unit(h, 4) > w {
-                            continue;
-                        }
-                        let hgt = grid_h(x, y);
-                        if map.has_ocean && hgt < self.sea_level {
-                            continue;
-                        }
-                        if let Some([lo, hi]) = item.height_rule {
-                            if hgt < lo || hgt > hi {
-                                continue;
-                            }
-                        }
-                        let (nx, ny) = (a * metres_per_unit, b * metres_per_unit);
-                        if let Some((sc, inverse)) = item.noise_density {
-                            let v = noise(nx / sc.max(1.0), ny / sc.max(1.0), seed);
-                            let v = if inverse { 1.0 - v } else { v };
-                            if unit(h, 5) > v {
-                                continue;
-                            }
-                        }
-                        if let Some((sc, cut, inverse)) = item.noise_cutoff {
-                            let v = noise(nx / sc.max(1.0), ny / sc.max(1.0), seed + 1);
-                            if (v < cut) != inverse {
-                                continue;
-                            }
-                        }
-                        let world = scale(d, radius + hgt);
-                        if excluded(exclude, world) {
-                            continue;
-                        }
-                        let pos = sub(world, cam);
-                        let s = item.scale[0] + (item.scale[1] - item.scale[0]) * unit(h, 6);
-                        out.push(Far {
-                            pos: [pos[0] as f32, pos[1] as f32, pos[2] as f32],
-                            size: (imp.size_m * s) as f32,
-                            lift: (imp.offset[1] * s) as f32,
-                            layer,
-                            frames: imp.frames as f32,
-                            colour: [
-                                imp.colour_scale[0] as f32,
-                                imp.colour_scale[1] as f32,
-                                imp.colour_scale[2] as f32,
-                            ],
-                        });
-                    }
+                let side = (2 * n + 1) as usize;
+                let count = side * side;
+                if job.cell_next >= offset + count {
+                    offset += count;
+                    continue;
                 }
+                for cell in job.cell_next - offset..count {
+                    if budget == 0 {
+                        return false;
+                    }
+                    budget -= 1;
+                    job.cell_next = offset + cell + 1;
+                    let i = ic - n + (cell / side) as i64;
+                    let j = jc - n + (cell % side) as i64;
+                    let h = hash(face as i64, i, j, seed);
+                    if unit(h, 1) > item.density {
+                        continue;
+                    }
+                    let a = (i as f64 + unit(h, 2) - 0.5) * step_u;
+                    let b = (j as f64 + unit(h, 3) - 0.5) * step_u;
+                    if a.abs() > 1.0 || b.abs() > 1.0 {
+                        continue;
+                    }
+                    let d = planet_lod::dir_from_ab(face, a, b);
+                    let rel = scale(sub(d, cam_dir), radius);
+                    let (x, y) = (dot(rel, east), dot(rel, north));
+                    let r2 = x * x + y * y;
+                    if r2 > range * range || r2 < near * near {
+                        continue;
+                    }
+                    let (lat, lon) = planet_lod::lat_lon(d);
+                    let w = self
+                        .weights(map, lat, lon)
+                        .map(|w| {
+                            let s = w[0] + w[1] + w[2] + w[3];
+                            if s < 0.05 && self.has_mask() {
+                                // No vegetation outside the authored mask, including resumed jobs.
+                                0.0
+                            } else if s < 0.05 {
+                                let mut f = w;
+                                f[0] += 1.0 - s / 0.05;
+                                f[ch]
+                            } else {
+                                w[ch] / s
+                            }
+                        })
+                        .unwrap_or(if ch == 0 { 1.0 } else { 0.0 });
+                    if w <= pk.cutoff || unit(h, 4) > w {
+                        continue;
+                    }
+                    let hgt = grid_h(x, y);
+                    if map.has_ocean && hgt < self.sea_level {
+                        continue;
+                    }
+                    if let Some([lo, hi]) = item.height_rule {
+                        if hgt < lo || hgt > hi {
+                            continue;
+                        }
+                    }
+                    let (nx, ny) = (a * metres_per_unit, b * metres_per_unit);
+                    if let Some((sc, inverse)) = item.noise_density {
+                        let v = noise(nx / sc.max(1.0), ny / sc.max(1.0), seed);
+                        let v = if inverse { 1.0 - v } else { v };
+                        if unit(h, 5) > v {
+                            continue;
+                        }
+                    }
+                    if let Some((sc, cut, inverse)) = item.noise_cutoff {
+                        let v = noise(nx / sc.max(1.0), ny / sc.max(1.0), seed + 1);
+                        if (v < cut) != inverse {
+                            continue;
+                        }
+                    }
+                    let world = scale(d, radius + hgt);
+                    if excluded(exclude, world) {
+                        continue;
+                    }
+                    let pos = sub(world, cam);
+                    let s = item.scale[0] + (item.scale[1] - item.scale[0]) * unit(h, 6);
+                    out.push(Far {
+                        pos: [pos[0] as f32, pos[1] as f32, pos[2] as f32],
+                        size: (imp.size_m * s) as f32,
+                        lift: (imp.offset[1] * s) as f32,
+                        layer,
+                        frames: imp.frames as f32,
+                        colour: [
+                            imp.colour_scale[0] as f32,
+                            imp.colour_scale[1] as f32,
+                            imp.colour_scale[2] as f32,
+                        ],
+                    });
+                }
+                offset += count;
             }
         }
-        if out.len() > MAX_FAR {
-            out.sort_by(|p, q| {
-                let dp = p.pos[0] * p.pos[0] + p.pos[1] * p.pos[1] + p.pos[2] * p.pos[2];
-                let dq = q.pos[0] * q.pos[0] + q.pos[1] * q.pos[1] + q.pos[2] * q.pos[2];
-                dp.partial_cmp(&dq).unwrap_or(std::cmp::Ordering::Equal)
-            });
-            out.truncate(MAX_FAR);
-        }
-        out
+        job.complete = true;
+        true
     }
 
     /// The grass items' textures, in order (the `layer` of a patch).
@@ -809,6 +893,98 @@ mod tests {
                  "noise_density":null,"noise_cutoff":null}]}]}"#,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn ascent_reuses_ground_placement_but_lateral_travel_does_not() {
+        let r = 600_000.0;
+        let dir = planet_lod::direction(-0.7, -74.8);
+        let pad = scale(dir, r + 10.0);
+        let space = scale(dir, r + 100_000.0);
+        assert!(surface_distance(pad, space, r) < 1e-6);
+        let east = scale(planet_lod::direction(-0.7, -74.79), r + 10.0);
+        assert!(surface_distance(pad, east, r) > 100.0);
+    }
+
+    #[test]
+    fn far_placement_yields_and_resumes_without_changing_props() {
+        let r = 600_000.0;
+        let map = flat_map(r);
+        let mut f = file();
+        let item = &mut f.packages[0].items[0];
+        item.spacing_m = 100.0;
+        item.impostor = Some(Impostor {
+            texture: "rock.png".into(),
+            frames: 8,
+            hemi: false,
+            size_m: 4.0,
+            offset: [0.0, 2.0, 0.0],
+            colour_scale: [1.0; 3],
+        });
+        // Multiple items/packages exercise the resume cursor across item boundaries, including gaps.
+        let mut second = f.packages[0].clone();
+        second.items.insert(0, file().packages[0].items[0].clone());
+        second.items[1].seed = 42;
+        f.packages.push(second);
+        let cam = scale(planet_lod::direction(-0.7, -74.8), r + 20.0);
+        let expected = f.place_far(&map, r, cam, &[]);
+        assert!(expected.len() > 100);
+        let mut job = FarPlacement::new(cam, r);
+        assert!(!f.advance_far(&mut job, &map, &[], 0));
+        assert_eq!(job.grid_next, 0);
+        let mut calls = 0;
+        loop {
+            let before = job.grid_next + job.cell_next;
+            let done = f.advance_far(&mut job, &map, &[], 37);
+            assert!(job.grid_next + job.cell_next - before <= 37);
+            calls += 1;
+            if done {
+                break;
+            }
+        }
+        assert!(calls > 100);
+        assert_eq!(expected, job.finish());
+        for prop in &expected {
+            let world = planet_lod::add(cam, prop.pos.map(f64::from));
+            assert!((length(world) - r).abs() < 0.001);
+        }
+        let high = scale(normalize(cam), r + FAR_RANGE_M + 10.0);
+        assert!(f.place_far(&map, r, high, &[]).is_empty());
+        // A fresh placement after descent restores the same props.
+        assert_eq!(expected, f.place_far(&map, r, cam, &[]));
+
+        // An authored vegetation mask has no first-biome fallback. This also applies while a job
+        // resumes across frames, so integration must not put props back into deserts or snow.
+        f.mask = Some(MaskRef {
+            file: "mask.rgba".into(),
+            width: 2,
+            height: 2,
+        });
+        f.mask_data = vec![[0; 4]; 4];
+        let mut empty = FarPlacement::new(cam, r);
+        while !f.advance_far(&mut empty, &map, &[], 37) {}
+        assert!(empty.finish().is_empty());
+        f.mask_data.fill([255, 0, 0, 0]);
+        assert_eq!(expected, f.place_far(&map, r, cam, &[]));
+    }
+
+    #[test]
+    fn far_placement_caps_the_nearest_instances() {
+        let mut job = FarPlacement::new([1.0, 0.0, 0.0], 1.0);
+        job.complete = true;
+        for i in (0..MAX_FAR + 100).rev() {
+            job.out.push(Far {
+                pos: [i as f32, 0.0, 0.0],
+                size: 1.0,
+                lift: 0.0,
+                layer: 0.0,
+                frames: 1.0,
+                colour: [1.0; 3],
+            });
+        }
+        let out = job.finish();
+        assert_eq!(out.len(), MAX_FAR);
+        assert!(out.iter().all(|p| p.pos[0] < MAX_FAR as f32));
     }
 
     #[test]

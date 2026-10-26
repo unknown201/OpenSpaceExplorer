@@ -8,7 +8,9 @@
 
 use crate::ocean_fft;
 use crate::planet_lod::{self, QuadKey, TerrainVertex};
-use crate::planet_scatter::{Exclusion, Far, Grass, Instance, ScatterFile};
+use crate::planet_scatter::{
+    surface_distance, Exclusion, Far, FarPlacement, Grass, Instance, ScatterFile, FAR_RANGE_M,
+};
 use crate::render::{fetch_bitmap, fetch_bytes, DrawItem, ExtraPass, Renderer};
 use glam::{DMat4, DVec3};
 use ose_data::terrain::{TerrainIndex, TerrainMap, TerrainPack};
@@ -50,6 +52,8 @@ const RING_SEGMENTS: u32 = 256;
 const TILE_PERIOD: f64 = 4096.0;
 /// Quad builds allowed per frame, in milliseconds of CPU time.
 const BUILD_BUDGET_MS: f64 = 6.0;
+/// Distant scatter must never rebuild a whole dense biome inside one frame.
+const SCATTER_BUDGET_MS: f64 = 1.5;
 const SLOT: u64 = 256;
 /// Level of the cloud shell's quads (96 quads).
 const CLOUD_LEVEL: u8 = 2;
@@ -241,6 +245,7 @@ struct Body {
     /// Far props as impostors (instance buffer, count), placed around `far_at`.
     far: Option<(wgpu::Buffer, u32)>,
     far_at: Option<DVec3>,
+    far_pending: Option<FarPlacement>,
     far_bind: Option<wgpu::BindGroup>,
     min_h: f64,
     max_h: f64,
@@ -1055,6 +1060,7 @@ impl PlanetRenderer {
                 grass_bind: None,
                 far: None,
                 far_at: None,
+                far_pending: None,
                 far_bind: None,
                 min_h: 0.0,
                 max_h: 0.0,
@@ -2150,22 +2156,36 @@ impl PlanetRenderer {
             self.queue
                 .write_buffer(&self.grass_chunk_buf, 0, bytemuck::bytes_of(&u));
         }
-        // Far props as impostors: re-placed when the camera has moved 60 m.
+        // Far props are anchored to the ground, so vertical ascent reuses their placement. The shader
+        // already fades each prop by its current camera distance. Rebuild only after lateral travel.
+        let cam = view.cam.to_array();
+        let high = view.cam.length() - view.radius_m - planet_lod::map_height(Some(map), cam)
+            > FAR_RANGE_M;
         let fmoved = b
             .far_at
-            .map(|p| (p - view.cam).length())
+            .map(|p| surface_distance(p.to_array(), cam, view.radius_m))
             .unwrap_or(f64::INFINITY);
-        if fmoved > 60.0 {
-            let mut g = f.place_far(
-                map,
-                view.radius_m,
-                [view.cam.x, view.cam.y, view.cam.z],
-                &self.exclusions,
-            );
-            if quality() == 0 {
-                g.clear();
+        if high || quality() == 0 {
+            b.far = None;
+            b.far_at = None;
+            b.far_pending = None;
+        } else if fmoved > 60.0 && b.far_pending.is_none() {
+            b.far_pending = Some(FarPlacement::new(cam, view.radius_m));
+        }
+        let start = now_ms();
+        let mut finished = false;
+        if let Some(job) = &mut b.far_pending {
+            while now_ms() - start < SCATTER_BUDGET_MS {
+                if f.advance_far(job, map, &self.exclusions, 256) {
+                    finished = true;
+                    break;
+                }
             }
-            b.far_at = Some(view.cam);
+        }
+        if finished {
+            let job = b.far_pending.take().unwrap();
+            b.far_at = Some(DVec3::from_array(job.origin));
+            let g = job.finish();
             b.far = (!g.is_empty()).then(|| {
                 let floats: Vec<f32> = g
                     .iter()
@@ -2279,6 +2299,8 @@ impl PlanetRenderer {
                 b.placed_at = None;
                 b.grass_at = None;
                 b.far_at = None;
+                b.far_pending = None;
+                b.far = None;
                 // terrain under the campus is lowered: rebuild the quads
                 b.quads.clear();
             }
