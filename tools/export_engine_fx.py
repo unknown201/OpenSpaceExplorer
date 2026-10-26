@@ -7,9 +7,20 @@ import math
 import re
 import struct
 from pathlib import Path
-from export_menu_scene import load_scene
+from export_menu_scene import load_scene, inverse, mul, trs
 from port_shader import programs, disassemble, wgsl
 
+CRASH_PREFABS = tuple(f"fx_explosion_{fuel}_{environment}.prefab"
+    for fuel in ("noFuel", "methalox", "solidFuel", "pressurized", "metallicHydrogen") for environment in ("atmosphere", "vacuum"))
+CONTEXT_PREFABS = tuple(name+'.prefab' for name in (
+    'fx_decouple_atm','fx_decouple_vacuum','fx_launchclamp_atm','fx_launchclamp_vacuum',
+    'fx_parachutedeploy_atm','fx_parachutedeploy_vacuum','fx_footstep_default',
+    'fx_kerbal_poof_default','fx_wheel_default','fx_surfaceImpact_default',
+    'fx_surfaceImpact_liquid_noFuel_atmosphere','fx_surfaceImpact_liquid_noFuel_vacuum',
+    'fx_surfaceImpact_solid_noFuel_atmosphere','fx_surfaceImpact_solid_noFuel_vacuum',
+    'fx_launchfire_default','fx_detachment_noFuel_atmosphere','fx_detachment_noFuel_vacuum',
+    'fx_dock_00','fx_undock_00','fx_science_default','fx_science_vacuum','fx_vapor_vortices'))
+CONTINUOUS_PREFABS = {'fx_groundblast_atmosphere_01','fx_launchsmoke_default','fx_launchfire_default','fx_wheel_default','fx_vapor_vortices'}
 
 class EngineFxExporter:
     def __init__(self, exporter, directory: Path):
@@ -22,6 +33,8 @@ class EngineFxExporter:
         self.textures = {}
         self.engines = {}
         self.audit = []
+        self.reentry_settings = {}
+        self.vapor_settings = {}
         self.texture_cache = {}
         self.material_cache = {}
         self.mesh_cache = {}
@@ -61,6 +74,7 @@ class EngineFxExporter:
 
     def shader(self, shader):
         name = shader.m_ParsedForm.m_Name
+        reentry = name == 'Reentry/Shockwave'
         key = name.split("/")[-1]
         if key in self.shaders: return key
         main_pass = next(p for p in shader.m_ParsedForm.m_SubShaders[0].m_Passes if p.progVertex.m_CommonParameters.m_ConstantBuffers)
@@ -79,12 +93,14 @@ class EngineFxExporter:
             texture_names = {"_DistortionTexture":"distortion_texture", "_NoiseTexture":"noise_texture",
                 "_TracesTexture":"traces_texture", "_CameraDepthTexture":"depth_texture",
                 "_GrabTexture":"scene_texture", "_GrabTextureMobile":"scene_texture", "_RefractionTex":"distortion_texture"}
+            if reentry:texture_names['_HeatGradient']='noise_texture'
             textures[stage] = {}
             for texture in program.m_CommonParameters.m_TextureParams:
                 prop = names[texture.m_NameIndex]
                 if prop not in texture_names: raise ValueError(f"Unhandled shader texture {name}: {prop}")
                 textures[stage][texture.m_Index] = texture_names[prop]
-        code = wgsl(vs[1],fs[1],textures['vertex'],textures['fragment'])
+        if reentry:textures['fragment'][0]='occlusion_texture'
+        code = wgsl(vs[1],fs[1],textures['vertex'],textures['fragment'],reentry=reentry)
         (self.out/f"shaders/{key}.wgsl").write_text(code,encoding="utf-8")
         for stage,pair in (("vertex",vs),("fragment",fs)):
             (self.out/f"shaders/{key}.{stage}.dxbc").write_bytes(pair[0])
@@ -94,6 +110,7 @@ class EngineFxExporter:
             "gamma_colors":[p.m_Name for p in shader.m_ParsedForm.m_PropInfo.m_Props if p.m_Type==0],
             "src_blend":int(state.srcBlend.val),"dst_blend":int(state.destBlend.val),
             "refraction":"HeatRefraction" in name,
+            "reentry":reentry,
             "vertex_sha256":hashlib.sha256(vs[0]).hexdigest(),"fragment_sha256":hashlib.sha256(fs[0]).hexdigest()}
         return key
 
@@ -123,14 +140,15 @@ class EngineFxExporter:
         self.material_cache[source] = key
         return key
 
-    def mesh(self, mesh):
+    def mesh(self, mesh, reentry=False):
         from UnityPy.helpers.MeshHelper import MeshHandler
-        source = (mesh.object_reader.assets_file.name,mesh.object_reader.path_id)
+        source = (mesh.object_reader.assets_file.name,mesh.object_reader.path_id,reentry)
         if source in self.mesh_cache: return self.mesh_cache[source]
         handler = MeshHandler(mesh); handler.process()
         n = len(handler.m_Vertices)
         # Original object coordinates are preserved: the shader displaces and bends in this frame.
         vertices = []
+        color_scale=1.0/255.0 if reentry and handler.m_Colors and any(c>1.0 for color in handler.m_Colors for c in color) else 1.0
         targets = []
         for channel in mesh.m_Shapes.channels[:3]:
             if channel.frameCount != 1: raise ValueError(f"Multi-frame morph target: {mesh.m_Name}")
@@ -141,7 +159,10 @@ class EngineFxExporter:
             targets.append(target)
         for i in range(n):
             row = list(handler.m_Vertices[i][:3]) + (list(handler.m_Normals[i][:3]) if handler.m_Normals else [0,0,1]) + (list(handler.m_UV0[i][:2]) if handler.m_UV0 else [0,0])
-            for j in range(3): row.extend(targets[j].get(i,[0.0]*6) if j<len(targets) else [0.0]*6)
+            for j in range(3):
+                if reentry and j==0:
+                    row.extend([c*color_scale for c in handler.m_Colors[i][:3]]+[0,0,0] if handler.m_Colors else [0.5,0.5,0.5,0,0,0])
+                else:row.extend(targets[j].get(i,[0.0]*6) if j<len(targets) else [0.0]*6)
             vertices.extend(row)
         indices = [v for sub in handler.get_triangles() for triangle in sub for v in triangle]
         data = struct.pack(f"<{len(vertices)}f",*vertices) + struct.pack(f"<{len(indices)}I",*indices)
@@ -150,36 +171,62 @@ class EngineFxExporter:
             uri = f"meshes/{key}.bin"
             (self.out/uri).write_bytes(data)
             self.meshes[key] = {"uri":uri,"vertices":n,"indices":len(indices),"stride":104,
+                "bounds":[[min(v[j] for v in handler.m_Vertices) for j in range(3)],[max(v[j] for v in handler.m_Vertices) for j in range(3)]],
                 "channels":[c.name for c in mesh.m_Shapes.channels]}
         self.mesh_cache[source] = key
         return key
 
     def engine(self, key):
         env,_ = self.ex.env_for_key(key)
+        # Built-in spark primitives and Default-ParticleSystem materials live outside Addressables.
+        for name in ('unity default resources','unity_builtin_extra'):
+            if name not in env.files:
+                env.load_file(str(self.ex.bdir.parents[2] / 'Resources' / name))
         part = key.removesuffix(".prefab")
         layers = []
         for sf in env.assets:
             for root in load_scene(sf):
                 if root.name != part: continue
+                # Instantiate(prefab, impactPosition, impactRotation) replaces the prefab root's
+                # editor pose. Keep its scale and every child transform, not the preview offset.
+                crash_origin = mul(trs((0,0,0),(0,0,0,1),tuple(getattr(root.tf.m_LocalScale,c) for c in 'xyz')),
+                    inverse(root.world)) if part.startswith('fx_') else None
                 manager = root.behaviour("ThrottleVFXManager") or {}
                 events = {}
+                if part.startswith('rcs_'):
+                    for group, nozzle in enumerate(n for n in root.walk() if n.name in ('RCSthruster','rcsPort')):
+                        events[nozzle.go.object_reader.path_id] = [[group,10]]
+                if part == 'eva_kerbal':
+                    for node in root.walk():
+                        jetpack = node.behaviour('JetpackVFXManager')
+                        if jetpack:
+                            transforms = {n.tf.object_reader.path_id:n for n in root.walk()}
+                            for group, effect in enumerate(jetpack['MoveEffectObjects']+jetpack['RotateEffectObjects']):
+                                visual = transforms[effect['Visual']['m_PathID']]
+                                events[visual.go.object_reader.path_id] = [[group,10]]
                 for mode in manager.get("FXModeActionEvents",[]):
                     for event in mode["ActionEvents"]:
                         for effect in event["EngineEffects"]:
                             events.setdefault(effect["EffectReference"]["m_PathID"],[]).append([mode["EngineModeIndex"],event["ModeEvent"]])
                 def walk(node, inherited):
+                    matrix = mul(crash_origin,node.world) if crash_origin else node.world
                     context = events.get(node.go.object_reader.path_id,inherited)
                     control = node.behaviour("ThrottleBlendshapeData")
                     renderer = node.component("SkinnedMeshRenderer") if control else None
                     if renderer and renderer.m_Mesh.path_id:
-                        layers.append({"name":node.name,"kind":"mesh","matrix":node.world,"events":context,
+                        layers.append({"name":node.name,"kind":"mesh","matrix":matrix,"events":context,
                             "mesh":self.mesh(renderer.m_Mesh.read()),"material":self.material(renderer.m_Materials[0]),"control":control})
                     particle = node.component("ParticleSystem")
+                    trail = node.component('TrailRenderer')
+                    if trail:
+                        layers.append({'name':node.name,'kind':'trail','matrix':matrix,'events':context,
+                            'material':self.particle_material(trail.m_Materials[0]),'mesh':'',
+                            'control':{},'renderer':trail.object_reader.read_typetree()})
                     if particle:
                         # Keep the original module data available, including authored startup/stop bursts.
                         raw = particle.object_reader.read_typetree()
                         pr = node.component("ParticleSystemRenderer")
-                        layers.append({"name":node.name,"kind":"particle","matrix":node.world,"events":context,
+                        layers.append({"name":node.name,"kind":"particle","matrix":matrix,"events":context,
                             "local_scale":[node.tf.m_LocalScale.x,node.tf.m_LocalScale.y,node.tf.m_LocalScale.z],
                             "material":self.particle_material(pr.m_Materials[0]) if pr and pr.m_Materials and pr.m_Materials[0].path_id else "",
                             "mesh":self.mesh(pr.m_Mesh.read()) if pr and pr.m_RenderMode==4 and pr.m_Mesh.path_id else "",
@@ -187,19 +234,26 @@ class EngineFxExporter:
                             "parameter_mappings":(node.behaviour("VFXParticleParameterizer") or {}).get("ParameterMappingsList",[]),
                             "control":node.behaviour("ThrottleParticleSystemData") or {}})
                     for child in node.children: walk(child,context)
-                walk(root,[[0,6],[0,10]] if part.startswith('fx_') else [])
+                # An explosion is a one-shot Play event, never a continuously running engine effect.
+                walk(root,[[0,6],[0,10]] if part in CONTINUOUS_PREFABS else [[0,6]] if part.startswith('fx_') else [])
         self.engines[part] = layers
         self.audit.append({"engine":part,"mesh_layers":sum(l['kind']=='mesh' for l in layers),
             "particle_layers":sum(l['kind']=='particle' for l in layers),
             "running_mesh_layers":sum(l['kind']=='mesh' and any(e[1]==10 for e in l['events']) for l in layers)})
 
-    def export(self):
+    def export(self, reentry=True):
         for key in sorted(self.ex.cat.string_keys()):
-            if key.startswith(("engine_","booster_")) and key.endswith(".prefab"):
+            if (key.startswith(("engine_","booster_","rcs_")) or key == 'eva_kerbal.prefab') and key.endswith(".prefab"):
                 print(f"  authored FX: {key}",flush=True)
                 self.engine(key)
-        for key in ('fx_groundblast_atmosphere_01.prefab','fx_launchsmoke_default.prefab'):
+        for key in ('fx_groundblast_atmosphere_01.prefab','fx_launchsmoke_default.prefab',*CRASH_PREFABS,*CONTEXT_PREFABS):
             self.engine(key)
+        if reentry:
+            from export_reentry_fx import export
+            export(self)
+        self.write()
+
+    def write(self):
         engine_files = {}
         for name,layers in self.engines.items():
             uri = f"engines/{name}.json"
@@ -209,10 +263,20 @@ class EngineFxExporter:
         env,_=self.ex.env_for_key('VFXGlobalSettings.asset')
         for obj in env.objects:
             if obj.type.name=='MonoBehaviour':
-                raw=obj.read_typetree()
-                for key in ('MaxThrustForceForNormalizedParameterkN','MaxThrustForceDistanceForNormalizedParameterM'):
+                try: raw=obj.read_typetree()
+                except ValueError: continue # Unity built-in behaviours do not carry game typetrees.
+                for key in ('MaxThrustForceForNormalizedParameterkN','MaxThrustForceDistanceForNormalizedParameterM','VacuumThresholdDensity'):
                     if key in raw:settings[key]=raw[key]
-        data = {"version":2,"context_settings":settings,"engines":engine_files,"meshes":self.meshes,"materials":self.materials,
+                if 'VaporHumidityThresholdPercentage' in raw:
+                    self.vapor_settings={k:v for k,v in raw.items() if k.startswith('Vapor') or k=='VacuumThresholdDensity'}
+        from export_web_assets import ROOT
+        humidity={}
+        for body in (ROOT/'assets/ksp2/data/celestialbody_json').glob('*.json'):
+            source=json.loads(body.read_text(encoding='utf-8'))['data']
+            if source.get('useAtmosphereHumidityCurve'):
+                humidity[body.stem]=source['BodyAltitudeRelativeHumidityCurve']['fCurve']
+        self.vapor_settings['HumidityCurves']=humidity
+        data = {"version":3,"context_settings":settings,"reentry_settings":self.reentry_settings,"vapor_settings":self.vapor_settings,"engines":engine_files,"meshes":self.meshes,"materials":self.materials,
             "shaders":self.shaders,"textures":self.textures,"particle_materials":self.particle_materials,"audit":self.audit}
         (self.out/"effects.json").write_text(json.dumps(data,separators=(',',':')),encoding="utf-8")
         (self.out/"coverage.json").write_text(json.dumps(self.audit,indent=2)+"\n",encoding="utf-8")

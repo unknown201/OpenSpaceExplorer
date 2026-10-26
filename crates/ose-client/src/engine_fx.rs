@@ -14,6 +14,10 @@ pub struct Library {
     pub particle_materials: HashMap<String, Material>,
     #[serde(default)]
     pub context_settings: HashMap<String, f64>,
+    #[serde(default)]
+    pub reentry_settings: Value,
+    #[serde(default)]
+    pub vapor_settings: Value,
 }
 #[derive(Clone, Deserialize)]
 pub struct Mesh {
@@ -21,6 +25,8 @@ pub struct Mesh {
     pub vertices: u32,
     pub indices: u32,
     pub stride: u32,
+    #[serde(default)]
+    pub bounds: [[f64; 3]; 2],
 }
 #[derive(Clone, Deserialize)]
 pub struct Texture {
@@ -45,6 +51,8 @@ pub struct Shader {
     pub dst_blend: u32,
     pub refraction: bool,
     pub gamma_colors: Vec<String>,
+    #[serde(default)]
+    pub reentry: bool,
 }
 #[derive(Clone, Deserialize)]
 pub struct Layer {

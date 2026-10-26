@@ -189,6 +189,9 @@ pub struct Powered {
     /// Fraction of the current stage's engines still attached (engines can break off).
     #[serde(default = "one")]
     pub thrust_scale: f64,
+    /// Share of supplied thrust from engines that cannot be throttled (solid boosters).
+    #[serde(default)]
+    pub locked_thrust_fraction: f64,
     /// Drag `Cd * A` from the part drag cubes for the current airflow, m^2; `None` uses the spec's
     /// reference area and coefficient.
     #[serde(default)]
@@ -703,6 +706,7 @@ impl Powered {
             },
             angvel: DVec3::ZERO,
             thrust_scale: 1.0,
+            locked_thrust_fraction: 0.0,
             drag_cda_m2: None,
             wheel_scale: 1.0,
             controlled: true,
@@ -787,10 +791,11 @@ impl Powered {
 
     pub fn thrust_kn(&self, pressure_atm: f64) -> f64 {
         match self.current_stage() {
-            Some(s) if self.ignited && self.propellant_t > 0.0 && self.throttle > 0.0 => {
+            Some(s) if self.ignited && !self.crashed && self.propellant_t > 0.0 => {
                 let p = pressure_atm.clamp(0.0, 1.0);
                 (s.thrust_vac_kn + (s.thrust_asl_kn - s.thrust_vac_kn) * p)
-                    * self.throttle
+                    * (self.locked_thrust_fraction
+                        + (1.0 - self.locked_thrust_fraction) * self.throttle)
                     * self.thrust_scale
             }
             _ => 0.0,
@@ -1064,15 +1069,21 @@ pub fn integrate(
     dt: f64,
 ) -> StepOutcome {
     let mut out = StepOutcome::default();
-    if p.crashed {
-        return out;
-    }
     let omega = if body.rotation_period_s > 0.0 {
         std::f64::consts::TAU / body.rotation_period_s
     } else {
         0.0
     };
     let omega_v = DVec3::new(0.0, 0.0, omega);
+    if p.crashed {
+        // The wreck stays at its impact site on the rotating surface, alongside its world-space FX.
+        let (s, c) = (omega * dt).sin_cos();
+        let turn = |v: DVec3| DVec3::new(v.x * c - v.y * s, v.x * s + v.y * c, v.z);
+        p.r = turn(p.r);
+        p.facing = turn(p.facing);
+        p.v = omega_v.cross(p.r);
+        return out;
+    }
     let r_mag = p.r.length();
     let alt = r_mag - body.radius_m;
     let (pressure_kpa, rho) = match atmo {
@@ -1223,6 +1234,11 @@ pub fn integrate(
     // RCS translation (the RCS group on), in the craft's axes
     p.rcs.usage = 0.0;
     if p.groups.rcs && p.controlled && p.rcs.thrust_kn > 0.0 && p.mass_t > 0.0 {
+        // Turning spends RCS propellant too, including SAS correction. The same normalized
+        // request drives the directional nozzle visuals in the authoritative readout.
+        if !p.landed && p.rcs.torque_knm > 0.0 {
+            p.rcs.usage += p.steer_cmd.length().min(1.0);
+        }
         let t = p.rcs.translate;
         let t = DVec3::new(
             t.x.clamp(-1.0, 1.0),
@@ -1431,7 +1447,7 @@ pub fn integrate(
 
     // coasting bookkeeping for the rails handoff
     let above_atmo = atmo.map(|a| alt > a.depth_m).unwrap_or(true);
-    if p.throttle <= 0.0 && !p.landed && above_atmo {
+    if p.thrust_kn(0.0) <= 0.0 && !p.landed && above_atmo {
         if p.coasting_since.is_none() {
             p.coasting_since = Some(ut);
         }
@@ -1949,6 +1965,17 @@ mod tests {
             }
         }
         assert!(crashed);
+        let site = lat_lon(&body, p.r, 0.0);
+        let distance = p.r.length();
+        let before = p.r;
+        integrate(&mut p, &body, None, None, 0.0, 2.0);
+        let after = lat_lon(&body, p.r, 2.0);
+        assert!((after.0 - site.0).abs() < 1e-9 && (after.1 - site.1).abs() < 1e-9);
+        assert!((p.r.length() - distance).abs() < 1e-8);
+        assert!(
+            (p.r - before).length() > 100.0,
+            "the wreck co-rotates instead of sliding away from its explosion"
+        );
         // descend at 2 m/s from 20 m: lands
         let mut q = Powered::new(
             rocket(),

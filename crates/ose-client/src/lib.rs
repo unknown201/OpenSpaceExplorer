@@ -16,6 +16,7 @@ pub mod audio;
 pub mod authored_particles;
 #[cfg(target_arch = "wasm32")]
 mod authored_sprite_gpu;
+pub mod authored_trails;
 pub mod engine_fx;
 #[cfg(target_arch = "wasm32")]
 mod engine_fx_gpu;
@@ -49,6 +50,8 @@ pub mod planet_preview;
 pub mod planet_scatter;
 pub mod reentry;
 #[cfg(target_arch = "wasm32")]
+mod reentry_gpu;
+#[cfg(target_arch = "wasm32")]
 pub mod render;
 pub mod rnd;
 pub mod scene;
@@ -61,6 +64,7 @@ pub mod tutorials;
 pub mod vab;
 #[cfg(target_arch = "wasm32")]
 pub mod vab3d;
+pub mod vapor;
 
 use scene::{Camera, Scene, TimeSync};
 use std::cell::RefCell;
@@ -300,6 +304,7 @@ struct App {
     flight_watch: std::cell::RefCell<Option<hud::FlightWatch>>,
     /// Your other vessels' reference bodies as last seen (the original's inactive-vessel SOI notices).
     soi_seen: std::cell::RefCell<std::collections::HashMap<u64, u16>>,
+    crash_report_due: std::cell::Cell<Option<(u64, f64)>>,
     /// The flown vessel's records for the flight report.
     flight_records: std::cell::RefCell<Option<hud::FlightRecords>>,
     /// Vessels this client has staged at least once: their first stage is lit, so the next is the one after.
@@ -745,6 +750,7 @@ pub fn start() -> Result<(), JsValue> {
         toasts: hud::Toasts::default(),
         flight_watch: std::cell::RefCell::new(None),
         soi_seen: Default::default(),
+        crash_report_due: std::cell::Cell::new(None),
         flight_records: std::cell::RefCell::new(None),
         staged: Default::default(),
         roll_sent: 0.0,
@@ -8249,6 +8255,7 @@ impl App {
 
     fn end_flight(&mut self) {
         self.flying = None;
+        self.crash_report_due.set(None);
         self.flight_craft = None;
         if let Some(el) = self.doc.get_element_by_id("flight-hud") {
             el.class_list().remove_1("open").ok();
@@ -9496,7 +9503,15 @@ impl App {
                 w.vessel == id && w.situation != Some(ose_net::FlightSituation::Crashed)
             })
         {
-            self.show_flight_report("The vessel was lost", None);
+            self.crash_report_due.set(Some((id, now_ms() + 2500.0)));
+        }
+        if let Some((vessel, due)) = self.crash_report_due.get() {
+            if vessel != id || f.situation != ose_net::FlightSituation::Crashed {
+                self.crash_report_due.set(None);
+            } else if now_ms() >= due {
+                self.crash_report_due.set(None);
+                self.show_flight_report("The vessel was lost", None);
+            }
         }
         // Event toasts from what changed since the last frame.
         let watch = hud::FlightWatch {
@@ -11421,6 +11436,8 @@ impl App {
                     &gpu.engine_fx_layers().to_string(),
                 )
                 .ok();
+                hud.set_attribute("data-ose-effect-assets", &gpu.effect_assets())
+                    .ok();
             }
             if let (Some(nav), Some(canvas)) = (
                 self.flight3d.nav,

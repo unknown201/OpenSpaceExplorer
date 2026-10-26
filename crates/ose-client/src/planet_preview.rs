@@ -27,7 +27,7 @@ pub struct Preview {
     occ: Option<(f64, f64, f64)>,
     /// `part=<part id>`: draw that part 6 m in front of the camera (checks that the planet never covers craft).
     part: Option<String>,
-    /// `plasma=<0..1>`: the re-entry sheath around that part (then 30 m away) at this strength, the air streaming away from the
+    /// `plasma=<0..1>`: the re-entry sheath around that part (then 30 m away) at the corresponding entry speed, the air streaming away from the
     /// camera's right and a little down, seen from the side (reentry.rs).
     plasma: f64,
     planet: Option<PlanetRenderer>,
@@ -145,6 +145,7 @@ impl Preview {
             (Some(p), true) => p.scatter_items(gpu, &view),
             _ => Vec::new(),
         };
+        let mut engines = Vec::new();
         if let Some(part) = &self.part {
             let name = format!("part:{part}");
             // farther off with a plasma sheath, so the camera is outside it
@@ -156,12 +157,37 @@ impl Preview {
                 it.ambient = 0.25;
                 items.push(it);
                 if self.plasma > 0.0 {
-                    gpu.add_plasma(crate::reentry::Sheath {
-                        centre: fwd * dist,
-                        trail: (fwd.cross(up).normalize() - up * 0.3).normalize(),
-                        radius: 1.5,
-                        strength: self.plasma,
-                        time_s: now_ms / 1000.0,
+                    let speed = 1200.0 + 1800.0 * self.plasma.clamp(0.0, 1.0);
+                    engines.push(crate::engine_fx_gpu::EngineDraw {
+                        instance: 0,
+                        part: format!("reentry:{part}"),
+                        model: glam::DMat4::from_translation(fwd * dist),
+                        throttle: 1.0,
+                        commanded: 0.0,
+                        pressure: 0.1,
+                        atmosphere_density: 0.05,
+                        gravity_mps2: 0.0,
+                        relative_velocity: speed,
+                        mode: 0,
+                        time: now_ms * 0.001,
+                        simulation_time: now_ms * 0.001,
+                        thrust_kn: 0.0,
+                        distance_from_spawn: 0.0,
+                        vertical_deviation: 1.0,
+                        vapor: None,
+                        reentry: Some(crate::reentry::State {
+                            heading: -(fwd.cross(up).normalize() - up * 0.3).normalize(),
+                            density: 0.05,
+                            altitude: self.alt,
+                            speed,
+                            mach: speed / 300.0,
+                            gradient: match self.body.as_str() {
+                                "Eve" => 1,
+                                "Jool" => 2,
+                                "Laythe" => 3,
+                                _ => 0,
+                            },
+                        }),
                     });
                 }
             }
@@ -171,6 +197,16 @@ impl Preview {
             .as_ref()
             .filter(|_| ready)
             .map(|p| p as &dyn crate::render::ExtraPass);
-        gpu.frame_with("assets/parts/", &items, &[], [0.0, 0.0, 0.0], extra);
+        gpu.frame_with_effects(
+            "assets/parts/",
+            &items,
+            &[],
+            [0.0, 0.0, 0.0],
+            crate::render::FrameEffects {
+                camera: cam,
+                engines: &engines,
+                extra,
+            },
+        );
     }
 }

@@ -402,9 +402,6 @@ pub struct Renderer {
     post: crate::fx_post::FxPost,
     /// The sun's lens flare (lens_flare.rs), drawn into the HDR scene before the post pass.
     lens_flare: crate::lens_flare::LensFlare,
-    /// Re-entry plasma around craft (reentry.rs), drawn after the engine effects; requests for this frame.
-    plasma: crate::reentry::PlasmaPass,
-    plasma_req: std::cell::RefCell<Vec<crate::reentry::Sheath>>,
     /// This frame's flare: sun direction (camera-relative world), strength, tint, angular radius (rad); set by
     /// the planet renderer, cleared after each frame.
     flare: std::cell::Cell<Option<crate::lens_flare::FlareRequest>>,
@@ -816,11 +813,8 @@ impl Renderer {
         let engine_fx =
             crate::engine_fx_gpu::EngineFxGpu::new(&device, &queue, &depth, &post.snapshot_view);
         let lens_flare = crate::lens_flare::LensFlare::new(&device, &depth);
-        let plasma = crate::reentry::PlasmaPass::new(&device, wgpu::TextureFormat::Depth32Float);
         Some(Renderer {
             lens_flare,
-            plasma,
-            plasma_req: std::cell::RefCell::new(Vec::new()),
             flare: std::cell::Cell::new(None),
             device,
             queue,
@@ -957,11 +951,6 @@ impl Renderer {
         self.engine_fx
             .resize(&self.device, &self.depth, &self.post.snapshot_view);
         self.lens_flare.resize(&self.device, &self.depth);
-    }
-
-    /// Draw a craft's re-entry plasma this frame (flight view; at most `reentry::MAX_SHEATHS`).
-    pub fn add_plasma(&self, s: crate::reentry::Sheath) {
-        self.plasma_req.borrow_mut().push(s);
     }
 
     /// Ask for the sun's lens flare this frame (the planet renderer does, while a body is drawn).
@@ -1650,9 +1639,6 @@ impl Renderer {
                 multiview_mask: None,
             });
             self.engine_fx.draw(&mut pass);
-            let sheaths = std::mem::take(&mut *self.plasma_req.borrow_mut());
-            self.plasma
-                .draw(&self.queue, &mut pass, self.view_proj(), &sheaths);
         }
         if let Some((dir, strength, tint, radius)) = self.flare.take() {
             self.lens_flare.draw(
@@ -1676,6 +1662,15 @@ impl Renderer {
     pub fn engine_particle_count(&self) -> usize {
         self.engine_fx.particle_count()
     }
+    pub fn effect_assets(&self) -> String {
+        self.engine_fx.active_assets()
+    }
+    pub(crate) fn fixture_fx_ready(&self, part: &str) -> bool {
+        self.engine_fx.asset_ready(part)
+    }
+    pub(crate) fn fixture_fx_reset(&mut self) {
+        self.engine_fx.reset_simulation();
+    }
     pub fn enable_fx_capture(&mut self) {
         self.engine_fx.enable_capture();
         self.fixture_grid = true;
@@ -1690,17 +1685,38 @@ impl Renderer {
 
     /// Linear HDR readback for comparing the WGSL port with the original compiled D3D shaders.
     pub async fn read_fx_pixels(&self) -> Result<Vec<u8>, String> {
-        let row = (self.width * 8).div_ceil(256) * 256;
+        self.read_effect_texture(&self.post.scene, self.width, self.height, 8)
+            .await
+    }
+    pub async fn read_reentry_pixels(&self) -> Result<Vec<u8>, String> {
+        self.read_effect_texture(
+            self.engine_fx
+                .occlusion_texture()
+                .ok_or("reentry not loaded")?,
+            2048,
+            2048,
+            2,
+        )
+        .await
+    }
+    async fn read_effect_texture(
+        &self,
+        texture: &wgpu::Texture,
+        width: u32,
+        height: u32,
+        pixel_bytes: u32,
+    ) -> Result<Vec<u8>, String> {
+        let row = (width * pixel_bytes).div_ceil(256) * 256;
         let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("FX parity readback"),
-            size: (row * self.height) as u64,
+            size: (row * height) as u64,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
         let mut encoder = self.device.create_command_encoder(&Default::default());
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
-                texture: &self.post.scene,
+                texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
@@ -1714,8 +1730,8 @@ impl Renderer {
                 },
             },
             wgpu::Extent3d {
-                width: self.width,
-                height: self.height,
+                width,
+                height,
                 depth_or_array_layers: 1,
             },
         );
@@ -1737,9 +1753,9 @@ impl Renderer {
             .slice(..)
             .get_mapped_range()
             .map_err(|e| e.to_string())?;
-        let mut output = Vec::with_capacity((self.width * self.height * 8) as usize);
+        let mut output = Vec::with_capacity((width * height * pixel_bytes) as usize);
         for line in mapped.chunks(row as usize) {
-            output.extend_from_slice(&line[..self.width as usize * 8]);
+            output.extend_from_slice(&line[..width as usize * pixel_bytes as usize]);
         }
         drop(mapped);
         buffer.unmap();

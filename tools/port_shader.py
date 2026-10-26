@@ -91,7 +91,20 @@ def translate(assembly: str, stage: str, textures: dict[int, str]) -> str:
     for raw in assembly.splitlines():
         raw = raw.strip()
         if not raw or raw.startswith(("//", "dcl_", "vs_", "ps_")) or raw == "ret": continue
+        structured = re.fullmatch(r"ld_structured_indexable\(structured_buffer, stride=(\d+)\)\(mixed,mixed,mixed,mixed\) (.*)", raw)
+        if structured:
+            stride, rest = structured.groups()
+            dest,index,offset,resource=operands(rest)
+            # One draw owns one vessel and occlusion record; retain byte offsets and component
+            # swizzles from the original StructuredBuffer loads (including unaligned float3s).
+            byte_offset=int(offset.removeprefix('l(').removesuffix(')'))
+            array='vessel' if int(stride)==156 else 'occlusion'
+            swizzle=resource.partition('.')[2] or 'xyzw'
+            expression='vec4<f32>('+','.join(f'reentry.{array}[{(byte_offset//4+"xyzw".index(c))//4}][{(byte_offset//4+"xyzw".index(c))%4}]' for c in swizzle)+')'
+            emit(dest,expression)
+            continue
         op, args = raw.split(None, 1)
+        if op.startswith('sample_indexable('): op='sample'
         args = operands(args)
         saturate = op.endswith("_sat")
         if saturate: op = op[:-4]
@@ -128,7 +141,10 @@ def translate(assembly: str, stage: str, textures: dict[int, str]) -> str:
             if tex == "depth_texture": expression = f"sample_depth(({coords}).xy)"
             else:
                 sampler='screen_sampler' if tex=='scene_texture' else 'fx_sampler'
+                if tex=='occlusion_texture':sampler='occlusion_sampler'
                 expression=f"textureSampleLevel({tex}, {sampler}, ({coords}).xy, {lod})" if op=='sample_l' else f"textureSample({tex}, {sampler}, ({coords}).xy)"
+            swizzle=args[2].partition('.')[2]
+            if swizzle: expression=f'({expression}).{swizzle}'
         else: raise ValueError(f"Unsupported {stage} instruction: {raw}")
         if saturate: expression = f"clamp({expression}, vec4<f32>(0.0), vec4<f32>(1.0))"
         emit(dest, expression)
@@ -143,8 +159,9 @@ def signature(assembly: str, which: str):
         re.findall(r"^//\s+(\w+)\s+(\d+)\s+([xyzw]+)\s+(\d+)\s+",part,re.M)]
 
 
-def wgsl(vertex: str, fragment: str, vertex_textures: dict[int,str], fragment_textures: dict[int,str]) -> str:
-    arguments = ",".join(f"v{i}: vec4<f32>" for i in range(8))
+def wgsl(vertex: str, fragment: str, vertex_textures: dict[int,str], fragment_textures: dict[int,str], reentry:bool=False) -> str:
+    register_count=max(8,1+max(r for assembly in (vertex,fragment) for _,_,r in signature(assembly,'Input')))
+    arguments = ",".join(f"v{i}: vec4<f32>" for i in range(register_count))
     code = """
 struct FxUniform {
     globals: array<vec4<f32>,64>, camera: array<vec4<f32>,9>,
@@ -175,14 +192,20 @@ struct RasterInput {
 };
 """
     code += "struct OriginalVertex {" + ",".join(f"o{i}:vec4<f32>" for i in range(8)) + ",};\n"
+    if reentry:
+        code+='''struct ReentryUniform { vessel:array<vec4<f32>,10>, occlusion:array<vec4<f32>,7> };
+@group(3) @binding(0) var<uniform> reentry:ReentryUniform;
+@group(3) @binding(1) var occlusion_texture:texture_2d<f32>;
+@group(3) @binding(2) var occlusion_sampler:sampler;
+'''
     code += f"fn original_vertex({arguments}) -> OriginalVertex {{\n{translate(vertex,'vertex',vertex_textures)}\n}}\n"
     code += f"fn original_fragment({arguments}) -> vec4<f32> {{\n{translate(fragment,'fragment',fragment_textures)}\n}}\n"
-    va = ["vec4<f32>(0.0)"]*8
+    va = ["vec4<f32>(0.0)"]*register_count
     for name,index,register in signature(vertex,"Input"):
         if name == "POSITION": va[register] = "position"
         elif name == "NORMAL": va[register] = "normal"
         elif name == "TEXCOORD" and index == 0: va[register] = "vec4<f32>(in.uv,0.0,0.0)"
-        elif name == "COLOR": va[register] = "vec4<f32>(1.0)"
+        elif name == "COLOR": va[register] = "vec4<f32>(in.delta0,1.0)" if reentry else "vec4<f32>(1.0)"
     code += """
 @vertex fn vs_plume(in: MeshInput) -> RasterInput {
     let position = vec4<f32>(in.position + in.delta0*u.weights.x + in.delta1*u.weights.y + in.delta2*u.weights.z,1.0);
@@ -193,10 +216,14 @@ struct RasterInput {
         if name == "SV_POSITION": code += f"    out.clip = original.o{register};\n"
         elif name == "TEXCOORD": code += f"    out.t{index} = original.o{register};\n"
     code += "    return out;\n}\n"
-    fa = ["vec4<f32>(0.0)"]*8
+    fa = ["vec4<f32>(0.0)"]*register_count
     for name,index,register in signature(fragment,"Input"):
         if name == "TEXCOORD": fa[register] = f"in.t{index}"
         elif name == "SV_IsFrontFace": fa[register] = "bitcast<vec4<f32>>(vec4<u32>(select(0u,0xffffffffu,front)))"
         elif name == "SV_POSITION": fa[register] = "in.clip"
     code += f"@fragment fn fs_plume(in: RasterInput, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {{ return original_fragment({','.join(fa)}); }}\n"
+    if reentry:
+        code=code.replace('textureSample(noise_texture, fx_sampler','textureSample(noise_texture, screen_sampler')
+        code=code.replace('in.position + in.delta0*u.weights.x + in.delta1*u.weights.y + in.delta2*u.weights.z','in.position')
+        code=code.replace('normalize(in.normal + in.normal0*u.weights.x + in.normal1*u.weights.y + in.normal2*u.weights.z)','in.normal')
     return code

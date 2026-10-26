@@ -16,7 +16,7 @@ void checked(HRESULT h,int line){if(FAILED(h))throw std::runtime_error("D3D fail
 #define check(x) checked(x,__LINE__)
 template<class T>T read(std::istream& f){T v;f.read((char*)&v,sizeof(v));if(!f)throw std::runtime_error("truncated reference input");return v;}
 std::vector<char> bytes(std::istream& f,size_t n){std::vector<char>b(n);f.read(b.data(),n);if(!f)throw std::runtime_error("truncated reference input");return b;}
-struct Shader{ComPtr<ID3D11VertexShader>vs;ComPtr<ID3D11PixelShader>ps;ComPtr<ID3D11InputLayout>layout;bool refraction;};
+struct Shader{ComPtr<ID3D11VertexShader>vs;ComPtr<ID3D11PixelShader>ps;ComPtr<ID3D11InputLayout>layout;bool refraction,reentry;};
 // The 512px reference grid contains exactly representable positive normal half values.
 // This is not a general float-to-half converter.
 uint16_t grid_half(float value){uint32_t x;memcpy(&x,&value,4);return(uint16_t)((((x>>23)-127+15)<<10)|((x&0x7fffff)>>13));}
@@ -39,7 +39,7 @@ int main(int argc,char**argv){try{
  }
  std::vector<Shader>shaders;
  for(unsigned i=0;i<ns;i++){
-  bool refraction=read<uint32_t>(assets)!=0;auto a=bytes(assets,read<uint32_t>(assets));auto b=bytes(assets,read<uint32_t>(assets));Shader s;s.refraction=refraction;
+  auto flags=read<uint32_t>(assets);auto a=bytes(assets,read<uint32_t>(assets));auto b=bytes(assets,read<uint32_t>(assets));Shader s;s.refraction=(flags&1)!=0;s.reentry=(flags&2)!=0;
   check(dev->CreateVertexShader(a.data(),a.size(),nullptr,&s.vs));check(dev->CreatePixelShader(b.data(),b.size(),nullptr,&s.ps));
    D3D11_INPUT_ELEMENT_DESC layout[]={{"POSITION",0,DXGI_FORMAT_R32G32B32_FLOAT,0,0,D3D11_INPUT_PER_VERTEX_DATA,0},
     {"TANGENT",0,DXGI_FORMAT_R32G32B32A32_FLOAT,0,0,D3D11_INPUT_PER_VERTEX_DATA,0},
@@ -49,6 +49,7 @@ int main(int argc,char**argv){try{
     {"TEXCOORD",2,DXGI_FORMAT_R32G32_FLOAT,0,24,D3D11_INPUT_PER_VERTEX_DATA,0},
     {"TEXCOORD",3,DXGI_FORMAT_R32G32_FLOAT,0,24,D3D11_INPUT_PER_VERTEX_DATA,0},
     {"COLOR",0,DXGI_FORMAT_R32G32B32A32_FLOAT,0,0,D3D11_INPUT_PER_VERTEX_DATA,0}};
+  if(s.reentry)layout[7].AlignedByteOffset=32;
   check(dev->CreateInputLayout(layout,8,a.data(),a.size(),&s.layout));shaders.push_back(s);
  }
  std::vector<Mesh>meshes;
@@ -80,17 +81,32 @@ int main(int argc,char**argv){try{
  for(UINT draw=0;draw<draws;draw++){
   auto mi=read<uint32_t>(frame),si=read<uint32_t>(frame);std::array<uint32_t,3>ti;frame.read((char*)ti.data(),12);
   std::array<float,432>u;frame.read((char*)u.data(),sizeof(u));const auto&m=meshes.at(mi);const auto&s=shaders.at(si);
-  std::vector<float>v(size_t(m.vertices)*8);
+  auto floats=s.reentry?12:8;std::vector<float>v(size_t(m.vertices)*floats);
   for(unsigned i=0;i<m.vertices;i++){
-   const float*src=&m.v[size_t(i)*26];float*dst=&v[size_t(i)*8];memcpy(dst,src,32);
-   for(int shape=0;shape<3;shape++)for(int axis=0;axis<3;axis++){dst[axis]+=src[8+shape*6+axis]*u[428+shape];dst[3+axis]+=src[11+shape*6+axis]*u[428+shape];}
-   float norm=sqrtf(dst[3]*dst[3]+dst[4]*dst[4]+dst[5]*dst[5]);for(int a=3;a<6;a++)dst[a]/=norm;
+   const float*src=&m.v[size_t(i)*26];float*dst=&v[size_t(i)*floats];memcpy(dst,src,32);
+   if(s.reentry){memcpy(dst+8,src+8,12);dst[11]=1;}
+   if(!s.reentry){for(int shape=0;shape<3;shape++)for(int axis=0;axis<3;axis++){dst[axis]+=src[8+shape*6+axis]*u[428+shape];dst[3+axis]+=src[11+shape*6+axis]*u[428+shape];}
+   float norm=sqrtf(dst[3]*dst[3]+dst[4]*dst[4]+dst[5]*dst[5]);for(int a=3;a<6;a++)dst[a]/=norm;}
   }
-  auto vb=buffer(v.data(),(UINT)v.size()*4,D3D11_BIND_VERTEX_BUFFER);UINT stride=32,offset=0;auto raw=vb.Get();ctx->IASetVertexBuffers(0,1,&raw,&stride,&offset);ctx->IASetIndexBuffer(m.ib.Get(),DXGI_FORMAT_R32_UINT,0);ctx->IASetInputLayout(s.layout.Get());ctx->VSSetShader(s.vs.Get(),nullptr,0);ctx->PSSetShader(s.ps.Get(),nullptr,0);
+  auto vb=buffer(v.data(),(UINT)v.size()*4,D3D11_BIND_VERTEX_BUFFER);UINT stride=floats*4,offset=0;auto raw=vb.Get();ctx->IASetVertexBuffers(0,1,&raw,&stride,&offset);ctx->IASetIndexBuffer(m.ib.Get(),DXGI_FORMAT_R32_UINT,0);ctx->IASetInputLayout(s.layout.Get());ctx->VSSetShader(s.vs.Get(),nullptr,0);ctx->PSSetShader(s.ps.Get(),nullptr,0);
   UINT sizes[]={64*16,9*16,11*16,23*16};std::vector<ComPtr<ID3D11Buffer>>buffers;std::vector<ID3D11Buffer*>raws;size_t at=0;
   for(auto n:sizes){buffers.push_back(buffer((char*)u.data()+at,n,D3D11_BIND_CONSTANT_BUFFER));raws.push_back(buffers.back().Get());at+=n;}
   ctx->VSSetConstantBuffers(0,4,raws.data());ctx->PSSetConstantBuffers(0,3,raws.data());ID3D11ShaderResourceView*vsmap[]={textures.at(ti[0]).Get()};ctx->VSSetShaderResources(0,1,vsmap);
-  if(s.refraction){ID3D11ShaderResourceView*map[]={textures.at(ti[0]).Get(),depthSrv.Get(),sceneSrv.Get()};ID3D11SamplerState*samplers[]={sampler.Get(),screenSampler.Get(),depthSampler.Get()};ctx->PSSetShaderResources(0,3,map);ctx->PSSetSamplers(0,3,samplers);ctx->OMSetBlendState(opaqueState.Get(),nullptr,0xffffffff);}
+  std::vector<ComPtr<ID3D11Buffer>>structured;std::vector<ComPtr<ID3D11ShaderResourceView>>structuredViews;ComPtr<ID3D11Texture2D>occlusion;ComPtr<ID3D11ShaderResourceView>occlusionSrv;
+  if(s.reentry){
+   std::array<float,68>extra;frame.read((char*)extra.data(),sizeof(extra));
+   for(auto pair:std::array<std::pair<UINT,UINT>,2>{{{0,156},{40,112}}}){
+    D3D11_BUFFER_DESC bd={};bd.ByteWidth=bd.StructureByteStride=pair.second;bd.Usage=D3D11_USAGE_DEFAULT;bd.BindFlags=D3D11_BIND_SHADER_RESOURCE;bd.MiscFlags=D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+    D3D11_SUBRESOURCE_DATA initial={};initial.pSysMem=extra.data()+pair.first;ComPtr<ID3D11Buffer>buf;check(dev->CreateBuffer(&bd,&initial,&buf));
+    D3D11_SHADER_RESOURCE_VIEW_DESC sv={};sv.ViewDimension=D3D11_SRV_DIMENSION_BUFFER;sv.Buffer.NumElements=1;ComPtr<ID3D11ShaderResourceView>view;check(dev->CreateShaderResourceView(buf.Get(),&sv,&view));structured.push_back(buf);structuredViews.push_back(view);
+   }
+   auto pixels=bytes(frame,2048*2048*2);D3D11_TEXTURE2D_DESC td={};td.Width=td.Height=2048;td.MipLevels=td.ArraySize=td.SampleDesc.Count=1;td.Format=DXGI_FORMAT_R16_FLOAT;td.Usage=D3D11_USAGE_IMMUTABLE;td.BindFlags=D3D11_BIND_SHADER_RESOURCE;
+   D3D11_SUBRESOURCE_DATA initial={};initial.pSysMem=pixels.data();initial.SysMemPitch=4096;check(dev->CreateTexture2D(&td,&initial,&occlusion));check(dev->CreateShaderResourceView(occlusion.Get(),nullptr,&occlusionSrv));
+   ID3D11ShaderResourceView*vm[]={structuredViews[0].Get()};ctx->VSSetShaderResources(0,1,vm);
+   ID3D11ShaderResourceView*pm[]={occlusionSrv.Get(),textures.at(ti[1]).Get(),structuredViews[0].Get(),structuredViews[1].Get()};ctx->PSSetShaderResources(0,4,pm);
+   ID3D11SamplerState*samplers[]={screenSampler.Get(),depthSampler.Get()};ctx->PSSetSamplers(0,2,samplers);ctx->OMSetBlendState(blendState.Get(),nullptr,0xffffffff);
+  }
+  else if(s.refraction){ID3D11ShaderResourceView*map[]={textures.at(ti[0]).Get(),depthSrv.Get(),sceneSrv.Get()};ID3D11SamplerState*samplers[]={sampler.Get(),screenSampler.Get(),depthSampler.Get()};ctx->PSSetShaderResources(0,3,map);ctx->PSSetSamplers(0,3,samplers);ctx->OMSetBlendState(opaqueState.Get(),nullptr,0xffffffff);}
   else{ID3D11ShaderResourceView*map[]={textures.at(ti[1]).Get(),textures.at(ti[2]).Get(),nullptr};ctx->PSSetShaderResources(0,3,map);ctx->PSSetSamplers(0,2,ss);ctx->OMSetBlendState(blendState.Get(),nullptr,0xffffffff);}
   ctx->DrawIndexed(m.indices,0,0);
  }
