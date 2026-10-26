@@ -9,6 +9,7 @@ import argparse
 import gzip
 import os
 import shutil
+import stat
 import tempfile
 from pathlib import Path
 
@@ -34,6 +35,7 @@ def prepare(root: Path, members=None) -> tuple[int, int, int]:
             continue
         zipped = path.with_name(path.name + '.gz')
         if zipped.exists() and zipped.stat().st_mtime_ns >= path.stat().st_mtime_ns:
+            os.chmod(zipped, stat.S_IMODE(source_stat.st_mode))
             raw_total += size
             gzip_total += zipped.stat().st_size
             continue
@@ -51,6 +53,7 @@ def prepare(root: Path, members=None) -> tuple[int, int, int]:
                 temporary.unlink(missing_ok=True)
                 raise
         if zipped_size < size * 0.95:
+            os.chmod(temporary, stat.S_IMODE(source_stat.st_mode))
             os.replace(temporary, zipped)
             os.utime(zipped, ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns))
             raw_total += size

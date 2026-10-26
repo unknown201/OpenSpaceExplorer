@@ -29,6 +29,8 @@ Full-resolution source images are still fetched and displayed; previews make the
 The runtime fallback works with existing exported assets, so a new game-asset export is not required.
 `tools/precompress.py` prepares gzip sidecars for release bundles and asset uploads; CI, `deploy.py` and
 `push_assets.py` invoke it automatically. Large scenes should be precompressed to avoid repeat CPU work.
+Sidecars retain their source permissions, and release installation makes public web files readable by
+the unprivileged server account.
 
 ## Measurements
 

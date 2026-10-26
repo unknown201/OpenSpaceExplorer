@@ -1,6 +1,7 @@
 import gzip
 import importlib.util
 import os
+import stat
 from pathlib import Path
 import tempfile
 import unittest
@@ -11,6 +12,19 @@ spec.loader.exec_module(precompress)
 
 
 class PrecompressTests(unittest.TestCase):
+    def test_sidecars_keep_source_permissions_even_when_reused(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / 'index.html'
+            source.write_bytes(b'<html>loading</html>' * 1000)
+            source.chmod(0o644)
+            precompress.prepare(root)
+            zipped = root / 'index.html.gz'
+            self.assertEqual(stat.S_IMODE(zipped.stat().st_mode), stat.S_IMODE(source.stat().st_mode))
+            zipped.chmod(0o600)
+            self.assertEqual(precompress.prepare(root)[0], 0)
+            self.assertEqual(stat.S_IMODE(zipped.stat().st_mode), stat.S_IMODE(source.stat().st_mode))
+
     def test_roundtrip_freshness_and_stale_replacement(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

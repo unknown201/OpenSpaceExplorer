@@ -8,6 +8,9 @@ dir="/opt/ose/releases/$id"
 mkdir -p "$dir"
 tar --no-same-owner -xzf "$tar" -C "$dir"
 chmod 755 "$dir/ose-server"
+# Release files are public assets served by the unprivileged ose account, including gzip sidecars.
+find "$dir/web" -type d -exec chmod 755 {} +
+find "$dir/web" -type f -exec chmod 644 {} +
 ln -sfn "$dir" /opt/ose/current
 mkdir -p /var/lib/ose/assets
 chown -R ose:ose /var/lib/ose 2>/dev/null || true
