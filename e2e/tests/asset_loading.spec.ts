@@ -4,6 +4,12 @@ test.beforeEach(async ({page,baseURL}) => {
   await page.goto(`${baseURL}/health`);
   const gpu = await page.evaluate(async () => !!(await (navigator as any).gpu?.requestAdapter()));
   test.skip(!gpu, 'Scene-loading tests require WebGPU; this browser uses Canvas fallback.');
+  // CI has no exported game install. Keep the loader tests independent of those local assets.
+  await page.route('**/assets/ksc/scene.json', route => route.fulfill({json:{file:'ksc/ksc.glb',
+    camera:{origin:[0,2,10],look_at:[0,0,0],fov_deg:60},buildings:[]}}));
+  await page.route('**/assets/terrain/Kerbin.json', route => route.fulfill({json:{version:1,id:'Kerbin',
+    radius_m:600000,has_ocean:true,sites:[],global:{offset:0,width:1,height:1,scale_m:0,offset_m:0},
+    mask:null,contrast:1,large:[],medium:[],decal_heights:null,decal_alpha:null,decals:[]}}));
 });
 
 function model(revision: number, textured = false): Buffer {
