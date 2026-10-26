@@ -12,9 +12,11 @@
 mod accounts;
 mod campaigns;
 mod crew_docking;
+mod previews;
 mod save;
 mod science;
 mod streaming;
+mod web;
 
 use axum::{
     extract::{
@@ -36,7 +38,6 @@ use ose_sim::trajectory::Transition;
 use ose_sim::Universe;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use tower_http::services::{ServeDir, ServeFile};
 
 const EMBEDDED_BODIES: &str = include_str!("../../../assets/own/kerbol-system.json");
 const EMBEDDED_PARTS: &str = include_str!("../../../assets/own/parts-catalog.json");
@@ -621,29 +622,15 @@ async fn main() -> anyhow::Result<()> {
         )
         .with_state(shared);
     if let Some(dir) = &args.assets_dir {
-        // Precompressed `.gz` copies (terrain packs, tools/extract_terrain.py) go out to browsers that accept gzip.
-        let assets = Router::new()
-            .fallback_service(ServeDir::new(dir).precompressed_gzip())
-            .layer(axum::middleware::map_response(
-                |mut r: axum::response::Response| async move {
-                    if r.status().is_success() {
-                        r.headers_mut().insert(
-                            axum::http::header::CACHE_CONTROL,
-                            axum::http::HeaderValue::from_static("public, max-age=86400"),
-                        );
-                    }
-                    r
-                },
-            ));
-        app = app.nest_service("/assets", assets);
+        app = app.nest_service("/assets", web::assets(dir.clone()));
         tracing::info!(dir = %dir.display(), "serving game assets");
     }
     if let Some(dir) = &args.static_dir {
-        let index = ServeFile::new(dir.join("index.html"));
-        app = app.fallback_service(ServeDir::new(dir).fallback(index));
+        app = app.fallback_service(web::client(dir.clone()));
         tracing::info!(dir = %dir.display(), "serving web client");
     }
 
+    let app = app.layer(web::compression());
     let listener = tokio::net::TcpListener::bind(&args.listen).await?;
     tracing::info!(listen = %args.listen, "server listening");
     axum::serve(listener, app).await?;

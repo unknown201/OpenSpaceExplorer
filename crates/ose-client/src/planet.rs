@@ -1022,18 +1022,27 @@ impl PlanetRenderer {
             let inbox = inbox.clone();
             let id = id.to_string();
             wasm_bindgen_futures::spawn_local(async move {
-                let base = format!("{BASE}/{id}");
                 // The terrain pack the server lands on, when the container has one.
-                let pack = match (
-                    fetch_bytes(&format!("assets/terrain/{id}.json")).await,
-                    fetch_bytes(&format!("assets/terrain/{id}.bin")).await,
-                ) {
-                    (Ok(j), Ok(b)) => serde_json::from_slice::<TerrainPack>(&j)
+                let description = fetch_bytes(&format!("assets/terrain/{id}.json"))
+                    .await
+                    .ok()
+                    .and_then(|j| serde_json::from_slice::<TerrainPack>(&j).ok());
+                let pack = match description {
+                    Some(pack) => fetch_bytes(&format!("assets/terrain/{id}.bin"))
+                        .await
                         .ok()
-                        .map(|p| Box::new((p, b))),
-                    _ => None,
+                        .map(|blob| Box::new((pack, blob))),
+                    None => None,
                 };
                 inbox.borrow_mut().push(Loaded::Pack(pack));
+            });
+        }
+        {
+            // Small metadata must not sit behind a multi-megabyte terrain pack. Start textures, sky
+            // and atmosphere loading while the terrain is in flight, including on slow remote links.
+            let inbox = inbox.clone();
+            let base = format!("{BASE}/{id}");
+            wasm_bindgen_futures::spawn_local(async move {
                 match fetch_bytes(&format!("{base}/planet.json")).await {
                     Ok(b) => match serde_json::from_slice(&b) {
                         Ok(v) => inbox.borrow_mut().push(Loaded::Info(v)),

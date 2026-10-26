@@ -19,9 +19,13 @@ ose-data = { workspace = true }
 serde_json = { workspace = true }
 ose-math = { workspace = true }
 bevy_ecs = { workspace = true }
+image = { version = "0.25", default-features = false, features = ["png", "webp"] }
+httpdate = "1"
 serde = { workspace = true }
 
 [dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+flate2 = "1"
 serde_json = { workspace = true }
 ose-math = { workspace = true }
 ose-data = { workspace = true }

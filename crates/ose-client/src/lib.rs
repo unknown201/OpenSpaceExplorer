@@ -12,6 +12,10 @@
 #![forbid(unsafe_code)]
 
 pub mod animation;
+#[cfg(target_arch = "wasm32")]
+mod asset_cache;
+#[cfg(target_arch = "wasm32")]
+mod asset_queue;
 pub mod audio;
 pub mod authored_particles;
 #[cfg(target_arch = "wasm32")]
@@ -807,6 +811,13 @@ pub fn start() -> Result<(), JsValue> {
     install_input(&app)?;
     install_label_clicks(&app)?;
     install_menu(&app)?;
+    // Static HTML can arrive before the client starts. Enable the first interaction only after its
+    // handlers are attached, so a quick click on a remote load cannot silently disappear.
+    for id in ["play", "player-name"] {
+        if let Some(element) = app.borrow().doc.get_element_by_id(id) {
+            element.remove_attribute("disabled")?;
+        }
+    }
     load_part_sizes(app.clone());
     load_localization(app.clone());
     load_trip_planner(app.clone());
@@ -10950,6 +10961,26 @@ impl App {
     }
 
     fn frame(&mut self) {
+        #[cfg(target_arch = "wasm32")]
+        if let Some(gpu) = &self.gpu {
+            let scene = if gpu.model_textured("vab") {
+                "vab"
+            } else if gpu.model_textured("ksc") {
+                "ksc"
+            } else {
+                ""
+            };
+            if self
+                .gpu_canvas
+                .get_attribute("data-ose-textured-scene")
+                .as_deref()
+                != Some(scene)
+            {
+                self.gpu_canvas
+                    .set_attribute("data-ose-textured-scene", scene)
+                    .ok();
+            }
+        }
         let now = now_ms();
         let ut = self.time.ut_at(now);
         self.update_tracking(now);

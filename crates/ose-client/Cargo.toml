@@ -19,6 +19,7 @@ web-sys = { workspace = true, features = [
   "Window", "Document", "Element", "HtmlElement", "HtmlTextAreaElement", "FontFace", "FontFaceSet", "FontFaceDescriptors", "HtmlCanvasElement", "CanvasRenderingContext2d",
   "CssStyleDeclaration", "DomRect", "Location", "Performance",
   "WebSocket", "BinaryType", "MessageEvent", "CloseEvent", "Event", "ErrorEvent",
+  "Cache", "CacheStorage", "ResponseInit", "RequestCache",
   "MouseEvent", "WheelEvent", "KeyboardEvent", "EventTarget", "DomTokenList", "console", "HtmlInputElement", "HtmlSelectElement", "Storage", "Request", "RequestInit", "Response", "Headers", "Blob", "ImageBitmap", "HtmlImageElement", "ImageData", "ImageBitmapOptions", "PremultiplyAlpha", "ColorSpaceConversion",
   "AudioContext", "BaseAudioContext", "AudioBuffer", "AudioBufferSourceNode", "AudioScheduledSourceNode", "AudioNode", "AudioDestinationNode", "AudioParam", "GainNode", "HtmlAudioElement", "HtmlMediaElement", "NodeList",
 ] }

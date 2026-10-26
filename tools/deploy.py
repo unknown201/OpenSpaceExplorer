@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from precompress import prepare
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -41,12 +42,13 @@ def main():
     env = dict(os.environ, CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER="rust-lld")
     run("cargo", "build", "--release", "-p", "ose-server", "--target", "x86_64-unknown-linux-musl", env=env)
     run("trunk", "build", "--release", "--dist", str(ROOT / "target" / "web"), cwd=ROOT / "crates" / "ose-client")
+    prepare(ROOT / "target" / "web")
     with tempfile.TemporaryDirectory() as tmp:
         pkg = Path(tmp) / "rel"
         (pkg / "web").mkdir(parents=True)
         shutil.copy(ROOT / "target" / "x86_64-unknown-linux-musl" / "release" / "ose-server", pkg)
         for f in (ROOT / "target" / "web").iterdir():
-            if f.suffix in (".html", ".wasm", ".js"):
+            if f.suffix in (".html", ".wasm", ".js", ".gz"):
                 shutil.copy(f, pkg / "web")
         for f in ("ose.service", "install.sh"):
             (pkg / f).write_bytes((ROOT / "deploy" / f).read_bytes().replace(b"\r\n", b"\n"))

@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from precompress import prepare
 
 ROOT = Path(__file__).resolve().parent.parent
 ASSETS = ROOT / "assets" / "web"
@@ -40,6 +41,8 @@ def main() -> int:
         sys.exit(f"push_assets: {ASSETS} has no index.json; run tools/export_web_assets.py first")
     subdirs = sys.argv[1:] or [d.name for d in ASSETS.iterdir() if d.is_dir()]
     members = ["index.json"] + subdirs
+    prepare(ASSETS, members)
+    members += [m + '.gz' for m in members if (ASSETS / m).is_file() and (ASSETS / (m + '.gz')).exists()]
     size = sum(f.stat().st_size for d in subdirs for f in (ASSETS / d).rglob("*") if f.is_file())
     print(f"pushing {', '.join(subdirs)} ({size / 1e6:.0f} MB) to {piper} -> ct {ct}:{REMOTE_DIR}")
     with tempfile.TemporaryDirectory() as tmp:

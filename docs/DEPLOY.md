@@ -65,6 +65,11 @@ reload nginx`. One guest was added this way on 2026-10-24.
 
 ## Local check
 
+Release builds and asset uploads prepare gzip sidecars with `tools/precompress.py`; the server also
+compresses older exports while streaming. Material PNG previews are generated and cached on the server,
+so existing asset installations benefit without a re-export. See [remote loading](loading-performance.md)
+for bandwidth measurements, browser caching and reproduction commands.
+
 ```
 cd crates/ose-client && trunk build --release --dist ../../target/web && cd ../..
 cargo run -p ose-server -- --listen 127.0.0.1:7777 --static-dir target/web

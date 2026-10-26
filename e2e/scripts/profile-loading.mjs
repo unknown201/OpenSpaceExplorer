@@ -1,0 +1,76 @@
+// Measure cold/warm critical-scene transfers with one browser-wide bandwidth budget.
+// OSE_BASE_URL=http://127.0.0.1:PORT OSE_DOWNLOAD_MBPS=7.5 node scripts/profile-loading.mjs output.json
+import { chromium } from 'playwright';
+import fs from 'node:fs';
+const base = process.env.OSE_BASE_URL || 'http://127.0.0.1:7788';
+const mbps = Number(process.env.OSE_DOWNLOAD_MBPS || 30);
+const output = process.argv[2] || '../target/loading-profile.json';
+const game = !!process.env.OSE_GAME;
+const browser = await chromium.launch({channel: 'chromium', args: ['--enable-unsafe-webgpu', '--ignore-gpu-blocklist',
+  ...(process.platform === 'win32' ? ['--disable-dawn-features=use_dxc'] : [])]});
+try {
+  const page = await browser.newPage();
+  page.setDefaultTimeout(180000);
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Network.enable');
+  await cdp.send('Network.emulateNetworkConditions', {
+    offline: false, latency: 30, downloadThroughput: mbps * 1e6 / 8, uploadThroughput: mbps * 1e6 / 8,
+  });
+  const requests = new Map();
+  const records = [];
+  cdp.on('Network.responseReceived', ({requestId, response}) => {
+    requests.set(requestId, {requestId, url: response.url, status: response.status, headerBytes: response.encodedDataLength || 0, encoding: response.headers['content-encoding'],
+      cache: response.fromDiskCache || response.fromPrefetchCache || false});
+    if (game && /\/(ksc\/ksc|vab\/vab)\.glb$/.test(response.url)) console.log('scene response', response.status, response.url);
+  });
+  cdp.on('Network.loadingFinished', ({requestId, encodedDataLength}) => {
+    const response = requests.get(requestId);
+    if (response) records.push({...response, wireBytes: encodedDataLength});
+  });
+  await page.goto(`${base}/health`);
+  const phases = [];
+  for (const phase of ['cold', 'warm']) {
+    records.length = 0;
+    requests.clear();
+    let result;
+    if (game) {
+      const start = performance.now();
+      await page.goto(base);
+      await page.locator('body.webgpu').waitFor();
+      await page.locator('[data-ose="player-name"]').fill('loading profiler');
+      await page.locator('[data-ose="play"]').click();
+      const ksc = page.waitForResponse(r => r.url().endsWith('/assets/ksc/ksc.glb'), {timeout:180000});
+      await page.locator('[data-ose="session-join"]').first().click();
+      const kscResponse = await ksc;
+      if (kscResponse.status() !== 304) await kscResponse.finished();
+      await page.locator('[data-ose="gpu"][data-ose-textured-scene="ksc"]').waitFor();
+      const vab = page.waitForResponse(r => r.url().endsWith('/assets/vab/vab.glb'), {timeout:180000});
+      await page.locator('[data-ose="ksc-vab"]').first().click();
+      const vabResponse = await vab;
+      if (vabResponse.status() !== 304) await vabResponse.finished();
+      await page.locator('[data-ose="gpu"][data-ose-textured-scene="vab"]').waitFor();
+      // Includes persistent-cache writes and model parsing/upload after the final transfer.
+      await page.waitForFunction(async () => !!(await (await caches.open('ose-large-assets-v1')).match('assets/vab/vab.glb')), {timeout:30000});
+      result = {elapsedMs: performance.now()-start};
+    } else result = await page.evaluate(async () => {
+      const start = performance.now();
+      const models = [];
+      for (const path of ['/assets/ksc/ksc.glb', '/assets/vab/vab.glb']) {
+        const at = performance.now();
+        const response = await fetch(path);
+        if (!response.ok) throw new Error(`${path}: HTTP ${response.status}`);
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        if (String.fromCharCode(...bytes.slice(0,4)) !== 'glTF') throw new Error(`${path}: not a decoded GLB`);
+        models.push({path, decodedBytes: bytes.length, elapsedMs: performance.now() - at});
+      }
+      return {elapsedMs: performance.now() - start, models};
+    });
+    await page.waitForTimeout(100);
+    const sceneRequests = [...requests.values()].filter(r => r.url.endsWith('/ksc/ksc.glb') || r.url.endsWith('/vab/vab.glb'))
+      .map(r => ({...r,wireBytes:records.find(done => done.requestId === r.requestId)?.wireBytes ?? r.headerBytes}));
+    const report = {phase, ...result, wireBytes: sceneRequests.reduce((sum, r) => sum + r.wireBytes, 0), requests: sceneRequests};
+    phases.push(report);
+    console.log(JSON.stringify(report));
+  }
+  fs.writeFileSync(output, JSON.stringify({mbps, addedLatencyMs: 30, base, game, phases}, null, 2));
+} finally { await browser.close(); }

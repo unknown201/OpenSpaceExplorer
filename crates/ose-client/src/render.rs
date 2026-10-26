@@ -424,6 +424,7 @@ pub struct Renderer {
     pending: HashMap<String, ()>,
     inbox: ModelInbox,
     texture_inbox: Rc<RefCell<Vec<PendingTexture>>>,
+    visible_models: crate::asset_queue::Visible,
     lines: HashMap<String, (wgpu::Buffer, u32)>,
     view_proj: DMat4,
     /// Meshes (by glTF mesh name) left out of a model for the next frame only, see `hide_meshes`.
@@ -844,6 +845,7 @@ impl Renderer {
             pending: HashMap::new(),
             inbox: Rc::new(RefCell::new(Vec::new())),
             texture_inbox: Rc::new(RefCell::new(Vec::new())),
+            visible_models: Rc::default(),
             lines: HashMap::new(),
             view_proj: DMat4::IDENTITY,
             hidden: HashMap::new(),
@@ -963,6 +965,15 @@ impl Renderer {
         self.pending.len()
     }
 
+    /// A visible scene has its initial material previews; full-resolution upgrades may continue.
+    pub fn model_textured(&self, name: &str) -> bool {
+        self.visible_models.borrow().contains(name)
+            && self
+                .models
+                .get(name)
+                .is_some_and(|model| model.textures.iter().all(Option::is_some))
+    }
+
     pub fn has_model(&self, name: &str) -> bool {
         self.models.contains_key(name)
     }
@@ -1055,20 +1066,47 @@ impl Renderer {
             let primitives = cpu.primitives.clone();
             let mesh_names = cpu.mesh_names.clone();
             let textures = vec![None; cpu.image_uris.len()];
+            let remaining = Rc::new(std::cell::Cell::new(cpu.image_uris.len()));
             for (i, uri) in cpu.image_uris.iter().enumerate() {
                 let url = resolve_uri(asset_base, uri);
                 let inbox = self.texture_inbox.clone();
                 let model = name.clone();
                 let linear = cpu.image_linear.get(i).copied().unwrap_or(false);
+                let visible = self.visible_models.clone();
+                let remaining = remaining.clone();
                 wasm_bindgen_futures::spawn_local(async move {
-                    match fetch_bitmap(&url).await {
-                        Ok(bitmap) => inbox.borrow_mut().push(PendingTexture {
-                            model,
-                            index: i,
-                            bitmap,
-                            linear,
-                        }),
-                        Err(e) => log(&format!("texture {url}: {e}")),
+                    let permit =
+                        crate::asset_queue::texture(&visible, &model, false, &remaining).await;
+                    let preview = fetch_model_preview(&url).await;
+                    remaining.set(remaining.get() - 1);
+                    drop(permit);
+                    let upgrade = match preview {
+                        Ok((bitmap, upgrade)) => {
+                            inbox.borrow_mut().push(PendingTexture {
+                                model: model.clone(),
+                                index: i,
+                                bitmap,
+                                linear,
+                            });
+                            upgrade
+                        }
+                        Err(e) => {
+                            log(&format!("texture {url}: {e}"));
+                            false
+                        }
+                    };
+                    if upgrade {
+                        let _permit =
+                            crate::asset_queue::texture(&visible, &model, true, &remaining).await;
+                        match fetch_bitmap(&url).await {
+                            Ok(bitmap) => inbox.borrow_mut().push(PendingTexture {
+                                model,
+                                index: i,
+                                bitmap,
+                                linear,
+                            }),
+                            Err(e) => log(&format!("texture upgrade {url}: {e}")),
+                        }
                     }
                 });
             }
@@ -1337,6 +1375,11 @@ impl Renderer {
             engines,
             extra,
         } = effects;
+        let visible: std::collections::HashSet<_> = items.iter().map(|i| i.model.clone()).collect();
+        if *self.visible_models.borrow() != visible {
+            *self.visible_models.borrow_mut() = visible;
+            crate::asset_queue::wake();
+        }
         self.drain_inbox(asset_base);
         self.engine_fx.prepare(
             &self.device,
@@ -1807,6 +1850,10 @@ fn resolve_uri(base: &str, uri: &str) -> String {
 }
 
 pub(crate) async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
+    crate::asset_cache::bytes(url).await
+}
+
+async fn image_response(url: &str) -> Result<web_sys::Response, String> {
     let window = web_sys::window().ok_or("no window")?;
     let resp = wasm_bindgen_futures::JsFuture::from(window.fetch_with_str(url))
         .await
@@ -1815,22 +1862,32 @@ pub(crate) async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     if !resp.ok() {
         return Err(format!("HTTP {}", resp.status()));
     }
-    let buf =
-        wasm_bindgen_futures::JsFuture::from(resp.array_buffer().map_err(|e| format!("{e:?}"))?)
-            .await
-            .map_err(|e| format!("{e:?}"))?;
-    Ok(js_sys::Uint8Array::new(&buf).to_vec())
+    Ok(resp)
+}
+
+async fn fetch_model_preview(url: &str) -> Result<(web_sys::ImageBitmap, bool), String> {
+    let preview_url = if url.starts_with("assets/textures/") && url.ends_with(".png") {
+        format!("{url}?preview=1")
+    } else {
+        url.to_owned()
+    };
+    let response = image_response(&preview_url).await?;
+    let upgrade = response
+        .headers()
+        .get("x-ose-preview")
+        .ok()
+        .flatten()
+        .as_deref()
+        == Some("1");
+    Ok((bitmap_response(response).await?, upgrade))
 }
 
 pub(crate) async fn fetch_bitmap(url: &str) -> Result<web_sys::ImageBitmap, String> {
+    bitmap_response(image_response(url).await?).await
+}
+
+async fn bitmap_response(resp: web_sys::Response) -> Result<web_sys::ImageBitmap, String> {
     let window = web_sys::window().ok_or("no window")?;
-    let resp = wasm_bindgen_futures::JsFuture::from(window.fetch_with_str(url))
-        .await
-        .map_err(|e| format!("{e:?}"))?;
-    let resp: web_sys::Response = resp.dyn_into().map_err(|_| "not a response")?;
-    if !resp.ok() {
-        return Err(format!("HTTP {}", resp.status()));
-    }
     let blob = wasm_bindgen_futures::JsFuture::from(resp.blob().map_err(|e| format!("{e:?}"))?)
         .await
         .map_err(|e| format!("{e:?}"))?;

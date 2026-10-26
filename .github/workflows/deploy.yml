@@ -42,12 +42,15 @@ jobs:
         run: cargo build --release -p ose-server --target x86_64-unknown-linux-musl
       - name: Build web client
         run: cd crates/ose-client && trunk build --release --dist ../../target/web
+      - name: Precompress web client
+        run: python3 tools/precompress.py target/web
       - name: Package release
         run: |
           rel=target/release-pkg
           mkdir -p "$rel/web"
           cp target/x86_64-unknown-linux-musl/release/ose-server "$rel/"
           cp target/web/index.html target/web/*.wasm target/web/*.js "$rel/web/"
+          cp target/web/*.gz "$rel/web/"
           cp deploy/ose.service deploy/install.sh "$rel/"
           tar --owner=0 --group=0 -czf ose-release.tar.gz -C "$rel" .
           ls -la ose-release.tar.gz

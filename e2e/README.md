@@ -1,5 +1,9 @@
 # Browser end-to-end tests
 
+For cold/warm remote-loading profiles and the cache/preview regression tests, see
+[loading performance](../docs/loading-performance.md), `scripts/profile-loading.mjs` and
+`tests/asset_loading.spec.ts`.
+
 For repeatable pad/ascent CPU profiles and GPU pass isolation, see
 [ascent performance](../docs/ascent-performance.md) and `scripts/profile-ascent.mjs`.
 
