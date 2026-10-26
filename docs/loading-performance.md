@@ -24,6 +24,19 @@ The loading path now:
   binary pack request when its description is absent.
 - Enables the Campaign button and pilot-name input only once their handlers are ready, so a quick
   interaction during startup cannot silently disappear while the rest of the client initializes.
+- Prefetches compressed KSC/VAB models and their small material previews as soon as WebGPU is ready
+  on the main menu. Name entry and the campaign browser remain interactive. One background model or
+  four small previews run at once; cosmetic full-resolution menu upgrades wait until prewarming ends.
+  Entering a campaign stops new background work. A foreground scene shares an active transfer and
+  promotes its queue priority, or consumes an already downloaded buffer without a second request.
+- Holds prefetched ArrayBuffers in a separate 128 MiB memory budget, including when browser storage
+  is blocked. Only the GLB JSON image list is read in the menu; geometry parsing/GPU uploads wait for
+  the scene to open. Persistent models still revalidate on the next navigation. Small source images
+  served without a preview marker also warm correctly; older servers returning large originals stop
+  further background image batches.
+
+Software WebGPU adapters use readable RGBA uploads for scene materials, avoiding unsupported external
+bitmap imports on headless software adapters. Hardware adapters retain the direct image-copy path.
 
 Full-resolution source images are still fetched and displayed; previews make the scene usable first.
 The runtime fallback works with existing exported assets, so a new game-asset export is not required.
@@ -52,6 +65,15 @@ Prepared model sidecars total about 23.2 MB, versus 105.9 MB of original GLBs. T
 an equal quarter of a shared 30 Mbps uplink, without simulating four separate browsers or link contention.
 Server previews were warm for the final samples. Full-resolution upgrades continue after scene readiness.
 
+With menu prefetching, a new cold browser at 30 Mbps / 30 ms spent 20.65 s preparing scenes in the menu,
+then 0.87 s from joining to textured KSC and 0.90 s from KSC to textured VAB. At 7.5 Mbps / 30 ms, menu
+preparation took 76.64 s, then the transitions took 0.42 s and 0.93 s. Repeated navigations prepared in
+about 1.2 s and both transitions together took 0.56–0.71 s. These samples deliberately wait for all
+prefetches before joining: downloading overlaps player setup rather than disappearing. Joining sooner
+reuses partial progress and leaves remaining scene data to foreground loading. Menu previews and unused
+VAB data can add bytes compared with entering KSC alone; prefetching is a latency tradeoff, not a smaller
+total asset set. These samples use one browser per link budget, not four simultaneous remote clients.
+
 ## Reproduce
 
 Serve a release client and full `assets/web` from a private server. From `e2e`, in PowerShell:
@@ -66,9 +88,14 @@ node scripts/profile-loading.mjs ../target/loading.json
 Unset `OSE_GAME` to measure only the two model transfers. The script records scene response sizes and
 conditional requests; it includes 304 headers even though Chromium does not emit loadingFinished for
 those responses. WebGPU is required for the full scene flow.
+Set `OSE_MENU_WAIT_MS=ready` to measure transitions after background prefetching completes, or use a
+number such as `15000` to simulate time spent choosing a pilot name/campaign. The report separates
+menu time, joining-to-KSC time and KSC-to-VAB time; the default joins immediately.
 
 Validation includes native HTTP tests for gzip round trips, precompressed pass-through, identity/range
 requests, cache headers, preview dimensions, conditional responses and unchanged full-resolution images.
 Browser tests cover persistent cache hits, asset updates, eviction, blocked storage, metadata concurrency
-and preview-to-original upgrades. Headless Firefox's Canvas fallback skips WebGPU-only loading tests;
+and preview-to-original upgrades. They also cover menu warming, joining mid-transfer without duplicate
+downloads, pausing queued background scenes, tiny source images and software material uploads.
+Headless Firefox's Canvas fallback skips WebGPU-only loading tests;
 the regular gameplay tests cover its fallback path.

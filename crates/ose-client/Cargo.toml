@@ -29,6 +29,7 @@ ose-math = { workspace = true }
 glam = "0.34"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+futures-util = "0.3"
 getrandom = { version = "0.3", features = ["wasm_js"] }
 wgpu = "30"
 bytemuck = { version = "1", features = ["derive"] }

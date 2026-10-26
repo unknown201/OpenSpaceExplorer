@@ -389,6 +389,7 @@ pub struct FrameEffects<'a> {
 }
 
 pub struct Renderer {
+    software_adapter: bool,
     device: wgpu::Device,
     queue: wgpu::Queue,
     surface: wgpu::Surface<'static>,
@@ -469,6 +470,7 @@ impl Renderer {
             .await
             .map_err(|e| log(&format!("webgpu device: {e}")))
             .ok()?;
+        let software_adapter = adapter.get_info().device_type == wgpu::DeviceType::Cpu;
         let caps = surface.get_capabilities(&adapter);
         let format = caps
             .formats
@@ -815,6 +817,7 @@ impl Renderer {
             crate::engine_fx_gpu::EngineFxGpu::new(&device, &queue, &depth, &post.snapshot_view);
         let lens_flare = crate::lens_flare::LensFlare::new(&device, &depth);
         Some(Renderer {
+            software_adapter,
             lens_flare,
             flare: std::cell::Cell::new(None),
             device,
@@ -1187,6 +1190,23 @@ impl Renderer {
             view_formats: &[],
         });
         let _ = mips;
+        // Software WebGPU adapters cannot always import a decoded bitmap's backing image. Upload
+        // readable RGBA bytes there; hardware adapters retain the direct GPU-copy path.
+        if self.software_adapter {
+            if let Some(pixels) = bitmap_pixels(bitmap) {
+                self.queue.write_texture(
+                    texture.as_image_copy(),
+                    &pixels,
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(w * 4),
+                        rows_per_image: Some(h),
+                    },
+                    size,
+                );
+                return texture.create_view(&wgpu::TextureViewDescriptor::default());
+            }
+        }
         self.queue.copy_external_image_to_texture(
             &wgpu::CopyExternalImageSourceInfo {
                 source: wgpu::ExternalImageSource::ImageBitmap(bitmap.clone()),
@@ -1831,7 +1851,27 @@ fn perspective_rh(fov_y: f64, aspect: f64, near: f64, _far: f64) -> DMat4 {
     )
 }
 
-fn resolve_uri(base: &str, uri: &str) -> String {
+fn bitmap_pixels(bitmap: &web_sys::ImageBitmap) -> Option<Vec<u8>> {
+    let document = web_sys::window()?.document()?;
+    let canvas: web_sys::HtmlCanvasElement =
+        document.create_element("canvas").ok()?.dyn_into().ok()?;
+    canvas.set_width(bitmap.width());
+    canvas.set_height(bitmap.height());
+    let context: web_sys::CanvasRenderingContext2d =
+        canvas.get_context("2d").ok()??.dyn_into().ok()?;
+    context
+        .draw_image_with_image_bitmap(bitmap, 0.0, 0.0)
+        .ok()?;
+    Some(
+        context
+            .get_image_data(0.0, 0.0, bitmap.width() as f64, bitmap.height() as f64)
+            .ok()?
+            .data()
+            .0,
+    )
+}
+
+pub(crate) fn resolve_uri(base: &str, uri: &str) -> String {
     // GLB images point at "../textures/x.png" relative to assets/parts/ or assets/bodies/.
     if uri.starts_with("http") || uri.starts_with('/') {
         return uri.to_string();
@@ -1871,7 +1911,7 @@ async fn fetch_model_preview(url: &str) -> Result<(web_sys::ImageBitmap, bool), 
     } else {
         url.to_owned()
     };
-    let response = image_response(&preview_url).await?;
+    let response = crate::asset_cache::preview(&preview_url).await?;
     let upgrade = response
         .headers()
         .get("x-ose-preview")

@@ -6,6 +6,8 @@ const base = process.env.OSE_BASE_URL || 'http://127.0.0.1:7788';
 const mbps = Number(process.env.OSE_DOWNLOAD_MBPS || 30);
 const output = process.argv[2] || '../target/loading-profile.json';
 const game = !!process.env.OSE_GAME;
+// "ready" waits for all menu prefetches; a number simulates time spent choosing a name/campaign.
+const menuWait = process.env.OSE_MENU_WAIT_MS || '0';
 const browser = await chromium.launch({channel: 'chromium', args: ['--enable-unsafe-webgpu', '--ignore-gpu-blocklist',
   ...(process.platform === 'win32' ? ['--disable-dawn-features=use_dxc'] : [])]});
 try {
@@ -39,19 +41,18 @@ try {
       await page.locator('body.webgpu').waitFor();
       await page.locator('[data-ose="player-name"]').fill('loading profiler');
       await page.locator('[data-ose="play"]').click();
-      const ksc = page.waitForResponse(r => r.url().endsWith('/assets/ksc/ksc.glb'), {timeout:180000});
+      if (menuWait === 'ready') await page.locator('[data-ose="gpu"][data-ose-preload="ready"]').waitFor();
+      else if (Number(menuWait) > 0) await page.waitForTimeout(Number(menuWait));
+      const joinedAt = performance.now();
       await page.locator('[data-ose="session-join"]').first().click();
-      const kscResponse = await ksc;
-      if (kscResponse.status() !== 304) await kscResponse.finished();
       await page.locator('[data-ose="gpu"][data-ose-textured-scene="ksc"]').waitFor();
-      const vab = page.waitForResponse(r => r.url().endsWith('/assets/vab/vab.glb'), {timeout:180000});
+      const kscAt = performance.now();
       await page.locator('[data-ose="ksc-vab"]').first().click();
-      const vabResponse = await vab;
-      if (vabResponse.status() !== 304) await vabResponse.finished();
       await page.locator('[data-ose="gpu"][data-ose-textured-scene="vab"]').waitFor();
       // Includes persistent-cache writes and model parsing/upload after the final transfer.
       await page.waitForFunction(async () => !!(await (await caches.open('ose-large-assets-v1')).match('assets/vab/vab.glb')), {timeout:30000});
-      result = {elapsedMs: performance.now()-start};
+      result = {elapsedMs: performance.now()-start, menuMs: joinedAt-start,
+        joinToKscMs: kscAt-joinedAt, kscToVabMs: performance.now()-kscAt};
     } else result = await page.evaluate(async () => {
       const start = performance.now();
       const models = [];
@@ -72,5 +73,5 @@ try {
     phases.push(report);
     console.log(JSON.stringify(report));
   }
-  fs.writeFileSync(output, JSON.stringify({mbps, addedLatencyMs: 30, base, game, phases}, null, 2));
+  fs.writeFileSync(output, JSON.stringify({mbps, addedLatencyMs: 30, base, game, menuWait, phases}, null, 2));
 } finally { await browser.close(); }

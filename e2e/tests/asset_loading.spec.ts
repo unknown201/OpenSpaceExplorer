@@ -2,8 +2,12 @@ import { expect, test, type Page } from '@playwright/test';
 
 test.beforeEach(async ({page,baseURL}) => {
   await page.goto(`${baseURL}/health`);
-  const gpu = await page.evaluate(async () => !!(await (navigator as any).gpu?.requestAdapter()));
+  const gpu = await page.evaluate(async () => {
+    try { return !!(await (navigator as any).gpu?.requestAdapter()); } catch { return false; }
+  });
   test.skip(!gpu, 'Scene-loading tests require WebGPU; this browser uses Canvas fallback.');
+  await page.route('**/assets/menu/**', route => route.fulfill({status:404}));
+  await page.route('**/assets/vab/scene.json', route => route.fulfill({status:404}));
   // CI has no exported game install. Keep the loader tests independent of those local assets.
   await page.route('**/assets/ksc/scene.json', route => route.fulfill({json:{file:'ksc/ksc.glb',
     camera:{origin:[0,2,10],look_at:[0,0,0],fov_deg:60},buildings:[]}}));
@@ -12,7 +16,7 @@ test.beforeEach(async ({page,baseURL}) => {
     mask:null,contrast:1,large:[],medium:[],decal_heights:null,decal_alpha:null,decals:[]}}));
 });
 
-function model(revision: number, textured = false): Buffer {
+function model(revision: number, textured = false, extraImages: string[] = []): Buffer {
   const bin = Buffer.alloc(4 * 1024 * 1024);
   [-1,0,0, 1,0,0, 0,1,0].forEach((v,i) => bin.writeFloatLE(v,i*4));
   [0,1,2].forEach((v,i) => bin.writeUInt32LE(v,36+i*4));
@@ -22,7 +26,7 @@ function model(revision: number, textured = false): Buffer {
     accessors:[{bufferView:0,componentType:5126,count:3,type:'VEC3'},
       {bufferView:1,componentType:5125,count:3,type:'SCALAR'}],
     meshes:[{primitives:[{attributes:{POSITION:0},indices:1,...(textured ? {material:0} : {})}]}],
-    ...(textured ? {images:[{uri:'../textures/loading-test.png'}],textures:[{source:0}],
+    ...(textured ? {images:[...extraImages.map(uri => ({uri})),{uri:'../textures/loading-test.png'}],textures:[{source:extraImages.length}],
       materials:[{pbrMetallicRoughness:{baseColorTexture:{index:0}}}]} : {}),
     nodes:[{mesh:0}],scenes:[{nodes:[0]}],scene:0});
   const json = Buffer.from(source.padEnd(Math.ceil(source.length/4)*4,' '));
@@ -34,12 +38,91 @@ function model(revision: number, textured = false): Buffer {
 
 async function join(page: Page, base: string) {
   await page.goto(base);
+  await enterCampaign(page);
+}
+
+async function enterCampaign(page: Page) {
   await expect(page.locator('#status')).toContainText('client loaded');
   await page.locator('[data-ose="player-name"]').fill('loading test');
   await page.locator('[data-ose="play"]').click();
   await page.locator('[data-ose="session-join"]').first().click();
   await expect(page.locator('[data-ose="ksc"]')).toBeVisible();
 }
+
+test('main menu warms both models and previews without blocking setup, even when storage is blocked', async ({page,baseURL}) => {
+  await page.addInitScript(() => Object.defineProperty(window,'caches',{get(){throw new Error('storage blocked');}}));
+  await page.addInitScript(() => {
+    const prototype = (window as any).GPUAdapterInfo?.prototype;
+    if (prototype) Object.defineProperty(prototype,'isFallbackAdapter',{get:() => {
+      (window as any).__softwareInfoReads = ((window as any).__softwareInfoReads || 0) + 1;
+      return true;
+    }});
+  });
+  await page.route('**/assets/vab/scene.json', route => route.fulfill({json:{file:'vab/vab.glb',
+    camera:{origin:[0,2,10],look_at:[0,0,0],fov_deg:60}}}));
+  const models: string[] = [], images: boolean[] = [], errors: string[] = [];
+  page.on('pageerror', e => errors.push(e.message));
+  await page.route('**/assets/{ksc,vab}/*.glb', route => {
+    models.push(route.request().url());
+    return route.fulfill({body:model(1,true,['../textures/loading-small.png']),contentType:'model/gltf-binary'});
+  });
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFUlEQVR4nGMMqDjxn4GBgYEJRIAwACawApOpXK/OAAAAAElFTkSuQmCC','base64');
+  // Already-small source images have no preview marker and must not stop the rest of preloading.
+  let small = 0;
+  await page.route('**/assets/textures/loading-small.png*', route => {
+    small++;
+    return route.fulfill({body:png,contentType:'image/png'});
+  });
+  await page.route('**/assets/textures/loading-test.png*', route => {
+    const preview = route.request().url().endsWith('?preview=1');
+    images.push(preview);
+    return route.fulfill({body:png,contentType:'image/png',headers:preview ? {'x-ose-preview':'1'} : {}});
+  });
+  await page.goto(baseURL!);
+  await page.locator('[data-ose="player-name"]').fill('ready while typing');
+  await expect(page.locator('[data-ose="play"]')).toBeEnabled();
+  await page.locator('[data-ose="play"]').click();
+  await expect(page.locator('[data-ose="session-join"]').first()).toBeVisible();
+  await expect(page.locator('[data-ose="gpu"]')).toHaveAttribute('data-ose-preload','ready');
+  expect(models.length).toBe(2);
+  expect(images).toEqual([true]);
+  expect(small).toBe(1);
+  await page.locator('[data-ose="session-join"]').first().click();
+  await expect(page.locator('[data-ose="gpu"]')).toHaveAttribute('data-ose-textured-scene','ksc');
+  expect(models.length).toBe(2);
+  // Foreground upgrades may now begin; the prefetched preview is reused without a second request.
+  expect(images.filter(Boolean)).toHaveLength(1);
+  await page.locator('[data-ose="ksc-vab"]').first().click();
+  await expect(page.locator('[data-ose="gpu"]')).toHaveAttribute('data-ose-vab-scene','ready');
+  expect(models.length).toBe(2);
+  expect(errors).toEqual([]);
+  expect(await page.evaluate(() => (window as any).__softwareInfoReads || 0)).toBeGreaterThan(0);
+});
+
+test('joining during a menu transfer reuses it and pauses remaining background scenes', async ({page,baseURL}) => {
+  let release!: () => void;
+  const held = new Promise<void>(resolve => {release=resolve;});
+  let downloads=0, vab=0;
+  const errors: string[] = [];
+  page.on('pageerror', e => errors.push(e.message));
+  await page.route('**/assets/ksc/ksc.glb', async route => {
+    downloads++;
+    await held;
+    await route.fulfill({body:model(1),contentType:'model/gltf-binary'});
+  });
+  await page.route('**/assets/vab/scene.json', route => {vab++; return route.fulfill({status:404});});
+  try {
+    await page.goto(baseURL!);
+    await expect.poll(() => downloads).toBe(1);
+    await enterCampaign(page);
+    await expect(page.locator('[data-ose="gpu"]')).toHaveAttribute('data-ose-preload','paused');
+    release();
+    await expect(page.locator('[data-ose="gpu"]')).toHaveAttribute('data-ose-ksc-scene','ready');
+    expect(downloads).toBe(1);
+    expect(vab).toBe(0);
+    expect(errors).toEqual([]);
+  } finally {release();}
+});
 
 test('large assets persist, revalidate and update; cache admission evicts old data', async ({ page, baseURL }) => {
   let revision = 1;

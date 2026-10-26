@@ -52,6 +52,8 @@ pub mod planet_lod;
 #[cfg(target_arch = "wasm32")]
 pub mod planet_preview;
 pub mod planet_scatter;
+#[cfg(target_arch = "wasm32")]
+mod preload;
 pub mod reentry;
 #[cfg(target_arch = "wasm32")]
 mod reentry_gpu;
@@ -10963,6 +10965,7 @@ impl App {
     fn frame(&mut self) {
         #[cfg(target_arch = "wasm32")]
         if let Some(gpu) = &self.gpu {
+            preload::tick(!self.in_session, &self.gpu_canvas);
             let scene = if gpu.model_textured("vab") {
                 "vab"
             } else if gpu.model_textured("ksc") {

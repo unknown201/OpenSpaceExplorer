@@ -1,6 +1,15 @@
 //! Large GLBs/terrain can exceed the browser HTTP cache's per-entry limit. Keep a small persistent
 //! copy and revalidate it with Last-Modified before reuse. Cache failures never prevent normal loading.
+use futures_util::{
+    future::{LocalBoxFuture, Shared},
+    FutureExt,
+};
 use js_sys::Uint8Array;
+use std::{
+    cell::RefCell,
+    collections::{HashMap, VecDeque},
+    rc::Rc,
+};
 use wasm_bindgen::{closure::Closure, JsCast, JsValue};
 use wasm_bindgen_futures::{future_to_promise, JsFuture};
 use web_sys::{Cache, Headers, Request, RequestCache, RequestInit, Response, ResponseInit};
@@ -28,9 +37,18 @@ async fn cached(cache: &Cache, url: &str) -> Option<Response> {
         .ok()
 }
 
-async fn download(url: &str, old: Option<&Response>) -> Result<Response, JsValue> {
+async fn download(
+    url: &str,
+    old: Option<&Response>,
+    background: bool,
+) -> Result<Response, JsValue> {
     let window = web_sys::window().ok_or_else(|| JsValue::from_str("no window"))?;
     let options = RequestInit::new();
+    let _ = js_sys::Reflect::set(
+        &options,
+        &"priority".into(),
+        &if background { "low" } else { "high" }.into(),
+    );
     if let Some(date) = old.and_then(|r| r.headers().get("last-modified").ok().flatten()) {
         let headers = Headers::new()?;
         headers.set("if-modified-since", &date)?;
@@ -118,15 +136,124 @@ async fn store_locked(
     Ok(())
 }
 
+#[derive(Clone)]
+struct Asset {
+    buffer: JsValue,
+    preview: bool,
+}
+type Transfer = Shared<LocalBoxFuture<'static, Result<Asset, String>>>;
+struct Flight {
+    transfer: Transfer,
+    priority: Option<Rc<crate::asset_queue::ModelPriority>>,
+    consumed: Rc<std::cell::Cell<bool>>,
+}
+#[derive(Default)]
+struct Downloads {
+    flights: HashMap<String, Flight>,
+    ready: VecDeque<(String, Asset)>,
+    bytes: usize,
+}
+thread_local! { static DOWNLOADS: RefCell<Downloads> = RefCell::default(); }
+const MENU_BYTES: usize = 128 * 1024 * 1024;
+
+// Keep prefetched ArrayBuffers outside WASM memory. Geometry is parsed only when its scene opens.
+async fn shared(url: &str, background: bool) -> Result<Asset, String> {
+    let ready = DOWNLOADS.with(|downloads| {
+        let mut d = downloads.borrow_mut();
+        let index = d.ready.iter().position(|(key, _)| key == url)?;
+        if background {
+            return Some(d.ready[index].1.clone());
+        }
+        let (_, asset) = d.ready.remove(index)?;
+        d.bytes -= Uint8Array::new(&asset.buffer).length() as usize;
+        Some(asset)
+    });
+    if let Some(asset) = ready {
+        return Ok(asset);
+    }
+    let (transfer, consumed) = DOWNLOADS.with(|downloads| {
+        let mut d = downloads.borrow_mut();
+        let flight = d.flights.entry(url.to_owned()).or_insert_with(|| {
+            let priority = url
+                .ends_with(".glb")
+                .then(|| Rc::new(crate::asset_queue::ModelPriority::new(background)));
+            let path = url.to_owned();
+            Flight {
+                transfer: load(path, background).boxed_local().shared(),
+                priority,
+                consumed: Rc::new(std::cell::Cell::new(false)),
+            }
+        });
+        if !background {
+            flight.consumed.set(true);
+            if let Some(priority) = &flight.priority {
+                priority.promote();
+            }
+        }
+        (flight.transfer.clone(), flight.consumed.clone())
+    });
+    let result = transfer.await;
+    DOWNLOADS.with(|downloads| {
+        let mut d = downloads.borrow_mut();
+        // Another waiter may already have removed this completed transfer.
+        if d.flights
+            .get(url)
+            .is_some_and(|f| Rc::ptr_eq(&f.consumed, &consumed))
+        {
+            d.flights.remove(url);
+            if !consumed.get() {
+                if let Ok(asset) = &result {
+                    let size = Uint8Array::new(&asset.buffer).length() as usize;
+                    if size <= MENU_BYTES {
+                        while d.bytes + size > MENU_BYTES {
+                            if let Some((_, old)) = d.ready.pop_front() {
+                                d.bytes -= Uint8Array::new(&old.buffer).length() as usize;
+                            }
+                        }
+                        d.bytes += size;
+                        d.ready.push_back((url.to_owned(), asset.clone()));
+                    }
+                }
+            }
+        }
+    });
+    result
+}
+
+pub async fn prefetch(url: &str) -> Result<JsValue, String> {
+    Ok(shared(url, true).await?.buffer)
+}
+pub async fn prefetch_preview(url: &str) -> Result<bool, String> {
+    let asset = shared(url, true).await?;
+    // The server returns already-small source images directly, without the preview marker.
+    Ok(asset.preview || Uint8Array::new(&asset.buffer).length() <= 256 * 1024)
+}
 pub async fn bytes(url: &str) -> Result<Vec<u8>, String> {
-    let _priority = url.ends_with(".glb").then(crate::asset_queue::model);
+    Ok(Uint8Array::new(&shared(url, false).await?.buffer).to_vec())
+}
+pub async fn preview(url: &str) -> Result<Response, String> {
+    let asset = shared(url, false).await?;
+    let init = ResponseInit::new();
+    let headers = Headers::new().map_err(|e| format!("{e:?}"))?;
+    if asset.preview {
+        headers
+            .set("x-ose-preview", "1")
+            .map_err(|e| format!("{e:?}"))?;
+    }
+    init.set_headers_headers(&headers);
+    Response::new_with_opt_buffer_source_and_init(Some(asset.buffer.unchecked_ref()), &init)
+        .map_err(|e| format!("{e:?}"))
+}
+
+async fn load(url: String, background: bool) -> Result<Asset, String> {
+    let url = url.as_str();
     let eligible = url.starts_with("assets/") && (url.ends_with(".glb") || url.ends_with(".bin"));
     let cache = if eligible { open().await } else { None };
     let old = match &cache {
         Some(cache) => cached(cache, url).await,
         None => None,
     };
-    let response = download(url, old.as_ref())
+    let response = download(url, old.as_ref(), background)
         .await
         .map_err(|e| format!("{e:?}"))?;
     if response.status() == 304 {
@@ -134,7 +261,10 @@ pub async fn bytes(url: &str) -> Result<Vec<u8>, String> {
             let buffer = JsFuture::from(old.array_buffer().map_err(|e| format!("{e:?}"))?)
                 .await
                 .map_err(|e| format!("{e:?}"))?;
-            return Ok(Uint8Array::new(&buffer).to_vec());
+            return Ok(Asset {
+                buffer,
+                preview: false,
+            });
         }
     }
     if !response.ok() {
@@ -150,5 +280,12 @@ pub async fn bytes(url: &str) -> Result<Vec<u8>, String> {
             let _ = store(&cache, url, &response, &buffer, size).await;
         }
     }
-    Ok(array.to_vec())
+    let preview = response
+        .headers()
+        .get("x-ose-preview")
+        .ok()
+        .flatten()
+        .as_deref()
+        == Some("1");
+    Ok(Asset { buffer, preview })
 }
