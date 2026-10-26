@@ -40,7 +40,7 @@ fn cache(response: &mut axum::response::Response, value: &'static str) {
 
 pub fn assets(dir: PathBuf) -> Router {
     let previews = crate::previews::Previews::new(dir.clone());
-    Router::new()
+    crate::packages::router(dir.clone(), previews.clone())
         .fallback_service(ServeDir::new(dir).precompressed_gzip())
         .layer(axum::middleware::from_fn_with_state(
             previews,
@@ -48,7 +48,9 @@ pub fn assets(dir: PathBuf) -> Router {
         ))
         .layer(axum::middleware::map_response(
             |mut response: axum::response::Response| async move {
-                if response.status().is_success() {
+                if response.status().is_success()
+                    && !response.headers().contains_key(header::CACHE_CONTROL)
+                {
                     cache(&mut response, "public, max-age=86400");
                 }
                 response

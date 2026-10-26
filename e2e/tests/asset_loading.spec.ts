@@ -1,5 +1,8 @@
 import { expect, test, type Page } from '@playwright/test';
 
+// These individual-loader regressions deliberately exercise the fallback without package interception.
+test.use({serviceWorkers:'block'});
+
 test.beforeEach(async ({page,baseURL}) => {
   await page.goto(`${baseURL}/health`);
   const gpu = await page.evaluate(async () => {

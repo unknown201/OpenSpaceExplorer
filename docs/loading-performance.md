@@ -1,5 +1,10 @@
 # Remote loading
 
+Usage-based compressed bundles now group these requests by screen and body, with foreground demand
+and speculative scheduling. See [Assets by usage](asset-packages.md) for package layout, cache bounds,
+fallbacks and the shared-bandwidth profiler. The individual-file path described below remains the
+fallback when packages or service workers are unavailable.
+
 Remote loads were dominated by asset transfer and request ordering. The live server sent the KSC GLB
 as 58,028,812 uncompressed bytes; the VAB GLB was another 47,848,500 bytes. Their material lists also
 reference 151 MiB and 32 MiB of PNG textures. Launching every texture fetch at once queued later scene

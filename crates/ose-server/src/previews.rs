@@ -40,7 +40,12 @@ impl Previews {
             cache: Mutex::default(),
         }))
     }
-    async fn get(&self, path: PathBuf, modified: SystemTime, size: u64) -> Option<Bytes> {
+    pub(crate) async fn get(
+        &self,
+        path: PathBuf,
+        modified: SystemTime,
+        size: u64,
+    ) -> Option<Bytes> {
         {
             let cache = self.0.cache.lock().ok()?;
             if let Some(entry) = cache

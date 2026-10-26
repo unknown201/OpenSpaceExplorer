@@ -8,10 +8,54 @@ use wasm_bindgen_futures::JsFuture;
 struct State {
     busy: bool,
     done: bool,
+    packages: Option<bool>,
+    checking: bool,
+    usage: String,
 }
 thread_local! { static STATE: RefCell<State> = RefCell::default(); }
 
-pub fn tick(menu: bool, canvas: &web_sys::HtmlCanvasElement) {
+pub fn tick(menu: bool, usage: &str, canvas: &web_sys::HtmlCanvasElement) {
+    let (packages, check) = STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        let check = state.packages.is_none() && !state.checking;
+        if check {
+            state.checking = true;
+        }
+        (state.packages, check)
+    });
+    if check {
+        wasm_bindgen_futures::spawn_local(async {
+            let supported = package_ready().await;
+            STATE.with(|state| state.borrow_mut().packages = Some(supported));
+        });
+    }
+    if packages.is_none() {
+        return;
+    }
+    if packages == Some(true) {
+        let changed = STATE.with(|state| {
+            let mut state = state.borrow_mut();
+            if state.usage == usage {
+                false
+            } else {
+                state.usage = usage.into();
+                true
+            }
+        });
+        if changed {
+            if let Some(api) = package_api() {
+                if let Ok(function) = js_sys::Reflect::get(&api, &"prioritize".into())
+                    .and_then(|v| v.dyn_into::<js_sys::Function>())
+                {
+                    let _ = function.call1(&api, &usage.into());
+                }
+            }
+        }
+        crate::asset_queue::warming(
+            menu && canvas.get_attribute("data-ose-preload").as_deref() == Some("loading"),
+        );
+        return;
+    }
     let (start, done) = STATE.with(|state| {
         let mut state = state.borrow_mut();
         let start = menu && !state.busy && !state.done;
@@ -41,6 +85,27 @@ pub fn tick(menu: bool, canvas: &web_sys::HtmlCanvasElement) {
             });
         });
     }
+}
+
+fn package_api() -> Option<wasm_bindgen::JsValue> {
+    js_sys::Reflect::get(&web_sys::window()?.into(), &"oseAssetPackages".into())
+        .ok()
+        .filter(|v| !v.is_undefined())
+}
+async fn package_ready() -> bool {
+    let Some(api) = package_api() else {
+        return false;
+    };
+    let Ok(promise) =
+        js_sys::Reflect::get(&api, &"ready".into()).and_then(|v| v.dyn_into::<js_sys::Promise>())
+    else {
+        return false;
+    };
+    JsFuture::from(promise)
+        .await
+        .ok()
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
 }
 
 async fn warm() -> bool {

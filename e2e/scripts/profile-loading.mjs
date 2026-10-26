@@ -2,20 +2,25 @@
 // OSE_BASE_URL=http://127.0.0.1:PORT OSE_DOWNLOAD_MBPS=7.5 node scripts/profile-loading.mjs output.json
 import { chromium } from 'playwright';
 import fs from 'node:fs';
-const base = process.env.OSE_BASE_URL || 'http://127.0.0.1:7788';
+import {networkProxy} from './network-proxy.mjs';
+const upstream = process.env.OSE_BASE_URL || 'http://127.0.0.1:7788';
 const mbps = Number(process.env.OSE_DOWNLOAD_MBPS || 30);
 const output = process.argv[2] || '../target/loading-profile.json';
 const game = !!process.env.OSE_GAME;
 // "ready" waits for all menu prefetches; a number simulates time spent choosing a name/campaign.
 const menuWait = process.env.OSE_MENU_WAIT_MS || '0';
+const proxy = game ? await networkProxy(upstream,mbps,30) : null;
+const base = proxy?.base || upstream;
 const browser = await chromium.launch({channel: 'chromium', args: ['--enable-unsafe-webgpu', '--ignore-gpu-blocklist',
   ...(process.platform === 'win32' ? ['--disable-dawn-features=use_dxc'] : [])]});
 try {
-  const page = await browser.newPage();
+  const page = await browser.newPage({serviceWorkers:process.env.OSE_PACKAGES === '0' ? 'block' : 'allow'});
+  // Keep the menu's randomly selected stock craft identical between transport comparisons.
+  await page.addInitScript(() => {Math.random = () => 0.5;});
   page.setDefaultTimeout(180000);
   const cdp = await page.context().newCDPSession(page);
   await cdp.send('Network.enable');
-  await cdp.send('Network.emulateNetworkConditions', {
+  if (!proxy) await cdp.send('Network.emulateNetworkConditions', {
     offline: false, latency: 30, downloadThroughput: mbps * 1e6 / 8, uploadThroughput: mbps * 1e6 / 8,
   });
   const requests = new Map();
@@ -32,6 +37,8 @@ try {
   await page.goto(`${base}/health`);
   const phases = [];
   for (const phase of ['cold', 'warm']) {
+    const startBytes=proxy?.transferredBytes || 0;
+    for (const worker of page.context().serviceWorkers()) await worker.evaluate(() => performance.clearResourceTimings()).catch(() => {});
     records.length = 0;
     requests.clear();
     let result;
@@ -50,7 +57,12 @@ try {
       await page.locator('[data-ose="ksc-vab"]').first().click();
       await page.locator('[data-ose="gpu"][data-ose-textured-scene="vab"]').waitFor();
       // Includes persistent-cache writes and model parsing/upload after the final transfer.
-      await page.waitForFunction(async () => !!(await (await caches.open('ose-large-assets-v1')).match('assets/vab/vab.glb')), {timeout:30000});
+      await page.waitForFunction(async () => {
+        for (const name of ['ose-large-assets-v1','ose-usage-assets-v1']) {
+          if (await (await caches.open(name)).match('assets/vab/vab.glb')) return true;
+        }
+        return false;
+      }, undefined, {timeout:30000});
       result = {elapsedMs: performance.now()-start, menuMs: joinedAt-start,
         joinToKscMs: kscAt-joinedAt, kscToVabMs: performance.now()-kscAt};
     } else result = await page.evaluate(async () => {
@@ -69,9 +81,18 @@ try {
     await page.waitForTimeout(100);
     const sceneRequests = [...requests.values()].filter(r => r.url.endsWith('/ksc/ksc.glb') || r.url.endsWith('/vab/vab.glb'))
       .map(r => ({...r,wireBytes:records.find(done => done.requestId === r.requestId)?.wireBytes ?? r.headerBytes}));
-    const report = {phase, ...result, wireBytes: sceneRequests.reduce((sum, r) => sum + r.wireBytes, 0), requests: sceneRequests};
+    const packages = (await Promise.all(page.context().serviceWorkers().map(worker => worker.evaluate(() =>
+      performance.getEntriesByType('resource').filter(e => /\/assets\/packages\//.test(e.name)).map(e => {
+        const r=e;
+        return {url:r.name,wireBytes:r.transferSize,encodedBodyBytes:r.encodedBodySize,elapsedMs:r.duration};
+      })).catch(() => [])))).flat();
+    const report = {phase, ...result, wireBytes: sceneRequests.reduce((sum, r) => sum + r.wireBytes, 0),
+      httpBodyBytes:proxy ? proxy.transferredBytes-startBytes : undefined, requests: sceneRequests, packages};
     phases.push(report);
     console.log(JSON.stringify(report));
+    // Stop speculative work before the next sample; persistent member caches survive worker restart.
+    if (proxy) {await cdp.send('ServiceWorker.enable'); await cdp.send('ServiceWorker.stopAllWorkers');}
   }
-  fs.writeFileSync(output, JSON.stringify({mbps, addedLatencyMs: 30, base, game, menuWait, phases}, null, 2));
-} finally { await browser.close(); }
+  fs.writeFileSync(output, JSON.stringify({mbps, addedLatencyMs: 30, base:upstream, game, menuWait,
+    sharedHttpBudget:!!proxy, packagesEnabled:process.env.OSE_PACKAGES !== '0', phases}, null, 2));
+} finally { await browser.close(); await proxy?.close(); }

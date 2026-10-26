@@ -12,6 +12,7 @@
 mod accounts;
 mod campaigns;
 mod crew_docking;
+mod packages;
 mod previews;
 mod save;
 mod science;

@@ -10965,7 +10965,35 @@ impl App {
     fn frame(&mut self) {
         #[cfg(target_arch = "wasm32")]
         if let Some(gpu) = &self.gpu {
-            preload::tick(!self.in_session, &self.gpu_canvas);
+            let usage = if let Some(preview) = &self.planet_preview {
+                format!("planet-{}", preview.body)
+            } else if !self.in_session {
+                "menu".into()
+            } else if self.flight_active() {
+                self.scene
+                    .as_ref()
+                    .and_then(|scene| {
+                        let v = scene.vessel(self.flying?)?;
+                        Some(format!(
+                            "planet-{}",
+                            scene.bodies.get(v.reference_body as usize)?.id
+                        ))
+                    })
+                    .unwrap_or_else(|| "flight-shared".into())
+            } else if self.vab_active() {
+                "vab".into()
+            } else if self.screen_open("mission") {
+                "mission-control".into()
+            } else if self.ksc_active() || self.launchpad_active() {
+                "ksc".into()
+            } else {
+                "core".into()
+            };
+            preload::tick(
+                !self.in_session && self.planet_preview.is_none(),
+                &usage,
+                &self.gpu_canvas,
+            );
             let scene = if gpu.model_textured("vab") {
                 "vab"
             } else if gpu.model_textured("ksc") {

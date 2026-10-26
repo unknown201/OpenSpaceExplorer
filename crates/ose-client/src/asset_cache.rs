@@ -275,7 +275,12 @@ async fn load(url: String, background: bool) -> Result<Asset, String> {
         .map_err(|e| format!("{e:?}"))?;
     let array = Uint8Array::new(&buffer);
     let size = array.length() as usize;
-    if (MIN_ENTRY..=MAX_ENTRY).contains(&size) {
+    if response.headers().has("x-ose-package").unwrap_or(false) {
+        // The service worker already persists each versioned package member. Avoid a second large copy.
+        if let Some(cache) = &cache {
+            let _ = JsFuture::from(cache.delete_with_str(url)).await;
+        }
+    } else if (MIN_ENTRY..=MAX_ENTRY).contains(&size) {
         if let Some(cache) = cache {
             let _ = store(&cache, url, &response, &buffer, size).await;
         }
