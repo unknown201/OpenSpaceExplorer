@@ -841,6 +841,10 @@ fn start_webgpu(app: Shared) {
         .map(|v| !v.is_undefined() && !v.is_null())
         .unwrap_or(false);
     if !has_gpu {
+        app.borrow()
+            .gpu_canvas
+            .set_attribute("data-ose-menu-scene", "static")
+            .ok();
         log("no navigator.gpu: staying on the 2D map");
         return;
     }
@@ -859,7 +863,13 @@ fn start_webgpu(app: Shared) {
                 a.resize();
                 log("webgpu renderer ready");
             }
-            None => log("webgpu unavailable: staying on the 2D map"),
+            None => {
+                app.borrow()
+                    .gpu_canvas
+                    .set_attribute("data-ose-menu-scene", "static")
+                    .ok();
+                log("webgpu unavailable: staying on the 2D map");
+            }
         }
     });
 }
@@ -5618,6 +5628,22 @@ impl App {
 
     /// Show one of the menu screens: "name", "sessions" or "paused".
     fn menu_screen(&self, which: &str) {
+        #[cfg(target_arch = "wasm32")]
+        if matches!(which, "name" | "sessions")
+            && !self.screen_open("name")
+            && !self.screen_open("sessions")
+        {
+            self.gpu_canvas
+                .set_attribute(
+                    "data-ose-menu-scene",
+                    if self.gpu.is_some() {
+                        "loading"
+                    } else {
+                        "static"
+                    },
+                )
+                .ok();
+        }
         for id in [
             "name",
             "sessions",
@@ -11163,6 +11189,23 @@ impl App {
                             .set_attribute("data-ose-menu-vessel", v)
                             .ok();
                     }
+                }
+                let presentation = if self.menu3d.presentation_ready(gpu) {
+                    "ready"
+                } else if self.menu3d.unavailable() {
+                    "static"
+                } else {
+                    "loading"
+                };
+                if self
+                    .gpu_canvas
+                    .get_attribute("data-ose-menu-scene")
+                    .as_deref()
+                    != Some(presentation)
+                {
+                    self.gpu_canvas
+                        .set_attribute("data-ose-menu-scene", presentation)
+                        .ok();
                 }
                 return;
             }

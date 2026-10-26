@@ -8,7 +8,7 @@ after 30 seconds; browser startup also refreshes its catalog.
 
 | Usage | Contents | Speculative next usage |
 | --- | --- | --- |
-| Main menu | Common UI, KSC, then VAB | No planet surfaces |
+| Main menu | Common UI, menu backdrop, then KSC and VAB | No planet surfaces |
 | Mission control | Common UI; mission data already comes over the game protocol | VAB, then KSC |
 | KSC / launchpad | Campus metadata, model and small material previews | VAB |
 | VAB | Interior metadata, model and previews | Kerbin's essential flight assets |
@@ -33,11 +33,24 @@ assets occupy separate chunks, so a metadata request cannot inadvertently pull i
 detail layer. Server gzip uses level 6; the outer fast-compression fallback does not encode it again.
 Completed encoded bundles share a 96 MiB server cache, with a 32 MiB capture limit per building
 bundle. An aborted or failed stream is never admitted. The existing 32 MiB preview cache is separate.
-The server prepares common UI, shared material, KSC and VAB bundles in a background task at startup,
+The server prepares common UI, shared material, menu, KSC and VAB bundles in a background task at startup,
 without using a player's download link. Other bundles are prepared when first requested. A player
 arriving during preparation can still stream a demanded bundle; server startup never waits for it.
 
 ## Browser scheduling and caching
+
+The menu's first paint includes a static vector planet/starfield and a fallback wordmark in the HTML,
+adding about 1.5 KiB gzip in the local build. No image request, JavaScript execution or exported game
+asset is required to display it. The package bootstrap is deferred so a slow script download cannot
+block that paint. Pilot-name entry and campaign selection become usable independently of scenery.
+
+The sky, menu planet, clouds and their material previews form a `menu` package, prioritized ahead of
+speculative KSC/VAB transfers. The selected craft reuses its ordinary part assets on demand; unselected
+menu vessels are not downloaded. A separate presentation-ready check waits for every drawn backdrop
+layer and active selected-craft part to have its initial material previews, then fades the static
+artwork out over 650 ms. Full-resolution upgrades continue normally. Reduced-motion users get an
+immediate handoff. With no WebGPU or no exported menu scene, the static artwork remains; it is hidden
+when entering a campaign so it never covers the game.
 
 An early bootstrap registers a service worker on HTTPS/localhost. Once WebGPU is ready, the client
 reports its current screen or flight body's ID. The worker queues the active usage ahead of likely

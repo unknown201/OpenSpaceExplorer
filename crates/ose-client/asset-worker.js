@@ -177,7 +177,7 @@ function ensure(chunk, priority, urgent = false) {
 }
 async function warm(usage) {
   const index = await manifest();
-  const order = usage === 'menu' ? [['core',90],['ksc',30],['vab',10]]
+  const order = usage === 'menu' ? [['core',90],['menu',80],['ksc',30],['vab',10]]
     : usage === 'mission-control' ? [['mission-control',90],['vab',20],['ksc',10]]
     : usage === 'vab' ? [['vab',90],['planet-Kerbin',10]]
     : usage === 'ksc' ? [['ksc',90],['vab',10]] : [[usage,90]];

@@ -22,11 +22,12 @@ function catalog() {
   const group = (id:string, optional:string[] = []) => ({depends:id === 'core' ? [] : ['core'],
     chunks:[`${id}-0`,...optional],prefetch:[`${id}-0`]});
   return {version:1,chunks,groups:{core:group('core'),'mission-control':group('mission-control'),
-    ksc:group('ksc'),vab:group('vab'),'planet-Mun':group('planet-Mun',['planet-Mun-1'])}};
+    menu:group('menu'),ksc:group('ksc'),vab:group('vab'),'planet-Mun':group('planet-Mun',['planet-Mun-1'])}};
 }
 test.beforeEach(async () => {
   entries = {
     'core-0':[entry('ui/core.png','core')],
+    'menu-0':[entry('menu/scene.json','menu backdrop')],
     'mission-control-0':[entry('ui/mission.json','mission control')],
     'ksc-0':[entry('ksc/scene.json','KSC metadata'),entry('ksc/ksc.glb','KSC geometry')],
     'vab-0':[entry('vab/scene.json','VAB metadata'),entry('vab/vab.glb',model)],
@@ -112,6 +113,11 @@ test('mission control warms before VAB; both survive reload without redownloadin
   await warm(page,'mission-control');
   expect(requested).toHaveLength(4);
   expect((await asset(page,'vab/vab.glb')).size).toBe(model.length);
+});
+
+test('main menu scenery takes priority over speculative campus and VAB packages', async ({page}) => {
+  await open(page);await warm(page,'menu');
+  expect(requested).toEqual(['core-0','menu-0','ksc-0','vab-0']);
 });
 
 test('selecting the Mun loads its essential package; surface detail is requested only when used', async ({page}) => {

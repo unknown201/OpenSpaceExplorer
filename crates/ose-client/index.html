@@ -7,7 +7,7 @@
   <link data-trunk rel="rust" />
   <link data-trunk rel="copy-file" href="asset-worker.js" />
   <link data-trunk rel="copy-file" href="asset-packages.js" />
-  <script src="asset-packages.js"></script>
+  <script src="asset-packages.js" defer></script>
   <style>
     html, body { margin: 0; height: 100%; overflow: hidden; background: #06080f; color: #cfd6e6;
       font: 14px system-ui, sans-serif; }
@@ -15,6 +15,15 @@
     #gpu { position: fixed; inset: 0; width: 100%; height: 100%; display: none; cursor: grab; }
     body.webgpu #gpu { display: block; } body.webgpu #map { display: none; }
     #map.dragging { cursor: grabbing; }
+    /* First paint is complete HTML artwork, independent of JavaScript, exported assets or WebGPU. */
+    #menu-poster { position: fixed; inset: 0; z-index: 1; pointer-events: none; display: none; background: #06080f; opacity: 1; }
+    #menu-poster svg { display: block; width: 100%; height: 100%; }
+    body:has(#menu:not(.hidden) #screen-name.open) #menu-poster,
+    body:has(#menu:not(.hidden) #screen-sessions.open) #menu-poster { display: block; transition: opacity .65s ease; }
+    body:has(#gpu[data-ose-menu-scene="ready"]) #menu-poster { opacity: 0; }
+    #menu-poster .poster-status { position: absolute; right: max(24px, 4vw); bottom: max(60px, 8vh); color: #b5c4d5; font: 13px system-ui, sans-serif; letter-spacing: .06em; }
+    body:has(#gpu[data-ose-menu-scene="static"]) #menu-poster .poster-status { display: none; }
+    @media (prefers-reduced-motion: reduce) { body #menu-poster, body #logo img, body #logo .logo-title { transition: none !important; } }
     #labels { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
     #labels .body { position: absolute; transform: translate(8px, -50%); white-space: nowrap;
       font-size: 12px; color: #9fb0cc; text-shadow: 0 0 3px #000; pointer-events: auto; cursor: pointer; }
@@ -179,7 +188,10 @@
     #menu-card:has(#screen-name.open) > .note, #menu-card:has(#screen-sessions.open) > .note { position: fixed; left: calc(80 * var(--u)); bottom: calc(60 * var(--u)); font-size: calc(16 * var(--u)); }
     #menu #screen-name.open { display: block; position: fixed; inset: 0; }
     #logo { position: absolute; left: calc(80 * var(--u)); top: calc(60 * var(--u)); width: calc(485 * var(--u)); height: calc(200 * var(--u));
-      background: url(assets/ui/sno_logo-wht_red_2x.png) left top / contain no-repeat; }
+      color: #e6edf5; }
+    #logo .logo-title { position: absolute; inset: 0; font: 600 calc(46 * var(--u))/1.12 system-ui, sans-serif; letter-spacing: .025em; transition: opacity .25s ease; }
+    #logo img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; object-position: left top; opacity: 0; transition: opacity .25s ease; }
+    #logo.logo-ready .logo-title { opacity: 0; visibility: hidden; } #logo.logo-ready img { opacity: 1; }
     #logo span { position: absolute; left: 0; bottom: calc(-26 * var(--u)); font-size: calc(18 * var(--u)); letter-spacing: 0.35em; text-transform: uppercase; color: #cfd6e6cc; white-space: nowrap; }
     #main-items { position: absolute; left: calc(80 * var(--u)); top: calc(279 * var(--u)); display: flex; flex-direction: column; gap: calc(32 * var(--u)); margin: 0; padding: 0; list-style: none; }
     #main-items button { margin: 0; width: calc(400 * var(--u)); height: calc(36 * var(--u)); padding: 0 0 0 calc(10 * var(--u)); text-align: left;
@@ -928,8 +940,40 @@
   </style>
 </head>
 <body>
-  <canvas id="gpu" data-ose="gpu"></canvas>
+  <canvas id="gpu" data-ose="gpu" data-ose-menu-scene="loading"></canvas>
   <canvas id="map"></canvas>
+  <div id="menu-poster" data-ose="menu-poster" aria-hidden="true">
+    <svg viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <radialGradient id="poster-space"><stop stop-color="#13243c"/><stop offset="1" stop-color="#050810"/></radialGradient>
+        <radialGradient id="poster-ocean" cx=".23" cy=".22" r=".85"><stop stop-color="#6793a9"/><stop offset=".32" stop-color="#244f6c"/><stop offset=".7" stop-color="#0c243e"/><stop offset="1" stop-color="#060b16"/></radialGradient>
+        <linearGradient id="poster-night"><stop stop-color="#02050b" stop-opacity="0"/><stop offset=".48" stop-color="#02050b" stop-opacity=".12"/><stop offset=".8" stop-color="#02050b" stop-opacity=".86"/><stop offset="1" stop-color="#02050b"/></linearGradient>
+        <linearGradient id="poster-edge"><stop stop-color="#a8d9e4" stop-opacity=".8"/><stop offset=".48" stop-color="#457392" stop-opacity=".3"/><stop offset="1" stop-color="#06101e" stop-opacity="0"/></linearGradient>
+        <linearGradient id="poster-left"><stop stop-color="#06080f"/><stop offset=".42" stop-color="#06080f" stop-opacity=".72"/><stop offset="1" stop-color="#06080f" stop-opacity="0"/></linearGradient>
+        <clipPath id="poster-disc"><circle cx="1420" cy="740" r="555"/></clipPath>
+        <pattern id="poster-stars" width="373" height="281" patternUnits="userSpaceOnUse">
+          <g fill="#d1dfeb"><circle cx="24" cy="42" r=".9" opacity=".65"/><circle cx="166" cy="19" r=".6" opacity=".35"/><circle cx="329" cy="72" r="1.2" opacity=".55"/><circle cx="106" cy="173" r=".8" opacity=".45"/><circle cx="279" cy="240" r=".7" opacity=".5"/><circle cx="219" cy="124" r=".5" opacity=".3"/></g>
+        </pattern>
+      </defs>
+      <path fill="url(#poster-space)" d="M0 0h1920v1080H0z"/><path fill="url(#poster-stars)" d="M0 0h1920v1080H0z"/>
+      <circle cx="1420" cy="740" r="561" fill="none" stroke="url(#poster-edge)" stroke-width="10"/>
+      <circle cx="1420" cy="740" r="555" fill="url(#poster-ocean)"/>
+      <g clip-path="url(#poster-disc)">
+        <g fill="#6a8b7a" opacity=".63">
+          <path d="m1030 284 102-37 83 32 52 66-31 38 44 54-33 64-77-9-38 83-65 18-58-71-52-18-37-85 18-62z"/>
+          <path d="m1148 560 79-29 68 49 16 64 59 35-20 78-52 48-14 98-58 80-39-26 14-79-39-78 16-67-62-48z"/>
+          <path d="m1514 330 103 13 56 75 117 29 41 71-53 58-79-21-41 38-47-27-32-81-53-31-30-62z"/>
+        </g>
+        <g fill="none" stroke="#e1edf0" stroke-linecap="round" opacity=".27">
+          <path d="M920 470q170-111 353-36t281 9" stroke-width="16"/><path d="M936 514q168-84 278-28m123 28q101 36 188 9" stroke-width="7"/>
+          <path d="M1050 728q107-57 226-8t222 23" stroke-width="12"/><path d="M1234 263q144 22 260 77" stroke-width="9"/>
+        </g>
+        <path fill="url(#poster-night)" d="M850 180h1120v1120H850z"/>
+      </g>
+      <path fill="url(#poster-left)" d="M0 0h1920v1080H0z"/>
+    </svg>
+    <span class="poster-status">Preparing scenery…</span>
+  </div>
   <div id="labels"></div>
   <div id="hud">
     <span id="ut" data-ose="ut" title="Universal time">UT --</span>
@@ -953,7 +997,7 @@
       <h1>OpenSpaceExplorer</h1>
       <div class="sub">a shared Kerbol system, played in the browser</div>
       <div class="screen open" id="screen-name" data-ose="menu-name">
-        <div id="logo" title="Kerbal Space Program 2, in the browser"></div>
+        <div id="logo" title="Kerbal Space Program 2, in the browser"><div class="logo-title">OPENSPACE<br />EXPLORER</div><img src="assets/ui/sno_logo-wht_red_2x.png" alt="Kerbal Space Program 2" fetchpriority="high" onload="this.parentElement.classList.add('logo-ready')" onerror="this.remove()" /></div>
         <ul id="main-items">
           <li><button id="play" data-ose="play" disabled>Campaign</button></li>
           <li><button id="main-settings" data-ose="main-settings" data-open-settings title="Controls, interface and sound">Settings</button></li>

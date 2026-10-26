@@ -154,6 +154,30 @@ impl MenuBackdrop {
         self.scene.is_some()
     }
 
+    /// Keep the first-paint poster until a complete textured menu has actually been drawn.
+    pub fn presentation_ready(&self, gpu: &Renderer) -> bool {
+        let Some(scene) = &self.scene else {
+            return false;
+        };
+        gpu.model_textured("menu:kerbin")
+            && (scene.sky.is_none() || gpu.model_textured("menu:sky"))
+            && (scene
+                .clouds
+                .as_ref()
+                .is_none_or(|c| c.layers.is_empty() && scene.atmosphere.is_none())
+                || gpu.model_textured("menu:clouds"))
+            && scene.vessels.get(self.vessel).is_none_or(|v| {
+                v.parts
+                    .iter()
+                    .filter(|p| p.active)
+                    .all(|p| gpu.model_textured(&format!("part:{}", p.id)))
+            })
+    }
+
+    pub fn unavailable(&self) -> bool {
+        self.failed
+    }
+
     /// Name of the vessel on show (for the page's `data-ose-menu-vessel` hook).
     pub fn vessel_name(&self) -> Option<&str> {
         self.scene

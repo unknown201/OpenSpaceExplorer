@@ -114,7 +114,7 @@ pub fn router(root: PathBuf, previews: crate::previews::Previews) -> Router {
             let Ok(catalog) = state.catalog().await else {
                 return;
             };
-            for name in ["core", "materials-shared", "ksc", "vab"] {
+            for name in ["core", "materials-shared", "menu", "ksc", "vab"] {
                 let Some(group) = catalog.groups.get(name) else {
                     continue;
                 };
@@ -414,7 +414,6 @@ fn json(root: &FsPath, path: &str) -> Option<serde_json::Value> {
     serde_json::from_slice(&std::fs::read(root.join(path)).ok()?).ok()
 }
 fn scene(root: &FsPath, name: &str) -> Vec<Entry> {
-    use std::io::{Read, Seek, SeekFrom};
     let mut entries = Vec::new();
     add(
         root,
@@ -429,7 +428,13 @@ fn scene(root: &FsPath, name: &str) -> Vec<Entry> {
     let Some(model) = metadata["file"].as_str() else {
         return entries;
     };
-    add(root, &mut entries, model, false, true);
+    add_model(root, &mut entries, model);
+    entries
+}
+
+fn add_model(root: &FsPath, entries: &mut Vec<Entry>, model: &str) {
+    use std::io::{Read, Seek, SeekFrom};
+    add(root, entries, model, false, true);
     let glb = (|| -> Option<serde_json::Value> {
         let mut file = std::fs::File::open(root.join(model)).ok()?;
         let mut header = [0; 20];
@@ -451,8 +456,20 @@ fn scene(root: &FsPath, name: &str) -> Vec<Entry> {
             // This is the same exported-material base used by the renderer.
             if let Some(name) = uri.strip_prefix("../textures/") {
                 if !name.contains('/') && name.ends_with(".png") {
-                    add(root, &mut entries, &format!("textures/{name}"), true, true);
+                    add(root, entries, &format!("textures/{name}"), true, true);
                 }
+            }
+        }
+    }
+}
+
+fn menu(root: &FsPath) -> Vec<Entry> {
+    let mut entries = Vec::new();
+    add(root, &mut entries, "menu/scene.json", false, true);
+    if let Some(scene) = json(root, "menu/scene.json") {
+        for layer in ["sky", "kerbin", "clouds"] {
+            if let Some(model) = scene[layer]["file"].as_str() {
+                add_model(root, &mut entries, model);
             }
         }
     }
@@ -475,6 +492,7 @@ fn build(root: &FsPath) -> io::Result<Catalog> {
     }
     groups.insert("core".into(), core);
     groups.insert("mission-control".into(), Vec::new()); // mission data arrives over the game protocol
+    groups.insert("menu".into(), menu(root));
     for name in ["ksc", "vab"] {
         groups.insert(name.into(), scene(root, name));
     }
@@ -679,7 +697,13 @@ mod tests {
         f.put("ui/ICO-Mission-Control.png", b"icon");
         f.scene("ksc", &["common.png", "ksc.png"], 10 * 1024 * 1024);
         f.scene("vab", &["common.png", "vab.png"], 256);
-        for name in ["common", "ksc", "vab"] {
+        f.scene("menu", &["common.png", "menu.png"], 256);
+        f.put(
+            "menu/scene.json",
+            br#"{"kerbin":{"file":"menu/menu.glb"},"vessels":[{"parts":[{"id":"unused"}]}]}"#,
+        );
+        f.put("parts/unused.glb", b"unselected craft part");
+        for name in ["common", "ksc", "vab", "menu"] {
             f.put(&format!("textures/{name}.png"), b"image");
         }
         for body in ["Kerbin", "Mun"] {
@@ -692,6 +716,18 @@ mod tests {
         let c = build(&f.0).unwrap();
         assert!(c.groups["vab"].depends.contains(&"materials-shared".into()));
         assert!(!c.groups["vab"].depends.contains(&"ksc".into()));
+        let menu: Vec<_> = c.groups["menu"]
+            .chunks
+            .iter()
+            .flat_map(|id| &c.chunks[id].assets)
+            .collect();
+        assert!(menu.iter().any(|u| u.ends_with("menu/menu.glb")));
+        assert!(menu.iter().any(|u| u.ends_with("menu.png?preview=1")));
+        assert!(!c
+            .chunks
+            .values()
+            .flat_map(|c| &c.assets)
+            .any(|u| u.contains("unused.glb")));
         assert!(c.groups["mission-control"].depends.contains(&"core".into()));
         let common: Vec<_> = c
             .chunks
