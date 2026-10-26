@@ -19,7 +19,8 @@ jobs:
   # Browser end-to-end: the trunk-built WASM client served by ose-server, driven by Playwright in Chromium
   # and Firefox (e2e/, docs/ADR-0004-browser-e2e.md). The gameplay report for each browser is in the job log.
   browser-e2e:
-    runs-on: ubuntu-latest
+    # Playwright 1.56 has browser builds for 24.04, not the newer ubuntu-latest image.
+    runs-on: ubuntu-24.04
     env:
       TRUNK_VERSION: 0.21.14
     steps:
