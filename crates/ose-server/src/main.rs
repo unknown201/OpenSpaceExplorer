@@ -799,15 +799,36 @@ fn flight_readout(
     let up = p.r.normalized();
     let pressure_kpa = atmo.map(|a| a.pressure_kpa(alt)).unwrap_or(0.0);
     let rho = atmo.map(|a| a.density(alt)).unwrap_or(0.0);
-    let thrust = p.thrust_kn(pressure_kpa / 101.325);
+    let env = ose_sim::flight::EngineEnvironment::at(p, body, atmo);
+    let engine_demands = u
+        .structure(e)
+        .map(|st| st.engine_demands(p.stage, p.throttle, env));
+    let thrust = if p.ignited && !p.crashed {
+        engine_demands
+            .as_ref()
+            .map(|engines| engines.iter().map(|e| e.thrust_kn).sum())
+            .unwrap_or_else(|| p.thrust_kn(pressure_kpa / 101.325))
+    } else {
+        0.0
+    };
     let g = body.mu / (r_mag * r_mag);
-    let max_thrust = p
-        .current_stage()
-        .map(|s| {
-            s.thrust_vac_kn
-                + (s.thrust_asl_kn - s.thrust_vac_kn) * (pressure_kpa / 101.325).clamp(0.0, 1.0)
+    let max_thrust = u
+        .structure(e)
+        .map(|st| {
+            st.engine_demands(p.stage, 1.0, env)
+                .iter()
+                .map(|e| e.thrust_kn)
+                .sum()
         })
-        .unwrap_or(0.0);
+        .unwrap_or_else(|| {
+            p.current_stage()
+                .map(|s| {
+                    s.thrust_vac_kn
+                        + (s.thrust_asl_kn - s.thrust_vac_kn)
+                            * (pressure_kpa / 101.325).clamp(0.0, 1.0)
+                })
+                .unwrap_or(0.0)
+        });
     let sit = match ose_sim::flight::situation(p, body, atmo) {
         Situation::Landed => ose_net::FlightSituation::Landed,
         Situation::Flying => ose_net::FlightSituation::Flying,
@@ -863,7 +884,7 @@ fn flight_readout(
             .structure(e)
             .map(|st| {
                 st.lifting_fx(
-                    p.facing,
+                    ose_sim::flight::vessel_basis(p),
                     v_surf,
                     rho,
                     atmo.map(|a| v_surf.length() / a.speed_of_sound(alt).max(1.0))
@@ -875,11 +896,13 @@ fn flight_readout(
             .map(|a| v_surf.length() / a.speed_of_sound(alt).max(1.0))
             .unwrap_or(0.0),
         firing_engines: if thrust > 0.0 {
-            u.structure(e)
-                .map(|st| {
-                    st.firing_engines(p.stage, p.throttle)
-                        .into_iter()
-                        .filter_map(|i| u16::try_from(i).ok())
+            engine_demands
+                .as_ref()
+                .map(|engines| {
+                    engines
+                        .iter()
+                        .filter(|e| e.thrust_kn > 0.0)
+                        .filter_map(|e| u16::try_from(e.part).ok())
                         .collect()
                 })
                 .unwrap_or_default()
@@ -962,7 +985,7 @@ fn flight_readout(
         control_surfaces: u
             .structure(e)
             .map(|st| {
-                st.surface_deflections(p.facing, p.steer_cmd)
+                st.surface_deflections(ose_sim::flight::vessel_basis(p), p.steer_cmd)
                     .into_iter()
                     .map(|(i, d)| (i as u16, d as f32))
                     .collect()

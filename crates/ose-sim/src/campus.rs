@@ -35,6 +35,21 @@ pub fn direction(lat_deg: f64, lon_deg: f64) -> DVec3 {
 }
 
 impl Site {
+    /// Conservative outer radius of every flat site surface, used to skip distant contact sweeps.
+    pub fn surface_radius_bound(&self, radius_m: f64) -> f64 {
+        let (origin, east, up, north) = self.frame(radius_m);
+        self.areas
+            .iter()
+            .flat_map(|a| {
+                [a.min_x, a.max_x].into_iter().flat_map(move |x| {
+                    [a.min_z, a.max_z].into_iter().map(move |z| {
+                        let d = DVec3::new(x, a.y, z) - self.anchor;
+                        (origin + east * d.x + up * d.y - north * d.z).length()
+                    })
+                })
+            })
+            .fold(radius_m, f64::max)
+    }
     /// The site's frame in body-fixed axes: origin (the anchor), scene +X, up, and scene -Z.
     fn frame(&self, radius_m: f64) -> (DVec3, DVec3, DVec3, DVec3) {
         let up = direction(self.lat_deg, self.lon_deg);

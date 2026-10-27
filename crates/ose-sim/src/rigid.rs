@@ -498,6 +498,7 @@ impl RigidVessel {
         for &h in &self.bodies_of {
             if let Some(b) = self.bodies.get_mut(h) {
                 b.reset_forces(false);
+                b.reset_torques(false);
             }
         }
         // external force and its moment about the origin, per part, for the joint loads below
@@ -895,6 +896,31 @@ mod tests {
             serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap(),
             serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap(),
         )
+    }
+
+    #[test]
+    fn an_offset_force_does_not_leave_torque_applied_on_later_steps() {
+        let (crafts, defs, res) = assets();
+        let mut craft = crafts[0].clone();
+        craft.parts.truncate(1);
+        craft.parts[0].parent = None;
+        let mut vessel = RigidVessel::build(&craft, &defs, &res);
+        vessel.step(
+            0.02,
+            DVec3::ZERO,
+            &[PartForce {
+                part: 0,
+                force_kn: DVec3::new(0.0, 1.0, 0.0),
+                offset_m: DVec3::new(1.0, 0.0, 0.0),
+            }],
+        );
+        let first = vessel.bodies[vessel.bodies_of[0]].angvel().length();
+        assert!(first > 0.0);
+        for _ in 0..10 {
+            vessel.step(0.02, DVec3::ZERO, &[]);
+        }
+        let after = vessel.bodies[vessel.bodies_of[0]].angvel().length();
+        assert!((after - first).abs() < 1e-8, "{first} -> {after}");
     }
 
     #[test]
