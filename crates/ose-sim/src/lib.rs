@@ -9,8 +9,10 @@ pub mod aero;
 pub mod bodies;
 pub mod campus;
 pub mod commnet;
+pub mod contact;
 pub mod crew;
 pub mod docking;
+pub mod dynamics;
 pub mod flight;
 pub mod missions;
 pub mod resources;
@@ -1086,7 +1088,8 @@ impl Universe {
                 && !p.crashed
                 && p.throttle <= 0.0
                 && p.drive.throttle == 0.0
-                && p.drive.speed_mps == 0.0;
+                && p.drive.speed_mps == 0.0
+                && flight::resting_on_ground(&p, &body, terrain.as_deref(), start_ut);
             let (steps, step_dt) = if parked {
                 (1, dt * ticks.max(1) as f64)
             } else {
@@ -1123,13 +1126,15 @@ impl Universe {
                             v_air.length(),
                             step_dt,
                         );
-                        let cda = st.aero(p.stage, p.facing, v_air, a.density(alt), mach);
-                        lift = st.lift(p.facing, v_air, a.density(alt), mach);
-                        torque = st.aero_torque(p.facing, v_air, a.density(alt), mach);
+                        let frame = flight::vessel_basis(&p);
+                        let forces = st.aerodynamics(p.stage, frame, v_air, a.density(alt), mach);
+                        let cda = forces.cda_m2;
+                        lift = forces.lift_kn;
+                        torque = forces.torque_knm;
                         surfaces = st.control_authority(v_air, a.density(alt), mach);
                         if heat.enabled {
                             burned = st.update_heat(
-                                p.facing,
+                                frame,
                                 v_air,
                                 a.density(alt),
                                 mach,
@@ -1160,15 +1165,17 @@ impl Universe {
                         }
                     }
                 }
-                let mass_before = p.mass_t;
+                let env = flight::EngineEnvironment::at(&p, &body, atmo.as_ref());
+                let propulsion = structure.as_mut().map(|st| st.propulsion(&p, env, step_dt));
                 let was_landed = p.landed;
-                let mut out = flight::integrate(
+                let mut out = flight::integrate_with_propulsion(
                     &mut p,
                     &body,
                     atmo.as_ref(),
                     terrain.as_deref(),
                     start_ut + i as f64 * step_dt,
                     step_dt,
+                    propulsion,
                 );
                 // a hard landing breaks the parts it lands on; the rest may come through
                 if out.crashed {
@@ -1213,9 +1220,8 @@ impl Universe {
                     p.rcs.powered = if p.propellant_t > 0.0 { 1.0 } else { 0.0 };
                 }
                 if let Some(st) = &mut structure {
-                    // the propellant burned comes out of the tanks through the flow graph
-                    let burned = (mass_before - p.mass_t).max(0.0);
-                    st.burn(&mut p, burned, step_dt);
+                    // Propulsion already drew exactly the fuel that produced this step's impulse.
+                    st.sync(&mut p);
                     let pressure = atmo
                         .as_ref()
                         .map(|a| a.pressure_kpa(p.r.length() - body.radius_m) / 101.325)
@@ -1962,6 +1968,10 @@ mod tests {
             false,
         );
         p.facing = DVec3::new(0.0, 1.0, 0.0);
+        // Give this fixture finite wheel authority; zero inertia no longer grants instant turns.
+        for stage in &mut p.spec.stages {
+            stage.wheel_torque_knm = 5.0;
+        }
         u.set_powered(v, p);
         u.set_structure(v, st);
         // a pure normal burn in a minute
@@ -1987,7 +1997,7 @@ mod tests {
         let normal = p.r.cross(p.v).normalized();
         assert!(d.dot(normal) > 0.99, "points along the burn: {d:?}");
         assert!(p.facing.dot(normal) > 0.9, "turned to it: {:?}", p.facing);
-        assert!(p.roll_rad > 1.0, "rolled {} rad", p.roll_rad);
+        assert!(p.roll_rad.abs() > 1.0, "rolled {} rad", p.roll_rad);
         // groups
         assert_eq!(u.action_group(v, ActionGroup::Lights, None), Some(true));
         assert_eq!(u.action_group(v, ActionGroup::Lights, None), Some(false));
@@ -2205,16 +2215,25 @@ mod tests {
         let p1 = u.powered(v).unwrap().clone();
         assert!(p1.angvel.length() > 0.01, "spinning: {:?}", p1.angvel);
         assert!(p1.roll_rate > 0.01, "rolling: {}", p1.roll_rate);
+        let momentum = |p: &flight::Powered, st: &structure::Structure| {
+            let (x, y, z) = flight::vessel_basis(p);
+            let w = p.angvel + p.facing * p.roll_rate;
+            let l = st
+                .mass_properties()
+                .inertia
+                .apply(DVec3::new(w.dot(x), w.dot(y), w.dot(z)));
+            x * l.x + y * l.y + z * l.z
+        };
+        let l1 = momentum(&p1, u.structure(v).unwrap());
+        u.world.get_mut::<flight::Powered>(v).unwrap().ignited = false;
         u.set_rotation(v, 0.0, 0.0, 0.0);
         for _ in 0..(3 * TICKS_PER_SECOND) {
             u.step();
         }
         let p2 = u.powered(v).unwrap().clone();
         assert!(
-            (p2.angvel.length() - p1.angvel.length()).abs() < 1e-6,
-            "nothing damps it: {:?} -> {:?}",
-            p1.angvel,
-            p2.angvel
+            (momentum(&p2, u.structure(v).unwrap()) - l1).length() < 1e-6,
+            "angular momentum is conserved during a torque-free tumble"
         );
         assert!(
             p2.facing.dot(f0) < p1.facing.dot(f0),
@@ -2222,6 +2241,7 @@ mod tests {
         );
         // SAS back on: it stops and holds
         let hold = p2.facing;
+        u.world.get_mut::<flight::Powered>(v).unwrap().ignited = true;
         u.set_controls(v, 0.01, flight::Attitude::Fixed(hold));
         for _ in 0..(20 * TICKS_PER_SECOND) {
             u.step();

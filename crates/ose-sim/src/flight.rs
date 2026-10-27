@@ -1,12 +1,12 @@
-//! Powered flight, version 1: a vessel as a point mass integrated in its reference body's inertial frame.
+//! Powered flight in the reference body's inertial frame: translation, attitude and ground response.
 //!
-//! This is the server-side flight model until the rigid-body bubble (Phase 6 proper) lands. It gives real
-//! launches, ascents, burns that consume propellant, staging, atmospheric drag and landings, with the craft
-//! reduced to a [`FlightSpec`] (per-stage thrust, Isp, propellant and dry mass from `ose_data::staging`).
+//! Part-backed craft receive fuel-resolved engine forces, aerodynamic forces and moments, and current
+//! inertia from `structure`. Vessels without parts retain the simplified [`FlightSpec`] propulsion and
+//! attitude path. Ground contact still uses a clearance proxy; per-part collision hulls remain future work.
 //!
 //! Frame: body-centred, inertial, Z-up, the body spinning about +Z at `2 pi / rotation_period`. Surface
 //! velocity is `v - omega x r`. Atmosphere density follows the body's pressure and temperature curves
-//! (`docs/reference-notes/physics-joints-drag.md`). Drag is `1/2 rho v^2 Cd A` on a single reference area.
+//! (`docs/reference-notes/physics-joints-drag.md`). Drag uses summed part `Cd A`, or the spec's fallback area.
 
 use crate::bodies::Body;
 use bevy_ecs::prelude::*;
@@ -15,7 +15,7 @@ use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
 pub const IDEAL_GAS_CONSTANT: f64 = 8.31447;
-/// Touchdown faster than this (surface speed) counts as a crash.
+/// Relative impact speed above this counts as a crash (wheel touchdown uses sink speed).
 pub const CRASH_SPEED_MPS: f64 = 12.0;
 /// Highest warp allowed while any vessel is under powered flight (the original's physics warp).
 pub const MAX_PHYSICS_WARP: u32 = 4;
@@ -183,7 +183,7 @@ pub struct Powered {
     /// Thrust axis, unit vector in the body-centred inertial frame.
     #[serde(default = "default_facing")]
     pub facing: DVec3,
-    /// Angular velocity, rad/s, inertial (roll is not modelled).
+    /// Transverse angular velocity, rad/s, inertial; axial spin is stored in `roll_rate`.
     #[serde(default)]
     pub angvel: DVec3,
     /// Fraction of the current stage's engines still attached (engines can break off).
@@ -362,6 +362,18 @@ pub fn vessel_top(p: &Powered) -> DVec3 {
     let side = p.facing.cross(base);
     let (sr, cr) = p.roll_rad.sin_cos();
     base * cr + side * sr
+}
+
+/// Right-handed craft axes in the inertial frame, including roll.
+pub fn vessel_basis(p: &Powered) -> (DVec3, DVec3, DVec3) {
+    let top = vessel_top(p);
+    (p.facing.cross(top), p.facing, top)
+}
+
+fn set_vessel_top(p: &mut Powered, top: DVec3) {
+    p.roll_rad = 0.0;
+    let base = vessel_top(p);
+    p.roll_rad = top.dot(p.facing.cross(base)).atan2(top.dot(base));
 }
 
 /// How fast a vessel rolls at full input, rad/s (scaled by its reaction wheels' power).
@@ -611,6 +623,68 @@ pub fn ground_radius(
 ) -> f64 {
     let (lat, lon) = lat_lon(body, r, ut);
     body.radius_m + ground_height_at(body, terrain, lat, lon)
+}
+
+/// Normal of the terrain, ocean or site surface, evaluated in inertial coordinates.
+pub fn ground_normal(
+    body: &Body,
+    terrain: Option<&ose_data::terrain::TerrainMap>,
+    r: DVec3,
+    ut: f64,
+) -> DVec3 {
+    let (up, east, north) = surface_frame(r);
+    let slope = |axis: DVec3| {
+        (ground_radius(body, terrain, r + axis, ut) - ground_radius(body, terrain, r - axis, ut))
+            * 0.5
+    };
+    (up - east * slope(east) - north * slope(north)).normalized()
+}
+
+/// Whether a grounded craft can safely use the long-step co-rotation optimization.
+pub fn resting_on_ground(
+    p: &Powered,
+    body: &Body,
+    terrain: Option<&ose_data::terrain::TerrainMap>,
+    ut: f64,
+) -> bool {
+    let omega = if body.rotation_period_s > 0.0 {
+        std::f64::consts::TAU / body.rotation_period_s
+    } else {
+        0.0
+    };
+    let spin = DVec3::new(0.0, 0.0, omega);
+    let normal = ground_normal(body, terrain, p.r, ut);
+    let gravity = p.r * (-body.mu / p.r.length().powi(3)) - spin.cross(spin.cross(p.r));
+    let downhill = gravity - normal * gravity.dot(normal);
+    (p.v - spin.cross(p.r)).length() < 1e-6
+        && crate::contact::can_rest(gravity, normal)
+        && (p.drive.wheels.is_empty() || p.drive.brakes || downhill.length() < 1e-6)
+}
+
+fn ground_crossing(
+    body: &Body,
+    terrain: Option<&ose_data::terrain::TerrainMap>,
+    from: DVec3,
+    to: DVec3,
+    clearance: f64,
+    ut: f64,
+    dt: f64,
+) -> Option<f64> {
+    let path = to - from;
+    let distance = path.length();
+    let ceiling = (body.radius_m + terrain.map(|t| t.max_m.max(0.0)).unwrap_or(0.0)).max(
+        body.site
+            .as_ref()
+            .map(|s| s.surface_radius_bound(body.radius_m))
+            .unwrap_or(body.radius_m),
+    );
+    if from.length().min(to.length()) > ceiling + clearance + distance {
+        return None;
+    }
+    crate::contact::sweep(distance, |t| {
+        let r = from + path * t;
+        r.length() - ground_radius(body, terrain, r, ut + dt * t) - clearance
+    })
 }
 
 /// Height of the ground above the nominal radius at a body-fixed latitude/longitude: a built site's
@@ -987,21 +1061,183 @@ pub fn spin(p: &mut Powered, thrust_fraction: f64, dt: f64) {
     p.roll_rad = (p.roll_rad + p.roll_rate * dt).rem_euclid(std::f64::consts::TAU);
 }
 
+/// Integrate the part-backed craft as a rotating body. The controller requests bounded torque;
+/// external forces can spin it faster than the controller's commanded rate limit.
+fn turn_with_parts(
+    p: &mut Powered,
+    engine: Propulsion,
+    target: DVec3,
+    frac: f64,
+    dt: f64,
+    out: &mut StepOutcome,
+) {
+    let (bx, by, bz) = vessel_basis(p);
+    let local = |v: DVec3| DVec3::new(v.dot(bx), v.dot(by), v.dot(bz));
+    let world = |v: DVec3| bx * v.x + by * v.y + bz * v.z;
+    let inertia = engine.mass.inertia;
+    let w0 = p.angvel + by * p.roll_rate;
+    let w = local(w0);
+    let torque = p
+        .rotation_stage()
+        .map(|s| {
+            if !p.controlled {
+                return 0.0;
+            }
+            s.wheel_torque_knm * p.wheel_scale.clamp(0.0, 1.0)
+                + s.gimbal_torque_knm * frac.clamp(0.0, 1.0)
+                + if p.groups.rcs {
+                    p.rcs.torque_knm * p.rcs.powered.clamp(0.0, 1.0)
+                } else {
+                    0.0
+                }
+                + p.surface_torque_knm
+        })
+        .unwrap_or(0.0)
+        .max(0.0);
+    let limit = |v: DVec3, cap: f64| {
+        let n = v.length();
+        if n > cap && n > 0.0 {
+            v * (cap / n)
+        } else {
+            v
+        }
+    };
+    let control = if p.attitude == Attitude::Free {
+        let i = p.rotation_input;
+        limit(DVec3::new(-i.x, i.z, i.y), 1.0) * torque
+    } else {
+        let cross = by.cross(target);
+        let theta = cross.length().atan2(by.dot(target));
+        let axis = if cross.length() > 1e-9 {
+            cross.normalized()
+        } else {
+            bx
+        };
+        let axis = local(axis);
+        let moment = inertia.apply(axis).length();
+        let alpha = if moment > 0.0 { torque / moment } else { 0.0 };
+        let desired = axis * (2.0 * alpha * theta * 0.9).sqrt().min(MAX_TURN_RATE)
+            + DVec3::new(0.0, ROLL_RATE_RAD_S * p.roll_input.clamp(-1.0, 1.0), 0.0);
+        limit(inertia.apply((desired - w) * (1.0 / dt)), torque)
+    };
+    p.steer_cmd = if torque > 0.0 {
+        world(control) * (1.0 / torque)
+    } else {
+        DVec3::ZERO
+    };
+    // Advance inertial angular momentum instead of explicitly stepping the gyroscopic term.
+    // This preserves momentum in a torque-free tumble, including about non-principal axes.
+    let mut momentum = world(inertia.apply(w));
+    let mut facing = by;
+    let mut top = bz;
+    let mut w1 = w0;
+    let torque_body = control + engine.torque_knm;
+    let acceleration = inertia
+        .solve(torque_body + local(p.aero_torque_knm))
+        .length();
+    let steps = ((w.length() + acceleration * dt) * dt / 0.05)
+        .ceil()
+        .clamp(1.0, 256.0) as usize;
+    let h = dt / steps as f64;
+    for _ in 0..steps {
+        let mut midpoint_w = w1;
+        let mut next_momentum = momentum;
+        for _ in 0..4 {
+            let y = rotate(facing, midpoint_w, h * 0.5);
+            let z = rotate(top, midpoint_w, h * 0.5);
+            let x = y.cross(z);
+            let t = x * torque_body.x + y * torque_body.y + z * torque_body.z + p.aero_torque_knm;
+            next_momentum = momentum + t * h;
+            let mid = (momentum + next_momentum) * 0.5;
+            let local_w = inertia.solve(DVec3::new(mid.dot(x), mid.dot(y), mid.dot(z)));
+            midpoint_w = x * local_w.x + y * local_w.y + z * local_w.z;
+        }
+        facing = rotate(facing, midpoint_w, h);
+        top = rotate(top, midpoint_w, h);
+        momentum = next_momentum;
+        let x = facing.cross(top);
+        let local_w = inertia.solve(DVec3::new(
+            momentum.dot(x),
+            momentum.dot(facing),
+            momentum.dot(top),
+        ));
+        w1 = x * local_w.x + facing * local_w.y + top * local_w.z;
+    }
+    p.facing = facing;
+    set_vessel_top(p, top);
+    p.roll_rate = w1.dot(p.facing);
+    p.angvel = w1 - p.facing * p.roll_rate;
+    out.angular_accel = (w1 - w0) * (1.0 / dt);
+    out.external_angular_accel = out.angular_accel - world(inertia.solve(control));
+    out.control_torque_knm = Some(world(control));
+    out.angvel = w1;
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct StepOutcome {
     pub crashed: bool,
     pub touched_down: bool,
-    /// Thrust delivered this step, kN, along `facing`.
+    /// Sum of engine thrust magnitudes delivered this step, kN.
     pub thrust_kn: f64,
     /// Aerodynamic drag this step, kN, inertial.
     pub drag_kn: DVec3,
-    /// Angular acceleration the controller applied and the angular velocity after it, inertial.
+    /// Total angular acceleration and final angular velocity, inertial (including roll for part-backed flight).
     pub angular_accel: DVec3,
+    /// External part-force contribution; do not synthesize this again as wheel/gimbal torque.
+    pub external_angular_accel: DVec3,
+    /// Resolved actuator torque for part-backed flight, inertial; structural loading uses it once.
+    pub control_torque_knm: Option<DVec3>,
     pub angvel: DVec3,
     /// Share of that control torque from reaction wheels (the rest from engine gimbals).
     pub wheel_share: f64,
-    /// Speed over the ground at touchdown, m/s.
+    /// Damage-check speed at touchdown: relative speed, or normal speed for an intact wheel landing.
     pub impact_mps: f64,
+    /// Incoming normal speed, kept separate from the relative-speed damage rule.
+    pub normal_impact_mps: f64,
+}
+
+/// Engine conditions at the vessel, shared by simulation and flight readouts.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct EngineEnvironment {
+    pub pressure_atm: f64,
+    pub density: f64,
+    pub mach: f64,
+    pub oxygen: bool,
+}
+
+impl EngineEnvironment {
+    pub fn at(p: &Powered, body: &Body, atmo: Option<&Atmo>) -> Self {
+        let Some(a) = atmo else {
+            return Self::default();
+        };
+        let alt = p.r.length() - body.radius_m;
+        let omega = if body.rotation_period_s > 0.0 {
+            std::f64::consts::TAU / body.rotation_period_s
+        } else {
+            0.0
+        };
+        let speed = (p.v - DVec3::new(0.0, 0.0, omega).cross(p.r)).length();
+        let sound = a.speed_of_sound(alt);
+        Self {
+            pressure_atm: a.pressure_kpa(alt) / 101.325,
+            density: a.density(alt),
+            mach: if sound > 0.0 { speed / sound } else { 0.0 },
+            oxygen: a.oxygen,
+        }
+    }
+}
+
+/// Average engine thrust over a step and the mass actually delivered by the tanks.
+/// The resource graph has already removed this fuel; the integrator must not request it again.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Propulsion {
+    pub thrust_kn: f64,
+    pub burned_t: f64,
+    /// Resultant force and its moment about the current mass centre, in the craft frame.
+    pub force_kn: DVec3,
+    pub torque_knm: DVec3,
+    /// Pre-burn mass distribution; also present when the engines are off.
+    pub mass: crate::dynamics::MassProperties,
 }
 
 /// Integrate one `dt` of powered flight around `body`.
@@ -1012,6 +1248,19 @@ pub fn integrate(
     terrain: Option<&ose_data::terrain::TerrainMap>,
     ut: f64,
     dt: f64,
+) -> StepOutcome {
+    integrate_with_propulsion(p, body, atmo, terrain, ut, dt, None)
+}
+
+/// Integrate with resolved per-engine propulsion, or the legacy stage estimate for vessels without parts.
+pub fn integrate_with_propulsion(
+    p: &mut Powered,
+    body: &Body,
+    atmo: Option<&Atmo>,
+    terrain: Option<&ose_data::terrain::TerrainMap>,
+    ut: f64,
+    dt: f64,
+    propulsion: Option<Propulsion>,
 ) -> StepOutcome {
     let mut out = StepOutcome::default();
     let omega = if body.rotation_period_s > 0.0 {
@@ -1049,6 +1298,8 @@ pub fn integrate(
     // attitude: landed vessels stand upright; otherwise turn toward the commanded attitude with torque
     let thrust_kn = if walk_dir.is_some() || p.eva_hop {
         0.0
+    } else if let Some(engine) = propulsion {
+        engine.thrust_kn
     } else {
         // jets: their thrust follows the speed and the air
         let air = match (&p.jet, atmo) {
@@ -1063,6 +1314,9 @@ pub fn integrate(
         };
         p.thrust_kn(pressure_atm) * air
     };
+    let (bx, by, bz) = vessel_basis(p);
+    let resolved_force =
+        propulsion.map(|e| bx * e.force_kn.x + by * e.force_kn.y + bz * e.force_kn.z);
     if p.landed {
         if !p.tipped {
             p.facing = if p.level {
@@ -1099,23 +1353,27 @@ pub fn integrate(
         } else {
             0.0
         };
-        let w0 = p.angvel;
-        // the airflow turns the craft; SAS (or the pilot) has to hold against it
-        if let Some((_, moi)) = turning_authority(p, frac) {
-            p.angvel = p.angvel + p.aero_torque_knm * (dt / moi);
-        }
-        if p.attitude == Attitude::Free {
-            spin(p, frac, dt);
+        if let Some(engine) = propulsion.filter(|e| e.mass.mass_t > 0.0) {
+            turn_with_parts(p, engine, target, frac, dt, &mut out);
         } else {
-            p.roll_rate = 0.0;
-            steer(p, target, frac, dt);
-            // roll about the axis at the reaction wheels' pace
-            let rate =
-                ROLL_RATE_RAD_S * p.wheel_scale.clamp(0.0, 1.0) * p.roll_input.clamp(-1.0, 1.0);
-            p.roll_rad = (p.roll_rad + rate * dt).rem_euclid(std::f64::consts::TAU);
+            let w0 = p.angvel;
+            // the airflow turns the craft; SAS (or the pilot) has to hold against it
+            if let Some((_, moi)) = turning_authority(p, frac) {
+                p.angvel = p.angvel + p.aero_torque_knm * (dt / moi);
+            }
+            if p.attitude == Attitude::Free {
+                spin(p, frac, dt);
+            } else {
+                p.roll_rate = 0.0;
+                steer(p, target, frac, dt);
+                // roll about the axis at the reaction wheels' pace
+                let rate =
+                    ROLL_RATE_RAD_S * p.wheel_scale.clamp(0.0, 1.0) * p.roll_input.clamp(-1.0, 1.0);
+                p.roll_rad = (p.roll_rad + rate * dt).rem_euclid(std::f64::consts::TAU);
+            }
+            out.angular_accel = (p.angvel - w0) * (1.0 / dt);
+            out.angvel = p.angvel;
         }
-        out.angular_accel = (p.angvel - w0) * (1.0 / dt);
-        out.angvel = p.angvel;
         out.wheel_share = p
             .rotation_stage()
             .map(|s| {
@@ -1132,7 +1390,14 @@ pub fn integrate(
 
     // thrust and propellant
     let mut thrust_acc = DVec3::ZERO;
-    if thrust_kn > 0.0 {
+    if let Some(engine) = propulsion {
+        if p.mass_t > 0.0 && thrust_kn > 0.0 {
+            thrust_acc = resolved_force.unwrap_or(DVec3::ZERO) * (1.0 / p.mass_t);
+        }
+        out.thrust_kn = thrust_kn;
+        p.propellant_t = (p.propellant_t - engine.burned_t).max(0.0);
+        p.mass_t = (p.mass_t - engine.burned_t).max(0.001);
+    } else if thrust_kn > 0.0 {
         let s = p.current_stage().expect("stage");
         let isp = s.isp_vac_s + (s.isp_asl_s - s.isp_vac_s) * pressure_atm.clamp(0.0, 1.0);
         let flow = if isp > 0.0 {
@@ -1193,12 +1458,14 @@ pub fn integrate(
         // sitting on the surface: co-rotate; lift off only when thrust beats gravity
         let g = body.mu / (r_mag * r_mag);
         let (up, _, _) = surface_frame(p.r);
+        let normal = ground_normal(body, terrain, p.r, ut);
         let lift_acc = if p.mass_t > 0.0 {
             p.lift_kn * (1.0 / p.mass_t)
         } else {
             DVec3::ZERO
         };
-        if (thrust_acc + lift_acc).dot(up) > g {
+        let support_acc = thrust_acc + lift_acc - up * g - omega_v.cross(omega_v.cross(p.r));
+        if support_acc.dot(normal) > 0.0 {
             p.landed = false;
         } else {
             let pace = if p.eva_run {
@@ -1239,10 +1506,20 @@ pub fn integrate(
                 let moved = p.drive.step(p.mass_t, g, slope_acc, dt);
                 p.r = p.r + dir * moved;
                 rolling = dir * p.drive.speed_mps;
+            } else if !p.walker {
+                let relative = p.v - omega_v.cross(p.r);
+                // Ground reaction removes penetration; friction opposes sliding and can hold a slope.
+                rolling = crate::contact::resolve_velocity(relative + support_acc * dt, normal).0;
+                p.r = p.r + rolling * dt;
             }
             let ang = omega * dt;
             let (s, c) = ang.sin_cos();
             p.r = DVec3::new(p.r.x * c - p.r.y * s, p.r.x * s + p.r.y * c, p.r.z);
+            rolling = DVec3::new(
+                rolling.x * c - rolling.y * s,
+                rolling.x * s + rolling.y * c,
+                rolling.z,
+            );
             // standing on its lowest point (or its side once tipped over)
             let ground = ground_radius(body, terrain, p.r, ut + dt) + stand_height(p);
             p.r = p.r.normalized() * ground;
@@ -1272,24 +1549,28 @@ pub fn integrate(
     out.drag_kn = drag_acc * p.mass_t + p.lift_kn;
     let acc = g_acc + thrust_acc + drag_acc + lift_acc;
     p.v = p.v + acc * dt;
+    let top = vessel_top(p);
+    let previous_r = p.r;
     p.r = p.r + p.v * dt;
+    if propulsion.is_some() {
+        // Position changes the roll reference, not the craft's inertial orientation.
+        set_vessel_top(p, top);
+    }
 
     // surface contact against the terrain (or sea) under the vessel
-    let new_r = p.r.length();
-    let ground = ground_radius(body, terrain, p.r, ut + dt);
-    if new_r <= ground + p.ground_clearance_m {
+    if let Some(hit) = ground_crossing(body, terrain, previous_r, p.r, stand_height(p), ut, dt) {
+        p.r = previous_r + (p.r - previous_r) * hit;
+        let hit_ut = ut + dt * hit;
+        let ground = ground_radius(body, terrain, p.r, hit_ut);
         let v_surf = p.v - omega_v.cross(p.r);
         let (up, _, _) = surface_frame(p.r);
-        let speed = v_surf.length();
-        // it falls over when the lean (its own plus the slope's) puts its centre of mass outside its footprint
-        let slope = terrain
-            .map(|t| slope_rad(body, t, p.r, ut + dt))
-            .unwrap_or(0.0);
+        let normal = ground_normal(body, terrain, p.r, hit_ut);
+        // It falls over when its lean relative to the actual support plane exceeds its footprint.
         // a level craft leans by how far its nose is off the horizon
         let lean = if p.level {
-            p.facing.dot(up).clamp(-1.0, 1.0).asin().abs() + slope
+            p.facing.dot(normal).clamp(-1.0, 1.0).asin().abs()
         } else {
-            p.facing.dot(up).clamp(-1.0, 1.0).acos() + slope
+            p.facing.dot(normal).clamp(-1.0, 1.0).acos()
         };
         if p.ground_clearance_m > 0.0 && lean.tan() > p.footprint_m / p.ground_clearance_m {
             p.tipped = true;
@@ -1309,26 +1590,35 @@ pub fn integrate(
         } else {
             p.facing = up;
         }
-        // what hits the ground: the whole speed standing, the sink rate for a plane on its wheels
+        let (sliding, normal_impact) = crate::contact::resolve_velocity(v_surf, normal);
+        // PartBehavior.HandleCollisionEnter compares relative speed with crashTolerance.
+        // Preserve the existing wheel/suspension exception for an intact rolling landing.
         let impact = if p.level && !p.tipped && !p.drive.wheels.is_empty() {
-            (-v_surf.dot(up)).max(0.0)
+            normal_impact
         } else {
-            speed
+            v_surf.length()
         };
         let rolling = if p.level && !p.tipped && !p.drive.wheels.is_empty() {
             p.drive.speed_mps = v_surf.dot(p.facing);
             p.facing * p.drive.speed_mps
         } else {
-            DVec3::ZERO
+            sliding
         };
         p.r = up * (ground + stand_height(p));
+        // Carry the contact site through the remainder of this tick on a rotating body.
+        let (s, c) = (omega * dt * (1.0 - hit)).sin_cos();
+        let turn = |v: DVec3| DVec3::new(v.x * c - v.y * s, v.x * s + v.y * c, v.z);
+        p.r = turn(p.r);
+        let rolling = turn(rolling);
         p.v = omega_v.cross(p.r) + rolling;
         p.landed = true;
         p.eva_hop = false;
         p.angvel = DVec3::ZERO;
+        p.roll_rate = 0.0;
         out.touched_down = true;
         let speed = impact;
         out.impact_mps = speed;
+        out.normal_impact_mps = normal_impact;
         let tolerance = if p.crash_tolerance_mps > 0.0 {
             p.crash_tolerance_mps
         } else {
@@ -1343,7 +1633,7 @@ pub fn integrate(
 
     // coasting bookkeeping for the rails handoff
     let above_atmo = atmo.map(|a| alt > a.depth_m).unwrap_or(true);
-    if p.thrust_kn(0.0) <= 0.0 && !p.landed && above_atmo {
+    if out.thrust_kn <= 0.0 && !p.landed && above_atmo {
         if p.coasting_since.is_none() {
             p.coasting_since = Some(ut);
         }
@@ -1429,6 +1719,266 @@ pub fn surface_state_at(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn contact_site(body: &mut Body, width: f64, height: f64) {
+        body.rotation_period_s = 0.0;
+        body.site = Some(std::sync::Arc::new(crate::campus::Site {
+            lat_deg: 0.0,
+            lon_deg: 0.0,
+            alt_m: 0.0,
+            yaw_rad: 0.0,
+            anchor: DVec3::ZERO,
+            areas: vec![crate::campus::Area {
+                min_x: -width,
+                max_x: width,
+                min_z: -width,
+                max_z: width,
+                y: height,
+            }],
+        }));
+    }
+
+    #[test]
+    fn ground_normal_follows_a_flat_site_instead_of_planet_radial_up() {
+        let mut body = kerbin();
+        contact_site(&mut body, 1000.0, 0.0);
+        let r = DVec3::new(body.radius_m, 900.0, 0.0);
+        let n = ground_normal(&body, None, r, 0.0);
+        assert!((n - DVec3::new(1.0, 0.0, 0.0)).length() < 1e-7, "{n:?}");
+        assert!((n - r.normalized()).length() > 0.001);
+        assert!(
+            body.site
+                .as_ref()
+                .unwrap()
+                .surface_radius_bound(body.radius_m)
+                >= r.length()
+        );
+    }
+
+    #[test]
+    fn a_fast_path_hits_a_raised_site_between_clear_endpoints() {
+        let mut body = kerbin();
+        body.mu = 0.0;
+        contact_site(&mut body, 2.0, 10.0);
+        let from = DVec3::new(body.radius_m + 5.0, -10.0, 0.0);
+        let to = DVec3::new(body.radius_m + 5.0, 10.0, 0.0);
+        for r in [from, to] {
+            assert!(r.length() > ground_radius(&body, None, r, 0.0));
+        }
+        let hit = ground_crossing(&body, None, from, to, 0.0, 0.0, 0.02).unwrap();
+        assert!((hit - 0.4).abs() < 1e-5, "first contact {hit}");
+        let mut p = Powered::new(rocket(), from, (to - from) * 50.0, false);
+        let out = integrate(&mut p, &body, None, None, 0.0, 0.02);
+        assert!(out.touched_down);
+        assert!(
+            p.r.y < -1.9,
+            "stops at the leading edge, not the endpoint: {:?}",
+            p.r
+        );
+    }
+
+    #[test]
+    fn a_grazing_landing_slides_and_loses_speed_over_multiple_ticks() {
+        let mut body = kerbin();
+        body.rotation_period_s = 0.0;
+        body.mu = 10.0 * body.radius_m * body.radius_m;
+        let mut p = Powered::new(
+            rocket(),
+            DVec3::new(body.radius_m + 0.01, 0.0, 0.0),
+            DVec3::new(-2.0, 10.0, 0.0),
+            false,
+        );
+        let out = integrate(&mut p, &body, None, None, 0.0, 0.02);
+        assert!(out.touched_down && !out.crashed);
+        assert!((out.normal_impact_mps - 2.2).abs() < 0.001);
+        assert!(out.impact_mps > 10.0 && out.impact_mps < 11.0);
+        assert!(
+            (p.v.y - 8.68).abs() < 0.001,
+            "tangential motion survives touchdown: {:?}",
+            p.v
+        );
+        assert!(!resting_on_ground(&p, &body, None, 0.02));
+        let start_y = p.r.y;
+        let mut speed = p.v.length();
+        for i in 1..=100 {
+            integrate(&mut p, &body, None, None, i as f64 * 0.02, 0.02);
+            assert!(p.v.length() <= speed + 1e-6, "friction cannot add energy");
+            speed = p.v.length();
+        }
+        assert!(p.r.y - start_y > 5.0 && p.r.y - start_y < 8.0);
+        assert!(
+            speed < 1e-6,
+            "friction eventually stops the slide, speed {speed}"
+        );
+        assert!((p.r.length() - body.radius_m).abs() < 1e-6);
+    }
+
+    #[test]
+    fn high_speed_grazing_body_contact_uses_relative_speed_for_damage() {
+        let mut body = kerbin();
+        body.rotation_period_s = 0.0;
+        let mut p = Powered::new(
+            rocket(),
+            DVec3::new(body.radius_m + 0.01, 0.0, 0.0),
+            DVec3::new(-2.0, 100.0, 0.0),
+            false,
+        );
+        let out = integrate(&mut p, &body, None, None, 0.0, 0.02);
+        assert!(out.touched_down && out.crashed);
+        assert!(out.normal_impact_mps < 3.0 && out.impact_mps > 100.0);
+    }
+
+    #[test]
+    fn grounded_motion_holds_a_shallow_slope_and_slides_down_a_steep_one() {
+        let mut body = kerbin();
+        body.radius_m = 1000.0;
+        body.mu = 10.0 * body.radius_m * body.radius_m;
+        contact_site(&mut body, 2000.0, 0.0);
+        // A flat plane far from its planetary tangent point is inclined relative to local gravity.
+        for (y, stays) in [(200.0, true), (1200.0, false)] {
+            let r = DVec3::new(1000.0, y, 0.0);
+            let mut p = Powered::new(rocket(), r, DVec3::ZERO, true);
+            assert_eq!(resting_on_ground(&p, &body, None, 0.0), stays);
+            for i in 0..100 {
+                integrate(&mut p, &body, None, None, i as f64 * 0.02, 0.02);
+            }
+            if stays {
+                assert!((p.r - r).length() < 1e-7);
+            } else {
+                assert!(
+                    p.r.y < y - 1.0 && p.v.y < 0.0,
+                    "slides downhill: {:?} {:?}",
+                    p.r,
+                    p.v
+                );
+            }
+            assert!((p.r.x - 1000.0).abs() < 1e-6, "remains on the plane");
+        }
+    }
+
+    #[test]
+    fn parked_optimization_excludes_sliding_and_unbraked_wheels_on_slopes() {
+        let mut body = kerbin();
+        body.rotation_period_s = 0.0;
+        let mut p = Powered::new(
+            rocket(),
+            DVec3::new(body.radius_m, 0.0, 0.0),
+            DVec3::ZERO,
+            true,
+        );
+        p.drive.wheels.push(DriveWheel {
+            radius_m: 0.3,
+            torque_knm: None,
+            ec_per_s: 0.0,
+            brake_knm: 2.0,
+            steers: false,
+        });
+        assert!(
+            resting_on_ground(&p, &body, None, 0.0),
+            "unbraked wheels can rest on a level surface"
+        );
+        p.v = DVec3::new(0.0, 1.0, 0.0);
+        assert!(!resting_on_ground(&p, &body, None, 0.0));
+        body.radius_m = 1000.0;
+        body.mu = 10.0 * body.radius_m * body.radius_m;
+        contact_site(&mut body, 2000.0, 0.0);
+        p.r = DVec3::new(1000.0, 200.0, 0.0);
+        p.v = DVec3::ZERO;
+        assert!(
+            !resting_on_ground(&p, &body, None, 0.0),
+            "unbraked wheels roll on an incline"
+        );
+        p.drive.brakes = true;
+        assert!(resting_on_ground(&p, &body, None, 0.0));
+    }
+
+    fn body_dynamics_fixture() -> (Powered, Propulsion) {
+        let mut p = Powered::new(
+            rocket(),
+            DVec3::new(700_000.0, 0.0, 0.0),
+            DVec3::ZERO,
+            false,
+        );
+        p.facing = DVec3::new(0.0, 1.0, 0.0);
+        p.mass_t = 10.0;
+        p.attitude = Attitude::Free;
+        p.controlled = false;
+        let engine = Propulsion {
+            mass: crate::dynamics::MassProperties {
+                mass_t: 10.0,
+                inertia: crate::dynamics::Inertia {
+                    x: DVec3::new(10.0, 0.0, 0.0),
+                    y: DVec3::new(0.0, 20.0, 0.0),
+                    z: DVec3::new(0.0, 0.0, 30.0),
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        (p, engine)
+    }
+
+    #[test]
+    fn off_axis_force_follows_roll_and_torque_has_the_expected_impulse() {
+        let (mut p, mut engine) = body_dynamics_fixture();
+        let mut body = kerbin();
+        body.mu = 0.0;
+        engine.thrust_kn = 10.0;
+        engine.force_kn = DVec3::new(10.0, 0.0, 0.0);
+        engine.torque_knm = DVec3::new(0.0, 0.0, 30.0);
+        p.roll_rad = std::f64::consts::FRAC_PI_2;
+        let out = integrate_with_propulsion(&mut p, &body, None, None, 0.0, 0.1, Some(engine));
+        // 90-degree roll maps craft +X to inertial -Z, and craft +Z torque to inertial +X.
+        assert!((p.v - DVec3::new(0.0, 0.0, -0.1)).length() < 1e-10);
+        assert!((out.angvel - DVec3::new(0.1, 0.0, 0.0)).length() < 1e-10);
+        assert!((p.facing.z - 0.005_f64.sin()).abs() < 1e-10);
+        assert_eq!(out.control_torque_knm, Some(DVec3::ZERO));
+    }
+
+    #[test]
+    fn sas_cannot_cancel_external_roll_without_sufficient_torque() {
+        let (mut p, mut engine) = body_dynamics_fixture();
+        p.attitude = Attitude::Fixed(p.facing);
+        engine.torque_knm = DVec3::new(0.0, 20.0, 0.0);
+        let mut out = StepOutcome::default();
+        let target = p.facing;
+        turn_with_parts(&mut p, engine, target, 0.0, 0.1, &mut out);
+        assert!((p.roll_rate - 0.1).abs() < 1e-10);
+        p.controlled = true;
+        p.spec.stages[0].wheel_torque_knm = 2.0;
+        turn_with_parts(&mut p, engine, target, 0.0, 0.1, &mut out);
+        assert!((p.roll_rate - 0.19).abs() < 1e-10);
+        assert!((out.control_torque_knm.unwrap().length() - 2.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn torque_free_asymmetric_tumble_preserves_momentum_and_energy() {
+        let (mut p, engine) = body_dynamics_fixture();
+        p.angvel = DVec3::new(2.0, 0.0, 3.0);
+        p.roll_rate = 1.0;
+        let properties = |p: &Powered| {
+            let (x, y, z) = vessel_basis(p);
+            let w = p.angvel + p.facing * p.roll_rate;
+            let local_w = DVec3::new(w.dot(x), w.dot(y), w.dot(z));
+            let l = engine.mass.inertia.apply(local_w);
+            (x * l.x + y * l.y + z * l.z, 0.5 * l.dot(local_w))
+        };
+        let (l0, e0) = properties(&p);
+        for _ in 0..1000 {
+            turn_with_parts(
+                &mut p,
+                engine,
+                DVec3::ZERO,
+                0.0,
+                0.002,
+                &mut StepOutcome::default(),
+            );
+        }
+        let (l1, e1) = properties(&p);
+        assert!((l1 - l0).length() < 1e-8);
+        assert!((e1 / e0 - 1.0).abs() < 1e-4, "energy {e0} -> {e1}");
+        assert!((p.angvel + p.facing * p.roll_rate).length() > MAX_TURN_RATE);
+    }
 
     #[test]
     fn a_rover_rolls_down_a_slope_unless_its_brakes_hold_it() {

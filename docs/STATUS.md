@@ -1,8 +1,16 @@
 # Status
 
-Updated 2026-10-25.
+Updated 2026-10-27.
 
 ## What works
+
+- Ground-contact response: local terrain/site normals separate landing response from relative-speed crash checks; non-wheeled craft retain tangential velocity and slide under provisional static/kinetic friction. A bounded segment sweep detects intervening terrain/site crossings and refines the first contact. Moving craft and unbraked wheels on slopes cannot use the parked time-warp shortcut. Nine regressions cover these behaviors. Per-part contact hulls, angular impact impulses, imported materials and vessel collisions remain open; see [physics and flight work](reference-notes/physics-flight-progress.md).
+
+- Roll-aware aerodynamics: drag, lift, airflow torque, heating, control-surface readouts and wing effects use the same rolled craft frame. Shielded wings stop contributing force; aerodynamic lever arms follow fuel mass changes. Per-part forces and application offsets reach the joint solver, including fairing drag. Structural torque accumulators are cleared each tick, preventing persistent false loads. Six added regressions cover banking, shielding, fuel shifts, heating and the torque reset; local rotational airflow, full actuator modeling and contacts remain open. See [physics and flight work](reference-notes/physics-flight-progress.md).
+
+- Per-engine propulsion: the native flight loop resolves each engine's resource request before motion, uses its full authored pressure/Isp curve (including pressures above one atmosphere), and limits its impulse to the fuel delivered that step. Mixed engines burn at their own mass-flow rates; jet air limits apply only to the jet. Structural load targets retain each engine's last partial burn, and flight thrust/TWR/engine-FX eligibility use the same demand calculation. Six analytical and universe-loop regressions cover these changes; see [physics and flight work](reference-notes/physics-flight-progress.md).
+
+- Off-axis propulsion and rotation: engines push along their mounted part axes, producing force and torque about the current fuel-weighted mass centre. Part-backed flight uses an oriented-box inertia tensor, preserves angular momentum during a free tumble, and bounds SAS torque instead of erasing externally induced roll. Thrust respects craft roll; structural loading receives the engine forces and actuator torque separately. Six additional analytical tests cover mounting angles, roll, fuel shifts, detachment, inertia and torque-free motion. Nozzle geometry, axis-specific actuator limits and physical contacts remain open; see the limitations in the physics notes.
 
 - Multiplayer control response: held flight/EVA inputs at 20 Hz with immediate key changes; bounded quaternion attitude prediction and correction for the flight model and navball, reset on discontinuities. Native regression tests and a browser launch/steering test with 30 ms added round-trip delay cover the changes; see [multiplayer performance](multiplayer-performance.md).
 
