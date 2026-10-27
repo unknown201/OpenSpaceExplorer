@@ -1324,6 +1324,7 @@ impl Universe {
                     st.sync(&mut p);
                     let mut burned = Vec::new();
                     let mut lift = DVec3::ZERO;
+                    p.aero_drag_kn = None;
                     let mut torque = DVec3::ZERO;
                     let mut surfaces = 0.0;
                     // part drag (and heating) for the airflow now
@@ -1351,7 +1352,11 @@ impl Universe {
                             step_dt,
                         );
                         let frame = flight::vessel_basis(&p);
-                        let forces = st.aerodynamics(p.stage, frame, v_air, a.density(alt), mach);
+                        let forces = st.aerodynamics_local(
+                            p.stage,
+                            structure::Airflow::at(&p, &body, Some(a)),
+                        );
+                        p.aero_drag_kn = Some(forces.drag_kn);
                         let cda = forces.cda_m2;
                         lift = forces.lift_kn;
                         torque = forces.torque_knm;
@@ -1370,6 +1375,10 @@ impl Universe {
                         }
                         cda
                     });
+                    if atmo.is_none() {
+                        // Clear the overlay and saved part loads on an airless SOI transition.
+                        st.aerodynamics_local(p.stage, structure::Airflow::at(&p, &body, None));
+                    }
                     p.lift_kn = lift;
                     p.aero_torque_knm = torque;
                     p.surface_torque_knm = surfaces;

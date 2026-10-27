@@ -6,7 +6,7 @@
 //!
 //! Frame: body-centred, inertial, Z-up, the body spinning about +Z at `2 pi / rotation_period`. Surface
 //! velocity is `v - omega x r`. Atmosphere density follows the body's pressure and temperature curves
-//! (`docs/reference-notes/physics-joints-drag.md`). Drag uses summed part `Cd A`, or the spec's fallback area.
+//! (`docs/reference-notes/physics-joints-drag.md`). Drag uses resolved per-part forces, or the spec's fallback area.
 
 use crate::bodies::Body;
 use bevy_ecs::prelude::*;
@@ -196,6 +196,9 @@ pub struct Powered {
     /// reference area and coefficient.
     #[serde(default)]
     pub drag_cda_m2: Option<f64>,
+    /// Transient resolved vector drag from the parts; recomputed each physics step.
+    #[serde(skip)]
+    pub aero_drag_kn: Option<DVec3>,
     /// Fraction of the reaction wheel torque that has power.
     #[serde(default = "one")]
     pub wheel_scale: f64,
@@ -782,6 +785,7 @@ impl Powered {
             thrust_scale: 1.0,
             locked_thrust_fraction: 0.0,
             drag_cda_m2: None,
+            aero_drag_kn: None,
             wheel_scale: 1.0,
             controlled: true,
             ignited: !landed,
@@ -1539,7 +1543,7 @@ pub fn integrate_with_propulsion(
         let (up, _, _) = surface_frame(p.r);
         let normal = ground_normal(body, terrain, p.r, ut);
         let lift_acc = if p.mass_t > 0.0 {
-            p.lift_kn * (1.0 / p.mass_t)
+            (p.lift_kn + p.aero_drag_kn.unwrap_or(DVec3::ZERO)) * (1.0 / p.mass_t)
         } else {
             DVec3::ZERO
         };
@@ -1610,7 +1614,9 @@ pub fn integrate_with_propulsion(
     // gravity + drag
     let g_acc = p.r * (-body.mu / (r_mag * r_mag * r_mag));
     let v_surf = p.v - omega_v.cross(p.r);
-    let drag_acc = if rho > 0.0 && v_surf.length_squared() > 0.0 {
+    let drag_acc = if let Some(drag) = p.aero_drag_kn.filter(|_| p.mass_t > 0.0) {
+        drag * (1.0 / p.mass_t)
+    } else if rho > 0.0 && v_surf.length_squared() > 0.0 {
         let q = 0.5 * rho * v_surf.length_squared();
         let cda = p
             .drag_cda_m2

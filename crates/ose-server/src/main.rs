@@ -882,15 +882,7 @@ fn flight_readout(
         atmosphere_temperature_k: atmo.map(|a| a.temperature_k.evaluate(alt)).unwrap_or(0.0),
         lifting_surfaces: u
             .structure(e)
-            .map(|st| {
-                st.lifting_fx(
-                    ose_sim::flight::vessel_basis(p),
-                    v_surf,
-                    rho,
-                    atmo.map(|a| v_surf.length() / a.speed_of_sound(alt).max(1.0))
-                        .unwrap_or(0.0),
-                )
-            })
+            .map(|st| st.lifting_fx_local(ose_sim::structure::Airflow::at(p, body, atmo)))
             .unwrap_or_default(),
         mach_number: atmo
             .map(|a| v_surf.length() / a.speed_of_sound(alt).max(1.0))

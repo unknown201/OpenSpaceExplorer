@@ -81,12 +81,22 @@ Nine new tests cover friction energy/sign behavior, shallow/steep slope support,
 
 This remains a contact-proxy improvement. The sweep samples every two metres up to 256 samples, then bisects a detected crossing; sufficiently narrow features can still be missed, especially once that cap is reached. It is not continuous mesh or hull collision detection. The craft still uses its existing upright clearance/footprint and snap-to-rest attitude. Contact does not yet generate off-centre angular impulses or distribute reaction forces through the joints. Friction coefficients (0.8 static, 0.6 sliding) are provisional, not imported KSP2 material values. Wheel rolling, EVA walking, wreck handling and ocean-as-ground behavior retain their previous approximations. Tangential sliding does not yet model abrasion damage/heating, and the remaining fraction of a touchdown tick carries the surface with the planet but defers sliding advance to the next tick.
 
+## Integrated with current main; completed: rotational airflow
+
+Integration onto upstream `fec09e4` preserves its manual steering over SAS holds, trim, restored craft orientation, aero overlays, directional crash destruction and debris. An added regression verifies the manual override, trim and restored orientation with part-backed inertia; the shielding test also checks overlay forces against the actual applied forces. Upstream also supplies EVA ladders, resource/crew transfers and chained maneuvers that were absent from the original research baseline.
+
+Each aerodynamic application point now sees `v_air + (omega_craft - omega_atmosphere) x (point - current mass centre)`. Landed craft follow the rotating surface. Drag cubes, parachutes, fairing bases and lifting surfaces use the local flow direction, dynamic pressure, Mach number and pseudo-Reynolds input. This produces passive aerodynamic damping during rotation, including with zero translational airspeed. The summed vector drag reaches translation directly; it is no longer reconstructed from one scalar area and the centre's velocity. Moments, structural loads, the aero overlay and wing effects share these forces. Airless transitions clear retained part loads and overlays.
+
+Reference evidence: `KSP.Modules/Module_LiftingSurface.cs::CalculateLiftDragForces` uses `PartBehavior.VelocityRelativeToSOIBodyFrameInPhysicsSpace`; `PartBehavior.GetVelocityRelativeToSOIBodyFrame` obtains the part's motion relative to the rotating body frame. This increment uses rigid-body point kinematics instead of independent per-part motion. **Local dynamic pressure and Mach are a physical refinement, not a claim of exact reference arithmetic:** `PartComponent.OnFixedUpdate` shares vessel dynamic pressure and Mach for vessel-owned parts. Authored bounds centres remain approximate force points, density/sound speed are uniform over the craft, structural flex velocity and wind are omitted, and heating/control-authority estimates still use vessel-level airflow. Imported centre-of-pressure offsets, lifting-surface options and actual surface deflection forces remain open.
+
+Four new tests verify analytical wing damping and effect strength, local Mach/drag and nonpositive mechanical power, rotation covariance, vacuum/shielding removal, co-rotating atmosphere behavior, and monotonically decreasing free-tumble energy across 500 integration steps. Several assertions share tests.
+
 ## Remaining physics priorities
 
 1. Import engine/nozzle transforms and weights, mass offsets and usable inertia geometry; replace scalar control authority with per-axis wheel, gimbal, RCS and control-surface limits, and keep structural mass properties synchronized with flight.
-2. Add local airflow from angular motion, aerodynamic damping, centre-of-pressure offsets, full lifting-surface options and force-based control-surface deflection.
+2. Import centre-of-pressure offsets and full lifting-surface options; implement force-based control-surface deflection and extend local airflow to heating and control-authority estimates.
 3. Replace the sampled ground proxy with per-part contact geometry for terrain, facilities, debris and nearby vessels; resolve off-centre angular impulses and connect reaction forces to joint loads. Add imported contact materials and sliding damage/heat.
-4. Implement displacement-based buoyancy and richer wheel/suspension/traction behavior, then docking attraction/capture and EVA ladder/hatch contact.
+4. Implement displacement-based buoyancy and richer wheel/suspension/traction behavior, then docking attraction/capture and physical EVA ladder/hatch contact (upstream now includes ladder commands and climbing).
 
 The next contact acceptance cases should cover off-centre impulses that turn the craft, continuous hull contacts that prevent tunnelling, and equal-and-opposite impulses for vessel/debris collisions. Contact forces should reach the same joint-load path as aerodynamic and engine forces. Retain the new slope, normal-speed and sliding-friction regressions while extending the model.
 
@@ -94,8 +104,8 @@ Per-engine mode switching, imported nozzle transforms, thrust response curves/li
 
 ## Validation, 2026-10-27
 
-- `cargo test -p ose-sim --lib`: 114 passed.
-- `cargo test --workspace`: passed on the final aerodynamic/contact implementation, including the fresh-server bot campaign through Mun landing and the server WebSocket tests. The existing ignored test remains ignored.
+- Before integration: `cargo test -p ose-sim --lib` passed all 114 tests. Integration with upstream adds its regressions and the manual-control check; the rotational-airflow follow-up passes all 130 tests.
+- `cargo test --workspace`: passed on both the integrated aerodynamic/contact implementation (`c328583`) and the rotational-airflow follow-up, including the fresh-server bot campaign through Mun landing and the server WebSocket tests. The existing ignored test remains ignored.
 - `cargo clippy --workspace --all-targets -- -D warnings`: passed.
 - `cargo check -p ose-client --target wasm32-unknown-unknown`: passed.
 - `cargo fmt --all --check` and `git diff --check`: passed.
