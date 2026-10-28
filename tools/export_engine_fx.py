@@ -256,7 +256,9 @@ class EngineFxExporter:
     def write(self):
         engine_files = {}
         for name,layers in self.engines.items():
-            uri = f"engines/{name}.json"
+            # Colons name NTFS streams on Windows and disappear from normal archives.
+            filename = name.replace(":", "_")
+            uri = f"engines/{filename}.json"
             (self.out/uri).write_text(json.dumps(layers,separators=(',',':')),encoding="utf-8")
             engine_files[name] = uri
         settings={}

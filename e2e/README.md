@@ -1,5 +1,8 @@
 # Browser end-to-end tests
 
+For repeatable pad/ascent CPU profiles and GPU pass isolation, see
+[ascent performance](../docs/ascent-performance.md) and `scripts/profile-ascent.mjs`.
+
 Playwright drives the real WASM client in Chromium and Firefox against `ose-server` and walks a fixed
 chain of player steps (`src/steps.ts`). Each step ends `PASSED`, `BLOCKED` (the client lacks the
 feature, named with its roadmap phase), `SKIPPED` (this browser or machine cannot do it, e.g. no WebGPU

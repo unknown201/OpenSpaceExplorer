@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 38;
+pub const PROTOCOL_VERSION: u16 = 39;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -270,6 +270,14 @@ pub enum ClientMessage {
     TurnInMission {
         id: String,
     },
+    /// Claim an unowned session. Ownership persists with the player's account.
+    ClaimSession {
+        id: String,
+    },
+    /// Delete an empty session owned by this player.
+    DeleteSession {
+        id: String,
+    },
 }
 
 /// A science report (the original's research report).
@@ -449,6 +457,8 @@ pub struct SessionInfo {
     pub ut_s: f64,
     pub last_played_unix: u64,
     pub players: u32,
+    pub owner: Option<u64>,
+    pub owner_name: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -457,6 +467,7 @@ pub struct CampaignMember {
     pub display_name: String,
     pub joined_tick: Tick,
     pub agency: Option<Agency>,
+    pub online: bool,
 }
 
 /// Attitude hold modes for powered flight (mirrors `ose_sim::flight::Attitude`).
@@ -645,6 +656,9 @@ pub struct KerbalInfo {
 pub struct LaunchSite {
     pub id: String,
     pub name: String,
+    /// Display name of the owner of a vessel occupying the spawn area.
+    #[serde(default)]
+    pub occupied_by: Option<String>,
     pub runway: bool,
     pub lat_deg: f64,
     pub lon_deg: f64,
@@ -949,6 +963,12 @@ pub enum ServerMessage {
     /// Sent right after `BodyCatalog`: each body's rotation.
     BodyRotation {
         bodies: Vec<BodySpin>,
+    },
+    /// Live session browser and campaign presence, pushed when membership or ownership changes.
+    SessionPresence {
+        sessions: Vec<SessionInfo>,
+        campaign_id: String,
+        members: Vec<CampaignMember>,
     },
 }
 

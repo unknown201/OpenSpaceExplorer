@@ -1417,6 +1417,15 @@ pub fn integrate_with_propulsion(
     let resolved_force = propulsion
         .as_ref()
         .map(|e| bx * e.force_kn.x + by * e.force_kn.y + bz * e.force_kn.z);
+    if let Some(allocation) = propulsion
+        .as_ref()
+        .and_then(|e| e.control_allocation.as_ref())
+    {
+        out.actuator_inputs = allocation.inputs.clone();
+        out.actuator_axial_corrections = allocation.axial_corrections.clone();
+        let f = allocation.force_kn;
+        out.control_force_kn = bx * f.x + by * f.y + bz * f.z;
+    }
     if p.landed {
         if !p.tipped {
             p.facing = if p.level {
@@ -1490,6 +1499,7 @@ pub fn integrate_with_propulsion(
 
     // thrust and propellant
     let mut thrust_acc = DVec3::ZERO;
+    let force_mass_t = p.mass_t;
     if let Some(engine) = propulsion.as_ref() {
         if p.mass_t > 0.0 && thrust_kn > 0.0 {
             thrust_acc = resolved_force.unwrap_or(DVec3::ZERO) * (1.0 / p.mass_t);
@@ -1523,15 +1533,22 @@ pub fn integrate_with_propulsion(
     }
 
     thrust_acc = thrust_acc
-        + out.control_force_kn * (1.0 / p.mass_t)
+        + out.control_force_kn * (1.0 / force_mass_t)
         + propulsion
             .as_ref()
             .map(|e| e.environment_force_kn * (1.0 / p.mass_t))
             .unwrap_or(DVec3::ZERO);
 
     // RCS translation (the RCS group on), in the craft's axes
-    p.rcs.usage = 0.0;
-    if p.groups.rcs && p.controlled && p.rcs.thrust_kn > 0.0 && p.mass_t > 0.0 {
+    if propulsion.is_none() {
+        p.rcs.usage = 0.0;
+    }
+    if propulsion.is_none()
+        && p.groups.rcs
+        && p.controlled
+        && p.rcs.thrust_kn > 0.0
+        && p.mass_t > 0.0
+    {
         // Turning spends RCS propellant too, including SAS correction. The same normalized
         // request drives the directional nozzle visuals in the authoritative readout.
         if !p.landed && p.rcs.torque_knm > 0.0 {

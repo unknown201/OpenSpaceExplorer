@@ -1188,7 +1188,7 @@ impl Universe {
                         step_dt,
                         &mut propulsion,
                     );
-                    st.resolve_wheel_power(&mut p, &body, &mut propulsion, step_dt);
+                    st.resolve_actuator_resources(&mut p, &body, &mut propulsion, step_dt);
                     propulsion
                 });
                 let before = p.clone();
@@ -1263,11 +1263,6 @@ impl Universe {
                 if let Some(st) = &mut structure {
                     // Propulsion already drew exactly the fuel that produced this step's impulse.
                     st.sync(&mut p);
-                    let pressure = atmo
-                        .as_ref()
-                        .map(|a| a.pressure_kpa(p.r.length() - body.radius_m) / 101.325)
-                        .unwrap_or(0.0);
-                    st.rcs_burn(&mut p, pressure, step_dt);
                     if comm_blocked {
                         // a probe out of contact cannot be flown (CommNetRequired)
                         p.controlled = false;

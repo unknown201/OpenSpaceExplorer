@@ -213,6 +213,7 @@ async fn hello_catalog_and_snapshots() {
                 assert_eq!(patches[0].end, ose_net::PatchEnd::Final);
                 saw_traj = true;
             }
+            ServerMessage::LaunchSites { .. } | ServerMessage::SessionPresence { .. } => {}
             other => panic!("unexpected {other:?}"),
         }
         if saw_time.is_some() && saw_snap.is_some() && saw_vessel && saw_traj {
@@ -772,6 +773,12 @@ async fn hello_catalog_and_snapshots() {
     let ServerMessage::Welcome { player_id: p2, .. } = recv(&mut ws2).await else {
         panic!("expected Welcome 2")
     };
+    // Browsing the menu must not participate in warp arbitration.
+    send_msg(&mut ws2, &ClientMessage::JoinCampaign).await;
+    wait_for(&mut ws2, |m| {
+        matches!(m, ServerMessage::CampaignState { .. }).then_some(())
+    })
+    .await;
     let mut limited = false;
     for _ in 0..40 {
         if let ServerMessage::TimeState {
@@ -1550,6 +1557,47 @@ async fn a_plane_launched_on_the_runway_lies_level_facing_down_it() {
         _ => None,
     })
     .await;
+    let sites = wait_for(&mut ws, |m| match m {
+        ServerMessage::LaunchSites { sites } if sites.iter().any(|s| s.occupied_by.is_some()) => {
+            Some(sites)
+        }
+        _ => None,
+    })
+    .await;
+    assert_eq!(
+        sites
+            .iter()
+            .find(|s| s.id == "Runway_1")
+            .unwrap()
+            .occupied_by
+            .as_deref(),
+        Some("pilot")
+    );
+    assert!(sites
+        .iter()
+        .filter(|s| !s.runway)
+        .all(|s| s.occupied_by.is_none()));
+    // A second connection cannot roll another craft onto the occupied spawn.
+    let mut other = connect_ws(&addr).await;
+    hello(&mut other, None, "other pilot").await;
+    send_msg(
+        &mut other,
+        &ClientMessage::LaunchSavedAt {
+            id: jet,
+            site: Some("Runway_1".into()),
+            crew: None,
+        },
+    )
+    .await;
+    wait_for(&mut other, |m| match m {
+        ServerMessage::CraftLaunched { vessel, reason, .. } => {
+            assert!(vessel.is_none());
+            assert!(reason.unwrap().contains("in use by pilot"));
+            Some(())
+        }
+        _ => None,
+    })
+    .await;
     // body positions from the snapshot, then the vessel from the vessels list sent with it
     let mut bodies = Vec::new();
     let (f, up) = wait_for(&mut ws, |m| match m {
@@ -1701,7 +1749,7 @@ async fn the_roster_lists_the_astronauts_and_a_launch_takes_the_chosen_crew() {
         .any(|(k, v)| k == "HAIRSTYLE" && v == "HAIR_JEB"));
     let launch = |crew: Option<Vec<String>>| ClientMessage::LaunchAt {
         craft: starter_craft(),
-        site: None,
+        site: Some("LaunchPad_2".into()),
         crew,
     };
     let launched = |m: ServerMessage| match m {
@@ -1709,7 +1757,15 @@ async fn the_roster_lists_the_astronauts_and_a_launch_takes_the_chosen_crew() {
         _ => None,
     };
     // Bill flies the pod
-    send_msg(&mut ws, &launch(Some(vec!["Bill Kerman".into()]))).await;
+    send_msg(
+        &mut ws,
+        &ClientMessage::LaunchAt {
+            craft: starter_craft(),
+            site: Some("LaunchPad_1".into()),
+            crew: Some(vec!["Bill Kerman".into()]),
+        },
+    )
+    .await;
     let (vessel, reason) = wait_for(&mut ws, launched).await;
     assert!(reason.is_none(), "{reason:?}");
     let vessel = vessel.unwrap();
@@ -1919,7 +1975,7 @@ async fn campaigns_can_be_left_resumed_and_started_again() {
     let list = wait_for(&mut ws, listed).await;
     assert!(list
         .iter()
-        .any(|x| x.id == alpha && x.name == "Alpha" && x.players == 1));
+        .any(|x| x.id == alpha && x.name == "Alpha" && x.players == 0));
     // start another: both are listed, the new one first
     send_msg(&mut ws, &create("Beta")).await;
     let (beta, name, created, member) = wait_for(&mut ws, state).await;
@@ -2337,4 +2393,208 @@ async fn deployment_snapshots_identify_panel_and_gear_instances() {
     })
     .await;
     assert_eq!(f.panels, vec![(3, false), (4, false)]);
+}
+
+#[tokio::test]
+async fn session_ownership_presence_and_cleanup() {
+    let (_server, addr) = spawn_server().await;
+    let mut owner = connect_ws(&addr).await;
+    let (owner_id, token) = hello(&mut owner, None, "Owner").await;
+    let mut visitor = connect_ws(&addr).await;
+    let (visitor_id, _) = hello(&mut visitor, None, "Visitor").await;
+    send_msg(
+        &mut owner,
+        &ClientMessage::CreateSession {
+            name: "Cleanup test".into(),
+            mode: ose_net::SessionMode::Sandbox,
+            difficulty: vec![],
+        },
+    )
+    .await;
+    let id = wait_for(&mut owner, |m| match m {
+        ServerMessage::CampaignState {
+            id, created: true, ..
+        } => Some(id),
+        _ => None,
+    })
+    .await;
+    wait_for(&mut visitor, |m| match m {
+        ServerMessage::SessionPresence { sessions, .. }
+            if sessions
+                .iter()
+                .any(|s| s.id == id && s.owner == Some(owner_id) && s.players == 1) =>
+        {
+            Some(())
+        }
+        _ => None,
+    })
+    .await;
+    // Menu visitors cannot hold down warp.
+    send_msg(&mut owner, &ClientMessage::RequestWarp { factor: 100 }).await;
+    wait_for(&mut owner, |m| {
+        matches!(m, ServerMessage::TimeState { warp: 100, .. }).then_some(())
+    })
+    .await;
+    send_msg(
+        &mut visitor,
+        &ClientMessage::DeleteSession { id: id.clone() },
+    )
+    .await;
+    wait_for(&mut visitor, |m| match m {
+        ServerMessage::Rejected { reason } => {
+            assert!(reason.contains("owner"));
+            Some(())
+        }
+        _ => None,
+    })
+    .await;
+    send_msg(
+        &mut visitor,
+        &ClientMessage::ClaimSession { id: id.clone() },
+    )
+    .await;
+    wait_for(&mut visitor, |m| match m {
+        ServerMessage::Rejected { reason } => {
+            assert!(reason.contains("owner"));
+            Some(())
+        }
+        _ => None,
+    })
+    .await;
+    send_msg(
+        &mut visitor,
+        &ClientMessage::SelectSession { id: id.clone() },
+    )
+    .await;
+    wait_for(&mut visitor, |m| {
+        matches!(
+            m,
+            ServerMessage::CampaignState {
+                you_are_member: true,
+                ..
+            }
+        )
+        .then_some(())
+    })
+    .await;
+    wait_for(&mut owner, |m| match m {
+        ServerMessage::SessionPresence {
+            members, sessions, ..
+        } if members
+            .iter()
+            .any(|m| m.player_id == visitor_id && m.online)
+            && sessions.iter().any(|s| s.id == id && s.players == 2) =>
+        {
+            Some(())
+        }
+        _ => None,
+    })
+    .await;
+    send_msg(&mut owner, &ClientMessage::DeleteSession { id: id.clone() }).await;
+    wait_for(&mut owner, |m| match m {
+        ServerMessage::Rejected { reason } => {
+            assert!(reason.contains("leave"));
+            Some(())
+        }
+        _ => None,
+    })
+    .await;
+    send_msg(&mut visitor, &ClientMessage::LeaveSession).await;
+    wait_for(&mut owner, |m| match m {
+        ServerMessage::SessionPresence {
+            members, sessions, ..
+        } if members
+            .iter()
+            .any(|m| m.player_id == visitor_id && !m.online)
+            && sessions.iter().any(|s| s.id == id && s.players == 1) =>
+        {
+            Some(())
+        }
+        _ => None,
+    })
+    .await;
+    wait_for(&mut owner, |m| {
+        matches!(m, ServerMessage::TimeState { warp: 100, .. }).then_some(())
+    })
+    .await;
+    // A second connection for the same account closing does not make its pilot disappear.
+    let mut duplicate = connect_ws(&addr).await;
+    hello(&mut duplicate, Some(token.clone()), "Owner").await;
+    send_msg(&mut duplicate, &ClientMessage::CampaignInfo).await;
+    wait_for(&mut duplicate, |m| {
+        matches!(m, ServerMessage::CampaignState { .. }).then_some(())
+    })
+    .await;
+    drop(duplicate);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    send_msg(&mut visitor, &ClientMessage::ListSessions).await;
+    let sessions = wait_for(&mut visitor, |m| match m {
+        ServerMessage::SessionList { sessions } => Some(sessions),
+        _ => None,
+    })
+    .await;
+    assert_eq!(sessions.iter().find(|s| s.id == id).unwrap().players, 1);
+    drop(owner);
+    wait_for(&mut visitor, |m| match m {
+        ServerMessage::SessionPresence { sessions, .. }
+            if sessions.iter().any(|s| s.id == id && s.players == 0) =>
+        {
+            Some(())
+        }
+        _ => None,
+    })
+    .await;
+    // Token resume retains ownership and an empty live campaign can be deleted.
+    let mut owner = connect_ws(&addr).await;
+    assert_eq!(hello(&mut owner, Some(token), "Owner").await.0, owner_id);
+    send_msg(&mut owner, &ClientMessage::DeleteSession { id: id.clone() }).await;
+    let sessions = wait_for(&mut owner, |m| match m {
+        ServerMessage::SessionList { sessions } => Some(sessions),
+        _ => None,
+    })
+    .await;
+    assert!(sessions.iter().all(|s| s.id != id));
+    // Legacy sessions can be claimed and deleted from the shelf.
+    send_msg(
+        &mut owner,
+        &ClientMessage::ClaimSession {
+            id: "shared".into(),
+        },
+    )
+    .await;
+    let sessions = wait_for(&mut owner, |m| match m {
+        ServerMessage::SessionList { sessions } => Some(sessions),
+        _ => None,
+    })
+    .await;
+    assert_eq!(
+        sessions.iter().find(|s| s.id == "shared").unwrap().owner,
+        Some(owner_id)
+    );
+    send_msg(
+        &mut owner,
+        &ClientMessage::CreateSession {
+            name: "Another".into(),
+            mode: ose_net::SessionMode::Sandbox,
+            difficulty: vec![],
+        },
+    )
+    .await;
+    wait_for(&mut owner, |m| {
+        matches!(m, ServerMessage::CampaignState { created: true, .. }).then_some(())
+    })
+    .await;
+    send_msg(
+        &mut owner,
+        &ClientMessage::DeleteSession {
+            id: "shared".into(),
+        },
+    )
+    .await;
+    let sessions = wait_for(&mut owner, |m| match m {
+        ServerMessage::SessionList { sessions } => Some(sessions),
+        _ => None,
+    })
+    .await;
+    assert!(sessions.iter().all(|s| s.id != "shared"));
 }
