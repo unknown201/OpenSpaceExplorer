@@ -4,6 +4,8 @@ Updated 2026-10-27.
 
 ## What works
 
+- Aerodynamics now loads the installed reference settings, including all four named lift families. Authored pressure/lift/control offsets keep body drag, wing force and drag-cube body lift at distinct points, each with local rotational airflow. Drag/lift flags and body-lift multipliers are imported for all 400 parts. Analytical regressions and the full Mun/server journey pass; procedural and deflected-surface geometry remain open. See [physics progress](reference-notes/physics-flight-progress.md).
+
 - EVA jetpacks now load the authored force, torque, full pressure/Isp curve and rate/reset settings. Move and rotation share one pack resolved before motion, including final partial fuel and automatic braking. Empty packs cannot grant a free tick or stop a spin; walking/jumping do not burn fuel. Old saves gain settings without refilling. Eight simulation regressions plus importer coverage; remaining camera/character/water behavior is tracked in [physics progress](reference-notes/physics-flight-progress.md).
 
 - Physics continuation: part bounds now supply impact angular impulses and joint reactions; displacement-based buoyancy allows floating and sinking; extended gear supplies spring/damper support. Wet structural mass/inertia follows current resources, and all 400 parts carry their authored mass centres (14 nonzero), with matching mounted flight/structural levers. Mounted wheel axes and bounded gimbals replace scalar control torque, and wheel charge/RCS propellant delivery limits this tick's forces before motion. RCS translation/rotation share each of the 22 authored one-way nozzle budgets; opposing nozzles pay for fuel even when their net translation cancels. Engine thrust uses all 63 authored nozzle points across 41 modes, preserving canted directions and individual force locations. See [physics progress and remaining parity gates](reference-notes/physics-flight-progress.md); continuous hull/vessel contacts, authored suspension/materials, RCS precision/part controls and richer aero remain open.
@@ -149,7 +151,7 @@ Live at https://ose.jfly.dev/ (home network and Tailscale). A push to `main` bui
 
 - Client, in the player's order (ADR-0007): campaign creation as the original's flow (mode, difficulty, name, agency, flag), then the KSC as a 3D scene with clickable buildings, the VAB with real part meshes, the launch pad, flight and map.
 
-- Extract the shipped `PhysicsSettings` asset (drag curves, joint constants) so the sim loads them from data.
+- Aerodynamic PhysicsSettings are now exported from the loaded reference JSON and used at runtime. Extract and load the remaining joint and thermal constants.
 - Campaign content: missions and the tech tree from the imported JSON, science.
 - Saves keep each vessel's parts as launched with which are still on and what each is doing (panels and antennas out, chutes, heat, gear, converters, fairings, bays), its control part and whether it is debris (`SavedVessel.parts`); older saves restore from the compacted `craft` as before.
 - Phase 6 next: ground contact per part (landing legs, tipping over) and body lift; panel orientation and transmitter draw; antennas and transmission time; EVA construction.

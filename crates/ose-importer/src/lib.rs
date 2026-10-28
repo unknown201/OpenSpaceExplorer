@@ -400,6 +400,7 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
 
     let mut engines = Vec::new();
     let mut drag_cubes = Vec::new();
+    let mut drag_properties = ose_data::DragProperties::default();
     let mut module_names = Vec::new();
     let mut raw_modules = BTreeMap::new();
     let mut gimbal_range = None;
@@ -425,11 +426,19 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
     let mut lifting_surface: Option<ose_data::LiftingSurface> = None;
     let mut intake_area_m2 = 0.0;
     let mut ctrl = (0.0, 0.0);
+    let mut ctrl_pressure_offset_m = DVec3::ZERO;
     if let Some(mods) = d["serializedPartModules"].as_array() {
         for m in mods {
             if let Some(entries) = m["ModuleData"].as_array() {
                 for entry in entries.iter() {
                     let o = &entry["DataObject"];
+                    if entry["Name"] == "Data_Drag" {
+                        drag_properties = ose_data::DragProperties {
+                            drag_enabled: o["DragEnabled"].as_bool().unwrap_or(true),
+                            body_lift_enabled: o["BodyLiftEnabled"].as_bool().unwrap_or(true),
+                            body_lift_multiplier: o["bodyLiftMultiplier"].as_f64().unwrap_or(1.0),
+                        };
+                    }
                     if entry["Name"] == "Data_LiftingSurface" {
                         let sign = match f(o, "transformSign") {
                             0.0 => 1.0,
@@ -441,6 +450,11 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
                             _ => DVec3::new(sign, 0.0, 0.0),
                         };
                         lifting_surface = Some(ose_data::LiftingSurface {
+                            pressure_offset_m: vec3(&o["CoPOffset"]),
+                            perpendicular_only: b(o, "perpendicularOnly"),
+                            use_internal_drag_model: o["useInternalDragModel"]
+                                .as_bool()
+                                .unwrap_or(true),
                             deflection_lift_coeff: f(o, "deflectionLiftCoeff"),
                             axis,
                             omnidirectional: b(o, "omnidirectional"),
@@ -453,6 +467,7 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
                     }
                     if entry["Name"] == "Data_ControlSurface" && !b(o, "DisableLiftingSurfaceForce")
                     {
+                        ctrl_pressure_offset_m = vec3(&o["CoPressureCtrlSurfaceOffset"]);
                         ctrl = (
                             f(o, "CtrlSurfaceRange"),
                             f(o, "CtrlSurfaceArea").clamp(0.0, 1.0),
@@ -745,6 +760,9 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
         stage_type: s(d, "stageType"),
         mass_t: f(d, "mass"),
         mass_offset_m: vec3(&d["coMassOffset"]),
+        pressure_offset_m: vec3(&d["coPressureOffset"]),
+        lift_offset_m: vec3(&d["coLiftOffset"]),
+        drag_properties,
         cost: f(d, "cost"),
         crew_capacity: d["crewCapacity"].as_u64().unwrap_or(0) as u32,
         max_temp_k: f(d, "maxTemp"),
@@ -779,6 +797,7 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
         lifting_surface,
         ctrl_range_deg: ctrl.0,
         ctrl_area: ctrl.1,
+        ctrl_pressure_offset_m,
         intake_area_m2,
         drag_cubes,
         module_names,
@@ -1328,5 +1347,43 @@ mod tests {
         assert_eq!(imported.rotate_max_speed_deg_s, 45.0);
         assert!(!imported.reset_enabled);
         assert_eq!(imported.isp_curve.evaluate(0.0), 150.0);
+    }
+    #[test]
+    fn aerodynamic_offsets_and_lift_options_import_with_legacy_defaults() {
+        let value = serde_json::json!({"data":{"partName":"wing","coPressureOffset":{"x":1.0,"y":2.0,"z":3.0},"serializedPartModules":[{"ModuleData":[{"Name":"Data_LiftingSurface","DataObject":{"CoPOffset":{"x":0.0,"y":4.0,"z":0.0},"perpendicularOnly":true,"useInternalDragModel":false}},{"Name":"Data_ControlSurface","DataObject":{"CtrlSurfaceRange":20.0,"CtrlSurfaceArea":0.5,"CoPressureCtrlSurfaceOffset":{"x":5.0,"y":0.0,"z":0.0}}}]}]}});
+        let imported = part(&value, &mut Coverage::default());
+        assert_eq!(imported.pressure_offset_m, DVec3::new(1.0, 2.0, 3.0));
+        assert_eq!(imported.ctrl_pressure_offset_m, DVec3::new(5.0, 0.0, 0.0));
+        let wing = imported.lifting_surface.as_ref().unwrap();
+        assert_eq!(wing.pressure_offset_m, DVec3::new(0.0, 4.0, 0.0));
+        assert!(wing.perpendicular_only);
+        assert!(!wing.use_internal_drag_model);
+        let mut old = serde_json::to_value(wing).unwrap();
+        for key in [
+            "pressure_offset_m",
+            "perpendicular_only",
+            "use_internal_drag_model",
+        ] {
+            old.as_object_mut().unwrap().remove(key);
+        }
+        let legacy: ose_data::LiftingSurface = serde_json::from_value(old).unwrap();
+        assert_eq!(legacy.pressure_offset_m, DVec3::ZERO);
+        assert!(!legacy.perpendicular_only);
+        assert!(legacy.use_internal_drag_model);
+    }
+    #[test]
+    fn body_lift_flags_multiplier_and_authored_lift_point_are_imported() {
+        let value = serde_json::json!({"data":{"partName":"body","coLiftOffset":{"x":1.0,"y":0.0,"z":2.0},"serializedPartModules":[{"ModuleData":[{"Name":"Data_Drag","DataObject":{"DragEnabled":false,"BodyLiftEnabled":true,"bodyLiftMultiplier":2.5}}]}]}});
+        let imported = part(&value, &mut Coverage::default());
+        assert_eq!(imported.lift_offset_m, DVec3::new(1.0, 0.0, 2.0));
+        assert!(!imported.drag_properties.drag_enabled);
+        assert!(imported.drag_properties.body_lift_enabled);
+        assert_eq!(imported.drag_properties.body_lift_multiplier, 2.5);
+        let mut old = serde_json::to_value(&imported).unwrap();
+        old.as_object_mut().unwrap().remove("drag_properties");
+        old.as_object_mut().unwrap().remove("lift_offset_m");
+        let legacy: PartDef = serde_json::from_value(old).unwrap();
+        assert_eq!(legacy.drag_properties, ose_data::DragProperties::default());
+        assert_eq!(legacy.lift_offset_m, DVec3::ZERO);
     }
 }

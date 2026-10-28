@@ -268,7 +268,7 @@ pub struct Powered {
     /// In the air from a jump (the throttle still walks, it does not fire the pack).
     #[serde(default)]
     pub eva_hop: bool,
-    /// Force of the wings and other lifting surfaces this step (lift and their drag), kN, inertial, and the
+    /// Body lift and wings/surfaces this step (including surface drag), kN, inertial, and the
     /// airflow's torque about the centre of mass, kN·m, inertial.
     #[serde(default)]
     pub lift_kn: DVec3,

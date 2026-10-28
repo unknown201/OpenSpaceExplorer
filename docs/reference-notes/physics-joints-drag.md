@@ -3,7 +3,7 @@
 From reading `KSP.Sim.impl` (`RigidbodyBehavior`, `PartOwnerBehavior`, `PartComponent`, `CelestialBodyComponent`,
 `PartComponentModule_Engine`), `KSP.Modules` (`Module_Drag`, `Data_Drag`, `Data_Engine`), `PhysicsSettings` and
 `AeroUtilities`. Numbers quoted are the C# defaults in `PhysicsSettings`; the shipped settings asset can override
-them, so the importer should also extract `PhysicsSettings` from the bundles and we test against those values.
+them. The aerodynamic subset is now exported from the actual loaded Global/PhysicsSettings.json into assets/own/aero-settings.json and consumed at runtime; joint and thermal defaults still need the same treatment.
 
 ## Rigid bodies and gravity
 
@@ -146,7 +146,7 @@ clamped ends:
   (0.1, 1.2, -0.785/-0.391), (1, 1), (100, 1), (200, 0.82), (500, 0.86, 1.9e-4), (1000, 0.9, 1.5e-5), (10000, 0.95)
 - `LiftMultiplier` 0.036, `LiftDragMultiplier` 0.015 (lifting surfaces, wings; separate module).
 
-These curves are also in the shipped `PhysicsSettings` asset; the importer should extract that asset and we
+These curves are exported from the loaded `PhysicsSettings` JSON; we
 should load the curves from data rather than hard-coding them.
 
 ## Engines (`Data_Engine.SetConsumptionRate`, `PartComponentModule_Engine.RequiredPropellantMass`)

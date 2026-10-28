@@ -30,7 +30,7 @@ pub struct EngineDemand {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct AeroForces {
     pub cda_m2: f64,
-    /// Lifting-surface force, including its induced drag, inertial kN.
+    /// Drag-cube body lift and lifting-surface force (including surface drag), inertial kN.
     pub lift_kn: DVec3,
     pub torque_knm: DVec3,
     /// Body, fairing and parachute drag, summed as vectors at each part's local airspeed.
@@ -194,6 +194,11 @@ pub struct Structure {
     pub rcs_defs: Vec<Option<ose_data::Rcs>>,
     /// Lifting surfaces (their curves resolved), intake areas, and each engine's jet curves.
     lift_defs: Vec<Option<(ose_data::LiftingSurface, aero::LiftCurves)>>,
+    pressure_offsets_m: Vec<DVec3>,
+    lift_offsets_m: Vec<DVec3>,
+    drag_properties: Vec<ose_data::DragProperties>,
+    body_lift_curves: aero::LiftCurves,
+    control_pressure_offsets_m: Vec<DVec3>,
     pub intake_area_m2: Vec<f64>,
     /// Control surfaces: deflection range (rad) and moving share of the surface.
     ctrl: Vec<(f64, f64)>,
@@ -640,6 +645,27 @@ impl Structure {
                 .map(|i| def_of(i).and_then(|d| d.converter.clone()))
                 .collect(),
             converter_on: vec![false; n],
+            lift_offsets_m: (0..n)
+                .map(|i| def_of(i).map(|d| d.lift_offset_m).unwrap_or(DVec3::ZERO))
+                .collect(),
+            drag_properties: (0..n)
+                .map(|i| def_of(i).map(|d| d.drag_properties).unwrap_or_default())
+                .collect(),
+            body_lift_curves: aero::body_lift_curves(),
+            pressure_offsets_m: (0..n)
+                .map(|i| {
+                    def_of(i)
+                        .map(|d| d.pressure_offset_m)
+                        .unwrap_or(DVec3::ZERO)
+                })
+                .collect(),
+            control_pressure_offsets_m: (0..n)
+                .map(|i| {
+                    def_of(i)
+                        .map(|d| d.ctrl_pressure_offset_m)
+                        .unwrap_or(DVec3::ZERO)
+                })
+                .collect(),
             lift_defs: (0..n)
                 .map(|i| {
                     def_of(i).and_then(|d| d.lifting_surface.clone()).map(|l| {
@@ -651,7 +677,11 @@ impl Structure {
                                 drag_mach: l.drag_mach_curve.clone(),
                             }
                         } else {
-                            aero::default_lift_curves()
+                            aero::settings()
+                                .lift_curves
+                                .get(&l.curve_set)
+                                .cloned()
+                                .unwrap_or_else(aero::default_lift_curves)
                         };
                         (l, curves)
                     })
@@ -1067,7 +1097,7 @@ impl Structure {
                 if range > 0.0 && share > 0.0 && !self.shielded[i] {
                     let q = 0.5 * env.density * self.last_air_speed_mps.powi(2);
                     let cap = (q
-                        * aero::LIFT_MULTIPLIER
+                        * aero::settings().lift_multiplier
                         * l.deflection_lift_coeff
                         * share
                         * curves.lift.evaluate(range.sin())
@@ -1075,13 +1105,14 @@ impl Structure {
                     .max(0.0);
                     let axis = aero::rotate(self.part_rot[i], l.axis);
                     let force = DVec3::new(axis.x, axis.y, -axis.z) * cap;
-                    let (at, _) = self.part_box(i);
+                    let offset = self.control_offset(i);
+                    let at = self.rigid.rest_position(i) + offset;
                     channels.push(Actuator {
                         kind: crate::actuators::Kind::Other,
                         part: i,
                         torque_knm: (at - centre).cross(force),
                         force_kn: force,
-                        offset_m: at - self.rigid.rest_position(i),
+                        offset_m: offset,
                         group: i * 8 + 5,
                         axial: None,
                     });
@@ -2244,13 +2275,46 @@ impl Structure {
         let axis = crate::rigid::to_vessel(aero::rotate(self.part_rot[part], surface.axis));
         aero::surface_force(
             curves,
-            surface.deflection_lift_coeff,
-            surface.omnidirectional,
+            surface,
             x * axis.x + y * axis.y + z * axis.z,
             travel,
             q,
             mach,
         )
+    }
+
+    fn body_lifting_force(
+        &self,
+        part: usize,
+        frame: (DVec3, DVec3, DVec3),
+        travel: DVec3,
+        q: f64,
+        mach: f64,
+    ) -> DVec3 {
+        let props = self.drag_properties[part];
+        if !self.rigid.present[part]
+            || self.shielded[part]
+            || !props.body_lift_enabled
+            || props.body_lift_multiplier <= 0.0
+        {
+            return DVec3::ZERO;
+        }
+        let Some(faces) = &self.faces[part] else {
+            return DVec3::ZERO;
+        };
+        let (x, y, z) = frame;
+        let local = aero::rotate_inverse(
+            self.part_rot[part],
+            DVec3::new(travel.dot(x), travel.dot(y), -travel.dot(z)),
+        );
+        let vector = faces.body_lift_vector(&self.body_lift_curves.lift, local);
+        let vector = self.mounted_offset(part, vector);
+        let force = (x * vector.x + y * vector.y + z * vector.z)
+            * (q / 1000.0
+                * aero::settings().body_lift_multiplier
+                * props.body_lift_multiplier
+                * self.body_lift_curves.lift_mach.evaluate(mach));
+        force - travel * force.dot(travel)
     }
 
     /// Lift plus induced drag of the exposed lifting surfaces, in inertial kN.
@@ -2283,10 +2347,37 @@ impl Structure {
         self.lifting_fx_local(Airflow::uniform(frame, v_air, rho, mach))
     }
 
-    fn part_air_velocity(&self, i: usize, flow: Airflow, centre: DVec3) -> DVec3 {
-        let r = self.part_box(i).0 - centre;
+    fn mounted_offset(&self, i: usize, offset: DVec3) -> DVec3 {
+        crate::rigid::to_vessel(aero::rotate(self.part_rot[i], offset))
+    }
+    fn lift_offset(&self, i: usize) -> DVec3 {
+        self.mounted_offset(
+            i,
+            self.lift_defs[i]
+                .as_ref()
+                .map(|(l, _)| l.pressure_offset_m)
+                .unwrap_or(DVec3::ZERO),
+        )
+    }
+    fn drag_offset(&self, i: usize) -> DVec3 {
+        self.mounted_offset(i, self.pressure_offsets_m[i]) + self.lift_offset(i)
+    }
+    fn body_lift_offset(&self, i: usize) -> DVec3 {
+        self.mounted_offset(i, self.lift_offsets_m[i]) + self.lift_offset(i)
+    }
+    fn control_offset(&self, i: usize) -> DVec3 {
+        self.mounted_offset(
+            i,
+            self.pressure_offsets_m[i] + self.control_pressure_offsets_m[i],
+        )
+    }
+    fn air_at_offset(&self, i: usize, offset: DVec3, flow: Airflow, centre: DVec3) -> DVec3 {
+        let r = self.rigid.rest_position(i) + offset - centre;
         let (x, y, z) = flow.frame;
         flow.velocity + flow.angular_velocity.cross(x * r.x + y * r.y + z * r.z)
+    }
+    fn part_air_velocity(&self, i: usize, flow: Airflow, centre: DVec3) -> DVec3 {
+        self.air_at_offset(i, self.drag_offset(i), flow, centre)
     }
 
     pub fn lifting_fx_local(&self, flow: Airflow) -> Vec<(u16, f32, f32)> {
@@ -2305,7 +2396,7 @@ impl Structure {
                 {
                     return None;
                 }
-                let v = self.part_air_velocity(i, flow, centre);
+                let v = self.air_at_offset(i, self.lift_offset(i), flow, centre);
                 let speed = v.length();
                 if speed <= 0.0 {
                     return None;
@@ -2343,12 +2434,25 @@ impl Structure {
         let travel = v_air * (1.0 / speed);
         let q = 0.5 * rho * speed * speed;
         (0..self.rigid.len())
-            .filter(|&i| self.rigid.present[i])
-            .map(|i| PartForce {
-                part: i,
-                force_kn: -travel * (q * self.part_cda_m2[i] / 1000.0)
-                    + self.lifting_force(i, frame, travel, q, mach),
-                offset_m: self.part_box(i).0 - self.rigid.rest_position(i),
+            .filter(|&i| self.rigid.present[i] && !self.shielded[i])
+            .flat_map(|i| {
+                [
+                    PartForce {
+                        part: i,
+                        force_kn: -travel * (q * self.part_cda_m2[i] / 1000.0),
+                        offset_m: self.drag_offset(i),
+                    },
+                    PartForce {
+                        part: i,
+                        force_kn: self.lifting_force(i, frame, travel, q, mach),
+                        offset_m: self.lift_offset(i),
+                    },
+                    PartForce {
+                        part: i,
+                        force_kn: self.body_lifting_force(i, frame, travel, q, mach),
+                        offset_m: self.body_lift_offset(i),
+                    },
+                ]
             })
             .collect()
     }
@@ -2401,20 +2505,54 @@ impl Structure {
             }
             let v = self.part_air_velocity(i, flow, centre);
             let speed = v.length();
-            if speed <= 0.0 {
-                continue;
-            }
-            let travel = v * (1.0 / speed);
-            let q = 0.5 * flow.density * speed * speed;
-            let drag = -travel * (q * self.part_cda_m2[i] / 1000.0);
-            let lift = self.lifting_force(i, flow.frame, travel, q, flow.mach(speed));
-            self.part_aero_kn[i] = (lift, drag);
+            let drag = if speed > 0.0 {
+                -v * (0.5 * flow.density * speed * self.part_cda_m2[i] / 1000.0)
+            } else {
+                DVec3::ZERO
+            };
+            let wing_v = self.air_at_offset(i, self.lift_offset(i), flow, centre);
+            let wing_speed = wing_v.length();
+            let lift = if wing_speed > 0.0 {
+                self.lifting_force(
+                    i,
+                    flow.frame,
+                    wing_v * (1.0 / wing_speed),
+                    0.5 * flow.density * wing_speed * wing_speed,
+                    flow.mach(wing_speed),
+                )
+            } else {
+                DVec3::ZERO
+            };
+            let body_v = self.air_at_offset(i, self.body_lift_offset(i), flow, centre);
+            let body_speed = body_v.length();
+            let body_lift = if body_speed > 0.0 {
+                self.body_lifting_force(
+                    i,
+                    flow.frame,
+                    body_v * (1.0 / body_speed),
+                    0.5 * flow.density * body_speed * body_speed,
+                    flow.mach(body_speed),
+                )
+            } else {
+                DVec3::ZERO
+            };
+            self.part_aero_kn[i] = (lift + body_lift, drag);
             out.drag_kn = out.drag_kn + drag;
-            out.lift_kn = out.lift_kn + lift;
+            out.lift_kn = out.lift_kn + lift + body_lift;
             forces.push(PartForce {
                 part: i,
-                force_kn: lift + drag,
-                offset_m: self.part_box(i).0 - self.rigid.rest_position(i),
+                force_kn: drag,
+                offset_m: self.drag_offset(i),
+            });
+            forces.push(PartForce {
+                part: i,
+                force_kn: lift,
+                offset_m: self.lift_offset(i),
+            });
+            forces.push(PartForce {
+                part: i,
+                force_kn: body_lift,
+                offset_m: self.body_lift_offset(i),
             });
         }
         out.torque_knm = self.airflow_moment(flow.frame, &forces);
@@ -2441,7 +2579,7 @@ impl Structure {
                 }
                 let u = aero::rotate(self.part_rot[i], l.axis);
                 let axis = bx * u.x + by * u.y + bz * (-u.z);
-                let (centre, _) = self.part_box(i);
+                let centre = self.rigid.rest_position(i) + self.control_offset(i);
                 // the torque a push along the surface's axis gives
                 let lever = to_inertial(centre - c).cross(axis);
                 let along = if lever.length() > 1e-6 {
@@ -2512,12 +2650,12 @@ impl Structure {
                 continue;
             }
             let lift = q
-                * aero::LIFT_MULTIPLIER
+                * aero::settings().lift_multiplier
                 * l.deflection_lift_coeff
                 * share
                 * curves.lift.evaluate(range.sin())
                 * curves.lift_mach.evaluate(mach);
-            let (centre, _) = self.part_box(i);
+            let centre = self.rigid.rest_position(i) + self.control_offset(i);
             total += lift.max(0.0) * (centre - c).length();
         }
         total
@@ -2583,13 +2721,17 @@ impl Structure {
                     _ => area_drag,
                 };
             }
-            let cda = aero::cda_m2(&self.curves, area_drag, rho * speed);
+            let cda = if self.drag_properties[i].drag_enabled {
+                aero::cda_m2(&self.curves, area_drag, rho * speed)
+            } else {
+                0.0
+            };
             self.part_cda_m2[i] = cda;
             total += cda;
         }
         // Fairing drag uses the local airflow at the base part, as do its structural loads.
         for (part, front, side) in self.fairing_shells() {
-            if self.shielded[part] {
+            if self.shielded[part] || !self.drag_properties[part].drag_enabled {
                 continue;
             }
             let v = self.part_air_velocity(part, flow, centre);
@@ -2913,6 +3055,10 @@ mod tests {
         let (crafts, defs, res) = assets();
         let craft = crafts.iter().find(|c| c.name == "Stock04_Jet").unwrap();
         let mut s = Structure::build(craft, &defs, &res);
+        for props in &mut s.drag_properties {
+            props.drag_enabled = true;
+            props.body_lift_enabled = false;
+        }
         let wing = s.lift_defs.iter().position(Option::is_some).unwrap();
         let mut lift = s.lift_defs[wing].clone().unwrap();
         lift.0.axis = DVec3::new(0.0, 0.0, 1.0);
@@ -2989,9 +3135,8 @@ mod tests {
             .as_ref()
             .unwrap()
             .iter()
-            .find(|f| f.part == wing)
-            .unwrap()
-            .force_kn;
+            .filter(|f| f.part == wing)
+            .fold(DVec3::ZERO, |sum, f| sum + f.force_kn);
         assert!((lift + drag - resolved).length() < 1e-10);
         assert!(drag.dot(air) < 0.0);
         s.shielded[wing] = true;
@@ -3014,6 +3159,193 @@ mod tests {
     }
 
     #[test]
+    fn distinct_authored_drag_and_lift_points_retain_their_moments_under_mount_rotation() {
+        let (mut s, _, wing) = airflow_fixture();
+        s.faces[wing] = Some(Faces {
+            area: [1.0; 6],
+            drag: [1.0; 6],
+        });
+        let h = 0.5_f64.sqrt();
+        s.part_rot[wing] = [0.0, h, 0.0, h];
+        s.pressure_offsets_m[wing] = DVec3::new(2.0, 0.0, 0.0);
+        s.lift_defs[wing].as_mut().unwrap().0.pressure_offset_m = DVec3::new(0.0, 1.0, 0.0);
+        let frame = (
+            DVec3::new(1.0, 0.0, 0.0),
+            DVec3::new(0.0, 1.0, 0.0),
+            DVec3::new(0.0, 0.0, 1.0),
+        );
+        let air = DVec3::new(10.0, 100.0, -10.0);
+        let out = s.aerodynamics(0, frame, air, 1.0, 0.3);
+        let centre = s.mass_properties().centre_m;
+        let origin = s.rigid.rest_position(wing) - centre;
+        // Unity +X rotates to -Z, then the craft handedness conversion mirrors Z.
+        let drag_offset = DVec3::new(0.0, 1.0, 2.0);
+        let lift_offset = DVec3::new(0.0, 1.0, 0.0);
+        let expected =
+            (origin + drag_offset).cross(out.drag_kn) + (origin + lift_offset).cross(out.lift_kn);
+        assert!((out.torque_knm - expected).length() < 1e-8);
+        let forces = s.resolved_aero_forces.as_ref().unwrap();
+        assert!(forces.iter().any(|f| f.part == wing
+            && (f.offset_m - drag_offset).length() < 1e-12
+            && (f.force_kn - out.drag_kn).length() < 1e-12));
+        assert!(forces.iter().any(|f| f.part == wing
+            && (f.offset_m - lift_offset).length() < 1e-12
+            && (f.force_kn - out.lift_kn).length() < 1e-12));
+    }
+
+    #[test]
+    fn perpendicular_lift_and_internal_drag_options_match_the_reference_projection() {
+        let (s, _, wing) = airflow_fixture();
+        let (mut surface, mut curves) = s.lift_defs[wing].clone().unwrap();
+        curves.drag = ose_data::Curve {
+            keys: vec![ose_data::CurveKey {
+                t: 0.0,
+                v: 2.0,
+                in_tangent: 0.0,
+                out_tangent: 0.0,
+            }],
+        };
+        let axis = DVec3::new(0.0, 0.0, 1.0);
+        let direction = DVec3::new(0.0, 0.8, 0.6);
+        let force = aero::surface_force(&curves, &surface, axis, direction, 1000.0, 0.3);
+        let lift = axis * (-1000.0 * aero::LIFT_MULTIPLIER * 0.6);
+        let drag = direction * (-1000.0 * aero::LIFT_DRAG_MULTIPLIER * 2.0);
+        assert!((force - lift - drag).length() < 1e-10);
+        surface.perpendicular_only = true;
+        let projected = aero::surface_force(&curves, &surface, axis, direction, 1000.0, 0.3);
+        assert!((projected - (lift - direction * lift.dot(direction)) - drag).length() < 1e-10);
+        surface.use_internal_drag_model = false;
+        let without_drag = aero::surface_force(&curves, &surface, axis, direction, 1000.0, 0.3);
+        assert!(without_drag.dot(direction).abs() < 1e-10);
+        assert!((without_drag - lift + direction * lift.dot(direction)).length() < 1e-10);
+    }
+
+    #[test]
+    fn local_airflow_uses_each_distinct_force_point_including_zero_centre_airspeed() {
+        let (mut s, _, wing) = airflow_fixture();
+        s.net.dry_t.fill(0.0);
+        s.net.dry_t[wing] = 1.0;
+        s.net.tanks.clear();
+        s.part_rot[wing] = [0.0, 0.0, 0.0, 1.0];
+        let surface = &mut s.lift_defs[wing].as_mut().unwrap().0;
+        surface.axis = DVec3::new(0.0, 1.0, 0.0);
+        surface.pressure_offset_m = DVec3::new(1.0, 0.0, 0.0);
+        s.pressure_offsets_m[wing] = DVec3::new(1.0, 0.0, 0.0);
+        s.faces[wing] = Some(Faces {
+            area: [1.0; 6],
+            drag: [1.0; 6],
+        });
+        let constant = ose_data::Curve {
+            keys: vec![ose_data::CurveKey {
+                t: 0.0,
+                v: 1.0,
+                in_tangent: 0.0,
+                out_tangent: 0.0,
+            }],
+        };
+        s.curves = aero::DragCurves {
+            tip: constant.clone(),
+            surface: constant.clone(),
+            tail: constant.clone(),
+            multiplier: constant.clone(),
+            cd: constant.clone(),
+            cd_power: constant.clone(),
+            pseudo_reynolds: constant,
+        };
+        let flow = Airflow {
+            frame: (
+                DVec3::new(1.0, 0.0, 0.0),
+                DVec3::new(0.0, 1.0, 0.0),
+                DVec3::new(0.0, 0.0, 1.0),
+            ),
+            velocity: DVec3::ZERO,
+            angular_velocity: DVec3::new(0.0, 0.0, 1.0),
+            density: 1.0,
+            speed_of_sound: 100.0,
+        };
+        let out = s.aerodynamics_local(0, flow);
+        // Point speeds are 2 m/s for body drag and 1 m/s for the wing.
+        assert!((out.drag_kn - DVec3::new(0.0, -0.0096, 0.0)).length() < 1e-12);
+        assert!((out.lift_kn - DVec3::new(0.0, -0.018, 0.0)).length() < 1e-12);
+        assert!((out.torque_knm - DVec3::new(0.0, 0.0, -0.0372)).length() < 1e-12);
+    }
+
+    #[test]
+    fn drag_cube_body_lift_matches_projected_face_forces_and_uses_its_own_lift_point() {
+        let (mut s, _, wing) = airflow_fixture();
+        s.net.dry_t.fill(0.0);
+        s.net.dry_t[wing] = 1.0;
+        s.net.tanks.clear();
+        s.part_rot[wing] = [0.0, 0.0, 0.0, 1.0];
+        s.lift_defs.fill(None);
+        s.faces[wing] = Some(Faces {
+            area: [2.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+            drag: [1.0; 6],
+        });
+        s.drag_properties[wing] = ose_data::DragProperties {
+            drag_enabled: false,
+            body_lift_enabled: true,
+            body_lift_multiplier: 1.0,
+        };
+        s.lift_offsets_m[wing] = DVec3::new(0.0, 0.0, 2.0);
+        let frame = (
+            DVec3::new(1.0, 0.0, 0.0),
+            DVec3::new(0.0, 1.0, 0.0),
+            DVec3::new(0.0, 0.0, 1.0),
+        );
+        let a = std::f64::consts::FRAC_1_SQRT_2;
+        let air = DVec3::new(a, a, 0.0) * 1000.0_f64.sqrt();
+        let expected = DVec3::new(-0.5 * a, 0.5 * a, 0.0) * (18.0 * 0.167);
+        let out = s.aerodynamics(0, frame, air, 2.0, 0.3);
+        assert_eq!(out.drag_kn, DVec3::ZERO);
+        assert_eq!(out.cda_m2, 0.0);
+        assert!((out.lift_kn - expected).length() < 1e-10);
+        assert!(out.lift_kn.dot(air).abs() < 1e-10);
+        assert!((out.torque_knm - DVec3::new(0.0, 0.0, -2.0).cross(expected)).length() < 1e-10);
+        let fast = s.aerodynamics(0, frame, air, 2.0, 1.0);
+        assert!((fast.lift_kn - expected * (0.125 / 0.167)).length() < 1e-10);
+        s.drag_properties[wing].body_lift_multiplier = 2.0;
+        assert!(
+            (s.aerodynamics(0, frame, air, 2.0, 0.3).lift_kn - expected * 2.0).length() < 1e-10
+        );
+        s.shielded[wing] = true;
+        assert_eq!(s.aerodynamics(0, frame, air, 2.0, 0.3).lift_kn, DVec3::ZERO);
+        s.shielded[wing] = false;
+        s.drag_properties[wing].body_lift_enabled = false;
+        s.drag_properties[wing].drag_enabled = true;
+        let drag_only = s.aerodynamics(0, frame, air, 2.0, 0.3);
+        assert_eq!(drag_only.lift_kn, DVec3::ZERO);
+        assert!(drag_only.drag_kn.dot(air) < 0.0);
+        s.rigid.remove_parts(&[wing]);
+        s.net.remove_parts(&[wing]);
+        let removed = s.aerodynamics(0, frame, air, 2.0, 0.3);
+        assert_eq!(removed.lift_kn, DVec3::ZERO);
+        assert_eq!(removed.drag_kn, DVec3::ZERO);
+    }
+
+    #[test]
+    fn named_speedbrake_family_does_not_fall_back_to_wing_lift() {
+        let (crafts, mut defs, res) = assets();
+        let craft = crafts.iter().find(|c| c.name == "Stock04_Jet").unwrap();
+        for def in &mut defs {
+            if let Some(surface) = &mut def.lifting_surface {
+                surface.curve_set = "SpeedBrake".into();
+            }
+        }
+        let s = Structure::build(craft, &defs, &res);
+        let frame = (
+            DVec3::new(1.0, 0.0, 0.0),
+            DVec3::new(0.0, 1.0, 0.0),
+            DVec3::new(0.0, 0.0, 1.0),
+        );
+        let velocity = DVec3::new(0.0, 100.0, 10.0);
+        let direction = velocity.normalized();
+        let force = s.lift(frame, velocity, 1.0, 0.3);
+        assert!(force.dot(direction) < 0.0);
+        assert!((force - direction * force.dot(direction)).length() < 1e-9);
+    }
+
+    #[test]
     fn aerodynamic_moment_tracks_fuel_mass_and_retains_each_parts_force() {
         let (mut s, p, wing) = airflow_fixture();
         let frame = crate::flight::vessel_basis(&p);
@@ -3021,10 +3353,14 @@ mod tests {
         let first = s.aerodynamics(0, frame, air, 1.0, 0.3);
         let c0 = s.mass_properties().centre_m;
         let loads = s.resolved_aero_forces.as_ref().unwrap();
-        let force = loads.iter().find(|f| f.part == wing).unwrap();
-        assert!((force.force_kn - first.lift_kn).length() < 1e-10);
+        let force = loads
+            .iter()
+            .filter(|f| f.part == wing)
+            .fold(DVec3::ZERO, |sum, f| sum + f.force_kn);
+        assert!((force - first.lift_kn).length() < 1e-10);
         assert!(
-            (first.torque_knm - (s.part_box(wing).0 - c0).cross(first.lift_kn)).length() < 1e-9
+            (first.torque_knm - (s.rigid.rest_position(wing) - c0).cross(first.lift_kn)).length()
+                < 1e-9
         );
         assert!(loads
             .iter()

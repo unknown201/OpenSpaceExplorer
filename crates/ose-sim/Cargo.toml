@@ -9,8 +9,6 @@ publish.workspace = true
 bevy_ecs = { workspace = true }
 rapier3d-f64 = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 ose-math = { workspace = true }
 ose-data = { workspace = true }
-
-[dev-dependencies]
-serde_json = { workspace = true }

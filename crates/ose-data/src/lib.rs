@@ -224,6 +224,13 @@ pub struct PartDef {
     /// Authored part centre of mass in Unity part-local axes (`coMassOffset`).
     #[serde(default)]
     pub mass_offset_m: ose_math::DVec3,
+    /// Body drag application offset (`coPressureOffset`), Unity part-local axes.
+    #[serde(default)]
+    pub pressure_offset_m: ose_math::DVec3,
+    #[serde(default)]
+    pub lift_offset_m: ose_math::DVec3,
+    #[serde(default)]
+    pub drag_properties: DragProperties,
 
     pub cost: f64,
     pub crew_capacity: u32,
@@ -294,6 +301,8 @@ pub struct PartDef {
     pub ctrl_range_deg: f64,
     #[serde(default)]
     pub ctrl_area: f64,
+    #[serde(default)]
+    pub ctrl_pressure_offset_m: ose_math::DVec3,
     /// An air intake's area, m^2 (`Data_ResourceIntake.area`; jets with their own intake have it too).
     #[serde(default)]
     pub intake_area_m2: f64,
@@ -353,10 +362,37 @@ pub struct Converter {
     pub conversion_rate: f64,
 }
 
+fn enabled() -> bool {
+    true
+}
+
+/// Enable flags and body-lift multiplier from `Data_Drag`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DragProperties {
+    pub drag_enabled: bool,
+    pub body_lift_enabled: bool,
+    pub body_lift_multiplier: f64,
+}
+impl Default for DragProperties {
+    fn default() -> Self {
+        Self {
+            drag_enabled: true,
+            body_lift_enabled: true,
+            body_lift_multiplier: 1.0,
+        }
+    }
+}
+
 /// A lifting surface as the original defines it (`Data_LiftingSurface`): lift pushes along its axis
 /// (`transformDir` times `transformSign`, part space) against the airflow through it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LiftingSurface {
+    #[serde(default)]
+    pub pressure_offset_m: ose_math::DVec3,
+    #[serde(default)]
+    pub perpendicular_only: bool,
+    #[serde(default = "enabled")]
+    pub use_internal_drag_model: bool,
     pub deflection_lift_coeff: f64,
     pub axis: ose_math::DVec3,
     pub omnidirectional: bool,

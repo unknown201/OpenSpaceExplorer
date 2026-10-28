@@ -188,14 +188,22 @@ Eight added simulation regressions cover full pressure interpolation and pressur
 
 This improves source/data parity and removes unbudgeted actuation. The camera-relative character input, camera alignment, separate upright/forward character controllers, water drag, pack-equipment/thrust-percentage controls and pack refill/transfer behavior remain incomplete. Partial fuel is shared proportionally between movement and rotation, rather than reproducing the original asynchronous broker's previous-tick scheduling and its all-or-nothing reset behavior. The older unconfigured walker fallback remains for callers that construct a bare flight state directly; spawned/restored EVA Kerbals use the configured path.
 
-## Reference audit for the next aero increment
+## Completed increment: authored aerodynamic settings, force points and body lift
 
-`Module_ControlSurface` also overrides a procedural surface's runtime mass centre from its generated `CoPOffset`. Importing the static 14 `coMassOffset` values does not cover that runtime geometry. `Module_Drag` applies drag at core `coPressureOffset + lifting-surface CoPOffset`, and body lift at core `coLiftOffset + lifting-surface CoPOffset`. `Module_LiftingSurface.CalculateLiftDragForces` applies its own lift/drag at the passed module offset, while the control-surface call adds the core offset and its generated control pivot offset. These forces need distinct retained application points and moments; relocating one combined force to a bounds centre is insufficient. Include perpendicular-only lift, internal-drag enabling, procedural geometry and body lift in the next comparison fixtures.
+`tools/export_aero_settings.py` now reads the reference's loaded `Global/PhysicsSettings.json` (settings version 0.1.16). Its committed `assets/own/aero-settings.json` contains the source SHA-256, five aerodynamic multipliers, seven drag curves and all four named lifting-surface families, including authored Hermite tangents. Runtime drag/lift calculations load this data rather than duplicating class-default tables. Weighted, non-clamped, invalid or unordered curves are rejected by the exporter. Joint and thermal settings are outside this export.
+
+All 400 part definitions now carry core pressure/lift offsets and drag/body-lift enabling and multiplier fields. The 13 lifting-surface modules retain their own pressure offset, perpendicular-only option and internal-drag switch; control surfaces retain their authored pressure offset. Regeneration from the original JSON reproduces every field within 1e-14. Named SpeedBrake and CapsuleBottom families no longer silently fall back to Default; Custom families retain their own curves.
+
+Body drag, lifting-surface force and drag-cube body lift retain separate application points and structural loads. Each samples its own rotational airflow, pressure and Mach. Body lift uses exposed face areas, facing-dot lift coefficients, authored drag factors and the global BodyLift Mach curve, projected perpendicular to travel. Core pressure/lift and module offsets follow the source's distinct force paths. Control allocation, deflection readouts and authority use the imported control point. Disabled, shielded and detached parts cannot contribute the corresponding force.
+
+Six additional simulation regressions cover independently calculated rotated force points and moments, zero-centre-airspeed rotational flow at different points, perpendicular lift/internal-drag options, asymmetric-cube body lift with Mach/multiplier/visibility checks, loaded settings and named speedbrake behavior. Two importer regressions cover offsets, flags and legacy defaults; two exporter tests preserve reference tangents and reject unsupported curves.
+
+Procedural surfaces still generate a runtime CoP/CoM that static imports do not reproduce. Actual deflected-surface lift/drag, stall, deployed drag-cube geometry and node-enabled attachment occlusion remain open. The existing actuator model supplies a bounded surface-force proxy. No matched executable flight traces are claimed.
 
 ## Remaining physics priorities
 
 1. Import usable collider inertia geometry and procedural/deployed mass changes; complete articulated engine gimbals. Match RCS precision/lever allocation and part controls, and complete EVA character/camera/water behavior.
-2. Import centre-of-pressure offsets, full lifting-surface options, and deflected control-surface lift/drag.
+2. Generate procedural surface CoP/CoM and deflected control-surface lift/drag; match stall, deployed drag cubes and node-enabled occlusion.
 3. Replace sampled corner paths with continuous hull contacts; add nearby vessel/debris pair contacts and equal-and-opposite impulses. Import contact materials and sliding damage/heat.
 4. Import displacement and wheel-collider data, suspension tuning and target positions; add load-dependent tyre grip and wheel slip. Extend water behavior, then docking attraction/capture and EVA ladder/hatch contact.
 
@@ -206,6 +214,10 @@ The next contact acceptance cases should cover continuous hull contacts that pre
 Per-engine mode switching, articulated nozzle transforms, thrust response curves/limits, full intake accounting, and the complete KSP2 engine modifier set are still open. The existing jet curve/intake approximation and structural thrust-lag filter remain. The resource allocator also retains its existing ordered-request semantics. This change closes specific propulsion errors; it does not establish complete engine or flight parity.
 
 ## Validation, 2026-10-27
+
+- Aerodynamic milestone: full `cargo test --workspace` passed, including the fresh-server Mun journey (504.80 s), 174 simulation tests and 16 importer tests. The settings-loader follow-up adds two simulation tests (176 total); focused simulation/importer tests pass. Strict workspace Clippy and the browser-client check pass. The final `cargo test --workspace --exclude ose-bot` run also passes with all 176 simulation tests, 16 importer tests and the WebSocket suite (19 passed, one existing ignored test).
+- Both aerodynamic-exporter tests pass; all 400 regenerated aerodynamic definitions match the committed catalog within 1e-14.
+
 
 - `cargo test --workspace`: passed on the authored-mass-centre follow-up, including the fresh-server Mun journey (508.60 s), server WebSocket tests and 162 simulation regressions. The existing ignored test remains ignored.
 - EVA follow-up: `cargo test --workspace --exclude ose-bot` passed, including 170 simulation tests, 14 importer tests and the server WebSocket suite. The existing ignored test remains ignored. The full Mun journey was last run on the mass-centre milestone; the bot was compiled/linted but that long journey was not repeated for this EVA-only continuation.

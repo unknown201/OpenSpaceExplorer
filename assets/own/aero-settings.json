@@ -1,0 +1,767 @@
+{
+  "version": "0.1.16",
+  "source_sha256": "cc318b2d68cd524530bb9096bebea7ff4bcd9e3e94cb58ed7b5b5485c1508cf0",
+  "lift_multiplier": 0.036,
+  "lift_drag_multiplier": 0.015,
+  "body_lift_multiplier": 18.0,
+  "drag_multiplier": 8.0,
+  "drag_cube_multiplier": 0.1,
+  "drag_curves": {
+    "tip": {
+      "keys": [
+        {
+          "t": 0.0,
+          "v": 1.0,
+          "in_tangent": 0.0,
+          "out_tangent": 0.0
+        },
+        {
+          "t": 0.85,
+          "v": 1.19,
+          "in_tangent": 0.6960422,
+          "out_tangent": 0.6960422
+        },
+        {
+          "t": 1.1,
+          "v": 2.83,
+          "in_tangent": 0.730473,
+          "out_tangent": 0.730473
+        },
+        {
+          "t": 5.0,
+          "v": 4.0,
+          "in_tangent": 0.0,
+          "out_tangent": 0.0
+        }
+      ]
+    },
+    "surface": {
+      "keys": [
+        {
+          "t": 0.0,
+          "v": 0.02,
+          "in_tangent": 0.0,
+          "out_tangent": 0.0
+        },
+        {
+          "t": 0.85,
+          "v": 0.02,
+          "in_tangent": 0.0,
+          "out_tangent": 0.0
+        },
+        {
+          "t": 0.9,
+          "v": 0.0152439,
+          "in_tangent": -0.07942077,
+          "out_tangent": -0.07942077
+        },
+        {
+          "t": 1.1,
+          "v": 0.0025,
+          "in_tangent": -0.005279571,
+          "out_tangent": -0.001936768
+        },
+        {
+          "t": 2.0,
+          "v": 0.002083333,
+          "in_tangent": -2.314833e-05,
+          "out_tangent": -2.314833e-05
+        },
+        {
+          "t": 5.0,
+          "v": 0.003333333,
+          "in_tangent": -0.000180556,
+          "out_tangent": -0.000180556
+        },
+        {
+          "t": 25.0,
+          "v": 0.001428571,
+          "in_tangent": -7.14286e-05,
+          "out_tangent": 0.0
+        }
+      ]
+    },
+    "tail": {
+      "keys": [
+        {
+          "t": 0.0,
+          "v": 1.0,
+          "in_tangent": 0.0,
+          "out_tangent": 0.0
+        },
+        {
+          "t": 0.85,
+          "v": 1.0,
+          "in_tangent": 0.0,
+          "out_tangent": 0.0
+        },
+        {
+          "t": 1.1,
+          "v": 0.25,
+          "in_tangent": -0.02215106,
+          "out_tangent": -0.02487721
+        },
+        {
+          "t": 1.4,
+          "v": 0.22,
+          "in_tangent": -0.03391732,
+          "out_tangent": -0.03391732
+        },
+        {
+          "t": 5.0,
+          "v": 0.15,
+          "in_tangent": -0.001198566,
+          "out_tangent": -0.001198566
+        },
+        {
+          "t": 25.0,
+          "v": 0.14,
+          "in_tangent": 0.0,
+          "out_tangent": 0.0
+        }
+      ]
+    },
+    "multiplier": {
+      "keys": [
+        {
+          "t": 0.0,
+          "v": 0.5,
+          "in_tangent": 0.0,
+          "out_tangent": 0.0
+        },
+        {
+          "t": 0.85,
+          "v": 0.5,
+          "in_tangent": 0.0,
+          "out_tangent": 0.0
+        },
+        {
+          "t": 1.1,
+          "v": 1.3,
+          "in_tangent": 0.0,
+          "out_tangent": -0.008100224
+        },
+        {
+          "t": 2.0,
+          "v": 0.7,
+          "in_tangent": -0.1104858,
+          "out_tangent": -0.1104858
+        },
+        {
+          "t": 5.0,
+          "v": 0.6,
+          "in_tangent": 0.0,
+          "out_tangent": 0.0
+        },
+        {
+          "t": 10.0,
+          "v": 0.85,
+          "in_tangent": 0.02198264,
+          "out_tangent": 0.02198264
+        },
+        {
+          "t": 14.0,
+          "v": 0.9,
+          "in_tangent": 0.007694946,
+          "out_tangent": 0.007694946
+        },
+        {
+          "t": 25.0,
+          "v": 0.95,
+          "in_tangent": 0.0,
+          "out_tangent": 0.0
+        }
+      ]
+    },
+    "cd": {
+      "keys": [
+        {
+          "t": 0.05,
+          "v": 0.0025,
+          "in_tangent": 0.15,
+          "out_tangent": 0.15
+        },
+        {
+          "t": 0.4,
+          "v": 0.15,
+          "in_tangent": 0.3963967,
+          "out_tangent": 0.3963967
+        },
+        {
+          "t": 0.7,
+          "v": 0.35,
+          "in_tangent": 0.9066986,
+          "out_tangent": 0.9066986
+        },
+        {
+          "t": 0.75,
+          "v": 0.45,
+          "in_tangent": 3.213604,
+          "out_tangent": 3.213604
+        },
+        {
+          "t": 0.8,
+          "v": 0.66,
+          "in_tangent": 3.49833,
+          "out_tangent": 3.49833
+        },
+        {
+          "t": 0.85,
+          "v": 0.8,
+          "in_tangent": 2.212924,
+          "out_tangent": 2.212924
+        },
+        {
+          "t": 0.9,
+          "v": 0.89,
+          "in_tangent": 1.1,
+          "out_tangent": 1.1
+        },
+        {
+          "t": 1.0,
+          "v": 1.0,
+          "in_tangent": 1.0,
+          "out_tangent": 1.0
+        }
+      ]
+    },
+    "cd_power": {
+      "keys": [
+        {
+          "t": 0.0,
+          "v": 1.0,
+          "in_tangent": 0.0,
+          "out_tangent": 0.00715953
+        },
+        {
+          "t": 0.85,
+          "v": 1.25,
+          "in_tangent": 0.7780356,
+          "out_tangent": 0.7780356
+        },
+        {
+          "t": 1.1,
+          "v": 2.5,
+          "in_tangent": 0.2492796,
+          "out_tangent": 0.2492796
+        },
+        {
+          "t": 5.0,
+          "v": 3.0,
+          "in_tangent": 0.0,
+          "out_tangent": 0.0
+        }
+      ]
+    },
+    "pseudo_reynolds": {
+      "keys": [
+        {
+          "t": 0.0,
+          "v": 4.0,
+          "in_tangent": -111111.1,
+          "out_tangent": -2975.412
+        },
+        {
+          "t": 0.0001,
+          "v": 3.0,
+          "in_tangent": -251.1479,
+          "out_tangent": -251.1479
+        },
+        {
+          "t": 0.01,
+          "v": 2.0,
+          "in_tangent": -19.63584,
+          "out_tangent": -19.63584
+        },
+        {
+          "t": 0.1,
+          "v": 1.2,
+          "in_tangent": -0.7846036,
+          "out_tangent": -0.3912548
+        },
+        {
+          "t": 1.0,
+          "v": 1.0,
+          "in_tangent": 0.0,
+          "out_tangent": 0.0
+        },
+        {
+          "t": 100.0,
+          "v": 1.0,
+          "in_tangent": 0.0,
+          "out_tangent": 0.0
+        },
+        {
+          "t": 200.0,
+          "v": 0.82,
+          "in_tangent": 0.0,
+          "out_tangent": 0.0
+        },
+        {
+          "t": 500.0,
+          "v": 0.86,
+          "in_tangent": 0.0001932119,
+          "out_tangent": 0.0001932119
+        },
+        {
+          "t": 1000.0,
+          "v": 0.9,
+          "in_tangent": 1.54299e-05,
+          "out_tangent": 1.54299e-05
+        },
+        {
+          "t": 10000.0,
+          "v": 0.95,
+          "in_tangent": 0.0,
+          "out_tangent": 0.0
+        }
+      ]
+    }
+  },
+  "lift_curves": {
+    "Default": {
+      "lift": {
+        "keys": [
+          {
+            "t": 0.0,
+            "v": 0.0,
+            "in_tangent": 0.0,
+            "out_tangent": 1.965926
+          },
+          {
+            "t": 0.258819,
+            "v": 0.5114774,
+            "in_tangent": 1.990092,
+            "out_tangent": 1.905806
+          },
+          {
+            "t": 0.5,
+            "v": 0.9026583,
+            "in_tangent": 0.7074468,
+            "out_tangent": -0.7074468
+          },
+          {
+            "t": 0.7071068,
+            "v": 0.5926583,
+            "in_tangent": -2.087948,
+            "out_tangent": -1.990095
+          },
+          {
+            "t": 1.0,
+            "v": 0.0,
+            "in_tangent": -2.014386,
+            "out_tangent": -2.014386
+          }
+        ]
+      },
+      "lift_mach": {
+        "keys": [
+          {
+            "t": 0.0,
+            "v": 1.0,
+            "in_tangent": 0.0,
+            "out_tangent": 0.0
+          },
+          {
+            "t": 0.3,
+            "v": 0.5,
+            "in_tangent": -1.671345,
+            "out_tangent": -0.8273422
+          },
+          {
+            "t": 1.0,
+            "v": 0.125,
+            "in_tangent": -0.0005291355,
+            "out_tangent": -0.02625772
+          },
+          {
+            "t": 5.0,
+            "v": 0.0625,
+            "in_tangent": 0.0,
+            "out_tangent": 0.0
+          },
+          {
+            "t": 25.0,
+            "v": 0.05,
+            "in_tangent": 0.0,
+            "out_tangent": 0.0
+          }
+        ]
+      },
+      "drag": {
+        "keys": [
+          {
+            "t": 0.0,
+            "v": 0.01,
+            "in_tangent": 0.0,
+            "out_tangent": 0.0
+          },
+          {
+            "t": 0.3420201,
+            "v": 0.06,
+            "in_tangent": 0.1750731,
+            "out_tangent": 0.1750731
+          },
+          {
+            "t": 0.5,
+            "v": 0.24,
+            "in_tangent": 2.60928,
+            "out_tangent": 2.60928
+          },
+          {
+            "t": 0.7071068,
+            "v": 1.7,
+            "in_tangent": 3.349777,
+            "out_tangent": 3.349777
+          },
+          {
+            "t": 1.0,
+            "v": 2.4,
+            "in_tangent": 1.387938,
+            "out_tangent": 0.0
+          }
+        ]
+      },
+      "drag_mach": {
+        "keys": [
+          {
+            "t": 0.0,
+            "v": 0.35,
+            "in_tangent": 0.0,
+            "out_tangent": -0.8463008
+          },
+          {
+            "t": 0.15,
+            "v": 0.125,
+            "in_tangent": 0.0,
+            "out_tangent": 0.0
+          },
+          {
+            "t": 0.9,
+            "v": 0.275,
+            "in_tangent": 0.541598,
+            "out_tangent": 0.541598
+          },
+          {
+            "t": 1.1,
+            "v": 0.75,
+            "in_tangent": 0.0,
+            "out_tangent": 0.0
+          },
+          {
+            "t": 1.4,
+            "v": 0.4,
+            "in_tangent": -0.3626955,
+            "out_tangent": -0.3626955
+          },
+          {
+            "t": 1.6,
+            "v": 0.35,
+            "in_tangent": -0.1545923,
+            "out_tangent": -0.1545923
+          },
+          {
+            "t": 2.0,
+            "v": 0.3,
+            "in_tangent": -0.09013031,
+            "out_tangent": -0.09013031
+          },
+          {
+            "t": 5.0,
+            "v": 0.22,
+            "in_tangent": 0.0,
+            "out_tangent": 0.0
+          },
+          {
+            "t": 25.0,
+            "v": 0.3,
+            "in_tangent": 0.0006807274,
+            "out_tangent": 0.0
+          }
+        ]
+      }
+    },
+    "BodyLift": {
+      "lift": {
+        "keys": [
+          {
+            "t": 0.0,
+            "v": 0.0,
+            "in_tangent": 0.0,
+            "out_tangent": 1.975376
+          },
+          {
+            "t": 0.309017,
+            "v": 0.5877852,
+            "in_tangent": 1.565065,
+            "out_tangent": 1.565065
+          },
+          {
+            "t": 0.5877852,
+            "v": 0.9510565,
+            "in_tangent": 0.735902,
+            "out_tangent": 0.735902
+          },
+          {
+            "t": 0.7071068,
+            "v": 1.0,
+            "in_tangent": 0.0,
+            "out_tangent": 0.0
+          },
+          {
+            "t": 0.8910065,
+            "v": 0.809017,
+            "in_tangent": -2.70827,
+            "out_tangent": -2.70827
+          },
+          {
+            "t": 1.0,
+            "v": 0.0,
+            "in_tangent": -11.06124,
+            "out_tangent": 0.0
+          }
+        ]
+      },
+      "lift_mach": {
+        "keys": [
+          {
+            "t": 0.3,
+            "v": 0.167,
+            "in_tangent": 0.0,
+            "out_tangent": 0.0
+          },
+          {
+            "t": 0.8,
+            "v": 0.167,
+            "in_tangent": 0.0,
+            "out_tangent": -0.3904104
+          },
+          {
+            "t": 1.0,
+            "v": 0.125,
+            "in_tangent": -0.0005291355,
+            "out_tangent": -0.02625772
+          },
+          {
+            "t": 5.0,
+            "v": 0.0625,
+            "in_tangent": 0.0,
+            "out_tangent": 0.0
+          },
+          {
+            "t": 25.0,
+            "v": 0.05,
+            "in_tangent": 0.0,
+            "out_tangent": 0.0
+          }
+        ]
+      },
+      "drag": {
+        "keys": [
+          {
+            "t": 0.0,
+            "v": 0.0,
+            "in_tangent": 0.0,
+            "out_tangent": 0.0
+          }
+        ]
+      },
+      "drag_mach": {
+        "keys": [
+          {
+            "t": 0.0,
+            "v": 0.0,
+            "in_tangent": 0.0,
+            "out_tangent": 0.0
+          }
+        ]
+      }
+    },
+    "SpeedBrake": {
+      "lift": {
+        "keys": [
+          {
+            "t": 0.0,
+            "v": 0.0,
+            "in_tangent": 0.0,
+            "out_tangent": 0.0
+          }
+        ]
+      },
+      "lift_mach": {
+        "keys": [
+          {
+            "t": 0.0,
+            "v": 0.0,
+            "in_tangent": 0.0,
+            "out_tangent": 0.0
+          }
+        ]
+      },
+      "drag": {
+        "keys": [
+          {
+            "t": 0.0,
+            "v": 0.01,
+            "in_tangent": 0.0,
+            "out_tangent": 0.0
+          },
+          {
+            "t": 0.3420201,
+            "v": 0.06,
+            "in_tangent": 0.1750731,
+            "out_tangent": 0.1750731
+          },
+          {
+            "t": 0.5,
+            "v": 0.24,
+            "in_tangent": 2.60928,
+            "out_tangent": 2.60928
+          },
+          {
+            "t": 0.7071068,
+            "v": 1.7,
+            "in_tangent": 3.349777,
+            "out_tangent": 3.349777
+          },
+          {
+            "t": 1.0,
+            "v": 2.4,
+            "in_tangent": 1.387938,
+            "out_tangent": 0.0
+          }
+        ]
+      },
+      "drag_mach": {
+        "keys": [
+          {
+            "t": 0.0,
+            "v": 0.35,
+            "in_tangent": 0.0,
+            "out_tangent": -0.8463008
+          },
+          {
+            "t": 0.15,
+            "v": 0.125,
+            "in_tangent": 0.0,
+            "out_tangent": 0.0
+          },
+          {
+            "t": 0.9,
+            "v": 0.275,
+            "in_tangent": 0.541598,
+            "out_tangent": 0.541598
+          },
+          {
+            "t": 1.1,
+            "v": 0.75,
+            "in_tangent": 0.0,
+            "out_tangent": 0.0
+          },
+          {
+            "t": 1.4,
+            "v": 0.4,
+            "in_tangent": -0.3626955,
+            "out_tangent": -0.3626955
+          },
+          {
+            "t": 1.6,
+            "v": 0.35,
+            "in_tangent": -0.1545923,
+            "out_tangent": -0.1545923
+          },
+          {
+            "t": 2.0,
+            "v": 0.3,
+            "in_tangent": -0.09013031,
+            "out_tangent": -0.09013031
+          },
+          {
+            "t": 5.0,
+            "v": 0.22,
+            "in_tangent": 0.0,
+            "out_tangent": 0.0
+          },
+          {
+            "t": 25.0,
+            "v": 0.3,
+            "in_tangent": 0.0006807274,
+            "out_tangent": 0.0
+          }
+        ]
+      }
+    },
+    "CapsuleBottom": {
+      "lift": {
+        "keys": [
+          {
+            "t": 0.0,
+            "v": 0.0,
+            "in_tangent": 0.0,
+            "out_tangent": 1.975376
+          },
+          {
+            "t": 0.309017,
+            "v": 0.5877852,
+            "in_tangent": 1.565065,
+            "out_tangent": 1.565065
+          },
+          {
+            "t": 0.5877852,
+            "v": 0.9510565,
+            "in_tangent": 0.735902,
+            "out_tangent": 0.735902
+          },
+          {
+            "t": 0.7071068,
+            "v": 1.0,
+            "in_tangent": 0.0,
+            "out_tangent": 0.0
+          },
+          {
+            "t": 0.8910065,
+            "v": 0.809017,
+            "in_tangent": -2.70827,
+            "out_tangent": -2.70827
+          },
+          {
+            "t": 1.0,
+            "v": 0.0,
+            "in_tangent": -11.06124,
+            "out_tangent": 0.0
+          }
+        ]
+      },
+      "lift_mach": {
+        "keys": [
+          {
+            "t": 0.3,
+            "v": 0.0625,
+            "in_tangent": 0.0,
+            "out_tangent": 0.0
+          }
+        ]
+      },
+      "drag": {
+        "keys": [
+          {
+            "t": 0.0,
+            "v": 0.0,
+            "in_tangent": 0.0,
+            "out_tangent": 0.0
+          }
+        ]
+      },
+      "drag_mach": {
+        "keys": [
+          {
+            "t": 0.0,
+            "v": 0.0,
+            "in_tangent": 0.0,
+            "out_tangent": 0.0
+          }
+        ]
+      }
+    }
+  }
+}

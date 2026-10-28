@@ -6,29 +6,16 @@
 //! `AreaDrag * DragCubeMultiplier(0.1) * pseudoRe * DragMultiplier(8) * q_Pa * 0.001` kN, so the equivalent
 //! `Cd * A` in m^2 is `0.8 * AreaDrag * pseudoRe`.
 
-use ose_data::{Curve, CurveKey, DragCube};
+use ose_data::{Curve, DragCube};
 use ose_math::DVec3;
-
-fn curve(keys: &[(f64, f64, f64, f64)]) -> Curve {
-    Curve {
-        keys: keys
-            .iter()
-            .map(|&(t, v, i, o)| CurveKey {
-                t,
-                v,
-                in_tangent: i,
-                out_tangent: o,
-            })
-            .collect(),
-    }
-}
+use serde::Deserialize;
 
 /// Lift multipliers (`PhysicsSettings.LiftMultiplier`, `LiftDragMultiplier`).
 pub const LIFT_MULTIPLIER: f64 = 0.036;
 pub const LIFT_DRAG_MULTIPLIER: f64 = 0.015;
 
 /// A lifting surface's curves: lift and drag against |sin(angle of attack)|, and their Mach factors.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct LiftCurves {
     pub lift: Curve,
     pub lift_mach: Curve,
@@ -38,45 +25,33 @@ pub struct LiftCurves {
 
 /// `PhysicsSettings.DefaultLiftingSurfaceCurve` (wings, fins, control surfaces).
 pub fn default_lift_curves() -> LiftCurves {
-    LiftCurves {
-        lift: curve(&[
-            (0.0, 0.0, 0.0, 1.965926),
-            (0.258819, 0.5114774, 1.990092, 1.905806),
-            (0.5, 0.9026583, 133.0 / 188.0, -133.0 / 188.0),
-            (
-                std::f64::consts::FRAC_1_SQRT_2,
-                0.5926583,
-                -2.087948,
-                -1.990095,
-            ),
-            (1.0, 0.0, -2.014386, -2.014386),
-        ]),
-        lift_mach: curve(&[
-            (0.0, 1.0, 0.0, 0.0),
-            (0.3, 0.5, -1.671345, -0.8273422),
-            (1.0, 0.125, -0.0005291355, -0.02625772),
-            (5.0, 0.0625, 0.0, 0.0),
-            (25.0, 0.05, 0.0, 0.0),
-        ]),
-        drag: curve(&[
-            (0.0, 0.01, 0.0, 0.0),
-            (0.3420201, 0.06, 0.1750731, 0.1750731),
-            (0.5, 0.24, 2.60928, 2.60928),
-            (std::f64::consts::FRAC_1_SQRT_2, 1.7, 3.349777, 3.349777),
-            (1.0, 2.4, 1.387938, 0.0),
-        ]),
-        drag_mach: curve(&[
-            (0.0, 0.35, 0.0, -0.8463008),
-            (0.15, 0.125, 0.0, 0.0),
-            (0.9, 0.275, 0.541598, 0.541598),
-            (1.1, 0.75, 0.0, 0.0),
-            (1.4, 0.4, -0.3626955, -0.3626955),
-            (1.6, 0.35, -0.1545923, -0.1545923),
-            (2.0, 0.3, -0.09013031, -0.09013031),
-            (5.0, 0.22, 0.0, 0.0),
-            (25.0, 0.3, 0.0006807274, 0.0),
-        ]),
-    }
+    settings().lift_curves["Default"].clone()
+}
+
+pub fn body_lift_curves() -> LiftCurves {
+    settings().lift_curves["BodyLift"].clone()
+}
+
+/// Selected settings from the reference's loaded Global/PhysicsSettings.json.
+#[derive(Debug, Deserialize)]
+pub struct AeroSettings {
+    pub version: String,
+    pub source_sha256: String,
+    pub lift_multiplier: f64,
+    pub lift_drag_multiplier: f64,
+    pub body_lift_multiplier: f64,
+    pub drag_multiplier: f64,
+    pub drag_cube_multiplier: f64,
+    pub drag_curves: DragCurves,
+    pub lift_curves: std::collections::BTreeMap<String, LiftCurves>,
+}
+
+pub fn settings() -> &'static AeroSettings {
+    static SETTINGS: std::sync::OnceLock<AeroSettings> = std::sync::OnceLock::new();
+    SETTINGS.get_or_init(|| {
+        serde_json::from_str(include_str!("../../../assets/own/aero-settings.json"))
+            .expect("validated reference aero settings")
+    })
 }
 
 /// Lift plus drag of one lifting surface, kN, for travel direction `travel` (unit) through air at dynamic
@@ -84,26 +59,35 @@ pub fn default_lift_curves() -> LiftCurves {
 /// axis in the same frame.
 pub fn surface_force(
     c: &LiftCurves,
-    coeff: f64,
-    omnidirectional: bool,
+    surface: &ose_data::LiftingSurface,
     axis: DVec3,
     travel: DVec3,
     q_pa: f64,
     mach: f64,
 ) -> DVec3 {
     let dot = travel.dot(axis);
-    let abs = if omnidirectional {
+    let abs = if surface.omnidirectional {
         dot.abs()
     } else {
         dot.clamp(0.0, 1.0)
     };
-    let lift = dot.signum() * c.lift.evaluate(abs) * c.lift_mach.evaluate(mach) * coeff;
-    let drag = c.drag.evaluate(abs) * c.drag_mach.evaluate(mach) * coeff;
-    axis * (-q_pa * LIFT_MULTIPLIER * lift) - travel * (q_pa * drag * LIFT_DRAG_MULTIPLIER)
+    let lift = dot.signum()
+        * c.lift.evaluate(abs)
+        * c.lift_mach.evaluate(mach)
+        * surface.deflection_lift_coeff;
+    let drag = c.drag.evaluate(abs) * c.drag_mach.evaluate(mach) * surface.deflection_lift_coeff;
+    let mut force = axis * (-q_pa * settings().lift_multiplier * lift);
+    if surface.perpendicular_only {
+        force = force - travel * force.dot(travel);
+    }
+    if surface.use_internal_drag_model {
+        force = force - travel * (q_pa * drag * settings().lift_drag_multiplier);
+    }
+    force
 }
 
 /// The `PhysicsSettings` drag curves.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct DragCurves {
     pub tip: Curve,
     pub surface: Curve,
@@ -116,69 +100,7 @@ pub struct DragCurves {
 
 impl Default for DragCurves {
     fn default() -> Self {
-        DragCurves {
-            tip: curve(&[
-                (0.0, 1.0, 0.0, 0.0),
-                (0.85, 1.19, 0.696, 0.696),
-                (1.1, 2.83, 0.730, 0.730),
-                (5.0, 4.0, 0.0, 0.0),
-            ]),
-            surface: curve(&[
-                (0.0, 0.02, 0.0, 0.0),
-                (0.85, 0.02, 0.0, 0.0),
-                (0.9, 0.01524, -0.0794, -0.0794),
-                (1.1, 0.0025, -0.00528, -0.00194),
-                (2.0, 0.002083, -2.3e-5, -2.3e-5),
-                (5.0, 0.003333, -1.8e-4, -1.8e-4),
-                (25.0, 0.001429, -7.1e-5, 0.0),
-            ]),
-            tail: curve(&[
-                (0.0, 1.0, 0.0, 0.0),
-                (0.85, 1.0, 0.0, 0.0),
-                (1.1, 0.25, -0.0222, -0.0249),
-                (1.4, 0.22, -0.0339, -0.0339),
-                (5.0, 0.15, -0.0012, -0.0012),
-                (25.0, 0.14, 0.0, 0.0),
-            ]),
-            multiplier: curve(&[
-                (0.0, 0.5, 0.0, 0.0),
-                (0.85, 0.5, 0.0, 0.0),
-                (1.1, 1.3, 0.0, -0.0081),
-                (2.0, 0.7, -0.110, -0.110),
-                (5.0, 0.6, 0.0, 0.0),
-                (10.0, 0.85, 0.022, 0.022),
-                (14.0, 0.9, 0.0077, 0.0077),
-                (25.0, 0.95, 0.0, 0.0),
-            ]),
-            cd: curve(&[
-                (0.05, 0.0025, 0.15, 0.15),
-                (0.4, 0.15, 0.396, 0.396),
-                (0.7, 0.35, 0.907, 0.907),
-                (0.75, 0.45, 3.21, 3.21),
-                (0.8, 0.66, 3.50, 3.50),
-                (0.85, 0.8, 2.21, 2.21),
-                (0.9, 0.89, 1.1, 1.1),
-                (1.0, 1.0, 1.0, 1.0),
-            ]),
-            cd_power: curve(&[
-                (0.0, 1.0, 0.0, 0.00716),
-                (0.85, 1.25, 0.778, 0.778),
-                (1.1, 2.5, 0.249, 0.249),
-                (5.0, 3.0, 0.0, 0.0),
-            ]),
-            pseudo_reynolds: curve(&[
-                (0.0, 4.0, -111111.0, -2975.0),
-                (1e-4, 3.0, -251.0, -251.0),
-                (0.01, 2.0, -19.6, -19.6),
-                (0.1, 1.2, -0.785, -0.391),
-                (1.0, 1.0, 0.0, 0.0),
-                (100.0, 1.0, 0.0, 0.0),
-                (200.0, 0.82, 0.0, 0.0),
-                (500.0, 0.86, 1.9e-4, 1.9e-4),
-                (1000.0, 0.9, 1.5e-5, 1.5e-5),
-                (10000.0, 0.95, 0.0, 0.0),
-            ]),
-        }
+        settings().drag_curves.clone()
     }
 }
 
@@ -233,6 +155,19 @@ impl Faces {
             5
         };
         self.area[face] = (self.area[face] - covered).max(0.0);
+    }
+
+    /// `Data_Drag.GetAeroDataForDirection` lift contribution of the exposed faces, part-local.
+    pub fn body_lift_vector(&self, lift_curve: &Curve, direction: DVec3) -> DVec3 {
+        NORMALS.iter().enumerate().fold(DVec3::ZERO, |sum, (i, n)| {
+            let normal = DVec3::new(n.0, n.1, n.2);
+            let dot = normal.dot(direction);
+            if dot > 0.0 {
+                sum - normal * (dot * self.area[i] * self.drag[i] * lift_curve.evaluate(dot))
+            } else {
+                sum
+            }
+        })
     }
 
     /// The original's `AreaDrag` for travel direction `d` (unit, part space) at `mach`.
@@ -308,7 +243,10 @@ pub fn rotate(q: [f64; 4], v: DVec3) -> DVec3 {
 
 /// Equivalent `Cd * A`, m^2, for an `AreaDrag` at `density * speed` (kg/m^3 * m/s).
 pub fn cda_m2(curves: &DragCurves, area_drag: f64, rho_v: f64) -> f64 {
-    0.8 * area_drag * curves.pseudo_reynolds.evaluate(rho_v)
+    settings().drag_multiplier
+        * settings().drag_cube_multiplier
+        * area_drag
+        * curves.pseudo_reynolds.evaluate(rho_v)
 }
 
 /// Rotate `v` by the inverse of a unit quaternion (x, y, z, w).
@@ -323,6 +261,30 @@ pub fn rotate_inverse(q: [f64; 4], v: DVec3) -> DVec3 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[allow(clippy::approx_constant)] // Preserve the serialized reference key, not an idealized angle.
+    fn exported_reference_settings_preserve_named_families_and_runtime_multipliers() {
+        let data = settings();
+        assert_eq!(data.version, "0.1.16");
+        assert_eq!(data.source_sha256.len(), 64);
+        assert_eq!(data.lift_multiplier, 0.036);
+        assert_eq!(data.lift_drag_multiplier, 0.015);
+        assert_eq!(data.body_lift_multiplier, 18.0);
+        assert_eq!(data.drag_multiplier * data.drag_cube_multiplier, 0.8);
+        assert_eq!(data.lift_curves.len(), 4);
+        assert_eq!(
+            data.lift_curves["Default"].lift.evaluate(0.7071068),
+            0.5926583
+        );
+        assert_eq!(data.lift_curves["BodyLift"].lift.evaluate(0.7071068), 1.0);
+        assert_eq!(data.lift_curves["SpeedBrake"].lift.evaluate(0.7071068), 0.0);
+        assert_eq!(
+            data.lift_curves["CapsuleBottom"].lift_mach.evaluate(5.0),
+            0.0625
+        );
+        assert_eq!(data.drag_curves.cd.evaluate(0.7), 0.35);
+    }
 
     fn tank() -> Faces {
         // the 1.25 m methalox tank's cube (fueltank_1v_inline_methalox_1x4)
