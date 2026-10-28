@@ -219,7 +219,7 @@ pub fn restore(
         if !v.experiments.is_empty() {
             u.set_running_experiments(e, v.experiments.clone());
         }
-        if let Some(craft) = &v.craft {
+        if let Some(craft) = v.craft.as_ref().filter(|c| !c.parts.is_empty()) {
             u.set_craft(e, craft.clone());
             u.set_crew(e, v.crew.clone());
             u.set_structure(
@@ -274,6 +274,24 @@ pub fn read(path: &Path) -> anyhow::Result<Option<SaveFile>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_saved_craft_keeps_flight_state_without_building_an_empty_structure() {
+        let bodies: Vec<ose_data::CelestialBody> = serde_json::from_str(include_str!("../../../assets/own/kerbol-system.json")).unwrap();
+        let mut u = Universe::with_bodies(&bodies);
+        let body = u.body_entity("Kerbin").unwrap();
+        let e = u.spawn_vessel_in_circular_orbit("legacy probe", body, 100_000.0);
+        let (_, _, orbit) = u.vessel(e).unwrap();
+        let (r, v) = orbit.state_at(u.ut());
+        u.set_powered(e, ose_sim::flight::Powered::new(ose_sim::flight::FlightSpec { stages: vec![], drag_area_m2: 0.0, drag_cd: 0.0 }, r, v, false));
+        u.set_craft(e, ose_data::craft::Craft { name: "legacy probe".into(), description: String::new(), parts: vec![], stages: vec![] });
+        let file = capture(&u, &[(e, 42, Some(1))], &Campaign::default(), &[]);
+        let mut restored = Universe::with_bodies(&bodies);
+        let entries = restore(&mut restored, &file, &[], &[]);
+        assert_eq!(entries.len(), 1);
+        assert!(restored.powered(entries[0].0).is_some());
+        assert!(restored.structure(entries[0].0).is_none());
+    }
 
     #[test]
     fn ownership_survives_saves_and_legacy_campaigns_remain_unowned() {
