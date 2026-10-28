@@ -388,6 +388,11 @@ impl Default for DragProperties {
 /// (`transformDir` times `transformSign`, part space) against the airflow through it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LiftingSurface {
+    /// Suppress this module's lift and internal drag while its named node is occupied.
+    #[serde(default)]
+    pub node_enabled: bool,
+    #[serde(default)]
+    pub attach_node_name: String,
     #[serde(default)]
     pub pressure_offset_m: ose_math::DVec3,
     #[serde(default)]

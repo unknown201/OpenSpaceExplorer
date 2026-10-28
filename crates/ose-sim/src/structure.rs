@@ -195,6 +195,8 @@ pub struct Structure {
     pub rcs_defs: Vec<Option<ose_data::Rcs>>,
     /// Lifting surfaces (their curves resolved), intake areas, and each engine's jet curves.
     lift_defs: Vec<Option<(ose_data::LiftingSurface, aero::LiftCurves)>>,
+    /// Parts connected to a valid, authored lift-gating node. Presence is checked each step.
+    lift_node_links: Vec<Vec<usize>>,
     pressure_offsets_m: Vec<DVec3>,
     lift_offsets_m: Vec<DVec3>,
     drag_properties: Vec<ose_data::DragProperties>,
@@ -580,6 +582,42 @@ impl Structure {
                     def_of(i)
                         .map(|d| d.ctrl_pressure_offset_m)
                         .unwrap_or(DVec3::ZERO)
+                })
+                .collect(),
+            lift_node_links: (0..n)
+                .map(|i| {
+                    let Some(def) = def_of(i) else {
+                        return Vec::new();
+                    };
+                    let Some(lift) = &def.lifting_surface else {
+                        return Vec::new();
+                    };
+                    if !lift.node_enabled
+                        || lift.attach_node_name.is_empty()
+                        || !def
+                            .attach_nodes
+                            .iter()
+                            .any(|node| node.id == lift.attach_node_name)
+                    {
+                        return Vec::new();
+                    }
+                    let node = lift.attach_node_name.as_str();
+                    craft
+                        .parts
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(j, part)| {
+                            if j == i && part.own_node.as_deref() == Some(node) {
+                                part.parent.filter(|&parent| parent < n)
+                            } else if part.parent == Some(i)
+                                && part.parent_node.as_deref() == Some(node)
+                            {
+                                Some(j)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect()
                 })
                 .collect(),
             lift_defs: (0..n)
@@ -1010,7 +1048,7 @@ impl Structure {
             }
             let (range, share) = self.ctrl[i];
             if let Some((l, curves)) = &self.lift_defs[i] {
-                if range > 0.0 && share > 0.0 && !self.shielded[i] {
+                if range > 0.0 && share > 0.0 && self.lifting_surface_active(i) {
                     let (speed, mach) = self
                         .last_airflow
                         .map(|flow| {
@@ -2228,6 +2266,14 @@ impl Structure {
         attached / total
     }
 
+    fn lifting_surface_active(&self, part: usize) -> bool {
+        self.rigid.present[part]
+            && !self.shielded[part]
+            && !self.lift_node_links[part]
+                .iter()
+                .any(|&other| self.rigid.present[other])
+    }
+
     fn lifting_force(
         &self,
         part: usize,
@@ -2239,8 +2285,7 @@ impl Structure {
         let Some((surface, curves)) = &self.lift_defs[part] else {
             return DVec3::ZERO;
         };
-        if !self.rigid.present[part] || self.shielded[part] || surface.deflection_lift_coeff <= 0.0
-        {
+        if !self.lifting_surface_active(part) || surface.deflection_lift_coeff <= 0.0 {
             return DVec3::ZERO;
         }
         let (x, y, z) = frame;
@@ -2362,10 +2407,7 @@ impl Structure {
             .enumerate()
             .filter_map(|(i, def)| {
                 let (surface, _) = def.as_ref()?;
-                if !self.rigid.present[i]
-                    || self.shielded[i]
-                    || surface.deflection_lift_coeff <= 0.0
-                {
+                if !self.lifting_surface_active(i) || surface.deflection_lift_coeff <= 0.0 {
                     return None;
                 }
                 let v = self.air_at_offset(i, self.lift_offset(i), flow, centre);
@@ -2546,7 +2588,7 @@ impl Structure {
             .filter_map(|i| {
                 let (range, share) = self.ctrl[i];
                 let (l, _) = self.lift_defs[i].as_ref()?;
-                if range <= 0.0 || share <= 0.0 || !self.rigid.present[i] || self.shielded[i] {
+                if range <= 0.0 || share <= 0.0 || !self.lifting_surface_active(i) {
                     return None;
                 }
                 let u = aero::rotate(self.part_rot[i], l.axis);
@@ -2625,7 +2667,7 @@ impl Structure {
             let Some((l, curves)) = &self.lift_defs[i] else {
                 continue;
             };
-            if range <= 0.0 || share <= 0.0 || !self.rigid.present[i] || self.shielded[i] {
+            if range <= 0.0 || share <= 0.0 || !self.lifting_surface_active(i) {
                 continue;
             }
             let speed = self
@@ -3192,6 +3234,182 @@ mod tests {
         s.shielded[wing] = true;
         s.update_heat_in_flow(flow, 288.0, 0.0, &thermal::HeatSettings::default(), 0.02);
         assert_eq!(s.reentry_flux_kw[wing], 0.0);
+    }
+
+    #[test]
+    fn occupied_lift_nodes_gate_surfaces_and_controls_until_every_peer_detaches() {
+        let flow = Airflow::uniform(
+            basis(DVec3::new(0.0, 1.0, 0.0)),
+            DVec3::new(0.0, 100.0, -10.0),
+            1.0,
+            0.3,
+        );
+        for (own, child) in [(true, false), (false, true), (true, true)] {
+            let (mut s, mut p) = lift_node_fixture(true, "lift-gate", own, child);
+            let env = crate::flight::EngineEnvironment {
+                density: 1.0,
+                mach: 0.3,
+                ..Default::default()
+            };
+            let blocked = s.aerodynamics_local(0, flow);
+            assert_eq!(blocked.lift_kn, DVec3::ZERO);
+            assert!(
+                blocked.drag_kn.length() > 0.0,
+                "the independent drag cube must remain active"
+            );
+            assert!(s.lifting_fx_local(flow).is_empty());
+            assert!(s
+                .surface_deflections(flow.frame, DVec3::new(1.0, 0.0, 0.0))
+                .is_empty());
+            assert_eq!(s.control_authority_local(flow), 0.0);
+            let mut engine = s.propulsion(&p, env, 0.02);
+            s.configure_actuators(&p, env, &mut engine);
+            assert!(!engine
+                .actuators
+                .unwrap()
+                .iter()
+                .any(|a| a.part == 1 && a.kind == crate::actuators::Kind::Other));
+            let mut peers = Vec::new();
+            if own {
+                peers.push(0);
+            }
+            if child {
+                peers.push(2);
+            }
+            for (step, peer) in peers.iter().enumerate() {
+                s.rigid.remove_parts(&[*peer]);
+                s.net.remove_parts(&[*peer]);
+                let lift = s.aerodynamics_local(0, flow).lift_kn;
+                if step + 1 < peers.len() {
+                    assert_eq!(
+                        lift,
+                        DVec3::ZERO,
+                        "another connection still occupies the gated node"
+                    );
+                } else {
+                    assert!(lift.length() > 1.0);
+                }
+            }
+            assert_eq!(s.lifting_fx_local(flow).len(), 1);
+            assert_eq!(
+                s.surface_deflections(flow.frame, DVec3::new(1.0, 0.0, 0.0))
+                    .len(),
+                1
+            );
+            s.sync(&mut p);
+            let mut engine = s.propulsion(&p, env, 0.02);
+            s.configure_actuators(&p, env, &mut engine);
+            assert!(engine
+                .actuators
+                .unwrap()
+                .iter()
+                .any(|a| a.part == 1 && a.kind == crate::actuators::Kind::Other));
+        }
+    }
+
+    #[test]
+    fn disabled_missing_and_unoccupied_lift_nodes_preserve_the_analytical_surface_force() {
+        let air = DVec3::new(0.0, 100.0, -10.0);
+        let flow = Airflow::uniform(basis(DVec3::new(0.0, 1.0, 0.0)), air, 1.0, 0.3);
+        let expected = DVec3::new(
+            0.0,
+            0.0,
+            0.5 * air.length_squared() * aero::LIFT_MULTIPLIER * 10.0 / air.length(),
+        ) - air.normalized()
+            * (0.5 * air.length_squared() * aero::LIFT_DRAG_MULTIPLIER * 0.4);
+        for (enabled, name, own, child) in [
+            (false, "lift-gate", true, true),
+            (true, "missing", true, true),
+            (true, "", true, true),
+            (true, "lift-gate", false, false),
+        ] {
+            let (mut s, _) = lift_node_fixture(enabled, name, own, child);
+            let out = s.aerodynamics_local(0, flow);
+            assert!(
+                (out.lift_kn - expected).length() < 1e-9,
+                "{enabled}/{name}: {:?}",
+                out.lift_kn
+            );
+            assert_eq!(s.lifting_fx_local(flow).len(), 1);
+            assert!(s.control_authority_local(flow) > 0.0);
+        }
+    }
+
+    fn lift_node_fixture(
+        enabled: bool,
+        node_name: &str,
+        own: bool,
+        child: bool,
+    ) -> (Structure, Powered) {
+        let (base, _, wing) = airflow_fixture();
+        let (crafts, mut defs, resources) = assets();
+        let source = crafts.iter().find(|c| c.name == "Stock04_Jet").unwrap();
+        let mut wing_part = source.parts[wing].clone();
+        let def = defs.iter_mut().find(|d| d.id == wing_part.part_id).unwrap();
+        let (mut surface, curves) = base.lift_defs[wing].clone().unwrap();
+        surface.node_enabled = enabled;
+        surface.attach_node_name = node_name.into();
+        surface.pressure_offset_m = DVec3::ZERO;
+        surface.curve_set = "Custom".into();
+        surface.lift_curve = curves.lift;
+        surface.lift_mach_curve = curves.lift_mach;
+        surface.drag_curve = curves.drag;
+        surface.use_internal_drag_model = true;
+        surface.drag_curve.keys[0].v = 0.4;
+        surface.drag_mach_curve = curves.drag_mach;
+        def.lifting_surface = Some(surface);
+        let mut gate = def.attach_nodes[0].clone();
+        gate.id = "lift-gate".into();
+        gate.node_type = "Surface".into();
+        let mut other = gate.clone();
+        other.id = "other".into();
+        def.attach_nodes = vec![gate, other];
+        def.ctrl_range_deg = 0.2_f64.to_degrees();
+        def.ctrl_area = 1.0;
+        let mut parent = source.parts[0].clone();
+        parent.parent = None;
+        parent.local_position = DVec3::ZERO;
+        let mut peer = parent.clone();
+        peer.guid = "node-child".into();
+        peer.parent = Some(1);
+        peer.parent_node = Some(if child { "lift-gate" } else { "other" }.into());
+        peer.local_position = DVec3::new(0.0, 8.0, 0.0);
+        wing_part.parent = Some(0);
+        wing_part.own_node = Some(if own { "lift-gate" } else { "other" }.into());
+        wing_part.local_position = DVec3::new(0.0, 3.0, 0.0);
+        let mut parts = vec![parent, wing_part, peer];
+        for part in &mut parts {
+            part.resources.clear();
+            part.stage_index = 0;
+            part.local_rotation = ose_data::craft::Quat {
+                w: 1.0,
+                ..Default::default()
+            };
+        }
+        let craft = Craft {
+            name: "Node gating".into(),
+            description: String::new(),
+            parts,
+            stages: vec![Vec::new()],
+            colors: Default::default(),
+            loose: Vec::new(),
+        };
+        let mut s = Structure::build(&craft, &defs, &resources);
+        s.faces.fill(None);
+        s.faces[1] = Some(Faces {
+            area: [1.0; 6],
+            drag: [1.0; 6],
+        });
+        for props in &mut s.drag_properties {
+            props.body_lift_enabled = false;
+            props.drag_enabled = true;
+        }
+        s.wheel_axes_knm.fill(DVec3::ZERO);
+        s.rcs_defs.fill(None);
+        s.shielded.fill(false);
+        let mut p = flying(DVec3::new(0.0, 1.0, 0.0));
+        p.ignited = false;
+        (s, p)
     }
 
     #[test]

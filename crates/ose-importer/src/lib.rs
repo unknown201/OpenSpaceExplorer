@@ -451,6 +451,8 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
                             _ => DVec3::new(sign, 0.0, 0.0),
                         };
                         lifting_surface = Some(ose_data::LiftingSurface {
+                            node_enabled: b(o, "nodeEnabled"),
+                            attach_node_name: s(o, "attachNodeName"),
                             pressure_offset_m: vec3(&o["CoPOffset"]),
                             perpendicular_only: b(o, "perpendicularOnly"),
                             use_internal_drag_model: o["useInternalDragModel"]
@@ -1367,6 +1369,33 @@ mod tests {
         assert!(!imported.reset_enabled);
         assert_eq!(imported.isp_curve.evaluate(0.0), 150.0);
     }
+    #[test]
+    fn lifting_node_gate_imports_and_old_catalogs_leave_lift_enabled() {
+        let value = serde_json::json!({"data":{"partName":"wing","serializedPartModules":[
+            {"ModuleData":[{"Name":"Data_LiftingSurface","DataObject":{"nodeEnabled":true,"attachNodeName":"top"}}]}
+        ]}});
+        let surface = part(&value, &mut Coverage::default())
+            .lifting_surface
+            .unwrap();
+        assert!(surface.node_enabled);
+        assert_eq!(surface.attach_node_name, "top");
+        let mut old = serde_json::to_value(surface).unwrap();
+        old.as_object_mut().unwrap().remove("node_enabled");
+        old.as_object_mut().unwrap().remove("attach_node_name");
+        let restored: ose_data::LiftingSurface = serde_json::from_value(old).unwrap();
+        assert!(!restored.node_enabled && restored.attach_node_name.is_empty());
+        let catalog: Vec<PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let surfaces: Vec<_> = catalog
+            .iter()
+            .filter_map(|p| p.lifting_surface.as_ref())
+            .collect();
+        assert_eq!(surfaces.len(), 13);
+        assert!(surfaces
+            .iter()
+            .all(|s| !s.node_enabled && s.attach_node_name.is_empty()));
+    }
+
     #[test]
     fn aerodynamic_offsets_and_lift_options_import_with_legacy_defaults() {
         let value = serde_json::json!({"data":{"partName":"wing","coPressureOffset":{"x":1.0,"y":2.0,"z":3.0},"serializedPartModules":[{"ModuleData":[{"Name":"Data_LiftingSurface","DataObject":{"CoPOffset":{"x":0.0,"y":4.0,"z":0.0},"perpendicularOnly":true,"useInternalDragModel":false}},{"Name":"Data_ControlSurface","DataObject":{"CtrlSurfaceRange":20.0,"CtrlSurfaceArea":0.5,"CoPressureCtrlSurfaceOffset":{"x":5.0,"y":0.0,"z":0.0}}}]}]}});
