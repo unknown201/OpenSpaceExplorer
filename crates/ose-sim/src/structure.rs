@@ -209,67 +209,7 @@ pub struct Structure {
     staged_to: usize,
 }
 
-fn quat_mul(a: ose_data::craft::Quat, b: ose_data::craft::Quat) -> ose_data::craft::Quat {
-    ose_data::craft::Quat {
-        w: a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
-        x: a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
-        y: a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
-        z: a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
-    }
-}
-
-/// A craft built nose-forward (the root part pointing along the floor, as planes and rovers are built in
-/// the hangar) turned so its pointing direction is craft +Y like a rocket's: the flight model thrusts and
-/// steers along +Y. Its old top (+Y) becomes Unity +Z / right-handed craft -Z.
-/// `None` for a craft that already points up.
-pub fn level_layout(craft: &Craft) -> Option<Craft> {
-    let root = craft.parts.iter().position(|p| p.parent.is_none())?;
-    let q = craft.parts[root].local_rotation.normalized();
-    let c = aero::rotate([q.x, q.y, q.z, q.w], DVec3::new(0.0, 1.0, 0.0));
-    if c.y.abs() >= 0.5 {
-        return None;
-    }
-    // the shortest turn from `c` to +Y
-    let y = DVec3::new(0.0, 1.0, 0.0);
-    let axis = c.cross(y);
-    let angle = c.dot(y).clamp(-1.0, 1.0).acos();
-    let axis = if axis.length() > 1e-9 {
-        axis.normalized()
-    } else {
-        DVec3::new(1.0, 0.0, 0.0)
-    };
-    let (sh, ch) = (angle * 0.5).sin_cos();
-    let r = ose_data::craft::Quat {
-        x: axis.x * sh,
-        y: axis.y * sh,
-        z: axis.z * sh,
-        w: ch,
-    };
-    // Unity positions are mirrored in Z into the right-handed craft frame. Keep
-    // the hangar belly on craft +Z, which level flight carries toward the ground.
-    let r = quat_mul(
-        ose_data::craft::Quat {
-            x: 0.0,
-            y: 1.0,
-            z: 0.0,
-            w: 0.0,
-        },
-        r,
-    );
-    Some(rotated(craft, r))
-}
-
-/// Rotate every part about the craft origin.
-pub fn rotated(craft: &Craft, r: ose_data::craft::Quat) -> Craft {
-    let r = r.normalized();
-    let mut out = craft.clone();
-    for part in &mut out.parts {
-        part.local_position = aero::rotate([r.x, r.y, r.z, r.w], part.local_position);
-        let pq = part.local_rotation.normalized();
-        part.local_rotation = quat_mul(r, pq);
-    }
-    out
-}
+pub use ose_data::craft::{level_layout, rotated};
 
 /// A parachute's state (`DeploymentStates`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

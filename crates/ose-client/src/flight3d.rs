@@ -1207,6 +1207,7 @@ impl FlightView {
         self.wheel_last_ms = inp.now_ms;
         // The vessel.
         if let Some(craft) = inp.craft {
+            let vessel_rot = vessel_rot * crate::orientation::mesh_to_vessel();
             let fired = inp
                 .vessel
                 .flight

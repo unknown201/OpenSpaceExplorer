@@ -593,6 +593,15 @@ class Exporter:
             return None
         path = self.out / "parts" / f"{part_id}.glb"
         metadata = export_rig(env, glb, transforms, go_name, node_by_tf, skins)
+        # ProcedurallyEditablePart instantiates its mesh-option prefab with
+        # DEFAULT_PART_VISUAL_ROTATION = Euler(0, 0, 90). The dependency meshes
+        # above are still in their authoring frame: span +Z, chord +X. Apply
+        # that runtime turn so chord becomes +Y and thickness matches the
+        # part's -X lift axis. Mirroring X reverses the glTF turn about Z.
+        if "_procedural_" in part_id and part_id.startswith(("wing_", "stabilizer_", "controlsurface_")):
+            h = math.sqrt(0.5)
+            glb.roots = [glb.node("procedural_visual", (0.0, 0.0, 0.0),
+                                  (0.0, 0.0, -h, h), (1.0, 1.0, 1.0), None, glb.roots)]
         # Preserve semantic controller ownership. A state called OPEN on an engine can be a reverser
         # or a mode animation; it must not be treated as landing gear or a solar deployment.
         part_data = ROOT / "assets/ksp2/data/parts" / f"{part_id}.json"
