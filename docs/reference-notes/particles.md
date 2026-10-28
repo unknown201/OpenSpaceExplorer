@@ -51,6 +51,10 @@ Each source keeps its original `maxNumParticles`;
 there is no shared 4,096-particle reduction. Sources stop emitting while existing particles finish.
 The simulation clock tolerates network-clock jitter, freezes on pause and resets on large time jumps
 or a reference-body/vessel change. World positions remain double precision until camera subtraction.
+Attaching an engine source during an existing burn resumes continuous exhaust without replaying
+ignition. Clock resets resync current transforms and engine action latches so transitions across a
+time jump do not produce delayed ignition, shutdown or flameout bursts on resume. Newly instantiated
+contextual effects still play their one-shot recipes during normal simulation.
 `authored_sprite_gpu.rs` batches sorted billboards, stretched particles and spark meshes.
 
 Ground blast and launch smoke use their source prefabs and exported `VFXParticleParameterizer`

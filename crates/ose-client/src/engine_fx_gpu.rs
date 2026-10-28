@@ -981,6 +981,7 @@ impl EngineFxGpu {
                     commanded: engine.commanded,
                     pressure: engine.pressure,
                     mode: engine.mode,
+                    play_on_create: engine.part.starts_with("fx_"),
                     context: crate::authored_particles::Context {
                         normalized_thrust: (engine.thrust_kn
                             / library
