@@ -8,7 +8,9 @@ use std::collections::HashSet;
 
 /// Degrees per second the attitude target turns while a rotation key is held; CapsLock precision mode
 /// scales inputs by 0.1 as `FlightInputHandler.inputSensitivityScale` does.
-pub const TURN_RATE_DEG_S: f64 = 25.0;
+pub const TURN_RATE_DEG_S: f64 = 8.0;
+/// Keyboard rotation authority in every SAS mode; precision mode reduces this by a further factor of ten.
+pub const ROTATION_SCALE: f64 = 0.3;
 pub const PRECISION_SCALE: f64 = 0.1;
 /// Throttle change per second with Shift or Ctrl held (`FlightInputHandler.UpdateMainThrottle`: input x dt).
 pub const THROTTLE_RATE: f64 = 1.0;
@@ -108,6 +110,9 @@ impl Held {
     /// WheelBrakes is held, not toggled.
     pub fn brakes(&self) -> bool {
         self.is("KeyB")
+    }
+    pub fn rotation_scale(&self) -> f64 {
+        ROTATION_SCALE * self.scale()
     }
     pub fn scale(&self) -> f64 {
         if self.precision {
@@ -355,6 +360,20 @@ mod tests {
         let (p, h) = turn(90.0, 90.0, 0.0, 10.0);
         assert!((p - 80.0).abs() < 1e-6);
         assert!((h - 180.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn rotation_is_gentler_in_normal_and_precision_modes_without_changing_other_controls() {
+        let mut held = Held::default();
+        held.down("KeyW");
+        held.down("ShiftLeft");
+        assert!((held.rotation_scale() - 0.3).abs() < 1e-10);
+        assert_eq!(held.pitch(), -1.0);
+        assert_eq!(held.throttle(), 1.0);
+        assert_eq!(held.wheel_throttle(), 1.0);
+        held.precision = true;
+        assert!((held.rotation_scale() - 0.03).abs() < 1e-10);
+        assert_eq!(held.scale(), PRECISION_SCALE);
     }
 
     #[test]

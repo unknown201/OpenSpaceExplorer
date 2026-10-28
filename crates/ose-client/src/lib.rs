@@ -9204,9 +9204,9 @@ impl App {
             .and_then(|v| v.flight.as_ref())
             .map(|f| f.situation == ose_net::FlightSituation::Landed)
             .unwrap_or(false);
-        let roll = self.keys.roll() as f32 * self.keys.scale() as f32;
-        // The keys turn the craft directly (pitch toward its top, yaw to its right, roll clockwise).
-        let s = self.keys.scale() as f32;
+        let roll = self.keys.roll() as f32 * self.keys.rotation_scale() as f32;
+        // Apply the same gentler rotation authority with SAS on and off.
+        let s = self.keys.rotation_scale() as f32;
         let rotation = (pitch_in as f32 * s, yaw_in as f32 * s, roll);
         if rotation == (0.0, 0.0, 0.0) && self.rotation_sent != (0.0, 0.0, 0.0) {
             // Let go: take the hold the server kept for the new direction once it has it.

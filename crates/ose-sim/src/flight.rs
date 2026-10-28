@@ -1122,10 +1122,11 @@ pub fn spin(p: &mut Powered, thrust_fraction: f64, dt: f64) {
     let top = vessel_top(p);
     p.own_top = top;
     let right = p.facing.cross(top);
-    // pitch turns the nose toward the top: about -right; yaw toward the right: about +top
+    // Unity's wheel torque is -(pitch, roll, yaw). Mirroring Unity Z transforms that axial vector
+    // to (pitch, roll, -yaw): pitch toward +Z is about +right, yaw toward +X is about -top.
     let w_turn = p.angvel - p.facing * p.angvel.dot(p.facing);
-    p.steer_cmd = right * -i.x + top * i.y + p.facing * i.z;
-    let w = w_turn + (right * -i.x + top * i.y) * (alpha * dt);
+    p.steer_cmd = right * i.x - top * i.y + p.facing * i.z;
+    let w = w_turn + (right * i.x - top * i.y) * (alpha * dt);
     let w = if w.length() > MAX_TURN_RATE {
         w * (MAX_TURN_RATE / w.length())
     } else {
@@ -1313,10 +1314,10 @@ fn control_request(
             v
         }
     };
-    let held = p.rotation_input.x.abs() > 1e-3 || p.rotation_input.y.abs() > 1e-3;
+    let held = p.rotation_input.length_squared() > 1e-6;
     let control = if p.attitude == Attitude::Free || held {
         let i = p.rotation_input + p.trim;
-        limit(DVec3::new(-i.x, i.z, i.y), 1.0) * torque
+        limit(DVec3::new(i.x, i.z, -i.y), 1.0) * torque
     } else {
         let cross = by.cross(target);
         let theta = cross.length().atan2(by.dot(target));
@@ -1417,9 +1418,7 @@ fn turn_with_parts(
     }
     p.facing = facing;
     set_vessel_top(p, top);
-    if (p.rotation_input.x.abs() > 1e-3 || p.rotation_input.y.abs() > 1e-3)
-        && matches!(p.attitude, Attitude::Fixed(_))
-    {
+    if p.rotation_input.length_squared() > 1e-6 && matches!(p.attitude, Attitude::Fixed(_)) {
         p.attitude = Attitude::Fixed(p.facing);
     }
     p.roll_rate = w1.dot(p.facing);
@@ -1649,8 +1648,7 @@ pub fn integrate_with_propulsion(
         let i = p.rotation_input + p.trim;
         let top = vessel_top(p);
         let right = p.facing.cross(top);
-        p.steer_cmd = right * -i.x.clamp(-1.0, 1.0)
-            + top * i.y.clamp(-1.0, 1.0)
+        p.steer_cmd = right * i.x.clamp(-1.0, 1.0) - top * i.y.clamp(-1.0, 1.0)
             + p.facing * i.z.clamp(-1.0, 1.0);
     } else {
         let target = attitude_direction(p.attitude, p.r, p.v, omega);
@@ -1673,7 +1671,7 @@ pub fn integrate_with_propulsion(
             if let Some((_, moi)) = turning_authority(p, frac) {
                 p.angvel = p.angvel + p.aero_torque_knm * (dt / moi);
             }
-            let held = p.rotation_input.x.abs() > 1e-3 || p.rotation_input.y.abs() > 1e-3;
+            let held = p.rotation_input.length_squared() > 1e-6;
             if p.attitude == Attitude::Free {
                 spin(p, frac, dt);
             } else if held {
@@ -2320,6 +2318,54 @@ mod tests {
     }
 
     #[test]
+    fn manual_rotation_matches_mirrored_ksp_torque_for_both_flight_models() {
+        // KSP Module_ReactionWheel applies -(pitch, roll, yaw) in Unity. Under the Z reflection,
+        // an axial vector becomes (pitch, roll, -yaw). Exercise all keys, bank angles and flight axes.
+        for facing in [DVec3::new(1.0, 0.0, 0.0), DVec3::new(0.0, 1.0, 0.0)] {
+            for roll in [0.0, std::f64::consts::FRAC_PI_2, std::f64::consts::PI] {
+                for input in [
+                    DVec3::new(-1.0, 0.0, 0.0),
+                    DVec3::new(1.0, 0.0, 0.0),
+                    DVec3::new(0.0, -1.0, 0.0),
+                    DVec3::new(0.0, 1.0, 0.0),
+                    DVec3::new(0.0, 0.0, -1.0),
+                    DVec3::new(0.0, 0.0, 1.0),
+                ] {
+                    let (mut p, engine) = body_dynamics_fixture();
+                    p.facing = facing;
+                    p.roll_rad = roll;
+                    p.controlled = true;
+                    p.spec.stages[0].moi_tm2 = 10.0;
+                    p.spec.stages[0].wheel_torque_knm = 1.0;
+                    p.spec.stages[0].gimbal_torque_knm = 0.0;
+                    p.rotation_input = input;
+                    let (x, y, z) = vessel_basis(&p);
+                    let expected = x * input.x + y * input.z - z * input.y;
+                    for attitude in [Attitude::Free, Attitude::Fixed(facing)] {
+                        let mut parts = p.clone();
+                        parts.attitude = attitude;
+                        let (torque, _) = control_request(&parts, &engine, facing, 0.0, 0.02);
+                        assert!((torque - DVec3::new(input.x, input.z, -input.y)).length() < 1e-10);
+                        turn_with_parts(
+                            &mut parts,
+                            &engine,
+                            facing,
+                            0.0,
+                            0.02,
+                            &mut StepOutcome::default(),
+                        );
+                        assert!(
+                            (parts.angvel + parts.facing * parts.roll_rate).dot(expected) > 0.0
+                        );
+                    }
+                    spin(&mut p, 0.0, 0.02);
+                    assert!((p.angvel + p.facing * p.roll_rate).dot(expected) > 0.0);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn off_axis_force_follows_roll_and_torque_has_the_expected_impulse() {
         let (mut p, mut engine) = body_dynamics_fixture();
         let mut body = kerbin();
@@ -2392,10 +2438,10 @@ mod tests {
         let target = p.facing;
         let mut out = StepOutcome::default();
         turn_with_parts(&mut p, &engine, target, 0.0, 0.1, &mut out);
-        assert!((out.control_torque_knm.unwrap() - top * 2.0).length() < 1e-10);
+        assert!((out.control_torque_knm.unwrap() + top * 2.0).length() < 1e-10);
         assert!((vessel_top(&p) - top).length() < 1e-10);
         assert_eq!(p.attitude, Attitude::Fixed(p.facing));
-        assert!(p.facing.z > 0.0);
+        assert!(p.facing.z < 0.0);
         p.rotation_input = DVec3::ZERO;
         p.attitude = Attitude::Free;
         p.trim.z = 0.25;

@@ -4564,7 +4564,7 @@ mod tests {
                 0,
                 DVec3::new(0.0, 1.0, 0.0),
                 DVec3::new(0.0, 0.0, 1.0),
-                DVec3::new(-1.0, 0.0, 0.0),
+                DVec3::new(1.0, 0.0, 0.0),
             ),
             (
                 1,
@@ -4576,7 +4576,7 @@ mod tests {
                 2,
                 DVec3::new(1.0, 0.0, 0.0),
                 DVec3::new(0.0, 1.0, 0.0),
-                DVec3::new(0.0, 1.0, 0.0),
+                DVec3::new(0.0, -1.0, 0.0),
             ),
         ] {
             for enabled in [false, true] {
@@ -4940,7 +4940,7 @@ mod tests {
             })
             .collect();
         p.rcs.translate = DVec3::new(1.0, 0.0, 0.0);
-        p.rotation_input = DVec3::new(0.0, -1.0, 0.0);
+        p.rotation_input = DVec3::new(0.0, 1.0, 0.0);
         let mut engine = s.propulsion(&p, Default::default(), 0.1);
         engine.mass.centre_m = s.rigid.rest_position(pair[0]);
         s.configure_actuators(&p, Default::default(), &mut engine);
@@ -5189,7 +5189,7 @@ mod tests {
         s.configure_actuators(&p, Default::default(), &mut engine);
         s.resolve_wheel_power(&mut p, &body, &mut engine, 0.02);
         assert!(
-            (engine.control_allocation.unwrap().torque_knm - DVec3::new(3.0, 4.0, 0.0)).length()
+            (engine.control_allocation.unwrap().torque_knm - DVec3::new(-3.0, 4.0, 0.0)).length()
                 < 1e-9
         );
         assert!(
