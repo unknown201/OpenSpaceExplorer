@@ -129,10 +129,24 @@ Four analytical regressions cover empty/quarter/full-step fuel and the next empt
 
 This closes the structured-vessel RCS resource timing and shared mount budget gap. It retains approximate bidirectional force spheres at part origins, not imported individual nozzle geometry. Translation is combined after torque allocation, so saturation can reduce the commanded turn and asymmetric translation can introduce an uncompensated moment. There is no second allocation pass after partial delivery. Requests retain the resource graph's ordered semantics. EVA and other unstructured flight states retain their existing simplified path.
 
+## Completed increment: local angular airflow and surface options
+
+Per-part drag and lift now evaluate velocity at each bounds-centre force point as mass-centre air velocity plus relative angular velocity crossed with the lever arm. Relative angular velocity includes pitch/yaw and roll and subtracts atmospheric co-rotation. Each point supplies its own Mach number, dynamic pressure, direction and pseudo-Reynolds argument. Current fuel mass sets the centre. Opposing local forces can create a damping couple with zero bulk speed or resultant force; the same part forces feed flight torque and structural loads. Flight receives the resolved drag vector instead of reconstructing it from a scalar Cd*A and bulk speed.
+
+Heating, control authority, bounded control-surface channels and the server's wing-condensation readout now use the same local motion. Thermal occlusion retains the original uniform-flow box sweep when angular velocity is zero; rotating flow uses a conservative per-target projected-outline query, keeping total occlusion work quadratic in part count. Shielding and attachment masks still apply.
+
+The importer and committed catalog now carry `perpendicularOnly` and `useInternalDragModel`. The first projects only lift perpendicular to travel; internal drag is evaluated separately and can be disabled. Old catalogs preserve the previous unprojected-lift/internal-drag defaults. All 13 authored lifting-surface entries currently use those defaults, so importing the flags does not invent a change to their authored behavior.
+
+Seven new simulation regressions check analytical pure-spin drag/torque and angular impulse/energy, retained joint loads, local Mach/dynamic pressure, fuel-shifted levers, roll covariance, shielding/detachment and vacuum, atmospheric co-rotation, lift projection/drag independence, local heating and control/wing-effect agreement. An importer regression checks explicit options, the reference's default internal drag, and old-catalog compatibility. Existing launches, aircraft takeoff, recovery and thermal tests remain in the simulation suite.
+
+This closes checklist P11 and P14 and part of P12 in [the complete known-gap checklist](../PHYSICS-GAPS.md). Authored pressure/lift/drag offsets and named model transforms remain open, as do node-dependent lift suppression and the full deflected/stalled control-surface model. Application points remain bounds-centre approximations; heating and its box-outline occlusion remain approximations. There is no original-executable trace comparison or claim of full aerodynamic parity.
+
 ## Remaining physics priorities
 
+The detailed inventory and acceptance criteria are in [PHYSICS-GAPS.md](../PHYSICS-GAPS.md).
+
 1. Import engine/nozzle transforms and weights, internal mass offsets and usable inertia geometry. Extend the combined RCS allocation to authored individual nozzles and compensate translation-induced moments where authority permits.
-2. Add local airflow from angular motion, aerodynamic damping, centre-of-pressure offsets, full lifting-surface options, and deflected control-surface lift/drag.
+2. Import centre-of-pressure/lift/drag offsets and named model transforms, node-dependent lifting-surface options, and deflected control-surface lift/drag. Local angular airflow and damping now have a shared force/readout path.
 3. Replace sampled corner paths with continuous hull contacts; add nearby vessel/debris pair contacts and equal-and-opposite impulses. Import contact materials and sliding damage/heat.
 4. Import displacement and wheel-collider data, suspension tuning and target positions; add load-dependent tyre grip and wheel slip. Extend water behavior, then docking attraction/capture and EVA ladder/hatch contact.
 
@@ -151,3 +165,14 @@ Per-engine mode switching, imported nozzle transforms, thrust response curves/li
 - `cargo fmt --all --check` and `git diff --check`: passed.
 
 These are analytical and automated gameplay regressions, not a measured comparison of flight traces against the KSP2 executable.
+
+## Validation, 2026-10-28
+
+- `cargo test -p ose-sim --lib`: 144 passed.
+- `cargo test -p ose-importer --lib`: 10 passed.
+- `cargo test --workspace` with `CARGO_BUILD_TARGET=x86_64-pc-windows-msvc`: passed with local sockets enabled, including the fresh-server Mun journey through landing (444.63 seconds) and 18 passing WebSocket tests; one existing integration test remains ignored.
+- `cargo clippy --workspace --all-targets -- -D warnings`: passed.
+- `cargo check -p ose-client --target wasm32-unknown-unknown`: passed.
+- `cargo fmt --all --check` and `git diff --check`: passed.
+
+The sandbox denies localhost sockets, so the initial sandboxed integration attempt timed out waiting for its server; the successful run used the authorized local execution path. The final parked-flow helper and extended vector-impulse assertion also have focused simulation coverage. These results remain analytical/gameplay evidence, not original-executable parity traces.

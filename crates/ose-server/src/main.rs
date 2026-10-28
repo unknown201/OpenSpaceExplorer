@@ -878,13 +878,12 @@ fn flight_readout(
         lifting_surfaces: u
             .structure(e)
             .map(|st| {
-                st.lifting_fx(
-                    ose_sim::flight::vessel_basis(p),
-                    v_surf,
+                st.lifting_fx_in_flow(ose_sim::structure::Airflow::for_vessel(
+                    p,
+                    ose_math::DVec3::new(0.0, 0.0, omega),
                     rho,
-                    atmo.map(|a| v_surf.length() / a.speed_of_sound(alt).max(1.0))
-                        .unwrap_or(0.0),
-                )
+                    atmo.map(|a| a.speed_of_sound(alt)).unwrap_or(0.0),
+                ))
             })
             .unwrap_or_default(),
         mach_number: atmo

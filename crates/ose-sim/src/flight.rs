@@ -1326,6 +1326,8 @@ pub struct Propulsion {
     pub actuators: Option<Vec<crate::actuators::Actuator>>,
     /// Inputs already limited by this tick's delivered actuator resources.
     pub control_allocation: Option<crate::actuators::Allocation>,
+    /// Resolved per-part drag, including angular airflow. None selects the bulk-velocity fallback.
+    pub aerodynamic_drag_kn: Option<DVec3>,
     /// Buoyancy/suspension forces and moments are inertial, unlike mounted engine forces.
     pub environment_force_kn: DVec3,
     pub environment_torque_knm: DVec3,
@@ -1655,7 +1657,10 @@ pub fn integrate_with_propulsion(
     // gravity + drag
     let g_acc = p.r * (-body.mu / (r_mag * r_mag * r_mag));
     let v_surf = p.v - omega_v.cross(p.r);
-    let drag_acc = if rho > 0.0 && v_surf.length_squared() > 0.0 {
+    let resolved_drag = propulsion.as_ref().and_then(|e| e.aerodynamic_drag_kn);
+    let drag_acc = if let Some(force) = resolved_drag {
+        force * (1.0 / p.mass_t)
+    } else if rho > 0.0 && v_surf.length_squared() > 0.0 {
         let q = 0.5 * rho * v_surf.length_squared();
         let cda = p
             .drag_cda_m2

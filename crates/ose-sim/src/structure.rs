@@ -30,9 +30,73 @@ pub struct EngineDemand {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct AeroForces {
     pub cda_m2: f64,
+    /// Sum of drag-cube forces in inertial kN; need not oppose centre-of-mass travel.
+    pub drag_kn: DVec3,
     /// Lifting-surface force, including its induced drag, inertial kN.
     pub lift_kn: DVec3,
     pub torque_knm: DVec3,
+}
+
+/// Atmospheric-relative motion at the mass centre. Angular velocity includes pitch, yaw and roll,
+/// minus the atmosphere's angular velocity, all in inertial axes.
+#[derive(Clone, Copy, Debug)]
+pub struct Airflow {
+    pub frame: (DVec3, DVec3, DVec3),
+    pub velocity: DVec3,
+    pub angular_velocity: DVec3,
+    pub density: f64,
+    pub speed_of_sound: f64,
+}
+
+impl Airflow {
+    pub fn for_vessel(
+        p: &Powered,
+        atmosphere_spin: DVec3,
+        density: f64,
+        speed_of_sound: f64,
+    ) -> Self {
+        Self {
+            frame: crate::flight::vessel_basis(p),
+            velocity: p.v - atmosphere_spin.cross(p.r),
+            // The parked/rolling path carries the supported hull with the body without
+            // storing that inertial spin in p.angvel. It has no relative tumble.
+            angular_velocity: if p.landed {
+                DVec3::ZERO
+            } else {
+                p.angvel + p.facing * p.roll_rate - atmosphere_spin
+            },
+            density,
+            speed_of_sound,
+        }
+    }
+    pub fn bulk(frame: (DVec3, DVec3, DVec3), velocity: DVec3, density: f64, mach: f64) -> Self {
+        Self {
+            frame,
+            velocity,
+            angular_velocity: DVec3::ZERO,
+            density,
+            speed_of_sound: if mach > 0.0 {
+                velocity.length() / mach
+            } else {
+                f64::INFINITY
+            },
+        }
+    }
+    fn velocity_at(&self, offset: DVec3) -> DVec3 {
+        let (x, y, z) = self.frame;
+        self.velocity
+            + self
+                .angular_velocity
+                .cross(x * offset.x + y * offset.y + z * offset.z)
+    }
+
+    fn mach(&self, speed: f64) -> f64 {
+        if self.speed_of_sound > 0.0 {
+            speed / self.speed_of_sound
+        } else {
+            0.0
+        }
+    }
 }
 
 #[derive(Component)]
@@ -61,6 +125,7 @@ pub struct Structure {
     pub part_cda_m2: Vec<f64>,
     curves: DragCurves,
     last_air_speed_mps: f64,
+    last_airflow: Option<Airflow>,
     /// Tanks and the flow graph engines draw through.
     pub net: FlowNet,
     /// Each part's engine mixture (`None` for parts without an engine).
@@ -373,6 +438,7 @@ impl Structure {
             part_cda_m2: vec![0.0; n],
             curves: DragCurves::default(),
             last_air_speed_mps: 0.0,
+            last_airflow: None,
             net: FlowNet::build(craft, defs, resources),
             engine_mixture,
             deployed: vec![false; n],
@@ -779,13 +845,20 @@ impl Structure {
             let (range, share) = self.ctrl[i];
             if let Some((l, curves)) = &self.lift_defs[i] {
                 if range > 0.0 && share > 0.0 && !self.shielded[i] {
-                    let q = 0.5 * env.density * self.last_air_speed_mps.powi(2);
+                    let (speed, mach) = self
+                        .last_airflow
+                        .map(|flow| {
+                            let speed = flow.velocity_at(self.part_box(i).0 - centre).length();
+                            (speed, flow.mach(speed))
+                        })
+                        .unwrap_or((self.last_air_speed_mps, env.mach));
+                    let q = 0.5 * env.density * speed.powi(2);
                     let cap = (q
                         * aero::LIFT_MULTIPLIER
                         * l.deflection_lift_coeff
                         * share
                         * curves.lift.evaluate(range.sin())
-                        * curves.lift_mach.evaluate(env.mach))
+                        * curves.lift_mach.evaluate(mach))
                     .max(0.0);
                     let axis = aero::rotate(self.part_rot[i], l.axis);
                     let force = DVec3::new(axis.x, axis.y, -axis.z) * cap;
@@ -1473,25 +1546,65 @@ impl Structure {
         settings: &thermal::HeatSettings,
         dt: f64,
     ) -> Vec<usize> {
+        self.update_heat_in_flow(
+            Airflow::bulk(frame, v_air, density, mach),
+            ambient_k,
+            conductivity,
+            settings,
+            dt,
+        )
+    }
+
+    pub fn update_heat_in_flow(
+        &mut self,
+        flow: Airflow,
+        ambient_k: f64,
+        conductivity: f64,
+        settings: &thermal::HeatSettings,
+        dt: f64,
+    ) -> Vec<usize> {
         let present: Vec<usize> = (0..self.rigid.len())
             .filter(|&i| self.rigid.present[i])
             .collect();
-        let (bx, by, bz) = frame;
-        let speed = v_air.length();
-        let d = if speed > 0.0 {
-            DVec3::new(v_air.dot(bx), v_air.dot(by), v_air.dot(bz)) * (1.0 / speed)
+        let (bx, by, bz) = flow.frame;
+        let centre = self.mass_properties().centre_m;
+        let boxes: Vec<(DVec3, DVec3)> = present.iter().map(|&i| self.part_box(i)).collect();
+        let local =
+            |velocity: DVec3| DVec3::new(velocity.dot(bx), velocity.dot(by), velocity.dot(bz));
+        let exposed = if flow.angular_velocity.length_squared() == 0.0
+            && flow.velocity.length_squared() > 0.0
+        {
+            thermal::exposed_proportions(
+                &boxes,
+                local(flow.velocity).normalized(),
+                flow.mach(flow.velocity.length()),
+            )
         } else {
-            DVec3::ZERO
-        };
-        let du = DVec3::new(d.x, d.y, -d.z);
-        let exposed = if speed > 0.0 {
-            let boxes: Vec<(DVec3, DVec3)> = present.iter().map(|&i| self.part_box(i)).collect();
-            thermal::exposed_proportions(&boxes, d, mach)
-        } else {
-            vec![0.0; present.len()]
+            present
+                .iter()
+                .enumerate()
+                .map(|(k, &i)| {
+                    let velocity = local(flow.velocity_at(self.part_box(i).0 - centre));
+                    thermal::exposed_proportion_at(
+                        &boxes,
+                        k,
+                        velocity,
+                        flow.mach(velocity.length()),
+                    )
+                })
+                .collect()
         };
         let mut burned = Vec::new();
         for (k, &i) in present.iter().enumerate() {
+            let velocity = local(flow.velocity_at(self.part_box(i).0 - centre));
+            let speed = velocity.length();
+            let mach = flow.mach(speed);
+            let d = if speed > 0.0 {
+                velocity * (1.0 / speed)
+            } else {
+                DVec3::ZERO
+            };
+            let du = DVec3::new(d.x, d.y, -d.z);
             let local = aero::rotate_inverse(self.part_rot[i], du);
             let (airstream, cd, wetted) = match &self.faces[i] {
                 Some(f) => {
@@ -1505,7 +1618,7 @@ impl Structure {
             };
             // under a fairing or in a closed bay the airflow does not reach it
             let reach = if self.shielded[i] { 0.0 } else { exposed[k] };
-            let mut flux = thermal::reentry_flux(mach, reach, airstream, density, cd);
+            let mut flux = thermal::reentry_flux(mach, reach, airstream, flow.density, cd);
             // a heat shield above its ablation temperature turns the heat away while it faces the flow
             // (`Module_Heatshield.ThermalUpdate`) and burns ablator for the heat it takes
             // (`PartComponentModule_Heatshield`)
@@ -1885,8 +1998,7 @@ impl Structure {
         let axis = crate::rigid::to_vessel(aero::rotate(self.part_rot[part], surface.axis));
         aero::surface_force(
             curves,
-            surface.deflection_lift_coeff,
-            surface.omnidirectional,
+            surface,
             x * axis.x + y * axis.y + z * axis.z,
             travel,
             q,
@@ -1921,12 +2033,14 @@ impl Structure {
         rho: f64,
         mach: f64,
     ) -> Vec<(u16, f32, f32)> {
-        let speed = v_air.length();
-        if speed <= 0.0 || rho <= 0.0 {
+        self.lifting_fx_in_flow(Airflow::bulk(frame, v_air, rho, mach))
+    }
+
+    pub fn lifting_fx_in_flow(&self, flow: Airflow) -> Vec<(u16, f32, f32)> {
+        if flow.density <= 0.0 {
             return Vec::new();
         }
-        let travel = v_air * (1.0 / speed);
-        let q = 0.5 * rho * speed * speed;
+        let centre = self.mass_properties().centre_m;
         self.lift_defs
             .iter()
             .enumerate()
@@ -1938,7 +2052,14 @@ impl Structure {
                 {
                     return None;
                 }
-                let force = self.lifting_force(i, frame, travel, q, mach);
+                let velocity = flow.velocity_at(self.part_box(i).0 - centre);
+                let speed = velocity.length();
+                if speed <= 0.0 {
+                    return None;
+                }
+                let travel = velocity * (1.0 / speed);
+                let q = 0.5 * flow.density * speed * speed;
+                let force = self.lifting_force(i, flow.frame, travel, q, flow.mach(speed));
                 let lift = force - travel * force.dot(travel);
                 Some((
                     u16::try_from(i).ok()?,
@@ -2003,15 +2124,98 @@ impl Structure {
         rho: f64,
         mach: f64,
     ) -> AeroForces {
-        let cda_m2 = self.aero(stage, frame, v_air, rho, mach);
-        let forces = self.aero_loads(frame, v_air, rho, mach);
-        let out = AeroForces {
-            cda_m2,
-            lift_kn: self.lift(frame, v_air, rho, mach),
-            torque_knm: self.airflow_moment(frame, &forces),
-        };
+        self.aerodynamics_in_flow(
+            stage,
+            Airflow {
+                frame,
+                velocity: v_air,
+                angular_velocity: DVec3::ZERO,
+                density: rho,
+                speed_of_sound: if mach > 0.0 {
+                    v_air.length() / mach
+                } else {
+                    f64::INFINITY
+                },
+            },
+        )
+    }
+
+    /// Evaluate each attached part at v_COM + omega_relative cross its mass-centred application lever.
+    /// Retain the individual forces even when their resultant cancels (a pure damping couple).
+    pub fn aerodynamics_in_flow(&mut self, stage: usize, flow: Airflow) -> AeroForces {
+        if stage != self.staged_to {
+            self.trim_to(stage);
+        }
+        let centre = self.mass_properties().centre_m;
+        let (x, y, z) = flow.frame;
+        let shells = self.fairing_shells();
+        let mut forces = Vec::new();
+        let mut out = AeroForces::default();
+        self.part_cda_m2.fill(0.0);
+        self.last_air_speed_mps = flow.velocity.length();
+        self.last_airflow = Some(flow);
+        for i in 0..self.rigid.len() {
+            if !self.rigid.present[i] {
+                continue;
+            }
+            let at = self.part_box(i).0;
+            let velocity = flow.velocity_at(at - centre);
+            let speed = velocity.length();
+            let mut force_kn = DVec3::ZERO;
+            if speed > 0.0 && flow.density > 0.0 && !self.shielded[i] {
+                let travel = velocity * (1.0 / speed);
+                let mach = flow.mach(speed);
+                let unity = DVec3::new(travel.dot(x), travel.dot(y), -travel.dot(z));
+                let local = aero::rotate_inverse(self.part_rot[i], unity);
+                let area_drag = self.part_area_drag(i, local, mach);
+                let mut cda = aero::cda_m2(&self.curves, area_drag, flow.density * speed);
+                let along = unity.y.abs().min(1.0);
+                let across = (1.0 - along * along).max(0.0).sqrt();
+                for &(_, front, side) in shells.iter().filter(|s| s.0 == i) {
+                    cda += front * FAIRING_CD_FRONT * along + side * FAIRING_CD_SIDE * across;
+                }
+                self.part_cda_m2[i] = cda;
+                out.cda_m2 += cda;
+                let q = 0.5 * flow.density * speed * speed;
+                let drag = -travel * (q * cda / 1000.0);
+                let lift = self.lifting_force(i, flow.frame, travel, q, mach);
+                out.drag_kn = out.drag_kn + drag;
+                out.lift_kn = out.lift_kn + lift;
+                force_kn = drag + lift;
+            }
+            forces.push(PartForce {
+                part: i,
+                force_kn,
+                offset_m: at - self.rigid.rest_position(i),
+            });
+        }
+        out.torque_knm = self.airflow_moment(flow.frame, &forces);
         self.resolved_aero_forces = Some(forces);
         out
+    }
+
+    fn part_area_drag(&self, i: usize, local: DVec3, mach: f64) -> f64 {
+        let area_drag = self.faces[i]
+            .as_ref()
+            .map(|f| f.area_drag(&self.curves, local, mach))
+            .unwrap_or(0.0);
+        let Some(c) = &self.chute_defs[i] else {
+            return area_drag;
+        };
+        let shape = |cube: &Option<ose_data::DragCube>| {
+            cube.as_ref()
+                .map(|q| Faces::from_cube(q).area_drag(&self.curves, local, mach))
+                .unwrap_or(area_drag)
+        };
+        let t = self.chute_open[i];
+        match self.chutes[i] {
+            Chute::SemiDeployed => area_drag + (shape(&c.semi_cube) - area_drag) * t,
+            Chute::Deployed => {
+                let semi = shape(&c.semi_cube);
+                semi + (shape(&c.deployed_cube) - semi) * t
+            }
+            _ => area_drag,
+        }
     }
 
     /// How far each control surface deflects for steering command `cmd` (inertial, a share of full turning
@@ -2050,11 +2254,19 @@ impl Structure {
     /// surface's extra lift at its deflection range (dynamic pressure × 0.036 × lift coefficient × moving share
     /// × the lift curve at the range × its Mach curve) at its distance from the centre of mass.
     pub fn control_authority(&self, v_air: DVec3, rho: f64, mach: f64) -> f64 {
-        let speed = v_air.length();
-        if speed <= 0.0 || rho <= 0.0 {
+        // Legacy bulk-velocity query; per-part flight uses the full rolled flow below.
+        self.control_authority_in_flow(Airflow::bulk(
+            basis(DVec3::new(0.0, 1.0, 0.0)),
+            v_air,
+            rho,
+            mach,
+        ))
+    }
+
+    pub fn control_authority_in_flow(&self, flow: Airflow) -> f64 {
+        if flow.density <= 0.0 {
             return 0.0;
         }
-        let q = 0.5 * rho * speed * speed;
         let c = self.mass_properties().centre_m;
         let mut total = 0.0;
         for i in 0..self.rigid.len() {
@@ -2065,6 +2277,9 @@ impl Structure {
             if range <= 0.0 || share <= 0.0 || !self.rigid.present[i] || self.shielded[i] {
                 continue;
             }
+            let speed = flow.velocity_at(self.part_box(i).0 - c).length();
+            let q = 0.5 * flow.density * speed * speed;
+            let mach = flow.mach(speed);
             let lift = q
                 * aero::LIFT_MULTIPLIER
                 * l.deflection_lift_coeff
@@ -2092,6 +2307,7 @@ impl Structure {
         }
         let speed = v_air.length();
         self.last_air_speed_mps = speed;
+        self.last_airflow = Some(Airflow::bulk(frame, v_air, rho, mach));
         self.part_cda_m2.iter_mut().for_each(|c| *c = 0.0);
         if speed <= 0.0 {
             return 0.0;
@@ -2109,27 +2325,7 @@ impl Structure {
                 continue;
             }
             let local = aero::rotate_inverse(self.part_rot[i], du);
-            let mut area_drag = match &self.faces[i] {
-                Some(f) => f.area_drag(&self.curves, local, mach),
-                None => 0.0,
-            };
-            // an opening parachute blends from its packed shape to its semi-deployed and deployed shapes
-            if let Some(c) = &self.chute_defs[i] {
-                let shape = |cube: &Option<ose_data::DragCube>| {
-                    cube.as_ref()
-                        .map(|q| Faces::from_cube(q).area_drag(&self.curves, local, mach))
-                        .unwrap_or(area_drag)
-                };
-                let t = self.chute_open[i];
-                area_drag = match self.chutes[i] {
-                    Chute::SemiDeployed => area_drag + (shape(&c.semi_cube) - area_drag) * t,
-                    Chute::Deployed => {
-                        let semi = shape(&c.semi_cube);
-                        semi + (shape(&c.deployed_cube) - semi) * t
-                    }
-                    _ => area_drag,
-                };
-            }
+            let area_drag = self.part_area_drag(i, local, mach);
             let cda = aero::cda_m2(&self.curves, area_drag, rho * speed);
             self.part_cda_m2[i] = cda;
             total += cda;
@@ -2489,6 +2685,356 @@ mod tests {
         s.ctrl[wing] = (0.2, 1.0);
         s.part_rot[wing] = [0.0, 0.0, 0.0, 1.0];
         (s, flying(DVec3::new(0.0, 1.0, 0.0)), wing)
+    }
+
+    #[test]
+    fn spinning_airflow_opposes_rotation_even_without_bulk_travel() {
+        let (mut s, mut p) = spinning_airflow_fixture();
+        let frame = crate::flight::vessel_basis(&p);
+        let omega = DVec3::new(0.0, 0.0, 10.0);
+        let out = s.aerodynamics_in_flow(
+            0,
+            Airflow {
+                frame,
+                velocity: DVec3::ZERO,
+                angular_velocity: omega,
+                density: 1.0,
+                speed_of_sound: 100.0,
+            },
+        );
+        // Two 4.8 m^2 Cd*A boxes at +/-2 m: speed 20 m/s, 0.96 kN each.
+        assert!(out.drag_kn.length() < 1e-12);
+        assert!((out.torque_knm - DVec3::new(0.0, 0.0, -3.84)).length() < 1e-10);
+        assert!(out.torque_knm.dot(omega) < 0.0);
+        let loads = s.resolved_aero_forces.as_ref().unwrap();
+        assert!((loads[0].force_kn + loads[1].force_kn).length() < 1e-12);
+        assert!((loads[0].force_kn.length() - 0.96).abs() < 1e-10);
+        // The angular impulse and energy change follow the same resolved couple.
+        s.sync(&mut p);
+        p.angvel = omega;
+        p.attitude = crate::flight::Attitude::Free;
+        p.aero_torque_knm = out.torque_knm;
+        p.lift_kn = out.lift_kn;
+        let mass = s.mass_properties();
+        let engine = crate::flight::Propulsion {
+            mass,
+            actuators: Some(Vec::new()),
+            aerodynamic_drag_kn: Some(out.drag_kn),
+            ..Default::default()
+        };
+        let mut body = test_body();
+        body.mu = 0.0;
+        let step = crate::flight::integrate_with_propulsion(
+            &mut p,
+            &body,
+            None,
+            None,
+            0.0,
+            0.02,
+            Some(engine),
+        );
+        let expected_rate = 10.0 - 3.84 * 0.02 / mass.inertia.apply(DVec3::new(0.0, 0.0, 1.0)).z;
+        assert!((p.angvel.z - expected_rate).abs() < 1e-9);
+        assert!(p.angvel.length() < omega.length());
+        assert!(p.v.length() < 1e-12 && step.drag_kn.length() < 1e-12);
+        s.apply(&p, &step, 0.02);
+        assert!(
+            s.rigid.links.iter().any(|l| l.force_kn > 0.1),
+            "a zero-resultant damping couple must still load the joints"
+        );
+    }
+
+    fn spinning_airflow_fixture() -> (Structure, Powered) {
+        let (crafts, defs, resources) = assets();
+        let mut part = crafts[0].parts[0].clone();
+        part.parent = None;
+        part.local_position = DVec3::ZERO;
+        part.local_rotation = ose_data::craft::Quat {
+            w: 1.0,
+            ..Default::default()
+        };
+        part.own_node = None;
+        part.parent_node = None;
+        part.resources.clear();
+        let mut second = part.clone();
+        second.guid = "opposite-box".into();
+        second.parent = Some(0);
+        second.local_position = DVec3::new(4.0, 0.0, 0.0);
+        let craft = Craft {
+            name: "Damping pair".into(),
+            description: String::new(),
+            parts: vec![part, second],
+            stages: vec![Vec::new()],
+        };
+        let mut s = Structure::build(&craft, &defs, &resources);
+        s.net.dry_t.fill(1.0);
+        s.net.tanks.clear();
+        s.rigid.sizes_m.fill(DVec3::new(1.0, 1.0, 1.0));
+        s.stowed_box.fill((DVec3::ZERO, DVec3::new(0.5, 0.5, 0.5)));
+        s.extended_box.fill(None);
+        s.faces.fill(Some(Faces {
+            area: [1.0; 6],
+            drag: [1.0; 6],
+        }));
+        s.lift_defs.fill(None);
+        s.chute_defs.fill(None);
+        s.fairing_payload.fill(None);
+        s.wheel_axes_knm.fill(DVec3::ZERO);
+        s.gimbal_range_rad.fill(0.0);
+        s.rcs_defs.fill(None);
+        s.electric.fill(Default::default());
+        s.crew[0] = 1;
+        let constant = ose_data::Curve {
+            keys: vec![ose_data::CurveKey {
+                v: 1.0,
+                ..Default::default()
+            }],
+        };
+        s.curves = DragCurves {
+            tip: constant.clone(),
+            tail: constant.clone(),
+            surface: constant.clone(),
+            multiplier: constant.clone(),
+            cd: constant.clone(),
+            cd_power: constant.clone(),
+            pseudo_reynolds: constant,
+        };
+        let mut p = flying(DVec3::new(0.0, 1.0, 0.0));
+        p.ignited = false;
+        p.throttle = 0.0;
+        p.attitude = crate::flight::Attitude::Free;
+        (s, p)
+    }
+
+    #[test]
+    fn angular_airflow_uses_local_mach_and_dynamic_pressure_and_masks_parts() {
+        let (mut s, p) = spinning_airflow_fixture();
+        s.curves.multiplier = ose_data::Curve {
+            keys: [0.0, 10.0]
+                .into_iter()
+                .map(|t| ose_data::CurveKey {
+                    t,
+                    v: 1.0 + t,
+                    in_tangent: 1.0,
+                    out_tangent: 1.0,
+                })
+                .collect(),
+        };
+        let flow = Airflow {
+            frame: crate::flight::vessel_basis(&p),
+            velocity: DVec3::new(0.0, 1.0, 0.0),
+            angular_velocity: DVec3::new(0.0, 0.0, 1.0),
+            density: 1.0,
+            speed_of_sound: 1.0,
+        };
+        let out = s.aerodynamics_in_flow(0, flow);
+        assert!((out.drag_kn.y + 0.5 * 4.8 * (9.0 * 4.0 - 2.0) / 1000.0).abs() < 1e-12);
+        assert!((s.part_cda_m2[0] - 9.6).abs() < 1e-12);
+        assert!((s.part_cda_m2[1] - 19.2).abs() < 1e-12);
+        s.shielded[1] = true;
+        let out = s.aerodynamics_in_flow(0, flow);
+        assert!((out.drag_kn.y - 0.0048).abs() < 1e-12);
+        s.rigid.remove_parts(&[0]);
+        let out = s.aerodynamics_in_flow(0, flow);
+        assert_eq!(out.drag_kn, DVec3::ZERO);
+        assert_eq!(out.torque_knm, DVec3::ZERO);
+        s.shielded[1] = false;
+        let out = s.aerodynamics_in_flow(
+            0,
+            Airflow {
+                density: 0.0,
+                ..flow
+            },
+        );
+        assert_eq!(out.drag_kn, DVec3::ZERO);
+        assert_eq!(out.torque_knm, DVec3::ZERO);
+    }
+
+    #[test]
+    fn angular_airflow_respects_rolled_frames_and_current_fuel_mass_centre() {
+        let (mut s, mut p) = spinning_airflow_fixture();
+        let flow = Airflow {
+            frame: crate::flight::vessel_basis(&p),
+            velocity: DVec3::ZERO,
+            angular_velocity: DVec3::new(0.0, 0.0, 1.0),
+            density: 1.0,
+            speed_of_sound: 100.0,
+        };
+        let first = s.aerodynamics_in_flow(0, flow);
+        p.roll_rad = std::f64::consts::FRAC_PI_2;
+        let rolled = s.aerodynamics_in_flow(
+            0,
+            Airflow {
+                frame: crate::flight::vessel_basis(&p),
+                angular_velocity: DVec3::new(1.0, 0.0, 0.0),
+                ..flow
+            },
+        );
+        assert!((rolled.torque_knm.length() - first.torque_knm.length()).abs() < 1e-12);
+        assert!(rolled.torque_knm.x < 0.0);
+        rcs_tank(&mut s, 0, "SolidFuel", 2.0);
+        let centre = s.mass_properties().centre_m;
+        assert!((centre.x - 1.0).abs() < 1e-12);
+        let out = s.aerodynamics_in_flow(0, flow);
+        // Lever arms -1 and +3 m give local speeds 1 and 3 m/s, respectively.
+        assert!((out.drag_kn.y + 0.5 * 4.8 * 8.0 / 1000.0).abs() < 1e-12);
+        assert!((out.torque_knm.z + 0.5 * 4.8 * 28.0 / 1000.0).abs() < 1e-12);
+        // With asymmetric levers the local drag has a net force even though bulk airspeed
+        // is zero. Flight must apply that vector exactly once rather than reconstruct bulk drag.
+        p.roll_rad = 0.0;
+        p.angvel = flow.angular_velocity;
+        p.aero_torque_knm = out.torque_knm;
+        s.sync(&mut p);
+        let mut body = test_body();
+        body.mu = 0.0;
+        let engine = crate::flight::Propulsion {
+            mass: s.mass_properties(),
+            actuators: Some(Vec::new()),
+            aerodynamic_drag_kn: Some(out.drag_kn),
+            ..Default::default()
+        };
+        let step = crate::flight::integrate_with_propulsion(
+            &mut p,
+            &body,
+            None,
+            None,
+            0.0,
+            0.02,
+            Some(engine),
+        );
+        assert!((p.v - out.drag_kn * (0.02 / p.mass_t)).length() < 1e-12);
+        assert!((step.drag_kn - out.drag_kn).length() < 1e-12);
+    }
+
+    #[test]
+    fn co_rotating_atmosphere_does_not_damp_a_co_rotating_vessel() {
+        let (mut s, mut p) = spinning_airflow_fixture();
+        let bodies = serde_json::from_str::<Vec<ose_data::CelestialBody>>(include_str!(
+            "../../../assets/own/kerbol-system.json"
+        ))
+        .unwrap();
+        let mut u = crate::Universe::with_bodies(&bodies);
+        let body = u.body_entity("Kerbin").unwrap();
+        let omega = std::f64::consts::TAU
+            / u.world
+                .get::<crate::bodies::Body>(body)
+                .unwrap()
+                .rotation_period_s;
+        p.r.x = 601_000.0;
+        p.angvel = DVec3::new(0.0, 0.0, omega);
+        p.v = p.angvel.cross(p.r);
+        let mut parked = p.clone();
+        parked.landed = true;
+        parked.angvel = DVec3::ZERO;
+        let supported_flow = Airflow::for_vessel(&parked, DVec3::new(0.0, 0.0, omega), 1.0, 340.0);
+        assert_eq!(supported_flow.velocity, DVec3::ZERO);
+        assert_eq!(supported_flow.angular_velocity, DVec3::ZERO);
+        s.sync(&mut p);
+        let vessel = u.spawn_vessel("Co-rotating airflow", body, p.r, p.v);
+        u.set_powered(vessel, p);
+        u.set_structure(vessel, s);
+        u.step();
+        let after = u.powered(vessel).unwrap();
+        assert!(after.aero_torque_knm.length() < 1e-15);
+        assert!(
+            u.structure(vessel).unwrap().resolved_aero_forces.is_none(),
+            "joint loads are consumed in the same tick"
+        );
+    }
+
+    #[test]
+    fn perpendicular_lift_projects_only_lift_and_internal_drag_remains_independent() {
+        let (mut s, p, wing) = airflow_fixture();
+        let frame = crate::flight::vessel_basis(&p);
+        let velocity = DVec3::new(0.0, 100.0, -10.0);
+        let travel = velocity.normalized();
+        let original = s.lift(frame, velocity, 1.0, 0.3);
+        s.lift_defs[wing].as_mut().unwrap().0.perpendicular_only = true;
+        let perpendicular = s.lift(frame, velocity, 1.0, 0.3);
+        assert!((perpendicular - (original - travel * original.dot(travel))).length() < 1e-9);
+        assert!(perpendicular.dot(travel).abs() < 1e-9);
+        s.lift_defs[wing].as_mut().unwrap().1.drag.keys[0].v = 1.0;
+        let with_drag = s.lift(frame, velocity, 1.0, 0.3);
+        assert!(
+            (with_drag.dot(travel) + 0.5 * velocity.length_squared() * aero::LIFT_DRAG_MULTIPLIER)
+                .abs()
+                < 1e-9
+        );
+        s.lift_defs[wing].as_mut().unwrap().0.use_internal_drag = false;
+        assert!((s.lift(frame, velocity, 1.0, 0.3) - perpendicular).length() < 1e-9);
+    }
+
+    #[test]
+    fn spinning_surfaces_share_local_flow_with_control_authority_and_wing_effects() {
+        let (mut s, mut p, wing) = airflow_fixture();
+        let flow = Airflow {
+            frame: crate::flight::vessel_basis(&p),
+            velocity: DVec3::ZERO,
+            angular_velocity: DVec3::new(3.0, 5.0, 7.0),
+            density: 1.0,
+            speed_of_sound: 100.0,
+        };
+        let velocity = flow.velocity_at(s.part_box(wing).0 - s.mass_properties().centre_m);
+        let travel = velocity.normalized();
+        let expected = s.lifting_force(
+            wing,
+            flow.frame,
+            travel,
+            0.5 * velocity.length_squared(),
+            flow.mach(velocity.length()),
+        );
+        assert!(expected.length() > 0.01);
+        let forces = s.aerodynamics_in_flow(0, flow);
+        assert!((forces.lift_kn - expected).length() < 1e-10);
+        let fx = s.lifting_fx_in_flow(flow);
+        let perpendicular = expected - travel * expected.dot(travel);
+        assert!((fx[0].2 as f64 - perpendicular.length()).abs() < 1e-4);
+        assert!(s.control_authority_in_flow(flow) > 0.0);
+        s.wheel_axes_knm.fill(DVec3::ZERO);
+        s.gimbal_range_rad.fill(0.0);
+        s.rcs_defs.fill(None);
+        p.ignited = false;
+        let env = crate::flight::EngineEnvironment {
+            density: 1.0,
+            ..Default::default()
+        };
+        let mut engine = s.propulsion(&p, env, 0.02);
+        s.configure_actuators(&p, env, &mut engine);
+        assert!(
+            engine
+                .actuators
+                .unwrap()
+                .iter()
+                .any(|a| a.force_kn.length() > 0.0),
+            "a stationary mass centre must not disable a spinning control surface"
+        );
+        s.shielded[wing] = true;
+        assert!(s.lifting_fx_in_flow(flow).is_empty());
+        assert_eq!(s.control_authority_in_flow(flow), 0.0);
+    }
+
+    #[test]
+    fn spinning_heat_uses_local_mach_direction_and_shielding() {
+        let (mut s, p) = spinning_airflow_fixture();
+        let flow = Airflow {
+            frame: crate::flight::vessel_basis(&p),
+            velocity: DVec3::ZERO,
+            angular_velocity: DVec3::new(0.0, 0.0, 10.0),
+            density: 1.0,
+            speed_of_sound: 1.0,
+        };
+        s.shielded[1] = true;
+        s.update_heat_in_flow(flow, 288.0, 0.0, &thermal::HeatSettings::default(), 0.02);
+        let expected = thermal::reentry_flux(20.0, 1.0, 1.0, 1.0, 1.0);
+        assert!(expected > 0.0);
+        assert!((s.reentry_flux_kw[0] - expected).abs() < 1e-8);
+        assert_eq!(s.reentry_flux_kw[1], 0.0);
+        let initial = s.reentry_flux_kw[0];
+        let mut rolled = flow;
+        rolled.frame = (flow.frame.2, flow.frame.1, -flow.frame.0);
+        rolled.angular_velocity = flow.frame.0 * -10.0;
+        s.update_heat_in_flow(rolled, 288.0, 0.0, &thermal::HeatSettings::default(), 0.02);
+        assert!((s.reentry_flux_kw[0] - initial).abs() < 1e-8);
     }
 
     #[test]

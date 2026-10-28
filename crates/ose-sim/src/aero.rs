@@ -84,22 +84,32 @@ pub fn default_lift_curves() -> LiftCurves {
 /// axis in the same frame.
 pub fn surface_force(
     c: &LiftCurves,
-    coeff: f64,
-    omnidirectional: bool,
+    surface: &ose_data::LiftingSurface,
     axis: DVec3,
     travel: DVec3,
     q_pa: f64,
     mach: f64,
 ) -> DVec3 {
     let dot = travel.dot(axis);
-    let abs = if omnidirectional {
+    let abs = if surface.omnidirectional {
         dot.abs()
     } else {
         dot.clamp(0.0, 1.0)
     };
-    let lift = dot.signum() * c.lift.evaluate(abs) * c.lift_mach.evaluate(mach) * coeff;
-    let drag = c.drag.evaluate(abs) * c.drag_mach.evaluate(mach) * coeff;
-    axis * (-q_pa * LIFT_MULTIPLIER * lift) - travel * (q_pa * drag * LIFT_DRAG_MULTIPLIER)
+    let lift = dot.signum()
+        * c.lift.evaluate(abs)
+        * c.lift_mach.evaluate(mach)
+        * surface.deflection_lift_coeff;
+    let drag = if surface.use_internal_drag {
+        c.drag.evaluate(abs) * c.drag_mach.evaluate(mach) * surface.deflection_lift_coeff
+    } else {
+        0.0
+    };
+    let mut lift_force = axis * (-q_pa * LIFT_MULTIPLIER * lift);
+    if surface.perpendicular_only {
+        lift_force = lift_force - travel * lift_force.dot(travel);
+    }
+    lift_force - travel * (q_pa * drag * LIFT_DRAG_MULTIPLIER)
 }
 
 /// The `PhysicsSettings` drag curves.

@@ -345,12 +345,20 @@ pub struct LiftingSurface {
     pub deflection_lift_coeff: f64,
     pub axis: ose_math::DVec3,
     pub omnidirectional: bool,
+    #[serde(default)]
+    pub perpendicular_only: bool,
+    #[serde(default = "default_true")]
+    pub use_internal_drag: bool,
     /// The curve set it uses (`Default`, `SpeedBrake`, ... `Custom` keeps its own curves).
     pub curve_set: String,
     pub lift_curve: Curve,
     pub lift_mach_curve: Curve,
     pub drag_curve: Curve,
     pub drag_mach_curve: Curve,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// RCS thrusters as the original defines them (`Data_RCS`): thrust per thruster, kN, the propellant

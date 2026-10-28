@@ -1098,6 +1098,7 @@ impl Universe {
                 (ticks.max(1), dt)
             };
             for i in 0..steps {
+                let mut resolved_drag = None;
                 if let Some(st) = &mut structure {
                     st.sync(&mut p);
                     let mut burned = Vec::new();
@@ -1128,18 +1129,21 @@ impl Universe {
                             v_air.length(),
                             step_dt,
                         );
-                        let frame = flight::vessel_basis(&p);
-                        let forces = st.aerodynamics(p.stage, frame, v_air, a.density(alt), mach);
+                        let flow = structure::Airflow::for_vessel(
+                            &p,
+                            DVec3::new(0.0, 0.0, omega),
+                            a.density(alt),
+                            sound,
+                        );
+                        let forces = st.aerodynamics_in_flow(p.stage, flow);
                         let cda = forces.cda_m2;
+                        resolved_drag = Some(forces.drag_kn);
                         lift = forces.lift_kn;
                         torque = forces.torque_knm;
-                        surfaces = st.control_authority(v_air, a.density(alt), mach);
+                        surfaces = st.control_authority_in_flow(flow);
                         if heat.enabled {
-                            burned = st.update_heat(
-                                frame,
-                                v_air,
-                                a.density(alt),
-                                mach,
+                            burned = st.update_heat_in_flow(
+                                flow,
                                 a.temperature_k.evaluate(alt),
                                 thermal::conductivity(alt, a.depth_m),
                                 &heat,
@@ -1177,6 +1181,7 @@ impl Universe {
                         p.throttle = 0.0;
                     }
                     let mut propulsion = st.propulsion(&p, env, step_dt);
+                    propulsion.aerodynamic_drag_kn = resolved_drag;
                     // Plan with rated wheel axes; current delivery is resolved at each wheel below.
                     p.wheel_scale = 1.0;
                     st.configure_actuators(&p, env, &mut propulsion);

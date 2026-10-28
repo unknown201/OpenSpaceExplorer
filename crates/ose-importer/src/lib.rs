@@ -386,6 +386,8 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
                             deflection_lift_coeff: f(o, "deflectionLiftCoeff"),
                             axis,
                             omnidirectional: b(o, "omnidirectional"),
+                            perpendicular_only: b(o, "perpendicularOnly"),
+                            use_internal_drag: o["useInternalDragModel"].as_bool().unwrap_or(true),
                             curve_set: s(o, "liftingSurfaceCurve"),
                             lift_curve: curve(&o["liftCurve"]),
                             lift_mach_curve: curve(&o["liftMachCurve"]),
@@ -1070,6 +1072,39 @@ mod tests {
         assert_eq!(part.attach_nodes[0].position.y, 0.264);
         assert_eq!(part.module_names.len(), 3);
         assert!(part.raw_modules.contains_key("PartComponentModule_Color"));
+    }
+
+    #[test]
+    fn lifting_surface_import_preserves_projection_and_internal_drag_options() {
+        let mut source = json!({"data":{"partName":"wing","serializedPartModules":[
+            {"Name":"PartComponentModule_LiftingSurface","ModuleData":[
+                {"Name":"Data_LiftingSurface","DataObject":{"deflectionLiftCoeff":2.0,"transformDir":"Z","transformSign":-1.0,"omnidirectional":true,"perpendicularOnly":true,"useInternalDragModel":false}}
+            ]}
+        ]}});
+        let imported = part(&source, &mut Coverage::default())
+            .lifting_surface
+            .unwrap();
+        assert!(imported.perpendicular_only && !imported.use_internal_drag);
+        assert_eq!(imported.axis, DVec3::new(0.0, 0.0, -1.0));
+        source["data"]["serializedPartModules"][0]["ModuleData"][0]["DataObject"]
+            .as_object_mut()
+            .unwrap()
+            .remove("useInternalDragModel");
+        let imported = part(&source, &mut Coverage::default())
+            .lifting_surface
+            .unwrap();
+        assert!(imported.use_internal_drag);
+        let mut old_catalog = serde_json::to_value(imported).unwrap();
+        old_catalog
+            .as_object_mut()
+            .unwrap()
+            .remove("perpendicular_only");
+        old_catalog
+            .as_object_mut()
+            .unwrap()
+            .remove("use_internal_drag");
+        let old: ose_data::LiftingSurface = serde_json::from_value(old_catalog).unwrap();
+        assert!(!old.perpendicular_only && old.use_internal_drag);
     }
 
     #[test]
