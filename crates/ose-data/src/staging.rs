@@ -387,6 +387,7 @@ mod tests {
             engines: engine
                 .map(|(thrust, isp, mix)| {
                     vec![EngineMode {
+                        thrust_transforms: Vec::new(),
                         id: "e".into(),
                         engine_type: "x".into(),
                         propellant_mixture: mix.into(),

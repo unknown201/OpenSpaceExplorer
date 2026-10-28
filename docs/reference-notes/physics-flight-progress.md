@@ -139,9 +139,26 @@ Five added regressions cover independent propellants/Isp, full pressure curves, 
 
 Nozzle geometry is still a three-axis mount proxy. Its shared sphere is a conservative approximation; the reference fires individual directional nozzles with separate lever arms. Partial delivery is not reallocated to other actuators, and ordered graph requests still determine access to shared supplies. RCS effects retain the existing vessel-level directional readout. EVA jetpacks retain their separate resource path.
 
+## Completed increment: authored engine thrust transforms
+
+`tools/export_physics_geometry.py` reads the installed part prefabs and the extracted `Data_Engine.engineModes` definitions. Its committed `assets/own/physics-geometry.json` covers 36 parts, 41 modes and 63 thrust points. `Module_Engine.SetThrustTransforms` defines the selection: default transform names share thrust equally across matching transforms; named weighted entries use their first matching transform and authored multiplier. Force points opposite the transform's forward axis. Export removes the prefab root's editor position/rotation, preserves scale in positions, and composes normalized rotations independently of scale for force directions. Missing or ambiguous geometry fails the export.
+
+The importer validates and attaches the geometry to each engine mode, and the slim catalog carries it. Flight sums each delivered engine's weighted nozzle forces and their individual moments. Structural engine loads retain those same individual application offsets. Thus the Twitch/Puff's canted thrust, clustered engines, and reverse-thrust jet mode geometry are represented in data. Only the existing selected/default mode is simulated; this does not add mode switching. Older catalogs retain the +Y/origin fallback.
+
+The existing bounded gimbal proxy now uses the engine's resultant direction and force-weighted nozzle centroid rather than the part origin. This is exact for its static parallel-nozzle force distribution, but remains an approximation for divergent nozzles, independent gimbal pivots and articulated nozzle motion. Structural thrust still passes through the existing lag filter. The bounds-based mass/contact geometry has not been replaced by exact colliders.
+
+Two simulation tests verify independently calculated canted/weighted forces and moments after mounting rotation, unchanged fuel flow, and complete committed-mode coverage with Cornet/Twitch prefab fixtures. An importer regression rejects stale mode counts and invalid directions and checks older catalogs. Two exporter tests cover editor-pose removal, scale-independent direction, default equal shares, explicit first-match weights and missing transforms. Aircraft/truck support regression checks now use the full Unity-to-craft-to-world frame, including Z mirroring; the level layout retains the corresponding belly correction.
+
+Reproduce the extraction and import with:
+
+```powershell
+.venv/Scripts/python tools/export_physics_geometry.py --data assets/ksp2/data/parts
+cargo run -p ose-importer -- --data assets/ksp2/data --physics-geometry assets/own/physics-geometry.json
+```
+
 ## Remaining physics priorities
 
-1. Import engine/nozzle transforms and weights, internal mass offsets and usable inertia geometry. Import directional RCS nozzle geometry and per-nozzle force limits.
+1. Import internal mass offsets and usable inertia geometry; complete articulated engine gimbals. Import directional RCS nozzle geometry and per-nozzle force limits.
 2. Import centre-of-pressure offsets, full lifting-surface options, and deflected control-surface lift/drag.
 3. Replace sampled corner paths with continuous hull contacts; add nearby vessel/debris pair contacts and equal-and-opposite impulses. Import contact materials and sliding damage/heat.
 4. Import displacement and wheel-collider data, suspension tuning and target positions; add load-dependent tyre grip and wheel slip. Extend water behavior, then docking attraction/capture and EVA ladder/hatch contact.
@@ -150,11 +167,12 @@ The next actuator acceptance cases should compare directional nozzle selection a
 
 The next contact acceptance cases should cover continuous hull contacts that prevent tunnelling between vertices, equal-and-opposite vessel/debris impulses, and stable support/traction over uneven terrain. Retain the existing slope, normal-speed, sliding-friction, angular-impulse and joint-reaction regressions.
 
-Per-engine mode switching, imported nozzle transforms, thrust response curves/limits, full intake accounting, and the complete KSP2 engine modifier set are still open. The existing jet curve/intake approximation and structural thrust-lag filter remain. The resource allocator also retains its existing ordered-request semantics. This change closes specific propulsion errors; it does not establish complete engine or flight parity.
+Per-engine mode switching, articulated nozzle transforms, thrust response curves/limits, full intake accounting, and the complete KSP2 engine modifier set are still open. The existing jet curve/intake approximation and structural thrust-lag filter remain. The resource allocator also retains its existing ordered-request semantics. This change closes specific propulsion errors; it does not establish complete engine or flight parity.
 
 ## Validation, 2026-10-27
 
-- Integration validation is pending; the source branches passed 130 and 133 simulation tests respectively.
+- `cargo test -p ose-sim -p ose-importer --lib`: passed (156 simulation tests, including the five RCS and two engine-geometry additions). A final rerun follows the normalized-rotation export.
+- The initial integrated workspace run passed the full Mun journey (494.76 s) but caught the aircraft frame regression described above. The focused aircraft/truck checks pass after correction; the final workspace rerun is in progress.
 - `cargo clippy --workspace --all-targets -- -D warnings`: passed.
 - `cargo check -p ose-client --target wasm32-unknown-unknown`: passed.
 - `cargo fmt --all --check` and `git diff --check`: passed.

@@ -125,6 +125,7 @@ pub struct Structure {
     pub net: FlowNet,
     /// Each part's engine mixture (`None` for parts without an engine).
     pub engine_mixture: Vec<Option<String>>,
+    engine_nozzles: Vec<Vec<ose_data::ThrustTransform>>,
     /// Each engine's gimbal range (`Data_Gimbal.gimbalRange`), rad; 0 for parts that do not gimbal.
     pub gimbal_range_rad: Vec<f64>,
     /// Each part's electric charge use and production, and crew capacity.
@@ -249,6 +250,17 @@ pub fn level_layout(craft: &Craft) -> Option<Craft> {
         z: axis.z * sh,
         w: ch,
     };
+    // Unity positions are mirrored in Z into the right-handed craft frame. Keep
+    // the hangar belly on craft +Z, which level flight carries toward the ground.
+    let r = quat_mul(
+        ose_data::craft::Quat {
+            x: 0.0,
+            y: 1.0,
+            z: 0.0,
+            w: 0.0,
+        },
+        r,
+    );
     Some(rotated(craft, r))
 }
 
@@ -568,6 +580,14 @@ impl Structure {
             last_air_speed_mps: 0.0,
             net: FlowNet::build(craft, defs, resources),
             engine_mixture,
+            engine_nozzles: (0..n)
+                .map(|i| {
+                    def_of(i)
+                        .and_then(|d| d.engines.first())
+                        .map(|e| e.thrust_transforms.clone())
+                        .unwrap_or_default()
+                })
+                .collect(),
             gimbal_range_rad,
             deployed: vec![false; n],
             crash_tolerance: (0..n)
@@ -846,6 +866,31 @@ impl Structure {
         self.rigid.set_part_masses(&self.part_masses());
     }
 
+    /// Preserve every authored force/application point through the mounted part rotation.
+    fn engine_forces(&self, part: usize, thrust_kn: f64) -> Vec<PartForce> {
+        if self.engine_nozzles[part].is_empty() {
+            return vec![PartForce {
+                part,
+                force_kn: self.part_axes(part)[1] * thrust_kn,
+                offset_m: DVec3::ZERO,
+            }];
+        }
+        self.engine_nozzles[part]
+            .iter()
+            .map(|point| PartForce {
+                part,
+                force_kn: crate::rigid::to_vessel(aero::rotate(
+                    self.part_rot[part],
+                    point.direction,
+                )) * (thrust_kn * point.weight),
+                offset_m: crate::rigid::to_vessel(aero::rotate(
+                    self.part_rot[part],
+                    point.position_m,
+                )),
+            })
+            .collect()
+    }
+
     /// Resolve fuel before integrating motion so a starved engine cannot provide a free step of thrust.
     pub fn propulsion(
         &mut self,
@@ -892,10 +937,12 @@ impl Structure {
                 let thrust = demand.thrust_kn * fraction;
                 delivered[demand.part] = thrust;
                 out.thrust_kn += thrust;
-                let force = self.part_axes(demand.part)[1] * thrust;
-                out.force_kn = out.force_kn + force;
-                out.torque_knm = out.torque_knm
-                    + (self.rigid.rest_position(demand.part) - out.mass.centre_m).cross(force);
+                for f in self.engine_forces(demand.part, thrust) {
+                    out.force_kn = out.force_kn + f.force_kn;
+                    out.torque_knm = out.torque_knm
+                        + (self.rigid.rest_position(f.part) + f.offset_m - out.mass.centre_m)
+                            .cross(f.force_kn);
+                }
             }
         }
         self.resolved_engine_thrust = Some(delivered);
@@ -933,17 +980,39 @@ impl Structure {
                 .as_ref()
                 .map(|t| t[i])
                 .unwrap_or(0.0);
-            let side = thrust * self.gimbal_range_rad[i].sin();
-            for axis in [axes[0], axes[2]] {
+            let base = self.engine_forces(i, thrust);
+            let axial = base.iter().fold(DVec3::ZERO, |v, f| v + f.force_kn);
+            let weight: f64 = base.iter().map(|f| f.force_kn.length()).sum();
+            let offset = if weight > 0.0 {
+                base.iter()
+                    .fold(DVec3::ZERO, |v, f| v + f.offset_m * f.force_kn.length())
+                    * (1.0 / weight)
+            } else {
+                DVec3::ZERO
+            };
+            let lever = r + offset;
+            let side = axial.length() * self.gimbal_range_rad[i].sin();
+            let normal = if axial.length_squared() > 0.0 {
+                axial.normalized()
+            } else {
+                axes[1]
+            };
+            let tangent = axes[0] - normal * axes[0].dot(normal);
+            let tangent = if tangent.length_squared() > 1e-12 {
+                tangent.normalized()
+            } else {
+                axes[2]
+            };
+            for axis in [tangent, normal.cross(tangent)] {
                 if side > 0.0 {
                     let force = axis * side;
                     channels.push(Actuator {
                         part: i,
-                        torque_knm: r.cross(force),
+                        torque_knm: lever.cross(force),
                         force_kn: force,
-                        offset_m: DVec3::ZERO,
+                        offset_m: offset,
                         group: i * 8 + 3,
-                        axial: Some((axes[1] * thrust, r)),
+                        axial: Some((axial, lever)),
                     });
                 }
             }
@@ -2583,11 +2652,7 @@ impl Structure {
             self.engine_load_target_kn[i] = 0.0;
             self.engine_load_kn[i] += (target - self.engine_load_kn[i]) * k;
             if self.rigid.present[i] && self.engine_load_kn[i].abs() > 1e-6 {
-                forces.push(PartForce {
-                    part: i,
-                    force_kn: self.part_axes(i)[1] * self.engine_load_kn[i],
-                    offset_m: DVec3::ZERO,
-                });
+                forces.extend(self.engine_forces(i, self.engine_load_kn[i]));
             }
         }
         // drag over the attached parts by frontal area on each axis
@@ -3612,6 +3677,8 @@ mod tests {
             .collect();
         assert_eq!(engines.len(), 2);
         let pair = [engines[0], engines[1]];
+        // Synthetic analytical engines use exact +Y origin geometry.
+        s.engine_nozzles.iter_mut().for_each(Vec::clear);
         s.stage_engines[0] = engines;
         for (part, isp) in [(pair[0], 100.0), (pair[1], 200.0)] {
             s.engine_thrust_kn[part] = 100.0 * ose_data::G0;
@@ -3731,6 +3798,13 @@ mod tests {
             let expected =
                 p.facing * (100.0 * ose_data::G0 * fraction * 0.1 / (mass - 0.1 * fraction));
             let mut engine = s.propulsion(&p, Default::default(), 0.1);
+            // Isotropic inertia keeps a constant body torque parallel to its inertial
+            // rotation axis, giving the analytical angular impulse exactly.
+            engine.mass.inertia = crate::dynamics::Inertia {
+                x: DVec3::new(10.0, 0.0, 0.0),
+                y: DVec3::new(0.0, 10.0, 0.0),
+                z: DVec3::new(0.0, 0.0, 10.0),
+            };
             s.configure_actuators(&p, Default::default(), &mut engine);
             p.rcs.powered = 1.0; // stale readout cannot create an impulse
             s.resolve_wheel_power(&mut p, &body, &mut engine, 0.1);
@@ -4260,6 +4334,88 @@ mod tests {
                 mass: out.mass,
                 ..Default::default()
             }
+        );
+    }
+
+    #[test]
+    fn authored_nozzles_preserve_weighted_directions_and_individual_application_points() {
+        let (mut s, p, pair) = propulsion_fixture();
+        let i = pair[0];
+        s.stage_engines[0] = vec![i];
+        s.engine_nozzles[i] = vec![
+            ose_data::ThrustTransform {
+                position_m: DVec3::new(1.0, -2.0, 0.0),
+                direction: DVec3::new(0.6, 0.8, 0.0),
+                weight: 0.25,
+            },
+            ose_data::ThrustTransform {
+                position_m: DVec3::new(-1.0, -2.0, 0.0),
+                direction: DVec3::new(-0.6, 0.8, 0.0),
+                weight: 0.75,
+            },
+        ];
+        let h = 0.5_f64.sqrt();
+        s.part_rot[i] = [0.0, h, 0.0, h]; // Unity +X becomes -Z; handedness then makes it craft +Z.
+        let out = s.propulsion(&p, Default::default(), 0.02);
+        let thrust = 100.0 * ose_data::G0;
+        let expected_force = DVec3::new(0.0, 0.8, -0.3) * thrust;
+        let r = s.rigid.rest_position(i) - out.mass.centre_m;
+        let expected_torque = (r + DVec3::new(0.0, -2.0, 1.0))
+            .cross(DVec3::new(0.0, 0.8, 0.6) * (thrust * 0.25))
+            + (r + DVec3::new(0.0, -2.0, -1.0)).cross(DVec3::new(0.0, 0.8, -0.6) * (thrust * 0.75));
+        assert!((out.force_kn - expected_force).length() < 1e-9);
+        assert!((out.torque_knm - expected_torque).length() < 1e-8);
+        assert!(
+            (out.thrust_kn - thrust).abs() < 1e-9,
+            "rated scalar remains sum of nozzle magnitudes"
+        );
+        assert!(
+            (out.burned_t - 0.02).abs() < 1e-9,
+            "cant does not alter fuel demand"
+        );
+        let points = s.engine_forces(i, thrust);
+        assert_eq!(points.len(), 2);
+        assert!((points[0].offset_m - DVec3::new(0.0, -2.0, 1.0)).length() < 1e-9);
+    }
+
+    #[test]
+    fn committed_nozzle_catalog_covers_every_engine_mode_and_authored_cant() {
+        let (_, defs, _) = assets();
+        let mut count = 0;
+        let mut points = 0;
+        for part in &defs {
+            for mode in &part.engines {
+                assert!(
+                    !mode.thrust_transforms.is_empty(),
+                    "{} {}",
+                    part.id,
+                    mode.id
+                );
+                let sum: f64 = mode.thrust_transforms.iter().map(|p| p.weight).sum();
+                assert!((sum - 1.0).abs() < 1e-6);
+                for p in &mode.thrust_transforms {
+                    assert!((p.direction.length() - 1.0).abs() < 1e-9);
+                }
+                count += 1;
+                points += mode.thrust_transforms.len();
+            }
+        }
+        assert_eq!((count, points), (41, 63));
+        let twitch = defs
+            .iter()
+            .find(|p| p.id == "engine_0v_methalox_twitch")
+            .unwrap();
+        assert!(
+            (twitch.engines[0].thrust_transforms[0].direction.x - 0.08808842447530461).abs()
+                < 1e-12
+        );
+        let cornet = defs
+            .iter()
+            .find(|p| p.id == "engine_1v_methalox_cornet")
+            .unwrap();
+        assert!(
+            (cornet.engines[0].thrust_transforms[0].position_m.y + 1.0079088807106014).abs()
+                < 1e-12
         );
     }
 

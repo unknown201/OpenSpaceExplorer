@@ -2722,7 +2722,7 @@ mod tests {
             .filter(|x| x.part_id == "wheel_2v_truck")
             .map(|x| {
                 let (bx, by, bz) = flight::vessel_basis(&p);
-                let v = x.local_position;
+                let v = rigid::to_vessel(x.local_position);
                 (bx * v.x + by * v.y + bz * v.z).dot(up)
             })
             .collect();
@@ -2730,7 +2730,7 @@ mod tests {
         assert!(
             wheels.iter().all(|z| {
                 let (bx, by, bz) = flight::vessel_basis(&p);
-                let v = cockpit.local_position;
+                let v = rigid::to_vessel(cockpit.local_position);
                 *z < (bx * v.x + by * v.y + bz * v.z).dot(up) - 0.5
             }),
             "wheels below the cab: {wheels:?}"

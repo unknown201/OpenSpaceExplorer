@@ -12,6 +12,9 @@ use std::path::PathBuf;
 #[derive(Parser, Debug)]
 #[command(name = "ose-importer")]
 struct Args {
+    /// Authored thrust transforms exported by tools/export_physics_geometry.py.
+    #[arg(long, default_value = "assets/own/physics-geometry.json")]
+    physics_geometry: PathBuf,
     /// Extracted data directory (output of tools/extract_bundles.py).
     #[arg(long, default_value = "assets/ksp2/data")]
     data: PathBuf,
@@ -33,6 +36,12 @@ fn main() -> anyhow::Result<()> {
     let mut cov = ose_importer::Coverage::default();
     let mut game = ose_importer::import_dir(&args.data, &mut cov)
         .with_context(|| format!("importing {}", args.data.display()))?;
+    if args.physics_geometry.exists() {
+        let geometry: std::collections::BTreeMap<String, Vec<Vec<ose_data::ThrustTransform>>> =
+            serde_json::from_str(&std::fs::read_to_string(&args.physics_geometry)?)?;
+        ose_importer::apply_engine_geometry(&mut game.parts, &geometry)
+            .map_err(anyhow::Error::msg)?;
+    }
     if let Ok(text) = std::fs::read_to_string(&args.loc) {
         let loc: std::collections::HashMap<String, String> = serde_json::from_str(&text)?;
         let mut titled = 0;

@@ -297,6 +297,37 @@ fn module_data(m: &Value) -> &Value {
     &m["ModuleData"][0]["DataObject"]
 }
 
+/// Attach prefab-derived geometry to the corresponding typed engine modes, rejecting stale exports.
+pub fn apply_engine_geometry(
+    parts: &mut [PartDef],
+    geometry: &BTreeMap<String, Vec<Vec<ose_data::ThrustTransform>>>,
+) -> Result<(), String> {
+    for (id, modes) in geometry {
+        let part = parts
+            .iter_mut()
+            .find(|p| &p.id == id)
+            .ok_or_else(|| format!("Unknown geometry part: {id}"))?;
+        if part.engines.len() != modes.len() {
+            return Err(format!("Engine mode count changed for {id}"));
+        }
+        for (engine, points) in part.engines.iter_mut().zip(modes) {
+            if points.is_empty()
+                || points.iter().any(|p| {
+                    !p.weight.is_finite()
+                        || p.weight < 0.0
+                        || !p.position_m.length_squared().is_finite()
+                        || !p.direction.length().is_finite()
+                        || (p.direction.length() - 1.0).abs() > 1e-6
+                })
+            {
+                return Err(format!("Invalid thrust geometry for {id}"));
+            }
+            engine.thrust_transforms = points.clone();
+        }
+    }
+    Ok(())
+}
+
 pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
     let d = unwrap_data(v);
     let ar = &d["attachRules"];
@@ -527,6 +558,7 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
                     if let Some(modes) = data["engineModes"].as_array() {
                         for em in modes {
                             engines.push(EngineMode {
+                                thrust_transforms: Vec::new(),
                                 id: s(em, "engineID"),
                                 engine_type: s(em, "engineType"),
                                 propellant_mixture: s(&em["propellant"], "mixtureName"),
@@ -1138,5 +1170,46 @@ mod tests {
                 b.rotation_period_s
             );
         }
+    }
+    #[test]
+    fn prefab_engine_geometry_maps_all_modes_and_rejects_stale_or_invalid_exports() {
+        let mut parts: Vec<PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let geometry: BTreeMap<String, Vec<Vec<ose_data::ThrustTransform>>> =
+            serde_json::from_str(include_str!("../../../assets/own/physics-geometry.json"))
+                .unwrap();
+        assert_eq!(geometry.len(), 36);
+        for part in &mut parts {
+            for mode in &mut part.engines {
+                mode.thrust_transforms.clear();
+            }
+        }
+        apply_engine_geometry(&mut parts, &geometry).unwrap();
+        assert_eq!(
+            parts
+                .iter()
+                .flat_map(|p| &p.engines)
+                .filter(|m| !m.thrust_transforms.is_empty())
+                .count(),
+            41
+        );
+        let id = "engine_1v_methalox_cornet".to_string();
+        let mut bad = BTreeMap::from([(id.clone(), Vec::new())]);
+        assert!(apply_engine_geometry(&mut parts, &bad)
+            .unwrap_err()
+            .contains("mode count"));
+        bad.insert(id.clone(), geometry[&id].clone());
+        bad.get_mut(&id).unwrap()[0][0].direction = DVec3::ZERO;
+        assert!(apply_engine_geometry(&mut parts, &bad).is_err());
+        bad.get_mut(&id).unwrap()[0][0].direction = DVec3::new(f64::NAN, 0.0, 0.0);
+        assert!(apply_engine_geometry(&mut parts, &bad).is_err());
+        let mut old =
+            serde_json::to_value(&parts.iter().find(|p| p.id == id).unwrap().engines[0]).unwrap();
+        old.as_object_mut().unwrap().remove("thrust_transforms");
+        let mode: EngineMode = serde_json::from_value(old).unwrap();
+        assert!(
+            mode.thrust_transforms.is_empty(),
+            "old catalogs retain the origin/+Y fallback"
+        );
     }
 }

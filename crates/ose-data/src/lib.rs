@@ -501,9 +501,19 @@ pub struct ResourceContainer {
     pub initial_units: f64,
 }
 
+/// Authored engine thrust transform, in Unity part-local axes. Force points opposite transform +Z.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ThrustTransform {
+    pub position_m: ose_math::DVec3,
+    pub direction: ose_math::DVec3,
+    pub weight: f64,
+}
+
 /// One engine mode (most engines have one; multi-mode engines like jets have several).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct EngineMode {
+    #[serde(default)]
+    pub thrust_transforms: Vec<ThrustTransform>,
     pub id: String,
     pub engine_type: String,
     pub propellant_mixture: String,
