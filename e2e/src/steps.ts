@@ -104,6 +104,7 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
   const probe = new Probe(page);
   const results: StepResult[] = [];
   let pageUp = false;
+  let joinedCampaign: { id: string; name: string } | null = null;
   const notLoaded = skipped("page did not load");
 
   // 1. The server serves the client page.
@@ -157,6 +158,9 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
         const shared = page.locator('[data-ose="session"]', { hasText: "Shared campaign" });
         const entry = (await shared.count()) > 0 ? shared.first() : page.locator('[data-ose="session"]').first();
         joined = ((await entry.locator(".name").textContent().catch(() => "")) ?? "").trim();
+        const id = await entry.getAttribute("data-ose-id");
+        if (!id) return failed("the selected campaign has no stable session ID");
+        joinedCampaign = { id, name: joined };
         await entry.locator('[data-ose="session-join"]').click();
       } catch {
         const note = ((await page.locator("#menu-note").textContent().catch(() => "")) ?? "").trim();
@@ -736,9 +740,10 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
         if (await page.locator('[data-ose="to-ksc"]').first().isVisible()) await page.locator('[data-ose="to-ksc"]').first().click();
         if (await page.locator('[data-ose="ts-back"]').first().isVisible()) await page.locator('[data-ose="ts-back"]').first().click();
       }
-      const name = ((await page.locator('[data-ose="campaign"]').textContent()) ?? "").split(" (")[0].trim();
+      if (!joinedCampaign) return failed("no selected campaign identity was retained");
+      const { id, name } = joinedCampaign;
       await exit.first().click();
-      const rows = page.locator('[data-ose="session"]').filter({ hasText: name || "campaign" });
+      const rows = page.locator(`[data-ose="session"][data-ose-id=${JSON.stringify(id)}]`);
       try {
         await rows.first().waitFor({ timeout: 5_000 });
       } catch {
