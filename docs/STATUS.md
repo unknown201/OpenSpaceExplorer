@@ -4,6 +4,8 @@ Updated 2026-10-27.
 
 ## What works
 
+- RCS modules honor their authored enable state, thrust percentage and shielded-activation permission before allocation. Force, fuel, available rating and usage readouts use the same limit, including final partial fuel. Analytical cases cover both directional nozzles and legacy mount proxies. Per-axis switches, precision selection and player-facing part controls remain open.
+
 - Aerodynamics now loads the installed reference settings, including all four named lift families. Authored pressure/lift/control offsets keep body drag, wing force and drag-cube body lift at distinct points, each with local rotational airflow. Drag/lift flags and body-lift multipliers are imported for all 400 parts. Analytical regressions and the full Mun/server journey pass; procedural and deflected-surface geometry remain open. See [physics progress](reference-notes/physics-flight-progress.md).
 
 - EVA jetpacks now load the authored force, torque, full pressure/Isp curve and rate/reset settings. Move and rotation share one pack resolved before motion, including final partial fuel and automatic braking. Empty packs cannot grant a free tick or stop a spin; walking/jumping do not burn fuel. Old saves gain settings without refilling. Eight simulation regressions plus importer coverage; remaining camera/character/water behavior is tracked in [physics progress](reference-notes/physics-flight-progress.md).

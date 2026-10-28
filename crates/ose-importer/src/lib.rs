@@ -491,6 +491,13 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
                     }
                     if entry["Name"] == "Data_RCS" {
                         rcs = Some(ose_data::Rcs {
+                            enabled: o["isEnabled"]["storedValue"].as_bool().unwrap_or(true),
+                            thrust_fraction: (o["thrustPercentage"]["storedValue"]
+                                .as_f64()
+                                .unwrap_or(100.0)
+                                / 100.0)
+                                .clamp(0.0, 1.0),
+                            shielded_can_activate: b(o, "shieldedCanActivate"),
                             thrusters: Vec::new(),
                             thrust_kn: f(o, "maxThrust"),
                             propellant: s(&o["Propellant"], "mixtureName"),
@@ -1385,5 +1392,23 @@ mod tests {
         let legacy: PartDef = serde_json::from_value(old).unwrap();
         assert_eq!(legacy.drag_properties, ose_data::DragProperties::default());
         assert_eq!(legacy.lift_offset_m, DVec3::ZERO);
+    }
+    #[test]
+    fn rcs_module_activation_defaults_and_limits_import_and_migrate() {
+        let value = serde_json::json!({"data":{"partName":"rcs","serializedPartModules":[{"ModuleData":[{"Name":"Data_RCS","DataObject":{"isEnabled":{"storedValue":false},"thrustPercentage":{"storedValue":25.0},"shieldedCanActivate":true,"maxThrust":2.0}}]}]}});
+        let imported = part(&value, &mut Coverage::default()).rcs.unwrap();
+        assert!(!imported.enabled);
+        assert_eq!(imported.thrust_fraction, 0.25);
+        assert!(imported.shielded_can_activate);
+        assert_eq!(imported.limited_thrust_kn(), 0.0);
+        let mut old = serde_json::to_value(&imported).unwrap();
+        for key in ["enabled", "thrust_fraction", "shielded_can_activate"] {
+            old.as_object_mut().unwrap().remove(key);
+        }
+        let legacy: ose_data::Rcs = serde_json::from_value(old).unwrap();
+        assert!(legacy.enabled);
+        assert_eq!(legacy.thrust_fraction, 1.0);
+        assert!(!legacy.shielded_can_activate);
+        assert_eq!(legacy.limited_thrust_kn(), 2.0);
     }
 }

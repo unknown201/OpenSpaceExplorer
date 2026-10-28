@@ -453,12 +453,30 @@ impl Default for Jetpack {
 /// (mixture) and Isp against pressure.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Rcs {
+    /// Authored per-module enable state and thrust limit (0..1).
+    #[serde(default = "enabled")]
+    pub enabled: bool,
+    #[serde(default = "one")]
+    pub thrust_fraction: f64,
+    /// Whether this module may fire inside a closed fairing/cargo bay.
+    #[serde(default)]
+    pub shielded_can_activate: bool,
     /// Individual directional nozzle points, Unity part-local axes; empty for legacy mount proxies.
     #[serde(default)]
     pub thrusters: Vec<ThrustTransform>,
     pub thrust_kn: f64,
     pub propellant: String,
     pub isp_curve: Curve,
+}
+
+impl Rcs {
+    pub fn limited_thrust_kn(&self) -> f64 {
+        if self.enabled {
+            self.thrust_kn.max(0.0) * self.thrust_fraction.clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    }
 }
 
 /// A landing leg or wheel as the original defines it.

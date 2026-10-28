@@ -1061,7 +1061,7 @@ impl Structure {
                             let force = crate::rigid::to_vessel(aero::rotate(
                                 self.part_rot[i],
                                 point.direction,
-                            )) * (rcs.thrust_kn * isp_scale.max(0.0));
+                            )) * (rcs.limited_thrust_kn() * isp_scale.max(0.0));
                             let offset = crate::rigid::to_vessel(aero::rotate(
                                 self.part_rot[i],
                                 point.position_m,
@@ -1078,7 +1078,7 @@ impl Structure {
                         }
                     } else {
                         for axis in axes {
-                            let force = axis * (rcs.thrust_kn * isp_scale.max(0.0));
+                            let force = axis * (rcs.limited_thrust_kn() * isp_scale.max(0.0));
                             channels.push(Actuator {
                                 kind: crate::actuators::Kind::RcsMount,
                                 part: i,
@@ -1242,8 +1242,8 @@ impl Structure {
         let mut isp = (0.0, 0.0);
         for i in (0..self.rigid.len()).filter(|&i| self.rigid.present[i]) {
             if let Some(r) = &self.rcs_defs[i] {
-                thrust += r.thrust_kn * r.thrusters.len().max(1) as f64;
-                torque += r.thrust_kn * (self.rigid.rest_position(i) - c).length();
+                thrust += r.limited_thrust_kn() * r.thrusters.len().max(1) as f64;
+                torque += r.limited_thrust_kn() * (self.rigid.rest_position(i) - c).length();
                 if isp.0 == 0.0 {
                     isp = (r.isp_curve.evaluate(0.0), r.isp_curve.evaluate(1.0));
                 }
@@ -1258,7 +1258,8 @@ impl Structure {
     fn rcs_fed(&self, part: usize) -> bool {
         self.rcs_defs[part].as_ref().is_some_and(|r| {
             r.isp_curve.evaluate(0.0) > 0.0
-                && r.thrust_kn > 0.0
+                && r.limited_thrust_kn() > 0.0
+                && (!self.shielded[part] || r.shielded_can_activate)
                 && self.net.mixture_unit_mass_t(&r.propellant) > 0.0
                 && self
                     .net
@@ -1304,9 +1305,9 @@ impl Structure {
             }
             let r = self.rcs_defs[i].as_ref().expect("RCS channel definition");
             let unit_mass = self.net.mixture_unit_mass_t(&r.propellant);
-            let flow = r.thrust_kn * *norm / (r.isp_curve.evaluate(0.0) * ose_data::G0);
+            let flow = r.limited_thrust_kn() * *norm / (r.isp_curve.evaluate(0.0) * ose_data::G0);
             parts.push(i);
-            demand += r.thrust_kn * *norm;
+            demand += r.limited_thrust_kn() * *norm;
             requests.push(Request {
                 part: i,
                 instructions: self
@@ -1326,7 +1327,8 @@ impl Structure {
         let mut supplied = 0.0;
         for (i, fraction) in parts.into_iter().zip(self.net.process(&requests, dt)) {
             delivered[i] = fraction;
-            supplied += self.rcs_defs[i].as_ref().unwrap().thrust_kn * effort[i] * fraction;
+            supplied +=
+                self.rcs_defs[i].as_ref().unwrap().limited_thrust_kn() * effort[i] * fraction;
         }
         propulsion.burned_t += (before - self.net.mass_t()).max(0.0);
         p.rcs.powered = if demand > 0.0 { supplied / demand } else { 0.0 };
@@ -4081,6 +4083,9 @@ mod tests {
         ] {
             s.part_rot[i] = [0.0, 0.0, 0.0, 1.0];
             s.rcs_defs[i] = Some(ose_data::Rcs {
+                enabled: true,
+                thrust_fraction: 1.0,
+                shielded_can_activate: false,
                 thrusters: Vec::new(),
                 thrust_kn: 100.0 * ose_data::G0,
                 propellant: propellant.into(),
@@ -4126,6 +4131,65 @@ mod tests {
         body.rotation_period_s = 0.0;
         s.sync(&mut p);
         (s, p, pair, body)
+    }
+
+    #[test]
+    fn rcs_activation_and_thrust_limits_bound_force_fuel_and_readouts() {
+        for authored in [false, true] {
+            for (enabled, limit, shielded, allow_shielded, stored, expected) in [
+                (true, 1.0, false, false, 1.0, 1.0),
+                (true, 0.25, false, false, 1.0, 0.25),
+                (true, 0.25, false, false, 0.005, 0.05),
+                (false, 1.0, false, false, 1.0, 0.0),
+                (true, 0.0, false, false, 1.0, 0.0),
+                (true, 1.0, true, false, 1.0, 0.0),
+                (true, 1.0, true, true, 1.0, 1.0),
+                (true, 2.0, false, false, 1.0, 1.0),
+                (true, -1.0, false, false, 1.0, 0.0),
+            ] {
+                let (mut s, mut p, pair, body) = rcs_fixture();
+                s.rcs_defs[pair[1]].as_mut().unwrap().enabled = false;
+                let r = s.rcs_defs[pair[0]].as_mut().unwrap();
+                r.enabled = enabled;
+                r.thrust_fraction = limit;
+                r.shielded_can_activate = allow_shielded;
+                if authored {
+                    r.thrusters.push(ose_data::ThrustTransform {
+                        position_m: DVec3::new(1.0, 0.0, 0.0),
+                        direction: DVec3::new(0.0, 1.0, 0.0),
+                        weight: 1.0,
+                    });
+                }
+                let tank = s.net.tanks.iter_mut().find(|t| t.part == pair[0]).unwrap();
+                tank.stored = stored / s.net.unit_mass_t[tank.resource];
+                s.sync(&mut p);
+                s.shielded[pair[0]] = shielded;
+                let before = s.net.mass_t();
+                let other_before = s.net.mass_of(&[pair[1]]);
+                let env = crate::flight::EngineEnvironment::default();
+                let mut engine = s.propulsion(&p, env, 0.1);
+                s.configure_actuators(&p, env, &mut engine);
+                s.resolve_wheel_power(&mut p, &body, &mut engine, 0.1);
+                let allocation = engine.control_allocation.unwrap();
+                assert!((allocation.force_kn.y - 100.0 * ose_data::G0 * expected).abs() < 1e-8,
+                    "authored={authored}, enabled={enabled}, limit={limit}, shielded={shielded}: {:?}", allocation.force_kn);
+                assert!((before - s.net.mass_t() - 0.1 * expected).abs() < 1e-9);
+                assert!((engine.burned_t - 0.1 * expected).abs() < 1e-9);
+                assert_eq!(s.net.mass_of(&[pair[1]]), other_before);
+                if expected > 0.0 {
+                    let rated_fraction = if stored < 0.1 * limit {
+                        expected / limit
+                    } else {
+                        1.0
+                    };
+                    assert!((p.rcs.powered - rated_fraction).abs() < 1e-9);
+                    assert!((p.rcs.usage - expected / limit.clamp(0.0, 1.0)).abs() < 1e-9);
+                } else {
+                    assert_eq!(p.rcs.powered, 0.0);
+                    assert_eq!(p.rcs.usage, 0.0);
+                }
+            }
+        }
     }
 
     #[test]

@@ -200,6 +200,12 @@ Six additional simulation regressions cover independently calculated rotated for
 
 Procedural surfaces still generate a runtime CoP/CoM that static imports do not reproduce. Actual deflected-surface lift/drag, stall, deployed drag-cube geometry and node-enabled attachment occlusion remain open. The existing actuator model supplies a bounded surface-force proxy. No matched executable flight traces are claimed.
 
+## Completed increment: RCS module activation and thrust limits
+
+The five authored RCS modules now import their serialized enable state, thrust percentage and shielded-activation permission. `Module_RCS.ProcessThrust` gates operation on module enable and shielding; `CalculateThrust` multiplies fuel flow by thrust percentage. OSE applies those same gates before allocation and scales both the force channels and fuel requests by the bounded module thrust fraction. A disabled, zero-limit or impermissibly shielded module cannot consume fuel, contribute torque authority or supply translation. Limited thrust also reaches the aggregate rating, delivered-power and usage readouts. Older catalogs default to enabled/full thrust and disallow shielded operation.
+
+A parameterized analytical simulation regression checks both authored one-way nozzles and legacy mount proxies: full/quarter/zero limits, enable toggling, shield blocking and explicit permission, bounded out-of-range limits, final partial fuel, per-mount isolation and fuel/readout consistency. Importer coverage checks serialized property values and older catalog defaults. The settings are currently simulation/catalog configuration; player-facing per-part editing and persistence of changed flight settings remain open, alongside axis switches, fore-by-throttle, full-thrust threshold and reference precision/lever selection.
+
 ## Remaining physics priorities
 
 1. Import usable collider inertia geometry and procedural/deployed mass changes; complete articulated engine gimbals. Match RCS precision/lever allocation and part controls, and complete EVA character/camera/water behavior.
@@ -214,6 +220,9 @@ The next contact acceptance cases should cover continuous hull contacts that pre
 Per-engine mode switching, articulated nozzle transforms, thrust response curves/limits, full intake accounting, and the complete KSP2 engine modifier set are still open. The existing jet curve/intake approximation and structural thrust-lag filter remain. The resource allocator also retains its existing ordered-request semantics. This change closes specific propulsion errors; it does not establish complete engine or flight parity.
 
 ## Validation, 2026-10-27
+
+- RCS activation follow-up: strict workspace Clippy passes; focused RCS tests pass (10 simulation, two importer). `cargo test --workspace --exclude ose-bot` passes (177 simulation, 17 importer, WebSocket suite 19 passed/one existing ignored). The browser check passes and all five RCS module defaults match a fresh installed-data regeneration. The full Mun journey passed on the preceding aerodynamic milestone.
+
 
 - Aerodynamic milestone: full `cargo test --workspace` passed, including the fresh-server Mun journey (504.80 s), 174 simulation tests and 16 importer tests. The settings-loader follow-up adds two simulation tests (176 total); focused simulation/importer tests pass. Strict workspace Clippy and the browser-client check pass. The final `cargo test --workspace --exclude ose-bot` run also passes with all 176 simulation tests, 16 importer tests and the WebSocket suite (19 passed, one existing ignored test).
 - Both aerodynamic-exporter tests pass; all 400 regenerated aerodynamic definitions match the committed catalog within 1e-14.
