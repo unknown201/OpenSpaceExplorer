@@ -3,7 +3,7 @@
 From reading `KSP.Sim.impl` (`RigidbodyBehavior`, `PartOwnerBehavior`, `PartComponent`, `CelestialBodyComponent`,
 `PartComponentModule_Engine`), `KSP.Modules` (`Module_Drag`, `Data_Drag`, `Data_Engine`), `PhysicsSettings` and
 `AeroUtilities`. Numbers quoted are the C# defaults in `PhysicsSettings`; the shipped settings asset can override
-them. The aerodynamic subset is now exported from the actual loaded Global/PhysicsSettings.json into assets/own/aero-settings.json and consumed at runtime; joint and thermal defaults still need the same treatment.
+them. The aerodynamic subset is now exported from the actual loaded Global/PhysicsSettings.json into assets/own/aero-settings.json and consumed at runtime; joint multipliers are exported to assets/own/joint-settings.json too. Thermal defaults still need the same treatment.
 
 ## Rigid bodies and gravity
 
@@ -47,7 +47,7 @@ Per joint, with `size` the attach node size (0, 1, 2...):
 nodeFactor = (size + 1) * JOINT_STACK_NODE_FACTOR        (stack node)
            = (size + 1) * JOINT_SURFACE_NODE_FACTOR      (surface node)
 stiffness  = JOINT_RIGIDITY * nodeFactor * JOINT_{STACK|SURFACE}_ATTACH_STIFFNESS
-sizeDiv    = size < 2 ? 1 : 3           (1 when MultiJointFullBreakStrength)
+sizeDiv    = size < 2 ? 1 : 3           (1 when MultiJointFullBreakStrength; now imported)
 breakForce  = min(hostBreakingForce,  otherBreakingForce)  * nodeFactor / sizeDiv / max(multiJointCount,1)
               * JointBreakForceFactor  * (rigid ? RigidJointBreakForceFactor  : 1)
 breakTorque = min(hostBreakingTorque, otherBreakingTorque) * nodeFactor / sizeDiv / max(multiJointCount,1)

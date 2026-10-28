@@ -31,14 +31,31 @@ use rapier3d_f64::prelude::{
     RigidBodySet, SoftBodySet,
 };
 
-/// `PhysicsSettings` defaults.
-pub const JOINT_RIGIDITY: f64 = 1500.0;
-pub const JOINT_STACK_NODE_FACTOR: f64 = 50.0;
-pub const JOINT_SURFACE_NODE_FACTOR: f64 = 0.8;
-pub const JOINT_ATTACH_STIFFNESS: f64 = 10.0;
-pub const JOINT_DAMPING_FACTOR: f64 = 0.01;
-pub const JOINT_BREAK_FORCE_FACTOR: f64 = 50.0;
-pub const JOINT_BREAK_TORQUE_FACTOR: f64 = 50.0;
+/// Joint settings exported from the installed reference's loaded PhysicsSettings JSON.
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct JointSettings {
+    pub version: String,
+    pub source_sha256: String,
+    pub rigidity: f64,
+    pub stack_node_factor: f64,
+    pub surface_node_factor: f64,
+    pub stack_attach_stiffness: f64,
+    pub surface_attach_stiffness: f64,
+    pub damping_factor: f64,
+    pub break_force_factor: f64,
+    pub break_torque_factor: f64,
+    pub rigid_break_force_factor: f64,
+    pub rigid_break_torque_factor: f64,
+}
+
+pub fn joint_settings() -> &'static JointSettings {
+    static SETTINGS: std::sync::OnceLock<JointSettings> = std::sync::OnceLock::new();
+    SETTINGS.get_or_init(|| {
+        serde_json::from_str(include_str!("../../../assets/own/joint-settings.json"))
+            .expect("validated reference joint settings")
+    })
+}
+
 /// Spring substeps per step for the wobble layer.
 const WOBBLE_SUBSTEPS: usize = 32;
 /// How quickly the attitude hold takes out the structure's own spin, s.
@@ -67,34 +84,72 @@ pub fn joint_limits(
     breaking_force: (f64, f64),
     breaking_torque: (f64, f64),
 ) -> JointLimits {
-    let size = node_size.max(0) as f64;
-    let node_factor = (size + 1.0)
-        * if stack {
-            JOINT_STACK_NODE_FACTOR
-        } else {
-            JOINT_SURFACE_NODE_FACTOR
-        };
-    let stiffness = JOINT_RIGIDITY * node_factor * JOINT_ATTACH_STIFFNESS;
-    let size_div = if node_size < 2 { 1.0 } else { 3.0 };
-    // a part authored without a breaking force is not breakable
-    let limit = |a: f64, b: f64, factor: f64| {
-        let m = a.min(b);
-        if m <= 0.0 {
-            f64::INFINITY
-        } else {
-            m * node_factor / size_div * factor
-        }
-    };
-    JointLimits {
-        stiffness,
-        damping: stiffness * JOINT_DAMPING_FACTOR,
-        break_force_kn: limit(breaking_force.0, breaking_force.1, JOINT_BREAK_FORCE_FACTOR),
-        break_torque_knm: limit(
-            breaking_torque.0,
-            breaking_torque.1,
-            JOINT_BREAK_TORQUE_FACTOR,
-        ),
+    joint_settings().limits(
+        node_size,
+        stack,
         rigid,
+        false,
+        breaking_force,
+        breaking_torque,
+    )
+}
+
+impl JointSettings {
+    fn limits(
+        &self,
+        node_size: i32,
+        stack: bool,
+        rigid: bool,
+        full_break_strength: bool,
+        breaking_force: (f64, f64),
+        breaking_torque: (f64, f64),
+    ) -> JointLimits {
+        let size = node_size.max(0) as f64;
+        let node_factor = (size + 1.0)
+            * if stack {
+                self.stack_node_factor
+            } else {
+                self.surface_node_factor
+            };
+        let stiffness = self.rigidity
+            * node_factor
+            * if stack {
+                self.stack_attach_stiffness
+            } else {
+                self.surface_attach_stiffness
+            };
+        let size_div = if node_size < 2 || full_break_strength {
+            1.0
+        } else {
+            3.0
+        };
+        // One multibody link represents the aggregate connection, not each parallel source joint.
+        // Splitting strength among N identical joints then summing their capacity cancels N.
+        let limit = |a: f64, b: f64, factor: f64, rigid_factor: f64| {
+            let m = a.min(b);
+            if m <= 0.0 {
+                f64::INFINITY
+            } else {
+                m * node_factor / size_div * factor * if rigid { rigid_factor } else { 1.0 }
+            }
+        };
+        JointLimits {
+            stiffness,
+            damping: stiffness * self.damping_factor,
+            break_force_kn: limit(
+                breaking_force.0,
+                breaking_force.1,
+                self.break_force_factor,
+                self.rigid_break_force_factor,
+            ),
+            break_torque_knm: limit(
+                breaking_torque.0,
+                breaking_torque.1,
+                self.break_torque_factor,
+                self.rigid_break_torque_factor,
+            ),
+            rigid,
+        }
     }
 }
 
@@ -385,7 +440,14 @@ impl RigidVessel {
             let rigid = own.is_some_and(|n| n.is_rigid) || other.is_some_and(|n| n.is_rigid);
             let bf = |d: Option<&PartDef>| d.map(|d| d.breaking_force).unwrap_or(0.0);
             let bt = |d: Option<&PartDef>| d.map(|d| d.breaking_torque).unwrap_or(0.0);
-            let limits = joint_limits(size, stack, rigid, (bf(def), bf(pdef)), (bt(def), bt(pdef)));
+            let limits = joint_settings().limits(
+                size,
+                stack,
+                rigid,
+                node.is_some_and(|n| n.full_break_strength),
+                (bf(def), bf(pdef)),
+                (bt(def), bt(pdef)),
+            );
             // anchor at the child's attach node, else midway between the parts
             let cpos = to_vessel(p.local_position);
             let ppos = to_vessel(craft.parts[parent].local_position);
@@ -1140,6 +1202,80 @@ mod tests {
         }
         let after = vessel.bodies[vessel.bodies_of[0]].angvel().length();
         assert!((after - first).abs() < 1e-8, "{first} -> {after}");
+    }
+
+    #[test]
+    fn exported_joint_settings_keep_distinct_attachment_and_rigid_multipliers() {
+        let loaded = joint_settings();
+        assert_eq!(loaded.version, "0.1.16");
+        assert_eq!(loaded.source_sha256, crate::aero::settings().source_sha256);
+        let settings = JointSettings {
+            rigidity: 2.0,
+            stack_node_factor: 3.0,
+            surface_node_factor: 5.0,
+            stack_attach_stiffness: 7.0,
+            surface_attach_stiffness: 11.0,
+            damping_factor: 0.25,
+            break_force_factor: 13.0,
+            break_torque_factor: 17.0,
+            rigid_break_force_factor: 19.0,
+            rigid_break_torque_factor: 23.0,
+            ..loaded.clone()
+        };
+        let stack = settings.limits(2, true, false, false, (2.0, 4.0), (3.0, 5.0));
+        assert_eq!(stack.stiffness, 126.0);
+        assert_eq!(stack.damping, 31.5);
+        assert_eq!(stack.break_force_kn, 78.0);
+        assert_eq!(stack.break_torque_knm, 153.0);
+        let full = settings.limits(2, true, true, true, (2.0, 4.0), (3.0, 5.0));
+        assert_eq!(full.break_force_kn, 4446.0);
+        assert_eq!(full.break_torque_knm, 10557.0);
+        let surface = settings.limits(0, false, false, false, (2.0, 4.0), (3.0, 5.0));
+        assert_eq!(surface.stiffness, 110.0);
+        assert_eq!(surface.damping, 27.5);
+        assert_eq!(surface.break_force_kn, 130.0);
+        assert_eq!(surface.break_torque_knm, 255.0);
+    }
+
+    #[test]
+    fn stock_procedural_wings_keep_authored_full_aggregate_connection_strength() {
+        let (crafts, defs, res) = assets();
+        let craft = crafts.iter().find(|c| c.name == "Stock04_Jet").unwrap();
+        let vessel = RigidVessel::build(craft, &defs, &res);
+        let mut checked = 0;
+        for link in &vessel.links {
+            let part = &craft.parts[link.child];
+            let own = defs.iter().find(|d| d.id == part.part_id).unwrap();
+            let Some(node) = own
+                .attach_nodes
+                .iter()
+                .find(|n| Some(n.id.as_str()) == part.own_node.as_deref() && n.full_break_strength)
+            else {
+                continue;
+            };
+            let parent = defs
+                .iter()
+                .find(|d| d.id == craft.parts[link.parent].part_id)
+                .unwrap();
+            let factor = (node.size + 1) as f64 * 0.8;
+            let expected_force = own.breaking_force.min(parent.breaking_force) * factor * 50.0;
+            let expected_torque = own.breaking_torque.min(parent.breaking_torque) * factor * 50.0;
+            assert!((link.limits.break_force_kn - expected_force).abs() < 1e-9);
+            assert!((link.limits.break_torque_knm - expected_torque).abs() < 1e-9);
+            let old = joint_limits(
+                node.size,
+                false,
+                link.limits.rigid,
+                (own.breaking_force, parent.breaking_force),
+                (own.breaking_torque, parent.breaking_torque),
+            );
+            assert!((link.limits.break_force_kn - 3.0 * old.break_force_kn).abs() < 1e-9);
+            checked += 1;
+        }
+        assert!(
+            checked >= 2,
+            "both stock aircraft wings should use full strength"
+        );
     }
 
     #[test]

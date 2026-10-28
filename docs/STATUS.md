@@ -4,6 +4,8 @@ Updated 2026-10-27.
 
 ## What works
 
+- Joint stiffness, damping and rigid/ordinary break multipliers now load from the installed reference settings. The nine procedural lifting-surface attachment definitions retain full-break-strength flags: stock aircraft wing connections no longer receive the ordinary size-2 divisor of three. Analytical and real-stock checks cover the correction; individual multi-joint geometry remains approximate.
+
 - RCS modules now honor per-axis rotation/translation switches, fore-by-throttle with explicit-input priority and the reference deadband, plus full-thrust thresholds before fuel delivery. Disabled command axes preserve incidental physical torque. Three analytical simulation regressions and importer coverage pass; precision/lever selection and runtime part-editing UI remain open.
 
 - Mounted rotations now normalize consistently for force axes, aerodynamic frames, contact boxes, inertia, structural bodies and hangar layout. This removes discrepancies from rounded stock quaternions and scaled imported rotations; analytical cross-path tests cover the conversion.
@@ -157,7 +159,7 @@ Live at https://ose.jfly.dev/ (home network and Tailscale). A push to `main` bui
 
 - Client, in the player's order (ADR-0007): campaign creation as the original's flow (mode, difficulty, name, agency, flag), then the KSC as a 3D scene with clickable buildings, the VAB with real part meshes, the launch pad, flight and map.
 
-- Aerodynamic PhysicsSettings are now exported from the loaded reference JSON and used at runtime. Extract and load the remaining joint and thermal constants.
+- Aerodynamic and joint PhysicsSettings are exported from the loaded reference JSON and used at runtime. Extract and load the remaining thermal constants.
 - Campaign content: missions and the tech tree from the imported JSON, science.
 - Saves keep each vessel's parts as launched with which are still on and what each is doing (panels and antennas out, chutes, heat, gear, converters, fairings, bays), its control part and whether it is debris (`SavedVessel.parts`); older saves restore from the compacted `craft` as before.
 - Phase 6 next: ground contact per part (landing legs, tipping over) and body lift; panel orientation and transmitter draw; antennas and transmission time; EVA construction.

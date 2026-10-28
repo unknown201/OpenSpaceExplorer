@@ -381,6 +381,7 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
                     is_resource_crossfeed: b(n, "isResourceCrossfeed"),
                     is_rigid: b(n, "isRigid"),
                     angular_strength_multiplier: f(n, "angularStrengthMultiplier"),
+                    full_break_strength: b(n, "MultiJointFullBreakStrength"),
                 })
                 .collect()
         })
@@ -1443,5 +1444,28 @@ mod tests {
         old.as_object_mut().unwrap().remove("controls");
         let legacy: ose_data::Rcs = serde_json::from_value(old).unwrap();
         assert_eq!(legacy.controls, ose_data::RcsControls::default());
+    }
+    #[test]
+    fn authored_full_break_strength_nodes_import_and_legacy_nodes_default_to_normal() {
+        let value = serde_json::json!({"data":{"partName":"wing","attachNodes":[{"nodeID":"srfAttach","nodeType":"Surface","size":2,"MultiJointFullBreakStrength":true}]}});
+        let imported = part(&value, &mut Coverage::default());
+        assert!(imported.attach_nodes[0].full_break_strength);
+        let mut old = serde_json::to_value(&imported.attach_nodes[0]).unwrap();
+        old.as_object_mut().unwrap().remove("full_break_strength");
+        assert!(
+            !serde_json::from_value::<AttachNode>(old)
+                .unwrap()
+                .full_break_strength
+        );
+        let parts: Vec<PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        assert_eq!(
+            parts
+                .iter()
+                .flat_map(|p| &p.attach_nodes)
+                .filter(|n| n.full_break_strength)
+                .count(),
+            9
+        );
     }
 }

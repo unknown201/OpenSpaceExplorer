@@ -681,6 +681,9 @@ pub struct AttachNode {
     pub is_resource_crossfeed: bool,
     pub is_rigid: bool,
     pub angular_strength_multiplier: f64,
+    /// Keep full aggregate strength for large nodes (`MultiJointFullBreakStrength`).
+    #[serde(default)]
+    pub full_break_strength: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

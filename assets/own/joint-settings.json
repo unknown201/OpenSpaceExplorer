@@ -1,0 +1,14 @@
+{
+  "version": "0.1.16",
+  "source_sha256": "cc318b2d68cd524530bb9096bebea7ff4bcd9e3e94cb58ed7b5b5485c1508cf0",
+  "rigidity": 1500.0,
+  "stack_node_factor": 50.0,
+  "surface_node_factor": 0.8,
+  "stack_attach_stiffness": 10.0,
+  "surface_attach_stiffness": 10.0,
+  "damping_factor": 0.01,
+  "break_force_factor": 50.0,
+  "break_torque_factor": 50.0,
+  "rigid_break_force_factor": 1.0,
+  "rigid_break_torque_factor": 1.0
+}

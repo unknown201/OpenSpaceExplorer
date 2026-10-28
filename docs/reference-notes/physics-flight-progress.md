@@ -220,6 +220,16 @@ The source 0.05 translation deadband and explicit fore/aft priority over throttl
 
 Three additional simulation tests cover each rotation switch and analytical force/moment/fuel, throttle priority/deadband and translation disabling, full-thrust threshold and partial delivery, and preservation of incidental physical torque. Importer coverage checks switch mapping and old-catalog defaults. All five imported definitions match regenerated installed data. Player-facing per-part controls and persistence of changed runtime settings remain open, as do precision/lever-based reference nozzle selection and the original SAS controller. The bounded optimizer is retained; these switches do not establish complete RCS control parity.
 
+## Completed increment: loaded joint settings and authored full-strength wing connections
+
+`tools/export_joint_settings.py` exports ten joint stiffness, damping and break multipliers from the same loaded reference settings JSON as the aerodynamic export, preserving its version and SHA-256. Runtime joints now consume this committed data. Stack and surface attachment stiffness remain independent, and rigid-connection break multipliers are applied independently to force and torque.
+
+The importer now retains `MultiJointFullBreakStrength` on all attachment nodes. Nine authored size-2 surface nodes set it: the three procedural wing, stabilizer and control-surface families. The stock aircraft use these nodes. Their aggregate connection strength now avoids the ordinary large-node divisor of three, matching `PartOwnerBehavior.GetJointBreakLimits`; previously those connections were three times too weak. Old catalogs default to the ordinary size divisor.
+
+The multibody solver still represents each connection with one aggregate link. Splitting equal capacity across N source joints and summing cancels N; this change does not reproduce the source's separate off-axis joint anchors or unequal individual loads. Translational constraint stiffness, exact multi-joint geometry, launch-clamp exceptions and all collider/inertia details remain open. The existing zero-authored-strength convention remains unchanged.
+
+Two simulation regressions independently exercise distinct stack/surface/rigid multipliers and verify real stock aircraft wing limits. Importer coverage pins the nine authored nodes and legacy defaults. Two exporter tests check source identity, separate multipliers and invalid/missing settings. All 986 regenerated node flags match the committed definitions. Strict workspace Clippy and the browser build pass; the complete workspace/Mun run is in progress.
+
 ## Remaining physics priorities
 
 1. Import usable collider inertia geometry and procedural/deployed mass changes; complete articulated engine gimbals. Match RCS precision/lever allocation and part controls, and complete EVA character/camera/water behavior.
