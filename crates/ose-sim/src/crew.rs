@@ -18,8 +18,8 @@ pub const VETERANS: [&str; 4] = [
 
 /// Jetpack thrust (`JetpackMoveForce`), kN.
 pub const JETPACK_THRUST_KN: f64 = 0.25;
-/// Jetpack specific impulse. The original does not use an Isp for the jetpack; with this the Kerbal's
-/// 0.025 t of monopropellant lasts about 100 s at full thrust.
+/// Legacy constant-Isp approximation. The reference JetpackResourceManager uses
+/// Data_Kerbal.JetpackAtmosphereCurve (240 s vacuum, 100 s at one atmosphere).
 pub const JETPACK_ISP_S: f64 = 100.0;
 /// A Kerbal with suit and pack (`eva_kerbal` mass), t, and the pack's propellant, t.
 pub const KERBAL_MASS_T: f64 = 0.07;

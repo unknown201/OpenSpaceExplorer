@@ -176,9 +176,15 @@ Two simulation regressions independently calculate a rotated part's centre and f
 
 Inertia still uses the existing oriented-box proxies and size clamps rather than authored collider tensors. Structural motion still uses the 1 kg minimum for synthetic massless parts. Internal resource locations, changing deployed mass distribution and correction of the vessel reference position as its mass centre shifts remain open. This increment supplies authored centres and consistent levers, not complete mass/inertia parity.
 
+## Reference audit for the next actuator/aero increment
+
+`JetpackResourceManager.Initialize` does use Isp: its maximum move mass flow is `JetpackMoveForce / (JetpackAtmosphereCurve(0) * g0)`, and rotate flow is `(JetpackRotateTorque / JetpackRotateTorqueOffset) / (Isp(0) * g0)`. `ProcessPreJetpackForcesAndTorques` changes exhaust velocity with the full pressure curve. The installed `eva_kerbal` data has 0.25 kN move force, 0.125 kN*m torque, a 0.25 m rotation lever, and a 240/100/0.001-second curve at 0/1/4 atmospheres. Its 0.025 units of MonoPropellant have a 0.025 t mass in this catalog. OSE's current constant 100 s and pressure-independent EVA thrust are approximations; the old comment claiming the reference had no Isp was incorrect. The next acceptance cases must budget move, rotation and automatic braking before force integration and check dry/final-partial fuel, mixed commands, full pressure interpolation, and no duplicate post-flight drain.
+
+`Module_ControlSurface` also overrides a procedural surface's runtime mass centre from its generated `CoPOffset`. Importing the static 14 `coMassOffset` values does not cover that runtime geometry. `Module_Drag` applies drag at core `coPressureOffset + lifting-surface CoPOffset`, and body lift at core `coLiftOffset + lifting-surface CoPOffset`. `Module_LiftingSurface.CalculateLiftDragForces` applies its own lift/drag at the passed module offset, while the control-surface call adds the core offset and its generated control pivot offset. These forces need distinct retained application points and moments; relocating one combined force to a bounds centre is insufficient. Include perpendicular-only lift, internal-drag enabling, procedural geometry and body lift in the next comparison fixtures.
+
 ## Remaining physics priorities
 
-1. Import usable collider inertia geometry and deployed mass changes; complete articulated engine gimbals. Match RCS precision/lever allocation and part controls; extend resource-before-actuation to EVA.
+1. Import usable collider inertia geometry and procedural/deployed mass changes; complete articulated engine gimbals. Match RCS precision/lever allocation and part controls; extend resource-before-actuation to EVA.
 2. Import centre-of-pressure offsets, full lifting-surface options, and deflected control-surface lift/drag.
 3. Replace sampled corner paths with continuous hull contacts; add nearby vessel/debris pair contacts and equal-and-opposite impulses. Import contact materials and sliding damage/heat.
 4. Import displacement and wheel-collider data, suspension tuning and target positions; add load-dependent tyre grip and wheel slip. Extend water behavior, then docking attraction/capture and EVA ladder/hatch contact.
@@ -191,8 +197,8 @@ Per-engine mode switching, articulated nozzle transforms, thrust response curves
 
 ## Validation, 2026-10-27
 
-- `cargo test --workspace`: passed, including the fresh-server Mun journey, server WebSocket tests and 160 simulation regressions. The existing ignored test remains ignored. The first integration run caught an aircraft frame regression; it was corrected before the passing rerun.
-- `cargo test -p ose-sim -p ose-importer --lib`: the mass-centre follow-up passes 162 simulation and 13 importer tests. The strengthened reverse-control regression also passes. The full workspace run for this increment is in progress; the preceding engine/RCS run passed as recorded above.
+- `cargo test --workspace`: passed on the authored-mass-centre follow-up, including the fresh-server Mun journey (508.60 s), server WebSocket tests and 162 simulation regressions. The existing ignored test remains ignored.
+- `cargo test -p ose-sim -p ose-importer --lib`: 162 simulation and 13 importer tests passed. The strengthened reverse-control regression also passes.
 - `cargo clippy --workspace --all-targets -- -D warnings`: passed.
 - `cargo check -p ose-client --target wasm32-unknown-unknown`: passed.
 - `python -m unittest discover -s tools/tests -p test_export_physics_geometry.py`: 3 passed.
