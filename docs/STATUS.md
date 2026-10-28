@@ -4,6 +4,8 @@ Updated 2026-10-27.
 
 ## What works
 
+- RCS modules now honor per-axis rotation/translation switches, fore-by-throttle with explicit-input priority and the reference deadband, plus full-thrust thresholds before fuel delivery. Disabled command axes preserve incidental physical torque. Three analytical simulation regressions and importer coverage pass; precision/lever selection and runtime part-editing UI remain open.
+
 - Mounted rotations now normalize consistently for force axes, aerodynamic frames, contact boxes, inertia, structural bodies and hangar layout. This removes discrepancies from rounded stock quaternions and scaled imported rotations; analytical cross-path tests cover the conversion.
 
 - RCS modules honor their authored enable state, thrust percentage and shielded-activation permission before allocation. Force, fuel, available rating and usage readouts use the same limit, including final partial fuel. Analytical cases cover both directional nozzles and legacy mount proxies. Per-axis switches, precision selection and player-facing part controls remain open.

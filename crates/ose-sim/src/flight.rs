@@ -1178,24 +1178,49 @@ pub fn plan_actuators(
     };
     let (request, _) = control_request(p, engine, target, frac, dt);
     let request = if p.landed { DVec3::ZERO } else { request };
-    let mut allocation = crate::actuators::allocate(channels, request);
+    allocate_actuator_request(p, engine, channels, request)
+}
+
+fn allocate_actuator_request(
+    p: &Powered,
+    engine: &Propulsion,
+    channels: &[crate::actuators::Actuator],
+    request: DVec3,
+) -> crate::actuators::Allocation {
+    let rotation_axes: Vec<_> = channels
+        .iter()
+        .map(|a| {
+            if a.kind.is_rcs() {
+                engine
+                    .rcs_controls
+                    .get(a.part)
+                    .copied()
+                    .flatten()
+                    .unwrap_or_default()
+                    .rotation_axes()
+            } else {
+                DVec3::new(1.0, 1.0, 1.0)
+            }
+        })
+        .collect();
+    let mut allocation = crate::actuators::allocate_with_axes(channels, request, &rotation_axes);
     // Authored RCS nozzles add translation to their rotation demand and clamp to 0..1.
     // Legacy mount proxies instead project the combined vector to their shared sphere.
-    let t = p.rcs.translate;
-    let mut translation = DVec3::new(
-        t.x.clamp(-1.0, 1.0),
-        t.y.clamp(-1.0, 1.0),
-        t.z.clamp(-1.0, 1.0),
-    );
-    translation = translation * (1.0 / translation.length().max(1.0));
     for (i, a) in channels.iter().enumerate() {
+        let controls = engine
+            .rcs_controls
+            .get(a.part)
+            .copied()
+            .flatten()
+            .unwrap_or_default();
+        let translation = controls.translation(p.rcs.translate, p.throttle);
         if a.kind == crate::actuators::Kind::RcsNozzle {
             let added = if a.force_kn.length_squared() > 0.0 {
                 translation.dot(a.force_kn.normalized()).max(0.0)
             } else {
                 0.0
             };
-            let next = (allocation.inputs[i] + added).clamp(0.0, 1.0);
+            let next = controls.nozzle_input(allocation.inputs[i] + added);
             let change = next - allocation.inputs[i];
             allocation.inputs[i] = next;
             allocation.force_kn = allocation.force_kn + a.force_kn * change;
@@ -1227,9 +1252,11 @@ pub fn plan_actuators(
                     }
             })
             .collect();
-        let norm = inputs.iter().map(|x| x * x).sum::<f64>().sqrt().max(1.0);
+        let length = inputs.iter().map(|x| x * x).sum::<f64>().sqrt();
+        let target = controls.nozzle_input(length);
+        let scale = if length > 0.0 { target / length } else { 0.0 };
         for (&j, input) in indices.iter().zip(inputs) {
-            let next = input / norm;
+            let next = input * scale;
             let change = next - allocation.inputs[j];
             allocation.inputs[j] = next;
             allocation.force_kn = allocation.force_kn + channels[j].force_kn * change;
@@ -1338,7 +1365,7 @@ fn turn_with_parts(
         let allocation = engine
             .control_allocation
             .clone()
-            .unwrap_or_else(|| crate::actuators::allocate(channels, request));
+            .unwrap_or_else(|| allocate_actuator_request(p, engine, channels, request));
         out.actuator_inputs = allocation.inputs;
         out.actuator_axial_corrections = allocation.axial_corrections;
         out.control_force_kn = world(allocation.force_kn);
@@ -1472,6 +1499,8 @@ impl EngineEnvironment {
 /// The resource graph has already removed this fuel; the integrator must not request it again.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Propulsion {
+    /// Per-part RCS switches resolved from the configured module, in craft control axes.
+    pub rcs_controls: Vec<Option<ose_data::RcsControls>>,
     pub actuators: Option<Vec<crate::actuators::Actuator>>,
     /// Inputs already limited by this tick's delivered actuator resources.
     pub control_allocation: Option<crate::actuators::Allocation>,

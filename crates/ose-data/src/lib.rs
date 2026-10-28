@@ -12,6 +12,7 @@ pub mod staging;
 pub mod terrain;
 pub mod terrain_detail;
 
+use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -453,6 +454,8 @@ impl Default for Jetpack {
 /// (mixture) and Isp against pressure.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Rcs {
+    #[serde(default)]
+    pub controls: RcsControls,
     /// Authored per-module enable state and thrust limit (0..1).
     #[serde(default = "enabled")]
     pub enabled: bool,
@@ -467,6 +470,83 @@ pub struct Rcs {
     pub thrust_kn: f64,
     pub propellant: String,
     pub isp_curve: Curve,
+}
+
+/// Reference module input switches, in flight-control axes rather than mounted part axes.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RcsControls {
+    pub pitch: bool,
+    pub yaw: bool,
+    pub roll: bool,
+    pub x: bool,
+    pub y: bool,
+    pub z: bool,
+    pub fore_by_throttle: bool,
+    pub full_thrust: bool,
+    pub full_thrust_min: f64,
+}
+
+impl Default for RcsControls {
+    fn default() -> Self {
+        Self {
+            pitch: true,
+            yaw: true,
+            roll: true,
+            x: true,
+            y: true,
+            z: true,
+            fore_by_throttle: false,
+            full_thrust: false,
+            full_thrust_min: 0.2,
+        }
+    }
+}
+
+impl RcsControls {
+    pub fn rotation_axes(self) -> DVec3 {
+        DVec3::new(
+            u8::from(self.pitch) as f64,
+            u8::from(self.roll) as f64,
+            u8::from(self.yaw) as f64,
+        )
+    }
+
+    /// Craft axes: right, fore and top. Explicit fore/aft overrides throttle outside the source deadband.
+    pub fn translation(self, input: DVec3, throttle: f64) -> DVec3 {
+        let fore = if input.y.abs() < 0.05 {
+            if self.fore_by_throttle {
+                throttle.clamp(0.0, 1.0)
+            } else {
+                0.0
+            }
+        } else {
+            input.y.clamp(-1.0, 1.0)
+        };
+        let axis = |value: f64, enabled: bool| {
+            if enabled && value.abs() >= 0.05 {
+                value.clamp(-1.0, 1.0)
+            } else {
+                0.0
+            }
+        };
+        DVec3::new(
+            axis(input.x, self.x),
+            if self.z { fore } else { 0.0 },
+            axis(input.z, self.y),
+        )
+    }
+
+    pub fn nozzle_input(self, effort: f64) -> f64 {
+        let effort = effort.clamp(0.0, 1.0);
+        if self.full_thrust && effort > 0.0 && // The reference compares single-precision module inputs at this boundary.
+            (effort as f32) >= (self.full_thrust_min.clamp(0.0, 1.0) as f32)
+        {
+            1.0
+        } else {
+            effort
+        }
+    }
 }
 
 impl Rcs {

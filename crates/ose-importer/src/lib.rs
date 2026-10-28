@@ -491,6 +491,17 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
                     }
                     if entry["Name"] == "Data_RCS" {
                         rcs = Some(ose_data::Rcs {
+                            controls: ose_data::RcsControls {
+                                pitch: o["enablePitch"]["storedValue"].as_bool().unwrap_or(true),
+                                yaw: o["enableYaw"]["storedValue"].as_bool().unwrap_or(true),
+                                roll: o["enableRoll"]["storedValue"].as_bool().unwrap_or(true),
+                                x: o["enableX"]["storedValue"].as_bool().unwrap_or(true),
+                                y: o["enableY"]["storedValue"].as_bool().unwrap_or(true),
+                                z: o["enableZ"]["storedValue"].as_bool().unwrap_or(true),
+                                fore_by_throttle: b(&o["foreByThrottle"], "storedValue"),
+                                full_thrust: b(&o["fullThrust"], "storedValue"),
+                                full_thrust_min: o["fullThrustMin"].as_f64().unwrap_or(0.2),
+                            },
                             enabled: o["isEnabled"]["storedValue"].as_bool().unwrap_or(true),
                             thrust_fraction: (o["thrustPercentage"]["storedValue"]
                                 .as_f64()
@@ -1410,5 +1421,27 @@ mod tests {
         assert_eq!(legacy.thrust_fraction, 1.0);
         assert!(!legacy.shielded_can_activate);
         assert_eq!(legacy.limited_thrust_kn(), 2.0);
+    }
+    #[test]
+    fn rcs_control_switches_import_and_default_for_older_catalogs() {
+        let value = serde_json::json!({"data":{"partName":"rcs","serializedPartModules":[{"ModuleData":[{"Name":"Data_RCS","DataObject":{"enablePitch":{"storedValue":false},"enableYaw":{"storedValue":false},"enableRoll":{"storedValue":true},"enableX":{"storedValue":false},"enableY":{"storedValue":false},"enableZ":{"storedValue":true},"foreByThrottle":{"storedValue":true},"fullThrust":{"storedValue":true},"fullThrustMin":0.3}}]}]}});
+        let imported = part(&value, &mut Coverage::default()).rcs.unwrap();
+        let c = imported.controls;
+        assert_eq!(c.rotation_axes(), DVec3::new(0.0, 1.0, 0.0));
+        assert_eq!(
+            c.translation(DVec3::new(1.0, 0.0, 1.0), 0.6),
+            DVec3::new(0.0, 0.6, 0.0)
+        );
+        assert_eq!(
+            c.translation(DVec3::new(0.0, -0.5, 0.0), 1.0),
+            DVec3::new(0.0, -0.5, 0.0)
+        );
+        assert_eq!(c.nozzle_input(0.2), 0.2);
+        assert_eq!(c.nozzle_input(0.3), 1.0);
+        assert_eq!(c.nozzle_input(0.0), 0.0);
+        let mut old = serde_json::to_value(imported).unwrap();
+        old.as_object_mut().unwrap().remove("controls");
+        let legacy: ose_data::Rcs = serde_json::from_value(old).unwrap();
+        assert_eq!(legacy.controls, ose_data::RcsControls::default());
     }
 }

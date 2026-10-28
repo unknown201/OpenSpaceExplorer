@@ -40,6 +40,15 @@ pub struct Allocation {
 }
 
 pub fn allocate(channels: &[Actuator], request: DVec3) -> Allocation {
+    allocate_with_axes(channels, request, &[])
+}
+
+/// Restrict which commanded rotation axes may request a channel; retain its full physical torque.
+pub fn allocate_with_axes(channels: &[Actuator], request: DVec3, axes: &[DVec3]) -> Allocation {
+    let masked = |i: usize, v: DVec3| {
+        let a = axes.get(i).copied().unwrap_or(DVec3::new(1.0, 1.0, 1.0));
+        DVec3::new(a.x * v.x, a.y * v.y, a.z * v.z)
+    };
     let mut out = Allocation {
         inputs: vec![0.0; channels.len()],
         ..Default::default()
@@ -48,9 +57,13 @@ pub fn allocate(channels: &[Actuator], request: DVec3) -> Allocation {
     for (i, channel) in channels.iter().enumerate() {
         if let Some((_, indices, norm)) = groups.iter_mut().find(|g| g.0 == channel.group) {
             indices.push(i);
-            *norm += channel.torque_knm.length_squared();
+            *norm += masked(i, channel.torque_knm).length_squared();
         } else {
-            groups.push((channel.group, vec![i], channel.torque_knm.length_squared()));
+            groups.push((
+                channel.group,
+                vec![i],
+                masked(i, channel.torque_knm).length_squared(),
+            ));
         }
     }
     let mut next = vec![0.0; channels.len()];
@@ -63,7 +76,8 @@ pub fn allocate(channels: &[Actuator], request: DVec3) -> Allocation {
             let residual = request - out.torque_knm;
             let mut length = 0.0;
             for &i in indices {
-                next[i] = out.inputs[i] + channels[i].torque_knm.dot(residual) / lipschitz;
+                next[i] =
+                    out.inputs[i] + masked(i, channels[i].torque_knm).dot(residual) / lipschitz;
                 if channels[i].kind == Kind::RcsNozzle {
                     next[i] = next[i].max(0.0);
                 }
@@ -108,6 +122,32 @@ pub fn allocate(channels: &[Actuator], request: DVec3) -> Allocation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn command_axis_masks_do_not_remove_incidental_physical_torque() {
+        let channel = Actuator {
+            kind: Kind::RcsNozzle,
+            part: 0,
+            torque_knm: DVec3::new(1.0, 1.0, 0.0),
+            force_kn: DVec3::new(0.0, 0.0, 1.0),
+            offset_m: DVec3::new(-1.0, 1.0, 0.0),
+            group: 0,
+            axial: None,
+        };
+        let out = allocate_with_axes(
+            std::slice::from_ref(&channel),
+            DVec3::new(1.0, 0.0, 0.0),
+            &[DVec3::new(1.0, 0.0, 0.0)],
+        );
+        assert_eq!(out.torque_knm, DVec3::new(1.0, 1.0, 0.0));
+        assert_eq!(out.force_kn, DVec3::new(0.0, 0.0, 1.0));
+        let disabled = allocate_with_axes(
+            &[channel],
+            DVec3::new(1.0, 0.0, 0.0),
+            &[DVec3::new(0.0, 1.0, 0.0)],
+        );
+        assert_eq!(disabled.inputs, vec![0.0]);
+    }
+
     #[test]
     fn gimbal_cannot_roll_and_shared_channels_respect_the_force_cone() {
         let channels =

@@ -212,6 +212,14 @@ The rigid-body path already normalized craft rotations, but force axes, aerodyna
 
 A shared craft-quaternion normalization method now supplies force mounts, contact boxes, hangar rotation and structural orientation. Existing zero rotations retain the identity fallback; nonfinite rotations also fall back to identity. A data regression covers normalization and invalid legacy values. An analytical simulation regression checks scaled, sign-flipped and rounded representations of a 90-degree mount: expected unit axes, engine forces and offsets, contact bounds, wet mass centre and inertia, rotational aerodynamic force/torque, hangar layout and rigid rotation of craft positions agree. This makes existing geometry paths consistent; it does not replace their bounding-box/contact or inertia approximations.
 
+## Completed increment: RCS per-module command switches
+
+All five RCS definitions now retain the serialized pitch/yaw/roll and X/Y/Z translation switches, fore-by-throttle setting, full-thrust setting and threshold. Rotation switches filter allocation requests in craft control axes while retaining the complete force and incidental physical torque of each fired nozzle. Disabling yaw cannot erase a yaw moment caused by a nozzle requested for another enabled axis. Translation switches map the reference's X/Z/Y controls into OSE's right/fore/top craft axes before mounted-nozzle projection.
+
+The source 0.05 translation deadband and explicit fore/aft priority over throttle are honored. Authored nozzle inputs retain the source's per-axis command bounds before projection; diagonal translation is not reduced by an extra vessel-wide normalization. Full-thrust mode promotes a combined nozzle request at/above the authored threshold before resource delivery. The boundary uses source single-precision comparison semantics. Final partial fuel still scales the resulting full-thrust request, and the legacy sphere fallback retains its shared mount bound. Planned and direct integration allocations use the same options.
+
+Three additional simulation tests cover each rotation switch and analytical force/moment/fuel, throttle priority/deadband and translation disabling, full-thrust threshold and partial delivery, and preservation of incidental physical torque. Importer coverage checks switch mapping and old-catalog defaults. All five imported definitions match regenerated installed data. Player-facing per-part controls and persistence of changed runtime settings remain open, as do precision/lever-based reference nozzle selection and the original SAS controller. The bounded optimizer is retained; these switches do not establish complete RCS control parity.
+
 ## Remaining physics priorities
 
 1. Import usable collider inertia geometry and procedural/deployed mass changes; complete articulated engine gimbals. Match RCS precision/lever allocation and part controls, and complete EVA character/camera/water behavior.
@@ -225,7 +233,10 @@ The next contact acceptance cases should cover continuous hull contacts that pre
 
 Per-engine mode switching, articulated nozzle transforms, thrust response curves/limits, full intake accounting, and the complete KSP2 engine modifier set are still open. The existing jet curve/intake approximation and structural thrust-lag filter remain. The resource allocator also retains its existing ordered-request semantics. This change closes specific propulsion errors; it does not establish complete engine or flight parity.
 
-## Validation, 2026-10-27
+## Validation, 2026-10-28
+
+- RCS command switches: `cargo test --workspace --exclude ose-bot` passes with 181 simulation tests, 18 importer tests and WebSocket coverage. Browser build passes. Installed-data regeneration matches all five modules. Strict workspace Clippy, formatting and whitespace checks pass. The full Mun journey was last run on the aerodynamic milestone.
+
 
 - Mounted-rotation follow-up: `cargo test --workspace --exclude ose-bot` passes with 178 simulation tests, 18 data tests, 17 importer tests and the WebSocket suite (19 passed/one existing ignored). Strict workspace Clippy, browser build, formatting and whitespace checks pass. The full Mun journey was last run on the aerodynamic milestone.
 

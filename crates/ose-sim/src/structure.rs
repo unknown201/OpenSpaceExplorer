@@ -1038,6 +1038,11 @@ impl Structure {
         }
         self.resolved_actuators = Some(channels.clone());
         propulsion.actuators = Some(channels);
+        propulsion.rcs_controls = self
+            .rcs_defs
+            .iter()
+            .map(|r| r.as_ref().map(|r| r.controls))
+            .collect();
     }
 
     /// Whether an engine can reach every ingredient of its mixture.
@@ -3997,6 +4002,7 @@ mod tests {
         ] {
             s.part_rot[i] = [0.0, 0.0, 0.0, 1.0];
             s.rcs_defs[i] = Some(ose_data::Rcs {
+                controls: Default::default(),
                 enabled: true,
                 thrust_fraction: 1.0,
                 shielded_can_activate: false,
@@ -4045,6 +4051,94 @@ mod tests {
         body.rotation_period_s = 0.0;
         s.sync(&mut p);
         (s, p, pair, body)
+    }
+
+    #[test]
+    fn rcs_per_part_axis_switches_gate_commands_without_erasing_physical_moments() {
+        for (axis, lever, force, command) in [
+            (
+                0,
+                DVec3::new(0.0, 1.0, 0.0),
+                DVec3::new(0.0, 0.0, 1.0),
+                DVec3::new(-1.0, 0.0, 0.0),
+            ),
+            (
+                1,
+                DVec3::new(0.0, 0.0, 1.0),
+                DVec3::new(1.0, 0.0, 0.0),
+                DVec3::new(0.0, 0.0, 1.0),
+            ),
+            (
+                2,
+                DVec3::new(1.0, 0.0, 0.0),
+                DVec3::new(0.0, 1.0, 0.0),
+                DVec3::new(0.0, 1.0, 0.0),
+            ),
+        ] {
+            for enabled in [false, true] {
+                let (mut s, mut p, pair, body) = rcs_fixture();
+                s.rcs_defs[pair[1]] = None;
+                let r = s.rcs_defs[pair[0]].as_mut().unwrap();
+                r.thrust_kn = 1.0;
+                match axis {
+                    0 => r.controls.pitch = enabled,
+                    1 => r.controls.roll = enabled,
+                    _ => r.controls.yaw = enabled,
+                }
+                r.thrusters = vec![ose_data::ThrustTransform {
+                    position_m: crate::rigid::to_vessel(lever),
+                    direction: crate::rigid::to_vessel(force),
+                    weight: 1.0,
+                }];
+                p.rcs.translate = DVec3::ZERO;
+                p.rotation_input = command;
+                let mut engine = s.propulsion(&p, Default::default(), 0.1);
+                engine.mass.centre_m = s.rigid.rest_position(pair[0]);
+                s.configure_actuators(&p, Default::default(), &mut engine);
+                s.resolve_wheel_power(&mut p, &body, &mut engine, 0.1);
+                let allocation = engine.control_allocation.unwrap();
+                let scale = if enabled { 1.0 } else { 0.0 };
+                assert!((allocation.force_kn - force * scale).length() < 1e-9);
+                assert!((allocation.torque_knm - lever.cross(force) * scale).length() < 1e-9);
+                assert!((engine.burned_t - 0.1 * scale / (100.0 * ose_data::G0)).abs() < 1e-9);
+            }
+        }
+    }
+
+    #[test]
+    fn rcs_throttle_and_full_thrust_options_resolve_before_final_partial_fuel() {
+        for (fore, throttle, by_throttle, full, fore_enabled, stored, expected) in [
+            (0.0, 0.5, true, false, true, 1.0, 0.5),
+            (-0.5, 1.0, true, false, true, 1.0, 0.0),
+            (0.03, 0.5, true, false, true, 1.0, 0.5),
+            (0.0, 1.0, false, false, true, 1.0, 0.0),
+            (0.0, 1.0, true, false, false, 1.0, 0.0),
+            (0.1, 0.0, false, true, true, 1.0, 0.1),
+            (0.2, 0.0, false, true, true, 1.0, 1.0),
+            (0.8, 0.0, false, true, true, 0.025, 0.25),
+        ] {
+            let (mut s, mut p, pair, body) = rcs_fixture();
+            s.rcs_defs[pair[1]] = None;
+            let r = s.rcs_defs[pair[0]].as_mut().unwrap();
+            r.controls.fore_by_throttle = by_throttle;
+            r.controls.full_thrust = full;
+            r.controls.z = fore_enabled;
+            r.thrusters = vec![ose_data::ThrustTransform {
+                position_m: DVec3::new(1.0, 0.0, 0.0),
+                direction: DVec3::new(0.0, 1.0, 0.0),
+                weight: 1.0,
+            }];
+            p.rcs.translate = DVec3::new(0.0, fore, 0.0);
+            p.throttle = throttle;
+            let tank = s.net.tanks.iter_mut().find(|t| t.part == pair[0]).unwrap();
+            tank.stored = stored / s.net.unit_mass_t[tank.resource];
+            let mut engine = s.propulsion(&p, Default::default(), 0.1);
+            s.configure_actuators(&p, Default::default(), &mut engine);
+            s.resolve_wheel_power(&mut p, &body, &mut engine, 0.1);
+            let allocation = engine.control_allocation.unwrap();
+            assert!((allocation.force_kn.y - 100.0 * ose_data::G0 * expected).abs() < 1e-8, "fore={fore} throttle={throttle} by_throttle={by_throttle} full={full} enabled={fore_enabled} stored={stored} expected={expected} actual={:?}", allocation.force_kn);
+            assert!((engine.burned_t - 0.1 * expected).abs() < 1e-9);
+        }
     }
 
     #[test]
