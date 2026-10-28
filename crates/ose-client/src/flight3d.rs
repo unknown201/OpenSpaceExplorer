@@ -435,7 +435,6 @@ pub struct FlightView {
     walk_phase: f64,
     deployments: HashMap<(u64, usize), crate::animation::Deployment>,
     /// Craft axes and local horizon of the last frame, for the navball.
-    pub nav: Option<crate::navball::NavFrame>,
     /// Height above the ground under the vessel (the altimeter's terrain mode), once the body's map is loaded.
     pub agl_m: Option<f64>,
     /// Part boxes relative to the camera (craft part index, min, max) and the camera's forward and up from
@@ -518,7 +517,6 @@ impl FlightView {
             walk_speed: 0.0,
             walk_phase: 0.0,
             deployments: HashMap::new(),
-            nav: None,
             agl_m: None,
             pick_boxes: Vec::new(),
             pick_cam: (DVec3::NEG_Z, DVec3::Y),
@@ -788,40 +786,6 @@ impl FlightView {
         let north = (DVec3::Y - up * up.dot(DVec3::Y)).normalize_or_zero();
         let east = north.cross(up);
 
-        // Navball frame: craft nose, top (craft +Z) and right, local horizon, and the markers' directions.
-        {
-            let forward = vessel_rot * DVec3::Y;
-            let top = vessel_rot * DVec3::Z;
-            let alt_m = r.length() - inp.body_radius;
-            let v_surf = v_rel - DVec3::new(0.0, 0.0, spin.omega()).cross(r);
-            // The original switches the navball from surface to orbit speed high in the atmosphere.
-            let v_nav = if alt_m < 36_000.0 { v_surf } else { v_rel };
-            let moving = v_nav.length() > 0.5;
-            let normal_i = r.cross(v_rel);
-            let radial_i = r - v_rel.normalize_or_zero() * r.dot(v_rel.normalize_or_zero());
-            let target = inp.target.map(|d| dir_to_model(r, d, spin, inp.ut));
-            self.nav = Some(crate::navball::NavFrame {
-                target,
-                forward,
-                top,
-                right: forward.cross(top),
-                up,
-                north,
-                east,
-                prograde: moving.then(|| dir_to_model(r, v_nav, spin, inp.ut)),
-                normal: (normal_i.length() > 1.0).then(|| dir_to_model(r, normal_i, spin, inp.ut)),
-                radial: (radial_i.length() > 1.0 && moving)
-                    .then(|| dir_to_model(r, radial_i, spin, inp.ut)),
-                // The burn in the orbital frame (prograde, orbit normal, radial out), as the node defines it.
-                maneuver: inp.maneuver.and_then(|(p, n, rd)| {
-                    let pro = v_rel.normalize_or_zero();
-                    let nrm = r.cross(v_rel).normalize_or_zero();
-                    let rad = nrm.cross(pro);
-                    let d = pro * p + nrm * n + rad * rd;
-                    (d.length() > 0.01).then(|| dir_to_model(r, d, spin, inp.ut))
-                }),
-            });
-        }
         // The camera's frame for the mode: (forward-ish, right-ish, up) axes the yaw and pitch turn around.
         let alt_m = r.length() - inp.body_radius;
         let mode = match self.mode {

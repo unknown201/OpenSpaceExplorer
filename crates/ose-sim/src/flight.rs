@@ -238,6 +238,8 @@ pub struct Powered {
     #[serde(default)]
     pub rotation_input: DVec3,
     #[serde(default)]
+    pub manual_steering: bool,
+    #[serde(default)]
     pub roll_rate: f64,
     /// RCS thrusters (with the RCS group on they translate the vessel and help turn it).
     #[serde(default)]
@@ -371,7 +373,7 @@ pub fn vessel_basis(p: &Powered) -> (DVec3, DVec3, DVec3) {
     (p.facing.cross(top), p.facing, top)
 }
 
-pub(crate) fn set_vessel_top(p: &mut Powered, top: DVec3) {
+pub fn set_vessel_top(p: &mut Powered, top: DVec3) {
     p.roll_rad = 0.0;
     let base = vessel_top(p);
     p.roll_rad = top.dot(p.facing.cross(base)).atan2(top.dot(base));
@@ -767,6 +769,7 @@ impl Powered {
             roll_input: 0.0,
             groups: ActionGroups::default(),
             rotation_input: DVec3::ZERO,
+            manual_steering: false,
             roll_rate: 0.0,
             eva_run: false,
             eva_jump: false,
@@ -993,7 +996,10 @@ pub fn steer(p: &mut Powered, target: DVec3, thrust_fraction: f64, dt: f64) {
         } else {
             DVec3::ZERO
         };
-        let w_des = axis_u * (2.0 * alpha_max * theta * 0.9).sqrt().min(MAX_TURN_RATE);
+        let w_des = if p.manual_steering {
+            let top = vessel_top(p);
+            (p.facing.cross(top) * p.rotation_input.x - top * p.rotation_input.y) * ROLL_RATE_RAD_S
+        } else { axis_u * (2.0 * alpha_max * theta * 0.9).sqrt().min(MAX_TURN_RATE).min(theta / dt) };
         let mut a = (w_des - w) * (1.0 / dt);
         let am = a.length();
         if am > alpha_max {
@@ -1005,7 +1011,9 @@ pub fn steer(p: &mut Powered, target: DVec3, thrust_fraction: f64, dt: f64) {
         p.steer_cmd = DVec3::ZERO;
         p.angvel = w;
     }
-    p.facing = rotate(p.facing, p.angvel, dt);
+    let top = rotate(vessel_top(p), p.angvel, dt);
+    p.facing = rotate(p.facing, p.angvel, dt).normalized();
+    set_vessel_top(p, top);
 }
 
 /// The torque available to turn the vessel, kN·m, and its moment of inertia now, t·m² (reaction wheels,
@@ -1062,7 +1070,9 @@ pub fn spin(p: &mut Powered, thrust_fraction: f64, dt: f64) {
         w
     };
     p.angvel = w;
+    let top = rotate(top, p.angvel, dt);
     p.facing = rotate(p.facing, p.angvel, dt).normalized();
+    set_vessel_top(p, top);
     // roll about the nose: its own rate, built up by the input and kept
     p.roll_rate = (p.roll_rate + i.z * alpha * dt).clamp(-MAX_TURN_RATE, MAX_TURN_RATE);
     p.roll_rad = (p.roll_rad + p.roll_rate * dt).rem_euclid(std::f64::consts::TAU);
@@ -1174,6 +1184,7 @@ fn control_request(
                 .min(MAX_TURN_RATE)
                 .min(theta / dt)
             + DVec3::new(0.0, ROLL_RATE_RAD_S * p.roll_input.clamp(-1.0, 1.0), 0.0);
+        let desired = if p.manual_steering { DVec3::new(p.rotation_input.x, p.roll_input, -p.rotation_input.y) * ROLL_RATE_RAD_S } else { desired };
         limit(inertia.apply((desired - w) * (1.0 / dt)), torque)
     };
     (control, torque)
@@ -1500,6 +1511,10 @@ pub fn integrate_with_propulsion(
             .unwrap_or(1.0);
     }
 
+    if p.manual_steering && p.attitude != Attitude::Free {
+        p.attitude = Attitude::Fixed(p.facing);
+        if p.rotation_input.x == 0.0 && p.rotation_input.y == 0.0 && p.angvel.length() < 1e-5 { p.manual_steering = false; }
+    }
     // thrust and propellant
     let mut thrust_acc = DVec3::ZERO;
     let force_mass_t = p.mass_t;
@@ -1682,7 +1697,7 @@ pub fn integrate_with_propulsion(
     let top = vessel_top(p);
     let previous_r = p.r;
     p.r = p.r + p.v * dt;
-    if propulsion.is_some() {
+    if !p.landed {
         // Position changes the roll reference, not the craft's inertial orientation.
         set_vessel_top(p, top);
     }

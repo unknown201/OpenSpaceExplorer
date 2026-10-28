@@ -183,9 +183,9 @@ pub enum ClientMessage {
         y: f32,
         z: f32,
     },
-    /// Rotation input with SAS off (`AttitudeMode::Free`), each -1..1 and held until changed: pitch turns
+    /// Rotation input, each -1..1 and held until changed: pitch turns
     /// the nose toward craft +Z (the navball's top), yaw toward craft +X, roll clockwise about the nose. The
-    /// reaction wheels (and RCS with its group on) set how fast the spin builds; nothing damps it. Answers
+    /// reaction wheels (and RCS with its group on) set how fast the spin builds. SAS brakes on release; Free mode preserves spin. Answers
     /// `FlightAck`.
     SetRotation {
         vessel: u64,

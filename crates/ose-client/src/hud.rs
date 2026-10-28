@@ -10,6 +10,11 @@ use web_sys::Document;
 /// and maneuver modes have no server counterpart yet and stay disabled.
 pub const SAS_BUTTONS: &[(&str, &str, &str)] = &[
     (
+        "fh-sas-toggle",
+        "Flight-ICO-StabilityAssist",
+        "SAS on / off (T)",
+    ),
+    (
         "fh-sas-stability",
         "Flight-ICO-StabilityAssist",
         "Stability assist: hold the current direction (T toggles SAS on and off)",
@@ -217,6 +222,12 @@ pub fn install(doc: &Document) {
         };
         let mut html = String::new();
         for (id, icon, tip, enabled) in items {
+            if id == "fh-sas-toggle" {
+                html.push_str(&format!(
+                    "<button id=\"{id}\" data-ose=\"{id}\" title=\"{tip}\">SAS</button>"
+                ));
+                continue;
+            }
             html.push_str(&format!(
                 "<button id=\"{id}\" data-ose=\"{id}\" title=\"{tip}\"{}><i style=\"--ico:url(assets/ui/hud/{icon}.png)\"></i></button>",
                 if enabled { "" } else { " disabled" }
@@ -231,7 +242,8 @@ pub fn install(doc: &Document) {
                 *id,
                 *icon,
                 *tip,
-                sas_mode(id, false).is_some() || *id == "fh-sas-stability",
+                sas_mode(id, false).is_some()
+                    || matches!(*id, "fh-sas-stability" | "fh-sas-toggle"),
             )
         }),
     );
@@ -308,7 +320,15 @@ pub fn update(doc: &Document, s: &HudState) {
     set(doc, "fh-pe-t", &fmt_dt(pe_t));
     let current = sas_lit(s.attitude);
     for (id, _, _) in SAS_BUTTONS {
-        lit(doc, id, *id == current);
+        lit(
+            doc,
+            id,
+            if *id == "fh-sas-toggle" {
+                !matches!(s.attitude, AttitudeMode::Free)
+            } else {
+                *id == current
+            },
+        );
     }
     lit(doc, "fh-act-gear", f.gear.iter().any(|(_, out)| *out));
     lit(doc, "fh-act-brakes", f.brakes || s.brakes_latched);

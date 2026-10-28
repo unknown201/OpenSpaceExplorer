@@ -35,7 +35,6 @@ pub mod ksc3d;
 #[cfg(target_arch = "wasm32")]
 pub mod menu3d;
 pub mod missions;
-#[cfg(target_arch = "wasm32")]
 pub mod navball;
 pub mod ocean_fft;
 pub mod orientation;
@@ -198,7 +197,6 @@ struct App {
     /// The flight view (the vessel in 3D near its body).
     #[cfg(target_arch = "wasm32")]
     flight3d: flight3d::FlightView,
-    #[cfg(target_arch = "wasm32")]
     navball: navball::Navball,
     /// The vessel the player is flying (launched from the pad), the craft it was built from, and whether
     /// the map is shown instead of the flight view (M).
@@ -596,7 +594,6 @@ pub fn start() -> Result<(), JsValue> {
         vab_dragged: false,
         #[cfg(target_arch = "wasm32")]
         flight3d: flight3d::FlightView::new(),
-        #[cfg(target_arch = "wasm32")]
         navball: navball::Navball::new(),
         flying: None,
         flight_craft: None,
@@ -6978,22 +6975,72 @@ impl App {
     /// Where the vessel points now as pitch above the horizon and compass heading, from the flight view's
     /// navball frame (None before the first flight frame).
     fn facing_pitch_heading(&self) -> Option<(f64, f64)> {
-        #[cfg(target_arch = "wasm32")]
-        {
-            let nav = self.flight3d.nav?;
-            let f = nav.forward;
-            let pitch = f.dot(nav.up).clamp(-1.0, 1.0).asin().to_degrees();
-            // Straight up the heading is noise; take north, so D (yaw right) leans the rocket east as
-            // the original's pad orientation does for a gravity turn.
-            let heading = if pitch > 89.5 {
-                0.0
-            } else {
-                f.dot(nav.east).atan2(f.dot(nav.north)).to_degrees()
-            };
-            Some((pitch, heading.rem_euclid(360.0)))
+        let nav = self.current_nav()?;
+        let f = nav.forward;
+        let pitch = f.dot(nav.up).clamp(-1.0, 1.0).asin().to_degrees();
+        let heading = if pitch.abs() > 89.5 {
+            0.0
+        } else {
+            f.dot(nav.east).atan2(f.dot(nav.north)).to_degrees()
+        };
+        Some((pitch, heading.rem_euclid(360.0)))
+    }
+
+    fn current_nav(&self) -> Option<navball::NavFrame> {
+        let scene = self.scene.as_ref()?;
+        let v = scene.vessel(self.flying?)?;
+        let f = v.flight.as_ref()?;
+        let now = now_ms();
+        let ut = self.time.ut_at(now);
+        let rb = v.reference_body as usize;
+        let body = scene.bodies.get(rb)?;
+        let g = |v: ose_math::DVec3| glam::DVec3::new(v.x, v.y, v.z);
+        let r = g(scene.vessel_position(v, ut) - scene.position(rb, ut));
+        let orbit = scene::orbit_from(body.mu, &v.orbit);
+        let (_, velocity) = orbit.state_at(ut);
+        let (facing, top) = scene
+            .vessel_attitude(v.id, now)
+            .unwrap_or((g(f.facing), g(f.roll_ref)));
+        let omega = scene.spin_omega.get(rb).copied().unwrap_or(0.0);
+        let mut nav = navball::NavFrame::new(r, g(velocity), facing, top, omega, self.speed_orbit);
+        nav.target = self.target_dir().map(g).map(|d| d.normalize_or_zero());
+        nav.maneuver = self
+            .node
+            .as_ref()
+            .filter(|n| n.vessel == v.id)
+            .and_then(|n| {
+                let pro = g(velocity).normalize_or_zero();
+                let normal = r.cross(pro).normalize_or_zero();
+                let d =
+                    pro * n.prograde_mps + normal * n.normal_mps + normal.cross(pro) * n.radial_mps;
+                (d.length() > 0.01).then(|| d.normalize_or_zero())
+            });
+        Some(nav)
+    }
+
+    fn draw_navball(&mut self) {
+        let Some(nav) = self.current_nav() else {
+            return;
+        };
+        let Some(canvas) = self
+            .doc
+            .get_element_by_id("fh-navball")
+            .and_then(|e| e.dyn_into::<HtmlCanvasElement>().ok())
+        else {
+            return;
+        };
+        canvas
+            .set_attribute(
+                "data-ose-forward",
+                &format!(
+                    "{:.6},{:.6},{:.6}",
+                    nav.forward.x, nav.forward.y, nav.forward.z
+                ),
+            )
+            .ok();
+        if self.navball.draw(&canvas, &nav) {
+            canvas.set_attribute("data-ose-navball", "drawn").ok();
         }
-        #[cfg(not(target_arch = "wasm32"))]
-        None
     }
 
     /// T: SAS off (the craft keeps turning as it was, keys apply torque) or back on, holding where it points.
@@ -7212,29 +7259,15 @@ impl App {
             self.controls_dirty = true;
         }
         let free = matches!(self.attitude, ose_net::AttitudeMode::Free);
-        if (pitch_in != 0.0 || yaw_in != 0.0) && !free {
-            if let Some(f) = self
-                .scene
-                .as_ref()
-                .and_then(|s| s.vessel(vessel))
-                .and_then(|v| v.flight.as_ref())
-            {
-                let target = match self.attitude {
-                    ose_net::AttitudeMode::Fixed(d) => d,
-                    _ => f.facing,
-                };
-                self.attitude = ose_net::AttitudeMode::Fixed(input::steer_target(
-                    f.facing,
-                    f.roll_ref,
-                    target,
-                    pitch_in * scale,
-                    yaw_in * scale,
-                    dt,
-                ));
-                self.controls_dirty = true;
+        if !free && (pitch_in != 0.0 || yaw_in != 0.0) {
+            if let Some(f) = self.scene.as_ref().and_then(|s| s.vessel(vessel)).and_then(|v| v.flight.as_ref()) {
+                if !matches!(self.attitude, ose_net::AttitudeMode::Fixed(_)) {
+                    self.attitude = ose_net::AttitudeMode::Fixed(f.facing);
+                    self.controls_dirty = true;
+                }
             }
         }
-        // Twenty updates a second while held; input edges flush the newest target immediately.
+        // Throttle changes are coalesced at 20 Hz; rotation intents below send on key edges.
         if self
             .control_cadence
             .due(now, self.controls_dirty, [pitch_in, yaw_in, thr_in])
@@ -7250,13 +7283,13 @@ impl App {
             .map(|f| f.situation == ose_net::FlightSituation::Landed)
             .unwrap_or(false);
         let roll = (self.keys.rotation().z * scale * input::ROTATION_SCALE) as f32;
-        // SAS off: the keys turn the craft directly (pitch toward its top, yaw to its right, roll clockwise).
+        // Hold manual axis commands server-side; SAS blends them using the reference override rules.
         let s = (scale * input::ROTATION_SCALE) as f32;
-        let rotation = if free {
-            (pitch_in as f32 * s, yaw_in as f32 * s, roll)
-        } else {
-            (0.0, 0.0, 0.0)
-        };
+        let rotation = (
+            pitch_in as f32 * s,
+            yaw_in as f32 * s,
+            if free { roll } else { 0.0 },
+        );
         if rotation != self.rotation_sent {
             self.rotation_sent = rotation;
             if let Some(ws) = &self.ws {
@@ -7463,6 +7496,10 @@ impl App {
     /// A SAS mode or action bar button.
     fn hud_button(&mut self, id: &str) {
         let Some(vessel) = self.flying else { return };
+        if id == "fh-sas-toggle" {
+            self.toggle_sas();
+            return;
+        }
         if id == "fh-sas-stability" {
             self.sas_hold();
             return;
@@ -8958,6 +8995,7 @@ impl App {
         self.update_flight_instruments();
         self.toasts.watch(&self.doc, "fh-note", "alert");
         self.flight_keys_tick(now);
+        self.draw_navball();
         // FPS counter, refreshed twice a second while shown.
         self.fps_frames += 1;
         if now - self.fps_since_ms >= 500.0 {
@@ -9307,16 +9345,6 @@ impl App {
                 .ok();
                 hud.set_attribute("data-ose-effect-assets", &gpu.effect_assets())
                     .ok();
-            }
-            if let (Some(nav), Some(canvas)) = (
-                self.flight3d.nav,
-                self.doc
-                    .get_element_by_id("fh-navball")
-                    .and_then(|e| e.dyn_into::<HtmlCanvasElement>().ok()),
-            ) {
-                if self.navball.draw(&canvas, &nav) {
-                    canvas.set_attribute("data-ose-navball", "drawn").ok();
-                }
             }
         }
         drawn

@@ -320,12 +320,8 @@ fn apply_warp(s: &Shared) -> (u32, Option<u64>) {
     drop(reqs);
     let requested = warp;
     let mut u = s.universe.lock().expect("sim lock");
-    let warp = if u.has_powered() {
-        warp.min(ose_sim::flight::MAX_PHYSICS_WARP)
-    } else {
-        warp
-    };
     u.set_warp(warp);
+    let warp = u.warp();
     // only another player's lower request counts as "holding warp down"; the physics cap does not
     (warp, if max > requested { holder } else { None })
 }
@@ -780,7 +776,18 @@ fn flight_readout(
     body_e: bevy_ecs::entity::Entity,
     defs: &[ose_data::PartDef],
 ) -> Option<ose_net::FlightReadout> {
-    let p = u.powered(e)?;
+    // Rails still carry a real craft pose; report it at the current orbital position.
+    let mut dormant;
+    let p = if let Some(p) = u.powered(e) {
+        p
+    } else {
+        dormant = u.dormant(e)?.clone();
+        let top = ose_sim::flight::vessel_top(&dormant);
+        let (_, _, orbit) = u.vessel(e)?;
+        (dormant.r, dormant.v) = orbit.state_at(u.ut());
+        ose_sim::flight::set_vessel_top(&mut dormant, top);
+        &dormant
+    };
     let body = u.world.get::<ose_sim::bodies::Body>(body_e)?;
     let atmo = u.atmosphere(body_e);
     let r_mag = p.r.length();
