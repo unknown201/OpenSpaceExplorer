@@ -166,6 +166,55 @@ pub fn exposed_proportions(boxes: &[(DVec3, DVec3)], travel: DVec3, mach: f64) -
     exposed
 }
 
+/// Conservative box-outline occlusion for one point's local flow, O(parts).
+/// Unlike the uniform-flow sweep, each rotating part may see a different upstream direction.
+pub fn exposed_proportion_at(
+    boxes: &[(DVec3, DVec3)],
+    target: usize,
+    travel: DVec3,
+    mach: f64,
+) -> f64 {
+    if mach < 1.0 || !mach.is_finite() || travel.length_squared() == 0.0 {
+        return 0.0;
+    }
+    let d = travel.normalized();
+    let reference = if d.x.abs() < 0.9 {
+        DVec3::new(1.0, 0.0, 0.0)
+    } else {
+        DVec3::new(0.0, 1.0, 0.0)
+    };
+    let e1 = d.cross(reference).normalized();
+    let e2 = d.cross(e1);
+    let extent = |axis: DVec3, half: DVec3| {
+        axis.x.abs() * half.x + axis.y.abs() * half.y + axis.z.abs() * half.z
+    };
+    let shape = |(c, h): (DVec3, DVec3)| {
+        let u = c.dot(e1);
+        let v = c.dot(e2);
+        let a = extent(e1, h);
+        let b = extent(e2, h);
+        ([u - a, v - b], [u + a, v + b], c.dot(d) + extent(d, h))
+    };
+    let (lo, hi, front) = shape(boxes[target]);
+    let area = (hi[0] - lo[0]) * (hi[1] - lo[1]);
+    if area <= 0.0 {
+        return 1.0;
+    }
+    boxes
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != target)
+        .fold(1.0_f64, |exposed, (i, &b)| {
+            let (blo, bhi, bfront) = shape(b);
+            if bfront < front || (bfront == front && i > target) {
+                return exposed;
+            }
+            let width = (hi[0].min(bhi[0]) - lo[0].max(blo[0])).max(0.0);
+            let height = (hi[1].min(bhi[1]) - lo[1].max(blo[1])).max(0.0);
+            exposed.min(1.0 - (width * height / area).min(1.0))
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1354,22 +1354,16 @@ impl Universe {
                             v_air.length(),
                             step_dt,
                         );
-                        let frame = flight::vessel_basis(&p);
-                        let forces = st.aerodynamics_local(
-                            p.stage,
-                            structure::Airflow::at(&p, &body, Some(a)),
-                        );
+                        let flow = structure::Airflow::at(&p, &body, Some(a));
+                        let forces = st.aerodynamics_local(p.stage, flow);
                         p.aero_drag_kn = Some(forces.drag_kn);
                         let cda = forces.cda_m2;
                         lift = forces.lift_kn;
                         torque = forces.torque_knm;
-                        surfaces = st.control_authority(v_air, a.density(alt), mach);
+                        surfaces = st.control_authority_local(flow);
                         if heat.enabled {
-                            burned = st.update_heat(
-                                frame,
-                                v_air,
-                                a.density(alt),
-                                mach,
+                            burned = st.update_heat_in_flow(
+                                flow,
                                 a.temperature_k.evaluate(alt),
                                 thermal::conductivity(alt, a.depth_m),
                                 &heat,

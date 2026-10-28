@@ -121,6 +121,7 @@ pub struct Structure {
     pub part_cda_m2: Vec<f64>,
     curves: DragCurves,
     last_air_speed_mps: f64,
+    last_airflow: Option<Airflow>,
     /// Tanks and the flow graph engines draw through.
     pub net: FlowNet,
     /// Each part's engine mixture (`None` for parts without an engine).
@@ -497,6 +498,7 @@ impl Structure {
             part_cda_m2: vec![0.0; n],
             curves: DragCurves::default(),
             last_air_speed_mps: 0.0,
+            last_airflow: None,
             net: FlowNet::build(craft, defs, resources),
             engine_mixture,
             engine_nozzles: (0..n)
@@ -1009,13 +1011,22 @@ impl Structure {
             let (range, share) = self.ctrl[i];
             if let Some((l, curves)) = &self.lift_defs[i] {
                 if range > 0.0 && share > 0.0 && !self.shielded[i] {
-                    let q = 0.5 * env.density * self.last_air_speed_mps.powi(2);
+                    let (speed, mach) = self
+                        .last_airflow
+                        .map(|flow| {
+                            let speed = self
+                                .air_at_offset(i, self.control_offset(i), flow, centre)
+                                .length();
+                            (speed, flow.mach(speed))
+                        })
+                        .unwrap_or((self.last_air_speed_mps, env.mach));
+                    let q = 0.5 * env.density * speed.powi(2);
                     let cap = (q
                         * aero::settings().lift_multiplier
                         * l.deflection_lift_coeff
                         * share
                         * curves.lift.evaluate(range.sin())
-                        * curves.lift_mach.evaluate(env.mach))
+                        * curves.lift_mach.evaluate(mach))
                     .max(0.0);
                     let axis = aero::rotate(self.part_rot[i], l.axis);
                     let force = DVec3::new(axis.x, axis.y, -axis.z) * cap;
@@ -1708,25 +1719,65 @@ impl Structure {
         settings: &thermal::HeatSettings,
         dt: f64,
     ) -> Vec<usize> {
+        self.update_heat_in_flow(
+            Airflow::uniform(frame, v_air, density, mach),
+            ambient_k,
+            conductivity,
+            settings,
+            dt,
+        )
+    }
+
+    pub fn update_heat_in_flow(
+        &mut self,
+        flow: Airflow,
+        ambient_k: f64,
+        conductivity: f64,
+        settings: &thermal::HeatSettings,
+        dt: f64,
+    ) -> Vec<usize> {
         let present: Vec<usize> = (0..self.rigid.len())
             .filter(|&i| self.rigid.present[i])
             .collect();
-        let (bx, by, bz) = frame;
-        let speed = v_air.length();
-        let d = if speed > 0.0 {
-            DVec3::new(v_air.dot(bx), v_air.dot(by), v_air.dot(bz)) * (1.0 / speed)
+        let (bx, by, bz) = flow.frame;
+        let centre = self.mass_properties().centre_m;
+        let boxes: Vec<(DVec3, DVec3)> = present.iter().map(|&i| self.part_box(i)).collect();
+        let local =
+            |velocity: DVec3| DVec3::new(velocity.dot(bx), velocity.dot(by), velocity.dot(bz));
+        let exposed = if flow.angular_velocity.length_squared() == 0.0
+            && flow.velocity.length_squared() > 0.0
+        {
+            thermal::exposed_proportions(
+                &boxes,
+                local(flow.velocity).normalized(),
+                flow.mach(flow.velocity.length()),
+            )
         } else {
-            DVec3::ZERO
-        };
-        let du = DVec3::new(d.x, d.y, -d.z);
-        let exposed = if speed > 0.0 {
-            let boxes: Vec<(DVec3, DVec3)> = present.iter().map(|&i| self.part_box(i)).collect();
-            thermal::exposed_proportions(&boxes, d, mach)
-        } else {
-            vec![0.0; present.len()]
+            present
+                .iter()
+                .enumerate()
+                .map(|(k, &i)| {
+                    let velocity = local(self.part_air_velocity(i, flow, centre));
+                    thermal::exposed_proportion_at(
+                        &boxes,
+                        k,
+                        velocity,
+                        flow.mach(velocity.length()),
+                    )
+                })
+                .collect()
         };
         let mut burned = Vec::new();
         for (k, &i) in present.iter().enumerate() {
+            let velocity = local(self.part_air_velocity(i, flow, centre));
+            let speed = velocity.length();
+            let mach = flow.mach(speed);
+            let d = if speed > 0.0 {
+                velocity * (1.0 / speed)
+            } else {
+                DVec3::ZERO
+            };
+            let du = DVec3::new(d.x, d.y, -d.z);
             let local = aero::rotate_inverse(self.part_rot[i], du);
             let (airstream, cd, wetted) = match &self.faces[i] {
                 Some(f) => {
@@ -1740,7 +1791,7 @@ impl Structure {
             };
             // under a fairing or in a closed bay the airflow does not reach it
             let reach = if self.shielded[i] { 0.0 } else { exposed[k] };
-            let mut flux = thermal::reentry_flux(mach, reach, airstream, density, cd);
+            let mut flux = thermal::reentry_flux(mach, reach, airstream, flow.density, cd);
             // a heat shield above its ablation temperature turns the heat away while it faces the flow
             // (`Module_Heatshield.ThermalUpdate`) and burns ablator for the heat it takes
             // (`PartComponentModule_Heatshield`)
@@ -2555,11 +2606,18 @@ impl Structure {
     /// surface's extra lift at its deflection range (dynamic pressure × 0.036 × lift coefficient × moving share
     /// × the lift curve at the range × its Mach curve) at its distance from the centre of mass.
     pub fn control_authority(&self, v_air: DVec3, rho: f64, mach: f64) -> f64 {
-        let speed = v_air.length();
-        if speed <= 0.0 || rho <= 0.0 {
+        self.control_authority_local(Airflow::uniform(
+            basis(DVec3::new(0.0, 1.0, 0.0)),
+            v_air,
+            rho,
+            mach,
+        ))
+    }
+
+    pub fn control_authority_local(&self, flow: Airflow) -> f64 {
+        if flow.density <= 0.0 {
             return 0.0;
         }
-        let q = 0.5 * rho * speed * speed;
         let c = self.mass_properties().centre_m;
         let mut total = 0.0;
         for i in 0..self.rigid.len() {
@@ -2570,6 +2628,11 @@ impl Structure {
             if range <= 0.0 || share <= 0.0 || !self.rigid.present[i] || self.shielded[i] {
                 continue;
             }
+            let speed = self
+                .air_at_offset(i, self.control_offset(i), flow, c)
+                .length();
+            let q = 0.5 * flow.density * speed * speed;
+            let mach = flow.mach(speed);
             let lift = q
                 * aero::settings().lift_multiplier
                 * l.deflection_lift_coeff
@@ -2600,6 +2663,7 @@ impl Structure {
             self.trim_to(stage);
         }
         self.last_air_speed_mps = flow.velocity.length();
+        self.last_airflow = Some(flow);
         self.part_cda_m2.fill(0.0);
         if flow.density <= 0.0 {
             return 0.0;
@@ -3020,6 +3084,114 @@ mod tests {
         s.ctrl[wing] = (0.2, 1.0);
         s.part_rot[wing] = [0.0, 0.0, 0.0, 1.0];
         (s, flying(DVec3::new(0.0, 1.0, 0.0)), wing)
+    }
+
+    #[test]
+    fn spinning_surfaces_share_local_flow_with_control_authority_and_wing_effects() {
+        let (mut s, mut p, wing) = airflow_fixture();
+        s.pressure_offsets_m[wing] = DVec3::ZERO;
+        s.control_pressure_offsets_m[wing] = DVec3::ZERO;
+        let flow = Airflow {
+            frame: crate::flight::vessel_basis(&p),
+            velocity: DVec3::ZERO,
+            angular_velocity: DVec3::new(3.0, 5.0, 7.0),
+            density: 1.0,
+            speed_of_sound: 100.0,
+        };
+        let velocity = s.air_at_offset(
+            wing,
+            s.lift_offset(wing),
+            flow,
+            s.mass_properties().centre_m,
+        );
+        let travel = velocity.normalized();
+        let expected = s.lifting_force(
+            wing,
+            flow.frame,
+            travel,
+            0.5 * velocity.length_squared(),
+            flow.mach(velocity.length()),
+        );
+        assert!(expected.length() > 0.01);
+        let forces = s.aerodynamics_local(0, flow);
+        assert!((forces.lift_kn - expected).length() < 1e-10);
+        let fx = s.lifting_fx_local(flow);
+        let perpendicular = expected - travel * expected.dot(travel);
+        assert!((fx[0].2 as f64 - perpendicular.length()).abs() < 1e-4);
+        assert!(s.control_authority_local(flow) > 0.0);
+        s.wheel_axes_knm.fill(DVec3::ZERO);
+        s.rcs_defs.fill(None);
+        p.ignited = false;
+        let env = crate::flight::EngineEnvironment {
+            density: 1.0,
+            ..Default::default()
+        };
+        let mut engine = s.propulsion(&p, env, 0.02);
+        s.configure_actuators(&p, env, &mut engine);
+        assert!(
+            engine
+                .actuators
+                .unwrap()
+                .iter()
+                .any(|a| a.force_kn.length() > 0.0),
+            "a stationary mass centre must not disable a spinning control surface"
+        );
+        s.shielded[wing] = true;
+        assert!(s.lifting_fx_local(flow).is_empty());
+        assert_eq!(s.control_authority_local(flow), 0.0);
+    }
+
+    #[test]
+    fn local_heating_uses_authored_point_velocity_and_shielding() {
+        let (mut s, p, wing) = airflow_fixture();
+        s.rigid.present.fill(false);
+        s.rigid.present[wing] = true;
+        s.net.present.fill(false);
+        s.net.present[wing] = true;
+        s.lift_defs[wing].as_mut().unwrap().0.pressure_offset_m = DVec3::ZERO;
+        let offset =
+            s.mass_properties().centre_m - s.rigid.rest_position(wing) + DVec3::new(2.0, 0.0, 0.0);
+        s.pressure_offsets_m[wing] = crate::rigid::to_vessel(offset);
+        s.faces[wing] = Some(Faces {
+            area: [1.0; 6],
+            drag: [1.0; 6],
+        });
+        let constant = ose_data::Curve {
+            keys: vec![ose_data::CurveKey {
+                v: 1.0,
+                ..Default::default()
+            }],
+        };
+        s.curves = DragCurves {
+            tip: constant.clone(),
+            tail: constant.clone(),
+            surface: constant.clone(),
+            multiplier: constant.clone(),
+            cd: constant.clone(),
+            cd_power: constant.clone(),
+            pseudo_reynolds: constant,
+        };
+        let flow = Airflow {
+            frame: crate::flight::vessel_basis(&p),
+            velocity: DVec3::ZERO,
+            angular_velocity: DVec3::new(0.0, 0.0, 10.0),
+            density: 1.0,
+            speed_of_sound: 1.0,
+        };
+        s.update_heat_in_flow(flow, 288.0, 0.0, &thermal::HeatSettings::default(), 0.02);
+        let expected = thermal::reentry_flux(20.0, 1.0, 1.0, 1.0, 1.0);
+        assert!(expected > 0.0);
+        assert!((s.reentry_flux_kw[wing] - expected).abs() < 1e-8);
+        let rolled = Airflow {
+            frame: (flow.frame.2, flow.frame.1, -flow.frame.0),
+            angular_velocity: flow.frame.0 * -10.0,
+            ..flow
+        };
+        s.update_heat_in_flow(rolled, 288.0, 0.0, &thermal::HeatSettings::default(), 0.02);
+        assert!((s.reentry_flux_kw[wing] - expected).abs() < 1e-8);
+        s.shielded[wing] = true;
+        s.update_heat_in_flow(flow, 288.0, 0.0, &thermal::HeatSettings::default(), 0.02);
+        assert_eq!(s.reentry_flux_kw[wing], 0.0);
     }
 
     #[test]

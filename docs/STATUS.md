@@ -4,6 +4,8 @@ Updated 2026-10-27.
 
 ## What works
 
+- Local heating and control authority now use atmosphere-relative point velocity at authored drag/control offsets, including tumble and roll. Zero bulk airspeed no longer disables a spinning control surface or its local heating. Rotating thermal occlusion remains a conservative box approximation. Two new analytical regressions pass; see the [known physics gaps and acceptance criteria](PHYSICS-GAPS.md).
+
 - Resolved engine thrust now reaches joints in the same tick as flight motion. A final partial burn delivers its full budgeted structural impulse and leaves no engine-load tail on a subsequent dry step. All 184 simulation tests pass; authored physical engine response curves remain open.
 
 - Joint stiffness, damping and rigid/ordinary break multipliers now load from the installed reference settings. The nine procedural lifting-surface attachment definitions retain full-break-strength flags: stock aircraft wing connections no longer receive the ordinary size-2 divisor of three. Analytical and real-stock checks cover the correction; individual multi-joint geometry remains approximate.

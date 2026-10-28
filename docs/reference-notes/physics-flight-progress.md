@@ -264,3 +264,10 @@ These are source/data comparisons, analytical fixtures and automated gameplay re
 ## Integration follow-up, 2026-10-28
 
 The legacy checkout's resource-resolved RCS work is already present here with authored nozzle and module controls. Its remaining mass-timing fix is retained: engine and actuator impulses use the same start-of-step mass. The final-partial-fuel analytical RCS regression now checks that shared mass while independently verifying delivered force and fuel consumption.
+
+
+## Integration continuation: local heating and control authority, 2026-10-28
+
+Current main already contained the legacy continuation's local drag/lift, authored nozzles, pressure/lift offsets, surface options and wing-effect flow. Integration retains those newer implementations and ports only the remaining local heating/control work. Heating evaluates local velocity and Mach at the authored drag point; bounded control channels and the authority readout evaluate their authored control point. The current wet mass centre and atmosphere-relative angular velocity drive both. Rotating thermal occlusion uses a conservative per-target projected-box query, quadratic overall; uniform flow retains the existing box sweep.
+
+Two added simulation regressions cover local heating at an authored point with zero bulk speed, roll equivalence, shielding, and agreement between spinning-surface force, wing FX, control authority and allocated control channels. All 186 simulation tests pass. The detailed known limitations and acceptance criteria are tracked in [PHYSICS-GAPS.md](../PHYSICS-GAPS.md). Existing newer force geometry, RCS/EVA controls and joint settings are preserved.
