@@ -228,7 +228,7 @@ The importer now retains `MultiJointFullBreakStrength` on all attachment nodes. 
 
 The multibody solver still represents each connection with one aggregate link. Splitting equal capacity across N source joints and summing cancels N; this change does not reproduce the source's separate off-axis joint anchors or unequal individual loads. Translational constraint stiffness, exact multi-joint geometry, launch-clamp exceptions and all collider/inertia details remain open. The existing zero-authored-strength convention remains unchanged.
 
-Two simulation regressions independently exercise distinct stack/surface/rigid multipliers and verify real stock aircraft wing limits. Importer coverage pins the nine authored nodes and legacy defaults. Two exporter tests check source identity, separate multipliers and invalid/missing settings. All 986 regenerated node flags match the committed definitions. Strict workspace Clippy and the browser build pass; the complete workspace/Mun run is in progress.
+Two simulation regressions independently exercise distinct stack/surface/rigid multipliers and verify real stock aircraft wing limits. Importer coverage pins the nine authored nodes and legacy defaults. Two exporter tests check source identity, separate multipliers and invalid/missing settings. All 986 regenerated node flags match the committed definitions. Strict workspace Clippy and the browser build pass. The full workspace/Mun run subsequently passed (502.91 s for the fresh-server journey).
 
 ## Completed increment: same-tick resolved structural thrust
 
@@ -245,7 +245,7 @@ Legacy stage-only callers without resolved per-engine delivery retain their resp
 3. Replace sampled corner paths with continuous hull contacts; add nearby vessel/debris pair contacts and equal-and-opposite impulses. Import contact materials and sliding damage/heat.
 4. Import displacement and wheel-collider data, suspension tuning and target positions; add load-dependent tyre grip and wheel slip. Extend water behavior, then docking attraction/capture and EVA ladder/hatch contact.
 
-The next actuator acceptance cases should compare the reference's lever/precision and axis-enabling rules for directional nozzle selection. Retain the mixed-propellant, empty/partial-fuel, shared-budget, battery and per-mount delivery cases. Retain the EVA shared-pack, braking and migration acceptance cases while adding character/camera/water behavior.
+The next actuator acceptance cases should compare the reference's lever/precision nozzle selection. Per-module axis-enabling cases are now covered. Precision state currently remains in client input handling and must reach simulation explicitly: source `useLever` scales by reciprocal perpendicular nozzle lever distance above one metre, otherwise `precisionFactor` supplies a fixed multiplier. Retain the mixed-propellant, empty/partial-fuel, shared-budget, battery and per-mount delivery cases. Retain the EVA shared-pack, braking and migration acceptance cases while adding character/camera/water behavior.
 
 The next contact acceptance cases should cover continuous hull contacts that prevent tunnelling between vertices, equal-and-opposite vessel/debris impulses, and stable support/traction over uneven terrain. Retain the existing slope, normal-speed, sliding-friction, angular-impulse and joint-reaction regressions.
 
@@ -253,25 +253,10 @@ Per-engine mode switching, articulated nozzle transforms, thrust response curves
 
 ## Validation, 2026-10-28
 
-- RCS command switches: `cargo test --workspace --exclude ose-bot` passes with 181 simulation tests, 18 importer tests and WebSocket coverage. Browser build passes. Installed-data regeneration matches all five modules. Strict workspace Clippy, formatting and whitespace checks pass. The full Mun journey was last run on the aerodynamic milestone.
-
-
-- Mounted-rotation follow-up: `cargo test --workspace --exclude ose-bot` passes with 178 simulation tests, 18 data tests, 17 importer tests and the WebSocket suite (19 passed/one existing ignored). Strict workspace Clippy, browser build, formatting and whitespace checks pass. The full Mun journey was last run on the aerodynamic milestone.
-
-
-- RCS activation follow-up: strict workspace Clippy passes; focused RCS tests pass (10 simulation, two importer). `cargo test --workspace --exclude ose-bot` passes (177 simulation, 17 importer, WebSocket suite 19 passed/one existing ignored). The browser check passes and all five RCS module defaults match a fresh installed-data regeneration. The full Mun journey passed on the preceding aerodynamic milestone.
-
-
-- Aerodynamic milestone: full `cargo test --workspace` passed, including the fresh-server Mun journey (504.80 s), 174 simulation tests and 16 importer tests. The settings-loader follow-up adds two simulation tests (176 total); focused simulation/importer tests pass. Strict workspace Clippy and the browser-client check pass. The final `cargo test --workspace --exclude ose-bot` run also passes with all 176 simulation tests, 16 importer tests and the WebSocket suite (19 passed, one existing ignored test).
-- Both aerodynamic-exporter tests pass; all 400 regenerated aerodynamic definitions match the committed catalog within 1e-14.
-
-
-- `cargo test --workspace`: passed on the authored-mass-centre follow-up, including the fresh-server Mun journey (508.60 s), server WebSocket tests and 162 simulation regressions. The existing ignored test remains ignored.
-- EVA follow-up: `cargo test --workspace --exclude ose-bot` passed, including 170 simulation tests, 14 importer tests and the server WebSocket suite. The existing ignored test remains ignored. The full Mun journey was last run on the mass-centre milestone; the bot was compiled/linted but that long journey was not repeated for this EVA-only continuation.
-- `cargo clippy --workspace --all-targets -- -D warnings`: passed.
-- `cargo check -p ose-client --target wasm32-unknown-unknown`: passed.
-- `python -m unittest discover -s tools/tests -p test_export_physics_geometry.py`: 3 passed.
-- Real installed-data regeneration: 41 engine modes and 22 RCS nozzle transforms reproduce the committed geometry; maximum JSON round-trip difference is below 5e-16. All 400 mass offsets also match the original JSON. Jetpack curve/tangents, rotation settings, mass and fuel capacity match the installed `eva_kerbal` definition in both committed and regenerated catalogs. The existing malformed `Tutorial1.3_Save.json` is warned and skipped by the importer; this does not affect part geometry.
-- `cargo fmt --all --check` and `git diff --check`: passed.
+- Joint/RCS/shared-layout milestone: `cargo test --workspace` passed, including the fresh-server Mun journey (502.91 s), 183 simulation tests, 19 importer tests, 107 client tests and the WebSocket suite (19 passed, one existing ignored test).
+- Latest structural-thrust follow-up: all 184 simulation tests pass. `cargo test --workspace --exclude ose-bot` passed, including the latest server build, 19 importer tests, 107 client tests and the WebSocket suite (19 passed, one existing ignored test). The long Mun journey above was run before this structural-only follow-up.
+- Latest `cargo clippy --workspace --all-targets -- -D warnings`, `cargo check -p ose-client --target wasm32-unknown-unknown`, `cargo fmt --all --check` and `git diff --check`: passed.
+- Both joint-exporter tests pass. The previously validated aerodynamic exporter (two tests) and geometry exporter (three tests) are unchanged.
+- Installed-data regeneration matches all five RCS control definitions and all 986 attachment-node full-strength flags. All 400 aerodynamic definitions were previously regenerated within 1e-14; all 41 engine modes/63 force points and 22 RCS nozzles retain their validated geometry. The settings exports share the loaded reference's version and SHA-256. The existing malformed `Tutorial1.3_Save.json` is warned and skipped by the importer.
 
 These are source/data comparisons, analytical fixtures and automated gameplay regressions. They do not certify matched flight/contact traces against the KSP2 executable. The remaining priorities above still prevent a complete physics parity claim.
