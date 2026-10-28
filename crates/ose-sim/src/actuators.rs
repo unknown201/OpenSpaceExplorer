@@ -1,6 +1,11 @@
 //! Bounded part actuators in craft axes. Allocation retains the forces/torques for joint loading.
 use ose_math::DVec3;
 
+/// Stock Data_ReactionWheel.TorqueResponseSpeed = 30; Unity Vector3.Lerp clamps t.
+pub fn wheel_response(previous: DVec3, desired: DVec3, dt: f64) -> DVec3 {
+    previous + (desired - previous) * (30.0 * dt).clamp(0.0, 1.0)
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Actuator {
     pub part: usize,
@@ -89,6 +94,17 @@ pub fn allocate(channels: &[Actuator], request: DVec3) -> Allocation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn wheel_response_matches_reference_lerp_on_press_release_reverse_and_warp() {
+        let target = DVec3::new(2.0, -3.0, 4.0);
+        let first = wheel_response(DVec3::ZERO, target, 0.02);
+        assert!((first - target * 0.6).length() < 1e-12);
+        let release = wheel_response(first, DVec3::ZERO, 0.02);
+        assert!((release - target * 0.24).length() < 1e-12);
+        let reverse = wheel_response(release, -target, 0.02);
+        assert!((reverse - target * (-0.504)).length() < 1e-12);
+        assert_eq!(wheel_response(reverse, target, 0.08), target);
+    }
     #[test]
     fn gimbal_cannot_roll_and_shared_channels_respect_the_force_cone() {
         let channels =

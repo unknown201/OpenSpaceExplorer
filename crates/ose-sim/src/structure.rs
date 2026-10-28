@@ -114,6 +114,7 @@ pub struct Structure {
     resolved_actuators: Option<Vec<crate::actuators::Actuator>>,
     /// Last delivered gimbal direction in each engine's exported model frame.
     pub engine_gimbals: Vec<(u16, DVec3)>,
+    wheel_actuation_knm: Vec<DVec3>,
     /// Inertial force with a craft-frame application offset; consumed once by `apply`.
     pub(crate) surface_loads: Vec<PartForce>,
     pub suspension_compression_m: Vec<f64>,
@@ -420,6 +421,7 @@ impl Structure {
                 .collect(),
             resolved_actuators: None,
             engine_gimbals: Vec::new(),
+            wheel_actuation_knm: vec![DVec3::ZERO; n],
             surface_loads: Vec::new(),
             suspension_compression_m: vec![0.0; n],
             engine_isp: (0..n)
@@ -791,7 +793,13 @@ impl Structure {
                 if cap > 0.0 {
                     channels.push(Actuator {
                         part: i,
-                        torque_knm: axes[j] * cap,
+                        // Module_ReactionWheel applies torque in the vessel control frame,
+                        // regardless of the mounted part's orientation.
+                        torque_knm: [
+                            DVec3::new(1.0, 0.0, 0.0),
+                            DVec3::new(0.0, 1.0, 0.0),
+                            DVec3::new(0.0, 0.0, 1.0),
+                        ][j] * cap,
                         force_kn: DVec3::ZERO,
                         offset_m: DVec3::ZERO,
                         group: i * 8 + j,
@@ -1015,6 +1023,12 @@ impl Structure {
 
     /// The wheels out under the craft, its drive direction and wheelbase, into the flight state's `drive`.
     fn sync_drive(&self, p: &mut Powered) {
+        // Old saves can retain an empty craft after its last part was detached/recovered.
+        // Such a vessel has no root transform or wheel drive.
+        let Some(root_rotation) = self.part_rot.get(self.root).copied() else {
+            p.drive = Default::default();
+            return;
+        };
         let wheels: Vec<usize> = (0..self.rigid.len())
             .filter(|&i| {
                 self.rigid.present[i]
@@ -1038,7 +1052,7 @@ impl Structure {
             })
             .collect();
         // the root part points the way it drives (a probe core's up), laid flat; craft +Z otherwise
-        let up = aero::rotate(self.part_rot[self.root], DVec3::new(0.0, 1.0, 0.0));
+        let up = aero::rotate(root_rotation, DVec3::new(0.0, 1.0, 0.0));
         let flat = (up.x * up.x + up.z * up.z).sqrt();
         p.drive.forward = if flat > 0.3 {
             [up.x / flat, up.z / flat]
@@ -1418,13 +1432,41 @@ impl Structure {
         }
         let mut allocation = crate::flight::plan_actuators(p, body, propulsion, dt);
         let channels = propulsion.actuators.as_ref().expect("configured actuators");
-        let mut torques = vec![DVec3::ZERO; self.rigid.len()];
-        for (a, input) in channels.iter().zip(&allocation.inputs) {
+        // Reference wheels receive the same axis commands. They do not compete for a
+        // least-squares allocation or let the first available wheel consume the request.
+        for i in 0..self.rigid.len() {
+            let cap = self.wheel_axes_knm[i];
+            let desired = if self.rigid.present[i] && p.controlled {
+                DVec3::new(
+                    cap.x * p.control_axes.x,
+                    cap.y * p.control_axes.y,
+                    cap.z * p.control_axes.z,
+                )
+            } else {
+                DVec3::ZERO
+            };
+            self.wheel_actuation_knm[i] =
+                crate::actuators::wheel_response(self.wheel_actuation_knm[i], desired, dt);
+        }
+        for (a, input) in channels.iter().zip(&mut allocation.inputs) {
             if a.force_kn.length_squared() == 0.0 && a.axial.is_none() {
-                torques[a.part] = torques[a.part] + a.torque_knm * *input;
+                let old = *input;
+                let norm = a.torque_knm.length_squared();
+                *input = if norm > 0.0 {
+                    self.wheel_actuation_knm[a.part].dot(a.torque_knm) / norm
+                } else {
+                    0.0
+                };
+                allocation.torque_knm = allocation.torque_knm + a.torque_knm * (*input - old);
             }
         }
-        let magnitudes: Vec<_> = torques.iter().map(|t| t.length()).collect();
+        let mut magnitudes = vec![0.0; self.rigid.len()];
+        for (a, input) in channels.iter().zip(&allocation.inputs) {
+            if a.force_kn.length_squared() == 0.0 && a.axial.is_none() {
+                let t = a.torque_knm * *input;
+                magnitudes[a.part] += t.x.abs() + t.y.abs() + t.z.abs();
+            }
+        }
         let delivered = self.consume_wheel_charge(p, &magnitudes, dt);
         for (a, input) in channels.iter().zip(&mut allocation.inputs) {
             if a.force_kn.length_squared() == 0.0 && a.axial.is_none() {
@@ -2644,6 +2686,29 @@ pub(crate) fn test_capsule(shield: bool) -> (Craft, Vec<PartDef>, Vec<ResourceDe
 mod tests {
     use super::*;
     use crate::flight::{FlightSpec, StageSpec};
+
+    #[test]
+    fn empty_structure_has_no_drive_root() {
+        let craft = Craft {
+            name: "empty legacy craft".into(),
+            description: String::new(),
+            parts: Vec::new(),
+            stages: Vec::new(),
+        };
+        let structure = Structure::build(&craft, &[], &[]);
+        let mut p = Powered::new(
+            FlightSpec {
+                stages: Vec::new(),
+                drag_area_m2: 0.0,
+                drag_cd: 0.0,
+            },
+            DVec3::new(700000.0, 0.0, 0.0),
+            DVec3::ZERO,
+            false,
+        );
+        structure.sync_drive(&mut p);
+        assert!(p.drive.wheels.is_empty());
+    }
 
     /// The starter rocket with three large landing legs on its tank.
     fn lander() -> (Craft, Vec<PartDef>, Vec<ResourceDef>) {
@@ -3865,7 +3930,7 @@ mod tests {
             s.net.tanks.push(crate::resources::Tank {
                 part: s.root,
                 resource: ec,
-                stored: 6.0 * dt * fraction,
+                stored: 6.0 * dt * 0.6 * fraction,
                 capacity: 10.0,
             });
             let initial = s.mass_properties();
@@ -3886,7 +3951,7 @@ mod tests {
                 .inertia
                 .apply(DVec3::new(w.dot(x), w.dot(y), w.dot(z)));
             assert!(
-                (momentum.y - 2.0 * dt * fraction).abs() < 1e-9,
+                (momentum.y - 2.0 * dt * 0.6 * fraction).abs() < 1e-9,
                 "fraction={fraction}: {momentum:?}"
             );
             assert!(ec_stored(u.structure(vessel).unwrap()) < 1e-10);
@@ -3923,6 +3988,35 @@ mod tests {
     }
 
     #[test]
+    fn powered_wheels_share_commands_instead_of_competing_for_allocation() {
+        let (mut s, mut p, other) = wheel_power_fixture();
+        s.wheel_axes_knm[other] = DVec3::new(0.0, 2.0, 0.0);
+        s.electric[other] = s.electric[s.root];
+        let ec = s.net.resource("ElectricCharge").unwrap();
+        for part in [s.root, other] {
+            s.net.tanks.push(crate::resources::Tank {
+                part,
+                resource: ec,
+                stored: 10.0,
+                capacity: 10.0,
+            });
+        }
+        p.rotation_input.z = 0.5;
+        p.wheel_scale = 1.0;
+        let mut engine = s.propulsion(&p, Default::default(), 0.02);
+        s.configure_actuators(&p, Default::default(), &mut engine);
+        s.resolve_actuator_resources(&mut p, &test_body(), &mut engine, 0.02);
+        let allocation = engine.control_allocation.unwrap();
+        assert!((allocation.torque_knm.y - 1.2).abs() < 1e-10);
+        for (a, input) in engine.actuators.unwrap().iter().zip(allocation.inputs) {
+            if a.force_kn.length_squared() == 0.0 && a.axial.is_none() {
+                assert!((input - 0.3).abs() < 1e-10);
+            }
+        }
+        assert!((ec_stored(&s) - (20.0 - 2.0 * 0.6 * 3.0 * 0.02)).abs() < 1e-10);
+    }
+
+    #[test]
     fn wheel_power_is_delivered_at_each_mount_and_recovers_without_tick_lag() {
         let (mut s, mut p, other) = wheel_power_fixture();
         s.wheel_axes_knm[other] = DVec3::new(0.0, 2.0, 0.0);
@@ -3948,17 +4042,17 @@ mod tests {
         s.configure_actuators(&p, Default::default(), &mut engine);
         s.resolve_actuator_resources(&mut p, &body, &mut engine, 0.02);
         let allocation = engine.control_allocation.as_ref().unwrap();
-        assert!((allocation.torque_knm.y - 2.0).abs() < 1e-9);
+        assert!((allocation.torque_knm.y - 1.2).abs() < 1e-9);
         let channels = engine.actuators.as_ref().unwrap();
         for (a, input) in channels.iter().zip(&allocation.inputs) {
             if a.part == s.root {
                 assert_eq!(*input, 0.0);
             }
             if a.part == other {
-                assert!((*input - 1.0).abs() < 1e-9);
+                assert!((*input - 0.6).abs() < 1e-9);
             }
         }
-        assert!((ec_stored(&s) - 9.88).abs() < 1e-9);
+        assert!((ec_stored(&s) - 9.928).abs() < 1e-9);
         // The dry wheel must also leave allocation room for a non-electric force channel.
         let mut engine = s.propulsion(&p, Default::default(), 0.02);
         engine.actuators = Some(vec![
@@ -3985,7 +4079,7 @@ mod tests {
         assert!((allocation.inputs[1] - 1.0).abs() < 1e-9);
         assert!((allocation.torque_knm.y - 2.0).abs() < 1e-9);
         assert!(
-            (ec_stored(&s) - 9.88).abs() < 1e-9,
+            (ec_stored(&s) - 9.928).abs() < 1e-9,
             "force channel draws no wheel charge"
         );
         // A generator supplies an empty wheel in this tick even if the last readout was zero.
@@ -4004,8 +4098,8 @@ mod tests {
         let mut engine = s.propulsion(&p, Default::default(), 0.02);
         s.configure_actuators(&p, Default::default(), &mut engine);
         s.resolve_actuator_resources(&mut p, &body, &mut engine, 0.02);
-        assert!((engine.control_allocation.unwrap().torque_knm.y - 2.0).abs() < 1e-9);
-        assert!(ec_stored(&s) < 1e-9);
+        assert!((engine.control_allocation.unwrap().torque_knm.y - 1.872).abs() < 1e-9);
+        assert!((ec_stored(&s) - 0.00768).abs() < 1e-9);
     }
 
     #[test]
@@ -4036,13 +4130,16 @@ mod tests {
         s.configure_actuators(&p, Default::default(), &mut engine);
         s.resolve_actuator_resources(&mut p, &body, &mut engine, 0.02);
         assert!(
-            (engine.control_allocation.unwrap().torque_knm - DVec3::new(-1.8, 3.2, 0.0)).length()
+            (engine.control_allocation.unwrap().torque_knm - DVec3::new(-1.08, 1.92, 0.0)).length()
                 < 1e-9
         );
         assert!(
-            (ec_stored(&s) - (10.0 - 3.0 * (1.8_f64 * 1.8 + 3.2 * 3.2).sqrt() * 0.02)).abs() < 1e-9,
+            (ec_stored(&s) - (10.0 - 3.0 * (1.08 + 1.92) * 0.02)).abs() < 1e-9,
             "manual axes independently scale their rated torques"
         );
+        // A settled idle wheel has no charge demand merely because the hull is spinning.
+        // Residual commanded torque during the response ramp still consumes charge.
+        s.wheel_actuation_knm.fill(DVec3::ZERO);
         p.rotation_input = DVec3::ZERO;
         p.roll_rate = 0.1;
         let before = ec_stored(&s);
@@ -4064,7 +4161,7 @@ mod tests {
     }
 
     #[test]
-    fn mounted_wheel_axes_obey_power_and_attachment_instead_of_stage_estimates() {
+    fn wheel_axes_use_control_frame_and_obey_power_and_attachment() {
         let (mut s, mut p, pair) = propulsion_fixture();
         s.wheel_axes_knm.fill(DVec3::ZERO);
         s.gimbal_range_rad.fill(0.0);
@@ -4078,11 +4175,11 @@ mod tests {
         s.configure_actuators(&p, Default::default(), &mut engine);
         let a = engine.actuators.as_ref().unwrap();
         let roll = crate::actuators::allocate(a, DVec3::new(0.0, 100.0, 0.0));
-        assert!((roll.torque_knm - DVec3::new(0.0, 0.5, 0.0)).length() < 1e-10);
+        assert_eq!(roll.torque_knm, DVec3::ZERO);
         assert!(
-            crate::actuators::allocate(a, DVec3::new(100.0, 0.0, 0.0))
-                .torque_knm
-                .length()
+            (crate::actuators::allocate(a, DVec3::new(100.0, 0.0, 0.0)).torque_knm
+                - DVec3::new(0.5, 0.0, 0.0))
+            .length()
                 < 1e-10
         );
         p.wheel_scale = 0.0;

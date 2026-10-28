@@ -2381,9 +2381,15 @@ mod tests {
                 .apply(DVec3::new(w.dot(x), w.dot(y), w.dot(z)));
             x * l.x + y * l.y + z * l.z
         };
-        let l1 = momentum(&p1, u.structure(v).unwrap());
+
         u.world.get_mut::<flight::Powered>(v).unwrap().ignited = false;
         u.set_rotation(v, 0.0, 0.0, 0.0);
+        // Reference wheel torque ramps down after key release; measure the torque-free
+        // tumble after that response has decayed, rather than treating release as instantaneous.
+        for _ in 0..TICKS_PER_SECOND {
+            u.step();
+        }
+        let l1 = momentum(u.powered(v).unwrap(), u.structure(v).unwrap());
         for _ in 0..(3 * TICKS_PER_SECOND) {
             u.step();
         }

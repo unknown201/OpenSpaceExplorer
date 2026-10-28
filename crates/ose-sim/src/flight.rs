@@ -242,6 +242,9 @@ pub struct Powered {
     pub manual_steering: bool,
     #[serde(default)]
     pub sas: crate::sas::Sas,
+    /// Last normalized physics-axis command (pitch, roll, mirrored yaw).
+    #[serde(default)]
+    pub control_axes: DVec3,
     #[serde(default = "one")]
     pub sas_warp: f64,
     #[serde(default)]
@@ -776,6 +779,7 @@ impl Powered {
             rotation_input: DVec3::ZERO,
             manual_steering: false,
             sas: Default::default(),
+            control_axes: DVec3::ZERO,
             sas_warp: 1.0,
             roll_rate: 0.0,
             eva_run: false,
@@ -1102,6 +1106,7 @@ pub fn plan_actuators(
         return Default::default();
     };
     if p.landed || p.crashed || !p.controlled {
+        p.control_axes = DVec3::ZERO;
         return crate::actuators::Allocation {
             inputs: vec![0.0; channels.len()],
             ..Default::default()
@@ -1228,6 +1233,7 @@ fn control_request(
             p.sas_warp,
         )
     };
+    p.control_axes = DVec3::new(command[0], command[1], -command[2]);
     let control = DVec3::new(
         command[0] * authority.x,
         command[1] * authority.y,

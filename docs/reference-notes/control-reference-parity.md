@@ -18,6 +18,13 @@ The installed KSP2 `KSP.Sim/VesselSAS.cs`, `PIDclamp.cs`, and
   once per physics tick; integration reuses the resource-resolved allocation.
 - Per-axis torque authority replaces the previous scalar normalization for manual inputs.
   Holding roll applies torque, rather than enforcing the old 0.5 rad/s target rate.
+- Both part-backed and scalar-inertia vessels now use the same SAS controller during integration.
+- Stock reaction wheels receive shared vessel-axis commands rather than competing for an optimized
+  torque allocation. Mount rotation no longer redirects a wheel's pitch/roll/yaw axes, matching
+  `Module_ReactionWheel.ActiveUpdate`.
+- Wheel actuation follows the stock `TorqueResponseSpeed = 30` clamped linear response on press,
+  release and reversal. Electric-charge demand sums the absolute pitch/roll/yaw torques as the
+  reference's `InputSumForResource` does. Residual torque during ramp-down still consumes charge.
 
 `ose-sim/src/sas.rs` keeps the controller separate from the integration and allocation code.
 Unity angular axes and rotations are reflected into OSE's right-handed physics frame.
@@ -32,11 +39,17 @@ were properties of the removed controller, not of the reference PID algorithm.
 
 This is a port of the input/SAS core, not proof of identical whole-game flight response. OSE still
 uses its bounded actuator allocator, proxy RCS geometry, approximate control-surface forces,
-box inertia, and delivered-thrust gimbal cone. Reaction-wheel torque response and resource
-accounting, physical gimbal response, authored asymmetric limits, selectable control points,
+box inertia, and delivered-thrust gimbal cone. Resource delivery still uses OSE's same-tick
+partial-delivery model rather than the reference's pending-request handshake. Physical gimbal
+response, authored asymmetric limits, selectable control points,
 and all per-module enable/authority settings are not yet reference-equivalent. The renderer's
 gimbal smoothing is separate from authoritative actuation. Those differences affect controller
 authority and therefore flight traces even when the SAS equations match.
 
 Bit-exact or whole-craft 1:1 parity has not been established. That requires matching actuator
 modules and comparing identical craft/input/timestep traces against the running reference.
+
+The wheel increment adds reference response traces, simultaneous powered-wheel commands,
+diagonal-axis charge, partial power, recovery, mount orientation, detachment and torque-free
+momentum checks after the release ramp has settled. Empty legacy craft are also guarded during
+save restoration and drive synchronization, preventing production-save startup failures.
