@@ -24,6 +24,8 @@ pub struct Input {
     pub commanded: f64,
     pub pressure: f64,
     pub mode: u32,
+    /// Contextual events play when instantiated; an already-burning engine only resumes exhaust.
+    pub play_on_create: bool,
     pub context: Context,
 }
 struct Source {
@@ -202,14 +204,14 @@ impl System {
         self.random as f64 / u32::MAX as f64
     }
     pub fn step(&mut self, dt: f64, inputs: &[Input]) {
-        if !dt.is_finite() || !(0.0..=0.25).contains(&dt) {
-            // Discard trails after a clock jump, but retain action latches: a visible wreck or
-            // deployed parachute must not replay its one-shot burst after pause/warp correction.
+        let reset = !dt.is_finite() || !(0.0..=0.25).contains(&dt);
+        if reset {
+            // Resync transforms and action latches below as well as discarding particles. Events
+            // that occurred across a pause/warp correction must not become fresh bursts on resume.
             self.particles.clear();
             for source in self.sources.values_mut() {
                 source.playing = false;
             }
-            return;
         }
         // Update current emitter transforms before integrating local-space particles.
         for input in inputs {
@@ -224,18 +226,20 @@ impl System {
                 previous: input.matrix,
                 throttle: 0.0,
                 pressure: input.pressure,
-                running: false,
+                running: active && !input.play_on_create,
                 playing: false,
                 epoch: 0.0,
                 remainder: 0.0,
                 delay: 0.0,
                 context: input.context,
             });
-            source.previous = source.matrix;
+            source.previous = if reset { input.matrix } else { source.matrix };
             source.matrix = input.matrix;
             source.pressure = input.pressure;
             source.context = input.context;
-            let event = if active && !source.running {
+            let event = if reset {
+                10
+            } else if active && !source.running {
                 6
             } else if !active && source.running {
                 if input.commanded > 0.001 {
@@ -268,7 +272,7 @@ impl System {
                 source.throttle
             };
         }
-        if dt == 0.0 {
+        if reset || dt == 0.0 {
             return;
         }
         for p in &mut self.particles {
@@ -866,6 +870,7 @@ mod tests {
             commanded: throttle,
             pressure: 1.0,
             mode: 0,
+            play_on_create: true,
             context: Context::default(),
         }
     }
@@ -882,6 +887,78 @@ mod tests {
             s.particles.is_empty(),
             "a full source must not replay delayed bursts"
         );
+    }
+    #[test]
+    fn attaching_to_a_burning_engine_does_not_replay_ignition() {
+        let layers = recipe(json!([[0, 6]]), 100);
+        let mut system = System::default();
+        let engine = |throttle| {
+            let mut source = input(layers.clone(), throttle);
+            source.play_on_create = false;
+            source
+        };
+        for _ in 0..20 {
+            system.step(0.02, &[engine(1.0)]);
+            assert!(
+                system.particles.is_empty(),
+                "loading during a burn is not ignition"
+            );
+        }
+        system.step(0.02, &[engine(0.0)]);
+        system.step(0.02, &[engine(1.0)]);
+        assert_eq!(
+            system.particles.len(),
+            10,
+            "a real restart still fires ignition"
+        );
+    }
+    #[test]
+    fn attaching_to_a_burning_engine_still_starts_continuous_exhaust() {
+        let layers = recipe(json!([[0, 10]]), 100);
+        let mut source = input(layers, 1.0);
+        source.play_on_create = false;
+        let mut system = System::default();
+        system.step(0.02, &[source]);
+        assert_eq!(system.particles.len(), 10);
+    }
+    #[test]
+    fn clock_jump_consumes_engine_transitions_without_replaying_them() {
+        for event in [4, 6, 7] {
+            let layers = recipe(json!([[0, event]]), 100);
+            let mut system = System::default();
+            let engine = |throttle| {
+                let mut source = input(layers.clone(), throttle);
+                source.commanded = if event == 4 { 1.0 } else { throttle };
+                source
+            };
+            let (before, after) = if event == 6 { (0.0, 1.0) } else { (1.0, 0.0) };
+            system.step(0.02, &[engine(before)]);
+            system.step(f64::INFINITY, &[engine(after)]);
+            for _ in 0..20 {
+                system.step(0.02, &[engine(after)]);
+                assert!(
+                    system.particles.is_empty(),
+                    "event {event} replayed after a clock jump"
+                );
+            }
+            system.step(0.02, &[engine(before)]);
+            system.step(0.02, &[engine(after)]);
+            assert_eq!(
+                system.particles.len(),
+                10,
+                "event {event} must still fire on a new transition"
+            );
+        }
+    }
+    #[test]
+    fn clock_jump_does_not_defer_a_new_contextual_burst_until_resume() {
+        let layers = recipe(json!([[0, 6]]), 100);
+        let mut system = System::default();
+        system.step(f64::INFINITY, &[input(layers.clone(), 1.0)]);
+        for _ in 0..20 {
+            system.step(0.02, &[input(layers.clone(), 1.0)]);
+            assert!(system.particles.is_empty());
+        }
     }
     #[test]
     fn shutdown_burst_fires_once_and_preserves_existing_particles() {
