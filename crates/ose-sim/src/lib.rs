@@ -1398,13 +1398,14 @@ impl Universe {
                 let env = flight::EngineEnvironment::at(&p, &body, atmo.as_ref());
                 let step_ut = start_ut + i as f64 * step_dt;
                 let propulsion = structure.as_mut().map(|st| {
-                    st.electric_services(&mut p, sun, step_dt);
-                    st.sync(&mut p);
                     if comm_blocked {
                         p.controlled = false;
                         p.throttle = 0.0;
                     }
-                    let mut propulsion = st.propulsion(&p, env, step_dt);
+                    let mut propulsion = st.powered_services(&mut p, sun, env, step_dt);
+                    if comm_blocked {
+                        p.controlled = false;
+                    }
                     // Plan with rated wheel axes; current delivery is resolved at each wheel below.
                     p.wheel_scale = 1.0;
                     st.configure_actuators(&p, env, &mut propulsion);

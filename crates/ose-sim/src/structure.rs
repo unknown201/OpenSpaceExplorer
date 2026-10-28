@@ -1524,17 +1524,12 @@ impl Structure {
         };
     }
 
-    /// One step of electric charge: solar panels (`sun` is the starlight relative to the home world, 0 in
-    /// shadow; fixed panels are taken at half their rating), generators, RTGs and converters fill the
-    /// batteries. Probe cores and drive motors draw before wheel actuation is planned. Updates control
-    /// eligibility and drive power for this tick; reaction-wheel requests are resolved separately.
-    pub fn electric_services(&mut self, p: &mut Powered, sun: f64, dt: f64) {
+    /// Independent producers run before propulsion. Engine alternators require resolved thrust instead.
+    fn electric_producers(&mut self, sun: f64, dt: f64) {
         let Some(ec) = self.net.resource("ElectricCharge") else {
             return;
         };
-        let live = self.live_engines(p.stage);
         let mut requests = Vec::new();
-        let mut cores = Vec::new();
         let instruction = |units_per_s: f64| Instruction {
             resource: ec,
             units_per_s,
@@ -1548,28 +1543,14 @@ impl Structure {
             if e.solar_output > 0.0 && (!e.solar_deployable || self.deployed[i]) {
                 made += e.solar_output * sun * if e.solar_tracking { 1.0 } else { 0.5 };
             }
-            if e.generator_output > 0.0 {
-                if self.engine_thrust_kn[i] > 0.0 {
-                    if p.ignited && !p.crashed && live.contains(&i) && self.fed(i) {
-                        made += e.generator_output * self.engine_duty(i, p.throttle);
-                    }
-                } else {
-                    made += e.generator_output;
-                }
+            if self.engine_isp[i].is_none() {
+                made += e.generator_output;
             }
             if made > 0.0 {
                 requests.push(Request {
                     part: i,
                     instructions: vec![instruction(-made)],
                     priority: 10,
-                });
-            }
-            if e.command_use > 0.0 {
-                cores.push(requests.len());
-                requests.push(Request {
-                    part: i,
-                    instructions: vec![instruction(e.command_use)],
-                    priority: 5,
                 });
             }
         }
@@ -1609,6 +1590,62 @@ impl Structure {
                 });
             }
         }
+        let fractions = self.net.process(&requests, dt);
+        for &(r, i) in &converting {
+            self.converter_running[i] = fractions[r];
+        }
+    }
+
+    /// Match the reference generator's FinalThrust / mode.maxThrust output at each engine mount.
+    /// A final partial burn supplies partial charge; dry, air-starved and idle engines supply none.
+    fn engine_alternators(&mut self, dt: f64) {
+        let (Some(ec), Some(thrust)) = (
+            self.net.resource("ElectricCharge"),
+            self.resolved_engine_thrust.as_ref(),
+        ) else {
+            return;
+        };
+        let requests: Vec<_> = thrust
+            .iter()
+            .enumerate()
+            .filter(|&(i, t)| {
+                self.rigid.present[i]
+                    && self.engine_thrust_kn[i] > 0.0
+                    && self.electric[i].generator_output > 0.0
+                    && *t > 0.0
+            })
+            .map(|(i, t)| Request {
+                part: i,
+                instructions: vec![Instruction {
+                    resource: ec,
+                    units_per_s: -self.electric[i].generator_output * t / self.engine_thrust_kn[i],
+                }],
+                priority: 10,
+            })
+            .collect();
+        self.net.process(&requests, dt);
+    }
+
+    /// Probe cores and drive motors draw once after producers, before wheel actuation is planned.
+    fn electric_consumers(&mut self, p: &mut Powered, dt: f64) {
+        let Some(ec) = self.net.resource("ElectricCharge") else {
+            return;
+        };
+        let instruction = |units_per_s| Instruction {
+            resource: ec,
+            units_per_s,
+        };
+        let mut requests = Vec::new();
+        for i in 0..self.rigid.len() {
+            if self.rigid.present[i] && self.electric[i].command_use > 0.0 {
+                requests.push(Request {
+                    part: i,
+                    instructions: vec![instruction(self.electric[i].command_use)],
+                    priority: 5,
+                });
+            }
+        }
+        let cores = requests.len();
         // wheel motors draw in proportion to the drive input
         let motor_use: f64 = p
             .drive
@@ -1627,9 +1664,6 @@ impl Structure {
             requests.len() - 1
         });
         let fractions = self.net.process(&requests, dt);
-        for &(r, i) in &converting {
-            self.converter_running[i] = fractions[r];
-        }
         p.drive.powered = match motors {
             Some(r) => fractions[r],
             None => {
@@ -1641,10 +1675,48 @@ impl Structure {
             }
         };
         let crewed = (0..self.rigid.len()).any(|i| self.rigid.present[i] && self.crew[i] > 0);
-        p.controlled = crewed || cores.is_empty() || cores.iter().any(|&r| fractions[r] > 0.0);
+        p.controlled = crewed || cores == 0 || fractions[..cores].iter().any(|&f| f > 0.0);
         if !p.controlled {
             p.throttle = 0.0;
         }
+    }
+
+    /// Coast/rails services have no resolved burn and therefore cannot run an engine alternator.
+    pub fn electric_services(&mut self, p: &mut Powered, sun: f64, dt: f64) {
+        self.electric_producers(sun, dt);
+        self.electric_consumers(p, dt);
+    }
+
+    /// Resolve propulsion and its electrical output together, retaining same-tick control and wheel power.
+    pub fn powered_services(
+        &mut self,
+        p: &mut Powered,
+        sun: f64,
+        env: crate::flight::EngineEnvironment,
+        dt: f64,
+    ) -> crate::flight::Propulsion {
+        self.electric_producers(sun, dt);
+        self.sync(p);
+        // An uncrewed controller may cut throttle after electrical delivery. Keep that trial's resource
+        // state transactional: discarded thrust must not consume fuel or leave alternator charge behind.
+        let needs_control = !(0..self.rigid.len())
+            .any(|i| self.rigid.present[i] && self.crew[i] > 0)
+            && (0..self.rigid.len())
+                .any(|i| self.rigid.present[i] && self.electric[i].command_use > 0.0);
+        let before = (needs_control && p.throttle > 0.0).then(|| self.net.tanks.clone());
+        let throttle = p.throttle;
+        let mut propulsion = self.propulsion(p, env, dt);
+        self.engine_alternators(dt);
+        self.electric_consumers(p, dt);
+        if p.throttle != throttle {
+            if let Some(before) = before {
+                self.net.tanks = before;
+                propulsion = self.propulsion(p, env, dt);
+                self.engine_alternators(dt);
+                self.electric_consumers(p, dt);
+            }
+        }
+        propulsion
     }
 
     /// Legacy scalar-demand entry point for coast/debris services and callers without part control plans.
@@ -5915,6 +5987,249 @@ mod tests {
             tank.stored = 0.0;
         }
         assert!(s.fed_engines(0).is_empty());
+    }
+
+    fn alternator_fixture(fuel_t: f64) -> (Structure, Powered, usize) {
+        let (mut s, mut p, pair) = propulsion_fixture();
+        let engine = pair[0];
+        s.stage_engines[0] = vec![engine];
+        s.electric.fill(Default::default());
+        s.converter_defs.fill(None);
+        s.crew.fill(0);
+        s.crew[s.root] = 1;
+        s.wheel_axes_knm.fill(DVec3::ZERO);
+        s.gimbal_range_rad.fill(0.0);
+        s.ctrl.fill((0.0, 0.0));
+        s.rcs_defs.fill(None);
+        s.electric[engine].generator_output = 12.0;
+        let solid = s.net.resource("SolidFuel").unwrap();
+        let ec = s.net.resource("ElectricCharge").unwrap();
+        s.net.flow_mode[ec] = ose_data::FlowMode::AllVessel;
+        s.net.tanks = vec![
+            crate::resources::Tank {
+                part: engine,
+                resource: solid,
+                stored: fuel_t / s.net.unit_mass_t[solid],
+                capacity: 10.0 / s.net.unit_mass_t[solid],
+            },
+            crate::resources::Tank {
+                part: s.root,
+                resource: ec,
+                stored: 0.0,
+                capacity: 10.0,
+            },
+        ];
+        p.v = DVec3::new(0.0, 100.0, 0.0);
+        p.attitude = crate::flight::Attitude::Free;
+        p.rotation_input = DVec3::ZERO;
+        s.sync(&mut p);
+        (s, p, engine)
+    }
+
+    #[test]
+    fn alternator_charge_and_impulse_share_the_same_final_partial_fuel() {
+        let dt = 1.0 / crate::TICKS_PER_SECOND as f64;
+        for fraction in [0.0, 0.25, 1.0] {
+            let fuel = dt * fraction; // Synthetic engine requests exactly 1 t/s.
+            let (s, p, _) = alternator_fixture(fuel);
+            let mass = p.mass_t;
+            let radius = p.r.length();
+            let bodies = serde_json::from_str::<Vec<ose_data::CelestialBody>>(include_str!(
+                "../../../assets/own/kerbol-system.json"
+            ))
+            .unwrap();
+            let mut u = crate::Universe::with_bodies(&bodies);
+            let body = u.body_entity("Kerbin").unwrap();
+            let mu = u.world.get::<crate::bodies::Body>(body).unwrap().mu;
+            let e = u.spawn_vessel("Fuel-limited alternator", body, p.r, p.v);
+            u.set_powered(e, p);
+            u.set_structure(e, s);
+            u.step();
+            let p = u.powered(e).unwrap();
+            let expected_v = fuel * 100.0 * ose_data::G0 / mass - mu / radius.powi(2) * dt;
+            assert!((p.v.x - expected_v).abs() < 1e-8);
+            assert!((p.mass_t - (mass - fuel)).abs() < 1e-9);
+            assert!((p.mass_t - u.structure(e).unwrap().net.mass_t()).abs() < 1e-9);
+            assert!((ec_stored(u.structure(e).unwrap()) - 12.0 * dt * fraction).abs() < 1e-9);
+            u.step();
+            assert!((ec_stored(u.structure(e).unwrap()) - 12.0 * dt * fraction).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn alternators_follow_pressure_throttle_air_and_engine_lifecycle() {
+        for (throttle, locked, pressure, isp, expected) in [
+            (0.5, false, 0.0, 100.0, 0.6),
+            (0.0, true, 0.0, 100.0, 1.2),
+            (1.0, false, 5.0, 20.0, 0.24),
+        ] {
+            let (mut s, mut p, engine) = alternator_fixture(1.0);
+            p.throttle = throttle;
+            s.engine_throttle_locked[engine] = locked;
+            s.engine_isp[engine]
+                .as_mut()
+                .unwrap()
+                .keys
+                .push(ose_data::CurveKey {
+                    t: 5.0,
+                    v: isp,
+                    in_tangent: 0.0,
+                    out_tangent: 0.0,
+                });
+            let out = s.powered_services(
+                &mut p,
+                0.0,
+                crate::flight::EngineEnvironment {
+                    pressure_atm: pressure,
+                    ..Default::default()
+                },
+                0.1,
+            );
+            assert!((ec_stored(&s) - expected).abs() < 1e-9);
+            assert!(
+                (ec_stored(&s) - 12.0 * out.thrust_kn / (100.0 * ose_data::G0) * 0.1).abs() < 1e-9
+            );
+        }
+        // No actual output means no alternator charge, even with fuel and a stale running readout.
+        for case in 0..6 {
+            let (mut s, mut p, engine) = alternator_fixture(1.0);
+            match case {
+                0 => p.ignited = false,
+                1 => p.crashed = true,
+                2 => p.throttle = 0.0,
+                3 => s.rigid.remove_parts(&[engine]),
+                4 => s.stage_engines[0].clear(),
+                _ => {
+                    s.engine_jet[engine] = Some(crate::flight::Jet {
+                        vel_curve: None,
+                        atm_curve: None,
+                    });
+                    s.intake_area_m2[s.root] = 1.0;
+                }
+            }
+            let out = s.powered_services(&mut p, 0.0, Default::default(), 0.1);
+            assert_no_engine_impulse(out);
+            assert_eq!(ec_stored(&s), 0.0, "case {case}");
+        }
+    }
+
+    #[test]
+    fn alternator_power_reaches_controls_and_wheels_in_the_current_tick() {
+        let (mut s, mut p, _) = alternator_fixture(0.025);
+        s.crew.fill(0);
+        s.electric[s.root].command_use = 1.0;
+        s.electric[s.root].wheel_use_per_knm = 1.0;
+        s.wheel_axes_knm[s.root] = DVec3::new(0.0, 2.0, 0.0);
+        s.part_rot[s.root] = [0.0, 0.0, 0.0, 1.0];
+        p.rotation_input = DVec3::new(0.0, 0.0, 1.0);
+        p.wheel_scale = 0.0;
+        p.controlled = false; // Stale readout must not delay recovery.
+        let bodies = serde_json::from_str::<Vec<ose_data::CelestialBody>>(include_str!(
+            "../../../assets/own/kerbol-system.json"
+        ))
+        .unwrap();
+        let u = crate::Universe::with_bodies(&bodies);
+        let body = u
+            .world
+            .get::<crate::bodies::Body>(u.body_entity("Kerbin").unwrap())
+            .unwrap();
+        let mut out = s.powered_services(&mut p, 0.0, Default::default(), 0.1);
+        assert!(p.controlled);
+        assert!((ec_stored(&s) - 0.2).abs() < 1e-9); // 0.3 generated, 0.1 for the core.
+        p.wheel_scale = 1.0;
+        s.configure_actuators(&p, Default::default(), &mut out);
+        s.resolve_wheel_power(&mut p, body, &mut out, 0.1);
+        assert!((out.control_allocation.unwrap().torque_knm.y - 2.0).abs() < 1e-9);
+        assert!(ec_stored(&s) < 1e-9);
+        assert!((out.burned_t - 0.025).abs() < 1e-9);
+    }
+
+    #[test]
+    fn isolated_unpowered_control_discards_trial_fuel_and_alternator_charge() {
+        let (mut s, mut p, engine) = alternator_fixture(1.0);
+        s.crew.fill(0);
+        s.electric[s.root].command_use = 1.0;
+        let ec = s.net.resource("ElectricCharge").unwrap();
+        s.net.flow_mode[ec] = ose_data::FlowMode::NoFlow;
+        // The engine can fill its own tank but cannot power the isolated command core.
+        s.net.tanks.push(crate::resources::Tank {
+            part: engine,
+            resource: ec,
+            stored: 0.0,
+            capacity: 10.0,
+        });
+        let before = s.net.tanks.clone();
+        let out = s.powered_services(&mut p, 0.0, Default::default(), 0.1);
+        assert_no_engine_impulse(out);
+        assert!(!p.controlled);
+        assert_eq!(p.throttle, 0.0);
+        assert_eq!(s.net.tanks, before);
+        assert_eq!(s.resolved_engine_thrust.as_ref().unwrap()[engine], 0.0);
+    }
+
+    #[test]
+    fn rails_services_do_not_reuse_an_old_burn_but_standalone_generators_still_run() {
+        let (mut s, mut p, _) = alternator_fixture(1.0);
+        s.powered_services(&mut p, 0.0, Default::default(), 0.1);
+        let before = ec_stored(&s);
+        let fuel = s.net.mass_t();
+        // Deliberately leave ignition/throttle and the previous thrust snapshot set.
+        s.electric_services(&mut p, 0.0, 10.0);
+        assert_eq!(ec_stored(&s), before);
+        assert_eq!(s.net.mass_t(), fuel);
+        s.electric[s.root].generator_output = 0.2;
+        s.electric_services(&mut p, 0.0, 10.0);
+        assert!((ec_stored(&s) - before - 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn alternator_fuel_impulse_and_charge_are_invariant_under_timestep_subdivision() {
+        let mut totals = Vec::new();
+        for steps in [1, 4, 20] {
+            let (mut s, mut p, _) = alternator_fixture(0.025);
+            let mut impulse = 0.0;
+            let mut burned = 0.0;
+            let dt = 0.1 / steps as f64;
+            for _ in 0..steps {
+                let out = s.powered_services(&mut p, 0.0, Default::default(), dt);
+                impulse += out.thrust_kn * dt;
+                burned += out.burned_t;
+            }
+            assert!((burned - 0.025).abs() < 1e-9);
+            assert!((impulse - 0.025 * 100.0 * ose_data::G0).abs() < 1e-9);
+            assert!((ec_stored(&s) - 0.3).abs() < 1e-9);
+            totals.push((impulse, burned, ec_stored(&s)));
+        }
+        for pair in totals.windows(2) {
+            assert!((pair[0].0 - pair[1].0).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn converter_fuel_is_reserved_once_before_alternator_output_is_resolved() {
+        let (mut s, mut p, engine) = alternator_fixture(0.075);
+        let solid = s.net.resource("SolidFuel").unwrap();
+        s.converter_defs[engine] = Some(ose_data::Converter {
+            formula: "Analytical generator sharing engine fuel".into(),
+            inputs: vec![("SolidFuel".into(), 0.5 / s.net.unit_mass_t[solid])],
+            outputs: vec![("ElectricCharge".into(), 1.0)],
+            conversion_rate: 1.0,
+        });
+        s.converter_on[engine] = true;
+        s.crew.fill(0);
+        s.electric[s.root].command_use = 0.5;
+        let mass = s.net.mass_t();
+        let out = s.powered_services(&mut p, 0.0, Default::default(), 0.1);
+        assert!(p.controlled);
+        // The converter uses 0.05 t and makes 0.1 EC; the final 0.025 t burn makes 0.3 EC.
+        assert!((s.converter_running[engine] - 1.0).abs() < 1e-9);
+        assert!((out.burned_t - 0.025).abs() < 1e-9);
+        assert!((out.mass.mass_t - (mass - 0.05)).abs() < 1e-9);
+        assert!((s.net.mass_t() - (mass - 0.075)).abs() < 1e-9);
+        assert!((ec_stored(&s) - 0.35).abs() < 1e-9); // One 0.05 EC core request.
+        let coast = s.powered_services(&mut p, 0.0, Default::default(), 0.1);
+        assert_no_engine_impulse(coast);
+        assert!((ec_stored(&s) - 0.30).abs() < 1e-9);
     }
 
     #[test]
