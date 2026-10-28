@@ -365,6 +365,9 @@ pub struct LiftingSurface {
 /// (mixture) and Isp against pressure.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Rcs {
+    /// Individual directional nozzle points, Unity part-local axes; empty for legacy mount proxies.
+    #[serde(default)]
+    pub thrusters: Vec<ThrustTransform>,
     pub thrust_kn: f64,
     pub propellant: String,
     pub isp_curve: Curve,

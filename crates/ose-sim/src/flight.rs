@@ -1155,8 +1155,8 @@ pub fn plan_actuators(
     let (request, _) = control_request(p, engine, target, frac, dt);
     let request = if p.landed { DVec3::ZERO } else { request };
     let mut allocation = crate::actuators::allocate(channels, request);
-    // RCS mount groups share a unit sphere across rotation and translation. Add the
-    // translation command in the mounted axes, then project the combined command.
+    // Authored RCS nozzles add translation to their rotation demand and clamp to 0..1.
+    // Legacy mount proxies instead project the combined vector to their shared sphere.
     let t = p.rcs.translate;
     let mut translation = DVec3::new(
         t.x.clamp(-1.0, 1.0),
@@ -1165,7 +1165,20 @@ pub fn plan_actuators(
     );
     translation = translation * (1.0 / translation.length().max(1.0));
     for (i, a) in channels.iter().enumerate() {
-        if a.group % 8 != 4 {
+        if a.kind == crate::actuators::Kind::RcsNozzle {
+            let added = if a.force_kn.length_squared() > 0.0 {
+                translation.dot(a.force_kn.normalized()).max(0.0)
+            } else {
+                0.0
+            };
+            let next = (allocation.inputs[i] + added).clamp(0.0, 1.0);
+            let change = next - allocation.inputs[i];
+            allocation.inputs[i] = next;
+            allocation.force_kn = allocation.force_kn + a.force_kn * change;
+            allocation.torque_knm = allocation.torque_knm + a.torque_knm * change;
+            continue;
+        }
+        if a.kind != crate::actuators::Kind::RcsMount {
             continue;
         }
         // Only the first channel visits a mount's group.

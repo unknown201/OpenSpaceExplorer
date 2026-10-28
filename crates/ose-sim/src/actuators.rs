@@ -1,8 +1,24 @@
 //! Bounded part actuators in craft axes. Allocation retains the forces/torques for joint loading.
 use ose_math::DVec3;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    Other,
+    /// Legacy catalog fallback: three bilateral channels share a mount sphere.
+    RcsMount,
+    /// One authored nozzle: an independent input in 0..1.
+    RcsNozzle,
+}
+
+impl Kind {
+    pub fn is_rcs(self) -> bool {
+        matches!(self, Self::RcsMount | Self::RcsNozzle)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Actuator {
+    pub kind: Kind,
     pub part: usize,
     /// Torque produced at full positive input. One scalar channel cannot control other axes.
     pub torque_knm: DVec3,
@@ -48,6 +64,9 @@ pub fn allocate(channels: &[Actuator], request: DVec3) -> Allocation {
             let mut length = 0.0;
             for &i in indices {
                 next[i] = out.inputs[i] + channels[i].torque_knm.dot(residual) / lipschitz;
+                if channels[i].kind == Kind::RcsNozzle {
+                    next[i] = next[i].max(0.0);
+                }
                 length += next[i] * next[i];
             }
             let length = length.sqrt().max(1.0);
@@ -93,6 +112,7 @@ mod tests {
     fn gimbal_cannot_roll_and_shared_channels_respect_the_force_cone() {
         let channels =
             [DVec3::new(2.0, 0.0, 0.0), DVec3::new(0.0, 0.0, 2.0)].map(|torque_knm| Actuator {
+                kind: Kind::Other,
                 part: 0,
                 torque_knm,
                 force_kn: DVec3::ZERO,
@@ -116,6 +136,7 @@ mod tests {
         let r = DVec3::new(0.0, -2.0, 0.0);
         let channels =
             [DVec3::new(1.0, 0.0, 0.0), DVec3::new(0.0, 0.0, 1.0)].map(|force_kn| Actuator {
+                kind: Kind::Other,
                 part: 0,
                 torque_knm: r.cross(force_kn),
                 force_kn,
@@ -128,5 +149,25 @@ mod tests {
         assert!((force.length() - 10.0).abs() < 1e-10);
         assert!((out.torque_knm - r.cross(out.force_kn)).length() < 1e-10);
         assert_eq!(out.axial_corrections.len(), 1);
+    }
+    #[test]
+    fn a_nozzle_cannot_reverse_to_meet_a_torque_request() {
+        let nozzle = Actuator {
+            kind: Kind::RcsNozzle,
+            part: 0,
+            force_kn: DVec3::new(1.0, 0.0, 0.0),
+            torque_knm: DVec3::new(0.0, 0.0, 1.0),
+            offset_m: DVec3::new(0.0, -1.0, 0.0),
+            group: 0,
+            axial: None,
+        };
+        assert_eq!(
+            allocate(std::slice::from_ref(&nozzle), DVec3::new(0.0, 0.0, -100.0)).inputs,
+            vec![0.0]
+        );
+        assert_eq!(
+            allocate(&[nozzle], DVec3::new(0.0, 0.0, 100.0)).inputs,
+            vec![1.0]
+        );
     }
 }

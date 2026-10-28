@@ -156,14 +156,24 @@ Reproduce the extraction and import with:
 cargo run -p ose-importer -- --data assets/ksp2/data --physics-geometry assets/own/physics-geometry.json
 ```
 
+## Completed increment: directional RCS nozzle geometry
+
+The geometry exporter also reads each prefab's serialized `Module_RCS.ThrusterTransforms` references, preserving their order and individual positions. It uses negative transform up for force, as in `Module_RCS.ProcessThrust`, rather than guessing by node name. The committed `assets/own/rcs-geometry.json` covers all five authored modules and 22 nozzles, including eight on each crew pod, four on the block and one on each linear thruster. The importer validates unit directions and per-nozzle weights and keeps legacy catalogs readable.
+
+Authored nozzles get separate force channels with inputs bounded to 0..1. A nozzle cannot reverse or provide an absent axis. Its translation and rotation demands share that one input, clamped at full thrust. Resource demand sums the individual firing strengths at each part before delivery, including opposing forces whose translation cancels. Delivered fractions scale those same forces and moments and their individual structural offsets. Only catalogs without geometry retain the previous per-mount sphere proxy. Rated RCS usage now includes all nozzle ratings.
+
+Four new simulation tests cover one-way torque allocation, one-way translation with zero/quarter/full fuel, application moments, shared rotation/translation saturation, fuel for an opposing-nozzle couple, and complete catalog coverage. An importer regression checks the 22 nozzle definitions and legacy fallback. The exporter reference-selection regression verifies serialized pointer order, negative-up direction and failure on unresolved external references. Existing mixed-propellant, full pressure-curve and universe impulse tests remain green.
+
+This closes static RCS geometry and force/fuel bounds. The torque allocator is still OSE's bounded optimizer rather than the reference's rotational-direction/lever projection and precision-mode logic. Per-part pitch/yaw/roll/translation switches, thrust percentage, shielding/underwater activation rules, dynamic nozzle poses and per-nozzle visual readouts remain to be matched. Shared-resource requests remain ordered; partial delivery is not reallocated to different actuators. EVA jetpacks still use their separate approximation.
+
 ## Remaining physics priorities
 
-1. Import internal mass offsets and usable inertia geometry; complete articulated engine gimbals. Import directional RCS nozzle geometry and per-nozzle force limits.
+1. Import internal mass offsets and usable inertia geometry; complete articulated engine gimbals. Match RCS precision/lever allocation and part controls; extend resource-before-actuation to EVA.
 2. Import centre-of-pressure offsets, full lifting-surface options, and deflected control-surface lift/drag.
 3. Replace sampled corner paths with continuous hull contacts; add nearby vessel/debris pair contacts and equal-and-opposite impulses. Import contact materials and sliding damage/heat.
 4. Import displacement and wheel-collider data, suspension tuning and target positions; add load-dependent tyre grip and wheel slip. Extend water behavior, then docking attraction/capture and EVA ladder/hatch contact.
 
-The next actuator acceptance cases should compare directional nozzle selection and application points against prefab transforms. Retain the mixed-propellant, empty/partial-fuel, shared-budget, battery and per-mount delivery cases. Extend the same resource-before-actuation rule to EVA jetpacks.
+The next actuator acceptance cases should compare the reference's lever/precision and axis-enabling rules for directional nozzle selection. Retain the mixed-propellant, empty/partial-fuel, shared-budget, battery and per-mount delivery cases. Extend the same resource-before-actuation rule to EVA jetpacks.
 
 The next contact acceptance cases should cover continuous hull contacts that prevent tunnelling between vertices, equal-and-opposite vessel/debris impulses, and stable support/traction over uneven terrain. Retain the existing slope, normal-speed, sliding-friction, angular-impulse and joint-reaction regressions.
 
@@ -171,10 +181,12 @@ Per-engine mode switching, articulated nozzle transforms, thrust response curves
 
 ## Validation, 2026-10-27
 
-- `cargo test -p ose-sim -p ose-importer --lib`: passed (156 simulation tests, including the five RCS and two engine-geometry additions). A final rerun follows the normalized-rotation export.
-- The initial integrated workspace run passed the full Mun journey (494.76 s) but caught the aircraft frame regression described above. The focused aircraft/truck checks pass after correction; the final workspace rerun is in progress.
+- `cargo test --workspace`: passed, including the fresh-server Mun journey, server WebSocket tests and 160 simulation regressions. The existing ignored test remains ignored. The first integration run caught an aircraft frame regression; it was corrected before the passing rerun.
+- `cargo test -p ose-sim -p ose-importer --lib`: 160 simulation and 12 importer tests passed after the directional RCS follow-up.
 - `cargo clippy --workspace --all-targets -- -D warnings`: passed.
 - `cargo check -p ose-client --target wasm32-unknown-unknown`: passed.
+- `python -m unittest discover -s tools/tests -p test_export_physics_geometry.py`: 3 passed.
+- Real installed-data regeneration: 41 engine modes and 22 RCS nozzle transforms reproduce the committed geometry; maximum JSON round-trip difference is below 5e-16. The existing malformed `Tutorial1.3_Save.json` is warned and skipped by the importer; this does not affect part geometry.
 - `cargo fmt --all --check` and `git diff --check`: passed.
 
-These are analytical and automated gameplay regressions, not a measured comparison of flight traces against the KSP2 executable.
+These are source/data comparisons, analytical fixtures and automated gameplay regressions. They do not certify matched flight/contact traces against the KSP2 executable. The remaining priorities above still prevent a complete physics parity claim.

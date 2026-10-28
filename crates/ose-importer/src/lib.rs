@@ -328,6 +328,32 @@ pub fn apply_engine_geometry(
     Ok(())
 }
 
+pub fn apply_rcs_geometry(
+    parts: &mut [PartDef],
+    geometry: &BTreeMap<String, Vec<ose_data::ThrustTransform>>,
+) -> Result<(), String> {
+    for (id, points) in geometry {
+        let rcs = parts
+            .iter_mut()
+            .find(|p| &p.id == id)
+            .and_then(|p| p.rcs.as_mut())
+            .ok_or_else(|| format!("Unknown RCS geometry part: {id}"))?;
+        if points.is_empty()
+            || points.iter().any(|p| {
+                (p.weight - 1.0).abs() > 1e-12
+                    || !p.weight.is_finite()
+                    || !p.position_m.length_squared().is_finite()
+                    || !p.direction.length().is_finite()
+                    || (p.direction.length() - 1.0).abs() > 1e-6
+            })
+        {
+            return Err(format!("Invalid RCS geometry for {id}"));
+        }
+        rcs.thrusters = points.clone();
+    }
+    Ok(())
+}
+
 pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
     let d = unwrap_data(v);
     let ar = &d["attachRules"];
@@ -436,6 +462,7 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
                     }
                     if entry["Name"] == "Data_RCS" {
                         rcs = Some(ose_data::Rcs {
+                            thrusters: Vec::new(),
                             thrust_kn: f(o, "maxThrust"),
                             propellant: s(&o["Propellant"], "mixtureName"),
                             isp_curve: curve(&o["atmosphereCurve"]),
@@ -1211,5 +1238,43 @@ mod tests {
             mode.thrust_transforms.is_empty(),
             "old catalogs retain the origin/+Y fallback"
         );
+    }
+    #[test]
+    fn rcs_geometry_import_checks_nozzle_definitions_and_legacy_fallback() {
+        let mut parts: Vec<PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let geometry: BTreeMap<String, Vec<ose_data::ThrustTransform>> =
+            serde_json::from_str(include_str!("../../../assets/own/rcs-geometry.json")).unwrap();
+        for part in &mut parts {
+            if let Some(rcs) = &mut part.rcs {
+                rcs.thrusters.clear();
+            }
+        }
+        apply_rcs_geometry(&mut parts, &geometry).unwrap();
+        assert_eq!(
+            parts
+                .iter()
+                .filter_map(|p| p.rcs.as_ref())
+                .map(|r| r.thrusters.len())
+                .sum::<usize>(),
+            22
+        );
+        let id = "rcs_0v_linear_methalox".to_string();
+        let mut bad = BTreeMap::from([(id.clone(), geometry[&id].clone())]);
+        bad.get_mut(&id).unwrap()[0].weight = 0.5;
+        assert!(apply_rcs_geometry(&mut parts, &bad).is_err());
+        let mut old = serde_json::to_value(
+            parts
+                .iter()
+                .find(|p| p.id == id)
+                .unwrap()
+                .rcs
+                .as_ref()
+                .unwrap(),
+        )
+        .unwrap();
+        old.as_object_mut().unwrap().remove("thrusters");
+        let rcs: ose_data::Rcs = serde_json::from_value(old).unwrap();
+        assert!(rcs.thrusters.is_empty());
     }
 }

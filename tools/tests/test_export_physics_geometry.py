@@ -6,7 +6,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from export_menu_scene import mul, trs
-from export_physics_geometry import thrust_points
+from export_physics_geometry import rcs_points, thrust_points
 
 
 def node(name, position=(0, 0, 0), rotation=(0, 0, 0, 1), scale=(1, 1, 1), parent=None):
@@ -14,6 +14,8 @@ def node(name, position=(0, 0, 0), rotation=(0, 0, 0, 1), scale=(1, 1, 1), paren
         m_LocalScale=SimpleNamespace(**dict(zip("xyz", scale))),
         m_LocalRotation=SimpleNamespace(**dict(zip("xyzw", rotation)))))
     result.world = trs(position, rotation, scale)
+    result.tf.object_reader = SimpleNamespace(path_id=id(result))
+    result.behaviour = lambda name: None
     if parent is not None:
         result.world = mul(parent.world, result.world)
         parent.children.append(result)
@@ -49,6 +51,24 @@ class GeometryTests(unittest.TestCase):
         self.assertEqual(points[0]["position_m"]["x"], 1)
         with self.assertRaises(ValueError):
             thrust_points(root, {"thrustVectorTransformName": "missing"})
+
+    def test_rcs_uses_serialized_transform_references_and_negative_up(self):
+        root = node("rcs")
+        first = node("arbitrary name", (1, 0, 0), parent=root)
+        h = math.sqrt(0.5)
+        second = node("another arbitrary name", (0, 1, 0), (0, 0, h, h), parent=root)
+        module = {"ThrusterTransforms": [
+            {"m_FileID": 0, "m_PathID": id(second)},
+            {"m_FileID": 0, "m_PathID": id(first)}]}
+        root.behaviour = lambda name: module if name == "Module_RCS" else None
+        points = rcs_points(root)
+        self.assertEqual(points[0]["position_m"], {"x": 0, "y": 1, "z": 0})
+        self.assertAlmostEqual(points[0]["direction"]["x"], 1)
+        self.assertEqual(points[1]["direction"], {"x": 0, "y": -1, "z": 0})
+        self.assertEqual([p["weight"] for p in points], [1, 1])
+        module["ThrusterTransforms"][0]["m_FileID"] = 1
+        with self.assertRaises(ValueError):
+            rcs_points(root)
 
 
 if __name__ == "__main__":

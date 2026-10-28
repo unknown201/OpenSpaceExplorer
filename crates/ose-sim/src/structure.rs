@@ -965,6 +965,7 @@ impl Structure {
             for (j, cap) in [caps.x, caps.y, caps.z].into_iter().enumerate() {
                 if cap > 0.0 {
                     channels.push(Actuator {
+                        kind: crate::actuators::Kind::Other,
                         part: i,
                         torque_knm: axes[j] * cap,
                         force_kn: DVec3::ZERO,
@@ -1007,6 +1008,7 @@ impl Structure {
                 if side > 0.0 {
                     let force = axis * side;
                     channels.push(Actuator {
+                        kind: crate::actuators::Kind::Other,
                         part: i,
                         torque_knm: lever.cross(force),
                         force_kn: force,
@@ -1016,27 +1018,47 @@ impl Structure {
                     });
                 }
             }
-            // No imported RCS nozzle transforms yet: permit a bounded transverse push at the mount.
+            // Authored nozzles push only forward; old catalogs retain the mounted sphere proxy.
             if p.groups.rcs {
-                if let Some(rcs) = &self.rcs_defs[i] {
-                    if !self.rcs_fed(i) {
-                        continue;
-                    }
+                if let Some(rcs) = self.rcs_defs[i].as_ref().filter(|_| self.rcs_fed(i)) {
                     let isp_scale = if rcs.isp_curve.evaluate(0.0) > 0.0 {
                         rcs.isp_curve.evaluate(env.pressure_atm) / rcs.isp_curve.evaluate(0.0)
                     } else {
                         0.0
                     };
-                    for axis in axes {
-                        let force = axis * (rcs.thrust_kn * isp_scale.max(0.0));
-                        channels.push(Actuator {
-                            part: i,
-                            torque_knm: r.cross(force),
-                            force_kn: force,
-                            offset_m: DVec3::ZERO,
-                            group: i * 8 + 4,
-                            axial: None,
-                        });
+                    if !rcs.thrusters.is_empty() {
+                        for point in &rcs.thrusters {
+                            let force = crate::rigid::to_vessel(aero::rotate(
+                                self.part_rot[i],
+                                point.direction,
+                            )) * (rcs.thrust_kn * isp_scale.max(0.0));
+                            let offset = crate::rigid::to_vessel(aero::rotate(
+                                self.part_rot[i],
+                                point.position_m,
+                            ));
+                            channels.push(Actuator {
+                                kind: crate::actuators::Kind::RcsNozzle,
+                                part: i,
+                                torque_knm: (r + offset).cross(force),
+                                force_kn: force,
+                                offset_m: offset,
+                                group: self.rigid.len() * 8 + channels.len(),
+                                axial: None,
+                            });
+                        }
+                    } else {
+                        for axis in axes {
+                            let force = axis * (rcs.thrust_kn * isp_scale.max(0.0));
+                            channels.push(Actuator {
+                                kind: crate::actuators::Kind::RcsMount,
+                                part: i,
+                                torque_knm: r.cross(force),
+                                force_kn: force,
+                                offset_m: DVec3::ZERO,
+                                group: i * 8 + 4,
+                                axial: None,
+                            });
+                        }
                     }
                 }
             }
@@ -1055,6 +1077,7 @@ impl Structure {
                     let force = DVec3::new(axis.x, axis.y, -axis.z) * cap;
                     let (at, _) = self.part_box(i);
                     channels.push(Actuator {
+                        kind: crate::actuators::Kind::Other,
                         part: i,
                         torque_knm: (at - centre).cross(force),
                         force_kn: force,
@@ -1188,7 +1211,7 @@ impl Structure {
         let mut isp = (0.0, 0.0);
         for i in (0..self.rigid.len()).filter(|&i| self.rigid.present[i]) {
             if let Some(r) = &self.rcs_defs[i] {
-                thrust += r.thrust_kn;
+                thrust += r.thrust_kn * r.thrusters.len().max(1) as f64;
                 torque += r.thrust_kn * (self.rigid.rest_position(i) - c).length();
                 if isp.0 == 0.0 {
                     isp = (r.isp_curve.evaluate(0.0), r.isp_curve.evaluate(1.0));
@@ -1227,15 +1250,24 @@ impl Structure {
         let channels = propulsion.actuators.as_ref().expect("configured actuators");
         let mut effort = vec![0.0; self.rigid.len()];
         for (a, input) in channels.iter().zip(&allocation.inputs) {
-            if a.group == a.part * 8 + 4 && self.rcs_defs[a.part].is_some() {
-                effort[a.part] += input * input;
+            if a.kind.is_rcs() {
+                effort[a.part] += if a.kind == crate::actuators::Kind::RcsNozzle {
+                    *input
+                } else {
+                    input * input
+                };
             }
         }
         let mut parts = Vec::new();
         let mut requests = Vec::new();
         let mut demand = 0.0;
         for (i, norm) in effort.iter_mut().enumerate() {
-            *norm = norm.sqrt().min(1.0);
+            if self.rcs_defs[i]
+                .as_ref()
+                .is_some_and(|r| r.thrusters.is_empty())
+            {
+                *norm = norm.sqrt().min(1.0);
+            }
             if !self.rigid.present[i] || *norm <= 0.0 {
                 continue;
             }
@@ -1273,7 +1305,7 @@ impl Structure {
             0.0
         };
         for (a, input) in channels.iter().zip(&mut allocation.inputs) {
-            if a.group == a.part * 8 + 4 && self.rcs_defs[a.part].is_some() {
+            if a.kind.is_rcs() {
                 let old = *input;
                 *input *= delivered[a.part];
                 allocation.force_kn = allocation.force_kn + a.force_kn * (*input - old);
@@ -3713,6 +3745,7 @@ mod tests {
         ] {
             s.part_rot[i] = [0.0, 0.0, 0.0, 1.0];
             s.rcs_defs[i] = Some(ose_data::Rcs {
+                thrusters: Vec::new(),
                 thrust_kn: 100.0 * ose_data::G0,
                 propellant: propellant.into(),
                 isp_curve: ose_data::Curve {
@@ -3946,6 +3979,88 @@ mod tests {
     }
 
     #[test]
+    fn rcs_nozzles_fire_only_in_their_authored_direction_and_partial_fuel_limits_them() {
+        for (direction, fraction) in [(1.0, 0.0), (1.0, 0.25), (1.0, 1.0), (-1.0, 1.0)] {
+            let (mut s, mut p, pair, body) = rcs_fixture();
+            s.rcs_defs[pair[1]] = None;
+            let rcs = s.rcs_defs[pair[0]].as_mut().unwrap();
+            rcs.thrust_kn = 1.0;
+            rcs.thrusters = vec![ose_data::ThrustTransform {
+                position_m: DVec3::new(0.0, 1.0, 0.0),
+                direction: DVec3::new(1.0, 0.0, 0.0),
+                weight: 1.0,
+            }];
+            s.net.tanks.retain(|t| t.part == pair[0]);
+            let t = &mut s.net.tanks[0];
+            t.stored = 0.1 * fraction / (100.0 * ose_data::G0 * s.net.unit_mass_t[t.resource]);
+            p.rcs.translate = DVec3::new(direction, 0.0, 0.0);
+            let mut engine = s.propulsion(&p, Default::default(), 0.1);
+            let centre = engine.mass.centre_m;
+            s.configure_actuators(&p, Default::default(), &mut engine);
+            s.resolve_wheel_power(&mut p, &body, &mut engine, 0.1);
+            let scale = if direction > 0.0 { fraction } else { 0.0 };
+            let allocation = engine.control_allocation.unwrap();
+            assert!((allocation.force_kn - DVec3::new(scale, 0.0, 0.0)).length() < 1e-9);
+            assert!(
+                (allocation.torque_knm
+                    - (s.rigid.rest_position(pair[0]) + DVec3::new(0.0, 1.0, 0.0) - centre)
+                        .cross(allocation.force_kn))
+                .length()
+                    < 1e-9
+            );
+            assert!((engine.burned_t - 0.1 * scale / (100.0 * ose_data::G0)).abs() < 1e-9);
+            assert!(allocation.inputs.iter().all(|x| *x >= 0.0 && *x <= 1.0));
+        }
+    }
+
+    #[test]
+    fn rcs_opposing_nozzles_pay_for_both_forces_even_when_translation_cancels() {
+        let (mut s, mut p, pair, body) = rcs_fixture();
+        s.rcs_defs[pair[1]] = None;
+        let rcs = s.rcs_defs[pair[0]].as_mut().unwrap();
+        rcs.thrust_kn = 1.0;
+        rcs.thrusters = [1.0, -1.0]
+            .into_iter()
+            .map(|sign| ose_data::ThrustTransform {
+                position_m: DVec3::new(0.0, sign, 0.0),
+                direction: DVec3::new(sign, 0.0, 0.0),
+                weight: 1.0,
+            })
+            .collect();
+        p.rcs.translate = DVec3::new(1.0, 0.0, 0.0);
+        p.rotation_input = DVec3::new(0.0, -1.0, 0.0);
+        let mut engine = s.propulsion(&p, Default::default(), 0.1);
+        engine.mass.centre_m = s.rigid.rest_position(pair[0]);
+        s.configure_actuators(&p, Default::default(), &mut engine);
+        s.resolve_wheel_power(&mut p, &body, &mut engine, 0.1);
+        let allocation = engine.control_allocation.unwrap();
+        assert!(allocation.force_kn.length() < 1e-9);
+        assert!((allocation.torque_knm - DVec3::new(0.0, 0.0, -2.0)).length() < 1e-9);
+        assert!((engine.burned_t - 0.2 / (100.0 * ose_data::G0)).abs() < 1e-9);
+        assert_eq!(allocation.inputs, vec![1.0, 1.0]);
+    }
+
+    #[test]
+    fn committed_rcs_nozzles_cover_the_five_authored_modules() {
+        let (_, defs, _) = assets();
+        let modules: Vec<_> = defs.iter().filter_map(|p| p.rcs.as_ref()).collect();
+        assert_eq!(modules.len(), 5);
+        assert_eq!(modules.iter().map(|r| r.thrusters.len()).sum::<usize>(), 22);
+        assert!(modules.iter().all(|r| !r.thrusters.is_empty()));
+        let block = defs
+            .iter()
+            .find(|p| p.id == "rcs_0v_block_monoprop")
+            .unwrap()
+            .rcs
+            .as_ref()
+            .unwrap();
+        assert!(
+            block.thrusters.iter().all(|t| t.direction.x == 0.0),
+            "the four-way block cannot synthesize a fifth direction"
+        );
+    }
+
+    #[test]
     fn rcs_translation_and_rotation_share_each_mounts_force_and_fuel_budget() {
         let (mut s, mut p, pair, body) = rcs_fixture();
         p.rotation_input = DVec3::new(1.0, 1.0, 1.0);
@@ -4087,6 +4202,7 @@ mod tests {
         let mut engine = s.propulsion(&p, Default::default(), 0.02);
         engine.actuators = Some(vec![
             crate::actuators::Actuator {
+                kind: crate::actuators::Kind::Other,
                 part: s.root,
                 torque_knm: DVec3::new(0.0, 2.0, 0.0),
                 force_kn: DVec3::ZERO,
@@ -4095,6 +4211,7 @@ mod tests {
                 axial: None,
             },
             crate::actuators::Actuator {
+                kind: crate::actuators::Kind::Other,
                 part: other,
                 torque_knm: DVec3::new(0.0, 2.0, 0.0),
                 force_kn: DVec3::new(2.0, 0.0, 0.0),
