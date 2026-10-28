@@ -354,6 +354,55 @@ pub fn apply_rcs_geometry(
     Ok(())
 }
 
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct LiftingGeometry {
+    pub transform_name: String,
+    pub resolved: bool,
+    pub frame: ose_data::SurfaceFrame,
+}
+
+/// Attach a static prefab frame without overwriting module-local axes or pressure offsets.
+pub fn apply_lifting_geometry(
+    parts: &mut [PartDef],
+    geometry: &BTreeMap<String, LiftingGeometry>,
+) -> Result<(), String> {
+    for (id, exported) in geometry {
+        let surface = parts
+            .iter_mut()
+            .find(|p| &p.id == id)
+            .and_then(|p| p.lifting_surface.as_mut())
+            .ok_or_else(|| format!("Unknown lifting geometry part: {id}"))?;
+        if surface.transform_name != exported.transform_name {
+            return Err(format!("Stale lifting transform name for {id}"));
+        }
+        let frame = &exported.frame;
+        let [x, y, z] = frame.direction_axes;
+        let determinant = frame.point_axes[0]
+            .cross(frame.point_axes[1])
+            .dot(frame.point_axes[2]);
+        if !frame.position_m.length_squared().is_finite()
+            || frame
+                .point_axes
+                .iter()
+                .any(|v| !v.length_squared().is_finite())
+            || !determinant.is_finite()
+            || determinant == 0.0
+            || frame
+                .direction_axes
+                .iter()
+                .any(|v| !v.length_squared().is_finite() || (v.length_squared() - 1.0).abs() > 1e-6)
+            || x.dot(y).abs() > 1e-6
+            || x.dot(z).abs() > 1e-6
+            || y.dot(z).abs() > 1e-6
+            || (x.cross(y).dot(z) - 1.0).abs() > 1e-6
+        {
+            return Err(format!("Invalid lifting frame for {id}"));
+        }
+        surface.reference_frame = Some(frame.clone());
+    }
+    Ok(())
+}
+
 pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
     let d = unwrap_data(v);
     let ar = &d["attachRules"];
@@ -451,6 +500,8 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
                             _ => DVec3::new(sign, 0.0, 0.0),
                         };
                         lifting_surface = Some(ose_data::LiftingSurface {
+                            transform_name: s(o, "transformName"),
+                            reference_frame: None,
                             node_enabled: b(o, "nodeEnabled"),
                             attach_node_name: s(o, "attachNodeName"),
                             pressure_offset_m: vec3(&o["CoPOffset"]),
@@ -1369,6 +1420,112 @@ mod tests {
         assert!(!imported.reset_enabled);
         assert_eq!(imported.isp_curve.evaluate(0.0), 150.0);
     }
+    #[test]
+    fn lifting_frames_validate_geometry_preserve_module_data_and_migrate_old_catalogs() {
+        let source = serde_json::json!({"data":{"partName":"wing","serializedPartModules":[{"ModuleData":[{"Name":"Data_LiftingSurface","DataObject":{"transformName":"aero","transformDir":"X","transformSign":1.0,"CoPOffset":{"x":1.0,"y":2.0,"z":3.0}}}]}]}});
+        let mut parts = vec![part(&source, &mut Coverage::default())];
+        let frame = ose_data::SurfaceFrame {
+            position_m: DVec3::new(1.0, 2.0, 3.0),
+            point_axes: [
+                DVec3::new(0.0, 2.0, 0.0),
+                DVec3::new(-3.0, 0.0, 0.0),
+                DVec3::new(0.0, 0.0, 4.0),
+            ],
+            direction_axes: [
+                DVec3::new(0.0, 1.0, 0.0),
+                DVec3::new(-1.0, 0.0, 0.0),
+                DVec3::new(0.0, 0.0, 1.0),
+            ],
+        };
+        let export = LiftingGeometry {
+            transform_name: "aero".into(),
+            resolved: true,
+            frame,
+        };
+        let geometry = BTreeMap::from([("wing".into(), export.clone())]);
+        apply_lifting_geometry(&mut parts, &geometry).unwrap();
+        let surface = parts[0].lifting_surface.as_ref().unwrap();
+        assert_eq!(surface.axis, DVec3::new(1.0, 0.0, 0.0));
+        assert_eq!(surface.pressure_offset_m, DVec3::new(1.0, 2.0, 3.0));
+        let frame = surface.reference_frame.as_ref().unwrap();
+        assert_eq!(
+            frame.point(surface.pressure_offset_m),
+            DVec3::new(-5.0, 4.0, 15.0)
+        );
+        assert_eq!(frame.direction(surface.axis), DVec3::new(0.0, 1.0, 0.0));
+        let mut old = serde_json::to_value(surface).unwrap();
+        old.as_object_mut().unwrap().remove("transform_name");
+        old.as_object_mut().unwrap().remove("reference_frame");
+        let restored: ose_data::LiftingSurface = serde_json::from_value(old).unwrap();
+        assert!(restored.transform_name.is_empty() && restored.reference_frame.is_none());
+        for case in 0..5 {
+            let mut bad = export.clone();
+            match case {
+                0 => bad.transform_name = "stale".into(),
+                1 => bad.frame.position_m.x = f64::NAN,
+                2 => bad.frame.point_axes[0] = DVec3::ZERO,
+                3 => bad.frame.direction_axes[0] = bad.frame.direction_axes[0] * 2.0,
+                _ => bad.frame.direction_axes[0] = bad.frame.direction_axes[0] * -1.0,
+            }
+            assert!(
+                apply_lifting_geometry(&mut parts, &BTreeMap::from([("wing".into(), bad)]))
+                    .is_err()
+            );
+        }
+        let mut mirrored = export.clone();
+        mirrored.resolved = false; // Missing named transforms export the module-owner fallback.
+        mirrored.frame.point_axes[0] = mirrored.frame.point_axes[0] * -1.0;
+        apply_lifting_geometry(&mut parts, &BTreeMap::from([("wing".into(), mirrored)])).unwrap();
+        assert_eq!(
+            parts[0]
+                .lifting_surface
+                .as_ref()
+                .unwrap()
+                .reference_frame
+                .as_ref()
+                .unwrap()
+                .direction(DVec3::new(1.0, 0.0, 0.0)),
+            DVec3::new(0.0, 1.0, 0.0)
+        );
+        assert!(
+            apply_lifting_geometry(&mut parts, &BTreeMap::from([("unknown".into(), export)]))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn committed_lifting_frames_match_the_thirteen_authored_root_transforms() {
+        let mut parts: Vec<PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let geometry: BTreeMap<String, LiftingGeometry> =
+            serde_json::from_str(include_str!("../../../assets/own/lifting-geometry.json"))
+                .unwrap();
+        assert_eq!(geometry.len(), 13);
+        apply_lifting_geometry(&mut parts, &geometry).unwrap();
+        for (id, exported) in geometry {
+            assert!(exported.transform_name.is_empty() && exported.resolved);
+            let frame = parts
+                .iter()
+                .find(|p| p.id == id)
+                .unwrap()
+                .lifting_surface
+                .as_ref()
+                .unwrap()
+                .reference_frame
+                .as_ref()
+                .unwrap();
+            assert_eq!(frame.point(DVec3::ZERO), DVec3::ZERO);
+            for axis in [
+                DVec3::new(1.0, 0.0, 0.0),
+                DVec3::new(0.0, 1.0, 0.0),
+                DVec3::new(0.0, 0.0, 1.0),
+            ] {
+                assert_eq!(frame.point(axis), axis);
+                assert_eq!(frame.direction(axis), axis);
+            }
+        }
+    }
+
     #[test]
     fn lifting_node_gate_imports_and_old_catalogs_leave_lift_enabled() {
         let value = serde_json::json!({"data":{"partName":"wing","serializedPartModules":[

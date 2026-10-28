@@ -6,7 +6,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from export_menu_scene import mul, trs
-from export_physics_geometry import rcs_points, thrust_points
+from export_physics_geometry import lifting_frame, rcs_points, thrust_points
 
 
 def node(name, position=(0, 0, 0), rotation=(0, 0, 0, 1), scale=(1, 1, 1), parent=None):
@@ -28,6 +28,42 @@ def node(name, position=(0, 0, 0), rotation=(0, 0, 0, 1), scale=(1, 1, 1), paren
 
 
 class GeometryTests(unittest.TestCase):
+    def test_lifting_frame_keeps_scaled_points_separate_from_unscaled_axes(self):
+        h = math.sqrt(0.5)
+        root = node("wing", (10, 20, 30), (h, 0, 0, h), (2, 3, 4))
+        hinge = node("hinge", (1, 2, 0), (0, 0, h, h), (5, 2, 1), parent=root)
+        node("aero", (0, 1, 0), (0, h, 0, h), (2, 1, 3), parent=hinge)
+        result = lifting_frame(root, {"transformName": "aero"})
+        self.assertTrue(result["resolved"])
+        frame = result["frame"]
+        point = [frame["position_m"][key] + sum(frame["point_axes"][j][key] * v
+                 for j, v in enumerate((1, 2, 3))) for key in "xyz"]
+        for actual, expected in zip(point, (-10, 141, -8)):
+            self.assertAlmostEqual(actual, expected)
+        for key, expected in zip("xyz", (0, 0, -1)):
+            self.assertAlmostEqual(frame["direction_axes"][0][key], expected)
+        for key, expected in zip("xyz", (0, 1, 0)):
+            self.assertAlmostEqual(frame["direction_axes"][2][key], expected)
+
+    def test_lifting_names_use_first_depth_first_match_and_missing_uses_module_owner(self):
+        h = math.sqrt(0.5)
+        root = node("wing", scale=(2, 1, 1))
+        owner = node("module", (1, 2, 3), (0, 0, h, h), (2, 3, 4), parent=root)
+        node("aero", (1, 0, 0), parent=owner)
+        node("aero", (4, 0, 0), parent=root)
+        node("aero", (-4, 0, 0), parent=root)
+        selected = lifting_frame(root, {"transformName": "aero"}, owner)
+        for key, expected in zip("xyz", (2, 4, 3)):
+            self.assertAlmostEqual(selected["frame"]["position_m"][key], expected, places=12)
+        missing = lifting_frame(root, {"transformName": "absent"}, owner)
+        empty = lifting_frame(root, {}, owner)
+        self.assertFalse(missing["resolved"])
+        self.assertTrue(empty["resolved"])
+        self.assertEqual(missing["frame"], empty["frame"])
+        self.assertEqual(missing["frame"]["position_m"], {"x": 2, "y": 2, "z": 3})
+        for key, expected in zip("xyz", (0, 1, 0)):
+            self.assertAlmostEqual(missing["frame"]["direction_axes"][0][key], expected)
+
     def test_root_editor_pose_is_removed_scale_changes_positions_but_not_forward(self):
         h = math.sqrt(0.5)
         root = node("engine", (10, 20, 30), (h, 0, 0, h), (2, 3, 4))

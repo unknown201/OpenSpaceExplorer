@@ -2289,7 +2289,12 @@ impl Structure {
             return DVec3::ZERO;
         }
         let (x, y, z) = frame;
-        let axis = crate::rigid::to_vessel(aero::rotate(self.part_rot[part], surface.axis));
+        let axis = surface
+            .reference_frame
+            .as_ref()
+            .map(|f| f.direction(surface.axis))
+            .unwrap_or(surface.axis);
+        let axis = crate::rigid::to_vessel(aero::rotate(self.part_rot[part], axis));
         aero::surface_force(
             curves,
             surface,
@@ -2372,15 +2377,28 @@ impl Structure {
             i,
             self.lift_defs[i]
                 .as_ref()
-                .map(|(l, _)| l.pressure_offset_m)
+                .map(|(l, _)| {
+                    l.reference_frame
+                        .as_ref()
+                        .map(|f| f.point(l.pressure_offset_m))
+                        .unwrap_or(l.pressure_offset_m)
+                })
                 .unwrap_or(DVec3::ZERO),
         )
     }
     fn drag_offset(&self, i: usize) -> DVec3 {
-        self.mounted_offset(i, self.pressure_offsets_m[i]) + self.lift_offset(i)
+        // Module_Drag adds raw module CoPOffset in the part frame, independently of
+        // Module_LiftingSurface's optional named reference transform.
+        self.mounted_offset(i, self.pressure_offsets_m[i] + self.raw_surface_offset(i))
     }
     fn body_lift_offset(&self, i: usize) -> DVec3 {
-        self.mounted_offset(i, self.lift_offsets_m[i]) + self.lift_offset(i)
+        self.mounted_offset(i, self.lift_offsets_m[i] + self.raw_surface_offset(i))
+    }
+    fn raw_surface_offset(&self, i: usize) -> DVec3 {
+        self.lift_defs[i]
+            .as_ref()
+            .map(|(l, _)| l.pressure_offset_m)
+            .unwrap_or(DVec3::ZERO)
     }
     fn control_offset(&self, i: usize) -> DVec3 {
         self.mounted_offset(
@@ -3234,6 +3252,97 @@ mod tests {
         s.shielded[wing] = true;
         s.update_heat_in_flow(flow, 288.0, 0.0, &thermal::HeatSettings::default(), 0.02);
         assert_eq!(s.reentry_flux_kw[wing], 0.0);
+    }
+
+    #[test]
+    fn named_lifting_frame_rotates_force_and_scaled_pressure_point_under_mount_and_roll() {
+        let (mut s, _, wing) = airflow_fixture();
+        let h = 0.5_f64.sqrt();
+        s.part_rot[wing] = [0.0, 0.0, h, h];
+        let surface = &mut s.lift_defs[wing].as_mut().unwrap().0;
+        surface.axis = DVec3::new(1.0, 0.0, 0.0);
+        surface.pressure_offset_m = DVec3::new(1.0, 2.0, 3.0);
+        surface.transform_name = "aero".into();
+        surface.reference_frame = Some(ose_data::SurfaceFrame {
+            position_m: DVec3::new(1.0, 2.0, 3.0),
+            point_axes: [
+                DVec3::new(0.0, 2.0, 0.0),
+                DVec3::new(-3.0, 0.0, 0.0),
+                DVec3::new(0.0, 0.0, 4.0),
+            ],
+            direction_axes: [
+                DVec3::new(0.0, 1.0, 0.0),
+                DVec3::new(-1.0, 0.0, 0.0),
+                DVec3::new(0.0, 0.0, 1.0),
+            ],
+        });
+        // Reference Rz(90) then mount Rz(90): +X becomes craft -X. Under a 90-degree
+        // roll this is inertial +Z. Scale affects the pressure point, never this unit axis.
+        let frame = (
+            DVec3::new(0.0, 0.0, -1.0),
+            DVec3::new(0.0, 1.0, 0.0),
+            DVec3::new(1.0, 0.0, 0.0),
+        );
+        let air = DVec3::new(0.0, 100.0, -10.0);
+        let expected_force = DVec3::new(
+            0.0,
+            0.0,
+            0.5 * air.length_squared() * aero::LIFT_MULTIPLIER * 10.0 / air.length(),
+        );
+        let offset = DVec3::new(-4.0, -5.0, -15.0);
+        assert!((s.lift_offset(wing) - offset).length() < 1e-12);
+        let out = s.aerodynamics(0, frame, air, 1.0, 0.3);
+        assert!((out.lift_kn - expected_force).length() < 1e-9);
+        let lever = s.rigid.rest_position(wing) + offset - s.mass_properties().centre_m;
+        let world_lever = frame.0 * lever.x + frame.1 * lever.y + frame.2 * lever.z;
+        assert!((out.torque_knm - world_lever.cross(expected_force)).length() < 1e-8);
+        let forces = s.resolved_aero_forces.as_ref().unwrap();
+        assert!(forces.iter().any(|f| f.part == wing
+            && (f.offset_m - offset).length() < 1e-12
+            && (f.force_kn - expected_force).length() < 1e-9));
+        let fx = s.lifting_fx(frame, air, 1.0, 0.3);
+        let perpendicular =
+            expected_force - air.normalized() * expected_force.dot(air.normalized());
+        assert!((fx[0].2 as f64 - perpendicular.length()).abs() < 1e-5);
+        // Module_Drag's offsets stay part-local; a named surface transform cannot move them.
+        s.pressure_offsets_m[wing] = DVec3::new(2.0, 0.0, 0.0);
+        s.lift_offsets_m[wing] = DVec3::new(0.0, 4.0, 0.0);
+        assert!((s.drag_offset(wing) - DVec3::new(-2.0, 3.0, -3.0)).length() < 1e-12);
+        assert!((s.body_lift_offset(wing) - DVec3::new(-6.0, 1.0, -3.0)).length() < 1e-12);
+    }
+
+    #[test]
+    fn named_lifting_point_drives_local_airflow_and_damping_at_zero_bulk_speed() {
+        let (mut s, p, wing) = airflow_fixture();
+        let at =
+            s.mass_properties().centre_m - s.rigid.rest_position(wing) + DVec3::new(2.0, 0.0, 0.0);
+        let surface = &mut s.lift_defs[wing].as_mut().unwrap().0;
+        surface.axis = DVec3::new(1.0, 0.0, 0.0);
+        surface.pressure_offset_m = DVec3::ZERO;
+        surface.reference_frame = Some(ose_data::SurfaceFrame {
+            position_m: crate::rigid::to_vessel(at),
+            point_axes: [
+                DVec3::new(0.0, 2.0, 0.0),
+                DVec3::new(-3.0, 0.0, 0.0),
+                DVec3::new(0.0, 0.0, 4.0),
+            ],
+            direction_axes: [
+                DVec3::new(0.0, 1.0, 0.0),
+                DVec3::new(-1.0, 0.0, 0.0),
+                DVec3::new(0.0, 0.0, 1.0),
+            ],
+        });
+        let flow = Airflow {
+            frame: crate::flight::vessel_basis(&p),
+            velocity: DVec3::ZERO,
+            angular_velocity: DVec3::new(0.0, 0.0, 1.0),
+            density: 1.0,
+            speed_of_sound: 100.0,
+        };
+        let out = s.aerodynamics_local(0, flow);
+        assert!((out.lift_kn - DVec3::new(0.0, -0.072, 0.0)).length() < 1e-10);
+        assert!((out.torque_knm - DVec3::new(0.0, 0.0, -0.144)).length() < 1e-10);
+        assert!(out.torque_knm.dot(flow.angular_velocity) < 0.0);
     }
 
     #[test]

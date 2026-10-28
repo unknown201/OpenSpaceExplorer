@@ -1,8 +1,9 @@
-"""Extract engine and RCS thrust points/directions from the installed part prefabs.
+"""Extract engine/RCS force points and lifting-surface frames from installed part prefabs.
 
 Coordinates remain Unity part-local, as in the imported part data. The simulator
 performs the same mounted rotation and handedness conversion as for other data.
-No meshes or decompiled source are written. Missing transforms are fatal.
+No meshes or decompiled source are written. Missing thrust transforms are fatal;
+missing named lifting transforms use the reference's module-owner fallback.
 """
 from __future__ import annotations
 
@@ -50,7 +51,7 @@ def rcs_points(root):
     return force_points(root, selected, (0, -1, 0))
 
 
-def force_points(root, selected, force_axis):
+def part_frames(root):
     scale = tuple(getattr(root.tf.m_LocalScale, c) for c in "xyz")
     # Instantiate replaces root position/rotation; prefab scale is retained.
     relative = mul(trs((0, 0, 0), (0, 0, 0, 1), scale), inverse(root.world))
@@ -63,6 +64,29 @@ def force_points(root, selected, force_axis):
             rotation_tree(child, mul(rotation, trs((0, 0, 0), q, (1, 1, 1))))
 
     rotation_tree(root, trs((0, 0, 0), (0, 0, 0, 1), (1, 1, 1)))
+    return relative, rotations
+
+
+def lifting_frame(root, data, owner=None):
+    """Match the first named model transform, falling back to the module owner's transform."""
+    owner = root if owner is None else owner
+    name = data.get("transformName") or ""
+    selected = next((node for node in root.walk() if node.name == name), None) if name else owner
+    resolved = selected is not None
+    selected = selected if resolved else owner
+    relative, rotations = part_frames(root)
+    matrix = mul(relative, selected.world)
+    rotation = rotations[id(selected)]
+    clean = lambda x: 0.0 if abs(x) < 1e-12 else float(x)
+    vector = lambda values: dict(zip("xyz", (clean(v) for v in values)))
+    return {"transform_name": name, "resolved": resolved,
+            "frame": {"position_m": vector(matrix[i][3] for i in range(3)),
+                      "point_axes": [vector(matrix[i][j] for i in range(3)) for j in range(3)],
+                      "direction_axes": [vector(rotation[i][j] for i in range(3)) for j in range(3)]}}
+
+
+def force_points(root, selected, force_axis):
+    relative, rotations = part_frames(root)
     out = []
     for node, weight in selected:
         matrix = mul(relative, node.world)
@@ -84,10 +108,12 @@ def main():
     parser.add_argument("--data", type=Path, default=ROOT / "assets/ksp2/data/parts")
     parser.add_argument("--out", type=Path, default=ROOT / "assets/own/physics-geometry.json")
     parser.add_argument("--rcs-out", type=Path, default=ROOT / "assets/own/rcs-geometry.json")
+    parser.add_argument("--lifting-out", type=Path, default=ROOT / "assets/own/lifting-geometry.json")
     args = parser.parse_args()
     exporter = Exporter(args.install, ROOT / "target/physics-geometry-export", 64, False)
     result = {}
     rcs = {}
+    lifting = {}
     for path in sorted(args.data.glob("*.json")):
         data = json.loads(path.read_text(encoding="utf-8"))["data"]
         modes = [mode for module in data.get("serializedPartModules", [])
@@ -95,7 +121,10 @@ def main():
                  for mode in entry["DataObject"]["engineModes"]]
         has_rcs = any(entry["Name"] == "Data_RCS" for module in data.get("serializedPartModules", [])
                       for entry in module.get("ModuleData", []))
-        if not modes and not has_rcs:
+        surfaces = [(module.get("BehaviourType", "KSP.Modules.Module_LiftingSurface").split(",")[0].split(".")[-1], entry["DataObject"])
+                    for module in data.get("serializedPartModules", [])
+                    for entry in module.get("ModuleData", []) if entry["Name"] == "Data_LiftingSurface"]
+        if not modes and not has_rcs and not surfaces:
             continue
         env, _ = exporter.env_for_key(path.stem + ".prefab")
         roots = [root for sf in env.assets for root in load_scene(sf) if root.name == path.stem]
@@ -121,6 +150,22 @@ def main():
                 raise ValueError(f"Missing or ambiguous RCS geometry: {path.stem}")
             rcs[path.stem] = candidates[0]
             print(path.stem, "RCS", len(candidates[0]), flush=True)
+        if surfaces:
+            if len(surfaces) != 1:
+                raise ValueError(f"Ambiguous lifting modules: {path.stem}")
+            # Model-only roots share names with part-prefab roots; select the actual module owner.
+            owner_class, surface = surfaces[0]
+            candidates = []
+            for root in roots:
+                owners = [node for node in root.walk() if node.behaviour(owner_class)]
+                if len(owners) > 1:
+                    raise ValueError(f"Ambiguous lifting module owners: {path.stem}")
+                if owners:
+                    candidates.append(lifting_frame(root, surface, owners[0]))
+            if not candidates or any(c != candidates[0] for c in candidates):
+                raise ValueError(f"Missing or ambiguous lifting geometry: {path.stem}")
+            lifting[path.stem] = candidates[0]
+            print(path.stem, "lifting", candidates[0]["resolved"], flush=True)
         exporter._envs.clear()
     if not result:
         raise ValueError(f"No engine definitions under {args.data}")
@@ -130,6 +175,9 @@ def main():
     args.rcs_out.parent.mkdir(parents=True, exist_ok=True)
     args.rcs_out.write_text(json.dumps(rcs, indent=2) + "\n", encoding="utf-8")
     print(f"Wrote {len(rcs)} RCS parts to {args.rcs_out}")
+    args.lifting_out.parent.mkdir(parents=True, exist_ok=True)
+    args.lifting_out.write_text(json.dumps(lifting, indent=2) + "\n", encoding="utf-8")
+    print(f"Wrote {len(lifting)} lifting surfaces to {args.lifting_out}")
 
 
 if __name__ == "__main__":

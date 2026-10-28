@@ -4,6 +4,8 @@ Updated 2026-10-28.
 
 ## What works
 
+- Static lifting-surface model frames now export and import named child transforms with module-owner fallback. Pressure points include hierarchy scale while lift directions use rotation only, then share mounted/rolled flight and joint-load geometry. Cube drag/body-lift offsets remain part-local. The 13 shipped surfaces resolve to identity root frames; animated/procedural frame updates remain open.
+
 - Lifting surfaces now honor authored named-node occupancy: parent-side or child-side connections suppress module lift/internal drag and control/wing readouts until all occupants detach. Independent drag cubes remain active. Missing/disabled rules preserve lift. Two simulation regressions and an importer regression cover the behavior and legacy defaults; the 13 stock surface gates remain authored disabled.
 
 - Local heating and control authority now use atmosphere-relative point velocity at authored drag/control offsets, including tumble and roll. Zero bulk airspeed no longer disables a spinning control surface or its local heating. Rotating thermal occlusion remains a conservative box approximation. Two new analytical regressions pass; see the [known physics gaps and acceptance criteria](PHYSICS-GAPS.md).

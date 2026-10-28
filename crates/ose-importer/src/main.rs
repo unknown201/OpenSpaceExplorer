@@ -17,6 +17,8 @@ struct Args {
     physics_geometry: PathBuf,
     #[arg(long, default_value = "assets/own/rcs-geometry.json")]
     rcs_geometry: PathBuf,
+    #[arg(long, default_value = "assets/own/lifting-geometry.json")]
+    lifting_geometry: PathBuf,
     /// Extracted data directory (output of tools/extract_bundles.py).
     #[arg(long, default_value = "assets/ksp2/data")]
     data: PathBuf,
@@ -48,6 +50,12 @@ fn main() -> anyhow::Result<()> {
         let geometry: std::collections::BTreeMap<String, Vec<ose_data::ThrustTransform>> =
             serde_json::from_str(&std::fs::read_to_string(&args.rcs_geometry)?)?;
         ose_importer::apply_rcs_geometry(&mut game.parts, &geometry).map_err(anyhow::Error::msg)?;
+    }
+    if args.lifting_geometry.exists() {
+        let geometry: std::collections::BTreeMap<String, ose_importer::LiftingGeometry> =
+            serde_json::from_str(&std::fs::read_to_string(&args.lifting_geometry)?)?;
+        ose_importer::apply_lifting_geometry(&mut game.parts, &geometry)
+            .map_err(anyhow::Error::msg)?;
     }
     if let Ok(text) = std::fs::read_to_string(&args.loc) {
         let loc: std::collections::HashMap<String, String> = serde_json::from_str(&text)?;

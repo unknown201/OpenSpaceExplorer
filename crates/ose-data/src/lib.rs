@@ -384,10 +384,37 @@ impl Default for DragProperties {
     }
 }
 
-/// A lifting surface as the original defines it (`Data_LiftingSurface`): lift pushes along its axis
-/// (`transformDir` times `transformSign`, part space) against the airflow through it.
+/// Static model reference frame for a lifting module, expressed in Unity part-local axes.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SurfaceFrame {
+    pub position_m: ose_math::DVec3,
+    /// Columns of the model-to-part affine transform; include hierarchy scale for points.
+    pub point_axes: [ose_math::DVec3; 3],
+    /// Rotation-only columns, matching Unity TransformDirection (independent of scale).
+    pub direction_axes: [ose_math::DVec3; 3],
+}
+
+impl SurfaceFrame {
+    pub fn point(&self, v: ose_math::DVec3) -> ose_math::DVec3 {
+        self.position_m
+            + self.point_axes[0] * v.x
+            + self.point_axes[1] * v.y
+            + self.point_axes[2] * v.z
+    }
+
+    pub fn direction(&self, v: ose_math::DVec3) -> ose_math::DVec3 {
+        self.direction_axes[0] * v.x + self.direction_axes[1] * v.y + self.direction_axes[2] * v.z
+    }
+}
+
+/// A lifting surface as the original defines it (`Data_LiftingSurface`). Its axis and pressure offset
+/// remain module-local; reference_frame resolves a named model transform when exported geometry exists.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LiftingSurface {
+    #[serde(default)]
+    pub transform_name: String,
+    #[serde(default)]
+    pub reference_frame: Option<SurfaceFrame>,
     /// Suppress this module's lift and internal drag while its named node is occupied.
     #[serde(default)]
     pub node_enabled: bool,
