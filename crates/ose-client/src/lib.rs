@@ -6996,8 +6996,6 @@ impl App {
         None
     }
 
-    /// T: SAS stability assist, holding the direction the vessel points now. (The server always holds some
-    /// direction, so there is no free-drifting "SAS off".)
     /// T: SAS off (the craft keeps turning as it was, keys apply torque) or back on, holding where it points.
     fn toggle_sas(&mut self) {
         if matches!(self.attitude, ose_net::AttitudeMode::Free) {
@@ -7010,11 +7008,17 @@ impl App {
     }
 
     fn sas_hold(&mut self) {
-        let (pitch_deg, heading_deg) = self.facing_pitch_heading().unwrap_or((90.0, 0.0));
-        self.set_attitude(ose_net::AttitudeMode::PitchHeading {
-            pitch_deg,
-            heading_deg,
-        });
+        let facing = self
+            .scene
+            .as_ref()
+            .and_then(|s| s.vessel(self.flying?))
+            .and_then(|v| v.flight.as_ref())
+            .map(|f| f.facing);
+        self.set_attitude(
+            facing
+                .map(ose_net::AttitudeMode::Fixed)
+                .unwrap_or(ose_net::AttitudeMode::Up),
+        );
     }
 
     /// G: fold the landing legs and wheels out, or in when any is out.
@@ -7194,7 +7198,8 @@ impl App {
         let (pitch_in, yaw_in, thr_in) = if self.lin_mode {
             (0.0, 0.0, 0.0)
         } else {
-            (k.pitch(), k.yaw(), k.throttle())
+            let rotation = k.rotation();
+            (rotation.x, rotation.y, k.throttle())
         };
         let scale = k.scale();
         let drive = (
@@ -7208,22 +7213,26 @@ impl App {
         }
         let free = matches!(self.attitude, ose_net::AttitudeMode::Free);
         if (pitch_in != 0.0 || yaw_in != 0.0) && !free {
-            // Start turning from where the vessel points when the target is not a free direction yet.
-            let (p, h) = match self.attitude {
-                ose_net::AttitudeMode::PitchHeading {
-                    pitch_deg,
-                    heading_deg,
-                } => (pitch_deg, heading_deg),
-                _ => self.facing_pitch_heading().unwrap_or((90.0, 0.0)),
-            };
-            let step = input::TURN_RATE_DEG_S * scale * dt;
-            // W (-1) lowers the nose: positive pitch input is S.
-            let (pitch_deg, heading_deg) = input::turn(p, h, pitch_in * step, yaw_in * step);
-            self.attitude = ose_net::AttitudeMode::PitchHeading {
-                pitch_deg,
-                heading_deg,
-            };
-            self.controls_dirty = true;
+            if let Some(f) = self
+                .scene
+                .as_ref()
+                .and_then(|s| s.vessel(vessel))
+                .and_then(|v| v.flight.as_ref())
+            {
+                let target = match self.attitude {
+                    ose_net::AttitudeMode::Fixed(d) => d,
+                    _ => f.facing,
+                };
+                self.attitude = ose_net::AttitudeMode::Fixed(input::steer_target(
+                    f.facing,
+                    f.roll_ref,
+                    target,
+                    pitch_in * scale,
+                    yaw_in * scale,
+                    dt,
+                ));
+                self.controls_dirty = true;
+            }
         }
         // Twenty updates a second while held; input edges flush the newest target immediately.
         if self
@@ -7240,9 +7249,9 @@ impl App {
             .and_then(|v| v.flight.as_ref())
             .map(|f| f.situation == ose_net::FlightSituation::Landed)
             .unwrap_or(false);
-        let roll = self.keys.roll() as f32 * self.keys.scale() as f32;
+        let roll = (self.keys.rotation().z * scale * input::ROTATION_SCALE) as f32;
         // SAS off: the keys turn the craft directly (pitch toward its top, yaw to its right, roll clockwise).
-        let s = self.keys.scale() as f32;
+        let s = (scale * input::ROTATION_SCALE) as f32;
         let rotation = if free {
             (pitch_in as f32 * s, yaw_in as f32 * s, roll)
         } else {

@@ -1051,10 +1051,11 @@ pub fn spin(p: &mut Powered, thrust_fraction: f64, dt: f64) {
     );
     let top = vessel_top(p);
     let right = p.facing.cross(top);
-    // pitch turns the nose toward the top: about -right; yaw toward the right: about +top
+    // Unity's wheel torque is -(pitch, roll, yaw). Mirroring Unity Z transforms that axial vector
+    // to (pitch, roll, -yaw): pitch toward +Z is about +right, yaw toward +X is about -top.
     let w_turn = p.angvel - p.facing * p.angvel.dot(p.facing);
-    p.steer_cmd = right * -i.x + top * i.y + p.facing * i.z;
-    let w = w_turn + (right * -i.x + top * i.y) * (alpha * dt);
+    p.steer_cmd = right * i.x - top * i.y + p.facing * i.z;
+    let w = w_turn + (right * i.x - top * i.y) * (alpha * dt);
     let w = if w.length() > MAX_TURN_RATE {
         w * (MAX_TURN_RATE / w.length())
     } else {
@@ -1151,7 +1152,7 @@ fn control_request(
     };
     let control = if p.attitude == Attitude::Free {
         let i = p.rotation_input;
-        limit(DVec3::new(-i.x, i.z, i.y), 1.0) * torque
+        limit(DVec3::new(i.x, i.z, -i.y), 1.0) * torque
     } else {
         let cross = by.cross(target);
         let theta = cross.length().atan2(by.dot(target));
@@ -2048,6 +2049,49 @@ mod tests {
             ..Default::default()
         };
         (p, engine)
+    }
+
+    #[test]
+    fn manual_rotation_matches_mirrored_ksp_torque_for_both_flight_models() {
+        // KSP Module_ReactionWheel applies -(pitch, roll, yaw) in Unity. Under the Z reflection,
+        // an axial vector becomes (pitch, roll, -yaw). Exercise all keys, bank angles and flight axes.
+        for facing in [DVec3::new(1.0, 0.0, 0.0), DVec3::new(0.0, 1.0, 0.0)] {
+            for roll in [0.0, std::f64::consts::FRAC_PI_2, std::f64::consts::PI] {
+                for input in [
+                    DVec3::new(-1.0, 0.0, 0.0),
+                    DVec3::new(1.0, 0.0, 0.0),
+                    DVec3::new(0.0, -1.0, 0.0),
+                    DVec3::new(0.0, 1.0, 0.0),
+                    DVec3::new(0.0, 0.0, -1.0),
+                    DVec3::new(0.0, 0.0, 1.0),
+                ] {
+                    let (mut p, engine) = body_dynamics_fixture();
+                    p.facing = facing;
+                    p.roll_rad = roll;
+                    p.controlled = true;
+                    p.spec.stages[0].moi_tm2 = 10.0;
+                    p.spec.stages[0].wheel_torque_knm = 1.0;
+                    p.spec.stages[0].gimbal_torque_knm = 0.0;
+                    p.rotation_input = input;
+                    let (x, y, z) = vessel_basis(&p);
+                    let expected = x * input.x + y * input.z - z * input.y;
+                    let (torque, _) = control_request(&p, &engine, facing, 0.0, 0.02);
+                    assert!((torque - DVec3::new(input.x, input.z, -input.y)).length() < 1e-10);
+                    let mut parts = p.clone();
+                    turn_with_parts(
+                        &mut parts,
+                        &engine,
+                        facing,
+                        0.0,
+                        0.02,
+                        &mut StepOutcome::default(),
+                    );
+                    assert!((parts.angvel + parts.facing * parts.roll_rate).dot(expected) > 0.0);
+                    spin(&mut p, 0.0, 0.02);
+                    assert!((p.angvel + p.facing * p.roll_rate).dot(expected) > 0.0);
+                }
+            }
+        }
     }
 
     #[test]

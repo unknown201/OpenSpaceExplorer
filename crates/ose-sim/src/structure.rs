@@ -4006,7 +4006,7 @@ mod tests {
         s.configure_actuators(&p, Default::default(), &mut engine);
         s.resolve_actuator_resources(&mut p, &body, &mut engine, 0.02);
         assert!(
-            (engine.control_allocation.unwrap().torque_knm - DVec3::new(3.0, 4.0, 0.0)).length()
+            (engine.control_allocation.unwrap().torque_knm - DVec3::new(-3.0, 4.0, 0.0)).length()
                 < 1e-9
         );
         assert!(

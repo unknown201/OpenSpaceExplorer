@@ -4,11 +4,16 @@
 //! flight keys that act while held (rotation, throttle, wheels) are read every frame from [`Held`]; the ones
 //! that act once (stage, gear, map) stay in the keydown handler.
 
+use ose_math::DVec3;
 use std::collections::HashSet;
 
 /// Degrees per second the attitude target turns while a rotation key is held; CapsLock precision mode
 /// scales inputs by 0.1 as `FlightInputHandler.inputSensitivityScale` does.
-pub const TURN_RATE_DEG_S: f64 = 25.0;
+pub const TURN_RATE_DEG_S: f64 = 8.0;
+/// Manual torque and roll-rate authority. Keep short keyboard taps manageable with SAS off too.
+pub const ROTATION_SCALE: f64 = 0.3;
+/// Do not wind the SAS target far ahead of a heavy craft that cannot follow the requested turn rate.
+const MAX_TARGET_LEAD_DEG: f64 = 5.0;
 pub const PRECISION_SCALE: f64 = 0.1;
 /// Throttle change per second with Shift or Ctrl held (`FlightInputHandler.UpdateMainThrottle`: input x dt).
 pub const THROTTLE_RATE: f64 = 1.0;
@@ -82,6 +87,11 @@ impl Held {
     pub fn roll(&self) -> f64 {
         self.axis(&["KeyQ"], &["KeyE"])
     }
+    /// KSP's pitch/yaw/roll intents, also used by SAS target steering. The simulation converts these
+    /// into angular axes (+X pitch, -Z yaw, +Y roll) after mirroring Unity Z.
+    pub fn rotation(&self) -> DVec3 {
+        DVec3::new(self.pitch(), self.yaw(), self.roll())
+    }
     /// ThrottleDelta: left Shift up, left Ctrl down (either side accepted).
     pub fn throttle(&self) -> f64 {
         self.axis(
@@ -118,43 +128,40 @@ impl Held {
     }
 }
 
-/// Turn a pitch-and-heading target (degrees above the horizon, compass heading with 90 = east) by a pitch and
-/// a yaw step (degrees), in the vessel's own sense: pitch tilts the nose along its heading toward or away from
-/// the horizon, yaw swings it sideways about the nose's "top" (the way it would tilt next). Near vertical a yaw
-/// tilts the rocket sideways rather than spinning an invisible heading, as a real yaw does. Positive yaw turns
-/// right (clockwise seen from above), positive pitch raises the nose.
-pub fn turn(pitch_deg: f64, heading_deg: f64, dpitch: f64, dyaw: f64) -> (f64, f64) {
-    // East-north-up: heading h is the horizontal direction, up is +Z.
-    let (p, h) = (pitch_deg.to_radians(), heading_deg.to_radians());
-    let hor = [h.sin(), h.cos(), 0.0];
-    let up = [0.0, 0.0, 1.0];
-    let lin = |a: [f64; 3], b: [f64; 3], x: f64, y: f64| {
-        [
-            a[0] * x + b[0] * y,
-            a[1] * x + b[1] * y,
-            a[2] * x + b[2] * y,
-        ]
-    };
-    // Pitch first, within the vertical plane of the heading; the plane may flip over the top.
-    let p2 = p + dpitch.to_radians();
-    let d = lin(hor, up, p2.cos(), p2.sin());
-    let top = lin(hor, up, -p2.sin(), p2.cos());
-    // top x d = -right, so a positive (rightward) yaw rotates d toward -(top x d) = right.
-    let right = [
-        -(top[1] * d[2] - top[2] * d[1]),
-        -(top[2] * d[0] - top[0] * d[2]),
-        -(top[0] * d[1] - top[1] * d[0]),
-    ];
-    let y = dyaw.to_radians();
-    let d = lin(d, right, y.cos(), y.sin());
-    let horiz = (d[0] * d[0] + d[1] * d[1]).sqrt();
-    let pitch = d[2].clamp(-1.0, 1.0).asin().to_degrees();
-    let heading = if horiz < 1e-9 {
-        heading_deg
+/// Advance a SAS target in the vessel's rolled inertial frame, including straight through vertical.
+/// Inputs use the same pitch-toward-+Z / yaw-toward-+X convention as `SetRotation`.
+pub fn steer_target(
+    facing: DVec3,
+    top: DVec3,
+    target: DVec3,
+    pitch: f64,
+    yaw: f64,
+    dt: f64,
+) -> DVec3 {
+    let facing = facing.normalized();
+    let top = (top - facing * top.dot(facing)).normalized();
+    let right = facing.cross(top);
+    let command = right * pitch - top * yaw;
+    let magnitude = command.length();
+    if magnitude == 0.0 {
+        return target;
+    }
+    // Normalize diagonals so two held axes do not turn faster than one.
+    let axis = command * (1.0 / magnitude);
+    let angle = TURN_RATE_DEG_S.to_radians() * magnitude.min(1.0) * dt.clamp(0.0, 0.1);
+    let target = target.normalized();
+    let turned = target * angle.cos()
+        + axis.cross(target) * angle.sin()
+        + axis * (axis.dot(target) * (1.0 - angle.cos()));
+    let error_axis = facing.cross(turned);
+    let error = error_axis.length().atan2(facing.dot(turned));
+    let limit = MAX_TARGET_LEAD_DEG.to_radians();
+    if error > limit {
+        let tangent = (turned - facing * facing.dot(turned)).normalized();
+        (facing * limit.cos() + tangent * limit.sin()).normalized()
     } else {
-        d[0].atan2(d[1]).to_degrees()
-    };
-    (pitch, heading.rem_euclid(360.0))
+        turned.normalized()
+    }
 }
 
 /// Keys the player can rebind (Settings > Input, the original's `InputRebindingController`): the action's
@@ -333,28 +340,61 @@ mod tests {
         assert_eq!(sent, 40);
     }
 
-    fn close(a: (f64, f64), b: (f64, f64)) -> bool {
-        (a.0 - b.0).abs() < 1e-6 && ((a.1 - b.1 + 540.0).rem_euclid(360.0) - 180.0).abs() < 1e-6
+    #[test]
+    fn sas_keys_follow_the_rolled_vessel_frame_on_launch_and_in_orbit() {
+        for (facing, top) in [
+            (DVec3::new(1.0, 0.0, 0.0), DVec3::new(0.0, 0.0, 1.0)), // vertical at equator
+            (DVec3::new(0.0, 1.0, 0.0), DVec3::new(0.0, 0.0, 1.0)), // level
+            (DVec3::new(0.0, 1.0, 0.0), DVec3::new(1.0, 0.0, 0.0)), // banked 90 degrees
+            (DVec3::new(0.0, 1.0, 0.0), DVec3::new(0.0, 0.0, -1.0)), // inverted
+        ] {
+            let right = facing.cross(top);
+            for (key, expected) in [
+                ("KeyW", -top),
+                ("KeyS", top),
+                ("KeyA", -right),
+                ("KeyD", right),
+            ] {
+                let mut held = Held::default();
+                held.down(key);
+                let i = held.rotation();
+                let target = steer_target(facing, top, facing, i.x, i.y, 0.1);
+                assert!(target.dot(expected) > 0.0, "{key}: {facing:?}, {top:?}");
+                assert!((facing.dot(target).acos().to_degrees() - 0.8).abs() < 1e-8);
+            }
+        }
     }
 
     #[test]
-    fn pitch_moves_along_the_heading() {
-        assert!(close(turn(90.0, 90.0, -10.0, 0.0), (80.0, 90.0)));
-        assert!(close(turn(10.0, 45.0, 5.0, 0.0), (15.0, 45.0)));
+    fn sas_crosses_vertical_without_reversing_and_respects_precision() {
+        let mut facing = DVec3::new(1.0, 0.0, 0.0);
+        let mut top = DVec3::new(0.0, 0.0, 1.0);
+        for _ in 0..250 {
+            let next = steer_target(facing, top, facing, 1.0, 0.0, 0.1);
+            assert!(next.dot(top) > 0.0);
+            let right = facing.cross(top);
+            top = right.cross(next).normalized();
+            facing = next;
+        }
+        // 200 degrees of uninterrupted pitch, including both vertical poles.
+        assert!((facing.x - 200_f64.to_radians().cos()).abs() < 1e-8);
+        let precise = steer_target(facing, top, facing, PRECISION_SCALE, 0.0, 0.1);
+        assert!((facing.dot(precise).acos().to_degrees() - 0.08).abs() < 1e-8);
     }
 
     #[test]
-    fn yaw_on_the_horizon_turns_the_heading() {
-        assert!(close(turn(0.0, 90.0, 0.0, 10.0), (0.0, 100.0)));
-        assert!(close(turn(0.0, 90.0, 0.0, -10.0), (0.0, 80.0)));
-    }
-
-    #[test]
-    fn yaw_while_vertical_tilts_sideways() {
-        // Straight up with the heading east: a right yaw leans the nose south (right of east).
-        let (p, h) = turn(90.0, 90.0, 0.0, 10.0);
-        assert!((p - 80.0).abs() < 1e-6);
-        assert!((h - 180.0).abs() < 1e-6);
+    fn sas_target_does_not_wind_up_and_release_keeps_the_final_target() {
+        let facing = DVec3::new(0.0, 1.0, 0.0);
+        let top = DVec3::new(0.0, 0.0, 1.0);
+        let mut target = facing;
+        for _ in 0..600 {
+            target = steer_target(facing, top, target, 1.0, 1.0, 1.0 / 60.0);
+            assert!(facing.dot(target).acos().to_degrees() <= 5.0 + 1e-8);
+        }
+        assert_eq!(steer_target(facing, top, target, 0.0, 0.0, 0.1), target);
+        let a = steer_target(facing, top, facing, 1.0, 0.0, 0.1);
+        let b = steer_target(facing, top, facing, 1.0, 1.0, 0.1);
+        assert!((facing.dot(a) - facing.dot(b)).abs() < 1e-10);
     }
 
     #[test]
