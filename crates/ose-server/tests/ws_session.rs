@@ -123,6 +123,13 @@ async fn recv(ws: &mut Ws) -> ServerMessage {
     }
 }
 
+/// Give periodic streams time to arrive regardless of bootstrap/snapshot message volume.
+/// Each iteration awaits recv, whose own timeout still fails a silent or disconnected socket.
+fn response_window() -> impl Iterator<Item = ()> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    std::iter::from_fn(move || (tokio::time::Instant::now() < deadline).then_some(()))
+}
+
 #[tokio::test]
 async fn hello_catalog_and_snapshots() {
     let (_server, addr) = spawn_server().await;
@@ -186,7 +193,7 @@ async fn hello_catalog_and_snapshots() {
     let mut saw_snap = None;
     let mut saw_vessel = false;
     let mut saw_traj = false;
-    for _ in 0..40 {
+    for _ in response_window() {
         match recv(&mut ws).await {
             ServerMessage::TimeState { tick, warp, .. } => saw_time = Some((tick, warp)),
             ServerMessage::Snapshot {
@@ -245,7 +252,7 @@ async fn hello_catalog_and_snapshots() {
     .unwrap();
     let mut burn_ok = false;
     let mut maneuver_seen = false;
-    for _ in 0..60 {
+    for _ in response_window() {
         match recv(&mut ws).await {
             ServerMessage::BurnState {
                 vessel,
@@ -283,7 +290,7 @@ async fn hello_catalog_and_snapshots() {
     .await
     .unwrap();
     let mut listed = false;
-    for _ in 0..40 {
+    for _ in response_window() {
         if let ServerMessage::SessionList { sessions } = recv(&mut ws).await {
             assert_eq!(sessions.len(), 1);
             assert_eq!(sessions[0].id, "shared");
@@ -308,7 +315,7 @@ async fn hello_catalog_and_snapshots() {
     .await
     .unwrap();
     let mut created_ok = false;
-    for _ in 0..40 {
+    for _ in response_window() {
         if let ServerMessage::CampaignState {
             name,
             created,
@@ -345,7 +352,7 @@ async fn hello_catalog_and_snapshots() {
     .await
     .unwrap();
     let mut agency_ok = false;
-    for _ in 0..40 {
+    for _ in response_window() {
         if let ServerMessage::CampaignState { members, .. } = recv(&mut ws).await {
             let me = members.iter().find(|m| m.player_id == player_id).unwrap();
             assert_eq!(
@@ -368,7 +375,7 @@ async fn hello_catalog_and_snapshots() {
         .await
         .unwrap();
         let mut seen = false;
-        for _ in 0..40 {
+        for _ in response_window() {
             if let ServerMessage::CampaignState {
                 members,
                 you_are_member,
@@ -447,7 +454,7 @@ async fn hello_catalog_and_snapshots() {
     .await
     .unwrap();
     let mut launched = None;
-    for _ in 0..60 {
+    for _ in response_window() {
         if let ServerMessage::CraftLaunched {
             vessel,
             reason,
@@ -478,7 +485,7 @@ async fn hello_catalog_and_snapshots() {
     .await
     .unwrap();
     let mut woke = false;
-    for _ in 0..60 {
+    for _ in response_window() {
         match recv(&mut ws).await {
             ServerMessage::FlightAck {
                 vessel,
@@ -516,7 +523,7 @@ async fn hello_catalog_and_snapshots() {
     .await
     .unwrap();
     let mut refused = false;
-    for _ in 0..60 {
+    for _ in response_window() {
         if let ServerMessage::FlightAck {
             vessel: 1,
             accepted,
@@ -537,7 +544,7 @@ async fn hello_catalog_and_snapshots() {
     .await
     .unwrap();
     let mut stock_count = 0;
-    for _ in 0..40 {
+    for _ in response_window() {
         if let ServerMessage::CraftList { crafts } = recv(&mut ws).await {
             stock_count = crafts.iter().filter(|c| c.stock).count();
             assert!(
@@ -560,7 +567,7 @@ async fn hello_catalog_and_snapshots() {
     .await
     .unwrap();
     let mut saved_id = None;
-    for _ in 0..40 {
+    for _ in response_window() {
         if let ServerMessage::CraftSaved { id, reason, .. } = recv(&mut ws).await {
             assert!(reason.is_none(), "{reason:?}");
             saved_id = id;
@@ -580,7 +587,7 @@ async fn hello_catalog_and_snapshots() {
     .await
     .unwrap();
     let mut launched2 = false;
-    for _ in 0..40 {
+    for _ in response_window() {
         if let ServerMessage::CraftLaunched { vessel, reason, .. } = recv(&mut ws).await {
             assert!(reason.is_none(), "{reason:?}");
             assert!(vessel.is_some());
@@ -590,7 +597,7 @@ async fn hello_catalog_and_snapshots() {
     }
     assert!(launched2, "saved craft did not launch");
     let mut seen_two = false;
-    for _ in 0..40 {
+    for _ in response_window() {
         if let ServerMessage::Vessels { vessels, .. } = recv(&mut ws).await {
             let mine: Vec<_> = vessels
                 .iter()
@@ -619,7 +626,7 @@ async fn hello_catalog_and_snapshots() {
         .await
         .unwrap();
         let mut id = None;
-        for _ in 0..40 {
+        for _ in response_window() {
             if let ServerMessage::CraftList { crafts } = recv(&mut ws).await {
                 id = crafts
                     .iter()
@@ -638,7 +645,7 @@ async fn hello_catalog_and_snapshots() {
     .await
     .unwrap();
     let mut pad_vessel = None;
-    for _ in 0..40 {
+    for _ in response_window() {
         if let ServerMessage::CraftLaunched { vessel, reason, .. } = recv(&mut ws).await {
             assert!(reason.is_none(), "{reason:?}");
             pad_vessel = vessel;
@@ -647,7 +654,7 @@ async fn hello_catalog_and_snapshots() {
     }
     let pad_vessel = pad_vessel.expect("pad vessel");
     let mut landed_seen = false;
-    for _ in 0..40 {
+    for _ in response_window() {
         if let ServerMessage::Vessels { vessels, .. } = recv(&mut ws).await {
             let v = vessels
                 .iter()
@@ -716,7 +723,7 @@ async fn hello_catalog_and_snapshots() {
     .unwrap();
     let mut staged = false;
     let mut debris_seen = false;
-    for _ in 0..80 {
+    for _ in response_window() {
         match recv(&mut ws).await {
             ServerMessage::FlightAck {
                 vessel,
@@ -752,7 +759,7 @@ async fn hello_catalog_and_snapshots() {
     .await
     .unwrap();
     let mut seen = false;
-    for _ in 0..40 {
+    for _ in response_window() {
         if let ServerMessage::TimeState { warp, .. } = recv(&mut ws).await {
             // a vessel is under powered flight, so warp is capped at physics warp
             if warp == 4 {
@@ -784,7 +791,7 @@ async fn hello_catalog_and_snapshots() {
     })
     .await;
     let mut limited = false;
-    for _ in 0..40 {
+    for _ in response_window() {
         if let ServerMessage::TimeState {
             warp,
             warp_limited_by,
@@ -800,7 +807,7 @@ async fn hello_catalog_and_snapshots() {
     assert!(limited, "second player did not hold warp down");
     drop(ws2);
     let mut restored = false;
-    for _ in 0..60 {
+    for _ in response_window() {
         if let ServerMessage::TimeState {
             warp,
             warp_limited_by,
@@ -834,7 +841,7 @@ async fn hello_catalog_and_snapshots() {
     };
     assert_eq!(p3, player_id, "token resumes the same player");
     let mut checked = false;
-    for _ in 0..40 {
+    for _ in response_window() {
         if let ServerMessage::Vessels { vessels, .. } = recv(&mut ws3).await {
             let mine: Vec<_> = vessels
                 .iter()
@@ -1148,7 +1155,7 @@ async fn exploration_science_tech_tree_and_recovery() {
     .await;
     assert!(recovered && earned == 0.0, "{earned}");
     // the recovered vessel is gone
-    for _ in 0..40 {
+    for _ in response_window() {
         if let ServerMessage::Vessels { vessels, .. } = recv(&mut ws).await {
             assert!(vessels.iter().all(|v| v.id != vessel));
             break;
@@ -2083,7 +2090,7 @@ async fn stale_guests_are_swept_but_members_stay() {
     .unwrap();
     tokio::time::sleep(Duration::from_millis(1800)).await;
     let mut checked = false;
-    for _ in 0..60 {
+    for _ in response_window() {
         if let ServerMessage::Vessels { vessels, .. } = recv(&mut m).await {
             if vessels.iter().all(|v| v.owner != Some(guest_id)) {
                 assert!(vessels.iter().any(|v| v.owner == Some(member_id)));
