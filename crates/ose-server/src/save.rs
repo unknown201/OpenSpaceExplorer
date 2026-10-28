@@ -78,6 +78,8 @@ pub struct Campaign {
     pub name: String,
     pub started_tick: Tick,
     pub members: Vec<CampaignMember>,
+    #[serde(default)]
+    pub owner: Option<u64>,
     #[serde(default = "default_mode")]
     pub mode: ose_net::SessionMode,
     #[serde(default)]
@@ -110,6 +112,7 @@ impl Default for Campaign {
             name: "Shared campaign".into(),
             started_tick: Tick(0),
             members: Vec::new(),
+            owner: None,
             mode: default_mode(),
             difficulty: Vec::new(),
             last_played_unix: 0,
@@ -354,6 +357,32 @@ mod tests {
         assert!(
             nu.saved_parts(debris).unwrap().debris,
             "debris stays debris"
+        );
+    }
+}
+
+#[cfg(test)]
+mod ownership_tests {
+    use super::*;
+
+    #[test]
+    fn ownership_survives_saves_and_legacy_campaigns_remain_unowned() {
+        let campaign = Campaign {
+            owner: Some(42),
+            ..Default::default()
+        };
+        let json = serde_json::to_value(&campaign).unwrap();
+        assert_eq!(
+            serde_json::from_value::<Campaign>(json.clone())
+                .unwrap()
+                .owner,
+            Some(42)
+        );
+        let mut legacy = json;
+        legacy.as_object_mut().unwrap().remove("owner");
+        assert_eq!(
+            serde_json::from_value::<Campaign>(legacy).unwrap().owner,
+            None
         );
     }
 }

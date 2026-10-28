@@ -132,6 +132,7 @@ struct App {
     difficulty_presets: Vec<DifficultyPreset>,
     agency_sent: bool,
     warp_holder: Option<u64>,
+    requested_warp: u32,
     /// Breadcrumb text last rendered, to rebuild the DOM only on change.
     crumbs: String,
     ut_el: Element,
@@ -623,6 +624,7 @@ pub fn start() -> Result<(), JsValue> {
         difficulty_presets: Vec::new(),
         agency_sent: false,
         warp_holder: None,
+        requested_warp: 1,
         crumbs: String::new(),
         ut_el: get("ut")?,
         warp_el: get("warp")?,
@@ -3003,6 +3005,7 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
             let size = ev
                 .target()
                 .and_then(|t| t.dyn_into::<Element>().ok())
+                .and_then(|e| e.closest("[data-size]").ok().flatten())
                 .and_then(|e| e.get_attribute("data-size"));
             if let Some(size) = size {
                 let mut app = a.borrow_mut();
@@ -3087,6 +3090,7 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
             let cat = ev
                 .target()
                 .and_then(|t| t.dyn_into::<Element>().ok())
+                .and_then(|e| e.closest("[data-ose-category]").ok().flatten())
                 .and_then(|e| e.get_attribute("data-ose-category"));
             if let Some(cat) = cat {
                 let mut app = a.borrow_mut();
@@ -3200,6 +3204,7 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
             let id = ev
                 .target()
                 .and_then(|t| t.dyn_into::<Element>().ok())
+                .and_then(|e| e.closest("[data-ose-craft-launch]").ok().flatten())
                 .and_then(|e| e.get_attribute("data-ose-craft-launch"))
                 .and_then(|s| s.parse::<u64>().ok());
             if let Some(id) = id {
@@ -3209,6 +3214,7 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
             let orbit = ev
                 .target()
                 .and_then(|t| t.dyn_into::<Element>().ok())
+                .and_then(|e| e.closest("[data-ose-craft-orbit]").ok().flatten())
                 .and_then(|e| e.get_attribute("data-ose-craft-orbit"))
                 .and_then(|s| s.parse::<u64>().ok());
             if let Some(id) = orbit {
@@ -3218,6 +3224,7 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
             let edit = ev
                 .target()
                 .and_then(|t| t.dyn_into::<Element>().ok())
+                .and_then(|e| e.closest("[data-ose-craft-edit]").ok().flatten())
                 .and_then(|e| e.get_attribute("data-ose-craft-edit"))
                 .and_then(|s| s.parse::<u64>().ok());
             if let Some(id) = edit {
@@ -3250,16 +3257,45 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
             }
         }),
     )?;
-    // Join buttons are created per session; one delegated handler on the list.
+    // Resolve the action button even when its icon or label receives the click.
     if let Some(list) = doc.get_element_by_id("sessions") {
         let a = app.clone();
         let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
-            let id = ev
+            let button = ev
                 .target()
                 .and_then(|t| t.dyn_into::<Element>().ok())
-                .and_then(|e| e.get_attribute("data-ose-session"));
-            if let Some(id) = id {
+                .and_then(|e| {
+                    e.closest("button[data-ose-session]:not([disabled])")
+                        .ok()
+                        .flatten()
+                });
+            let Some(button) = button else { return };
+            let Some(id) = button.get_attribute("data-ose-session") else {
+                return;
+            };
+            let action = button.get_attribute("data-ose").unwrap_or_default();
+            if action == "session-join" {
                 a.borrow_mut().join_session(&id);
+            } else {
+                if action == "session-delete"
+                    && !web_sys::window().is_some_and(|w| {
+                        w.confirm_with_message(
+                            "Delete this session and all its progress? This cannot be undone.",
+                        )
+                        .unwrap_or(false)
+                    })
+                {
+                    return;
+                }
+                let app = a.borrow();
+                if let Some(ws) = &app.ws {
+                    let msg = if action == "session-delete" {
+                        ClientMessage::DeleteSession { id }
+                    } else {
+                        ClientMessage::ClaimSession { id }
+                    };
+                    send(ws, &msg);
+                }
             }
         });
         list.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
@@ -4385,12 +4421,12 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                 }
                 "." | ">" => {
                     app.warp_to = None;
-                    let w = kerbin_time::next_warp(app.time.warp);
+                    let w = kerbin_time::next_warp(app.requested_warp);
                     app.request_warp(w);
                 }
                 "," | "<" => {
                     app.warp_to = None;
-                    let w = kerbin_time::prev_warp(app.time.warp);
+                    let w = kerbin_time::prev_warp(app.requested_warp);
                     app.request_warp(w);
                 }
                 _ => {}
@@ -4417,7 +4453,7 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
     let a = app.clone();
     let on_warp = Closure::<dyn FnMut()>::new(move || {
         let mut app = a.borrow_mut();
-        let w = kerbin_time::next_warp(app.time.warp);
+        let w = kerbin_time::next_warp(app.requested_warp);
         app.request_warp(w);
     });
     app.borrow()
@@ -4446,7 +4482,7 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
         let a = app.clone();
         let on_down = Closure::<dyn FnMut()>::new(move || {
             let mut app = a.borrow_mut();
-            let w = kerbin_time::prev_warp(app.time.warp);
+            let w = kerbin_time::prev_warp(app.requested_warp);
             app.request_warp(w);
         });
         down.add_event_listener_with_callback("click", on_down.as_ref().unchecked_ref())?;
@@ -4574,14 +4610,12 @@ impl App {
     }
 
     fn request_warp(&mut self, factor: u32) {
+        self.requested_warp = factor;
         if let Some(ws) = &self.ws {
             send(ws, &ClientMessage::RequestWarp { factor });
         }
-        // Show the request at once; the next TimeState confirms or corrects it.
-        let now = now_ms();
-        let ut = self.time.ut_at(now);
-        self.time.update(ut, factor, now);
-        self.update_hud(ut);
+        // Only the server changes the clock rate; keep the request separate from a physics cap.
+        self.update_hud(self.time.ut_at(now_ms()));
     }
 
     fn frame_focus(&mut self) {
@@ -4731,6 +4765,29 @@ impl App {
                 set_text(&self.doc, "menu-note", &format!("rejected: {reason}"));
                 if let Some(m) = self.doc.get_element_by_id("menu") {
                     m.class_list().remove_1("hidden").ok();
+                }
+            }
+            ServerMessage::SessionPresence {
+                sessions,
+                campaign_id,
+                members,
+            } => {
+                self.render_sessions(&sessions);
+                if self.in_session && self.campaign_id == campaign_id {
+                    if let Some((name, current)) = &mut self.campaign {
+                        let names: Vec<_> = members
+                            .iter()
+                            .filter(|m| m.online)
+                            .map(|m| m.display_name.as_str())
+                            .collect();
+                        set_text(
+                            &self.doc,
+                            "campaign",
+                            &format!("{name}: {} online ({})", names.len(), names.join(", ")),
+                        );
+                        *current = members;
+                    }
+                    self.update_warp_holder();
                 }
             }
             ServerMessage::SessionList { sessions } => {
@@ -4894,14 +4951,18 @@ impl App {
                 created,
                 ..
             } => {
-                let names: Vec<&str> = members.iter().map(|m| m.display_name.as_str()).collect();
+                let names: Vec<&str> = members
+                    .iter()
+                    .filter(|m| m.online)
+                    .map(|m| m.display_name.as_str())
+                    .collect();
                 set_text(
                     &self.doc,
                     "campaign",
                     &format!(
-                        "{name} ({}): {} in the campaign ({})",
+                        "{name} ({}): {} online ({})",
                         mode_name(mode),
-                        members.len(),
+                        names.len(),
                         names.join(", ")
                     ),
                 );
@@ -4929,6 +4990,7 @@ impl App {
                 }
                 self.campaign = Some((name, members));
                 if self.campaign_id != campaign_id {
+                    self.requested_warp = 1;
                     if let Some(scene) = &mut self.scene {
                         scene.reset_attitudes();
                     }
@@ -5294,6 +5356,9 @@ impl App {
                 }
             }
             ServerMessage::LaunchSites { sites } => {
+                if self.launch_sites == sites {
+                    return;
+                }
                 self.launch_sites = sites;
                 if self
                     .launch_site
@@ -5537,6 +5602,7 @@ impl App {
         }
         self.end_flight();
         self.in_session = false;
+        self.requested_warp = 1;
         self.tracking_open = false;
         self.campaign = None;
         self.science = None;
@@ -8220,7 +8286,17 @@ impl App {
         let mut html = String::new();
         for s in &self.launch_sites {
             html.push_str(&format!(
-                "<option value=\"{id}\"{sel}>{name}</option>",
+                "<option value=\"{id}\"{sel}{disabled}>{name}  -  {status}</option>",
+                disabled = if s.occupied_by.is_some() {
+                    " disabled"
+                } else {
+                    ""
+                },
+                status = esc(&s
+                    .occupied_by
+                    .as_ref()
+                    .map(|name| format!("In use by {name}"))
+                    .unwrap_or_else(|| "Available".into())),
                 id = esc(&s.id),
                 sel = if s.id == chosen || (chosen.is_empty() && s.id == "LaunchPad_1") {
                     " selected"
@@ -10302,10 +10378,23 @@ impl App {
                 "game2",
             ];
             let art = ART[(hud::fnv(&s.id) % ART.len() as u64) as usize];
+            let ownership = match s.owner {
+                Some(owner) if Some(owner) == self.player_id => "Owned by you".to_string(),
+                Some(_) => format!("Owner: {}", s.owner_name.as_deref().unwrap_or("unknown")),
+                None => "Unowned".to_string(),
+            };
+            let manage = if s.owner.is_none() {
+                format!("<button data-ose=\"session-claim\" data-ose-session=\"{}\">Own session</button>", esc(&s.id))
+            } else if s.owner == self.player_id {
+                format!("<button data-ose=\"session-delete\" data-ose-session=\"{}\" {} title=\"All players must leave before deletion\">Delete</button>", esc(&s.id), if s.players > 0 { "disabled" } else { "" })
+            } else {
+                String::new()
+            };
             html.push_str(&format!(
                 "<li data-ose=\"session\" data-ose-id=\"{id}\" class=\"has-thumb\"><i class=\"sess-thumb\" style=\"background-image:url(assets/loading/{art}.jpg)\"></i><div><div class=\"name\">{name}</div>\
-                 <div class=\"meta\">{mode} \u{b7} {ut} \u{b7} {players} {pl}</div></div>\
-                 <button data-ose=\"session-join\" data-ose-session=\"{id}\">Resume</button></li>",
+                 <div class=\"meta\">{mode} \u{b7} {ut} \u{b7} {players} {pl} online \u{b7} {ownership}</div></div>\
+                 <div class=\"session-actions\"><button data-ose=\"session-join\" data-ose-session=\"{id}\">Resume</button>{manage}</div></li>",
+                ownership = esc(&ownership),
                 id = esc(&s.id),
                 name = esc(&s.name),
                 mode = mode_name(s.mode),
@@ -11025,8 +11114,15 @@ impl App {
     fn update_hud(&self, ut: f64) {
         self.ut_el
             .set_text_content(Some(&format!("UT {}", kerbin_time::format_ut(ut))));
-        self.warp_el
-            .set_text_content(Some(&format!("\u{d7}{}", self.time.warp)));
+        let warp_text = if self.requested_warp > self.time.warp {
+            format!(
+                "\u{d7}{} (requested \u{d7}{})",
+                self.time.warp, self.requested_warp
+            )
+        } else {
+            format!("\u{d7}{}", self.time.warp)
+        };
+        self.warp_el.set_text_content(Some(&warp_text));
         if let Some(pips) = self.doc.get_element_by_id("warp-pips") {
             let mut html = String::new();
             for (i, w) in kerbin_time::WARP_LADDER.iter().enumerate() {
@@ -11045,6 +11141,15 @@ impl App {
                     .ok();
             }
         }
+        let title = if self.requested_warp > self.time.warp {
+            format!("Requested {}×; running at {}×. Physics flight is limited to 4× until vessels can coast safely on rails; other players may also hold warp down.", self.requested_warp, self.time.warp)
+        } else {
+            "Increase time warp".to_string()
+        };
+        self.warp_el.set_attribute("title", &title).ok();
+        self.warp_el
+            .set_attribute("data-ose-requested-warp", &self.requested_warp.to_string())
+            .ok();
     }
 
     fn frame(&mut self) {

@@ -260,3 +260,7 @@ Per-engine mode switching, articulated nozzle transforms, thrust response curves
 - Installed-data regeneration matches all five RCS control definitions and all 986 attachment-node full-strength flags. All 400 aerodynamic definitions were previously regenerated within 1e-14; all 41 engine modes/63 force points and 22 RCS nozzles retain their validated geometry. The settings exports share the loaded reference's version and SHA-256. The existing malformed `Tutorial1.3_Save.json` is warned and skipped by the importer.
 
 These are source/data comparisons, analytical fixtures and automated gameplay regressions. They do not certify matched flight/contact traces against the KSP2 executable. The remaining priorities above still prevent a complete physics parity claim.
+
+## Integration follow-up, 2026-10-28
+
+The legacy checkout's resource-resolved RCS work is already present here with authored nozzle and module controls. Its remaining mass-timing fix is retained: engine and actuator impulses use the same start-of-step mass. The final-partial-fuel analytical RCS regression now checks that shared mass while independently verifying delivered force and fuel consumption.

@@ -1711,6 +1711,7 @@ pub fn integrate_with_propulsion(
     }
 
     // thrust and propellant
+    let force_mass_t = p.mass_t;
     let mut thrust_acc = DVec3::ZERO;
     if let Some(pack) = &jetpack {
         thrust_acc = pack.force_kn * (1.0 / p.mass_t);
@@ -1748,7 +1749,7 @@ pub fn integrate_with_propulsion(
     }
 
     thrust_acc = thrust_acc
-        + out.control_force_kn * (1.0 / p.mass_t)
+        + out.control_force_kn * (1.0 / force_mass_t)
         + propulsion
             .as_ref()
             .map(|e| e.environment_force_kn * (1.0 / p.mass_t))

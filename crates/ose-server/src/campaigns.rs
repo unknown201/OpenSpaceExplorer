@@ -141,6 +141,7 @@ pub fn switch(s: &Shared, player_id: u64, target: Target) -> Result<(), String> 
                 mode: n.mode,
                 difficulty: n.difficulty,
                 started_tick: tick,
+                owner: Some(player_id),
                 ..Default::default()
             };
         }
@@ -195,6 +196,7 @@ pub fn reload(s: &Shared, player_id: u64, file: &save::SaveFile) -> Result<(), S
     back.id = c.id.clone();
     back.quicksave = c.quicksave.take();
     back.members = c.members.clone();
+    back.owner = c.owner;
     *u = nu;
     *v = registry;
     *c = back;
@@ -216,13 +218,26 @@ pub fn list(s: &Shared) -> ServerMessage {
     let ut_s = s.universe.lock().expect("sim lock").ut();
     let c = s.campaign.lock().expect("campaign lock");
     let shelf = s.shelf.lock().expect("shelf lock");
+    let playing = s.playing.lock().expect("playing lock");
+    let owner_name = |campaign: &save::Campaign| {
+        campaign.owner.map(|id| {
+            campaign
+                .members
+                .iter()
+                .find(|m| m.player_id == id)
+                .map(|m| m.display_name.clone())
+                .unwrap_or_else(|| crate::display_name_for(s, id))
+        })
+    };
     let mut sessions = vec![ose_net::SessionInfo {
         id: c.id.clone(),
         name: c.name.clone(),
         mode: c.mode,
         ut_s,
         last_played_unix: c.last_played_unix,
-        players: c.members.len() as u32,
+        players: playing.len() as u32,
+        owner: c.owner,
+        owner_name: owner_name(&c),
     }];
     let mut rest: Vec<ose_net::SessionInfo> = shelf
         .iter()
@@ -232,12 +247,79 @@ pub fn list(s: &Shared) -> ServerMessage {
             mode: x.save.campaign.mode,
             ut_s: x.save.tick.seconds(),
             last_played_unix: x.save.campaign.last_played_unix,
-            players: x.save.campaign.members.len() as u32,
+            players: 0,
+            owner: x.save.campaign.owner,
+            owner_name: owner_name(&x.save.campaign),
         })
         .collect();
     rest.sort_by_key(|x| std::cmp::Reverse(x.last_played_unix));
     sessions.extend(rest);
     ServerMessage::SessionList { sessions }
+}
+
+/// Ownership is checked on the server, including for shelved campaigns.
+pub fn manage(s: &Shared, player: u64, id: &str, delete: bool) -> Result<(), String> {
+    let mut u = s.universe.lock().expect("sim lock");
+    let mut v = s.vessels.lock().expect("vessels lock");
+    let mut c = s.campaign.lock().expect("campaign lock");
+    let mut shelf = s.shelf.lock().expect("shelf lock");
+    let live = c.id == id;
+    let campaign = if live {
+        &mut *c
+    } else {
+        &mut shelf
+            .iter_mut()
+            .find(|x| x.id == id)
+            .ok_or_else(|| format!("no campaign {id}"))?
+            .save
+            .campaign
+    };
+    if !delete {
+        match campaign.owner {
+            None => campaign.owner = Some(player),
+            Some(owner) if owner == player => {}
+            _ => return Err("this session already has an owner".into()),
+        }
+        if !campaign.members.iter().any(|m| m.player_id == player) {
+            campaign.members.push(save::CampaignMember {
+                player_id: player,
+                display_name: crate::display_name_for(s, player),
+                joined_tick: u.tick(),
+                agency: None,
+            });
+        }
+        return Ok(());
+    }
+    if campaign.owner != Some(player) {
+        return Err("only the session owner can delete it".into());
+    }
+    if live && !s.playing.lock().expect("playing lock").is_empty() {
+        return Err("leave the session before deleting it; all players must leave first".into());
+    }
+    if live {
+        // Replace the deleted live world without shelving it again.
+        if let Some(back) = shelf.pop() {
+            let mut nu = s.setup.universe();
+            *v = save::restore(&mut nu, &back.save, &s.parts, &s.resources);
+            *u = nu;
+            *c = back.save.campaign;
+            c.id = back.id;
+        } else {
+            *u = s.setup.new_campaign_universe();
+            v.clear();
+            *c = save::Campaign::default();
+            // Never reuse the deleted id for its replacement.
+            c.id = format!("empty-{}", crate::now_unix());
+            while c.id == id {
+                c.id.push('x');
+            }
+        }
+        u.set_warp(1);
+        *s.revert.lock().expect("revert lock") = None;
+    } else {
+        shelf.retain(|x| x.id != id);
+    }
+    Ok(())
 }
 
 #[cfg(test)]

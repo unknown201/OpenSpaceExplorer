@@ -110,6 +110,8 @@
       padding: 8px 10px; margin-bottom: 6px; border: 1px solid #2c3d63; border-radius: 6px; background: #06080f; }
     #sessions .name { color: #e6ecf7; font-size: 14px; }
     #sessions .meta { color: #6f7f9c; font-size: 12px; margin-top: 2px; }
+    #sessions .session-actions { display: flex; gap: 6px; }
+    #sessions button:disabled { opacity: 0.45; cursor: default; }
     #sessions button { margin: 0; width: auto; padding: 6px 14px; font-size: 13px; }
     #sessions .empty { color: #6f7f9c; font-size: 12px; padding: 8px 0; }
     #menu .row { display: flex; gap: 8px; } #menu .row button { flex: 1; }
@@ -263,6 +265,8 @@
     #sessions .sess-thumb { width: calc(75 * var(--u)); height: calc(46 * var(--u)); background: center / cover no-repeat; border: 1px solid #ffffff33; }
     #sessions .name { font-size: calc(18 * var(--u)); font-weight: 600; color: #f2f2f2; }
     #sessions .meta { font-size: calc(12 * var(--u)); color: #ffffff99; }
+    #sessions .session-actions { display: flex; gap: 6px; }
+    #sessions button:disabled { opacity: 0.45; cursor: default; }
     #sessions button { padding: calc(6 * var(--u)) calc(14 * var(--u)); font-size: calc(14 * var(--u)); }
     #sessions .empty { color: #ffffff80; padding: calc(8 * var(--u)); }
     #campaign-left > .row button { margin: 0; height: calc(40 * var(--u)); font-size: calc(16 * var(--u)); }
@@ -533,6 +537,8 @@
     #vab-header .vh-group { display: flex; gap: 6px; align-items: center; }
     #vab-header button { margin: 0; width: auto; padding: 6px 12px; font-size: 13px; }
     #vab-header #vab-name { flex: 0 1 360px; text-align: center; font: 600 16px var(--ui-font, inherit); padding: 6px 10px; background: #06080fcc; color: #fff; border: 1px solid #2c3d63; border-radius: 4px; }
+    /* Decorative children share the full button hit area. */
+    button > i, button > img, #screen-vab button > * { pointer-events: none; }
     #vab-header .vh-ico { padding: 6px 8px; display: grid; place-items: center; }
     #vab-header .vh-ico i, #vab-header .vh-launch i, #vab-side i.vh-inline { display: inline-block; width: 18px; height: 18px; background: currentColor; -webkit-mask: var(--ico) center / contain no-repeat; mask: var(--ico) center / contain no-repeat; vertical-align: middle; }
     #vab-header .vh-flip i { transform: scaleX(-1); }

@@ -4241,8 +4241,8 @@ mod tests {
             s.sync(&mut p);
             let mass = p.mass_t;
             let v = p.v;
-            let expected =
-                p.facing * (100.0 * ose_data::G0 * fraction * 0.1 / (mass - 0.1 * fraction));
+            // Control and engine impulses use the same mass at the start of this step.
+            let expected = p.facing * (100.0 * ose_data::G0 * fraction * 0.1 / mass);
             let mut engine = s.propulsion(&p, Default::default(), 0.1);
             // Isotropic inertia keeps a constant body torque parallel to its inertial
             // rotation axis, giving the analytical angular impulse exactly.

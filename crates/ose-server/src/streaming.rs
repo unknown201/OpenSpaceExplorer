@@ -97,7 +97,7 @@ pub fn start(s: super::AppState) {
                         let started = std::time::Instant::now();
                         publish(&s.streams.snapshots, || {
                             let (time, bodies, vessels) = super::snapshot(&s);
-                            [time, bodies, vessels]
+                            [time, bodies, vessels, super::launch_sites_message(&s)]
                         });
                         tracing::debug!(elapsed_us = started.elapsed().as_micros() as u64,
                             clients = s.streams.snapshots.receiver_count(), "snapshot published");
