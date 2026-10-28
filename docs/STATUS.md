@@ -4,6 +4,8 @@ Updated 2026-10-27.
 
 ## What works
 
+- Resolved engine thrust now reaches joints in the same tick as flight motion. A final partial burn delivers its full budgeted structural impulse and leaves no engine-load tail on a subsequent dry step. All 184 simulation tests pass; authored physical engine response curves remain open.
+
 - Joint stiffness, damping and rigid/ordinary break multipliers now load from the installed reference settings. The nine procedural lifting-surface attachment definitions retain full-break-strength flags: stock aircraft wing connections no longer receive the ordinary size-2 divisor of three. Analytical and real-stock checks cover the correction; individual multi-joint geometry remains approximate.
 
 - RCS modules now honor per-axis rotation/translation switches, fore-by-throttle with explicit-input priority and the reference deadband, plus full-thrust thresholds before fuel delivery. Disabled command axes preserve incidental physical torque. Three analytical simulation regressions and importer coverage pass; precision/lever selection and runtime part-editing UI remain open.

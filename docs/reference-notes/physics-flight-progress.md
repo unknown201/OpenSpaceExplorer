@@ -230,6 +230,14 @@ The multibody solver still represents each connection with one aggregate link. S
 
 Two simulation regressions independently exercise distinct stack/surface/rigid multipliers and verify real stock aircraft wing limits. Importer coverage pins the nine authored nodes and legacy defaults. Two exporter tests check source identity, separate multipliers and invalid/missing settings. All 986 regenerated node flags match the committed definitions. Strict workspace Clippy and the browser build pass; the complete workspace/Mun run is in progress.
 
+## Completed increment: same-tick resolved structural thrust
+
+Part-backed structural loading now receives the exact engine force already delivered for the current flight step. The previous independent 0.4-second structural filter suppressed the first impulse and could retain a decaying engine load during subsequent rotating/aerodynamic steps after fuel exhaustion. Nozzle response belongs in the physical propulsion calculation, applied consistently to flight and structure; it cannot be simulated only by delaying joint loads.
+
+An isolated-body analytical regression checks the complete structural momentum change from a last quarter-step burn against delivered propellant times exhaust velocity. The multibody depletion regression now requires the exact delivered engine load and verifies zero engine load on the next dry tick while structural stepping remains active. All 184 simulation tests, strict workspace Clippy and the browser build pass.
+
+Legacy stage-only callers without resolved per-engine delivery retain their response proxy. This change does not implement authored engine spool/tail-off or thrust curves; those still need to affect the physical propulsion result before both consumers. Structural contacts, body inertia and joint geometry retain their documented approximations.
+
 ## Remaining physics priorities
 
 1. Import usable collider inertia geometry and procedural/deployed mass changes; complete articulated engine gimbals. Match RCS precision/lever allocation and part controls, and complete EVA character/camera/water behavior.
@@ -241,7 +249,7 @@ The next actuator acceptance cases should compare the reference's lever/precisio
 
 The next contact acceptance cases should cover continuous hull contacts that prevent tunnelling between vertices, equal-and-opposite vessel/debris impulses, and stable support/traction over uneven terrain. Retain the existing slope, normal-speed, sliding-friction, angular-impulse and joint-reaction regressions.
 
-Per-engine mode switching, articulated nozzle transforms, thrust response curves/limits, full intake accounting, and the complete KSP2 engine modifier set are still open. The existing jet curve/intake approximation and structural thrust-lag filter remain. The resource allocator also retains its existing ordered-request semantics. This change closes specific propulsion errors; it does not establish complete engine or flight parity.
+Per-engine mode switching, articulated nozzle transforms, thrust response curves/limits, full intake accounting, and the complete KSP2 engine modifier set are still open. The existing jet curve/intake approximation remains. Resolved part-backed structural thrust is now immediate; the separate lag survives only for legacy stage-only callers. The resource allocator also retains its existing ordered-request semantics. This change closes specific propulsion errors; it does not establish complete engine or flight parity.
 
 ## Validation, 2026-10-28
 

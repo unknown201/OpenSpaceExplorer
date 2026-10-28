@@ -2715,6 +2715,7 @@ impl Structure {
             })
             .collect();
         // thrust over the attached engines of the burning stage
+        let fuel_resolved = resolved.is_some();
         if let Some(delivered) = resolved {
             self.engine_load_target_kn.copy_from_slice(&delivered);
         } else if out.thrust_kn > 0.0 {
@@ -2738,10 +2739,14 @@ impl Structure {
                 }
             }
         }
-        // Engine thrust reaches the structure through a short lag: solid boosters tail off and liquid engines
-        // spool (the original's engine response and thrust curves) rather than stepping, which would ring the
-        // joints far past their static load.
-        let k = 1.0 - (-dt / THRUST_LAG_S).exp();
+        // Fuel-resolved flight and the structure must receive the same delivered force this tick.
+        // A separate structural filter would invent a thrust tail after a partial/empty burn.
+        // Legacy stage-only callers retain their existing response proxy.
+        let k = if fuel_resolved {
+            1.0
+        } else {
+            1.0 - (-dt / THRUST_LAG_S).exp()
+        };
         for i in 0..self.engine_load_kn.len() {
             let target = self.engine_load_target_kn[i];
             self.engine_load_target_kn[i] = 0.0;
@@ -5128,6 +5133,84 @@ mod tests {
     }
 
     #[test]
+    fn resolved_structural_thrust_delivers_the_exact_single_body_impulse() {
+        let (mut craft, mut defs, res) = test_capsule(false);
+        craft.parts.truncate(1);
+        craft.parts[0].resources.clear();
+        craft.parts[0].parent = None;
+        craft.parts[0].local_position = DVec3::ZERO;
+        craft.parts[0].local_rotation = ose_data::craft::Quat {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+            w: 1.0,
+        };
+        craft.stages = vec![vec![0]];
+        let engine = defs
+            .iter()
+            .flat_map(|d| &d.engines)
+            .find(|e| e.propellant_mixture == "SolidFuel")
+            .unwrap()
+            .clone();
+        let def = defs
+            .iter_mut()
+            .find(|d| d.id == craft.parts[0].part_id)
+            .unwrap();
+        def.mass_t = 2.0;
+        def.mass_offset_m = DVec3::ZERO;
+        def.resource_containers.clear();
+        def.engines = vec![engine];
+        let mut s = Structure::build(&craft, &defs, &res);
+        s.stage_engines = vec![vec![0]];
+        s.engine_thrust_kn[0] = 100.0 * ose_data::G0;
+        s.engine_throttle_locked[0] = false;
+        s.engine_nozzles[0].clear();
+        s.engine_isp[0] = Some(ose_data::Curve {
+            keys: vec![ose_data::CurveKey {
+                t: 0.0,
+                v: 100.0,
+                in_tangent: 0.0,
+                out_tangent: 0.0,
+            }],
+        });
+        let solid = s.net.resource("SolidFuel").unwrap();
+        s.net.tanks = vec![crate::resources::Tank {
+            part: 0,
+            resource: solid,
+            stored: 0.025 / s.net.unit_mass_t[solid],
+            capacity: 0.1 / s.net.unit_mass_t[solid],
+        }];
+        let mut p = flying(DVec3::new(1.0, 0.0, 0.0));
+        p.throttle = 1.0;
+        p.ignited = true;
+        s.sync(&mut p);
+        let engine = s.propulsion(&p, Default::default(), 0.1);
+        assert!((engine.burned_t - 0.025).abs() < 1e-12);
+        let pieces = s.apply(
+            &p,
+            &StepOutcome {
+                thrust_kn: engine.thrust_kn,
+                ..Default::default()
+            },
+            0.1,
+        );
+        assert!(pieces.is_empty());
+        let expected = DVec3::new(0.0, 0.025 * 100.0 * ose_data::G0 / 2.0, 0.0);
+        assert!((s.rigid.centre_of(&[0]).1 - expected).length() < 1e-10);
+        let idle = s.propulsion(&p, Default::default(), 0.1);
+        assert_no_engine_impulse(idle);
+        s.apply(
+            &p,
+            &StepOutcome {
+                angvel: DVec3::new(0.1, 0.0, 0.0),
+                ..Default::default()
+            },
+            0.1,
+        );
+        assert_eq!(s.engine_load_kn[0], 0.0);
+    }
+
+    #[test]
     fn propulsion_limits_the_last_impulse_to_the_fuel_delivered() {
         let (mut s, p, pair) = propulsion_fixture();
         let solid = s.net.resource("SolidFuel").unwrap();
@@ -5150,9 +5233,21 @@ mod tests {
             },
             0.1,
         );
-        assert!(s.engine_load_kn[pair[0]] > 0.0);
+        assert!((s.engine_load_kn[pair[0]] - out.thrust_kn).abs() < 1e-9);
         assert_eq!(s.engine_load_kn[pair[1]], 0.0);
-        assert_no_engine_impulse(s.propulsion(&p, Default::default(), 0.1));
+        let coast = s.propulsion(&p, Default::default(), 0.1);
+        assert_no_engine_impulse(coast);
+        // Keep structural stepping active with rotation: exhausted engines still cannot leave a tail.
+        s.apply(
+            &p,
+            &StepOutcome {
+                angvel: DVec3::new(0.1, 0.0, 0.0),
+                ..Default::default()
+            },
+            0.1,
+        );
+        assert_eq!(s.engine_load_kn[pair[0]], 0.0);
+        assert_eq!(s.engine_load_kn[pair[1]], 0.0);
     }
 
     #[test]
