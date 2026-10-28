@@ -166,9 +166,19 @@ Four new simulation tests cover one-way torque allocation, one-way translation w
 
 This closes static RCS geometry and force/fuel bounds. The torque allocator is still OSE's bounded optimizer rather than the reference's rotational-direction/lever projection and precision-mode logic. Per-part pitch/yaw/roll/translation switches, thrust percentage, shielding/underwater activation rules, dynamic nozzle poses and per-nozzle visual readouts remain to be matched. Shared-resource requests remain ordered; partial delivery is not reallocated to different actuators. EVA jetpacks still use their separate approximation.
 
+## Completed increment: authored part mass centres
+
+The catalog now carries each part's `coMassOffset` as `mass_offset_m`, with an origin default for older catalogs. All 400 entries reproduce the installed source; 14 are nonzero. `PartComponent` initializes its centre from this offset, and `PartBehavior.StartPhysX` gives that centre and total mass to its rigid body. Accordingly, the offset applies to each part's total wet mass, rather than creating a separate dry-mass offset and leaving fuel at the geometry origin.
+
+Flight mass centres and parallel-axis inertia use the mounted offset. Structural bodies use the same local centre when built and when resource changes update their masses. Geometry origins, joint anchors and contact bounds remain at their authored placements. Structural centre/velocity aggregation and Newton-Euler loads now distinguish mass centres from geometry origins. Force moments subtract the actual mounted local centre; applying a force through that centre cannot create a false spin.
+
+Two simulation regressions independently calculate a rotated part's centre and force lever, preserve its pose/velocity through mass updates, and check analytical multi-part centre/inertia changes under added fuel and detachment. An importer regression checks coordinate import and old-catalog fallback. Existing analytical box-contact fixtures explicitly reset inherited real-part mass offsets to zero. The stock aircraft shallow-impact fixture now starts just above support: a release from ten metres adds a hard gravity-driven sink and does not isolate a two-metre-per-second touchdown. Ground control checks require visible deflection and verify that reversing every input reverses its surface response; they do not assume a fixed lever-dependent angle.
+
+Inertia still uses the existing oriented-box proxies and size clamps rather than authored collider tensors. Structural motion still uses the 1 kg minimum for synthetic massless parts. Internal resource locations, changing deployed mass distribution and correction of the vessel reference position as its mass centre shifts remain open. This increment supplies authored centres and consistent levers, not complete mass/inertia parity.
+
 ## Remaining physics priorities
 
-1. Import internal mass offsets and usable inertia geometry; complete articulated engine gimbals. Match RCS precision/lever allocation and part controls; extend resource-before-actuation to EVA.
+1. Import usable collider inertia geometry and deployed mass changes; complete articulated engine gimbals. Match RCS precision/lever allocation and part controls; extend resource-before-actuation to EVA.
 2. Import centre-of-pressure offsets, full lifting-surface options, and deflected control-surface lift/drag.
 3. Replace sampled corner paths with continuous hull contacts; add nearby vessel/debris pair contacts and equal-and-opposite impulses. Import contact materials and sliding damage/heat.
 4. Import displacement and wheel-collider data, suspension tuning and target positions; add load-dependent tyre grip and wheel slip. Extend water behavior, then docking attraction/capture and EVA ladder/hatch contact.
@@ -182,11 +192,11 @@ Per-engine mode switching, articulated nozzle transforms, thrust response curves
 ## Validation, 2026-10-27
 
 - `cargo test --workspace`: passed, including the fresh-server Mun journey, server WebSocket tests and 160 simulation regressions. The existing ignored test remains ignored. The first integration run caught an aircraft frame regression; it was corrected before the passing rerun.
-- `cargo test -p ose-sim -p ose-importer --lib`: 160 simulation and 12 importer tests passed after the directional RCS follow-up.
+- `cargo test -p ose-sim -p ose-importer --lib`: the mass-centre follow-up passes 162 simulation and 13 importer tests. The strengthened reverse-control regression also passes. The full workspace run for this increment is in progress; the preceding engine/RCS run passed as recorded above.
 - `cargo clippy --workspace --all-targets -- -D warnings`: passed.
 - `cargo check -p ose-client --target wasm32-unknown-unknown`: passed.
 - `python -m unittest discover -s tools/tests -p test_export_physics_geometry.py`: 3 passed.
-- Real installed-data regeneration: 41 engine modes and 22 RCS nozzle transforms reproduce the committed geometry; maximum JSON round-trip difference is below 5e-16. The existing malformed `Tutorial1.3_Save.json` is warned and skipped by the importer; this does not affect part geometry.
+- Real installed-data regeneration: 41 engine modes and 22 RCS nozzle transforms reproduce the committed geometry; maximum JSON round-trip difference is below 5e-16. All 400 mass offsets also match the original JSON. The existing malformed `Tutorial1.3_Save.json` is warned and skipped by the importer; this does not affect part geometry.
 - `cargo fmt --all --check` and `git diff --check`: passed.
 
 These are source/data comparisons, analytical fixtures and automated gameplay regressions. They do not certify matched flight/contact traces against the KSP2 executable. The remaining priorities above still prevent a complete physics parity claim.

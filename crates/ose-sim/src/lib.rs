@@ -2641,10 +2641,26 @@ mod tests {
                 .surface_deflections(flight::vessel_basis(&p), p.steer_cmd);
             let most = d.iter().map(|x| x.1.abs()).fold(0.0, f64::max);
             assert!(
-                most > 0.1,
-                "{what}: surfaces move on the ground: {d:?} cmd {:?}",
+                most > 1.0_f64.to_radians(),
+                "{what}: surfaces visibly move on the ground: {d:?} cmd {:?}",
                 p.steer_cmd
             );
+            assert!(u.set_rotation(v, -input.x, -input.y, -input.z));
+            u.step();
+            let reverse = u.powered(v).unwrap();
+            assert!(reverse.landed);
+            let opposite = u
+                .structure(v)
+                .unwrap()
+                .surface_deflections(flight::vessel_basis(reverse), reverse.steer_cmd);
+            assert_eq!(d.len(), opposite.len());
+            for ((part, angle), (other, reversed)) in d.iter().zip(&opposite) {
+                assert_eq!(part, other);
+                assert!(
+                    (angle + reversed).abs() < 1e-6,
+                    "{what}: reversing the key reverses deflection"
+                );
+            }
         }
     }
 
@@ -2672,7 +2688,9 @@ mod tests {
         for (dip, sink, crashes) in [(0.0, 2.0, false), (0.6, 100.0, true)] {
             let mut q = p0.clone();
             q.landed = false;
-            q.r = up * (p0.r.length() + 10.0);
+            // A shallow touchdown starts just above support. Dropping from 10 m
+            // would add about 14 m/s of gravity-driven sink before contact.
+            q.r = up * (p0.r.length() + if crashes { 10.0 } else { 0.01 });
             q.facing = (p0.facing * f64::cos(dip) - up * f64::sin(dip)).normalized();
             q.v = omega.cross(q.r) + p0.facing * 120.0 - up * sink;
             q.throttle = 0.0;

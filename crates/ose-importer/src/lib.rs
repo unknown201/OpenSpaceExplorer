@@ -730,6 +730,7 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
         size_category: s(d, "sizeCategory"),
         stage_type: s(d, "stageType"),
         mass_t: f(d, "mass"),
+        mass_offset_m: vec3(&d["coMassOffset"]),
         cost: f(d, "cost"),
         crew_capacity: d["crewCapacity"].as_u64().unwrap_or(0) as u32,
         max_temp_k: f(d, "maxTemp"),
@@ -1276,5 +1277,19 @@ mod tests {
         old.as_object_mut().unwrap().remove("thrusters");
         let rcs: ose_data::Rcs = serde_json::from_value(old).unwrap();
         assert!(rcs.thrusters.is_empty());
+    }
+    #[test]
+    fn authored_mass_offsets_import_and_old_catalogs_default_to_the_origin() {
+        let value = serde_json::json!({"data":{"partName":"test","mass":2.0,"coMassOffset":{"x":1.0,"y":2.0,"z":3.0}}});
+        let imported = part(&value, &mut Coverage::default());
+        assert_eq!(imported.mass_offset_m, DVec3::new(1.0, 2.0, 3.0));
+        let mut old = serde_json::to_value(&imported).unwrap();
+        old.as_object_mut().unwrap().remove("mass_offset_m");
+        assert_eq!(
+            serde_json::from_value::<PartDef>(old)
+                .unwrap()
+                .mass_offset_m,
+            DVec3::ZERO
+        );
     }
 }

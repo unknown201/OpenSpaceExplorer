@@ -240,6 +240,9 @@ pub struct RigidVessel {
     pub links: Vec<Link>,
     /// Part origins at rest, vessel frame.
     rest_pos: Vec<DVec3>,
+    /// Authored centre in each body's local axes and at rest in the craft frame.
+    local_com_m: Vec<DVec3>,
+    rest_com_offset_m: Vec<DVec3>,
     /// The root body's rotation at build: the vessel frame is the root's rotation since then.
     root_rot0: [f64; 4],
     root: usize,
@@ -298,7 +301,7 @@ impl RigidVessel {
             );
             let body = &mut self.bodies[self.bodies_of[i]];
             body.set_additional_mass_properties(
-                MassProperties::new(Vector::ZERO, mass, inertia),
+                MassProperties::new(v(self.local_com_m[i]), mass, inertia),
                 true,
             );
             body.recompute_mass_properties_from_colliders(&self.colliders);
@@ -325,6 +328,8 @@ impl RigidVessel {
         let mut sizes_m = Vec::with_capacity(craft.parts.len());
         let mut bodies_of = Vec::with_capacity(craft.parts.len());
         let mut rots = Vec::with_capacity(craft.parts.len());
+        let mut local_com_m = Vec::with_capacity(craft.parts.len());
+        let mut rest_com_offset_m = Vec::with_capacity(craft.parts.len());
         for (i, p) in craft.parts.iter().enumerate() {
             let def = by_id.get(p.part_id.as_str()).copied();
             let m = part_mass_t(craft, i, def, &unit_mass);
@@ -344,9 +349,12 @@ impl RigidVessel {
                 m * (sx * sx + sy * sy) / 12.0,
             );
             let rot = quat_to_vessel(p.local_rotation);
+            let local_com = to_vessel(def.map(|d| d.mass_offset_m).unwrap_or(DVec3::ZERO));
+            local_com_m.push(local_com);
+            rest_com_offset_m.push(d(rot * v(local_com)));
             let rb = RigidBodyBuilder::dynamic()
                 .pose(Pose::from_parts(v(to_vessel(p.local_position)), rot))
-                .additional_mass_properties(MassProperties::new(Vector::ZERO, m, inertia))
+                .additional_mass_properties(MassProperties::new(v(local_com), m, inertia))
                 .can_sleep(false)
                 .build();
             bodies_of.push(bodies.insert(rb));
@@ -419,6 +427,8 @@ impl RigidVessel {
             present: vec![true; n],
             links,
             rest_pos,
+            local_com_m,
+            rest_com_offset_m,
             root_rot0: {
                 let r = craft
                     .parts
@@ -478,6 +488,18 @@ impl RigidVessel {
             .unwrap_or(DVec3::ZERO)
     }
 
+    /// Current world centre of mass, distinct from the part's geometry origin.
+    pub fn mass_position(&self, part: usize) -> DVec3 {
+        self.bodies
+            .get(self.bodies_of[part])
+            .map(|b| d(b.translation() + *b.rotation() * v(self.local_com_m[part])))
+            .unwrap_or(DVec3::ZERO)
+    }
+
+    pub fn rest_mass_position(&self, part: usize) -> DVec3 {
+        self.rest_pos[part] + self.rest_com_offset_m[part]
+    }
+
     pub fn velocity(&self, part: usize) -> DVec3 {
         self.bodies
             .get(self.bodies_of[part])
@@ -501,7 +523,7 @@ impl RigidVessel {
         let m: f64 = parts.iter().map(|&i| self.masses_t[i]).sum();
         let (mut c, mut vel) = (DVec3::ZERO, DVec3::ZERO);
         for &i in parts {
-            c = c + self.position(i) * self.masses_t[i];
+            c = c + self.mass_position(i) * self.masses_t[i];
             vel = vel + self.velocity(i) * self.masses_t[i];
         }
         (c * (1.0 / m), vel * (1.0 / m))
@@ -551,7 +573,8 @@ impl RigidVessel {
             // the force through the part's centre plus the moment of its offset: rapier's point form measures
             // the offset from a centre of mass it does not refresh for multibody links
             rb.add_force(v(f.force_kn), true);
-            rb.add_torque(v(f.offset_m.cross(f.force_kn)), true);
+            let from_com = v(f.offset_m) - *rb.rotation() * v(self.local_com_m[f.part]);
+            rb.add_torque(from_com.cross(v(f.force_kn)), true);
             ext[f.part].0 = ext[f.part].0 + f.force_kn;
             ext[f.part].1 = ext[f.part].1 + d(at).cross(f.force_kn);
         }
@@ -567,7 +590,7 @@ impl RigidVessel {
             let mut net = DVec3::ZERO;
             for &i in &present {
                 let m = self.masses_t[i];
-                let r = self.position(i) - com;
+                let r = self.mass_position(i) - com;
                 let sz = self.sizes_m[i];
                 inertia +=
                     m * r.length_squared() + m * (sz.x * sz.x + sz.y * sz.y + sz.z * sz.z) / 18.0;
@@ -578,10 +601,10 @@ impl RigidVessel {
                 let spin = ang_mom * (1.0 / inertia);
                 let alpha = (net * -1.0) * (1.0 / inertia) - spin * (1.0 / HOLD_TIME_S.max(dt));
                 for &i in &present {
-                    let r = self.position(i) - com;
+                    let r = self.mass_position(i) - com;
                     let f = alpha.cross(r) * self.masses_t[i];
                     let rb = &mut self.bodies[self.bodies_of[i]];
-                    let at = rb.translation();
+                    let at = rb.translation() + *rb.rotation() * v(self.local_com_m[i]);
                     rb.add_force(v(f), true);
                     ext[i].0 = ext[i].0 + f;
                     ext[i].1 = ext[i].1 + d(at).cross(f);
@@ -636,7 +659,7 @@ impl RigidVessel {
         for &i in &present {
             let a = (self.velocity(i) - self.prev_vel[i]) * (1.0 / dt);
             let m = self.masses_t[i];
-            let r = self.position(i);
+            let r = self.mass_position(i);
             let mut need = (a - gravity) * m;
             if let Some(t) = turning {
                 // the part is carried round the centre of mass: tangential and centripetal acceleration
@@ -774,7 +797,7 @@ impl RigidVessel {
         let (mut m, mut c) = (0.0, DVec3::ZERO);
         for i in (0..self.len()).filter(|&i| self.present[i]) {
             m += self.masses_t[i];
-            c = c + self.rest_pos[i] * self.masses_t[i];
+            c = c + self.rest_mass_position(i) * self.masses_t[i];
         }
         if m > 0.0 {
             c * (1.0 / m)
@@ -790,7 +813,7 @@ impl RigidVessel {
         let mut t = DVec3::ZERO;
         for i in (0..self.len()).filter(|&i| self.present[i]) {
             let m = self.masses_t[i];
-            let r = self.rest_pos[i] - c;
+            let r = self.rest_mass_position(i) - c;
             let s = self.sizes_m[i];
             let own = m * (s.x * s.x + s.y * s.y + s.z * s.z) / 18.0;
             t = t + (alpha * r.length_squared() - r * r.dot(alpha)) * m + alpha * own;
@@ -937,6 +960,73 @@ mod tests {
             serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap(),
             serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap(),
         )
+    }
+
+    #[test]
+    fn authored_centres_rotate_with_mounts_and_force_levers_use_the_mass_centre() {
+        let (crafts, mut defs, res) = assets();
+        let mut craft = crafts[0].clone();
+        craft.parts.truncate(1);
+        craft.parts[0].parent = None;
+        craft.parts[0].resources.clear();
+        craft.parts[0].local_position = DVec3::ZERO;
+        let h = 0.5_f64.sqrt();
+        craft.parts[0].local_rotation = Quat {
+            x: 0.0,
+            y: 0.0,
+            z: h,
+            w: h,
+        };
+        let def = defs
+            .iter_mut()
+            .find(|d| d.id == craft.parts[0].part_id)
+            .unwrap();
+        def.mass_t = 2.0;
+        def.mass_offset_m = DVec3::new(0.0, 1.0, 0.0);
+        def.resource_containers.clear();
+        def.bounds = Some(ose_data::PartBounds {
+            center_m: DVec3::ZERO,
+            size_m: DVec3::new(1.0, 1.0, 1.0),
+        });
+        let mut rv = RigidVessel::build(&craft, &defs, &res);
+        let centre = DVec3::new(-1.0, 0.0, 0.0);
+        assert!(rv.position(0).length() < 1e-12);
+        assert!((rv.mass_position(0) - centre).length() < 1e-12);
+        assert!((rv.rest_centre() - centre).length() < 1e-12);
+        rv.step(
+            0.02,
+            DVec3::ZERO,
+            &[PartForce {
+                part: 0,
+                force_kn: DVec3::new(0.0, 1.0, 0.0),
+                offset_m: centre,
+            }],
+        );
+        let handle = rv.bodies_of[0];
+        assert!(
+            rv.bodies[handle].angvel().length() < 1e-10,
+            "force through COM must not spin a single part"
+        );
+        assert!((rv.velocity(0).y - 0.01).abs() < 1e-10);
+        let position = rv.position(0);
+        let velocity = rv.velocity(0);
+        rv.set_part_masses(&[1.0]);
+        assert_eq!(rv.position(0), position);
+        assert_eq!(rv.velocity(0), velocity);
+        assert!((rv.mass_position(0) - rv.position(0) - centre).length() < 1e-10);
+        rv.step(
+            0.02,
+            DVec3::ZERO,
+            &[PartForce {
+                part: 0,
+                force_kn: DVec3::new(0.0, 1.0, 0.0),
+                offset_m: DVec3::ZERO,
+            }],
+        );
+        assert!(
+            (rv.bodies[handle].angvel().z - 0.02 / (1.0 / 6.0)).abs() < 1e-8,
+            "origin force uses the one-metre lever after wet-mass update"
+        );
     }
 
     #[test]

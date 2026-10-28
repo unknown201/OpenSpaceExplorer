@@ -827,15 +827,15 @@ impl Structure {
         .map(|v| crate::rigid::to_vessel(aero::rotate(self.part_rot[i], v)).normalized())
     }
 
-    /// Current attached mass distribution. Tank contents share the part's box and origin;
-    /// imported internal mass offsets and nozzle positions are not yet available.
+    /// Current attached mass distribution. As in PartComponent, the authored centre
+    /// applies to the part's total mass; its own inertia still uses the existing box proxy.
     pub fn mass_properties(&self) -> crate::dynamics::MassProperties {
         let masses = self.part_masses();
         let mut out = crate::dynamics::MassProperties::default();
         for (i, &mass) in masses.iter().enumerate() {
             if self.rigid.present[i] && self.net.present[i] {
                 out.mass_t += mass;
-                out.centre_m = out.centre_m + self.rigid.rest_position(i) * mass;
+                out.centre_m = out.centre_m + self.rigid.rest_mass_position(i) * mass;
             }
         }
         if out.mass_t > 0.0 {
@@ -847,7 +847,7 @@ impl Structure {
                     mass,
                     self.rigid.sizes_m[i],
                     self.part_axes(i),
-                    self.rigid.rest_position(i) - out.centre_m,
+                    self.rigid.rest_mass_position(i) - out.centre_m,
                 );
             }
         }
@@ -4403,14 +4403,75 @@ mod tests {
     }
 
     #[test]
+    fn mass_offsets_shift_wet_centres_and_inertia_without_moving_geometry() {
+        let (mut craft, mut defs, res) = test_capsule(false);
+        craft.parts[0].local_position = DVec3::ZERO;
+        craft.parts[1].local_position = DVec3::new(0.0, 3.0, 0.0);
+        let h = 0.5_f64.sqrt();
+        craft.parts[0].local_rotation = ose_data::craft::Quat {
+            x: 0.0,
+            y: 0.0,
+            z: h,
+            w: h,
+        };
+        craft.parts[1].local_rotation = ose_data::craft::Quat {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+            w: 1.0,
+        };
+        for (i, part) in craft.parts.iter_mut().enumerate() {
+            part.resources.clear();
+            let def = defs.iter_mut().find(|d| d.id == part.part_id).unwrap();
+            def.mass_t = if i == 0 { 2.0 } else { 1.0 };
+            def.mass_offset_m = if i == 0 {
+                DVec3::new(1.0, 0.0, 0.0)
+            } else {
+                DVec3::new(0.0, 0.5, 0.0)
+            };
+            def.resource_containers.clear();
+            def.bounds = Some(ose_data::PartBounds {
+                center_m: DVec3::ZERO,
+                size_m: DVec3::new(1.0, 1.0, 1.0),
+            });
+        }
+        let mut s = Structure::build(&craft, &defs, &res);
+        let dry = s.mass_properties();
+        let c = 5.5 / 3.0;
+        let moment = 0.5 + 2.0 * (1.0_f64 - c).powi(2) + (3.5_f64 - c).powi(2);
+        assert!((dry.centre_m - DVec3::new(0.0, c, 0.0)).length() < 1e-12);
+        assert!((dry.inertia.x.x - moment).abs() < 1e-12);
+        assert!((dry.inertia.y.y - 0.5).abs() < 1e-12);
+        let fuel = s.net.resource("SolidFuel").unwrap();
+        s.net.tanks.push(crate::resources::Tank {
+            part: 1,
+            resource: fuel,
+            stored: 1.0 / s.net.unit_mass_t[fuel],
+            capacity: 1.0 / s.net.unit_mass_t[fuel],
+        });
+        s.sync_structural_mass();
+        let wet = s.mass_properties();
+        assert!((wet.mass_t - 4.0).abs() < 1e-12);
+        assert!((wet.centre_m - DVec3::new(0.0, 2.25, 0.0)).length() < 1e-12);
+        assert!((s.rigid.rest_centre() - wet.centre_m).length() < 1e-12);
+        assert_eq!(s.rigid.rest_position(0), DVec3::ZERO);
+        assert_eq!(s.part_box(0).0, DVec3::ZERO);
+        s.rigid.remove_parts(&[1]);
+        s.net.remove_parts(&[1]);
+        let remaining = s.mass_properties();
+        assert!((remaining.centre_m - DVec3::new(0.0, 1.0, 0.0)).length() < 1e-12);
+        assert!((remaining.inertia.x.x - 1.0 / 3.0).abs() < 1e-12);
+    }
+
+    #[test]
     fn fuel_drain_and_detachment_update_mass_centre_and_inertia() {
         let (mut s, mut p, pair) = propulsion_fixture();
         let before = s.mass_properties();
         let burn = s.propulsion(&p, Default::default(), 0.1);
         let after = s.mass_properties();
         let expected = (before.centre_m * before.mass_t
-            - s.rigid.rest_position(pair[0]) * 0.1
-            - s.rigid.rest_position(pair[1]) * 0.05)
+            - s.rigid.rest_mass_position(pair[0]) * 0.1
+            - s.rigid.rest_mass_position(pair[1]) * 0.05)
             * (1.0 / after.mass_t);
         assert!((after.mass_t - before.mass_t + burn.burned_t).abs() < 1e-9);
         assert!((after.centre_m - expected).length() < 1e-9);
@@ -4429,7 +4490,7 @@ mod tests {
         let rigid_centre = (0..s.rigid.len())
             .filter(|&i| s.rigid.present[i])
             .fold(DVec3::ZERO, |c, i| {
-                c + s.rigid.rest_position(i) * s.net.mass_of(&[i]).max(0.001)
+                c + s.rigid.rest_mass_position(i) * s.net.mass_of(&[i]).max(0.001)
             })
             * (1.0 / rigid_total);
         assert!((s.rigid.rest_centre() - rigid_centre).length() < 1e-9);
@@ -4438,7 +4499,7 @@ mod tests {
         s.net.remove_parts(&[pair[0]]);
         let detached = s.mass_properties();
         let expected = (after.centre_m * after.mass_t
-            - s.rigid.rest_position(pair[0]) * removed_mass)
+            - s.rigid.rest_mass_position(pair[0]) * removed_mass)
             * (1.0 / detached.mass_t);
         assert!((detached.centre_m - expected).length() < 1e-9);
         assert!((detached.mass_t - after.mass_t + removed_mass).abs() < 1e-9);

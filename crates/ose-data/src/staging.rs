@@ -373,6 +373,7 @@ mod tests {
             size_category: String::new(),
             stage_type: stage_type.into(),
             mass_t: mass,
+            mass_offset_m: DVec3::ZERO,
             cost: 0.0,
             crew_capacity: 0,
             max_temp_k: 0.0,

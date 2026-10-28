@@ -221,6 +221,10 @@ pub struct PartDef {
     pub stage_type: String,
     /// Dry mass in tonnes, as authored.
     pub mass_t: f64,
+    /// Authored part centre of mass in Unity part-local axes (`coMassOffset`).
+    #[serde(default)]
+    pub mass_offset_m: ose_math::DVec3,
+
     pub cost: f64,
     pub crew_capacity: u32,
     pub max_temp_k: f64,

@@ -559,6 +559,7 @@ mod tests {
             .find(|d| d.id == craft.parts[0].part_id)
             .unwrap();
         def.mass_t = 2.0;
+        def.mass_offset_m = DVec3::ZERO;
         def.resource_containers.clear();
         def.engines.clear();
         def.electric = Default::default();
