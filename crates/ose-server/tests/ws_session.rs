@@ -2394,34 +2394,39 @@ async fn restart_keeps_time_vessels_and_burns() {
     let mut ws2 = connect_ws(&addr2).await;
     let (pid2, _) = hello(&mut ws2, Some(token), "saver").await;
     assert_eq!(pid2, pid, "account survives restart");
-    let mut ok = false;
-    for _ in 0..40 {
-        match recv(&mut ws2).await {
-            ServerMessage::TimeState { tick, .. } => {
-                assert!(
-                    tick.0 >= before.tick,
-                    "time went backwards: {} < {}",
-                    tick.0,
-                    before.tick
-                );
+    // Snapshot frequency and bootstrap traffic do not bound when the 1 Hz trajectory arrives.
+    let restored = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match recv(&mut ws2).await {
+                ServerMessage::TimeState { tick, .. } => {
+                    assert!(
+                        tick.0 >= before.tick,
+                        "time went backwards: {} < {}",
+                        tick.0,
+                        before.tick
+                    );
+                }
+                ServerMessage::Vessels { vessels, .. } => {
+                    let mine: Vec<_> = vessels.iter().filter(|v| v.owner == Some(pid2)).collect();
+                    assert_eq!(mine.len(), 1, "one restored probe, no new one: {vessels:?}");
+                    assert_eq!(mine[0].id, 1);
+                }
+                ServerMessage::Trajectory { patches, .. } => {
+                    assert!(
+                        patches.iter().any(|p| p.end == ose_net::PatchEnd::Maneuver),
+                        "burn restored: {patches:?}"
+                    );
+                    break;
+                }
+                _ => {}
             }
-            ServerMessage::Vessels { vessels, .. } => {
-                let mine: Vec<_> = vessels.iter().filter(|v| v.owner == Some(pid2)).collect();
-                assert_eq!(mine.len(), 1, "one restored probe, no new one: {vessels:?}");
-                assert_eq!(mine[0].id, 1);
-            }
-            ServerMessage::Trajectory { patches, .. } => {
-                assert!(
-                    patches.iter().any(|p| p.end == ose_net::PatchEnd::Maneuver),
-                    "burn restored: {patches:?}"
-                );
-                ok = true;
-                break;
-            }
-            _ => {}
         }
-    }
-    assert!(ok, "no trajectory with the restored burn");
+    })
+    .await;
+    assert!(
+        restored.is_ok(),
+        "no trajectory with the restored burn within 10 seconds"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
