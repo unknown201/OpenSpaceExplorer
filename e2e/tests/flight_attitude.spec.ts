@@ -9,7 +9,10 @@ test("map navball follows steering and SAS can be switched off", async ({ page, 
   await page.locator('[data-ose="ksc-launchpad"]').click();
   await page.locator('[data-ose="craft"]').filter({ hasText: "Stock12_StartRocket" }).click();
   await page.locator('[data-ose="lp-orbit"]').click();
+  await expect(page.locator('#status')).toContainText('launched Stock12_StartRocket');
   await page.locator('[data-ose="ksc-button"]').click();
+  const hints = page.getByRole('button', { name: 'No more hints' });
+  if (await hints.isVisible()) await hints.click();
   await page.locator('[data-ose="ksc-tracking"]').click();
   await page.locator('[data-ose="ts-vessel"].mine').filter({ hasText: 'Stock12_StartRocket' }).last().click();
   await page.locator('[data-ose="ts-fly"]').click();
