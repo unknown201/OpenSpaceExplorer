@@ -413,6 +413,7 @@ mod tests {
             drag_cubes: vec![],
             bounds: None,
             reaction_wheel_torque_knm: 0.0,
+            reaction_wheel_axes_knm: None,
             electric: Default::default(),
             experiments: vec![],
             docking: None,

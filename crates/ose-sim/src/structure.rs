@@ -2,8 +2,8 @@
 //! thrust and drag the point-mass flight model delivers, so joints carry the original's loads and can break.
 //!
 //! Each engine's fuel delivery and part orientation set its thrust and structural load target.
-//! Drag is split over the attached parts by their frontal area on each vessel axis, so a vessel flying
-//! sideways through thick air bends at its weak joints. Gravity is uniform across a vessel and loads nothing.
+//! Resolved aerodynamic, actuator, water, suspension and impact loads retain their part/application point.
+//! The frontal-area load split remains only as a fallback. Uniform gravity does not load joints in free fall.
 //! The structure's own motion is not used: the trajectory and attitude stay with the flight model.
 
 use bevy_ecs::prelude::*;
@@ -106,6 +106,11 @@ pub struct Structure {
     pub stage_engines: Vec<Vec<usize>>,
     /// Rated vacuum thrust of each part's engine, kN (0 for parts without one).
     pub engine_thrust_kn: Vec<f64>,
+    wheel_axes_knm: Vec<DVec3>,
+    resolved_actuators: Option<Vec<crate::actuators::Actuator>>,
+    /// Inertial force with a craft-frame application offset; consumed once by `apply`.
+    pub(crate) surface_loads: Vec<PartForce>,
+    pub suspension_compression_m: Vec<f64>,
     engine_isp: Vec<Option<ose_data::Curve>>,
     engine_throttle_locked: Vec<bool>,
     /// Each part's drag faces after occlusion by stack neighbours (`None` without a drag cube), and its
@@ -115,6 +120,7 @@ pub struct Structure {
     /// Each part's `Cd * A` at the last `aero` call, m^2.
     pub part_cda_m2: Vec<f64>,
     curves: DragCurves,
+    last_air_speed_mps: f64,
     /// Tanks and the flow graph engines draw through.
     pub net: FlowNet,
     /// Each part's engine mixture (`None` for parts without an engine).
@@ -191,8 +197,7 @@ pub struct Structure {
     /// Control surfaces: deflection range (rad) and moving share of the surface.
     ctrl: Vec<(f64, f64)>,
     engine_jet: Vec<Option<crate::flight::Jet>>,
-    /// Built nose-forward (a plane): the craft lies level on the ground, on its craft -Z... side (its top,
-    /// craft -Z after `level_layout`, faces up) instead of standing on its tail.
+    /// Built nose-forward (a plane): craft +Z is the belly and -Z is up, in right-handed vessel axes.
     pub level: bool,
     /// Flight stage the structure was last trimmed to.
     staged_to: usize,
@@ -209,7 +214,8 @@ fn quat_mul(a: ose_data::craft::Quat, b: ose_data::craft::Quat) -> ose_data::cra
 
 /// A craft built nose-forward (the root part pointing along the floor, as planes and rovers are built in
 /// the hangar) turned so its pointing direction is craft +Y like a rocket's: the flight model thrusts and
-/// steers along +Y. Its old top (+Y) becomes -Z. `None` for a craft that already points up.
+/// steers along +Y. Its old top (+Y) becomes Unity +Z / right-handed craft -Z.
+/// `None` for a craft that already points up.
 pub fn level_layout(craft: &Craft) -> Option<Craft> {
     let root = craft.parts.iter().position(|p| p.parent.is_none())?;
     let q = craft.parts[root].local_rotation;
@@ -246,7 +252,7 @@ pub fn level_layout(craft: &Craft) -> Option<Craft> {
     Some(rotated(craft, r))
 }
 
-/// The craft turned by `r` about its origin: every part's position and rotation.
+/// Rotate every part about the craft origin.
 pub fn rotated(craft: &Craft, r: ose_data::craft::Quat) -> Craft {
     let mut out = craft.clone();
     for part in &mut out.parts {
@@ -525,6 +531,22 @@ impl Structure {
             stage_parts,
             stage_engines,
             engine_thrust_kn,
+            wheel_axes_knm: (0..n)
+                .map(|i| {
+                    def_of(i)
+                        .map(|d| {
+                            d.reaction_wheel_axes_knm.unwrap_or(DVec3::new(
+                                d.reaction_wheel_torque_knm,
+                                d.reaction_wheel_torque_knm,
+                                d.reaction_wheel_torque_knm,
+                            ))
+                        })
+                        .unwrap_or(DVec3::ZERO)
+                })
+                .collect(),
+            resolved_actuators: None,
+            surface_loads: Vec::new(),
+            suspension_compression_m: vec![0.0; n],
             engine_isp: (0..n)
                 .map(|i| {
                     def_of(i)
@@ -543,6 +565,7 @@ impl Structure {
             part_rot,
             part_cda_m2: vec![0.0; n],
             curves: DragCurves::default(),
+            last_air_speed_mps: 0.0,
             net: FlowNet::build(craft, defs, resources),
             engine_mixture,
             gimbal_range_rad,
@@ -781,16 +804,13 @@ impl Structure {
             DVec3::new(0.0, 1.0, 0.0),
             DVec3::new(0.0, 0.0, -1.0),
         ]
-        .map(|v| crate::rigid::to_vessel(aero::rotate(self.part_rot[i], v)))
+        .map(|v| crate::rigid::to_vessel(aero::rotate(self.part_rot[i], v)).normalized())
     }
 
     /// Current attached mass distribution. Tank contents share the part's box and origin;
     /// imported internal mass offsets and nozzle positions are not yet available.
     pub fn mass_properties(&self) -> crate::dynamics::MassProperties {
-        let mut masses = self.net.dry_t.clone();
-        for tank in &self.net.tanks {
-            masses[tank.part] += tank.stored * self.net.unit_mass_t[tank.resource];
-        }
+        let masses = self.part_masses();
         let mut out = crate::dynamics::MassProperties::default();
         for (i, &mass) in masses.iter().enumerate() {
             if self.rigid.present[i] && self.net.present[i] {
@@ -812,6 +832,18 @@ impl Structure {
             }
         }
         out
+    }
+
+    fn part_masses(&self) -> Vec<f64> {
+        let mut masses = self.net.dry_t.clone();
+        for tank in &self.net.tanks {
+            masses[tank.part] += tank.stored * self.net.unit_mass_t[tank.resource];
+        }
+        masses
+    }
+
+    fn sync_structural_mass(&mut self) {
+        self.rigid.set_part_masses(&self.part_masses());
     }
 
     /// Resolve fuel before integrating motion so a starved engine cannot provide a free step of thrust.
@@ -868,6 +900,105 @@ impl Structure {
         }
         self.resolved_engine_thrust = Some(delivered);
         out
+    }
+
+    /// Build bounded channels from attached, powered actuators and this step's delivered thrust.
+    pub fn configure_actuators(
+        &mut self,
+        p: &Powered,
+        env: crate::flight::EngineEnvironment,
+        propulsion: &mut crate::flight::Propulsion,
+    ) {
+        use crate::actuators::Actuator;
+        let mut channels = Vec::new();
+        let centre = propulsion.mass.centre_m;
+        for i in (0..self.rigid.len()).filter(|&i| self.rigid.present[i]) {
+            let axes = self.part_axes(i);
+            let caps = self.wheel_axes_knm[i] * p.wheel_scale.clamp(0.0, 1.0);
+            for (j, cap) in [caps.x, caps.y, caps.z].into_iter().enumerate() {
+                if cap > 0.0 {
+                    channels.push(Actuator {
+                        part: i,
+                        torque_knm: axes[j] * cap,
+                        force_kn: DVec3::ZERO,
+                        offset_m: DVec3::ZERO,
+                        group: i * 8 + j,
+                        axial: None,
+                    });
+                }
+            }
+            let r = self.rigid.rest_position(i) - centre;
+            let thrust = self
+                .resolved_engine_thrust
+                .as_ref()
+                .map(|t| t[i])
+                .unwrap_or(0.0);
+            let side = thrust * self.gimbal_range_rad[i].sin();
+            for axis in [axes[0], axes[2]] {
+                if side > 0.0 {
+                    let force = axis * side;
+                    channels.push(Actuator {
+                        part: i,
+                        torque_knm: r.cross(force),
+                        force_kn: force,
+                        offset_m: DVec3::ZERO,
+                        group: i * 8 + 3,
+                        axial: Some((axes[1] * thrust, r)),
+                    });
+                }
+            }
+            // No imported RCS nozzle transforms yet: permit a bounded transverse push at the mount.
+            if p.groups.rcs {
+                if let Some(rcs) = &self.rcs_defs[i] {
+                    let isp_scale = if rcs.isp_curve.evaluate(0.0) > 0.0 {
+                        rcs.isp_curve.evaluate(env.pressure_atm) / rcs.isp_curve.evaluate(0.0)
+                    } else {
+                        0.0
+                    };
+                    for axis in axes {
+                        let force = axis
+                            * (rcs.thrust_kn * isp_scale.max(0.0) * p.rcs.powered.clamp(0.0, 1.0));
+                        channels.push(Actuator {
+                            part: i,
+                            torque_knm: r.cross(force),
+                            force_kn: force,
+                            offset_m: DVec3::ZERO,
+                            group: i * 8 + 4,
+                            axial: None,
+                        });
+                    }
+                }
+            }
+            let (range, share) = self.ctrl[i];
+            if let Some((l, curves)) = &self.lift_defs[i] {
+                if range > 0.0 && share > 0.0 && !self.shielded[i] {
+                    let q = 0.5 * env.density * self.last_air_speed_mps.powi(2);
+                    let cap = (q
+                        * aero::LIFT_MULTIPLIER
+                        * l.deflection_lift_coeff
+                        * share
+                        * curves.lift.evaluate(range.sin())
+                        * curves.lift_mach.evaluate(env.mach))
+                    .max(0.0);
+                    let axis = aero::rotate(self.part_rot[i], l.axis);
+                    let force = DVec3::new(axis.x, axis.y, -axis.z) * cap;
+                    let (at, _) = self.part_box(i);
+                    channels.push(Actuator {
+                        part: i,
+                        torque_knm: (at - centre).cross(force),
+                        force_kn: force,
+                        offset_m: at - self.rigid.rest_position(i),
+                        group: i * 8 + 5,
+                        axial: None,
+                    });
+                }
+            }
+        }
+        if !p.controlled {
+            channels.clear();
+        }
+        self.resolved_actuators = Some(channels.clone());
+        propulsion.actuators = Some(channels);
     }
 
     /// Whether an engine can reach every ingredient of its mixture.
@@ -1193,10 +1324,10 @@ impl Structure {
         )
     }
 
-    /// Which way is up on the ground, vessel frame: the axis standing (+Y), or the craft's top lying level.
+    /// Up on the ground in vessel axes: +Y standing, -Z with the craft lying level.
     fn up_axis(&self) -> DVec3 {
         if self.level {
-            DVec3::new(0.0, 0.0, 1.0)
+            DVec3::new(0.0, 0.0, -1.0)
         } else {
             DVec3::new(0.0, 1.0, 0.0)
         }
@@ -1208,6 +1339,7 @@ impl Structure {
         if p.stage != self.staged_to {
             self.trim_to(p.stage);
         }
+        self.sync_structural_mass();
         p.mass_t = self.net.mass_t().max(0.001);
         self.update_shielding();
         self.sync_drive(p);
@@ -1255,17 +1387,15 @@ impl Structure {
     }
 
     /// One step of electric charge: solar panels (`sun` is the starlight relative to the home world, 0 in
-    /// shadow; fixed panels are taken at half their rating since roll is not simulated), generators (engine
-    /// alternators while their engine runs) and RTGs fill the batteries; probe cores and reaction wheels (at
-    /// `wheel_input` 0..1 of full torque) draw from them. Sets the vessel's wheel power and, for an uncrewed
-    /// vessel, whether its probe cores still have control.
-    pub fn electric(&mut self, p: &mut Powered, sun: f64, wheel_input: f64, dt: f64) {
+    /// shadow; fixed panels are taken at half their rating), generators, RTGs and converters fill the
+    /// batteries. Probe cores and drive motors draw before wheel actuation is planned. Updates control
+    /// eligibility and drive power for this tick; reaction-wheel requests are resolved separately.
+    pub fn electric_services(&mut self, p: &mut Powered, sun: f64, dt: f64) {
         let Some(ec) = self.net.resource("ElectricCharge") else {
             return;
         };
         let live = self.live_engines(p.stage);
         let mut requests = Vec::new();
-        let mut wheels = Vec::new();
         let mut cores = Vec::new();
         let instruction = |units_per_s: f64| Instruction {
             resource: ec,
@@ -1302,16 +1432,6 @@ impl Structure {
                     part: i,
                     instructions: vec![instruction(e.command_use)],
                     priority: 5,
-                });
-            }
-            if e.wheel_use_per_knm > 0.0 && e.wheel_torque_vec_knm > 0.0 {
-                wheels.push((requests.len(), e.wheel_torque_vec_knm, i));
-                requests.push(Request {
-                    part: i,
-                    instructions: vec![instruction(
-                        e.wheel_use_per_knm * e.wheel_torque_vec_knm * wheel_input.clamp(0.0, 1.0),
-                    )],
-                    priority: 4,
                 });
             }
         }
@@ -1382,31 +1502,105 @@ impl Structure {
                 }
             }
         };
-        // a wheel idling draws nothing but still needs charge to turn
-        let total: f64 = wheels.iter().map(|w| w.1).sum();
-        p.wheel_scale = if total > 0.0 {
-            wheels
-                .iter()
-                .map(|&(r, torque, part)| {
-                    let powered = if requests[r].instructions[0].units_per_s > 0.0 {
-                        fractions[r]
-                    } else if self.net.available(part, ec) > 1e-9 {
-                        1.0
-                    } else {
-                        0.0
-                    };
-                    torque * powered
-                })
-                .sum::<f64>()
-                / total
-        } else {
-            1.0
-        };
         let crewed = (0..self.rigid.len()).any(|i| self.rigid.present[i] && self.crew[i] > 0);
         p.controlled = crewed || cores.is_empty() || cores.iter().any(|&r| fractions[r] > 0.0);
         if !p.controlled {
             p.throttle = 0.0;
         }
+    }
+
+    /// Legacy scalar-demand entry point for coast/debris services and callers without part control plans.
+    pub fn electric(&mut self, p: &mut Powered, sun: f64, wheel_input: f64, dt: f64) {
+        self.electric_services(p, sun, dt);
+        let torques: Vec<_> = self
+            .electric
+            .iter()
+            .map(|e| e.wheel_torque_vec_knm * wheel_input.clamp(0.0, 1.0))
+            .collect();
+        self.consume_wheel_charge(p, &torques, dt);
+    }
+
+    /// Consume charge once at the actual wheel mounts, before applying their torque.
+    fn consume_wheel_charge(&mut self, p: &mut Powered, torques: &[f64], dt: f64) -> Vec<f64> {
+        let ec = self.net.resource("ElectricCharge");
+        let mut requests = Vec::new();
+        let mut parts = Vec::new();
+        let mut delivered = vec![0.0; self.rigid.len()];
+        for (i, &torque) in torques.iter().enumerate() {
+            if !self.rigid.present[i] {
+                continue;
+            }
+            let cost = self.electric[i].wheel_use_per_knm;
+            if cost <= 0.0 {
+                delivered[i] = 1.0;
+            } else if let Some(ec) = ec {
+                if torque > 0.0 && p.controlled {
+                    parts.push(i);
+                    requests.push(Request {
+                        part: i,
+                        instructions: vec![Instruction {
+                            resource: ec,
+                            units_per_s: cost * torque,
+                        }],
+                        priority: 4,
+                    });
+                } else if self.net.available(i, ec) > 1e-9 {
+                    delivered[i] = 1.0;
+                }
+            }
+        }
+        for (i, fraction) in parts.into_iter().zip(self.net.process(&requests, dt)) {
+            delivered[i] = fraction;
+        }
+        let mut total = 0.0;
+        let mut powered = 0.0;
+        for (i, axes) in self.wheel_axes_knm.iter().enumerate() {
+            if self.rigid.present[i] {
+                total += axes.length();
+                powered += axes.length() * delivered[i];
+            }
+        }
+        p.wheel_scale = if total > 0.0 { powered / total } else { 1.0 };
+        delivered
+    }
+
+    /// Freeze the planned inputs to what this tick's charge can actually supply.
+    pub fn resolve_wheel_power(
+        &mut self,
+        p: &mut Powered,
+        body: &crate::bodies::Body,
+        propulsion: &mut crate::flight::Propulsion,
+        dt: f64,
+    ) {
+        // A dry wheel must not win the allocation ahead of a usable gimbal or surface.
+        let ec = self.net.resource("ElectricCharge");
+        for a in propulsion.actuators.as_mut().expect("configured actuators") {
+            if a.force_kn.length_squared() == 0.0
+                && a.axial.is_none()
+                && self.electric[a.part].wheel_use_per_knm > 0.0
+                && !ec.is_some_and(|ec| self.net.available(a.part, ec) > 1e-9)
+            {
+                a.torque_knm = DVec3::ZERO;
+            }
+        }
+        let mut allocation = crate::flight::plan_actuators(p, body, propulsion, dt);
+        let channels = propulsion.actuators.as_ref().expect("configured actuators");
+        let mut torques = vec![DVec3::ZERO; self.rigid.len()];
+        for (a, input) in channels.iter().zip(&allocation.inputs) {
+            if a.force_kn.length_squared() == 0.0 && a.axial.is_none() {
+                torques[a.part] = torques[a.part] + a.torque_knm * *input;
+            }
+        }
+        let magnitudes: Vec<_> = torques.iter().map(|t| t.length()).collect();
+        let delivered = self.consume_wheel_charge(p, &magnitudes, dt);
+        for (a, input) in channels.iter().zip(&mut allocation.inputs) {
+            if a.force_kn.length_squared() == 0.0 && a.axial.is_none() {
+                let old = *input;
+                *input *= delivered[a.part];
+                allocation.torque_knm = allocation.torque_knm + a.torque_knm * (*input - old);
+            }
+        }
+        propulsion.control_allocation = Some(allocation);
     }
 
     /// Heat the parts for one step (see `thermal`): `v_air` is the velocity through the air (inertial), the
@@ -1638,6 +1832,17 @@ impl Structure {
             }
         }
         (broken, pieces, lost)
+    }
+
+    /// Remove the actual parts struck by the bounds contact solver, preserving craft roll for debris.
+    pub fn contact_damage(&mut self, parts: &[usize], p: &Powered) -> Option<Vec<Piece>> {
+        if parts.contains(&self.root) {
+            return None;
+        }
+        self.rigid.remove_parts(parts);
+        self.net.remove_parts(parts);
+        let (x, y, z) = crate::flight::vessel_basis(p);
+        Some(self.split_off(x, y, z))
     }
 
     /// Destroy parts that burned up: they leave the structure, and whatever only they held on breaks off
@@ -2197,6 +2402,7 @@ impl Structure {
         if stage != self.staged_to {
             self.trim_to(stage);
         }
+        self.last_air_speed_mps = flow.velocity.length();
         self.part_cda_m2.fill(0.0);
         if flow.density <= 0.0 {
             return 0.0;
@@ -2265,8 +2471,12 @@ impl Structure {
     /// Load the structure with one flight step's thrust and drag. Pieces that broke off are removed from the
     /// structure and returned; the caller takes their mass off the vessel and spawns them.
     pub fn apply(&mut self, p: &Powered, out: &StepOutcome, dt: f64) -> Vec<Piece> {
+        // RCS and converters may have changed tank contents since the flight-state sync.
+        self.sync_structural_mass();
         let resolved = self.resolved_engine_thrust.take();
         let aero_forces = self.resolved_aero_forces.take();
+        let surface_forces = std::mem::take(&mut self.surface_loads);
+        let actuators = self.resolved_actuators.take();
         if p.stage != self.staged_to {
             self.trim_to(p.stage);
         }
@@ -2274,11 +2484,12 @@ impl Structure {
         let to_vessel = |v: DVec3| DVec3::new(v.dot(bx), v.dot(by), v.dot(bz));
         let alpha = to_vessel(out.angular_accel);
         let turning = alpha.length() > 1e-4 || out.angvel.length() > 1e-3;
-        let loaded = aero_forces
-            .as_ref()
-            .is_some_and(|forces| forces.iter().any(|f| f.force_kn.length() >= QUIET_KN));
-        if p.landed
-            || p.crashed
+        let loaded = !surface_forces.is_empty()
+            || aero_forces
+                .as_ref()
+                .is_some_and(|forces| forces.iter().any(|f| f.force_kn.length() >= QUIET_KN));
+        if p.crashed
+            || (p.landed && !loaded)
             || (out.thrust_kn < QUIET_KN && out.drag_kn.length() < QUIET_KN && !turning && !loaded)
         {
             // nothing pushes the structure: let it ring down
@@ -2289,7 +2500,14 @@ impl Structure {
         let present: Vec<usize> = (0..self.rigid.len())
             .filter(|&i| self.rigid.present[i])
             .collect();
-        let mut forces = Vec::new();
+        let mut forces: Vec<PartForce> = surface_forces
+            .into_iter()
+            .filter(|f| self.rigid.present[f.part])
+            .map(|f| PartForce {
+                force_kn: to_vessel(f.force_kn),
+                ..f
+            })
+            .collect();
         // thrust over the attached engines of the burning stage
         if let Some(delivered) = resolved {
             self.engine_load_target_kn.copy_from_slice(&delivered);
@@ -2376,7 +2594,7 @@ impl Structure {
             }
         }
         // turning the vessel: the wheels twist it at the root, the gimbals push sideways at the engines
-        let turn = turning.then(|| {
+        let mut turn = turning.then(|| {
             let need = out.control_torque_knm.map(to_vessel).unwrap_or_else(|| {
                 self.rigid
                     .torque_for(to_vessel(out.angular_accel - out.external_angular_accel))
@@ -2408,6 +2626,34 @@ impl Structure {
             }
             t
         });
+        if let Some(channels) = actuators {
+            let t = turn.get_or_insert_with(|| Turning {
+                alpha,
+                omega: to_vessel(out.angvel),
+                ..Default::default()
+            });
+            t.torques.clear();
+            t.forces.clear();
+            forces.extend(
+                out.actuator_axial_corrections
+                    .iter()
+                    .filter(|f| self.rigid.present[f.part])
+                    .copied(),
+            );
+            for (a, input) in channels.iter().zip(&out.actuator_inputs) {
+                if self.rigid.present[a.part] {
+                    if a.force_kn.length_squared() > 0.0 {
+                        forces.push(PartForce {
+                            part: a.part,
+                            force_kn: a.force_kn * *input,
+                            offset_m: a.offset_m,
+                        });
+                    } else {
+                        t.torques.push((a.part, a.torque_knm * *input));
+                    }
+                }
+            }
+        }
         let broken = self
             .rigid
             .step_turning(dt, DVec3::ZERO, &forces, turn.as_ref());
@@ -3344,6 +3590,274 @@ mod tests {
     }
 
     #[test]
+    fn wheel_charge_limits_the_first_tick_and_last_partial_angular_impulse() {
+        for fraction in [0.0, 0.25, 1.0] {
+            let (mut s, mut p, _) = wheel_power_fixture();
+            let dt = 1.0 / crate::TICKS_PER_SECOND as f64;
+            let ec = s.net.resource("ElectricCharge").unwrap();
+            s.net.tanks.push(crate::resources::Tank {
+                part: s.root,
+                resource: ec,
+                stored: 6.0 * dt * fraction,
+                capacity: 10.0,
+            });
+            let initial = s.mass_properties();
+            let bodies: Vec<ose_data::CelestialBody> =
+                serde_json::from_str(include_str!("../../../assets/own/kerbol-system.json"))
+                    .unwrap();
+            let mut u = crate::Universe::with_bodies(&bodies);
+            let body = u.body_entity("Kerbin").unwrap();
+            let vessel = u.spawn_vessel("Charge-limited wheel", body, p.r, p.v);
+            p.wheel_scale = 1.0; // stale readout must not grant free torque
+            u.set_powered(vessel, p);
+            u.set_structure(vessel, s);
+            u.step();
+            let p = u.powered(vessel).unwrap();
+            let (x, y, z) = crate::flight::vessel_basis(p);
+            let w = p.angvel + p.facing * p.roll_rate;
+            let momentum = initial
+                .inertia
+                .apply(DVec3::new(w.dot(x), w.dot(y), w.dot(z)));
+            assert!(
+                (momentum.y - 2.0 * dt * fraction).abs() < 1e-9,
+                "fraction={fraction}: {momentum:?}"
+            );
+            assert!(ec_stored(u.structure(vessel).unwrap()) < 1e-10);
+            // Empty on the following tick: no second impulse and no second charge draw.
+            let rate = p.roll_rate;
+            u.step();
+            assert!((u.powered(vessel).unwrap().roll_rate - rate).abs() < 1e-8);
+            assert!(ec_stored(u.structure(vessel).unwrap()) < 1e-10);
+        }
+    }
+
+    fn wheel_power_fixture() -> (Structure, Powered, usize) {
+        let (mut s, mut p, pair) = propulsion_fixture();
+        s.wheel_axes_knm.fill(DVec3::ZERO);
+        s.wheel_axes_knm[s.root] = DVec3::new(0.0, 2.0, 0.0);
+        s.gimbal_range_rad.fill(0.0);
+        s.ctrl.fill((0.0, 0.0));
+        s.rcs_defs.fill(None);
+        s.electric.fill(Default::default());
+        s.electric[s.root].wheel_use_per_knm = 3.0;
+        s.electric[s.root].wheel_torque_vec_knm = 2.0;
+        s.crew[s.root] = 1;
+        s.part_rot[s.root] = [0.0, 0.0, 0.0, 1.0];
+        let ec = s.net.resource("ElectricCharge").unwrap();
+        s.net.tanks.retain(|t| t.resource != ec);
+        s.net.flow_mode[ec] = ose_data::FlowMode::NoFlow;
+        p.ignited = false;
+        p.throttle = 0.0;
+        p.attitude = crate::flight::Attitude::Free;
+        p.rotation_input = DVec3::new(0.0, 0.0, 1.0);
+        p.facing = DVec3::new(0.0, 1.0, 0.0);
+        p.v = DVec3::new(0.0, 100.0, 0.0);
+        (s, p, pair[0])
+    }
+
+    #[test]
+    fn wheel_power_is_delivered_at_each_mount_and_recovers_without_tick_lag() {
+        let (mut s, mut p, other) = wheel_power_fixture();
+        s.wheel_axes_knm[other] = DVec3::new(0.0, 2.0, 0.0);
+        s.part_rot[other] = [0.0, 0.0, 0.0, 1.0];
+        s.electric[other] = s.electric[s.root];
+        let ec = s.net.resource("ElectricCharge").unwrap();
+        s.net.tanks.push(crate::resources::Tank {
+            part: other,
+            resource: ec,
+            stored: 10.0,
+            capacity: 10.0,
+        });
+        let u = crate::Universe::with_bodies(
+            &serde_json::from_str::<Vec<ose_data::CelestialBody>>(include_str!(
+                "../../../assets/own/kerbol-system.json"
+            ))
+            .unwrap(),
+        );
+        let body = u.body_entity("Kerbin").unwrap();
+        let body = u.world.get::<crate::bodies::Body>(body).unwrap().clone();
+        s.sync(&mut p);
+        let mut engine = s.propulsion(&p, Default::default(), 0.02);
+        s.configure_actuators(&p, Default::default(), &mut engine);
+        s.resolve_wheel_power(&mut p, &body, &mut engine, 0.02);
+        let allocation = engine.control_allocation.as_ref().unwrap();
+        assert!((allocation.torque_knm.y - 2.0).abs() < 1e-9);
+        let channels = engine.actuators.as_ref().unwrap();
+        for (a, input) in channels.iter().zip(&allocation.inputs) {
+            if a.part == s.root {
+                assert_eq!(*input, 0.0);
+            }
+            if a.part == other {
+                assert!((*input - 1.0).abs() < 1e-9);
+            }
+        }
+        assert!((ec_stored(&s) - 9.88).abs() < 1e-9);
+        // The dry wheel must also leave allocation room for a non-electric force channel.
+        let mut engine = s.propulsion(&p, Default::default(), 0.02);
+        engine.actuators = Some(vec![
+            crate::actuators::Actuator {
+                part: s.root,
+                torque_knm: DVec3::new(0.0, 2.0, 0.0),
+                force_kn: DVec3::ZERO,
+                offset_m: DVec3::ZERO,
+                group: 0,
+                axial: None,
+            },
+            crate::actuators::Actuator {
+                part: other,
+                torque_knm: DVec3::new(0.0, 2.0, 0.0),
+                force_kn: DVec3::new(2.0, 0.0, 0.0),
+                offset_m: DVec3::ZERO,
+                group: 1,
+                axial: None,
+            },
+        ]);
+        s.resolve_wheel_power(&mut p, &body, &mut engine, 0.02);
+        let allocation = engine.control_allocation.unwrap();
+        assert_eq!(allocation.inputs[0], 0.0);
+        assert!((allocation.inputs[1] - 1.0).abs() < 1e-9);
+        assert!((allocation.torque_knm.y - 2.0).abs() < 1e-9);
+        assert!(
+            (ec_stored(&s) - 9.88).abs() < 1e-9,
+            "force channel draws no wheel charge"
+        );
+        // A generator supplies an empty wheel in this tick even if the last readout was zero.
+        s.rigid.remove_parts(&[other]);
+        s.net.remove_parts(&[other]);
+        s.net.tanks.push(crate::resources::Tank {
+            part: s.root,
+            resource: ec,
+            stored: 0.0,
+            capacity: 10.0,
+        });
+        s.electric[s.root].generator_output = 6.0;
+        s.engine_thrust_kn[s.root] = 0.0;
+        s.electric_services(&mut p, 0.0, 0.02);
+        p.wheel_scale = 1.0;
+        let mut engine = s.propulsion(&p, Default::default(), 0.02);
+        s.configure_actuators(&p, Default::default(), &mut engine);
+        s.resolve_wheel_power(&mut p, &body, &mut engine, 0.02);
+        assert!((engine.control_allocation.unwrap().torque_knm.y - 2.0).abs() < 1e-9);
+        assert!(ec_stored(&s) < 1e-9);
+    }
+
+    #[test]
+    fn wheel_charge_tracks_vector_torque_and_sas_braking_but_not_idle_spin() {
+        let (mut s, mut p, _) = wheel_power_fixture();
+        s.wheel_axes_knm[s.root] = DVec3::new(3.0, 4.0, 0.0);
+        let ec = s.net.resource("ElectricCharge").unwrap();
+        s.net.tanks.push(crate::resources::Tank {
+            part: s.root,
+            resource: ec,
+            stored: 10.0,
+            capacity: 10.0,
+        });
+        let u = crate::Universe::with_bodies(
+            &serde_json::from_str::<Vec<ose_data::CelestialBody>>(include_str!(
+                "../../../assets/own/kerbol-system.json"
+            ))
+            .unwrap(),
+        );
+        let body = u
+            .world
+            .get::<crate::bodies::Body>(u.body_entity("Kerbin").unwrap())
+            .unwrap()
+            .clone();
+        s.sync(&mut p);
+        p.rotation_input = DVec3::new(-0.6, 0.0, 0.8);
+        let mut engine = s.propulsion(&p, Default::default(), 0.02);
+        s.configure_actuators(&p, Default::default(), &mut engine);
+        s.resolve_wheel_power(&mut p, &body, &mut engine, 0.02);
+        assert!(
+            (engine.control_allocation.unwrap().torque_knm - DVec3::new(3.0, 4.0, 0.0)).length()
+                < 1e-9
+        );
+        assert!(
+            (ec_stored(&s) - 9.7).abs() < 1e-9,
+            "3 EC per kN*m times 5 kN*m times 0.02 s"
+        );
+        p.rotation_input = DVec3::ZERO;
+        p.roll_rate = 0.1;
+        let before = ec_stored(&s);
+        let mut engine = s.propulsion(&p, Default::default(), 0.02);
+        s.configure_actuators(&p, Default::default(), &mut engine);
+        s.resolve_wheel_power(&mut p, &body, &mut engine, 0.02);
+        assert_eq!(ec_stored(&s), before, "free spin draws no wheel charge");
+        p.attitude = crate::flight::Attitude::Fixed(p.facing);
+        let mut engine = s.propulsion(&p, Default::default(), 0.02);
+        s.configure_actuators(&p, Default::default(), &mut engine);
+        s.resolve_wheel_power(&mut p, &body, &mut engine, 0.02);
+        assert!(engine.control_allocation.unwrap().torque_knm.y < 0.0);
+        assert!(ec_stored(&s) < before, "SAS braking draws charge");
+    }
+
+    #[test]
+    fn mounted_wheel_axes_obey_power_and_attachment_instead_of_stage_estimates() {
+        let (mut s, mut p, pair) = propulsion_fixture();
+        s.wheel_axes_knm.fill(DVec3::ZERO);
+        s.gimbal_range_rad.fill(0.0);
+        s.ctrl.fill((0.0, 0.0));
+        s.wheel_axes_knm[pair[0]] = DVec3::new(2.0, 0.0, 0.0);
+        let h = 0.5_f64.sqrt();
+        s.part_rot[pair[0]] = [0.0, 0.0, h, h]; // part X -> craft Y (roll)
+        p.wheel_scale = 0.25;
+        p.spec.stages[0].wheel_torque_knm = 1000.0; // stale scalar must have no effect
+        let mut engine = s.propulsion(&p, Default::default(), 0.02);
+        s.configure_actuators(&p, Default::default(), &mut engine);
+        let a = engine.actuators.as_ref().unwrap();
+        let roll = crate::actuators::allocate(a, DVec3::new(0.0, 100.0, 0.0));
+        assert!((roll.torque_knm - DVec3::new(0.0, 0.5, 0.0)).length() < 1e-10);
+        assert!(
+            crate::actuators::allocate(a, DVec3::new(100.0, 0.0, 0.0))
+                .torque_knm
+                .length()
+                < 1e-10
+        );
+        p.wheel_scale = 0.0;
+        s.configure_actuators(&p, Default::default(), &mut engine);
+        assert!(engine.actuators.as_ref().unwrap().is_empty());
+        p.wheel_scale = 1.0;
+        s.rigid.remove_parts(&[pair[0]]);
+        s.configure_actuators(&p, Default::default(), &mut engine);
+        assert!(engine.actuators.as_ref().unwrap().is_empty());
+    }
+
+    #[test]
+    fn gimbal_limits_follow_delivered_thrust_including_the_final_partial_burn() {
+        let (mut s, p, pair) = propulsion_fixture();
+        s.wheel_axes_knm.fill(DVec3::ZERO);
+        s.gimbal_range_rad.fill(0.0);
+        s.ctrl.fill((0.0, 0.0));
+        s.stage_engines[0] = vec![pair[0]];
+        s.gimbal_range_rad[pair[0]] = 5.0_f64.to_radians();
+        let solid = s.net.resource("SolidFuel").unwrap();
+        for tank in &mut s.net.tanks {
+            if tank.resource == solid {
+                tank.stored = if tank.part == pair[0] {
+                    0.005 / s.net.unit_mass_t[solid]
+                } else {
+                    0.0
+                };
+            }
+        }
+        let mut engine = s.propulsion(&p, Default::default(), 0.02);
+        assert!((engine.thrust_kn - 0.25 * s.engine_thrust_kn[pair[0]]).abs() < 1e-8);
+        s.configure_actuators(&p, Default::default(), &mut engine);
+        let channels = engine.actuators.as_ref().unwrap();
+        assert_eq!(channels.len(), 2);
+        let side = engine.thrust_kn * 5.0_f64.to_radians().sin();
+        for a in channels {
+            assert!((a.force_kn.length() - side).abs() < 1e-10);
+        }
+        let mut dry = s.propulsion(&p, Default::default(), 0.02);
+        s.configure_actuators(&p, Default::default(), &mut dry);
+        assert!(
+            dry.actuators.as_ref().unwrap().is_empty(),
+            "dry engines cannot steer"
+        );
+    }
+
+    #[test]
     fn mounted_engines_produce_balanced_and_off_axis_forces() {
         let (mut s, p, pair) = propulsion_fixture();
         // Only two equal masses contribute, so their midpoint is the analytical mass centre.
@@ -3382,7 +3896,7 @@ mod tests {
 
     #[test]
     fn fuel_drain_and_detachment_update_mass_centre_and_inertia() {
-        let (mut s, p, pair) = propulsion_fixture();
+        let (mut s, mut p, pair) = propulsion_fixture();
         let before = s.mass_properties();
         let burn = s.propulsion(&p, Default::default(), 0.1);
         let after = s.mass_properties();
@@ -3393,6 +3907,24 @@ mod tests {
         assert!((after.mass_t - before.mass_t + burn.burned_t).abs() < 1e-9);
         assert!((after.centre_m - expected).length() < 1e-9);
         assert!(after.inertia.x.x < before.inertia.x.x);
+        s.sync(&mut p);
+        for i in 0..s.rigid.len() {
+            if s.rigid.present[i] {
+                assert!((s.rigid.masses_t[i] - s.net.mass_of(&[i]).max(0.001)).abs() < 1e-9);
+            }
+        }
+        // This synthetic fixture includes massless parts, for which Rapier retains a 1 kg floor.
+        let rigid_total: f64 = (0..s.rigid.len())
+            .filter(|&i| s.rigid.present[i])
+            .map(|i| s.net.mass_of(&[i]).max(0.001))
+            .sum();
+        let rigid_centre = (0..s.rigid.len())
+            .filter(|&i| s.rigid.present[i])
+            .fold(DVec3::ZERO, |c, i| {
+                c + s.rigid.rest_position(i) * s.net.mass_of(&[i]).max(0.001)
+            })
+            * (1.0 / rigid_total);
+        assert!((s.rigid.rest_centre() - rigid_centre).length() < 1e-9);
         let removed_mass = s.net.mass_of(&[pair[0]]);
         s.rigid.remove_parts(&[pair[0]]);
         s.net.remove_parts(&[pair[0]]);

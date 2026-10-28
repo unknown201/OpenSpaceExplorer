@@ -21,6 +21,8 @@ pub struct Body {
     pub rotation_period_s: f64,
     pub initial_rotation_deg: f64,
     pub is_star: bool,
+    /// Ocean density is authored in tonnes per cubic metre.
+    pub ocean: Option<ose_data::Ocean>,
     /// A built site on the surface (the KSC campus) that craft stand on instead of the terrain.
     pub site: Option<std::sync::Arc<crate::campus::Site>>,
 }
@@ -54,6 +56,7 @@ pub fn spawn_bodies(world: &mut World, defs: &[BodyDef]) -> BodyIndex {
                 rotation_period_s: d.rotation_period_s,
                 initial_rotation_deg: d.initial_rotation_deg,
                 is_star: d.is_star,
+                ocean: d.ocean.clone(),
                 site: None,
             })
             .id();
