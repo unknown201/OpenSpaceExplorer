@@ -115,6 +115,7 @@ pub struct CelestialBody {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Ocean {
+    /// PQS height-map datum below sea level. The sea surface itself is at the body radius.
     pub altitude_m: f64,
     pub density: f64,
 }
@@ -238,6 +239,9 @@ pub struct PartDef {
     /// Reaction wheel torque (the larger of pitch and yaw), kN*m; 0 for parts without a wheel.
     #[serde(default)]
     pub reaction_wheel_torque_knm: f64,
+    /// Per-axis pitch, roll, yaw torque in part-local X,Y,Z; old catalogs use the scalar fallback.
+    #[serde(default)]
+    pub reaction_wheel_axes_knm: Option<ose_math::DVec3>,
     /// Electric charge use and production of the part's modules.
     #[serde(default)]
     pub electric: Electric,

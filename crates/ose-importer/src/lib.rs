@@ -347,6 +347,7 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
     let mut raw_modules = BTreeMap::new();
     let mut gimbal_range = None;
     let mut wheel_torque: f64 = 0.0;
+    let mut wheel_axes = None;
     let mut electric = ose_data::Electric::default();
     let mut experiments = Vec::new();
     let mut docking = None;
@@ -548,6 +549,11 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
                 "PartComponentModule_Gimbal" => gimbal_range = Some(f(data, "gimbalRange")),
                 "PartComponentModule_ReactionWheel" => {
                     wheel_torque = f(data, "PitchTorque").max(f(data, "YawTorque"));
+                    wheel_axes = Some(ose_math::DVec3::new(
+                        f(data, "PitchTorque"),
+                        f(data, "RollTorque"),
+                        f(data, "YawTorque"),
+                    ));
                 }
                 "PartComponentModule_Drag" => {
                     if let Some(cubes) = data["cubes"].as_array() {
@@ -679,6 +685,7 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
         engines,
         bounds,
         reaction_wheel_torque_knm: wheel_torque,
+        reaction_wheel_axes_knm: wheel_axes,
         electric,
         experiments,
         docking,
@@ -1063,6 +1070,21 @@ mod tests {
         assert_eq!(part.attach_nodes[0].position.y, 0.264);
         assert_eq!(part.module_names.len(), 3);
         assert!(part.raw_modules.contains_key("PartComponentModule_Color"));
+    }
+
+    #[test]
+    fn wheel_import_preserves_each_axis_instead_of_repeating_pitch_torque() {
+        let source = json!({"data":{"partName":"wheel","serializedPartModules":[
+            {"Name":"PartComponentModule_ReactionWheel","ModuleData":[
+                {"Name":"Data_ReactionWheel","DataObject":{"PitchTorque":2.0,"YawTorque":3.0,"RollTorque":0.5}}
+            ]}
+        ]}});
+        let imported = part(&source, &mut Coverage::default());
+        assert_eq!(
+            imported.reaction_wheel_axes_knm,
+            Some(ose_math::DVec3::new(2.0, 0.5, 3.0))
+        );
+        assert_eq!(imported.reaction_wheel_torque_knm, 3.0);
     }
 
     #[test]

@@ -230,7 +230,7 @@ pub struct PartForce {
 }
 
 pub struct RigidVessel {
-    /// Wet mass at build (dry plus stored resources), t.
+    /// Current wet mass (dry plus stored resources), t; includes the solver's 1 kg floor.
     pub masses_t: Vec<f64>,
     pub dry_masses_t: Vec<f64>,
     /// Box size of each part (vessel frame axes), m, as used for its inertia.
@@ -278,6 +278,34 @@ fn part_mass_t(
 }
 
 impl RigidVessel {
+    /// Update existing bodies in place. Fuel leaving at the part's velocity carries away
+    /// its share of momentum; changing mass must not rescale velocities or rebuild joints.
+    pub fn set_part_masses(&mut self, masses_t: &[f64]) {
+        assert_eq!(masses_t.len(), self.len());
+        for (i, &mass) in masses_t.iter().enumerate() {
+            if !self.present[i] {
+                continue;
+            }
+            let mass = mass.max(0.001);
+            if mass == self.masses_t[i] {
+                continue;
+            }
+            let s = self.sizes_m[i];
+            let inertia = Vector::new(
+                mass * (s.y * s.y + s.z * s.z) / 12.0,
+                mass * (s.x * s.x + s.z * s.z) / 12.0,
+                mass * (s.x * s.x + s.y * s.y) / 12.0,
+            );
+            let body = &mut self.bodies[self.bodies_of[i]];
+            body.set_additional_mass_properties(
+                MassProperties::new(Vector::ZERO, mass, inertia),
+                true,
+            );
+            body.recompute_mass_properties_from_colliders(&self.colliders);
+            self.masses_t[i] = mass;
+        }
+    }
+
     /// Build from a craft, every part at its authored placement, at rest.
     pub fn build(craft: &Craft, defs: &[PartDef], resources: &[ResourceDef]) -> RigidVessel {
         let by_id: HashMap<&str, &PartDef> = defs.iter().map(|p| (p.id.as_str(), p)).collect();
@@ -579,6 +607,19 @@ impl RigidVessel {
             &(),
             &(),
         );
+        // Rapier leaves link body velocities at the start of its final substep while
+        // generalized velocities contain the completed step. Read the latter through
+        // each link Jacobian before differencing velocities for Newton-Euler loads.
+        for &i in &present {
+            let handle = self.bodies_of[i];
+            if let Some(link) = self.joints.rigid_body_link(handle) {
+                let multibody = self.joints.get_multibody(link.multibody).unwrap();
+                let velocity = multibody.body_jacobian(link.id) * multibody.generalized_velocity();
+                let body = &mut self.bodies[handle];
+                body.set_linvel(Vector::new(velocity[0], velocity[1], velocity[2]), false);
+                body.set_angvel(Vector::new(velocity[3], velocity[4], velocity[5]), false);
+            }
+        }
         // Joint loads by Newton-Euler over each child subtree: the joint supplies whatever the subtree's
         // motion needs beyond gravity and the external forces on it (rotational inertia neglected).
         let mut sum_f = vec![DVec3::ZERO; n];
@@ -896,6 +937,93 @@ mod tests {
             serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap(),
             serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap(),
         )
+    }
+
+    #[test]
+    fn changing_mass_preserves_spin_and_updates_box_inertia() {
+        let (crafts, defs, res) = assets();
+        let mut craft = crafts[0].clone();
+        craft.parts.truncate(1);
+        craft.parts[0].parent = None;
+        craft.parts[0].local_rotation = Quat {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+            w: 1.0,
+        };
+        let mut rv = RigidVessel::build(&craft, &defs, &res);
+        let handle = rv.bodies_of[0];
+        rv.bodies[handle].set_angvel(Vector::new(0.0, 0.0, 0.2), true);
+        let mass = rv.masses_t[0] * 0.5;
+        rv.set_part_masses(&[mass]);
+        rv.step(0.02, DVec3::ZERO, &[]);
+        assert!((d(rv.bodies[handle].angvel()) - DVec3::new(0.0, 0.0, 0.2)).length() < 1e-9);
+        // Refilling likewise preserves velocity, and the next torque uses the new inertia.
+        rv.set_part_masses(&[mass * 2.0]);
+        rv.bodies[handle].set_angvel(Vector::ZERO, true);
+        rv.step(
+            0.02,
+            DVec3::ZERO,
+            &[PartForce {
+                part: 0,
+                force_kn: DVec3::new(0.0, 1.0, 0.0),
+                offset_m: DVec3::new(1.0, 0.0, 0.0),
+            }],
+        );
+        let size = rv.sizes_m[0];
+        let inertia = mass * 2.0 * (size.x * size.x + size.y * size.y) / 12.0;
+        assert!((rv.bodies[handle].angvel().z - 0.02 / inertia).abs() < 1e-9);
+    }
+
+    #[test]
+    fn wet_mass_updates_keep_multibody_motion_and_joint_loads_continuous() {
+        let (crafts, defs, res) = assets();
+        let craft = crafts
+            .iter()
+            .find(|c| c.name == "Stock12_StartRocket")
+            .unwrap();
+        let mut rv = RigidVessel::build(craft, &defs, &res);
+        let force = engine_force(craft, &defs);
+        for _ in 0..10 {
+            assert!(rv.step(0.02, DVec3::ZERO, &[force]).is_empty());
+        }
+        // A translating assembled craft loses fuel asymmetrically, without a force.
+        // Both the immediate state and the next multibody step must retain its velocity.
+        for _ in 0..8 {
+            let positions: Vec<_> = (0..rv.len()).map(|i| rv.position(i)).collect();
+            let velocities: Vec<_> = (0..rv.len()).map(|i| rv.velocity(i)).collect();
+            let masses: Vec<_> = rv
+                .masses_t
+                .iter()
+                .zip(&rv.dry_masses_t)
+                .map(|(&m, &dry)| dry + (m - dry) * 0.5)
+                .collect();
+            rv.set_part_masses(&masses);
+            for i in 0..rv.len() {
+                assert_eq!(rv.position(i), positions[i]);
+                assert_eq!(rv.velocity(i), velocities[i]);
+                assert!((rv.bodies[rv.bodies_of[i]].mass() - masses[i].max(0.001)).abs() < 1e-9);
+            }
+            assert!(rv.step(0.02, DVec3::ZERO, &[]).is_empty());
+            for (i, velocity) in velocities.iter().enumerate() {
+                assert!(
+                    (rv.velocity(i) - *velocity).length() < 1e-7,
+                    "mass change accelerated part {i}: {:?} -> {:?}",
+                    velocity,
+                    rv.velocity(i)
+                );
+            }
+            assert!(rv.links.iter().all(|l| l.force_kn < 1e-5));
+        }
+        // The next powered step must use the new total mass and engine mount share.
+        let total: f64 = rv.masses_t.iter().sum();
+        let before = rv.velocity(force.part);
+        assert!(rv.step(0.02, DVec3::ZERO, &[force]).is_empty());
+        let expected_dv = force.force_kn * (0.02 / total);
+        assert!((rv.velocity(force.part) - before - expected_dv).length() < 1e-6);
+        let mount = rv.links.iter().find(|l| l.child == force.part).unwrap();
+        let expected_load = force.force_kn.length() * (1.0 - rv.masses_t[force.part] / total);
+        assert!((mount.force_kn - expected_load).abs() < 1e-4);
     }
 
     #[test]

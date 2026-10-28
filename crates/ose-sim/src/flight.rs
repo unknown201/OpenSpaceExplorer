@@ -2,7 +2,8 @@
 //!
 //! Part-backed craft receive fuel-resolved engine forces, aerodynamic forces and moments, and current
 //! inertia from `structure`. Vessels without parts retain the simplified [`FlightSpec`] propulsion and
-//! attitude path. Ground contact still uses a clearance proxy; per-part collision hulls remain future work.
+//! attitude path. Part-backed surface forces and corner sweeps live in `surface`; the clearance proxy
+//! remains for parked/rolling craft and vessels without parts.
 //!
 //! Frame: body-centred, inertial, Z-up, the body spinning about +Z at `2 pi / rotation_period`. Surface
 //! velocity is `v - omega x r`. Atmosphere density follows the body's pressure and temperature curves
@@ -370,7 +371,7 @@ pub fn vessel_basis(p: &Powered) -> (DVec3, DVec3, DVec3) {
     (p.facing.cross(top), p.facing, top)
 }
 
-fn set_vessel_top(p: &mut Powered, top: DVec3) {
+pub(crate) fn set_vessel_top(p: &mut Powered, top: DVec3) {
     p.roll_rad = 0.0;
     let base = vessel_top(p);
     p.roll_rad = top.dot(p.facing.cross(base)).atan2(top.dot(base));
@@ -647,6 +648,11 @@ pub fn resting_on_ground(
     terrain: Option<&ose_data::terrain::TerrainMap>,
     ut: f64,
 ) -> bool {
+    if body.ocean.is_some()
+        && crate::surface::solid_radius(body, terrain, p.r, ut) < body.radius_m - 1e-5
+    {
+        return false;
+    }
     let omega = if body.rotation_period_s > 0.0 {
         std::f64::consts::TAU / body.rotation_period_s
     } else {
@@ -924,7 +930,7 @@ pub fn attitude_direction(att: Attitude, r: DVec3, v: DVec3, omega: f64) -> DVec
 }
 
 /// Rotate `f` by the rotation vector `w * dt` (Rodrigues).
-fn rotate(f: DVec3, w: DVec3, dt: f64) -> DVec3 {
+pub(crate) fn rotate(f: DVec3, w: DVec3, dt: f64) -> DVec3 {
     let angle = w.length() * dt;
     if angle < 1e-12 {
         return f;
@@ -1061,23 +1067,53 @@ pub fn spin(p: &mut Powered, thrust_fraction: f64, dt: f64) {
     p.roll_rad = (p.roll_rad + p.roll_rate * dt).rem_euclid(std::f64::consts::TAU);
 }
 
-/// Integrate the part-backed craft as a rotating body. The controller requests bounded torque;
-/// external forces can spin it faster than the controller's commanded rate limit.
-fn turn_with_parts(
-    p: &mut Powered,
-    engine: Propulsion,
+/// Plan part-backed controls without advancing motion or consuming resources.
+pub fn plan_actuators(
+    p: &Powered,
+    body: &Body,
+    engine: &Propulsion,
+    dt: f64,
+) -> crate::actuators::Allocation {
+    let Some(channels) = engine.actuators.as_ref() else {
+        return Default::default();
+    };
+    if p.landed || p.crashed || !p.controlled {
+        return crate::actuators::Allocation {
+            inputs: vec![0.0; channels.len()],
+            ..Default::default()
+        };
+    }
+    let omega = if body.rotation_period_s > 0.0 {
+        std::f64::consts::TAU / body.rotation_period_s
+    } else {
+        0.0
+    };
+    let target = attitude_direction(p.attitude, p.r, p.v, omega);
+    let max_thrust = p
+        .current_stage()
+        .map(|s| s.thrust_vac_kn.max(s.thrust_asl_kn))
+        .unwrap_or(0.0);
+    let frac = if max_thrust > 0.0 {
+        engine.thrust_kn / max_thrust
+    } else {
+        0.0
+    };
+    let (request, _) = control_request(p, engine, target, frac, dt);
+    crate::actuators::allocate(channels, request)
+}
+
+fn control_request(
+    p: &Powered,
+    engine: &Propulsion,
     target: DVec3,
     frac: f64,
     dt: f64,
-    out: &mut StepOutcome,
-) {
+) -> (DVec3, f64) {
     let (bx, by, bz) = vessel_basis(p);
     let local = |v: DVec3| DVec3::new(v.dot(bx), v.dot(by), v.dot(bz));
-    let world = |v: DVec3| bx * v.x + by * v.y + bz * v.z;
     let inertia = engine.mass.inertia;
-    let w0 = p.angvel + by * p.roll_rate;
-    let w = local(w0);
-    let torque = p
+    let w = local(p.angvel + by * p.roll_rate);
+    let fallback_torque = p
         .rotation_stage()
         .map(|s| {
             if !p.controlled {
@@ -1094,6 +1130,17 @@ fn turn_with_parts(
         })
         .unwrap_or(0.0)
         .max(0.0);
+    let torque = engine
+        .actuators
+        .as_ref()
+        .map(|a| {
+            if p.controlled {
+                a.iter().map(|a| a.torque_knm.length()).sum()
+            } else {
+                0.0
+            }
+        })
+        .unwrap_or(fallback_torque);
     let limit = |v: DVec3, cap: f64| {
         let n = v.length();
         if n > cap && n > 0.0 {
@@ -1108,17 +1155,57 @@ fn turn_with_parts(
     } else {
         let cross = by.cross(target);
         let theta = cross.length().atan2(by.dot(target));
-        let axis = if cross.length() > 1e-9 {
+        let axis = if cross.length() > 1e-12 {
             cross.normalized()
-        } else {
+        } else if by.dot(target) < 0.0 {
             bx
+        } else {
+            DVec3::ZERO
         };
         let axis = local(axis);
         let moment = inertia.apply(axis).length();
         let alpha = if moment > 0.0 { torque / moment } else { 0.0 };
-        let desired = axis * (2.0 * alpha * theta * 0.9).sqrt().min(MAX_TURN_RATE)
+        // Close to the target, the stopping-speed law can cross the entire error
+        // in one tick and start a limit cycle. Bound the requested rate by that error.
+        let desired = axis
+            * (2.0 * alpha * theta * 0.9)
+                .sqrt()
+                .min(MAX_TURN_RATE)
+                .min(theta / dt)
             + DVec3::new(0.0, ROLL_RATE_RAD_S * p.roll_input.clamp(-1.0, 1.0), 0.0);
         limit(inertia.apply((desired - w) * (1.0 / dt)), torque)
+    };
+    (control, torque)
+}
+
+/// Integrate the part-backed craft as a rotating body. The controller requests bounded torque;
+/// external forces can spin it faster than the controller's commanded rate limit.
+fn turn_with_parts(
+    p: &mut Powered,
+    engine: &Propulsion,
+    target: DVec3,
+    frac: f64,
+    dt: f64,
+    out: &mut StepOutcome,
+) {
+    let (bx, by, bz) = vessel_basis(p);
+    let local = |v: DVec3| DVec3::new(v.dot(bx), v.dot(by), v.dot(bz));
+    let world = |v: DVec3| bx * v.x + by * v.y + bz * v.z;
+    let inertia = engine.mass.inertia;
+    let w0 = p.angvel + by * p.roll_rate;
+    let w = local(w0);
+    let (request, torque) = control_request(p, engine, target, frac, dt);
+    let control = if let Some(channels) = &engine.actuators {
+        let allocation = engine
+            .control_allocation
+            .clone()
+            .unwrap_or_else(|| crate::actuators::allocate(channels, request));
+        out.actuator_inputs = allocation.inputs;
+        out.actuator_axial_corrections = allocation.axial_corrections;
+        out.control_force_kn = world(allocation.force_kn);
+        allocation.torque_knm
+    } else {
+        request
     };
     p.steer_cmd = if torque > 0.0 {
         world(control) * (1.0 / torque)
@@ -1132,9 +1219,8 @@ fn turn_with_parts(
     let mut top = bz;
     let mut w1 = w0;
     let torque_body = control + engine.torque_knm;
-    let acceleration = inertia
-        .solve(torque_body + local(p.aero_torque_knm))
-        .length();
+    let external = p.aero_torque_knm + engine.environment_torque_knm;
+    let acceleration = inertia.solve(torque_body + local(external)).length();
     let steps = ((w.length() + acceleration * dt) * dt / 0.05)
         .ceil()
         .clamp(1.0, 256.0) as usize;
@@ -1146,7 +1232,7 @@ fn turn_with_parts(
             let y = rotate(facing, midpoint_w, h * 0.5);
             let z = rotate(top, midpoint_w, h * 0.5);
             let x = y.cross(z);
-            let t = x * torque_body.x + y * torque_body.y + z * torque_body.z + p.aero_torque_knm;
+            let t = x * torque_body.x + y * torque_body.y + z * torque_body.z + external;
             next_momentum = momentum + t * h;
             let mid = (momentum + next_momentum) * 0.5;
             let local_w = inertia.solve(DVec3::new(mid.dot(x), mid.dot(y), mid.dot(z)));
@@ -1173,8 +1259,14 @@ fn turn_with_parts(
     out.angvel = w1;
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct StepOutcome {
+    pub actuator_inputs: Vec<f64>,
+    pub actuator_axial_corrections: Vec<crate::rigid::PartForce>,
+    /// Bounds contacts exceeding this particular part's crash tolerance.
+    pub contact_damage: Vec<usize>,
+    /// Resolved gimbal and control-surface side force, inertial kN.
+    pub control_force_kn: DVec3,
     pub crashed: bool,
     pub touched_down: bool,
     /// Sum of engine thrust magnitudes delivered this step, kN.
@@ -1229,8 +1321,15 @@ impl EngineEnvironment {
 
 /// Average engine thrust over a step and the mass actually delivered by the tanks.
 /// The resource graph has already removed this fuel; the integrator must not request it again.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Propulsion {
+    pub actuators: Option<Vec<crate::actuators::Actuator>>,
+    /// Inputs already limited by this tick's delivered actuator resources.
+    pub control_allocation: Option<crate::actuators::Allocation>,
+    /// Buoyancy/suspension forces and moments are inertial, unlike mounted engine forces.
+    pub environment_force_kn: DVec3,
+    pub environment_torque_knm: DVec3,
+    pub per_part_contacts: bool,
     pub thrust_kn: f64,
     pub burned_t: f64,
     /// Resultant force and its moment about the current mass centre, in the craft frame.
@@ -1298,7 +1397,7 @@ pub fn integrate_with_propulsion(
     // attitude: landed vessels stand upright; otherwise turn toward the commanded attitude with torque
     let thrust_kn = if walk_dir.is_some() || p.eva_hop {
         0.0
-    } else if let Some(engine) = propulsion {
+    } else if let Some(engine) = propulsion.as_ref() {
         engine.thrust_kn
     } else {
         // jets: their thrust follows the speed and the air
@@ -1315,8 +1414,9 @@ pub fn integrate_with_propulsion(
         p.thrust_kn(pressure_atm) * air
     };
     let (bx, by, bz) = vessel_basis(p);
-    let resolved_force =
-        propulsion.map(|e| bx * e.force_kn.x + by * e.force_kn.y + bz * e.force_kn.z);
+    let resolved_force = propulsion
+        .as_ref()
+        .map(|e| bx * e.force_kn.x + by * e.force_kn.y + bz * e.force_kn.z);
     if p.landed {
         if !p.tipped {
             p.facing = if p.level {
@@ -1353,7 +1453,7 @@ pub fn integrate_with_propulsion(
         } else {
             0.0
         };
-        if let Some(engine) = propulsion.filter(|e| e.mass.mass_t > 0.0) {
+        if let Some(engine) = propulsion.as_ref().filter(|e| e.mass.mass_t > 0.0) {
             turn_with_parts(p, engine, target, frac, dt, &mut out);
         } else {
             let w0 = p.angvel;
@@ -1390,7 +1490,7 @@ pub fn integrate_with_propulsion(
 
     // thrust and propellant
     let mut thrust_acc = DVec3::ZERO;
-    if let Some(engine) = propulsion {
+    if let Some(engine) = propulsion.as_ref() {
         if p.mass_t > 0.0 && thrust_kn > 0.0 {
             thrust_acc = resolved_force.unwrap_or(DVec3::ZERO) * (1.0 / p.mass_t);
         }
@@ -1421,6 +1521,13 @@ pub fn integrate_with_propulsion(
         p.propellant_t -= burn;
         p.mass_t -= burn;
     }
+
+    thrust_acc = thrust_acc
+        + out.control_force_kn * (1.0 / p.mass_t)
+        + propulsion
+            .as_ref()
+            .map(|e| e.environment_force_kn * (1.0 / p.mass_t))
+            .unwrap_or(DVec3::ZERO);
 
     // RCS translation (the RCS group on), in the craft's axes
     p.rcs.usage = 0.0;
@@ -1558,7 +1665,10 @@ pub fn integrate_with_propulsion(
     }
 
     // surface contact against the terrain (or sea) under the vessel
-    if let Some(hit) = ground_crossing(body, terrain, previous_r, p.r, stand_height(p), ut, dt) {
+    if let Some(hit) = (!propulsion.as_ref().is_some_and(|e| e.per_part_contacts))
+        .then(|| ground_crossing(body, terrain, previous_r, p.r, stand_height(p), ut, dt))
+        .flatten()
+    {
         p.r = previous_r + (p.r - previous_r) * hit;
         let hit_ut = ut + dt * hit;
         let ground = ground_radius(body, terrain, p.r, hit_ut);
@@ -1936,17 +2046,45 @@ mod tests {
     }
 
     #[test]
+    fn sas_converges_on_small_errors_with_high_authority() {
+        for dt in [0.01, 0.02, 0.08] {
+            let (mut p, mut engine) = body_dynamics_fixture();
+            p.controlled = true;
+            p.spec.stages[0].wheel_torque_knm = 1000.0;
+            let target = rotate(p.facing, DVec3::new(0.0, 0.0, 1.0), 1e-4);
+            p.attitude = Attitude::Fixed(target);
+            engine.actuators = None;
+            let initial_error = (p.facing - target).length();
+            let mut error = initial_error;
+            for _ in 0..100 {
+                turn_with_parts(
+                    &mut p,
+                    &engine,
+                    target,
+                    0.0,
+                    dt,
+                    &mut StepOutcome::default(),
+                );
+                error = (p.facing - target).length();
+                assert!(error <= initial_error + 1e-10, "dt={dt}, error={error}");
+            }
+            assert!(error < 1e-8, "dt={dt}: {error}");
+            assert!(p.angvel.length() < 1e-8, "dt={dt}: {:?}", p.angvel);
+        }
+    }
+
+    #[test]
     fn sas_cannot_cancel_external_roll_without_sufficient_torque() {
         let (mut p, mut engine) = body_dynamics_fixture();
         p.attitude = Attitude::Fixed(p.facing);
         engine.torque_knm = DVec3::new(0.0, 20.0, 0.0);
         let mut out = StepOutcome::default();
         let target = p.facing;
-        turn_with_parts(&mut p, engine, target, 0.0, 0.1, &mut out);
+        turn_with_parts(&mut p, &engine, target, 0.0, 0.1, &mut out);
         assert!((p.roll_rate - 0.1).abs() < 1e-10);
         p.controlled = true;
         p.spec.stages[0].wheel_torque_knm = 2.0;
-        turn_with_parts(&mut p, engine, target, 0.0, 0.1, &mut out);
+        turn_with_parts(&mut p, &engine, target, 0.0, 0.1, &mut out);
         assert!((p.roll_rate - 0.19).abs() < 1e-10);
         assert!((out.control_torque_knm.unwrap().length() - 2.0).abs() < 1e-10);
     }
@@ -1967,7 +2105,7 @@ mod tests {
         for _ in 0..1000 {
             turn_with_parts(
                 &mut p,
-                engine,
+                &engine,
                 DVec3::ZERO,
                 0.0,
                 0.002,
@@ -2022,6 +2160,7 @@ mod tests {
             rotation_period_s: 21_549.425,
             initial_rotation_deg: 0.0,
             is_star: false,
+            ocean: None,
             site: None,
         }
     }

@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod actuators;
 pub mod aero;
 pub mod bodies;
 pub mod campus;
@@ -19,6 +20,7 @@ pub mod resources;
 pub mod rigid;
 pub mod science;
 pub mod structure;
+pub mod surface;
 pub mod thermal;
 pub mod trajectory;
 pub mod vessels;
@@ -1166,7 +1168,30 @@ impl Universe {
                     }
                 }
                 let env = flight::EngineEnvironment::at(&p, &body, atmo.as_ref());
-                let propulsion = structure.as_mut().map(|st| st.propulsion(&p, env, step_dt));
+                let step_ut = start_ut + i as f64 * step_dt;
+                let propulsion = structure.as_mut().map(|st| {
+                    st.electric_services(&mut p, sun, step_dt);
+                    st.sync(&mut p);
+                    if comm_blocked {
+                        p.controlled = false;
+                        p.throttle = 0.0;
+                    }
+                    let mut propulsion = st.propulsion(&p, env, step_dt);
+                    // Plan with rated wheel axes; current delivery is resolved at each wheel below.
+                    p.wheel_scale = 1.0;
+                    st.configure_actuators(&p, env, &mut propulsion);
+                    st.configure_surface(
+                        &mut p,
+                        &body,
+                        terrain.as_deref(),
+                        step_ut,
+                        step_dt,
+                        &mut propulsion,
+                    );
+                    st.resolve_wheel_power(&mut p, &body, &mut propulsion, step_dt);
+                    propulsion
+                });
+                let before = p.clone();
                 let was_landed = p.landed;
                 let mut out = flight::integrate_with_propulsion(
                     &mut p,
@@ -1177,10 +1202,26 @@ impl Universe {
                     step_dt,
                     propulsion,
                 );
+                if let Some(st) = &mut structure {
+                    st.resolve_surface(
+                        &before,
+                        &mut p,
+                        &body,
+                        terrain.as_deref(),
+                        step_ut,
+                        step_dt,
+                        &mut out,
+                    );
+                }
                 // a hard landing breaks the parts it lands on; the rest may come through
                 if out.crashed {
                     if let Some(st) = &mut structure {
-                        if let Some((_, off)) = st.impact(out.impact_mps, p.facing) {
+                        let survivors = if out.contact_damage.is_empty() {
+                            st.impact(out.impact_mps, p.facing).map(|(_, off)| off)
+                        } else {
+                            st.contact_damage(&out.contact_damage, &p)
+                        };
+                        if let Some(off) = survivors {
                             p.crashed = false;
                             out.crashed = false;
                             for piece in off {
@@ -1227,9 +1268,6 @@ impl Universe {
                         .map(|a| a.pressure_kpa(p.r.length() - body.radius_m) / 101.325)
                         .unwrap_or(0.0);
                     st.rcs_burn(&mut p, pressure, step_dt);
-                    // wheels work in proportion to how fast the vessel is being turned
-                    let turning = (p.angvel.length() / 0.2).clamp(0.0, 1.0);
-                    st.electric(&mut p, sun, turning, step_dt);
                     if comm_blocked {
                         // a probe out of contact cannot be flown (CommNetRequired)
                         p.controlled = false;
@@ -1807,9 +1845,19 @@ mod tests {
             u.powered(v).unwrap().clone()
         };
         let upright = drop(&mut u, 0.05, 2.0);
-        assert!(upright.landed && !upright.tipped && !upright.crashed);
+        assert!(
+            upright.landed && !upright.tipped && !upright.crashed,
+            "{upright:?}"
+        );
         let leaning = drop(&mut u, 0.8, 2.0);
-        assert!(leaning.landed && leaning.tipped, "falls over");
+        assert!(
+            leaning.tipped && !leaning.crashed,
+            "falls over: {leaning:?}"
+        );
+        assert!(
+            leaning.angvel.length() > 0.1 || leaning.landed,
+            "contact produces a physical tumble before rest"
+        );
         assert!(
             leaning.r.length() - 600_000.0 < upright.r.length() - 600_000.0,
             "lying lower"
@@ -1968,10 +2016,7 @@ mod tests {
             false,
         );
         p.facing = DVec3::new(0.0, 1.0, 0.0);
-        // Give this fixture finite wheel authority; zero inertia no longer grants instant turns.
-        for stage in &mut p.spec.stages {
-            stage.wheel_torque_knm = 5.0;
-        }
+        // Control authority comes from the attached part actuators.
         u.set_powered(v, p);
         u.set_structure(v, st);
         // a pure normal burn in a minute
@@ -1997,7 +2042,11 @@ mod tests {
         let normal = p.r.cross(p.v).normalized();
         assert!(d.dot(normal) > 0.99, "points along the burn: {d:?}");
         assert!(p.facing.dot(normal) > 0.9, "turned to it: {:?}", p.facing);
-        assert!(p.roll_rad.abs() > 1.0, "rolled {} rad", p.roll_rad);
+        assert!(
+            (p.roll_rate - flight::ROLL_RATE_RAD_S).abs() < 0.05,
+            "roll input reaches the commanded rate: {}",
+            p.roll_rate
+        );
         // groups
         assert_eq!(u.action_group(v, ActionGroup::Lights, None), Some(true));
         assert_eq!(u.action_group(v, ActionGroup::Lights, None), Some(false));
@@ -2176,7 +2225,7 @@ mod tests {
         let p = u.powered(v).unwrap();
         assert!(
             p.r.length() - 600_000.0 > alt0 + 100.0,
-            "climbing: {} m above the runway",
+            "climbing: {} m above the runway {p:?}",
             p.r.length() - 600_000.0 - alt0
         );
         assert!(
@@ -2369,7 +2418,7 @@ mod tests {
         let p = u.powered(v).unwrap();
         let st = u.structure(v).unwrap();
         assert!(top > 1_000.0, "flew to {top} m");
-        assert!(p.landed, "came down");
+        assert!(p.landed, "came down: {p:?}");
         assert!(
             !p.crashed,
             "the parachute saved it ({landing_speed:.1} m/s)"
