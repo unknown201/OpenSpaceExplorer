@@ -7,6 +7,12 @@ const CORRECT_MS: f64 = 50.0;
 const STALE_MS: f64 = 500.0;
 const MAX_PREDICT_ANGLE: f64 = std::f64::consts::PI / 6.0;
 
+/// Exported meshes mirror Unity X, while physics mirrors Unity Z. A half-turn
+/// around Y converts the exported craft frame to the physics vessel frame.
+pub fn mesh_to_vessel() -> DQuat {
+    DQuat::from_xyzw(0.0, 1.0, 0.0, 0.0)
+}
+
 /// Body, warp and surface/flight changes invalidate an angular velocity estimate.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Context {
@@ -94,6 +100,62 @@ impl Track {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exported_geometry_matches_physics_axes_for_stock_craft() {
+        let crafts: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        // Check mounted geometry, not just the vessel nose (which is unchanged by
+        // the missing half-turn). Off-axis points expose the upside-down render.
+        let flight_crafts: Vec<_> = crafts
+            .iter()
+            .filter_map(ose_data::craft::level_layout)
+            .collect();
+        for craft in crafts.iter().chain(&flight_crafts) {
+            for part in &craft.parts {
+                let p = part.local_position;
+                let q = part.local_rotation;
+                let unity_q = DQuat::from_xyzw(q.x, q.y, q.z, q.w).normalize();
+                let mesh_q = DQuat::from_xyzw(q.x, -q.y, -q.z, q.w).normalize();
+                for v in [DVec3::X, DVec3::Y, DVec3::Z] {
+                    let unity = DVec3::new(p.x, p.y, p.z) + unity_q * v;
+                    let physics = DVec3::new(unity.x, unity.y, -unity.z);
+                    let exported = DVec3::new(-p.x, p.y, p.z) + mesh_q * DVec3::new(-v.x, v.y, v.z);
+                    assert!(
+                        (mesh_to_vessel() * exported - physics).length() < 1e-8,
+                        "{}: {}",
+                        craft.name,
+                        part.part_id
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn stock_planes_share_the_launch_layout_and_keep_gear_below_the_cockpit() {
+        let crafts: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        for name in ["Stock04_Jet", "Stock03_Drone"] {
+            let craft = crafts.iter().find(|c| c.name == name).unwrap();
+            let flight = ose_data::craft::level_layout(craft).unwrap();
+            assert!(ose_data::craft::level_layout(&flight).is_none());
+            let q = |p: &ose_data::craft::CraftPart| {
+                let q = p.local_rotation;
+                DQuat::from_xyzw(q.x, q.y, q.z, q.w).normalize()
+            };
+            let root = craft.parts.iter().position(|p| p.parent.is_none()).unwrap();
+            let turn = q(&flight.parts[root]) * q(&craft.parts[root]).inverse();
+            assert!((q(&flight.parts[root]) * DVec3::Y - DVec3::Y).length() < 1e-6);
+            // Hangar up becomes Unity +Z, hence physics -Z (the level basis's up).
+            assert!((turn * DVec3::Y - DVec3::Z).length() < 1e-6);
+            for part in &flight.parts {
+                if part.part_id.starts_with("landinggear_") {
+                    assert!(part.local_position.z < 1e-6, "{name}: gear above cockpit");
+                }
+            }
+        }
+    }
     const CONTEXT: Context = Context {
         body: 1,
         warp: 1,

@@ -3903,7 +3903,9 @@ impl App {
                 craft: Some(craft),
             } => {
                 if self.flying.is_some() && self.flight_craft_id == Some(id) {
-                    self.flight_craft = Some(craft.clone());
+                    self.flight_craft = Some(
+                        ose_data::craft::level_layout(&craft).unwrap_or_else(|| craft.clone()),
+                    );
                 }
                 self.craft_docs.insert(id, craft);
                 self.draw_thumbnail(id);
@@ -6549,7 +6551,9 @@ impl App {
             self.target = None;
         }
         self.send_target();
-        self.flight_craft = craft_id.and_then(|c| self.craft_docs.get(&c).cloned());
+        self.flight_craft = craft_id.and_then(|c| self.craft_docs.get(&c)).map(|craft| {
+            ose_data::craft::level_layout(craft).unwrap_or_else(|| craft.clone())
+        });
         self.flight_craft_id = craft_id;
         // A craft not fetched yet (launched from another screen, or after a reload): ask for it; the flight
         // view draws it when it arrives.
