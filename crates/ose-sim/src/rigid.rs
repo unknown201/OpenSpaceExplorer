@@ -104,6 +104,7 @@ pub fn to_vessel(v: DVec3) -> DVec3 {
 }
 
 fn quat_to_vessel(q: Quat) -> Rotation {
+    let q = q.normalized();
     // mirroring Z flips the sense of rotation about X and Y
     let r = Rotation::from_xyzw(-q.x, -q.y, q.z, q.w);
     if r.length_squared() < 1e-12 {

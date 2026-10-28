@@ -206,6 +206,12 @@ The five authored RCS modules now import their serialized enable state, thrust p
 
 A parameterized analytical simulation regression checks both authored one-way nozzles and legacy mount proxies: full/quarter/zero limits, enable toggling, shield blocking and explicit permission, bounded out-of-range limits, final partial fuel, per-mount isolation and fuel/readout consistency. Importer coverage checks serialized property values and older catalog defaults. The settings are currently simulation/catalog configuration; player-facing per-part editing and persistence of changed flight settings remain open, alongside axis switches, fore-by-throttle, full-thrust threshold and reference precision/lever selection.
 
+## Completed increment: consistent mounted quaternion normalization
+
+The rigid-body path already normalized craft rotations, but force axes, aerodynamic frame transforms, rotated contact boxes and hangar layout used raw imported quaternions. 300 of the 352 committed stock part rotations differ from unit length by more than 1e-12; the largest squared-norm error is 5.364424335851936e-7. These rounding differences previously gave force/contact calculations a slightly different pose from their structural body. Scaled uploaded quaternions could cause much larger disagreement.
+
+A shared craft-quaternion normalization method now supplies force mounts, contact boxes, hangar rotation and structural orientation. Existing zero rotations retain the identity fallback; nonfinite rotations also fall back to identity. A data regression covers normalization and invalid legacy values. An analytical simulation regression checks scaled, sign-flipped and rounded representations of a 90-degree mount: expected unit axes, engine forces and offsets, contact bounds, wet mass centre and inertia, rotational aerodynamic force/torque, hangar layout and rigid rotation of craft positions agree. This makes existing geometry paths consistent; it does not replace their bounding-box/contact or inertia approximations.
+
 ## Remaining physics priorities
 
 1. Import usable collider inertia geometry and procedural/deployed mass changes; complete articulated engine gimbals. Match RCS precision/lever allocation and part controls, and complete EVA character/camera/water behavior.
@@ -220,6 +226,9 @@ The next contact acceptance cases should cover continuous hull contacts that pre
 Per-engine mode switching, articulated nozzle transforms, thrust response curves/limits, full intake accounting, and the complete KSP2 engine modifier set are still open. The existing jet curve/intake approximation and structural thrust-lag filter remain. The resource allocator also retains its existing ordered-request semantics. This change closes specific propulsion errors; it does not establish complete engine or flight parity.
 
 ## Validation, 2026-10-27
+
+- Mounted-rotation follow-up: `cargo test --workspace --exclude ose-bot` passes with 178 simulation tests, 18 data tests, 17 importer tests and the WebSocket suite (19 passed/one existing ignored). Strict workspace Clippy, browser build, formatting and whitespace checks pass. The full Mun journey was last run on the aerodynamic milestone.
+
 
 - RCS activation follow-up: strict workspace Clippy passes; focused RCS tests pass (10 simulation, two importer). `cargo test --workspace --exclude ose-bot` passes (177 simulation, 17 importer, WebSocket suite 19 passed/one existing ignored). The browser check passes and all five RCS module defaults match a fresh installed-data regeneration. The full Mun journey passed on the preceding aerodynamic milestone.
 

@@ -16,6 +16,28 @@ pub struct Quat {
     pub w: f64,
 }
 
+impl Quat {
+    /// Unit rotation for a mounted part. Legacy zero/invalid rotations mean identity.
+    pub fn normalized(self) -> Self {
+        let norm2 = self.x * self.x + self.y * self.y + self.z * self.z + self.w * self.w;
+        if !norm2.is_finite() || norm2 < 1e-12 {
+            return Self {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                w: 1.0,
+            };
+        }
+        let inverse = norm2.sqrt().recip();
+        Self {
+            x: self.x * inverse,
+            y: self.y * inverse,
+            z: self.z * inverse,
+            w: self.w * inverse,
+        }
+    }
+}
+
 /// Base and accent colours, sRGB bytes (the VAB's Colors tool).
 pub type Paint = ([u8; 3], [u8; 3]);
 
@@ -153,6 +175,48 @@ impl Craft {
             dry_t: dry,
             resources_t: wet,
             unknown_parts: unknown,
+        }
+    }
+}
+
+#[cfg(test)]
+mod rotation_tests {
+    use super::Quat;
+    #[test]
+    fn mount_rotations_normalize_and_legacy_invalid_values_mean_identity() {
+        let q = Quat {
+            x: 0.0,
+            y: 0.0,
+            z: 3.0,
+            w: 3.0,
+        }
+        .normalized();
+        assert!((q.z - 0.5_f64.sqrt()).abs() < 1e-15);
+        assert!((q.w - 0.5_f64.sqrt()).abs() < 1e-15);
+        for q in [
+            Quat::default(),
+            Quat {
+                x: f64::NAN,
+                y: 0.0,
+                z: 0.0,
+                w: 1.0,
+            },
+            Quat {
+                x: 0.0,
+                y: f64::INFINITY,
+                z: 0.0,
+                w: 1.0,
+            },
+        ] {
+            assert_eq!(
+                q.normalized(),
+                Quat {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                    w: 1.0
+                }
+            );
         }
     }
 }

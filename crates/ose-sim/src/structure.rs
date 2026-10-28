@@ -224,17 +224,7 @@ fn quat_mul(a: ose_data::craft::Quat, b: ose_data::craft::Quat) -> ose_data::cra
 /// `None` for a craft that already points up.
 pub fn level_layout(craft: &Craft) -> Option<Craft> {
     let root = craft.parts.iter().position(|p| p.parent.is_none())?;
-    let q = craft.parts[root].local_rotation;
-    let q = if q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w < 1e-12 {
-        ose_data::craft::Quat {
-            x: 0.0,
-            y: 0.0,
-            z: 0.0,
-            w: 1.0,
-        }
-    } else {
-        q
-    };
+    let q = craft.parts[root].local_rotation.normalized();
     let c = aero::rotate([q.x, q.y, q.z, q.w], DVec3::new(0.0, 1.0, 0.0));
     if c.y.abs() >= 0.5 {
         return None;
@@ -271,20 +261,11 @@ pub fn level_layout(craft: &Craft) -> Option<Craft> {
 
 /// Rotate every part about the craft origin.
 pub fn rotated(craft: &Craft, r: ose_data::craft::Quat) -> Craft {
+    let r = r.normalized();
     let mut out = craft.clone();
     for part in &mut out.parts {
         part.local_position = aero::rotate([r.x, r.y, r.z, r.w], part.local_position);
-        let pq = part.local_rotation;
-        let pq = if pq.x * pq.x + pq.y * pq.y + pq.z * pq.z + pq.w * pq.w < 1e-12 {
-            ose_data::craft::Quat {
-                x: 0.0,
-                y: 0.0,
-                z: 0.0,
-                w: 1.0,
-            }
-        } else {
-            pq
-        };
+        let pq = part.local_rotation.normalized();
         part.local_rotation = quat_mul(r, pq);
     }
     out
@@ -330,11 +311,8 @@ pub struct Piece {
 /// A part's bounds (part space, Unity axes) as a box in the vessel frame: centre relative to the part
 /// origin and half size of the rotated box.
 fn vessel_box(q: ose_data::craft::Quat, b: ose_data::PartBounds) -> (DVec3, DVec3) {
-    let q = if q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w < 1e-12 {
-        [0.0, 0.0, 0.0, 1.0]
-    } else {
-        [q.x, q.y, q.z, q.w]
-    };
+    let q = q.normalized();
+    let q = [q.x, q.y, q.z, q.w];
     let to_vessel = |v: DVec3| {
         let u = aero::rotate(q, v);
         DVec3::new(u.x, u.y, -u.z)
@@ -492,12 +470,8 @@ impl Structure {
             .parts
             .iter()
             .map(|p| {
-                let q = p.local_rotation;
-                if q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w < 1e-12 {
-                    [0.0, 0.0, 0.0, 1.0]
-                } else {
-                    [q.x, q.y, q.z, q.w]
-                }
+                let q = p.local_rotation.normalized();
+                [q.x, q.y, q.z, q.w]
             })
             .collect();
         let n = craft.parts.len();
@@ -4800,6 +4774,91 @@ mod tests {
         assert!((tilted.force_kn - first - second).length() < 1e-9);
         assert!((tilted.torque_knm - moment).length() < 1e-9);
         assert!(moment.length() > 1.0);
+    }
+
+    #[test]
+    fn mounted_rotation_scale_cannot_change_forces_contact_bounds_or_inertia() {
+        let (mut craft, defs, res) = test_capsule(false);
+        let h = 0.5_f64.sqrt();
+        for part in &mut craft.parts {
+            part.local_rotation = ose_data::craft::Quat {
+                x: 0.0,
+                y: 0.0,
+                z: h,
+                w: h,
+            };
+        }
+        let mut baseline = Structure::build(&craft, &defs, &res);
+        for scale in [0.5, -3.0, 1.0000003] {
+            let mut scaled = craft.clone();
+            for part in &mut scaled.parts {
+                part.local_rotation.z *= scale;
+                part.local_rotation.w *= scale;
+            }
+            let mut actual = Structure::build(&scaled, &defs, &res);
+            let expected_mass = baseline.mass_properties();
+            let actual_mass = actual.mass_properties();
+            assert!((actual_mass.centre_m - expected_mass.centre_m).length() < 1e-11);
+            for (a, b) in [
+                (actual_mass.inertia.x, expected_mass.inertia.x),
+                (actual_mass.inertia.y, expected_mass.inertia.y),
+                (actual_mass.inertia.z, expected_mass.inertia.z),
+            ] {
+                assert!((a - b).length() < 1e-10);
+            }
+            for i in 0..actual.rigid.len() {
+                let (actual_centre, actual_half) = actual.part_box(i);
+                let (expected_centre, expected_half) = baseline.part_box(i);
+                assert!((actual_centre - expected_centre).length() < 1e-11);
+                assert!((actual_half - expected_half).length() < 1e-11);
+                let axes = actual.part_axes(i);
+                assert!((axes[0] - DVec3::new(0.0, 1.0, 0.0)).length() < 1e-12);
+                assert!((axes[1] - DVec3::new(-1.0, 0.0, 0.0)).length() < 1e-12);
+                for (force, expected) in actual
+                    .engine_forces(i, 17.0)
+                    .iter()
+                    .zip(baseline.engine_forces(i, 17.0))
+                {
+                    assert!((force.force_kn - expected.force_kn).length() < 1e-10);
+                    assert!((force.offset_m - expected.offset_m).length() < 1e-11);
+                }
+            }
+            let frame = basis(DVec3::new(0.0, 1.0, 0.0));
+            let velocity = DVec3::new(30.0, 80.0, 10.0);
+            let flow = |s: &mut Structure| {
+                s.aerodynamics_local(
+                    0,
+                    Airflow {
+                        frame,
+                        velocity,
+                        angular_velocity: DVec3::new(0.1, -0.2, 0.3),
+                        density: 1.2,
+                        speed_of_sound: 340.0,
+                    },
+                )
+            };
+            let expected = flow(&mut baseline);
+            let aero = flow(&mut actual);
+            assert!((aero.drag_kn - expected.drag_kn).length() < 1e-10);
+            assert!((aero.lift_kn - expected.lift_kn).length() < 1e-10);
+            assert!((aero.torque_knm - expected.torque_knm).length() < 1e-9);
+            let level = level_layout(&scaled).unwrap();
+            let level_base = level_layout(&craft).unwrap();
+            for (a, b) in level.parts.iter().zip(level_base.parts) {
+                assert!((a.local_position - b.local_position).length() < 1e-11);
+            }
+        }
+        let rotation = ose_data::craft::Quat {
+            x: 0.0,
+            y: 0.0,
+            z: 2.0 * h,
+            w: 2.0 * h,
+        };
+        let rotated = rotated(&craft, rotation);
+        for (a, b) in rotated.parts.iter().zip(&craft.parts) {
+            let p = b.local_position;
+            assert!((a.local_position - DVec3::new(-p.y, p.x, p.z)).length() < 1e-11);
+        }
     }
 
     #[test]
