@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 39;
+pub const PROTOCOL_VERSION: u16 = 40;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -185,7 +185,8 @@ pub enum ClientMessage {
     },
     /// Rotation input, each -1..1 and held until changed: pitch turns
     /// the nose toward craft +Z (the navball's top), yaw toward craft +X, roll clockwise about the nose. The
-    /// reaction wheels (and RCS with its group on) set how fast the spin builds. SAS brakes on release; Free mode preserves spin. Answers
+    /// reaction wheels (and RCS with its group on) set how fast the spin builds. SAS controls turn rate
+    /// and brakes on release; with `AttitudeMode::Free` nothing damps it. Answers
     /// `FlightAck`.
     SetRotation {
         vessel: u64,
@@ -523,6 +524,10 @@ pub struct FlightReadout {
     pub propellant_t: f64,
     pub propellant_fraction: f64,
     pub mass_t: f64,
+    /// Current wet centre of mass in the physics vessel frame (Unity Z reflected).
+    pub centre_of_mass_m: DVec3,
+    /// Delivered thrust directions by engine part, in that part's exported model frame.
+    pub engine_gimbals: Vec<(u16, DVec3)>,
     pub thrust_kn: f64,
     pub twr: f64,
     pub dynamic_pressure_kpa: f64,

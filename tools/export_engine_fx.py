@@ -236,6 +236,10 @@ class EngineFxExporter:
                     for child in node.children: walk(child,context)
                 # An explosion is a one-shot Play event, never a continuously running engine effect.
                 walk(root,[[0,6],[0,10]] if part in CONTINUOUS_PREFABS else [[0,6]] if part.startswith('fx_') else [])
+                from gimbal_metadata import definition, tag_layers
+                gimbal = definition(part)
+                if gimbal is not None:
+                    tag_layers(root, layers, gimbal)
         self.engines[part] = layers
         self.audit.append({"engine":part,"mesh_layers":sum(l['kind']=='mesh' for l in layers),
             "particle_layers":sum(l['kind']=='particle' for l in layers),

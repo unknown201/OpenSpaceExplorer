@@ -871,6 +871,20 @@ fn flight_readout(
             None => 0.0,
         },
         mass_t: p.mass_t,
+        centre_of_mass_m: u
+            .structure(e)
+            .map(|st| st.mass_properties().centre_m)
+            .unwrap_or_default(),
+        engine_gimbals: u
+            .structure(e)
+            .map(|st| {
+                st.engine_gimbals
+                    .iter()
+                    .copied()
+                    .filter(|(i, _)| st.rigid.present[*i as usize])
+                    .collect()
+            })
+            .unwrap_or_default(),
         thrust_kn: thrust,
         twr: if p.mass_t > 0.0 && g > 0.0 {
             max_thrust / (p.mass_t * g)

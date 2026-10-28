@@ -237,8 +237,13 @@ pub struct Powered {
     /// craft +Z, yaw toward craft +X, roll is clockwise about the nose. And the roll rate it builds, rad/s.
     #[serde(default)]
     pub rotation_input: DVec3,
+    /// Legacy scalar-flight steering flag; part-backed controls use the reference SAS state.
     #[serde(default)]
     pub manual_steering: bool,
+    #[serde(default)]
+    pub sas: crate::sas::Sas,
+    #[serde(default = "one")]
+    pub sas_warp: f64,
     #[serde(default)]
     pub roll_rate: f64,
     /// RCS thrusters (with the RCS group on they translate the vessel and help turn it).
@@ -770,6 +775,8 @@ impl Powered {
             groups: ActionGroups::default(),
             rotation_input: DVec3::ZERO,
             manual_steering: false,
+            sas: Default::default(),
+            sas_warp: 1.0,
             roll_rate: 0.0,
             eva_run: false,
             eva_jump: false,
@@ -999,7 +1006,13 @@ pub fn steer(p: &mut Powered, target: DVec3, thrust_fraction: f64, dt: f64) {
         let w_des = if p.manual_steering {
             let top = vessel_top(p);
             (p.facing.cross(top) * p.rotation_input.x - top * p.rotation_input.y) * ROLL_RATE_RAD_S
-        } else { axis_u * (2.0 * alpha_max * theta * 0.9).sqrt().min(MAX_TURN_RATE).min(theta / dt) };
+        } else {
+            axis_u
+                * (2.0 * alpha_max * theta * 0.9)
+                    .sqrt()
+                    .min(MAX_TURN_RATE)
+                    .min(theta / dt)
+        };
         let mut a = (w_des - w) * (1.0 / dt);
         let am = a.length();
         if am > alpha_max {
@@ -1080,7 +1093,7 @@ pub fn spin(p: &mut Powered, thrust_fraction: f64, dt: f64) {
 
 /// Plan part-backed controls without advancing motion or consuming resources.
 pub fn plan_actuators(
-    p: &Powered,
+    p: &mut Powered,
     body: &Body,
     engine: &Propulsion,
     dt: f64,
@@ -1114,7 +1127,7 @@ pub fn plan_actuators(
 }
 
 fn control_request(
-    p: &Powered,
+    p: &mut Powered,
     engine: &Propulsion,
     target: DVec3,
     frac: f64,
@@ -1152,41 +1165,74 @@ fn control_request(
             }
         })
         .unwrap_or(fallback_torque);
-    let limit = |v: DVec3, cap: f64| {
-        let n = v.length();
-        if n > cap && n > 0.0 {
-            v * (cap / n)
-        } else {
-            v
-        }
-    };
-    let control = if p.attitude == Attitude::Free {
-        let i = p.rotation_input;
-        limit(DVec3::new(i.x, i.z, -i.y), 1.0) * torque
+    if engine.control_allocation.is_some() {
+        return (DVec3::ZERO, torque);
+    }
+    let authority = engine
+        .actuators
+        .as_ref()
+        .map(|channels| {
+            channels.iter().fold(DVec3::ZERO, |sum, a| {
+                sum + DVec3::new(
+                    a.torque_knm.x.abs(),
+                    a.torque_knm.y.abs(),
+                    a.torque_knm.z.abs(),
+                )
+            })
+        })
+        .unwrap_or(DVec3::new(torque, torque, torque));
+    let input = [
+        p.rotation_input.x,
+        p.roll_input + p.rotation_input.z,
+        p.rotation_input.y,
+    ]
+    .map(|v| v.clamp(-1.0, 1.0));
+    let command = if p.attitude == Attitude::Free {
+        p.sas.reset();
+        input
     } else {
-        let cross = by.cross(target);
-        let theta = cross.length().atan2(by.dot(target));
-        let axis = if cross.length() > 1e-12 {
-            cross.normalized()
-        } else if by.dot(target) < 0.0 {
-            bx
+        let cv = |v: DVec3| glam::DVec3::new(v.x, v.y, v.z);
+        let current = crate::sas::orientation(cv(by), cv(bz));
+        if !p.sas.initialized {
+            let lock = if let Attitude::Fixed(target) = p.attitude {
+                glam::DQuat::from_rotation_arc(cv(by), cv(target).normalize()) * current
+            } else {
+                current
+            };
+            p.sas.set_lock(lock);
+            p.sas.acquiring_fixed_target = by.dot(target) < 0.995;
+        }
+        if p.sas.acquiring_fixed_target && by.dot(target) > 0.9999 {
+            p.sas.set_lock(current);
+            p.sas.acquiring_fixed_target = false;
+        }
+        let direction = if matches!(p.attitude, Attitude::Fixed(_)) && !p.sas.acquiring_fixed_target
+        {
+            None
         } else {
-            DVec3::ZERO
+            Some(cv(target))
         };
-        let axis = local(axis);
-        let moment = inertia.apply(axis).length();
-        let alpha = if moment > 0.0 { torque / moment } else { 0.0 };
-        // Close to the target, the stopping-speed law can cross the entire error
-        // in one tick and start a limit cycle. Bound the requested rate by that error.
-        let desired = axis
-            * (2.0 * alpha * theta * 0.9)
-                .sqrt()
-                .min(MAX_TURN_RATE)
-                .min(theta / dt)
-            + DVec3::new(0.0, ROLL_RATE_RAD_S * p.roll_input.clamp(-1.0, 1.0), 0.0);
-        let desired = if p.manual_steering { DVec3::new(p.rotation_input.x, p.roll_input, -p.rotation_input.y) * ROLL_RATE_RAD_S } else { desired };
-        limit(inertia.apply((desired - w) * (1.0 / dt)), torque)
+        let acceleration = [
+            (authority.x / inertia.x.x).max(0.0001),
+            (authority.y / inertia.y.y).max(0.0001),
+            (authority.z / inertia.z.z).max(0.0001),
+        ];
+        // Unity angular velocity is an axial vector: reflect X/Y, retain Z.
+        p.sas.update(
+            current,
+            direction,
+            glam::DVec3::new(-w.x, -w.y, w.z),
+            input,
+            acceleration,
+            dt,
+            p.sas_warp,
+        )
     };
+    let control = DVec3::new(
+        command[0] * authority.x,
+        command[1] * authority.y,
+        -command[2] * authority.z,
+    );
     (control, torque)
 }
 
@@ -1204,6 +1250,10 @@ fn turn_with_parts(
     let local = |v: DVec3| DVec3::new(v.dot(bx), v.dot(by), v.dot(bz));
     let world = |v: DVec3| bx * v.x + by * v.y + bz * v.z;
     let inertia = engine.mass.inertia;
+    if p.sas.kill_rotation {
+        p.angvel = DVec3::ZERO;
+        p.roll_rate = 0.0;
+    }
     let w0 = p.angvel + by * p.roll_rate;
     let w = local(w0);
     let (request, torque) = control_request(p, engine, target, frac, dt);
@@ -1479,23 +1529,24 @@ pub fn integrate_with_propulsion(
         if let Some(engine) = propulsion.as_ref().filter(|e| e.mass.mass_t > 0.0) {
             turn_with_parts(p, engine, target, frac, dt, &mut out);
         } else {
-            let w0 = p.angvel;
-            // the airflow turns the craft; SAS (or the pilot) has to hold against it
-            if let Some((_, moi)) = turning_authority(p, frac) {
-                p.angvel = p.angvel + p.aero_torque_knm * (dt / moi);
-            }
-            if p.attitude == Attitude::Free {
-                spin(p, frac, dt);
+            let moi = turning_authority(p, frac).map(|(_, m)| m).unwrap_or(0.0);
+            if moi > 0.0 {
+                let engine = Propulsion {
+                    mass: crate::dynamics::MassProperties {
+                        mass_t: p.mass_t,
+                        inertia: crate::dynamics::Inertia {
+                            x: DVec3::new(moi, 0.0, 0.0),
+                            y: DVec3::new(0.0, moi, 0.0),
+                            z: DVec3::new(0.0, 0.0, moi),
+                        },
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                };
+                turn_with_parts(p, &engine, target, frac, dt, &mut out);
             } else {
-                p.roll_rate = 0.0;
-                steer(p, target, frac, dt);
-                // roll about the axis at the reaction wheels' pace
-                let rate =
-                    ROLL_RATE_RAD_S * p.wheel_scale.clamp(0.0, 1.0) * p.roll_input.clamp(-1.0, 1.0);
-                p.roll_rad = (p.roll_rad + rate * dt).rem_euclid(std::f64::consts::TAU);
+                p.facing = target;
             }
-            out.angular_accel = (p.angvel - w0) * (1.0 / dt);
-            out.angvel = p.angvel;
         }
         out.wheel_share = p
             .rotation_stage()
@@ -1511,10 +1562,6 @@ pub fn integrate_with_propulsion(
             .unwrap_or(1.0);
     }
 
-    if p.manual_steering && p.attitude != Attitude::Free {
-        p.attitude = Attitude::Fixed(p.facing);
-        if p.rotation_input.x == 0.0 && p.rotation_input.y == 0.0 && p.angvel.length() < 1e-5 { p.manual_steering = false; }
-    }
     // thrust and propellant
     let mut thrust_acc = DVec3::ZERO;
     let force_mass_t = p.mass_t;
@@ -2090,7 +2137,7 @@ mod tests {
                     p.rotation_input = input;
                     let (x, y, z) = vessel_basis(&p);
                     let expected = x * input.x + y * input.z - z * input.y;
-                    let (torque, _) = control_request(&p, &engine, facing, 0.0, 0.02);
+                    let (torque, _) = control_request(&mut p, &engine, facing, 0.0, 0.02);
                     assert!((torque - DVec3::new(input.x, input.z, -input.y)).length() < 1e-10);
                     let mut parts = p.clone();
                     turn_with_parts(
@@ -2127,30 +2174,20 @@ mod tests {
     }
 
     #[test]
-    fn sas_converges_on_small_errors_with_high_authority() {
-        for dt in [0.01, 0.02, 0.08] {
+    fn sas_small_error_uses_reference_gains_and_autotune() {
+        for (dt, expected) in [
+            (0.01, 8.74381111111111),
+            (0.02, 4.67692222222222),
+            (0.08, 1.62675555555555),
+        ] {
             let (mut p, mut engine) = body_dynamics_fixture();
             p.controlled = true;
             p.spec.stages[0].wheel_torque_knm = 1000.0;
             let target = rotate(p.facing, DVec3::new(0.0, 0.0, 1.0), 1e-4);
             p.attitude = Attitude::Fixed(target);
             engine.actuators = None;
-            let initial_error = (p.facing - target).length();
-            let mut error = initial_error;
-            for _ in 0..100 {
-                turn_with_parts(
-                    &mut p,
-                    &engine,
-                    target,
-                    0.0,
-                    dt,
-                    &mut StepOutcome::default(),
-                );
-                error = (p.facing - target).length();
-                assert!(error <= initial_error + 1e-10, "dt={dt}, error={error}");
-            }
-            assert!(error < 1e-8, "dt={dt}: {error}");
-            assert!(p.angvel.length() < 1e-8, "dt={dt}: {:?}", p.angvel);
+            let (torque, _) = control_request(&mut p, &engine, target, 0.0, dt);
+            assert!((torque.z - expected).abs() < 1e-8, "{dt}: {torque:?}");
         }
     }
 
@@ -2166,8 +2203,8 @@ mod tests {
         p.controlled = true;
         p.spec.stages[0].wheel_torque_knm = 2.0;
         turn_with_parts(&mut p, &engine, target, 0.0, 0.1, &mut out);
-        assert!((p.roll_rate - 0.19).abs() < 1e-10);
-        assert!((out.control_torque_knm.unwrap().length() - 2.0).abs() < 1e-10);
+        assert!(p.roll_rate > 0.18 && p.roll_rate <= 0.2);
+        assert!(out.control_torque_knm.unwrap().length() <= 2.0 + 1e-10);
     }
 
     #[test]

@@ -9,6 +9,7 @@ use std::{
 
 #[derive(Clone)]
 pub struct EngineDraw {
+    pub gimbal: glam::DQuat,
     pub instance: u64,
     pub part: String,
     /// The part's glTF frame in the camera-relative world. Assets retain original Unity coordinates.
@@ -27,6 +28,16 @@ pub struct EngineDraw {
     pub vertical_deviation: f64,
     pub reentry: Option<crate::reentry::State>,
     pub vapor: Option<crate::vapor::State>,
+}
+
+impl EngineDraw {
+    fn layer_model(&self, layer: &Layer) -> DMat4 {
+        self.model
+            * layer
+                .gimbal_pivot
+                .map(|p| crate::gimbal::about_pivot(self.gimbal, DVec3::from_array(p)))
+                .unwrap_or(DMat4::IDENTITY)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -743,7 +754,9 @@ impl EngineFxGpu {
                         .unwrap(),
                 )
                 .transpose();
-                let model = engine.model * DMat4::from_scale(DVec3::new(-1.0, 1.0, 1.0)) * local;
+                let model = engine.layer_model(layer)
+                    * DMat4::from_scale(DVec3::new(-1.0, 1.0, 1.0))
+                    * local;
                 let mut uniform = Uniform {
                     globals: engine_fx::material_values(
                         material,
@@ -944,8 +957,9 @@ impl EngineFxGpu {
                         .unwrap(),
                 )
                 .transpose();
-                let mut matrix =
-                    engine.model * DMat4::from_scale(DVec3::new(-1.0, 1.0, 1.0)) * local;
+                let mut matrix = engine.layer_model(layer)
+                    * DMat4::from_scale(DVec3::new(-1.0, 1.0, 1.0))
+                    * local;
                 matrix.w_axis += camera.extend(0.0);
                 if engine_fx::number(&layer.particle, "scalingMode", 0.0) == 1.0 {
                     matrix.x_axis = (matrix.x_axis.truncate().normalize_or_zero()

@@ -112,6 +112,8 @@ pub struct Structure {
     wheel_axes_knm: Vec<DVec3>,
     gimbal_range_rad: Vec<f64>,
     resolved_actuators: Option<Vec<crate::actuators::Actuator>>,
+    /// Last delivered gimbal direction in each engine's exported model frame.
+    pub engine_gimbals: Vec<(u16, DVec3)>,
     /// Inertial force with a craft-frame application offset; consumed once by `apply`.
     pub(crate) surface_loads: Vec<PartForce>,
     pub suspension_compression_m: Vec<f64>,
@@ -417,6 +419,7 @@ impl Structure {
                 })
                 .collect(),
             resolved_actuators: None,
+            engine_gimbals: Vec::new(),
             surface_loads: Vec::new(),
             suspension_compression_m: vec![0.0; n],
             engine_isp: (0..n)
@@ -2350,6 +2353,33 @@ impl Structure {
         let aero_forces = self.resolved_aero_forces.take();
         let surface_forces = std::mem::take(&mut self.surface_loads);
         let actuators = self.resolved_actuators.take();
+        self.engine_gimbals.clear();
+        if let (Some(channels), Some(thrusts)) = (&actuators, &resolved) {
+            for i in self.live_engines(p.stage) {
+                if thrusts[i] <= 0.0 || self.gimbal_range_rad[i] <= 0.0 {
+                    continue;
+                }
+                let axes = self.part_axes(i);
+                let mut force = axes[1] * thrusts[i];
+                for (a, input) in channels.iter().zip(&out.actuator_inputs) {
+                    if a.part == i && a.axial.is_some() {
+                        force = force + a.force_kn * *input;
+                    }
+                }
+                for correction in &out.actuator_axial_corrections {
+                    if correction.part == i {
+                        force = force + correction.force_kn;
+                    }
+                }
+                if let Ok(part) = u16::try_from(i) {
+                    self.engine_gimbals.push((
+                        part,
+                        DVec3::new(-force.dot(axes[0]), force.dot(axes[1]), -force.dot(axes[2]))
+                            .normalized(),
+                    ));
+                }
+            }
+        }
         if p.stage != self.staged_to {
             self.trim_to(p.stage);
         }
@@ -3803,7 +3833,7 @@ mod tests {
         p.rotation_input = DVec3::new(1.0, 0.0, 0.0);
         let mut engine = s.propulsion(&p, Default::default(), 0.1);
         s.configure_actuators(&p, Default::default(), &mut engine);
-        let rotation = crate::flight::plan_actuators(&p, &test_body(), &engine, 0.1);
+        let rotation = crate::flight::plan_actuators(&mut p, &test_body(), &engine, 0.1);
         assert!(rotation.torque_knm.length() > 0.0);
         s.resolve_actuator_resources(&mut p, &test_body(), &mut engine, 0.1);
         let out = engine.control_allocation.unwrap();
@@ -3819,8 +3849,8 @@ mod tests {
         // Opposing translation and rotation can cancel without a residual free force.
         let mut engine = s.propulsion(&p, Default::default(), 0.1);
         s.configure_actuators(&p, Default::default(), &mut engine);
-        let mut allocation = crate::flight::plan_actuators(&p, &test_body(), &engine, 0.1);
-        p.rcs.translate = -allocation.force_kn.normalized();
+        let mut allocation = crate::flight::plan_actuators(&mut p, &test_body(), &engine, 0.1);
+        p.rcs.translate = -allocation.force_kn * (1.0 / (100.0 * ose_data::G0));
         s.resolve_rcs(&mut p, &mut engine, &mut allocation, 0.1);
         assert!(allocation.force_kn.length() < 1e-8);
         assert!(engine.burned_t < 1e-10);
@@ -4006,12 +4036,12 @@ mod tests {
         s.configure_actuators(&p, Default::default(), &mut engine);
         s.resolve_actuator_resources(&mut p, &body, &mut engine, 0.02);
         assert!(
-            (engine.control_allocation.unwrap().torque_knm - DVec3::new(-3.0, 4.0, 0.0)).length()
+            (engine.control_allocation.unwrap().torque_knm - DVec3::new(-1.8, 3.2, 0.0)).length()
                 < 1e-9
         );
         assert!(
-            (ec_stored(&s) - 9.7).abs() < 1e-9,
-            "3 EC per kN*m times 5 kN*m times 0.02 s"
+            (ec_stored(&s) - (10.0 - 3.0 * (1.8_f64 * 1.8 + 3.2 * 3.2).sqrt() * 0.02)).abs() < 1e-9,
+            "manual axes independently scale their rated torques"
         );
         p.rotation_input = DVec3::ZERO;
         p.roll_rate = 0.1;
@@ -4021,6 +4051,11 @@ mod tests {
         s.resolve_actuator_resources(&mut p, &body, &mut engine, 0.02);
         assert_eq!(ec_stored(&s), before, "free spin draws no wheel charge");
         p.attitude = crate::flight::Attitude::Fixed(p.facing);
+        let mut engine = s.propulsion(&p, Default::default(), 0.02);
+        s.configure_actuators(&p, Default::default(), &mut engine);
+        s.resolve_actuator_resources(&mut p, &body, &mut engine, 0.02);
+        assert_eq!(engine.control_allocation.unwrap().torque_knm.y, 0.0);
+        p.roll_rad += 0.002;
         let mut engine = s.propulsion(&p, Default::default(), 0.02);
         s.configure_actuators(&p, Default::default(), &mut engine);
         s.resolve_actuator_resources(&mut p, &body, &mut engine, 0.02);
@@ -4086,6 +4121,20 @@ mod tests {
         for a in channels {
             assert!((a.force_kn.length() - side).abs() < 1e-10);
         }
+        let allocation = crate::actuators::allocate(channels, DVec3::new(1000.0, 0.0, 1000.0));
+        let mut outcome = StepOutcome::default();
+        outcome.thrust_kn = engine.thrust_kn;
+        outcome.actuator_inputs = allocation.inputs;
+        outcome.actuator_axial_corrections = allocation.axial_corrections;
+        s.apply(&p, &outcome, 0.02);
+        let direction = s
+            .engine_gimbals
+            .iter()
+            .find(|g| g.0 as usize == pair[0])
+            .unwrap()
+            .1;
+        assert!((direction.length() - 1.0).abs() < 1e-10);
+        assert!((direction.y.acos() - 5.0_f64.to_radians()).abs() < 1e-8);
         let mut dry = s.propulsion(&p, Default::default(), 0.02);
         s.configure_actuators(&p, Default::default(), &mut dry);
         assert!(

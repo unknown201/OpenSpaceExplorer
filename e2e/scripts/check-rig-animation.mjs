@@ -7,7 +7,7 @@ import {fileURLToPath} from 'node:url';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../..');
 const out=path.join(root,'.cache/animation-audit/browser');
 fs.mkdirSync(out,{recursive:true});
-const browser=await chromium.launch({channel:'chromium',executablePath:process.env.OSE_CHROMIUM_EXECUTABLE,args:['--enable-unsafe-webgpu','--ignore-gpu-blocklist']});
+const browser=await chromium.launch({channel:'chromium',executablePath:process.env.OSE_CHROMIUM_EXECUTABLE,args:['--enable-unsafe-webgpu','--ignore-gpu-blocklist',...(process.platform==='win32'?['--disable-dawn-features=use_dxc']:[])]});
 try {
   const page=await browser.newPage({viewport:{width:650,height:650}});
   const errors=[];
@@ -16,7 +16,7 @@ try {
   await page.goto(process.env.OSE_BASE_URL??'http://127.0.0.1:7796');
   await page.waitForFunction(()=>window.wasmBindings?.rig_fixture_draw);
   await page.evaluate(async()=>{window.rigFixture=window.wasmBindings;await window.rigFixture.fx_fixture_setup();});
-  for(const part of ['solararray_2v_accordion','landinggear_1v','landingleg_0v']) {
+  for(const part of ['solararray_2v_accordion','landinggear_1v','landingleg_0v','engine_1v_methalox_swivel','engine_2v_methalox_poodle','engine_3v_methalox_mammoth']) {
     await page.waitForFunction(part=>window.rigFixture.rig_fixture_draw(part,0),part,{timeout:30000});
     // Wait for the asynchronously fetched materials before comparing deterministic poses.
     await page.waitForTimeout(1500);
@@ -48,7 +48,7 @@ try {
       if(!valid) mismatch++;
     }
     if(visible<100||mismatch>visible*0.001) throw new Error(`${part}: instance independence failed (${mismatch}/${visible} pixels)`);
-    console.log(`${part}: closed/half/open frames differ; two independent instances rendered`);
+    console.log(`${part}: three poses differ; two independent instances rendered`);
   }
   if(errors.length) throw new Error(errors.join('\n'));
 } finally {await browser.close();}

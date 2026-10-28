@@ -18,6 +18,7 @@ pub mod flight;
 pub mod missions;
 pub mod resources;
 pub mod rigid;
+pub mod sas;
 pub mod science;
 pub mod structure;
 pub mod surface;
@@ -525,10 +526,6 @@ impl Universe {
         match self.world.get_mut::<flight::Powered>(e) {
             Some(mut p) => {
                 p.rotation_input = DVec3::new(pitch, yaw, roll);
-                if p.attitude != flight::Attitude::Free && (pitch != 0.0 || yaw != 0.0) {
-                    p.manual_steering = true;
-                    p.attitude = flight::Attitude::Fixed(p.facing);
-                }
 
                 true
             }
@@ -802,7 +799,8 @@ impl Universe {
             if self.world.get::<flight::Dormant>(e).is_none() {
                 return false;
             }
-            let turning = self.warp() <= flight::MAX_PHYSICS_WARP && self.dormant(e).is_some_and(|p| p.attitude != attitude);
+            let turning = self.warp() <= flight::MAX_PHYSICS_WARP
+                && self.dormant(e).is_some_and(|p| p.attitude != attitude);
             if throttle <= 0.0 && !turning {
                 // nothing to do on rails; remember the attitude for the next wake
                 if let Some(mut d) = self.world.get_mut::<flight::Dormant>(e) {
@@ -818,8 +816,21 @@ impl Universe {
                     return false;
                 }
                 p.throttle = throttle;
-                p.manual_steering = attitude != flight::Attitude::Free && (p.rotation_input.x != 0.0 || p.rotation_input.y != 0.0 || (p.manual_steering && matches!(attitude, flight::Attitude::Fixed(_))));
-                p.attitude = if p.manual_steering { flight::Attitude::Fixed(p.facing) } else { attitude };
+                if p.attitude != attitude {
+                    p.sas.reset();
+                    let cv = |v: DVec3| glam::DVec3::new(v.x, v.y, v.z);
+                    let (_, y, z) = flight::vessel_basis(&p);
+                    let mut q = crate::sas::orientation(cv(y), cv(z));
+                    if let flight::Attitude::Fixed(target) = attitude {
+                        q = glam::DQuat::from_rotation_arc(cv(y), cv(target).normalize()) * q;
+                    }
+                    p.sas.set_lock(q);
+                    if let flight::Attitude::Fixed(target) = attitude {
+                        p.sas.acquiring_fixed_target = y.dot(target) < 0.995;
+                    }
+                }
+                p.manual_steering = false;
+                p.attitude = attitude;
                 true
             }
             None => false,
@@ -1269,6 +1280,7 @@ impl Universe {
                     propulsion.aerodynamic_drag_kn = resolved_drag;
                     // Plan with rated wheel axes; current delivery is resolved at each wheel below.
                     p.wheel_scale = 1.0;
+                    p.sas_warp = warp as f64;
                     st.configure_actuators(&p, env, &mut propulsion);
                     st.configure_surface(
                         &mut p,
@@ -2139,8 +2151,8 @@ mod tests {
         assert!(d.dot(normal) > 0.99, "points along the burn: {d:?}");
         assert!(p.facing.dot(normal) > 0.9, "turned to it: {:?}", p.facing);
         assert!(
-            (p.roll_rate - flight::ROLL_RATE_RAD_S).abs() < 0.05,
-            "roll input reaches the commanded rate: {}",
+            p.roll_rate > flight::ROLL_RATE_RAD_S,
+            "reference manual roll applies torque rather than a rate cap: {}",
             p.roll_rate
         );
         // groups
@@ -2393,7 +2405,15 @@ mod tests {
         }
         let p3 = u.powered(v).unwrap();
         assert!(p3.angvel.length() < 0.01, "{:?}", p3.angvel);
-        assert!(p3.facing.dot(hold) > 0.99, "holds where SAS caught it");
+        // Reference damping continually relocks during braking, then holds the caught pose.
+        let settled = p3.facing;
+        for _ in 0..(5 * TICKS_PER_SECOND) {
+            u.step();
+        }
+        assert!(
+            u.powered(v).unwrap().facing.dot(settled) > 0.99,
+            "holds the caught pose"
+        );
     }
 
     #[test]

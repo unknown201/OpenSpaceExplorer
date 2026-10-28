@@ -56,6 +56,9 @@ pub struct Shader {
 }
 #[derive(Clone, Deserialize)]
 pub struct Layer {
+    /// Engine gimbal ancestor's pivot, in the exported (X-reflected) part frame.
+    #[serde(default)]
+    pub gimbal_pivot: Option<[f64; 3]>,
     pub name: String,
     pub kind: String,
     pub matrix: [[f64; 4]; 4],

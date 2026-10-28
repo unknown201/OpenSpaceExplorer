@@ -578,6 +578,10 @@ class Exporter:
             return None
         path = self.out / "parts" / f"{part_id}.glb"
         metadata = export_rig(env, glb, transforms, go_name, node_by_tf, skins)
+        from gimbal_metadata import definition
+        gimbal = definition(part_id, glb.nodes)
+        if gimbal is not None:
+            metadata['ose_gimbal'] = gimbal
         # ProcedurallyEditablePart instantiates its mesh-option prefab with
         # DEFAULT_PART_VISUAL_ROTATION = Euler(0, 0, 90). The dependency meshes
         # above are still in their authoring frame: span +Z, chord +X. Apply

@@ -27,6 +27,7 @@ pub mod ftue;
 mod fx_fixture;
 #[cfg(target_arch = "wasm32")]
 mod fx_post;
+pub mod gimbal;
 pub mod hud;
 pub mod input;
 pub mod kerbin_time;
@@ -3445,7 +3446,7 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                         app.set_throttle(1.0);
                         true
                     }
-                    "KeyX" => {
+                    "KeyX" if !ev.alt_key() => {
                         app.set_throttle(0.0);
                         true
                     }
@@ -7241,11 +7242,12 @@ impl App {
             self.eva_keys_tick(now, dt);
             return;
         }
+        let flight_rotation = self.keys.flight_rotation(dt);
         let k = &self.keys;
         let (pitch_in, yaw_in, thr_in) = if self.lin_mode {
             (0.0, 0.0, 0.0)
         } else {
-            let rotation = k.rotation();
+            let rotation = flight_rotation;
             (rotation.x, rotation.y, k.throttle())
         };
         let scale = k.scale();
@@ -7259,14 +7261,6 @@ impl App {
             self.controls_dirty = true;
         }
         let free = matches!(self.attitude, ose_net::AttitudeMode::Free);
-        if !free && (pitch_in != 0.0 || yaw_in != 0.0) {
-            if let Some(f) = self.scene.as_ref().and_then(|s| s.vessel(vessel)).and_then(|v| v.flight.as_ref()) {
-                if !matches!(self.attitude, ose_net::AttitudeMode::Fixed(_)) {
-                    self.attitude = ose_net::AttitudeMode::Fixed(f.facing);
-                    self.controls_dirty = true;
-                }
-            }
-        }
         // Throttle changes are coalesced at 20 Hz; rotation intents below send on key edges.
         if self
             .control_cadence
@@ -7282,9 +7276,9 @@ impl App {
             .and_then(|v| v.flight.as_ref())
             .map(|f| f.situation == ose_net::FlightSituation::Landed)
             .unwrap_or(false);
-        let roll = (self.keys.rotation().z * scale * input::ROTATION_SCALE) as f32;
+        let roll = flight_rotation.z as f32;
         // Hold manual axis commands server-side; SAS blends them using the reference override rules.
-        let s = (scale * input::ROTATION_SCALE) as f32;
+        let s = 1.0_f32;
         let rotation = (
             pitch_in as f32 * s,
             yaw_in as f32 * s,
@@ -9390,6 +9384,7 @@ impl App {
                 items.push(render::DrawItem {
                     animation: None,
                     node_turns: Vec::new(),
+                    node_rotations: Vec::new(),
                     model: name.clone(),
                     rel_pos_km: pos_km - cam_km,
                     rotation: DQuat::IDENTITY,

@@ -123,6 +123,7 @@ pub struct Rig {
     /// Exported explicitly by the converter, never guessed by the renderer from part names.
     pub deployment: Option<(usize, bool)>,
     pub deployment_control: String,
+    pub gimbal: Option<crate::gimbal::Definition>,
 }
 
 impl Rig {
@@ -315,11 +316,36 @@ impl Rig {
             skins,
             order,
             deployment,
+            gimbal: json["extras"]
+                .get("ose_gimbal")
+                .map(|v| serde_json::from_value(v.clone()))
+                .transpose()
+                .map_err(|e| format!("gimbal metadata: {e}"))?,
             deployment_control: json["extras"]["ose_deployment"]["control"]
                 .as_str()
                 .unwrap_or("")
                 .into(),
         })
+    }
+
+    /// Convert one model-space thrust turn through each authored pivot's parent/rest frame.
+    pub fn gimbal_turns(&self, rotation: glam::DQuat) -> Vec<(usize, Quat)> {
+        let Some(definition) = &self.gimbal else {
+            return Vec::new();
+        };
+        let world = self.world_matrices(&self.pose(None));
+        self.nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| definition.controls(&n.name))
+            .map(|(i, _)| {
+                let (_, frame, _) = world[i].to_scale_rotation_translation();
+                (
+                    i,
+                    (frame.inverse() * rotation.as_quat() * frame).normalize(),
+                )
+            })
+            .collect()
     }
 
     pub fn pose(&self, sample: Option<ClipSample>) -> Vec<Transform> {

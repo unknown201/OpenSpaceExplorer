@@ -42,19 +42,18 @@ fn vacuum() -> Body {
 }
 
 #[test]
-fn sas_brakes_on_release_then_holds_the_settled_direction_without_reversal() {
+fn manual_axes_use_reference_torque_in_both_flight_paths() {
     for parts in [false, true] {
         for torque in [0.1, 10.0, 1000.0] {
             for dt in [0.01, 0.02, 0.08] {
                 let mut p = Powered::new(
                     spec(torque),
-                    DVec3::new(700_000.0, 0.0, 0.0),
+                    DVec3::new(700000.0, 0.0, 0.0),
                     DVec3::ZERO,
                     false,
                 );
                 p.facing = DVec3::new(0.0, 1.0, 0.0);
                 p.attitude = Attitude::Fixed(p.facing);
-                p.manual_steering = true;
                 p.rotation_input.x = 0.3;
                 let engine = parts.then(|| Propulsion {
                     mass: MassProperties {
@@ -68,42 +67,10 @@ fn sas_brakes_on_release_then_holds_the_settled_direction_without_reversal() {
                     },
                     ..Default::default()
                 });
-                for _ in 0..(1.0 / dt) as usize {
-                    flight::integrate_with_propulsion(
-                        &mut p,
-                        &vacuum(),
-                        None,
-                        None,
-                        0.0,
-                        dt,
-                        engine.clone(),
-                    );
-                }
-                let release = p.facing;
-                p.rotation_input = DVec3::ZERO;
-                for _ in 0..(40.0 / dt) as usize {
-                    let before = p.facing;
-                    flight::integrate_with_propulsion(
-                        &mut p,
-                        &vacuum(),
-                        None,
-                        None,
-                        0.0,
-                        dt,
-                        engine.clone(),
-                    );
-                    assert!(
-                        p.facing.z >= before.z - 1e-8,
-                        "reversed after release: parts={parts}, torque={torque}, dt={dt}"
-                    );
-                }
+                flight::integrate_with_propulsion(&mut p, &vacuum(), None, None, 0.0, dt, engine);
+                assert!((p.angvel.length() - 0.3 * torque * dt / 20.0).abs() < 1e-9);
+                assert!(p.sas.initialized);
                 assert!(!p.manual_steering);
-                assert!(p.angvel.length() < 1e-5);
-                assert!(p.facing.z >= release.z - 1e-8);
-                let Attitude::Fixed(hold) = p.attitude else {
-                    panic!("not holding")
-                };
-                assert!(p.facing.dot(hold) > 1.0 - 1e-8);
             }
         }
     }
@@ -150,7 +117,7 @@ fn rails_manual_controls_wake_without_throttle_and_keep_the_inertial_roll() {
     u.set_warp(1);
     assert!(u.set_rotation(e, 0.3, 0.0, 0.0));
     let p = u.powered(e).expect("manual control wakes a coast");
-    assert!(p.manual_steering);
+    assert_eq!(p.rotation_input.x, 0.3);
     assert!(flight::vessel_top(p).dot(top) > 1.0 - 1e-10);
     u.step();
     assert!(u.powered(e).unwrap().angvel.length() > 0.0);

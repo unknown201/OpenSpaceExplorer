@@ -11,7 +11,7 @@ use std::collections::HashSet;
 /// scales inputs by 0.1 as `FlightInputHandler.inputSensitivityScale` does.
 pub const TURN_RATE_DEG_S: f64 = 8.0;
 /// Manual torque and roll-rate authority. Keep short keyboard taps manageable with SAS off too.
-pub const ROTATION_SCALE: f64 = 0.3;
+pub const ROTATION_SCALE: f64 = 1.0;
 /// Do not wind the SAS target far ahead of a heavy craft that cannot follow the requested turn rate.
 const MAX_TARGET_LEAD_DEG: f64 = 5.0;
 pub const PRECISION_SCALE: f64 = 0.1;
@@ -54,11 +54,30 @@ impl ControlCadence {
 #[derive(Default)]
 pub struct Held {
     codes: HashSet<String>,
+    trim: [f64; 3],
     /// CapsLock toggles precision mode (`TogglePrecisionMode`).
     pub precision: bool,
 }
 
 impl Held {
+    /// FlightInputHandler: trim changes by 0.1/s and is added after precision scaling.
+    pub fn flight_rotation(&mut self, dt: f64) -> DVec3 {
+        let raw = self.rotation();
+        let modifier = self.is("AltLeft") || self.is("AltRight");
+        if modifier && self.is("KeyX") {
+            self.trim = [0.0; 3];
+        } else if modifier {
+            for (t, u) in self.trim.iter_mut().zip([raw.x, raw.y, raw.z]) {
+                *t = (*t + u * 0.1 * dt).clamp(-1.0, 1.0);
+            }
+        }
+        let scale = if modifier { 0.0 } else { self.scale() };
+        DVec3::new(
+            raw.x * scale + self.trim[0],
+            raw.y * scale + self.trim[1],
+            raw.z * scale + self.trim[2],
+        )
+    }
     pub fn down(&mut self, code: &str) {
         self.codes.insert(code.to_string());
     }
@@ -125,6 +144,27 @@ impl Held {
         } else {
             1.0
         }
+    }
+}
+
+#[cfg(test)]
+mod reference_trim_tests {
+    use super::*;
+    #[test]
+    fn trim_rate_precision_and_reset_follow_reference() {
+        let mut keys = Held::default();
+        keys.down("AltLeft");
+        keys.down("KeyS");
+        assert_eq!(keys.flight_rotation(1.0).x, 0.1);
+        keys.up("AltLeft");
+        keys.up("KeyS");
+        keys.precision = true;
+        assert_eq!(keys.flight_rotation(0.02).x, 0.1);
+        keys.down("KeyS");
+        assert_eq!(keys.flight_rotation(0.02).x, 0.2);
+        keys.down("AltLeft");
+        keys.down("KeyX");
+        assert_eq!(keys.flight_rotation(0.02), DVec3::ZERO);
     }
 }
 

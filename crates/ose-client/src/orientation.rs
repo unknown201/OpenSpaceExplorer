@@ -13,6 +13,11 @@ pub fn mesh_to_vessel() -> DQuat {
     DQuat::from_xyzw(0.0, 1.0, 0.0, 0.0)
 }
 
+/// Place exported craft geometry around the simulation's current centre of mass.
+pub fn mesh_origin(centre: ose_math::DVec3) -> DVec3 {
+    mesh_to_vessel().inverse() * -DVec3::new(centre.x, centre.y, centre.z)
+}
+
 /// Body, warp and surface/flight changes invalidate an angular velocity estimate.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Context {
@@ -100,6 +105,25 @@ impl Track {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn craft_rotates_about_wet_mass_centre_with_no_bottom_anchor() {
+        let centre = ose_math::DVec3::new(0.3, 6.0, -0.4);
+        let mesh_centre = DVec3::new(-0.3, 6.0, 0.4);
+        let origin = mesh_origin(centre);
+        let vessel = DVec3::new(100.0, 500.0, 200.0);
+        let engine = DVec3::new(0.0, 0.0, 0.0);
+        for rotation in [
+            DQuat::IDENTITY,
+            DQuat::from_rotation_z(0.6),
+            DQuat::from_rotation_x(1.0),
+        ] {
+            assert!((vessel + rotation * (mesh_centre + origin) - vessel).length() < 1e-9);
+        }
+        assert!(
+            (DQuat::from_rotation_z(0.6) * (engine + origin) - (engine + origin)).length() > 3.0
+        );
+    }
 
     #[test]
     fn exported_geometry_matches_physics_axes_for_stock_craft() {
