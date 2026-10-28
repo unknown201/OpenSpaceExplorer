@@ -39,10 +39,17 @@ test("warp requests pass 4x and VAB icons accept clicks", async ({ page, baseURL
   await expect(page.locator('[data-ose="ksc-vab"]').first()).toBeVisible();
   await page.locator('[data-ose="ksc-sessions"]').first().click();
   await expect(page.locator('[data-ose="session-list"]')).toBeVisible();
-  const session = page.locator('[data-ose="session"]').first();
-  const id = await session.getAttribute("data-ose-id");
-  await session.locator('[data-ose="session-claim"]').click();
+  // Own and delete a dedicated campaign so later browser projects keep their shared world.
+  if (!(await page.locator("#create-name").isVisible())) await page.locator("#create-details > summary").click();
+  const cleanupName = `Session cleanup ${Date.now()}`;
+  await page.selectOption("#create-mode", "Sandbox");
+  await page.fill("#create-name", cleanupName);
+  await page.locator("#create").click();
+  await expect(page.locator('[data-ose="ksc-sessions"]').first()).toBeVisible();
+  await page.locator('[data-ose="ksc-sessions"]').first().click();
+  const session = page.locator('[data-ose="session"]').filter({ hasText: cleanupName });
   await expect(session).toContainText("Owned by you");
+  const id = await session.getAttribute("data-ose-id");
   page.once("dialog", dialog => dialog.accept());
   await session.locator('[data-ose="session-delete"]').click();
   await expect(page.locator(`[data-ose="session"][data-ose-id="${id}"]`)).toHaveCount(0);
