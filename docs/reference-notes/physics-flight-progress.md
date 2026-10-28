@@ -164,7 +164,7 @@ Authored nozzles get separate force channels with inputs bounded to 0..1. A nozz
 
 Four new simulation tests cover one-way torque allocation, one-way translation with zero/quarter/full fuel, application moments, shared rotation/translation saturation, fuel for an opposing-nozzle couple, and complete catalog coverage. An importer regression checks the 22 nozzle definitions and legacy fallback. The exporter reference-selection regression verifies serialized pointer order, negative-up direction and failure on unresolved external references. Existing mixed-propellant, full pressure-curve and universe impulse tests remain green.
 
-This closes static RCS geometry and force/fuel bounds. The torque allocator is still OSE's bounded optimizer rather than the reference's rotational-direction/lever projection and precision-mode logic. Per-part pitch/yaw/roll/translation switches, thrust percentage, shielding/underwater activation rules, dynamic nozzle poses and per-nozzle visual readouts remain to be matched. Shared-resource requests remain ordered; partial delivery is not reallocated to different actuators. EVA jetpacks still use their separate approximation.
+This closes static RCS geometry and force/fuel bounds. The torque allocator is still OSE's bounded optimizer rather than the reference's rotational-direction/lever projection and precision-mode logic. Per-part pitch/yaw/roll/translation switches, thrust percentage, shielding/underwater activation rules, dynamic nozzle poses and per-nozzle visual readouts remain to be matched. Shared-resource requests remain ordered; partial delivery is not reallocated to different actuators. EVA propulsion is covered by the later increment below.
 
 ## Completed increment: authored part mass centres
 
@@ -176,20 +176,30 @@ Two simulation regressions independently calculate a rotated part's centre and f
 
 Inertia still uses the existing oriented-box proxies and size clamps rather than authored collider tensors. Structural motion still uses the 1 kg minimum for synthetic massless parts. Internal resource locations, changing deployed mass distribution and correction of the vessel reference position as its mass centre shifts remain open. This increment supplies authored centres and consistent levers, not complete mass/inertia parity.
 
-## Reference audit for the next actuator/aero increment
+## Completed increment: authored EVA propulsion and fuel delivery
 
-`JetpackResourceManager.Initialize` does use Isp: its maximum move mass flow is `JetpackMoveForce / (JetpackAtmosphereCurve(0) * g0)`, and rotate flow is `(JetpackRotateTorque / JetpackRotateTorqueOffset) / (Isp(0) * g0)`. `ProcessPreJetpackForcesAndTorques` changes exhaust velocity with the full pressure curve. The installed `eva_kerbal` data has 0.25 kN move force, 0.125 kN*m torque, a 0.25 m rotation lever, and a 240/100/0.001-second curve at 0/1/4 atmospheres. Its 0.025 units of MonoPropellant have a 0.025 t mass in this catalog. OSE's current constant 100 s and pressure-independent EVA thrust are approximations; the old comment claiming the reference had no Isp was incorrect. The next acceptance cases must budget move, rotation and automatic braking before force integration and check dry/final-partial fuel, mixed commands, full pressure interpolation, and no duplicate post-flight drain.
+EVA settings are imported from `Data_Kerbal` into the slim catalog, passed into each campaign, and preserved on the flight state. The installed values are 0.25 kN move force, 0.125 kN*m rotation torque, a 0.25 m rotation lever, a 280-degree/second angular-rate cap and 200-degree/second reset speed. These last two values differ from the class defaults. The full Isp curve is 240/100/0.001 seconds at 0/1/4 atmospheres, with its authored Hermite tangents. The existing dry-mass and pack-capacity constants match the installed 0.07 t and 0.025 t values.
+
+`JetpackResourceManager.Initialize` sets move flow to `move force / (Isp(vacuum) * g0)` and rotate flow to `(rotation torque / rotation lever) / (Isp(vacuum) * g0)`. Its pressure-dependent exhaust velocity scales force and torque. OSE now resolves both requests from the one pack before motion. A final partial delivery scales both channels, including automatic braking; an empty pack cannot provide a free force or arrest a spin. Walking and jumping do not run the pack. Throttle and fore translation combine into one bounded axis input rather than paying for/applying the same move twice. There is no second post-flight drain for configured EVA packs.
+
+Rotation uses the reference's angular-rate controller rather than pretending the pack is a reaction wheel: requested torque divided by the pre-step mass sets the rate, then delivered fuel and the authored rate cap bound it. The existing attitude-hold UI requests bounded pointing; manual override updates a stability hold. Inertial orientation is retained as the orbital/local roll reference changes. Old EVA saves acquire the configured settings and corrected Isp metadata without refilling or changing their saved fuel/mass.
+
+Eight added simulation regressions cover full pressure interpolation and pressure-independent mass flow, combined translation/rotation delivery at zero/quarter/full fuel, subsequent dry ticks, fuel-limited braking, idle spin with reset disabled, the authored rate cap, shared throttle/translation input, jumping suppression, manual hold override, inertial frame continuity, universe-level mass/impulse accounting and old-save migration. The related grounded-actuator check catches a separate error: landed part-backed craft must apply their already-resolved control forces before deciding whether to lift off. One importer test pins the installed jetpack definition and checks authored field conversion.
+
+This improves source/data parity and removes unbudgeted actuation. The camera-relative character input, camera alignment, separate upright/forward character controllers, water drag, pack-equipment/thrust-percentage controls and pack refill/transfer behavior remain incomplete. Partial fuel is shared proportionally between movement and rotation, rather than reproducing the original asynchronous broker's previous-tick scheduling and its all-or-nothing reset behavior. The older unconfigured walker fallback remains for callers that construct a bare flight state directly; spawned/restored EVA Kerbals use the configured path.
+
+## Reference audit for the next aero increment
 
 `Module_ControlSurface` also overrides a procedural surface's runtime mass centre from its generated `CoPOffset`. Importing the static 14 `coMassOffset` values does not cover that runtime geometry. `Module_Drag` applies drag at core `coPressureOffset + lifting-surface CoPOffset`, and body lift at core `coLiftOffset + lifting-surface CoPOffset`. `Module_LiftingSurface.CalculateLiftDragForces` applies its own lift/drag at the passed module offset, while the control-surface call adds the core offset and its generated control pivot offset. These forces need distinct retained application points and moments; relocating one combined force to a bounds centre is insufficient. Include perpendicular-only lift, internal-drag enabling, procedural geometry and body lift in the next comparison fixtures.
 
 ## Remaining physics priorities
 
-1. Import usable collider inertia geometry and procedural/deployed mass changes; complete articulated engine gimbals. Match RCS precision/lever allocation and part controls; extend resource-before-actuation to EVA.
+1. Import usable collider inertia geometry and procedural/deployed mass changes; complete articulated engine gimbals. Match RCS precision/lever allocation and part controls, and complete EVA character/camera/water behavior.
 2. Import centre-of-pressure offsets, full lifting-surface options, and deflected control-surface lift/drag.
 3. Replace sampled corner paths with continuous hull contacts; add nearby vessel/debris pair contacts and equal-and-opposite impulses. Import contact materials and sliding damage/heat.
 4. Import displacement and wheel-collider data, suspension tuning and target positions; add load-dependent tyre grip and wheel slip. Extend water behavior, then docking attraction/capture and EVA ladder/hatch contact.
 
-The next actuator acceptance cases should compare the reference's lever/precision and axis-enabling rules for directional nozzle selection. Retain the mixed-propellant, empty/partial-fuel, shared-budget, battery and per-mount delivery cases. Extend the same resource-before-actuation rule to EVA jetpacks.
+The next actuator acceptance cases should compare the reference's lever/precision and axis-enabling rules for directional nozzle selection. Retain the mixed-propellant, empty/partial-fuel, shared-budget, battery and per-mount delivery cases. Retain the EVA shared-pack, braking and migration acceptance cases while adding character/camera/water behavior.
 
 The next contact acceptance cases should cover continuous hull contacts that prevent tunnelling between vertices, equal-and-opposite vessel/debris impulses, and stable support/traction over uneven terrain. Retain the existing slope, normal-speed, sliding-friction, angular-impulse and joint-reaction regressions.
 
@@ -198,11 +208,11 @@ Per-engine mode switching, articulated nozzle transforms, thrust response curves
 ## Validation, 2026-10-27
 
 - `cargo test --workspace`: passed on the authored-mass-centre follow-up, including the fresh-server Mun journey (508.60 s), server WebSocket tests and 162 simulation regressions. The existing ignored test remains ignored.
-- `cargo test -p ose-sim -p ose-importer --lib`: 162 simulation and 13 importer tests passed. The strengthened reverse-control regression also passes.
+- EVA follow-up: `cargo test --workspace --exclude ose-bot` passed, including 170 simulation tests, 14 importer tests and the server WebSocket suite. The existing ignored test remains ignored. The full Mun journey was last run on the mass-centre milestone; the bot was compiled/linted but that long journey was not repeated for this EVA-only continuation.
 - `cargo clippy --workspace --all-targets -- -D warnings`: passed.
 - `cargo check -p ose-client --target wasm32-unknown-unknown`: passed.
 - `python -m unittest discover -s tools/tests -p test_export_physics_geometry.py`: 3 passed.
-- Real installed-data regeneration: 41 engine modes and 22 RCS nozzle transforms reproduce the committed geometry; maximum JSON round-trip difference is below 5e-16. All 400 mass offsets also match the original JSON. The existing malformed `Tutorial1.3_Save.json` is warned and skipped by the importer; this does not affect part geometry.
+- Real installed-data regeneration: 41 engine modes and 22 RCS nozzle transforms reproduce the committed geometry; maximum JSON round-trip difference is below 5e-16. All 400 mass offsets also match the original JSON. Jetpack curve/tangents, rotation settings, mass and fuel capacity match the installed `eva_kerbal` definition in both committed and regenerated catalogs. The existing malformed `Tutorial1.3_Save.json` is warned and skipped by the importer; this does not affect part geometry.
 - `cargo fmt --all --check` and `git diff --check`: passed.
 
 These are source/data comparisons, analytical fixtures and automated gameplay regressions. They do not certify matched flight/contact traces against the KSP2 executable. The remaining priorities above still prevent a complete physics parity claim.

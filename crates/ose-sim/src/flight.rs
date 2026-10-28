@@ -225,6 +225,9 @@ pub struct Powered {
     /// A Kerbal on EVA: on the ground, the throttle with a level attitude walks instead of firing the pack.
     #[serde(default)]
     pub walker: bool,
+    /// Authored EVA settings, preserved in saves; old EVA saves are migrated on restore.
+    #[serde(default)]
+    pub jetpack: Option<ose_data::Jetpack>,
     /// Driving on wheels (rovers).
     #[serde(default)]
     pub drive: Drive,
@@ -800,6 +803,7 @@ impl Powered {
             crash_tolerance_mps: 0.0,
             tipped: false,
             walker: false,
+            jetpack: None,
             drive: Drive::default(),
             roll_rad: 0.0,
             roll_input: 0.0,
@@ -874,6 +878,26 @@ impl Powered {
     }
 
     pub fn thrust_kn(&self, pressure_atm: f64) -> f64 {
+        if let Some(pack) = self.jetpack.as_ref().filter(|_| self.walker) {
+            if !self.ignited
+                || !self.controlled
+                || !self.groups.rcs
+                || self.crashed
+                || self.eva_hop
+                || self.propellant_t <= 0.0
+            {
+                return 0.0;
+            }
+            let vacuum = pack.isp_curve.evaluate(0.0);
+            return if vacuum > 0.0 {
+                pack.move_force_kn
+                    * self.throttle.clamp(0.0, 1.0)
+                    * pack.isp_curve.evaluate(pressure_atm.max(0.0)).max(0.0)
+                    / vacuum
+            } else {
+                0.0
+            };
+        }
         match self.current_stage() {
             Some(s) if self.ignited && !self.crashed && self.propellant_t > 0.0 => {
                 let p = pressure_atm.clamp(0.0, 1.0);
@@ -1519,9 +1543,22 @@ pub fn integrate_with_propulsion(
     } else {
         None
     };
+    let jetpack = if p.walker && p.jetpack.is_some() && propulsion.is_none() {
+        Some(crate::jetpack::resolve(
+            p,
+            pressure_atm,
+            walk_dir.is_none() && !p.eva_hop,
+            omega,
+            dt,
+        ))
+    } else {
+        None
+    };
     // attitude: landed vessels stand upright; otherwise turn toward the commanded attitude with torque
     let thrust_kn = if walk_dir.is_some() || p.eva_hop {
         0.0
+    } else if let Some(pack) = &jetpack {
+        pack.force_kn.length()
     } else if let Some(engine) = propulsion.as_ref() {
         engine.thrust_kn
     } else {
@@ -1543,6 +1580,16 @@ pub fn integrate_with_propulsion(
         .as_ref()
         .map(|e| bx * e.force_kn.x + by * e.force_kn.y + bz * e.force_kn.z);
     if p.landed {
+        if let Some(allocation) = propulsion
+            .as_ref()
+            .and_then(|e| e.control_allocation.as_ref())
+        {
+            out.actuator_inputs = allocation.inputs.clone();
+            out.actuator_axial_corrections = allocation.axial_corrections.clone();
+            out.control_force_kn = bx * allocation.force_kn.x
+                + by * allocation.force_kn.y
+                + bz * allocation.force_kn.z;
+        }
         p.own_top = DVec3::ZERO;
         if !p.tipped {
             p.facing = if p.level {
@@ -1587,7 +1634,9 @@ pub fn integrate_with_propulsion(
         } else {
             0.0
         };
-        if let Some(engine) = propulsion.as_ref().filter(|e| e.mass.mass_t > 0.0) {
+        if let Some(pack) = &jetpack {
+            pack.turn(p, dt, &mut out);
+        } else if let Some(engine) = propulsion.as_ref().filter(|e| e.mass.mass_t > 0.0) {
             turn_with_parts(p, engine, target, frac, dt, &mut out);
         } else {
             let w0 = p.angvel;
@@ -1634,7 +1683,10 @@ pub fn integrate_with_propulsion(
 
     // thrust and propellant
     let mut thrust_acc = DVec3::ZERO;
-    if let Some(engine) = propulsion.as_ref() {
+    if let Some(pack) = &jetpack {
+        thrust_acc = pack.force_kn * (1.0 / p.mass_t);
+        out.thrust_kn = pack.force_kn.length();
+    } else if let Some(engine) = propulsion.as_ref() {
         if p.mass_t > 0.0 && thrust_kn > 0.0 {
             thrust_acc = resolved_force.unwrap_or(DVec3::ZERO) * (1.0 / p.mass_t);
         }
@@ -1674,10 +1726,11 @@ pub fn integrate_with_propulsion(
             .unwrap_or(DVec3::ZERO);
 
     // Part-backed RCS is already in the resource-resolved control allocation.
-    if propulsion.is_none() {
+    if propulsion.is_none() && jetpack.is_none() {
         p.rcs.usage = 0.0;
     }
     if propulsion.is_none()
+        && jetpack.is_none()
         && p.groups.rcs
         && p.controlled
         && p.rcs.thrust_kn > 0.0
@@ -1812,7 +1865,7 @@ pub fn integrate_with_propulsion(
     let top = vessel_top(p);
     let previous_r = p.r;
     p.r = p.r + p.v * dt;
-    if propulsion.is_some() {
+    if propulsion.is_some() || jetpack.is_some() {
         // Position changes the roll reference, not the craft's inertial orientation.
         set_vessel_top(p, top);
     }
@@ -2018,6 +2071,42 @@ mod tests {
                 y: height,
             }],
         }));
+    }
+
+    #[test]
+    fn mounted_control_force_can_lift_a_landed_craft_before_attitude_integration() {
+        let body = kerbin();
+        let mut p = Powered::new(
+            FlightSpec {
+                stages: vec![StageSpec {
+                    start_mass_t: 2.0,
+                    ..Default::default()
+                }],
+                drag_area_m2: 0.0,
+                drag_cd: 0.0,
+            },
+            DVec3::new(body.radius_m, 0.0, 0.0),
+            DVec3::ZERO,
+            true,
+        );
+        let (x, y, z) = vessel_basis(&p);
+        let force = DVec3::new(100.0, 0.0, 0.0);
+        let propulsion = Propulsion {
+            mass: crate::dynamics::MassProperties {
+                mass_t: 2.0,
+                ..Default::default()
+            },
+            control_allocation: Some(crate::actuators::Allocation {
+                force_kn: DVec3::new(force.dot(x), force.dot(y), force.dot(z)),
+                inputs: vec![0.5],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let out = integrate_with_propulsion(&mut p, &body, None, None, 0.0, 0.02, Some(propulsion));
+        assert!(!p.landed && p.v.x > 0.5);
+        assert_eq!(out.actuator_inputs, vec![0.5]);
+        assert_eq!(out.control_force_kn, force);
     }
 
     #[test]

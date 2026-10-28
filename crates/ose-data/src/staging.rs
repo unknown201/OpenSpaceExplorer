@@ -428,6 +428,7 @@ mod tests {
             fairing: false,
             cargo_bay: false,
             rcs: None,
+            jetpack: None,
             lifting_surface: None,
             ctrl_range_deg: 0.0,
             ctrl_area: 0.0,

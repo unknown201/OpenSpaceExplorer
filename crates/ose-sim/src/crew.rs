@@ -16,11 +16,6 @@ pub const VETERANS: [&str; 4] = [
     "Valentina Kerman",
 ];
 
-/// Jetpack thrust (`JetpackMoveForce`), kN.
-pub const JETPACK_THRUST_KN: f64 = 0.25;
-/// Legacy constant-Isp approximation. The reference JetpackResourceManager uses
-/// Data_Kerbal.JetpackAtmosphereCurve (240 s vacuum, 100 s at one atmosphere).
-pub const JETPACK_ISP_S: f64 = 100.0;
 /// A Kerbal with suit and pack (`eva_kerbal` mass), t, and the pack's propellant, t.
 pub const KERBAL_MASS_T: f64 = 0.07;
 pub const JETPACK_PROPELLANT_T: f64 = 0.025;
@@ -343,13 +338,20 @@ impl Universe {
         };
         let (_, kname) = crew.remove(idx);
         self.set_crew(e, crew);
+        let jetpack = self
+            .world
+            .get_resource::<KerbalPart>()
+            .map(|k| k.jetpack.clone())
+            .unwrap_or_default();
+        let isp_vac = jetpack.isp_curve.evaluate(0.0);
+        let isp_asl = jetpack.isp_curve.evaluate(1.0);
         let spec = flight::FlightSpec {
             stages: vec![flight::StageSpec {
                 stage_id: 0,
-                thrust_vac_kn: JETPACK_THRUST_KN,
-                thrust_asl_kn: JETPACK_THRUST_KN,
-                isp_vac_s: JETPACK_ISP_S,
-                isp_asl_s: JETPACK_ISP_S,
+                thrust_vac_kn: jetpack.move_force_kn,
+                thrust_asl_kn: jetpack.move_force_kn * isp_asl / isp_vac.max(1e-9),
+                isp_vac_s: isp_vac,
+                isp_asl_s: isp_asl,
                 propellant_t: JETPACK_PROPELLANT_T,
                 start_mass_t: KERBAL_MASS_T + JETPACK_PROPELLANT_T,
                 ..Default::default()
@@ -391,9 +393,10 @@ impl Universe {
             p.ignited = true;
             p.walker = true;
             // the jetpack also translates (Space/Shift up, Ctrl down, sideways) like RCS, always on
-            p.rcs.thrust_kn = JETPACK_THRUST_KN;
-            p.rcs.isp_vac_s = JETPACK_ISP_S;
-            p.rcs.isp_asl_s = JETPACK_ISP_S;
+            p.rcs.thrust_kn = jetpack.move_force_kn;
+            p.rcs.isp_vac_s = isp_vac;
+            p.rcs.isp_asl_s = isp_asl;
+            p.jetpack = Some(jetpack);
             p.groups.rcs = true;
             p.ground_clearance_m = 0.55;
             p.footprint_m = 0.3;
@@ -693,6 +696,28 @@ impl Universe {
 
     /// Mark a restored vessel as a Kerbal on EVA / a flag.
     pub fn restore_eva_kerbal(&mut self, e: Entity, name: &str) {
+        let settings = self
+            .world
+            .get_resource::<KerbalPart>()
+            .map(|k| k.jetpack.clone())
+            .unwrap_or_default();
+        if let Some(mut p) = self.world.get_mut::<flight::Powered>(e) {
+            if p.jetpack.is_none() {
+                let vacuum = settings.isp_curve.evaluate(0.0);
+                let sea_level = settings.isp_curve.evaluate(1.0);
+                p.rcs.thrust_kn = settings.move_force_kn;
+                p.rcs.isp_vac_s = vacuum;
+                p.rcs.isp_asl_s = sea_level;
+                if let Some(stage) = p.spec.stages.first_mut() {
+                    stage.isp_vac_s = vacuum;
+                    stage.isp_asl_s = sea_level;
+                    stage.thrust_vac_kn = settings.move_force_kn;
+                    stage.thrust_asl_kn = settings.move_force_kn * sea_level / vacuum.max(1e-9);
+                }
+                p.jetpack = Some(settings);
+            }
+        }
+
         let experiments = self
             .world
             .get_resource::<KerbalPart>()
@@ -710,14 +735,29 @@ impl Universe {
         });
     }
 
+    pub fn set_jetpack(&mut self, jetpack: ose_data::Jetpack) {
+        self.world
+            .get_resource_or_insert_with(KerbalPart::default)
+            .jetpack = jetpack;
+    }
+
     /// The experiments an EVA Kerbal carries (from the `eva_kerbal` part).
     pub fn set_kerbal_part(&mut self, experiments: Vec<PartExperiment>) {
-        self.world.insert_resource(KerbalPart { experiments });
+        let jetpack = self
+            .world
+            .get_resource::<KerbalPart>()
+            .map(|k| k.jetpack.clone())
+            .unwrap_or_default();
+        self.world.insert_resource(KerbalPart {
+            experiments,
+            jetpack,
+        });
     }
 }
 
 #[derive(Resource, Clone, Debug, Default)]
 pub struct KerbalPart {
+    pub jetpack: ose_data::Jetpack,
     pub experiments: Vec<PartExperiment>,
 }
 
@@ -883,6 +923,54 @@ mod tests {
         assert!(p.propellant_t < JETPACK_PROPELLANT_T, "the pack fires");
         // 0.25 kN on a Kerbal is too weak to lift off Kerbin (as in the original); it is for low gravity
         assert!(p.landed);
+    }
+
+    #[test]
+    fn eva_universe_resolves_partial_fuel_once_and_old_saves_keep_their_remaining_pack() {
+        let (mut u, vessel) = k1_on_pad();
+        let body = u.body_entity("Kerbin").unwrap();
+        let mut carrier = u.powered(vessel).unwrap().clone();
+        carrier.r = DVec3::new(700000.0, 0.0, 0.0);
+        carrier.v = DVec3::new(0.0, 100.0, 0.0);
+        carrier.landed = false;
+        carrier.facing = DVec3::new(1.0, 0.0, 0.0);
+        u.set_powered(vessel, carrier);
+        let eva = u.go_eva(vessel, Some("Jebediah Kerman")).unwrap();
+        let mut p = u.powered(eva).unwrap().clone();
+        let dt = 1.0 / crate::TICKS_PER_SECOND as f64;
+        let fuel = 0.25 / (240.0 * ose_data::G0) * dt * 0.25;
+        p.r = DVec3::new(700000.0, 0.0, 0.0);
+        p.v = DVec3::new(0.0, 100.0, 0.0);
+        p.facing = DVec3::new(1.0, 0.0, 0.0);
+        p.attitude = flight::Attitude::Free;
+        p.throttle = 1.0;
+        p.rcs.translate = DVec3::new(0.0, 1.0, 0.0);
+        p.propellant_t = fuel;
+        p.mass_t = KERBAL_MASS_T + fuel;
+        let mu = u.world.get::<bodies::Body>(body).unwrap().mu;
+        let expected = (0.25 * 0.25 / KERBAL_MASS_T - mu / 700000.0_f64.powi(2)) * dt;
+        u.set_powered(eva, p);
+        u.step();
+        let after = u.powered(eva).unwrap();
+        assert!((after.v.x - expected).abs() < 1e-10);
+        assert!((after.mass_t - KERBAL_MASS_T).abs() < 1e-12 && after.propellant_t < 1e-12);
+        u.step();
+        assert!((u.powered(eva).unwrap().mass_t - KERBAL_MASS_T).abs() < 1e-12);
+        let mut old = serde_json::to_value(u.powered(eva).unwrap()).unwrap();
+        old.as_object_mut().unwrap().remove("jetpack");
+        let mut restored: flight::Powered = serde_json::from_value(old).unwrap();
+        restored.propellant_t = 0.0123;
+        restored.mass_t = 0.0823;
+        u.set_powered(eva, restored);
+        u.restore_eva_kerbal(eva, "Jebediah Kerman");
+        let after = u.powered(eva).unwrap();
+        assert_eq!(after.propellant_t, 0.0123);
+        assert_eq!(after.mass_t, 0.0823);
+        assert_eq!(
+            after.jetpack.as_ref().unwrap().isp_curve.evaluate(0.0),
+            240.0
+        );
+        assert_eq!(after.rcs.isp_vac_s, 240.0);
     }
 
     #[test]

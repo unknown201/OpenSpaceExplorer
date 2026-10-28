@@ -15,6 +15,7 @@ pub struct WorldSetup {
     /// The KSC (CommNet source and where the day starts): latitude, longitude, altitude.
     pub ksc: (f64, f64, f64),
     pub kerbal_experiments: Vec<ose_data::science::PartExperiment>,
+    pub jetpack: ose_data::Jetpack,
     pub science: ose_data::science::ScienceCatalog,
     pub regions: Vec<u8>,
 }
@@ -40,6 +41,7 @@ impl WorldSetup {
             });
         }
         u.set_kerbal_part(self.kerbal_experiments.clone());
+        u.set_jetpack(self.jetpack.clone());
         // craft at the KSC stand on the campus the client draws
         u.set_site("Kerbin", crate::ksc_site());
         u.set_science(self.science.clone(), self.regions.clone());
@@ -67,6 +69,7 @@ impl Default for WorldSetup {
             terrains: Vec::new(),
             ksc: (KSC_LAT_DEG, KSC_LON_DEG, 100.0),
             kerbal_experiments: Vec::new(),
+            jetpack: Default::default(),
             science: Default::default(),
             regions: Vec::new(),
         }

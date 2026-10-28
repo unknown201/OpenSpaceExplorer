@@ -282,6 +282,9 @@ pub struct PartDef {
     /// RCS thrusters (`Data_RCS`).
     #[serde(default)]
     pub rcs: Option<Rcs>,
+    /// EVA movement and rotation settings (`Data_Kerbal`).
+    #[serde(default)]
+    pub jetpack: Option<Jetpack>,
     /// A wing, fin or control surface (`Data_LiftingSurface`).
     #[serde(default)]
     pub lifting_surface: Option<LiftingSurface>,
@@ -363,6 +366,51 @@ pub struct LiftingSurface {
     pub lift_mach_curve: Curve,
     pub drag_curve: Curve,
     pub drag_mach_curve: Curve,
+}
+
+/// Authored EVA jetpack force, resource and rotation settings.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Jetpack {
+    pub move_force_kn: f64,
+    pub rotate_torque_knm: f64,
+    pub rotate_offset_m: f64,
+    pub rotate_max_speed_deg_s: f64,
+    pub reset_enabled: bool,
+    pub reset_speed_deg_s: f64,
+    pub reset_threshold_deg_s: f64,
+    pub propellant: String,
+    pub isp_curve: Curve,
+}
+
+impl Default for Jetpack {
+    fn default() -> Self {
+        // Migration fallback for old catalogs/saves, matching the installed eva_kerbal definition.
+        Self {
+            move_force_kn: 0.25,
+            rotate_torque_knm: 0.125,
+            rotate_offset_m: 0.25,
+            rotate_max_speed_deg_s: 280.0,
+            reset_enabled: true,
+            reset_speed_deg_s: 200.0,
+            reset_threshold_deg_s: 0.1,
+            propellant: "MonoPropellant".into(),
+            isp_curve: Curve {
+                keys: [
+                    (0.0, 240.0, 0.0),
+                    (1.0, 100.0, -59.99975),
+                    (4.0, 0.001, 0.0),
+                ]
+                .into_iter()
+                .map(|(t, v, tangent)| CurveKey {
+                    t,
+                    v,
+                    in_tangent: tangent,
+                    out_tangent: tangent,
+                })
+                .collect(),
+            },
+        }
+    }
 }
 
 /// RCS thrusters as the original defines them (`Data_RCS`): thrust per thruster, kN, the propellant

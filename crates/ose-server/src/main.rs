@@ -433,6 +433,7 @@ async fn main() -> anyhow::Result<()> {
     let part_defs: Vec<ose_data::PartDef> = serde_json::from_str(EMBEDDED_PARTS)?;
     if let Some(k) = part_defs.iter().find(|d| d.id == "eva_kerbal") {
         setup.kerbal_experiments = k.experiments.clone();
+        setup.jetpack = k.jetpack.clone().unwrap_or_default();
     }
     setup.science = serde_json::from_str(EMBEDDED_SCIENCE)?;
     setup.regions = EMBEDDED_REGIONS.to_vec();

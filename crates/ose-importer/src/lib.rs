@@ -421,6 +421,7 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
     let mut fairing = false;
     let mut cargo_bay = false;
     let mut rcs: Option<ose_data::Rcs> = None;
+    let mut jetpack = None;
     let mut lifting_surface: Option<ose_data::LiftingSurface> = None;
     let mut intake_area_m2 = 0.0;
     let mut ctrl = (0.0, 0.0);
@@ -459,6 +460,19 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
                     }
                     if entry["Name"] == "Data_ResourceIntake" {
                         intake_area_m2 = f(o, "area");
+                    }
+                    if entry["Name"] == "Data_Kerbal" {
+                        jetpack = Some(ose_data::Jetpack {
+                            move_force_kn: f(o, "JetpackMoveForce"),
+                            rotate_torque_knm: f(o, "JetpackRotateTorque"),
+                            rotate_offset_m: f(o, "JetpackRotateTorqueOffset"),
+                            rotate_max_speed_deg_s: f(o, "JetpackRotateMaxAngularSpeed"),
+                            reset_enabled: b(o, "JetpackRotateResetEnabled"),
+                            reset_speed_deg_s: f(o, "JetpackRotateResetAngularSpeed"),
+                            reset_threshold_deg_s: f(o, "JetpackRotateResetAngularSpeedThreshold"),
+                            propellant: s(&o["JetpackPropellantDefinition"], "mixtureName"),
+                            isp_curve: curve(&o["JetpackAtmosphereCurve"]),
+                        });
                     }
                     if entry["Name"] == "Data_RCS" {
                         rcs = Some(ose_data::Rcs {
@@ -761,6 +775,7 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
         fairing,
         cargo_bay,
         rcs,
+        jetpack,
         lifting_surface,
         ctrl_range_deg: ctrl.0,
         ctrl_area: ctrl.1,
@@ -1291,5 +1306,27 @@ mod tests {
                 .mass_offset_m,
             DVec3::ZERO
         );
+    }
+    #[test]
+    fn authored_jetpack_curve_and_rotation_settings_survive_the_slim_catalog() {
+        let parts: Vec<PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let pack = parts
+            .iter()
+            .find(|p| p.id == "eva_kerbal")
+            .unwrap()
+            .jetpack
+            .as_ref()
+            .unwrap();
+        assert_eq!(pack, &ose_data::Jetpack::default());
+        assert!((pack.isp_curve.evaluate(2.5) - 27.50059375).abs() < 1e-9);
+        let value = serde_json::json!({"data":{"partName":"eva","serializedPartModules":[{"ModuleData":[{"Name":"Data_Kerbal","DataObject":{"JetpackMoveForce":0.3,"JetpackRotateTorque":0.2,"JetpackRotateTorqueOffset":0.4,"JetpackRotateMaxAngularSpeed":45.0,"JetpackRotateResetEnabled":false,"JetpackRotateResetAngularSpeed":30.0,"JetpackRotateResetAngularSpeedThreshold":0.5,"JetpackPropellantDefinition":{"mixtureName":"MonoPropellant"},"JetpackAtmosphereCurve":{"fCurve":{"keys":[{"time":0.0,"value":150.0,"inTangent":0.0,"outTangent":0.0}]}}}}]}]}});
+        let imported = part(&value, &mut Coverage::default()).jetpack.unwrap();
+        assert_eq!(imported.move_force_kn, 0.3);
+        assert_eq!(imported.rotate_torque_knm, 0.2);
+        assert_eq!(imported.rotate_offset_m, 0.4);
+        assert_eq!(imported.rotate_max_speed_deg_s, 45.0);
+        assert!(!imported.reset_enabled);
+        assert_eq!(imported.isp_curve.evaluate(0.0), 150.0);
     }
 }

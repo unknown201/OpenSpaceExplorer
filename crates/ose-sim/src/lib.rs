@@ -15,6 +15,7 @@ pub mod crew;
 pub mod docking;
 pub mod dynamics;
 pub mod flight;
+pub mod jetpack;
 pub mod missions;
 pub mod resources;
 pub mod rigid;
@@ -1508,7 +1509,7 @@ impl Universe {
                         }
                     }
                 }
-                if structure.is_none() && p.walker && p.rcs.usage > 0.0 {
+                if structure.is_none() && p.walker && p.jetpack.is_none() && p.rcs.usage > 0.0 {
                     // a Kerbal's jetpack translation burns the pack
                     let flow = p.rcs.thrust_kn * p.rcs.usage.min(1.0)
                         / (p.rcs.isp_vac_s.max(1.0) * ose_data::G0);
