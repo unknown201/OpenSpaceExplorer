@@ -127,16 +127,26 @@ Dry wheels are removed from the control request before allocation so they cannot
 
 Three new regressions check the full universe loop with zero, quarter and full-step charge, no extra impulse on the subsequent empty tick, isolated per-mount delivery, detached wheels, same-tick generator recovery, allocation handoff to a non-electric force channel, analytical multi-axis charge use, idle spin and SAS braking.
 
-This closes reaction-wheel charge timing, not all actuator-resource timing. Partial electrical delivery limits the existing planned wheel inputs; the remaining demand is not reallocated in a second optimization. Shared charge requests retain ordered resource-graph semantics. Alternator output still follows the existing throttle/fuel-availability estimate, and solar output retains its existing orientation approximation. RCS rotation and translation still use the post-flight resource path and need one shared per-thruster budget. Imported RCS nozzle geometry, wheel dynamics/saturation and physical reaction-wheel momentum storage are not implemented.
+This closes reaction-wheel charge timing, not all actuator-resource timing. Partial electrical delivery limits the existing planned wheel inputs; the remaining demand is not reallocated in a second optimization. Shared charge requests retain ordered resource-graph semantics. Alternator output still follows the existing throttle/fuel-availability estimate, and solar output retains its existing orientation approximation. The subsequent RCS increment below closes part-backed RCS timing and shared mount budgets. Imported RCS nozzle geometry, wheel dynamics/saturation and physical reaction-wheel momentum storage are not implemented.
+
+## Completed increment: fuel-resolved RCS mount budgets
+
+RCS translation and rotation now share each mount's bounded three-axis force vector. Translation is added to the torque allocation in mounted axes and the combined vector is projected to that mount's force bound. Each mount requests its own propellant recipe at its own resource-graph node before integration. Vacuum thrust / (vacuum Isp * standard gravity) sets mass flow; the full pressure curve changes thrust, including above one atmosphere. Delivered fuel scales the same force and moment used by flight and structural loading. The post-flight aggregate RCS request is removed. A dry mount cannot borrow fuel or Isp from a different RCS definition, and a last partial burn cannot grant an extra empty-tank tick. Balanced translational forces now keep the structural solver active even with zero net torque.
+
+The reference equations come from `KSP.Modules/Module_RCS.cs::GetMaxFuelFlow` and `CalculateThrust`, and `Data_RCS.cs::OABGetMaxFuelFlow`. The reference resource broker reads its previous delivery; OSE deliberately resolves delivery before applying motion to avoid granting an unbudgeted impulse. This is a resource-accounting correction rather than reproduction of the reference's asynchronous scheduling.
+
+Five added regressions cover independent propellants/Isp, full pressure curves, missing and final partial fuel, proportional recipe shortfall at an isolated mount, the shared translation/rotation bound, group disabling/detachment, analytical linear impulse and mass accounting, the universe loop and structural translation loads. The existing K2 gameplay test remains in the focused RCS suite.
+
+Nozzle geometry is still a three-axis mount proxy. Its shared sphere is a conservative approximation; the reference fires individual directional nozzles with separate lever arms. Partial delivery is not reallocated to other actuators, and ordered graph requests still determine access to shared supplies. RCS effects retain the existing vessel-level directional readout. EVA jetpacks retain their separate resource path.
 
 ## Remaining physics priorities
 
-1. Import engine/nozzle transforms and weights, internal mass offsets and usable inertia geometry. Resolve RCS resources and its combined rotation/translation demands before applying force.
+1. Import engine/nozzle transforms and weights, internal mass offsets and usable inertia geometry. Import directional RCS nozzle geometry and per-nozzle force limits.
 2. Import centre-of-pressure offsets, full lifting-surface options, and deflected control-surface lift/drag.
 3. Replace sampled corner paths with continuous hull contacts; add nearby vessel/debris pair contacts and equal-and-opposite impulses. Import contact materials and sliding damage/heat.
 4. Import displacement and wheel-collider data, suspension tuning and target positions; add load-dependent tyre grip and wheel slip. Extend water behavior, then docking attraction/capture and EVA ladder/hatch contact.
 
-The next actuator-resource acceptance cases should check mixed RCS propellants/Isp at individual mounts, empty and final-partial-fuel ticks, and simultaneous translation/rotation sharing each thruster's force and fuel budget. Retain the new battery, per-mount delivery and wheel-impulse cases. Plan control demand before integration, resolve requests once through the resource graph, and apply only the delivered channels; do not reconsume resources after flight.
+The next actuator acceptance cases should compare directional nozzle selection and application points against prefab transforms. Retain the mixed-propellant, empty/partial-fuel, shared-budget, battery and per-mount delivery cases. Extend the same resource-before-actuation rule to EVA jetpacks.
 
 The next contact acceptance cases should cover continuous hull contacts that prevent tunnelling between vertices, equal-and-opposite vessel/debris impulses, and stable support/traction over uneven terrain. Retain the existing slope, normal-speed, sliding-friction, angular-impulse and joint-reaction regressions.
 

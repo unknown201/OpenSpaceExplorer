@@ -328,8 +328,8 @@ pub struct RcsState {
     pub isp_asl_s: f64,
     /// Translation input in craft axes (x right, y fore along the nose, z top), each -1..1, held.
     pub translate: DVec3,
-    /// Share of full thrust used this step (translation plus turning), and the share of the propellant
-    /// that was delivered last step (0..1).
+    /// Share of full thrust delivered this step (translation plus turning), and the share of requested
+    /// propellant delivered (0..1). Part-backed craft resolve this before motion.
     pub usage: f64,
     pub powered: f64,
 }
@@ -1131,7 +1131,7 @@ pub fn plan_actuators(
     let Some(channels) = engine.actuators.as_ref() else {
         return Default::default();
     };
-    if p.landed || p.crashed || !p.controlled {
+    if p.crashed || !p.controlled {
         return crate::actuators::Allocation {
             inputs: vec![0.0; channels.len()],
             ..Default::default()
@@ -1153,7 +1153,53 @@ pub fn plan_actuators(
         0.0
     };
     let (request, _) = control_request(p, engine, target, frac, dt);
-    crate::actuators::allocate(channels, request)
+    let request = if p.landed { DVec3::ZERO } else { request };
+    let mut allocation = crate::actuators::allocate(channels, request);
+    // RCS mount groups share a unit sphere across rotation and translation. Add the
+    // translation command in the mounted axes, then project the combined command.
+    let t = p.rcs.translate;
+    let mut translation = DVec3::new(
+        t.x.clamp(-1.0, 1.0),
+        t.y.clamp(-1.0, 1.0),
+        t.z.clamp(-1.0, 1.0),
+    );
+    translation = translation * (1.0 / translation.length().max(1.0));
+    for (i, a) in channels.iter().enumerate() {
+        if a.group % 8 != 4 {
+            continue;
+        }
+        // Only the first channel visits a mount's group.
+        if channels[..i].iter().any(|b| b.group == a.group) {
+            continue;
+        }
+        let indices: Vec<_> = channels
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| b.group == a.group)
+            .map(|(j, _)| j)
+            .collect();
+        let inputs: Vec<_> = indices
+            .iter()
+            .map(|&j| {
+                let force = channels[j].force_kn;
+                allocation.inputs[j]
+                    + if force.length_squared() > 0.0 {
+                        translation.dot(force.normalized())
+                    } else {
+                        0.0
+                    }
+            })
+            .collect();
+        let norm = inputs.iter().map(|x| x * x).sum::<f64>().sqrt().max(1.0);
+        for (&j, input) in indices.iter().zip(inputs) {
+            let next = input / norm;
+            let change = next - allocation.inputs[j];
+            allocation.inputs[j] = next;
+            allocation.force_kn = allocation.force_kn + channels[j].force_kn * change;
+            allocation.torque_knm = allocation.torque_knm + channels[j].torque_knm * change;
+        }
+    }
+    allocation
 }
 
 fn control_request(
@@ -1326,7 +1372,7 @@ pub struct StepOutcome {
     pub actuator_axial_corrections: Vec<crate::rigid::PartForce>,
     /// Bounds contacts exceeding this particular part's crash tolerance.
     pub contact_damage: Vec<usize>,
-    /// Resolved gimbal and control-surface side force, inertial kN.
+    /// Resolved mounted actuator force (gimbal, RCS and control surfaces), inertial kN.
     pub control_force_kn: DVec3,
     pub crashed: bool,
     pub touched_down: bool,
@@ -1614,9 +1660,16 @@ pub fn integrate_with_propulsion(
             .map(|e| e.environment_force_kn * (1.0 / p.mass_t))
             .unwrap_or(DVec3::ZERO);
 
-    // RCS translation (the RCS group on), in the craft's axes
-    p.rcs.usage = 0.0;
-    if p.groups.rcs && p.controlled && p.rcs.thrust_kn > 0.0 && p.mass_t > 0.0 {
+    // Part-backed RCS is already in the resource-resolved control allocation.
+    if propulsion.is_none() {
+        p.rcs.usage = 0.0;
+    }
+    if propulsion.is_none()
+        && p.groups.rcs
+        && p.controlled
+        && p.rcs.thrust_kn > 0.0
+        && p.mass_t > 0.0
+    {
         // Turning spends RCS propellant too, including SAS correction. The same normalized
         // request drives the directional nozzle visuals in the authoritative readout.
         if !p.landed && p.rcs.torque_knm > 0.0 {
