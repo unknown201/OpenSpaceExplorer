@@ -2,6 +2,11 @@ import { expect, test } from "@playwright/test";
 
 test("map navball follows steering and SAS can be switched off", async ({ page, baseURL }) => {
   page.setDefaultTimeout(10_000);
+  // Exercise instrument drawing without requiring the locally exported game artwork.
+  await page.route("**/assets/ui/Flight-Navball-Texture.png", route => route.fulfill({
+    contentType: "image/svg+xml",
+    body: '<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024"><rect width="1024" height="512" fill="#267cbd"/><rect y="512" width="1024" height="512" fill="#9d663b"/></svg>',
+  }));
   await page.goto(baseURL!);
   await page.locator('[data-ose="player-name"]').fill("attitude pilot");
   await page.locator('[data-ose="play"]').click();

@@ -238,7 +238,7 @@ pub fn restore(
         if !v.experiments.is_empty() {
             u.set_running_experiments(e, v.experiments.clone());
         }
-        if let Some(saved) = &v.parts {
+        if let Some(saved) = v.parts.as_ref().filter(|s| !s.craft.parts.is_empty()) {
             u.set_crew(e, v.crew.clone());
             u.restore_parts(e, saved, parts, resources);
             u.set_docked(e, v.docked.clone());
