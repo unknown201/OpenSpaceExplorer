@@ -240,3 +240,27 @@ and maximum rate error 0.6142401 rad/s. The staged-wheel/pose increment gives
 0.5-degree / 0.01-rad/s / 1e-6-t thresholds. A Rust integration test replays all
 600 intervals in the normal test suite. This is one SAS-off, unignited vacuum
 fixture; it does not establish SAS/RCS, powered atmospheric or whole-game parity.
+
+The next mode/authority increment retains both preceding global control commands
+and raw manual inputs, then applies the current wheel mode and authority when
+the module updates. Switching ManualOnly/SASOnly or changing authority therefore
+does not reuse a command already scaled for the previous setting. Disabling torque
+or turning SAS off in SASOnly pauses the source response filter and clears the next
+torque object; an already queued physical torque still completes its tick. The
+stored raw inputs and queue survive structural rebuilds. Source-only regressions
+cover pause/resume, precision-mode switching and disable/re-enable with authority.
+
+SAS now gets the wheel `ITorqueProvider` potential separately from physical actuator
+limits. The source excludes ManualOnly wheels from that potential and advertises
+the rated torque independently of the authority/toggle controls. Tests check both
+the provider values and that equal advertised torque produces equal controller
+tuning while different physical limits still bound the torque request. Other
+providers retain their existing potential estimate; these wheel mode cases still
+need dedicated executable SAS-enabled captures.
+
+RCS input deadbands, full-thrust snapping and the strict post-precision request
+threshold compare at the source's single-precision boundaries. This includes a
+double just below 0.05 that rounds to the source deadband boundary and a nominal
+0.2 input compared with an authored float 0.2 full-thrust threshold. Small values
+that round to the 0.05 request cutoff do not fire or consume fuel. The comparisons
+are explicit; the simulation retains double precision for its dynamics.

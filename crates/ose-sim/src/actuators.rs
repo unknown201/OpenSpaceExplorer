@@ -63,13 +63,13 @@ pub fn rcs_power(
     precision: bool,
     tuning: ose_data::flight_geometry::RcsTuning,
 ) -> f64 {
-    let input = if tuning.full_thrust && input >= tuning.full_thrust_min {
+    let input = if tuning.full_thrust && (input as f32) >= (tuning.full_thrust_min as f32) {
         1.0
     } else {
         input
     };
     let power = input * rcs_precision_factor(direction, lever, precision, tuning.use_lever);
-    if power > 0.05 {
+    if (power as f32) > 0.05_f32 {
         power
     } else {
         0.0
@@ -330,6 +330,24 @@ mod tests {
             &[DVec3::new(0.0, 1.0, 0.0)],
         );
         assert_eq!(disabled.inputs, vec![0.0]);
+    }
+
+    #[test]
+    fn rcs_module_decision_boundaries_use_reference_float_precision() {
+        let direction = DVec3::new(0.0, 1.0, 0.0);
+        let lever = DVec3::new(2.0, 0.0, 0.0);
+        let tuning = ose_data::flight_geometry::RcsTuning {
+            full_thrust: true,
+            full_thrust_min: 0.2_f32 as f64,
+            ..Default::default()
+        };
+        assert_eq!(rcs_power(0.2, direction, lever, false, tuning), 1.0);
+        let normal = ose_data::flight_geometry::RcsTuning::default();
+        assert_eq!(
+            rcs_power(0.05 + 1e-10, direction, lever, false, normal),
+            0.0
+        );
+        assert!(rcs_power(0.050001, direction, lever, false, normal) > 0.0);
     }
 
     #[test]

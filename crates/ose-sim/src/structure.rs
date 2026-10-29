@@ -114,6 +114,7 @@ pub struct Structure {
     pub engine_gimbals: Vec<(u16, DVec3)>,
     wheel_actuation_knm: Vec<DVec3>,
     wheel_previous_command: Vec<DVec3>,
+    wheel_previous_manual: Vec<DVec3>,
     wheel_queued_torque: Vec<DVec3>,
     wheel_accepted_power: Vec<bool>,
     geometry: Vec<ose_data::flight_geometry::FlightGeometry>,
@@ -332,6 +333,7 @@ impl Structure {
             self.surface_deploy_angles[j] = old.surface_deploy_angles[i];
             self.wheel_actuation_knm[j] = old.wheel_actuation_knm[i];
             self.wheel_previous_command[j] = old.wheel_previous_command[i];
+            self.wheel_previous_manual[j] = old.wheel_previous_manual[i];
             self.wheel_queued_torque[j] = old.wheel_queued_torque[i];
             self.wheel_accepted_power[j] = old.wheel_accepted_power[i];
             self.gimbal_angles[j] = old.gimbal_angles[i].clone();
@@ -529,6 +531,7 @@ impl Structure {
             engine_gimbals: Vec::new(),
             wheel_actuation_knm: vec![DVec3::ZERO; n],
             wheel_previous_command: vec![DVec3::ZERO; n],
+            wheel_previous_manual: vec![DVec3::ZERO; n],
             wheel_queued_torque: vec![DVec3::ZERO; n],
             wheel_accepted_power: vec![false; n],
             occupied_mass_t: vec![0.; n],
@@ -1177,6 +1180,16 @@ impl Structure {
                 * power_scale
                 * cfg.wheel_authority
                 * f64::from(cfg.wheel_enabled);
+            let queued = if self.electric[i].wheel_acceptance_threshold.is_some() {
+                aero::rotate_inverse(p.control_rotation, self.wheel_queued_torque[i])
+            } else {
+                DVec3::ZERO
+            };
+            let caps = DVec3::new(
+                caps.x.max(queued.x.abs()),
+                caps.y.max(queued.y.abs()),
+                caps.z.max(queued.z.abs()),
+            );
             for (j, cap) in [caps.x, caps.y, caps.z].into_iter().enumerate() {
                 if cap > 0.0 {
                     channels.push(Actuator {
@@ -1357,6 +1370,35 @@ impl Structure {
         if !p.controlled {
             channels.clear();
         }
+        // Module_ReactionWheel.GetPotentialTorque excludes ManualOnly wheels but
+        // advertises rated torque independently of ToggleTorque/WheelAuthority.
+        // Preserve other providers' current model until their source parity is measured.
+        propulsion.controller_authority = self
+            .electric
+            .iter()
+            .any(|e| e.wheel_acceptance_threshold.is_some())
+            .then(|| {
+                channels.iter().fold(DVec3::ZERO, |sum, a| {
+                    if a.force_kn.length_squared() == 0.0
+                        && a.axial.is_none()
+                        && self.electric[a.part].wheel_acceptance_threshold.is_some()
+                    {
+                        return sum;
+                    }
+                    let v = aero::rotate_inverse(p.control_rotation, a.torque_knm);
+                    sum + DVec3::new(v.x.abs(), v.y.abs(), v.z.abs())
+                }) + if p.controlled {
+                    (0..self.rigid.len())
+                        .filter(|&i| {
+                            self.rigid.present[i]
+                                && self.electric[i].wheel_acceptance_threshold.is_some()
+                                && p.part_control(i).wheel_mode != 1
+                        })
+                        .fold(DVec3::ZERO, |sum, i| sum + self.wheel_axes_knm[i])
+                } else {
+                    DVec3::ZERO
+                }
+            });
         self.resolved_actuators = Some(channels.clone());
         propulsion.actuators = Some(channels);
         propulsion.rcs_controls = self
@@ -2119,8 +2161,8 @@ impl Structure {
             let cfg = p.part_control(i);
             let cap = self.wheel_axes_knm[i] * cfg.wheel_authority * f64::from(cfg.wheel_enabled);
             let manual = p.manual_axes();
-            let command = aero::rotate_inverse(p.control_rotation, p.control_axes);
-            let command = match cfg.wheel_mode {
+            let combined = aero::rotate_inverse(p.control_rotation, p.control_axes);
+            let select = |command: DVec3, manual: DVec3| match cfg.wheel_mode {
                 1 => manual,
                 2 => {
                     if p.attitude == crate::flight::Attitude::Free {
@@ -2131,6 +2173,7 @@ impl Structure {
                 }
                 _ => command,
             };
+            let command = select(combined, manual);
             let desired = if self.rigid.present[i] && p.controlled {
                 DVec3::new(cap.x * command.x, cap.y * command.y, cap.z * command.z)
             } else {
@@ -2145,16 +2188,32 @@ impl Structure {
                 if self.rigid.present[i] && cfg.wheel_enabled {
                     previous_demands[i] = previous.x.abs() + previous.y.abs() + previous.z.abs();
                 }
-                self.wheel_actuation_knm[i] =
-                    crate::actuators::wheel_response(previous, self.wheel_previous_command[i], dt);
-                self.wheel_previous_command[i] = desired;
                 wheel_outputs[i] = self.wheel_queued_torque[i];
-                self.wheel_queued_torque[i] =
-                    if self.wheel_accepted_power[i] || self.electric[i].wheel_use_per_knm <= 0.0 {
+                if cfg.wheel_enabled
+                    && !(cfg.wheel_mode == 2 && p.attitude == crate::flight::Attitude::Free)
+                {
+                    // Mode/authority apply now to the preceding global input state.
+                    let delayed = select(
+                        self.wheel_previous_command[i],
+                        self.wheel_previous_manual[i],
+                    );
+                    let delayed =
+                        DVec3::new(cap.x * delayed.x, cap.y * delayed.y, cap.z * delayed.z);
+                    self.wheel_actuation_knm[i] =
+                        crate::actuators::wheel_response(previous, delayed, dt);
+                    self.wheel_queued_torque[i] = if self.wheel_accepted_power[i]
+                        || self.electric[i].wheel_use_per_knm <= 0.0
+                    {
                         aero::rotate(p.control_rotation, self.wheel_actuation_knm[i])
                     } else {
                         DVec3::ZERO
                     };
+                } else {
+                    // The source early return clears torque without advancing its filter.
+                    self.wheel_queued_torque[i] = DVec3::ZERO;
+                }
+                self.wheel_previous_command[i] = if p.controlled { combined } else { DVec3::ZERO };
+                self.wheel_previous_manual[i] = if p.controlled { manual } else { DVec3::ZERO };
             } else {
                 self.wheel_actuation_knm[i] = crate::actuators::wheel_response(
                     self.wheel_actuation_knm[i],
@@ -2552,17 +2611,19 @@ impl Structure {
                     aero::rotate(
                         p.control_rotation,
                         DVec3::new(
-                            if cfg.rcs_axes[offset] && v.x.abs() >= 0.05 {
+                            if cfg.rcs_axes[offset] && (v.x as f32).abs() >= 0.05_f32 {
                                 v.x
                             } else {
                                 0.
                             },
-                            if cfg.rcs_axes[offset + 1] && (offset == 3 || v.y.abs() >= 0.05) {
+                            if cfg.rcs_axes[offset + 1]
+                                && (offset == 3 || (v.y as f32).abs() >= 0.05_f32)
+                            {
                                 v.y
                             } else {
                                 0.
                             },
-                            if cfg.rcs_axes[offset + 2] && v.z.abs() >= 0.05 {
+                            if cfg.rcs_axes[offset + 2] && (v.z as f32).abs() >= 0.05_f32 {
                                 v.z
                             } else {
                                 0.
@@ -6303,6 +6364,7 @@ mod tests {
         let (mut rebuilt, _, _) = wheel_power_fixture();
         rebuilt.carry_state_from(&s, &(0..s.rigid.len()).map(Some).collect::<Vec<_>>());
         assert_eq!(rebuilt.wheel_previous_command, s.wheel_previous_command);
+        assert_eq!(rebuilt.wheel_previous_manual, s.wheel_previous_manual);
         assert_eq!(rebuilt.wheel_queued_torque, s.wheel_queued_torque);
         assert_eq!(rebuilt.wheel_accepted_power, s.wheel_accepted_power);
     }
@@ -6444,6 +6506,107 @@ mod tests {
         assert!(before
             .iter()
             .any(|f| (f.offset_m - st.lift_offset(f.part)).length() > 1.));
+    }
+
+    #[test]
+    fn reference_sas_only_pauses_its_filter_and_clears_the_next_queued_torque() {
+        use ose_data::flight_geometry::PartControl;
+        let (mut s, mut p, _) = wheel_power_fixture();
+        s.electric[s.root].wheel_acceptance_threshold = Some(0.01);
+        s.wheel_actuation_knm[s.root] = DVec3::new(0.0, 1.0, 0.0);
+        s.wheel_queued_torque[s.root] = DVec3::new(0.0, 0.6, 0.0);
+        s.wheel_accepted_power[s.root] = true;
+        p.rotation_input = DVec3::ZERO;
+        p.part_controls = vec![(
+            s.root as u16,
+            PartControl {
+                wheel_mode: 2,
+                ..Default::default()
+            },
+        )];
+        let ec = s.net.resource("ElectricCharge").unwrap();
+        s.net.tanks.push(crate::resources::Tank {
+            part: s.root,
+            resource: ec,
+            stored: 10.0,
+            capacity: 10.0,
+        });
+        for expected in [0.6, 0.0, 0.0] {
+            let mut engine = s.propulsion(&p, Default::default(), 0.02);
+            s.configure_actuators(&p, Default::default(), &mut engine);
+            s.resolve_wheel_power(&mut p, &test_body(), &mut engine, 0.02);
+            assert!((engine.control_allocation.unwrap().torque_knm.y - expected).abs() < 1e-12);
+            assert_eq!(s.wheel_actuation_knm[s.root].y, 1.0);
+            assert_eq!(s.wheel_queued_torque[s.root], DVec3::ZERO);
+        }
+        p.attitude = crate::flight::Attitude::Fixed(p.facing);
+        let mut engine = s.propulsion(&p, Default::default(), 0.02);
+        s.configure_actuators(&p, Default::default(), &mut engine);
+        s.resolve_wheel_power(&mut p, &test_body(), &mut engine, 0.02);
+        assert!((s.wheel_actuation_knm[s.root].y - 0.4).abs() < 1e-12);
+        assert_eq!(engine.control_allocation.unwrap().torque_knm, DVec3::ZERO);
+    }
+
+    #[test]
+    fn reference_mode_switch_uses_previous_raw_input_with_current_mode_and_advertised_torque() {
+        use ose_data::flight_geometry::PartControl;
+        let (mut s, mut p, _) = wheel_power_fixture();
+        s.electric[s.root].wheel_acceptance_threshold = Some(0.01);
+        s.electric[s.root].wheel_use_per_knm = 0.0;
+        s.wheel_previous_command[s.root] = DVec3::new(0.0, 0.1, 0.0);
+        s.wheel_previous_manual[s.root] = DVec3::new(0.0, 1.0, 0.0);
+        p.rotation_input = DVec3::new(0.0, 0.0, 0.1);
+        p.raw_rotation_input = Some(DVec3::new(0.0, 0.0, 1.0));
+        p.part_controls = vec![(
+            s.root as u16,
+            PartControl {
+                wheel_mode: 1,
+                ..Default::default()
+            },
+        )];
+        let mut engine = s.propulsion(&p, Default::default(), 0.02);
+        s.configure_actuators(&p, Default::default(), &mut engine);
+        assert_eq!(engine.controller_authority, Some(DVec3::ZERO));
+        s.resolve_wheel_power(&mut p, &test_body(), &mut engine, 0.02);
+        assert!((s.wheel_actuation_knm[s.root].y - 1.2).abs() < 1e-12);
+        p.part_controls[0].1.wheel_mode = 2;
+        p.attitude = crate::flight::Attitude::Fixed(p.facing);
+        let mut engine = s.propulsion(&p, Default::default(), 0.02);
+        s.configure_actuators(&p, Default::default(), &mut engine);
+        assert_eq!(engine.controller_authority, Some(DVec3::new(0.0, 2.0, 0.0)));
+        s.resolve_wheel_power(&mut p, &test_body(), &mut engine, 0.02);
+        assert!((s.wheel_actuation_knm[s.root].y + 0.6).abs() < 1e-12);
+        assert!((engine.control_allocation.unwrap().torque_knm.y - 1.2).abs() < 1e-12);
+    }
+
+    #[test]
+    fn reference_disable_retains_filter_and_paid_queue_then_uses_current_authority_on_resume() {
+        use ose_data::flight_geometry::PartControl;
+        let (mut s, mut p, _) = wheel_power_fixture();
+        s.electric[s.root].wheel_acceptance_threshold = Some(0.01);
+        s.wheel_actuation_knm[s.root] = DVec3::new(0.0, 1.0, 0.0);
+        s.wheel_queued_torque[s.root] = DVec3::new(0.0, 0.6, 0.0);
+        p.part_controls = vec![(
+            s.root as u16,
+            PartControl {
+                wheel_enabled: false,
+                wheel_authority: 0.25,
+                ..Default::default()
+            },
+        )];
+        for expected in [0.6, 0.0] {
+            let mut engine = s.propulsion(&p, Default::default(), 0.02);
+            s.configure_actuators(&p, Default::default(), &mut engine);
+            assert_eq!(engine.controller_authority, Some(DVec3::new(0.0, 2.0, 0.0)));
+            s.resolve_wheel_power(&mut p, &test_body(), &mut engine, 0.02);
+            assert!((engine.control_allocation.unwrap().torque_knm.y - expected).abs() < 1e-12);
+            assert_eq!(s.wheel_actuation_knm[s.root].y, 1.0);
+        }
+        p.part_controls[0].1.wheel_enabled = true;
+        let mut engine = s.propulsion(&p, Default::default(), 0.02);
+        s.configure_actuators(&p, Default::default(), &mut engine);
+        s.resolve_wheel_power(&mut p, &test_body(), &mut engine, 0.02);
+        assert!((s.wheel_actuation_knm[s.root].y - 0.7).abs() < 1e-12);
     }
 
     #[test]

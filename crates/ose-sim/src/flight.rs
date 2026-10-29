@@ -1419,10 +1419,11 @@ fn control_request(
             let axis = crate::aero::rotate(p.control_rotation, v);
             axis.dot(inertia.apply(axis)).max(1e-12)
         };
+        let advertised = engine.controller_authority.unwrap_or(authority);
         let acceleration = [
-            authority.x / moment(DVec3::new(1., 0., 0.)),
-            authority.y / moment(DVec3::new(0., 1., 0.)),
-            authority.z / moment(DVec3::new(0., 0., 1.)),
+            advertised.x / moment(DVec3::new(1., 0., 0.)),
+            advertised.y / moment(DVec3::new(0., 1., 0.)),
+            advertised.z / moment(DVec3::new(0., 0., 1.)),
         ];
         // Unity angular velocity is an axial vector: reflect X/Y, retain Z.
         p.sas.update(
@@ -1643,6 +1644,8 @@ pub struct Propulsion {
     pub gyroscopic_compensation: crate::dynamics::Inertia,
     /// PartOwnerComponent reports origin-translated MOI to SAS, separately from physical COM inertia.
     pub controller_inertia: Option<crate::dynamics::Inertia>,
+    /// Source ITorqueProvider potential in control axes, distinct from actual actuator limits.
+    pub controller_authority: Option<DVec3>,
     /// Buoyancy/suspension forces and moments are inertial, unlike mounted engine forces.
     pub environment_force_kn: DVec3,
     pub environment_torque_knm: DVec3,
@@ -2529,6 +2532,26 @@ mod tests {
             let (torque, _) = control_request(&mut p, &engine, target, 0.0, dt);
             assert!((torque.z - expected).abs() < 1e-8, "{dt}: {torque:?}");
         }
+    }
+
+    #[test]
+    fn sas_autotunes_from_advertised_torque_while_physical_limits_bound_the_request() {
+        let sample = |physical: f64| {
+            let (mut p, mut engine) = body_dynamics_fixture();
+            p.controlled = true;
+            p.spec.stages[0].wheel_torque_knm = physical;
+            engine.actuators = None;
+            engine.controller_authority = Some(DVec3::new(1000.0, 1000.0, 1000.0));
+            let target = rotate(p.facing, DVec3::new(0.0, 0.0, 1.0), 1e-4);
+            p.attitude = Attitude::Fixed(target);
+            let (torque, _) = control_request(&mut p, &engine, target, 0.0, 0.02);
+            (p.sas, p.control_axes, torque)
+        };
+        let (low_sas, low_command, low) = sample(100.0);
+        let (high_sas, high_command, high) = sample(1000.0);
+        assert_eq!(low_sas, high_sas);
+        assert_eq!(low_command, high_command);
+        assert!((low * 10.0 - high).length() < 1e-10);
     }
 
     #[test]

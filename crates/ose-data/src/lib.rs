@@ -552,7 +552,7 @@ impl RcsControls {
 
     /// Craft axes: right, fore and top. Explicit fore/aft overrides throttle outside the source deadband.
     pub fn translation(self, input: DVec3, throttle: f64) -> DVec3 {
-        let fore = if input.y.abs() < 0.05 {
+        let fore = if (input.y as f32).abs() < 0.05_f32 {
             if self.fore_by_throttle {
                 throttle.clamp(0.0, 1.0)
             } else {
@@ -562,7 +562,7 @@ impl RcsControls {
             input.y.clamp(-1.0, 1.0)
         };
         let axis = |value: f64, enabled: bool| {
-            if enabled && value.abs() >= 0.05 {
+            if enabled && (value as f32).abs() >= 0.05_f32 {
                 value.clamp(-1.0, 1.0)
             } else {
                 0.0
@@ -786,6 +786,22 @@ pub struct GameData {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn rcs_deadbands_compare_at_reference_float_precision_before_throttle_fallback() {
+        let controls = RcsControls {
+            fore_by_throttle: true,
+            ..Default::default()
+        };
+        let boundary = 0.05 - 1e-10;
+        let input = DVec3::new(boundary, boundary, boundary);
+        assert_eq!(controls.translation(input, 1.0), input);
+        assert_eq!(
+            controls.translation(DVec3::new(0.049, 0.049, 0.049), 1.0),
+            DVec3::new(0.0, 1.0, 0.0)
+        );
+        assert_eq!(controls.translation(-input, 1.0), -input);
+    }
+
     use super::*;
 
     #[test]
