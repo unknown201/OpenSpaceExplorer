@@ -63,8 +63,45 @@ OSE, explicitly convert Unity's handedness and the world/control frame, and matc
 initial state, craft configuration, environment, applied inputs and sample phase.
 A floating physics-origin frame must not be confused with this main-body frame.
 The recorder does not claim those conditions already match. Two passive captures
-and one 600-sample orbit/pulse capture were obtained on 2026-10-29 UTC. The first
+and two 600-sample orbit/pulse captures were obtained on 2026-10-29 UTC. The first
 replay fails and exposes missing occupied-seat mass, runtime inertia scaling and
 procedural geometry. A pass must not be reported from this baseline. Use `tools/compare_control_traces.py` only after this
 preparation; it rejects different input sequences/timestamps and reports angle,
 angular-rate and mass errors.
+
+## Recorded evidence and cleanup
+
+`fixtures/jumping-flea.csv` is the second actual orbit/pulse capture, with its
+coordinate metadata and companion `jumping-flea.parts.csv`. Only the generated part
+GUIDs were removed from the companion. `aeris-k2.surfaces.csv` contains the earlier
+stock jet's runtime areas/offsets. These are numerical measurements; no loader,
+game binaries, reference source code or user save is redistributed.
+
+Reproduce the **failing** baseline from repository root:
+
+```powershell
+cargo run -q -p ose-sim --example control_trace -- 'Jumping Flea' tools/ksp2-control-capture/fixtures/jumping-flea.csv > .cache/jumping-flea-ose.csv
+python -B tools/compare_control_traces.py --reference-unity tools/ksp2-control-capture/fixtures/jumping-flea.csv .cache/jumping-flea-ose.csv
+```
+
+The comparison exits 1. `fixtures/jumping-flea-baseline.json` records the result at
+c1c0e23: initial poses/velocities and the recorded input sequence are reused;
+catalog masses/tensors are left untouched. Actual engines were unignited, RCS/SAS
+off. No controller tuning, fitted pose/time shift or compensating inertia/mass
+multiplier is applied. This is a diagnostic mismatch, not a passed parity test.
+
+The per-part data confirms 0.095 t occupied crew mass and procedural fin mass/COM
+changes. The three fixed parts' principal inertias match the imported unit tensors
+after RigidbodyBehavior's `GLOBAL_TENSOR_SCALAR / mass` scaling. Procedural fin
+shapes differ from their prefab defaults. PartOwnerComponent's MOI also translates
+each tensor from the part origin, whereas physical compound inertia uses each part
+COM; those quantities must not be silently substituted in SAS autotuning.
+
+After the captures, KSP2 was closed. The 22 verified installed files, owned loader
+cache/config/log directories, and the isolated `OSE Control Validation 2026102`
+campaign were removed. All captures/logs and a copy of the temporary campaign are
+archived under `.cache/ksp2-runtime-captures-20261029` in the original workspace.
+The existing Default campaign's files hashed identically before and after cleanup.
+A crew-mass implementation experiment is preserved in the integration checkout's
+`.cache/control-crew-in-progress.patch`; it is not deployed because a stock jet
+regression still fails. Capturing measurements does not close that implementation gap.

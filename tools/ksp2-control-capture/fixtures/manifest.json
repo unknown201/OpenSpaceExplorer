@@ -1,0 +1,18 @@
+{
+  "source": "KSP2 executable captures",
+  "game_version": "0.2.2.0.32913",
+  "capture_date_utc": "2026-10-29",
+  "candidate_commit": "c1c0e23",
+  "files": {
+    "aeris-k2.surfaces.csv": "859ef9a4b448daa92099e83f94ddd05aa5e5d6a2aff87ff440a4615f7896e557",
+    "jumping-flea-baseline.json": "409fa055abd636bbed43f44a0acbf009b99201a14db279f859c9d3def7715091",
+    "jumping-flea.csv": "ea161ccd1ea636b4ce45d712aa79b1c8a442b58aaf8f409bafcb5491882456a3",
+    "jumping-flea.csv.metadata.txt": "aed9764e9961d4049a9b756a064a65903c2f6a4f65e51560e092725f602b87d9",
+    "jumping-flea.parts.csv": "f86ca6c61f0844b5a7299a73eb522e44b4eab5be903e6e6dcd4a33d567825e55"
+  },
+  "cleanup": {
+    "temporary_loader_removed": true,
+    "temporary_campaign_removed": true,
+    "default_campaign_hashes_unchanged": true
+  }
+}

@@ -61,6 +61,22 @@ namespace OpenSpaceExplorer.Validation
                 capture=new StreamWriter(path,false);capture.AutoFlush=true;
                 capture.WriteLine("t,pitch,yaw,roll,throttle,qx,qy,qz,qw,wx,wy,wz,mass_t,px,py,pz,vx,vy,vz,ix,iy,iz,command_pitch,command_yaw,command_roll,translate_x,translate_y,translate_z,sas,ut");
                 File.WriteAllText(path+".metadata.txt","source=running_KSP2\nfixture="+(pulse?"orbit_input_pulse":"passive")+"\nphase=post_FixedUpdate\nframe=main_body_motion_frame\nhandedness=Unity\nvessel="+vesselId+"\nassembly="+typeof(VesselComponent).Assembly.GetName().Version+"\n");
+                using(var parts=new StreamWriter(path+".parts.csv",false)) {
+                    parts.WriteLine("part_id,guid,px,py,pz,qx,qy,qz,qw,com_x,com_y,com_z,dry_t,resource_t,crew_t,physics_t,ix,iy,iz,iqx,iqy,iqz,iqw");
+                    var craftFrame=vessel.SimulationObject.transform.bodyFrame;
+                    foreach(var part in vessel.SimulationObject.PartOwner.Parts) {
+                        var rb=part.SimulationObject.Rigidbody;if(rb==null)continue;
+                        var pos=craftFrame.ToLocalPosition(part.transform.Position);
+                        var rot=craftFrame.ToLocalRotation(part.transform.Rotation);
+                        var com=part.transform.bodyFrame.ToLocalPosition(part.CenterOfMass);
+                        var iq=part.transform.bodyFrame.ToLocalRotation(rb.inertiaTensorRotation);
+                        var inertia=rb.inertiaTensor.vector;
+                        double[] values={pos.x,pos.y,pos.z,rot.x,rot.y,rot.z,rot.w,com.x,com.y,com.z,
+                            part.DryMass,part.ResourceMass,part.GreenMass,part.PhysicsMass,
+                            inertia.x,inertia.y,inertia.z,iq.x,iq.y,iq.z,iq.w};
+                        parts.WriteLine(part.Name+","+part.Guid.ToString()+","+string.Join(",",Array.ConvertAll(values,v=>v.ToString("R",CultureInfo.InvariantCulture))));
+                    }
+                }
                 using(var parts=new StreamWriter(path+".surfaces.csv",false)) {
                     parts.WriteLine("part_id,moving_coeff,fixed_coeff,range_deg,speed,pressure_x,pressure_y,pressure_z,pivot_x,pivot_y,pivot_z");
                     foreach(var part in vessel.SimulationObject.PartOwner.Parts) {

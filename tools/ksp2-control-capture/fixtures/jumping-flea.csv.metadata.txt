@@ -1,0 +1,6 @@
+source=running_KSP2
+fixture=orbit_input_pulse
+phase=post_FixedUpdate
+frame=main_body_motion_frame
+handedness=Unity
+assembly=0.0.0.0

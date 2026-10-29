@@ -72,7 +72,12 @@ fn main() {
     }
     u.set_powered(vessel, p);
     u.set_structure(vessel, Structure::build(craft, &defs, &res));
-    if replay.is_some() { eprintln!("OSE initial mass properties: {:?}", u.structure(vessel).unwrap().mass_properties()); }
+    if replay.is_some() {
+        eprintln!(
+            "OSE initial mass properties: {:?}",
+            u.structure(vessel).unwrap().mass_properties()
+        );
+    }
     println!("t,pitch,yaw,roll,throttle,qx,qy,qz,qw,wx,wy,wz,mass_t");
     let samples = replay
         .as_ref()

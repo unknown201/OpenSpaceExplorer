@@ -16,6 +16,17 @@ def read(path):
         if i and r['t']<=rows[i-1]['t']:raise ValueError('timestamps must increase')
     return rows
 
+def unity_to_ose(rows):
+    """Explicit Z reflection, preserving time, inputs and the original rows."""
+    result=[]
+    for row in rows:
+        converted=dict(row)
+        # Quaternion and angular velocity are axial; position/velocity are polar.
+        for key in ['qx','qy','wx','wy','pz','vz']:
+            if key in converted: converted[key]=-converted[key]
+        result.append(converted)
+    return result
+
 def compare(a,b,angle_deg=0.5,omega=0.01,mass=1e-6):
     if len(a)!=len(b):raise ValueError('sample counts differ; resample captures explicitly before comparing')
     angles=[];rates=[];masses=[]
@@ -36,7 +47,15 @@ def compare(a,b,angle_deg=0.5,omega=0.01,mass=1e-6):
 def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('reference',type=Path);p.add_argument('candidate',type=Path)
     p.add_argument('--angle-deg',type=float,default=0.5);p.add_argument('--omega',type=float,default=0.01);p.add_argument('--mass',type=float,default=1e-6)
-    args=p.parse_args();result=compare(read(args.reference),read(args.candidate),args.angle_deg,args.omega,args.mass)
+    p.add_argument('--reference-unity',action='store_true',help='Reflect a recorder capture from Unity into the OSE main-body frame; never aligns time or pose')
+    args=p.parse_args();reference=read(args.reference)
+    if args.reference_unity:
+        metadata=Path(str(args.reference)+'.metadata.txt').read_text()
+        fields=dict(line.split('=',1) for line in metadata.splitlines() if '=' in line)
+        if fields.get('handedness')!='Unity' or fields.get('frame')!='main_body_motion_frame':
+            raise ValueError('Unity conversion requires the recorder main-body-frame metadata')
+        reference=unity_to_ose(reference)
+    result=compare(reference,read(args.candidate),args.angle_deg,args.omega,args.mass)
     print(json.dumps(result,indent=2));raise SystemExit(0 if result['passed'] else 1)
 
 if __name__=='__main__':main()

@@ -122,7 +122,7 @@ feeds pitch/release/reversal/roll/yaw through the stock input override API. It d
 not ignite engines or write a save. Capture data includes actual applied inputs,
 orientation/angular velocity, position/velocity, mass, runtime MOI and surface geometry.
 
-The first useful pulse fixture has 600 samples at the nominal 20 ms interval. Unity
+Each useful pulse fixture has 600 samples at the nominal 20 ms interval. Unity
 Z reflection uses quaternion [-x,-y,z,w], polar position/velocity [x,y,-z] and axial
 angular velocity [-x,-y,z]. The native example accepts a reference CSV as its second
 argument and initializes from its first pose/state, then replays every recorded input.
@@ -136,3 +136,10 @@ collider model. Procedural surfaces also have runtime coefficients/offsets diffe
 from their prefab defaults. These are measured gaps, not closed parity claims.
 Full joint/PhysX sample-phase equivalence is also unverified. See the recorder README
 for capture conditions and cleanup requirements.
+
+Measured numeric fixtures and an explicit Unity-frame comparison option are now
+committed with the recorder. The second capture also includes individual runtime
+masses, COMs and principal inertia tensors. Cleanup is complete: temporary loader,
+plugin and campaign removed; the original campaign verified unchanged. The occupied
+crew mass experiment is preserved locally and withheld after a stock jet takeoff
+regression; it is not counted as implemented or included in the deployed release.
