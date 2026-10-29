@@ -47,6 +47,16 @@ fn main() -> anyhow::Result<()> {
         }
         println!("titles from {}: {titled}", args.loc.display());
     }
+    let geometry_path = args.own_out.join("flight-geometry.json");
+    if geometry_path.exists() {
+        let geometry: std::collections::HashMap<String, ose_data::flight_geometry::FlightGeometry> =
+            serde_json::from_str(&std::fs::read_to_string(geometry_path)?)?;
+        for part in &mut game.parts {
+            if let Some(g) = geometry.get(&part.id) {
+                part.flight_geometry = g.clone();
+            }
+        }
+    }
     std::fs::create_dir_all(&args.out)?;
     std::fs::write(
         args.out.join("game_data.json"),

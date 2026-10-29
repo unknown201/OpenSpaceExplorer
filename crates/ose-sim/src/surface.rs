@@ -559,6 +559,7 @@ mod tests {
             .find(|d| d.id == craft.parts[0].part_id)
             .unwrap();
         def.mass_t = 2.0;
+        def.flight_geometry = Default::default();
         def.resource_containers.clear();
         def.engines.clear();
         def.electric = Default::default();

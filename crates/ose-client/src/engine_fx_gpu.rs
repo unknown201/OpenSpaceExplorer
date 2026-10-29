@@ -9,6 +9,7 @@ use std::{
 
 #[derive(Clone)]
 pub struct EngineDraw {
+    pub gimbal_poses: Vec<(DVec3, glam::DQuat)>,
     pub gimbal: glam::DQuat,
     pub instance: u64,
     pub part: String,
@@ -35,7 +36,16 @@ impl EngineDraw {
         self.model
             * layer
                 .gimbal_pivot
-                .map(|p| crate::gimbal::about_pivot(self.gimbal, DVec3::from_array(p)))
+                .map(|p| {
+                    let p = DVec3::from_array(p);
+                    let turn = self
+                        .gimbal_poses
+                        .iter()
+                        .min_by(|a, b| a.0.distance_squared(p).total_cmp(&b.0.distance_squared(p)))
+                        .map(|(_, q)| *q)
+                        .unwrap_or(self.gimbal);
+                    crate::gimbal::about_pivot(turn, p)
+                })
                 .unwrap_or(DMat4::IDENTITY)
     }
 }

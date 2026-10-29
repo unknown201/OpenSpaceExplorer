@@ -871,6 +871,27 @@ fn flight_readout(
             None => 0.0,
         },
         mass_t: p.mass_t,
+        part_controls: p.part_controls.clone(),
+        part_control_capabilities: u
+            .structure(e)
+            .map(|s| s.control_capabilities())
+            .unwrap_or_default(),
+        control_point: p.control_point,
+        control_rotation: p.control_rotation,
+        rcs_nozzles: u
+            .structure(e)
+            .map(|s| s.rcs_nozzles.clone())
+            .unwrap_or_default(),
+        gimbal_poses: u
+            .structure(e)
+            .map(|st| {
+                st.gimbal_poses
+                    .iter()
+                    .copied()
+                    .filter(|(i, _, _)| st.rigid.present[*i as usize])
+                    .collect()
+            })
+            .unwrap_or_default(),
         centre_of_mass_m: u
             .structure(e)
             .map(|st| st.mass_properties().centre_m)
@@ -951,7 +972,7 @@ fn flight_readout(
             ose_math::DVec3::ZERO
         },
         lift_kn: p.lift_kn.length() as f32,
-        angvel: p.angvel,
+        angvel: p.angvel + p.facing * p.roll_rate,
         resources: u
             .structure(e)
             .map(|st| st.resource_totals())
@@ -3117,6 +3138,14 @@ async fn session(mut socket: WebSocket, s: AppState) {
                                 None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
                             };
                             if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::ConfigurePart {vessel,part,settings}) => {
+                            let ok=owned_vessel(&s,vessel,player_id).is_some_and(|e|s.universe.lock().expect("sim lock").configure_part(e,part,settings));
+                            if !send(&mut socket,&ServerMessage::FlightAck {vessel,accepted:ok,reason:(!ok).then(||"invalid part settings or ownership".into())}).await {break;}
+                        }
+                        Ok(ClientMessage::ControlFrom {vessel,part}) => {
+                            let ok=owned_vessel(&s,vessel,player_id).is_some_and(|e|s.universe.lock().expect("sim lock").control_from(e,part));
+                            if !send(&mut socket,&ServerMessage::FlightAck {vessel,accepted:ok,reason:(!ok).then(||"part cannot control this vessel".into())}).await {break;}
                         }
                         Ok(ClientMessage::SetRoll { vessel, input }) => {
                             let reply = match owned_vessel(&s, vessel, player_id) {

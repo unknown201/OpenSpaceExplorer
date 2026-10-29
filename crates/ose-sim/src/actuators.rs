@@ -6,8 +6,104 @@ pub fn wheel_response(previous: DVec3, desired: DVec3, dt: f64) -> DVec3 {
     previous + (desired - previous) * (30.0 * dt).clamp(0.0, 1.0)
 }
 
+/// Module_RCS combines positive rotational and translational nozzle projections,
+/// then clamps their sum. Rotation uses a unit lever projected off the rotation
+/// axis, so distant mounts do not receive a larger normal-mode command.
+pub fn rcs_input(direction: DVec3, lever: DVec3, rotation: DVec3, translation: DVec3) -> f64 {
+    let axis = if rotation.length_squared() > 1e-16 {
+        rotation.normalized()
+    } else {
+        DVec3::ZERO
+    };
+    let radial = lever - axis * lever.dot(axis);
+    let tangential = if radial.length_squared() > 1e-16 {
+        rotation.cross(radial.normalized())
+    } else {
+        DVec3::ZERO
+    };
+    (direction.dot(tangential).max(0.0) + direction.dot(translation).max(0.0)).clamp(0.0, 1.0)
+}
+
+/// Joint translation/rotation allocation over real, one-way nozzle columns. Per-part
+/// L1 budgets retain the exact propellant reservation after partial resource delivery.
+pub fn nozzle_wrench(
+    channels: &[Actuator],
+    torque: DVec3,
+    force: DVec3,
+    budgets: &[(usize, f64)],
+) -> Allocation {
+    let ts = channels
+        .iter()
+        .map(|a| a.torque_knm.length())
+        .sum::<f64>()
+        .max(1e-6);
+    let fs = channels
+        .iter()
+        .map(|a| a.force_kn.length())
+        .sum::<f64>()
+        .max(1e-6);
+    let norm = channels
+        .iter()
+        .map(|a| {
+            a.torque_knm.length_squared() / (ts * ts) + a.force_kn.length_squared() / (fs * fs)
+        })
+        .sum::<f64>()
+        .max(1e-12);
+    let mut out = Allocation {
+        inputs: vec![0.0; channels.len()],
+        ..Default::default()
+    };
+    for _ in 0..128 {
+        let rt = torque - out.torque_knm;
+        let rf = force - out.force_kn;
+        for (a, u) in channels.iter().zip(&mut out.inputs) {
+            *u = (*u + (a.torque_knm.dot(rt) / (ts * ts) + a.force_kn.dot(rf) / (fs * fs)) / norm)
+                .clamp(0.0, 1.0);
+        }
+        for &(part, budget) in budgets {
+            let sum = channels
+                .iter()
+                .zip(&out.inputs)
+                .filter(|(a, _)| a.part == part)
+                .map(|(_, u)| *u)
+                .sum::<f64>();
+            if sum > budget {
+                let (mut lo, mut hi) = (0.0, 1.0);
+                for _ in 0..32 {
+                    let mid = (lo + hi) * 0.5;
+                    let sum = channels
+                        .iter()
+                        .zip(&out.inputs)
+                        .filter(|(a, _)| a.part == part)
+                        .map(|(_, u)| (*u - mid).max(0.0))
+                        .sum::<f64>();
+                    if sum > budget {
+                        lo = mid;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                for (a, u) in channels.iter().zip(&mut out.inputs) {
+                    if a.part == part {
+                        *u = (*u - hi).max(0.0);
+                    }
+                }
+            }
+        }
+        out.force_kn = DVec3::ZERO;
+        out.torque_knm = DVec3::ZERO;
+        for (a, u) in channels.iter().zip(&out.inputs) {
+            out.force_kn = out.force_kn + a.force_kn * *u;
+            out.torque_knm = out.torque_knm + a.torque_knm * *u;
+        }
+    }
+    out
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Actuator {
+    /// Authored nozzles can push only along their force direction.
+    pub positive_only: bool,
     pub part: usize,
     /// Torque produced at full positive input. One scalar channel cannot control other axes.
     pub torque_knm: DVec3,
@@ -53,6 +149,9 @@ pub fn allocate(channels: &[Actuator], request: DVec3) -> Allocation {
             let mut length = 0.0;
             for &i in indices {
                 next[i] = out.inputs[i] + channels[i].torque_knm.dot(residual) / lipschitz;
+                if channels[i].positive_only {
+                    next[i] = next[i].max(0.0);
+                }
                 length += next[i] * next[i];
             }
             let length = length.sqrt().max(1.0);
@@ -95,6 +194,64 @@ pub fn allocate(channels: &[Actuator], request: DVec3) -> Allocation {
 mod tests {
     use super::*;
     #[test]
+    fn nozzle_commands_combine_rotation_and_translation_without_reverse_thrust() {
+        let direction = DVec3::new(0., 1., 0.);
+        let lever = DVec3::new(2., 0., 0.);
+        assert!(
+            (rcs_input(direction, lever, DVec3::new(0., 0., 0.4), direction * 0.3) - 0.7).abs()
+                < 1e-12
+        );
+        assert_eq!(
+            rcs_input(direction, lever, DVec3::new(0., 0., -1.), -direction),
+            0.
+        );
+        assert_eq!(
+            rcs_input(direction, lever, DVec3::new(0., 0., 1.), direction),
+            1.
+        );
+        assert_eq!(
+            rcs_input(direction, lever * 10., DVec3::new(0., 0., 1.), DVec3::ZERO),
+            1.
+        );
+        assert_eq!(
+            rcs_input(direction, DVec3::ZERO, DVec3::new(0., 0., 1.), DVec3::ZERO),
+            0.
+        );
+    }
+    #[test]
+    fn fuel_budget_reallocates_combined_wrench_to_remaining_nozzles() {
+        let channels = [1., -1.]
+            .into_iter()
+            .enumerate()
+            .map(|(part, x)| Actuator {
+                positive_only: true,
+                part,
+                torque_knm: DVec3::new(0., 0., x),
+                force_kn: DVec3::new(0., 1., 0.),
+                offset_m: DVec3::new(x, 0., 0.),
+                group: part,
+                axial: None,
+            })
+            .collect::<Vec<_>>();
+        let out = nozzle_wrench(
+            &channels,
+            DVec3::ZERO,
+            DVec3::new(0., 1., 0.),
+            &[(0, 0.25), (1, 1.)],
+        );
+        assert!((out.inputs[0] - 0.25).abs() < 1e-6);
+        assert!(out.inputs[1] > 0.49 && out.inputs[1] < 0.51);
+        assert!(out.inputs.iter().all(|u| *u >= 0. && *u <= 1.));
+        let empty = nozzle_wrench(
+            &channels,
+            DVec3::new(0., 0., 1.),
+            DVec3::new(0., 1., 0.),
+            &[(0, 0.), (1, 0.)],
+        );
+        assert_eq!(empty.force_kn, DVec3::ZERO);
+        assert_eq!(empty.torque_knm, DVec3::ZERO);
+    }
+    #[test]
     fn wheel_response_matches_reference_lerp_on_press_release_reverse_and_warp() {
         let target = DVec3::new(2.0, -3.0, 4.0);
         let first = wheel_response(DVec3::ZERO, target, 0.02);
@@ -109,6 +266,7 @@ mod tests {
     fn gimbal_cannot_roll_and_shared_channels_respect_the_force_cone() {
         let channels =
             [DVec3::new(2.0, 0.0, 0.0), DVec3::new(0.0, 0.0, 2.0)].map(|torque_knm| Actuator {
+                positive_only: false,
                 part: 0,
                 torque_knm,
                 force_kn: DVec3::ZERO,
@@ -132,6 +290,7 @@ mod tests {
         let r = DVec3::new(0.0, -2.0, 0.0);
         let channels =
             [DVec3::new(1.0, 0.0, 0.0), DVec3::new(0.0, 0.0, 1.0)].map(|force_kn| Actuator {
+                positive_only: false,
                 part: 0,
                 torque_knm: r.cross(force_kn),
                 force_kn,

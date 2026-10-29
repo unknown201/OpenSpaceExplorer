@@ -115,6 +115,15 @@ pub struct Structure {
     /// Last delivered gimbal direction in each engine's exported model frame.
     pub engine_gimbals: Vec<(u16, DVec3)>,
     wheel_actuation_knm: Vec<DVec3>,
+    geometry: Vec<ose_data::flight_geometry::FlightGeometry>,
+    controls: Vec<ose_data::flight_geometry::PartControl>,
+    control_sources: Vec<bool>,
+    gimbal_angles: Vec<Vec<[f64; 2]>>,
+    surface_angles: Vec<f64>,
+    resolved_nozzle_forces: Vec<PartForce>,
+    pub gimbal_poses: Vec<(u16, DVec3, [f64; 4])>,
+    pub rcs_nozzles: Vec<(u16, DVec3, f32)>,
+    last_rcs_pressure_atm: f64,
     /// Inertial force with a craft-frame application offset; consumed once by `apply`.
     pub(crate) surface_loads: Vec<PartForce>,
     pub suspension_compression_m: Vec<f64>,
@@ -419,9 +428,42 @@ impl Structure {
                         .to_radians()
                 })
                 .collect(),
+            controls: vec![Default::default(); n],
+            control_sources: (0..n)
+                .map(|i| {
+                    def_of(i).is_some_and(|d| {
+                        d.module_names.iter().any(|m| {
+                            m == "PartComponentModule_Command"
+                                || m == "PartComponentModule_DockingNode"
+                        })
+                    })
+                })
+                .collect(),
             resolved_actuators: None,
             engine_gimbals: Vec::new(),
             wheel_actuation_knm: vec![DVec3::ZERO; n],
+            geometry: (0..n)
+                .map(|i| {
+                    def_of(i)
+                        .map(|d| d.flight_geometry.clone())
+                        .unwrap_or_default()
+                })
+                .collect(),
+            gimbal_angles: (0..n)
+                .map(|i| {
+                    vec![
+                        [0.0; 2];
+                        def_of(i)
+                            .map(|d| d.flight_geometry.gimbals.len())
+                            .unwrap_or(0)
+                    ]
+                })
+                .collect(),
+            surface_angles: vec![0.0; n],
+            resolved_nozzle_forces: Vec::new(),
+            gimbal_poses: Vec::new(),
+            rcs_nozzles: Vec::new(),
+            last_rcs_pressure_atm: 0.0,
             surface_loads: Vec::new(),
             suspension_compression_m: vec![0.0; n],
             engine_isp: (0..n)
@@ -660,6 +702,7 @@ impl Structure {
                     .unwrap_or(1.0);
                 let mass_flow_tps = self.engine_thrust_kn[part] / (vacuum_isp * ose_data::G0)
                     * self.engine_duty(part, throttle)
+                    * self.controls[part].thrust_limiter
                     * air;
                 (mass_flow_tps > 0.0).then(|| EngineDemand {
                     part,
@@ -668,6 +711,36 @@ impl Structure {
                         * curve.evaluate(env.pressure_atm.max(0.0)).max(0.0)
                         * ose_data::G0,
                 })
+            })
+            .collect()
+    }
+
+    pub fn can_control_from(&self, i: usize) -> bool {
+        self.control_sources.get(i) == Some(&true) && self.rigid.present.get(i) == Some(&true)
+    }
+    pub fn control_rotation(&self, i: usize) -> [f64; 4] {
+        let mount = glam::DQuat::from_array(self.part_rot[i]);
+        let local = glam::DQuat::from_array(
+            self.geometry[i]
+                .control_rotation
+                .unwrap_or([0., 0., 0., 1.]),
+        );
+        let q = (mount * local).normalize().to_array();
+        [-q[0], -q[1], q[2], q[3]]
+    }
+    pub fn control_capabilities(&self) -> Vec<(u16, u8)> {
+        (0..self.rigid.len())
+            .filter(|&i| self.rigid.present[i])
+            .map(|i| {
+                (
+                    i as u16,
+                    u8::from(self.wheel_axes_knm[i].length_squared() > 0.0)
+                        | (u8::from(self.gimbal_range_rad[i] > 0.0) << 1)
+                        | (u8::from(self.rcs_defs[i].is_some()) << 2)
+                        | (u8::from(self.ctrl[i].0 > 0.0) << 3)
+                        | (u8::from(self.engine_thrust_kn[i] > 0.0) << 4)
+                        | (u8::from(self.can_control_from(i)) << 5),
+                )
             })
             .collect()
     }
@@ -681,15 +754,58 @@ impl Structure {
         .map(|v| crate::rigid::to_vessel(aero::rotate(self.part_rot[i], v)).normalized())
     }
 
-    /// Current attached mass distribution. Tank contents share the part's box and origin;
-    /// imported internal mass offsets and nozzle positions are not yet available.
+    fn part_point(&self, i: usize, point: DVec3) -> DVec3 {
+        self.rigid.rest_position(i) + crate::rigid::to_vessel(aero::rotate(self.part_rot[i], point))
+    }
+
+    fn engine_forces(&self, i: usize, thrust: f64) -> Vec<PartForce> {
+        let Some(jets) = self.geometry[i].engines.first().filter(|j| !j.is_empty()) else {
+            return vec![PartForce {
+                part: i,
+                force_kn: self.part_axes(i)[1] * thrust,
+                offset_m: DVec3::ZERO,
+            }];
+        };
+        jets.iter()
+            .map(|jet| {
+                let mut position = jet.position_m;
+                let mut direction = jet.direction;
+                if let Some(g) = jet
+                    .gimbal
+                    .and_then(|g| self.geometry[i].gimbals.get(g).map(|d| (g, d)))
+                {
+                    let angles = self.gimbal_angles[i][g.0];
+                    let frame = glam::DQuat::from_array(g.1.rotation);
+                    let turn = frame
+                        * glam::DQuat::from_rotation_x(angles[0] * g.1.axis_mult[0])
+                        * glam::DQuat::from_rotation_y(angles[1] * g.1.axis_mult[1])
+                        * frame.inverse();
+                    let v = position - g.1.position_m;
+                    let p = turn * glam::DVec3::new(v.x, v.y, v.z);
+                    position = g.1.position_m + DVec3::new(p.x, p.y, p.z);
+                    let d = turn * glam::DVec3::new(direction.x, direction.y, direction.z);
+                    direction = DVec3::new(d.x, d.y, d.z);
+                }
+                PartForce {
+                    part: i,
+                    offset_m: self.part_point(i, position) - self.rigid.rest_position(i),
+                    force_kn: crate::rigid::to_vessel(aero::rotate(self.part_rot[i], direction))
+                        * thrust
+                        * jet.weight,
+                }
+            })
+            .collect()
+    }
+
+    /// KSP PartComponent.CenterOfMassOffset applies to the part's total (dry + resource) mass.
     pub fn mass_properties(&self) -> crate::dynamics::MassProperties {
         let masses = self.part_masses();
         let mut out = crate::dynamics::MassProperties::default();
         for (i, &mass) in masses.iter().enumerate() {
             if self.rigid.present[i] && self.net.present[i] {
                 out.mass_t += mass;
-                out.centre_m = out.centre_m + self.rigid.rest_position(i) * mass;
+                out.centre_m =
+                    out.centre_m + self.part_point(i, self.geometry[i].mass_offset_m) * mass;
             }
         }
         if out.mass_t > 0.0 {
@@ -697,11 +813,21 @@ impl Structure {
         }
         for (i, &mass) in masses.iter().enumerate() {
             if self.rigid.present[i] && self.net.present[i] {
+                if let Some(tensor) = self.geometry[i].inertia_per_t {
+                    let axes = self.part_axes(i);
+                    out.inertia.add_tensor(
+                        mass,
+                        tensor,
+                        [axes[0], axes[1], -axes[2]],
+                        self.part_point(i, self.geometry[i].mass_offset_m) - out.centre_m,
+                    );
+                    continue;
+                }
                 out.inertia.add_box(
                     mass,
                     self.rigid.sizes_m[i],
                     self.part_axes(i),
-                    self.rigid.rest_position(i) - out.centre_m,
+                    self.part_point(i, self.geometry[i].mass_offset_m) - out.centre_m,
                 );
             }
         }
@@ -727,6 +853,10 @@ impl Structure {
         env: crate::flight::EngineEnvironment,
         dt: f64,
     ) -> crate::flight::Propulsion {
+        self.resolved_nozzle_forces.clear();
+        for i in 0..self.controls.len() {
+            self.controls[i] = p.part_control(i);
+        }
         let mut delivered = vec![0.0; self.rigid.len()];
         let mut out = crate::flight::Propulsion {
             mass: self.mass_properties(),
@@ -766,10 +896,14 @@ impl Structure {
                 let thrust = demand.thrust_kn * fraction;
                 delivered[demand.part] = thrust;
                 out.thrust_kn += thrust;
-                let force = self.part_axes(demand.part)[1] * thrust;
-                out.force_kn = out.force_kn + force;
-                out.torque_knm = out.torque_knm
-                    + (self.rigid.rest_position(demand.part) - out.mass.centre_m).cross(force);
+                for force in self.engine_forces(demand.part, thrust) {
+                    out.force_kn = out.force_kn + force.force_kn;
+                    out.torque_knm = out.torque_knm
+                        + (self.rigid.rest_position(force.part) + force.offset_m
+                            - out.mass.centre_m)
+                            .cross(force.force_kn);
+                    self.resolved_nozzle_forces.push(force);
+                }
             }
         }
         self.resolved_engine_thrust = Some(delivered);
@@ -783,23 +917,33 @@ impl Structure {
         env: crate::flight::EngineEnvironment,
         propulsion: &mut crate::flight::Propulsion,
     ) {
+        self.last_rcs_pressure_atm = env.pressure_atm;
+        self.rcs_nozzles.clear();
         use crate::actuators::Actuator;
         let mut channels = Vec::new();
         let centre = propulsion.mass.centre_m;
         for i in (0..self.rigid.len()).filter(|&i| self.rigid.present[i]) {
             let axes = self.part_axes(i);
-            let caps = self.wheel_axes_knm[i] * p.wheel_scale.clamp(0.0, 1.0);
+            let cfg = p.part_control(i);
+            let caps = self.wheel_axes_knm[i]
+                * p.wheel_scale.clamp(0.0, 1.0)
+                * cfg.wheel_authority
+                * f64::from(cfg.wheel_enabled);
             for (j, cap) in [caps.x, caps.y, caps.z].into_iter().enumerate() {
                 if cap > 0.0 {
                     channels.push(Actuator {
+                        positive_only: false,
                         part: i,
                         // Module_ReactionWheel applies torque in the vessel control frame,
                         // regardless of the mounted part's orientation.
-                        torque_knm: [
-                            DVec3::new(1.0, 0.0, 0.0),
-                            DVec3::new(0.0, 1.0, 0.0),
-                            DVec3::new(0.0, 0.0, 1.0),
-                        ][j] * cap,
+                        torque_knm: aero::rotate(
+                            p.control_rotation,
+                            [
+                                DVec3::new(1., 0., 0.),
+                                DVec3::new(0., 1., 0.),
+                                DVec3::new(0., 0., 1.),
+                            ][j],
+                        ) * cap,
                         force_kn: DVec3::ZERO,
                         offset_m: DVec3::ZERO,
                         group: i * 8 + j,
@@ -813,11 +957,14 @@ impl Structure {
                 .as_ref()
                 .map(|t| t[i])
                 .unwrap_or(0.0);
-            let side = thrust * self.gimbal_range_rad[i].sin();
+            let side = thrust
+                * (self.gimbal_range_rad[i] * cfg.gimbal_limiter).sin()
+                * f64::from(cfg.gimbal_enabled);
             for axis in [axes[0], axes[2]] {
                 if side > 0.0 {
                     let force = axis * side;
                     channels.push(Actuator {
+                        positive_only: false,
                         part: i,
                         torque_knm: r.cross(force),
                         force_kn: force,
@@ -827,8 +974,8 @@ impl Structure {
                     });
                 }
             }
-            // No imported RCS nozzle transforms yet: permit a bounded transverse push at the mount.
-            if p.groups.rcs {
+            // Old catalogs without nozzle transforms retain the mounted force fallback.
+            if p.groups.rcs && cfg.rcs_enabled {
                 if let Some(rcs) = &self.rcs_defs[i] {
                     let isp_scale = if rcs.isp_curve.evaluate(0.0) > 0.0 {
                         rcs.isp_curve.evaluate(env.pressure_atm) / rcs.isp_curve.evaluate(0.0)
@@ -840,16 +987,45 @@ impl Structure {
                         && ingredients
                             .iter()
                             .all(|&(resource, _)| self.net.available(i, resource) > 1e-9);
-                    for axis in axes {
-                        let force = axis * (rcs.thrust_kn * isp_scale.max(0.0) * f64::from(fed));
-                        channels.push(Actuator {
-                            part: i,
-                            torque_knm: r.cross(force),
-                            force_kn: force,
-                            offset_m: DVec3::ZERO,
-                            group: i * 8 + 4,
-                            axial: None,
-                        });
+                    if !self.geometry[i].rcs.is_empty() {
+                        for (j, nozzle) in self.geometry[i].rcs.iter().enumerate() {
+                            let force = crate::rigid::to_vessel(aero::rotate(
+                                self.part_rot[i],
+                                nozzle.direction,
+                            )) * (rcs.thrust_kn
+                                * isp_scale.max(0.0)
+                                * f64::from(fed)
+                                * nozzle.weight
+                                * cfg.rcs_limiter);
+                            let offset =
+                                self.part_point(i, nozzle.position_m) - self.rigid.rest_position(i);
+                            channels.push(Actuator {
+                                positive_only: true,
+                                part: i,
+                                force_kn: force,
+                                torque_knm: (r + offset).cross(force),
+                                offset_m: offset,
+                                group: self.rigid.len() * 8 + i * 32 + j,
+                                axial: None,
+                            });
+                        }
+                    } else {
+                        for axis in axes {
+                            let force = axis
+                                * (rcs.thrust_kn
+                                    * isp_scale.max(0.0)
+                                    * f64::from(fed)
+                                    * cfg.rcs_limiter);
+                            channels.push(Actuator {
+                                positive_only: false,
+                                part: i,
+                                torque_knm: r.cross(force),
+                                force_kn: force,
+                                offset_m: DVec3::ZERO,
+                                group: i * 8 + 4,
+                                axial: None,
+                            });
+                        }
                     }
                 }
             }
@@ -875,6 +1051,7 @@ impl Structure {
                     let force = DVec3::new(axis.x, axis.y, -axis.z) * cap;
                     let (at, _) = self.part_box(i);
                     channels.push(Actuator {
+                        positive_only: false,
                         part: i,
                         torque_knm: (at - centre).cross(force),
                         force_kn: force,
@@ -1186,6 +1363,13 @@ impl Structure {
         if p.stage != self.staged_to {
             self.trim_to(p.stage);
         }
+        if p.control_point
+            .is_some_and(|i| !self.can_control_from(i as usize))
+        {
+            p.control_point = None;
+            p.control_rotation = [0.0, 0.0, 0.0, 1.0];
+            p.sas.reset();
+        }
         self.sync_structural_mass();
         p.mass_t = self.net.mass_t().max(0.001);
         self.update_shielding();
@@ -1431,16 +1615,35 @@ impl Structure {
             }
         }
         let mut allocation = crate::flight::plan_actuators(p, body, propulsion, dt);
+        self.resolve_authored_gimbals(p, propulsion, &mut allocation, dt);
+        self.resolve_surface_geometry(p, propulsion, &mut allocation, dt);
         let channels = propulsion.actuators.as_ref().expect("configured actuators");
         // Reference wheels receive the same axis commands. They do not compete for a
         // least-squares allocation or let the first available wheel consume the request.
         for i in 0..self.rigid.len() {
-            let cap = self.wheel_axes_knm[i];
+            let cfg = p.part_control(i);
+            let cap = self.wheel_axes_knm[i] * cfg.wheel_authority * f64::from(cfg.wheel_enabled);
+            let manual = DVec3::new(
+                p.rotation_input.x,
+                p.rotation_input.z + p.roll_input,
+                -p.rotation_input.y,
+            );
+            let command = aero::rotate_inverse(p.control_rotation, p.control_axes);
+            let command = match cfg.wheel_mode {
+                1 => manual,
+                2 => {
+                    if p.attitude == crate::flight::Attitude::Free {
+                        DVec3::ZERO
+                    } else {
+                        command - manual
+                    }
+                }
+                _ => command,
+            };
             let desired = if self.rigid.present[i] && p.controlled {
-                DVec3::new(
-                    cap.x * p.control_axes.x,
-                    cap.y * p.control_axes.y,
-                    cap.z * p.control_axes.z,
+                aero::rotate(
+                    p.control_rotation,
+                    DVec3::new(cap.x * command.x, cap.y * command.y, cap.z * command.z),
                 )
             } else {
                 DVec3::ZERO
@@ -1479,6 +1682,248 @@ impl Structure {
         propulsion.control_allocation = Some(allocation);
     }
 
+    fn resolve_authored_gimbals(
+        &mut self,
+        p: &Powered,
+        propulsion: &crate::flight::Propulsion,
+        allocation: &mut crate::actuators::Allocation,
+        dt: f64,
+    ) {
+        self.gimbal_poses.clear();
+        let channels = propulsion.actuators.as_ref().unwrap();
+        for i in 0..self.geometry.len() {
+            if !self.rigid.present[i]
+                || self.geometry[i]
+                    .engines
+                    .first()
+                    .is_none_or(|j| j.is_empty())
+            {
+                continue;
+            }
+            for (a, input) in channels.iter().zip(&mut allocation.inputs) {
+                if a.part == i && a.axial.is_some() {
+                    allocation.force_kn = allocation.force_kn - a.force_kn * *input;
+                    allocation.torque_knm = allocation.torque_knm - a.torque_knm * *input;
+                    *input = 0.0;
+                }
+            }
+            allocation.axial_corrections.retain(|f| {
+                if f.part == i {
+                    allocation.force_kn = allocation.force_kn - f.force_kn;
+                    allocation.torque_knm = allocation.torque_knm
+                        - (self.rigid.rest_position(i) + f.offset_m - propulsion.mass.centre_m)
+                            .cross(f.force_kn);
+                    false
+                } else {
+                    true
+                }
+            });
+            for g in 0..self.geometry[i].gimbals.len() {
+                let definition = &self.geometry[i].gimbals[g];
+                let cfg = p.part_control(i);
+                let at = self.part_point(i, definition.position_m);
+                let lever = aero::rotate_inverse(p.control_rotation, at - propulsion.mass.centre_m);
+                let command = aero::rotate_inverse(p.control_rotation, p.control_axes);
+                let mut input = glam::DVec3::new(
+                    if cfg.pitch { command.x } else { 0. },
+                    if cfg.roll { command.y } else { 0. },
+                    if cfg.yaw { -command.z } else { 0. },
+                );
+                if !cfg.gimbal_enabled {
+                    input = glam::DVec3::ZERO;
+                }
+                let sign = if lever.y > 0.0 { -1.0 } else { 1.0 };
+                input.x *= sign;
+                input.z *= sign;
+                if lever.x.abs() > 0.1 {
+                    input.x += input.y * lever.x.signum();
+                }
+                if lever.z.abs() > 0.1 {
+                    input.z -= input.y * lever.z.signum();
+                }
+                let body = aero::rotate(p.control_rotation, DVec3::new(input.x, input.y, -input.z));
+                input = glam::DVec3::new(body.x, body.y, -body.z);
+                let mount = glam::DQuat::from_array(self.part_rot[i]);
+                let frame = glam::DQuat::from_array(definition.rotation);
+                let local = (mount * frame).inverse() * input;
+                let old = self.gimbal_angles[i][g];
+                let target = [
+                    local.x.clamp(-1.0, 1.0)
+                        * definition.limits_rad[if local.x > 0.0 { 0 } else { 1 }]
+                        * cfg.gimbal_limiter,
+                    local.y.clamp(-1.0, 1.0)
+                        * definition.limits_rad[if local.y > 0.0 { 2 } else { 3 }]
+                        * cfg.gimbal_limiter,
+                ];
+                let t = definition
+                    .response_speed
+                    .map(|s| (s * dt).clamp(0.0, 1.0))
+                    .unwrap_or(1.0);
+                let next = [
+                    old[0] + (target[0] - old[0]) * t,
+                    old[1] + (target[1] - old[1]) * t,
+                ];
+                self.gimbal_angles[i][g] = next;
+                let turn = frame
+                    * glam::DQuat::from_rotation_x(next[0] * definition.axis_mult[0])
+                    * glam::DQuat::from_rotation_y(next[1] * definition.axis_mult[1])
+                    * frame.inverse();
+                let q = turn.to_array();
+                self.gimbal_poses.push((
+                    i as u16,
+                    DVec3::new(
+                        -definition.position_m.x,
+                        definition.position_m.y,
+                        definition.position_m.z,
+                    ),
+                    [q[0], -q[1], -q[2], q[3]],
+                ));
+            }
+            let thrust = self
+                .resolved_engine_thrust
+                .as_ref()
+                .map(|t| t[i])
+                .unwrap_or(0.0);
+            let next = self.engine_forces(i, thrust);
+            let old: Vec<_> = self
+                .resolved_nozzle_forces
+                .iter()
+                .filter(|f| f.part == i)
+                .copied()
+                .collect();
+            for (forces, sign) in [(&next, 1.0), (&old, -1.0)] {
+                for f in forces {
+                    allocation.force_kn = allocation.force_kn + f.force_kn * sign;
+                    allocation.torque_knm = allocation.torque_knm
+                        + (self.rigid.rest_position(i) + f.offset_m - propulsion.mass.centre_m)
+                            .cross(f.force_kn)
+                            * sign;
+                }
+            }
+            self.resolved_nozzle_forces.retain(|f| f.part != i);
+            self.resolved_nozzle_forces.extend(next);
+        }
+    }
+
+    fn lift_point(&self, i: usize) -> DVec3 {
+        if self.geometry[i].inertia_source.is_empty() {
+            self.part_box(i).0
+        } else {
+            self.part_point(i, self.geometry[i].lift_offset_m)
+        }
+    }
+
+    fn resolve_surface_geometry(
+        &mut self,
+        p: &Powered,
+        propulsion: &crate::flight::Propulsion,
+        allocation: &mut crate::actuators::Allocation,
+        dt: f64,
+    ) {
+        let Some(flow) = self.last_airflow else {
+            return;
+        };
+        let (x, y, z) = flow.frame;
+        let centre = propulsion.mass.centre_m;
+        let command = if p.controlled {
+            p.control_axes
+        } else {
+            DVec3::ZERO
+        };
+        for i in 0..self.geometry.len() {
+            let Some(surface) = self.geometry[i].surface.clone() else {
+                continue;
+            };
+            if !self.rigid.present[i] || self.shielded[i] {
+                continue;
+            }
+            let point = self.lift_point(i);
+            let input = if surface.ignore_sas {
+                aero::rotate(
+                    p.control_rotation,
+                    DVec3::new(
+                        p.rotation_input.x,
+                        p.roll_input + p.rotation_input.z,
+                        -p.rotation_input.y,
+                    ),
+                )
+            } else {
+                command
+            };
+            let cfg = p.part_control(i);
+            let input = aero::rotate_inverse(p.control_rotation, input);
+            let input = DVec3::new(
+                if cfg.surface_axes[0] { input.x } else { 0. },
+                if cfg.surface_axes[1] { input.y } else { 0. },
+                if cfg.surface_axes[2] { input.z } else { 0. },
+            );
+            let input =
+                aero::rotate(p.control_rotation, input) * if cfg.surface_invert { -1. } else { 1. };
+            let velocity = flow.velocity_at(point - centre);
+            let speed = velocity.length();
+            let travel = if speed > 0. {
+                velocity * (1. / speed)
+            } else {
+                DVec3::ZERO
+            };
+            let q = 0.5 * flow.density * speed * speed;
+            // Determine the mounted hinge's signed torque direction from a small physical
+            // deflection. This includes mirrored surfaces and reversed airflow.
+            let saved = self.surface_angles[i];
+            self.surface_angles[i] = 0.001;
+            let plus = self.lifting_force(i, flow.frame, travel, q, flow.mach(speed));
+            self.surface_angles[i] = -0.001;
+            let minus = self.lifting_force(i, flow.frame, travel, q, flow.mach(speed));
+            self.surface_angles[i] = saved;
+            let delta = plus - minus;
+            let derivative =
+                (point - centre).cross(DVec3::new(delta.dot(x), delta.dot(y), delta.dot(z)));
+            let target = if derivative.length() > 1e-10 {
+                input.dot(derivative.normalized()).clamp(-1., 1.)
+                    * self.ctrl[i].0
+                    * p.part_control(i).surface_authority
+            } else {
+                0.
+            };
+            let old = self.lifting_force(i, flow.frame, travel, q, flow.mach(speed));
+            let previous = self.surface_angles[i];
+            self.surface_angles[i] = if surface.exponential {
+                previous + (target - previous) * (surface.speed * dt).clamp(0., 1.)
+            } else {
+                previous
+                    + (target - previous).clamp(
+                        -surface.speed.to_radians() * dt,
+                        surface.speed.to_radians() * dt,
+                    )
+            };
+            let new = self.lifting_force(i, flow.frame, travel, q, flow.mach(speed));
+            let delta = new - old;
+            let local = DVec3::new(delta.dot(x), delta.dot(y), delta.dot(z));
+            for (a, u) in propulsion
+                .actuators
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(&mut allocation.inputs)
+            {
+                if a.part == i && a.group == i * 8 + 5 {
+                    allocation.force_kn = allocation.force_kn - a.force_kn * *u;
+                    allocation.torque_knm = allocation.torque_knm - a.torque_knm * *u;
+                    *u = 0.;
+                }
+            }
+            allocation.force_kn = allocation.force_kn + local;
+            allocation.torque_knm = allocation.torque_knm + (point - centre).cross(local);
+            if let Some(forces) = &mut self.resolved_aero_forces {
+                forces.push(PartForce {
+                    part: i,
+                    force_kn: delta,
+                    offset_m: point - self.rigid.rest_position(i),
+                });
+            }
+        }
+    }
+
     /// Combine rotation and translation at each RCS mount, then resolve its one fuel request.
     /// Until nozzle geometry is imported, each mount retains the bounded force-sphere proxy.
     fn resolve_rcs(
@@ -1488,6 +1933,14 @@ impl Structure {
         allocation: &mut crate::actuators::Allocation,
         dt: f64,
     ) {
+        if propulsion
+            .actuators
+            .as_ref()
+            .is_some_and(|a| a.iter().any(|a| a.positive_only))
+        {
+            self.resolve_nozzle_rcs(p, propulsion, allocation, dt);
+            return;
+        }
         let channels = propulsion.actuators.as_ref().expect("configured actuators");
         let t = p.rcs.translate;
         let t = DVec3::new(
@@ -1571,6 +2024,171 @@ impl Structure {
         p.rcs.usage = supplied;
         p.rcs.powered = if requested > 0.0 {
             supplied / requested
+        } else {
+            0.0
+        };
+    }
+
+    fn resolve_nozzle_rcs(
+        &mut self,
+        p: &mut Powered,
+        propulsion: &mut crate::flight::Propulsion,
+        allocation: &mut crate::actuators::Allocation,
+        dt: f64,
+    ) {
+        let channels = propulsion.actuators.as_ref().unwrap();
+        let indices: Vec<_> = channels
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| a.positive_only)
+            .map(|(i, _)| i)
+            .collect();
+        let nozzles: Vec<_> = indices.iter().map(|&i| channels[i].clone()).collect();
+        let translation = if p.controlled && !p.crashed {
+            aero::rotate(p.control_rotation, p.rcs.translate)
+        } else {
+            DVec3::ZERO
+        };
+        let inputs: Vec<_> = nozzles
+            .iter()
+            .map(|a| {
+                let cfg = p.part_control(a.part);
+                let mask = |v: DVec3, offset: usize| {
+                    let v = aero::rotate_inverse(p.control_rotation, v);
+                    aero::rotate(
+                        p.control_rotation,
+                        DVec3::new(
+                            if cfg.rcs_axes[offset] { v.x } else { 0. },
+                            if cfg.rcs_axes[offset + 1] { v.y } else { 0. },
+                            if cfg.rcs_axes[offset + 2] { v.z } else { 0. },
+                        ),
+                    )
+                };
+                if a.force_kn.length_squared() < 1e-16 {
+                    0.
+                } else {
+                    crate::actuators::rcs_input(
+                        a.force_kn.normalized(),
+                        self.rigid.rest_position(a.part) + a.offset_m - propulsion.mass.centre_m,
+                        mask(p.control_axes, 0),
+                        mask(translation, 3),
+                    )
+                }
+            })
+            .collect();
+        let request = nozzles
+            .iter()
+            .zip(&inputs)
+            .fold(DVec3::ZERO, |s, (a, u)| s + a.torque_knm * *u);
+        let force = nozzles
+            .iter()
+            .zip(&inputs)
+            .fold(DVec3::ZERO, |s, (a, u)| s + a.force_kn * *u);
+        let parts: Vec<_> = self
+            .rcs_defs
+            .iter()
+            .enumerate()
+            .filter(|(i, d)| d.is_some() && nozzles.iter().any(|a| a.part == *i))
+            .map(|(i, _)| i)
+            .collect();
+        let mut budgets: Vec<_> = parts
+            .iter()
+            .map(|&i| (i, nozzles.iter().filter(|a| a.part == i).count() as f64))
+            .collect();
+        let mut planned = crate::actuators::Allocation {
+            inputs,
+            torque_knm: request,
+            force_kn: force,
+            ..Default::default()
+        };
+        let tanks = self.net.tanks.clone();
+        let before = self.net.mass_t();
+        let make_requests = |inputs: &[f64], net: &FlowNet| {
+            parts
+                .iter()
+                .map(|&part| {
+                    let def = self.rcs_defs[part].as_ref().unwrap();
+                    let thrust = nozzles
+                        .iter()
+                        .zip(inputs)
+                        .filter(|(a, _)| a.part == part)
+                        .map(|(a, u)| a.force_kn.length() * *u)
+                        .sum::<f64>();
+                    let pressure = self.last_rcs_pressure_atm;
+                    let isp = def.isp_curve.evaluate(pressure);
+                    let rate = if isp > 0.0 {
+                        thrust
+                            / (isp
+                                * ose_data::G0
+                                * net.mixture_unit_mass_t(&def.propellant).max(1e-12))
+                    } else {
+                        0.0
+                    };
+                    Request {
+                        part,
+                        priority: 6,
+                        instructions: net
+                            .ingredients(&def.propellant)
+                            .into_iter()
+                            .map(|(resource, units)| Instruction {
+                                resource,
+                                units_per_s: units * rate,
+                            })
+                            .collect(),
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+        let requested = planned.inputs.iter().sum::<f64>();
+        let delivered = self
+            .net
+            .process(&make_requests(&planned.inputs, &self.net), dt);
+        if delivered.iter().any(|f| *f < 1.0 - 1e-10) {
+            for ((part, budget), fraction) in budgets.iter_mut().zip(delivered) {
+                *budget = nozzles
+                    .iter()
+                    .zip(&planned.inputs)
+                    .filter(|(a, _)| a.part == *part)
+                    .map(|(_, u)| *u)
+                    .sum::<f64>()
+                    * fraction;
+            }
+            self.net.tanks = tanks;
+            planned = crate::actuators::nozzle_wrench(&nozzles, request, force, &budgets);
+            let delivered = self
+                .net
+                .process(&make_requests(&planned.inputs, &self.net), dt);
+            for (a, u) in nozzles.iter().zip(&mut planned.inputs) {
+                let index = parts.iter().position(|i| *i == a.part).unwrap();
+                *u *= delivered[index];
+            }
+        }
+        for (&i, input) in indices.iter().zip(&planned.inputs) {
+            let a = &channels[i];
+            let mounted = self.rigid.rest_position(a.part) + a.offset_m;
+            let local = aero::rotate_inverse(
+                self.part_rot[a.part],
+                crate::rigid::to_vessel(mounted - self.rigid.rest_position(a.part)),
+            );
+            let rated = self.rcs_defs[a.part].as_ref().unwrap().thrust_kn;
+            self.rcs_nozzles.push((
+                a.part as u16,
+                DVec3::new(-local.x, local.y, local.z),
+                (if rated > 0. {
+                    a.force_kn.length() / rated * *input
+                } else {
+                    0.
+                }) as f32,
+            ));
+            let old = allocation.inputs[i];
+            allocation.inputs[i] = *input;
+            allocation.force_kn = allocation.force_kn + channels[i].force_kn * (*input - old);
+            allocation.torque_knm = allocation.torque_knm + channels[i].torque_knm * (*input - old);
+        }
+        propulsion.burned_t += (before - self.net.mass_t()).max(0.0);
+        p.rcs.usage = planned.inputs.iter().sum();
+        p.rcs.powered = if requested > 0.0 {
+            (p.rcs.usage / requested).min(1.0)
         } else {
             0.0
         };
@@ -2041,14 +2659,30 @@ impl Structure {
         }
         let (x, y, z) = frame;
         let axis = crate::rigid::to_vessel(aero::rotate(self.part_rot[part], surface.axis));
-        aero::surface_force(
-            curves,
-            surface,
-            x * axis.x + y * axis.y + z * axis.z,
-            travel,
-            q,
-            mach,
-        )
+        let normal = x * axis.x + y * axis.y + z * axis.z;
+        let fixed = aero::surface_force(curves, surface, normal, travel, q, mach);
+        if let Some(hinge) = &self.geometry[part].surface {
+            let h =
+                crate::rigid::to_vessel(aero::rotate(self.part_rot[part], hinge.axis)).normalized();
+            let rotation = glam::DQuat::from_axis_angle(
+                glam::DVec3::new(h.x, h.y, h.z),
+                -self.surface_angles[part],
+            );
+            let neutral = crate::rigid::to_vessel(aero::rotate(self.part_rot[part], hinge.normal));
+            let rotated = rotation * glam::DVec3::new(neutral.x, neutral.y, neutral.z);
+            let moving = aero::surface_force(
+                curves,
+                surface,
+                x * rotated.x + y * rotated.y + z * rotated.z,
+                travel,
+                q,
+                mach,
+            );
+            let share = self.ctrl[part].1.clamp(0., 1.);
+            fixed * (1. - share) + moving * share
+        } else {
+            fixed
+        }
     }
 
     /// Lift plus induced drag of the exposed lifting surfaces, in inertial kN.
@@ -2203,7 +2837,11 @@ impl Structure {
             if !self.rigid.present[i] {
                 continue;
             }
-            let at = self.part_box(i).0;
+            let at = if self.geometry[i].inertia_source.is_empty() {
+                self.part_box(i).0
+            } else {
+                self.part_point(i, self.geometry[i].pressure_offset_m)
+            };
             let velocity = flow.velocity_at(at - centre);
             let speed = velocity.length();
             let mut force_kn = DVec3::ZERO;
@@ -2223,10 +2861,35 @@ impl Structure {
                 out.cda_m2 += cda;
                 let q = 0.5 * flow.density * speed * speed;
                 let drag = -travel * (q * cda / 1000.0);
-                let lift = self.lifting_force(i, flow.frame, travel, q, mach);
+                let lift_at = self.lift_point(i);
+                let lift_velocity = flow.velocity_at(lift_at - centre);
+                let lift_speed = lift_velocity.length();
+                let lift_travel = if lift_speed > 0. {
+                    lift_velocity * (1. / lift_speed)
+                } else {
+                    DVec3::ZERO
+                };
+                let lift = self.lifting_force(
+                    i,
+                    flow.frame,
+                    lift_travel,
+                    0.5 * flow.density * lift_speed * lift_speed,
+                    flow.mach(lift_speed),
+                );
+                if (lift_at - at).length_squared() > 1e-14 {
+                    forces.push(PartForce {
+                        part: i,
+                        force_kn: lift,
+                        offset_m: lift_at - self.rigid.rest_position(i),
+                    });
+                }
                 out.drag_kn = out.drag_kn + drag;
                 out.lift_kn = out.lift_kn + lift;
-                force_kn = drag + lift;
+                force_kn = if (self.lift_point(i) - at).length_squared() > 1e-14 {
+                    drag
+                } else {
+                    drag + lift
+                };
             }
             forces.push(PartForce {
                 part: i,
@@ -2276,6 +2939,13 @@ impl Structure {
         (0..self.rigid.len())
             .filter_map(|i| {
                 let (range, share) = self.ctrl[i];
+                if self.geometry[i].surface.is_some() {
+                    return (self.rigid.present[i]
+                        && !self.shielded[i]
+                        && range > 0.0
+                        && share > 0.0)
+                        .then_some((i, self.surface_angles[i]));
+                }
                 let (l, _) = self.lift_defs[i].as_ref()?;
                 if range <= 0.0 || share <= 0.0 || !self.rigid.present[i] || self.shielded[i] {
                     return None;
@@ -2392,12 +3062,20 @@ impl Structure {
         // RCS and converters may have changed tank contents since the flight-state sync.
         self.sync_structural_mass();
         let resolved = self.resolved_engine_thrust.take();
+        let nozzle_forces = std::mem::take(&mut self.resolved_nozzle_forces);
         let aero_forces = self.resolved_aero_forces.take();
         let surface_forces = std::mem::take(&mut self.surface_loads);
         let actuators = self.resolved_actuators.take();
         self.engine_gimbals.clear();
         if let (Some(channels), Some(thrusts)) = (&actuators, &resolved) {
             for i in self.live_engines(p.stage) {
+                if self.geometry[i]
+                    .engines
+                    .first()
+                    .is_some_and(|j| !j.is_empty())
+                {
+                    continue;
+                }
                 if thrusts[i] <= 0.0 || self.gimbal_range_rad[i] <= 0.0 {
                     continue;
                 }
@@ -2483,7 +3161,14 @@ impl Structure {
                 }
             }
         }
-        // Engine thrust reaches the structure through a short lag: solid boosters tail off and liquid engines
+        // Authored engine forces use the same nozzle positions/directions as flight dynamics.
+        forces.extend(nozzle_forces.into_iter().filter(|f| {
+            self.geometry[f.part]
+                .engines
+                .first()
+                .is_some_and(|j| !j.is_empty())
+        }));
+        // Legacy catalogs: engine thrust reaches the structure through a short lag: solid boosters tail off and liquid engines
         // spool (the original's engine response and thrust curves) rather than stepping, which would ring the
         // joints far past their static load.
         let k = 1.0 - (-dt / THRUST_LAG_S).exp();
@@ -2491,7 +3176,13 @@ impl Structure {
             let target = self.engine_load_target_kn[i];
             self.engine_load_target_kn[i] = 0.0;
             self.engine_load_kn[i] += (target - self.engine_load_kn[i]) * k;
-            if self.rigid.present[i] && self.engine_load_kn[i].abs() > 1e-6 {
+            if self.rigid.present[i]
+                && self.engine_load_kn[i].abs() > 1e-6
+                && self.geometry[i]
+                    .engines
+                    .first()
+                    .is_none_or(|j| j.is_empty())
+            {
                 forces.push(PartForce {
                     part: i,
                     force_kn: self.part_axes(i)[1] * self.engine_load_kn[i],
@@ -2776,6 +3467,7 @@ mod tests {
         s.lift_defs.fill(None);
         s.lift_defs[wing] = Some(lift);
         s.faces.fill(None);
+        s.geometry.fill(Default::default());
         s.ctrl.fill((0.0, 0.0));
         s.ctrl[wing] = (0.2, 1.0);
         s.part_rot[wing] = [0.0, 0.0, 0.0, 1.0];
@@ -2862,6 +3554,7 @@ mod tests {
             stages: vec![Vec::new()],
         };
         let mut s = Structure::build(&craft, &defs, &resources);
+        s.geometry.fill(Default::default());
         s.net.dry_t.fill(1.0);
         s.net.tanks.clear();
         s.rigid.sizes_m.fill(DVec3::new(1.0, 1.0, 1.0));
@@ -3448,7 +4141,7 @@ mod tests {
         let (crafts, defs, res) = assets();
         let c = crafts.iter().find(|c| c.name == "Stock04_Jet").unwrap();
         let c = level_layout(c).unwrap();
-        let s = Structure::build(&c, &defs, &res);
+        let mut s = Structure::build(&c, &defs, &res);
         let facing = DVec3::new(0.0, 1.0, 0.0);
         let slow = s.control_authority(facing * 50.0, 1.2, 0.15);
         let fast = s.control_authority(facing * 150.0, 1.2, 0.45);
@@ -3461,14 +4154,36 @@ mod tests {
         );
         // asked to pitch, the surfaces deflect (some one way, some the other), never past their range
         let pitch = DVec3::new(1.0, 0.0, 0.0);
+        let mut p = Powered::new(
+            crate::flight::FlightSpec {
+                stages: vec![],
+                drag_area_m2: 0.,
+                drag_cd: 0.,
+            },
+            DVec3::ZERO,
+            facing * 50.,
+            false,
+        );
+        p.control_axes = pitch;
+        s.last_airflow = Some(Airflow::bulk(basis(facing), facing * 50., 1.2, 0.15));
+        let propulsion = crate::flight::Propulsion {
+            mass: s.mass_properties(),
+            actuators: Some(vec![]),
+            ..Default::default()
+        };
+        s.resolve_surface_geometry(&p, &propulsion, &mut Default::default(), 0.02);
         let d = s.surface_deflections(basis(facing), pitch);
         assert!(!d.is_empty());
         assert!(d.iter().any(|(_, a)| a.abs() > 0.01), "{d:?}");
         assert!(d.iter().all(|(_, a)| a.abs() <= 30f64.to_radians() + 1e-9));
+        p.control_axes = DVec3::ZERO;
+        for _ in 0..40 {
+            s.resolve_surface_geometry(&p, &propulsion, &mut Default::default(), 0.02);
+        }
         assert!(s
             .surface_deflections(basis(facing), DVec3::ZERO)
             .iter()
-            .all(|(_, a)| *a == 0.0));
+            .all(|(_, a)| a.abs() < 1e-9));
     }
 
     #[test]
@@ -3683,6 +4398,7 @@ mod tests {
         let (crafts, defs, res) = assets();
         let craft = crafts.iter().find(|c| c.name == "Kerbal K1").unwrap();
         let mut s = Structure::build(craft, &defs, &res);
+        s.geometry.fill(Default::default());
         let engines: Vec<_> = s
             .live_engines(0)
             .into_iter()
@@ -3741,6 +4457,123 @@ mod tests {
             stored: mass_t / s.net.unit_mass_t[resource],
             capacity: 10000.0,
         });
+    }
+
+    #[test]
+    fn control_frame_composes_authored_node_and_mount_and_resets_when_detached() {
+        let (mut s, mut p, pair) = propulsion_fixture();
+        let i = pair[0];
+        s.control_sources[i] = true;
+        let turn = glam::DQuat::from_rotation_z(std::f64::consts::FRAC_PI_2).to_array();
+        s.part_rot[i] = turn;
+        s.geometry[i].control_rotation = Some(turn);
+        let rotation = s.control_rotation(i);
+        assert!(
+            (aero::rotate(rotation, DVec3::new(0., 1., 0.)) - DVec3::new(0., -1., 0.)).length()
+                < 1e-10
+        );
+        p.control_point = Some(i as u16);
+        p.control_rotation = rotation;
+        s.rigid.present[i] = false;
+        assert!(!s.can_control_from(i));
+        s.sync(&mut p);
+        assert_eq!(p.control_point, None);
+        assert_eq!(p.control_rotation, [0., 0., 0., 1.]);
+    }
+
+    #[test]
+    fn authored_gimbal_moves_nozzle_about_pivot_with_limited_asymmetric_response() {
+        use ose_data::flight_geometry::{Gimbal, Nozzle, PartControl};
+        let (mut s, mut p, pair) = propulsion_fixture();
+        let i = pair[0];
+        s.part_rot[i] = [0., 0., 0., 1.];
+        s.geometry[i].engines = vec![vec![Nozzle {
+            position_m: DVec3::new(0., -1., 0.),
+            direction: DVec3::new(0., 1., 0.),
+            weight: 1.,
+            gimbal: Some(0),
+        }]];
+        s.geometry[i].gimbals = vec![Gimbal {
+            position_m: DVec3::ZERO,
+            rotation: [0., 0., 0., 1.],
+            limits_rad: [0.2, 0.4, 0.1, 0.3],
+            response_speed: Some(10.),
+            axis_mult: [1., 1.],
+        }];
+        s.gimbal_angles[i] = vec![[0., 0.]];
+        p.control_axes = DVec3::new(1., 0., 0.);
+        p.part_controls = vec![(
+            i as u16,
+            PartControl {
+                gimbal_limiter: 0.5,
+                ..Default::default()
+            },
+        )];
+        let mut thrust = vec![0.; s.rigid.len()];
+        thrust[i] = 100.;
+        s.resolved_engine_thrust = Some(thrust);
+        s.resolved_nozzle_forces = s.engine_forces(i, 100.);
+        let prop = crate::flight::Propulsion {
+            mass: crate::dynamics::MassProperties {
+                centre_m: s.rigid.rest_position(i) + DVec3::new(0., 2., 0.),
+                ..Default::default()
+            },
+            actuators: Some(vec![]),
+            ..Default::default()
+        };
+        let mut allocation = crate::actuators::Allocation::default();
+        s.resolve_authored_gimbals(&p, &prop, &mut allocation, 0.02);
+        assert!((s.gimbal_angles[i][0][0] - 0.02).abs() < 1e-12);
+        let force = s.engine_forces(i, 100.)[0];
+        assert!(
+            (force.force_kn - DVec3::new(0., 100. * 0.02_f64.cos(), -100. * 0.02_f64.sin()))
+                .length()
+                < 1e-10
+        );
+        assert!(
+            (force.offset_m - DVec3::new(0., -0.02_f64.cos(), 0.02_f64.sin())).length() < 1e-10
+        );
+        assert!((force.force_kn.length() - 100.).abs() < 1e-10);
+        assert!(
+            (allocation.force_kn - (force.force_kn - DVec3::new(0., 100., 0.))).length() < 1e-10
+        );
+        p.control_axes = -p.control_axes;
+        s.resolve_authored_gimbals(&p, &prop, &mut Default::default(), 0.02);
+        assert!((s.gimbal_angles[i][0][0] - (-0.024)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn authored_nozzle_partial_fuel_limits_force_moment_and_consumes_only_once() {
+        use ose_data::flight_geometry::Nozzle;
+        for fraction in [0., 0.25, 1.] {
+            let (mut s, mut p, _) = rcs_fixture();
+            let i = s.root;
+            let dt = 0.02;
+            s.geometry[i].rcs = vec![Nozzle {
+                position_m: DVec3::new(1., 0., 0.),
+                direction: DVec3::new(0., 1., 0.),
+                weight: 1.,
+                gimbal: None,
+            }];
+            rcs_tank(&mut s, i, "SolidFuel", dt * fraction);
+            let before = s.net.mass_t();
+            let mut prop = crate::flight::Propulsion {
+                mass: s.mass_properties(),
+                ..Default::default()
+            };
+            s.configure_actuators(&p, Default::default(), &mut prop);
+            let mut allocation =
+                crate::actuators::allocate(prop.actuators.as_ref().unwrap(), DVec3::ZERO);
+            s.resolve_rcs(&mut p, &mut prop, &mut allocation, dt);
+            assert!(
+                (allocation.force_kn.length() - 100. * ose_data::G0 * fraction).abs() < 1e-5,
+                "{fraction}: {allocation:?}"
+            );
+            assert!(((before - s.net.mass_t()) - dt * fraction).abs() < 1e-9);
+            let force = allocation.force_kn;
+            let lever = s.part_point(i, DVec3::new(1., 0., 0.)) - prop.mass.centre_m;
+            assert!((allocation.torque_knm - lever.cross(force)).length() < 1e-6);
+        }
     }
 
     fn test_body() -> crate::bodies::Body {
@@ -4057,6 +4890,7 @@ mod tests {
         let mut engine = s.propulsion(&p, Default::default(), 0.02);
         engine.actuators = Some(vec![
             crate::actuators::Actuator {
+                positive_only: false,
                 part: s.root,
                 torque_knm: DVec3::new(0.0, 2.0, 0.0),
                 force_kn: DVec3::ZERO,
@@ -4065,6 +4899,7 @@ mod tests {
                 axial: None,
             },
             crate::actuators::Actuator {
+                positive_only: false,
                 part: other,
                 torque_knm: DVec3::new(0.0, 2.0, 0.0),
                 force_kn: DVec3::new(2.0, 0.0, 0.0),
@@ -4219,10 +5054,12 @@ mod tests {
             assert!((a.force_kn.length() - side).abs() < 1e-10);
         }
         let allocation = crate::actuators::allocate(channels, DVec3::new(1000.0, 0.0, 1000.0));
-        let mut outcome = StepOutcome::default();
-        outcome.thrust_kn = engine.thrust_kn;
-        outcome.actuator_inputs = allocation.inputs;
-        outcome.actuator_axial_corrections = allocation.axial_corrections;
+        let outcome = StepOutcome {
+            thrust_kn: engine.thrust_kn,
+            actuator_inputs: allocation.inputs,
+            actuator_axial_corrections: allocation.axial_corrections,
+            ..Default::default()
+        };
         s.apply(&p, &outcome, 0.02);
         let direction = s
             .engine_gimbals

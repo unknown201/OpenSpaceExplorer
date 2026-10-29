@@ -40,10 +40,9 @@ const KSC_PADS: [(f64, f64, f64); 4] = [
     (-0.4362, -75.3480, 132.0),
 ];
 
-/// Visual exaggeration of the server's part flex: with the server's realistic joint loads the bends are a
-/// milliradian or two under thrust, which reads as nothing on screen; twelve times makes the wobble visible
-/// and still subtle. FLEX_MAX_RAD and FLEX_MAX_M cap the result so a near-breaking joint doesn't fold a part.
-pub const FLEX_EXAGGERATION: f64 = 12.0;
+/// Display authoritative joint motion at its physical scale. The caps only bound
+/// invalid or nearly broken joint poses.
+pub const FLEX_EXAGGERATION: f64 = 1.0;
 const FLEX_MAX_RAD: f32 = 0.12;
 const FLEX_MAX_M: f32 = 0.4;
 
@@ -893,6 +892,7 @@ impl FlightView {
             ) {
                 let impact = DVec3::from_array(hit.position);
                 engine_draws.push(crate::engine_fx_gpu::EngineDraw {
+                    gimbal_poses: Vec::new(),
                     gimbal: DQuat::IDENTITY,
                     instance: 0x2000000000000000 | inp.vessel.id,
                     part: if f.eva {
@@ -1222,6 +1222,7 @@ impl FlightView {
                                 hi.z,
                             );
                             engine_draws.push(crate::engine_fx_gpu::EngineDraw {
+                                gimbal_poses: Vec::new(),
                                 gimbal: DQuat::IDENTITY,
                                 instance: 0x0040000000000000 | (inp.vessel.id << 16) | *pi as u64,
                                 part: "fx_vapor_vortices".into(),
@@ -1264,6 +1265,7 @@ impl FlightView {
                     }
                     let air_velocity = v_rel - DVec3::new(0.0, 0.0, spin.omega()).cross(r);
                     engine_draws.push(crate::engine_fx_gpu::EngineDraw {
+                        gimbal_poses: Vec::new(),
                         gimbal: DQuat::IDENTITY,
                         instance: 0x0080000000000000 | (inp.vessel.id << 16) | *pi as u64,
                         part: format!("reentry:{part_id}"),
@@ -1314,6 +1316,7 @@ impl FlightView {
                             .find(|x| x.0 as usize == *pi)
                             .is_none_or(|x| x.1);
                         engine_draws.push(crate::engine_fx_gpu::EngineDraw {
+                            gimbal_poses: Vec::new(),
                             gimbal: DQuat::IDENTITY,
                             instance: 0x0200000000000000 | (inp.vessel.id << 16) | *pi as u64,
                             part: "fx_wheel_default".into(),
@@ -1353,7 +1356,7 @@ impl FlightView {
                             let rotation =
                                 pose.inverse() * dir_to_model(r, g(f.rcs_rotate), spin, inp.ut);
                             for nozzle in jets {
-                                let throttle = crate::particles::rcs_nozzle_throttle(
+                                let fallback = crate::particles::rcs_nozzle_throttle(
                                     *lp + *lq * DVec3::from_array(nozzle.position),
                                     *lq * DVec3::from_array(nozzle.direction),
                                     *lq * translation,
@@ -1361,7 +1364,22 @@ impl FlightView {
                                     false,
                                     false,
                                 );
+                                let throttle = f
+                                    .rcs_nozzles
+                                    .iter()
+                                    .filter(|n| n.0 as usize == *pi)
+                                    .min_by(|a, b| {
+                                        let distance = |p: &ose_math::DVec3| {
+                                            DVec3::new(p.x, p.y, p.z).distance_squared(
+                                                DVec3::from_array(nozzle.position),
+                                            )
+                                        };
+                                        distance(&a.1).total_cmp(&distance(&b.1))
+                                    })
+                                    .map(|n| n.2 as f64)
+                                    .unwrap_or(fallback);
                                 engine_draws.push(crate::engine_fx_gpu::EngineDraw {
+                                    gimbal_poses: Vec::new(),
                                     gimbal: DQuat::IDENTITY,
                                     instance: 0x0800000000000000
                                         | (inp.vessel.id << 24)
@@ -1392,6 +1410,12 @@ impl FlightView {
                     }
                     if part_id.starts_with("engine_") || part_id.starts_with("booster_") {
                         engine_draws.push(crate::engine_fx_gpu::EngineDraw {
+                            gimbal_poses: f
+                                .gimbal_poses
+                                .iter()
+                                .filter(|p| p.0 as usize == *pi)
+                                .map(|(_, p, q)| (DVec3::new(p.x, p.y, p.z), DQuat::from_array(*q)))
+                                .collect(),
                             gimbal: gimbal_rotations.get(pi).copied().unwrap_or(DQuat::IDENTITY),
                             instance: (inp.vessel.id << 16) | *pi as u64,
                             part: part_id.clone(),
@@ -1457,6 +1481,16 @@ impl FlightView {
                         .unwrap_or_default();
                     for (j, nozzle) in jets.iter().enumerate() {
                         let nozzle_position = DVec3::from_array(nozzle.position);
+                        let authoritative = f
+                            .gimbal_poses
+                            .iter()
+                            .filter(|p| p.0 as usize == *pi)
+                            .min_by(|a, b| {
+                                let distance = |p: &ose_math::DVec3| {
+                                    DVec3::new(p.x, p.y, p.z).distance_squared(nozzle_position)
+                                };
+                                distance(&a.1).total_cmp(&distance(&b.1))
+                            });
                         let pivot = pivots
                             .iter()
                             .min_by(|a, b| {
@@ -1465,6 +1499,9 @@ impl FlightView {
                             })
                             .copied()
                             .unwrap_or(nozzle_position);
+                        let (pivot, gimbal) = authoritative
+                            .map(|(_, p, q)| (DVec3::new(p.x, p.y, p.z), DQuat::from_array(*q)))
+                            .unwrap_or((pivot, gimbal));
                         let nozzle_position = crate::gimbal::about_pivot(gimbal, pivot)
                             .transform_point3(nozzle_position);
                         let at = pos + vessel_rot * (*lp + *lq * nozzle_position + origin);
@@ -1477,6 +1514,7 @@ impl FlightView {
                             let ground = at + direction * (height / down);
                             let rotation = DQuat::from_rotation_arc(DVec3::Y, up);
                             engine_draws.push(crate::engine_fx_gpu::EngineDraw {
+                                gimbal_poses: Vec::new(),
                                 gimbal: DQuat::IDENTITY,
                                 instance: 0x8000000000000000
                                     | (inp.vessel.id << 24)
@@ -1513,6 +1551,7 @@ impl FlightView {
                             if inp.body_id == "Kerbin" && distance < 40.0 && !launch_smoke_added {
                                 launch_smoke_added = true;
                                 engine_draws.push(crate::engine_fx_gpu::EngineDraw {
+                                    gimbal_poses: Vec::new(),
                                     gimbal: DQuat::IDENTITY,
                                     instance: 0x4000000000000000 | inp.vessel.id,
                                     part: "fx_launchsmoke_default".into(),
@@ -1671,7 +1710,20 @@ impl FlightView {
                 let pid = craft.parts[i].part_id.as_str();
                 let mut it = DrawItem::lit(name, wpos - cam, vessel_rot * lq, 1.0, sun);
                 it.animation = animation;
-                if let Some(rotation) = gimbal_rotations.get(&i) {
+                let poses: Vec<_> = readout
+                    .map(|f| {
+                        f.gimbal_poses
+                            .iter()
+                            .filter(|p| p.0 as usize == i)
+                            .map(|(_, p, q)| (DVec3::new(p.x, p.y, p.z), DQuat::from_array(*q)))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if !poses.is_empty() {
+                    if let Some(model) = gpu.model(&it.model) {
+                        it.node_rotations = model.rig.gimbal_pose_turns(&poses);
+                    }
+                } else if let Some(rotation) = gimbal_rotations.get(&i) {
                     if let Some(model) = gpu.model(&it.model) {
                         it.node_rotations = model.rig.gimbal_turns(*rotation);
                     }
@@ -1797,6 +1849,7 @@ impl FlightView {
                             )
                         };
                         engine_draws.push(crate::engine_fx_gpu::EngineDraw {
+                            gimbal_poses: Vec::new(),
                             gimbal: DQuat::IDENTITY,
                             instance: 0x0400000000000000
                                 | (inp.vessel.id << 8)
@@ -1864,6 +1917,7 @@ impl FlightView {
                 let mut model = burst.model;
                 model.w_axis -= cam.extend(0.0);
                 engine_draws.push(crate::engine_fx_gpu::EngineDraw {
+                    gimbal_poses: Vec::new(),
                     gimbal: DQuat::IDENTITY,
                     instance: burst.instance,
                     part: burst.asset.clone(),

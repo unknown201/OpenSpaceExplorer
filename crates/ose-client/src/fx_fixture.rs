@@ -77,6 +77,7 @@ fn draw(
         let camera = target + DVec3::new(yaw.sin(), 0.1, yaw.cos()).normalize() * distance;
         gpu.set_camera(target - camera, DVec3::Y, 45f64.to_radians(), 0.1, 1e6);
         let engine = EngineDraw {
+            gimbal_poses: Vec::new(),
             gimbal: DQuat::IDENTITY,
             instance: if part.starts_with("fx_explosion_") {
                 0x2000000000000000
@@ -167,6 +168,7 @@ pub fn fx_fixture_vapor(time: f64, wet: bool) -> Result<usize, JsValue> {
             1e6,
         );
         let engine = EngineDraw {
+            gimbal_poses: Vec::new(),
             gimbal: DQuat::IDENTITY,
             instance: 0,
             part: "fx_vapor_vortices".into(),
@@ -217,6 +219,7 @@ pub fn fx_fixture_reentry(
         let target = DVec3::new(0.0, -2.0, 0.0);
         gpu.set_camera(target - camera, DVec3::Y, 45f64.to_radians(), 0.1, 1e6);
         let engine = EngineDraw {
+            gimbal_poses: Vec::new(),
             gimbal: DQuat::IDENTITY,
             instance: 0,
             part: format!("reentry:{part}"),

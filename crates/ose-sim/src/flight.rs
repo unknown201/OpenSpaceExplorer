@@ -245,6 +245,12 @@ pub struct Powered {
     /// Last normalized physics-axis command (pitch, roll, mirrored yaw).
     #[serde(default)]
     pub control_axes: DVec3,
+    #[serde(default)]
+    pub part_controls: Vec<(u16, ose_data::flight_geometry::PartControl)>,
+    #[serde(default)]
+    pub control_point: Option<u16>,
+    #[serde(default = "identity_control_rotation")]
+    pub control_rotation: [f64; 4],
     #[serde(default = "one")]
     pub sas_warp: f64,
     #[serde(default)]
@@ -379,6 +385,28 @@ pub fn vessel_top(p: &Powered) -> DVec3 {
 pub fn vessel_basis(p: &Powered) -> (DVec3, DVec3, DVec3) {
     let top = vessel_top(p);
     (p.facing.cross(top), p.facing, top)
+}
+
+pub fn control_basis(p: &Powered) -> (DVec3, DVec3, DVec3) {
+    let (x, y, z) = vessel_basis(p);
+    let world = |v: DVec3| x * v.x + y * v.y + z * v.z;
+    (
+        world(crate::aero::rotate(
+            p.control_rotation,
+            DVec3::new(1., 0., 0.),
+        )),
+        world(crate::aero::rotate(
+            p.control_rotation,
+            DVec3::new(0., 1., 0.),
+        )),
+        world(crate::aero::rotate(
+            p.control_rotation,
+            DVec3::new(0., 0., 1.),
+        )),
+    )
+}
+fn identity_control_rotation() -> [f64; 4] {
+    [0., 0., 0., 1.]
 }
 
 pub fn set_vessel_top(p: &mut Powered, top: DVec3) {
@@ -738,6 +766,13 @@ pub struct StageOutcome {
 }
 
 impl Powered {
+    pub fn part_control(&self, part: usize) -> ose_data::flight_geometry::PartControl {
+        self.part_controls
+            .iter()
+            .find(|(i, _)| *i as usize == part)
+            .map(|(_, c)| *c)
+            .unwrap_or_default()
+    }
     pub fn new(spec: FlightSpec, r: DVec3, v: DVec3, landed: bool) -> Powered {
         let (mass, prop) = match spec.stages.first() {
             Some(s) => (s.start_mass_t, s.propellant_t),
@@ -780,6 +815,9 @@ impl Powered {
             manual_steering: false,
             sas: Default::default(),
             control_axes: DVec3::ZERO,
+            part_controls: Vec::new(),
+            control_point: None,
+            control_rotation: [0., 0., 0., 1.],
             sas_warp: 1.0,
             roll_rate: 0.0,
             eva_run: false,
@@ -1138,10 +1176,10 @@ fn control_request(
     frac: f64,
     dt: f64,
 ) -> (DVec3, f64) {
-    let (bx, by, bz) = vessel_basis(p);
+    let (bx, by, bz) = control_basis(p);
     let local = |v: DVec3| DVec3::new(v.dot(bx), v.dot(by), v.dot(bz));
     let inertia = engine.mass.inertia;
-    let w = local(p.angvel + by * p.roll_rate);
+    let w = local(p.angvel + p.facing * p.roll_rate);
     let fallback_torque = p
         .rotation_stage()
         .map(|s| {
@@ -1178,11 +1216,8 @@ fn control_request(
         .as_ref()
         .map(|channels| {
             channels.iter().fold(DVec3::ZERO, |sum, a| {
-                sum + DVec3::new(
-                    a.torque_knm.x.abs(),
-                    a.torque_knm.y.abs(),
-                    a.torque_knm.z.abs(),
-                )
+                let v = crate::aero::rotate_inverse(p.control_rotation, a.torque_knm);
+                sum + DVec3::new(v.x.abs(), v.y.abs(), v.z.abs())
             })
         })
         .unwrap_or(DVec3::new(torque, torque, torque));
@@ -1217,10 +1252,14 @@ fn control_request(
         } else {
             Some(cv(target))
         };
+        let moment = |v: DVec3| {
+            let axis = crate::aero::rotate(p.control_rotation, v);
+            axis.dot(inertia.apply(axis)).max(1e-12)
+        };
         let acceleration = [
-            (authority.x / inertia.x.x).max(0.0001),
-            (authority.y / inertia.y.y).max(0.0001),
-            (authority.z / inertia.z.z).max(0.0001),
+            authority.x / moment(DVec3::new(1., 0., 0.)),
+            authority.y / moment(DVec3::new(0., 1., 0.)),
+            authority.z / moment(DVec3::new(0., 0., 1.)),
         ];
         // Unity angular velocity is an axial vector: reflect X/Y, retain Z.
         p.sas.update(
@@ -1233,13 +1272,16 @@ fn control_request(
             p.sas_warp,
         )
     };
-    p.control_axes = DVec3::new(command[0], command[1], -command[2]);
+    p.control_axes = crate::aero::rotate(
+        p.control_rotation,
+        DVec3::new(command[0], command[1], -command[2]),
+    );
     let control = DVec3::new(
         command[0] * authority.x,
         command[1] * authority.y,
         -command[2] * authority.z,
     );
-    (control, torque)
+    (crate::aero::rotate(p.control_rotation, control), torque)
 }
 
 /// Integrate the part-backed craft as a rotating body. The controller requests bounded torque;

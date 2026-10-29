@@ -622,6 +622,130 @@ pub fn flight_pam_html(
             format!("{:.0} kN at {:.0}%", f.thrust_kn, f.throttle * 100.0),
         ));
     }
+    let capabilities = f
+        .part_control_capabilities
+        .iter()
+        .find(|(part, _)| *part == i)
+        .map(|(_, c)| *c)
+        .unwrap_or(0);
+    let settings = f
+        .part_controls
+        .iter()
+        .find(|(part, _)| *part == i)
+        .map(|(_, c)| *c)
+        .unwrap_or_default();
+    let checkbox = |key: &str, label: &str, on: bool| {
+        format!("<label class='pam-row'><span>{label}</span><input type='checkbox' data-part-control='{key}' {}></label>",if on {"checked"}else{""})
+    };
+    let percent = |key: &str, label: &str, value: f64| {
+        format!("<label class='pam-row'><span>{label} %</span><input type='number' min='0' max='100' step='1' data-part-control='{key}' value='{:.0}'></label>",value*100.)
+    };
+    if capabilities & 1 != 0 {
+        rows.push_str(&checkbox(
+            "wheel_enabled",
+            "Reaction wheels",
+            settings.wheel_enabled,
+        ));
+        rows.push_str(&percent(
+            "wheel_authority",
+            "Wheel authority",
+            settings.wheel_authority,
+        ));
+        rows.push_str("<label class='pam-row'>Wheel mode <select data-part-control='wheel_mode'>");
+        for (mode, label) in ["All", "Manual only", "SAS only"].iter().enumerate() {
+            rows.push_str(&format!(
+                "<option value='{mode}' {}>{label}</option>",
+                if settings.wheel_mode as usize == mode {
+                    "selected"
+                } else {
+                    ""
+                }
+            ));
+        }
+        rows.push_str("</select></label>");
+    }
+    if capabilities & 2 != 0 {
+        rows.push_str(&checkbox(
+            "gimbal_enabled",
+            "Engine gimbal",
+            settings.gimbal_enabled,
+        ));
+        rows.push_str(&percent(
+            "gimbal_limiter",
+            "Gimbal travel",
+            settings.gimbal_limiter,
+        ));
+        for (key, label, on) in [
+            ("pitch", "Gimbal pitch", settings.pitch),
+            ("yaw", "Gimbal yaw", settings.yaw),
+            ("roll", "Gimbal roll", settings.roll),
+        ] {
+            rows.push_str(&checkbox(key, label, on));
+        }
+    }
+    if capabilities & 4 != 0 {
+        rows.push_str(&checkbox(
+            "rcs_enabled",
+            "RCS thrusters",
+            settings.rcs_enabled,
+        ));
+        rows.push_str(&percent(
+            "rcs_limiter",
+            "RCS authority",
+            settings.rcs_limiter,
+        ));
+    }
+    if capabilities & 8 != 0 {
+        rows.push_str(&percent(
+            "surface_authority",
+            "Control surface authority",
+            settings.surface_authority,
+        ));
+        rows.push_str(&checkbox(
+            "surface_invert",
+            "Invert surface",
+            settings.surface_invert,
+        ));
+        for (j, label) in ["Surface pitch", "Surface roll", "Surface yaw"]
+            .iter()
+            .enumerate()
+        {
+            rows.push_str(&checkbox(
+                &format!("surface_axis-{j}"),
+                label,
+                settings.surface_axes[j],
+            ));
+        }
+    }
+    if capabilities & 4 != 0 {
+        for (j, label) in [
+            "RCS pitch",
+            "RCS roll",
+            "RCS yaw",
+            "RCS X",
+            "RCS Y",
+            "RCS Z",
+        ]
+        .iter()
+        .enumerate()
+        {
+            rows.push_str(&checkbox(
+                &format!("rcs_axis-{j}"),
+                label,
+                settings.rcs_axes[j],
+            ));
+        }
+    }
+    if capabilities & 16 != 0 {
+        rows.push_str(&percent(
+            "thrust_limiter",
+            "Thrust limiter",
+            settings.thrust_limiter,
+        ));
+    }
+    if capabilities & 32 != 0 {
+        acts.push_str("<button data-control-from>Control from here</button>");
+    }
     if rows.is_empty() {
         rows.push_str("<div class=\"pam-sub\">Nothing to set on this part.</div>");
     }

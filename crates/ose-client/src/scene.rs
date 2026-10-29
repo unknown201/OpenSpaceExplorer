@@ -98,6 +98,9 @@ impl Scene {
                     entry.insert(Track::new(rotation, ut, now_ms, context));
                 }
             }
+            if let Some(track) = self.attitudes.get_mut(&v.id) {
+                track.set_world_velocity(g(flight.angvel));
+            }
         }
         self.vessels_ut = ut;
         self.vessels = vessels;

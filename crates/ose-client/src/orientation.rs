@@ -50,6 +50,15 @@ pub struct Track {
 }
 
 impl Track {
+    /// Use authoritative spin rather than inferring it from two delayed poses. This
+    /// avoids one extra snapshot interval of apparent rotation after SAS has stopped.
+    pub fn set_world_velocity(&mut self, omega: DVec3) {
+        self.velocity = if omega.is_finite() && !self.context.grounded {
+            self.rotation.inverse() * omega * (self.context.warp as f64 / 1000.0)
+        } else {
+            DVec3::ZERO
+        };
+    }
     pub fn new(rotation: DQuat, ut: f64, received_ms: f64, context: Context) -> Self {
         Self {
             rotation,
@@ -105,6 +114,19 @@ impl Track {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn authoritative_spin_stops_prediction_after_release_despite_jitter() {
+        let mut track = Track::new(DQuat::IDENTITY, 0., 0., CONTEXT);
+        track.set_world_velocity(DVec3::Z);
+        close(track.sample(80.), DQuat::from_rotation_z(0.08));
+        track.update(DQuat::from_rotation_z(0.1), 0.1, 130., CONTEXT);
+        track.set_world_velocity(DVec3::ZERO);
+        close(track.sample(200.), DQuat::from_rotation_z(0.1));
+        close(track.sample(350.), DQuat::from_rotation_z(0.1));
+        track.set_world_velocity(DVec3::splat(f64::NAN));
+        close(track.sample(360.), DQuat::from_rotation_z(0.1));
+    }
 
     #[test]
     fn craft_rotates_about_wet_mass_centre_with_no_bottom_anchor() {

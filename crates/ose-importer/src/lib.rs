@@ -666,6 +666,12 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
         electric.solar_tracking = false;
     }
     PartDef {
+        flight_geometry: ose_data::flight_geometry::FlightGeometry {
+            mass_offset_m: vec3(&d["coMassOffset"]),
+            pressure_offset_m: vec3(&d["coPressureOffset"]),
+            lift_offset_m: vec3(&d["coLiftOffset"]),
+            ..Default::default()
+        },
         id: s(d, "partName"),
         title_key: s(d, "Title"),
         category: s(d, "category"),

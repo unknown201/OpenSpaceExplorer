@@ -517,6 +517,58 @@ impl Universe {
         Some((d, tv - v, (d.length() - surface).max(0.0)))
     }
 
+    pub fn configure_part(
+        &mut self,
+        e: Entity,
+        part: u16,
+        settings: ose_data::flight_geometry::PartControl,
+    ) -> bool {
+        if !settings.valid()
+            || !self
+                .structure(e)
+                .is_some_and(|s| s.rigid.present.get(part as usize) == Some(&true))
+        {
+            return false;
+        }
+        let update = |p: &mut flight::Powered| {
+            p.part_controls.retain(|(i, _)| *i != part);
+            p.part_controls.push((part, settings));
+            p.sas.reset();
+        };
+        if let Some(mut p) = self.world.get_mut::<flight::Powered>(e) {
+            update(&mut p);
+            true
+        } else if let Some(mut p) = self.world.get_mut::<flight::Dormant>(e) {
+            update(&mut p.0);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn control_from(&mut self, e: Entity, part: u16) -> bool {
+        let Some(s) = self.structure(e) else {
+            return false;
+        };
+        let i = part as usize;
+        if !s.rigid.present.get(i).copied().unwrap_or(false) || !s.can_control_from(i) {
+            return false;
+        }
+        let q = s.control_rotation(i);
+        self.wake(e);
+        if let Some(mut p) = self.world.get_mut::<flight::Powered>(e) {
+            p.control_point = Some(part);
+            p.control_rotation = q;
+            p.sas.reset();
+            if p.attitude != flight::Attitude::Free {
+                p.attitude = flight::Attitude::Fixed(flight::control_basis(&p).1);
+            }
+            true
+        } else {
+            false
+        }
+    }
+
     /// Rotation input with SAS off (pitch, yaw, roll each -1..1, held until changed; see
     /// `Powered::rotation_input`); false without a powered vessel.
     pub fn set_rotation(&mut self, e: Entity, pitch: f64, yaw: f64, roll: f64) -> bool {
@@ -819,7 +871,7 @@ impl Universe {
                 if p.attitude != attitude {
                     p.sas.reset();
                     let cv = |v: DVec3| glam::DVec3::new(v.x, v.y, v.z);
-                    let (_, y, z) = flight::vessel_basis(&p);
+                    let (_, y, z) = flight::control_basis(&p);
                     let mut q = crate::sas::orientation(cv(y), cv(z));
                     if let flight::Attitude::Fixed(target) = attitude {
                         q = glam::DQuat::from_rotation_arc(cv(y), cv(target).normalize()) * q;
@@ -2321,7 +2373,7 @@ mod tests {
         for i in 0..(90 * TICKS_PER_SECOND) {
             u.step();
             let p = u.powered(v).unwrap();
-            assert!(!p.crashed, "crashed at step {i}");
+            assert!(!p.crashed, "crashed at step {i}: {p:?}");
             if !p.landed && lifted_at.is_none() {
                 lifted_at = Some((i, p.drive.speed_mps));
             }
@@ -2593,7 +2645,7 @@ mod tests {
         let p = u.powered(v).unwrap();
         assert_eq!(p.stage, 2);
         assert!(upper > 10.0, "the Poodle stage kept its {upper} t");
-        assert!(p.r.length() - 600_000.0 > 40_000.0, "climbing");
+        assert!(p.r.length() - 600_000.0 > 40_000.0, "climbing: {p:?}");
     }
 
     #[test]

@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 pub mod craft;
+pub mod flight_geometry;
 pub mod missions;
 pub mod science;
 pub mod staging;
@@ -213,6 +214,8 @@ pub struct PartBounds {
 /// A part definition.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PartDef {
+    #[serde(default)]
+    pub flight_geometry: flight_geometry::FlightGeometry,
     pub id: String,
     pub title_key: String,
     pub category: String,

@@ -211,6 +211,40 @@ impl Sas {
 mod tests {
     use super::*;
     #[test]
+    fn compiled_reference_source_traces_match_every_pid_step() {
+        let data: serde_json::Value =
+            serde_json::from_str(include_str!("../testdata/control-reference.json")).unwrap();
+        for trace in data["traces"].as_array().unwrap() {
+            let roll = trace["axis"].as_u64().unwrap() == 1;
+            let dt = trace["dt"].as_f64().unwrap();
+            let mut pid = Pid::default();
+            for (i, row) in trace["rows"].as_array().unwrap().iter().enumerate() {
+                if i == 72 {
+                    pid = Pid::default();
+                }
+                let v = |n: usize| row[n].as_f64().unwrap();
+                let actual = pid.update(
+                    v(0),
+                    dt,
+                    if roll { 9000. } else { 15000. },
+                    if roll { 600. } else { 2000. },
+                    if roll { 2000. } else { 1500. },
+                    v(1),
+                    v(2),
+                );
+                assert!(
+                    (actual - v(3)).abs() < 1e-12,
+                    "axis={} dt={dt} step={i}: {actual} vs {}",
+                    trace["axis"],
+                    v(3)
+                );
+            }
+        }
+        for row in data["scalars"].as_array().unwrap() {
+            assert!((scalar(row[0].as_f64().unwrap()) - row[1].as_f64().unwrap()).abs() < 1e-12);
+        }
+    }
+    #[test]
     fn reference_autotune_breakpoints() {
         for (x, y) in [
             (0., 10.),

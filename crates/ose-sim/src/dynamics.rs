@@ -11,6 +11,22 @@ pub struct Inertia {
 }
 
 impl Inertia {
+    /// Rotate a full part-space tensor and translate it with the parallel-axis theorem.
+    pub fn add_tensor(&mut self, mass: f64, tensor: [DVec3; 3], axes: [DVec3; 3], offset: DVec3) {
+        let rotate = |v: DVec3| axes[0] * v.x + axes[1] * v.y + axes[2] * v.z;
+        let column = |e: DVec3| {
+            let local = DVec3::new(axes[0].dot(e), axes[1].dot(e), axes[2].dot(e));
+            rotate(tensor[0] * local.x + tensor[1] * local.y + tensor[2] * local.z) * mass
+        };
+        self.x = self.x + column(DVec3::new(1.0, 0.0, 0.0));
+        self.y = self.y + column(DVec3::new(0.0, 1.0, 0.0));
+        self.z = self.z + column(DVec3::new(0.0, 0.0, 1.0));
+        let r2 = mass * offset.length_squared();
+        self.x.x += r2;
+        self.y.y += r2;
+        self.z.z += r2;
+        self.add_outer(offset, -mass);
+    }
     pub fn apply(self, v: DVec3) -> DVec3 {
         self.x * v.x + self.y * v.y + self.z * v.z
     }
@@ -61,6 +77,32 @@ pub struct MassProperties {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn authored_tensor_rotation_and_mass_offset_match_analytic_box() {
+        let axes = [
+            DVec3::new(0., 1., 0.),
+            DVec3::new(-1., 0., 0.),
+            DVec3::new(0., 0., 1.),
+        ];
+        let offset = DVec3::new(1., 2., 3.);
+        let mut imported = Inertia::default();
+        imported.add_tensor(
+            12.,
+            [
+                DVec3::new(52. / 12., 0., 0.),
+                DVec3::new(0., 40. / 12., 0.),
+                DVec3::new(0., 0., 20. / 12.),
+            ],
+            axes,
+            offset,
+        );
+        let mut analytic = Inertia::default();
+        analytic.add_box(12., DVec3::new(2., 4., 6.), axes, offset);
+        assert!((imported.x - analytic.x).length() < 1e-10);
+        assert!((imported.y - analytic.y).length() < 1e-10);
+        assert!((imported.z - analytic.z).length() < 1e-10);
+    }
 
     #[test]
     fn rotated_box_and_parallel_axis_have_analytical_moments() {
