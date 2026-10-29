@@ -953,6 +953,9 @@
     #ksc-buildings button { text-transform: uppercase; letter-spacing: 0.08em; border: 0 !important; border-bottom: 2px dotted #6a718f88 !important; border-radius: 0 !important; background: transparent !important; color: #0a0a0a !important; }
     #ksc-buildings button:last-child { border-bottom: 0 !important; }
     #ksc-buildings button img { filter: brightness(0.2); }
+    /* Science transmission under way: the Transmit button fills, red when it stalls. */
+    #flight-hud #fh-transmit.sending { background: linear-gradient(90deg, #1f6b8f var(--p, 0%), #10141bd9 var(--p, 0%)); color: #fff; }
+    #flight-hud #fh-transmit.stalled { background: linear-gradient(90deg, #8f2f1f var(--p, 0%), #10141bd9 var(--p, 0%)); }
     /* The picker's family headings (the original's Group By: Type). */
     #vab-parts li.pg-head { grid-column: 1 / -1; list-style: none; margin: 8px 0 2px; padding: 0 2px; border: 0 !important; background: none !important; cursor: default; display: block; text-align: left; font: 600 13px var(--hud-font); letter-spacing: 0.14em; text-transform: uppercase; color: #e6ecf7; min-height: 0; height: auto; }
     #vab-parts li.pg-head::before { content: "\25BE  "; color: #9fb0cc; }

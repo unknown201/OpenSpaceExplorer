@@ -118,6 +118,8 @@ pub struct NearVessel<'a> {
     pub landed: bool,
     /// The owner's agency colours, for parts and crafts without their own.
     pub paint: Option<ose_data::craft::Paint>,
+    /// A Kerbal's clip when not standing idle: on a ladder or climbing in through a hatch.
+    pub clip: Option<&'static str>,
 }
 
 /// The paint a part is drawn in (linear rgb base and accent): its own colours, else its craft's, else the
@@ -519,6 +521,8 @@ pub struct FlightView {
     /// A walking Kerbal: last model-frame position and time (ms), smoothed speed (m/s) and stride phase.
     walk_last: Option<(DVec3, f64)>,
     walk_speed: f64,
+    /// A Kerbal's smoothed speed along its up (m/s, + climbing): picks the ladder clip.
+    climb_speed: f64,
     walk_phase: f64,
     /// How far the flown vessel's wheels have rolled (m, signed by the drive direction) and when last updated.
     wheel_travel: f64,
@@ -627,6 +631,7 @@ impl FlightView {
             flex_since_ms: 0.0,
             walk_last: None,
             walk_speed: 0.0,
+            climb_speed: 0.0,
             walk_phase: 0.0,
             wheel_travel: 0.0,
             wheel_last_ms: 0.0,
@@ -806,8 +811,33 @@ impl FlightView {
         self.ksc
     }
 
-    /// Direction to the sun in the KSC campus frame (glTF, Y up) at `ut`, given the inertial direction from
-    /// The campus footprint (all facility boxes, 300 m wider) as a scatter exclusion in the model frame.
+    /// The campus in the model frame for the planet renderer: the footprint (all facility boxes, 300 m wider),
+    /// which sinks the terrain under the campus model and keeps grass off it, then each facility 100 m wider,
+    /// which keeps trees and rocks off it (around them the original's vegetation grows up to the campus).
+    fn ksc_exclusions(&self, pos: DVec3, rot: DQuat) -> Vec<crate::planet_scatter::Exclusion> {
+        let Some(foot) = self.ksc_exclusion(pos, rot) else {
+            return Vec::new();
+        };
+        let scene = self.ksc_scene.borrow();
+        let Some(scene) = scene.as_ref() else {
+            return Vec::new();
+        };
+        let mut out = vec![foot];
+        let m = 100.0;
+        for b in &scene.buildings {
+            out.push(crate::planet_scatter::Exclusion {
+                origin: pos.to_array(),
+                ax: (rot * DVec3::X).to_array(),
+                az: (rot * DVec3::Z).to_array(),
+                x: [b.min[0] - m, b.max[0] + m],
+                z: [b.min[2] - m, b.max[2] + m],
+                props: true,
+            });
+        }
+        out
+    }
+
+    /// The campus footprint (all facility boxes, 300 m wider) in the model frame.
     fn ksc_exclusion(&self, pos: DVec3, rot: DQuat) -> Option<crate::planet_scatter::Exclusion> {
         let scene = self.ksc_scene.borrow();
         let scene = scene.as_ref()?;
@@ -830,6 +860,7 @@ impl FlightView {
             az: az.to_array(),
             x: [x0 - m, x1 + m],
             z: [z0 - m, z1 + m],
+            props: false,
         })
     }
 
@@ -1129,11 +1160,12 @@ impl FlightView {
         // The KSC campus on Kerbin while low enough to matter.
         if inp.body_id == "Kerbin" && alt < 25_000.0 {
             if let Some((kpos, krot)) = self.ksc_pose(inp.body_radius) {
-                // No trees, rocks or grass on the campus, its runways and pads (the original draws the campus
-                // over its own ground): the facilities' footprint, 300 m wider all round.
-                if let Some(ex) = self.ksc_exclusion(kpos, krot) {
+                // No grass on the campus and no trees or rocks on its facilities, runways and pads (the original
+                // draws the campus over its own ground); see ksc_exclusions.
+                let ex = self.ksc_exclusions(kpos, krot);
+                if !ex.is_empty() {
                     if let Some(p) = self.planet.as_mut() {
-                        p.set_exclusions(vec![ex]);
+                        p.set_exclusions(ex);
                     }
                 }
                 gpu.request_model("ksc", "assets/ksc/ksc.glb");
@@ -2072,10 +2104,26 @@ impl FlightView {
                     let dt = ((inp.now_ms - t0) / 1000.0).max(1e-3);
                     let v = ((pos - p0).length() / dt).min(10.0);
                     self.walk_speed += (v - self.walk_speed) * (dt * 6.0).min(1.0);
+                    let vy = ((pos - p0).dot(up) / dt).clamp(-10.0, 10.0);
+                    self.climb_speed += (vy - self.climb_speed) * (dt * 6.0).min(1.0);
                     self.walk_phase += self.walk_speed * dt * 5.0;
                 }
                 self.walk_last = Some((pos, inp.now_ms));
-                kerbal_clip = Some(if !landed {
+                let flight = inp.vessel.flight.as_ref();
+                let on_ladder = flight.is_some_and(|f| f.on_ladder.is_some());
+                let boarding = flight.is_some_and(|f| f.boarding);
+                kerbal_clip = Some(if boarding {
+                    // Climbing in through the hatch.
+                    "ladder_up"
+                } else if on_ladder {
+                    if self.climb_speed > 0.15 {
+                        "ladder_up"
+                    } else if self.climb_speed < -0.15 {
+                        "ladder_down"
+                    } else {
+                        "ladder_idle"
+                    }
+                } else if !landed {
                     "air"
                 } else if self.walk_speed > 1.6 {
                     "run"
@@ -2236,12 +2284,26 @@ impl FlightView {
                 }
                 continue;
             }
+            // A Kerbal stands up from the ground facing where it faces (the way it walks, or its ladder).
+            let rot = match (stand, near.facing) {
+                (Stand::Kerbal { .. }, Some((f, _))) => {
+                    let up_o = p.normalize_or_zero();
+                    let ahead = dir_to_model(r_o, f, spin, inp.ut);
+                    let level = (ahead - up_o * ahead.dot(up_o)).normalize_or_zero();
+                    if level.length() > 0.5 {
+                        quat_from_basis(up_o.cross(level), up_o, level)
+                    } else {
+                        rot
+                    }
+                }
+                _ => rot,
+            };
             for (name, _, scale) in stand.models(gpu) {
                 let mut it = DrawItem::lit(name.to_string(), p - cam, rot, scale, sun);
 
                 it.ambient = part_ambient;
                 it.sun = sun_share;
-                it.animation = kerbal_sample(gpu, name, "idle", inp.now_ms);
+                it.animation = kerbal_sample(gpu, name, near.clip.unwrap_or("idle"), inp.now_ms);
                 if let Some(c) = stand.tint(name) {
                     it.color = c;
                 }

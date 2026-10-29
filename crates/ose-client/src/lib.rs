@@ -5383,6 +5383,12 @@ impl App {
                 reason,
                 ..
             } => {
+                // Transmission takes time (protocol 47): the answer to Transmit has no reports, each report
+                // follows as it arrives; the readout shows the progress meanwhile.
+                if reason.is_none() && reports.is_empty() && !recovered {
+                    set_text(&self.doc, "fh-note", "");
+                    return;
+                }
                 let msg = match reason {
                     Some(r) => r,
                     None => format!(
@@ -9033,6 +9039,57 @@ impl App {
     }
 
     fn update_crew_buttons(&self, f: &ose_net::FlightReadout) {
+        // Science on its way home (protocol 47): the Transmit button fills as a report goes, with the reports
+        // still waiting, and says why when it stalls (no link, no power).
+        if let Some(el) = self
+            .doc
+            .get_element_by_id("fh-transmit")
+            .and_then(|e| e.dyn_into::<HtmlElement>().ok())
+        {
+            let (text, pct, stalled, title) = match &f.transmitting {
+                Some((exp, place, share, waiting, stall)) => (
+                    format!(
+                        "{} {:.0}%{}",
+                        if stall.is_some() {
+                            "Stalled"
+                        } else {
+                            "Sending"
+                        },
+                        share * 100.0,
+                        if *waiting > 0 {
+                            format!(" +{waiting}")
+                        } else {
+                            String::new()
+                        }
+                    ),
+                    share * 100.0,
+                    stall.is_some(),
+                    match stall {
+                        Some(why) => format!("Transmission stalled: {why}"),
+                        None => format!(
+                            "Transmitting {} ({}); {waiting} more waiting",
+                            exp,
+                            hud::report_place(place)
+                        ),
+                    },
+                ),
+                None => (
+                    "Transmit".to_string(),
+                    0.0,
+                    false,
+                    "Send the reports home".to_string(),
+                ),
+            };
+            if el.text_content().as_deref() != Some(text.as_str()) {
+                el.set_text_content(Some(&text));
+            }
+            el.set_title(&title);
+            el.style().set_property("--p", &format!("{pct:.1}%")).ok();
+            el.class_list()
+                .toggle_with_force("sending", f.transmitting.is_some())
+                .ok();
+            el.class_list().toggle_with_force("stalled", stalled).ok();
+        }
         self.render_players();
         self.render_kerbal_manager();
         self.render_parts_manager();
@@ -11887,6 +11944,13 @@ impl App {
                         .filter(|f| g(f.facing).length() > 0.5)
                         .map(|f| (g(f.facing), g(f.roll_ref))),
                     paint: agency_paint(o.owner),
+                    clip: o.flight.as_ref().and_then(|f| {
+                        if f.boarding {
+                            Some("ladder_up")
+                        } else {
+                            f.on_ladder.map(|_| "ladder_idle")
+                        }
+                    }),
                     landed: o
                         .flight
                         .as_ref()

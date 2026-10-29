@@ -188,6 +188,10 @@ pub struct Exclusion {
     pub az: V3,
     pub x: [f64; 2],
     pub z: [f64; 2],
+    /// Keeps trees, rocks and far impostors out (a facility); `false` for an area that only sinks the terrain
+    /// under a site model and keeps grass off it (the campus footprint, whose lawns and banks the original
+    /// plants as its vegetation mask says).
+    pub props: bool,
 }
 
 impl Exclusion {
@@ -211,6 +215,44 @@ impl Exclusion {
 
 fn excluded(ex: &[Exclusion], p: V3) -> bool {
     ex.iter().any(|e| e.contains(p))
+}
+
+/// Trees, rocks and far impostors: only the facilities keep them out.
+fn excluded_props(ex: &[Exclusion], p: V3) -> bool {
+    ex.iter().any(|e| e.props && e.contains(p))
+}
+
+/// On a launch pad's island in a site model (the KSC campus): within 650 m of a pad, on the model's own
+/// ground where it is above the terrain and level over 100 m. The original keeps those lawns clear inside their
+/// lake ring and grows its trees on the banks and the campus around.
+fn on_campus_lawn(map: &TerrainMap, lat: f64, lon: f64) -> bool {
+    let Some(o) = map.overlay.as_ref() else {
+        return false;
+    };
+    let near_pad = map.flats.iter().any(|f| {
+        let (p1, p2) = (lat.to_radians(), f.lat_deg.to_radians());
+        let dlon = (lon - f.lon_deg).to_radians();
+        let a = ((p2 - p1) / 2.0).sin().powi(2) + p1.cos() * p2.cos() * (dlon / 2.0).sin().powi(2);
+        2.0 * map.body_radius_m * a.sqrt().min(1.0).asin() < 650.0
+    });
+    if !near_pad {
+        return false;
+    }
+    let Some(h) = o.sample(lat, lon) else {
+        return false;
+    };
+    // (the terrain without the pad flats, which hold it at pad height under the campus)
+    if h < map.map_height_m(lat, lon) + 1.0 {
+        return false;
+    }
+    // about 50 m either way on Kerbin
+    let e = 0.0005;
+    [(e, 0.0), (-e, 0.0), (0.0, e), (0.0, -e)]
+        .iter()
+        .all(|&(dla, dlo)| {
+            o.sample(lat + dla, lon + dlo)
+                .is_some_and(|v| (v - h).abs() < 2.5)
+        })
 }
 
 /// One placed prop.
@@ -436,7 +478,7 @@ impl ScatterFile {
                         let yo =
                             item.y_offset[0] + (item.y_offset[1] - item.y_offset[0]) * unit(h, 7);
                         let pos = scale(d, radius + hgt + yo * s);
-                        if excluded(exclude, pos) {
+                        if excluded_props(exclude, pos) || on_campus_lawn(map, lat, lon) {
                             continue;
                         }
                         let dist = length(sub(pos, cam));
@@ -657,7 +699,7 @@ impl ScatterFile {
                         }
                     }
                     let world = scale(d, radius + hgt);
-                    if excluded(exclude, world) {
+                    if excluded_props(exclude, world) || on_campus_lawn(map, lat, lon) {
                         continue;
                     }
                     let pos = sub(world, cam);

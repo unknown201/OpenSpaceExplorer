@@ -1738,6 +1738,7 @@ impl PlanetRenderer {
                     let p = planet_lod::scale(d, radius + h);
                     let sink = ex
                         .iter()
+                        .filter(|e| !e.props)
                         .map(|e| e.inner_weight(p, 300.0, 150.0))
                         .fold(0.0, f64::max);
                     h - 20.0 * sink

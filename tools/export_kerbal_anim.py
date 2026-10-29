@@ -32,6 +32,10 @@ CLIPS = {
     "walk_back": ["kerbal_jp_walk_b", "kerbal_walk_b"],
     "run": ["kerbal_jp_run", "kerbal_run"],
     "air": ["kerbal_jp_suspended_idle", "kerbal_suspended_idle"],
+    # On a ladder (climbing up, down, hanging still); boarding plays the climb up.
+    "ladder_up": ["kerbal_ladder_up"],
+    "ladder_down": ["kerbal_ladder_down"],
+    "ladder_idle": ["kerbal_ladder_idle"],
 }
 VARIANTS = {"m": ("head_m_01", "eyes_m_01"), "f": ("head_f_01", "eyes_f_01")}
 
