@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct FlightGeometry {
     #[serde(default)]
+    pub rcs_tuning: RcsTuning,
+    #[serde(default)]
     pub control_rotation: Option<[f64; 4]>,
     #[serde(default)]
     pub surface: Option<ControlSurface>,
@@ -21,6 +23,12 @@ pub struct FlightGeometry {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ControlSurface {
+    #[serde(default)]
+    pub deploy: Option<SurfaceDeploy>,
+    #[serde(default)]
+    pub fixed_lift_coeff: Option<f64>,
+    #[serde(default)]
+    pub moving_lift_coeff: Option<f64>,
     pub normal: DVec3,
     pub axis: DVec3,
     pub pivot_m: DVec3,
@@ -63,6 +71,8 @@ pub struct PartControl {
     pub rcs_enabled: bool,
     pub rcs_limiter: f64,
     pub surface_authority: f64,
+    pub surface_deploy: bool,
+    pub surface_deploy_fraction: f64,
     pub surface_axes: [bool; 3],
     pub surface_invert: bool,
     /// Pitch/roll/yaw followed by translation X/Y/Z in control axes.
@@ -83,6 +93,8 @@ impl Default for PartControl {
             rcs_enabled: true,
             rcs_limiter: 1.,
             surface_authority: 1.,
+            surface_deploy: false,
+            surface_deploy_fraction: 1.,
             surface_axes: [true; 3],
             surface_invert: false,
             rcs_axes: [true; 6],
@@ -98,9 +110,38 @@ impl PartControl {
                 self.gimbal_limiter,
                 self.rcs_limiter,
                 self.surface_authority,
+                self.surface_deploy_fraction,
                 self.thrust_limiter,
             ]
             .iter()
             .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RcsTuning {
+    pub use_lever: bool,
+    pub full_thrust: bool,
+    pub full_thrust_min: f64,
+    pub shielded_can_activate: bool,
+}
+impl Default for RcsTuning {
+    fn default() -> Self {
+        Self {
+            use_lever: false,
+            full_thrust: false,
+            full_thrust_min: 0.2,
+            shielded_can_activate: false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SurfaceDeploy {
+    pub axis: DVec3,
+    pub pivot_m: DVec3,
+    pub separate: bool,
+    pub angle_rad: f64,
+    pub min_control_angle_rad: f64,
 }

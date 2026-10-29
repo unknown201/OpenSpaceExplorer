@@ -86,7 +86,20 @@ def extract(ex, part, source):
         if hinge is not None and '_procedural_' in part:
             visual=np.array([[0.,-1.,0.],[1.,0.,0.],[0.,0.,1.]])
             axis=visual@axis;normal=visual@normal;pivot=visual@pivot
-        out['surface']={'normal':obj(normal),'axis':obj(axis),'pivot_m':obj(pivot),'speed':surface.get('ActuatorSpeedNormalScale',10.),
+        deploy_name=surface.get('CtrlSurfaceDeployTransformName','default')
+        separate=deploy_name not in ('default',surface.get('CtrlSurfacePivotTransformName'))
+        deploy_node=next((n for n in nodes if n.name==deploy_name),None) if separate else hinge
+        deploy_axis=np.eye(3)['XYZ'.index(surface.get('DeployTransformRotAxis','X'))]
+        if deploy_node is not None:
+            parent=parents.get(id(deploy_node));parent_world=np.array(parent.world) if parent is not None else np.eye(4)
+            deploy_axis=parent_world[:3,:3]@deploy_axis;deploy_axis/=np.linalg.norm(deploy_axis)
+            deploy_pivot=np.array(deploy_node.world)[:3,3]
+        else:deploy_axis=axis;deploy_pivot=pivot
+        deploy={'axis':obj(deploy_axis),'pivot_m':obj(deploy_pivot),'separate':separate,
+            'angle_rad':math.radians(surface.get('CtrlSurfaceDeployAngle',90.) if surface.get('UseCtrlSurfaceDeployAngle',False) else surface.get('CtrlSurfaceRange',15.)),
+            'min_control_angle_rad':math.radians(surface.get('CtrlSurfaceMinimumLockAngleForControl',0.))}
+        out['surface']={'deploy':deploy,'fixed_lift_coeff':0. if surface.get('DisableLiftingSurfaceForce',False) else None,
+            'moving_lift_coeff':surface.get('CtrlSurfaceArea',0.) if surface.get('DisableLiftingSurfaceForce',False) else None,'normal':obj(normal),'axis':obj(axis),'pivot_m':obj(pivot),'speed':surface.get('ActuatorSpeedNormalScale',10.),
             'exponential':surface.get('UseExponentialSpeed',True),'ignore_sas':surface.get('IgnoreSASInputs',False)}
     config=modules.get('PartComponentModule_Gimbal');gimbal_nodes=[]
     if config:
@@ -118,6 +131,8 @@ def extract(ex, part, source):
             jets=[nozzle(n,np.array([0.,0.,-1.]),1/len(selected)) for n in selected]
         out['engines'].append(jets)
     if 'PartComponentModule_RCS' in modules:
+        r=modules['PartComponentModule_RCS']
+        out['rcs_tuning']={'use_lever':r.get('useLever',False),'full_thrust':r.get('fullThrust',{}).get('storedValue',False),'full_thrust_min':r.get('fullThrustMin',0.2),'shielded_can_activate':r.get('shieldedCanActivate',False)}
         out['rcs']=[nozzle(n,np.array([0.,-1.,0.]),1.) for n in nodes if n.name in ('RCSthruster','rcsPort')]
     integrals=[];audit=[]
     for n in nodes:

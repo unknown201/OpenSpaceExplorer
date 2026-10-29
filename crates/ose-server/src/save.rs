@@ -443,6 +443,8 @@ mod control_settings_tests {
         ));
         let before = u.powered(e).unwrap().clone();
         assert!(u.set_control_point(e, command));
+        assert!(u.set_precision(e, true));
+        assert!(u.set_raw_rotation(e, ose_math::DVec3::new(1., -1., 0.5)));
         assert_eq!(u.powered(e).unwrap().r, before.r);
         assert_eq!(u.powered(e).unwrap().v, before.v);
         let saved = capture(&u, &[(e, 42, Some(1))], &Campaign::default(), &[]);
@@ -453,6 +455,11 @@ mod control_settings_tests {
         let p = restored.powered(entry.0).unwrap();
         assert_eq!(p.part_control(command as usize), settings);
         assert_eq!(p.control_point, Some(command));
+        assert!(p.rcs.precision);
+        assert_eq!(
+            p.raw_rotation_input,
+            Some(ose_math::DVec3::new(1., -1., 0.5))
+        );
         assert_eq!(p.control_rotation, u.powered(e).unwrap().control_rotation);
     }
     #[test]

@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 51;
+pub const PROTOCOL_VERSION: u16 = 52;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -360,6 +360,16 @@ pub enum ClientMessage {
         vessel: u64,
         part: u16,
         settings: ose_data::flight_geometry::PartControl,
+    },
+    SetPrecision {
+        vessel: u64,
+        enabled: bool,
+    },
+    SetRawRotation {
+        vessel: u64,
+        pitch: f32,
+        yaw: f32,
+        roll: f32,
     },
 }
 
@@ -741,6 +751,7 @@ pub struct FlightReadout {
     pub delta_v_now_mps: f64,
     /// With the aero overlay on: (part, lift kN, drag kN) for the parts the air pushes, inertial.
     pub aero_forces: Vec<(u16, DVec3, DVec3)>,
+    pub surface_deployments: Vec<(u16, f32)>,
     /// The burning stage is jets (their thrust follows speed and air; `thrust_kn` shows it).
     pub jet: bool,
 }

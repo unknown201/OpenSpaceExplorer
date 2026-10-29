@@ -321,6 +321,8 @@ struct App {
     roll_sent: f32,
     /// Rotation input last sent with SAS off (protocol 31 SetRotation): pitch, yaw, roll.
     rotation_sent: (f32, f32, f32),
+    precision_sent: Option<(u64, bool)>,
+    raw_rotation_sent: Option<(u64, [f32; 3])>,
     /// Launch sites from the server (protocol 30) and the one chosen (None: launch pad 1), kept per browser.
     launch_sites: Vec<ose_net::LaunchSite>,
     launch_site: Option<String>,
@@ -765,6 +767,8 @@ pub fn start() -> Result<(), JsValue> {
         staged: Default::default(),
         roll_sent: 0.0,
         rotation_sent: (0.0, 0.0, 0.0),
+        precision_sent: None,
+        raw_rotation_sent: None,
         launch_sites: Vec::new(),
         launch_site: stored("ose.launchSite"),
         loading_place: None,
@@ -2800,6 +2804,8 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                 "rcs_enabled" => settings.rcs_enabled = checked,
                 "rcs_limiter" => settings.rcs_limiter = value,
                 "surface_authority" => settings.surface_authority = value,
+                "surface_deploy" => settings.surface_deploy = checked,
+                "surface_deploy_fraction" => settings.surface_deploy_fraction = value,
                 "thrust_limiter" => settings.thrust_limiter = value,
                 "surface_invert" => settings.surface_invert = checked,
                 _ => {
@@ -9408,20 +9414,45 @@ impl App {
             self.eva_keys_tick(now, dt);
             return;
         }
-        #[allow(unused_mut)]
-        let mut flight_rotation = self.keys.flight_rotation(dt);
+        #[cfg(not(target_arch = "wasm32"))]
+        let additional = ose_math::DVec3::ZERO;
         #[cfg(target_arch = "wasm32")]
-        {
+        let additional = {
             let (axes, throttle) = analog::poll(&self.analog);
-            let precision = self.keys.scale();
-            flight_rotation.x = (flight_rotation.x + axes[0] * precision).clamp(-1.0, 1.0);
-            flight_rotation.y = (flight_rotation.y + axes[1] * precision).clamp(-1.0, 1.0);
-            flight_rotation.z = (flight_rotation.z + axes[2] * precision).clamp(-1.0, 1.0);
             if let Some(throttle) = throttle {
                 if (throttle - self.throttle).abs() > 0.002 {
                     self.throttle = throttle;
                     self.controls_dirty = true;
                 }
+            }
+            ose_math::DVec3::new(axes[0], axes[1], axes[2])
+        };
+        let (raw_rotation, flight_rotation) = self.keys.flight_axes(dt, additional);
+        let raw = [
+            if self.lin_mode {
+                0.
+            } else {
+                raw_rotation.x as f32
+            },
+            if self.lin_mode {
+                0.
+            } else {
+                raw_rotation.y as f32
+            },
+            raw_rotation.z as f32,
+        ];
+        if self.raw_rotation_sent != Some((vessel, raw)) {
+            self.raw_rotation_sent = Some((vessel, raw));
+            if let Some(ws) = &self.ws {
+                send(
+                    ws,
+                    &ClientMessage::SetRawRotation {
+                        vessel,
+                        pitch: raw[0],
+                        yaw: raw[1],
+                        roll: raw[2],
+                    },
+                );
             }
         }
         let k = &self.keys;
@@ -9431,6 +9462,18 @@ impl App {
             let rotation = flight_rotation;
             (rotation.x, rotation.y, k.throttle())
         };
+        if self.precision_sent != Some((vessel, k.precision)) {
+            self.precision_sent = Some((vessel, k.precision));
+            if let Some(ws) = &self.ws {
+                send(
+                    ws,
+                    &ClientMessage::SetPrecision {
+                        vessel,
+                        enabled: k.precision,
+                    },
+                );
+            }
+        }
         let scale = k.scale();
         let drive = (
             k.wheel_throttle() as f32 * scale as f32,
@@ -9499,6 +9542,8 @@ impl App {
         } else {
             (tx, ty, tz)
         };
+        // The normal flight-input path scales translation before each RCS module
+        // applies its own precision reduction.
         let s = self.keys.scale() as f32;
         let translate = (tx as f32 * s, ty as f32 * s, tz as f32 * s);
         if translate != self.translate_sent {

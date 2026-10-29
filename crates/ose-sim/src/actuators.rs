@@ -39,6 +39,72 @@ pub fn rcs_input(direction: DVec3, lever: DVec3, rotation: DVec3, translation: D
     (direction.dot(tangential).max(0.0) + direction.dot(translation).max(0.0)).clamp(0.0, 1.0)
 }
 
+pub fn rcs_precision_factor(
+    direction: DVec3,
+    lever: DVec3,
+    precision: bool,
+    use_lever: bool,
+) -> f64 {
+    if !precision {
+        1.0
+    } else if use_lever {
+        1.0 / lever.cross(direction).length().max(1.0)
+    } else {
+        0.1
+    }
+}
+
+/// Module_RCS applies full-thrust snapping, precision, then the strict 0.05
+/// propellant-request threshold, in that order.
+pub fn rcs_power(
+    input: f64,
+    direction: DVec3,
+    lever: DVec3,
+    precision: bool,
+    tuning: ose_data::flight_geometry::RcsTuning,
+) -> f64 {
+    let input = if tuning.full_thrust && input >= tuning.full_thrust_min {
+        1.0
+    } else {
+        input
+    };
+    let power = input * rcs_precision_factor(direction, lever, precision, tuning.use_lever);
+    if power > 0.05 {
+        power
+    } else {
+        0.0
+    }
+}
+
+/// Reference hinge projection, distance-weighted roll and ahead-of-COM reversal.
+pub fn surface_mix(
+    control_up: DVec3,
+    input: DVec3,
+    com_from_pivot: DVec3,
+    hinge: DVec3,
+    normal: DVec3,
+    deflection: f64,
+) -> f64 {
+    let roll = input.dot(control_up);
+    let mut action = (input - control_up * roll).dot(hinge);
+    let h = glam::DVec3::new(hinge.x, hinge.y, hinge.z);
+    let turn = glam::DQuat::from_axis_angle(h, deflection);
+    let local = turn * glam::DVec3::new(com_from_pivot.x, com_from_pivot.y, com_from_pivot.z);
+    let local = DVec3::new(local.x, local.y, local.z);
+    let forward = hinge.cross(normal).normalized();
+    let radial = local - forward * local.dot(forward);
+    let weight = if radial.length_squared() > 1e-16 {
+        0.5 - 0.5 * radial.normalized().dot(control_up).abs()
+    } else {
+        0.5
+    };
+    let roll = local.dot(hinge) * weight * roll;
+    if control_up.dot(com_from_pivot) < 0.0 {
+        action = -action;
+    }
+    (action - roll).clamp(-1.0, 1.0)
+}
+
 /// Joint translation/rotation allocation over real, one-way nozzle columns. Per-part
 /// L1 budgets retain the exact propellant reservation after partial resource delivery.
 pub fn nozzle_wrench(
@@ -247,6 +313,47 @@ mod tests {
         assert_eq!(disabled.inputs, vec![0.0]);
     }
 
+    #[test]
+    fn rcs_precision_uses_lever_or_factor_and_applies_request_threshold_last() {
+        use ose_data::flight_geometry::RcsTuning;
+        let d = DVec3::new(0., 1., 0.);
+        let lever = DVec3::new(4., 0., 0.);
+        let tuning = RcsTuning {
+            use_lever: true,
+            ..Default::default()
+        };
+        assert_eq!(rcs_power(1., d, lever, true, tuning), 0.25);
+        assert_eq!(rcs_power(1., d, lever, false, tuning), 1.);
+        assert_eq!(rcs_power(0.2, d, lever, true, tuning), 0.);
+        assert_eq!(
+            rcs_power(
+                0.1,
+                d,
+                lever,
+                true,
+                RcsTuning {
+                    full_thrust: true,
+                    full_thrust_min: 0.1,
+                    ..tuning
+                }
+            ),
+            0.25
+        );
+        assert_eq!(rcs_power(1., d, lever, true, Default::default()), 0.1);
+        assert_eq!(rcs_power(0.05, d, lever, false, tuning), 0.);
+        assert_eq!(rcs_precision_factor(d, d * 100., true, true), 1.);
+    }
+    #[test]
+    fn surfaces_reverse_ahead_of_com_and_mix_opposite_roll_without_air() {
+        let up = DVec3::new(0., 1., 0.);
+        let hinge = DVec3::new(1., 0., 0.);
+        let normal = DVec3::new(0., 0., 1.);
+        assert_eq!(surface_mix(up, hinge, up * 2., hinge, normal, 0.), 1.);
+        assert_eq!(surface_mix(up, hinge, -up * 2., hinge, normal, 0.), -1.);
+        assert_eq!(surface_mix(up, up, hinge * 2., hinge, normal, 0.), -1.);
+        assert_eq!(surface_mix(up, up, hinge * (-2.), hinge, normal, 0.), 1.);
+        assert_eq!(surface_mix(up, hinge * 10., up * 2., hinge, normal, 0.), 1.);
+    }
     #[test]
     fn nozzle_commands_combine_rotation_and_translation_without_reverse_thrust() {
         let direction = DVec3::new(0., 1., 0.);

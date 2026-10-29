@@ -55,15 +55,18 @@ per-part reservations and consumed once. Actual delivered nozzle powers drive pl
 Surfaces now deflect normals before evaluating the lift/drag curves, including their
 nonlinear stall behavior and actuator speed. Separate lift and pressure offsets are
 used. The procedural visual rotation must be applied to their authored model axes.
-The mounted response direction is found from physical force derivatives; the full
-reference control-mixing/deployment algorithm and runtime raster-derived procedural
-moving areas are **still approximations**. Separately deployed grid fins are not
-completed by this increment. Neither this nor the collider import is a claim of
-identical runtime procedural geometry.
+The control mixer now follows the reference hinge projection, ahead-of-COM pitch/yaw
+reversal and distance-weighted roll term. Surfaces actuate without air. Deployment
+adds the reference target offset, 1.5-range clamp, inversion and actuator response.
+Separately deployed grid fins use their authored lift coefficient, deployment-area
+scale, 75-degree manual-control lockout, speed and IgnoreSASInputs flag. Their
+independent deploy bone is driven from the authoritative angle. Runtime
+raster-derived procedural moving areas remain unverified; neither this nor the
+collider import is a claim of identical runtime procedural geometry.
 
 Flight PAM supports wheel enable/authority/input mode, gimbal enable/travel/axis flags,
-RCS enable/authority/axis flags, surface authority/axis flags/inversion, and thrust
-limits. Command and docking parts expose Control from here. Selection rotates the
+RCS enable/authority/axis flags, surface authority/axis flags/inversion/deploy angle,
+and thrust limits. Command and docking parts expose Control from here. Selection rotates the
 control frame without changing position or spin; detached control points reset. All
 settings/control-frame data survive save/load and the server validates ownership,
 attachment and finite bounds.
@@ -71,8 +74,16 @@ attachment and finite bounds.
 Gamepad/joystick axes are polled through the browser Gamepad API. Settings persist
 axis assignment/inversion, dead zone, response exponent and optional throttle axis.
 Disconnects and missing axes produce zero rotation. Keyboard precision and trim still
-apply. Button mapping, device-specific hardware calibration and reference RCS lever
-precision mode remain outside this increment.
+apply. Raw module inputs are sent separately from the precision-scaled, trimmed SAS
+inputs; manual-only wheels and IgnoreSASInputs surfaces therefore receive the same
+raw input as the reference. Analog input participates in trim before scaling.
+Button mapping and device-specific hardware calibration remain outside this increment.
+
+Protocol 52 carries precision mode explicitly. The normal flight handler retains its
+0.1 translation scale, followed by the RCS module's authored lever-distance reduction
+or 0.1 factor. Full-thrust snapping precedes precision; the strict 0.05 request
+threshold follows it. Shielded thrusters obey shieldedCanActivate. These details are
+covered by threshold/order, raw wheel-mode and grid-fin deployment regressions.
 
 Client joint flex is displayed at physical scale (previously exaggerated twelve times).
 Attitude extrapolation now uses authoritative full angular velocity, including roll,
@@ -103,3 +114,25 @@ Exporter setup: the project Python environment needs UnityPy, NumPy and SciPy
 `python -B -m unittest discover -s tools -p test_flight_geometry.py`.
 The .NET fixture generator needs the .NET 9 SDK and the local decompiled reference;
 reference C# files stay under gitignored `reference/`/`.cache/` and are not redistributed.
+
+`tools/ksp2-control-capture/` was built and run in the installed KSP2 0.2.2.0.32913,
+with user authorization, in a separate temporary sandbox campaign. F8 records passively;
+F9 explicitly prepares a 100 km circular orbit, disables SAS/cuts throttle input, then
+feeds pitch/release/reversal/roll/yaw through the stock input override API. It does
+not ignite engines or write a save. Capture data includes actual applied inputs,
+orientation/angular velocity, position/velocity, mass, runtime MOI and surface geometry.
+
+The first useful pulse fixture has 600 samples at the nominal 20 ms interval. Unity
+Z reflection uses quaternion [-x,-y,z,w], polar position/velocity [x,y,-z] and axial
+angular velocity [-x,-y,z]. The native example accepts a reference CSV as its second
+argument and initializes from its first pose/state, then replays every recorded input.
+There is no fitted time/pose offset, mass correction or inertia calibration.
+
+This first executable comparison **fails**: the captured Jumping Flea starts at
+2.598231454 t versus OSE's 2.5031 t, and OSE rotates substantially faster. The roughly
+95 kg difference includes the omitted occupied-seat mass; source inspection also
+found RigidbodyBehavior's enabled inertia-tensor scaling absent from the imported
+collider model. Procedural surfaces also have runtime coefficients/offsets different
+from their prefab defaults. These are measured gaps, not closed parity claims.
+Full joint/PhysX sample-phase equivalence is also unverified. See the recorder README
+for capture conditions and cleanup requirements.

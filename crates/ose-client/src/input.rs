@@ -62,7 +62,15 @@ pub struct Held {
 impl Held {
     /// FlightInputHandler: trim changes by 0.1/s and is added after precision scaling.
     pub fn flight_rotation(&mut self, dt: f64) -> DVec3 {
-        let raw = self.rotation();
+        self.flight_axes(dt, DVec3::ZERO).1
+    }
+    pub fn flight_axes(&mut self, dt: f64, additional: DVec3) -> (DVec3, DVec3) {
+        let raw = self.rotation() + additional;
+        let raw = DVec3::new(
+            raw.x.clamp(-1., 1.),
+            raw.y.clamp(-1., 1.),
+            raw.z.clamp(-1., 1.),
+        );
         let modifier = self.is("AltLeft") || self.is("AltRight");
         if modifier && self.is("KeyX") {
             self.trim = [0.0; 3];
@@ -72,10 +80,13 @@ impl Held {
             }
         }
         let scale = if modifier { 0.0 } else { self.scale() };
-        DVec3::new(
-            raw.x * scale + self.trim[0],
-            raw.y * scale + self.trim[1],
-            raw.z * scale + self.trim[2],
+        (
+            if modifier { DVec3::ZERO } else { raw },
+            DVec3::new(
+                raw.x * scale + self.trim[0],
+                raw.y * scale + self.trim[1],
+                raw.z * scale + self.trim[2],
+            ),
         )
     }
     pub fn down(&mut self, code: &str) {
@@ -150,6 +161,22 @@ impl Held {
 #[cfg(test)]
 mod reference_trim_tests {
     use super::*;
+    #[test]
+    fn raw_module_input_stays_separate_from_precision_and_analog_trim() {
+        let mut keys = Held::default();
+        keys.precision = true;
+        let (raw, effective) = keys.flight_axes(0.02, DVec3::new(1., 0., 0.));
+        assert_eq!(raw.x, 1.);
+        assert_eq!(effective.x, 0.1);
+        keys.down("AltLeft");
+        let (raw, effective) = keys.flight_axes(1., DVec3::new(1., 0., 0.));
+        assert_eq!(raw, DVec3::ZERO);
+        assert_eq!(effective.x, 0.1);
+        keys.up("AltLeft");
+        let (raw, effective) = keys.flight_axes(0.02, DVec3::ZERO);
+        assert_eq!(raw, DVec3::ZERO);
+        assert_eq!(effective.x, 0.1);
+    }
     #[test]
     fn trim_rate_precision_and_reset_follow_reference() {
         let mut keys = Held::default();

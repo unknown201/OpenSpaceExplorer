@@ -519,12 +519,15 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
                             drag_mach_curve: curve(&o["dragMachCurve"]),
                         });
                     }
-                    if entry["Name"] == "Data_ControlSurface" && !b(o, "DisableLiftingSurfaceForce")
-                    {
+                    if entry["Name"] == "Data_ControlSurface" {
                         ctrl_pressure_offset_m = vec3(&o["CoPressureCtrlSurfaceOffset"]);
                         ctrl = (
                             f(o, "CtrlSurfaceRange"),
-                            f(o, "CtrlSurfaceArea").clamp(0.0, 1.0),
+                            if b(o, "DisableLiftingSurfaceForce") {
+                                1.0
+                            } else {
+                                f(o, "CtrlSurfaceArea").clamp(0.0, 1.0)
+                            },
                         );
                     }
                     if entry["Name"] == "Data_ResourceIntake" {
