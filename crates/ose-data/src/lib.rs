@@ -324,6 +324,9 @@ pub struct Electric {
     pub command_use: f64,
     /// Reaction wheel draw at full input per kN*m of the |(pitch, yaw, roll)| torque.
     pub wheel_use_per_knm: f64,
+    /// Source request acceptance minimum. `None` retains proportional delivery for older/custom data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wheel_acceptance_threshold: Option<f64>,
     /// Reaction wheel |(pitch, yaw, roll)| torque, kN*m.
     pub wheel_torque_vec_knm: f64,
     /// Solar panel output in full sun at the home world's distance (`Data_SolarPanel.ResourceSettings.Rate`).

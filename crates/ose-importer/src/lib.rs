@@ -925,6 +925,12 @@ fn electric_from_module(m: &Value, e: &mut ose_data::Electric) {
             "Data_ReactionWheel" => {
                 if let Some(r) = o["RequiredResources"].as_array() {
                     e.wheel_use_per_knm = r.iter().map(ec_rate).sum::<f64>();
+                    e.wheel_acceptance_threshold = r
+                        .iter()
+                        .find(|r| r["ResourceName"].as_str() == Some("ElectricCharge"))
+                        .and_then(|r| r["AcceptanceThreshold"].as_f64())
+                        .filter(|v| v.is_finite())
+                        .map(|v| v.clamp(0.0, 1.0));
                 }
                 let t = |k: &str| f(o, k);
                 e.wheel_torque_vec_knm =
@@ -1640,6 +1646,21 @@ mod tests {
         let legacy: ose_data::Rcs = serde_json::from_value(old).unwrap();
         assert_eq!(legacy.controls, ose_data::RcsControls::default());
     }
+    #[test]
+    fn reaction_wheel_power_acceptance_is_imported_and_legacy_data_keeps_proportional_delivery() {
+        let value = serde_json::json!({"data":{"partName":"wheel","serializedPartModules":[{"ModuleData":[{"Name":"Data_ReactionWheel","DataObject":{"PitchTorque":5.0,"RequiredResources":[{"ResourceName":"ElectricCharge","Rate":0.025,"AcceptanceThreshold":0.01}]}}]}]}});
+        let imported = part(&value, &mut Coverage::default());
+        assert_eq!(imported.electric.wheel_use_per_knm, 0.025);
+        assert_eq!(imported.electric.wheel_acceptance_threshold, Some(0.01));
+        let mut legacy = serde_json::to_value(imported.electric).unwrap();
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("wheel_acceptance_threshold");
+        let legacy: ose_data::Electric = serde_json::from_value(legacy).unwrap();
+        assert_eq!(legacy.wheel_acceptance_threshold, None);
+    }
+
     #[test]
     fn authored_full_break_strength_nodes_import_and_legacy_nodes_default_to_normal() {
         let value = serde_json::json!({"data":{"partName":"wing","attachNodes":[{"nodeID":"srfAttach","nodeType":"Surface","size":2,"MultiJointFullBreakStrength":true}]}});

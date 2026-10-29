@@ -180,3 +180,19 @@ See `jumping-flea-after-mass-inertia.json` beside the baseline fixture. Remainin
 work includes exact capture/module/PhysX phase and resource-request timing,
 additional procedural shapes and joint-solver behavior. No time/pose offset or
 controller gain was fitted to the recording.
+
+Reaction-wheel resource acceptance now retains each authored ElectricCharge
+`AcceptanceThreshold` (29 catalogue parts). Resource requests below that minimum
+are rejected without consuming charge. When a partial delivery is accepted,
+Module_ReactionWheel gates its full interpolated torque on the acceptance boolean;
+it does not scale torque by the normalized delivered amount. OSE now follows that
+rule. Legacy/custom electric definitions without an authored threshold retain
+proportional delivery. Tests cover the boundary, retained charge after rejection,
+and a lower-priority consumer using that charge. This closes the acceptance rule;
+the asynchronous pending-request/module update timing remains unverified.
+
+Source inspection also confirms that PartOwnerComponent caches its physics stats:
+OnLateUpdate marks them dirty, and OnFixedUpdate refreshes them only when dirty.
+The recorder's FixedUpdate samples can therefore repeat cached angular velocity
+across physics ticks. Existing fixtures and failed comparisons are retained as
+recorded; their phase has not been corrected by shifting or fitting the data.

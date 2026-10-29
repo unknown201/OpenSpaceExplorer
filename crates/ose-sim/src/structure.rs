@@ -2021,6 +2021,7 @@ impl Structure {
         let ec = self.net.resource("ElectricCharge");
         let mut requests = Vec::new();
         let mut parts = Vec::new();
+        let mut minimums = Vec::new();
         let mut delivered = vec![0.0; self.rigid.len()];
         for (i, &torque) in torques.iter().enumerate() {
             if !self.rigid.present[i] {
@@ -2032,6 +2033,7 @@ impl Structure {
             } else if let Some(ec) = ec {
                 if torque > 0.0 && p.controlled {
                     parts.push(i);
+                    minimums.push(self.electric[i].wheel_acceptance_threshold.unwrap_or(0.0));
                     requests.push(Request {
                         part: i,
                         instructions: vec![Instruction {
@@ -2045,8 +2047,17 @@ impl Structure {
                 }
             }
         }
-        for (i, fraction) in parts.into_iter().zip(self.net.process(&requests, dt)) {
-            delivered[i] = fraction;
+        for (i, fraction) in parts
+            .into_iter()
+            .zip(self.net.process_with_minimums(&requests, &minimums, dt))
+        {
+            // Module_ReactionWheel gates full torque on WasLastTickDeliveryAccepted;
+            // it does not multiply torque by LastTickDeliveryNormalized.
+            delivered[i] = if self.electric[i].wheel_acceptance_threshold.is_some() {
+                f64::from(fraction > 0.0)
+            } else {
+                fraction
+            };
         }
         let mut total = 0.0;
         let mut powered = 0.0;
@@ -6140,7 +6151,7 @@ mod tests {
     }
 
     #[test]
-    fn wheel_charge_limits_the_first_tick_and_last_partial_angular_impulse() {
+    fn legacy_wheel_charge_limits_the_first_tick_and_last_partial_angular_impulse() {
         for fraction in [0.0, 0.25, 1.0] {
             let (mut s, mut p, _) = wheel_power_fixture();
             let dt = 1.0 / crate::TICKS_PER_SECOND as f64;
@@ -6178,6 +6189,37 @@ mod tests {
             u.step();
             assert!((u.powered(vessel).unwrap().roll_rate - rate).abs() < 1e-8);
             assert!(ec_stored(u.structure(vessel).unwrap()) < 1e-10);
+        }
+    }
+
+    #[test]
+    fn reference_wheel_accepts_partial_power_without_scaling_torque_or_draining_rejections() {
+        for fraction in [0.0, 0.005, 0.01, 0.25, 1.0] {
+            let (mut s, mut p, _) = wheel_power_fixture();
+            s.electric[s.root].wheel_acceptance_threshold = Some(0.01);
+            let dt = 0.02;
+            let want = 6.0 * dt * 0.6;
+            let ec = s.net.resource("ElectricCharge").unwrap();
+            s.net.tanks.push(crate::resources::Tank {
+                part: s.root,
+                resource: ec,
+                stored: want * fraction,
+                capacity: 10.0,
+            });
+            let mut propulsion = s.propulsion(&p, Default::default(), dt);
+            s.configure_actuators(&p, Default::default(), &mut propulsion);
+            s.resolve_wheel_power(&mut p, &test_body(), &mut propulsion, dt);
+            let accepted = fraction >= 0.01;
+            assert!(
+                (propulsion.control_allocation.unwrap().torque_knm.y
+                    - if accepted { 1.2 } else { 0.0 })
+                .abs()
+                    < 1e-10,
+                "fraction={fraction}"
+            );
+            let expected_charge = if accepted { 0.0 } else { want * fraction };
+            assert!((ec_stored(&s) - expected_charge).abs() < 1e-12);
+            assert_eq!(p.wheel_scale, f64::from(accepted));
         }
     }
 

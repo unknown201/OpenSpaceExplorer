@@ -316,6 +316,17 @@ impl FlowNet {
 
     /// Run the requests for one step; returns each request's delivered fraction (0..1), in input order.
     pub fn process(&mut self, requests: &[Request], dt: f64) -> Vec<f64> {
+        self.process_with_minimums(requests, &[], dt)
+    }
+
+    /// Reject an entire request below its normalized minimum, without consuming any resource.
+    /// Unspecified minima retain proportional delivery; acceptance does not imply full delivery.
+    pub fn process_with_minimums(
+        &mut self,
+        requests: &[Request],
+        minimums: &[f64],
+        dt: f64,
+    ) -> Vec<f64> {
         let mut order: Vec<usize> = (0..requests.len()).collect();
         order.sort_by_key(|&i| std::cmp::Reverse(requests[i].priority));
         let mut fractions = vec![0.0; requests.len()];
@@ -340,6 +351,9 @@ impl FlowNet {
                 plans.push((want, groups));
             }
             let fraction = fraction.clamp(0.0, 1.0);
+            if fraction < minimums.get(i).copied().unwrap_or(0.0).clamp(0.0, 1.0) {
+                continue;
+            }
             fractions[i] = fraction;
             if fraction <= 0.0 {
                 continue;
@@ -514,6 +528,35 @@ mod tests {
             "methane draw cut to the same fraction"
         );
         let _ = me;
+    }
+
+    #[test]
+    fn a_rejected_minimum_does_not_consume_charge_needed_by_a_lower_priority_request() {
+        let (_, mut net) = k1();
+        let ec = net.resource("ElectricCharge").unwrap();
+        net.tanks.retain(|t| t.resource != ec);
+        net.tanks.push(Tank {
+            part: 0,
+            resource: ec,
+            stored: 0.005,
+            capacity: 1.0,
+        });
+        let request = Request {
+            part: 0,
+            instructions: vec![Instruction {
+                resource: ec,
+                units_per_s: 1.0,
+            }],
+            priority: 4,
+        };
+        let mut smaller = request.clone();
+        smaller.priority = 3;
+        smaller.instructions[0].units_per_s = 0.005;
+        assert_eq!(
+            net.process_with_minimums(&[request, smaller], &[0.01, 1.0], 1.0),
+            vec![0.0, 1.0]
+        );
+        assert_eq!(net.available(0, ec), 0.0);
     }
 
     #[test]
