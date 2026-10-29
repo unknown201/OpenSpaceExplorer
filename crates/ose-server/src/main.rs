@@ -999,6 +999,10 @@ fn flight_readout(
                     .collect()
             })
             .unwrap_or_default(),
+        surface_deployments: u
+            .structure(e)
+            .map(|s| s.surface_deployments())
+            .unwrap_or_default(),
         control_surfaces: u
             .structure(e)
             .map(|st| {
@@ -3138,6 +3142,14 @@ async fn session(mut socket: WebSocket, s: AppState) {
                                 None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
                             };
                             if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::SetRawRotation {vessel,pitch,yaw,roll}) => {
+                            let ok=owned_vessel(&s,vessel,player_id).is_some_and(|e|s.universe.lock().expect("sim lock").set_raw_rotation(e,ose_math::DVec3::new(pitch as f64,yaw as f64,roll as f64)));
+                            if !send(&mut socket,&ServerMessage::FlightAck {vessel,accepted:ok,reason:(!ok).then(||"invalid raw input or ownership".into())}).await {break;}
+                        }
+                        Ok(ClientMessage::SetPrecision {vessel,enabled}) => {
+                            let ok=owned_vessel(&s,vessel,player_id).is_some_and(|e|s.universe.lock().expect("sim lock").set_precision(e,enabled));
+                            if !send(&mut socket,&ServerMessage::FlightAck {vessel,accepted:ok,reason:(!ok).then(||"invalid vessel or ownership".into())}).await {break;}
                         }
                         Ok(ClientMessage::ConfigurePart {vessel,part,settings}) => {
                             let ok=owned_vessel(&s,vessel,player_id).is_some_and(|e|s.universe.lock().expect("sim lock").configure_part(e,part,settings));

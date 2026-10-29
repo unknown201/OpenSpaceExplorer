@@ -55,15 +55,18 @@ per-part reservations and consumed once. Actual delivered nozzle powers drive pl
 Surfaces now deflect normals before evaluating the lift/drag curves, including their
 nonlinear stall behavior and actuator speed. Separate lift and pressure offsets are
 used. The procedural visual rotation must be applied to their authored model axes.
-The mounted response direction is found from physical force derivatives; the full
-reference control-mixing/deployment algorithm and runtime raster-derived procedural
-moving areas are **still approximations**. Separately deployed grid fins are not
-completed by this increment. Neither this nor the collider import is a claim of
-identical runtime procedural geometry.
+The control mixer now follows the reference hinge projection, ahead-of-COM pitch/yaw
+reversal and distance-weighted roll term. Surfaces actuate without air. Deployment
+adds the reference target offset, 1.5-range clamp, inversion and actuator response.
+Separately deployed grid fins use their authored lift coefficient, deployment-area
+scale, 75-degree manual-control lockout, speed and IgnoreSASInputs flag. Their
+independent deploy bone is driven from the authoritative angle. Runtime
+raster-derived procedural moving areas remain unverified; neither this nor the
+collider import is a claim of identical runtime procedural geometry.
 
 Flight PAM supports wheel enable/authority/input mode, gimbal enable/travel/axis flags,
-RCS enable/authority/axis flags, surface authority/axis flags/inversion, and thrust
-limits. Command and docking parts expose Control from here. Selection rotates the
+RCS enable/authority/axis flags, surface authority/axis flags/inversion/deploy angle,
+and thrust limits. Command and docking parts expose Control from here. Selection rotates the
 control frame without changing position or spin; detached control points reset. All
 settings/control-frame data survive save/load and the server validates ownership,
 attachment and finite bounds.
@@ -71,8 +74,16 @@ attachment and finite bounds.
 Gamepad/joystick axes are polled through the browser Gamepad API. Settings persist
 axis assignment/inversion, dead zone, response exponent and optional throttle axis.
 Disconnects and missing axes produce zero rotation. Keyboard precision and trim still
-apply. Button mapping, device-specific hardware calibration and reference RCS lever
-precision mode remain outside this increment.
+apply. Raw module inputs are sent separately from the precision-scaled, trimmed SAS
+inputs; manual-only wheels and IgnoreSASInputs surfaces therefore receive the same
+raw input as the reference. Analog input participates in trim before scaling.
+Button mapping and device-specific hardware calibration remain outside this increment.
+
+Protocol 42 carries precision mode explicitly. The normal flight handler retains its
+0.1 translation scale, followed by the RCS module's authored lever-distance reduction
+or 0.1 factor. Full-thrust snapping precedes precision; the strict 0.05 request
+threshold follows it. Shielded thrusters obey shieldedCanActivate. These details are
+covered by threshold/order, raw wheel-mode and grid-fin deployment regressions.
 
 Client joint flex is displayed at physical scale (previously exaggerated twelve times).
 Attitude extrapolation now uses authoritative full angular velocity, including roll,
@@ -103,3 +114,10 @@ Exporter setup: the project Python environment needs UnityPy, NumPy and SciPy
 `python -B -m unittest discover -s tools -p test_flight_geometry.py`.
 The .NET fixture generator needs the .NET 9 SDK and the local decompiled reference;
 reference C# files stay under gitignored `reference/`/`.cache/` and are not redistributed.
+
+`tools/ksp2-control-capture/` contains a passive recorder compiled against the installed
+KSP2 assemblies and BepInEx 5.4.23.2. It records effective manual inputs, applied
+commands, main-body-frame orientation/angular velocity, mass, and runtime procedural
+surface areas/offsets. It has not yet been installed or run: confirmation to run the
+added loader through Windows automation is pending. See its README for exact files,
+build instructions, capture phase and cleanup. Compiling it is not runtime validation.

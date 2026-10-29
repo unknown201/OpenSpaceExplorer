@@ -702,6 +702,16 @@ pub fn flight_pam_html(
             settings.surface_authority,
         ));
         rows.push_str(&checkbox(
+            "surface_deploy",
+            "Deploy surface",
+            settings.surface_deploy,
+        ));
+        rows.push_str(&percent(
+            "surface_deploy_fraction",
+            "Deploy angle",
+            settings.surface_deploy_fraction,
+        ));
+        rows.push_str(&checkbox(
             "surface_invert",
             "Invert surface",
             settings.surface_invert,

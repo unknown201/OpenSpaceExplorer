@@ -517,6 +517,39 @@ impl Universe {
         Some((d, tv - v, (d.length() - surface).max(0.0)))
     }
 
+    pub fn set_raw_rotation(&mut self, e: Entity, input: DVec3) -> bool {
+        if ![input.x, input.y, input.z]
+            .iter()
+            .all(|v| v.is_finite() && (-1.0..=1.0).contains(v))
+        {
+            return false;
+        }
+        if input.length_squared() > 0. && self.warp() <= flight::MAX_PHYSICS_WARP {
+            self.wake(e);
+        }
+        if let Some(mut p) = self.world.get_mut::<flight::Powered>(e) {
+            p.raw_rotation_input = Some(input);
+            true
+        } else if let Some(mut p) = self.world.get_mut::<flight::Dormant>(e) {
+            p.0.raw_rotation_input = Some(input);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn set_precision(&mut self, e: Entity, enabled: bool) -> bool {
+        if let Some(mut p) = self.world.get_mut::<flight::Powered>(e) {
+            p.rcs.precision = enabled;
+            true
+        } else if let Some(mut p) = self.world.get_mut::<flight::Dormant>(e) {
+            p.0.rcs.precision = enabled;
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn configure_part(
         &mut self,
         e: Entity,

@@ -120,6 +120,7 @@ pub struct Structure {
     control_sources: Vec<bool>,
     gimbal_angles: Vec<Vec<[f64; 2]>>,
     surface_angles: Vec<f64>,
+    surface_deploy_angles: Vec<f64>,
     resolved_nozzle_forces: Vec<PartForce>,
     pub gimbal_poses: Vec<(u16, DVec3, [f64; 4])>,
     pub rcs_nozzles: Vec<(u16, DVec3, f32)>,
@@ -460,6 +461,7 @@ impl Structure {
                 })
                 .collect(),
             surface_angles: vec![0.0; n],
+            surface_deploy_angles: vec![0.0; n],
             resolved_nozzle_forces: Vec::new(),
             gimbal_poses: Vec::new(),
             rcs_nozzles: Vec::new(),
@@ -975,7 +977,10 @@ impl Structure {
                 }
             }
             // Old catalogs without nozzle transforms retain the mounted force fallback.
-            if p.groups.rcs && cfg.rcs_enabled {
+            if p.groups.rcs
+                && cfg.rcs_enabled
+                && (!self.shielded[i] || self.geometry[i].rcs_tuning.shielded_can_activate)
+            {
                 if let Some(rcs) = &self.rcs_defs[i] {
                     let isp_scale = if rcs.isp_curve.evaluate(0.0) > 0.0 {
                         rcs.isp_curve.evaluate(env.pressure_atm) / rcs.isp_curve.evaluate(0.0)
@@ -999,6 +1004,17 @@ impl Structure {
                                 * cfg.rcs_limiter);
                             let offset =
                                 self.part_point(i, nozzle.position_m) - self.rigid.rest_position(i);
+                            let precision = crate::actuators::rcs_precision_factor(
+                                if force.length_squared() > 1e-16 {
+                                    force.normalized()
+                                } else {
+                                    DVec3::ZERO
+                                },
+                                r + offset,
+                                p.rcs.precision,
+                                self.geometry[i].rcs_tuning.use_lever,
+                            );
+                            let force = force * precision;
                             channels.push(Actuator {
                                 positive_only: true,
                                 part: i,
@@ -1042,12 +1058,18 @@ impl Structure {
                     let q = 0.5 * env.density * speed.powi(2);
                     let cap = (q
                         * aero::LIFT_MULTIPLIER
-                        * l.deflection_lift_coeff
-                        * share
-                        * curves.lift.evaluate(range.sin())
+                        * self.control_lift_coeff(i)
+                        * curves.lift.evaluate((range * cfg.surface_authority).sin())
                         * curves.lift_mach.evaluate(mach))
                     .max(0.0);
-                    let axis = aero::rotate(self.part_rot[i], l.axis);
+                    let axis = aero::rotate(
+                        self.part_rot[i],
+                        self.geometry[i]
+                            .surface
+                            .as_ref()
+                            .map(|g| self.surface_normal(i, g))
+                            .unwrap_or(l.axis),
+                    );
                     let force = DVec3::new(axis.x, axis.y, -axis.z) * cap;
                     let (at, _) = self.part_box(i);
                     channels.push(Actuator {
@@ -1623,11 +1645,7 @@ impl Structure {
         for i in 0..self.rigid.len() {
             let cfg = p.part_control(i);
             let cap = self.wheel_axes_knm[i] * cfg.wheel_authority * f64::from(cfg.wheel_enabled);
-            let manual = DVec3::new(
-                p.rotation_input.x,
-                p.rotation_input.z + p.roll_input,
-                -p.rotation_input.y,
-            );
+            let manual = p.manual_axes();
             let command = aero::rotate_inverse(p.control_rotation, p.control_axes);
             let command = match cfg.wheel_mode {
                 1 => manual,
@@ -1813,6 +1831,59 @@ impl Structure {
         }
     }
 
+    fn control_lift_coeff(&self, i: usize) -> f64 {
+        let Some((lift, _)) = &self.lift_defs[i] else {
+            return 0.;
+        };
+        if let Some(surface) = &self.geometry[i].surface {
+            if surface.ignore_sas {
+                return 0.;
+            }
+            let deployed = if let Some(deploy) = surface.deploy.as_ref().filter(|d| d.separate) {
+                if self.surface_deploy_angles[i] < deploy.min_control_angle_rad {
+                    return 0.;
+                }
+                (self.surface_deploy_angles[i] / deploy.angle_rad.max(1e-10)).clamp(0., 1.)
+            } else {
+                1.
+            };
+            surface
+                .moving_lift_coeff
+                .unwrap_or(lift.deflection_lift_coeff * self.ctrl[i].1)
+                * deployed
+        } else {
+            lift.deflection_lift_coeff * self.ctrl[i].1
+        }
+    }
+
+    fn surface_normal(
+        &self,
+        i: usize,
+        surface: &ose_data::flight_geometry::ControlSurface,
+    ) -> DVec3 {
+        let mut normal = glam::DVec3::new(surface.normal.x, surface.normal.y, surface.normal.z);
+        if let Some(deploy) = surface.deploy.as_ref().filter(|d| d.separate) {
+            let axis = glam::DVec3::new(deploy.axis.x, deploy.axis.y, deploy.axis.z).normalize();
+            normal = glam::DQuat::from_axis_angle(axis, self.surface_deploy_angles[i]) * normal;
+        }
+        DVec3::new(normal.x, normal.y, normal.z)
+    }
+
+    pub fn surface_deployments(&self) -> Vec<(u16, f32)> {
+        self.geometry
+            .iter()
+            .enumerate()
+            .filter(|(i, g)| {
+                self.rigid.present[*i]
+                    && g.surface
+                        .as_ref()
+                        .and_then(|s| s.deploy.as_ref())
+                        .is_some_and(|d| d.separate)
+            })
+            .map(|(i, _)| (i as u16, self.surface_deploy_angles[i] as f32))
+            .collect()
+    }
+
     fn resolve_surface_geometry(
         &mut self,
         p: &Powered,
@@ -1838,15 +1909,10 @@ impl Structure {
                 continue;
             }
             let point = self.lift_point(i);
-            let input = if surface.ignore_sas {
-                aero::rotate(
-                    p.control_rotation,
-                    DVec3::new(
-                        p.rotation_input.x,
-                        p.roll_input + p.rotation_input.z,
-                        -p.rotation_input.y,
-                    ),
-                )
+            let input = if !p.controlled {
+                DVec3::ZERO
+            } else if surface.ignore_sas {
+                aero::rotate(p.control_rotation, p.manual_axes())
             } else {
                 command
             };
@@ -1857,8 +1923,7 @@ impl Structure {
                 if cfg.surface_axes[1] { input.y } else { 0. },
                 if cfg.surface_axes[2] { input.z } else { 0. },
             );
-            let input =
-                aero::rotate(p.control_rotation, input) * if cfg.surface_invert { -1. } else { 1. };
+            let input = aero::rotate(p.control_rotation, input);
             let velocity = flow.velocity_at(point - centre);
             let speed = velocity.length();
             let travel = if speed > 0. {
@@ -1867,25 +1932,60 @@ impl Structure {
                 DVec3::ZERO
             };
             let q = 0.5 * flow.density * speed * speed;
-            // Determine the mounted hinge's signed torque direction from a small physical
-            // deflection. This includes mirrored surfaces and reversed airflow.
-            let saved = self.surface_angles[i];
-            self.surface_angles[i] = 0.001;
-            let plus = self.lifting_force(i, flow.frame, travel, q, flow.mach(speed));
-            self.surface_angles[i] = -0.001;
-            let minus = self.lifting_force(i, flow.frame, travel, q, flow.mach(speed));
-            self.surface_angles[i] = saved;
-            let delta = plus - minus;
-            let derivative =
-                (point - centre).cross(DVec3::new(delta.dot(x), delta.dot(y), delta.dot(z)));
-            let target = if derivative.length() > 1e-10 {
-                input.dot(derivative.normalized()).clamp(-1., 1.)
-                    * self.ctrl[i].0
-                    * p.part_control(i).surface_authority
-            } else {
-                0.
-            };
             let old = self.lifting_force(i, flow.frame, travel, q, flow.mach(speed));
+            let deploy_target = surface
+                .deploy
+                .as_ref()
+                .map(|d| {
+                    if cfg.surface_deploy {
+                        d.angle_rad * cfg.surface_deploy_fraction
+                    } else {
+                        0.
+                    }
+                })
+                .unwrap_or(0.);
+            if surface.deploy.as_ref().is_some_and(|d| d.separate) {
+                let previous = self.surface_deploy_angles[i];
+                self.surface_deploy_angles[i] = if surface.exponential {
+                    previous + (deploy_target - previous) * (surface.speed * dt).clamp(0., 1.)
+                } else {
+                    previous
+                        + (deploy_target - previous).clamp(
+                            -surface.speed.to_radians() * dt,
+                            surface.speed.to_radians() * dt,
+                        )
+                };
+            }
+            let hinge =
+                crate::rigid::to_vessel(aero::rotate(self.part_rot[i], surface.axis)).normalized();
+            let normal = crate::rigid::to_vessel(aero::rotate(
+                self.part_rot[i],
+                self.surface_normal(i, &surface),
+            ))
+            .normalized();
+            let pivot = self.part_point(i, surface.pivot_m);
+            let up = aero::rotate(p.control_rotation, DVec3::new(0., 1., 0.));
+            let mut target = crate::actuators::surface_mix(
+                up,
+                input,
+                centre - pivot,
+                hinge,
+                normal,
+                self.surface_angles[i],
+            ) * self.ctrl[i].0
+                * cfg.surface_authority;
+            if let Some(deploy) = &surface.deploy {
+                if deploy.separate {
+                    if self.surface_deploy_angles[i] < deploy.min_control_angle_rad {
+                        target = 0.;
+                        self.surface_angles[i] = 0.;
+                    }
+                } else {
+                    target += deploy_target;
+                }
+            }
+            target = (target * if cfg.surface_invert { -1. } else { 1. })
+                .clamp(-1.5 * self.ctrl[i].0, 1.5 * self.ctrl[i].0);
             let previous = self.surface_angles[i];
             self.surface_angles[i] = if surface.exponential {
                 previous + (target - previous) * (surface.speed * dt).clamp(0., 1.)
@@ -2058,21 +2158,45 @@ impl Structure {
                     aero::rotate(
                         p.control_rotation,
                         DVec3::new(
-                            if cfg.rcs_axes[offset] { v.x } else { 0. },
-                            if cfg.rcs_axes[offset + 1] { v.y } else { 0. },
-                            if cfg.rcs_axes[offset + 2] { v.z } else { 0. },
+                            if cfg.rcs_axes[offset] && v.x.abs() >= 0.05 {
+                                v.x
+                            } else {
+                                0.
+                            },
+                            if cfg.rcs_axes[offset + 1] && (offset == 3 || v.y.abs() >= 0.05) {
+                                v.y
+                            } else {
+                                0.
+                            },
+                            if cfg.rcs_axes[offset + 2] && v.z.abs() >= 0.05 {
+                                v.z
+                            } else {
+                                0.
+                            },
                         ),
                     )
                 };
                 if a.force_kn.length_squared() < 1e-16 {
                     0.
                 } else {
-                    crate::actuators::rcs_input(
-                        a.force_kn.normalized(),
-                        self.rigid.rest_position(a.part) + a.offset_m - propulsion.mass.centre_m,
+                    let direction = a.force_kn.normalized();
+                    let lever =
+                        self.rigid.rest_position(a.part) + a.offset_m - propulsion.mass.centre_m;
+                    let input = crate::actuators::rcs_input(
+                        direction,
+                        lever,
                         mask(p.control_axes, 0),
                         mask(translation, 3),
-                    )
+                    );
+                    let tuning = self.geometry[a.part].rcs_tuning;
+                    let factor = crate::actuators::rcs_precision_factor(
+                        direction,
+                        lever,
+                        p.rcs.precision,
+                        tuning.use_lever,
+                    );
+                    crate::actuators::rcs_power(input, direction, lever, p.rcs.precision, tuning)
+                        / factor
                 }
             })
             .collect();
@@ -2653,8 +2777,7 @@ impl Structure {
         let Some((surface, curves)) = &self.lift_defs[part] else {
             return DVec3::ZERO;
         };
-        if !self.rigid.present[part] || self.shielded[part] || surface.deflection_lift_coeff <= 0.0
-        {
+        if !self.rigid.present[part] || self.shielded[part] {
             return DVec3::ZERO;
         }
         let (x, y, z) = frame;
@@ -2668,18 +2791,37 @@ impl Structure {
                 glam::DVec3::new(h.x, h.y, h.z),
                 -self.surface_angles[part],
             );
-            let neutral = crate::rigid::to_vessel(aero::rotate(self.part_rot[part], hinge.normal));
+            let neutral = crate::rigid::to_vessel(aero::rotate(
+                self.part_rot[part],
+                self.surface_normal(part, hinge),
+            ));
             let rotated = rotation * glam::DVec3::new(neutral.x, neutral.y, neutral.z);
+            let share = self.ctrl[part].1.clamp(0., 1.);
+            let mut fixed_surface = surface.clone();
+            fixed_surface.deflection_lift_coeff = hinge
+                .fixed_lift_coeff
+                .unwrap_or(surface.deflection_lift_coeff * (1. - share));
+            let fixed = aero::surface_force(curves, &fixed_surface, normal, travel, q, mach);
+            let mut moving_surface = surface.clone();
+            let deployed = hinge
+                .deploy
+                .as_ref()
+                .filter(|d| d.separate && d.angle_rad.abs() > 1e-10)
+                .map(|d| (self.surface_deploy_angles[part] / d.angle_rad).clamp(0., 1.))
+                .unwrap_or(1.);
+            moving_surface.deflection_lift_coeff = hinge
+                .moving_lift_coeff
+                .unwrap_or(surface.deflection_lift_coeff * share)
+                * deployed;
             let moving = aero::surface_force(
                 curves,
-                surface,
+                &moving_surface,
                 x * rotated.x + y * rotated.y + z * rotated.z,
                 travel,
                 q,
                 mach,
             );
-            let share = self.ctrl[part].1.clamp(0., 1.);
-            fixed * (1. - share) + moving * share
+            fixed + moving
         } else {
             fixed
         }
@@ -2727,7 +2869,13 @@ impl Structure {
                 let (surface, _) = def.as_ref()?;
                 if !self.rigid.present[i]
                     || self.shielded[i]
-                    || surface.deflection_lift_coeff <= 0.0
+                    || (surface.deflection_lift_coeff <= 0.0
+                        && self.geometry[i]
+                            .surface
+                            .as_ref()
+                            .and_then(|s| s.moving_lift_coeff)
+                            .unwrap_or(0.)
+                            <= 0.)
                 {
                     return None;
                 }
@@ -2742,7 +2890,13 @@ impl Structure {
                 let lift = force - travel * force.dot(travel);
                 Some((
                     u16::try_from(i).ok()?,
-                    surface.deflection_lift_coeff as f32,
+                    surface.deflection_lift_coeff.max(
+                        self.geometry[i]
+                            .surface
+                            .as_ref()
+                            .and_then(|s| s.moving_lift_coeff)
+                            .unwrap_or(0.),
+                    ) as f32,
                     lift.length() as f32,
                 ))
             })
@@ -2986,7 +3140,7 @@ impl Structure {
         let mut total = 0.0;
         for i in 0..self.rigid.len() {
             let (range, share) = self.ctrl[i];
-            let Some((l, curves)) = &self.lift_defs[i] else {
+            let Some((_l, curves)) = &self.lift_defs[i] else {
                 continue;
             };
             if range <= 0.0 || share <= 0.0 || !self.rigid.present[i] || self.shielded[i] {
@@ -2997,9 +3151,10 @@ impl Structure {
             let mach = flow.mach(speed);
             let lift = q
                 * aero::LIFT_MULTIPLIER
-                * l.deflection_lift_coeff
-                * share
-                * curves.lift.evaluate(range.sin())
+                * self.control_lift_coeff(i)
+                * curves
+                    .lift
+                    .evaluate((range * self.controls[i].surface_authority).sin())
                 * curves.lift_mach.evaluate(mach);
             let (centre, _) = self.part_box(i);
             total += lift.max(0.0) * (centre - c).length();
@@ -4460,6 +4615,68 @@ mod tests {
     }
 
     #[test]
+    fn grid_fin_deploys_before_unlocking_control_and_stowed_fin_has_no_lift() {
+        let (crafts, defs, res) = assets();
+        let mut part = crafts[0].parts[0].clone();
+        part.part_id = "gridfin_1v_radial".into();
+        part.parent = None;
+        part.local_position = DVec3::ZERO;
+        part.local_rotation = ose_data::craft::Quat {
+            x: 0.,
+            y: 0.,
+            z: 0.,
+            w: 1.,
+        };
+        part.resources.clear();
+        let craft = Craft {
+            name: "grid fin".into(),
+            description: String::new(),
+            parts: vec![part],
+            stages: vec![],
+        };
+        let mut s = Structure::build(&craft, &defs, &res);
+        let mut p = flying(DVec3::new(0., 1., 0.));
+        p.rotation_input = DVec3::new(1., 0., 0.);
+        let frame = basis(p.facing);
+        let travel = DVec3::new(0., 1., 0.);
+        s.last_airflow = Some(Airflow::bulk(frame, travel * 50., 1.2, 0.15));
+        assert_eq!(s.lifting_force(0, frame, travel, 1500., 0.15), DVec3::ZERO);
+        assert_eq!(s.control_lift_coeff(0), 0.);
+        p.part_controls = vec![(
+            0,
+            ose_data::flight_geometry::PartControl {
+                surface_deploy: true,
+                ..Default::default()
+            },
+        )];
+        let prop = crate::flight::Propulsion {
+            mass: s.mass_properties(),
+            actuators: Some(vec![]),
+            ..Default::default()
+        };
+        s.resolve_surface_geometry(&p, &prop, &mut Default::default(), 0.02);
+        assert!((s.surface_deploy_angles[0].to_degrees() - 18.).abs() < 1e-8);
+        assert_eq!(s.surface_angles[0], 0.);
+        for _ in 1..9 {
+            s.resolve_surface_geometry(&p, &prop, &mut Default::default(), 0.02);
+        }
+        assert!(
+            (s.surface_deploy_angles[0].to_degrees() - 90. * (1. - 0.8_f64.powi(9))).abs() < 1e-8
+        );
+        assert!(s.surface_angles[0].abs() > 0.01);
+        assert_eq!(
+            s.control_lift_coeff(0),
+            0.,
+            "authored grid fin ignores SAS and retains manual control"
+        );
+        assert!(s.lifting_force(0, frame, travel, 1500., 0.15).length() > 1e-6);
+        p.part_controls[0].1.surface_deploy = false;
+        s.resolve_surface_geometry(&p, &prop, &mut Default::default(), 0.02);
+        assert_eq!(s.surface_angles[0], 0.);
+        assert_eq!(s.control_lift_coeff(0), 0.);
+    }
+
+    #[test]
     fn control_frame_composes_authored_node_and_mount_and_resets_when_detached() {
         let (mut s, mut p, pair) = propulsion_fixture();
         let i = pair[0];
@@ -4818,6 +5035,41 @@ mod tests {
         p.facing = DVec3::new(0.0, 1.0, 0.0);
         p.v = DVec3::new(0.0, 100.0, 0.0);
         (s, p, pair[0])
+    }
+
+    #[test]
+    fn manual_wheel_mode_uses_raw_input_and_sas_only_subtracts_raw_input() {
+        use ose_data::flight_geometry::PartControl;
+        for (mode, expected) in [(1, 1.2), (2, -1.08)] {
+            let (mut s, mut p, _) = wheel_power_fixture();
+            p.rotation_input = DVec3::new(0., 0., 0.1);
+            p.raw_rotation_input = Some(DVec3::new(0., 0., 1.));
+            p.rcs.precision = true;
+            if mode == 2 {
+                p.attitude = crate::flight::Attitude::Fixed(p.facing);
+            }
+            p.part_controls = vec![(
+                s.root as u16,
+                PartControl {
+                    wheel_mode: mode,
+                    ..Default::default()
+                },
+            )];
+            let ec = s.net.resource("ElectricCharge").unwrap();
+            s.net.tanks.push(crate::resources::Tank {
+                part: s.root,
+                resource: ec,
+                stored: 10.,
+                capacity: 10.,
+            });
+            let mut engine = s.propulsion(&p, Default::default(), 0.02);
+            s.configure_actuators(&p, Default::default(), &mut engine);
+            s.resolve_actuator_resources(&mut p, &test_body(), &mut engine, 0.02);
+            assert!(
+                (engine.control_allocation.unwrap().torque_knm.y - expected).abs() < 1e-8,
+                "mode={mode}"
+            );
+        }
     }
 
     #[test]

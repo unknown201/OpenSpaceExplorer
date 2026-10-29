@@ -1678,6 +1678,7 @@ impl FlightView {
                     let at = DVec3::new(flp.x, y, flp.z);
                     let wpos = pos + vessel_rot * (at + origin);
                     let mut it = DrawItem::lit(model.into(), wpos - cam, vessel_rot, radius, sun);
+
                     it.ambient = part_ambient;
                     it.fill_dir = up;
                     it.fill = 0.25;
@@ -1731,6 +1732,25 @@ impl FlightView {
                 if let (Some((node, axis)), Some(f)) = (control_hinge(pid), readout) {
                     if let Some(d) = f.control_surfaces.iter().find(|c| c.0 as usize == i) {
                         it.node_turns.push((node, hinge_turn(axis, d.1)));
+                    }
+                }
+                if pid.starts_with("gridfin_") {
+                    if let Some(angle) = readout
+                        .and_then(|f| f.surface_deployments.iter().find(|d| d.0 as usize == i))
+                    {
+                        if let Some(model) = gpu.model(&it.model) {
+                            if let Some((node, definition)) = model
+                                .rig
+                                .nodes
+                                .iter()
+                                .enumerate()
+                                .find(|(_, n)| n.name == "bone_pitcher_animated")
+                            {
+                                let rest = definition.rest.rotation;
+                                it.node_rotations
+                                    .push((node, rest.inverse() * hinge_turn('Z', angle.1) * rest));
+                            }
+                        }
                     }
                 }
                 it.ambient = part_ambient;
@@ -1820,6 +1840,7 @@ impl FlightView {
             }
             for (name, _, scale) in inp.stand.models(gpu) {
                 let mut it = DrawItem::lit(name.to_string(), at - cam, rot, scale, sun);
+
                 it.ambient = part_ambient;
                 it.sun = sun_share;
                 if let Some(key) = kerbal_clip {
@@ -1893,6 +1914,7 @@ impl FlightView {
             let rot = DQuat::from_rotation_arc(DVec3::Y, p.normalize_or_zero());
             for (name, _, scale) in stand.models(gpu) {
                 let mut it = DrawItem::lit(name.to_string(), p - cam, rot, scale, sun);
+
                 it.ambient = part_ambient;
                 it.sun = sun_share;
                 it.animation = kerbal_sample(gpu, name, "idle", inp.now_ms);

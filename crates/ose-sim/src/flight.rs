@@ -237,6 +237,8 @@ pub struct Powered {
     /// craft +Z, yaw toward craft +X, roll is clockwise about the nose. And the roll rate it builds, rad/s.
     #[serde(default)]
     pub rotation_input: DVec3,
+    #[serde(default)]
+    pub raw_rotation_input: Option<DVec3>,
     /// Legacy scalar-flight steering flag; part-backed controls use the reference SAS state.
     #[serde(default)]
     pub manual_steering: bool,
@@ -320,6 +322,8 @@ impl Jet {
 /// A vessel's RCS: what its thrusters can do (from its parts) and how they are used.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RcsState {
+    #[serde(default)]
+    pub precision: bool,
     /// Thrust the thrusters give along any one direction, kN, and the torque they give about the centre
     /// of mass, kN·m.
     pub thrust_kn: f64,
@@ -338,6 +342,7 @@ pub struct RcsState {
 impl Default for RcsState {
     fn default() -> Self {
         RcsState {
+            precision: false,
             thrust_kn: 0.0,
             torque_knm: 0.0,
             isp_vac_s: 0.0,
@@ -766,6 +771,14 @@ pub struct StageOutcome {
 }
 
 impl Powered {
+    pub fn manual_axes(&self) -> DVec3 {
+        let raw = self.raw_rotation_input.unwrap_or(DVec3::new(
+            self.rotation_input.x,
+            self.rotation_input.y,
+            self.rotation_input.z + self.roll_input,
+        ));
+        DVec3::new(raw.x, raw.z, -raw.y)
+    }
     pub fn part_control(&self, part: usize) -> ose_data::flight_geometry::PartControl {
         self.part_controls
             .iter()
@@ -812,6 +825,7 @@ impl Powered {
             roll_input: 0.0,
             groups: ActionGroups::default(),
             rotation_input: DVec3::ZERO,
+            raw_rotation_input: None,
             manual_steering: false,
             sas: Default::default(),
             control_axes: DVec3::ZERO,

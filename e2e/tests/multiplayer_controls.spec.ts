@@ -16,7 +16,7 @@ test("held flight controls with 30 ms added round-trip delay", async ({ page, ba
       timers.add(timer);
     };
     socket.onMessage(message => {
-      // Postcard enum discriminant for ClientMessage::SetRotation in protocol v40.
+      // Postcard enum discriminant for ClientMessage::SetRotation in protocol v42 (existing discriminants retained).
       if (typeof message !== "string" && message[0] === 36) {
         controls.push({ at: performance.now(), bytes: message.length });
       }

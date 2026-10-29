@@ -51,6 +51,10 @@ class GeometryTests(unittest.TestCase):
                 self.assertGreater(n['weight'],0)
             if g.get('surface') and p['ctrl_range_deg']>0:
                 a=np.array(list(g['surface']['axis'].values()));n=np.array(list(g['surface']['normal'].values()))
+                deployment=g['surface'].get('deploy')
+                if deployment and deployment['separate']:
+                    d=np.array([deployment['axis'][k] for k in 'xyz']);angle=deployment['angle_rad']
+                    n=n*np.cos(angle)+np.cross(d,n)*np.sin(angle)+d*np.dot(d,n)*(1-np.cos(angle))
                 self.assertLess(abs(a@n),1e-5,p['id'])
 
 if __name__=='__main__':unittest.main()
