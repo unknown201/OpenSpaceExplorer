@@ -1,0 +1,310 @@
+{
+  "Jumping Flea": {
+    "source_fnv1a64": "cb08a6f4d266c533",
+    "parts": [
+      {
+        "guid": "1a382176-2fae-4607-a8a3-be1fedf49100",
+        "part_id": "pod_1v_conical_crew",
+        "flight": {
+          "part_id": "pod_1v_conical_crew",
+          "dry_mass_t": 0.8575000166893005,
+          "mass_offset_m": {
+            "x": 0.0,
+            "y": -0.17499999701976776,
+            "z": 0.0
+          },
+          "inertia_per_t": [
+            {
+              "x": 0.14735252697413087,
+              "y": -0.0005895936766765786,
+              "z": 1.2823034787444603e-06
+            },
+            {
+              "x": -0.0005895936766765786,
+              "y": 0.12111644443979568,
+              "z": 6.3391495649931e-05
+            },
+            {
+              "x": 1.2823034787431495e-06,
+              "y": 6.339149564993099e-05,
+              "z": 0.1473642633730607
+            }
+          ],
+          "surface": null,
+          "mirrored": false
+        }
+      },
+      {
+        "guid": "64e3d1e8-1368-4687-ba81-52b3298e4ec8",
+        "part_id": "parachute_0v",
+        "flight": {
+          "part_id": "parachute_0v",
+          "dry_mass_t": 0.10000000149011612,
+          "mass_offset_m": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "inertia_per_t": [
+            {
+              "x": 0.026645970338210194,
+              "y": -1.9403778095347095e-09,
+              "z": -4.5550707598219303e-10
+            },
+            {
+              "x": -1.9403778095347083e-09,
+              "y": 0.025217655301122077,
+              "z": 6.02158359011769e-09
+            },
+            {
+              "x": -4.5550707595553956e-10,
+              "y": 6.021583590117696e-09,
+              "z": 0.02664593756829407
+            }
+          ],
+          "surface": null,
+          "mirrored": false
+        }
+      },
+      {
+        "guid": "1f2b7dc9-fd46-486c-84b2-c79fdb1da3c7",
+        "part_id": "booster_1v_solid_flea",
+        "flight": {
+          "part_id": "booster_1v_solid_flea",
+          "dry_mass_t": 0.44999998807907104,
+          "mass_offset_m": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "inertia_per_t": [
+            {
+              "x": 0.2847038984298706,
+              "y": 0.0,
+              "z": 0.0
+            },
+            {
+              "x": 0.0,
+              "y": 0.17491670846939086,
+              "z": 0.0
+            },
+            {
+              "x": 0.0,
+              "y": 0.0,
+              "z": 0.2847036600112915
+            }
+          ],
+          "surface": null,
+          "mirrored": false
+        }
+      },
+      {
+        "guid": "dbc47896-d1ca-4363-aee7-e1093c327291",
+        "part_id": "fin_0v_procedural",
+        "flight": {
+          "part_id": "fin_0v_procedural",
+          "dry_mass_t": 0.002865731054043863,
+          "mass_offset_m": {
+            "x": 0.00029292143881320953,
+            "y": -0.07245832681655884,
+            "z": 0.22335566580295563
+          },
+          "inertia_per_t": [
+            {
+              "x": 0.07098827300296003,
+              "y": 3.655637372429333e-06,
+              "z": 1.6532541947904539e-06
+            },
+            {
+              "x": 3.655637372429332e-06,
+              "y": 0.016327367291646924,
+              "z": 0.009873029468052148
+            },
+            {
+              "x": 1.653254194790456e-06,
+              "y": 0.009873029468052148,
+              "z": 0.05486133799547406
+            }
+          ],
+          "surface": {
+            "fixed_lift_coeff": 0.0,
+            "moving_lift_coeff": 0.12276778370141983,
+            "range_deg": 0.0,
+            "speed": 30.0,
+            "pressure_offset_m": {
+              "x": 0.0018095970153808594,
+              "y": -0.1837615966796875,
+              "z": -2.7059288024902344
+            },
+            "pivot_m": {
+              "x": -1.1920930376163597e-07,
+              "y": -3.576279254957626e-07,
+              "z": -1.7053029724000551e-13
+            }
+          },
+          "mirrored": false
+        }
+      },
+      {
+        "guid": "75d00f18-47a0-4189-824b-a26499106787",
+        "part_id": "fin_0v_procedural",
+        "flight": {
+          "part_id": "fin_0v_procedural",
+          "dry_mass_t": 0.0028657167495111935,
+          "mass_offset_m": {
+            "x": 0.00029309652745723724,
+            "y": -0.07245999574661255,
+            "z": 0.2233574390411377
+          },
+          "inertia_per_t": [
+            {
+              "x": 0.07098809418346146,
+              "y": 3.683676389982489e-06,
+              "z": 1.6537690467156928e-06
+            },
+            {
+              "x": 3.68367638998249e-06,
+              "y": 0.016327577504457968,
+              "z": 0.009873003681341155
+            },
+            {
+              "x": 1.6537690467156955e-06,
+              "y": 0.009873003681341155,
+              "z": 0.0548609534446413
+            }
+          ],
+          "surface": {
+            "fixed_lift_coeff": 0.0,
+            "moving_lift_coeff": 0.12276776134967804,
+            "range_deg": 0.0,
+            "speed": 30.0,
+            "pressure_offset_m": {
+              "x": 0.0018084361217916012,
+              "y": -0.18376153707504272,
+              "z": -2.705937385559082
+            },
+            "pivot_m": {
+              "x": 2.3841860752327193e-07,
+              "y": -2.9802333756379085e-07,
+              "z": -4.547474593066814e-13
+            }
+          },
+          "mirrored": false
+        }
+      }
+    ]
+  },
+  "Stock04_Jet": {
+    "source_fnv1a64": "328ef0ceefdaea9f",
+    "parts": [
+      {
+        "guid": "00fbfe75-a739-4ef3-a4d0-909939b547d5",
+        "part_id": "wing_1v_procedural_light",
+        "flight": {
+          "part_id": "wing_1v_procedural_light",
+          "dry_mass_t": null,
+          "mass_offset_m": null,
+          "inertia_per_t": null,
+          "surface": {
+            "fixed_lift_coeff": 1.9532676935195923,
+            "moving_lift_coeff": 0.6661900281906128,
+            "range_deg": 30.0,
+            "speed": 30.0,
+            "pressure_offset_m": {
+              "x": -0.0445016473531723,
+              "y": -1.881187915802002,
+              "z": 1.8009992837905884
+            },
+            "pivot_m": {
+              "x": 0.0003202930383849889,
+              "y": -1.7048048973083496,
+              "z": 1.7961030006408691
+            }
+          },
+          "mirrored": false
+        }
+      },
+      {
+        "guid": "06ac624d-8e95-42fc-a746-53dca1fa2c36",
+        "part_id": "wing_1v_procedural_light",
+        "flight": {
+          "part_id": "wing_1v_procedural_light",
+          "dry_mass_t": null,
+          "mass_offset_m": null,
+          "inertia_per_t": null,
+          "surface": {
+            "fixed_lift_coeff": 1.9532676935195923,
+            "moving_lift_coeff": 0.6661900281906128,
+            "range_deg": 30.0,
+            "speed": 30.0,
+            "pressure_offset_m": {
+              "x": 0.04449791833758354,
+              "y": -1.8811839818954468,
+              "z": 1.8010013103485107
+            },
+            "pivot_m": {
+              "x": 0.0003216415934730321,
+              "y": -1.7048041820526123,
+              "z": 1.7961010932922363
+            }
+          },
+          "mirrored": true
+        }
+      },
+      {
+        "guid": "db344ef3-ac63-46cb-b7e5-85898e8c6249",
+        "part_id": "stabilizer_1v_procedural_light",
+        "flight": {
+          "part_id": "stabilizer_1v_procedural_light",
+          "dry_mass_t": null,
+          "mass_offset_m": null,
+          "inertia_per_t": null,
+          "surface": {
+            "fixed_lift_coeff": 0.27433109283447266,
+            "moving_lift_coeff": 0.1337871253490448,
+            "range_deg": 15.0,
+            "speed": 30.0,
+            "pressure_offset_m": {
+              "x": -0.0003470430674497038,
+              "y": -0.6112210154533386,
+              "z": 0.6534244418144226
+            },
+            "pivot_m": {
+              "x": 0.000303804874420166,
+              "y": -0.4128605127334595,
+              "z": 0.6532647013664246
+            }
+          },
+          "mirrored": false
+        }
+      },
+      {
+        "guid": "536d6f19-2e66-4c64-bc9a-63ca1d93739e",
+        "part_id": "stabilizer_1v_procedural_light",
+        "flight": {
+          "part_id": "stabilizer_1v_procedural_light",
+          "dry_mass_t": null,
+          "mass_offset_m": null,
+          "inertia_per_t": null,
+          "surface": {
+            "fixed_lift_coeff": 0.27433112263679504,
+            "moving_lift_coeff": 0.1337870955467224,
+            "range_deg": 15.0,
+            "speed": 30.0,
+            "pressure_offset_m": {
+              "x": -0.0026557939127087593,
+              "y": -0.6112210154533386,
+              "z": 0.6534191370010376
+            },
+            "pivot_m": {
+              "x": 0.0003038346185348928,
+              "y": -0.4128584563732147,
+              "z": 0.6532621383666992
+            }
+          },
+          "mirrored": true
+        }
+      }
+    ]
+  }
+}

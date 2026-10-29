@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct FlightGeometry {
+    /// RigidbodyBehavior MassScaleType: 0 = physical, 2 = inverse mass.
+    #[serde(default)]
+    pub inertia_mode: u8,
     #[serde(default)]
     pub rcs_tuning: RcsTuning,
     #[serde(default)]
@@ -23,6 +26,8 @@ pub struct FlightGeometry {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ControlSurface {
+    #[serde(default = "surface_sign")]
+    pub mirror_sign: f64,
     #[serde(default)]
     pub deploy: Option<SurfaceDeploy>,
     #[serde(default)]
@@ -144,4 +149,88 @@ pub struct SurfaceDeploy {
     pub separate: bool,
     pub angle_rad: f64,
     pub min_control_angle_rad: f64,
+}
+
+/// Per-instance procedural shape measurements. They never change engine/wheel ratings.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct PartFlight {
+    #[serde(default)]
+    pub mirrored: bool,
+    pub part_id: String,
+    pub dry_mass_t: Option<f64>,
+    pub mass_offset_m: Option<DVec3>,
+    pub inertia_per_t: Option<[DVec3; 3]>,
+    pub surface: Option<SurfaceFlight>,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SurfaceFlight {
+    pub fixed_lift_coeff: f64,
+    pub moving_lift_coeff: f64,
+    pub pivot_m: DVec3,
+    pub pressure_offset_m: DVec3,
+    pub range_deg: f64,
+    pub speed: f64,
+}
+impl PartFlight {
+    pub fn valid(&self) -> bool {
+        let vector = |v: DVec3| {
+            [v.x, v.y, v.z]
+                .iter()
+                .all(|x| x.is_finite() && x.abs() < 1e4)
+        };
+        self.dry_mass_t
+            .is_none_or(|m| m.is_finite() && (0.001..=1e6).contains(&m))
+            && self.mass_offset_m.is_none_or(vector)
+            && self.inertia_per_t.is_none_or(|t| {
+                t.iter().all(|v| vector(*v))
+                    && t[0].x > 0.
+                    && t[0].x * t[1].y - t[0].y * t[1].x > 0.
+                    && t[0].dot(t[1].cross(t[2])) > 0.
+                    && (t[0].y - t[1].x).abs() < 1e-8
+                    && (t[0].z - t[2].x).abs() < 1e-8
+                    && (t[1].z - t[2].y).abs() < 1e-8
+            })
+            && self.surface.as_ref().is_none_or(|s| {
+                vector(s.pivot_m)
+                    && vector(s.pressure_offset_m)
+                    && [
+                        s.fixed_lift_coeff,
+                        s.moving_lift_coeff,
+                        s.range_deg,
+                        s.speed,
+                    ]
+                    .iter()
+                    .all(|v| v.is_finite() && (0. ..=1e4).contains(v))
+            })
+    }
+}
+
+fn surface_sign() -> f64 {
+    1.
+}
+
+#[cfg(test)]
+mod instance_tests {
+    use super::*;
+    #[test]
+    fn instance_geometry_rejects_nonphysical_tensors_and_old_crafts_default_cleanly() {
+        let mut f = PartFlight {
+            part_id: "part".into(),
+            inertia_per_t: Some([
+                DVec3::new(1., 0., 0.),
+                DVec3::new(0., 2., 0.),
+                DVec3::new(0., 0., 3.),
+            ]),
+            ..Default::default()
+        };
+        assert!(f.valid());
+        f.inertia_per_t.as_mut().unwrap()[1].y = -2.;
+        assert!(!f.valid());
+        f.inertia_per_t = None;
+        f.dry_mass_t = Some(f64::NAN);
+        assert!(!f.valid());
+        f.dry_mass_t = Some(2.);
+        let text = serde_json::to_string(&f).unwrap();
+        assert_eq!(serde_json::from_str::<PartFlight>(&text).unwrap(), f);
+    }
 }

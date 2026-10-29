@@ -65,6 +65,46 @@ pub struct CraftPart {
     /// This part's own paint over the craft's (base, accent), when set.
     #[serde(default)]
     pub colors: Option<Paint>,
+    #[serde(default)]
+    pub flight: Option<crate::flight_geometry::PartFlight>,
+}
+
+impl CraftPart {
+    pub fn dry_mass(&self, def: &PartDef) -> f64 {
+        self.flight
+            .as_ref()
+            .filter(|f| f.part_id == def.id && f.valid())
+            .and_then(|f| f.dry_mass_t)
+            .unwrap_or(def.mass_t)
+    }
+    pub fn flight_definition(&self, def: &PartDef) -> PartDef {
+        let mut result = def.clone();
+        if let Some(f) = self
+            .flight
+            .as_ref()
+            .filter(|f| f.part_id == def.id && f.valid())
+        {
+            result.mass_t = self.dry_mass(def);
+            if let Some(com) = f.mass_offset_m {
+                result.mass_offset_m = com;
+                result.flight_geometry.mass_offset_m = com;
+            }
+            if let Some(t) = f.inertia_per_t {
+                result.flight_geometry.inertia_per_t = Some(t);
+                result.flight_geometry.inertia_source = "runtime_shape".into();
+            }
+            if let (Some(actual), Some(surface)) = (&f.surface, &mut result.flight_geometry.surface)
+            {
+                surface.fixed_lift_coeff = Some(actual.fixed_lift_coeff);
+                surface.moving_lift_coeff = Some(actual.moving_lift_coeff);
+                surface.pivot_m = actual.pivot_m;
+                surface.speed = actual.speed;
+                result.ctrl_pressure_offset_m = actual.pressure_offset_m;
+                result.ctrl_range_deg = actual.range_deg;
+            }
+        }
+        result
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -231,7 +271,7 @@ impl Craft {
         let mut unknown = Vec::new();
         for p in &self.parts {
             match by_id.get(p.part_id.as_str()) {
-                Some(def) => dry += def.mass_t,
+                Some(def) => dry += p.dry_mass(def),
                 None => unknown.push(p.part_id.clone()),
             }
             for r in &p.resources {

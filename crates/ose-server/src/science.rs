@@ -515,6 +515,7 @@ mod tests {
             name: "x".into(),
             description: String::new(),
             parts: vec![ose_data::craft::CraftPart {
+                flight: None,
                 colors: None,
                 guid: "0".into(),
                 part_id: next.parts[0].clone(),

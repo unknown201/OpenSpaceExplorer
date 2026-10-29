@@ -1039,6 +1039,7 @@ mod tests {
         y: f64,
     ) -> CraftPart {
         CraftPart {
+            flight: None,
             colors: None,
             guid: id.into(),
             part_id: id.into(),

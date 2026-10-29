@@ -154,6 +154,13 @@ pub fn craft_from_value(v: &Value) -> anyhow::Result<Craft> {
             None => (None, None, None),
         };
         parts.push(CraftPart {
+            flight: ps["isMirrored"].as_bool().unwrap_or(false).then(|| {
+                ose_data::flight_geometry::PartFlight {
+                    part_id: s(p, "partName"),
+                    mirrored: true,
+                    ..Default::default()
+                }
+            }),
             colors: part_colors(p),
             guid: guids[i].clone(),
             part_id: s(p, "partName"),
@@ -231,10 +238,57 @@ pub fn craft_from_value(v: &Value) -> anyhow::Result<Craft> {
     })
 }
 
+/// Reapply curated measurements only to the exact stock assembly they were captured from.
+pub fn apply_stock_flight_geometry(craft: &mut Craft, source: &[u8]) -> anyhow::Result<()> {
+    let values: Value = serde_json::from_str(include_str!(
+        "../../../assets/own/stock-flight-geometry.json"
+    ))?;
+    let Some(entry) = values.get(&craft.name) else {
+        return Ok(());
+    };
+    let hash = source.iter().fold(0xcbf29ce484222325_u64, |h, b| {
+        (h ^ *b as u64).wrapping_mul(0x100000001b3)
+    });
+    anyhow::ensure!(
+        entry["source_fnv1a64"].as_str() == Some(&format!("{hash:016x}")),
+        "stock flight geometry requires a fresh capture for {}",
+        craft.name
+    );
+    for row in entry["parts"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("flight geometry parts"))?
+    {
+        let part = craft
+            .parts
+            .iter_mut()
+            .find(|p| {
+                p.guid == row["guid"].as_str().unwrap_or("")
+                    && p.part_id == row["part_id"].as_str().unwrap_or("")
+            })
+            .ok_or_else(|| anyhow::anyhow!("captured part does not match stock craft"))?;
+        let flight: ose_data::flight_geometry::PartFlight =
+            serde_json::from_value(row["flight"].clone())?;
+        anyhow::ensure!(flight.valid(), "invalid captured part geometry");
+        part.flight = Some(flight);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn stock_measurements_require_the_original_assembly_bytes() {
+        let mut craft = Craft {
+            name: "Jumping Flea".into(),
+            ..Default::default()
+        };
+        assert!(apply_stock_flight_geometry(&mut craft, b"modified stock assembly").is_err());
+        craft.name = "Custom craft".into();
+        assert!(apply_stock_flight_geometry(&mut craft, b"custom").is_ok());
+    }
 
     #[test]
     fn two_part_craft_builds_a_tree_with_resources_and_stages() {

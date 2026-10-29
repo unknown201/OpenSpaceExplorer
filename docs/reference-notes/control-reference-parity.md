@@ -79,7 +79,7 @@ inputs; manual-only wheels and IgnoreSASInputs surfaces therefore receive the sa
 raw input as the reference. Analog input participates in trim before scaling.
 Button mapping and device-specific hardware calibration remain outside this increment.
 
-Protocol 52 carries precision mode explicitly. The normal flight handler retains its
+Protocol 53 carries precision mode explicitly. The normal flight handler retains its
 0.1 translation scale, followed by the RCS module's authored lever-distance reduction
 or 0.1 factor. Full-thrust snapping precedes precision; the strict 0.05 request
 threshold follows it. Shielded thrusters obey shieldedCanActivate. These details are
@@ -128,7 +128,7 @@ angular velocity [-x,-y,z]. The native example accepts a reference CSV as its se
 argument and initializes from its first pose/state, then replays every recorded input.
 There is no fitted time/pose offset, mass correction or inertia calibration.
 
-This first executable comparison **fails**: the captured Jumping Flea starts at
+The baseline executable comparison at `abcfc19` **fails**: the captured Jumping Flea starts at
 2.598231454 t versus OSE's 2.5031 t, and OSE rotates substantially faster. The roughly
 95 kg difference includes the omitted occupied-seat mass; source inspection also
 found RigidbodyBehavior's enabled inertia-tensor scaling absent from the imported
@@ -137,9 +137,46 @@ from their prefab defaults. These are measured gaps, not closed parity claims.
 Full joint/PhysX sample-phase equivalence is also unverified. See the recorder README
 for capture conditions and cleanup requirements.
 
-Measured numeric fixtures and an explicit Unity-frame comparison option are now
-committed with the recorder. The second capture also includes individual runtime
-masses, COMs and principal inertia tensors. Cleanup is complete: temporary loader,
-plugin and campaign removed; the original campaign verified unchanged. The occupied
-crew mass experiment is preserved locally and withheld after a stock jet takeoff
-regression; it is not counted as implemented or included in the deployed release.
+Measured numeric fixtures and an explicit Unity-frame comparison option are
+committed with the recorder. Cleanup is complete: temporary loader, plugin and
+campaign removed; the original campaign was verified unchanged.
+
+The mass/inertia increment adds occupied-seat mass (0.095 t per Kerbal, including
+the reference IVA pack mass), keeps it synchronized with the flight and joint
+solvers, and restores it after loading a saved structure. Per-instance `PartFlight`
+data retains measured dry mass, mass centre, unscaled collider tensor and moving
+surface geometry. Measurements for Jumping Flea and Aeris-K2 are stored separately
+from catalogue defaults. Stock re-import checks the original assembly fingerprint;
+legacy saves recover known stock part measurements by stable part GUID/type.
+Modified or unknown parts keep their supplied geometry/defaults.
+
+The imported inertia settings reproduce RigidbodyBehavior's cached unscaled tensor,
+inverse-mass scaling, detached single-part rule and low-mass scalar. Scaling changes
+the part's own inertia, not the mass used by the parallel-axis term. Physical inertia
+uses each part COM. SAS receives the separate origin-translated MOI reported by
+PartOwnerComponent; the captured Flea verifies both quantities independently.
+
+The [PhysX 4.1 integrator](https://raw.githubusercontent.com/NVIDIAGameWorks/PhysX/4.1/physx/source/lowleveldynamics/src/DyBodyCoreIntegrator.h)
+advances each body's angular velocity without its own gyroscopic term. Summing
+constrained bodies therefore leaves the gyroscopic contribution from the joint
+lever masses. Imported reference bodies now use that aggregate equation. The
+physical path retains full angular-momentum integration and its conservation
+regression. A single-body reference regression checks constant world spin about
+non-principal axes; it is deliberately different from physical free precession.
+The aggregate joint approximation is supported by the source and runtime trace,
+but is not a replacement for measuring flexible-joint transients.
+
+Moving and fixed lift now retain their separate pressure points and local airflow.
+Surface actuation follows the reference force-before-deflection update order;
+new deflection affects the next force tick. Authored mirrored-surface signs are
+preserved through stock imports and editor mirror placement. Their tests retain
+both force-location and one-tick ordering assertions.
+
+Replaying the same 600 captured samples now gives zero mass error, maximum angular
+rate error 0.2222502 rad/s (baseline 9.5071410), and maximum attitude error 8.147963
+degrees (baseline 179.819182). RMS attitude error is 6.020884 degrees. The original
+0.5-degree / 0.01-rad/s thresholds remain unchanged, so **the comparison still fails**.
+See `jumping-flea-after-mass-inertia.json` beside the baseline fixture. Remaining
+work includes exact capture/module/PhysX phase and resource-request timing,
+additional procedural shapes and joint-solver behavior. No time/pose offset or
+controller gain was fitted to the recording.

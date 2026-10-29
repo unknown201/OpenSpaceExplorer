@@ -102,6 +102,10 @@ cache/config/log directories, and the isolated `OSE Control Validation 2026102`
 campaign were removed. All captures/logs and a copy of the temporary campaign are
 archived under `.cache/ksp2-runtime-captures-20261029` in the original workspace.
 The existing Default campaign's files hashed identically before and after cleanup.
-A crew-mass implementation experiment is preserved in the integration checkout's
-`.cache/control-crew-in-progress.patch`; it is not deployed because a stock jet
-regression still fails. Capturing measurements does not close that implementation gap.
+The subsequent mass/inertia implementation resolves that mass-only experiment's
+jet regression by retaining separate fixed/moving force locations and the reference
+force-before-deflection order. It includes crew mass, measured instance geometry,
+reference inertia scaling, PhysX-style aggregate rotation, and separate SAS MOI.
+`jumping-flea-after-mass-inertia.json` records the improved but still failing replay:
+0 t mass error, 8.147963-degree maximum angle error and 0.2222502 rad/s maximum rate
+error. Thresholds are unchanged; this is not a whole-game parity pass.

@@ -238,6 +238,18 @@ impl Universe {
     }
 
     pub fn set_crew(&mut self, e: Entity, members: Vec<(usize, String)>) {
+        let mass = self
+            .world
+            .get_mut::<structure::Structure>(e)
+            .map(|mut st| st.set_occupied_seats(&members));
+        if let Some(mass) = mass {
+            if let Some(mut p) = self.world.get_mut::<flight::Powered>(e) {
+                p.mass_t = mass;
+            }
+            if let Some(mut p) = self.world.get_mut::<flight::Dormant>(e) {
+                p.0.mass_t = mass;
+            }
+        }
         self.world.entity_mut(e).insert(Crew { members });
     }
 

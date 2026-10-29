@@ -85,6 +85,25 @@ pub fn surface_mix(
     normal: DVec3,
     deflection: f64,
 ) -> f64 {
+    surface_mix_mirrored(
+        control_up,
+        input,
+        com_from_pivot,
+        hinge,
+        normal,
+        deflection,
+        1.,
+    )
+}
+pub fn surface_mix_mirrored(
+    control_up: DVec3,
+    input: DVec3,
+    com_from_pivot: DVec3,
+    hinge: DVec3,
+    normal: DVec3,
+    deflection: f64,
+    mirror_sign: f64,
+) -> f64 {
     let roll = input.dot(control_up);
     let mut action = (input - control_up * roll).dot(hinge);
     let h = glam::DVec3::new(hinge.x, hinge.y, hinge.z);
@@ -102,7 +121,7 @@ pub fn surface_mix(
     if control_up.dot(com_from_pivot) < 0.0 {
         action = -action;
     }
-    (action - roll).clamp(-1.0, 1.0)
+    (action - roll * mirror_sign).clamp(-1.0, 1.0) * mirror_sign
 }
 
 /// Joint translation/rotation allocation over real, one-way nozzle columns. Per-part

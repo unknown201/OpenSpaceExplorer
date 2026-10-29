@@ -292,6 +292,10 @@ pub struct RigidVessel {
     /// Box size of each part (vessel frame axes), m, as used for its inertia.
     pub sizes_m: Vec<DVec3>,
     unit_mass_properties: Vec<MassProperties>,
+    reference_masses_t: Vec<f64>,
+    inertia_modes: Vec<u8>,
+    inertia_factors: Vec<f64>,
+    reference_frozen: bool,
     /// Parts still simulated (removed ones were staged away or broke off).
     pub present: Vec<bool>,
     pub links: Vec<Link>,
@@ -347,16 +351,44 @@ impl RigidVessel {
                 continue;
             }
             let mass = mass.max(0.001);
-            if mass == self.masses_t[i] {
+            if !self.reference_frozen {
+                self.reference_masses_t[i] = mass;
+            }
+            let factor = self.inertia_factor(i, self.inertia_modes[i], mass);
+            if mass == self.masses_t[i] && factor == self.inertia_factors[i] {
                 continue;
             }
-            let mut properties = self.unit_mass_properties[i];
-            properties.set_mass(mass, true);
+            let unit = self.unit_mass_properties[i];
+            let properties = MassProperties::with_inertia_matrix(
+                unit.local_com,
+                mass,
+                unit.reconstruct_inertia_matrix() * (mass * factor),
+            );
+            self.inertia_factors[i] = factor;
             let body = &mut self.bodies[self.bodies_of[i]];
             body.set_additional_mass_properties(properties, true);
             body.recompute_mass_properties_from_colliders(&self.colliders);
             self.masses_t[i] = mass;
         }
+    }
+
+    pub(crate) fn inertia_factor(&self, i: usize, mode: u8, mass: f64) -> f64 {
+        crate::dynamics::reference_inertia_factor(
+            mode,
+            mass,
+            self.reference_masses_t[i],
+            self.present.iter().filter(|p| **p).count(),
+        )
+    }
+    pub(crate) fn carry_inertia_reference(&mut self, old: &Self, map: &[Option<usize>]) {
+        for (i, j) in map.iter().enumerate() {
+            if let Some(j) = j {
+                self.reference_masses_t[*j] = old.reference_masses_t[i];
+            }
+        }
+        self.reference_frozen = old.reference_frozen;
+        let masses = self.masses_t.clone();
+        self.set_part_masses(&masses);
     }
 
     /// Build from a craft, every part at its authored placement, at rest.
@@ -377,12 +409,17 @@ impl RigidVessel {
         let mut dry_masses_t = Vec::with_capacity(craft.parts.len());
         let mut sizes_m = Vec::with_capacity(craft.parts.len());
         let mut unit_mass_properties = Vec::with_capacity(craft.parts.len());
+        let mut inertia_modes = Vec::with_capacity(craft.parts.len());
+        let mut inertia_factors = Vec::with_capacity(craft.parts.len());
         let mut bodies_of = Vec::with_capacity(craft.parts.len());
         let mut rots = Vec::with_capacity(craft.parts.len());
         let mut local_com_m = Vec::with_capacity(craft.parts.len());
         let mut rest_com_offset_m = Vec::with_capacity(craft.parts.len());
         for (i, p) in craft.parts.iter().enumerate() {
-            let def = by_id.get(p.part_id.as_str()).copied();
+            let effective = by_id
+                .get(p.part_id.as_str())
+                .map(|d| p.flight_definition(d));
+            let def = effective.as_ref();
             let m = part_mass_t(craft, i, def, &unit_mass);
             // solid box over the part's bounds; deployed shapes (parachutes) are capped
             let size = def
@@ -413,8 +450,15 @@ impl RigidVessel {
                 )
             };
             unit_mass_properties.push(unit);
-            let mut properties = unit;
-            properties.set_mass(m, true);
+            let mode = def.map(|d| d.flight_geometry.inertia_mode).unwrap_or(0);
+            let factor = crate::dynamics::reference_inertia_factor(mode, m, m, craft.parts.len());
+            inertia_modes.push(mode);
+            inertia_factors.push(factor);
+            let properties = MassProperties::with_inertia_matrix(
+                unit.local_com,
+                m,
+                unit.reconstruct_inertia_matrix() * (m * factor),
+            );
             let rot = quat_to_vessel(p.local_rotation);
             let local_com = to_vessel(def.map(|d| d.mass_offset_m).unwrap_or(DVec3::ZERO));
             local_com_m.push(local_com);
@@ -495,6 +539,10 @@ impl RigidVessel {
             .map(|p| to_vessel(p.local_position))
             .collect();
         RigidVessel {
+            reference_masses_t: masses_t.clone(),
+            inertia_modes,
+            inertia_factors,
+            reference_frozen: false,
             masses_t,
             dry_masses_t,
             sizes_m,
@@ -619,6 +667,7 @@ impl RigidVessel {
         forces: &[PartForce],
         turning: Option<&Turning>,
     ) -> Vec<Broken> {
+        self.reference_frozen = true;
         let n = self.len();
         for &h in &self.bodies_of {
             if let Some(b) = self.bodies.get_mut(h) {
@@ -1035,6 +1084,11 @@ mod tests {
             serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap(),
             serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap(),
         );
+        for craft in &mut data.0 {
+            for part in &mut craft.parts {
+                part.flight = None;
+            }
+        }
         // Analytical fixtures explicitly define their force points, bounds and inertia.
         for def in &mut data.1 {
             def.flight_geometry = Default::default();

@@ -98,7 +98,7 @@ def extract(ex, part, source):
         deploy={'axis':obj(deploy_axis),'pivot_m':obj(deploy_pivot),'separate':separate,
             'angle_rad':math.radians(surface.get('CtrlSurfaceDeployAngle',90.) if surface.get('UseCtrlSurfaceDeployAngle',False) else surface.get('CtrlSurfaceRange',15.)),
             'min_control_angle_rad':math.radians(surface.get('CtrlSurfaceMinimumLockAngleForControl',0.))}
-        out['surface']={'deploy':deploy,'fixed_lift_coeff':0. if surface.get('DisableLiftingSurfaceForce',False) else None,
+        out['surface']={'mirror_sign':surface.get('CtrlTransformSign',-1.),'deploy':deploy,'fixed_lift_coeff':0. if surface.get('DisableLiftingSurfaceForce',False) else None,
             'moving_lift_coeff':surface.get('CtrlSurfaceArea',0.) if surface.get('DisableLiftingSurfaceForce',False) else None,'normal':obj(normal),'axis':obj(axis),'pivot_m':obj(pivot),'speed':surface.get('ActuatorSpeedNormalScale',10.),
             'exponential':surface.get('UseExponentialSpeed',True),'ignore_sas':surface.get('IgnoreSASInputs',False)}
     config=modules.get('PartComponentModule_Gimbal');gimbal_nodes=[]
@@ -192,6 +192,7 @@ def extract(ex, part, source):
         inertia=np.eye(3)*np.trace(covariance)-covariance
         if np.linalg.eigvalsh(inertia).min()>0:
             out['inertia_per_t']=[obj(inertia[:,i]) for i in range(3)];out['inertia_source']='authored_colliders'
+    out['inertia_mode']=2 if out['inertia_per_t'] is not None and part!='launchclamp_3v_ground' else 0
     if audit:out['inertia_source']='bounds_fallback: '+', '.join(sorted(set(audit)))
     return out
 

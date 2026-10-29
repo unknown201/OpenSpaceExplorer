@@ -103,7 +103,10 @@ fn main() -> anyhow::Result<()> {
                 Err(_) => json5::from_str(&text)?,
             };
             match ose_importer::craft::craft_from_value(&v) {
-                Ok(c) => crafts.push(c),
+                Ok(mut c) => {
+                    ose_importer::craft::apply_stock_flight_geometry(&mut c, text.as_bytes())?;
+                    crafts.push(c)
+                }
                 Err(e) => println!("warning: stock craft {}: {e}", f.display()),
             }
         }

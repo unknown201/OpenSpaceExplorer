@@ -251,6 +251,7 @@ impl Editor {
         };
         if self.craft.parts.is_empty() {
             self.craft.parts.push(CraftPart {
+                flight: None,
                 colors: None,
                 guid: format!("p{}", 1),
                 part_id: spec.id.clone(),
@@ -340,6 +341,7 @@ impl Editor {
             self.craft.parts[target].local_position + quat_rotate(pq, local_position);
         let idx = self.craft.parts.len();
         self.craft.parts.push(CraftPart {
+            flight: None,
             colors: None,
             guid: format!("p{}", idx + 1),
             part_id: spec.id.clone(),
@@ -1045,6 +1047,7 @@ impl Editor {
         } else {
             0
         };
+        let mirrored_pair = symmetry == 2 && self.is_plane();
         let mut out = Vec::new();
         for (guid, (pos, q)) in (self.next_guid()..).zip(poses) {
             let resources = spec
@@ -1056,8 +1059,14 @@ impl Editor {
                     capacity_units: c.capacity_units,
                 })
                 .collect();
+            let mirrored = mirrored_pair && out.len() == 1;
             out.push(self.craft.parts.len());
             self.craft.parts.push(CraftPart {
+                flight: mirrored.then(|| ose_data::flight_geometry::PartFlight {
+                    part_id: spec.id.clone(),
+                    mirrored: true,
+                    ..Default::default()
+                }),
                 colors: None,
                 guid: format!("p{guid}"),
                 part_id: spec.id.clone(),

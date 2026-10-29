@@ -102,7 +102,7 @@ pub fn delta_v_by_stage(
         })
         .collect();
     let def_of = |i: usize| cat.parts.get(craft.parts[i].part_id.as_str()).copied();
-    let dry_mass = |i: usize| def_of(i).map(|d| d.mass_t).unwrap_or(0.0);
+    let dry_mass = |i: usize| def_of(i).map(|d| craft.parts[i].dry_mass(d)).unwrap_or(0.0);
     let crossfeed_ok =
         |i: usize| craft.parts[i].fuel_crossfeed && def_of(i).is_some_and(|d| d.fuel_cross_feed);
 
@@ -451,6 +451,7 @@ mod tests {
         res: &[(&str, f64)],
     ) -> CraftPart {
         CraftPart {
+            flight: None,
             colors: None,
             guid: guid.into(),
             part_id: part.into(),

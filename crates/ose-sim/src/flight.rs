@@ -1341,7 +1341,7 @@ fn control_request(
 ) -> (DVec3, f64) {
     let (bx, by, bz) = control_basis(p);
     let local = |v: DVec3| DVec3::new(v.dot(bx), v.dot(by), v.dot(bz));
-    let inertia = engine.mass.inertia;
+    let inertia = engine.controller_inertia.unwrap_or(engine.mass.inertia);
     let w = local(p.angvel + p.facing * p.roll_rate);
     let fallback_torque = p
         .rotation_stage()
@@ -1499,6 +1499,33 @@ fn turn_with_parts(
         .clamp(1.0, 256.0) as usize;
     let h = dt / steps as f64;
     for _ in 0..steps {
+        if engine.gyroscopic_compensation != crate::dynamics::Inertia::default() {
+            // Summing constrained PhysX bodies leaves the parallel-axis (lever-mass)
+            // gyroscopic term, while omitting each body's own tensor contribution.
+            let own = engine.gyroscopic_compensation;
+            let lever = crate::dynamics::Inertia {
+                x: inertia.x - own.x,
+                y: inertia.y - own.y,
+                z: inertia.z - own.z,
+            };
+            let mut midpoint = w1;
+            let mut next = w1;
+            for _ in 0..4 {
+                let y = rotate(facing, midpoint, h * 0.5);
+                let z = rotate(top, midpoint, h * 0.5);
+                let x = y.cross(z);
+                let w = DVec3::new(midpoint.dot(x), midpoint.dot(y), midpoint.dot(z));
+                let t = torque_body + DVec3::new(external.dot(x), external.dot(y), external.dot(z));
+                let a = inertia.solve(t - w.cross(lever.apply(w)));
+                next = w1 + (x * a.x + y * a.y + z * a.z) * h;
+                midpoint = (w1 + next) * 0.5;
+            }
+            facing = rotate(facing, midpoint, h);
+            top = rotate(top, midpoint, h);
+            w1 = next;
+            continue;
+        }
+
         let mut midpoint_w = w1;
         let mut next_momentum = momentum;
         for _ in 0..4 {
@@ -1609,6 +1636,10 @@ pub struct Propulsion {
     pub actuators: Option<Vec<crate::actuators::Actuator>>,
     /// Inputs already limited by this tick's delivered actuator resources.
     pub control_allocation: Option<crate::actuators::Allocation>,
+    /// PhysX 4.1 omits each rigid body's own gyroscopic term; joint lever masses still contribute.
+    pub gyroscopic_compensation: crate::dynamics::Inertia,
+    /// PartOwnerComponent reports origin-translated MOI to SAS, separately from physical COM inertia.
+    pub controller_inertia: Option<crate::dynamics::Inertia>,
     /// Buoyancy/suspension forces and moments are inertial, unlike mounted engine forces.
     pub environment_force_kn: DVec3,
     pub environment_torque_knm: DVec3,
@@ -2535,6 +2566,22 @@ mod tests {
         let frame = vessel_basis(&p);
         turn_with_parts(&mut p, &engine, target, 0.0, 0.1, &mut out);
         assert!((out.control_torque_knm.unwrap() - frame.1 * 0.5).length() < 1e-10);
+    }
+
+    #[test]
+    fn physx_single_body_keeps_world_spin_without_own_gyroscopic_precession() {
+        let (mut p, mut engine) = body_dynamics_fixture();
+        p.attitude = Attitude::Free;
+        p.rotation_input = DVec3::ZERO;
+        p.angvel = DVec3::new(0.5, 0., 0.9);
+        p.roll_rate = 0.7;
+        engine.gyroscopic_compensation = engine.mass.inertia;
+        let initial = p.angvel + p.facing * p.roll_rate;
+        for _ in 0..50 {
+            let f = p.facing;
+            turn_with_parts(&mut p, &engine, f, 0., 0.02, &mut Default::default());
+        }
+        assert!((p.angvel + p.facing * p.roll_rate - initial).length() < 1e-8);
     }
 
     #[test]

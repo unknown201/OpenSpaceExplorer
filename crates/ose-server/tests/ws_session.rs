@@ -403,6 +403,7 @@ async fn hello_catalog_and_snapshots() {
         description: String::new(),
         parts: vec![
             ose_data::craft::CraftPart {
+                flight: None,
                 colors: None,
                 guid: "a".into(),
                 part_id: "pod_1v_conical_crew".into(),
@@ -422,6 +423,7 @@ async fn hello_catalog_and_snapshots() {
                 fuel_line_target: None,
             },
             ose_data::craft::CraftPart {
+                flight: None,
                 colors: None,
                 guid: "b".into(),
                 part_id: "engine_1v_methalox_terrier".into(),
@@ -899,6 +901,7 @@ fn starter_craft() -> ose_data::craft::Craft {
                 other: Option<&str>,
                 y: f64| {
         ose_data::craft::CraftPart {
+            flight: None,
             colors: None,
             guid: guid.into(),
             part_id: id.into(),

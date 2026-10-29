@@ -211,6 +211,25 @@ pub fn capture(
     }
 }
 
+fn migrate_stock_geometry(craft: &mut ose_data::craft::Craft) {
+    static STOCK: std::sync::LazyLock<Vec<ose_data::craft::Craft>> =
+        std::sync::LazyLock::new(|| {
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json"))
+                .expect("stock craft")
+        });
+    for part in &mut craft.parts {
+        if part.flight.is_none() {
+            if let Some(template) = STOCK
+                .iter()
+                .flat_map(|c| &c.parts)
+                .find(|p| p.guid == part.guid && p.part_id == part.part_id)
+            {
+                part.flight = template.flight.clone();
+            }
+        }
+    }
+}
+
 /// Restore a save into a fresh universe (bodies already spawned). Returns the vessel registry.
 pub fn restore(
     u: &mut Universe,
@@ -240,14 +259,18 @@ pub fn restore(
         }
         if let Some(saved) = v.parts.as_ref().filter(|s| !s.craft.parts.is_empty()) {
             u.set_crew(e, v.crew.clone());
-            u.restore_parts(e, saved, parts, resources);
+            let mut saved = saved.clone();
+            migrate_stock_geometry(&mut saved.craft);
+            u.restore_parts(e, &saved, parts, resources);
             u.set_docked(e, v.docked.clone());
         } else if let Some(craft) = v.craft.as_ref().filter(|c| !c.parts.is_empty()) {
+            let mut craft = craft.clone();
+            migrate_stock_geometry(&mut craft);
             u.set_craft(e, craft.clone());
             u.set_crew(e, v.crew.clone());
             u.set_structure(
                 e,
-                ose_sim::structure::Structure::build(craft, parts, resources),
+                ose_sim::structure::Structure::build(&craft, parts, resources),
             );
             u.set_docked(e, v.docked.clone());
         }
@@ -300,6 +323,60 @@ pub fn read(path: &Path) -> anyhow::Result<Option<SaveFile>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_stock_geometry_and_occupied_mass_are_restored_together() {
+        let bodies: Vec<ose_data::CelestialBody> =
+            serde_json::from_str(include_str!("../../../assets/own/kerbol-system.json")).unwrap();
+        let crafts: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let defs: Vec<ose_data::PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let res: Vec<ose_data::ResourceDef> =
+            serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
+        let craft = crafts.iter().find(|c| c.name == "Jumping Flea").unwrap();
+        let mut u = Universe::with_bodies(&bodies);
+        let body = u.body_entity("Kerbin").unwrap();
+        let report = ose_data::staging::delta_v_by_stage(craft, &defs, &res);
+        let e = u.spawn_vessel_in_circular_orbit("legacy", body, 100000.);
+        let (r, v) = u.vessel(e).unwrap().2.state_at(u.ut());
+        u.set_powered(
+            e,
+            ose_sim::flight::Powered::new(
+                ose_sim::flight::FlightSpec::from_report(&report, &[], &[], 1.),
+                r,
+                v,
+                false,
+            ),
+        );
+        u.set_craft(e, craft.clone());
+        u.set_structure(e, ose_sim::structure::Structure::build(craft, &defs, &res));
+        let expected = u.powered(e).unwrap().mass_t;
+        let mut save = capture(&u, &[(e, 7, None)], &Campaign::default(), &[]);
+        if let Some(parts) = &mut save.vessels[0].parts {
+            for p in &mut parts.craft.parts {
+                p.flight = None;
+            }
+        }
+        if let Some(c) = &mut save.vessels[0].craft {
+            for p in &mut c.parts {
+                p.flight = None;
+            }
+        }
+        let save: SaveFile = serde_json::from_str(&serde_json::to_string(&save).unwrap()).unwrap();
+        let mut restored = Universe::with_bodies(&bodies);
+        let registry = restore(&mut restored, &save, &defs, &res);
+        let e = registry[0].0;
+        assert!((restored.powered(e).unwrap().mass_t - expected).abs() < 1e-12);
+        assert!((restored.structure(e).unwrap().mass_properties().mass_t - expected).abs() < 1e-12);
+        assert_eq!(restored.crew(e).len(), 1);
+        assert!(restored
+            .current_craft(e)
+            .unwrap()
+            .parts
+            .iter()
+            .all(|p| p.flight.is_some()));
+    }
 
     #[test]
     fn a_save_keeps_what_the_parts_are_doing_and_which_are_gone() {

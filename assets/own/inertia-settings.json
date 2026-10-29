@@ -1,0 +1,8 @@
+{
+  "version": "0.1.16",
+  "source_sha256": "cc318b2d68cd524530bb9096bebea7ff4bcd9e3e94cb58ed7b5b5485c1508cf0",
+  "enabled": true,
+  "scalar": 5.0,
+  "low_mass_scalar": 50.0,
+  "low_mass_limit_t": 0.02
+}

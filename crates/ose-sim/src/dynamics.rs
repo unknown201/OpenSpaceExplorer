@@ -126,3 +126,66 @@ mod tests {
         assert!((i.solve(i.apply(a)) - a).length() < 1e-10);
     }
 }
+
+#[derive(serde::Deserialize)]
+struct InertiaSettings {
+    enabled: bool,
+    scalar: f64,
+    low_mass_scalar: f64,
+    low_mass_limit_t: f64,
+}
+/// Multiplier on the current-mass unit tensor. RigidbodyBehavior caches its
+/// unscaled initial tensor, then rescales it without changing rigid-body mass.
+pub(crate) fn reference_inertia_factor(
+    mode: u8,
+    mass: f64,
+    initial_mass: f64,
+    part_count: usize,
+) -> f64 {
+    static SETTINGS: std::sync::LazyLock<InertiaSettings> = std::sync::LazyLock::new(|| {
+        serde_json::from_str(include_str!("../../../assets/own/inertia-settings.json"))
+            .expect("inertia settings")
+    });
+    if !SETTINGS.enabled || mode != 2 {
+        return 1.;
+    }
+    if part_count == 1 {
+        if mass <= SETTINGS.low_mass_limit_t {
+            SETTINGS.low_mass_scalar * initial_mass / mass
+        } else {
+            1.
+        }
+    } else {
+        SETTINGS.scalar * initial_mass / (mass * mass)
+    }
+}
+
+#[cfg(test)]
+mod reference_scaling_tests {
+    use super::*;
+    #[test]
+    fn cached_reference_tensor_scaling_does_not_scale_the_lever_mass() {
+        assert_eq!(reference_inertia_factor(2, 2., 2., 4), 2.5);
+        assert_eq!(reference_inertia_factor(2, 1., 2., 4), 10.);
+        assert_eq!(reference_inertia_factor(2, 1., 2., 1), 1.);
+        assert_eq!(reference_inertia_factor(2, 0.01, 0.02, 1), 100.);
+        assert_eq!(reference_inertia_factor(0, 1., 2., 4), 1.);
+        let mut inertia = Inertia::default();
+        inertia.add_tensor(
+            2.,
+            [
+                DVec3::new(1., 0., 0.) * 2.5,
+                DVec3::new(0., 1., 0.) * 2.5,
+                DVec3::new(0., 0., 1.) * 2.5,
+            ],
+            [
+                DVec3::new(1., 0., 0.),
+                DVec3::new(0., 1., 0.),
+                DVec3::new(0., 0., 1.),
+            ],
+            DVec3::new(3., 0., 0.),
+        );
+        assert_eq!(inertia.x.x, 5.);
+        assert_eq!(inertia.y.y, 23.);
+    }
+}

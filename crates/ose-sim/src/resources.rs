@@ -143,7 +143,7 @@ impl FlowNet {
             flow_mode,
             tanks,
             dry_t: (0..n)
-                .map(|i| def_of(i).map(|d| d.mass_t).unwrap_or(0.0))
+                .map(|i| def_of(i).map(|d| craft.parts[i].dry_mass(d)).unwrap_or(0.0))
                 .collect(),
             present: vec![true; n],
             edges,
@@ -561,6 +561,7 @@ mod tests {
         // a fuel line on the radial booster's... use the 1x8 core (19) fed from the upper 1x4 (7) across the
         // decoupler: a line hanging on tank 7 feeding tank 19
         let line = ose_data::craft::CraftPart {
+            flight: None,
             colors: None,
             guid: "line".into(),
             part_id: "fuelline_0v_external".into(),
