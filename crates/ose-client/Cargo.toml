@@ -22,6 +22,7 @@ web-sys = { workspace = true, features = [
   "Cache", "CacheStorage", "ResponseInit", "RequestCache",
   "MouseEvent", "WheelEvent", "KeyboardEvent", "EventTarget", "DomTokenList", "console", "HtmlInputElement", "HtmlSelectElement", "Storage", "Request", "RequestInit", "Response", "Headers", "Blob", "ImageBitmap", "HtmlImageElement", "ImageData", "ImageBitmapOptions", "PremultiplyAlpha", "ColorSpaceConversion",
   "AudioContext", "BaseAudioContext", "AudioBuffer", "AudioBufferSourceNode", "AudioScheduledSourceNode", "AudioNode", "AudioDestinationNode", "AudioParam", "GainNode", "HtmlAudioElement", "HtmlMediaElement", "NodeList",
+  "Navigator", "Gamepad", "GamepadButton",
 ] }
 ose-net = { workspace = true }
 ose-data = { workspace = true }

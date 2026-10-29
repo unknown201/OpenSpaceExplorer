@@ -160,6 +160,8 @@ impl Preview {
                     let speed = 1200.0 + 1800.0 * self.plasma.clamp(0.0, 1.0);
                     engines.push(crate::engine_fx_gpu::EngineDraw {
                         instance: 0,
+                        gimbal: glam::DQuat::IDENTITY,
+                        gimbal_poses: Vec::new(),
                         part: format!("reentry:{part}"),
                         model: glam::DMat4::from_translation(fwd * dist),
                         throttle: 1.0,

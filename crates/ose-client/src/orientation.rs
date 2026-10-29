@@ -13,6 +13,11 @@ pub fn mesh_to_vessel() -> DQuat {
     DQuat::from_xyzw(0.0, 1.0, 0.0, 0.0)
 }
 
+/// Place exported craft geometry around the simulation's current centre of mass.
+pub fn mesh_origin(centre: ose_math::DVec3) -> DVec3 {
+    mesh_to_vessel().inverse() * -DVec3::new(centre.x, centre.y, centre.z)
+}
+
 /// Body, warp and surface/flight changes invalidate an angular velocity estimate.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Context {
@@ -45,6 +50,15 @@ pub struct Track {
 }
 
 impl Track {
+    /// Use authoritative spin rather than inferring it from two delayed poses. This
+    /// avoids one extra snapshot interval of apparent rotation after SAS has stopped.
+    pub fn set_world_velocity(&mut self, omega: DVec3) {
+        self.velocity = if omega.is_finite() && !self.context.grounded {
+            self.rotation.inverse() * omega * (self.context.warp as f64 / 1000.0)
+        } else {
+            DVec3::ZERO
+        };
+    }
     pub fn new(rotation: DQuat, ut: f64, received_ms: f64, context: Context) -> Self {
         Self {
             rotation,
@@ -100,6 +114,38 @@ impl Track {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn authoritative_spin_stops_prediction_after_release_despite_jitter() {
+        let mut track = Track::new(DQuat::IDENTITY, 0., 0., CONTEXT);
+        track.set_world_velocity(DVec3::Z);
+        close(track.sample(80.), DQuat::from_rotation_z(0.08));
+        track.update(DQuat::from_rotation_z(0.1), 0.1, 130., CONTEXT);
+        track.set_world_velocity(DVec3::ZERO);
+        close(track.sample(200.), DQuat::from_rotation_z(0.1));
+        close(track.sample(350.), DQuat::from_rotation_z(0.1));
+        track.set_world_velocity(DVec3::splat(f64::NAN));
+        close(track.sample(360.), DQuat::from_rotation_z(0.1));
+    }
+
+    #[test]
+    fn craft_rotates_about_wet_mass_centre_with_no_bottom_anchor() {
+        let centre = ose_math::DVec3::new(0.3, 6.0, -0.4);
+        let mesh_centre = DVec3::new(-0.3, 6.0, 0.4);
+        let origin = mesh_origin(centre);
+        let vessel = DVec3::new(100.0, 500.0, 200.0);
+        let engine = DVec3::new(0.0, 0.0, 0.0);
+        for rotation in [
+            DQuat::IDENTITY,
+            DQuat::from_rotation_z(0.6),
+            DQuat::from_rotation_x(1.0),
+        ] {
+            assert!((vessel + rotation * (mesh_centre + origin) - vessel).length() < 1e-9);
+        }
+        assert!(
+            (DQuat::from_rotation_z(0.6) * (engine + origin) - (engine + origin)).length() > 3.0
+        );
+    }
 
     #[test]
     fn exported_geometry_matches_physics_axes_for_stock_craft() {

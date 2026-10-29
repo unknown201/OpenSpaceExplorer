@@ -11,6 +11,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod analog;
 pub mod animation;
 #[cfg(target_arch = "wasm32")]
 mod asset_cache;
@@ -31,6 +32,7 @@ pub mod ftue;
 mod fx_fixture;
 #[cfg(target_arch = "wasm32")]
 mod fx_post;
+pub mod gimbal;
 pub mod hud;
 pub mod input;
 pub mod kerbin_time;
@@ -41,7 +43,6 @@ pub mod lens_flare;
 #[cfg(target_arch = "wasm32")]
 pub mod menu3d;
 pub mod missions;
-#[cfg(target_arch = "wasm32")]
 pub mod navball;
 pub mod ocean_fft;
 pub mod orientation;
@@ -210,7 +211,6 @@ struct App {
     /// The flight view (the vessel in 3D near its body).
     #[cfg(target_arch = "wasm32")]
     flight3d: flight3d::FlightView,
-    #[cfg(target_arch = "wasm32")]
     navball: navball::Navball,
     /// The vessel the player is flying (launched from the pad), the craft it was built from, and whether
     /// the map is shown instead of the flight view (M).
@@ -335,7 +335,6 @@ struct App {
     mouselook: bool,
     /// The aero overlay (F12) and the control trim (Alt + W/A/S/D/Q/E, Alt+X clears it): pitch, yaw, roll.
     aero_overlay: bool,
-    trim: (f32, f32, f32),
     /// For each loose assembly, the undo depth when it was left on the floor (0 for ones loaded).
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     loose_stamps: Vec<usize>,
@@ -369,6 +368,7 @@ struct App {
     adopt_after_ms: f64,
     /// The flown vessel's part whose window is open (right click in flight).
     flight_pam: Option<usize>,
+    analog: analog::Config,
     /// Docking mode (Delete, the original's ToggleRotLinControls): W/A/S/D and Shift/Ctrl translate instead of
     /// turning and throttling.
     lin_mode: bool,
@@ -700,7 +700,6 @@ pub fn start() -> Result<(), JsValue> {
         vab_dragged: false,
         #[cfg(target_arch = "wasm32")]
         flight3d: flight3d::FlightView::new(),
-        #[cfg(target_arch = "wasm32")]
         navball: navball::Navball::new(),
         flying: None,
         flight_craft: None,
@@ -781,7 +780,6 @@ pub fn start() -> Result<(), JsValue> {
         loose_stamps: Vec::new(),
         mouselook: false,
         aero_overlay: false,
-        trim: (0.0, 0.0, 0.0),
         vab_local_frame: false,
         lesson_selected: None,
         academy: None,
@@ -793,6 +791,9 @@ pub fn start() -> Result<(), JsValue> {
         adopt_after_ms: 0.0,
         lin_mode: false,
         flight_pam: None,
+        analog: stored("ose.analog")
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default(),
         translate_sent: (0.0, 0.0, 0.0),
         eva_run_sent: false,
         eva_grab: false,
@@ -1326,6 +1327,93 @@ fn install_settings(app: &Shared) -> Result<(), JsValue> {
             "<div id=\"settings-rebind\" data-ose=\"settings-rebind\"></div>{}",
             settings::input_html()
         ));
+    }
+    if let Some(panel) = doc.get_element_by_id("settings-input") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |ev: web_sys::Event| {
+            let Some(input) = ev
+                .target()
+                .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+            else {
+                return;
+            };
+            let Some(key) = input.get_attribute("data-analog") else {
+                return;
+            };
+            let mut app = a.borrow_mut();
+            let config = &mut app.analog;
+            match key.as_str() {
+                "enabled" => config.enabled = input.checked(),
+                "dead" => config.dead_zone = input.value_as_number().clamp(0.0, 0.5),
+                "curve" => config.exponent = input.value_as_number().clamp(0.25, 4.0),
+                "throttle" => config.throttle_axis = input.value().parse::<usize>().ok(),
+                _ => {
+                    if let Some(i) = key
+                        .strip_prefix("axis-")
+                        .and_then(|s| s.parse::<usize>().ok())
+                        .filter(|i| *i < 3)
+                    {
+                        config.axes[i] = input.value().parse().unwrap_or(i);
+                    } else if let Some(i) = key
+                        .strip_prefix("invert-")
+                        .and_then(|s| s.parse::<usize>().ok())
+                        .filter(|i| *i < 3)
+                    {
+                        config.invert[i] = input.checked();
+                    }
+                }
+            }
+            if let Ok(value) = serde_json::to_string(config) {
+                store("ose.analog", &value);
+            }
+        });
+        panel.add_event_listener_with_callback("change", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+        let config = &app.borrow().analog;
+        for (key, value) in [
+            ("dead", config.dead_zone),
+            ("curve", config.exponent),
+            ("axis-0", config.axes[0] as f64),
+            ("axis-1", config.axes[1] as f64),
+            ("axis-2", config.axes[2] as f64),
+        ] {
+            if let Some(input) = doc
+                .query_selector(&format!("[data-analog='{key}']"))
+                .ok()
+                .flatten()
+                .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+            {
+                input.set_value_as_number(value);
+            }
+        }
+        if let Some(input) = doc
+            .query_selector("[data-analog='throttle']")
+            .ok()
+            .flatten()
+            .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+        {
+            input.set_value(
+                &config
+                    .throttle_axis
+                    .map(|i| i.to_string())
+                    .unwrap_or_default(),
+            );
+        }
+        for (key, on) in [
+            ("enabled", config.enabled),
+            ("invert-0", config.invert[0]),
+            ("invert-1", config.invert[1]),
+            ("invert-2", config.invert[2]),
+        ] {
+            if let Some(input) = doc
+                .query_selector(&format!("[data-analog='{key}']"))
+                .ok()
+                .flatten()
+                .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+            {
+                input.set_checked(on);
+            }
+        }
     }
     let apply_scale = |doc: &Document, pct: f64| {
         if let Some(root) = doc
@@ -2650,6 +2738,110 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
             }
         });
         pam.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |ev: web_sys::Event| {
+            let Some(target) = ev.target().and_then(|t| t.dyn_into::<Element>().ok()) else {
+                return;
+            };
+            let mut app = a.borrow_mut();
+            let (Some(vessel), Some(part)) = (app.flying, app.flight_pam) else {
+                return;
+            };
+            let Some(ws) = app.ws.clone() else { return };
+            if target.has_attribute("data-control-from") {
+                send(
+                    &ws,
+                    &ClientMessage::ControlFrom {
+                        vessel,
+                        part: part as u16,
+                    },
+                );
+                return;
+            }
+            if ev.type_() != "change" {
+                return;
+            }
+            let Some(key) = target.get_attribute("data-part-control") else {
+                return;
+            };
+            let mut settings = app
+                .scene
+                .as_ref()
+                .and_then(|s| s.vessel(vessel))
+                .and_then(|v| v.flight.as_ref())
+                .and_then(|f| {
+                    f.part_controls
+                        .iter()
+                        .find(|(i, _)| *i as usize == part)
+                        .map(|(_, c)| *c)
+                })
+                .unwrap_or_default();
+            let input = target.dyn_ref::<web_sys::HtmlInputElement>();
+            let checked = input.is_some_and(|i| i.checked());
+            let value = input
+                .map(|i| i.value_as_number() / 100.)
+                .unwrap_or(0.)
+                .clamp(0., 1.);
+            match key.as_str() {
+                "wheel_enabled" => settings.wheel_enabled = checked,
+                "wheel_authority" => settings.wheel_authority = value,
+                "wheel_mode" => {
+                    settings.wheel_mode = target
+                        .dyn_ref::<web_sys::HtmlSelectElement>()
+                        .and_then(|e| e.value().parse().ok())
+                        .unwrap_or(0)
+                }
+                "gimbal_enabled" => settings.gimbal_enabled = checked,
+                "gimbal_limiter" => settings.gimbal_limiter = value,
+                "pitch" => settings.pitch = checked,
+                "yaw" => settings.yaw = checked,
+                "roll" => settings.roll = checked,
+                "rcs_enabled" => settings.rcs_enabled = checked,
+                "rcs_limiter" => settings.rcs_limiter = value,
+                "surface_authority" => settings.surface_authority = value,
+                "thrust_limiter" => settings.thrust_limiter = value,
+                "surface_invert" => settings.surface_invert = checked,
+                _ => {
+                    if let Some(i) = key
+                        .strip_prefix("surface_axis-")
+                        .and_then(|s| s.parse::<usize>().ok())
+                        .filter(|i| *i < 3)
+                    {
+                        settings.surface_axes[i] = checked;
+                    } else if let Some(i) = key
+                        .strip_prefix("rcs_axis-")
+                        .and_then(|s| s.parse::<usize>().ok())
+                        .filter(|i| *i < 6)
+                    {
+                        settings.rcs_axes[i] = checked;
+                    } else {
+                        return;
+                    }
+                }
+            }
+            if settings.valid() {
+                if let Some(f) = app
+                    .scene
+                    .as_mut()
+                    .and_then(|s| s.vessels.iter_mut().find(|v| v.id == vessel))
+                    .and_then(|v| v.flight.as_mut())
+                {
+                    f.part_controls.retain(|(i, _)| *i as usize != part);
+                    f.part_controls.push((part as u16, settings));
+                }
+                send(
+                    &ws,
+                    &ClientMessage::ConfigurePart {
+                        vessel,
+                        part: part as u16,
+                        settings,
+                    },
+                );
+            }
+        });
+        pam.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        pam.add_event_listener_with_callback("change", cb.as_ref().unchecked_ref())?;
         cb.forget();
     }
     // The signal indicator: with no signal and antennas folded, a click extends them.
@@ -4183,40 +4375,11 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                         );
                         true
                     }
-                    // The original's TrimModifier: Alt with the steering keys sets a held trim.
+                    // Held::flight_rotation integrates trim while Alt is held.
                     "KeyW" | "KeyS" | "KeyA" | "KeyD" | "KeyQ" | "KeyE" | "KeyX"
                         if ev.alt_key() =>
                     {
                         ev.prevent_default();
-                        let step = if app.keys.precision { 0.01 } else { 0.05 };
-                        let (mut p, mut y, mut r) = app.trim;
-                        match code.as_str() {
-                            "KeyW" => p -= step,
-                            "KeyS" => p += step,
-                            "KeyA" => y -= step,
-                            "KeyD" => y += step,
-                            "KeyQ" => r -= step,
-                            "KeyE" => r += step,
-                            _ => (p, y, r) = (0.0, 0.0, 0.0),
-                        }
-                        app.trim = (p.clamp(-1.0, 1.0), y.clamp(-1.0, 1.0), r.clamp(-1.0, 1.0));
-                        let (p, y, r) = app.trim;
-                        if let (Some(vessel), Some(ws)) = (app.flying, &app.ws) {
-                            send(
-                                ws,
-                                &ClientMessage::SetTrim {
-                                    vessel,
-                                    pitch: p,
-                                    yaw: y,
-                                    roll: r,
-                                },
-                            );
-                        }
-                        hud::push(
-                            &app.doc,
-                            &format!("Trim: pitch {p:+.2} \u{b7} yaw {y:+.2} \u{b7} roll {r:+.2}"),
-                            "passive",
-                        );
                         true
                     }
                     "Tab" if !ev.repeat() && !app.map_mode => {
@@ -4251,7 +4414,7 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                         app.set_throttle(1.0);
                         true
                     }
-                    "KeyX" => {
+                    "KeyX" if !ev.alt_key() => {
                         app.set_throttle(0.0);
                         true
                     }
@@ -6740,6 +6903,13 @@ impl App {
     /// Redraw the flight part window from the latest readout (it follows the part's state).
     fn flight_pam_refresh(&self) {
         let Some(i) = self.flight_pam else { return };
+        if self
+            .doc
+            .active_element()
+            .is_some_and(|e| e.has_attribute("data-part-control"))
+        {
+            return;
+        }
         let Some(el) = self.doc.get_element_by_id("fh-pam") else {
             return;
         };
@@ -8926,22 +9096,76 @@ impl App {
     /// Where the vessel points now as pitch above the horizon and compass heading, from the flight view's
     /// navball frame (None before the first flight frame).
     fn facing_pitch_heading(&self) -> Option<(f64, f64)> {
-        #[cfg(target_arch = "wasm32")]
-        {
-            let nav = self.flight3d.nav?;
-            let f = nav.forward;
-            let pitch = f.dot(nav.up).clamp(-1.0, 1.0).asin().to_degrees();
-            // Straight up the heading is noise; take north, so D (yaw right) leans the rocket east as
-            // the original's pad orientation does for a gravity turn.
-            let heading = if pitch > 89.5 {
-                0.0
-            } else {
-                f.dot(nav.east).atan2(f.dot(nav.north)).to_degrees()
-            };
-            Some((pitch, heading.rem_euclid(360.0)))
+        let nav = self.current_nav()?;
+        let f = nav.forward;
+        let pitch = f.dot(nav.up).clamp(-1.0, 1.0).asin().to_degrees();
+        let heading = if pitch.abs() > 89.5 {
+            0.0
+        } else {
+            f.dot(nav.east).atan2(f.dot(nav.north)).to_degrees()
+        };
+        Some((pitch, heading.rem_euclid(360.0)))
+    }
+
+    fn current_nav(&self) -> Option<navball::NavFrame> {
+        let scene = self.scene.as_ref()?;
+        let v = scene.vessel(self.flying?)?;
+        let f = v.flight.as_ref()?;
+        let now = now_ms();
+        let ut = self.time.ut_at(now);
+        let rb = v.reference_body as usize;
+        let body = scene.bodies.get(rb)?;
+        let g = |v: ose_math::DVec3| glam::DVec3::new(v.x, v.y, v.z);
+        let r = g(scene.vessel_position(v, ut) - scene.position(rb, ut));
+        let orbit = scene::orbit_from(body.mu, &v.orbit);
+        let (_, velocity) = orbit.state_at(ut);
+        let (facing, top) = scene
+            .vessel_attitude(v.id, now)
+            .unwrap_or((g(f.facing), g(f.roll_ref)));
+        let (facing, top) = orientation::from_axes(facing, top)
+            .map(|q| q * glam::DQuat::from_array(f.control_rotation))
+            .map(|q| (q * glam::DVec3::Y, q * glam::DVec3::Z))
+            .unwrap_or((facing, top));
+        let omega = scene.spin_omega.get(rb).copied().unwrap_or(0.0);
+        let mut nav = navball::NavFrame::new(r, g(velocity), facing, top, omega, self.speed_orbit);
+        nav.target = self.target_dir().map(g).map(|d| d.normalize_or_zero());
+        nav.maneuver = self
+            .node
+            .as_ref()
+            .filter(|n| n.vessel == v.id)
+            .and_then(|n| {
+                let pro = g(velocity).normalize_or_zero();
+                let normal = r.cross(pro).normalize_or_zero();
+                let d =
+                    pro * n.prograde_mps + normal * n.normal_mps + normal.cross(pro) * n.radial_mps;
+                (d.length() > 0.01).then(|| d.normalize_or_zero())
+            });
+        Some(nav)
+    }
+
+    fn draw_navball(&mut self) {
+        let Some(nav) = self.current_nav() else {
+            return;
+        };
+        let Some(canvas) = self
+            .doc
+            .get_element_by_id("fh-navball")
+            .and_then(|e| e.dyn_into::<HtmlCanvasElement>().ok())
+        else {
+            return;
+        };
+        canvas
+            .set_attribute(
+                "data-ose-forward",
+                &format!(
+                    "{:.6},{:.6},{:.6}",
+                    nav.forward.x, nav.forward.y, nav.forward.z
+                ),
+            )
+            .ok();
+        if self.navball.draw(&canvas, &nav) {
+            canvas.set_attribute("data-ose-navball", "drawn").ok();
         }
-        #[cfg(not(target_arch = "wasm32"))]
-        None
     }
 
     /// T: SAS stability assist, holding the direction the vessel points now. (The server always holds some
@@ -8958,11 +9182,25 @@ impl App {
     }
 
     fn sas_hold(&mut self) {
-        let (pitch_deg, heading_deg) = self.facing_pitch_heading().unwrap_or((90.0, 0.0));
-        self.set_attitude(ose_net::AttitudeMode::PitchHeading {
-            pitch_deg,
-            heading_deg,
-        });
+        let facing = self
+            .scene
+            .as_ref()
+            .and_then(|s| s.vessel(self.flying?))
+            .and_then(|v| v.flight.as_ref())
+            .map(|f| {
+                let q = orientation::from_axes(
+                    glam::DVec3::new(f.facing.x, f.facing.y, f.facing.z),
+                    glam::DVec3::new(f.roll_ref.x, f.roll_ref.y, f.roll_ref.z),
+                )
+                .unwrap_or(glam::DQuat::IDENTITY);
+                let v = q * glam::DQuat::from_array(f.control_rotation) * glam::DVec3::Y;
+                ose_math::DVec3::new(v.x, v.y, v.z)
+            });
+        self.set_attitude(
+            facing
+                .map(ose_net::AttitudeMode::Fixed)
+                .unwrap_or(ose_net::AttitudeMode::Up),
+        );
     }
 
     /// G: fold the landing legs and wheels out, or in when any is out.
@@ -9170,11 +9408,28 @@ impl App {
             self.eva_keys_tick(now, dt);
             return;
         }
+        #[allow(unused_mut)]
+        let mut flight_rotation = self.keys.flight_rotation(dt);
+        #[cfg(target_arch = "wasm32")]
+        {
+            let (axes, throttle) = analog::poll(&self.analog);
+            let precision = self.keys.scale();
+            flight_rotation.x = (flight_rotation.x + axes[0] * precision).clamp(-1.0, 1.0);
+            flight_rotation.y = (flight_rotation.y + axes[1] * precision).clamp(-1.0, 1.0);
+            flight_rotation.z = (flight_rotation.z + axes[2] * precision).clamp(-1.0, 1.0);
+            if let Some(throttle) = throttle {
+                if (throttle - self.throttle).abs() > 0.002 {
+                    self.throttle = throttle;
+                    self.controls_dirty = true;
+                }
+            }
+        }
         let k = &self.keys;
         let (pitch_in, yaw_in, thr_in) = if self.lin_mode {
             (0.0, 0.0, 0.0)
         } else {
-            (k.pitch(), k.yaw(), k.throttle())
+            let rotation = flight_rotation;
+            (rotation.x, rotation.y, k.throttle())
         };
         let scale = k.scale();
         let drive = (
@@ -9186,10 +9441,7 @@ impl App {
             self.throttle = (self.throttle + thr_in * input::THROTTLE_RATE * dt).clamp(0.0, 1.0);
             self.controls_dirty = true;
         }
-        // The steering keys turn the craft about its own axes in every SAS mode (SetRotation, protocol 39 on);
-        // the server's hold takes the new direction when they are let go, so the client stops moving a
-        // pitch/heading target (which traced circles near the vertical) and adopts the server's hold after.
-        // Twenty updates a second while held; input edges flush the newest target immediately.
+        // Throttle changes are coalesced at 20 Hz; rotation intents below send on key edges.
         if self
             .control_cadence
             .due(now, self.controls_dirty, [pitch_in, yaw_in, thr_in])
@@ -9204,15 +9456,10 @@ impl App {
             .and_then(|v| v.flight.as_ref())
             .map(|f| f.situation == ose_net::FlightSituation::Landed)
             .unwrap_or(false);
-        let roll = self.keys.roll() as f32 * self.keys.rotation_scale() as f32;
-        // Apply the same gentler rotation authority with SAS on and off.
-        let s = self.keys.rotation_scale() as f32;
+        let roll = flight_rotation.z as f32;
+        // Hold manual axis commands server-side; SAS blends them using the reference override rules.
+        let s = 1.0_f32;
         let rotation = (pitch_in as f32 * s, yaw_in as f32 * s, roll);
-        if rotation == (0.0, 0.0, 0.0) && self.rotation_sent != (0.0, 0.0, 0.0) {
-            // Let go: take the hold the server kept for the new direction once it has it.
-            self.adopt_attitude = !matches!(self.attitude, ose_net::AttitudeMode::Free);
-            self.adopt_after_ms = now + 300.0;
-        }
         if rotation != self.rotation_sent {
             self.rotation_sent = rotation;
             if let Some(ws) = &self.ws {
@@ -9422,6 +9669,10 @@ impl App {
     /// A SAS mode or action bar button.
     fn hud_button(&mut self, id: &str) {
         let Some(vessel) = self.flying else { return };
+        if id == "fh-sas-toggle" {
+            self.toggle_sas();
+            return;
+        }
         if id == "fh-sas-stability" {
             self.sas_hold();
             return;
@@ -11213,6 +11464,7 @@ impl App {
         self.update_flight_instruments();
         self.toasts.watch(&self.doc, "fh-note", "alert");
         self.flight_keys_tick(now);
+        self.draw_navball();
         // FPS counter, refreshed twice a second while shown.
         self.fps_frames += 1;
         if now - self.fps_since_ms >= 500.0 {
@@ -11722,16 +11974,6 @@ impl App {
                 hud.set_attribute("data-ose-effect-assets", &gpu.effect_assets())
                     .ok();
             }
-            if let (Some(nav), Some(canvas)) = (
-                self.flight3d.nav,
-                self.doc
-                    .get_element_by_id("fh-navball")
-                    .and_then(|e| e.dyn_into::<HtmlCanvasElement>().ok()),
-            ) {
-                if self.navball.draw(&canvas, &nav) {
-                    canvas.set_attribute("data-ose-navball", "drawn").ok();
-                }
-            }
         }
         drawn
     }
@@ -11801,6 +12043,7 @@ impl App {
                 items.push(render::DrawItem {
                     animation: None,
                     node_turns: Vec::new(),
+                    node_rotations: Vec::new(),
                     model: name.clone(),
                     rel_pos_km: pos_km - cam_km,
                     rotation: DQuat::IDENTITY,

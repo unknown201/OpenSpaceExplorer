@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 49;
+pub const PROTOCOL_VERSION: u16 = 50;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -245,9 +245,10 @@ pub enum ClientMessage {
         y: f32,
         z: f32,
     },
-    /// Rotation input with SAS off (`AttitudeMode::Free`), each -1..1 and held until changed: pitch turns
+    /// Rotation input, each -1..1 and held until changed: pitch turns
     /// the nose toward craft +Z (the navball's top), yaw toward craft +X, roll clockwise about the nose. The
-    /// reaction wheels (and RCS with its group on) set how fast the spin builds; nothing damps it. Answers
+    /// reaction wheels (and RCS with its group on) set how fast the spin builds. SAS controls turn rate
+    /// and brakes on release; with `AttitudeMode::Free` nothing damps it. Answers
     /// `FlightAck`.
     SetRotation {
         vessel: u64,
@@ -354,6 +355,11 @@ pub enum ClientMessage {
     /// Hand in a completed mission for its science reward; answers `MissionAck` and `ScienceState`.
     TurnInMission {
         id: String,
+    },
+    ConfigurePart {
+        vessel: u64,
+        part: u16,
+        settings: ose_data::flight_geometry::PartControl,
     },
 }
 
@@ -606,6 +612,18 @@ pub struct FlightReadout {
     pub propellant_t: f64,
     pub propellant_fraction: f64,
     pub mass_t: f64,
+    /// Current wet centre of mass in the physics vessel frame (Unity Z reflected).
+    pub centre_of_mass_m: DVec3,
+    /// Delivered thrust directions by engine part, in that part's exported model frame.
+    pub engine_gimbals: Vec<(u16, DVec3)>,
+    /// Per-pivot exported model-space position and rotation delta, after physical response.
+    pub gimbal_poses: Vec<(u16, DVec3, [f64; 4])>,
+    /// Delivered nozzle power at exported model-space anchors.
+    pub rcs_nozzles: Vec<(u16, DVec3, f32)>,
+    pub part_controls: Vec<(u16, ose_data::flight_geometry::PartControl)>,
+    pub part_control_capabilities: Vec<(u16, u8)>,
+    pub control_point: Option<u16>,
+    pub control_rotation: [f64; 4],
     pub thrust_kn: f64,
     pub twr: f64,
     pub dynamic_pressure_kpa: f64,

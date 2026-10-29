@@ -123,6 +123,7 @@ pub struct Rig {
     /// Exported explicitly by the converter, never guessed by the renderer from part names.
     pub deployment: Option<(usize, bool)>,
     pub deployment_control: String,
+    pub gimbal: Option<crate::gimbal::Definition>,
 }
 
 impl Rig {
@@ -315,11 +316,56 @@ impl Rig {
             skins,
             order,
             deployment,
+            gimbal: json["extras"]
+                .get("ose_gimbal")
+                .map(|v| serde_json::from_value(v.clone()))
+                .transpose()
+                .map_err(|e| format!("gimbal metadata: {e}"))?,
             deployment_control: json["extras"]["ose_deployment"]["control"]
                 .as_str()
                 .unwrap_or("")
                 .into(),
         })
+    }
+
+    /// Convert one model-space thrust turn through each authored pivot's parent/rest frame.
+    pub fn gimbal_turns(&self, rotation: glam::DQuat) -> Vec<(usize, Quat)> {
+        let Some(definition) = &self.gimbal else {
+            return Vec::new();
+        };
+        let world = self.world_matrices(&self.pose(None));
+        self.nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| definition.controls(&n.name))
+            .map(|(i, _)| {
+                let (_, frame, _) = world[i].to_scale_rotation_translation();
+                (
+                    i,
+                    (frame.inverse() * rotation.as_quat() * frame).normalize(),
+                )
+            })
+            .collect()
+    }
+
+    pub fn gimbal_pose_turns(&self, poses: &[(glam::DVec3, glam::DQuat)]) -> Vec<(usize, Quat)> {
+        let Some(definition) = &self.gimbal else {
+            return Vec::new();
+        };
+        let world = self.world_matrices(&self.pose(None));
+        self.nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| definition.controls(&n.name))
+            .filter_map(|(i, _)| {
+                let p = world[i].w_axis.truncate().as_dvec3();
+                let (_, turn) = poses
+                    .iter()
+                    .min_by(|a, b| a.0.distance_squared(p).total_cmp(&b.0.distance_squared(p)))?;
+                let (_, frame, _) = world[i].to_scale_rotation_translation();
+                Some((i, (frame.inverse() * turn.as_quat() * frame).normalize()))
+            })
+            .collect()
     }
 
     pub fn pose(&self, sample: Option<ClipSample>) -> Vec<Transform> {

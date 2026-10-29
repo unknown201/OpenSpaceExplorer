@@ -40,10 +40,9 @@ const KSC_PADS: [(f64, f64, f64); 4] = [
     (-0.4362, -75.3480, 132.0),
 ];
 
-/// Visual exaggeration of the server's part flex: with the server's realistic joint loads the bends are a
-/// milliradian or two under thrust, which reads as nothing on screen; twelve times makes the wobble visible
-/// and still subtle. FLEX_MAX_RAD and FLEX_MAX_M cap the result so a near-breaking joint doesn't fold a part.
-pub const FLEX_EXAGGERATION: f64 = 12.0;
+/// Display authoritative joint motion at its physical scale. The caps only bound
+/// invalid or nearly broken joint poses.
+pub const FLEX_EXAGGERATION: f64 = 1.0;
 const FLEX_MAX_RAD: f32 = 0.12;
 const FLEX_MAX_M: f32 = 0.4;
 
@@ -525,8 +524,8 @@ pub struct FlightView {
     wheel_travel: f64,
     wheel_last_ms: f64,
     deployments: HashMap<(u64, usize), crate::animation::Deployment>,
+    gimbals: HashMap<(u64, usize), crate::gimbal::Driver>,
     /// Craft axes and local horizon of the last frame, for the navball.
-    pub nav: Option<crate::navball::NavFrame>,
     /// Height above the ground under the vessel (the altimeter's terrain mode), once the body's map is loaded.
     pub agl_m: Option<f64>,
     /// Part boxes relative to the camera (craft part index, min, max) and the camera's forward and up from
@@ -632,7 +631,7 @@ impl FlightView {
             wheel_travel: 0.0,
             wheel_last_ms: 0.0,
             deployments: HashMap::new(),
-            nav: None,
+            gimbals: HashMap::new(),
             agl_m: None,
             pick_boxes: Vec::new(),
             hovered: None,
@@ -912,40 +911,6 @@ impl FlightView {
         let north = (DVec3::Y - up * up.dot(DVec3::Y)).normalize_or_zero();
         let east = north.cross(up);
 
-        // Navball frame: craft nose, top (craft +Z) and right, local horizon, and the markers' directions.
-        {
-            let forward = vessel_rot * DVec3::Y;
-            let top = vessel_rot * DVec3::Z;
-            let alt_m = r.length() - inp.body_radius;
-            let v_surf = v_rel - DVec3::new(0.0, 0.0, spin.omega()).cross(r);
-            // The original switches the navball from surface to orbit speed high in the atmosphere.
-            let v_nav = if alt_m < 36_000.0 { v_surf } else { v_rel };
-            let moving = v_nav.length() > 0.5;
-            let normal_i = r.cross(v_rel);
-            let radial_i = r - v_rel.normalize_or_zero() * r.dot(v_rel.normalize_or_zero());
-            let target = inp.target.map(|d| dir_to_model(r, d, spin, inp.ut));
-            self.nav = Some(crate::navball::NavFrame {
-                target,
-                forward,
-                top,
-                right: forward.cross(top),
-                up,
-                north,
-                east,
-                prograde: moving.then(|| dir_to_model(r, v_nav, spin, inp.ut)),
-                normal: (normal_i.length() > 1.0).then(|| dir_to_model(r, normal_i, spin, inp.ut)),
-                radial: (radial_i.length() > 1.0 && moving)
-                    .then(|| dir_to_model(r, radial_i, spin, inp.ut)),
-                // The burn in the orbital frame (prograde, orbit normal, radial out), as the node defines it.
-                maneuver: inp.maneuver.and_then(|(p, n, rd)| {
-                    let pro = v_rel.normalize_or_zero();
-                    let nrm = r.cross(v_rel).normalize_or_zero();
-                    let rad = nrm.cross(pro);
-                    let d = pro * p + nrm * n + rad * rd;
-                    (d.length() > 0.01).then(|| dir_to_model(r, d, spin, inp.ut))
-                }),
-            });
-        }
         // The camera's frame for the mode: (forward-ish, right-ish, up) axes the yaw and pitch turn around.
         let alt_m = r.length() - inp.body_radius;
         let mode = match self.mode {
@@ -1079,6 +1044,8 @@ impl FlightView {
             ) {
                 let impact = DVec3::from_array(hit.position);
                 engine_draws.push(crate::engine_fx_gpu::EngineDraw {
+                    gimbal_poses: Vec::new(),
+                    gimbal: DQuat::IDENTITY,
                     instance: 0x2000000000000000 | inp.vessel.id,
                     part: if f.eva {
                         "fx_kerbal_poof_default".into()
@@ -1223,8 +1190,11 @@ impl FlightView {
                 None => FlexMap::new(),
             };
             let poses = crate::thumb::poses(craft);
-            // Bottom anchor: the craft's lowest point (along its own +Y) sits at the vessel point.
-            let mut min_y = f64::INFINITY;
+            // Simulation position is the wet centre of mass, including on the pad.
+            let origin = readout
+                .map(|f| crate::orientation::mesh_origin(f.centre_of_mass_m))
+                .unwrap_or(DVec3::ZERO);
+            let mut gimbal_rotations = HashMap::new();
             let mut parts = Vec::new();
             for (i, (p, (pp, q))) in craft.parts.iter().zip(poses.iter()).enumerate() {
                 if gone.get(i).copied().unwrap_or(false) {
@@ -1296,32 +1266,29 @@ impl FlightView {
                         }
                     }
                 }
-                if let Some(m) = gpu.model(&name) {
-                    let (lo, hi) = if animation.is_some() {
-                        m.pose_bounds(animation)
-                    } else {
-                        (m.bounds_min, m.bounds_max)
-                    };
-                    let (lo, hi) = (lo.as_dvec3(), hi.as_dvec3());
-                    for c in 0..8 {
-                        let corner = DVec3::new(
-                            if c & 1 == 0 { lo.x } else { hi.x },
-                            if c & 2 == 0 { lo.y } else { hi.y },
-                            if c & 4 == 0 { lo.z } else { hi.z },
-                        );
-                        min_y = min_y.min((lp + lq * corner).y);
-                    }
+                if let Some(definition) = gpu.model(&name).and_then(|m| m.rig.gimbal.as_ref()) {
+                    let direction = readout
+                        .and_then(|f| f.engine_gimbals.iter().find(|g| g.0 as usize == i))
+                        .map(|(_, d)| DVec3::new(d.x, d.y, d.z))
+                        .unwrap_or(DVec3::Y);
+                    let driver = self
+                        .gimbals
+                        .entry((inp.vessel.id, i))
+                        .or_insert_with(|| crate::gimbal::Driver::new(inp.ut));
+                    gimbal_rotations.insert(
+                        i,
+                        driver.update(direction, inp.ut, definition.response_speed),
+                    );
                 }
                 parts.push((i, name, lp, lq, animation));
             }
-            let lift = if min_y.is_finite() { -min_y } else { 0.0 };
             // The aero overlay: an arrow per part for its lift (blue) and drag (red), 0.5 m per kN.
             self.aero_segments.clear();
             for (pi, lift_kn, drag_kn) in inp.aero {
                 let Some((_, _, lp, _, _)) = parts.iter().find(|p| p.0 == *pi as usize) else {
                     continue;
                 };
-                let at = pos + vessel_rot * (*lp + DVec3::Y * lift);
+                let at = pos + vessel_rot * (*lp + origin);
                 for (f, is_lift) in [(lift_kn, true), (drag_kn, false)] {
                     let fv = DVec3::new(f.x, f.y, f.z);
                     let mag = fv.length();
@@ -1356,7 +1323,7 @@ impl FlightView {
                     let (pp, q) = poses[i];
                     let matrix = glam::DMat4::from_rotation_translation(
                         vessel_rot * DQuat::from_xyzw(q.x, -q.y, -q.z, q.w).normalize(),
-                        pos + vessel_rot * DVec3::new(-pp.x, pp.y + lift, pp.z),
+                        pos + vessel_rot * (DVec3::new(-pp.x, pp.y, pp.z) + origin),
                     );
                     let separated = gone.get(i).copied().unwrap_or(false);
                     if self.effect_edges.rising(1, i, separated) && (inp.is_decoupler)(&p.part_id) {
@@ -1442,11 +1409,13 @@ impl FlightView {
                                 hi.z,
                             );
                             engine_draws.push(crate::engine_fx_gpu::EngineDraw {
+                                gimbal_poses: Vec::new(),
+                                gimbal: DQuat::IDENTITY,
                                 instance: 0x0040000000000000 | (inp.vessel.id << 16) | *pi as u64,
                                 part: "fx_vapor_vortices".into(),
                                 model: glam::DMat4::from_rotation_translation(
                                     vessel_rot * *lq,
-                                    pos - cam + vessel_rot * (*lp + DVec3::Y * lift + *lq * tip),
+                                    pos - cam + vessel_rot * (*lp + origin + *lq * tip),
                                 ),
                                 throttle: if f.situation == ose_net::FlightSituation::Crashed {
                                     0.0
@@ -1483,11 +1452,13 @@ impl FlightView {
                     }
                     let air_velocity = v_rel - DVec3::new(0.0, 0.0, spin.omega()).cross(r);
                     engine_draws.push(crate::engine_fx_gpu::EngineDraw {
+                        gimbal_poses: Vec::new(),
+                        gimbal: DQuat::IDENTITY,
                         instance: 0x0080000000000000 | (inp.vessel.id << 16) | *pi as u64,
                         part: format!("reentry:{part_id}"),
                         model: glam::DMat4::from_rotation_translation(
                             vessel_rot * *lq,
-                            pos - cam + vessel_rot * (*lp + DVec3::Y * lift),
+                            pos - cam + vessel_rot * (*lp + origin),
                         ),
                         throttle: if f.situation == ose_net::FlightSituation::Crashed {
                             0.0
@@ -1532,11 +1503,13 @@ impl FlightView {
                             .find(|x| x.0 as usize == *pi)
                             .is_none_or(|x| x.1);
                         engine_draws.push(crate::engine_fx_gpu::EngineDraw {
+                            gimbal_poses: Vec::new(),
+                            gimbal: DQuat::IDENTITY,
                             instance: 0x0200000000000000 | (inp.vessel.id << 16) | *pi as u64,
                             part: "fx_wheel_default".into(),
                             model: glam::DMat4::from_rotation_translation(
                                 DQuat::from_rotation_arc(DVec3::Y, up),
-                                pos - cam + vessel_rot * (*lp + DVec3::Y * lift),
+                                pos - cam + vessel_rot * (*lp + origin),
                             ),
                             throttle: if landed
                                 && deployed
@@ -1570,7 +1543,7 @@ impl FlightView {
                             let rotation =
                                 pose.inverse() * dir_to_model(r, g(f.rcs_rotate), spin, inp.ut);
                             for nozzle in jets {
-                                let throttle = crate::particles::rcs_nozzle_throttle(
+                                let fallback = crate::particles::rcs_nozzle_throttle(
                                     *lp + *lq * DVec3::from_array(nozzle.position),
                                     *lq * DVec3::from_array(nozzle.direction),
                                     *lq * translation,
@@ -1578,7 +1551,23 @@ impl FlightView {
                                     false,
                                     false,
                                 );
+                                let throttle = f
+                                    .rcs_nozzles
+                                    .iter()
+                                    .filter(|n| n.0 as usize == *pi)
+                                    .min_by(|a, b| {
+                                        let distance = |p: &ose_math::DVec3| {
+                                            DVec3::new(p.x, p.y, p.z).distance_squared(
+                                                DVec3::from_array(nozzle.position),
+                                            )
+                                        };
+                                        distance(&a.1).total_cmp(&distance(&b.1))
+                                    })
+                                    .map(|n| n.2 as f64)
+                                    .unwrap_or(fallback);
                                 engine_draws.push(crate::engine_fx_gpu::EngineDraw {
+                                    gimbal_poses: Vec::new(),
+                                    gimbal: DQuat::IDENTITY,
                                     instance: 0x0800000000000000
                                         | (inp.vessel.id << 24)
                                         | ((*pi as u64) << 8)
@@ -1586,7 +1575,7 @@ impl FlightView {
                                     part: part_id.clone(),
                                     model: glam::DMat4::from_rotation_translation(
                                         pose,
-                                        pos - cam + vessel_rot * (*lp + DVec3::Y * lift),
+                                        pos - cam + vessel_rot * (*lp + origin),
                                     ),
                                     throttle,
                                     commanded: throttle,
@@ -1608,11 +1597,18 @@ impl FlightView {
                     }
                     if part_id.starts_with("engine_") || part_id.starts_with("booster_") {
                         engine_draws.push(crate::engine_fx_gpu::EngineDraw {
+                            gimbal_poses: f
+                                .gimbal_poses
+                                .iter()
+                                .filter(|p| p.0 as usize == *pi)
+                                .map(|(_, p, q)| (DVec3::new(p.x, p.y, p.z), DQuat::from_array(*q)))
+                                .collect(),
+                            gimbal: gimbal_rotations.get(pi).copied().unwrap_or(DQuat::IDENTITY),
                             instance: (inp.vessel.id << 16) | *pi as u64,
                             part: part_id.clone(),
                             model: glam::DMat4::from_rotation_translation(
                                 vessel_rot * *lq,
-                                pos - cam + vessel_rot * (*lp + DVec3::Y * lift),
+                                pos - cam + vessel_rot * (*lp + origin),
                             ),
                             throttle: crate::particles::exhaust_throttle(
                                 f.firing_engines.contains(&(*pi as u16)),
@@ -1654,20 +1650,59 @@ impl FlightView {
                     let width = ((hi.x - lo.x).min(hi.z - lo.z) * 0.55
                         / (jets.len().max(1) as f64).sqrt())
                     .clamp(0.08, 12.0);
+                    let gimbal = gimbal_rotations.get(pi).copied().unwrap_or(DQuat::IDENTITY);
+                    let pivot_world = m.rig.world_matrices(&m.rig.pose(None));
+                    let pivots: Vec<_> = m
+                        .rig
+                        .gimbal
+                        .as_ref()
+                        .map(|definition| {
+                            m.rig
+                                .nodes
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, n)| definition.controls(&n.name))
+                                .map(|(i, _)| pivot_world[i].w_axis.truncate().as_dvec3())
+                                .collect()
+                        })
+                        .unwrap_or_default();
                     for (j, nozzle) in jets.iter().enumerate() {
-                        let at = pos
-                            + vessel_rot
-                                * (*lp
-                                    + *lq * DVec3::from_array(nozzle.position)
-                                    + DVec3::Y * lift);
-                        let direction = (vessel_rot * *lq * DVec3::from_array(nozzle.direction))
-                            .normalize_or_zero();
+                        let nozzle_position = DVec3::from_array(nozzle.position);
+                        let authoritative = f
+                            .gimbal_poses
+                            .iter()
+                            .filter(|p| p.0 as usize == *pi)
+                            .min_by(|a, b| {
+                                let distance = |p: &ose_math::DVec3| {
+                                    DVec3::new(p.x, p.y, p.z).distance_squared(nozzle_position)
+                                };
+                                distance(&a.1).total_cmp(&distance(&b.1))
+                            });
+                        let pivot = pivots
+                            .iter()
+                            .min_by(|a, b| {
+                                a.distance_squared(nozzle_position)
+                                    .total_cmp(&b.distance_squared(nozzle_position))
+                            })
+                            .copied()
+                            .unwrap_or(nozzle_position);
+                        let (pivot, gimbal) = authoritative
+                            .map(|(_, p, q)| (DVec3::new(p.x, p.y, p.z), DQuat::from_array(*q)))
+                            .unwrap_or((pivot, gimbal));
+                        let nozzle_position = crate::gimbal::about_pivot(gimbal, pivot)
+                            .transform_point3(nozzle_position);
+                        let at = pos + vessel_rot * (*lp + *lq * nozzle_position + origin);
+                        let direction =
+                            (vessel_rot * *lq * gimbal * DVec3::from_array(nozzle.direction))
+                                .normalize_or_zero();
                         let down = -direction.dot(up);
                         let height = (at.length() - self.ground_radius).max(0.0);
                         if pressure > 0.01 && down > 0.3 && height / down < width * 25.0 {
                             let ground = at + direction * (height / down);
                             let rotation = DQuat::from_rotation_arc(DVec3::Y, up);
                             engine_draws.push(crate::engine_fx_gpu::EngineDraw {
+                                gimbal_poses: Vec::new(),
+                                gimbal: DQuat::IDENTITY,
                                 instance: 0x8000000000000000
                                     | (inp.vessel.id << 24)
                                     | ((*pi as u64) << 8)
@@ -1703,6 +1738,8 @@ impl FlightView {
                             if inp.body_id == "Kerbin" && distance < 40.0 && !launch_smoke_added {
                                 launch_smoke_added = true;
                                 engine_draws.push(crate::engine_fx_gpu::EngineDraw {
+                                    gimbal_poses: Vec::new(),
+                                    gimbal: DQuat::IDENTITY,
                                     instance: 0x4000000000000000 | inp.vessel.id,
                                     part: "fx_launchsmoke_default".into(),
                                     model: glam::DMat4::from_rotation_translation(
@@ -1826,7 +1863,7 @@ impl FlightView {
                 }
                 for (model, y) in fairing_shells(bottom, top, radius) {
                     let at = DVec3::new(flp.x, y, flp.z);
-                    let wpos = pos + vessel_rot * (at + DVec3::Y * lift);
+                    let wpos = pos + vessel_rot * (at + origin);
                     let mut it = DrawItem::lit(model.into(), wpos - cam, vessel_rot, radius, sun);
                     it.ambient = part_ambient;
                     it.fill_dir = up;
@@ -1845,7 +1882,7 @@ impl FlightView {
                         let spot = pid.contains("spot") || pid.contains("broad");
                         // Where the part's Light sits and which way it shines (its +Z), from the models.
                         let (off, axis) = lamp_frame(pid);
-                        let at = pos + vessel_rot * (*lp + DVec3::Y * lift + *lq * off);
+                        let at = pos + vessel_rot * (*lp + origin + *lq * off);
                         crate::render::LocalLight {
                             pos: at - cam,
                             range: if spot { 60.0 } else { 18.0 },
@@ -1872,7 +1909,7 @@ impl FlightView {
                 if !gpu.has_model(&name) {
                     continue;
                 }
-                let wpos = pos + vessel_rot * (lp + DVec3::Y * lift);
+                let wpos = pos + vessel_rot * (lp + origin);
                 if let Some(m) = gpu.model(&name) {
                     let (bmin, bmax) = (m.bounds_min.as_dvec3(), m.bounds_max.as_dvec3());
                     let rot = vessel_rot * lq;
@@ -1904,16 +1941,23 @@ impl FlightView {
                 if bare_engine(craft, i) {
                     it.hide_containing = Some("fairing");
                 }
-                // A gimballing engine's nozzle swivels with the steering (protocol 44): angles about the part's
-                // own X and Z, applied to its "gimbal" node; mirroring X keeps a turn about X and reverses Z.
-                if let Some((_, gx, gz)) =
-                    readout.and_then(|f| f.gimbals.iter().find(|g| g.0 as usize == i))
-                {
-                    it.node_turns.push((
-                        "gimbal",
-                        glam::Quat::from_rotation_x(*gx) * glam::Quat::from_rotation_z(-*gz),
-                        glam::Vec3::ZERO,
-                    ));
+                let poses: Vec<_> = readout
+                    .map(|f| {
+                        f.gimbal_poses
+                            .iter()
+                            .filter(|p| p.0 as usize == i)
+                            .map(|(_, p, q)| (DVec3::new(p.x, p.y, p.z), DQuat::from_array(*q)))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if !poses.is_empty() {
+                    if let Some(model) = gpu.model(&it.model) {
+                        it.node_rotations = model.rig.gimbal_pose_turns(&poses);
+                    }
+                } else if let Some(rotation) = gimbal_rotations.get(&i) {
+                    if let Some(model) = gpu.model(&it.model) {
+                        it.node_rotations = model.rig.gimbal_turns(*rotation);
+                    }
                 }
                 // Wheels roll with the ground speed.
                 if let Some((bone, radius)) = wheel_spinner(pid) {
@@ -2057,6 +2101,8 @@ impl FlightView {
                             )
                         };
                         engine_draws.push(crate::engine_fx_gpu::EngineDraw {
+                            gimbal_poses: Vec::new(),
+                            gimbal: DQuat::IDENTITY,
                             instance: 0x0400000000000000
                                 | (inp.vessel.id << 8)
                                 | nozzle.mode as u64,
@@ -2195,6 +2241,8 @@ impl FlightView {
                 let mut model = burst.model;
                 model.w_axis -= cam.extend(0.0);
                 engine_draws.push(crate::engine_fx_gpu::EngineDraw {
+                    gimbal_poses: Vec::new(),
+                    gimbal: DQuat::IDENTITY,
                     instance: burst.instance,
                     part: burst.asset.clone(),
                     model,

@@ -242,7 +242,7 @@ pub fn restore(
             u.set_crew(e, v.crew.clone());
             u.restore_parts(e, saved, parts, resources);
             u.set_docked(e, v.docked.clone());
-        } else if let Some(craft) = &v.craft {
+        } else if let Some(craft) = v.craft.as_ref().filter(|c| !c.parts.is_empty()) {
             u.set_craft(e, craft.clone());
             u.set_crew(e, v.crew.clone());
             u.set_structure(
@@ -384,5 +384,115 @@ mod ownership_tests {
             serde_json::from_value::<Campaign>(legacy).unwrap().owner,
             None
         );
+    }
+}
+
+#[cfg(test)]
+mod control_settings_tests {
+    use super::*;
+    #[test]
+    fn part_settings_and_control_point_survive_json_save_restore() {
+        use ose_data::flight_geometry::PartControl;
+        let bodies: Vec<ose_data::CelestialBody> =
+            serde_json::from_str(include_str!("../../../assets/own/kerbol-system.json")).unwrap();
+        let crafts: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let defs: Vec<ose_data::PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let res: Vec<ose_data::ResourceDef> =
+            serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
+        let craft = crafts.iter().find(|c| c.name == "Kerbal K1").unwrap();
+        let mut u = Universe::with_bodies(&bodies);
+        let e = u.spawn_vessel_in_circular_orbit(
+            "configured K1",
+            u.body_entity("Kerbin").unwrap(),
+            100_000.,
+        );
+        let (r, v) = u.vessel(e).unwrap().2.state_at(u.ut());
+        let report = ose_data::staging::delta_v_by_stage(craft, &defs, &res);
+        u.set_powered(
+            e,
+            ose_sim::flight::Powered::new(
+                ose_sim::flight::FlightSpec::from_report(&report, &[], &[], 1.),
+                r,
+                v,
+                false,
+            ),
+        );
+        u.set_craft(e, craft.clone());
+        u.set_structure(e, ose_sim::structure::Structure::build(craft, &defs, &res));
+        let command = (0..craft.parts.len())
+            .find(|i| u.structure(e).unwrap().can_control_from(*i))
+            .unwrap() as u16;
+        let settings = PartControl {
+            wheel_authority: 0.25,
+            gimbal_limiter: 0.4,
+            surface_invert: true,
+            rcs_axes: [false, true, true, false, true, true],
+            ..Default::default()
+        };
+        assert!(u.configure_part(e, command, settings));
+        assert!(!u.configure_part(e, u16::MAX, settings));
+        assert!(!u.configure_part(
+            e,
+            command,
+            PartControl {
+                wheel_authority: f64::NAN,
+                ..settings
+            }
+        ));
+        let before = u.powered(e).unwrap().clone();
+        assert!(u.set_control_point(e, command));
+        assert_eq!(u.powered(e).unwrap().r, before.r);
+        assert_eq!(u.powered(e).unwrap().v, before.v);
+        let saved = capture(&u, &[(e, 42, Some(1))], &Campaign::default(), &[]);
+        let saved: SaveFile =
+            serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+        let mut restored = Universe::with_bodies(&bodies);
+        let entry = restore(&mut restored, &saved, &defs, &res)[0];
+        let p = restored.powered(entry.0).unwrap();
+        assert_eq!(p.part_control(command as usize), settings);
+        assert_eq!(p.control_point, Some(command));
+        assert_eq!(p.control_rotation, u.powered(e).unwrap().control_rotation);
+    }
+    #[test]
+    fn empty_saved_craft_keeps_flight_state_without_building_an_empty_structure() {
+        let bodies: Vec<ose_data::CelestialBody> =
+            serde_json::from_str(include_str!("../../../assets/own/kerbol-system.json")).unwrap();
+        let mut u = Universe::with_bodies(&bodies);
+        let body = u.body_entity("Kerbin").unwrap();
+        let e = u.spawn_vessel_in_circular_orbit("legacy probe", body, 100_000.0);
+        let (_, _, orbit) = u.vessel(e).unwrap();
+        let (r, v) = orbit.state_at(u.ut());
+        u.set_powered(
+            e,
+            ose_sim::flight::Powered::new(
+                ose_sim::flight::FlightSpec {
+                    stages: vec![],
+                    drag_area_m2: 0.0,
+                    drag_cd: 0.0,
+                },
+                r,
+                v,
+                false,
+            ),
+        );
+        u.set_craft(
+            e,
+            ose_data::craft::Craft {
+                name: "legacy probe".into(),
+                description: String::new(),
+                parts: vec![],
+                stages: vec![],
+                colors: Default::default(),
+                loose: Vec::new(),
+            },
+        );
+        let file = capture(&u, &[(e, 42, Some(1))], &Campaign::default(), &[]);
+        let mut restored = Universe::with_bodies(&bodies);
+        let entries = restore(&mut restored, &file, &[], &[]);
+        assert_eq!(entries.len(), 1);
+        assert!(restored.powered(entries[0].0).is_some());
+        assert!(restored.structure(entries[0].0).is_none());
     }
 }

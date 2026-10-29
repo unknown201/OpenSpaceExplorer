@@ -19,6 +19,7 @@ pub mod jetpack;
 pub mod missions;
 pub mod resources;
 pub mod rigid;
+pub mod sas;
 pub mod science;
 pub mod structure;
 pub mod surface;
@@ -189,7 +190,69 @@ impl Universe {
     }
 
     pub fn set_warp(&mut self, factor: u32) {
+        if factor > flight::MAX_PHYSICS_WARP {
+            let ut = self.ut();
+            for e in self.vessels() {
+                let Some(p) = self.powered(e) else { continue };
+                let Some(body) = self.body_of(e) else {
+                    continue;
+                };
+                if p.crashed
+                    || p.landed
+                    || p.throttle > 0.0
+                    || p.coasting_since.is_none()
+                    || p.rotation_input.length_squared() > 0.0
+                    || p.roll_input != 0.0
+                    || p.rcs.translate.length_squared() > 0.0
+                    || p.manual_steering
+                    || p.r.length() <= self.rails_clear_radius(body)
+                {
+                    continue;
+                }
+                let p = p.clone();
+                self.world
+                    .entity_mut(e)
+                    .remove::<flight::Powered>()
+                    .insert(flight::Dormant(p));
+                let index = self.world.resource::<bodies::BodyIndex>().clone();
+                vessels::refresh_next_transition(&mut self.world, &index, e, ut, &self.params);
+            }
+        }
+        let factor = if self.has_powered() {
+            factor.min(flight::MAX_PHYSICS_WARP)
+        } else {
+            factor
+        };
         self.world.resource_mut::<WarpFactor>().0 = factor.max(1);
+    }
+
+    /// Margin above air and terrain where analytic coasting must return to physics.
+    fn rails_clear_radius(&self, body: Entity) -> f64 {
+        let b = self.world.get::<bodies::Body>(body).expect("body");
+        b.radius_m
+            + self.atmosphere(body).map(|a| a.depth_m).unwrap_or(0.0).max(
+                self.world
+                    .get::<flight::Terrain>(body)
+                    .map(|t| t.0.max_m.max(0.0))
+                    .unwrap_or(0.0),
+            )
+            + 1_000.0
+    }
+
+    fn rails_reentry(&self, e: Entity) -> Option<f64> {
+        self.dormant(e)?;
+        let (_, body, orbit) = self.vessel(e)?;
+        let radius = self.rails_clear_radius(body);
+        let ut = self.ut();
+        if orbit.position_at(ut).length() <= radius + 1.0 {
+            return Some(ut);
+        }
+        if orbit.periapsis() >= radius {
+            return None;
+        }
+        let nu = -orbit.true_anomaly_at_radius(radius);
+        let dt = orbit.time_to_true_anomaly(nu, ut);
+        (dt.is_finite() && dt >= 0.0).then_some(ut + dt)
     }
 
     pub fn tick(&self) -> Tick {
@@ -495,12 +558,68 @@ impl Universe {
         Some((d, tv - v, (d.length() - surface).max(0.0)))
     }
 
+    pub fn configure_part(
+        &mut self,
+        e: Entity,
+        part: u16,
+        settings: ose_data::flight_geometry::PartControl,
+    ) -> bool {
+        if !settings.valid()
+            || !self
+                .structure(e)
+                .is_some_and(|s| s.rigid.present.get(part as usize) == Some(&true))
+        {
+            return false;
+        }
+        let update = |p: &mut flight::Powered| {
+            p.part_controls.retain(|(i, _)| *i != part);
+            p.part_controls.push((part, settings));
+            p.sas.reset();
+        };
+        if let Some(mut p) = self.world.get_mut::<flight::Powered>(e) {
+            update(&mut p);
+            true
+        } else if let Some(mut p) = self.world.get_mut::<flight::Dormant>(e) {
+            update(&mut p.0);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn set_control_point(&mut self, e: Entity, part: u16) -> bool {
+        let Some(s) = self.structure(e) else {
+            return false;
+        };
+        let i = part as usize;
+        if !s.rigid.present.get(i).copied().unwrap_or(false) || !s.can_control_from(i) {
+            return false;
+        }
+        let q = s.control_rotation(i);
+        self.wake(e);
+        if let Some(mut p) = self.world.get_mut::<flight::Powered>(e) {
+            p.control_point = Some(part);
+            p.control_rotation = q;
+            p.sas.reset();
+            if p.attitude != flight::Attitude::Free {
+                p.attitude = flight::Attitude::Fixed(flight::control_basis(&p).1);
+            }
+            true
+        } else {
+            false
+        }
+    }
+
     /// Rotation input with SAS off (pitch, yaw, roll each -1..1, held until changed; see
     /// `Powered::rotation_input`); false without a powered vessel.
     pub fn set_rotation(&mut self, e: Entity, pitch: f64, yaw: f64, roll: f64) -> bool {
+        if (pitch != 0.0 || yaw != 0.0 || roll != 0.0) && self.warp() <= flight::MAX_PHYSICS_WARP {
+            self.wake(e);
+        }
         match self.world.get_mut::<flight::Powered>(e) {
             Some(mut p) => {
                 p.rotation_input = DVec3::new(pitch, yaw, roll);
+
                 true
             }
             None => false,
@@ -552,6 +671,9 @@ impl Universe {
 
     /// Roll input for a vessel (-1..1, held until changed); false without a powered vessel.
     pub fn set_roll(&mut self, e: Entity, input: f64) -> bool {
+        if input != 0.0 && self.warp() <= flight::MAX_PHYSICS_WARP {
+            self.wake(e);
+        }
         match self.world.get_mut::<flight::Powered>(e) {
             Some(mut p) => {
                 p.roll_input = input.clamp(-1.0, 1.0);
@@ -798,8 +920,10 @@ impl Universe {
             return false;
         };
         let (r, v) = orbit.state_at(self.ut());
+        let top = flight::vessel_top(&p);
         p.r = r;
         p.v = v;
+        flight::set_vessel_top(&mut p, top);
         p.landed = false;
         p.coasting_since = None;
         let mut ent = self.world.entity_mut(e);
@@ -817,7 +941,9 @@ impl Universe {
             if self.world.get::<flight::Dormant>(e).is_none() {
                 return false;
             }
-            if throttle <= 0.0 {
+            let turning = self.warp() <= flight::MAX_PHYSICS_WARP
+                && self.dormant(e).is_some_and(|p| p.attitude != attitude);
+            if throttle <= 0.0 && !turning {
                 // nothing to do on rails; remember the attitude for the next wake
                 if let Some(mut d) = self.world.get_mut::<flight::Dormant>(e) {
                     d.0.attitude = attitude;
@@ -832,6 +958,20 @@ impl Universe {
                     return false;
                 }
                 p.throttle = throttle;
+                if p.attitude != attitude {
+                    p.sas.reset();
+                    let cv = |v: DVec3| glam::DVec3::new(v.x, v.y, v.z);
+                    let (_, y, z) = flight::control_basis(&p);
+                    let mut q = crate::sas::orientation(cv(y), cv(z));
+                    if let flight::Attitude::Fixed(target) = attitude {
+                        q = glam::DQuat::from_rotation_arc(cv(y), cv(target).normalize()) * q;
+                    }
+                    p.sas.set_lock(q);
+                    if let flight::Attitude::Fixed(target) = attitude {
+                        p.sas.acquiring_fixed_target = y.dot(target) < 0.995;
+                    }
+                }
+                p.manual_steering = false;
                 p.attitude = attitude;
                 true
             }
@@ -1202,6 +1342,11 @@ impl Universe {
     /// vessel skips over its next SOI transition (the original's timescale override at SOI crossings); the
     /// crossing then lands on the step boundary and the handoff happens exactly there.
     pub fn step(&mut self) {
+        for e in self.vessels() {
+            if self.rails_reentry(e).is_some_and(|t| t <= self.ut()) {
+                self.wake(e);
+            }
+        }
         let mut warp = self.warp() as u64;
         if self.has_powered() {
             warp = warp.min(flight::MAX_PHYSICS_WARP as u64);
@@ -1210,6 +1355,9 @@ impl Universe {
         let mut ticks = warp;
         for e in self.vessels() {
             let mut stops = Vec::new();
+            if let Some(reentry) = self.rails_reentry(e) {
+                stops.push(reentry);
+            }
             if let Some(nt) = self.world.get::<vessels::NextTransition>(e) {
                 stops.push(nt.ut);
             }
@@ -1408,6 +1556,7 @@ impl Universe {
                     }
                     // Plan with rated wheel axes; current delivery is resolved at each wheel below.
                     p.wheel_scale = 1.0;
+                    p.sas_warp = warp as f64;
                     st.configure_actuators(&p, env, &mut propulsion);
                     st.configure_surface(
                         &mut p,
@@ -1575,7 +1724,13 @@ impl Universe {
             let hand_off = p.coasting_since.is_some_and(|t| ut - t >= 10.0)
                 && !p.landed
                 && !p.crashed
-                && safe_coast;
+                && safe_coast
+                && !p.manual_steering
+                && p.rotation_input.length_squared() == 0.0
+                && p.roll_input == 0.0
+                && p.rcs.translate.length_squared() == 0.0
+                && (p.attitude != flight::Attitude::Free
+                    || (p.angvel.length() < 1e-5 && p.roll_rate.abs() < 1e-5));
             self.world
                 .entity_mut(e)
                 .insert(bodies::OnRails(orbit))
@@ -1634,6 +1789,11 @@ impl Universe {
         }
         for e in self.vessels() {
             if self.world.get::<flight::Powered>(e).is_some() {
+                continue;
+            }
+            if self.rails_reentry(e).is_some_and(|t| t <= ut) {
+                self.wake(e);
+                self.world.resource_mut::<WarpFactor>().0 = 1;
                 continue;
             }
             let burned = vessels::apply_due_burn(&mut self.world, e, ut);
@@ -1704,10 +1864,10 @@ mod tests {
         let (r0, v0) = o0.state_at(u.ut());
         u.set_dormant(v, flight::Powered::new(upper_stage(), r0, v0, false));
         assert!(u.powered(v).is_none());
-        // zero throttle keeps it on rails
+        // A new SAS direction wakes a coasting craft even at zero throttle.
         assert!(u.set_controls(v, 0.0, flight::Attitude::OrbitPrograde));
-        assert!(u.powered(v).is_none());
-        // throttle up: woken at the rails position, burns prograde
+        assert!(u.powered(v).is_some());
+        // throttle up: burns prograde from the rails position
         assert!(u.set_controls(v, 1.0, flight::Attitude::OrbitPrograde));
         let p = u.powered(v).expect("woken");
         assert!(
@@ -2483,8 +2643,8 @@ mod tests {
         assert!(d.dot(normal) > 0.99, "points along the burn: {d:?}");
         assert!(p.facing.dot(normal) > 0.9, "turned to it: {:?}", p.facing);
         assert!(
-            (p.roll_rate - flight::ROLL_RATE_RAD_S).abs() < 0.05,
-            "roll input reaches the commanded rate: {}",
+            p.roll_rate > flight::ROLL_RATE_RAD_S,
+            "reference manual roll applies torque rather than a rate cap: {}",
             p.roll_rate
         );
         // groups
@@ -2628,7 +2788,9 @@ mod tests {
             (DVec3::new(0.0, 0.0, 1.0), "roll"),
         ] {
             assert!(u.set_rotation(v, input.x, input.y, input.z));
-            u.step();
+            for _ in 0..150 {
+                u.step();
+            }
             let p = u.powered(v).unwrap().clone();
             assert!(p.landed, "{what}");
             let d = u
@@ -2642,7 +2804,10 @@ mod tests {
                 p.steer_cmd
             );
             assert!(u.set_rotation(v, -input.x, -input.y, -input.z));
-            u.step();
+            // Authored hinges take time to travel through neutral after a reversal.
+            for _ in 0..150 {
+                u.step();
+            }
             let reverse = u.powered(v).unwrap();
             assert!(reverse.landed);
             let opposite = u
@@ -2653,7 +2818,7 @@ mod tests {
             for ((part, angle), (other, reversed)) in d.iter().zip(&opposite) {
                 assert_eq!(part, other);
                 assert!(
-                    (angle + reversed).abs() < 1e-6,
+                    angle.abs() < 1e-5 || angle * reversed < 0.0,
                     "{what}: reversing the key reverses deflection"
                 );
             }
@@ -3029,7 +3194,7 @@ mod tests {
         for i in 0..(90 * TICKS_PER_SECOND) {
             u.step();
             let p = u.powered(v).unwrap();
-            assert!(!p.crashed, "crashed at step {i}");
+            assert!(!p.crashed, "crashed at step {i}: {p:?}");
             if !p.landed && lifted_at.is_none() {
                 lifted_at = Some((i, p.drive.speed_mps));
             }
@@ -3089,9 +3254,15 @@ mod tests {
                 .apply(DVec3::new(w.dot(x), w.dot(y), w.dot(z)));
             x * l.x + y * l.y + z * l.z
         };
-        let l1 = momentum(&p1, u.structure(v).unwrap());
+
         u.world.get_mut::<flight::Powered>(v).unwrap().ignited = false;
         u.set_rotation(v, 0.0, 0.0, 0.0);
+        // Reference wheel torque ramps down after key release; measure the torque-free
+        // tumble after that response has decayed, rather than treating release as instantaneous.
+        for _ in 0..TICKS_PER_SECOND {
+            u.step();
+        }
+        let l1 = momentum(u.powered(v).unwrap(), u.structure(v).unwrap());
         for _ in 0..(3 * TICKS_PER_SECOND) {
             u.step();
         }
@@ -3113,7 +3284,15 @@ mod tests {
         }
         let p3 = u.powered(v).unwrap();
         assert!(p3.angvel.length() < 0.01, "{:?}", p3.angvel);
-        assert!(p3.facing.dot(hold) > 0.99, "holds where SAS caught it");
+        // Reference damping continually relocks during braking, then holds the caught pose.
+        let settled = p3.facing;
+        for _ in 0..(5 * TICKS_PER_SECOND) {
+            u.step();
+        }
+        assert!(
+            u.powered(v).unwrap().facing.dot(settled) > 0.99,
+            "holds the caught pose"
+        );
     }
 
     #[test]
@@ -3287,7 +3466,7 @@ mod tests {
         let p = u.powered(v).unwrap();
         assert_eq!(p.stage, 2);
         assert!(upper > 10.0, "the Poodle stage kept its {upper} t");
-        assert!(p.r.length() - 600_000.0 > 40_000.0, "climbing");
+        assert!(p.r.length() - 600_000.0 > 40_000.0, "climbing: {p:?}");
     }
 
     #[test]

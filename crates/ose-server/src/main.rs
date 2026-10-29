@@ -327,12 +327,8 @@ fn apply_warp(s: &Shared) -> (u32, Option<u64>) {
     drop(reqs);
     let requested = warp;
     let mut u = s.universe.lock().expect("sim lock");
-    let warp = if u.has_powered() {
-        warp.min(ose_sim::flight::MAX_PHYSICS_WARP)
-    } else {
-        warp
-    };
     u.set_warp(warp);
+    let warp = u.warp();
     // only another player's lower request counts as "holding warp down"; the physics cap does not
     (warp, if max > requested { holder } else { None })
 }
@@ -798,7 +794,18 @@ fn flight_readout(
     body_e: bevy_ecs::entity::Entity,
     defs: &[ose_data::PartDef],
 ) -> Option<ose_net::FlightReadout> {
-    let p = u.powered(e)?;
+    // Rails still carry a real craft pose; report it at the current orbital position.
+    let mut dormant;
+    let p = if let Some(p) = u.powered(e) {
+        p
+    } else {
+        dormant = u.dormant(e)?.clone();
+        let top = ose_sim::flight::vessel_top(&dormant);
+        let (_, _, orbit) = u.vessel(e)?;
+        (dormant.r, dormant.v) = orbit.state_at(u.ut());
+        ose_sim::flight::set_vessel_top(&mut dormant, top);
+        &dormant
+    };
     let body = u.world.get::<ose_sim::bodies::Body>(body_e)?;
     let atmo = u.atmosphere(body_e);
     let r_mag = p.r.length();
@@ -882,6 +889,41 @@ fn flight_readout(
             None => 0.0,
         },
         mass_t: p.mass_t,
+        part_controls: p.part_controls.clone(),
+        part_control_capabilities: u
+            .structure(e)
+            .map(|s| s.control_capabilities())
+            .unwrap_or_default(),
+        control_point: p.control_point,
+        control_rotation: p.control_rotation,
+        rcs_nozzles: u
+            .structure(e)
+            .map(|s| s.rcs_nozzles.clone())
+            .unwrap_or_default(),
+        gimbal_poses: u
+            .structure(e)
+            .map(|st| {
+                st.gimbal_poses
+                    .iter()
+                    .copied()
+                    .filter(|(i, _, _)| st.rigid.present[*i as usize])
+                    .collect()
+            })
+            .unwrap_or_default(),
+        centre_of_mass_m: u
+            .structure(e)
+            .map(|st| st.mass_properties().centre_m)
+            .unwrap_or_default(),
+        engine_gimbals: u
+            .structure(e)
+            .map(|st| {
+                st.engine_gimbals
+                    .iter()
+                    .copied()
+                    .filter(|(i, _)| st.rigid.present[*i as usize])
+                    .collect()
+            })
+            .unwrap_or_default(),
         thrust_kn: thrust,
         twr: if p.mass_t > 0.0 && g > 0.0 {
             max_thrust / (p.mass_t * g)
@@ -941,7 +983,7 @@ fn flight_readout(
             ose_math::DVec3::ZERO
         },
         lift_kn: p.lift_kn.length() as f32,
-        angvel: p.angvel,
+        angvel: p.angvel + p.facing * p.roll_rate,
         resources: u
             .structure(e)
             .map(|st| st.resource_totals())
@@ -3561,11 +3603,14 @@ async fn session(mut socket: WebSocket, s: AppState) {
                             };
                             if !send(&mut socket, &reply).await { break; }
                         }
+                        Ok(ClientMessage::ConfigurePart { vessel, part, settings }) => {
+                            let ok = owned_vessel(&s, vessel, player_id).is_some_and(|e| s.universe.lock().expect("sim lock").configure_part(e, part, settings));
+                            if !send(&mut socket, &ServerMessage::FlightAck { vessel, accepted: ok, reason: (!ok).then(|| "invalid part settings or ownership".into()) }).await { break; }
+                        }
                         Ok(ClientMessage::ControlFrom { vessel, part }) => {
                             let reply = match owned_vessel(&s, vessel, player_id) {
                                 Some(e) => {
-                                    let spec_for = |c: &ose_data::craft::Craft| flight_spec_for(&s, c);
-                                    let r = s.universe.lock().expect("sim lock").control_from(e, part as usize, &s.parts, &s.resources, &spec_for);
+                                    let r = s.universe.lock().expect("sim lock").set_control_point(e, part).then_some(()).ok_or("part cannot control this vessel");
                                     ServerMessage::FlightAck { vessel, accepted: r.is_ok(), reason: r.err().map(String::from) }
                                 }
                                 None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },

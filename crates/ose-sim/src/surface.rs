@@ -560,6 +560,7 @@ mod tests {
             .unwrap();
         def.mass_t = 2.0;
         def.mass_offset_m = DVec3::ZERO;
+        def.flight_geometry = Default::default();
         def.resource_containers.clear();
         def.engines.clear();
         def.electric = Default::default();

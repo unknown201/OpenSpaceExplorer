@@ -127,7 +127,11 @@ pub const INPUT: &[(&str, &[Binding])] = &[
 ];
 
 pub fn input_html() -> String {
-    let mut html = String::new();
+    let mut html = String::from("<h4>Joystick / gamepad</h4><p>Connect a controller and press a button to enable browser access. Axis numbers start at zero.</p><label><input type='checkbox' data-analog='enabled'> Enable analog controls</label><label>Dead zone <input type='number' min='0' max='0.5' step='0.01' data-analog='dead'></label><label>Response exponent <input type='number' min='0.25' max='4' step='0.05' data-analog='curve'></label>");
+    for (i, name) in ["Pitch", "Yaw", "Roll"].iter().enumerate() {
+        html.push_str(&format!("<label>{name} axis <input type='number' min='0' max='31' data-analog='axis-{i}'></label><label><input type='checkbox' data-analog='invert-{i}'> Invert {name}</label>"));
+    }
+    html.push_str("<label>Throttle axis (blank disables) <input type='number' min='0' max='31' data-analog='throttle'></label>");
     for (group, rows) in INPUT {
         html.push_str(&format!("<h4>{group}</h4><table>"));
         for (key, action, works) in rows.iter() {

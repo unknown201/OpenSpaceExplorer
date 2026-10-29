@@ -362,6 +362,7 @@ mod tests {
         engine: Option<(f64, f64, &str)>,
     ) -> PartDef {
         PartDef {
+            flight_geometry: Default::default(),
             id: id.into(),
             title_key: id.into(),
             category: if stage_type.starts_with("Decoupler") {

@@ -77,6 +77,8 @@ fn draw(
         let camera = target + DVec3::new(yaw.sin(), 0.1, yaw.cos()).normalize() * distance;
         gpu.set_camera(target - camera, DVec3::Y, 45f64.to_radians(), 0.1, 1e6);
         let engine = EngineDraw {
+            gimbal_poses: Vec::new(),
+            gimbal: DQuat::IDENTITY,
             instance: if part.starts_with("fx_explosion_") {
                 0x2000000000000000
             } else {
@@ -166,6 +168,8 @@ pub fn fx_fixture_vapor(time: f64, wet: bool) -> Result<usize, JsValue> {
             1e6,
         );
         let engine = EngineDraw {
+            gimbal_poses: Vec::new(),
+            gimbal: DQuat::IDENTITY,
             instance: 0,
             part: "fx_vapor_vortices".into(),
             model: DMat4::from_translation(point - camera),
@@ -215,6 +219,8 @@ pub fn fx_fixture_reentry(
         let target = DVec3::new(0.0, -2.0, 0.0);
         gpu.set_camera(target - camera, DVec3::Y, 45f64.to_radians(), 0.1, 1e6);
         let engine = EngineDraw {
+            gimbal_poses: Vec::new(),
+            gimbal: DQuat::IDENTITY,
             instance: 0,
             part: format!("reentry:{part}"),
             model: DMat4::from_translation(-camera),
@@ -290,10 +296,15 @@ pub fn rig_fixture_instances(part: String, fraction: f32, instances: u8) -> Resu
                     DVec3::new(1.0, 2.0, 2.0),
                 );
                 item.animation = model.rig.deployment_sample(t);
+                if model.rig.gimbal.is_some() {
+                    item.node_rotations = model.rig.gimbal_turns(DQuat::from_rotation_z(
+                        (t as f64 * 2.0 - 1.0) * 5f64.to_radians(),
+                    ));
+                }
                 item.ambient = 0.35;
                 items.push(item);
             }
-            ready = model.rig.deployment.is_some();
+            ready = model.rig.deployment.is_some() || model.rig.gimbal.is_some();
         }
         gpu.frame("assets/parts/", &items, &[], [0.025, 0.035, 0.06]);
         Ok(ready)

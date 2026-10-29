@@ -297,6 +297,7 @@ pub struct DrawItem {
     /// Extra turns on named nodes after the animation pose, about a point in the node's own frame (a control
     /// surface on its hinge bone, a wing's flap about its leading edge).
     pub node_turns: Vec<(&'static str, glam::Quat, glam::Vec3)>,
+    pub node_rotations: Vec<(usize, glam::Quat)>,
     pub model: String,
     /// Position relative to the camera, kilometres.
     pub rel_pos_km: DVec3,
@@ -340,6 +341,7 @@ impl DrawItem {
         DrawItem {
             animation: None,
             node_turns: Vec::new(),
+            node_rotations: Vec::new(),
             model,
             rel_pos_km,
             rotation,
@@ -1489,6 +1491,9 @@ impl Renderer {
                     t.translation += t.rotation * (*pivot - *turn * *pivot) * s;
                     t.rotation = (t.rotation * *turn).normalize();
                 }
+            }
+            for (i, turn) in &item.node_rotations {
+                pose[*i].rotation = (pose[*i].rotation * *turn).normalize();
             }
             let world = model.rig.world_matrices(&pose);
             for (pi, (mesh_i, _, node)) in model.primitives.iter().enumerate() {

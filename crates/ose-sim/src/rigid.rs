@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use ose_data::craft::{Craft, Quat};
 use ose_data::{PartDef, ResourceDef, ResourceKind};
 use ose_math::DVec3;
-use rapier3d_f64::math::{Pose, Rotation, Vector};
+use rapier3d_f64::math::{Matrix, Pose, Rotation, Vector};
 use rapier3d_f64::prelude::{
     CCDSolver, ColliderSet, DefaultBroadPhase, GenericJointBuilder, ImpulseJointSet,
     IntegrationParameters, IslandManager, JointAxesMask, MassProperties, MultibodyJointHandle,
@@ -291,6 +291,7 @@ pub struct RigidVessel {
     pub dry_masses_t: Vec<f64>,
     /// Box size of each part (vessel frame axes), m, as used for its inertia.
     pub sizes_m: Vec<DVec3>,
+    unit_mass_properties: Vec<MassProperties>,
     /// Parts still simulated (removed ones were staged away or broke off).
     pub present: Vec<bool>,
     pub links: Vec<Link>,
@@ -349,17 +350,10 @@ impl RigidVessel {
             if mass == self.masses_t[i] {
                 continue;
             }
-            let s = self.sizes_m[i];
-            let inertia = Vector::new(
-                mass * (s.y * s.y + s.z * s.z) / 12.0,
-                mass * (s.x * s.x + s.z * s.z) / 12.0,
-                mass * (s.x * s.x + s.y * s.y) / 12.0,
-            );
+            let mut properties = self.unit_mass_properties[i];
+            properties.set_mass(mass, true);
             let body = &mut self.bodies[self.bodies_of[i]];
-            body.set_additional_mass_properties(
-                MassProperties::new(v(self.local_com_m[i]), mass, inertia),
-                true,
-            );
+            body.set_additional_mass_properties(properties, true);
             body.recompute_mass_properties_from_colliders(&self.colliders);
             self.masses_t[i] = mass;
         }
@@ -382,6 +376,7 @@ impl RigidVessel {
         let mut masses_t = Vec::with_capacity(craft.parts.len());
         let mut dry_masses_t = Vec::with_capacity(craft.parts.len());
         let mut sizes_m = Vec::with_capacity(craft.parts.len());
+        let mut unit_mass_properties = Vec::with_capacity(craft.parts.len());
         let mut bodies_of = Vec::with_capacity(craft.parts.len());
         let mut rots = Vec::with_capacity(craft.parts.len());
         let mut local_com_m = Vec::with_capacity(craft.parts.len());
@@ -394,23 +389,39 @@ impl RigidVessel {
                 .and_then(|d| d.bounds)
                 .map(|b| b.size_m)
                 .unwrap_or(DVec3::new(1.0, 1.0, 1.0));
-            let (sx, sy, sz) = (
-                size.x.clamp(0.1, 5.0),
-                size.y.clamp(0.1, 5.0),
-                size.z.clamp(0.1, 5.0),
-            );
+            let (sx, sy, sz) = (size.x.max(0.0001), size.y.max(0.0001), size.z.max(0.0001));
             let inertia = Vector::new(
                 m * (sy * sy + sz * sz) / 12.0,
                 m * (sx * sx + sz * sz) / 12.0,
                 m * (sx * sx + sy * sy) / 12.0,
             );
+            let unit = if let Some(t) = def.and_then(|d| d.flight_geometry.inertia_per_t) {
+                MassProperties::with_inertia_matrix(
+                    v(to_vessel(def.unwrap().mass_offset_m)),
+                    1.0,
+                    Matrix::from_cols(
+                        v(DVec3::new(t[0].x, t[0].y, -t[0].z)),
+                        v(DVec3::new(t[1].x, t[1].y, -t[1].z)),
+                        v(DVec3::new(-t[2].x, -t[2].y, t[2].z)),
+                    ),
+                )
+            } else {
+                MassProperties::new(
+                    v(to_vessel(def.map(|d| d.mass_offset_m).unwrap_or_default())),
+                    1.0,
+                    inertia / m,
+                )
+            };
+            unit_mass_properties.push(unit);
+            let mut properties = unit;
+            properties.set_mass(m, true);
             let rot = quat_to_vessel(p.local_rotation);
             let local_com = to_vessel(def.map(|d| d.mass_offset_m).unwrap_or(DVec3::ZERO));
             local_com_m.push(local_com);
             rest_com_offset_m.push(d(rot * v(local_com)));
             let rb = RigidBodyBuilder::dynamic()
                 .pose(Pose::from_parts(v(to_vessel(p.local_position)), rot))
-                .additional_mass_properties(MassProperties::new(v(local_com), m, inertia))
+                .additional_mass_properties(properties)
                 .can_sleep(false)
                 .build();
             bodies_of.push(bodies.insert(rb));
@@ -487,6 +498,7 @@ impl RigidVessel {
             masses_t,
             dry_masses_t,
             sizes_m,
+            unit_mass_properties,
             present: vec![true; n],
             links,
             rest_pos,
@@ -1018,11 +1030,16 @@ mod tests {
     use super::*;
 
     fn assets() -> (Vec<Craft>, Vec<PartDef>, Vec<ResourceDef>) {
-        (
+        let mut data: (Vec<Craft>, Vec<PartDef>, Vec<ResourceDef>) = (
             serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap(),
             serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap(),
             serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap(),
-        )
+        );
+        // Analytical fixtures explicitly define their force points, bounds and inertia.
+        for def in &mut data.1 {
+            def.flight_geometry = Default::default();
+        }
+        data
     }
 
     #[test]
@@ -1094,7 +1111,10 @@ mod tests {
 
     #[test]
     fn changing_mass_preserves_spin_and_updates_box_inertia() {
-        let (crafts, defs, res) = assets();
+        let (crafts, mut defs, res) = assets();
+        for d in &mut defs {
+            d.flight_geometry = Default::default();
+        }
         let mut craft = crafts[0].clone();
         craft.parts.truncate(1);
         craft.parts[0].parent = None;

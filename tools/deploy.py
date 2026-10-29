@@ -17,6 +17,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 from pathlib import Path
 from precompress import prepare
@@ -53,7 +54,13 @@ def main():
         for f in ("ose.service", "install.sh"):
             (pkg / f).write_bytes((ROOT / "deploy" / f).read_bytes().replace(b"\r\n", b"\n"))
         tar = Path(tmp) / "ose-release.tar.gz"
-        run("tar", "--force-local", "--owner=0", "--group=0", "-czf", str(tar), "-C", str(pkg), ".")
+        def root_owner(info):
+            info.uid = info.gid = 0
+            info.uname = info.gname = "root"
+            return info
+        # Python writes a portable archive on both Windows BSD tar and GNU tar hosts.
+        with tarfile.open(tar, "w:gz") as archive:
+            archive.add(pkg, arcname=".", filter=root_owner)
         run("scp", "-q", "-i", key, str(tar), f"{piper}:/root/ose-release.tar.gz")
     remote = (
         f"pct push {ct} /root/ose-release.tar.gz /tmp/ose-release.tar.gz && rm /root/ose-release.tar.gz && "

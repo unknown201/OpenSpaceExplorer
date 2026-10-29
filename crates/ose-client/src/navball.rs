@@ -37,6 +37,43 @@ pub struct NavFrame {
     pub target: Option<DVec3>,
 }
 
+impl NavFrame {
+    /// Instruments use the inertial craft pose in every view, independently of the renderer.
+    pub fn new(
+        r: DVec3,
+        velocity: DVec3,
+        forward: DVec3,
+        top: DVec3,
+        omega: f64,
+        orbit_speed: bool,
+    ) -> Self {
+        let up = r.normalize_or_zero();
+        let north = (DVec3::Z - up * up.z).normalize_or_zero();
+        let east = north.cross(up);
+        let v = if orbit_speed {
+            velocity
+        } else {
+            velocity - DVec3::Z.cross(r) * omega
+        };
+        let moving = v.length() > 0.5;
+        let normal = r.cross(velocity);
+        let radial = r - velocity.normalize_or_zero() * r.dot(velocity.normalize_or_zero());
+        Self {
+            forward,
+            top,
+            right: forward.cross(top),
+            up,
+            north,
+            east,
+            prograde: moving.then(|| v.normalize_or_zero()),
+            normal: (normal.length() > 1.0).then(|| normal.normalize_or_zero()),
+            radial: (radial.length() > 1.0 && moving).then(|| radial.normalize_or_zero()),
+            maneuver: None,
+            target: None,
+        }
+    }
+}
+
 struct Atlas {
     w: u32,
     h: u32,
