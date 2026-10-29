@@ -683,6 +683,7 @@ fn vessels_message(s: &Shared, u: &Universe, tick: Tick) -> ServerMessage {
                 position_m: bp + rp,
                 velocity_mps: bv + rv,
                 orbit: elements(&orbit),
+                on_rails: u.powered(e).is_none(),
                 flight: flight_readout(u, e, body, &s.parts).map(|mut f| {
                     // the staging list from the vessel as it is now, here
                     if let (Some(craft), Some(p)) = (u.current_craft(e), u.powered(e)) {

@@ -472,7 +472,20 @@ async fn hello_catalog_and_snapshots() {
     }
     let launched = launched.expect("CraftLaunched");
 
-    // A craft launched straight into orbit keeps a flight state: throttle up wakes it under power.
+    // On-rails crafts retain instrument data; the explicit flag distinguishes their motion mode.
+    let mut rails_instruments = false;
+    for _ in response_window() {
+        if let ServerMessage::Vessels { vessels, .. } = recv(&mut ws).await {
+            if let Some(v) = vessels.iter().find(|v| v.id == launched) {
+                assert!(v.on_rails);
+                assert!(v.flight.is_some(), "on-rails craft keeps its instruments");
+                rails_instruments = true;
+                break;
+            }
+        }
+    }
+    assert!(rails_instruments, "orbiting craft was not reported");
+    // Throttle up wakes it under power.
     ws.send(Message::Binary(
         ose_net::encode(&ClientMessage::SetControls {
             vessel: launched,
@@ -497,7 +510,7 @@ async fn hello_catalog_and_snapshots() {
             ServerMessage::Vessels { vessels, .. } => {
                 if let Some(f) = vessels
                     .iter()
-                    .find(|v| v.id == launched)
+                    .find(|v| v.id == launched && !v.on_rails)
                     .and_then(|v| v.flight.as_ref())
                 {
                     assert_eq!(f.situation, ose_net::FlightSituation::Orbit);

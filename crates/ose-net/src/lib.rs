@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 50;
+pub const PROTOCOL_VERSION: u16 = 51;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -458,7 +458,9 @@ pub struct VesselState {
     pub position_m: DVec3,
     pub velocity_mps: DVec3,
     pub orbit: OrbitElements,
-    /// Present while the vessel is under powered flight (landed, ascending, descending).
+    /// Whether motion follows an analytic orbit rather than active physics.
+    pub on_rails: bool,
+    /// Instruments are retained for crafts in active physics and on rails.
     pub flight: Option<FlightReadout>,
     /// The vessel's target, if it has one.
     pub target: Option<TargetReadout>,

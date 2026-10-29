@@ -370,6 +370,7 @@ mod tests {
             },
             target: None,
             craft_rev: 0,
+            on_rails: true,
             flight: None,
         };
         let kerbin = s.position(1, 0.0);

@@ -863,6 +863,8 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
       }
       await page.fill('[data-ose="vab-search"]', "");
       await page.fill('[data-ose="vab-name"]', "e2e capsule");
+      // The preceding ascent can still be within the first pad's clearance volume.
+      await page.locator('[data-ose="vab-site"]').selectOption("LaunchPad_2");
       await page.locator('[data-ose="vab-launch"]').first().click();
       const hud = page.locator('[data-ose="flight"]');
       try {

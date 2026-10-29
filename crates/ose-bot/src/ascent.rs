@@ -362,9 +362,7 @@ pub async fn wait_for_rails(c: &mut Client, vessel: u64, timeout: Duration) -> R
     c.request_warp(ose_sim::flight::MAX_PHYSICS_WARP).await?;
     let r = c
         .wait_for(timeout, "the craft to go back on rails", |l, m| match m {
-            ServerMessage::Vessels { .. } => {
-                l.vessel(vessel).filter(|v| v.flight.is_none()).map(|_| ())
-            }
+            ServerMessage::Vessels { .. } => l.vessel(vessel).filter(|v| v.on_rails).map(|_| ()),
             _ => None,
         })
         .await;
