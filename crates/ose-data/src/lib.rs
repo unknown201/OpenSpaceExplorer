@@ -492,6 +492,9 @@ impl Default for Jetpack {
 /// (mixture) and Isp against pressure.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Rcs {
+    /// Module_RCS's normalized minimum delivery (0.5). None keeps legacy proportional allocation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_minimum: Option<f64>,
     #[serde(default)]
     pub controls: RcsControls,
     /// Authored per-module enable state and thrust limit (0..1).

@@ -548,6 +548,7 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
                     }
                     if entry["Name"] == "Data_RCS" {
                         rcs = Some(ose_data::Rcs {
+                            request_minimum: Some(0.5),
                             controls: ose_data::RcsControls {
                                 pitch: o["enablePitch"]["storedValue"].as_bool().unwrap_or(true),
                                 yaw: o["enableYaw"]["storedValue"].as_bool().unwrap_or(true),
@@ -1606,6 +1607,21 @@ mod tests {
         assert_eq!(legacy.drag_properties, ose_data::DragProperties::default());
         assert_eq!(legacy.lift_offset_m, DVec3::ZERO);
     }
+    #[test]
+    fn rcs_source_request_minimum_imports_and_older_catalogues_retain_legacy_allocation() {
+        let value = serde_json::json!({"data":{"partName":"rcs","serializedPartModules":[{"ModuleData":[{"Name":"Data_RCS","DataObject":{"maxThrust":1.0}}]}]}});
+        let rcs = part(&value, &mut Coverage::default()).rcs.unwrap();
+        assert_eq!(rcs.request_minimum, Some(0.5));
+        let mut old = serde_json::to_value(rcs).unwrap();
+        old.as_object_mut().unwrap().remove("request_minimum");
+        assert_eq!(
+            serde_json::from_value::<ose_data::Rcs>(old)
+                .unwrap()
+                .request_minimum,
+            None
+        );
+    }
+
     #[test]
     fn rcs_module_activation_defaults_and_limits_import_and_migrate() {
         let value = serde_json::json!({"data":{"partName":"rcs","serializedPartModules":[{"ModuleData":[{"Name":"Data_RCS","DataObject":{"isEnabled":{"storedValue":false},"thrustPercentage":{"storedValue":25.0},"shieldedCanActivate":true,"maxThrust":2.0}}]}]}});

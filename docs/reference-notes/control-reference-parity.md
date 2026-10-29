@@ -264,3 +264,25 @@ double just below 0.05 that rounds to the source deadband boundary and a nominal
 0.2 input compared with an authored float 0.2 full-thrust threshold. Small values
 that round to the 0.05 request cutoff do not fire or consume fuel. The comparisons
 are explicit; the simulation retains double precision for its dynamics.
+
+Source RCS definitions now carry Module_RCS.RequestPropellant's normalized minimum
+delivery of 0.5. The five stock RCS definitions import and retain this rule. A
+delivery below half the requested amount is rejected without drawing any mixture
+ingredient, so retained fuel may still support a smaller later pulse. Accepted
+partial delivery scales the originally commanded nozzles in that module. It is
+not redirected to another module to improve the requested force/torque result.
+Source-directed mixed assemblies also preserve the broadcast nozzle pattern;
+legacy-only definitions keep the preceding bounded reallocation behavior.
+
+The same acceptance gate applies when source data uses the older transform/mount
+fallback. Nozzle resolution is selected consistently so these paths cannot charge
+fuel twice or bypass the minimum. Tests cover the 50% boundary, retained gas and
+smaller retries, both transform paths, independent starvation in two modules, and
+all-ingredient retention when a mixture request is rejected. Definitions without
+the new optional rule deserialize to their legacy behavior.
+
+This increment does not claim complete RCS resource parity. The model still sums
+the nozzle demand conservatively per module and resolves delivery in the current
+simulation tick. KSP2's shared pending request handle, per-nozzle call order and
+render/physics timing require an executable RCS capture before changing that
+schedule. The SAS-off reaction-wheel fixture remains a separate passing check.

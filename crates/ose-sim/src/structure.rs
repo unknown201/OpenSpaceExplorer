@@ -1553,6 +1553,14 @@ impl Structure {
         })
     }
 
+    fn resolves_nozzle_rcs(&self, actuator: &crate::actuators::Actuator) -> bool {
+        actuator.kind == crate::actuators::Kind::RcsNozzle
+            && (!self.geometry[actuator.part].rcs.is_empty()
+                || self.rcs_defs[actuator.part]
+                    .as_ref()
+                    .is_some_and(|r| r.request_minimum.is_some()))
+    }
+
     /// Each mount pays for its combined translation/rotation vector once, before motion.
     fn resolve_rcs_fuel(
         &mut self,
@@ -1563,11 +1571,11 @@ impl Structure {
     ) {
         p.rcs.usage = 0.0;
         p.rcs.powered = 0.0;
-        if propulsion.actuators.as_ref().is_some_and(|a| {
-            a.iter().any(|a| {
-                a.kind == crate::actuators::Kind::RcsNozzle && !self.geometry[a.part].rcs.is_empty()
-            })
-        }) {
+        if propulsion
+            .actuators
+            .as_ref()
+            .is_some_and(|a| a.iter().any(|a| self.resolves_nozzle_rcs(a)))
+        {
             self.resolve_nozzle_rcs(p, propulsion, allocation, dt);
         }
         let nozzle_usage = p.rcs.usage;
@@ -1575,7 +1583,7 @@ impl Structure {
         let channels = propulsion.actuators.as_ref().expect("configured actuators");
         let mut effort = vec![0.0; self.rigid.len()];
         for (a, input) in channels.iter().zip(&allocation.inputs) {
-            if a.kind.is_rcs() && self.geometry[a.part].rcs.is_empty() {
+            if a.kind.is_rcs() && !self.resolves_nozzle_rcs(a) {
                 effort[a.part] += if a.kind == crate::actuators::Kind::RcsNozzle {
                     *input
                 } else {
@@ -1585,6 +1593,7 @@ impl Structure {
         }
         let mut parts = Vec::new();
         let mut requests = Vec::new();
+        let mut minimums = Vec::new();
         let mut demand = 0.0;
         for (i, norm) in effort.iter_mut().enumerate() {
             if self.rcs_defs[i]
@@ -1600,6 +1609,7 @@ impl Structure {
             let unit_mass = self.net.mixture_unit_mass_t(&r.propellant);
             let flow = r.limited_thrust_kn() * *norm / (r.isp_curve.evaluate(0.0) * ose_data::G0);
             parts.push(i);
+            minimums.push(r.request_minimum.unwrap_or(0.0));
             demand += r.limited_thrust_kn() * *norm;
             requests.push(Request {
                 part: i,
@@ -1618,7 +1628,10 @@ impl Structure {
         let before = self.net.mass_t();
         let mut delivered = vec![0.0; self.rigid.len()];
         let mut supplied = 0.0;
-        for (i, fraction) in parts.into_iter().zip(self.net.process(&requests, dt)) {
+        for (i, fraction) in parts
+            .into_iter()
+            .zip(self.net.process_with_minimums(&requests, &minimums, dt))
+        {
             delivered[i] = fraction;
             supplied +=
                 self.rcs_defs[i].as_ref().unwrap().limited_thrust_kn() * effort[i] * fraction;
@@ -1635,7 +1648,7 @@ impl Structure {
             nozzle_usage
         };
         for (a, input) in channels.iter().zip(&mut allocation.inputs) {
-            if a.kind.is_rcs() && self.geometry[a.part].rcs.is_empty() {
+            if a.kind.is_rcs() && !self.resolves_nozzle_rcs(a) {
                 let old = *input;
                 *input *= delivered[a.part];
                 allocation.force_kn = allocation.force_kn + a.force_kn * (*input - old);
@@ -2576,9 +2589,7 @@ impl Structure {
         let indices: Vec<_> = channels
             .iter()
             .enumerate()
-            .filter(|(_, a)| {
-                a.kind == crate::actuators::Kind::RcsNozzle && !self.geometry[a.part].rcs.is_empty()
-            })
+            .filter(|(_, a)| self.resolves_nozzle_rcs(a))
             .map(|(i, _)| i)
             .collect();
         let nozzles: Vec<_> = indices.iter().map(|&i| channels[i].clone()).collect();
@@ -2684,7 +2695,24 @@ impl Structure {
             force_kn: force,
             ..Default::default()
         };
-        let tanks = self.net.tanks.clone();
+        let source_broadcast = parts.iter().any(|&part| {
+            self.rcs_defs[part]
+                .as_ref()
+                .unwrap()
+                .request_minimum
+                .is_some()
+        });
+        let minimums: Vec<_> = parts
+            .iter()
+            .map(|&part| {
+                self.rcs_defs[part]
+                    .as_ref()
+                    .unwrap()
+                    .request_minimum
+                    .unwrap_or(0.0)
+            })
+            .collect();
+        let tanks = (!source_broadcast).then(|| self.net.tanks.clone());
         let before = self.net.mass_t();
         let make_requests = |inputs: &[f64], net: &FlowNet| {
             parts
@@ -2723,10 +2751,19 @@ impl Structure {
                 .collect::<Vec<_>>()
         };
         let requested = planned.inputs.iter().sum::<f64>();
-        let delivered = self
-            .net
-            .process(&make_requests(&planned.inputs, &self.net), dt);
-        if delivered.iter().any(|f| *f < 1.0 - 1e-10) {
+        let delivered = self.net.process_with_minimums(
+            &make_requests(&planned.inputs, &self.net),
+            &minimums,
+            dt,
+        );
+        if source_broadcast {
+            // Module_RCS broadcasts each nozzle's command. Scarce propellant scales
+            // that module's delivery; it does not move the command to another nozzle.
+            for (a, input) in nozzles.iter().zip(&mut planned.inputs) {
+                let index = parts.iter().position(|i| *i == a.part).unwrap();
+                *input *= delivered[index];
+            }
+        } else if delivered.iter().any(|f| *f < 1.0 - 1e-10) {
             for ((part, budget), fraction) in budgets.iter_mut().zip(delivered) {
                 *budget = nozzles
                     .iter()
@@ -2736,7 +2773,7 @@ impl Structure {
                     .sum::<f64>()
                     * fraction;
             }
-            self.net.tanks = tanks;
+            self.net.tanks = tanks.expect("legacy RCS request snapshot");
             planned = crate::actuators::nozzle_wrench(&nozzles, request, force, &budgets);
             let delivered = self
                 .net
@@ -5760,6 +5797,7 @@ mod tests {
         ] {
             s.part_rot[i] = [0.0, 0.0, 0.0, 1.0];
             s.rcs_defs[i] = Some(ose_data::Rcs {
+                request_minimum: None,
                 controls: Default::default(),
                 enabled: true,
                 thrust_fraction: 1.0,
@@ -5861,6 +5899,140 @@ mod tests {
                 assert!((engine.burned_t - 0.1 * scale / (100.0 * ose_data::G0)).abs() < 1e-9);
             }
         }
+    }
+
+    #[test]
+    fn reference_rcs_rejects_below_half_delivery_and_retains_fuel_for_a_smaller_pulse() {
+        for has_nozzle in [false, true] {
+            for fraction in [0.25, 0.499, 0.5, 0.75, 1.0] {
+                let (mut s, mut p, pair, body) = rcs_fixture();
+                s.rcs_defs[pair[1]] = None;
+                let r = s.rcs_defs[pair[0]].as_mut().unwrap();
+                r.request_minimum = Some(0.5);
+                r.thrusters = if has_nozzle {
+                    vec![ose_data::ThrustTransform {
+                        position_m: DVec3::new(1.0, 0.0, 0.0),
+                        direction: DVec3::new(0.0, 1.0, 0.0),
+                        weight: 1.0,
+                    }]
+                } else {
+                    vec![]
+                };
+                let tank = s.net.tanks.iter_mut().find(|t| t.part == pair[0]).unwrap();
+                tank.stored = 0.1 * fraction / s.net.unit_mass_t[tank.resource];
+                let mut engine = s.propulsion(&p, Default::default(), 0.1);
+                s.configure_actuators(&p, Default::default(), &mut engine);
+                s.resolve_wheel_power(&mut p, &body, &mut engine, 0.1);
+                let expected = if fraction >= 0.5 { fraction } else { 0.0 };
+                assert!(
+                    (engine.control_allocation.unwrap().force_kn.y
+                        - 100.0 * ose_data::G0 * expected)
+                        .abs()
+                        < 1e-8,
+                    "fraction={fraction}"
+                );
+                assert!((engine.burned_t - 0.1 * expected).abs() < 1e-9);
+                let tank = s.net.tanks.iter().find(|t| t.part == pair[0]).unwrap();
+                let retained = tank.stored * s.net.unit_mass_t[tank.resource];
+                assert!((retained - 0.1 * (fraction - expected)).abs() < 1e-9);
+                if fraction == 0.25 {
+                    p.rcs.translate.y = 0.4;
+                    let mut engine = s.propulsion(&p, Default::default(), 0.1);
+                    s.configure_actuators(&p, Default::default(), &mut engine);
+                    s.resolve_wheel_power(&mut p, &body, &mut engine, 0.1);
+                    assert!((engine.burned_t - 0.025).abs() < 1e-9);
+                    assert!(
+                        (engine.control_allocation.unwrap().force_kn.y - 25.0 * ose_data::G0).abs()
+                            < 1e-8
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn reference_rcs_starvation_scales_the_requested_nozzles_without_redistribution() {
+        for fraction in [0.25, 0.5, 1.0] {
+            let (mut s, mut p, pair, body) = rcs_fixture();
+            let mut wants = vec![];
+            for (j, i) in pair.into_iter().enumerate() {
+                let rest = s.rigid.rest_position(i);
+                let r = s.rcs_defs[i].as_mut().unwrap();
+                r.request_minimum = Some(0.5);
+                r.thrust_kn = 1.0;
+                r.thrusters = vec![ose_data::ThrustTransform {
+                    position_m: crate::rigid::to_vessel(
+                        DVec3::new(if j == 0 { 1.0 } else { -1.0 }, 0.0, 0.0) - rest,
+                    ),
+                    direction: DVec3::new(0.0, 1.0, 0.0),
+                    weight: 1.0,
+                }];
+                let want = 0.1 / (r.isp_curve.evaluate(0.0) * ose_data::G0);
+                wants.push(want);
+                let tank = s.net.tanks.iter_mut().find(|t| t.part == i).unwrap();
+                tank.stored =
+                    want * if j == 0 { fraction } else { 2.0 } / s.net.unit_mass_t[tank.resource];
+            }
+            let mut engine = s.propulsion(&p, Default::default(), 0.1);
+            engine.mass.centre_m = DVec3::ZERO;
+            s.configure_actuators(&p, Default::default(), &mut engine);
+            s.resolve_wheel_power(&mut p, &body, &mut engine, 0.1);
+            let first = if fraction >= 0.5 { fraction } else { 0.0 };
+            let allocation = engine.control_allocation.as_ref().unwrap();
+            for (a, input) in engine
+                .actuators
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(&allocation.inputs)
+            {
+                assert!((*input - if a.part == pair[0] { first } else { 1.0 }).abs() < 1e-9);
+            }
+            assert!((allocation.force_kn.y - 1.0 - first).abs() < 1e-9);
+            assert!((allocation.torque_knm.z - first + 1.0).abs() < 1e-9);
+            assert!((engine.burned_t - wants[0] * first - wants[1]).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn reference_rcs_mixture_rejection_retains_every_ingredient() {
+        let (mut s, mut p, pair, body) = rcs_fixture();
+        s.rcs_defs[pair[1]] = None;
+        let r = s.rcs_defs[pair[0]].as_mut().unwrap();
+        r.request_minimum = Some(0.5);
+        r.propellant = "Methalox".into();
+        r.thrust_kn = 1.0;
+        r.thrusters = vec![ose_data::ThrustTransform {
+            position_m: DVec3::new(1.0, 0.0, 0.0),
+            direction: DVec3::new(0.0, 1.0, 0.0),
+            weight: 1.0,
+        }];
+        s.net.tanks.clear();
+        let want = 0.1 / (100.0 * ose_data::G0);
+        let units = want / s.net.mixture_unit_mass_t("Methalox");
+        let ingredients = s.net.ingredients("Methalox");
+        assert_eq!(ingredients.len(), 2);
+        for (j, (resource, ratio)) in ingredients.into_iter().enumerate() {
+            s.net.tanks.push(crate::resources::Tank {
+                part: pair[0],
+                resource,
+                stored: units * ratio * if j == 0 { 1.0 } else { 0.25 },
+                capacity: units * ratio * 2.0,
+            });
+        }
+        let before = s.net.tanks.clone();
+        let mut engine = s.propulsion(&p, Default::default(), 0.1);
+        s.configure_actuators(&p, Default::default(), &mut engine);
+        s.resolve_wheel_power(&mut p, &body, &mut engine, 0.1);
+        assert_eq!(engine.control_allocation.unwrap().force_kn, DVec3::ZERO);
+        assert_eq!(s.net.tanks, before);
+        assert_eq!(engine.burned_t, 0.0);
+        p.rcs.translate.y = 0.25;
+        let mut engine = s.propulsion(&p, Default::default(), 0.1);
+        s.configure_actuators(&p, Default::default(), &mut engine);
+        s.resolve_wheel_power(&mut p, &body, &mut engine, 0.1);
+        assert!((engine.control_allocation.unwrap().force_kn.y - 0.25).abs() < 1e-9);
+        assert!((engine.burned_t - want * 0.25).abs() < 1e-12);
     }
 
     #[test]
