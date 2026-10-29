@@ -307,9 +307,17 @@ impl Stand {
         // on its bones and the original's EVA clips; the rigid pieces stand in while it loads.
         if let Stand::Kerbal { round, .. } = self {
             let anim: ModelRef = if round {
-                ("kerbal:anim_f", "assets/kerbal/kerbal_f.glb?clips=ladder", 1.0)
+                (
+                    "kerbal:anim_f",
+                    "assets/kerbal/kerbal_f.glb?clips=ladder",
+                    1.0,
+                )
             } else {
-                ("kerbal:anim_m", "assets/kerbal/kerbal_m.glb?clips=ladder", 1.0)
+                (
+                    "kerbal:anim_m",
+                    "assets/kerbal/kerbal_m.glb?clips=ladder",
+                    1.0,
+                )
             };
             gpu.request_model(anim.0, anim.1);
             if gpu.has_model(anim.0) {
