@@ -172,12 +172,12 @@ new deflection affects the next force tick. Authored mirrored-surface signs are
 preserved through stock imports and editor mirror placement. Their tests retain
 both force-location and one-tick ordering assertions.
 
-Replaying the same 600 captured samples now gives zero mass error, maximum angular
+The mass/inertia increment at `e8f04ec` replayed those 600 samples with zero mass error, maximum angular
 rate error 0.2222502 rad/s (baseline 9.5071410), and maximum attitude error 8.147963
 degrees (baseline 179.819182). RMS attitude error is 6.020884 degrees. The original
 0.5-degree / 0.01-rad/s thresholds remain unchanged, so **the comparison still fails**.
 See `jumping-flea-after-mass-inertia.json` beside the baseline fixture. Remaining
-work includes exact capture/module/PhysX phase and resource-request timing,
+work at that point included exact capture/module/PhysX phase and resource-request timing,
 additional procedural shapes and joint-solver behavior. No time/pose offset or
 controller gain was fitted to the recording.
 
@@ -196,3 +196,47 @@ OnLateUpdate marks them dirty, and OnFixedUpdate refreshes them only when dirty.
 The recorder's FixedUpdate samples can therefore repeat cached angular velocity
 across physics ticks. Existing fixtures and failed comparisons are retained as
 recorded; their phase has not been corrected by shifting or fitting the data.
+
+The 0.2 recorder captures a live rigid-body state before each physics tick and its
+end state after `WaitForFixedUpdate`, with the interval's actual input, rendered
+frame, physics tick, requested torque and wheel power flags. It supplies the stock
+one-shot overrides before every fixed tick, so multiple physics ticks in one
+rendered frame no longer create unintended input dropouts. Live states use actual
+Rigidbody COM, mass-weighted velocity/angular velocity and the control owner's
+body rotation composed with its authored control offset. Cached vessel telemetry
+remains a separate diagnostic. See Unity's [execution order](https://docs.unity3d.com/2020.3/Documentation/Manual/ExecutionOrder.html).
+
+`jumping-flea-interval.csv` is the new executable capture. All 600 intervals have
+positive 20 ms durations, consecutive physics counts and exactly continuous live
+end/start angular velocity. Cached end-state velocity differs from live velocity
+by up to 0.112767 rad/s. The intended holds/release/reversal occur without the old
+per-render input dropouts. The source CSV, numerical geometry companions, original
+metadata, hashes and before/after reports are preserved; GUID fields are omitted.
+The temporary loader/campaign were removed and all 75 Default files retained
+their original hashes.
+
+The runtime wheel path now retains the preceding command, filtered demand,
+resource acceptance and queued local torque. The source module receives the
+preceding FlightInputHandler state; its resource component requests the preceding
+filtered demand and observes accepted delivery later; RigidbodyBehavior applies
+the existing torque object before the module replaces it. The live trace confirms
+these stages. Accepted partial requests still permit full filtered torque. Staging
+and structural rebuilds retain these transient queues. Tests distinguish paid,
+delayed torque from new requests rejected on an empty battery. Legacy/custom
+definitions without a source threshold retain their immediate proportional path.
+The fixed-tick request schedule is an approximation to KSP2's render-dependent
+component update schedule; it is not validated for every frame rate or brownout.
+
+For imported reference bodies, the beginning-of-tick frame now supplies the tensor
+and mounted-force transformation for the velocity solve. The joint lever-mass
+gyroscopic estimate is solved implicitly in that frame. Orientation advances once
+using the resulting angular velocity, matching the post-solver pose order in
+PhysX's `integrateCore`. The physical path retains its midpoint/conservative
+integration. A single-body impulse/pose regression independently checks the order.
+
+On this same new capture, `213248c` gives maximum attitude error 12.770470 degrees
+and maximum rate error 0.6142401 rad/s. The staged-wheel/pose increment gives
+**0.145481 degrees, 0.0024561 rad/s and zero mass error**, passing the original
+0.5-degree / 0.01-rad/s / 1e-6-t thresholds. A Rust integration test replays all
+600 intervals in the normal test suite. This is one SAS-off, unignited vacuum
+fixture; it does not establish SAS/RCS, powered atmospheric or whole-game parity.

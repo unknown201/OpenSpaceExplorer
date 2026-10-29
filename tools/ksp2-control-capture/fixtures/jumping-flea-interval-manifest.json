@@ -1,0 +1,25 @@
+{
+  "source": "KSP2 executable live-rigidbody interval capture",
+  "game_version": "0.2.2.0.32913",
+  "capture_date_utc": "2026-10-29",
+  "baseline_candidate_commit": "213248c",
+  "thresholds": {
+    "angle_deg": 0.5,
+    "omega_rad_s": 0.01,
+    "mass_t": 1e-06
+  },
+  "files": {
+    "jumping-flea-interval-after.json": "eaaa7b06061dbee1924903d07282c7089a0332b1e752414d21743f95262d667e",
+    "jumping-flea-interval-before.json": "41a62712a17ae31e1e6fedd204953b3bc24c2a7c93c0543aa9e3714d8a87ca95",
+    "jumping-flea-interval.csv": "8b2b8602c055307939b08460250bb525b4d62e7d5bb6a494b2ffae053a8cf5e6",
+    "jumping-flea-interval.csv.metadata.txt": "101b626ca663b382d14530c76d371cd01f34c46dd7274e9670a12aa1cb2c8f87",
+    "jumping-flea-interval.csv.parts.csv": "34160de6ddf47ca244b00eeeafd5b8d13da200916f08d9e4995b70231353635e",
+    "jumping-flea-interval.csv.surfaces.csv": "85037a6f938362d55aeb71086819ea89f72ab0df589b9aa3d15040029aa6887f"
+  },
+  "cleanup": {
+    "loader_removed": true,
+    "temporary_campaign_removed": true,
+    "default_campaign_unchanged": true,
+    "capture_files": 4
+  }
+}

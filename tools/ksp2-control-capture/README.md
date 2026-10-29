@@ -6,7 +6,9 @@ F9 is an explicit fixture: it prepares a 100 km Kerbin orbit, disables SAS and c
 throttle input, waits two seconds, then supplies pitch/release/reversal/roll/yaw
 through the stock FlightInputHandler override API for 12 seconds. It stops overrides
 and recording automatically. It never changes physics parameters or writes a save.
-The fixture does not ignite an engine; use an unignited craft.
+The fixture does not ignite an engine; use an unignited craft. Version 0.2 records
+live rigid-body intervals and supplies the stock one-shot overrides on every
+physics tick. Earlier 0.1 measurements remain immutable diagnostic fixtures.
 
 ## Build
 
@@ -54,9 +56,17 @@ vessel change stops it automatically. Outputs are in `BepInEx/ose-control-traces
   applied SAS commands, throttle, quaternion, angular velocity, mass, translation,
   SAS enable and absolute UT;
 - companion metadata: source executable assembly version, vessel identity,
-  main-body motion frame, Unity handedness and post-FixedUpdate sample phase;
+  main-body motion frame, Unity handedness and explicit live start/end phases;
 - companion surfaces CSV: actual runtime moving/fixed lift coefficients, actuator
   speed/range, pressure offsets and hinge pivots.
+
+The primary pose/rate are sampled before physics from live Rigidbodies, rather
+than cached PartOwnerComponent statistics. `end_q*`/`end_w*` are sampled after
+`WaitForFixedUpdate`; applied inputs describe that interval. `dt`, `fixed_count`
+and `unity_frame` expose dropped ticks and multiple physics steps per render.
+`cached_w*`, requested torque, wheel input and pending/accepted power distinguish
+telemetry lag from actual module/force latency. `compare_control_traces.py`
+rejects noncontiguous intervals or discontinuous live end/start rates.
 
 The logger preserves the game's values and coordinate frame. Before comparing with
 OSE, explicitly convert Unity's handedness and the world/control frame, and match
@@ -109,3 +119,25 @@ reference inertia scaling, PhysX-style aggregate rotation, and separate SAS MOI.
 `jumping-flea-after-mass-inertia.json` records the improved but still failing replay:
 0 t mass error, 8.147963-degree maximum angle error and 0.2222502 rad/s maximum rate
 error. Thresholds are unchanged; this is not a whole-game parity pass.
+
+## Live-interval regression
+
+`fixtures/jumping-flea-interval.csv` is a separate 600-interval executable capture
+with uninterrupted requested holds and continuous live body states. The old
+capture and reports above are retained unchanged. The new fixture's manifest
+records hashes, baseline commit `213248c` and successful cleanup: temporary loader
+and campaign removed, all 75 Default files unchanged. Only generated GUID fields
+were removed from metadata/part companions.
+
+```powershell
+cargo test -p ose-sim --test control_runtime
+cargo run -q -p ose-sim --example control_trace -- 'Jumping Flea' tools/ksp2-control-capture/fixtures/jumping-flea-interval.csv > .cache/jumping-flea-interval-ose.csv
+python -B tools/compare_control_traces.py --reference-unity tools/ksp2-control-capture/fixtures/jumping-flea-interval.csv .cache/jumping-flea-interval-ose.csv
+```
+
+The corrected wheel stages and PhysX pose order pass the unchanged thresholds on
+this fixture: maximum attitude error 0.145481 degrees, angular-rate error
+0.0024561 rad/s and mass error 0 t. The same capture at `213248c` fails at
+12.770470 degrees / 0.6142401 rad/s. No input/time/pose offset, tensor multiplier
+or controller gain was fitted. This validates SAS-off wheel pulses in this craft;
+other craft, SAS/RCS, brownouts and joint/contact behavior still need captures.

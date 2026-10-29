@@ -1494,12 +1494,17 @@ fn turn_with_parts(
     let torque_body = control + engine.torque_knm;
     let external = p.aero_torque_knm + engine.environment_torque_knm;
     let acceleration = inertia.solve(torque_body + local(external)).length();
-    let steps = ((w.length() + acceleration * dt) * dt / 0.05)
-        .ceil()
-        .clamp(1.0, 256.0) as usize;
+    let reference = engine.gyroscopic_compensation != crate::dynamics::Inertia::default();
+    let steps = if reference {
+        1 // PhysX advances its pose once per fixed tick using post-solver angular motion.
+    } else {
+        ((w.length() + acceleration * dt) * dt / 0.05)
+            .ceil()
+            .clamp(1.0, 256.0) as usize
+    };
     let h = dt / steps as f64;
     for _ in 0..steps {
-        if engine.gyroscopic_compensation != crate::dynamics::Inertia::default() {
+        if reference {
             // Summing constrained PhysX bodies leaves the parallel-axis (lever-mass)
             // gyroscopic term, while omitting each body's own tensor contribution.
             let own = engine.gyroscopic_compensation;
@@ -1508,20 +1513,18 @@ fn turn_with_parts(
                 y: inertia.y - own.y,
                 z: inertia.z - own.z,
             };
-            let mut midpoint = w1;
+            let x = facing.cross(top);
+            let t =
+                torque_body + DVec3::new(external.dot(x), external.dot(facing), external.dot(top));
             let mut next = w1;
             for _ in 0..4 {
-                let y = rotate(facing, midpoint, h * 0.5);
-                let z = rotate(top, midpoint, h * 0.5);
-                let x = y.cross(z);
-                let w = DVec3::new(midpoint.dot(x), midpoint.dot(y), midpoint.dot(z));
-                let t = torque_body + DVec3::new(external.dot(x), external.dot(y), external.dot(z));
+                let midpoint = (w1 + next) * 0.5;
+                let w = DVec3::new(midpoint.dot(x), midpoint.dot(facing), midpoint.dot(top));
                 let a = inertia.solve(t - w.cross(lever.apply(w)));
-                next = w1 + (x * a.x + y * a.y + z * a.z) * h;
-                midpoint = (w1 + next) * 0.5;
+                next = w1 + (x * a.x + facing * a.y + top * a.z) * h;
             }
-            facing = rotate(facing, midpoint, h);
-            top = rotate(top, midpoint, h);
+            facing = rotate(facing, next, h);
+            top = rotate(top, next, h);
             w1 = next;
             continue;
         }
@@ -2566,6 +2569,25 @@ mod tests {
         let frame = vessel_basis(&p);
         turn_with_parts(&mut p, &engine, target, 0.0, 0.1, &mut out);
         assert!((out.control_torque_knm.unwrap() - frame.1 * 0.5).length() < 1e-10);
+    }
+
+    #[test]
+    fn physx_pose_advances_with_post_impulse_spin_in_the_current_inertia_frame() {
+        let (mut p, mut engine) = body_dynamics_fixture();
+        p.attitude = Attitude::Free;
+        p.rotation_input = DVec3::ZERO;
+        p.angvel = DVec3::ZERO;
+        p.roll_rate = 0.0;
+        engine.gyroscopic_compensation = engine.mass.inertia;
+        engine.torque_knm = DVec3::new(2.0, 0.0, 0.0);
+        let (x, y, z) = vessel_basis(&p);
+        let a = engine.mass.inertia.solve(engine.torque_knm);
+        let next = (x * a.x + y * a.y + z * a.z) * 0.02;
+        let expected = rotate(y, next, 0.02);
+        let f = p.facing;
+        turn_with_parts(&mut p, &engine, f, 0.0, 0.02, &mut Default::default());
+        assert!((p.facing - expected).length() < 1e-12);
+        assert!((p.angvel + p.facing * p.roll_rate - next).length() < 1e-12);
     }
 
     #[test]

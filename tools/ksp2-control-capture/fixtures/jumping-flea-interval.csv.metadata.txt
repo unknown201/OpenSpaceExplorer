@@ -1,0 +1,9 @@
+source=running_KSP2
+recorder_version=0.2.0
+fixture=orbit_input_pulse
+phase=pre_physics_live_rigidbody
+inputs=interval_applied
+end_phase=wait_for_fixed_update_live_rigidbody
+frame=main_body_motion_frame
+handedness=Unity
+assembly=0.0.0.0

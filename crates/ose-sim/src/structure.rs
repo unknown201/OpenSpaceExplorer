@@ -113,6 +113,9 @@ pub struct Structure {
     /// Last delivered gimbal direction in each engine's exported model frame.
     pub engine_gimbals: Vec<(u16, DVec3)>,
     wheel_actuation_knm: Vec<DVec3>,
+    wheel_previous_command: Vec<DVec3>,
+    wheel_queued_torque: Vec<DVec3>,
+    wheel_accepted_power: Vec<bool>,
     geometry: Vec<ose_data::flight_geometry::FlightGeometry>,
     controls: Vec<ose_data::flight_geometry::PartControl>,
     control_sources: Vec<bool>,
@@ -328,6 +331,9 @@ impl Structure {
             self.surface_angles[j] = old.surface_angles[i];
             self.surface_deploy_angles[j] = old.surface_deploy_angles[i];
             self.wheel_actuation_knm[j] = old.wheel_actuation_knm[i];
+            self.wheel_previous_command[j] = old.wheel_previous_command[i];
+            self.wheel_queued_torque[j] = old.wheel_queued_torque[i];
+            self.wheel_accepted_power[j] = old.wheel_accepted_power[i];
             self.gimbal_angles[j] = old.gimbal_angles[i].clone();
             self.chutes[j] = old.chutes[i];
             self.chute_open[j] = old.chute_open[i];
@@ -522,6 +528,9 @@ impl Structure {
             resolved_actuators: None,
             engine_gimbals: Vec::new(),
             wheel_actuation_knm: vec![DVec3::ZERO; n],
+            wheel_previous_command: vec![DVec3::ZERO; n],
+            wheel_queued_torque: vec![DVec3::ZERO; n],
+            wheel_accepted_power: vec![false; n],
             occupied_mass_t: vec![0.; n],
             mirrored: craft
                 .parts
@@ -1159,8 +1168,13 @@ impl Structure {
         for i in (0..self.rigid.len()).filter(|&i| self.rigid.present[i]) {
             let axes = self.part_axes(i);
             let cfg = p.part_control(i);
+            let power_scale = if self.electric[i].wheel_acceptance_threshold.is_some() {
+                1.0 // Reference potential torque is independent of the last power readout.
+            } else {
+                p.wheel_scale.clamp(0.0, 1.0)
+            };
             let caps = self.wheel_axes_knm[i]
-                * p.wheel_scale.clamp(0.0, 1.0)
+                * power_scale
                 * cfg.wheel_authority
                 * f64::from(cfg.wheel_enabled);
             for (j, cap) in [caps.x, caps.y, caps.z].into_iter().enumerate() {
@@ -2042,7 +2056,9 @@ impl Structure {
                         }],
                         priority: 4,
                     });
-                } else if self.net.available(i, ec) > 1e-9 {
+                } else if self.electric[i].wheel_acceptance_threshold.is_none()
+                    && self.net.available(i, ec) > 1e-9
+                {
                     delivered[i] = 1.0;
                 }
             }
@@ -2084,6 +2100,7 @@ impl Structure {
         for a in propulsion.actuators.as_mut().expect("configured actuators") {
             if a.force_kn.length_squared() == 0.0
                 && a.axial.is_none()
+                && self.electric[a.part].wheel_acceptance_threshold.is_none()
                 && self.electric[a.part].wheel_use_per_knm > 0.0
                 && !ec.is_some_and(|ec| self.net.available(a.part, ec) > 1e-9)
             {
@@ -2094,6 +2111,8 @@ impl Structure {
         self.resolve_authored_gimbals(p, propulsion, &mut allocation, dt);
         self.resolve_surface_geometry(p, propulsion, &mut allocation, dt);
         let channels = propulsion.actuators.as_ref().expect("configured actuators");
+        let mut wheel_outputs = vec![DVec3::ZERO; self.rigid.len()];
+        let mut previous_demands = vec![0.0; self.rigid.len()];
         // Reference wheels receive the same axis commands. They do not compete for a
         // least-squares allocation or let the first available wheel consume the request.
         for i in 0..self.rigid.len() {
@@ -2113,22 +2132,44 @@ impl Structure {
                 _ => command,
             };
             let desired = if self.rigid.present[i] && p.controlled {
-                aero::rotate(
-                    p.control_rotation,
-                    DVec3::new(cap.x * command.x, cap.y * command.y, cap.z * command.z),
-                )
+                DVec3::new(cap.x * command.x, cap.y * command.y, cap.z * command.z)
             } else {
                 DVec3::ZERO
             };
-            self.wheel_actuation_knm[i] =
-                crate::actuators::wheel_response(self.wheel_actuation_knm[i], desired, dt);
+            if self.electric[i].wheel_acceptance_threshold.is_some() {
+                // Source stages: modules see the preceding input FixedUpdate; the
+                // component posts the preceding filtered demand; torque reads the
+                // previous resource acceptance; RigidbodyBehavior applies its already
+                // queued local torque before the module replaces it for the next tick.
+                let previous = self.wheel_actuation_knm[i];
+                if self.rigid.present[i] && cfg.wheel_enabled {
+                    previous_demands[i] = previous.x.abs() + previous.y.abs() + previous.z.abs();
+                }
+                self.wheel_actuation_knm[i] =
+                    crate::actuators::wheel_response(previous, self.wheel_previous_command[i], dt);
+                self.wheel_previous_command[i] = desired;
+                wheel_outputs[i] = self.wheel_queued_torque[i];
+                self.wheel_queued_torque[i] =
+                    if self.wheel_accepted_power[i] || self.electric[i].wheel_use_per_knm <= 0.0 {
+                        aero::rotate(p.control_rotation, self.wheel_actuation_knm[i])
+                    } else {
+                        DVec3::ZERO
+                    };
+            } else {
+                self.wheel_actuation_knm[i] = crate::actuators::wheel_response(
+                    self.wheel_actuation_knm[i],
+                    aero::rotate(p.control_rotation, desired),
+                    dt,
+                );
+                wheel_outputs[i] = self.wheel_actuation_knm[i];
+            }
         }
         for (a, input) in channels.iter().zip(&mut allocation.inputs) {
             if a.force_kn.length_squared() == 0.0 && a.axial.is_none() {
                 let old = *input;
                 let norm = a.torque_knm.length_squared();
                 *input = if norm > 0.0 {
-                    self.wheel_actuation_knm[a.part].dot(a.torque_knm) / norm
+                    wheel_outputs[a.part].dot(a.torque_knm) / norm
                 } else {
                     0.0
                 };
@@ -2142,11 +2183,21 @@ impl Structure {
                 magnitudes[a.part] += t.x.abs() + t.y.abs() + t.z.abs();
             }
         }
+        for (i, magnitude) in magnitudes.iter_mut().enumerate() {
+            if self.electric[i].wheel_acceptance_threshold.is_some() {
+                *magnitude = previous_demands[i];
+            }
+        }
         let delivered = self.consume_wheel_charge(p, &magnitudes, dt);
+        for (accepted, fraction) in self.wheel_accepted_power.iter_mut().zip(&delivered) {
+            *accepted = *fraction > 0.0;
+        }
         for (a, input) in channels.iter().zip(&mut allocation.inputs) {
             if a.force_kn.length_squared() == 0.0 && a.axial.is_none() {
                 let old = *input;
-                *input *= delivered[a.part];
+                if self.electric[a.part].wheel_acceptance_threshold.is_none() {
+                    *input *= delivered[a.part];
+                }
                 allocation.torque_knm = allocation.torque_knm + a.torque_knm * (*input - old);
             }
         }
@@ -6206,20 +6257,83 @@ mod tests {
                 stored: want * fraction,
                 capacity: 10.0,
             });
-            let mut propulsion = s.propulsion(&p, Default::default(), dt);
-            s.configure_actuators(&p, Default::default(), &mut propulsion);
-            s.resolve_wheel_power(&mut p, &test_body(), &mut propulsion, dt);
+            let mut torques = vec![0.0; s.rigid.len()];
+            torques[s.root] = 1.2;
+            let delivered = s.consume_wheel_charge(&mut p, &torques, dt);
             let accepted = fraction >= 0.01;
-            assert!(
-                (propulsion.control_allocation.unwrap().torque_knm.y
-                    - if accepted { 1.2 } else { 0.0 })
-                .abs()
-                    < 1e-10,
+            assert_eq!(
+                delivered[s.root],
+                f64::from(accepted),
                 "fraction={fraction}"
             );
             let expected_charge = if accepted { 0.0 } else { want * fraction };
             assert!((ec_stored(&s) - expected_charge).abs() < 1e-12);
             assert_eq!(p.wheel_scale, f64::from(accepted));
+        }
+    }
+
+    #[test]
+    fn reference_wheel_stages_input_charge_acceptance_and_queued_torque() {
+        let (mut s, mut p, _) = wheel_power_fixture();
+        s.electric[s.root].wheel_acceptance_threshold = Some(0.01);
+        let ec = s.net.resource("ElectricCharge").unwrap();
+        s.net.tanks.push(crate::resources::Tank {
+            part: s.root,
+            resource: ec,
+            stored: 10.0,
+            capacity: 10.0,
+        });
+        // The first two ticks draw no charge. Posting filtered demand precedes
+        // acceptance, and RigidbodyBehavior applies the preceding torque object.
+        let outputs = [0.0, 0.0, 0.0, 0.0, 1.872, 1.9488, 1.97952];
+        for (tick, expected) in outputs.into_iter().enumerate() {
+            let before = ec_stored(&s);
+            let mut engine = s.propulsion(&p, Default::default(), 0.02);
+            s.configure_actuators(&p, Default::default(), &mut engine);
+            s.resolve_wheel_power(&mut p, &test_body(), &mut engine, 0.02);
+            let actual = engine.control_allocation.unwrap().torque_knm.y;
+            assert!((actual - expected).abs() < 1e-10, "tick={tick}: {actual}");
+            if tick < 2 {
+                assert_eq!(ec_stored(&s), before);
+            } else {
+                assert!(ec_stored(&s) < before);
+            }
+        }
+        // Splitting/rebuilding preserves pending commands and already-paid torque.
+        let (mut rebuilt, _, _) = wheel_power_fixture();
+        rebuilt.carry_state_from(&s, &(0..s.rigid.len()).map(Some).collect::<Vec<_>>());
+        assert_eq!(rebuilt.wheel_previous_command, s.wheel_previous_command);
+        assert_eq!(rebuilt.wheel_queued_torque, s.wheel_queued_torque);
+        assert_eq!(rebuilt.wheel_accepted_power, s.wheel_accepted_power);
+    }
+
+    #[test]
+    fn reference_wheel_delivers_only_the_impulse_queued_by_accepted_charge() {
+        for fraction in [0.0, 0.005, 0.01, 0.25] {
+            let (mut s, mut p, _) = wheel_power_fixture();
+            s.electric[s.root].wheel_acceptance_threshold = Some(0.01);
+            let ec = s.net.resource("ElectricCharge").unwrap();
+            s.net.tanks.push(crate::resources::Tank {
+                part: s.root,
+                resource: ec,
+                stored: 1.2 * 3.0 * 0.02 * fraction,
+                capacity: 10.0,
+            });
+            for tick in 0..9 {
+                let mut engine = s.propulsion(&p, Default::default(), 0.02);
+                s.configure_actuators(&p, Default::default(), &mut engine);
+                s.resolve_wheel_power(&mut p, &test_body(), &mut engine, 0.02);
+                let actual = engine.control_allocation.unwrap().torque_knm.y;
+                let expected = if tick == 4 && fraction >= 0.01 {
+                    1.872
+                } else {
+                    0.0
+                };
+                assert!(
+                    (actual - expected).abs() < 1e-10,
+                    "fraction={fraction}, tick={tick}: {actual}"
+                );
+            }
         }
     }
 

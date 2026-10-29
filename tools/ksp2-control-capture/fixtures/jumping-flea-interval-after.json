@@ -1,0 +1,9 @@
+{
+  "samples": 600,
+  "duration_s": 11.979999732226133,
+  "max_angle_deg": 0.14548070040419234,
+  "rms_angle_deg": 0.045474342960809995,
+  "max_omega_rad_s": 0.00245606862680783,
+  "max_mass_t": 0.0,
+  "passed": true
+}

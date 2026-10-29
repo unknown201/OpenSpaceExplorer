@@ -14,7 +14,21 @@ def read(path):
     for i,r in enumerate(rows):
         if not all(math.isfinite(v) for v in r.values()):raise ValueError('nonfinite trace')
         if i and r['t']<=rows[i-1]['t']:raise ValueError('timestamps must increase')
+    if 'dt' in rows[0]:validate_intervals(rows)
     return rows
+
+def validate_intervals(rows):
+    """Reject missing/unaligned live physics intervals rather than fitting a time shift."""
+    for i,row in enumerate(rows):
+        if row['dt']<=0:raise ValueError('nonpositive physics interval')
+        if not i:continue
+        previous=rows[i-1]
+        if abs(row['t']-previous['t']-previous['dt'])>1e-6:
+            raise ValueError('noncontiguous physics intervals')
+        if row['fixed_count']!=previous['fixed_count']+1:
+            raise ValueError('missing physics tick')
+        if any(abs(row[k]-previous['end_'+k])>1e-8 for k in ['wx','wy','wz']):
+            raise ValueError('live angular velocity is discontinuous between intervals')
 
 def unity_to_ose(rows):
     """Explicit Z reflection, preserving time, inputs and the original rows."""
@@ -22,7 +36,8 @@ def unity_to_ose(rows):
     for row in rows:
         converted=dict(row)
         # Quaternion and angular velocity are axial; position/velocity are polar.
-        for key in ['qx','qy','wx','wy','pz','vz']:
+        for key in ['qx','qy','wx','wy','pz','vz','end_qx','end_qy','end_wx','end_wy',
+                    'cached_wx','cached_wy','torque_x','torque_y']:
             if key in converted: converted[key]=-converted[key]
         result.append(converted)
     return result
