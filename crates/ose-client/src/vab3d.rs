@@ -36,6 +36,13 @@ fn quat_to_gltf(q: ose_data::craft::Quat) -> DQuat {
 }
 
 pub struct VabView {
+    /// The rest of the selected part's symmetry set, tinted with it.
+    pub sym_lit: Vec<usize>,
+    /// The rest of the hovered part's symmetry set, lit with it.
+    pub sym_hover: Vec<usize>,
+    /// While a part is held: how each part of a symmetry set maps onto the others (for the copies shown on
+    /// a set when the held part snaps to one of its nodes).
+    pub sym_of: std::collections::HashMap<usize, Vec<crate::vab::SymMap>>,
     /// Parts of the stage card the pointer is over, tinted in the hall (the original's stage highlight).
     pub stage_lit: Vec<usize>,
     scene: Option<VabScene>,
@@ -124,6 +131,9 @@ impl VabView {
             col: None,
             hovered: None,
             stage_lit: Vec::new(),
+            sym_lit: Vec::new(),
+            sym_hover: Vec::new(),
+            sym_of: Default::default(),
             held_turn: crate::vab::NO_TURN,
             snap_turn: crate::vab::NO_TURN,
             held_yaw: crate::vab::NO_TURN,
@@ -483,15 +493,20 @@ impl VabView {
             item.fill_dir = -forward;
             item.fill = 0.35;
             if self.icon_mode {
-            } else if Some(i) == selected {
+            } else if Some(i) == selected || self.sym_lit.contains(&i) {
                 item.color = [0.65, 1.0, 0.7, 1.0];
+                item.highlight = 0.45;
             } else if self.stage_lit.contains(&i) {
                 // the parts of the stage card under the pointer
                 item.color = [0.7, 0.85, 1.0, 1.0];
                 item.ambient = 0.6;
-            } else if Some(i) == self.hovered && self.held.is_none() {
+                item.highlight = 0.4;
+            } else if (Some(i) == self.hovered || self.sym_hover.contains(&i))
+                && self.held.is_none()
+            {
                 item.color = [1.0, 1.0, 0.75, 1.0];
                 item.ambient = 0.6;
+                item.highlight = 0.3;
             }
             items.push(item);
         }
@@ -641,6 +656,23 @@ impl VabView {
                 } else {
                     self.held_turn
                 };
+                // Snapped on a part of a symmetry set: the copies on the rest of the set.
+                if let Some(maps) = self.snap.as_ref().and_then(|(pi, _)| self.sym_of.get(pi)) {
+                    let pos = self.world_to_craft(at);
+                    for m in maps {
+                        let (p, q) = m.pose(pos, turn, ose_math::DVec3::new(0.0, 0.0, 1.0));
+                        let mut copy = DrawItem::lit(
+                            name.clone(),
+                            centre + to_gltf(p) - cam_pos,
+                            quat_to_gltf(q),
+                            1.0,
+                            light,
+                        );
+                        copy.ambient = 0.6;
+                        copy.color = [0.7, 1.0, 0.75, 1.0];
+                        items.push(copy);
+                    }
+                }
                 let mut ghost = DrawItem::lit(name, at - cam_pos, quat_to_gltf(turn), 1.0, light);
                 ghost.ambient = 0.6;
                 ghost.color = if self.snap.is_some() {

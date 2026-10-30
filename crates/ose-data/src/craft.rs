@@ -72,6 +72,10 @@ pub struct CraftPart {
     /// SAS 0x10, Brakes 0x20, Abort 0x40, SolarPanels 0x80, Custom01 0x10000 .. Custom10 0x2000000).
     #[serde(default)]
     pub actions: Vec<(String, u32)>,
+    /// The symmetry set the part belongs to (the original's `SymmetrySet`): parts placed together with
+    /// symmetry share one nonzero id, and the editor keeps them alike; 0 for none.
+    #[serde(default)]
+    pub symmetry: u32,
 }
 
 /// The part actions a group can run: on with the group on, off with it off.

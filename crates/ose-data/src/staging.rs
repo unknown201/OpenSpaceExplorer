@@ -451,6 +451,7 @@ mod tests {
         res: &[(&str, f64)],
     ) -> CraftPart {
         CraftPart {
+            symmetry: 0,
             actions: Vec::new(),
             flight: None,
             colors: None,
