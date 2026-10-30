@@ -928,25 +928,48 @@
     /* "Realtime Rounded" is added by the client (load_fonts) when the server has it. */
     :root { --hud-font: "Realtime Rounded", "Cascadia Mono", Consolas, "Roboto Mono", monospace; }
     #flight-hud, #flight-hud button, #flight-hud .fh-row b, #ftue, #toasts, #labels { font-family: var(--hud-font) !important; }
-    #flight-hud .fh-bottom { left: calc(16 * var(--u)); bottom: calc(12 * var(--u)); transform: none; }
-    #flight-hud .fh-staging { left: auto; right: calc(16 * var(--u)); bottom: calc(12 * var(--u)); }
-    #flight-hud .fh-bottom .fh-core { min-width: calc(300 * var(--u)); padding: calc(8 * var(--u)) calc(10 * var(--u)); }
+    #flight-hud .fh-bottom { left: calc(16 * var(--u)); bottom: calc(22 * var(--u)); transform: none; }
+    #flight-hud .fh-staging { left: auto; right: calc(16 * var(--u)); bottom: calc(22 * var(--u)); }
+    #flight-hud .fh-bottom .fh-core { min-width: calc(240 * var(--u)); padding: calc(6 * var(--u)) calc(8 * var(--u)); gap: calc(4 * var(--u)); }
     #flight-hud .fh-bottom .fh-row b { min-width: calc(70 * var(--u)); font-size: calc(16 * var(--u)); }
     #flight-hud #fh-stage-btn { font: 700 calc(26 * var(--u)) var(--hud-font); letter-spacing: 0.08em; color: #0b1a0b; background: #3fe05a; border-color: #8fff9f; padding: calc(8 * var(--u)) calc(12 * var(--u)); }
     #flight-hud #fh-stage-btn:hover { background: #6cf07f; }
     #flight-hud .fh-actions { right: auto; bottom: auto; left: calc(8 * var(--u)); top: calc(76 * var(--u)); flex-direction: column; }
-    #flight-hud .fh-appbar { top: auto; bottom: calc(12 * var(--u)); right: calc(260 * var(--u)); flex-direction: row; background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(8 * var(--u)); padding: calc(4 * var(--u)); }
-    #flight-hud .fh-views { top: auto; bottom: calc(12 * var(--u)); right: calc(620 * var(--u)); background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(8 * var(--u)); padding: calc(4 * var(--u)); }
-    #flight-hud .fh-missions { top: auto; bottom: calc(68 * var(--u)); right: calc(260 * var(--u)); max-height: 60vh; overflow-y: auto; }
+    #flight-hud .fh-appbar { top: auto; bottom: calc(22 * var(--u)); right: calc(260 * var(--u)); flex-direction: row; background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(8 * var(--u)); padding: calc(4 * var(--u)); }
+    #flight-hud .fh-views { top: auto; bottom: calc(22 * var(--u)); right: calc(620 * var(--u)); background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(8 * var(--u)); padding: calc(4 * var(--u)); }
+    #flight-hud .fh-missions { top: auto; bottom: calc(78 * var(--u)); right: calc(260 * var(--u)); max-height: 60vh; overflow-y: auto; }
     #flight-hud .fh-crewbox { bottom: auto; top: calc(52 * var(--u)); right: calc(16 * var(--u)); }
     #flight-hud .fh-crew-acts { bottom: auto; top: calc(166 * var(--u)); }
     #flight-hud .fh-help { display: none; }
+    /* The navball cluster as the original's: heading on top, speed (yellow) left and altitude (magenta) right. */
+    #flight-hud .fh-ball { position: relative; align-self: flex-end; margin: calc(34 * var(--u)) calc(104 * var(--u)) 0 calc(96 * var(--u)); }
+    #flight-hud .fh-ball canvas { display: block; }
+    #flight-hud .fh-hdg { position: absolute; top: calc(-30 * var(--u)); left: 50%; transform: translateX(-50%); background: #10141bf0; border: 1px solid #e6ecf7aa; border-radius: calc(4 * var(--u)); padding: calc(1 * var(--u)) calc(10 * var(--u)); }
+    #flight-hud .fh-hdg b { font: 700 calc(18 * var(--u)) var(--hud-font); }
+    body:has(#flight-hud.open) #hud > #ut, body:has(#flight-hud.open) #hud > .warp { left: calc(50% + 56 * var(--u)) !important; }
+    /* The original's group captions under the bottom widgets, and a tighter time warp. */
+    #flight-hud .fh-core, #flight-hud .fh-sas { position: relative; }
+    #flight-hud .fh-bottom .fh-core::after, #flight-hud .fh-sas::after, #flight-hud .fh-views::after, #flight-hud .fh-appbar::after, body:has(#flight-hud.open) #hud > .warp::after {
+      position: absolute; left: 0; right: 0; bottom: calc(-13 * var(--u)); text-align: center; font: 600 calc(10 * var(--u)) var(--hud-font); letter-spacing: 0.12em; color: #cfd6e6; pointer-events: none; }
+    #flight-hud .fh-bottom .fh-core::after { content: "ORBITAL.INFO"; }
+    #flight-hud .fh-sas::after { content: "SAS.CONTROL"; }
+    #flight-hud .fh-views::after { content: "GAME.VIEW"; }
+    #flight-hud .fh-appbar::after { content: "APP.BAR"; }
+    body:has(#flight-hud.open) #hud > .warp::after { content: "TIME.WARP"; }
+    body:has(#flight-hud.open) #hud > .warp button { padding: 1px 8px !important; min-width: 0 !important; }
+    /* ORBITAL.INFO: Ap over Pe, each with its countdown, as the original's two lines. */
+    #flight-hud .fh-bottom .fh-orbit { display: grid; grid-template-columns: auto 1fr auto; gap: 0 calc(8 * var(--u)); justify-items: start; }
+    #flight-hud .fh-spd, #flight-hud .fh-alt { position: absolute; top: 50%; transform: translateY(-50%); min-width: calc(110 * var(--u)); background: #10141bf0; border: 2px solid; border-radius: calc(4 * var(--u)); padding: calc(2 * var(--u)) calc(8 * var(--u)); text-align: right; }
+    #flight-hud .fh-spd { right: calc(100% - 26 * var(--u)); border-color: #e8c440; } #flight-hud .fh-spd .fh-label { color: #e8c440; }
+    #flight-hud .fh-alt { left: calc(100% - 26 * var(--u)); border-color: #e050c8; } #flight-hud .fh-alt .fh-label { color: #e050c8; }
+    #flight-hud .fh-spd .fh-label, #flight-hud .fh-alt .fh-label { display: block; font-size: calc(10 * var(--u)); cursor: pointer; pointer-events: auto; text-align: left; }
+    #flight-hud .fh-spd b, #flight-hud .fh-alt b { font: 700 calc(20 * var(--u)) var(--hud-font); font-variant-numeric: tabular-nums; }
     #fh-map-info { left: calc(64 * var(--u)) !important; font-family: var(--hud-font); }
     body:has(#flight-hud.open) #ftue { bottom: auto; top: calc(210 * var(--u)); }
     /* Time warp and the clock leave the top bar for the bottom centre, as the original's TIME.WARP widget. */
     body:is(:has(#flight-hud.open), :has(#screen-ksc.open), :has(#tracking.open)) #hud > :is(#ut, .warp) { position: fixed; left: 50%; transform: translateX(-50%); font-family: var(--hud-font); z-index: 12; }
-    body:is(:has(#flight-hud.open), :has(#screen-ksc.open), :has(#tracking.open)) #hud > #ut { bottom: calc(52 * var(--u)); background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)) calc(6 * var(--u)) 0 0; padding: calc(2 * var(--u)) calc(14 * var(--u)); font-size: calc(16 * var(--u)); }
-    body:is(:has(#flight-hud.open), :has(#screen-ksc.open), :has(#tracking.open)) #hud > .warp { bottom: calc(12 * var(--u)); background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)); padding: calc(4 * var(--u)) calc(8 * var(--u)); }
+    body:is(:has(#flight-hud.open), :has(#screen-ksc.open), :has(#tracking.open)) #hud > #ut { bottom: calc(62 * var(--u)); background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)) calc(6 * var(--u)) 0 0; padding: calc(2 * var(--u)) calc(14 * var(--u)); font-size: calc(16 * var(--u)); }
+    body:is(:has(#flight-hud.open), :has(#screen-ksc.open), :has(#tracking.open)) #hud > .warp { bottom: calc(22 * var(--u)); background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)); padding: calc(4 * var(--u)) calc(8 * var(--u)); }
     /* The KSC hub, PAIGE and the breadcrumbs in the original's type: uppercase, spaced, Realtime Rounded. */
     #ksc-panel, #ksc-panel h2, #ksc-buildings button { font-family: var(--hud-font) !important; }
     #ksc-panel h2 { text-transform: uppercase; letter-spacing: 0.12em; font-size: calc(26 * var(--u)); line-height: 1.15; }
@@ -1312,13 +1335,18 @@
     <button id="ts-back" data-ose="ts-back">Back to KSC</button>
   </div>
   <div id="flight-hud" data-ose="flight">
-    <div class="fh-top"><div class="fh-label" id="fh-alt-mode" data-ose="flight-alt-mode" title="Altitude above sea level or above the terrain below; click to switch" style="cursor:pointer;pointer-events:auto;text-decoration:underline dotted">SEA LEVEL</div><div id="fh-altitude" data-ose="flight-altitude">--</div><div id="fh-situation" class="fh-small">--</div><div id="fh-met" class="fh-small" data-ose="flight-met" title="Mission elapsed time"></div><div id="fh-note" class="fh-small" style="color:#f0a070"></div><div id="fh-running" class="fh-small" data-ose="flight-running" style="color:#8fd08f"></div><div id="fh-control" data-ose="flight-control" style="color:#ff6a5a;font-weight:700"></div></div>
+    <div class="fh-top"><div id="fh-situation" class="fh-small">--</div><div id="fh-met" class="fh-small" data-ose="flight-met" title="Mission elapsed time"></div><div id="fh-note" class="fh-small" style="color:#f0a070"></div><div id="fh-running" class="fh-small" data-ose="flight-running" style="color:#8fd08f"></div><div id="fh-control" data-ose="flight-control" style="color:#ff6a5a;font-weight:700"></div></div>
     <div class="fh-bottom">
       <div class="fh-thr-col"><button id="fh-full" class="fh-thr-btn" data-ose="flight-throttle-full" title="Full throttle (Z)">&#9650;</button><div class="fh-throttle" title="Throttle: hold Shift / Ctrl, Z full, X cut"><div id="fh-throttle-fill"></div><span>THR</span><span id="fh-throttle-pct">0%</span></div><button id="fh-cut" class="fh-thr-btn" data-ose="flight-throttle-cut" title="Cut the throttle (X)">&#9660;</button></div>
-      <canvas id="fh-navball" data-ose="flight-navball" width="200" height="200"></canvas>
+      <div class="fh-ball">
+        <canvas id="fh-navball" data-ose="flight-navball" width="200" height="200"></canvas>
+        <div class="fh-hdg" title="Heading"><b id="fh-heading">--</b></div>
+        <div class="fh-spd" title="Speed; click the label to switch surface, orbit and target"><span class="fh-label" id="fh-speed-mode" data-ose="flight-speed-mode">SURFACE</span><b id="fh-speed">--</b></div>
+        <div class="fh-alt" title="Altitude above sea level or above the terrain below; click the label to switch"><span class="fh-label" id="fh-alt-mode" data-ose="flight-alt-mode" style="cursor:pointer;pointer-events:auto">SEA LEVEL</span><b id="fh-altitude" data-ose="flight-altitude">--</b></div>
+      </div>
       <div class="fh-sas" id="fh-sas" data-ose="flight-sas"></div>
       <div class="fh-core">
-        <div class="fh-row"><span class="fh-label" id="fh-speed-mode" data-ose="flight-speed-mode" title="Speed relative to the surface or in orbit; click to switch">SURFACE</span><b id="fh-speed">--</b><span class="fh-label">VERTICAL</span><b id="fh-vspeed">--</b></div>
+        <div class="fh-row"><span class="fh-label">VERTICAL</span><b id="fh-vspeed">--</b></div>
         <div class="fh-row fh-burn" id="fh-burn" data-ose="flight-burn" title="Burn timer: start burning when it reaches zero, pointed at the maneuver marker"></div>
         <div class="fh-row fh-orbit" data-ose="flight-apsides"><span class="fh-label" title="Apoapsis: highest point of the orbit and the time to it">AP</span><b id="fh-ap">--</b><span id="fh-ap-t" class="fh-small">--</span><span class="fh-label" title="Periapsis: lowest point of the orbit and the time to it">PE</span><b id="fh-pe">--</b><span id="fh-pe-t" class="fh-small">--</span></div>
         <div class="fh-row"><span id="fh-attitude">--</span><span id="fh-twr" class="fh-small">--</span><span id="fh-target" class="fh-small" data-ose="flight-target" title="Target: distance and relative speed"></span><span id="fh-aero" class="fh-small" data-ose="flight-aero" title="Lift from wings; jets: thrust follows speed and air, and needs an intake"></span></div>

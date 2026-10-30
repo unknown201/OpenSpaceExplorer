@@ -60,10 +60,11 @@ pub fn poll(config: &Config) -> ([f64; 3], Option<f64>) {
     let Some(pads) = web_sys::window().and_then(|w| w.navigator().get_gamepads().ok()) else {
         return ([0.; 3], None);
     };
-    for pad in pads
+    // The first connected gamepad drives the controls.
+    if let Some(pad) = pads
         .iter()
         .filter_map(|p| p.dyn_into::<web_sys::Gamepad>().ok())
-        .filter(|p| p.connected())
+        .find(|p| p.connected())
     {
         let axes: Vec<_> = pad
             .axes()

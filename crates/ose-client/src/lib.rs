@@ -10643,6 +10643,15 @@ impl App {
             other => format!("{other:?}"),
         };
         set_text(&self.doc, "fh-attitude", &att);
+        // The heading box over the navball (the original's compass heading).
+        set_text(
+            &self.doc,
+            "fh-heading",
+            &self
+                .facing_pitch_heading()
+                .map(|(_, h)| format!("{:03.0}\u{b0}", h.rem_euclid(360.0)))
+                .unwrap_or_else(|| "--".into()),
+        );
         // Joint stress: worst joint load over its break limit (1 breaks), as the bar's fill and colour.
         let stress = f.joint_stress.clamp(0.0, 1.0);
         if let Some(bar) = self
@@ -11466,7 +11475,7 @@ impl App {
 
     fn update_hud(&self, ut: f64) {
         self.ut_el
-            .set_text_content(Some(&format!("UT {}", kerbin_time::format_ut(ut))));
+            .set_text_content(Some(&format!("UT {}", kerbin_time::format_ut_clock(ut))));
         let warp_text = if self.requested_warp > self.time.warp {
             format!(
                 "\u{d7}{} (requested \u{d7}{})",

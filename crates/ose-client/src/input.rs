@@ -163,8 +163,10 @@ mod reference_trim_tests {
     use super::*;
     #[test]
     fn raw_module_input_stays_separate_from_precision_and_analog_trim() {
-        let mut keys = Held::default();
-        keys.precision = true;
+        let mut keys = Held {
+            precision: true,
+            ..Default::default()
+        };
         let (raw, effective) = keys.flight_axes(0.02, DVec3::new(1., 0., 0.));
         assert_eq!(raw.x, 1.);
         assert_eq!(effective.x, 0.1);

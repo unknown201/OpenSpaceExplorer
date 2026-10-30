@@ -24,6 +24,28 @@ pub fn format_ut(ut: f64) -> String {
     )
 }
 
+/// The clock as the original's time warp widget writes it: `T+001y,001d,00:00:00` for UT 0.
+pub fn format_ut_clock(ut: f64) -> String {
+    let ut = ut.max(0.0);
+    let year = (ut / YEAR_S).floor();
+    let rem = ut - year * YEAR_S;
+    let day = (rem / DAY_S).floor();
+    let rem = rem - day * DAY_S;
+    let (h, m, s) = (
+        (rem / 3600.0).floor(),
+        (rem % 3600.0 / 60.0).floor(),
+        (rem % 60.0).floor(),
+    );
+    format!(
+        "T+{:03}y,{:03}d,{:02}:{:02}:{:02}",
+        year as u64 + 1,
+        day as u64 + 1,
+        h as u64,
+        m as u64,
+        s as u64
+    )
+}
+
 /// Warp factors the UI steps through; the same ladder as the original's rails warp.
 pub const WARP_LADDER: [u32; 11] = [1, 2, 3, 4, 5, 10, 50, 100, 1_000, 10_000, 100_000];
 
@@ -60,6 +82,15 @@ pub fn prev_warp(current: u32) -> u32 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn clock_reads_like_the_originals_widget() {
+        assert_eq!(super::format_ut_clock(0.0), "T+001y,001d,00:00:00");
+        assert_eq!(
+            super::format_ut_clock(super::YEAR_S + 2.0 * super::DAY_S + 3723.0),
+            "T+002y,003d,01:02:03"
+        );
+    }
+
     use super::*;
 
     #[test]
