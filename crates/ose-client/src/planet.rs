@@ -2038,20 +2038,18 @@ impl PlanetRenderer {
                     // flickered as the camera moved, so out of the facilities the terrain is draped 4 m over
                     // that ground (one textured surface, the ground craft stand on). Under the facilities it
                     // drops 20 m below it so the campus model's own lawns and roads show.
-                    // Out at sea, where both lie under the water, nothing is lifted (that raised shallow
-                    // shelves); elsewhere the lift is held to a slope from the ground here.
+                    // The lift is held to a slope from the ground here.
                     let campus = map.and_then(|m| {
                         let (lat, lon) = planet_lod::lat_lon(d);
                         let o = m.overlay.as_ref()?;
                         let here = o.sample(lat, lon);
-                        if h < 0.0 && here.is_none_or(|c| c < 0.0) {
-                            return None;
+                        // Where the terrain is under the sea it follows the campus ground as it is (its skirts
+                        // run on under the water, so the coast is that ground's own, smooth line; a lift there
+                        // stood the coast in steps along the vertex grid), without the reach.
+                        if h < 0.0 {
+                            return here;
                         }
-                        // (and never past the sea where the ground here is under it: the coast keeps its line)
                         let base = here.unwrap_or(h).max(h);
-                        if base < 0.0 {
-                            return None;
-                        }
                         o.sample_max(lat, lon, reach, radius)
                             .map(|c| c.min(base + 0.3 * reach))
                     });
@@ -2664,6 +2662,11 @@ impl PlanetRenderer {
             out.push(it);
         }
         out
+    }
+
+    /// Whether the campus exclusions are in force (the terrain sunk under the campus).
+    pub fn has_exclusions(&self) -> bool {
+        !self.exclusions.is_empty()
     }
 
     /// Keep scatter (rocks, plants, trees, grass) off these rectangles; props are placed again when they change.

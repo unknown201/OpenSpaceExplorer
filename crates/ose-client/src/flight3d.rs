@@ -1251,7 +1251,10 @@ impl FlightView {
         }
         // The KSC campus on Kerbin while low enough to matter.
         self.ksc_distance = f64::INFINITY;
-        if inp.body_id == "Kerbin" && alt < 25_000.0 {
+        // It stays drawn for as long as the terrain is sunk under it (up to 30 km on the way up): between the two
+        // the sunken footprint showed as a pale hole where the campus had been.
+        let sunk = self.planet.as_ref().is_some_and(|p| p.has_exclusions());
+        if inp.body_id == "Kerbin" && (alt < 25_000.0 || (sunk && alt <= 30_000.0)) {
             if let Some((kpos, krot)) = self.ksc_pose(inp.body_radius) {
                 self.ksc_distance = (kpos - pos).length();
                 // No grass on the campus and no trees or rocks on its facilities, runways and pads (the original
