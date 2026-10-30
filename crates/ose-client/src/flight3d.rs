@@ -1022,6 +1022,13 @@ impl FlightView {
             spin,
             inp.ut,
         );
+        // Sun shadows around what the camera looks at: the craft on itself, on the pad and the ground.
+        gpu.set_shadow(
+            focus - cam,
+            (distance * 1.5 + 20.0).clamp(25.0, 4_000.0),
+            2_000.0,
+            sun,
+        );
         let mut items: Vec<DrawItem> = Vec::new();
         let context = (inp.vessel.id, inp.body_id.to_string());
         if self.fx_context.as_ref() != Some(&context) {

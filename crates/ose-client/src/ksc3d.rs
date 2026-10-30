@@ -286,6 +286,15 @@ impl KscView {
         } else {
             DVec3::new(0.2, 1.0, 0.1)
         };
+        // Buildings, the tower and the dish cast the sun's shadows over the campus around the view.
+        if elev > 0.0 {
+            gpu.set_shadow(
+                self.look_at - pos,
+                (self.distance * 1.2).clamp(300.0, 3_000.0),
+                1_500.0,
+                sun,
+            );
+        }
         let mut items = Vec::new();
         if gpu.has_model("ksc") {
             let mut item = DrawItem::lit("ksc".into(), -pos, DQuat::IDENTITY, 1.0, light);

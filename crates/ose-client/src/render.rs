@@ -30,7 +30,15 @@ struct CameraUniform {
     light_pos: [[f32; 4]; MAX_LIGHTS],
     light_dir: [[f32; 4]; MAX_LIGHTS],
     light_col: [[f32; 4]; MAX_LIGHTS],
+    /// The sun's shadow map: camera-relative world to its clip space (x, y in -1..1, depth 0..1).
+    shadow_vp: [[f32; 4]; 4],
+    /// x: 1 when the shadow map is in use this frame, y: one texel in shadow-map uv, z: normal offset in
+    /// world units (pushes the lookup off the surface against acne), w: unused.
+    shadow: [f32; 4],
 }
+
+/// The sun's shadow map size (texels a side).
+const SHADOW_SIZE: u32 = 4096;
 
 /// Local lights a frame can carry (the nearest craft lamps).
 pub const MAX_LIGHTS: usize = 8;
@@ -67,11 +75,47 @@ struct ObjectUniform {
     paint_b: [f32; 4],
 }
 
+/// Depth from the sun for the shadow map.
+const SHADOW_SHADER: &str = r#"
+struct Object { model: mat4x4<f32> };
+@group(0) @binding(0) var<uniform> sun_vp: mat4x4<f32>;
+@group(1) @binding(0) var<uniform> object: Object;
+@vertex
+fn vs_shadow(@location(0) pos: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv: vec2<f32>) -> @builtin(position) vec4<f32> {
+    return sun_vp * object.model * vec4<f32>(pos, 1.0);
+}
+"#;
+
 const SHADER: &str = r#"
-struct Camera { view_proj: mat4x4<f32>, light_count: vec4<f32>, light_pos: array<vec4<f32>, 8>, light_dir: array<vec4<f32>, 8>, light_col: array<vec4<f32>, 8> };
+struct Camera { view_proj: mat4x4<f32>, light_count: vec4<f32>, light_pos: array<vec4<f32>, 8>, light_dir: array<vec4<f32>, 8>, light_col: array<vec4<f32>, 8>, shadow_vp: mat4x4<f32>, shadow: vec4<f32> };
 struct Object { model: mat4x4<f32>, color: vec4<f32>, light_dir: vec4<f32>, light2: vec4<f32>, params: vec4<f32>, extra: vec4<f32>, paint_a: vec4<f32>, paint_b: vec4<f32> };
 @group(0) @binding(0) var<uniform> camera: Camera;
+@group(0) @binding(1) var shadow_tex: texture_depth_2d;
+@group(0) @binding(2) var shadow_samp: sampler_comparison;
 @group(1) @binding(0) var<uniform> object: Object;
+
+// How much of the sun reaches a point (1 lit, 0 in shadow), from the shadow map with a 3x3 filter.
+fn sun_visible(world: vec3<f32>, n: vec3<f32>) -> f32 {
+    if camera.shadow.x < 0.5 {
+        return 1.0;
+    }
+    let p = camera.shadow_vp * vec4<f32>(world + n * camera.shadow.z, 1.0);
+    let q = p.xyz / p.w;
+    let uv = vec2<f32>(q.x * 0.5 + 0.5, 0.5 - q.y * 0.5);
+    if any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0)) || q.z > 1.0 || q.z < 0.0 {
+        return 1.0;
+    }
+    var lit = 0.0;
+    let d = camera.shadow.y;
+    for (var y = -1; y <= 1; y++) {
+        for (var x = -1; x <= 1; x++) {
+            lit += textureSampleCompareLevel(shadow_tex, shadow_samp, uv + vec2<f32>(f32(x), f32(y)) * d, q.z);
+        }
+    }
+    // Fade out towards the map's edge so its end is not a line on the ground.
+    let edge = min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y));
+    return mix(1.0, lit / 9.0, smoothstep(0.0, 0.05, edge));
+}
 @group(2) @binding(0) var tex: texture_2d<f32>;
 @group(2) @binding(1) var samp: sampler;
 @group(2) @binding(2) var normal_tex: texture_2d<f32>;
@@ -134,7 +178,7 @@ fn fs_mesh(in: VsOut) -> @location(0) vec4<f32> {
     // The camera sits at the origin of the relative world.
     let view = normalize(-in.world);
     let ldir = normalize(object.light_dir.xyz);
-    let diffuse = max(dot(n, ldir), 0.0) * object.light_dir.w;
+    let diffuse = max(dot(n, ldir), 0.0) * object.light_dir.w * sun_visible(in.world, n0);
     if object.params.z > 0.5 {
         // Atmosphere shell: a rim that brightens towards the limb and on the day side, see-through
         // elsewhere. The alpha of the colour sets the strength.
@@ -401,6 +445,17 @@ pub struct Renderer {
     mirror_pipeline: wgpu::RenderPipeline,
     blend_pipeline: wgpu::RenderPipeline,
     line_pipeline: wgpu::RenderPipeline,
+    /// The sun's shadow map: depth-only pipeline, the map, the sun's view-projection uniform.
+    shadow_pipeline: wgpu::RenderPipeline,
+    shadow_view: wgpu::TextureView,
+    shadow_cam_buf: wgpu::Buffer,
+    shadow_cam_bind: wgpu::BindGroup,
+    /// Whether this frame renders and uses the shadow map (`set_shadow` after `set_camera`).
+    shadow_on: bool,
+    /// The shadow map's comparison sampler and this frame's shadow uniform (view-projection, parameters),
+    /// for other renderers that receive the shadows (the planet's terrain).
+    shadow_sampler: wgpu::Sampler,
+    shadow_u: ([[f32; 4]; 4], [f32; 4]),
     engine_fx: crate::engine_fx_gpu::EngineFxGpu,
     post: crate::fx_post::FxPost,
     /// The sun's lens flare (lens_flare.rs), drawn into the HDR scene before the post pass.
@@ -511,6 +566,29 @@ impl Renderer {
         };
         let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("camera"),
+            entries: &[
+                uniform_entry(0),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                    count: None,
+                },
+            ],
+        });
+        // The shadow pass: depth only, from the sun, with the same object uniforms as the main pass.
+        let shadow_cam_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("shadow camera"),
             entries: &[uniform_entry(0)],
         });
         let object_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -739,13 +817,104 @@ impl Renderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let shadow_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("shadow map"),
+            size: wgpu::Extent3d {
+                width: SHADOW_SIZE,
+                height: SHADOW_SIZE,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let shadow_view = shadow_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("shadow"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            compare: Some(wgpu::CompareFunction::LessEqual),
+            ..Default::default()
+        });
         let camera_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("camera"),
             layout: &camera_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: camera_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&shadow_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&shadow_sampler),
+                },
+            ],
+        });
+        let shadow_cam_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("shadow camera"),
+            size: 64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let shadow_cam_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("shadow camera"),
+            layout: &shadow_cam_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: camera_buf.as_entire_binding(),
+                resource: shadow_cam_buf.as_entire_binding(),
             }],
+        });
+        let shadow_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("shadow shader"),
+            source: wgpu::ShaderSource::Wgsl(SHADOW_SHADER.into()),
+        });
+        let shadow_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("shadow"),
+            layout: Some(&device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("shadow"),
+                bind_group_layouts: &[Some(&shadow_cam_layout), Some(&object_layout)],
+                immediate_size: 0,
+            })),
+            vertex: wgpu::VertexState {
+                module: &shadow_shader,
+                entry_point: Some("vs_shadow"),
+                compilation_options: Default::default(),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<Vertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2],
+                })],
+            },
+            fragment: None,
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                // Both faces: thin parts (fins, the tower's girders) and mirrored instances cast too.
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState {
+                    constant: 2,
+                    slope_scale: 2.0,
+                    clamp: 0.0,
+                },
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
         });
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             address_mode_u: wgpu::AddressMode::Repeat,
@@ -830,6 +999,13 @@ impl Renderer {
             mirror_pipeline,
             blend_pipeline,
             line_pipeline,
+            shadow_pipeline,
+            shadow_view,
+            shadow_cam_buf,
+            shadow_cam_bind,
+            shadow_on: false,
+            shadow_sampler,
+            shadow_u: ([[0.0; 4]; 4], [0.0; 4]),
             engine_fx,
             post,
             view: DMat4::IDENTITY,
@@ -1287,16 +1463,71 @@ impl Renderer {
         self.near = near;
         let proj = perspective_rh(fov_y_rad, aspect, near, far);
         self.view_proj = proj * view;
-        // A new camera starts with no lamps; a view that has some sets them after (set_lights).
+        // A new camera starts with no lamps and no shadow; a view that has them sets them after
+        // (set_lights, set_shadow).
         let u = CameraUniform {
             view_proj: self.view_proj.as_mat4().to_cols_array_2d(),
             light_count: [0.0; 4],
             light_pos: [[0.0; 4]; MAX_LIGHTS],
             light_dir: [[0.0; 4]; MAX_LIGHTS],
             light_col: [[0.0; 4]; MAX_LIGHTS],
+            shadow_vp: [[0.0; 4]; 4],
+            shadow: [0.0; 4],
         };
+        self.shadow_on = false;
+        self.shadow_u = ([[0.0; 4]; 4], [0.0; 4]);
         self.queue
             .write_buffer(&self.camera_buf, 0, bytemuck::bytes_of(&u));
+    }
+
+    /// The sun's shadow map and its comparison sampler, for renderers that receive its shadows.
+    pub fn shadow_map(&self) -> (&wgpu::TextureView, &wgpu::Sampler) {
+        (&self.shadow_view, &self.shadow_sampler)
+    }
+
+    /// This frame's shadow uniform: view-projection and parameters (x 0 when off), as `set_shadow` set them.
+    pub fn shadow_uniform(&self) -> ([[f32; 4]; 4], [f32; 4]) {
+        self.shadow_u
+    }
+
+    /// Sun shadows this frame (after `set_camera`): a shadow map covering a disc of `radius` around
+    /// `center` (camera-relative), lit from `toward_sun`; casters up to `depth` beyond the disc towards the
+    /// sun are caught. Texel steps are snapped so the shadows do not crawl as the camera moves.
+    pub fn set_shadow(&mut self, center: DVec3, radius: f64, depth: f64, toward_sun: DVec3) {
+        let l = toward_sun.normalize_or_zero();
+        if l.length() < 0.5 || radius <= 0.0 {
+            return;
+        }
+        let up = if l.y.abs() > 0.9 { DVec3::X } else { DVec3::Y };
+        let view = look_to_rh(-l, up);
+        // Snap the centre to whole texels in the light's frame.
+        let texel = 2.0 * radius / SHADOW_SIZE as f64;
+        let c = view.transform_point3(center);
+        let c = DVec3::new(
+            (c.x / texel).round() * texel,
+            (c.y / texel).round() * texel,
+            c.z,
+        );
+        // Orthographic: x, y over the disc, depth from `depth` towards the sun to `radius` beyond the centre.
+        let (near, far) = (-c.z - depth, -c.z + radius);
+        let proj = DMat4::from_cols(
+            glam::DVec4::new(1.0 / radius, 0.0, 0.0, 0.0),
+            glam::DVec4::new(0.0, 1.0 / radius, 0.0, 0.0),
+            glam::DVec4::new(0.0, 0.0, -1.0 / (far - near), 0.0),
+            glam::DVec4::new(-c.x / radius, -c.y / radius, -near / (far - near), 1.0),
+        );
+        let vp = (proj * view).as_mat4().to_cols_array_2d();
+        self.queue
+            .write_buffer(&self.shadow_cam_buf, 0, bytemuck::cast_slice(&vp));
+        let shadow = [1.0, 1.0 / SHADOW_SIZE as f32, (texel * 1.5) as f32, 0.0];
+        let at = std::mem::offset_of!(CameraUniform, shadow_vp) as u64;
+        self.queue
+            .write_buffer(&self.camera_buf, at, bytemuck::cast_slice(&vp));
+        let at = std::mem::offset_of!(CameraUniform, shadow) as u64;
+        self.queue
+            .write_buffer(&self.camera_buf, at, bytemuck::cast_slice(&shadow));
+        self.shadow_on = true;
+        self.shadow_u = (vp, shadow);
     }
 
     /// The frame's local lamps (after `set_camera`): the first MAX_LIGHTS are used.
@@ -1307,6 +1538,8 @@ impl Renderer {
             light_pos: [[0.0; 4]; MAX_LIGHTS],
             light_dir: [[0.0; 4]; MAX_LIGHTS],
             light_col: [[0.0; 4]; MAX_LIGHTS],
+            shadow_vp: [[0.0; 4]; 4],
+            shadow: [0.0; 4],
         };
         for (k, l) in lights.iter().take(MAX_LIGHTS).enumerate() {
             let p = l.pos.as_vec3();
@@ -1315,8 +1548,10 @@ impl Renderer {
             u.light_dir[k] = [d.x, d.y, d.z, l.cone_cos];
             u.light_col[k] = [l.color[0], l.color[1], l.color[2], 1.0];
         }
+        // Everything before the shadow fields; the shadow keeps what set_shadow wrote.
+        let end = std::mem::offset_of!(CameraUniform, shadow_vp);
         self.queue
-            .write_buffer(&self.camera_buf, 0, bytemuck::bytes_of(&u));
+            .write_buffer(&self.camera_buf, 0, &bytemuck::bytes_of(&u)[..end]);
     }
 
     /// Screen position in pixels of a camera-relative point, if in front of the camera.
@@ -1609,6 +1844,41 @@ impl Renderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("frame"),
             });
+        // The sun's shadow map, from every opaque mesh (cleared to the far plane when unused, so a stale
+        // map never shadows a later view).
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("shadow"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.shadow_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            if self.shadow_on {
+                pass.set_pipeline(&self.shadow_pipeline);
+                pass.set_bind_group(0, &self.shadow_cam_bind, &[]);
+                for (model_name, pi, s, _, skinned) in &mesh_draws {
+                    let model = &self.models[model_name];
+                    let (mesh_i, _, _) = model.primitives[*pi];
+                    let prim = &model.meshes[mesh_i];
+                    if prim.blend {
+                        continue;
+                    }
+                    pass.set_bind_group(1, &self.objects[*s].1, &[]);
+                    pass.set_vertex_buffer(0, skinned.as_ref().unwrap_or(&prim.vertices).slice(..));
+                    pass.set_index_buffer(prim.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..prim.index_count, 0, 0..1);
+                }
+            }
+        }
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("main"),

@@ -37,6 +37,10 @@ struct Frame {
     // planet detail: x terrain shadow steps, y volume cloud steps, z per-pixel relief (0/1); w: the props'
     // sunlight scale (matching the terrain's exposure)
     quality: vec4<f32>,
+    // the meshes' sun shadow map: camera-relative metres to its clip space; x 1 in use, y texel (uv), z normal
+    // offset (m)
+    shadow_vp: mat4x4<f32>,
+    mesh_shadow: vec4<f32>,
 };
 
 struct Chunk {
@@ -93,6 +97,30 @@ struct Surface {
 @group(0) @binding(2) var scattering_tex: texture_3d<f32>;
 @group(0) @binding(3) var irradiance_tex: texture_2d<f32>;
 @group(0) @binding(4) var lut_samp: sampler;
+@group(0) @binding(6) var mesh_shadow_tex: texture_depth_2d;
+@group(0) @binding(7) var mesh_shadow_samp: sampler_comparison;
+
+// The share of sunlight a terrain point gets past the meshes (the rocket, the tower, buildings): 3x3 PCF.
+fn mesh_shadow(rel: vec3<f32>, n: vec3<f32>) -> f32 {
+    if frame.mesh_shadow.x < 0.5 {
+        return 1.0;
+    }
+    let p = frame.shadow_vp * vec4<f32>(rel + n * frame.mesh_shadow.z, 1.0);
+    let q = p.xyz / p.w;
+    let uv = vec2<f32>(q.x * 0.5 + 0.5, 0.5 - q.y * 0.5);
+    if any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0)) || q.z > 1.0 || q.z < 0.0 {
+        return 1.0;
+    }
+    var lit = 0.0;
+    let d = frame.mesh_shadow.y;
+    for (var y = -1; y <= 1; y++) {
+        for (var x = -1; x <= 1; x++) {
+            lit += textureSampleCompareLevel(mesh_shadow_tex, mesh_shadow_samp, uv + vec2<f32>(f32(x), f32(y)) * d, q.z);
+        }
+    }
+    let edge = min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y));
+    return mix(1.0, lit / 9.0, smoothstep(0.0, 0.05, edge));
+}
 // The sky pass's own group 1 (quads use binding 0 of group 1 for their chunk): the original's starfield skybox.
 @group(1) @binding(1) var star_tex: texture_2d<f32>;
 @group(1) @binding(2) var star_samp: sampler;
@@ -1158,7 +1186,7 @@ fn fs_terrain(in: VOut) -> @location(0) vec4<f32> {
         return vec4<f32>(0.0, 0.0, 1.0, 1.0);
     }
     var light = sun_and_sky(p_km, n, frame.sun.xyz);
-    light.sun = light.sun * terrain_shadow(in.model, frame.sun.xyz);
+    light.sun = light.sun * terrain_shadow(in.model, frame.sun.xyz) * mesh_shadow(in.rel, n);
     let shade = cloud_shadow(in.model, frame.sun.xyz);
     // Caustics: the sea floor under shallow water catches the waves' focused sunlight (the original's
     // _CausticsTexture, two drifting copies, the brighter where they meet), fading with depth.

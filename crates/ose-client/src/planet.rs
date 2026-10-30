@@ -112,6 +112,10 @@ struct FrameU {
     cam_tile: [f32; 4],
     /// planet detail: x terrain shadow steps, y volume cloud steps, z per-pixel relief (0/1)
     quality: [f32; 4],
+    /// The meshes' sun shadow map (render.rs `set_shadow`): view-projection from camera-relative metres, and
+    /// x 1 when in use, y one texel in uv, z normal offset (m).
+    shadow_vp: [[f32; 4]; 4],
+    mesh_shadow: [f32; 4],
 }
 
 #[repr(C)]
@@ -263,6 +267,8 @@ struct Body {
     surface_buf: wgpu::Buffer,
     surface_bind: Option<wgpu::BindGroup>,
     frame_bind: Option<wgpu::BindGroup>,
+    /// The frame group without the shadow map, for grass and far impostors.
+    frame_plain_bind: Option<wgpu::BindGroup>,
     dirty: bool,
 }
 
@@ -297,6 +303,9 @@ pub struct PlanetRenderer {
     grass_chunk_buf: wgpu::Buffer,
     grass_chunk_bind: wgpu::BindGroup,
     frame_layout: wgpu::BindGroupLayout,
+    frame_plain_layout: wgpu::BindGroupLayout,
+    /// The meshes' sun shadow map and its comparison sampler (render.rs), received by the terrain.
+    shadow_map: (wgpu::TextureView, wgpu::Sampler),
     surface_layout: wgpu::BindGroupLayout,
     chunk_layout: wgpu::BindGroupLayout,
     frame_buf: wgpu::Buffer,
@@ -378,8 +387,38 @@ impl PlanetRenderer {
                 tex_entry(3, D::D2),
                 samp_entry(4),
                 tex_entry(5, D::D2Array),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: D::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                    count: None,
+                },
             ],
         });
+        // Grass and far impostors already sample 16 textures in the fragment stage, the limit: their frame
+        // group leaves the meshes' shadow map out.
+        let frame_plain_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("planet frame (no shadow)"),
+                entries: &[
+                    uniform_entry(0, false),
+                    tex_entry(1, D::D2),
+                    tex_entry(2, D::D3),
+                    tex_entry(3, D::D2),
+                    samp_entry(4),
+                    tex_entry(5, D::D2Array),
+                ],
+            });
         let chunk_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("planet chunk"),
             entries: &[uniform_entry(0, true)],
@@ -585,7 +624,7 @@ impl PlanetRenderer {
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("planet grass"),
                 bind_group_layouts: &[
-                    Some(&frame_layout),
+                    Some(&frame_plain_layout),
                     Some(&chunk_layout),
                     Some(&surface_layout),
                     Some(&grass_layout),
@@ -917,6 +956,7 @@ impl PlanetRenderer {
             stars,
             shaft_pipeline,
             under_water: false,
+            shadow_map: (gpu.shadow_map().0.clone(), gpu.shadow_map().1.clone()),
             shafts: false,
             prop_sun: 1.0,
             waves_tex,
@@ -937,6 +977,7 @@ impl PlanetRenderer {
             grass_chunk_buf,
             grass_chunk_bind,
             frame_layout,
+            frame_plain_layout,
             surface_layout,
             chunk_layout,
             frame_buf,
@@ -1084,6 +1125,7 @@ impl PlanetRenderer {
                 surface_buf,
                 surface_bind: None,
                 frame_bind: None,
+                frame_plain_bind: None,
                 dirty: true,
             },
         );
@@ -1626,6 +1668,44 @@ impl PlanetRenderer {
                     binding: 5,
                     resource: wgpu::BindingResource::TextureView(&self.waves_view),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::TextureView(&self.shadow_map.0),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::Sampler(&self.shadow_map.1),
+                },
+            ],
+        });
+        let frame_plain_bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("planet frame (no shadow)"),
+            layout: &self.frame_plain_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.frame_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(lut(0)),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(lut(1)),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(lut(2)),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::Sampler(&self.lut_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&self.waves_view),
+                },
             ],
         });
         let surf = surface_uniform(b, self.debug);
@@ -1635,6 +1715,7 @@ impl PlanetRenderer {
         b.surface_bind = Some(surface_bind);
         b.ring_bind = ring_bind;
         b.frame_bind = Some(frame_bind);
+        b.frame_plain_bind = Some(frame_plain_bind);
         b.dirty = false;
     }
 
@@ -1994,6 +2075,8 @@ impl PlanetRenderer {
                     self.prop_sun,
                 ]
             },
+            shadow_vp: gpu.shadow_uniform().0,
+            mesh_shadow: gpu.shadow_uniform().1,
             cam_tile: [
                 view.cam.x.rem_euclid(TILE_PERIOD) as f32,
                 view.cam.y.rem_euclid(TILE_PERIOD) as f32,
@@ -2770,7 +2853,7 @@ impl ExtraPass for PlanetRenderer {
         }
         if let (Some((buf, n)), Some(fb2)) = (&b.far, &b.far_bind) {
             pass.set_pipeline(&self.far_pipeline);
-            pass.set_bind_group(0, fb, &[]);
+            pass.set_bind_group(0, b.frame_plain_bind.as_ref().unwrap_or(fb), &[]);
             pass.set_bind_group(1, &self.far_chunk_bind, &[0]);
             pass.set_bind_group(2, sb, &[]);
             pass.set_bind_group(3, fb2, &[]);
@@ -2779,7 +2862,7 @@ impl ExtraPass for PlanetRenderer {
         }
         if let (Some((buf, n)), Some(gb)) = (&b.grass, &b.grass_bind) {
             pass.set_pipeline(&self.grass_pipeline);
-            pass.set_bind_group(0, fb, &[]);
+            pass.set_bind_group(0, b.frame_plain_bind.as_ref().unwrap_or(fb), &[]);
             pass.set_bind_group(1, &self.grass_chunk_bind, &[0]);
             pass.set_bind_group(2, sb, &[]);
             pass.set_bind_group(3, gb, &[]);

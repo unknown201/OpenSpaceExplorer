@@ -31,8 +31,9 @@ test("ground EVA and boarding render without animation errors", async ({ page, b
   // Artwork is optional in CI. When installed, check that the exported model
   // retains the normal idle as well as all three ladder clips.
   const model = await page.request.get(`${baseURL}/assets/kerbal/kerbal_m.glb`);
-  if (model.ok()) {
-    const glb = await model.body();
+  const glb = model.ok() ? await model.body() : Buffer.alloc(0);
+  // Without exported artwork the server answers with the app page, not a binary glTF ("glTF" magic).
+  if (glb.length > 20 && glb.subarray(0, 4).toString() === "glTF") {
     const size = glb.readUInt32LE(12);
     const names = JSON.parse(glb.subarray(20, 20 + size).toString()).animations.map((a: { name: string }) => a.name);
     expect(names).toEqual(expect.arrayContaining(["idle", "ladder_up", "ladder_down", "ladder_idle"]));
