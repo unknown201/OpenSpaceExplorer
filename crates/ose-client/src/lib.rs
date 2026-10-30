@@ -12648,6 +12648,7 @@ impl App {
                     sun: 1.0,
                     glow: 0.0,
                     exposure: 0.0,
+                    true_metal: false,
                     paint: None,
                     hide_containing: None,
                 });

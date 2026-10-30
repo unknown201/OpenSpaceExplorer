@@ -133,6 +133,11 @@ def main() -> int:
                 ]
             }
         idx = glb.material(m.m_Name, textures)
+        # The original scales its metallic map by _Metallic (1 on the launch tower's steel, 0 on the concrete
+        # platform); the client multiplies the map by metallicFactor.
+        metallic = dict(m.m_SavedProperties.m_Floats).get("_Metallic")
+        if metallic is not None:
+            glb.materials[idx]["pbrMetallicRoughness"]["metallicFactor"] = float(metallic)
         if surface_extras:
             glb.materials[idx].setdefault("extras", {}).update(surface_extras)
             if "ose_water" in surface_extras:
