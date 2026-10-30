@@ -6425,7 +6425,12 @@ impl App {
             rows.push(("Crew".into(), spec.crew_capacity.to_string()));
         }
         for c in &spec.resource_containers {
-            rows.push((c.resource.clone(), format!("{:.0} units", c.capacity_units)));
+            let units = if c.capacity_units < 10.0 {
+                format!("{:.2} units", c.capacity_units)
+            } else {
+                format!("{:.0} units", c.capacity_units)
+            };
+            rows.push((hud::resource_name(&c.resource), units));
         }
         for e in &spec.engines {
             rows.push(("Thrust".into(), format!("{:.1} kN", e.max_thrust_kn)));
@@ -6437,29 +6442,55 @@ impl App {
                 ),
             ));
         }
-        let table: String = rows
-            .iter()
-            .map(|(k, v)| format!("<tr><td>{}</td><td>{}</td></tr>", esc(k), esc(v)))
-            .collect();
-        let sub = [loc("Subtitle"), loc("Manufacturer")]
-            .into_iter()
-            .flatten()
-            .map(|s| esc(&s))
-            .collect::<Vec<_>>()
-            .join(" \u{b7} ");
         let locked = if row.class_list().contains("locked") {
             "<p style=\"color:#f0a070\">Not researched yet: the launch pad will refuse a craft with it.</p>"
         } else {
             ""
         };
+        // The original's part info panel: maker, name, "# subtitle", description, "## Statistics".
+        let stats: String = rows
+            .iter()
+            .map(|(k, v)| {
+                format!(
+                    "<div class=\"st\"><span>*{}</span><b>{}</b></div>",
+                    esc(k),
+                    esc(v)
+                )
+            })
+            .collect();
         tip.set_inner_html(&format!(
-            "<h4>{}</h4><div class=\"sub\">{}</div><table>{}</table>{}<p>{}</p>",
-            esc(spec.display_title()),
-            sub,
-            table,
-            locked,
-            esc(&loc("Description").unwrap_or_default()),
+            "<div class=\"mk\">{maker}</div><h4>{title}</h4><div class=\"sub\">{subtitle}</div><p>{desc}</p>{locked}<div class=\"sh\">## Statistics</div>{stats}",
+            maker = esc(&loc("Manufacturer").unwrap_or_default()),
+            title = esc(spec.display_title()),
+            subtitle = loc("Subtitle")
+                .map(|s| format!("# {}", esc(&s)))
+                .unwrap_or_default(),
+            desc = esc(&loc("Description").unwrap_or_default()),
         ));
+        // In the hall it stands beside the picker, as the original's; elsewhere next to the row.
+        let docked = self.vab_active()
+            && self
+                .doc
+                .body()
+                .is_some_and(|b| b.class_list().contains("webgpu"));
+        if docked {
+            if let (Some(t), Some(picker)) = (
+                tip.dyn_ref::<HtmlElement>(),
+                self.doc.get_element_by_id("vab-picker"),
+            ) {
+                let p = picker.get_bounding_client_rect();
+                t.style()
+                    .set_property("left", &format!("{}px", p.right() + 8.0))
+                    .ok();
+                t.style()
+                    .set_property("top", &format!("{}px", p.top()))
+                    .ok();
+                tip.class_list().add_1("docked").ok();
+                tip.class_list().add_1("open").ok();
+                return;
+            }
+        }
+        tip.class_list().remove_1("docked").ok();
         let r = row.get_bounding_client_rect();
         if let Some(t) = tip.dyn_ref::<HtmlElement>() {
             let top = r.top().min(

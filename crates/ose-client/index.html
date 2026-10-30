@@ -623,6 +623,16 @@
     #vab-side .vs-help { font-size: 11px; color: #6f7f9c; margin-top: 10px; line-height: 1.4; }
     #vab-tip { position: fixed; z-index: 30; display: none; width: 300px; background: #0b1020f5; border: 1px solid #3b63a8; border-radius: 6px; padding: 10px 12px; color: #e6ecf7; font-size: 12px; pointer-events: none; box-shadow: 0 6px 20px #000a; }
     #vab-tip.open { display: block; }
+    /* The original's part info panel: maker line, name, orange "# subtitle", statistics with values below. */
+    #vab-tip { font-family: var(--hud-font); }
+    #vab-tip .mk { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: #9fb0cc; border-bottom: 1px dashed #3b4a6a; padding-bottom: 4px; margin-bottom: 6px; }
+    #vab-tip h4 { font-size: 18px !important; font-weight: 600; }
+    #vab-tip .sub { color: #ffd25a !important; text-transform: uppercase; letter-spacing: 0.06em; font-size: 12px !important; }
+    #vab-tip .sh { margin: 10px 0 4px; color: #e6ecf7; letter-spacing: 0.06em; }
+    #vab-tip .st { border-top: 1px dashed #2c3d63; padding: 4px 0; }
+    #vab-tip .st span { display: block; color: #9fb0cc; }
+    #vab-tip .st b { display: block; color: #ffa040; font-size: 14px; font-weight: 600; }
+    #vab-tip.docked { width: 260px; border-radius: 4px; max-height: calc(100vh - 60px); overflow: hidden; }
     /* Part manager window (right click a part in the VAB). */
     #vab-pam { position: fixed; z-index: 31; display: none; width: 300px; background: #0b1020f8; border: 1px solid #3b63a8; border-radius: 6px; padding: 8px 12px 10px; color: #e6ecf7; font: 13px var(--ui-font, system-ui); box-shadow: 0 6px 20px #000a; }
     #vab-pam.open { display: block; }
