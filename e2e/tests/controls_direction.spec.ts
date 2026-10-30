@@ -77,16 +77,24 @@ test("each flight key turns the craft the original's way", async ({ page, baseUR
 });
 
 test("a rocket leaving the pad turns east with D", async ({ page, baseURL }) => {
-  await start(page, baseURL!, "gravity turn pilot");
-  // Any free pad: earlier tests leave vessels standing on some.
-  await page.evaluate(() => {
-    const sel = document.getElementById("lp-site") as HTMLSelectElement | null;
-    const free = sel && [...sel.options].find(o => !/in use/i.test(o.textContent ?? ""));
-    if (sel && free) {
-      sel.value = free.value;
-      sel.dispatchEvent(new Event("change", { bubbles: true }));
-    }
-  });
+  page.setDefaultTimeout(15_000);
+  await page.route("**/assets/ui/Flight-Navball-Texture.png", route => route.fulfill({
+    contentType: "image/svg+xml",
+    body: '<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024"><rect width="1024" height="512" fill="#267cbd"/><rect y="512" width="1024" height="512" fill="#9d663b"/></svg>',
+  }));
+  // A campaign of its own: the shared one's pads hold other tests' vessels, and with collisions (dd6b22f) a
+  // rocket launched beside one is knocked about.
+  await page.goto(baseURL!);
+  await page.locator('[data-ose="player-name"]').fill("gravity turn pilot");
+  await page.locator('[data-ose="play"]').click();
+  await page.locator('[data-ose="session-join"]').first().waitFor();
+  if (!(await page.locator("#create-name").isVisible())) {
+    await page.locator("#create-details > summary").click();
+  }
+  await page.selectOption("#create-mode", "Sandbox");
+  await page.fill("#create-name", `gravity turn ${test.info().project.name}`);
+  await page.locator('[data-ose="create"]').click();
+  await page.locator('[data-ose="ksc-launchpad"]').click();
   await page.locator('[data-ose="craft"]').filter({ hasText: "Stock12_StartRocket" })
     .locator('[data-ose="craft-launch"]').click();
   await expect(page.locator('[data-ose="flight"].open')).toBeVisible();
@@ -95,11 +103,12 @@ test("a rocket leaving the pad turns east with D", async ({ page, baseURL }) => 
   await page.keyboard.press("z");
   await page.keyboard.press("Space");
   await page.waitForTimeout(3000);
+  // Read while D is held, once the nose has left the vertical: held longer, a small rocket's tip-over
+  // swings the heading round as it passes level.
   await page.keyboard.down("d");
-  await page.waitForTimeout(2500);
-  await page.keyboard.up("d");
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(1200);
   const heading = parseFloat((await page.locator("#fh-heading").textContent()) ?? "");
+  await page.keyboard.up("d");
   expect(heading, `D tips a rising rocket east (heading ${heading})`).toBeGreaterThan(45);
   expect(heading).toBeLessThan(135);
 });
