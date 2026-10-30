@@ -511,7 +511,7 @@ fn water_fog(radiance: vec3<f32>, dist: f32) -> vec3<f32> {
 fn regrade(radiance: vec3<f32>) -> vec3<f32> {
     let alt_km = length(frame.cam_km.xyz) - bottom_r();
     let lum = dot(radiance, vec3<f32>(0.2126, 0.7152, 0.0722));
-    let sat = 1.0 + 0.35 * smoothstep(10.0, 40.0, alt_km) * frame.rayleigh.w;
+    let sat = 1.0 + 0.15 * smoothstep(10.0, 40.0, alt_km) * frame.rayleigh.w;
     return max(mix(vec3<f32>(lum), radiance, sat), vec3<f32>(0.0));
 }
 
@@ -525,10 +525,11 @@ fn through_air(radiance: vec3<f32>, p: vec3<f32>) -> vec3<f32> {
         return radiance;
     }
     let s = sky_to_point(frame.cam_km.xyz, p, frame.sun.xyz);
-    // From high up the original's ground stays vivid under its haze (its aerial perspective is a camera volume
-    // of limited reach): the in-scatter over the ground is eased to 60 % as the camera climbs from 10 to 40 km.
+    // From high up the original's haze over the ground is stronger and bluer than the LUT's: Josh's shot at
+    // 89 km measures land 137, 186, 200 and sea 120, 169, 226, so the in-scatter rises to 130 % as the camera
+    // climbs from 10 to 40 km.
     let alt_km = length(frame.cam_km.xyz) - bottom_r();
-    let haze = 1.0 - 0.4 * smoothstep(10.0, 40.0, alt_km);
+    let haze = 1.0 + 0.3 * smoothstep(10.0, 40.0, alt_km);
     // an eclipse dims the sunlit air too
     return radiance * s.transmittance + s.radiance * haze * eclipse(frame.cam_km.xyz, frame.sun.xyz);
 }

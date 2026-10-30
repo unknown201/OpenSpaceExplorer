@@ -129,6 +129,10 @@ lake ring, and the ascent at 30, 89 and 94 km. Changes made from them:
 - Far cloud fields at about the original's coverage (smoothstep 0.12 to 0.6 of the baked coverage).
 - Rayleigh in-scatter x (1, 1.05, 1.3): the original's sky at the pad measures 104, 147, 204, ours was 101,
   135, 172 (now 101, 137, 187).
+- 2026-10-30, against the 89 km shot again: its land is strongly hazed (137, 186, 200) and its sea azure
+  (120, 169, 226), so the aerial perspective over the ground now rises to 130 % from 10 to 40 km (it had been
+  eased to 60 % after the official screenshots, which turn out to be graded) and the land regrade is 15 %.
+  Ours now: land 142, 166, 181, sea 134, 177, 208.
 From 89 km our open sea now measures 125, 167, 193 against the original's 120, 169, 226.
 
 ## 6. Sunlight
