@@ -1559,8 +1559,14 @@ fn vs_far(@builtin(vertex_index) vi: u32, f: FIn) -> FOut {
 
 @fragment
 fn fs_far(in: FOut) -> @location(0) vec4<f32> {
-    let tex = textureSampleLevel(grass_tex, grass_samp, in.uv, in.layer, 0.0);
-    if tex.a < 0.5 {
+    // Mipmapped by the pixel footprint (the full-size atlas at a kilometre broke each tree into a few sparkling
+    // texels, so the sky showed through a forest on the horizon), with the alpha raised by the mip level so the
+    // averaged-down silhouettes keep their coverage.
+    let tex = textureSampleGrad(grass_tex, grass_samp, in.uv, in.layer, dpdx(in.uv), dpdy(in.uv));
+    let size = vec2<f32>(textureDimensions(grass_tex));
+    let fp = max(length(dpdx(in.uv) * size), length(dpdy(in.uv) * size));
+    let mip = max(log2(max(fp, 1.0)), 0.0);
+    if tex.a * (1.0 + 0.35 * mip) < 0.5 {
         discard;
     }
     let dist = length(in.rel);
