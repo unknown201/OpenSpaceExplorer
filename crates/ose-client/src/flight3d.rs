@@ -533,6 +533,9 @@ pub struct FlightView {
     pub ksc_distance: f64,
     pub yaw: f64,
     pub pitch: f64,
+    /// The mode the camera was framed in last frame and the camera's direction from the vessel then: when
+    /// Auto switches frames (into orbital above the air) the view carries on from where it was.
+    cam_frame: Option<(CameraMode, DVec3)>,
     pub distance: f64,
     spins: HashMap<String, Spin>,
     ksc: Option<(DVec3, DQuat)>,
@@ -646,6 +649,7 @@ impl FlightView {
             ksc_distance: f64::INFINITY,
             yaw: 0.8,
             pitch: 0.25,
+            cam_frame: None,
             distance: 35.0,
             spins: body_spins(),
             ksc: None,
@@ -1032,16 +1036,27 @@ impl FlightView {
             (b_up.length() > 0.5 && b_n.length() > 0.5).then(|| (b_n, b_up.cross(b_n), b_up))
         };
         let (b_n, b_e, b_u) = match mode {
-            CameraMode::Orbital => frame(orbit_up, north),
+            // The orbit normal up; yaw measured from straight out from the body, which lies in the orbit plane
+            // (north does not: on a climb from the equator it is nearly the orbit normal itself).
+            CameraMode::Orbital => frame(orbit_up, up),
             // Behind the vessel: the default yaw looks along the velocity.
             CameraMode::Chase => frame(up, -v_surf_m).or_else(|| frame(up, -dir)),
             CameraMode::Locked => frame(vessel_rot * DVec3::Y, vessel_rot * DVec3::Z),
             _ => None,
         }
         .unwrap_or((north, east, up));
+        // A new frame (Auto entering or leaving orbital, a mode key): keep the camera where it was by
+        // re-expressing its direction in the new frame, instead of jumping to the same angles in it.
+        if let Some((m, prev)) = self.cam_frame {
+            if m != mode && prev.length() > 0.5 {
+                self.pitch = prev.dot(b_u).clamp(-1.0, 1.0).asin();
+                self.yaw = prev.dot(b_e).atan2(prev.dot(b_n));
+            }
+        }
         let cam_up = b_u;
         let offs = self.pitch.cos() * (self.yaw.cos() * b_n + self.yaw.sin() * b_e)
             + self.pitch.sin() * b_u;
+        self.cam_frame = Some((mode, offs));
         // After a crash the vessel point is the impact: look at the wreck scattered round it instead, from
         // far enough out to take it all in, and never from under the ground.
         let crashed = inp
