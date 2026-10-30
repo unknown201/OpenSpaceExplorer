@@ -1566,6 +1566,12 @@ impl Universe {
             } else {
                 0.0
             };
+            // flown, the panels face the sun as they are turned (the star sits at the origin)
+            if let Some(st) = structure.as_mut() {
+                let at = bodies::star_space_state(&self.world, body_e, ut).0 + p.r;
+                st.sun_local =
+                    (at.length() > 0.0).then(|| st.to_craft_axis(p.facing, -at.normalized()));
+            }
             let mut pieces = Vec::new();
             // the pieces a crash threw (they come to rest on the ground rather than crash again)
             let mut wrecked: Vec<usize> = Vec::new();

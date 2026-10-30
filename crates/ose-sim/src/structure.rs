@@ -208,6 +208,9 @@ pub struct Structure {
     /// The craft's +Z in flight (`flight::vessel_top`), inertial, kept current by the universe: with the
     /// facing it places the parts (a plane's belly down). Zero falls back to the unrolled frame.
     pub frame_top: DVec3,
+    /// The direction to the sun in the craft's axes, while the vessel is flown (`None` on rails: there the
+    /// original credits panels their full rating in sunlight, `PartComponentModule_SolarPanel`).
+    pub sun_local: Option<DVec3>,
     /// Each part's lift and drag at the last `aero_torque` call, kN, inertial (the aero overlay).
     pub part_aero_kn: Vec<(DVec3, DVec3)>,
     /// RCS thrusters on the parts.
@@ -352,6 +355,26 @@ impl Structure {
     }
 
     /// The craft's axes in the inertial frame: +Y along `facing`, +Z toward `frame_top`.
+    /// An inertial direction in the craft's axes (the inverse of `axis_inertial`).
+    pub fn to_craft_axis(&self, facing: DVec3, d: DVec3) -> DVec3 {
+        let (bx, by, bz) = self.frame(facing);
+        DVec3::new(d.dot(bx), d.dot(by), -d.dot(bz))
+    }
+
+    /// How squarely a fixed panel faces the sun, 0..1: its `PanelIncidenceDirection` (the part's +X, as the
+    /// stock panels' `raycastTransform` lies) against the sun (`Module_SolarPanel`). Tracking panels turn
+    /// to it; on rails every panel counts in full.
+    fn solar_incidence(&self, i: usize) -> f64 {
+        match self.sun_local {
+            Some(sun) if !self.electric[i].solar_tracking => {
+                aero::rotate(self.part_rot[i], DVec3::new(1.0, 0.0, 0.0))
+                    .dot(sun)
+                    .clamp(0.0, 1.0)
+            }
+            _ => 1.0,
+        }
+    }
+
     fn frame(&self, facing: DVec3) -> (DVec3, DVec3, DVec3) {
         let y = facing.normalized();
         let z = self.frame_top - y * self.frame_top.dot(y);
@@ -779,6 +802,7 @@ impl Structure {
             bay_open: vec![false; n],
             shielded: vec![false; n],
             frame_top: DVec3::ZERO,
+            sun_local: None,
             part_aero_kn: vec![(DVec3::ZERO, DVec3::ZERO); n],
             ejection_force: (0..n)
                 .map(|i| def_of(i).map(|d| d.ejection_force).unwrap_or(0.0))
@@ -1896,7 +1920,7 @@ impl Structure {
             let e = self.electric[i];
             let mut made = 0.0;
             if e.solar_output > 0.0 && (!e.solar_deployable || self.deployed[i]) {
-                made += e.solar_output * sun * if e.solar_tracking { 1.0 } else { 0.5 };
+                made += e.solar_output * sun * self.solar_incidence(i);
             }
             if self.engine_isp[i].is_none() {
                 made += e.generator_output;
@@ -8024,9 +8048,27 @@ mod tests {
         assert!(ec_stored(&s) <= half, "no sun, no charge");
         s.electric(&mut p, 1.0, 0.0, 10.0);
         let gained = ec_stored(&s) - half;
-        // eight fixed 0.15/s panels at half rating: 0.6 per second
-        assert!((gained - 6.0).abs() < 0.5, "gained {gained}");
+        // on rails the original credits every panel in full: eight fixed 0.15/s panels, 1.2 per second
+        assert!((gained - 12.0).abs() < 0.5, "gained {gained}");
         assert!(p.controlled, "a crewed pod always has control");
+        // flown, each fixed panel gives what its face catches: square to one of them, the ones round the
+        // tank facing away give nothing and those edge-on little
+        let panels: Vec<usize> = (0..s.rigid.len())
+            .filter(|&i| s.electric[i].solar_output > 0.0)
+            .collect();
+        let face = aero::rotate(s.part_rot[panels[0]], DVec3::new(1.0, 0.0, 0.0));
+        s.sun_local = Some(face);
+        for t in s.net.tanks.iter_mut().filter(|t| t.resource == ec) {
+            t.stored *= 0.5;
+        }
+        let before = ec_stored(&s);
+        s.electric(&mut p, 1.0, 0.0, 10.0);
+        let lit = ec_stored(&s) - before;
+        assert!(lit > 1.4 && lit < 11.0, "one face to the sun: {lit}");
+        s.sun_local = Some(-face);
+        let before = ec_stored(&s);
+        s.electric(&mut p, 1.0, 0.0, 10.0);
+        assert!(ec_stored(&s) - before < lit, "the other side lit instead");
     }
 
     #[test]
