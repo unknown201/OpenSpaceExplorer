@@ -42,12 +42,17 @@ test(`flight smoothness with ${delayMs} ms one-way delay and ${jitterMs} ms jitt
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));
   const random = rng(20261029);
+  // The delay starts with the measured flight. Firefox's routed WebSocket sometimes holds the join reply
+  // when every frame is deferred from the first one, and the sign-in, campaign and VAB steps are not
+  // what is being measured.
+  let delaying = false;
   // One queue per direction: a message leaves no earlier than the one before it, so delays vary but
   // ordering holds, as over a TCP WebSocket.
   const direction = () => {
     let due = 0;
     return (send: () => void) => {
       if (!active) return;
+      if (!delaying) { send(); return; }
       const now = performance.now();
       due = Math.max(due, now + delayMs + random() * 2 * jitterMs);
       const timer = setTimeout(() => { timers.delete(timer); if (active) send(); }, due - now);
@@ -98,6 +103,7 @@ test(`flight smoothness with ${delayMs} ms one-way delay and ${jitterMs} ms jitt
     await page.keyboard.press("z");
     await page.keyboard.press("Space");
     await expect(page.locator('[data-ose="flight"]')).toHaveAttribute("data-ose-situation", "Flying", { timeout: 20_000 });
+    delaying = true;
 
     // Sample the client's summaries for `seconds`, steering for the middle third so turning is in the mix.
     const windows: Window[] = [];
