@@ -1255,6 +1255,12 @@ impl FlightView {
                     items.push(it);
                 }
             }
+        } else if inp.body_id != "Kerbin" || alt > 30_000.0 {
+            // Without the campus drawn, the terrain is no longer sunk under it (that left a sunken rectangle
+            // seen from orbit); 30 km rather than 25 so the two do not flap about one altitude.
+            if let Some(p) = self.planet.as_mut() {
+                p.set_exclusions(Vec::new());
+            }
         }
         // Parts in space get more ambient: with only the sun, a craft between it and the camera (or in the
         // planet's shadow) went black against black, and players could not find their probes in orbit.

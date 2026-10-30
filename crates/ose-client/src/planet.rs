@@ -257,6 +257,9 @@ struct Body {
     min_h: f64,
     max_h: f64,
     quads: HashMap<QuadKey, GpuQuad>,
+    /// Quads whose shape changed (the campus exclusions moved): still drawn, rebuilt in place as the budget
+    /// allows, so the ground never opens up or blinks while they are redone.
+    stale: std::collections::HashSet<QuadKey>,
     clouds: HashMap<QuadKey, GpuQuad>,
     tex: HashMap<Tex, wgpu::TextureView>,
     /// Detail arrays: texture, layers expected, layers received.
@@ -1118,6 +1121,7 @@ impl PlanetRenderer {
                 min_h: 0.0,
                 max_h: 0.0,
                 quads: HashMap::new(),
+                stale: std::collections::HashSet::new(),
                 clouds: HashMap::new(),
                 tex: HashMap::new(),
                 arrays: HashMap::new(),
@@ -1806,9 +1810,18 @@ impl PlanetRenderer {
             let quads = &self.bodies[&id].quads;
             planet_lod::select(cam, radius, min_h, max_h, &|k| quads.contains_key(k))
         };
-        // Build the nearest missing quads within the time budget.
+        // Build the nearest missing quads within the time budget, then redo stale ones in view, nearest first.
         let t0 = now_ms();
-        for (_, key) in wanted {
+        let mut redo: Vec<(f64, QuadKey)> = {
+            let b = &self.bodies[&id];
+            draw.iter()
+                .filter(|k| b.stale.contains(k))
+                .map(|k| (planet_lod::distance_to_quad(k, cam, radius), *k))
+                .collect()
+        };
+        redo.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        let n_wanted = wanted.len();
+        for (i, (_, key)) in wanted.into_iter().chain(redo).enumerate() {
             if now_ms() - t0 > BUILD_BUDGET_MS {
                 break;
             }
@@ -1817,19 +1830,36 @@ impl PlanetRenderer {
                 let ex = &self.exclusions;
                 planet_lod::build_quad(&key, radius, has_ocean, &|d| {
                     let h = planet_lod::map_height(map, d);
-                    // The original hides its terrain under the KSC campus (the campus is a terrain blocker):
-                    // here the ground drops 20 m under the facilities so the campus model's own ground shows.
+                    // A site model's own ground (the KSC campus: a 19 km plateau whose skirts slope below the
+                    // sea) and the terrain are drawn together and the higher shows, as in the original. Where
+                    // the two are at nearly the same height they fought for the pixels and their outlines
+                    // flickered as the camera moved, so out of the facilities the terrain is draped 4 m over
+                    // that ground (one textured surface, the ground craft stand on). Under the facilities it
+                    // drops 20 m below it so the campus model's own lawns and roads show.
+                    let campus = map.and_then(|m| {
+                        let (lat, lon) = planet_lod::lat_lon(d);
+                        m.overlay.as_ref().and_then(|o| o.sample(lat, lon))
+                    });
                     let p = planet_lod::scale(d, radius + h);
                     let sink = ex
                         .iter()
                         .filter(|e| !e.props)
                         .map(|e| e.inner_weight(p, 300.0, 150.0))
                         .fold(0.0, f64::max);
-                    h - 20.0 * sink
+                    match campus {
+                        Some(c) => h.max(c + 4.0) * (1.0 - sink) + (h.min(c) - 20.0) * sink,
+                        None => h - 20.0 * sink,
+                    }
                 })
             };
-            let q = self.upload_quad(&mesh);
-            self.bodies.get_mut(&id).unwrap().quads.insert(key, q);
+            let mut q = self.upload_quad(&mesh);
+            let b = self.bodies.get_mut(&id).unwrap();
+            if i >= n_wanted {
+                // a replacement: no fade-in from the parent
+                q.built_ms = 0.0;
+            }
+            b.stale.remove(&key);
+            b.quads.insert(key, q);
         }
         // The cloud shell, once its texture is in.
         // None on a gas giant: its layer starts at 0 m, on the sphere, and the banded albedo is the deck.
@@ -2393,15 +2423,32 @@ impl PlanetRenderer {
     /// Keep scatter (rocks, plants, trees, grass) off these rectangles; props are placed again when they change.
     pub fn set_exclusions(&mut self, ex: Vec<Exclusion>) {
         if ex != self.exclusions {
-            self.exclusions = ex;
+            // the quads under both the old and the new exclusions change
+            let old = std::mem::replace(&mut self.exclusions, ex);
+            let ex: Vec<Exclusion> = old
+                .into_iter()
+                .chain(self.exclusions.iter().cloned())
+                .collect();
             for b in self.bodies.values_mut() {
                 b.placed_at = None;
                 b.grass_at = None;
                 b.far_at = None;
                 b.far_pending = None;
                 b.far = None;
-                // terrain under the campus is lowered: rebuild the quads
-                b.quads.clear();
+                // terrain under the campus is lowered: redo the quads near it, in place
+                let radius = b.map.as_ref().map(|m| m.body_radius_m).unwrap_or(1.0);
+                let near: Vec<QuadKey> = b
+                    .quads
+                    .keys()
+                    .filter(|k| {
+                        let c = planet_lod::scale(k.center_dir(), radius);
+                        let reach = k.angular_radius() * radius + 15_000.0;
+                        ex.iter()
+                            .any(|e| planet_lod::length(planet_lod::sub(c, e.origin)) < reach)
+                    })
+                    .copied()
+                    .collect();
+                b.stale.extend(near);
             }
         }
     }
