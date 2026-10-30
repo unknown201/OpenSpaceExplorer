@@ -9319,6 +9319,12 @@ impl App {
                 ),
             )
             .ok();
+        // The craft's own axes too, so a test can tell which way each key turns it (top = its "up", right).
+        for (attr, d) in [("data-ose-top", nav.top), ("data-ose-right", nav.right)] {
+            canvas
+                .set_attribute(attr, &format!("{:.6},{:.6},{:.6}", d.x, d.y, d.z))
+                .ok();
+        }
         if self.navball.draw(&canvas, &nav) {
             canvas.set_attribute("data-ose-navball", "drawn").ok();
         }
@@ -10894,7 +10900,17 @@ impl App {
             "fh-heading",
             &self
                 .facing_pitch_heading()
-                .map(|(_, h)| format!("{:03.0}\u{b0}", h.rem_euclid(360.0)))
+                .map(|(pitch, h)| {
+                    // Pointing straight up the original reads the heading of the craft's top (180 on the
+                    // pad, where rockets stand with their top to the south).
+                    let h = match self.current_nav() {
+                        Some(n) if pitch > 89.5 => {
+                            n.top.dot(n.east).atan2(n.top.dot(n.north)).to_degrees()
+                        }
+                        _ => h,
+                    };
+                    format!("{:03.0}\u{b0}", h.rem_euclid(360.0))
+                })
                 .unwrap_or_else(|| "--".into()),
         );
         // Joint stress: worst joint load over its break limit (1 breaks), as the bar's fill and colour.

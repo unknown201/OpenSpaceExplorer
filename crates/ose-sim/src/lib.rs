@@ -829,6 +829,30 @@ impl Universe {
     /// Lay a powered vessel level (a plane, built nose-forward and turned by `structure::level_layout`):
     /// on the ground it lies on its wheels pointing along compass heading `heading_deg`, and it holds that
     /// heading level until told otherwise.
+    /// Stand a rocket on its pad as KSP2 does: rolled so its top faces south (the navball reads heading 180),
+    /// so D yaws it east and W tips it north. Not for level craft (planes keep their own frame).
+    pub fn stand_south(&mut self, e: Entity) -> bool {
+        let Some(mut p) = self.world.get_mut::<flight::Powered>(e) else {
+            return false;
+        };
+        let (_, _, north) = flight::surface_frame(p.r);
+        let south = -north - p.facing * (-north).dot(p.facing);
+        if south.length_squared() < 1e-6 {
+            return false;
+        }
+        // As a roll from the reference (north): the landed vessel keeps its roll, not a free top.
+        flight::set_vessel_top(&mut p, south.normalized());
+        let mut p = p.clone();
+        if let Some(mut st) = self.world.entity_mut(e).take::<structure::Structure>() {
+            st.sync(&mut p);
+            self.world.entity_mut(e).insert(st);
+        }
+        if let Some(mut q) = self.world.get_mut::<flight::Powered>(e) {
+            *q = p;
+        }
+        true
+    }
+
     pub fn set_level(&mut self, e: Entity, heading_deg: f64) -> bool {
         let Some(mut p) = self.world.get_mut::<flight::Powered>(e) else {
             return false;

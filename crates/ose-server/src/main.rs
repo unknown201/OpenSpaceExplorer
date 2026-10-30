@@ -1657,6 +1657,9 @@ fn launch_on_pad_now(
     );
     if is_level {
         u.set_level(e, at.heading_deg);
+    } else {
+        // Rockets stand as KSP2's: top to the south, so D turns them east (the gravity turn).
+        u.stand_south(e);
     }
     if let Err(reason) = crew_launch(s, &mut u, e, crew) {
         u.despawn_vessel(e);
