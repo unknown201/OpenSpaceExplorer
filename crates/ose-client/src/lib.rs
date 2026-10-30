@@ -44,6 +44,7 @@ pub mod lens_flare;
 pub mod menu3d;
 pub mod missions;
 pub mod navball;
+pub mod netstats;
 pub mod ocean_fft;
 pub mod orientation;
 pub mod particles;
@@ -144,6 +145,11 @@ struct App {
     status_el: Element,
     scene: Option<Scene>,
     time: TimeSync,
+    /// Stream and frame smoothness counters, published on `<body data-ose-net>` once a second.
+    net: netstats::NetStats,
+    /// `?netsmooth=0`: the pre-protocol-58 presentation (clock snaps, orbit-element extrapolation), for the
+    /// smoothness benchmark to compare against on one build.
+    legacy_netcode: bool,
     camera: Camera,
     ws: Option<WebSocket>,
     /// Campaign was requested; send Hello once the background socket opens.
@@ -596,6 +602,10 @@ pub fn start() -> Result<(), JsValue> {
         .get_context("2d")?
         .ok_or("no 2d context")?
         .dyn_into()?;
+    let legacy_netcode = window
+        .location()
+        .search()
+        .is_ok_and(|q| q.contains("netsmooth=0"));
     let app: Shared = Rc::new(RefCell::new(App {
         labels: get("labels")?,
         label_els: Vec::new(),
@@ -638,7 +648,9 @@ pub fn start() -> Result<(), JsValue> {
         focus_el: get("focus")?,
         status_el,
         scene: None,
-        time: TimeSync::default(),
+        time: TimeSync::new(legacy_netcode),
+        net: netstats::NetStats::default(),
+        legacy_netcode,
         camera: Camera::new(0),
         ws: None,
         login_requested: false,
@@ -3619,7 +3631,24 @@ fn connect(app: &Shared) -> Result<(), JsValue> {
             if let Ok(buf) = ev.data().dyn_into::<js_sys::ArrayBuffer>() {
                 let bytes = js_sys::Uint8Array::new(&buf).to_vec();
                 match ose_net::decode::<ServerMessage>(&bytes) {
-                    Ok(msg) => app.borrow_mut().on_server(msg),
+                    Ok(msg) => {
+                        let streamed = matches!(
+                            msg,
+                            ServerMessage::TimeState { .. }
+                                | ServerMessage::Snapshot { .. }
+                                | ServerMessage::Vessels { .. }
+                                | ServerMessage::Trajectory { .. }
+                        );
+                        let started = now_ms();
+                        let mut a = app.borrow_mut();
+                        if streamed {
+                            a.net.arrival(started, bytes.len());
+                        }
+                        a.on_server(msg);
+                        if streamed {
+                            a.net.handled(now_ms() - started);
+                        }
+                    }
                     Err(e) => log(&format!("bad server message: {e}")),
                 }
             }
@@ -5476,7 +5505,8 @@ impl App {
                 self.apply_spins();
             }
             ServerMessage::BodyCatalog { bodies } => {
-                let scene = Scene::new(bodies);
+                let mut scene = Scene::new(bodies);
+                scene.legacy = self.legacy_netcode;
                 self.build_labels(&scene);
                 let focus = scene
                     .index_of("Kerbin")
@@ -5493,7 +5523,12 @@ impl App {
                 warp,
                 warp_limited_by,
             } => {
-                self.time.update(tick.seconds(), warp, now_ms());
+                let now = now_ms();
+                let before = self.time.ut_at(now);
+                self.time.update(tick.seconds(), warp, now);
+                let step_ms = (self.time.ut_at(now) - before) * 1000.0 / warp.max(1) as f64;
+                self.net
+                    .clock(now, tick.seconds(), warp, step_ms, self.time.pending_ms());
                 if warp_limited_by != self.warp_holder {
                     self.warp_holder = warp_limited_by;
                     self.update_warp_holder();
@@ -5516,7 +5551,9 @@ impl App {
                     .find(|v| v.owner.is_some() && v.owner == self.player_id)
                     .map(|v| (v.id, v.reference_body as usize));
                 if let Some(scene) = &mut self.scene {
-                    scene.update_vessels(vessels, tick.seconds(), now_ms(), self.time.warp);
+                    let now = now_ms();
+                    let display_ut = self.time.ut_at(now);
+                    scene.update_vessels(vessels, tick.seconds(), now, self.time.warp, display_ut);
                 }
                 // Follow the player's own vessel the first time it appears.
                 if changed && self.follow.is_none() {
@@ -11891,6 +11928,27 @@ impl App {
             .ok();
     }
 
+    /// Feed the smoothness counters this frame's motion of the flown vessel, and publish the last second's
+    /// summary when it is due.
+    fn sample_smoothness(&mut self, now: f64, ut: f64) {
+        let motion = self.flying.and_then(|id| {
+            let scene = self.scene.as_ref()?;
+            let v = scene.vessel(id)?;
+            let p = scene.vessel_position(v, ut);
+            // The displayed path's own derivative, corrections and all.
+            let h = 0.004;
+            let vel =
+                (scene.vessel_position(v, ut + h) - scene.vessel_position(v, ut - h)) * (0.5 / h);
+            Some((id, [p.x, p.y, p.z], [vel.x, vel.y, vel.z]))
+        });
+        self.net.frame(now, ut, motion);
+        if let Some(json) = self.net.report(now) {
+            if let Some(body) = self.doc.body() {
+                body.set_attribute("data-ose-net", &json).ok();
+            }
+        }
+    }
+
     fn frame(&mut self) {
         #[cfg(target_arch = "wasm32")]
         if let Some(gpu) = &self.gpu {
@@ -11943,6 +12001,7 @@ impl App {
         }
         let now = now_ms();
         let ut = self.time.ut_at(now);
+        self.sample_smoothness(now, ut);
         self.update_tracking(now);
         self.update_audio(now);
         if self.time.have_time {

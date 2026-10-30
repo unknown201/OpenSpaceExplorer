@@ -35,11 +35,22 @@ test("held flight controls with 30 ms added round-trip delay", async ({ page, ba
     await page.locator('[data-ose="vab-clear"]').click();
     for (const part of ["Tin Can", "FL-T200", "LV-T45"]) {
       await page.locator('[data-ose="vab-search"]').fill(part);
-      await page.locator('[data-ose="vab-part"]').first().click();
+      // The card list re-renders after the search; wait for it as the gameplay chain does.
+      const card = page.locator('[data-ose="vab-part"]').first();
+      await card.waitFor({ timeout: 5000 });
+      await card.click();
     }
+    await page.locator('[data-ose="vab-search"]').fill("");
     await page.locator('[data-ose="vab-name"]').fill("Latency test rocket");
+    // An earlier test can leave its craft on the pad the VAB has selected; launch from a free one.
+    const site = page.locator('[data-ose="vab-site"]');
+    if (await site.isVisible()) {
+      const free = await site.locator("option:not([disabled])").first().getAttribute("value");
+      if (free) await site.selectOption(free);
+    }
     await page.locator('[data-ose="vab-launch"]').click();
-    await expect(page.locator('[data-ose="flight"].open')).toBeVisible();
+    // Rolling out opens the flight view over the KSC scene, which takes a while on a CI runner's software GPU.
+    await expect(page.locator('[data-ose="flight"].open')).toBeVisible({ timeout: 20_000 });
     await page.keyboard.press("z");
     await page.keyboard.press("Space");
     await expect(page.locator('[data-ose="flight"]')).toHaveAttribute("data-ose-situation", "Flying", { timeout: 20_000 });

@@ -169,6 +169,11 @@ pub enum Situation {
 #[derive(Component, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Powered {
     pub spec: FlightSpec,
+    /// Acceleration other than gravity (thrust, drag, lift) over the last integration step, m/s², in the
+    /// reference body's inertial frame. Zero at rest on the ground or as a wreck. Streamed so a client can
+    /// extrapolate a powered vessel between snapshots without flying it.
+    #[serde(default)]
+    pub accel_ng_mps2: DVec3,
     /// Index into `spec.stages` of the stage currently able to burn; `>= len` when all are spent.
     pub stage: usize,
     pub propellant_t: f64,
@@ -820,6 +825,7 @@ impl Powered {
         };
         Powered {
             spec,
+            accel_ng_mps2: DVec3::ZERO,
             stage: 0,
             propellant_t: prop,
             mass_t: mass,
@@ -1682,6 +1688,8 @@ pub fn integrate_with_propulsion(
     propulsion: Option<Propulsion>,
 ) -> StepOutcome {
     let mut out = StepOutcome::default();
+    // Until the free-flight integration below runs, this step applies no non-gravitational acceleration.
+    p.accel_ng_mps2 = DVec3::ZERO;
     let omega = if body.rotation_period_s > 0.0 {
         std::f64::consts::TAU / body.rotation_period_s
     } else {
@@ -2023,6 +2031,7 @@ pub fn integrate_with_propulsion(
     };
     out.drag_kn = drag_acc * p.mass_t + p.lift_kn;
     let acc = g_acc + thrust_acc + drag_acc + lift_acc;
+    p.accel_ng_mps2 = thrust_acc + drag_acc + lift_acc;
     p.v = p.v + acc * dt;
     let top = vessel_top(p);
     let previous_r = p.r;

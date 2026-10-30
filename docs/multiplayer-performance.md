@@ -113,3 +113,84 @@ local assets. Chromium/WebGPU measured 22.1 FPS and 24 control messages (648 pay
 Firefox/Canvas measured 60 FPS and 41 messages (1,107 bytes), over the two-second steering sample.
 These render paths have different visual costs and are not comparable GPU benchmarks. The result
 confirms that rendering remains a bottleneck in the full scene despite the networking improvements.
+
+## Smoothness under latency and jitter
+
+Protocol 54 changes how the client draws what the 10 Hz stream tells it, not what it is told or how often.
+Three sources of frame-to-frame jank were found with the counters below, all independent of the browser's
+own frame rate:
+
+- The clock. Every `TimeState` reset the client's time estimate to its arrival, so network and scheduler
+  jitter on each message moved the displayed universal time back or forth by the jitter (tens of
+  milliseconds on a WAN), and every vessel jumped by its speed times that step. `TimeSync` now filters the
+  offset between server time and the page clock and slews the displayed time toward it at up to 3% of the
+  warp rate, so the time shown is continuous; warp changes, rewinds and disagreements over 200 ms still snap.
+- Extrapolation under power. A powered vessel was placed from its osculating orbit elements, which ignore
+  thrust, drag and lift (and are degenerate just off the pad), so each new state disagreed with the
+  prediction. `VesselState` now carries the vessel's non-gravitational acceleration from its last physics
+  step, and the client carries position and velocity forward under gravity plus that acceleration.
+- Arrival discontinuities. What remained of the prediction error showed as a step at each arrival. The scene
+  now records where each powered vessel was drawn when its new state arrives and fades that difference out
+  over one snapshot interval (scaled by warp), like the attitude presentation already did. Errors over 25 m
+  are teleports (loads, decoupling, docking) and show at once.
+
+Only presentation changed: game rules, instruments and the map still use the authoritative states and
+orbits, and nothing of the flight model runs in the browser (ADR-0002).
+
+### Counters and benchmark
+
+The client keeps smoothness counters (`crates/ose-client/src/netstats.rs`) and publishes a summary of the
+last second as JSON in `<body data-ose-net>`: stream rate and bytes, arrival spacing, how far the clock
+moved at each `TimeState` and how much slew it has pending, frame spacing with stalls over 50 ms, time spent
+applying each stream message, and the motion residual of the flown vessel: each frame, how far it is from
+where the previous frame's position and velocity put it. Smooth motion has a residual near zero whatever
+the latency; a residual in metres is a visible jump.
+
+The counters also found the server itself: its simulation loop took one step per timer wake, and on
+Windows tokio's timer wakes every 16 ms rather than 20, so universal time advanced at 0.65 of real time
+(`utRate` in the summary; the Linux deployment was not affected). The loop now owes steps to the wall
+clock and takes the ones a late wake missed, up to five at once; a longer backlog is dropped so an
+overloaded server runs slow rather than spiralling. Snapshot ticks are still sampled by the 10 Hz
+publisher's own timer, so their spacing jitters by a tick or two; the client clock absorbs that.
+
+`e2e/tests/netcode_smoothness.spec.ts` launches a starter rocket with each WebSocket direction delayed by
+a base latency plus random order-preserving jitter (`OSE_NET_DELAY_MS`, `OSE_NET_JITTER_MS`), flies it for
+`OSE_NET_SECONDS` while steering for a third of the time, and reports those counters. `OSE_NET_MODE=legacy`
+opens the page with `?netsmooth=0`, which makes the same build draw as before protocol 58, so one build
+measures both. Nothing is asserted about the numbers.
+
+### Before and after
+
+Release server and release client on Windows, 2026-10-30, Chromium/WebGPU headless (which paces at about
+32 FPS), no game assets, twelve seconds of a starter rocket's ascent per run, the first second dropped.
+Legacy is the same build with `?netsmooth=0`. Residuals are metres per frame; jumps are frames whose
+residual exceeded 0.5 m; clock steps are how far the displayed time moved at a `TimeState`, ms; pending
+is how much slew the smoothed clock still had to make up, ms. Each run leaves its rocket on the server,
+so stream rate grows with the run count rather than with the change.
+
+| One-way delay + jitter | Mode | Residual p95 | Residual max | Jumps / 12 s | Clock step p95 / max | Pending p95 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0 ms + 0 ms | legacy | 0.50 m | 1.01 m | 28 | 35 / 45 ms | |
+| 0 ms + 0 ms | smoothed | 0.007 m | 0.08 m | 0 | 0 / 0 ms | 7 ms |
+| 60 ms + 0..50 ms | legacy | 0.70 m | 1.41 m | 60 | 44 / 79 ms | |
+| 60 ms + 0..50 ms | smoothed | 0.009 m | 0.12 m | 0 | 0 / 0 ms | 9 ms |
+| 120 ms + 0..80 ms | legacy | 0.69 m | 1.23 m | 63 | 64 / 116 ms | |
+| 120 ms + 0..80 ms | smoothed | 0.011 m | 0.03 m | 0 | 0 / 0 ms | 16 ms |
+
+Jumps even at zero added delay come from the snapshot publisher's tick jitter and the browser's own
+message scheduling; the legacy clock passed both straight to the picture. Early in an ascent the rocket is
+slow, so these metres understate what the same clock steps do at orbital speed (a 60 ms step at 2,300 m/s
+is 140 m, though the camera follows the vessel, so what the player sees is the ground and other vessels
+jumping).
+
+With the full `assets/web` directory served, the same 60 ms + 0..50 ms run measured a residual p95 of
+0.70 m (legacy) against 0.01 m (smoothed) with 0 jumps, but both modes saw 24 to 28 frame stalls over
+50 ms in twelve seconds, up to 450 ms, while models and terrain loaded; those are rendering and asset
+loading stalls (`docs/ascent-performance.md`), not stream handling, which stayed under 0.2 ms per
+message. A 450 ms stall also delays the stream, and the smoothed clock came within 15 ms of its 200 ms
+snap limit after one; the player sees a freeze and then continuous motion rather than a freeze and a jump.
+
+Not changed here: the 10 Hz stream, its contents and size (deflate would shrink `Vessels` only 1.5x and
+the body `Snapshot` not at all, so no compression was added), interest management, and prediction of the
+flown vessel from the player's own inputs (ADR-0002 keeps the flight model out of the browser; the
+attitude presentation already follows the authoritative angular velocity).

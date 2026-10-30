@@ -22,7 +22,29 @@ pub struct Scene {
     /// Predicted patched-conic trajectory per vessel id, from the last `Trajectory` message.
     pub trajectories: HashMap<u64, Vec<TrajectoryPatch>>,
     attitudes: HashMap<u64, crate::orientation::Track>,
+    /// Where each powered vessel was drawn when its latest state arrived, relative to where that state puts
+    /// it: the prediction error, blended away over `CORRECTION_S` of wall time so it never shows as a jump.
+    corrections: HashMap<u64, Correction>,
+    /// Draw as before protocol 58 (`?netsmooth=0`): orbit elements for every vessel and no error blending.
+    /// Kept so the smoothness benchmark can measure the difference on one build.
+    pub legacy: bool,
 }
+
+/// A powered vessel's prediction error at the arrival of its latest state, and the display time it was
+/// taken at.
+#[derive(Clone, Copy, Debug)]
+struct Correction {
+    offset: DVec3,
+    from_ut: f64,
+    /// Universal-time span to blend it out over: `CORRECTION_S` of wall time at the warp of arrival.
+    span_ut: f64,
+}
+
+/// Wall seconds a vessel's prediction error is blended away over at the arrival of a new state (one
+/// snapshot interval).
+pub const CORRECTION_S: f64 = 0.1;
+/// Larger prediction errors are shown at once: they are teleports (loads, docking, decoupling), not jitter.
+pub const MAX_CORRECTION_M: f64 = 25.0;
 
 /// `ose-math` orbit from wire elements around a body with gravitational parameter `mu`.
 pub fn orbit_from(mu: f64, o: &OrbitElements) -> Orbit {
@@ -59,16 +81,53 @@ impl Scene {
             spin_omega: Vec::new(),
             trajectories: HashMap::new(),
             attitudes: HashMap::new(),
+            corrections: HashMap::new(),
+            legacy: false,
         }
     }
 
     pub fn reset_attitudes(&mut self) {
         self.attitudes.clear();
+        self.corrections.clear();
+    }
+
+    /// A vessel under active physics and off the ground: its state is a point sample of a flight, so it is
+    /// extrapolated kinematically and its prediction error is blended away.
+    fn predicted(v: &VesselState) -> bool {
+        !v.on_rails && v.flight.is_some() && !Self::standing(v)
+    }
+
+    fn standing(v: &VesselState) -> bool {
+        v.flight.as_ref().is_some_and(|f| {
+            matches!(
+                f.situation,
+                ose_net::FlightSituation::Landed | ose_net::FlightSituation::Crashed
+            )
+        })
     }
 
     /// Ingest authoritative state once; drawing samples the small attitude tracks without cloning craft.
-    pub fn update_vessels(&mut self, vessels: Vec<VesselState>, ut: f64, now_ms: f64, warp: u32) {
+    /// `display_ut` is the time the frame now on screen shows, so the new state can be compared with what
+    /// was drawn and the difference faded out rather than shown as a jump.
+    pub fn update_vessels(
+        &mut self,
+        vessels: Vec<VesselState>,
+        ut: f64,
+        now_ms: f64,
+        warp: u32,
+        display_ut: f64,
+    ) {
         use crate::orientation::{from_axes, Context, Track};
+        // Where each predicted vessel is drawn right now, before the new state replaces the old.
+        let drawn: Vec<(u64, DVec3)> = vessels
+            .iter()
+            .filter(|v| Self::predicted(v) && !self.legacy)
+            .filter_map(|v| {
+                let old = self.vessel(v.id)?;
+                (old.reference_body == v.reference_body && Self::predicted(old))
+                    .then(|| (v.id, self.vessel_position(old, display_ut)))
+            })
+            .collect();
         let live: std::collections::HashSet<_> = vessels
             .iter()
             .filter(|v| v.flight.is_some())
@@ -104,6 +163,33 @@ impl Scene {
         }
         self.vessels_ut = ut;
         self.vessels = vessels;
+        self.corrections.clear();
+        for (id, was) in drawn {
+            let Some(v) = self.vessel(id) else { continue };
+            let offset = was - self.raw_position(v, display_ut);
+            let finite = offset.length().is_finite();
+            if finite && offset.length() <= MAX_CORRECTION_M {
+                self.corrections.insert(
+                    id,
+                    Correction {
+                        offset,
+                        from_ut: display_ut,
+                        span_ut: CORRECTION_S * warp.max(1) as f64,
+                    },
+                );
+            }
+        }
+    }
+
+    /// The prediction error still shown for vessel `id` at `ut`: all of it at arrival, none a snapshot later.
+    fn correction(&self, id: u64, ut: f64) -> DVec3 {
+        match self.corrections.get(&id) {
+            Some(c) if c.span_ut > 0.0 => {
+                let left = 1.0 - ((ut - c.from_ut) / c.span_ut).clamp(0.0, 1.0);
+                c.offset * left
+            }
+            _ => DVec3::ZERO,
+        }
     }
 
     pub fn vessel_attitude(&self, id: u64, now_ms: f64) -> Option<(glam::DVec3, glam::DVec3)> {
@@ -111,19 +197,22 @@ impl Scene {
         Some((rotation * glam::DVec3::Y, rotation * glam::DVec3::Z))
     }
 
-    /// Star-space position of a vessel at `ut`: its reference body plus its orbit, so it moves smoothly
-    /// between `Vessels` messages. Falls back to the sent position if the reference body is unknown.
+    /// Star-space position of a vessel at `ut`, as drawn: `raw_position` plus whatever is left of the
+    /// prediction error being faded out since its latest state arrived.
     pub fn vessel_position(&self, v: &VesselState, ut: f64) -> DVec3 {
+        self.raw_position(v, ut) + self.correction(v.id, ut)
+    }
+
+    /// Star-space position of a vessel at `ut` from its latest state alone, so it moves smoothly between
+    /// `Vessels` messages: its reference body plus its orbit on rails, or the sent position and velocity
+    /// carried on under gravity and its own acceleration under power. Falls back to the sent position if
+    /// the reference body is unknown.
+    fn raw_position(&self, v: &VesselState, ut: f64) -> DVec3 {
         let rb = v.reference_body as usize;
         // A craft standing on the ground turns with its body: keep its offset from the body's centre and rotate
         // it by the spin since the snapshot. Its orbit elements describe a fall through the planet, which made
         // a craft on the pad bob up and down between snapshots.
-        let standing = v.flight.as_ref().is_some_and(|f| {
-            matches!(
-                f.situation,
-                ose_net::FlightSituation::Landed | ose_net::FlightSituation::Crashed
-            )
-        });
+        let standing = Self::standing(v);
         if standing && rb < self.bodies.len() {
             let w = self.spin_omega.get(rb).copied().unwrap_or(0.0);
             let rel = v.position_m - self.position(rb, self.vessels_ut);
@@ -132,13 +221,38 @@ impl Scene {
             let turned = DVec3::new(rel.x * c - rel.y * s, rel.x * s + rel.y * c, rel.z);
             return self.position(rb, ut) + turned;
         }
-        match self.bodies.get(v.reference_body as usize) {
-            Some(body) => {
-                self.position(v.reference_body as usize, ut)
-                    + orbit_from(body.mu, &v.orbit).position_at(ut)
-            }
-            None => v.position_m,
+        let Some(body) = self.bodies.get(rb) else {
+            return v.position_m;
+        };
+        if Self::predicted(v) && !self.legacy {
+            // Under power the osculating orbit is wrong by the thrust and drag of the next instant (and
+            // degenerate just off the pad), so carry the sent state forward: constant acceleration over
+            // a snapshot interval is accurate to millimetres.
+            let r0 = v.position_m - self.position(rb, self.vessels_ut);
+            let v0 = v.velocity_mps - self.body_velocity(rb, self.vessels_ut);
+            let tau = ut - self.vessels_ut;
+            let r = r0.length();
+            let gravity = if r > 0.0 {
+                r0 * (-body.mu / (r * r * r))
+            } else {
+                DVec3::ZERO
+            };
+            let rel = r0 + v0 * tau + (gravity + v.accel_mps2) * (0.5 * tau * tau);
+            return self.position(rb, ut) + rel;
         }
+        self.position(rb, ut) + orbit_from(body.mu, &v.orbit).position_at(ut)
+    }
+
+    /// Star-space velocity of body `i` at `ut`: the streamed snapshot's, which was taken at the same tick as
+    /// the vessel states, else a central difference of its position.
+    pub fn body_velocity(&self, i: usize, ut: f64) -> DVec3 {
+        if (ut - self.vessels_ut).abs() < 1e-9 {
+            if let Some(s) = self.snapshot.get(i) {
+                return s.velocity_mps;
+            }
+        }
+        let dt = 0.5;
+        (self.position(i, ut + dt) - self.position(i, ut - dt)) * (0.5 / dt)
     }
 
     pub fn vessel(&self, id: u64) -> Option<&VesselState> {
@@ -212,30 +326,82 @@ impl Scene {
     }
 }
 
-/// The client's estimate of server time: the last `TimeState`, when it arrived (performance.now ms), and the
-/// warp it is advancing at. Between messages time is extrapolated, but never more than `MAX_EXTRAPOLATE_MS`
-/// so a stalled connection freezes rather than runs away.
+/// The client's estimate of server time. Each `TimeState` is one sample of (server time, arrival); the
+/// samples carry network and scheduler jitter, so the clock does not jump to each one. It filters the offset
+/// between server time and the page clock and slews the displayed time toward it at a bounded rate, so
+/// everything drawn from it moves continuously. A warp change, a rewind or a disagreement beyond `SNAP_MS`
+/// resets it outright. Between messages time is extrapolated, but never more than `MAX_EXTRAPOLATE_MS`, so
+/// a stalled connection freezes rather than runs away.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TimeSync {
-    pub base_ut: f64,
-    pub base_now_ms: f64,
     pub warp: u32,
     pub have_time: bool,
+    /// Take every `TimeState` as the truth, as before protocol 58 (`?netsmooth=0`, for the benchmark).
+    pub legacy: bool,
+    /// Displayed server time at `base_now_ms`.
+    base_ut: f64,
+    base_now_ms: f64,
+    /// What the displayed time still has to gain (or, negative, lose) to agree with the filtered samples, s.
+    pending_s: f64,
 }
 
 pub const MAX_EXTRAPOLATE_MS: f64 = 500.0;
+/// Fraction of the warp rate the displayed time may run fast or slow while it catches up.
+pub const SLEW: f64 = 0.03;
+/// Weight of each new sample in the filtered offset (at 10 Hz, a time constant of about 0.4 s).
+const SAMPLE_WEIGHT: f64 = 0.25;
+/// A filtered disagreement beyond this (wall-clock ms at the current warp) is a jump, not jitter: snap.
+pub const SNAP_MS: f64 = 200.0;
 
 impl TimeSync {
+    pub fn new(legacy: bool) -> TimeSync {
+        TimeSync {
+            legacy,
+            ..TimeSync::default()
+        }
+    }
+
     pub fn update(&mut self, ut: f64, warp: u32, now_ms: f64) {
+        if self.legacy || !self.have_time || warp != self.warp {
+            self.snap(ut, warp, now_ms);
+            return;
+        }
+        // Bank the slew applied so far so the displayed time stays continuous through this update.
+        let displayed = self.ut_at(now_ms);
+        let applied = displayed - (self.base_ut + self.dt_s(now_ms) * self.warp as f64);
+        self.pending_s -= applied;
+        self.base_ut = displayed;
+        self.base_now_ms = now_ms;
+        let error = ut - displayed;
+        self.pending_s += (error - self.pending_s) * SAMPLE_WEIGHT;
+        if !self.pending_s.is_finite() || self.pending_s.abs() > SNAP_MS / 1000.0 * warp as f64 {
+            self.snap(ut, warp, now_ms);
+        }
+    }
+
+    fn snap(&mut self, ut: f64, warp: u32, now_ms: f64) {
         self.base_ut = ut;
         self.base_now_ms = now_ms;
         self.warp = warp;
+        self.pending_s = 0.0;
         self.have_time = true;
     }
 
+    fn dt_s(&self, now_ms: f64) -> f64 {
+        (now_ms - self.base_now_ms).clamp(0.0, MAX_EXTRAPOLATE_MS) / 1000.0
+    }
+
     pub fn ut_at(&self, now_ms: f64) -> f64 {
-        let dt = (now_ms - self.base_now_ms).clamp(0.0, MAX_EXTRAPOLATE_MS) / 1000.0;
-        self.base_ut + dt * self.warp as f64
+        let dt = self.dt_s(now_ms);
+        let rate = self.warp as f64;
+        let slew = self.pending_s.clamp(-SLEW * rate * dt, SLEW * rate * dt);
+        self.base_ut + dt * rate + slew
+    }
+
+    /// The displayed time's disagreement with the filtered samples, ms of wall clock at the current warp:
+    /// what the slew still has to make up.
+    pub fn pending_ms(&self) -> f64 {
+        self.pending_s * 1000.0 / self.warp.max(1) as f64
     }
 }
 
@@ -359,6 +525,7 @@ mod tests {
             reference_body: 1,
             position_m: DVec3::ZERO,
             velocity_mps: DVec3::ZERO,
+            accel_mps2: DVec3::ZERO,
             orbit: OrbitElements {
                 semi_major_axis_m: 700_000.0,
                 eccentricity: 0.0,
@@ -385,6 +552,80 @@ mod tests {
         assert_eq!(t.ut_at(5100.0), 200.0);
         assert_eq!(t.ut_at(9000.0), 600.0);
         assert_eq!(t.ut_at(4000.0), 100.0);
+    }
+
+    /// Deterministic jitter in [-amplitude, amplitude] ms.
+    fn jitter(i: u32, amplitude: f64) -> f64 {
+        let x = (i as f64 * 12.9898).sin() * 43758.5453;
+        (x - x.floor()) * 2.0 * amplitude - amplitude
+    }
+
+    /// Ten snapshots a second arriving up to 30 ms early or late: the displayed time never jumps, runs within
+    /// the slew bound of real time and stays close to it. The old clock, which took each arrival as the
+    /// truth, jumped by the arrival jitter (up to 60 ms frame to frame) on every message.
+    #[test]
+    fn jittery_arrivals_keep_displayed_time_continuous() {
+        let mut t = TimeSync::default();
+        let mut arrivals: Vec<(f64, f64)> = (0..100)
+            .map(|i| {
+                let sent_ms = i as f64 * 100.0;
+                (sent_ms + 80.0 + jitter(i, 30.0), 1000.0 + sent_ms / 1000.0)
+            })
+            .collect();
+        arrivals.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut next = 0;
+        let mut last: Option<(f64, f64)> = None;
+        let mut worst_step = 0.0f64;
+        let mut worst_error = 0.0f64;
+        let mut now = 0.0;
+        while now < 9_900.0 {
+            while next < arrivals.len() && arrivals[next].0 <= now {
+                t.update(arrivals[next].1, 1, arrivals[next].0);
+                next += 1;
+            }
+            if t.have_time {
+                let ut = t.ut_at(now);
+                if let Some((prev_now, prev_ut)) = last {
+                    let step = (ut - prev_ut) * 1000.0;
+                    let frame = now - prev_now;
+                    assert!(
+                        step >= frame * (1.0 - SLEW) - 1e-9,
+                        "ran back at {now}: {step} ms"
+                    );
+                    assert!(
+                        step <= frame * (1.0 + SLEW) + 1e-9,
+                        "jumped at {now}: {step} ms"
+                    );
+                    worst_step = worst_step.max((step - frame).abs());
+                }
+                if now > 1_000.0 {
+                    // The server's time at `now` is 1000 + now/1000; the display lags it by the one-way delay.
+                    let error = (ut - (1000.0 + now / 1000.0)) * 1000.0;
+                    worst_error = worst_error.max((error + 80.0).abs());
+                }
+                last = Some((now, ut));
+            }
+            now += 16.0;
+        }
+        assert!(worst_step <= 16.0 * SLEW + 1e-9, "{worst_step}");
+        assert!(
+            worst_error < 25.0,
+            "{worst_error} ms from the delayed server time"
+        );
+    }
+
+    #[test]
+    fn warp_changes_and_rewinds_snap_the_clock() {
+        let mut t = TimeSync::default();
+        t.update(100.0, 1, 0.0);
+        t.update(100.1, 1, 100.0);
+        t.update(100.2, 4, 200.0);
+        assert_eq!(t.warp, 4);
+        assert!((t.ut_at(300.0) - 100.6).abs() < 1e-9);
+        // a quickload takes time back by a minute: shown at once
+        t.update(40.0, 4, 300.0);
+        assert!((t.ut_at(300.0) - 40.0).abs() < 1e-9);
+        assert_eq!(t.pending_ms(), 0.0);
     }
 
     #[test]

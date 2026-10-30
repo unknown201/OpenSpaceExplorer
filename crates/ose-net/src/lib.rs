@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 57;
+pub const PROTOCOL_VERSION: u16 = 58;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -485,6 +485,10 @@ pub struct VesselState {
     pub reference_body: u16,
     pub position_m: DVec3,
     pub velocity_mps: DVec3,
+    /// Acceleration other than gravity (thrust, drag, lift) the vessel had at `tick`, m/s² in the same
+    /// frame; zero on rails, on the ground and for wrecks. With `orbit`'s gravity it lets the client
+    /// extrapolate a powered vessel to the frame's time (protocol 58).
+    pub accel_mps2: DVec3,
     pub orbit: OrbitElements,
     /// Whether motion follows an analytic orbit rather than active physics.
     pub on_rails: bool,

@@ -2368,6 +2368,100 @@ async fn multiplayer_latency_probe() {
     }
 }
 
+/// Payload and timing probe for one powered player (docs/multiplayer-performance.md): the size of each
+/// streamed message kind, what deflate would make of it, and the tick spacing of consecutive snapshots.
+/// `cargo test -p ose-server --test ws_session stream_payload_probe -- --ignored --nocapture`
+#[tokio::test]
+#[ignore]
+async fn stream_payload_probe() {
+    use std::io::Write;
+    let (_server, addr) = spawn_server().await;
+    let mut ws = connect_ws(&addr).await;
+    hello(&mut ws, None, "payload").await;
+    send_msg(
+        &mut ws,
+        &ClientMessage::LaunchOnPad {
+            craft: starter_craft(),
+        },
+    )
+    .await;
+    let vessel = wait_for(&mut ws, |m| match m {
+        ServerMessage::CraftLaunched { vessel, reason, .. } => {
+            assert!(reason.is_none(), "{reason:?}");
+            vessel
+        }
+        _ => None,
+    })
+    .await;
+    send_msg(
+        &mut ws,
+        &ClientMessage::SetControls {
+            vessel,
+            throttle: 1.0,
+            attitude: ose_net::AttitudeMode::Up,
+        },
+    )
+    .await;
+    send_msg(&mut ws, &ClientMessage::Stage { vessel }).await;
+    let mut sizes: std::collections::BTreeMap<&str, Vec<(usize, usize)>> = Default::default();
+    let mut last_tick = None;
+    let mut tick_gaps = Vec::new();
+    let mut arrivals = Vec::new();
+    let mut last_arrival: Option<std::time::Instant> = None;
+    for _ in 0..200 {
+        let message = recv(&mut ws).await;
+        let kind = match &message {
+            ServerMessage::TimeState { .. } => "TimeState",
+            ServerMessage::Snapshot { tick, .. } => {
+                if let Some(last) = last_tick {
+                    tick_gaps.push(tick.0 as i64 - last);
+                }
+                last_tick = Some(tick.0 as i64);
+                let now = std::time::Instant::now();
+                if let Some(last) = last_arrival {
+                    arrivals.push((now - last).as_secs_f64() * 1000.0);
+                }
+                last_arrival = Some(now);
+                "Snapshot"
+            }
+            ServerMessage::Vessels { .. } => "Vessels",
+            ServerMessage::Trajectory { .. } => "Trajectory",
+            ServerMessage::LaunchSites { .. } => "LaunchSites",
+            _ => continue,
+        };
+        let raw = ose_net::encode(&message).unwrap();
+        let mut deflated =
+            flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::fast());
+        deflated.write_all(&raw).unwrap();
+        let deflated = deflated.finish().unwrap();
+        sizes
+            .entry(kind)
+            .or_default()
+            .push((raw.len(), deflated.len()));
+    }
+    for (kind, list) in &sizes {
+        let raw: usize = list.iter().map(|s| s.0).sum();
+        let deflated: usize = list.iter().map(|s| s.1).sum();
+        eprintln!(
+            "{kind}: n={} raw_avg={} deflate_fast_avg={} ratio={:.2}",
+            list.len(),
+            raw / list.len(),
+            deflated / list.len(),
+            raw as f64 / deflated.max(1) as f64
+        );
+    }
+    let mut gaps = tick_gaps.clone();
+    gaps.sort_unstable();
+    gaps.dedup();
+    arrivals.sort_by(f64::total_cmp);
+    eprintln!(
+        "snapshot tick gaps seen: {gaps:?}; arrival spacing ms p50={:.1} p95={:.1} max={:.1}",
+        arrivals[arrivals.len() / 2],
+        arrivals[arrivals.len() * 95 / 100],
+        arrivals.last().unwrap()
+    );
+}
+
 #[tokio::test]
 async fn restart_keeps_time_vessels_and_burns() {
     let dir = std::env::temp_dir().join(format!("ose-save-test-{}", std::process::id()));

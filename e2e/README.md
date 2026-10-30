@@ -32,6 +32,12 @@ The gameplay table for each browser is printed in the run and attached to the te
 and checks the 20 Hz control cadence when the browser's frame rate allows it. For representative visuals,
 serve the client with `--assets-dir assets/web`; missing models make the FPS result misleadingly high.
 
+`npx playwright test netcode_smoothness.spec.ts` flies a starter rocket with each WebSocket direction
+delayed by `OSE_NET_DELAY_MS` plus random jitter up to twice `OSE_NET_JITTER_MS`, and reports the client's
+smoothness counters (`<body data-ose-net>`): the flown vessel's frame-to-frame motion residual, clock
+steps, frame stalls and stream rate. `OSE_NET_MODE=legacy` measures the pre-protocol-58 presentation on the
+same build. See [multiplayer performance](../docs/multiplayer-performance.md).
+
 For particle verification, set `OSE_REQUIRE_WEBGPU=1` to reject Canvas fallback. Set
 `OSE_CHROMIUM_EXECUTABLE` to a local Chromium executable when the pinned browser cannot create a GPU
 device (some Windows installs lack its DXIL DLL). With WebGPU, the flight step checks authored plume

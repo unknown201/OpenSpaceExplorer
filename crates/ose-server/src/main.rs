@@ -507,28 +507,56 @@ async fn main() -> anyhow::Result<()> {
     streaming::start(shared.clone());
     let sim = shared.clone();
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_millis(
-            1000 / ose_sim::TICKS_PER_SECOND,
-        ));
+        let period = std::time::Duration::from_micros(1_000_000 / ose_sim::TICKS_PER_SECOND);
+        let mut interval = tokio::time::interval(period);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // Steps are owed by the wall clock, not by timer wakes: a late wake (the timer's granularity is
+        // 16 ms on Windows; a slow step anywhere) is followed by the steps it missed, so universal time
+        // keeps pace with real time. A backlog beyond `MAX_CATCH_UP` steps is dropped instead: the
+        // simulation cannot keep up, and time runs slow rather than spiralling. Only at warp 1: a step
+        // under warp covers that many ticks, so a burst of them would jump universal time by seconds
+        // and overshoot what a player (or the bot) is coasting toward.
+        const MAX_CATCH_UP: u32 = 5;
+        let mut due = tokio::time::Instant::now();
         let mut ticks: u64 = 0;
         loop {
             interval.tick().await;
+            let now = tokio::time::Instant::now();
+            let warped = sim.universe.lock().expect("sim lock").warp() > 1;
+            if warped || due + period * MAX_CATCH_UP < now {
+                due = now;
+            }
+            let mut owed = 0;
+            while due <= now && owed < MAX_CATCH_UP {
+                due += period;
+                owed += 1;
+            }
+            for _ in 0..owed {
+                step_once(&sim, &mut ticks);
+            }
+        }
+    });
+
+    fn step_once(sim: &Shared, ticks: &mut u64) {
+        {
             sim.universe.lock().expect("sim lock").step();
-            ticks += 1;
+            let ticks = {
+                *ticks += 1;
+                *ticks
+            };
             // docking ports latch ten times a second
             if ticks.is_multiple_of(5) {
-                let msgs = crew_docking::dock_latched(&sim);
+                let msgs = crew_docking::dock_latched(sim);
                 if !msgs.is_empty() {
                     sim.pending.lock().expect("pending lock").extend(msgs);
                 }
             }
             // missions look at the agency's vessels once a second
             if ticks.is_multiple_of(ose_sim::TICKS_PER_SECOND) {
-                push_roster(&sim);
-                science::evaluate_missions(&sim);
-                science::deliver_experiment_events(&sim);
-                deliver_transmitted(&sim);
+                push_roster(sim);
+                science::evaluate_missions(sim);
+                science::deliver_experiment_events(sim);
+                deliver_transmitted(sim);
                 let (required, heat) = {
                     let c = sim.campaign.lock().expect("campaign lock");
                     let get = |id: &str| c.difficulty.iter().find(|d| d.id == id).map(|d| &d.value);
@@ -551,7 +579,7 @@ async fn main() -> anyhow::Result<()> {
                 u.set_heat_settings(heat);
             }
         }
-    });
+    }
 
     if let Some(p) = save_path.clone() {
         let saver = shared.clone();
@@ -682,6 +710,11 @@ fn vessels_message(s: &Shared, u: &Universe, tick: Tick) -> ServerMessage {
                 reference_body: catalog_index(s, u, body),
                 position_m: bp + rp,
                 velocity_mps: bv + rv,
+                accel_mps2: u
+                    .powered(e)
+                    .filter(|p| !p.landed && !p.crashed)
+                    .map(|p| p.accel_ng_mps2)
+                    .unwrap_or_default(),
                 orbit: elements(&orbit),
                 on_rails: u.powered(e).is_none(),
                 flight: flight_readout(u, e, body, &s.parts).map(|mut f| {
