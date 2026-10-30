@@ -44,7 +44,8 @@
     .pack-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 7px; }
     .pack-count { font-variant-numeric: tabular-nums; color: #728998; white-space: nowrap; }
     .pack-fill { background: #86afbe; }
-    body:has(#flight-hud.open) #asset-downloads { bottom: auto; top: 18px; right: 160px; }
+    /* In flight it keeps clear of the KSP2 HUD: under the vessel actions at the top centre. */
+    body:has(#flight-hud.open) #asset-downloads { bottom: auto; top: calc(150 * var(--u)); right: auto; left: 50%; transform: translateX(-50%); }
     @media (prefers-reduced-motion: reduce) { .assembly-part, .assembly-fill, .pack-fill, .assembly-flame { transition: none !important; } .assembly-scan { animation: none; } }
     @media (prefers-reduced-motion: reduce) { body #menu-poster, body #logo img, body #logo .logo-title { transition: none !important; } }
     #labels { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
