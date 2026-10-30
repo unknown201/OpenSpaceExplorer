@@ -82,6 +82,16 @@ around 80 km.
 - Used for the sky (camera ray), aerial perspective on terrain and parts (`AerialPerspective`: a camera volume of
   transmittance and in-scatter), the sun's colour at the ground (transmittance) and sky irradiance (ambient).
   Gas giants use a separate keyword.
+- Ours: the terrain, sea, clouds and impostors apply it in planet.wgsl. The meshes render.rs draws outdoors (the
+  KSC campus, its near trees, craft) take it from a probe: planet.wgsl's `fs_haze_probe` evaluates the same air
+  to the campus centre (transmittance, in-scatter, and the sun's and sky's light relative to a sun overhead) into
+  a 4 x 1 target read back a frame later (`HazeProbe`); the mesh shader scales it to each fragment's distance as
+  through an even medium. Without it the campus stood out noon-bright and unhazed against the land from a few km
+  up and at dusk.
+- From altitude the coarse terrain quads ran under the campus ground's skirts between their vertices, which
+  showed as green patches up to 10 km round the KSC: the drape takes the campus ground's highest point within
+  about two vertex spacings (`Overlay::sample_max`, max-filtered levels), held to a 0.3 slope and never past the
+  sea where that ground is under it.
 
 ## 5. Clouds (`VolumeCloudConfiguration`, `ScaledCloudConfiguration`)
 

@@ -12986,6 +12986,7 @@ impl App {
                     highlight: 0.0,
                     paint: None,
                     hide_containing: None,
+                    haze: None,
                 });
             }
             if let (Some(orbit), Some(p)) = (scene.orbit(i), b.parent) {
