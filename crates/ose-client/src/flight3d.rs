@@ -520,6 +520,9 @@ impl CameraMode {
 
 pub struct FlightView {
     pub mode: CameraMode,
+    /// The flown vessel's distance from the KSC campus (m) while on Kerbin and low, else infinity: the pad's
+    /// ambience fades with it.
+    pub ksc_distance: f64,
     pub yaw: f64,
     pub pitch: f64,
     pub distance: f64,
@@ -632,6 +635,7 @@ impl FlightView {
         FlightView {
             aero_segments: Vec::new(),
             mode: CameraMode::Auto,
+            ksc_distance: f64::INFINITY,
             yaw: 0.8,
             pitch: 0.25,
             distance: 35.0,
@@ -1223,8 +1227,10 @@ impl FlightView {
             items.push(it);
         }
         // The KSC campus on Kerbin while low enough to matter.
+        self.ksc_distance = f64::INFINITY;
         if inp.body_id == "Kerbin" && alt < 25_000.0 {
             if let Some((kpos, krot)) = self.ksc_pose(inp.body_radius) {
+                self.ksc_distance = (kpos - pos).length();
                 // No grass on the campus and no trees or rocks on its facilities, runways and pads (the original
                 // draws the campus over its own ground); see ksc_exclusions.
                 let ex = self.ksc_exclusions(kpos, krot);

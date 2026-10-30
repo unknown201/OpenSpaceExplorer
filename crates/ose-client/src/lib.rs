@@ -10578,8 +10578,20 @@ impl App {
         // Ambience under the music: the launch pad emitter around the KSC, the hall in the VAB.
         self.audio.ambience(match scene {
             audio::Scene::Vab => Some("vab_ambience"),
+            // The original's launch pad point emitter (machinery, vents) under the KSC's music.
+            audio::Scene::Ksc => Some("ksc_launchpad"),
             _ => None,
         });
+        // In flight it fades out as the craft leaves the campus.
+        #[cfg(target_arch = "wasm32")]
+        let pad_near = if flight.is_some() && !menu_open {
+            1.0 - ((self.flight3d.ksc_distance - 600.0) / 2_400.0).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        let pad_near = 0.0;
+        self.audio.level_loop("ksc_launchpad", pad_near, 1.0);
         let mut level = 0.0;
         let mut solid = false;
         if let Some((id, _, Some(f))) = &flight {
