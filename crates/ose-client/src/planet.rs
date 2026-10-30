@@ -701,13 +701,13 @@ impl PlanetRenderer {
                 shader_location: 1,
             },
             wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x3,
+                format: wgpu::VertexFormat::Float32x4,
                 offset: 28,
                 shader_location: 2,
             },
         ];
         let far_vbl = [Some(wgpu::VertexBufferLayout {
-            array_stride: 40,
+            array_stride: 44,
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &far_attrs,
         })];
@@ -2330,6 +2330,7 @@ impl PlanetRenderer {
                             p.colour[0],
                             p.colour[1],
                             p.colour[2],
+                            p.near,
                         ]
                     })
                     .collect();
@@ -2405,11 +2406,21 @@ impl PlanetRenderer {
             let up = DVec3::from_array(inst.up);
             let rot = glam::DQuat::from_rotation_arc(DVec3::Y, up)
                 * glam::DQuat::from_rotation_y(inst.yaw);
+            // over the last part of its range the mesh shrinks away while its impostor dithers in
+            let d = (DVec3::from_array(inst.pos) - view.cam).length();
+            let fade = 1.0
+                - ((d - inst.range * crate::planet_scatter::XFADE)
+                    / (inst.range * (1.0 - crate::planet_scatter::XFADE)).max(1e-3))
+                .clamp(0.0, 1.0);
+            let fade = fade * fade * (3.0 - 2.0 * fade);
+            if fade < 0.02 {
+                continue;
+            }
             let mut it = DrawItem::lit(
                 key,
                 DVec3::from_array(inst.pos) - view.cam,
                 rot,
-                inst.scale,
+                inst.scale * fade,
                 view.sun,
             );
             it.ambient = 0.3;

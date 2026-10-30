@@ -108,6 +108,8 @@ pub struct Far {
     pub layer: f32,
     pub frames: f32,
     pub colour: [f32; 3],
+    /// Its item's mesh range (m): the impostor dithers in from `XFADE` of it to all of it.
+    pub near: f32,
 }
 
 /// Impostors are drawn out to this distance (m), at most this many.
@@ -266,7 +268,12 @@ pub struct Instance {
     pub up: V3,
     pub yaw: f64,
     pub scale: f64,
+    /// Its item's mesh range (m): over the last part of it the mesh shrinks away as its impostor fades in.
+    pub range: f64,
 }
+
+/// Props hand over from mesh to impostor between this share of their mesh range and the range itself.
+pub const XFADE: f64 = 0.85;
 
 /// Instances closer together than this many grid cells across are dropped: the renderer draws props one by one.
 pub const MAX_CELLS_ACROSS: i64 = 26;
@@ -490,6 +497,7 @@ impl ScatterFile {
                                 up,
                                 yaw: unit(h, 8) * std::f64::consts::TAU,
                                 scale: s,
+                                range,
                             },
                         ));
                     }
@@ -652,7 +660,7 @@ impl ScatterFile {
                     let rel = scale(sub(d, cam_dir), radius);
                     let (x, y) = (dot(rel, east), dot(rel, north));
                     let r2 = x * x + y * y;
-                    if r2 > range * range || r2 < near * near {
+                    if r2 > range * range || r2 < (near * XFADE).powi(2) {
                         continue;
                     }
                     let (lat, lon) = planet_lod::lat_lon(d);
@@ -715,6 +723,7 @@ impl ScatterFile {
                             imp.colour_scale[1] as f32,
                             imp.colour_scale[2] as f32,
                         ],
+                        near: near as f32,
                     });
                 }
                 offset += count;
@@ -1022,6 +1031,7 @@ mod tests {
                 layer: 0.0,
                 frames: 1.0,
                 colour: [1.0; 3],
+                near: 0.0,
             });
         }
         let out = job.finish();
