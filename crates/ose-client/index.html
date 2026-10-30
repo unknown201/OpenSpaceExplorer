@@ -71,7 +71,7 @@
     #labels .body.star::before { -webkit-mask-image: url(assets/ui/hud/ICO-Map-StarSystem-16x16.png); mask-image: url(assets/ui/hud/ICO-Map-StarSystem-16x16.png); }
     #labels .node { position: absolute; transform: translate(-50%, -50%); width: 12px; height: 12px;
       border: 2px solid #96aaff; border-radius: 50%; background: #06080f; pointer-events: auto; cursor: pointer; }
-    #node-panel { position: fixed; top: 100px; left: 50%; transform: translateX(-50%); z-index: 12; width: 280px; padding: 8px 10px; border-radius: 6px;
+    #node-panel { position: fixed; top: 160px; left: 50%; transform: translateX(-50%); z-index: 12; width: 280px; padding: 8px 10px; border-radius: 6px;
       background: #0b1020e6; border: 1px solid #2c3d63; font-size: 12px; display: none; }
     #node-panel.open { display: block; }
     #node-panel label { display: grid; grid-template-columns: 70px 1fr 70px; gap: 6px; align-items: center; margin: 4px 0; }
@@ -967,6 +967,9 @@
     #flight-hud .fh-bottom { left: calc(16 * var(--u)); bottom: calc(22 * var(--u)); transform: none; }
     #flight-hud .fh-staging { left: auto; right: calc(16 * var(--u)); bottom: calc(22 * var(--u)); }
     #flight-hud .fh-bottom .fh-core { min-width: calc(240 * var(--u)); padding: calc(6 * var(--u)) calc(8 * var(--u)); gap: calc(4 * var(--u)); }
+    /* The burn line wraps inside the box instead of widening it over the time warp. */
+    #flight-hud .fh-bottom .fh-core { max-width: calc(250 * var(--u)); }
+    #flight-hud #fh-burn.on { flex-wrap: wrap; white-space: normal; font-size: calc(11 * var(--u)); line-height: 1.25; }
     #flight-hud .fh-bottom .fh-row b { min-width: calc(70 * var(--u)); font-size: calc(16 * var(--u)); }
     #flight-hud #fh-stage-btn { font: 700 calc(26 * var(--u)) var(--hud-font); letter-spacing: 0.08em; color: #0b1a0b; background: #3fe05a; border-color: #8fff9f; padding: calc(8 * var(--u)) calc(12 * var(--u)); }
     #flight-hud #fh-stage-btn:hover { background: #6cf07f; }
