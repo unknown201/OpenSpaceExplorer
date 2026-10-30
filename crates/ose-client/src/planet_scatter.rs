@@ -1000,7 +1000,8 @@ mod tests {
         assert_eq!(expected, job.finish());
         for prop in &expected {
             let world = planet_lod::add(cam, prop.pos.map(f64::from));
-            assert!((length(world) - r).abs() < 0.001);
+            // on the flat test ground, sunk the metre far props sit below it
+            assert!((length(world) - (r - 1.0)).abs() < 0.001);
         }
         let high = scale(normalize(cam), r + FAR_RANGE_M + 10.0);
         assert!(f.place_far(&map, r, high, &[]).is_empty());
