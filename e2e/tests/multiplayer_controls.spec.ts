@@ -30,7 +30,15 @@ test("held flight controls with 30 ms added round-trip delay", async ({ page, ba
     await page.goto(baseURL!);
     await page.locator('[data-ose="player-name"]').fill("latency pilot");
     await page.locator('[data-ose="play"]').click();
-    await page.locator('[data-ose="session-join"]').first().click();
+    // A campaign of its own, as controls_direction does: the shared one's pads fill with other tests'
+    // vessels, and then Launch has nowhere to roll out to.
+    await page.locator('[data-ose="session-join"]').first().waitFor();
+    if (!(await page.locator("#create-name").isVisible())) {
+      await page.locator("#create-details > summary").click();
+    }
+    await page.selectOption("#create-mode", "Sandbox");
+    await page.fill("#create-name", `latency controls ${testInfo.project.name}`);
+    await page.locator('[data-ose="create"]').click();
     await page.locator('[data-ose="ksc-vab"]').first().click();
     await page.locator('[data-ose="vab-clear"]').click();
     for (const part of ["Tin Can", "FL-T200", "LV-T45"]) {
