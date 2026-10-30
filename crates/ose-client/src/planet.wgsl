@@ -1079,6 +1079,27 @@ fn fs_terrain(in: VOut) -> @location(0) vec4<f32> {
     if surface.poles.x > 0.5 && pu.w > 0.0 {
         albedo = mix(albedo, textureSampleGrad(pole_albedo_tex, equi_samp, pu.uv, pu.dx, pu.dy).rgb, pu.w);
     }
+    // Land the scaled albedo paints as sea (its coastline is coarser than the terrain's, and the KSC campus ground
+    // stands out into the bay there): the nearest land colour round it instead, from two rings of samples.
+    if frame.water.y > 0.5 && in.height > 0.5 {
+        let seaness = smoothstep(-0.015, 0.015, albedo.b - 0.5 * albedo.g);
+        if seaness > 0.01 {
+            let texel = 1.0 / vec2<f32>(textureDimensions(albedo_tex));
+            var sum = vec3<f32>(0.0);
+            var wsum = 0.0;
+            for (var k = 0; k < 16; k = k + 1) {
+                let a = f32(k) * 0.7854 + select(0.0, 0.39, k >= 8);
+                let r = select(4.0, 10.0, k >= 8);
+                let c = textureSampleLevel(albedo_tex, equi_samp, uv + vec2<f32>(cos(a), sin(a)) * r * texel, 0.0).rgb;
+                let w = 1.0 - smoothstep(-0.015, 0.015, c.b - 0.5 * c.g);
+                sum = sum + c * w;
+                wsum = wsum + w;
+            }
+            if wsum > 0.05 {
+                albedo = mix(albedo, sum / wsum, seaness * smoothstep(0.5, 3.0, in.height));
+            }
+        }
+    }
 
     // The scaled normal map (far): perturb in the east/north/up frame.
     if surface.flags.y > 0.5 {
