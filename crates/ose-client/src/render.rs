@@ -312,8 +312,10 @@ fn fs_mesh(in: VsOut) -> @location(0) vec4<f32> {
     // lit hall) keeps the half-measure.
     let shaded_in = lit * (1.0 - metal * 0.5) + spec_col * spec;
     // Mid-grey metal maps (KSP2's tower averages 0.54) mean bare steel: stretched so its diffuse nearly goes.
-    let m_true = clamp(metal_map * 1.6, 0.0, 1.0);
-    let shaded_out = lit * (1.0 - m_true) + base.rgb * m_true * ambient * 0.35 + spec_col * spec;
+    // The environment a bare steel lattice reflects is mostly dim (shadowed girders, ground): KSP2's tower reads
+    // about 60 sRGB in Josh's pad shot, and our outdoor tone curve lifts whatever is left.
+    let m_true = clamp(metal_map * 2.0, 0.0, 1.0);
+    let shaded_out = lit * (1.0 - m_true) + base.rgb * m_true * ambient * 0.12 + spec_col * spec;
     let shaded = select(shaded_in, shaded_out, true_metal);
     // Local lamps (craft lights): falloff with distance over their range, a soft cone for spots.
     var lamps = vec3<f32>(0.0);
