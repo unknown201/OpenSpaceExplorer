@@ -21,8 +21,9 @@ Ranked by how much it changes what the player sees:
 | R4 | Flight | Top right: Kerbal portrait with a G-FORCE gauge and a small VESSEL-RESOURCES window (EC, MP bars) | portrait only; resources in an app window | done (56eb370) |
 | R5 | Flight | Staging: Δv and the stage's resources (CH4, Ox bars) over a big GO button with the stage count | stage cards, stats, big STAGE | done (0ee1ab0) |
 | R6 | VAB | Part cards with a size badge (SM/MD/LG) and a favourite star; trash bin under the picker; tool bar of icons; undo/redo at the top left of the hall; launch box with the site above and Δv | text size chips, star only on favourites, text tool bar, undo in the bar, Launch top right | done (8a24b50, 69cc00e, 6b17c92) |
-| R7 | VAB | Part info panel beside the picker (stats list, Shift for more) | hover tooltip | open |
+| R7 | VAB | Part info panel beside the picker (stats list, Shift for more) | hover tooltip | done (901894c) |
 | R8 | Flight | RECOVERABLE tab at the top centre when the vessel can be recovered | Recover button under the altimeter | done (062b626) |
+| R9 | Burn timer: Δv left draining while the engines fly the node, why a burn stopped; experiment status: paused and why, why one could not start | protocols 55 and 56 shown in the burn row and the running experiments line, with notices | done (292bead and after) |
 
 ## 1. KSP2's default keyboard and mouse bindings
 
