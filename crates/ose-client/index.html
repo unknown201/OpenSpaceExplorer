@@ -998,6 +998,9 @@
     #flight-hud #fh-stage-res .sr-bar i { display: block; height: 100%; background: #3fe05a; }
     #flight-hud #fh-stage-res b { text-align: right; font-weight: 600; }
     #flight-hud .fh-staging #fh-ec { display: none; } /* shown in VESSEL-RESOURCES */
+    /* The burn timer: the delta-v still to go drains a blue bar; red when the burn stopped short. */
+    #flight-hud #fh-burn.burning { background: linear-gradient(90deg, #2f5fbf var(--p, 100%), transparent var(--p, 100%)); color: #fff; border-radius: 3px; padding: 1px 6px; }
+    #flight-hud #fh-burn.stopped { color: #ff8a6a; }
     /* ORBITAL.INFO: Ap over Pe, each with its countdown, as the original's two lines. */
     #flight-hud .fh-bottom .fh-orbit { display: grid; grid-template-columns: auto 1fr auto; gap: 0 calc(8 * var(--u)); justify-items: start; }
     #flight-hud .fh-spd, #flight-hud .fh-alt { position: absolute; top: 50%; transform: translateY(-50%); min-width: calc(110 * var(--u)); background: #10141bf0; border: 2px solid; border-radius: calc(4 * var(--u)); padding: calc(2 * var(--u)) calc(8 * var(--u)); text-align: right; }

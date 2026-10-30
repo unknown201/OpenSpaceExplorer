@@ -10049,13 +10049,50 @@ impl App {
                 Some(n) => {
                     let dv = (n.prograde_mps.powi(2) + n.normal_mps.powi(2) + n.radial_mps.powi(2))
                         .sqrt();
+                    // Full thrust of the stage that will burn: from the throttle when it is up, else the
+                    // stage readout (the engines fly the node by themselves since protocol 55).
                     let full = if f.throttle > 0.01 {
                         f.thrust_kn / f.throttle
                     } else {
-                        0.0
+                        // stages fire from the highest index down: the first left with engines burns next
+                        f.stage_list
+                            .iter()
+                            .filter(|s| s.thrust_kn > 0.0)
+                            .max_by_key(|s| s.stage_id)
+                            .map(|s| s.thrust_kn)
+                            .unwrap_or(0.0)
                     };
-                    el.set_text_content(Some(&hud::burn_text(n.ut - ut, dv, f.mass_t, full)));
+                    // Under way (protocol 55 flies nodes with the engines): the delta-v still to go and a
+                    // bar that drains, as the original's burn timer; a burn that stopped short says why.
+                    let text = match (f.burn_left_mps, f.burn_stopped.as_deref()) {
+                        (Some(left), _) => format!(
+                            "BURNING \u{b7} \u{394}v left {:.1} of {:.0} m/s",
+                            left.max(0.0),
+                            dv
+                        ),
+                        (None, Some(why)) => format!("Burn stopped: {why}"),
+                        _ => hud::burn_text(n.ut - ut, dv, f.mass_t, full),
+                    };
+                    el.set_text_content(Some(&text));
                     el.class_list().add_1("on").ok();
+                    el.class_list()
+                        .toggle_with_force("burning", f.burn_left_mps.is_some())
+                        .ok();
+                    el.class_list()
+                        .toggle_with_force(
+                            "stopped",
+                            f.burn_left_mps.is_none() && f.burn_stopped.is_some(),
+                        )
+                        .ok();
+                    if let Some(h) = el.dyn_ref::<HtmlElement>() {
+                        let left = f.burn_left_mps.map(f64::from).unwrap_or(dv);
+                        let pct = if dv > 0.0 {
+                            (left / dv).clamp(0.0, 1.0) * 100.0
+                        } else {
+                            0.0
+                        };
+                        h.style().set_property("--p", &format!("{pct:.1}%")).ok();
+                    }
                 }
                 None => {
                     el.class_list().remove_1("on").ok();
@@ -11441,6 +11478,23 @@ impl App {
         true
     }
 
+    /// A node the engines have flown (its time passed, no burn under way and none stopped short) is done:
+    /// the next one is edited, or the last goes, as the original removes a completed node.
+    fn node_tick(&mut self) {
+        let Some(node) = self.node else { return };
+        let ut = self.time.ut_at(now_ms());
+        let f = self
+            .scene
+            .as_ref()
+            .and_then(|s| s.vessel(node.vessel))
+            .and_then(|v| v.flight.as_ref());
+        let burning = f.is_some_and(|f| f.burn_left_mps.is_some());
+        let stopped = f.is_some_and(|f| f.burn_stopped.is_some());
+        if ut > node.ut + 5.0 && !burning && !stopped {
+            self.delete_node();
+        }
+    }
+
     /// Delete the node being edited; the nearest other one becomes the one edited (the original's trash).
     fn delete_node(&mut self) {
         let Some(node) = self.node else { return };
@@ -11758,6 +11812,7 @@ impl App {
             set_text(&self.doc, "fps", &format!("{fps:.0} FPS"));
         }
         self.warp_to_tick(now);
+        self.node_tick();
         self.lesson_tick();
         if self.in_session && self.vab_active() {
             self.vab_report_tick(now);
@@ -12861,14 +12916,8 @@ impl App {
                 }
             }
         }
-        // Nodes whose time has passed are done (the server burned them): the next one is edited.
+        // Other nodes whose time has passed are done (the engines flew them, protocol 55).
         self.nodes.retain(|n| n.ut > ut - 5.0);
-        if self.node.is_some_and(|n| n.ut < ut - 5.0) && !self.nodes.is_empty() {
-            let k = (0..self.nodes.len())
-                .min_by(|&a, &b| self.nodes[a].ut.total_cmp(&self.nodes[b].ut))
-                .unwrap_or(0);
-            self.node = Some(self.nodes.remove(k));
-        }
         // The other planned nodes, each where the path will be at its time.
         for k in 0..8 {
             let id = format!("node-other-{k}");
