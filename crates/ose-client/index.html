@@ -980,8 +980,11 @@
     #flight-hud #fh-recoverable { display: none; margin: calc(-6 * var(--u)) calc(-24 * var(--u)) calc(4 * var(--u)); padding: calc(2 * var(--u)) calc(12 * var(--u)); background: #1d5a2a; color: #9fffb0; font: 700 calc(12 * var(--u)) var(--hud-font); letter-spacing: 0.12em; border-radius: calc(6 * var(--u)) calc(6 * var(--u)) 0 0; }
     #flight-hud #fh-recoverable.on { display: block; }
     /* The navball cluster as the original's: heading on top, speed (yellow) left and altitude (magenta) right. */
-    #flight-hud .fh-ball { position: relative; align-self: flex-end; margin: calc(34 * var(--u)) calc(104 * var(--u)) 0 calc(96 * var(--u)); }
-    #flight-hud .fh-ball canvas { display: block; }
+    #flight-hud .fh-ball { position: relative; align-self: flex-end; margin: calc(34 * var(--u)) calc(104 * var(--u)) calc(58 * var(--u)) calc(96 * var(--u)); }
+    #flight-hud .fh-ball canvas { display: block; position: relative; }
+    /* The original's bezel round the navball: heading tape, throttle arc (left), vertical speed (right). */
+    #fh-bezel { position: absolute; left: 50%; top: 50%; width: calc(340 * var(--u)); height: calc(340 * var(--u)); transform: translate(-50%, -50%); pointer-events: none; overflow: visible; font-family: var(--hud-font); }
+    #flight-hud .fh-throttle { display: none; }
     #flight-hud .fh-hdg { position: absolute; top: calc(-30 * var(--u)); left: 50%; transform: translateX(-50%); background: #10141bf0; border: 1px solid #e6ecf7aa; border-radius: calc(4 * var(--u)); padding: calc(1 * var(--u)) calc(10 * var(--u)); }
     #flight-hud .fh-hdg b { font: 700 calc(18 * var(--u)) var(--hud-font); }
     body:has(#flight-hud.open) #hud > #ut, body:has(#flight-hud.open) #hud > .warp { left: calc(50% + 56 * var(--u)) !important; }
@@ -1448,6 +1451,7 @@
     <div class="fh-bottom">
       <div class="fh-thr-col"><button id="fh-full" class="fh-thr-btn" data-ose="flight-throttle-full" title="Full throttle (Z)">&#9650;</button><div class="fh-throttle" title="Throttle: hold Shift / Ctrl, Z full, X cut"><div id="fh-throttle-fill"></div><span>THR</span><span id="fh-throttle-pct">0%</span></div><button id="fh-cut" class="fh-thr-btn" data-ose="flight-throttle-cut" title="Cut the throttle (X)">&#9660;</button></div>
       <div class="fh-ball">
+        <svg id="fh-bezel" data-ose="flight-bezel" viewBox="-170 -170 340 340" aria-hidden="true"></svg>
         <canvas id="fh-navball" data-ose="flight-navball" width="200" height="200"></canvas>
         <div class="fh-hdg" title="Heading"><b id="fh-heading">--</b></div>
         <div class="fh-spd" title="Speed; click the label to switch surface, orbit and target"><span class="fh-label" id="fh-speed-mode" data-ose="flight-speed-mode">SURFACE</span><b id="fh-speed">--</b></div>

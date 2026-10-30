@@ -11333,25 +11333,29 @@ impl App {
         };
         set_text(&self.doc, "fh-attitude", &att);
         // The heading box over the navball (the original's compass heading).
+        let heading = self.facing_pitch_heading().map(|(pitch, h)| {
+            // Pointing straight up the original reads the heading of the craft's top (180 on the
+            // pad, where rockets stand with their top to the south).
+            match self.current_nav() {
+                Some(n) if pitch > 89.5 => n.top.dot(n.east).atan2(n.top.dot(n.north)).to_degrees(),
+                _ => h,
+            }
+        });
         set_text(
             &self.doc,
             "fh-heading",
-            &self
-                .facing_pitch_heading()
-                .map(|(pitch, h)| {
-                    // Pointing straight up the original reads the heading of the craft's top (180 on the
-                    // pad, where rockets stand with their top to the south).
-                    let h = match self.current_nav() {
-                        Some(n) if pitch > 89.5 => {
-                            n.top.dot(n.east).atan2(n.top.dot(n.north)).to_degrees()
-                        }
-                        _ => h,
-                    };
-                    // 359.6 reads 000, not 360
-                    format!("{:03}\u{b0}", (h.round() as i64).rem_euclid(360))
-                })
+            &heading
+                // 359.6 reads 000, not 360
+                .map(|h| format!("{:03}\u{b0}", (h.round() as i64).rem_euclid(360)))
                 .unwrap_or_else(|| "--".into()),
         );
+        if let Some(el) = self.doc.get_element_by_id("fh-bezel") {
+            el.set_inner_html(&hud::navball_bezel_svg(
+                f.throttle,
+                f.vertical_speed_mps,
+                heading,
+            ));
+        }
         // Joint stress: worst joint load over its break limit (1 breaks), as the bar's fill and colour.
         let stress = f.joint_stress.clamp(0.0, 1.0);
         if let Some(bar) = self
