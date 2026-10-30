@@ -15,14 +15,14 @@ Ranked by how much it changes what the player sees:
 
 | # | Screen | KSP2 | Ours now | Status |
 |---|---|---|---|---|
-| R1 | Flight | Navball cluster: heading box on top, speed box (yellow, left) and altitude box (magenta, right) on the navball, throttle arc left, vertical-speed arc right, ORBITAL.INFO (Ap/Pe, T- times) under it | navball with a throttle bar; speed, Ap/Pe in a panel beside it; the altimeter is a separate box top centre | open |
-| R2 | Flight | SAS.CONTROL: a ring of mode buttons beside the navball, SAS and RCS round toggles under the navball | a 2-column grid of mode buttons, RCS in the action bar | open |
-| R3 | Flight, KSC | TIME.WARP: pause button, `T+001y,001d,00:00:29`, pips, `TIME.WARP= 1x`; group captions (GAME.VIEW, APP.BAR, SAS.CONTROL, ORBITAL.INFO) | `UT Y1 D1 04:30:30`, minus and xN buttons, pips; no captions | open |
-| R4 | Flight | Top right: Kerbal portrait with a G-FORCE gauge and a small VESSEL-RESOURCES window (EC, MP bars) | portrait only; resources in an app window | open |
-| R5 | Flight | Staging: Δv and the stage's resources (CH4, Ox bars) over a big GO button with the stage count | stage cards, stats, big STAGE | open |
-| R6 | VAB | Part cards with a size badge (SM/MD/LG) and a favourite star; trash bin under the picker; tool bar of icons; undo/redo at the top left of the hall; launch box with the site above and Δv | text size chips, star only on favourites, text tool bar, undo in the bar, Launch top right | open |
+| R1 | Flight | Navball cluster: heading box on top, speed box (yellow, left) and altitude box (magenta, right) on the navball, throttle arc left, vertical-speed arc right, ORBITAL.INFO (Ap/Pe, T- times) under it | navball with a throttle bar; speed, Ap/Pe in a panel beside it; the altimeter is a separate box top centre | done (6ed1042) |
+| R2 | Flight | SAS.CONTROL: a ring of mode buttons beside the navball, SAS and RCS round toggles under the navball | a 2-column grid of mode buttons, RCS in the action bar | done (d1d36bd) |
+| R3 | Flight, KSC | TIME.WARP: pause button, `T+001y,001d,00:00:29`, pips, `TIME.WARP= 1x`; group captions (GAME.VIEW, APP.BAR, SAS.CONTROL, ORBITAL.INFO) | `UT Y1 D1 04:30:30`, minus and xN buttons, pips; no captions | done (6ed1042) |
+| R4 | Flight | Top right: Kerbal portrait with a G-FORCE gauge and a small VESSEL-RESOURCES window (EC, MP bars) | portrait only; resources in an app window | done (56eb370) |
+| R5 | Flight | Staging: Δv and the stage's resources (CH4, Ox bars) over a big GO button with the stage count | stage cards, stats, big STAGE | done (0ee1ab0) |
+| R6 | VAB | Part cards with a size badge (SM/MD/LG) and a favourite star; trash bin under the picker; tool bar of icons; undo/redo at the top left of the hall; launch box with the site above and Δv | text size chips, star only on favourites, text tool bar, undo in the bar, Launch top right | done (8a24b50, 69cc00e, 6b17c92) |
 | R7 | VAB | Part info panel beside the picker (stats list, Shift for more) | hover tooltip | open |
-| R8 | Flight | RECOVERABLE tab at the top centre when the vessel can be recovered | Recover button under the altimeter | open |
+| R8 | Flight | RECOVERABLE tab at the top centre when the vessel can be recovered | Recover button under the altimeter | done (062b626) |
 
 ## 1. KSP2's default keyboard and mouse bindings
 
