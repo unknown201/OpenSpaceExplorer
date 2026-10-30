@@ -706,7 +706,10 @@ impl ScatterFile {
                             continue;
                         }
                     }
-                    let world = scale(d, radius + hgt);
+                    // The coarse grid served the rules; the prop itself stands on the exact ground (the grid,
+                    // 100 m between samples, left trees floating or buried on slopes and the campus banks),
+                    // sunk a metre so the drawn terrain, coarser out there, never shows under it.
+                    let world = scale(d, radius + planet_lod::ground_height(Some(map), d) - 1.0);
                     if excluded_props(exclude, world) || on_campus_lawn(map, lat, lon) {
                         continue;
                     }

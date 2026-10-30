@@ -1510,6 +1510,11 @@ struct FOut {
     @location(4) facing: vec3<f32>,
     @location(5) colour: vec3<f32>,
     @location(6) @interpolate(flat) near: f32,
+    // the camera's direction in the atlas's frame grid (fractional) and this corner of the card, so the
+    // fragment can blend the four nearest views instead of switching between them
+    @location(7) @interpolate(flat) frame_xy: vec2<f32>,
+    @location(8) corner: vec2<f32>,
+    @location(9) @interpolate(flat) frames: f32,
 };
 
 fn octa_encode(n_in: vec3<f32>) -> vec2<f32> {
@@ -1556,6 +1561,9 @@ fn vs_far(@builtin(vertex_index) vi: u32, f: FIn) -> FOut {
     let frame_xy = floor(o * (frames - 1.0) + 0.5);
     out.uv = (frame_xy + vec2<f32>(c.x, 1.0 - c.y)) / frames;
     out.uv.y = 1.0 - out.uv.y;
+    out.frame_xy = o * (frames - 1.0);
+    out.corner = vec2<f32>(c.x, 1.0 - c.y);
+    out.frames = frames;
     out.layer = i32(f.params.z + 0.5);
     out.colour = f.colour.rgb;
     out.near = f.colour.w;
@@ -1567,7 +1575,22 @@ fn fs_far(in: FOut) -> @location(0) vec4<f32> {
     // Mipmapped by the pixel footprint (the full-size atlas at a kilometre broke each tree into a few sparkling
     // texels, so the sky showed through a forest on the horizon), with the alpha raised by the mip level so the
     // averaged-down silhouettes keep their coverage.
-    let tex = textureSampleGrad(grass_tex, grass_samp, in.uv, in.layer, dpdx(in.uv), dpdy(in.uv));
+    // the four views around the camera's direction, blended, so the tree does not jump between them as the
+    // camera turns (one gradient for all four: they share the card's footprint)
+    let gx = dpdx(in.uv);
+    let gy = dpdy(in.uv);
+    let f0 = floor(in.frame_xy);
+    let ft = in.frame_xy - f0;
+    let fmax = vec2<f32>(in.frames - 1.0);
+    var tex = vec4<f32>(0.0);
+    for (var k = 0; k < 4; k = k + 1) {
+        let off = vec2<f32>(f32(k & 1), f32(k >> 1));
+        let fr = min(f0 + off, fmax);
+        var uv = (fr + in.corner) / in.frames;
+        uv.y = 1.0 - uv.y;
+        let w = mix(1.0 - ft.x, ft.x, off.x) * mix(1.0 - ft.y, ft.y, off.y);
+        tex = tex + w * textureSampleGrad(grass_tex, grass_samp, uv, in.layer, gx, gy);
+    }
     let size = vec2<f32>(textureDimensions(grass_tex));
     let fp = max(length(dpdx(in.uv) * size), length(dpdy(in.uv) * size));
     let mip = max(log2(max(fp, 1.0)), 0.0);
