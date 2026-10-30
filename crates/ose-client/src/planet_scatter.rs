@@ -91,6 +91,9 @@ pub struct Impostor {
     /// Colour scale that makes the atlas match the mesh's colour maps.
     #[serde(default = "ones")]
     pub colour_scale: [f64; 3],
+    /// Its normal atlas (object-space normal in RGB), when exported: far props are lit per pixel with it.
+    #[serde(default)]
+    pub normals: Option<String>,
 }
 
 fn ones() -> [f64; 3] {
@@ -528,6 +531,24 @@ impl ScatterFile {
         out
     }
 
+    /// The impostor array's layers: every colour atlas (`impostor_textures`, in that order), then each one's
+    /// normal atlas, or the colour atlas again where it has none (then `Far::frames` is negative and the
+    /// shader lights it flat).
+    pub fn impostor_layers(&self) -> Vec<&str> {
+        let albedo = self.impostor_textures();
+        let normal = albedo.iter().map(|t| self.impostor_normals(t).unwrap_or(t));
+        albedo.iter().copied().chain(normal).collect()
+    }
+
+    fn impostor_normals(&self, texture: &str) -> Option<&str> {
+        self.packages
+            .iter()
+            .flat_map(|p| &p.items)
+            .filter_map(|i| i.impostor.as_ref())
+            .find(|m| m.texture == texture)
+            .and_then(|m| m.normals.as_deref())
+    }
+
     /// Where an item's meshes stop and its impostors take over (m): its mesh range, or nearer when the
     /// per-item mesh cap runs out first.
     pub fn near_range(item: &Item) -> f64 {
@@ -720,7 +741,12 @@ impl ScatterFile {
                         size: (imp.size_m * s) as f32,
                         lift: (imp.offset[1] * s) as f32,
                         layer,
-                        frames: imp.frames as f32,
+                        // negative: no normal atlas, lit flat
+                        frames: if imp.normals.is_some() {
+                            imp.frames as f32
+                        } else {
+                            -(imp.frames as f32)
+                        },
                         colour: [
                             imp.colour_scale[0] as f32,
                             imp.colour_scale[1] as f32,
@@ -974,6 +1000,7 @@ mod tests {
             size_m: 4.0,
             offset: [0.0, 2.0, 0.0],
             colour_scale: [1.0; 3],
+            normals: None,
         });
         // Multiple items/packages exercise the resume cursor across item boundaries, including gaps.
         let mut second = f.packages[0].clone();

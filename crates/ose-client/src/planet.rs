@@ -1361,7 +1361,7 @@ impl PlanetRenderer {
                         self.bodies[id]
                             .scatter
                             .as_ref()
-                            .map(|f| f.impostor_textures().len())
+                            .map(|f| f.impostor_layers().len())
                             .unwrap_or(1) as u32
                     } else {
                         let key = if tex == Tex::DetailA {
@@ -1422,7 +1422,7 @@ impl PlanetRenderer {
                     }
                 }
                 Loaded::Scatter(f) => {
-                    for (i, t) in f.impostor_textures().iter().enumerate() {
+                    for (i, t) in f.impostor_layers().iter().enumerate() {
                         let url = format!("assets/{t}");
                         let inbox = inbox.clone();
                         let i = i as u32;

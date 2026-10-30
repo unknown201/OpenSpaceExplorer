@@ -144,8 +144,21 @@ def export_impostor(imps: dict, prefab_name: str, png_path: Path) -> dict | None
     except Exception:  # noqa: BLE001
         return None
     img.resize((1024, 1024)).save(png_path, optimize=True)
+    # Its normal atlas (object-space normal in RGB, depth in A): the client lights the far props per pixel with it,
+    # so a forest seen from afar keeps the shape of its crowns instead of reading as flat dark blobs.
+    normals = None
+    nrm = objs.get((texs.get("_Normals") or {}).get("m_PathID"))
+    if nrm is not None:
+        try:
+            n_img = nrm.read().image.convert("RGBA")
+            n_path = png_path.with_name(png_path.stem + "_n.png")
+            n_img.resize((1024, 1024)).save(n_path, optimize=True)
+            normals = n_path.name
+        except Exception:  # noqa: BLE001
+            normals = None
     off = colors.get("_Offset", {"r": 0.0, "g": 0.0, "b": 0.0})
     return {
+        "normals": normals,
         "frames": int(floats.get("_Frames", asset.get("HorizontalFrames", 16))),
         "hemi": bool(floats.get("_Hemi", 0.0)),
         "size_m": floats.get("_ImpostorSize", 10.0),
@@ -408,6 +421,8 @@ def export_body(ex: Exporter, bid: str, out: Path) -> dict | None:
                 imp = export_impostor(imps, node.name, out / "scatter" / f"imp_{name}.png")
                 if imp:
                     imp["texture"] = f"scatter/imp_{name}.png"
+                    if imp.get("normals"):
+                        imp["normals"] = f"scatter/{imp['normals']}"
                     # The original grades its impostors in the shader (tint, hue, saturation, brightness); here
                     # the atlas is scaled so its mean colour matches the mesh's colour maps, and the switch from
                     # mesh to impostor does not show.
