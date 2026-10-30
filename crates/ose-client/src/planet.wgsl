@@ -1515,6 +1515,10 @@ struct FOut {
     @location(7) @interpolate(flat) frame_xy: vec2<f32>,
     @location(8) corner: vec2<f32>,
     @location(9) @interpolate(flat) frames: f32,
+    // 1 when the atlas has a normal atlas (the array's second half); the prop's own east and north
+    @location(10) @interpolate(flat) lit_normals: f32,
+    @location(11) @interpolate(flat) east: vec3<f32>,
+    @location(12) @interpolate(flat) north: vec3<f32>,
 };
 
 fn octa_encode(n_in: vec3<f32>) -> vec2<f32> {
@@ -1556,7 +1560,10 @@ fn vs_far(@builtin(vertex_index) vi: u32, f: FIn) -> FOut {
     east = normalize(east);
     let north = cross(up, east);
     let d = vec3<f32>(dot(to_cam, east), dot(to_cam, up), dot(to_cam, north));
-    let frames = f.params.w;
+    let frames = abs(f.params.w);
+    out.lit_normals = select(0.0, 1.0, f.params.w > 0.0);
+    out.east = east;
+    out.north = north;
     let o = octa_encode(d) * 0.5 + 0.5;
     let frame_xy = floor(o * (frames - 1.0) + 0.5);
     out.uv = (frame_xy + vec2<f32>(c.x, 1.0 - c.y)) / frames;
@@ -1583,6 +1590,8 @@ fn fs_far(in: FOut) -> @location(0) vec4<f32> {
     let ft = in.frame_xy - f0;
     let fmax = vec2<f32>(in.frames - 1.0);
     var tex = vec4<f32>(0.0);
+    var nrm = vec3<f32>(0.0);
+    let n_layer = in.layer + i32(textureNumLayers(grass_tex)) / 2;
     for (var k = 0; k < 4; k = k + 1) {
         let off = vec2<f32>(f32(k & 1), f32(k >> 1));
         let fr = min(f0 + off, fmax);
@@ -1590,6 +1599,7 @@ fn fs_far(in: FOut) -> @location(0) vec4<f32> {
         uv.y = 1.0 - uv.y;
         let w = mix(1.0 - ft.x, ft.x, off.x) * mix(1.0 - ft.y, ft.y, off.y);
         tex = tex + w * textureSampleGrad(grass_tex, grass_samp, uv, in.layer, gx, gy);
+        nrm = nrm + w * textureSampleGrad(grass_tex, grass_samp, uv, n_layer, gx, gy).rgb;
     }
     let size = vec2<f32>(textureDimensions(grass_tex));
     let fp = max(length(dpdx(in.uv) * size), length(dpdy(in.uv) * size));
@@ -1604,7 +1614,17 @@ fn fs_far(in: FOut) -> @location(0) vec4<f32> {
     if dither > fade_in * (1.0 - smoothstep(2000.0, 2500.0, dist)) {
         discard;
     }
-    let n = normalize(in.up * 0.6 + in.facing * 0.4);
+    // the atlas's object-space normal (Unity: x east, y up, z north), stored in an sRGB array: back to its
+    // encoded value first; atlases without one keep the old flat normal
+    var n = normalize(in.up * 0.6 + in.facing * 0.4);
+    if in.lit_normals > 0.5 {
+        let enc = pow(max(nrm, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2));
+        let o = enc * 2.0 - 1.0;
+        let wn = in.east * o.x + in.up * o.y + in.north * o.z;
+        if dot(wn, wn) > 1e-4 {
+            n = normalize(wn);
+        }
+    }
     let p_km = frame.cam_km.xyz + in.rel * 0.001;
     let sun = frame.sun.xyz;
     let shade = cloud_shadow(normalize(p_km) * frame.solar.w, sun);
