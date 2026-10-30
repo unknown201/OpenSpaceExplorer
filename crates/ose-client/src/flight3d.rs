@@ -257,6 +257,11 @@ fn lamp_frame(part_id: &str) -> (DVec3, DVec3) {
     }
 }
 
+/// The sun's strength on meshes outdoors (craft, the campus) against their albedo: the original's frame is
+/// brighter than plain albedo times sunlight (its pad concrete reads near white at noon in Josh's
+/// screenshots, ours mid grey), from its exposure. The VAB and menu keep their own lighting.
+pub(crate) const SUN_GAIN: f32 = 1.35;
+
 /// The original's most common Kerbal skin colour (looks SKINCOLOR BADA55).
 pub const DEFAULT_SKIN: [u8; 3] = [0xBA, 0xDA, 0x55];
 
@@ -1232,6 +1237,7 @@ impl FlightView {
                 if gpu.has_model("ksc") {
                     let mut it = DrawItem::lit("ksc".into(), kpos - cam, krot, 1.0, sun);
                     it.ambient = 0.38;
+                    it.sun = SUN_GAIN;
                     items.push(it);
                 }
             }
@@ -1245,7 +1251,8 @@ impl FlightView {
         };
         // How much of the star the craft sees: a moon or planet in front of it dims its parts as it does the
         // ground (planet.rs, the planet thread's eclipse test).
-        let sun_share = crate::planet::eclipse_visible(pos, sun, &occluders, sun_radius_rad) as f32;
+        let sun_share =
+            crate::planet::eclipse_visible(pos, sun, &occluders, sun_radius_rad) as f32 * SUN_GAIN;
         // Air streams past opposite the surface velocity; open chutes trail into it.
         let trail = {
             let v_surf = v_rel - DVec3::new(0.0, 0.0, spin.omega()).cross(r);

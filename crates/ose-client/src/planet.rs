@@ -19,6 +19,9 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 const SHADER: &str = include_str!("planet.wgsl");
+
+/// Lifts every body's exposure towards the original's brighter frame (see `prepare`).
+const EXPOSURE_GAIN: f64 = 1.35;
 const BASE: &str = "assets/planets";
 /// The sea's deep colour from a body's `_DiffuseColor`, scaled by one factor for every body (the one that
 /// brings Kerbin's to the luminance of the shared `_DeepWaterColor` default (0, 0.34, 0.62), so darker seas
@@ -1960,10 +1963,13 @@ impl PlanetRenderer {
             .unwrap_or(0.1);
         let solar_mean = solar.iter().sum::<f64>() / 3.0 * 2.0;
         let auto = 4.12 * (0.1 / mean_albedo.max(0.01)) * (2.0 / solar_mean.max(0.1));
-        let exposure = match a.and_then(|a| a["Exposure"][0].as_f64()) {
-            Some(e) => (e * 0.1).max(2.0),
-            None => auto.clamp(4.0, 20.0),
-        };
+        // EXPOSURE_GAIN: against Josh's KSP2 screenshots our frame at the pad was 25-30 % too dark in sRGB (the
+        // sky's top band 108,135,164 against 147,176,214), the original's auto exposure lifting it further.
+        let exposure = EXPOSURE_GAIN
+            * match a.and_then(|a| a["Exposure"][0].as_f64()) {
+                Some(e) => (e * 0.1).max(2.0),
+                None => auto.clamp(4.0, 20.0),
+            };
         // Props (rocks, trees: the renderer's own lit shader, no exposure) get their sunlight scaled to what the
         // terrain receives through this exposure, so they are not darker than the ground they stand on.
         // Eased on very dark bodies (Moho's exposure is ~10): their rocks reuse bright stock textures that would

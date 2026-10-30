@@ -73,6 +73,9 @@ struct ObjectUniform {
     /// green channel with the base colour and its red channel with the accent.
     paint_a: [f32; 4],
     paint_b: [f32; 4],
+    /// The primitive's surface mode (`GpuPrimitive::surface`).
+    surface: [f32; 4],
+    surface2: [f32; 4],
 }
 
 /// Depth from the sun for the shadow map.
@@ -88,7 +91,7 @@ fn vs_shadow(@location(0) pos: vec3<f32>, @location(1) normal: vec3<f32>, @locat
 
 const SHADER: &str = r#"
 struct Camera { view_proj: mat4x4<f32>, light_count: vec4<f32>, light_pos: array<vec4<f32>, 8>, light_dir: array<vec4<f32>, 8>, light_col: array<vec4<f32>, 8>, shadow_vp: mat4x4<f32>, shadow: vec4<f32> };
-struct Object { model: mat4x4<f32>, color: vec4<f32>, light_dir: vec4<f32>, light2: vec4<f32>, params: vec4<f32>, extra: vec4<f32>, paint_a: vec4<f32>, paint_b: vec4<f32> };
+struct Object { model: mat4x4<f32>, color: vec4<f32>, light_dir: vec4<f32>, light2: vec4<f32>, params: vec4<f32>, extra: vec4<f32>, paint_a: vec4<f32>, paint_b: vec4<f32>, surface: vec4<f32>, surface2: vec4<f32> };
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(0) @binding(1) var shadow_tex: texture_depth_2d;
 @group(0) @binding(2) var shadow_samp: sampler_comparison;
@@ -124,7 +127,7 @@ fn sun_visible(world: vec3<f32>, n: vec3<f32>) -> f32 {
 @group(2) @binding(5) var paint_tex: texture_2d<f32>;
 
 struct VsIn { @location(0) pos: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv: vec2<f32> };
-struct VsOut { @builtin(position) clip: vec4<f32>, @location(0) normal: vec3<f32>, @location(1) uv: vec2<f32>, @location(2) world: vec3<f32> };
+struct VsOut { @builtin(position) clip: vec4<f32>, @location(0) normal: vec3<f32>, @location(1) uv: vec2<f32>, @location(2) world: vec3<f32>, @location(3) local: vec3<f32> };
 
 @vertex
 fn vs_mesh(in: VsIn) -> VsOut {
@@ -140,6 +143,8 @@ fn vs_mesh(in: VsIn) -> VsOut {
     out.normal = normalize((cofactor * in.normal) * sign(dot(a,cross(b,c))));
     out.uv = in.uv;
     out.world = world.xyz;
+    // The vertex in the mesh's own frame in metres (its scale applied): a fixed frame for maps tiled by position.
+    out.local = in.pos * length(object.model[0].xyz);
     return out;
 }
 
@@ -151,6 +156,25 @@ fn fs_mesh(in: VsOut) -> @location(0) vec4<f32> {
     let em = textureSample(em_tex, samp, in.uv).rgb * object.extra.x;
     let pm = textureSample(paint_tex, samp, in.uv);
     var base = mix(object.color, texel * object.color, object.params.y);
+    // Position-tiled maps (surface modes) sample with explicit gradients taken here, outside any branch:
+    // implicit-derivative samples inside the branches broke unrelated draws on Chrome's D3D backend.
+    let p_local = in.local.xz;
+    let dp_x = dpdx(p_local);
+    let dp_y = dpdy(p_local);
+    if object.surface.x > 0.5 && object.surface.x < 1.5 {
+        // KSP2's campus lawn: its grassland map at the medium scale, varied by the same map at a large and a
+        // fine scale (each relative to the map's average, its smallest mip).
+        let p = p_local;
+        let avg = max(dot(textureSampleLevel(tex, samp, vec2<f32>(0.5), 16.0).rgb, vec3<f32>(0.3, 0.5, 0.2)), 1e-3);
+        let sm = 1.0 / object.surface.y;
+        let sl = 1.0 / object.surface.z;
+        let sf = 1.0 / object.surface.w;
+        let m = textureSampleGrad(tex, samp, p * sm, dp_x * sm, dp_y * sm).rgb;
+        let l = dot(textureSampleGrad(tex, samp, p * sl, dp_x * sl, dp_y * sl).rgb, vec3<f32>(0.3, 0.5, 0.2)) / avg;
+        let f = dot(textureSampleGrad(tex, samp, p * sf, dp_x * sf, dp_y * sf).rgb, vec3<f32>(0.3, 0.5, 0.2)) / avg;
+        let vary = clamp(1.0 + (l - 1.0) * 1.8, 0.6, 1.5) * mix(1.0, f, 0.3);
+        base = vec4<f32>(m * vary * object.surface2.xyz * object.color.rgb, 1.0);
+    }
     // Vessel paint (KSP2's _PaintMaskGlossMap): green takes the base colour, red the accent.
     let painted_a = mix(base.rgb, base.rgb * object.paint_a.rgb, pm.g * object.paint_a.w);
     base = vec4<f32>(mix(painted_a, base.rgb * object.paint_b.rgb, pm.r * object.paint_b.w), base.a);
@@ -188,6 +212,29 @@ fn fs_mesh(in: VsOut) -> @location(0) vec4<f32> {
     }
     let fill = max(dot(n, normalize(object.light2.xyz)), 0.0) * object.light2.w;
     let ambient = max(object.params.w, 0.08);
+    var water = vec3<f32>(0.0);
+    let is_water = object.surface.x > 1.5;
+    if is_water {
+        // KSP2's LandBasedWater: the body colour lit like the ground, the sky colour reflected by Fresnel
+        // (with a floor for the sky's overall sheen), slow ripples and the sun's glint.
+        let t = camera.light_count.y;
+        let p = p_local;
+        let gx = 0.35 * cos(p.x * 0.31 + t * 0.8) + 0.25 * cos((p.x + p.y) * 0.53 + t * 1.3) + 0.15 * cos(p.x * 1.7 - t * 2.1);
+        let gy = 0.35 * cos(p.y * 0.27 - t * 0.7) + 0.25 * cos((p.x - p.y) * 0.47 - t * 1.1) + 0.15 * cos(p.y * 1.9 + t * 1.9);
+        let ta = normalize(cross(n0, select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 0.0, 1.0), abs(n0.x) > 0.9)));
+        let tb = cross(n0, ta);
+        // Ripples fade out with distance before they alias into bands.
+        let near = 1.0 - smoothstep(60.0, 500.0, length(in.world));
+        let nw = normalize(n0 + (ta * gx + tb * gy) * 0.06 * near);
+        let cos_v = max(dot(nw, view), 0.0);
+        let fres = 0.02 + 0.98 * pow(1.0 - cos_v, object.surface.y);
+        let day = clamp(ambient * 2.6, 0.08, 1.0);
+        let body = base.rgb * (ambient + (1.0 - ambient) * diffuse);
+        let refl = object.surface2.xyz * day * mix(0.14, 0.6, fres);
+        let hw = normalize(ldir + view);
+        let glint = pow(max(dot(nw, hw), 0.0), 2500.0) * 1.5 * diffuse;
+        water = min(body + refl + vec3<f32>(glint), vec3<f32>(0.9));
+    }
     let lit = base.rgb * min(ambient + (1.0 - ambient) * diffuse + fill, 1.6);
     // Specular from the metallic-gloss map (metal in red, smoothness in alpha): a Blinn-Phong lobe whose
     // sharpness follows smoothness, tinted by the base colour on metal.
@@ -213,7 +260,8 @@ fn fs_mesh(in: VsOut) -> @location(0) vec4<f32> {
         }
     }
     let rgb = mix(shaded + base.rgb * lamps, base.rgb, object.params.x) + em;
-    return vec4<f32>(rgb, base.a);
+    // Water is opaque (one return for every path: an early one broke unrelated draws too).
+    return select(vec4<f32>(rgb, base.a), vec4<f32>(water, 1.0), is_water);
 }
 
 struct LineIn { @location(0) pos: vec3<f32> };
@@ -245,6 +293,10 @@ struct GpuPrimitive {
     blend: bool,
     /// The material's base colour factor, multiplied into the draw colour.
     color: [f32; 4],
+    /// Surface mode from the material's extras: [0] 0 plain, 1 ground (the base map tiled by position at
+    /// [1], [2], [3] metres: KSP2's campus lawn), 2 water ([1] Fresnel power, [4..7] the sky colour it
+    /// reflects: KSP2's LandBasedWater).
+    surface: [f32; 8],
 }
 
 /// A loaded GLB: each mesh primitive uploaded once, the node instances that draw them with their flattened
@@ -319,7 +371,15 @@ struct PendingTexture {
 /// Parsed GLB before GPU upload.
 /// Vertices, indices, base-colour / normal / metallic-gloss image indices, alpha blending and base colour
 /// factor of one mesh primitive before upload.
-type CpuMesh = (Vec<Vertex>, Vec<u32>, [Option<usize>; 5], bool, [f32; 4]);
+/// (vertices, indices, textures, blend, base colour factor, surface mode: see `GpuPrimitive::surface`)
+type CpuMesh = (
+    Vec<Vertex>,
+    Vec<u32>,
+    [Option<usize>; 5],
+    bool,
+    [f32; 4],
+    [f32; 8],
+);
 type Influences = Vec<([u16; 4], [f32; 4])>;
 
 struct CpuModel {
@@ -456,6 +516,8 @@ pub struct Renderer {
     /// for other renderers that receive the shadows (the planet's terrain).
     shadow_sampler: wgpu::Sampler,
     shadow_u: ([[f32; 4]; 4], [f32; 4]),
+    /// Seconds for animated surfaces, set with the camera.
+    anim_s: f32,
     engine_fx: crate::engine_fx_gpu::EngineFxGpu,
     post: crate::fx_post::FxPost,
     /// The sun's lens flare (lens_flare.rs), drawn into the HDR scene before the post pass.
@@ -1006,6 +1068,7 @@ impl Renderer {
             shadow_on: false,
             shadow_sampler,
             shadow_u: ([[0.0; 4]; 4], [0.0; 4]),
+            anim_s: 0.0,
             engine_fx,
             post,
             view: DMat4::IDENTITY,
@@ -1190,7 +1253,7 @@ impl Renderer {
             self.pending.remove(&name);
             let mut meshes = Vec::new();
             let mut local_bounds: Vec<(Vec3, Vec3)> = Vec::new();
-            for (vertices, indices, textures, blend, color) in &cpu.meshes {
+            for (vertices, indices, textures, blend, color, surface) in &cpu.meshes {
                 let mut lo = Vec3::splat(f32::INFINITY);
                 let mut hi = Vec3::splat(f32::NEG_INFINITY);
                 for v in vertices {
@@ -1222,6 +1285,7 @@ impl Renderer {
                     bind: None,
                     blend: *blend,
                     color: *color,
+                    surface: *surface,
                 });
             }
             let mut bounds_min = Vec3::splat(f32::INFINITY);
@@ -1457,6 +1521,8 @@ impl Renderer {
     pub fn set_camera(&mut self, forward: DVec3, up: DVec3, fov_y_rad: f64, near: f64, far: f64) {
         self.camera_forward = forward.normalize();
         self.camera_up = up.normalize();
+        // Seconds for animated surfaces (water ripples), wrapped to keep f32 precision.
+        self.anim_s = ((js_sys::Date::now() / 1000.0) % 3600.0) as f32;
         let aspect = self.width as f64 / self.height.max(1) as f64;
         let view = look_to_rh(forward.normalize(), up.normalize());
         self.view = view;
@@ -1467,7 +1533,7 @@ impl Renderer {
         // (set_lights, set_shadow).
         let u = CameraUniform {
             view_proj: self.view_proj.as_mat4().to_cols_array_2d(),
-            light_count: [0.0; 4],
+            light_count: [0.0, self.anim_s, 0.0, 0.0],
             light_pos: [[0.0; 4]; MAX_LIGHTS],
             light_dir: [[0.0; 4]; MAX_LIGHTS],
             light_col: [[0.0; 4]; MAX_LIGHTS],
@@ -1534,7 +1600,7 @@ impl Renderer {
     pub fn set_lights(&mut self, lights: &[LocalLight]) {
         let mut u = CameraUniform {
             view_proj: self.view_proj.as_mat4().to_cols_array_2d(),
-            light_count: [lights.len().min(MAX_LIGHTS) as f32, 0.0, 0.0, 0.0],
+            light_count: [lights.len().min(MAX_LIGHTS) as f32, self.anim_s, 0.0, 0.0],
             light_pos: [[0.0; 4]; MAX_LIGHTS],
             light_dir: [[0.0; 4]; MAX_LIGHTS],
             light_col: [[0.0; 4]; MAX_LIGHTS],
@@ -1806,6 +1872,14 @@ impl Renderer {
                         .paint
                         .map(|p| [p.1[0], p.1[1], p.1[2], 1.0])
                         .unwrap_or([1.0, 1.0, 1.0, 0.0]),
+                    surface: {
+                        let s = model.meshes[*mesh_i].surface;
+                        [s[0], s[1], s[2], s[3]]
+                    },
+                    surface2: {
+                        let s = model.meshes[*mesh_i].surface;
+                        [s[4], s[5], s[6], s[7]]
+                    },
                 };
                 self.queue
                     .write_buffer(&self.objects[slot].0, 0, bytemuck::bytes_of(&u));
@@ -1832,6 +1906,8 @@ impl Renderer {
                 extra: [0.0; 4],
                 paint_a: [1.0, 1.0, 1.0, 0.0],
                 paint_b: [1.0, 1.0, 1.0, 0.0],
+                surface: [0.0; 4],
+                surface2: [0.0; 4],
             };
             self.queue
                 .write_buffer(&self.objects[slot].0, 0, bytemuck::bytes_of(&u));
@@ -2301,6 +2377,32 @@ fn parse_glb(bytes: &[u8]) -> Result<CpuModel, String> {
             })
             .unwrap_or([1.0; 4])
     };
+    let material_surface = |mi: usize| -> [f32; 8] {
+        let Some(m) = json["materials"].as_array().and_then(|a| a.get(mi)) else {
+            return [0.0; 8];
+        };
+        let nums = |v: &serde_json::Value| -> Vec<f32> {
+            v.as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_f64())
+                        .map(|x| x as f32)
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let g = nums(&m["extras"]["ose_ground"]);
+        if g.len() >= 3 {
+            let tint = |i: usize| g.get(i).copied().unwrap_or(1.0);
+            return [1.0, g[0], g[1], g[2], tint(3), tint(4), tint(5), 0.0];
+        }
+        let w = nums(&m["extras"]["ose_water"]);
+        if w.len() >= 4 {
+            let lin = |c: f32| srgb_to_linear(c as f64) as f32;
+            return [2.0, w[3], 0.0, 0.0, lin(w[0]), lin(w[1]), lin(w[2]), 0.0];
+        }
+        [0.0; 8]
+    };
     let material_blend = |mi: usize| -> bool {
         json["materials"]
             .as_array()
@@ -2425,7 +2527,11 @@ fn parse_glb(bytes: &[u8]) -> Result<CpuModel, String> {
                 .as_u64()
                 .map(|m| material_color(m as usize))
                 .unwrap_or([1.0; 4]);
-            cpu_meshes.push((vertices, indices, texture, blend, color));
+            let surface = prim["material"]
+                .as_u64()
+                .map(|m| material_surface(m as usize))
+                .unwrap_or([0.0; 8]);
+            cpu_meshes.push((vertices, indices, texture, blend, color, surface));
             mesh_names.push(mesh["name"].as_str().unwrap_or("").to_string());
             by_key.insert((mi, pi), cpu_meshes.len() - 1);
             primitives.push((cpu_meshes.len() - 1, world, node));
@@ -2433,7 +2539,7 @@ fn parse_glb(bytes: &[u8]) -> Result<CpuModel, String> {
     }
     let mesh_radius = json["extras"]["mesh_radius"].as_f64().unwrap_or(1.0);
     let mut image_linear = vec![false; image_uris.len()];
-    for (_, _, tex, _, _) in &cpu_meshes {
+    for (_, _, tex, _, _, _) in &cpu_meshes {
         for k in [1, 2, 4] {
             if let Some(i) = tex[k] {
                 if i < image_linear.len() {

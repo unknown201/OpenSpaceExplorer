@@ -96,7 +96,53 @@ def main() -> int:
             if uri:
                 textures[slot] = glb.image_uri("../" + uri, Path(uri).stem)
                 texture_count += 1
+        # The original's campus lawns (KSP2_ksc_grass) blend grassland maps at three world-space scales and have no
+        # plain base map; its lakes (KSP2/Environment/LandBasedWater) are a water shader. The client draws both
+        # from these extras (render.rs `surface`).
+        try:
+            shader_name = m.m_Shader.read().m_ParsedForm.m_Name if m.m_Shader else ""
+        except Exception:  # noqa: BLE001
+            shader_name = ""
+        tex_envs = dict(m.m_SavedProperties.m_TexEnvs)
+        surface_extras = None
+        if shader_name == "KSP2_ksc_grass" and "baseColor" not in textures:
+            te = tex_envs.get("_MediumDiffuse")
+            try:
+                tex = te.m_Texture.read() if te and te.m_Texture and te.m_Texture.path_id else None
+            except Exception:  # noqa: BLE001
+                tex = None
+            uri = ex.export_texture_object(tex) if tex is not None else None
+            if uri:
+                textures["baseColor"] = glb.image_uri("../" + uri, Path(uri).stem)
+                texture_count += 1
+                # Tile sizes in metres from the campus lawn's mesh: its uv unit spans about 6.4 km, and the
+                # material tiles the medium map 75 times, the large 6 times, the small one at _TileRate 1800.
+                # Then a linear tint: the grassland map alone is far darker than the lawn KSP2 shows (its
+                # shader lifts and grades it); matched to Josh's KSC screenshot.
+                surface_extras = {"ose_ground": [85.0, 1070.0, 4.0, 4.2, 4.6, 7.6]}
+        elif shader_name == "KSP2/Environment/LandBasedWater":
+            cols = dict(m.m_SavedProperties.m_Colors)
+            floats = dict(m.m_SavedProperties.m_Floats)
+            sky = cols.get("_SkyColor")
+            surface_extras = {
+                "ose_water": [
+                    sky.r if sky else 0.52,
+                    sky.g if sky else 0.72,
+                    sky.b if sky else 1.0,
+                    float(floats.get("_FresnelPower", 5.0)),
+                ]
+            }
         idx = glb.material(m.m_Name, textures)
+        if surface_extras:
+            glb.materials[idx].setdefault("extras", {}).update(surface_extras)
+            if "ose_water" in surface_extras:
+                dc = dict(m.m_SavedProperties.m_Colors).get("_DiffuseColor")
+                if dc is not None:
+                    glb.materials[idx]["pbrMetallicRoughness"]["baseColorFactor"] = [dc.r, dc.g, dc.b, 1.0]
+                materials[key] = idx
+                return idx
+            materials[key] = idx
+            return idx
         colors = dict(m.m_SavedProperties.m_Colors)
         c = colors.get("_Color")
         if c is not None and (c.r, c.g, c.b) != (1.0, 1.0, 1.0):
