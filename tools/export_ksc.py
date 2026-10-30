@@ -123,6 +123,27 @@ def main() -> int:
                 # Then a linear tint: the grassland map alone is far darker than the lawn KSP2 shows (its
                 # shader lifts and grades it); matched to Josh's KSC screenshot.
                 surface_extras = {"ose_ground": [85.0, 1070.0, 4.0, 0.9, 1.35, 1.7]}
+                # The campus ground blends KSP2's large grassland map (olive with yellow patches, 7 tiles over the
+                # 18.9 km mesh) under the medium one, which fades out past a kilometre: carried in the emissive
+                # slot, with the tiles (medium 189 m, large 2.7 km, fine 4 m) and KSP2's _GlobalColorize times
+                # _GlobalIntensity as the tint (ose_ground_large).
+                if shader_name == "KSP2/KSC/ksc_campus_vertexPaint":
+                    te_l = tex_envs.get("_LargeTexture")
+                    try:
+                        tex_l = te_l.m_Texture.read() if te_l and te_l.m_Texture and te_l.m_Texture.path_id else None
+                    except Exception:  # noqa: BLE001
+                        tex_l = None
+                    uri_l = ex.export_texture_object(tex_l) if tex_l is not None else None
+                    if uri_l:
+                        textures["emissive"] = glb.image_uri("../" + uri_l, Path(uri_l).stem)
+                        texture_count += 1
+                        cz = dict(m.m_SavedProperties.m_Colors).get("_GlobalColorize")
+                        gi = float(dict(m.m_SavedProperties.m_Floats).get("_GlobalIntensity", 1.0))
+                        tint = [cz.r * gi, cz.g * gi, cz.b * gi] if cz is not None else [1.0, 1.0, 1.0]
+                        # Through our outdoor tone curve KSP2's grade reads too yellow and bright: scaled to the
+                        # ground in Josh's KSC screenshot (109,131,89 sRGB).
+                        tint = [tint[0] * 0.40, tint[1] * 0.43, tint[2] * 0.81]
+                        surface_extras = {"ose_ground_large": [189.0, 2700.0, 4.0, *tint]}
         elif shader_name == "KSP2/Environment/LandBasedWater":
             cols = dict(m.m_SavedProperties.m_Colors)
             floats = dict(m.m_SavedProperties.m_Floats)

@@ -149,11 +149,30 @@ fn vs_mesh(in: VsIn) -> VsOut {
     return out;
 }
 
-// A water ripple's surface slope (x, y) at a point on the surface (metres) and time (s).
+// Smooth value noise (0..1) on a unit grid.
+fn vnoise(p: vec2<f32>) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    let a = fract(sin(dot(i, vec2<f32>(127.1, 311.7))) * 43758.547);
+    let b = fract(sin(dot(i + vec2<f32>(1.0, 0.0), vec2<f32>(127.1, 311.7))) * 43758.547);
+    let c = fract(sin(dot(i + vec2<f32>(0.0, 1.0), vec2<f32>(127.1, 311.7))) * 43758.547);
+    let d = fract(sin(dot(i + vec2<f32>(1.0, 1.0), vec2<f32>(127.1, 311.7))) * 43758.547);
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+// A water ripple's surface slope (x, y) at a point on the surface (metres) and time (s): the gradient of two
+// drifting octaves of value noise, with no repeating direction (regular waves banded from the air).
 fn fn_ripple(p: vec2<f32>, t: f32) -> vec2<f32> {
-    let gx = 0.35 * cos(p.x * 0.31 + t * 0.8) + 0.25 * cos((p.x + p.y) * 0.53 + t * 1.3) + 0.15 * cos(p.x * 1.7 - t * 2.1);
-    let gy = 0.35 * cos(p.y * 0.27 - t * 0.7) + 0.25 * cos((p.x - p.y) * 0.47 - t * 1.1) + 0.15 * cos(p.y * 1.9 + t * 1.9);
-    return vec2<f32>(gx, gy);
+    var g = vec2<f32>(0.0);
+    let e = 0.35;
+    for (var k = 0; k < 2; k++) {
+        let s = select(0.35, 0.9, k == 1);
+        let q = p * s + vec2<f32>(t * 0.21, -t * 0.17) * f32(k + 1);
+        let n0 = vnoise(q);
+        g += vec2<f32>(vnoise(q + vec2<f32>(e, 0.0)) - n0, vnoise(q + vec2<f32>(0.0, e)) - n0) / e * select(1.0, 0.5, k == 1);
+    }
+    return g;
 }
 
 @fragment
@@ -161,7 +180,9 @@ fn fs_mesh(in: VsOut) -> @location(0) vec4<f32> {
     let texel = textureSample(tex, samp, in.uv);
     let nm = textureSample(normal_tex, samp, in.uv);
     let mg = textureSample(mg_tex, samp, in.uv);
-    let em = textureSample(em_tex, samp, in.uv).rgb * object.extra.x;
+    // Ground mode 3 carries its large map in the emissive slot: it never glows.
+    let em_s = textureSample(em_tex, samp, in.uv).rgb;
+    let em = select(em_s * object.extra.x, vec3<f32>(0.0), object.surface.x > 2.5);
     let pm = textureSample(paint_tex, samp, in.uv);
     var base = mix(object.color, texel * object.color, object.params.y);
     // Position-tiled maps (surface modes) sample with explicit gradients taken here, outside any branch:
@@ -185,6 +206,19 @@ fn fs_mesh(in: VsOut) -> @location(0) vec4<f32> {
         let f = dot(textureSampleGrad(tex, samp, p * sf, dp_x * sf, dp_y * sf).rgb, vec3<f32>(0.3, 0.5, 0.2)) / avg;
         let vary = clamp(1.0 + (l - 1.0) * 1.8, 0.6, 1.5) * mix(1.0, f, 0.3);
         base = vec4<f32>(m * vary * object.surface2.xyz * object.color.rgb, 1.0);
+    }
+    if object.surface.x > 2.5 {
+        // KSP2's campus ground (ksc_campus_vertexPaint): the large grassland map's patches everywhere, the
+        // medium map's detail over them up close (relative to its average, its smallest mip), faded out
+        // between 250 m and 1.3 km as KSP2's _MediumTextureFade; graded by _GlobalColorize.
+        let dist = length(in.world);
+        let sm = 1.0 / object.surface.y;
+        let sl = 1.0 / object.surface.z;
+        let large = textureSampleGrad(em_tex, samp, p_local * sl, dp_x * sl, dp_y * sl).rgb;
+        let med = textureSampleGrad(tex, samp, p_local * sm, dp_x * sm, dp_y * sm).rgb;
+        let med_avg = max(textureSampleLevel(tex, samp, vec2<f32>(0.5), 16.0).rgb, vec3<f32>(1e-3));
+        let detail = mix(med / med_avg, vec3<f32>(1.0), smoothstep(250.0, 1300.0, dist));
+        base = vec4<f32>(large * detail * object.surface2.xyz * object.color.rgb, 1.0);
     }
     // Vessel paint (KSP2's _PaintMaskGlossMap): green takes the base colour, red the accent.
     let painted_a = mix(base.rgb, base.rgb * object.paint_a.rgb, pm.g * object.paint_a.w);
@@ -224,7 +258,7 @@ fn fs_mesh(in: VsOut) -> @location(0) vec4<f32> {
     let fill = max(dot(n, normalize(object.light2.xyz)), 0.0) * object.light2.w;
     let ambient = max(object.params.w, 0.08);
     var water = vec3<f32>(0.0);
-    let is_water = object.surface.x > 1.5;
+    let is_water = object.surface.x > 1.5 && object.surface.x < 2.5;
     if is_water {
         // KSP2's LandBasedWater: the body colour lit like the ground, the sky colour reflected by Fresnel
         // (with a floor for the sky's overall sheen), slow ripples and the sun's glint.
@@ -2500,6 +2534,11 @@ fn parse_glb(bytes: &[u8]) -> Result<CpuModel, String> {
         let metal = m["pbrMetallicRoughness"]["metallicFactor"]
             .as_f64()
             .unwrap_or(1.0) as f32;
+        // Ground with KSP2's large grassland map in the emissive slot: mode 3.
+        let gl = nums(&m["extras"]["ose_ground_large"]);
+        if gl.len() >= 6 {
+            return [3.0, gl[0], gl[1], gl[2], gl[3], gl[4], gl[5], metal];
+        }
         let g = nums(&m["extras"]["ose_ground"]);
         if g.len() >= 3 {
             let tint = |i: usize| g.get(i).copied().unwrap_or(1.0);
