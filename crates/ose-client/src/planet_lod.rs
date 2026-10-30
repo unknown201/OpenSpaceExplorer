@@ -425,6 +425,18 @@ pub fn build_quad(q: &QuadKey, radius: f64, ocean: bool, height: &dyn Fn(V3) -> 
     }
 }
 
+/// Ground height for a direction from a `TerrainMap` (no map: the sphere): the terrain, or a site model's own
+/// ground (the KSC campus) where that is higher. What props and vessels stand on.
+pub fn ground_height(map: Option<&TerrainMap>, d: V3) -> f64 {
+    match map {
+        Some(m) => {
+            let (lat, lon) = lat_lon(d);
+            m.height_m(lat, lon)
+        }
+        None => 0.0,
+    }
+}
+
 /// Terrain height for a direction from a `TerrainMap` (no map: the sphere). The terrain alone: a site model's
 /// own ground (the KSC campus) is drawn by that model, over the terrain where it is higher.
 pub fn map_height(map: Option<&TerrainMap>, d: V3) -> f64 {

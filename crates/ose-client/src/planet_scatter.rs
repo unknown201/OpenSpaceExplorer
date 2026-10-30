@@ -222,7 +222,7 @@ fn excluded_props(ex: &[Exclusion], p: V3) -> bool {
     ex.iter().any(|e| e.props && e.contains(p))
 }
 
-/// On a launch pad's island in a site model (the KSC campus): within 650 m of a pad, on the model's own
+/// On a launch pad's island in a site model (the KSC campus): within 480 m of a pad, on the model's own
 /// ground where it is above the terrain and level over 100 m. The original keeps those lawns clear inside their
 /// lake ring and grows its trees on the banks and the campus around.
 fn on_campus_lawn(map: &TerrainMap, lat: f64, lon: f64) -> bool {
@@ -233,7 +233,7 @@ fn on_campus_lawn(map: &TerrainMap, lat: f64, lon: f64) -> bool {
         let (p1, p2) = (lat.to_radians(), f.lat_deg.to_radians());
         let dlon = (lon - f.lon_deg).to_radians();
         let a = ((p2 - p1) / 2.0).sin().powi(2) + p1.cos() * p2.cos() * (dlon / 2.0).sin().powi(2);
-        2.0 * map.body_radius_m * a.sqrt().min(1.0).asin() < 650.0
+        2.0 * map.body_radius_m * a.sqrt().min(1.0).asin() < 480.0
     });
     if !near_pad {
         return false;
@@ -364,7 +364,7 @@ impl ScatterFile {
         let cam_dir = normalize(cam);
         let (face, ca, cb) = planet_lod::face_ab(cam_dir);
         let metres_per_unit = radius * std::f64::consts::FRAC_PI_4;
-        let height = |d: V3| planet_lod::map_height(Some(map), d);
+        let height = |d: V3| planet_lod::ground_height(Some(map), d);
         // height above the ground under the camera
         let cam_alt = length(cam) - radius - height(cam_dir);
         let mut model = 0usize;
@@ -565,7 +565,7 @@ impl ScatterFile {
         let (cam, radius) = (job.origin, job.radius);
         let textures = self.impostor_textures();
         let cam_dir = normalize(cam);
-        let height = |d: V3| planet_lod::map_height(Some(map), d);
+        let height = |d: V3| planet_lod::ground_height(Some(map), d);
         if !job.checked {
             budget -= 1;
             if textures.is_empty() || length(cam) - radius - height(cam_dir) > FAR_RANGE_M {
@@ -749,7 +749,7 @@ impl ScatterFile {
     ) -> Vec<Grass> {
         let textures = self.grass_textures();
         let cam_dir = normalize(cam);
-        let height = |d: V3| planet_lod::map_height(Some(map), d);
+        let height = |d: V3| planet_lod::ground_height(Some(map), d);
         let ground = height(cam_dir);
         if length(cam) - radius - ground > GRASS_RANGE_M * 0.8 || textures.is_empty() {
             return Vec::new();
