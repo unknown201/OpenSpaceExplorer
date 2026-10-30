@@ -525,11 +525,14 @@ fn through_air(radiance: vec3<f32>, p: vec3<f32>) -> vec3<f32> {
         return radiance;
     }
     let s = sky_to_point(frame.cam_km.xyz, p, frame.sun.xyz);
-    // From high up the original's haze over the ground is stronger and bluer than the LUT's: Josh's shot at
-    // 89 km measures land 137, 186, 200 and sea 120, 169, 226, so the in-scatter rises to 130 % as the camera
-    // climbs from 10 to 40 km.
+    // From high up the original's haze over the ground differs from the LUT's by body: over Kerbin it is
+    // stronger and bluer (Josh's shot at 89 km measures land 137, 186, 200 and sea 120, 169, 226: 130 %), over
+    // Duna much lighter (its official orbit shot is a crisp, deep red with pale canyons: 40 %). Between the two
+    // by how blue the air scatters (Rayleigh blue over red: Kerbin 5.7, Laythe 3.1, Eve 3.2, Duna 0.2), as the
+    // camera climbs from 10 to 40 km.
     let alt_km = length(frame.cam_km.xyz) - bottom_r();
-    let haze = 1.0 + 0.3 * smoothstep(10.0, 40.0, alt_km);
+    let blue = clamp((frame.rayleigh.z / max(frame.rayleigh.x, 1e-6) - 1.0) / 4.0, 0.0, 1.0);
+    let haze = 1.0 + (mix(0.4, 1.3, blue) - 1.0) * smoothstep(10.0, 40.0, alt_km);
     // an eclipse dims the sunlit air too
     return radiance * s.transmittance + s.radiance * haze * eclipse(frame.cam_km.xyz, frame.sun.xyz);
 }
