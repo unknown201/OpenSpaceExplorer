@@ -891,6 +891,51 @@ impl FlightView {
         Some((krot.inverse() * d).normalize_or_zero())
     }
 
+    /// Kerbin behind the KSC screen: the planet renderer prepared for a camera at `cam_local` in the campus
+    /// frame (metres, glTF axes) with the sun along `sun_local`. Returns the campus's rotation into the planet's
+    /// model frame and the vegetation and rocks around, once the planet is ready to draw; the planet itself
+    /// is `ksc_planet_pass`.
+    pub fn ksc_planet(
+        &mut self,
+        gpu: &mut Renderer,
+        body_radius: f64,
+        cam_local: DVec3,
+        sun_local: DVec3,
+        now_ms: f64,
+    ) -> Option<(DQuat, Vec<DrawItem>)> {
+        let (kpos, krot) = self.ksc_pose(body_radius)?;
+        let cam = kpos + krot * cam_local;
+        let sun = (krot * sun_local).normalize_or_zero();
+        let ex = self.ksc_exclusions(kpos, krot);
+        let planet = self
+            .planet
+            .get_or_insert_with(|| crate::planet::PlanetRenderer::new(gpu));
+        if !ex.is_empty() {
+            planet.set_exclusions(ex);
+        }
+        let view = crate::planet::PlanetView {
+            body_id: "Kerbin",
+            radius_m: body_radius,
+            cam,
+            sun,
+            time_s: now_ms / 1000.0,
+            occluders: &[],
+            sun_radius_rad: 0.0047,
+        };
+        if !planet.prepare(gpu, &view) {
+            return None;
+        }
+        let items = planet.scatter_items(gpu, &view);
+        Some((krot, items))
+    }
+
+    /// The planet pass for the KSC screen, after `ksc_planet` returned it ready.
+    pub fn ksc_planet_pass(&self) -> Option<&dyn crate::render::ExtraPass> {
+        self.planet
+            .as_ref()
+            .map(|p| p as &dyn crate::render::ExtraPass)
+    }
+
     /// Draw the flight scene; returns the vessel's altitude above the sphere for the HUD.
     pub fn frame(&mut self, gpu: &mut Renderer, inp: &FlightInput) -> bool {
         let spin = inp.spin.unwrap_or_else(|| {

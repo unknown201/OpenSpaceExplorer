@@ -11776,7 +11776,23 @@ impl App {
                         ut,
                     )
                 });
-                if self.ksc3d.frame(gpu, sun) {
+                // Kerbin itself around the campus (terrain, rivers, sea, sky, clouds) once its planet is ready.
+                let kerbin_r = self
+                    .scene
+                    .as_ref()
+                    .and_then(|scene| scene.index_of("Kerbin").map(|k| scene.bodies[k].radius_m));
+                let backdrop = sun.zip(kerbin_r).and_then(|(s, r)| {
+                    self.flight3d
+                        .ksc_planet(gpu, r, self.ksc3d.camera_local(), s, now_ms())
+                });
+                let drawn = match backdrop {
+                    Some((rot, scatter)) => match self.flight3d.ksc_planet_pass() {
+                        Some(pass) => self.ksc3d.frame_over(gpu, sun, Some((rot, scatter, pass))),
+                        None => self.ksc3d.frame(gpu, sun),
+                    },
+                    None => self.ksc3d.frame(gpu, sun),
+                };
+                if drawn {
                     if !was_ready {
                         self.gpu_canvas
                             .set_attribute("data-ose-ksc-scene", "ready")

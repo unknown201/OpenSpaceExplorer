@@ -102,6 +102,8 @@ pub struct KscView {
     fov_rad: f64,
     /// Last camera pose used for a frame (position, forward, up) so picks match what is shown.
     cam_pos: DVec3,
+    /// The campus frame's rotation into the drawn frame (the planet's model frame over Kerbin, else none).
+    view_rot: DQuat,
     /// Facility index under the pointer.
     pub hovered: Option<usize>,
     /// Where the camera glides to (look-at point and distance): a facility, or back to the scene's own view.
@@ -128,6 +130,7 @@ impl KscView {
             distance: 1000.0,
             fov_rad: 60f64.to_radians(),
             cam_pos: DVec3::ZERO,
+            view_rot: DQuat::IDENTITY,
             hovered: None,
             goal: None,
             home: None,
@@ -238,6 +241,12 @@ impl KscView {
         best.map(|(_, i)| i)
     }
 
+    /// The campus's position relative to the camera for the planet renderer: the camera's position in the
+    /// campus frame (metres, glTF axes, set by the last `frame`).
+    pub fn camera_local(&self) -> DVec3 {
+        self.camera().0
+    }
+
     /// Screen position of the top centre of a facility's box, for its tooltip.
     pub fn label_anchor(&self, gpu: &Renderer, i: usize) -> Option<(f64, f64)> {
         let b = self.scene.as_ref()?.buildings.get(i)?;
@@ -246,13 +255,24 @@ impl KscView {
             b.max[1],
             (b.min[2] + b.max[2]) * 0.5,
         );
-        gpu.project(top - self.cam_pos)
+        gpu.project(self.view_rot * (top - self.cam_pos))
     }
 
     /// Draw the campus. Returns false while the scene is not loaded yet.
     /// Draw the campus lit from `sun` (direction to the sun in the campus frame; `None` keeps a fixed
     /// afternoon light).
     pub fn frame(&mut self, gpu: &mut Renderer, sun: Option<DVec3>) -> bool {
+        self.frame_over(gpu, sun, None)
+    }
+
+    /// Draw the campus, over Kerbin when `planet` is given: the campus's rotation into the planet's model
+    /// frame, the planet's own draw items (vegetation, rocks) and its pass (terrain, water, sky, clouds).
+    pub fn frame_over(
+        &mut self,
+        gpu: &mut Renderer,
+        sun: Option<DVec3>,
+        planet: Option<(DQuat, Vec<DrawItem>, &dyn crate::render::ExtraPass)>,
+    ) -> bool {
         if !self.requested {
             self.start_fetch();
         }
@@ -274,7 +294,10 @@ impl KscView {
         };
         let (pos, forward, up) = self.camera();
         self.cam_pos = pos;
-        gpu.set_camera(forward, up, self.fov_rad, 1.0, 80_000.0);
+        // Over the planet the frame is the planet's: the campus turned by its pose.
+        let rot = planet.as_ref().map(|p| p.0).unwrap_or(DQuat::IDENTITY);
+        self.view_rot = rot;
+        gpu.set_camera(rot * forward, rot * up, self.fov_rad, 1.0, 80_000.0);
         gpu.request_model("ksc", &format!("assets/{}", scene.file));
         // Day and night as the original's time-of-day: the sun's height sets the sky and the ambient light;
         // at night a dim moonlight from overhead keeps the campus readable.
@@ -289,15 +312,15 @@ impl KscView {
         // Buildings, the tower and the dish cast the sun's shadows over the campus around the view.
         if elev > 0.0 {
             gpu.set_shadow(
-                self.look_at - pos,
+                rot * (self.look_at - pos),
                 (self.distance * 1.2).clamp(300.0, 3_000.0),
                 1_500.0,
-                sun,
+                rot * sun,
             );
         }
         let mut items = Vec::new();
         if gpu.has_model("ksc") {
-            let mut item = DrawItem::lit("ksc".into(), -pos, DQuat::IDENTITY, 1.0, light);
+            let mut item = DrawItem::lit("ksc".into(), rot * -pos, rot, 1.0, rot * light);
             item.ambient = (0.12 + 0.26 * day) as f32;
             // The campus lights (windows, floodlights: the original's emissive maps) come on at dusk.
             item.glow = (1.0 - day) as f32;
@@ -357,15 +380,38 @@ impl KscView {
                 ];
                 for (k, pts) in strips.into_iter().enumerate() {
                     lines.push(LineItem {
-                        key: format!("ksc-outline:{}:{k}", b.facility),
-                        points_km: pts,
-                        rel_origin_km: -pos,
+                        key: format!(
+                            "ksc-outline:{}:{k}:{}",
+                            b.facility,
+                            u8::from(planet.is_some())
+                        ),
+                        points_km: pts.into_iter().map(|p| rot * p).collect(),
+                        rel_origin_km: rot * -pos,
                         color: [0.6, 0.95, 1.0, 0.9],
                     });
                 }
             }
         }
-        gpu.frame("assets/ksc/", &items, &lines, sky);
+        match planet {
+            Some((_, scatter, pass)) => {
+                // Kerbin's terrain replaces the campus's flat ground plane and far stand-in, and its sky the
+                // plain backdrop.
+                gpu.hide_meshes("ksc", &["ground", "KSCmain_LOD"]);
+                items.extend(scatter);
+                gpu.frame_with_effects(
+                    "assets/ksc/",
+                    &items,
+                    &lines,
+                    sky,
+                    crate::render::FrameEffects {
+                        camera: DVec3::ZERO,
+                        engines: &[],
+                        extra: Some(pass),
+                    },
+                );
+            }
+            None => gpu.frame("assets/ksc/", &items, &lines, sky),
+        }
         true
     }
 }
