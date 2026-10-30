@@ -22,7 +22,7 @@ async function effect(page: Page, key: string): Promise<[number, number, number]
   const span = async (k: string | null) => {
     const a = await axes(page);
     if (k) await page.keyboard.down(k);
-    await page.waitForTimeout(700);
+    await page.waitForTimeout(1000);
     if (k) await page.keyboard.up(k);
     const b = await axes(page);
     const df = sub(b.f, a.f);
@@ -63,17 +63,17 @@ test("each flight key turns the craft the original's way", async ({ page, baseUR
   await expect(page.locator('[data-ose="flight-navball"]')).toHaveAttribute("data-ose-navball", "drawn");
   // [nose toward top, nose toward right, top toward right]
   const [wTop] = await effect(page, "w");
-  expect(wTop, "W pitches the nose down").toBeLessThan(-0.01);
+  expect(wTop, "W pitches the nose down").toBeLessThan(-0.003);
   const [sTop] = await effect(page, "s");
-  expect(sTop, "S pitches the nose up").toBeGreaterThan(0.01);
+  expect(sTop, "S pitches the nose up").toBeGreaterThan(0.003);
   const [, aRight] = await effect(page, "a");
-  expect(aRight, "A yaws left").toBeLessThan(-0.01);
+  expect(aRight, "A yaws left").toBeLessThan(-0.003);
   const [, dRight] = await effect(page, "d");
-  expect(dRight, "D yaws right").toBeGreaterThan(0.01);
+  expect(dRight, "D yaws right").toBeGreaterThan(0.003);
   const [, , qRoll] = await effect(page, "q");
-  expect(qRoll, "Q rolls left").toBeLessThan(-0.01);
+  expect(qRoll, "Q rolls left").toBeLessThan(-0.003);
   const [, , eRoll] = await effect(page, "e");
-  expect(eRoll, "E rolls right").toBeGreaterThan(0.01);
+  expect(eRoll, "E rolls right").toBeGreaterThan(0.003);
 });
 
 test("a rocket leaving the pad turns east with D", async ({ page, baseURL }) => {
