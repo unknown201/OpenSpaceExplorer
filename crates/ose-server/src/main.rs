@@ -1130,6 +1130,15 @@ fn flight_readout(
         }),
         burn_left_mps: u.burn_left(e).map(|d| d.length() as f32),
         burn_stopped: u.burn_stopped(e).map(String::from),
+        engines_off: u
+            .structure(e)
+            .map(|st| {
+                (0..st.engine_shutdown.len())
+                    .filter(|&i| st.engine_shutdown[i] && st.rigid.present[i])
+                    .map(|i| i as u16)
+                    .collect()
+            })
+            .unwrap_or_default(),
         // filled in by `vessels_message`, which knows the vessel ids
         on_ladder: None,
         boarding: u.boarding(e).is_some(),
@@ -3650,6 +3659,26 @@ async fn session(mut socket: WebSocket, s: AppState) {
                                     let to: Vec<usize> = to.iter().map(|&i| i as usize).collect();
                                     let r = s.universe.lock().expect("sim lock").transfer_resource(e, &resource, &from, &to);
                                     ServerMessage::FlightAck { vessel, accepted: r.is_ok(), reason: r.err().map(String::from) }
+                                }
+                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
+                            };
+                            if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::SetPartActions { vessel, part, actions }) => {
+                            let reply = match owned_vessel(&s, vessel, player_id) {
+                                Some(e) => {
+                                    let r = s.universe.lock().expect("sim lock").set_part_actions(e, part as usize, actions);
+                                    ServerMessage::FlightAck { vessel, accepted: r.is_ok(), reason: r.err().map(String::from) }
+                                }
+                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
+                            };
+                            if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::PartAction { vessel, part, action, on }) => {
+                            let reply = match owned_vessel(&s, vessel, player_id) {
+                                Some(e) => {
+                                    let ok = s.universe.lock().expect("sim lock").part_action(e, part as usize, &action, on);
+                                    ServerMessage::FlightAck { vessel, accepted: ok, reason: (!ok).then(|| "that part has no such action".into()) }
                                 }
                                 None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
                             };

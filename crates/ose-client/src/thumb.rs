@@ -142,6 +142,7 @@ mod tests {
 
     fn part(part_id: &str, parent: Option<usize>, pos: DVec3, stage: i32) -> CraftPart {
         CraftPart {
+            actions: Vec::new(),
             flight: None,
             colors: None,
             guid: part_id.into(),

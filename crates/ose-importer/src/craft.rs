@@ -154,6 +154,7 @@ pub fn craft_from_value(v: &Value) -> anyhow::Result<Craft> {
             None => (None, None, None),
         };
         parts.push(CraftPart {
+            actions: Vec::new(),
             flight: ps["isMirrored"].as_bool().unwrap_or(false).then(|| {
                 ose_data::flight_geometry::PartFlight {
                     part_id: s(p, "partName"),

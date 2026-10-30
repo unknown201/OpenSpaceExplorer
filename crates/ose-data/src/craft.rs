@@ -67,6 +67,22 @@ pub struct CraftPart {
     pub colors: Option<Paint>,
     #[serde(default)]
     pub flight: Option<crate::flight_geometry::PartFlight>,
+    /// The part's actions bound to action groups (`Data_ModuleActions.customActionMappings`): action key
+    /// (see `ACTIONS`) and the groups as the original's `KSPActionGroup` bits (Gear 2, Lights 4, RCS 8,
+    /// SAS 0x10, Brakes 0x20, Abort 0x40, SolarPanels 0x80, Custom01 0x10000 .. Custom10 0x2000000).
+    #[serde(default)]
+    pub actions: Vec<(String, u32)>,
+}
+
+/// The part actions a group can run: on with the group on, off with it off.
+/// `engine`: the engine runs or is shut down; `deploy`: panels, antennas, gear and bays extend or retract;
+/// `chute`: parachutes arm (on only); `converter`: converters run or stop; `fairing`: the fairing comes
+/// off (on only).
+pub const ACTIONS: [&str; 5] = ["engine", "deploy", "chute", "converter", "fairing"];
+
+/// The `KSPActionGroup` bit of custom group `n` (1..10).
+pub fn custom_group_bit(n: u8) -> u32 {
+    0x10000u32 << (n.clamp(1, 10) - 1)
 }
 
 impl CraftPart {

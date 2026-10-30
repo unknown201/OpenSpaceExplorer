@@ -744,7 +744,53 @@ impl Universe {
         if abort {
             self.arm_parachutes(e);
         }
+        // and the part actions bound to the group
+        let mask = match group {
+            ActionGroup::Lights => 0x4,
+            ActionGroup::Rcs => 0x8,
+            ActionGroup::Abort => 0x40,
+            ActionGroup::Custom(n) => ose_data::craft::custom_group_bit(n),
+        };
+        if let Some(mut st) = self.world.get_mut::<structure::Structure>(e) {
+            st.run_action_groups(mask, state);
+        }
         Some(state)
+    }
+
+    /// Bind a part's actions to action groups in flight (replacing its bindings); they go with the craft.
+    pub fn set_part_actions(
+        &mut self,
+        e: Entity,
+        part: usize,
+        actions: Vec<(String, u32)>,
+    ) -> Result<(), &'static str> {
+        if actions
+            .iter()
+            .any(|(a, _)| !ose_data::craft::ACTIONS.contains(&a.as_str()))
+        {
+            return Err("unknown action");
+        }
+        let mut st = self
+            .world
+            .get_mut::<structure::Structure>(e)
+            .ok_or("vessel has no parts")?;
+        if part >= st.part_actions.len() || !st.rigid.present[part] {
+            return Err("no such part");
+        }
+        st.part_actions[part] = actions.clone();
+        if let Some(mut doc) = self.world.get_mut::<docking::CraftDoc>(e) {
+            if let Some(p) = doc.0.parts.get_mut(part) {
+                p.actions = actions;
+            }
+        }
+        Ok(())
+    }
+
+    /// Run one part's action now (its right-click menu); false when it does not apply to that part.
+    pub fn part_action(&mut self, e: Entity, part: usize, action: &str, on: bool) -> bool {
+        self.world
+            .get_mut::<structure::Structure>(e)
+            .is_some_and(|mut st| st.part_action(part, action, on))
     }
 
     /// Jettison a vessel's fairings; how many, `None` without a structure.
@@ -3717,6 +3763,44 @@ mod tests {
         u.step();
         assert_eq!(u.tick(), Tick(101));
         assert!((u.tick().seconds() - 2.02).abs() < 1e-12);
+    }
+
+    #[test]
+    fn action_groups_run_the_part_actions_bound_to_them() {
+        let (mut u, body, spec, st) = k1_on_real_kerbin();
+        let v = u.spawn_powered_on_surface("K1", body, spec, 0.0, 0.0);
+        u.set_structure(v, st);
+        u.step();
+        let engines = u.structure(v).unwrap().live_engines(0);
+        assert!(!engines.is_empty());
+        let e0 = engines[0];
+        // custom group 1 runs the first engine; nothing else is bound
+        assert!(u
+            .set_part_actions(
+                v,
+                e0,
+                vec![("engine".into(), ose_data::craft::custom_group_bit(1))]
+            )
+            .is_ok());
+        assert!(u.set_part_actions(v, e0, vec![("warp".into(), 1)]).is_err());
+        assert_eq!(
+            u.action_group(v, ActionGroup::Custom(1), Some(false)),
+            Some(false)
+        );
+        let live = u.structure(v).unwrap().live_engines(0);
+        assert!(!live.contains(&e0), "shut down");
+        assert_eq!(live.len(), engines.len() - 1, "the others run on");
+        u.action_group(v, ActionGroup::Custom(1), Some(true));
+        assert!(u.structure(v).unwrap().live_engines(0).contains(&e0));
+        // a group nothing is bound to changes no part
+        u.action_group(v, ActionGroup::Custom(2), Some(false));
+        assert_eq!(u.structure(v).unwrap().live_engines(0).len(), engines.len());
+        // and a part's own menu
+        assert!(u.part_action(v, e0, "engine", false));
+        assert!(
+            !u.part_action(v, 0, "engine", false),
+            "the pod has no engine"
+        );
     }
 
     #[test]

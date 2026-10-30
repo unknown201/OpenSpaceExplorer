@@ -451,6 +451,7 @@ mod tests {
         res: &[(&str, f64)],
     ) -> CraftPart {
         CraftPart {
+            actions: Vec::new(),
             flight: None,
             colors: None,
             guid: guid.into(),

@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 56;
+pub const PROTOCOL_VERSION: u16 = 57;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -226,6 +226,21 @@ pub enum ClientMessage {
         resource: String,
         from: Vec<u16>,
         to: Vec<u16>,
+    },
+    /// Bind a part's actions (`ose_data::craft::ACTIONS`) to action groups (`KSPActionGroup` bits) in
+    /// flight, replacing its bindings; an `ActionGroup` then runs them. Answers `FlightAck`.
+    SetPartActions {
+        vessel: u64,
+        part: u16,
+        actions: Vec<(String, u32)>,
+    },
+    /// Run one part's action now (its part menu: shut an engine down, extend one panel, ...). Answers
+    /// `FlightAck`.
+    PartAction {
+        vessel: u64,
+        part: u16,
+        action: String,
+        on: bool,
     },
     /// Rename one of the player's vessels (1..=64 characters, trimmed); answers `FlightAck`.
     RenameVessel {
@@ -700,6 +715,8 @@ pub struct FlightReadout {
     pub burn_left_mps: Option<f32>,
     /// Why the last planned burn stopped short (out of thrust, crashed); the node stays.
     pub burn_stopped: Option<String>,
+    /// Engines the pilot has shut down (`PartAction` "engine" off).
+    pub engines_off: Vec<u16>,
     /// A Kerbal holding a ladder: (vessel, part).
     pub on_ladder: Option<(u64, u16)>,
     /// A Kerbal climbing in through a hatch (`Board`): the vessel is gone a moment later.

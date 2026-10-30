@@ -329,6 +329,8 @@ pub struct SavedParts {
     pub fairing_deployed: Vec<bool>,
     pub bay_open: Vec<bool>,
     #[serde(default)]
+    pub engine_shutdown: Vec<bool>,
+    #[serde(default)]
     pub control_part: Option<String>,
     #[serde(default)]
     pub debris: bool,
@@ -403,6 +405,7 @@ impl Universe {
             converter_on: st.converter_on.clone(),
             fairing_deployed: st.fairing_deployed.clone(),
             bay_open: st.bay_open.clone(),
+            engine_shutdown: st.engine_shutdown.clone(),
             control_part,
             debris,
         })
@@ -437,6 +440,7 @@ impl Universe {
         copy(&mut st.converter_on, &saved.converter_on);
         copy(&mut st.fairing_deployed, &saved.fairing_deployed);
         copy(&mut st.bay_open, &saved.bay_open);
+        copy(&mut st.engine_shutdown, &saved.engine_shutdown);
         if saved.chutes.len() == n {
             st.chutes.clone_from(&saved.chutes);
         }
@@ -1039,6 +1043,7 @@ mod tests {
         y: f64,
     ) -> CraftPart {
         CraftPart {
+            actions: Vec::new(),
             flight: None,
             colors: None,
             guid: id.into(),

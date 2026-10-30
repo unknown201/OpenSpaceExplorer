@@ -145,6 +145,10 @@ pub struct Structure {
     pub net: FlowNet,
     /// Each part's engine mixture (`None` for parts without an engine).
     pub engine_mixture: Vec<Option<String>>,
+    /// Engines shut down by the pilot (a part action): they give no thrust until switched on again.
+    pub engine_shutdown: Vec<bool>,
+    /// Each part's actions bound to action groups (`CraftPart::actions`).
+    pub part_actions: Vec<Vec<(String, u32)>>,
     engine_nozzles: Vec<Vec<ose_data::ThrustTransform>>,
     /// Each engine's gimbal range (`Data_Gimbal.gimbalRange`), rad; 0 for parts that do not gimbal.
     pub gimbal_range_rad: Vec<f64>,
@@ -348,6 +352,7 @@ impl Structure {
             self.converter_on[j] = old.converter_on[i];
             self.fairing_deployed[j] = old.fairing_deployed[i];
             self.bay_open[j] = old.bay_open[i];
+            self.engine_shutdown[j] = old.engine_shutdown[i];
         }
         self.rigid.carry_inertia_reference(&old.rigid, map);
         self.frame_top = old.frame_top;
@@ -488,6 +493,8 @@ impl Structure {
                     .to_radians()
             })
             .collect();
+        let engine_shutdown = vec![false; n];
+        let part_actions = craft.parts.iter().map(|p| p.actions.clone()).collect();
         let engine_mixture = (0..n)
             .map(|i| {
                 def_of(i)
@@ -614,6 +621,8 @@ impl Structure {
             last_airflow: None,
             net: FlowNet::build(craft, defs, resources),
             engine_mixture,
+            engine_shutdown,
+            part_actions,
             engine_nozzles: (0..n)
                 .map(|i| {
                     def_of(i)
@@ -848,10 +857,78 @@ impl Structure {
             .map(|e| {
                 e.iter()
                     .copied()
-                    .filter(|&i| self.rigid.present[i] && self.engine_thrust_kn[i] > 0.0)
+                    .filter(|&i| {
+                        self.rigid.present[i]
+                            && self.engine_thrust_kn[i] > 0.0
+                            && !self.engine_shutdown[i]
+                    })
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// Run one part's action (`ose_data::craft::ACTIONS`) on or off; whether it applied to that part.
+    pub fn part_action(&mut self, i: usize, action: &str, on: bool) -> bool {
+        if i >= self.rigid.len() || !self.rigid.present[i] {
+            return false;
+        }
+        match action {
+            "engine" if self.engine_thrust_kn[i] > 0.0 => {
+                self.engine_shutdown[i] = !on;
+                true
+            }
+            "deploy" => {
+                let panel =
+                    self.electric[i].solar_deployable && self.electric[i].solar_output > 0.0;
+                let mut done = false;
+                if panel || self.antenna_deployable[i] {
+                    self.deployed[i] = on;
+                    done = true;
+                }
+                if self.gear_defs[i].as_ref().is_some_and(|g| g.retractable) {
+                    self.gear_out[i] = on;
+                    done = true;
+                }
+                if self.cargo_bay[i] {
+                    self.bay_open[i] = on;
+                    self.update_shielding();
+                    done = true;
+                }
+                done
+            }
+            "chute" if on && self.chute_defs[i].is_some() => {
+                self.arm_chute(i);
+                true
+            }
+            "converter" if self.converter_defs[i].is_some() => {
+                self.converter_on[i] = on;
+                true
+            }
+            "fairing" if on && self.fairing_payload[i].is_some() => {
+                self.fairing_deployed[i] = true;
+                self.update_shielding();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Run every part action bound to a group in `mask` (`KSPActionGroup` bits); how many ran.
+    pub fn run_action_groups(&mut self, mask: u32, on: bool) -> usize {
+        let mut ran = 0;
+        for i in 0..self.part_actions.len() {
+            let bound: Vec<String> = self.part_actions[i]
+                .iter()
+                .filter(|(_, m)| m & mask != 0)
+                .map(|(a, _)| a.clone())
+                .collect();
+            for a in bound {
+                if self.part_action(i, &a, on) {
+                    ran += 1;
+                }
+            }
+        }
+        ran
     }
 
     /// Engines eligible to produce thrust in this stage (attached and supplied with all propellants).
