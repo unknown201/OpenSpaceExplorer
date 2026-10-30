@@ -132,6 +132,35 @@ struct Args {
     /// Seconds between guest sweeps.
     #[arg(long, default_value_t = 60.0)]
     guest_sweep_s: f64,
+    /// Test fixtures only: give each player with nothing in the campaign a probe in a 100 km orbit when
+    /// they connect or start or resume a campaign, so the browser tests have a vessel before they launch one. A real world starts
+    /// empty, as the original's does.
+    #[arg(long)]
+    test_probe: bool,
+}
+
+fn has_vessel(s: &Shared, player: u64) -> bool {
+    s.vessels
+        .lock()
+        .expect("vessels lock")
+        .iter()
+        .any(|&(_, _, owner)| owner == Some(player))
+}
+
+/// `--test-probe`: a probe in a 100 km circular orbit round the home world for a player who has nothing.
+fn spawn_test_probe(s: &Shared, player_id: u64, name: &str) -> Option<u64> {
+    let mut u = s.universe.lock().expect("sim lock");
+    let home = s
+        .catalog
+        .iter()
+        .find(|b| b.id == "Kerbin")
+        .or_else(|| s.catalog.first())?;
+    let body = u.body_entity(&home.id)?;
+    let e = u.spawn_vessel_in_circular_orbit(&format!("{name} probe"), body, 100_000.0);
+    let mut list = s.vessels.lock().expect("vessels lock");
+    let id = list.iter().map(|&(_, id, _)| id).max().unwrap_or(0) + 1;
+    list.push((e, id, Some(player_id)));
+    Some(id)
 }
 
 /// What the client needs to draw and place a part (served at `/parts.json`).
@@ -304,6 +333,8 @@ struct Shared {
     last_roster: Mutex<Option<ServerMessage>>,
     /// The vessel each player last commanded (`CampaignMember::flying`).
     flying: Mutex<std::collections::HashMap<u64, u64>>,
+    /// `--test-probe`: hand each player a probe on connecting (browser test fixtures only).
+    test_probe: bool,
 }
 
 /// Apply lowest-wins warp arbitration. Returns (effective warp, the player holding it down, if any).
@@ -502,6 +533,7 @@ async fn main() -> anyhow::Result<()> {
         kerbals: serde_json::from_str(EMBEDDED_KERBALS)?,
         last_roster: Mutex::new(None),
         flying: Mutex::new(std::collections::HashMap::new()),
+        test_probe: args.test_probe,
     });
 
     streaming::start(shared.clone());
@@ -2063,14 +2095,6 @@ fn owned_vessel(s: &Shared, id: u64, player: u64) -> Option<bevy_ecs::entity::En
     e
 }
 
-fn has_vessel(s: &Shared, player: u64) -> bool {
-    s.vessels
-        .lock()
-        .expect("vessels lock")
-        .iter()
-        .any(|&(_, _, owner)| owner == Some(player))
-}
-
 /// Remove players who never joined the campaign and have been away for `ttl_s`, with their vessels and
 /// saved crafts. Connected players are always kept.
 fn sweep_guests(s: &Shared, ttl_s: u64) {
@@ -2953,22 +2977,6 @@ fn launch_craft(
     }
 }
 
-/// Every player gets a probe in a 100 km circular orbit around the home world on joining.
-fn spawn_player_probe(s: &Shared, player_id: u64, name: &str) -> Option<u64> {
-    let mut u = s.universe.lock().expect("sim lock");
-    let home = s
-        .catalog
-        .iter()
-        .find(|b| b.id == "Kerbin")
-        .or_else(|| s.catalog.first())?;
-    let body = u.body_entity(&home.id)?;
-    let e = u.spawn_vessel_in_circular_orbit(&format!("{name} probe"), body, 100_000.0);
-    let mut list = s.vessels.lock().expect("vessels lock");
-    let id = list.iter().map(|&(_, id, _)| id).max().unwrap_or(0) + 1;
-    list.push((e, id, Some(player_id)));
-    Some(id)
-}
-
 async fn session(mut socket: WebSocket, s: AppState) {
     // Handshake.
     let player_id = loop {
@@ -3050,8 +3058,8 @@ async fn session(mut socket: WebSocket, s: AppState) {
                         {
                             return;
                         }
-                        if !has_vessel(&s, id) {
-                            spawn_player_probe(&s, id, &display_name);
+                        if s.test_probe && !has_vessel(&s, id) {
+                            spawn_test_probe(&s, id, &display_name);
                         }
                         *s.connections
                             .lock()
@@ -3229,9 +3237,8 @@ async fn session(mut socket: WebSocket, s: AppState) {
                             let reply = match switched {
                                 Ok(()) => {
                                     let name = display_name_for(&s, player_id);
-                                    // a pilot probe for a player who has nothing in this campaign yet
-                                    if !has_vessel(&s, player_id) {
-                                        spawn_player_probe(&s, player_id, &name);
+                                    if s.test_probe && !has_vessel(&s, player_id) {
+                                        spawn_test_probe(&s, player_id, &name);
                                     }
                                     campaign_state(&s, player_id, Some(&name))
                                 }
@@ -3245,8 +3252,8 @@ async fn session(mut socket: WebSocket, s: AppState) {
                             let reply = match campaigns::switch(&s, player_id, campaigns::Target::New(new)) {
                                 Ok(()) => {
                                     let pname = display_name_for(&s, player_id);
-                                    if !has_vessel(&s, player_id) {
-                                        spawn_player_probe(&s, player_id, &pname);
+                                    if s.test_probe && !has_vessel(&s, player_id) {
+                                        spawn_test_probe(&s, player_id, &pname);
                                     }
                                     let mut reply = campaign_state(&s, player_id, Some(&pname));
                                     if let ServerMessage::CampaignState { created: c, .. } = &mut reply {

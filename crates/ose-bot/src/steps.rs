@@ -131,13 +131,14 @@ pub async fn run_mun_campaign(cfg: &BotConfig) -> Vec<StepResult> {
         .await,
     );
 
-    // 2. Open a protocol session: Hello -> Welcome -> BodyCatalog, and find the probe the server gives us.
+    // 2. Open a protocol session: Hello -> Welcome -> BodyCatalog. A new world hands nobody a vessel; the
+    // run launches its own below.
     results.push(
         timed("connect_hello", Mode::Server, async {
             let Some(base) = &cfg.server else {
                 return Outcome::skipped("no --server given");
             };
-            let mut c = match Client::connect(base, &cfg.display_name).await {
+            let c = match Client::connect(base, &cfg.display_name).await {
                 Ok(c) => c,
                 Err(ConnectError::NoEndpoint { status }) => {
                     return Outcome::blocked(format!(
@@ -147,26 +148,16 @@ pub async fn run_mun_campaign(cfg: &BotConfig) -> Vec<StepResult> {
                 }
                 Err(e) => return Outcome::failed(e),
             };
-            let vessel = match c.my_vessel(Duration::from_secs(10)).await {
-                Ok(v) => v,
-                Err(e) => return Outcome::failed(e),
-            };
             let bodies = match server_flight::bodies(&c) {
                 Ok(b) => b,
                 Err(e) => return Outcome::failed(e),
             };
             let detail = format!(
-                "player {} welcomed at tick {}; catalog of {} bodies; own vessel {} ({:?}) around {}",
+                "player {} welcomed at tick {}; catalog of {} bodies",
                 c.player_id,
                 c.latest.tick.0,
                 c.catalog.len(),
-                vessel.id,
-                vessel.name,
-                c.body(vessel.reference_body)
-                    .map(|b| b.id.as_str())
-                    .unwrap_or("?")
             );
-            flight.vessel_id = Some(vessel.id);
             flight.bodies = Some(bodies);
             flight.client = Some(c);
             Outcome::passed(detail)

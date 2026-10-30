@@ -192,7 +192,6 @@ async fn hello_catalog_and_snapshots() {
     let mut saw_time = None;
     let mut saw_snap = None;
     let mut saw_vessel = false;
-    let mut saw_traj = false;
     for _ in response_window() {
         match recv(&mut ws).await {
             ServerMessage::TimeState { tick, warp, .. } => saw_time = Some((tick, warp)),
@@ -206,37 +205,43 @@ async fn hello_catalog_and_snapshots() {
                 saw_snap = Some(tick);
             }
             ServerMessage::Vessels { vessels, .. } => {
-                let probe = vessels
-                    .iter()
-                    .find(|v| v.owner == Some(player_id))
-                    .expect("my probe");
-                assert_eq!(probe.reference_body, kerbin as u16);
-                let alt = (probe.orbit.semi_major_axis_m - bodies[kerbin].radius_m).abs();
-                assert!((alt - 100_000.0).abs() < 1.0, "probe altitude {alt}");
+                // a new world has no craft in it, as in the original: the player launches their own
+                assert!(
+                    vessels.iter().all(|v| v.owner != Some(player_id)),
+                    "nothing of mine yet: {vessels:?}"
+                );
                 saw_vessel = true;
-            }
-            ServerMessage::Trajectory { patches, .. } => {
-                assert_eq!(patches.len(), 1, "{patches:?}");
-                assert_eq!(patches[0].end, ose_net::PatchEnd::Final);
-                saw_traj = true;
             }
             // anything else (the roster, science, ...) is pushed whenever it changes, at any time
             _ => {}
         }
-        if saw_time.is_some() && saw_snap.is_some() && saw_vessel && saw_traj {
+        if saw_time.is_some() && saw_snap.is_some() && saw_vessel {
             break;
         }
     }
-    assert!(
-        saw_vessel && saw_traj,
-        "vessel {saw_vessel} trajectory {saw_traj}"
-    );
+    assert!(saw_vessel, "no Vessels message");
     let (_, warp) = saw_time.expect("TimeState");
     assert_eq!(warp, 1);
     saw_snap.expect("Snapshot");
 
-    // Schedule a prograde burn on the probe; the trajectory shows the maneuver and a 12,000 km apoapsis.
-    let probe_id = 1;
+    // A craft of our own in a 100 km orbit, then a prograde burn on it: the trajectory shows the maneuver
+    // and a 12,000 km apoapsis.
+    send_msg(
+        &mut ws,
+        &ClientMessage::LaunchCraft {
+            craft: starter_craft(),
+            altitude_m: 100_000.0,
+        },
+    )
+    .await;
+    let probe_id = wait_for(&mut ws, |m| match m {
+        ServerMessage::CraftLaunched { vessel, reason, .. } => {
+            assert!(reason.is_none(), "{reason:?}");
+            vessel
+        }
+        _ => None,
+    })
+    .await;
     ws.send(Message::Binary(
         ose_net::encode(&ClientMessage::ScheduleBurn {
             vessel: probe_id,
@@ -263,7 +268,9 @@ async fn hello_catalog_and_snapshots() {
                 assert!(scheduled, "{reason:?}");
                 burn_ok = true;
             }
-            ServerMessage::Trajectory { patches, .. } if patches.len() >= 2 => {
+            ServerMessage::Trajectory {
+                vessel, patches, ..
+            } if vessel == probe_id && patches.len() >= 2 => {
                 assert_eq!(patches[0].end, ose_net::PatchEnd::Maneuver);
                 let o = &patches[1].orbit;
                 let ap = o.semi_major_axis_m * (1.0 + o.eccentricity);
@@ -529,10 +536,10 @@ async fn hello_catalog_and_snapshots() {
         }
     }
     assert!(woke, "orbiting craft was not woken by SetControls");
-    // the bare probe has no flight state and is refused
+    // a vessel that is not ours is refused
     ws.send(Message::Binary(
         ose_net::encode(&ClientMessage::SetControls {
-            vessel: 1,
+            vessel: 999,
             throttle: 1.0,
             attitude: ose_net::AttitudeMode::OrbitPrograde,
         })
@@ -544,7 +551,7 @@ async fn hello_catalog_and_snapshots() {
     let mut refused = false;
     for _ in response_window() {
         if let ServerMessage::FlightAck {
-            vessel: 1,
+            vessel: 999,
             accepted,
             ..
         } = recv(&mut ws).await
@@ -554,7 +561,7 @@ async fn hello_catalog_and_snapshots() {
             break;
         }
     }
-    assert!(refused, "probe controls were not refused");
+    assert!(refused, "controls for a vessel not ours were not refused");
 
     // Craft library: stock crafts are listed; saving adds ours; a saved id launches.
     ws.send(Message::Binary(
@@ -866,18 +873,38 @@ async fn hello_catalog_and_snapshots() {
                 .iter()
                 .filter(|v| v.owner == Some(p3) && !v.name.ends_with("debris"))
                 .collect();
-            // the probe, two Tiny launches and the pad craft (debris comes and goes), no second probe
+            // two Tiny launches and the pad craft (debris comes and goes); nothing handed out on joining
             assert_eq!(
                 mine.len(),
-                4,
-                "resumed player keeps probe, two Tiny launches and the pad craft: {vessels:?}"
+                3,
+                "resumed player keeps two Tiny launches and the pad craft: {vessels:?}"
             );
-            assert_eq!(mine.iter().filter(|v| v.name.ends_with("probe")).count(), 1);
+            assert_eq!(mine.iter().filter(|v| v.name.ends_with("probe")).count(), 0);
             checked = true;
             break;
         }
     }
     assert!(checked);
+}
+
+/// Put a starter craft of the player's own in a circular orbit (a new world gives nobody a vessel).
+async fn launch_to_orbit(ws: &mut Ws, altitude_m: f64) -> u64 {
+    send_msg(
+        ws,
+        &ClientMessage::LaunchCraft {
+            craft: starter_craft(),
+            altitude_m,
+        },
+    )
+    .await;
+    wait_for(ws, |m| match m {
+        ServerMessage::CraftLaunched { vessel, reason, .. } => {
+            assert!(reason.is_none(), "{reason:?}");
+            vessel
+        }
+        _ => None,
+    })
+    .await
 }
 
 async fn send_msg(ws: &mut Ws, m: &ClientMessage) {
@@ -2100,6 +2127,7 @@ async fn stale_guests_are_swept_but_members_stay() {
     let (_server, addr) = spawn_server_with(&args, None).await;
     let mut g = connect_ws(&addr).await;
     let (guest_id, _) = hello(&mut g, None, "e2e pilot").await;
+    launch_to_orbit(&mut g, 100_000.0).await;
     drop(g);
     let mut m = connect_ws(&addr).await;
     let (member_id, _) = hello(&mut m, None, "josh").await;
@@ -2110,6 +2138,7 @@ async fn stale_guests_are_swept_but_members_stay() {
     ))
     .await
     .unwrap();
+    launch_to_orbit(&mut m, 110_000.0).await;
     tokio::time::sleep(Duration::from_millis(1800)).await;
     let mut checked = false;
     for _ in response_window() {
@@ -2121,7 +2150,7 @@ async fn stale_guests_are_swept_but_members_stay() {
             }
         }
     }
-    assert!(checked, "guest probe was not swept");
+    assert!(checked, "guest craft was not swept");
 }
 
 #[tokio::test]
@@ -2172,7 +2201,7 @@ async fn campaigns_can_be_left_resumed_and_started_again() {
     let (id, name, _, member) = wait_for(&mut ws, state).await;
     assert_eq!((id.as_str(), name.as_str()), (alpha.as_str(), "Alpha"));
     assert!(member);
-    // a teammate who never played Alpha resumes it with a pilot probe of their own
+    // a teammate who never played Alpha resumes it with nothing handed out, and flies their own craft there
     let mut late = connect_ws(&addr).await;
     let (late_id, _) = hello(&mut late, None, "bob").await;
     send_msg(
@@ -2182,6 +2211,7 @@ async fn campaigns_can_be_left_resumed_and_started_again() {
     .await;
     let (id, _, _, _) = wait_for(&mut late, state).await;
     assert_eq!(id, alpha, "every CampaignState carries the campaign id");
+    launch_to_orbit(&mut late, 100_000.0).await;
     wait_for(&mut late, |m| match m {
         ServerMessage::Vessels { vessels, .. } => vessels
             .iter()
@@ -2232,10 +2262,13 @@ async fn multiplayer_streams_share_consistent_world_updates() {
     // This peer deliberately stops reading after Hello while the other players keep flying.
     let mut idle = connect_ws(&addr).await;
     hello(&mut idle, None, "idle").await;
+    // every player puts a craft up (a new world hands nobody one), each in its own orbit
+    launch_to_orbit(&mut idle, 100_000.0).await;
     let mut peers = Vec::new();
     for i in 0..8 {
         let mut ws = connect_ws(&addr).await;
         let (id, _) = hello(&mut ws, None, &format!("pilot-{i}")).await;
+        launch_to_orbit(&mut ws, 110_000.0 + 10_000.0 * i as f64).await;
         peers.push((id, ws));
     }
     let collect_worlds =
@@ -2483,9 +2516,10 @@ async fn restart_keeps_time_vessels_and_burns() {
     let port: u16 = addr.rsplit(':').next().unwrap().parse().unwrap();
     let mut ws = connect_ws(&addr).await;
     let (pid, token) = hello(&mut ws, None, "saver").await;
+    let craft = launch_to_orbit(&mut ws, 100_000.0).await;
     ws.send(Message::Binary(
         ose_net::encode(&ClientMessage::ScheduleBurn {
-            vessel: 1,
+            vessel: craft,
             ut: 5.0e5,
             prograde_mps: 100.0,
             normal_mps: 0.0,
@@ -2531,8 +2565,12 @@ async fn restart_keeps_time_vessels_and_burns() {
                 }
                 ServerMessage::Vessels { vessels, .. } => {
                     let mine: Vec<_> = vessels.iter().filter(|v| v.owner == Some(pid2)).collect();
-                    assert_eq!(mine.len(), 1, "one restored probe, no new one: {vessels:?}");
-                    assert_eq!(mine[0].id, 1);
+                    assert_eq!(
+                        mine.len(),
+                        1,
+                        "the restored craft, nothing new: {vessels:?}"
+                    );
+                    assert_eq!(mine[0].id, craft);
                 }
                 ServerMessage::Trajectory { patches, .. } => {
                     assert!(
