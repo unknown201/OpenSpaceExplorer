@@ -887,6 +887,26 @@ async fn hello_catalog_and_snapshots() {
     assert!(checked);
 }
 
+/// Put a starter craft of the player's own in a circular orbit (a new world gives nobody a vessel).
+async fn launch_to_orbit(ws: &mut Ws, altitude_m: f64) -> u64 {
+    send_msg(
+        ws,
+        &ClientMessage::LaunchCraft {
+            craft: starter_craft(),
+            altitude_m,
+        },
+    )
+    .await;
+    wait_for(ws, |m| match m {
+        ServerMessage::CraftLaunched { vessel, reason, .. } => {
+            assert!(reason.is_none(), "{reason:?}");
+            vessel
+        }
+        _ => None,
+    })
+    .await
+}
+
 async fn send_msg(ws: &mut Ws, m: &ClientMessage) {
     ws.send(Message::Binary(ose_net::encode(m).unwrap().into()))
         .await
@@ -2107,6 +2127,7 @@ async fn stale_guests_are_swept_but_members_stay() {
     let (_server, addr) = spawn_server_with(&args, None).await;
     let mut g = connect_ws(&addr).await;
     let (guest_id, _) = hello(&mut g, None, "e2e pilot").await;
+    launch_to_orbit(&mut g, 100_000.0).await;
     drop(g);
     let mut m = connect_ws(&addr).await;
     let (member_id, _) = hello(&mut m, None, "josh").await;
@@ -2117,6 +2138,7 @@ async fn stale_guests_are_swept_but_members_stay() {
     ))
     .await
     .unwrap();
+    launch_to_orbit(&mut m, 110_000.0).await;
     tokio::time::sleep(Duration::from_millis(1800)).await;
     let mut checked = false;
     for _ in response_window() {
@@ -2128,7 +2150,7 @@ async fn stale_guests_are_swept_but_members_stay() {
             }
         }
     }
-    assert!(checked, "guest probe was not swept");
+    assert!(checked, "guest craft was not swept");
 }
 
 #[tokio::test]
@@ -2179,7 +2201,7 @@ async fn campaigns_can_be_left_resumed_and_started_again() {
     let (id, name, _, member) = wait_for(&mut ws, state).await;
     assert_eq!((id.as_str(), name.as_str()), (alpha.as_str(), "Alpha"));
     assert!(member);
-    // a teammate who never played Alpha resumes it with a pilot probe of their own
+    // a teammate who never played Alpha resumes it with nothing handed out, and flies their own craft there
     let mut late = connect_ws(&addr).await;
     let (late_id, _) = hello(&mut late, None, "bob").await;
     send_msg(
@@ -2189,6 +2211,7 @@ async fn campaigns_can_be_left_resumed_and_started_again() {
     .await;
     let (id, _, _, _) = wait_for(&mut late, state).await;
     assert_eq!(id, alpha, "every CampaignState carries the campaign id");
+    launch_to_orbit(&mut late, 100_000.0).await;
     wait_for(&mut late, |m| match m {
         ServerMessage::Vessels { vessels, .. } => vessels
             .iter()
@@ -2239,10 +2262,13 @@ async fn multiplayer_streams_share_consistent_world_updates() {
     // This peer deliberately stops reading after Hello while the other players keep flying.
     let mut idle = connect_ws(&addr).await;
     hello(&mut idle, None, "idle").await;
+    // every player puts a craft up (a new world hands nobody one), each in its own orbit
+    launch_to_orbit(&mut idle, 100_000.0).await;
     let mut peers = Vec::new();
     for i in 0..8 {
         let mut ws = connect_ws(&addr).await;
         let (id, _) = hello(&mut ws, None, &format!("pilot-{i}")).await;
+        launch_to_orbit(&mut ws, 110_000.0 + 10_000.0 * i as f64).await;
         peers.push((id, ws));
     }
     let collect_worlds =
@@ -2490,9 +2516,10 @@ async fn restart_keeps_time_vessels_and_burns() {
     let port: u16 = addr.rsplit(':').next().unwrap().parse().unwrap();
     let mut ws = connect_ws(&addr).await;
     let (pid, token) = hello(&mut ws, None, "saver").await;
+    let craft = launch_to_orbit(&mut ws, 100_000.0).await;
     ws.send(Message::Binary(
         ose_net::encode(&ClientMessage::ScheduleBurn {
-            vessel: 1,
+            vessel: craft,
             ut: 5.0e5,
             prograde_mps: 100.0,
             normal_mps: 0.0,
@@ -2538,8 +2565,12 @@ async fn restart_keeps_time_vessels_and_burns() {
                 }
                 ServerMessage::Vessels { vessels, .. } => {
                     let mine: Vec<_> = vessels.iter().filter(|v| v.owner == Some(pid2)).collect();
-                    assert_eq!(mine.len(), 1, "one restored probe, no new one: {vessels:?}");
-                    assert_eq!(mine[0].id, 1);
+                    assert_eq!(
+                        mine.len(),
+                        1,
+                        "the restored craft, nothing new: {vessels:?}"
+                    );
+                    assert_eq!(mine[0].id, craft);
                 }
                 ServerMessage::Trajectory { patches, .. } => {
                     assert!(
