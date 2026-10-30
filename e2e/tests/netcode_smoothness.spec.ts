@@ -74,7 +74,7 @@ test(`flight smoothness with ${delayMs} ms one-way delay and ${jitterMs} ms jitt
       // The card list re-renders after the search; wait for it as the gameplay chain does.
       const card = page.locator('[data-ose="vab-part"]').first();
       await card.waitFor({ timeout: 5000 });
-      await card.click();
+      await card.dblclick();
     }
     await page.locator('[data-ose="vab-search"]').fill("");
     await page.locator('[data-ose="vab-name"]').fill("Smoothness rocket");

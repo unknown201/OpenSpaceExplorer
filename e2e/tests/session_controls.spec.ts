@@ -19,7 +19,13 @@ test("warp requests pass 4x and VAB icons accept clicks", async ({ page, baseURL
   await page.locator('[data-ose="ksc-vab"]').first().click();
   await page.locator('[data-ose="vab-clear"]').click();
   await page.locator('[data-ose="vab-search"]').fill("Tin Can");
+  await page.locator('[data-ose="vab-part"]').first().dblclick();
+  await expect(page.locator('[data-ose="vab-canvas"]')).toHaveAttribute("data-ose-vab-parts", "1");
+  // A single click puts a part in hand, as the original's picker does; Esc lets it go.
   await page.locator('[data-ose="vab-part"]').first().click();
+  await expect(page.locator("body")).toHaveClass(/vab-holding/);
+  await page.keyboard.press("Escape");
+  await expect(page.locator("body")).not.toHaveClass(/vab-holding/);
   await expect(page.locator('[data-ose="vab-canvas"]')).toHaveAttribute("data-ose-vab-parts", "1");
   // Real pointer clicks at the icon centre must activate the containing button.
   // (Playwright's click waits for the icon to hold still: the header reflows as the launch sites and the
