@@ -336,6 +336,13 @@ class Exporter:
                     del self._envs[k]
         return self._envs[tag], main
 
+    PAD_CLOSEUP = frozenset({
+        "ksc_launch_launchplatform_d",
+        "ksc_launch_gantrytower02_d",
+        "flametrench_concrete_pad_d",
+        "flametrench_concrete_rectangle_d",
+    })
+
     def export_texture_object(self, tex) -> str | None:
         """Export a Texture2D object as PNG under textures/<name>.png (once); returns the relative uri."""
         name = tex.m_Name
@@ -349,7 +356,15 @@ class Exporter:
             return None
         # The KSC's extra-large ground textures (the runway's 1x4 strip) span a kilometre or more: kept at 4096
         # on their long side, or they smear across the ground.
-        cap = 4096 if "exlarge" in name.lower() else self.max_texture
+        # The launch pad's deck, tower and flame trench colour maps fill the flight camera's view at every launch:
+        # kept at 2048 so the concrete and steel stay sharp next to the craft (the rest of the campus at 1024).
+        low = name.lower()
+        if "exlarge" in low:
+            cap = 4096
+        elif low in self.PAD_CLOSEUP:
+            cap = max(self.max_texture, 2048)
+        else:
+            cap = self.max_texture
         resized = img.width > cap or img.height > cap
         if resized:
             sc = cap / max(img.width, img.height)
