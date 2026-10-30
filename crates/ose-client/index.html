@@ -941,6 +941,8 @@
     #flight-hud .fh-crewbox { bottom: auto; top: calc(52 * var(--u)); right: calc(16 * var(--u)); }
     #flight-hud .fh-crew-acts { bottom: auto; top: calc(166 * var(--u)); }
     #flight-hud .fh-help { display: none; }
+    #flight-hud #fh-recoverable { display: none; margin: calc(-6 * var(--u)) calc(-24 * var(--u)) calc(4 * var(--u)); padding: calc(2 * var(--u)) calc(12 * var(--u)); background: #1d5a2a; color: #9fffb0; font: 700 calc(12 * var(--u)) var(--hud-font); letter-spacing: 0.12em; border-radius: calc(6 * var(--u)) calc(6 * var(--u)) 0 0; }
+    #flight-hud #fh-recoverable.on { display: block; }
     /* The navball cluster as the original's: heading on top, speed (yellow) left and altitude (magenta) right. */
     #flight-hud .fh-ball { position: relative; align-self: flex-end; margin: calc(34 * var(--u)) calc(104 * var(--u)) 0 calc(96 * var(--u)); }
     #flight-hud .fh-ball canvas { display: block; }
@@ -1395,7 +1397,7 @@
     <button id="ts-back" data-ose="ts-back">Back to KSC</button>
   </div>
   <div id="flight-hud" data-ose="flight">
-    <div class="fh-top"><div id="fh-situation" class="fh-small">--</div><div id="fh-met" class="fh-small" data-ose="flight-met" title="Mission elapsed time"></div><div id="fh-note" class="fh-small" style="color:#f0a070"></div><div id="fh-running" class="fh-small" data-ose="flight-running" style="color:#8fd08f"></div><div id="fh-control" data-ose="flight-control" style="color:#ff6a5a;font-weight:700"></div></div>
+    <div class="fh-top"><div id="fh-recoverable" data-ose="flight-recoverable" title="Landed on Kerbin: Recover brings the crew, parts and science home">// RECOVERABLE //</div><div id="fh-situation" class="fh-small">--</div><div id="fh-met" class="fh-small" data-ose="flight-met" title="Mission elapsed time"></div><div id="fh-note" class="fh-small" style="color:#f0a070"></div><div id="fh-running" class="fh-small" data-ose="flight-running" style="color:#8fd08f"></div><div id="fh-control" data-ose="flight-control" style="color:#ff6a5a;font-weight:700"></div></div>
     <div class="fh-bottom">
       <div class="fh-thr-col"><button id="fh-full" class="fh-thr-btn" data-ose="flight-throttle-full" title="Full throttle (Z)">&#9650;</button><div class="fh-throttle" title="Throttle: hold Shift / Ctrl, Z full, X cut"><div id="fh-throttle-fill"></div><span>THR</span><span id="fh-throttle-pct">0%</span></div><button id="fh-cut" class="fh-thr-btn" data-ose="flight-throttle-cut" title="Cut the throttle (X)">&#9660;</button></div>
       <div class="fh-ball">

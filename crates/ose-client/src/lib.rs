@@ -10106,6 +10106,12 @@ impl App {
                 && !f.eva,
             transferring: f.transfer.is_some(),
         };
+        // The original's RECOVERABLE tab at the top centre.
+        if let Some(el) = self.doc.get_element_by_id("fh-recoverable") {
+            el.class_list()
+                .toggle_with_force("on", watch.recoverable)
+                .ok();
+        }
         let before = self.flight_watch.replace(Some(watch.clone()));
         if let Some(before) = before {
             let name = body.map(|b| b.id.as_str()).unwrap_or("the body");
