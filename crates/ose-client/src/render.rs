@@ -316,7 +316,23 @@ fn fs_mesh(in: VsOut) -> @location(0) vec4<f32> {
     // about 60 sRGB in Josh's pad shot, and our outdoor tone curve lifts whatever is left.
     let m_true = clamp(metal_map * 2.0, 0.0, 1.0);
     let shaded_out = lit * (1.0 - m_true) + base.rgb * m_true * ambient * 0.12 + spec_col * spec;
-    let shaded = select(shaded_in, shaded_out, true_metal);
+    var shaded = select(shaded_in, shaded_out, true_metal);
+    // Outdoor parts (exposure set, not the campus) reflect the sky and ground round them as KSP2's do (its
+    // reflection probes): a sky gradient about the local up (the fill light's direction), strong at grazing angles
+    // (Fresnel), sharper and brighter on glossy and metal surfaces.
+    if object.extra.y > 0.0 && !true_metal && object.light2.w > 0.0 {
+        let up_w = normalize(object.light2.xyz);
+        let r = reflect(-view, n);
+        let e = dot(r, up_w);
+        let day_k = clamp(ambient * 2.6, 0.08, 1.0) * object.light_dir.w;
+        let sky_c = mix(vec3<f32>(0.42, 0.52, 0.62), vec3<f32>(0.16, 0.28, 0.58), smoothstep(0.0, 0.7, e));
+        let ground_c = vec3<f32>(0.10, 0.12, 0.07);
+        let env = mix(ground_c, sky_c, smoothstep(-0.08, 0.06, e)) * day_k;
+        let fr = pow(1.0 - clamp(dot(n, view), 0.0, 1.0), 5.0);
+        let f0 = mix(vec3<f32>(0.04), base.rgb, metal);
+        let k_env = (f0 + (vec3<f32>(1.0) - f0) * fr) * (0.25 + 0.75 * smooth_ * smooth_);
+        shaded = shaded * (vec3<f32>(1.0) - k_env * 0.5) + env * k_env;
+    }
     // Local lamps (craft lights): falloff with distance over their range, a soft cone for spots.
     var lamps = vec3<f32>(0.0);
     let nl = i32(camera.light_count.x);
