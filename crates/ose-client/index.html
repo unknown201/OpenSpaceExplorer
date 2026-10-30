@@ -333,7 +333,7 @@
     body.webgpu #menu-card.vab > .note { position: fixed; left: 50%; bottom: calc(24 * var(--u)); transform: translateX(-50%); pointer-events: none; }
     body.webgpu #screen-vab #vab { height: calc(100vh - 32 * var(--u)); margin: 0; grid-template-columns: calc(340 * var(--u)) 1fr calc(320 * var(--u)); }
     body.webgpu #vab-picker, body.webgpu #vab-side { pointer-events: auto; background: #10141bf0; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)); padding: calc(12 * var(--u)); overflow: auto; }
-    body.webgpu #vab-parts { max-height: calc(100vh - 200 * var(--u)); }
+    body.webgpu #vab-parts { max-height: calc(100vh - 230 * var(--u) - 64px); }
     body.webgpu #vab-canvas { visibility: hidden; pointer-events: none; }
     body.webgpu #vab-parts li { cursor: grab; user-select: none; }
     body.vab-holding, body.vab-holding * { cursor: grabbing !important; }
@@ -1008,6 +1008,11 @@
     /* Science transmission under way: the Transmit button fills, red when it stalls. */
     #flight-hud #fh-transmit.sending { background: linear-gradient(90deg, #1f6b8f var(--p, 0%), #10141bd9 var(--p, 0%)); color: #fff; }
     #flight-hud #fh-transmit.stalled { background: linear-gradient(90deg, #8f2f1f var(--p, 0%), #10141bd9 var(--p, 0%)); }
+    /* The original's trash bin under the picker: a part dropped on it is deleted. */
+    #vab-trash { margin-top: 6px; height: 34px; display: grid; place-items: center; border: 1px dashed #3b4a6a; border-radius: 4px; background: #0b1020aa; }
+    #vab-trash i { width: 22px; height: 22px; background: #9fb0cc; -webkit-mask: url(assets/ui/hud/TrashBin-ICO-onRest.png) center / contain no-repeat; mask: url(assets/ui/hud/TrashBin-ICO-onRest.png) center / contain no-repeat; }
+    body.vab-holding #vab-trash { border-color: #ff6a5a; background: #3a141088; }
+    body.vab-holding #vab-trash:hover { background: #7a2018; }
     /* Part cards as the original's: a size badge at the top left, a favourite star at the top right. */
     #vab-parts li[data-ose-part] { position: relative; }
     #vab-parts li .pb { position: absolute; top: 3px; left: 3px; padding: 0 3px; border-radius: 2px; background: #e8a020; color: #10141b; font: 700 9px var(--hud-font); line-height: 13px; }
@@ -1247,6 +1252,7 @@
             <div id="vab-filter"><span id="vab-sizes" data-ose="vab-sizes"></span>
               <select id="vab-sort" data-ose="vab-sort" title="Group or sort the parts"><option value="0">Group by type</option><option value="1">Name</option><option value="2">Mass</option></select></div>
             <ul id="vab-parts" data-ose="vab-parts"></ul>
+            <div id="vab-trash" data-ose="vab-trash" title="Drop a part here to delete it (and what hangs on it)"><i></i></div>
           </div>
           <canvas id="vab-canvas" data-ose="vab-canvas" width="640" height="640"></canvas>
           <div id="vab-side">

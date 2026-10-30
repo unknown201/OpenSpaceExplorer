@@ -3964,6 +3964,25 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                 if let Some(b) = app.doc.body() {
                     b.class_list().remove_1("vab-holding").ok();
                 }
+                // Dropped on the trash bin: the part (and what hangs on it) is gone; Ctrl+Z brings it back.
+                let over_trash = app.doc.get_element_by_id("vab-trash").is_some_and(|t| {
+                    let r = t.get_bounding_client_rect();
+                    let (x, y) = (ev.client_x() as f64, ev.client_y() as f64);
+                    x >= r.left() && x <= r.right() && y >= r.top() && y <= r.bottom()
+                });
+                if over_trash {
+                    if pasting {
+                        // A paste dropped in the bin never reached the craft: nothing to undo.
+                        let mut history = std::mem::take(&mut app.vab_history);
+                        history.undo(&mut app.editor);
+                        app.vab_history = history;
+                    }
+                    set_text(&app.doc, "vab-report", "deleted (Ctrl+Z to bring it back)");
+                    app.press = None;
+                    app.drag = None;
+                    app.render_vab();
+                    return;
+                }
                 let free = app.editor.free_nodes(&app.catalog);
                 let rect = app.gpu_canvas.get_bounding_client_rect();
                 app.vab3d.cursor = (
