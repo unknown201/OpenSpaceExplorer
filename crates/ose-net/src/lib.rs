@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 53;
+pub const PROTOCOL_VERSION: u16 = 55;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -691,6 +691,12 @@ pub struct FlightReadout {
     /// The report being sent home: (experiment, location, share sent 0..1, reports waiting behind it, why
     /// it is held up when it is: no link, no power).
     pub transmitting: Option<(String, String, f32, u16, Option<String>)>,
+    /// Flying a planned burn: the delta-v still to go, m/s. Nodes are flown by the engines (pointed along
+    /// the node from half its burn time before, burning until it is delivered); passing a node changes
+    /// nothing by itself.
+    pub burn_left_mps: Option<f32>,
+    /// Why the last planned burn stopped short (out of thrust, crashed); the node stays.
+    pub burn_stopped: Option<String>,
     /// A Kerbal holding a ladder: (vessel, part).
     pub on_ladder: Option<(u64, u16)>,
     /// A Kerbal climbing in through a hatch (`Board`): the vessel is gone a moment later.

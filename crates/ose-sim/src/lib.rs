@@ -197,7 +197,9 @@ impl Universe {
                 let Some(body) = self.body_of(e) else {
                     continue;
                 };
+                // a vessel flying a planned burn stays under power
                 if p.crashed
+                    || self.world.get::<vessels::ExecutingBurn>(e).is_some()
                     || p.landed
                     || p.throttle > 0.0
                     || p.coasting_since.is_none()
@@ -1295,6 +1297,68 @@ impl Universe {
         self.world.get::<vessels::ScheduledBurn>(e).copied()
     }
 
+    /// Development only: let planned burns change orbits at their time without engines or propellant (the
+    /// old impulsive behaviour). Off by default: a node is a plan, and its burn is flown.
+    pub fn set_free_burns(&mut self, on: bool) {
+        self.world.insert_resource(vessels::FreeBurns(on));
+    }
+
+    /// When the vessel's scheduled burn starts: half its burn time before the node, at the thrust it has.
+    pub fn burn_start(&self, e: Entity) -> Option<f64> {
+        let b = self.scheduled_burn(e)?;
+        let Some(p) = self
+            .world
+            .get::<flight::Powered>(e)
+            .or_else(|| self.world.get::<flight::Dormant>(e).map(|d| &d.0))
+        else {
+            return Some(b.ut);
+        };
+        let thrust = p
+            .current_stage()
+            .map(|s| s.thrust_vac_kn.max(s.thrust_asl_kn))
+            .unwrap_or(0.0);
+        let dv = (b.prograde_mps.powi(2) + b.normal_mps.powi(2) + b.radial_mps.powi(2)).sqrt();
+        let half = if thrust > 0.0 && p.mass_t > 0.0 {
+            0.5 * dv * p.mass_t / thrust
+        } else {
+            0.0
+        };
+        Some(b.ut - half.min(3_600.0))
+    }
+
+    /// The planned burn the vessel is flying: what is left of it, m/s, inertial.
+    pub fn burn_left(&self, e: Entity) -> Option<DVec3> {
+        self.world
+            .get::<vessels::ExecutingBurn>(e)
+            .map(|x| x.dv - x.delivered)
+    }
+
+    /// Why the vessel's last planned burn stopped short.
+    pub fn burn_stopped(&self, e: Entity) -> Option<&str> {
+        self.world
+            .get::<vessels::BurnStopped>(e)
+            .map(|b| b.0.as_str())
+    }
+
+    /// Start flying the scheduled burn now: the delta-v it asks for at its time, held and burned.
+    fn begin_burn(&mut self, e: Entity) {
+        let (Some(b), Some(o)) = (
+            self.scheduled_burn(e),
+            self.world.get::<bodies::OnRails>(e).map(|o| o.0),
+        ) else {
+            return;
+        };
+        let dv = vessels::burn_delta_v(&o, &b);
+        self.world
+            .entity_mut(e)
+            .remove::<vessels::BurnStopped>()
+            .insert(vessels::ExecutingBurn {
+                dv,
+                delivered: DVec3::ZERO,
+                dry_s: 0.0,
+            });
+    }
+
     /// Plan a chain of burns (maneuver nodes) for a vessel: put in time order, each planned on the orbit
     /// the one before leaves; all must be in the future. An empty list clears them.
     pub fn schedule_burns(&mut self, e: Entity, mut burns: Vec<vessels::ScheduledBurn>) -> bool {
@@ -1397,8 +1461,10 @@ impl Universe {
             if let Some(nt) = self.world.get::<vessels::NextTransition>(e) {
                 stops.push(nt.ut);
             }
-            if let Some(b) = self.world.get::<vessels::ScheduledBurn>(e) {
-                stops.push(b.ut);
+            if self.world.get::<vessels::ExecutingBurn>(e).is_none() {
+                if let Some(t) = self.burn_start(e) {
+                    stops.push(t);
+                }
             }
             for stop in stops {
                 let at_tick = (stop * TICKS_PER_SECOND as f64).ceil().max(0.0) as u64;
@@ -1455,6 +1521,15 @@ impl Universe {
             {
                 vessels::promote_next_burn(&mut self.world, e);
             }
+            // a maneuver hold flies the node from its start
+            if matches!(p.attitude, flight::Attitude::Maneuver(_))
+                && self.world.get::<vessels::ExecutingBurn>(e).is_none()
+                && self.burn_start(e).is_some_and(|t| t <= self.ut())
+            {
+                self.begin_burn(e);
+            }
+            let mut exec = self.world.get::<vessels::ExecutingBurn>(e).copied();
+            let mut exec_done: Option<Option<String>> = None;
             // a maneuver hold points at the scheduled burn as it stands now
             if matches!(p.attitude, flight::Attitude::Maneuver(_)) {
                 let burn = self.world.get::<vessels::ScheduledBurn>(e).copied();
@@ -1579,6 +1654,28 @@ impl Universe {
                         }
                     }
                 }
+                // flying a planned burn: hold along what is left, throttle up once pointed, ease off near the end
+                if let (Some(x), None) = (&exec, &exec_done) {
+                    let left = x.dv - x.delivered;
+                    if left.length() > 1e-6 {
+                        let dir = left.normalized();
+                        p.attitude = flight::Attitude::Maneuver(dir);
+                        let thrust = p
+                            .current_stage()
+                            .map(|s| s.thrust_vac_kn.max(s.thrust_asl_kn))
+                            .unwrap_or(0.0);
+                        let a_max = if p.mass_t > 0.0 {
+                            thrust / p.mass_t
+                        } else {
+                            0.0
+                        };
+                        p.throttle = if p.facing.dot(dir) > 0.996 && a_max > 0.0 {
+                            (left.length() / a_max).clamp(0.02, 1.0)
+                        } else {
+                            0.0
+                        };
+                    }
+                }
                 let env = flight::EngineEnvironment::at(&p, &body, atmo.as_ref());
                 let step_ut = start_ut + i as f64 * step_dt;
                 let propulsion = structure.as_mut().map(|st| {
@@ -1626,6 +1723,32 @@ impl Universe {
                         step_dt,
                         &mut out,
                     );
+                }
+                if let (Some(x), None) = (&mut exec, &exec_done) {
+                    // what the engines (and anything but gravity) changed this step
+                    let r = before.r.length();
+                    let g = before.r * (-body.mu / (r * r * r));
+                    x.delivered = x.delivered + (p.v - before.v) - g * step_dt;
+                    let left = x.dv - x.delivered;
+                    let wanted = before.throttle > 0.0;
+                    if left.dot(x.dv) <= 0.0 || left.length() < 0.05 {
+                        p.throttle = 0.0;
+                        exec_done = Some(None);
+                    } else if wanted && out.thrust_kn <= 0.0 {
+                        x.dry_s += step_dt;
+                        if x.dry_s > 3.0 {
+                            p.throttle = 0.0;
+                            exec_done = Some(Some(format!(
+                                "out of thrust with {:.1} m/s to go",
+                                left.length()
+                            )));
+                        }
+                    } else {
+                        x.dry_s = 0.0;
+                    }
+                    if p.crashed {
+                        exec_done = Some(Some("the vessel crashed".into()));
+                    }
                 }
                 // a hard landing breaks the parts it lands on; the rest may come through
                 if out.crashed {
@@ -1747,6 +1870,24 @@ impl Universe {
                     self.broken_off.push((e, d));
                 }
             }
+            match exec_done {
+                Some(stopped) => {
+                    let mut ent = self.world.entity_mut(e);
+                    ent.remove::<vessels::ExecutingBurn>();
+                    match stopped {
+                        // flown: the next node takes its place
+                        None => vessels::promote_next_burn(&mut self.world, e),
+                        Some(why) => {
+                            ent.insert(vessels::BurnStopped(why));
+                        }
+                    }
+                }
+                None => {
+                    if let Some(x) = exec {
+                        self.world.entity_mut(e).insert(x);
+                    }
+                }
+            }
             let orbit = Orbit::from_state_vectors(body.mu, p.r, p.v, ut);
             // back on rails only when the coast cannot hit anything: periapsis above the atmosphere and the
             // highest terrain (or an escape trajectory)
@@ -1757,7 +1898,9 @@ impl Universe {
                     .unwrap_or(0.0)
                     .max(terrain.as_ref().map(|t| t.max_m.max(0.0)).unwrap_or(0.0));
             let safe_coast = orbit.eccentricity() >= 1.0 || orbit.periapsis() > clear_top;
+            let flying_burn = self.world.get::<vessels::ExecutingBurn>(e).is_some();
             let hand_off = p.coasting_since.is_some_and(|t| ut - t >= 10.0)
+                && !flying_burn
                 && !p.landed
                 && !p.crashed
                 && safe_coast
@@ -1832,7 +1975,31 @@ impl Universe {
                 self.world.resource_mut::<WarpFactor>().0 = 1;
                 continue;
             }
-            let burned = vessels::apply_due_burn(&mut self.world, e, ut);
+            // a planned burn is flown by the vessel's engines: wake it at the burn's start
+            let under_way = self.world.get::<vessels::ExecutingBurn>(e).is_some();
+            if self.world.get::<flight::Dormant>(e).is_some()
+                && (under_way || self.burn_start(e).is_some_and(|t| t <= ut))
+                && !self
+                    .world
+                    .get_resource::<vessels::FreeBurns>()
+                    .is_some_and(|f| f.0)
+            {
+                if !under_way {
+                    self.begin_burn(e);
+                }
+                if self.wake(e) {
+                    if let Some(mut p) = self.world.get_mut::<flight::Powered>(e) {
+                        p.attitude = flight::Attitude::Maneuver(DVec3::ZERO);
+                    }
+                    // (time warp drops to physics warp by itself while it flies)
+                }
+                continue;
+            }
+            let burned = self
+                .world
+                .get_resource::<vessels::FreeBurns>()
+                .is_some_and(|f| f.0)
+                && vessels::apply_due_burn(&mut self.world, e, ut);
             let t = vessels::update_reference_body(&mut self.world, &index, e, ut);
             let due = self
                 .world
@@ -3547,6 +3714,87 @@ mod tests {
     }
 
     #[test]
+    fn a_planned_burn_is_flown_by_the_engines_on_fuel() {
+        let (mut u, body, spec, st) = k1_on_real_kerbin();
+        let v = u.spawn_vessel_in_circular_orbit("K1", body, 100_000.0);
+        let (r, vel) = u.vessel(v).unwrap().2.state_at(u.ut());
+        let mut p = flight::Powered::new(spec, r, vel, false);
+        p.facing = vel.normalized();
+        // the upper stage (the last with an engine), lit
+        p.ignited = true;
+        p.stage = p
+            .spec
+            .stages
+            .iter()
+            .rposition(|s| s.thrust_vac_kn > 0.0)
+            .unwrap();
+        u.set_dormant(v, p);
+        u.set_structure(v, st);
+        let fuel0 = u
+            .dormant(v)
+            .or(u.powered(v))
+            .map(|p| p.propellant_t)
+            .unwrap();
+        let ap0 = u.vessel(v).unwrap().2.apoapsis();
+        let burn = vessels::ScheduledBurn {
+            ut: u.ut() + 120.0,
+            prograde_mps: 100.0,
+            normal_mps: 0.0,
+            radial_mps: 0.0,
+        };
+        assert!(u.schedule_burn(v, burn));
+        let start = u.burn_start(v).unwrap();
+        assert!(start < burn.ut, "it starts before the node");
+        // passing the node time changes nothing by itself: the engines fly it
+        u.set_warp(4);
+        for _ in 0..(400 * TICKS_PER_SECOND / 4) {
+            u.step();
+            if u.scheduled_burn(v).is_none() || u.burn_stopped(v).is_some() {
+                break;
+            }
+        }
+        assert!(u.burn_stopped(v).is_none(), "{:?}", u.burn_stopped(v));
+        assert!(u.scheduled_burn(v).is_none(), "flown");
+        let p = u.powered(v).or(u.dormant(v)).unwrap().clone();
+        assert!(
+            p.propellant_t < fuel0,
+            "it burned fuel: {fuel0} -> {}",
+            p.propellant_t
+        );
+        let orbit = Orbit::from_state_vectors(
+            u.world.get::<bodies::Body>(body).unwrap().mu,
+            p.r,
+            p.v,
+            u.ut(),
+        );
+        let ap_impulse = vessels::orbit_after_burn(
+            &u.vessel(v).unwrap().2,
+            &vessels::ScheduledBurn { ut: u.ut(), ..burn },
+        );
+        let _ = ap_impulse;
+        assert!(
+            orbit.apoapsis() > ap0 + 100_000.0,
+            "raised: {ap0} -> {}",
+            orbit.apoapsis()
+        );
+        // a vessel with no engines does not move for its node
+        let probe = u.spawn_vessel_in_circular_orbit("probe", body, 120_000.0);
+        let before = u.vessel(probe).unwrap().2.apoapsis();
+        assert!(u.schedule_burn(
+            probe,
+            vessels::ScheduledBurn {
+                ut: u.ut() + 10.0,
+                ..burn
+            }
+        ));
+        u.set_warp(100);
+        for _ in 0..10 {
+            u.step();
+        }
+        assert!((u.vessel(probe).unwrap().2.apoapsis() - before).abs() < 1.0);
+    }
+
+    #[test]
     fn scheduled_burn_raises_apoapsis_and_lands_on_the_tick() {
         use ose_data::{CelestialBody as BodyDef, BIG_G, G0};
         let mu = 1.00034160493135 * G0 * 600_000.0 * 600_000.0;
@@ -3571,6 +3819,8 @@ mod tests {
             star_luminosity: None,
         };
         let mut u = Universe::with_bodies(&[kerbin]);
+        // the old impulsive burns, kept for development
+        u.set_free_burns(true);
         let body = u.body_entity("Kerbin").unwrap();
         let v = u.spawn_vessel_in_circular_orbit("probe", body, 100_000.0);
         let burn = vessels::ScheduledBurn {

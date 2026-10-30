@@ -465,6 +465,26 @@ pub async fn run_mun_campaign(cfg: &BotConfig) -> Vec<StepResult> {
                 flight.vessel_id,
                 &flight.tuned,
             ) {
+                // the engines fly the transfer burn; then a small correction puts the Mun periapsis back
+                // in the band and is flown on the way
+                let t = &match server_flight::warp_until_flown(c, id, t.burn_ut, COAST_TIMEOUT).await {
+                    Err(e) => return Outcome::failed(e),
+                    Ok(()) => match server_flight::correct_course(
+                        c,
+                        b,
+                        id,
+                        MUN_PERIAPSIS_MIN_M,
+                        MUN_PERIAPSIS_MAX_M,
+                    )
+                    .await
+                    {
+                        Ok(corr) => TunedBurn {
+                            burn_ut: t.burn_ut,
+                            ..corr
+                        },
+                        Err(e) => return Outcome::failed(e),
+                    },
+                };
                 let v = match server_flight::warp_until_around(c, id, b.mun, COAST_TIMEOUT).await {
                     Ok(v) => v,
                     Err(e) => return Outcome::failed(e),
@@ -547,7 +567,7 @@ pub async fn run_mun_campaign(cfg: &BotConfig) -> Vec<StepResult> {
             if let Err(e) = server_flight::capture_predicted(&patches, b, cap.burn_ut) {
                 return Outcome::failed(e);
             }
-            if let Err(e) = server_flight::warp_past(c, cap.burn_ut + 5.0, COAST_TIMEOUT).await {
+            if let Err(e) = server_flight::warp_until_flown(c, id, cap.burn_ut, COAST_TIMEOUT).await {
                 return Outcome::failed(e);
             }
             let after = match c.vessel_state(id, Duration::from_secs(10)).await {

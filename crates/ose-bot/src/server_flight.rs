@@ -4,7 +4,7 @@
 use crate::client::{orbit_from, Client};
 use crate::plan::{in_plane_angle, plan_hohmann, TransferPlan};
 use anyhow::{anyhow, bail, Context, Result};
-use ose_net::{PatchEnd, TrajectoryPatch, VesselState};
+use ose_net::{PatchEnd, ServerMessage, TrajectoryPatch, VesselState};
 use std::time::Duration;
 
 /// Warp the bot asks for while coasting. The server clamps it so burns and SOI crossings land on tick.
@@ -214,6 +214,84 @@ pub async fn warp_until_around(
         .await;
     c.request_warp(1).await?;
     result
+}
+
+/// Warp until the vessel has flown its planned burn at `burn_ut` (the server flies nodes with the engines,
+/// at physics warp, from half the burn time before): its time is past the node and its trajectory has no
+/// maneuver left. Then drop back to real time.
+pub async fn warp_until_flown(
+    c: &mut Client,
+    vessel: u64,
+    burn_ut: f64,
+    timeout: Duration,
+) -> Result<()> {
+    c.request_warp(COAST_WARP).await?;
+    let result = c
+        .wait_for(timeout, "the planned burn to be flown", |l, m| match m {
+            ServerMessage::Trajectory {
+                vessel: v, patches, ..
+            } if *v == vessel
+                && l.ut() > burn_ut
+                && !patches.iter().any(|p| p.end == PatchEnd::Maneuver)
+                && l.vessel(vessel)
+                    .and_then(|v| v.flight.as_ref())
+                    .is_none_or(|f| f.burn_left_mps.is_none()) =>
+            {
+                Some(())
+            }
+            _ => None,
+        })
+        .await;
+    c.request_warp(1).await?;
+    result
+}
+
+/// After the transfer burn is flown (its finite burn lands a little off the impulsive plan), aim the Mun
+/// periapsis back into `[alt_min_m, alt_max_m]` with a small prograde correction five minutes on, as a
+/// player would: sample -20..+20 m/s in 0.25 m/s steps against the server's prediction and keep the one
+/// nearest the middle of the band (none when the trajectory already is in it).
+pub async fn correct_course(
+    c: &mut Client,
+    b: &Bodies,
+    vessel: u64,
+    alt_min_m: f64,
+    alt_max_m: f64,
+) -> Result<TunedBurn> {
+    let mid = 0.5 * (alt_min_m + alt_max_m);
+    let burn_ut = c.latest.ut() + 300.0;
+    let mut attempts = 0u32;
+    let mut best: Option<(f64, f64, f64, f64)> = None; // (|alt - mid|, dv, alt, encounter)
+    for k in -80..=80 {
+        let dv = k as f64 * 0.25;
+        let (hit, _) = eval(c, b, vessel, burn_ut, dv, &mut attempts).await?;
+        let Some((alt, enc)) = hit else { continue };
+        let score = (alt - mid).abs();
+        if best.is_none_or(|(s, ..)| score < s) {
+            best = Some((score, dv, alt, enc));
+        }
+    }
+    let Some((_, dv, alt, _)) = best else {
+        bail!("no correction within 20 m/s keeps a Mun encounter");
+    };
+    if alt < alt_min_m || alt > alt_max_m {
+        bail!(
+            "the best correction ({dv:.2} m/s) gives a Mun periapsis of {:.0} km, outside [{:.0}, {:.0}] km",
+            alt / 1000.0,
+            alt_min_m / 1000.0,
+            alt_max_m / 1000.0
+        );
+    }
+    // schedule it last so it is the one the server keeps
+    let (hit, patches) = eval(c, b, vessel, burn_ut, dv, &mut attempts).await?;
+    let (alt, enc) = hit.ok_or_else(|| anyhow!("the correction lost its encounter on re-check"))?;
+    Ok(TunedBurn {
+        dv_mps: dv,
+        burn_ut,
+        predicted_periapsis_alt_m: alt,
+        predicted_encounter_ut: enc,
+        attempts,
+        patch_ends: patches.iter().map(|p| p.end).collect(),
+    })
 }
 
 /// Warp until the server's time passes `ut`, then drop back to real time.

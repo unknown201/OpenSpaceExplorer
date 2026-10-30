@@ -289,6 +289,25 @@ pub struct ScheduledBurn {
     pub radial_mps: f64,
 }
 
+/// A planned burn being flown: the vessel holds along what is left of `dv` (inertial, m/s, as the node
+/// gives it at its time) and burns its engines until `delivered` covers it. Nothing changes the orbit
+/// but the engines.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct ExecutingBurn {
+    pub dv: DVec3,
+    pub delivered: DVec3,
+    /// How long the engines have been asked for thrust and given none, s (out of propellant).
+    pub dry_s: f64,
+}
+
+/// Why the vessel's last planned burn stopped short (no engines, out of propellant).
+#[derive(Component, Clone, Debug, PartialEq)]
+pub struct BurnStopped(pub String);
+
+/// Development only: planned burns change the orbit at their time without engines or propellant.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq)]
+pub struct FreeBurns(pub bool);
+
 /// The burns planned after the vessel's `ScheduledBurn`, in time order (chained maneuver nodes): each
 /// becomes the scheduled one when the one before is done.
 #[derive(Component, Clone, Debug, Default, PartialEq)]

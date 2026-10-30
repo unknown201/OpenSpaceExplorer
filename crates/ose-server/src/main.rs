@@ -1128,6 +1128,8 @@ fn flight_readout(
                 stalled.map(String::from),
             )
         }),
+        burn_left_mps: u.burn_left(e).map(|d| d.length() as f32),
+        burn_stopped: u.burn_stopped(e).map(String::from),
         // filled in by `vessels_message`, which knows the vessel ids
         on_ladder: None,
         boarding: u.boarding(e).is_some(),
