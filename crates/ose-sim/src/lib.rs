@@ -843,6 +843,9 @@ impl Universe {
         }
         // As a roll from the reference (north): the landed vessel keeps its roll, not a free top.
         flight::set_vessel_top(&mut p, south.normalized());
+        // Standing on the ground the craft shows its drive heading's roll: face that south too, or it would
+        // stand rolled the other way until lift-off and turn round as it leaves the pad.
+        p.drive.heading_rad = std::f64::consts::PI;
         let mut p = p.clone();
         if let Some(mut st) = self.world.entity_mut(e).take::<structure::Structure>() {
             st.sync(&mut p);
