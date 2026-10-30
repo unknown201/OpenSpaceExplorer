@@ -8,10 +8,14 @@ test("held flight controls with 30 ms added round-trip delay", async ({ page, ba
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));
   // Delay each direction without changing ordering. This models latency, not packet loss or bandwidth.
+  // The delay starts with the measured flight: Firefox's routed WebSocket sometimes holds the join reply
+  // when every frame is deferred from the first one.
+  let delaying = false;
   await page.routeWebSocket("**/ws", socket => {
     const server = socket.connectToServer();
     const later = (send: () => void) => {
       if (!active) return;
+      if (!delaying) { send(); return; }
       const timer = setTimeout(() => { timers.delete(timer); if (active) send(); }, 15);
       timers.add(timer);
     };
@@ -62,6 +66,7 @@ test("held flight controls with 30 ms added round-trip delay", async ({ page, ba
     await page.keyboard.press("z");
     await page.keyboard.press("Space");
     await expect(page.locator('[data-ose="flight"]')).toHaveAttribute("data-ose-situation", "Flying", { timeout: 20_000 });
+    delaying = true;
     const start = performance.now();
     const frameTimes = page.evaluate(() => new Promise<number[]>(resolve => {
       const times: number[] = [];
