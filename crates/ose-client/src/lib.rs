@@ -3175,6 +3175,14 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
             if let Some(d) = drag {
                 ev.prevent_default();
                 let app = a.borrow();
+                // Leave the search box (or any field): keys like Ctrl+Z belong to the editor again.
+                if let Some(f) = app
+                    .doc
+                    .active_element()
+                    .and_then(|e| e.dyn_into::<HtmlElement>().ok())
+                {
+                    f.blur().ok();
+                }
                 if let Some(b) = app.doc.body() {
                     b.class_list().add_1("stage-dragging").ok();
                 }
