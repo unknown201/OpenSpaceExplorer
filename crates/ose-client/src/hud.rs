@@ -182,6 +182,150 @@ pub fn apsides(
     (Some((a * (1.0 + e) - radius_m, t_ap)), (pe_alt, t_pe))
 }
 
+/// SVG path of a ring segment between radii `r0` and `r1` from `a0` to `a1` degrees (clockwise from +x, y
+/// down, as SVG draws).
+fn ring_seg(r0: f64, r1: f64, a0: f64, a1: f64) -> String {
+    let p = |r: f64, a: f64| {
+        let t = a.to_radians();
+        (r * t.cos(), r * t.sin())
+    };
+    let (x0, y0) = p(r1, a0);
+    let (x1, y1) = p(r1, a1);
+    let (x2, y2) = p(r0, a1);
+    let (x3, y3) = p(r0, a0);
+    let large = if (a1 - a0).abs() > 180.0 { 1 } else { 0 };
+    let sweep = if a1 > a0 { 1 } else { 0 };
+    format!(
+        "M{x0:.1} {y0:.1}A{r1} {r1} 0 {large} {sweep} {x1:.1} {y1:.1}L{x2:.1} {y2:.1}A{r0} {r0} 0 {large} {} {x3:.1} {y3:.1}Z",
+        1 - sweep
+    )
+}
+
+/// Where vertical speed `v` (m/s) sits on the original's log scale beside the navball: -1 (falling 1000 m/s
+/// or more) to 1 (climbing as fast), 0 level.
+pub fn vspeed_scale(v: f64) -> f64 {
+    (v.signum() * (1.0 + v.abs()).log10() / 3.0).clamp(-1.0, 1.0)
+}
+
+/// The original's bezel round the navball (navball radius 100 in its own units): the heading tape over the
+/// top, the throttle as a segmented arc on the left, the vertical speed on a log arc on the right.
+pub fn navball_bezel_svg(throttle: f64, vspeed: f64, heading: Option<f64>) -> String {
+    let mut s = String::new();
+    // The dark ring the heading tape sits on.
+    s.push_str(&format!(
+        "<path d=\"{}\" fill=\"#121722\" stroke=\"#2a3348\" stroke-width=\"1\"/>",
+        ring_seg(101.0, 124.0, 200.0, 340.0)
+    ));
+    if let Some(h) = heading {
+        for k in -14..=14 {
+            let mark = ((h / 5.0).round() + k as f64) * 5.0;
+            let a = 270.0 + (mark - h);
+            if !(203.0..=337.0).contains(&a) {
+                continue;
+            }
+            let deg = (mark.round() as i64).rem_euclid(360);
+            let t = a.to_radians();
+            let (c, sn) = (t.cos(), t.sin());
+            let major = deg % 10 == 0;
+            let r0 = if major { 112.0 } else { 116.0 };
+            s.push_str(&format!(
+                "<line x1=\"{:.1}\" y1=\"{:.1}\" x2=\"{:.1}\" y2=\"{:.1}\" stroke=\"#8fa6d6\" stroke-width=\"1\"/>",
+                r0 * c,
+                r0 * sn,
+                123.0 * c,
+                123.0 * sn
+            ));
+            if deg % 30 == 0 {
+                let label = match deg {
+                    0 => "N".to_string(),
+                    90 => "E".to_string(),
+                    180 => "S".to_string(),
+                    270 => "W".to_string(),
+                    d => d.to_string(),
+                };
+                let color = if deg % 90 == 0 { "#ff5a4a" } else { "#b8c6e6" };
+                s.push_str(&format!(
+                    "<text x=\"{:.1}\" y=\"{:.1}\" fill=\"{color}\" font-size=\"9\" text-anchor=\"middle\" dominant-baseline=\"middle\" transform=\"rotate({:.1} {:.1} {:.1})\">{label}</text>",
+                    106.0 * c,
+                    106.0 * sn,
+                    a + 90.0,
+                    106.0 * c,
+                    106.0 * sn
+                ));
+            }
+        }
+        // The lubber mark at the top.
+        s.push_str("<path d=\"M0 -100L-4 -94L4 -94Z\" fill=\"#3fe05a\"/>");
+    }
+    // Throttle: twenty segments from the lower left up to the upper left, lit up to the setting.
+    let (a_lo, a_hi) = (128.0_f64, 232.0_f64);
+    let n = 20;
+    let lit = (throttle.clamp(0.0, 1.0) * n as f64).round() as i32;
+    for k in 0..n {
+        let a0 = a_lo + (a_hi - a_lo) * k as f64 / n as f64;
+        let a1 = a_lo + (a_hi - a_lo) * (k as f64 + 0.8) / n as f64;
+        let on = k < lit;
+        s.push_str(&format!(
+            "<path d=\"{}\" fill=\"{}\"/>",
+            ring_seg(134.0, 156.0, a0, a1),
+            if on { "#3fe05a" } else { "#1a2a22" }
+        ));
+    }
+    let t = a_hi.to_radians();
+    s.push_str(&format!(
+        "<text x=\"{:.1}\" y=\"{:.1}\" fill=\"#e6ecf7\" font-size=\"11\" font-weight=\"700\" text-anchor=\"middle\" dominant-baseline=\"middle\">{:.0}</text>",
+        150.0 * t.cos() + 6.0,
+        150.0 * t.sin() - 12.0,
+        throttle.clamp(0.0, 1.0) * 100.0
+    ));
+    // Vertical speed: a log scale on the right, level at the middle, climbing up; the fill runs from level.
+    let span = 55.0;
+    s.push_str(&format!(
+        "<path d=\"{}\" fill=\"#121722\" stroke=\"#2a3348\" stroke-width=\"1\"/>",
+        ring_seg(134.0, 146.0, -span, span)
+    ));
+    let at = -vspeed_scale(vspeed) * span;
+    if at.abs() > 0.3 {
+        s.push_str(&format!(
+            "<path d=\"{}\" fill=\"{}\"/>",
+            ring_seg(135.0, 145.0, at.min(0.0), at.max(0.0)),
+            if vspeed >= 0.0 { "#3a8bff" } else { "#ff7a3a" }
+        ));
+    }
+    for (v, label) in [
+        (1000.0, "+1k"),
+        (100.0, "+100"),
+        (10.0, "+10"),
+        (0.0, "0"),
+        (-10.0, "-10"),
+        (-100.0, "-100"),
+        (-1000.0, "-1k"),
+    ] {
+        let a = (-vspeed_scale(v) * span).to_radians();
+        let (c, sn) = (a.cos(), a.sin());
+        s.push_str(&format!(
+            "<line x1=\"{:.1}\" y1=\"{:.1}\" x2=\"{:.1}\" y2=\"{:.1}\" stroke=\"#8fa6d6\" stroke-width=\"1\"/><text x=\"{:.1}\" y=\"{:.1}\" fill=\"#b8c6e6\" font-size=\"9\" dominant-baseline=\"middle\">{label}</text>",
+            146.0 * c,
+            146.0 * sn,
+            150.0 * c,
+            150.0 * sn,
+            152.0 * c,
+            152.0 * sn
+        ));
+    }
+    let a = at.to_radians();
+    s.push_str(&format!(
+        "<path d=\"M{:.1} {:.1}L{:.1} {:.1}L{:.1} {:.1}Z\" fill=\"#ffffff\"/>",
+        132.0 * a.cos(),
+        132.0 * a.sin(),
+        126.0 * (a - 0.035).cos(),
+        126.0 * (a - 0.035).sin(),
+        126.0 * (a + 0.035).cos(),
+        126.0 * (a + 0.035).sin()
+    ));
+    s
+}
+
 pub fn fmt_dist(m: f64) -> String {
     if !m.is_finite() {
         "--".into()
@@ -1528,6 +1672,21 @@ pub fn players_html(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The bezel's scales: vertical speed on the original's log arc, throttle lit by twentieths.
+    #[test]
+    fn navball_bezel_scales() {
+        assert_eq!(vspeed_scale(0.0), 0.0);
+        assert!((vspeed_scale(999.0) - 1.0).abs() < 1e-9);
+        assert!((vspeed_scale(-9.0) + 1.0 / 3.0).abs() < 1e-9);
+        assert_eq!(vspeed_scale(1e6), 1.0);
+        let lit = |t: f64| navball_bezel_svg(t, 0.0, Some(90.0)).matches("#3fe05a\"/>").count();
+        assert_eq!(lit(0.0), 1, "only the lubber mark at no throttle");
+        assert_eq!(lit(0.5), 11);
+        assert_eq!(lit(1.0), 21);
+        assert!(navball_bezel_svg(0.0, 0.0, Some(90.0)).contains(">E<"));
+        assert!(!navball_bezel_svg(0.0, 0.0, None).contains(">E<"));
+    }
 
     fn orbit(a: f64, e: f64, m0: f64) -> OrbitElements {
         OrbitElements {
