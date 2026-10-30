@@ -33,6 +33,12 @@ ICONS = [
     "PartCategories-ICO-Structure", "PartCategories-ICO-Aero", "PartCategories-ICO-Ground", "PartCategories-ICO-Thermal",
     "PartCategories-ICO-Electrical", "PartCategories-ICO-Communication", "PartCategories-ICO-Science",
     "PartCategories-ICO-Utility", "PartCategories-ICO-Payload",
+    # VAB tool bar (oab bundle).
+    "ToolsBar-ICO-Redo-onRest", "ToolsBar-ICO-CoMass-onRest", "ToolsBar-ICO-CoLift-onRest", "ToolsBar-ICO-CoThrust-onRest",
+    "ToolsBar-ICO-SymOne-onRest", "ToolsBar-ICO-SymTwo-onRest", "ToolsBar-ICO-SymThree-onRest", "ToolsBar-ICO-SymFour-onRest",
+    "ToolsBar-ICO-SymSix-onRest", "ToolsBar-ICO-SymEight-onRest", "ToolsBar-ICO-SymMirror-onRest", "ICO-SnapMagnet",
+    "ToolsBar-ICO-SelectionTool-onRest", "ToolsBar-ICO-TransformRotateTool-onRest", "ToolsBar-ICO-ViewVertical",
+    "ToolsBar-ICO-ViewHorizontal", "ToolsBar-ICO-ColorManager-onRest",
     # Map markers.
     "ICO-Map-Vessel-16x16", "ICO-Map-Kerbal-16x16", "ICO-Map-Flag-16x16", "ICO-Map-Planet-16x16",
     "ICO-Map-StarSystem-16x16", "ICO-Map-Debris-16x16",

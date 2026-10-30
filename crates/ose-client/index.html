@@ -1008,6 +1008,24 @@
     /* Science transmission under way: the Transmit button fills, red when it stalls. */
     #flight-hud #fh-transmit.sending { background: linear-gradient(90deg, #1f6b8f var(--p, 0%), #10141bd9 var(--p, 0%)); color: #fff; }
     #flight-hud #fh-transmit.stalled { background: linear-gradient(90deg, #8f2f1f var(--p, 0%), #10141bd9 var(--p, 0%)); }
+    /* The VAB tool bar in the original's icons (text stays for screen readers and tooltips). */
+    body.webgpu #vab-header > .vh-group:first-of-type :is(#vab-sym, #vab-snap, #vab-com, #vab-col, #vab-cot, #vab-orient)::before { content: ""; display: inline-block; width: 20px; height: 20px; vertical-align: middle; background: currentColor; -webkit-mask: var(--tool) center / contain no-repeat; mask: var(--tool) center / contain no-repeat; }
+    body.webgpu #vab-header > .vh-group:first-of-type :is(#vab-snap, #vab-com, #vab-col, #vab-cot, #vab-orient) { font-size: 0 !important; }
+    body.webgpu #vab-header #vab-sym { font-size: 11px !important; }
+    body.webgpu #vab-header #vab-snap { --tool: url(assets/ui/hud/ICO-SnapMagnet.png); }
+    body.webgpu #vab-header #vab-com { --tool: url(assets/ui/hud/ToolsBar-ICO-CoMass-onRest.png); }
+    body.webgpu #vab-header #vab-col { --tool: url(assets/ui/hud/ToolsBar-ICO-CoLift-onRest.png); }
+    body.webgpu #vab-header #vab-cot { --tool: url(assets/ui/hud/ToolsBar-ICO-CoThrust-onRest.png); }
+    body.webgpu #vab-header #vab-orient { --tool: url(assets/ui/hud/ToolsBar-ICO-ViewVertical.png); }
+    body.webgpu #vab-header #vab-orient[data-plane="1"] { --tool: url(assets/ui/hud/ToolsBar-ICO-ViewHorizontal.png); }
+    body.webgpu #vab-header #vab-sym { --tool: url(assets/ui/hud/ToolsBar-ICO-SymOne-onRest.png); }
+    body.webgpu #vab-header #vab-sym[data-sym="2"] { --tool: url(assets/ui/hud/ToolsBar-ICO-SymTwo-onRest.png); }
+    body.webgpu #vab-header #vab-sym[data-sym="3"] { --tool: url(assets/ui/hud/ToolsBar-ICO-SymThree-onRest.png); }
+    body.webgpu #vab-header #vab-sym[data-sym="4"] { --tool: url(assets/ui/hud/ToolsBar-ICO-SymFour-onRest.png); }
+    body.webgpu #vab-header #vab-sym[data-sym="6"] { --tool: url(assets/ui/hud/ToolsBar-ICO-SymSix-onRest.png); }
+    body.webgpu #vab-header #vab-sym[data-sym="8"] { --tool: url(assets/ui/hud/ToolsBar-ICO-SymEight-onRest.png); }
+    body.webgpu #vab-header #vab-sym[data-sym="mirror"] { --tool: url(assets/ui/hud/ToolsBar-ICO-SymMirror-onRest.png); }
+    body.webgpu #vab-header #vab-redo i { --ico: url(assets/ui/hud/ToolsBar-ICO-Redo-onRest.png) !important; transform: none; }
     /* The original's trash bin under the picker: a part dropped on it is deleted. */
     #vab-trash { margin-top: 6px; height: 34px; display: grid; place-items: center; border: 1px dashed #3b4a6a; border-radius: 4px; background: #0b1020aa; }
     #vab-trash i { width: 22px; height: 22px; background: #9fb0cc; -webkit-mask: url(assets/ui/hud/TrashBin-ICO-onRest.png) center / contain no-repeat; mask: url(assets/ui/hud/TrashBin-ICO-onRest.png) center / contain no-repeat; }

@@ -7519,6 +7519,19 @@ impl App {
             format!("\u{d7}{}", self.vab_symmetry)
         };
         set_text(&self.doc, "vab-sym", &sym);
+        // The tool bar shows the original's icon for the symmetry and the build orientation.
+        if let Some(b) = self.doc.get_element_by_id("vab-sym") {
+            let key = if sym == "Mirror" {
+                "mirror".to_string()
+            } else {
+                self.vab_symmetry.to_string()
+            };
+            b.set_attribute("data-sym", &key).ok();
+        }
+        if let Some(b) = self.doc.get_element_by_id("vab-orient") {
+            b.set_attribute("data-plane", if self.editor.plane_new { "1" } else { "0" })
+                .ok();
+        }
         for (id, on) in [
             ("vab-com", self.vab_show_com),
             ("vab-cot", self.vab_show_cot),
