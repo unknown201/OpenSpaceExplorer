@@ -3600,6 +3600,22 @@ mod tests {
     }
 
     #[test]
+    fn ksp2s_clock_starts_near_noon_at_the_ksc() {
+        // KSP2's game starts at Y1 D1 00:00 with the sun high over the pad (and setting)
+        let bodies: Vec<ose_data::CelestialBody> =
+            serde_json::from_str(include_str!("../../../assets/own/kerbol-system.json")).unwrap();
+        let u = Universe::with_bodies(&bodies);
+        let kerbin = u.body_entity("Kerbin").unwrap();
+        let (lat, lon) = (-0.6836, -74.8198);
+        let e0 = u.sun_elevation_deg(kerbin, lat, lon, 0.0);
+        assert!(e0 > 60.0, "{e0}");
+        assert!(
+            u.sun_elevation_deg(kerbin, lat, lon, 600.0) < e0,
+            "afternoon"
+        );
+    }
+
+    #[test]
     fn the_sun_rises_over_the_ksc_once_a_kerbin_day() {
         let bodies: Vec<ose_data::CelestialBody> =
             serde_json::from_str(include_str!("../../../assets/own/kerbol-system.json")).unwrap();

@@ -20,9 +20,6 @@ pub struct WorldSetup {
     pub regions: Vec<u8>,
 }
 
-/// How high the sun stands over the KSC when a new campaign starts, degrees.
-pub const MORNING_SUN_DEG: f64 = 15.0;
-
 impl WorldSetup {
     /// A universe at time zero with the bodies, terrain, KSC ground station and science in place.
     pub fn universe(&self) -> Universe {
@@ -48,17 +45,10 @@ impl WorldSetup {
         u
     }
 
-    /// A universe for a new campaign: the clock starts on the first morning at the KSC.
+    /// A universe for a new campaign: the clock starts where the original's does, at Y1 D1 00:00 (UT 0),
+    /// with the sun high over the KSC.
     pub fn new_campaign_universe(&self) -> Universe {
-        let mut u = self.universe();
-        if let Some(kerbin) = u.body_entity("Kerbin") {
-            let (lat, lon, _) = self.ksc;
-            let t = u.next_morning_ut(kerbin, lat, lon, MORNING_SUN_DEG, 0.0);
-            u.set_tick(ose_sim::Tick(
-                (t * ose_sim::TICKS_PER_SECOND as f64).round() as u64,
-            ));
-        }
-        u
+        self.universe()
     }
 }
 
@@ -327,23 +317,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_new_campaign_starts_on_a_morning_at_the_ksc() {
+    fn a_new_campaign_starts_where_ksp2s_clock_does() {
         let setup = WorldSetup {
             bodies: serde_json::from_str(crate::EMBEDDED_BODIES).unwrap(),
             ..Default::default()
         };
         let u = setup.new_campaign_universe();
+        assert_eq!(u.ut(), 0.0, "Y1 D1 00:00");
         let kerbin = u.body_entity("Kerbin").unwrap();
         let (lat, lon, _) = setup.ksc;
         let sun = u.sun_elevation_deg(kerbin, lat, lon, u.ut());
-        assert!(
-            (10.0..20.0).contains(&sun),
-            "sun {sun} degrees up at {} s",
-            u.ut()
-        );
-        assert!(
-            u.sun_elevation_deg(kerbin, lat, lon, u.ut() + 1_800.0) > sun,
-            "rising"
-        );
+        assert!(sun > 60.0, "the sun high over the KSC: {sun} degrees");
     }
 }
