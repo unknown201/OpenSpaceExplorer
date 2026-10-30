@@ -106,6 +106,8 @@ struct App {
     node_el: Option<HtmlElement>,
     /// The other planned maneuver nodes (protocol 46 chains them), not the one being edited (`node`).
     nodes: Vec<Node>,
+    /// Action-group bindings set in flight, by (vessel, part as launched), until the craft catches up.
+    flight_actions: std::collections::HashMap<(u64, u16), Vec<(String, u32)>>,
     player_name: String,
     /// True once the server confirmed us as a campaign member (the map is "in session").
     in_session: bool,
@@ -602,6 +604,7 @@ pub fn start() -> Result<(), JsValue> {
         node: None,
         node_el: None,
         nodes: Vec::new(),
+        flight_actions: Default::default(),
         player_name: String::new(),
         in_session: false,
         campaign: None,
@@ -2738,8 +2741,16 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                 .and_then(|e| e.closest("#fpam-close").ok().flatten())
                 .is_some();
             let mut app = a.borrow_mut();
+            let chip = t.as_ref().and_then(|e| {
+                Some((
+                    e.get_attribute("data-agkind")?,
+                    e.get_attribute("data-agbit")?.parse::<u32>().ok()?,
+                ))
+            });
             if close {
                 app.flight_open_pam(None, 0.0, 0.0);
+            } else if let Some((kind, bit)) = chip {
+                app.flight_toggle_action(&kind, bit);
             } else if let Some(act) = act {
                 app.hud_button(&act);
             }
@@ -2953,6 +2964,22 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                     .and_then(|v| v.parse::<usize>().ok())
             };
             let mut app = a.borrow_mut();
+            let chip = t.as_ref().and_then(|e| {
+                Some((
+                    e.get_attribute("data-agkind")?,
+                    e.get_attribute("data-agbit")?.parse::<u32>().ok()?,
+                ))
+            });
+            if let (Some((kind, bit)), Some(i)) = (chip, app.vab_pam) {
+                app.vab_record();
+                if let Some(p) = app.editor.craft.parts.get_mut(i) {
+                    vab::toggle_action(&mut p.actions, &kind, bit);
+                }
+                if let Some(el) = app.doc.get_element_by_id("vab-pam") {
+                    el.set_inner_html(&vab::pam_html(&app.editor.craft, i, &app.catalog));
+                }
+                return;
+            }
             if close {
                 app.vab_open_pam(None, 0.0, 0.0);
             } else if let Some(k) = num("data-loose-launch") {
@@ -7022,7 +7049,7 @@ impl App {
             let s = stages.iter().position(|st| st.contains(&i))?;
             Some((s, stages.len()))
         });
-        let html = hud::flight_pam_html(
+        let mut html = hud::flight_pam_html(
             &title,
             i,
             f,
@@ -7034,11 +7061,70 @@ impl App {
                 stage,
             },
         );
+        // Protocol 57: shut an engine down or start it again, and the part's action-group bindings.
+        if spec.is_some_and(|s| s.has_engine) {
+            let off = f.engines_off.contains(&(i as u16));
+            html.push_str(&format!(
+                "<div class=\"pam-acts\"><button data-act=\"fh-act-engine\">{}</button></div>",
+                if off {
+                    "Activate engine"
+                } else {
+                    "Shut down engine"
+                }
+            ));
+        }
+        if let Some(s) = spec {
+            html.push_str(&vab::action_groups_html(
+                &self.flight_part_actions(i),
+                &vab::part_action_kinds(s),
+            ));
+        }
         let key = format!("{}:{}", html.len(), hud::fnv(&html));
         if el.get_attribute("data-ose-key").as_deref() != Some(key.as_str()) {
             el.set_inner_html(&html);
             el.set_attribute("data-ose-key", &key).ok();
         }
+    }
+
+    /// Part `i`'s action-group bindings in flight: what this client last set, else the vessel's craft.
+    fn flight_part_actions(&self, i: usize) -> Vec<(String, u32)> {
+        let Some(vessel) = self.flying else {
+            return Vec::new();
+        };
+        if let Some(a) = self.flight_actions.get(&(vessel, i as u16)) {
+            return a.clone();
+        }
+        let now = self
+            .vessel_crafts
+            .get(&vessel)
+            .and_then(|k| k.1.as_ref())
+            .zip(self.flight_cur_part(i))
+            .and_then(|(c, k)| c.parts.get(k));
+        now.or_else(|| self.flight_craft.as_ref().and_then(|c| c.parts.get(i)))
+            .map(|p| p.actions.clone())
+            .unwrap_or_default()
+    }
+
+    /// Bind or unbind part `flight_pam`'s `kind` action to group `bit` in flight (`SetPartActions`).
+    fn flight_toggle_action(&mut self, kind: &str, bit: u32) {
+        let (Some(vessel), Some(i)) = (self.flying, self.flight_pam) else {
+            return;
+        };
+        let mut actions = self.flight_part_actions(i);
+        vab::toggle_action(&mut actions, kind, bit);
+        self.flight_actions
+            .insert((vessel, i as u16), actions.clone());
+        if let Some(ws) = &self.ws {
+            send(
+                ws,
+                &ClientMessage::SetPartActions {
+                    vessel,
+                    part: i as u16,
+                    actions,
+                },
+            );
+        }
+        self.flight_pam_refresh();
     }
 
     /// The index in the craft as flown now (`GetVesselCraft`) of part `i` of the craft as launched.
@@ -9921,6 +10007,18 @@ impl App {
                 }
                 ClientMessage::DeployPanels { vessel, deploy }
             }
+            "fh-act-engine" => {
+                let Some(i) = self.flight_pam else { return };
+                let off = f
+                    .as_ref()
+                    .is_some_and(|f| f.engines_off.contains(&(i as u16)));
+                ClientMessage::PartAction {
+                    vessel,
+                    part: i as u16,
+                    action: "engine".into(),
+                    on: off,
+                }
+            }
             "fh-act-antenna" => ClientMessage::DeployAntennas {
                 vessel,
                 deploy: !f
@@ -10909,7 +11007,8 @@ impl App {
                         }
                         _ => h,
                     };
-                    format!("{:03.0}\u{b0}", h.rem_euclid(360.0))
+                    // 359.6 reads 000, not 360
+                    format!("{:03}\u{b0}", (h.round() as i64).rem_euclid(360))
                 })
                 .unwrap_or_else(|| "--".into()),
         );

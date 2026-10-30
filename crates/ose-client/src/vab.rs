@@ -1273,12 +1273,115 @@ pub fn pam_html(craft: &Craft, i: usize, catalog: &Catalog) -> String {
             v = r.stored_units,
         ));
     }
+    let kinds = spec.map(part_action_kinds).unwrap_or_default();
     format!(
         "<div class=\"pam-head\"><b>{title}</b><button id=\"pam-close\" title=\"Close (Esc)\">&#10005;</button></div>{stage}\
-         <label class=\"pam-row\"><span>Fuel crossfeed</span><input type=\"checkbox\" id=\"pam-crossfeed\"{cf} /></label>{rows}",
+         <label class=\"pam-row\"><span>Fuel crossfeed</span><input type=\"checkbox\" id=\"pam-crossfeed\"{cf} /></label>{rows}{groups}",
         title = esc(title),
         cf = if p.fuel_crossfeed { " checked" } else { "" },
+        groups = action_groups_html(&p.actions, &kinds),
     )
+}
+
+/// Action groups a part action can be bound to (`KSPActionGroup` bits, protocol 57), as the original's
+/// Action Groups list names them.
+pub const ACTION_GROUPS: [(u32, &str); 17] = [
+    (0x2, "Gear"),
+    (0x4, "Lights"),
+    (0x20, "Brakes"),
+    (0x40, "Abort"),
+    (0x80, "Solar"),
+    (0x100, "Radiators"),
+    (0x200, "Science"),
+    (0x10000, "1"),
+    (0x20000, "2"),
+    (0x40000, "3"),
+    (0x80000, "4"),
+    (0x100000, "5"),
+    (0x200000, "6"),
+    (0x400000, "7"),
+    (0x800000, "8"),
+    (0x1000000, "9"),
+    (0x2000000, "10"),
+];
+
+/// The part actions (`ose_data::craft::ACTIONS`) a part has, from what it is.
+pub fn part_action_kinds(spec: &PartSpec) -> Vec<&'static str> {
+    let id = spec.id.to_ascii_lowercase();
+    let mut kinds = Vec::new();
+    if spec.has_engine {
+        kinds.push("engine");
+    }
+    if [
+        "solar", "antenna", "dish", "gear", "leg", "bay", "radiator", "wheel",
+    ]
+    .iter()
+    .any(|k| id.contains(k))
+    {
+        kinds.push("deploy");
+    }
+    if spec.stage_type.contains("Parachute") || id.contains("parachute") || id.contains("chute") {
+        kinds.push("chute");
+    }
+    if id.contains("isru") || id.contains("converter") {
+        kinds.push("converter");
+    }
+    if id.starts_with("fairing") {
+        kinds.push("fairing");
+    }
+    kinds
+}
+
+/// What each part action does, for the group rows.
+pub fn action_label(kind: &str) -> &'static str {
+    match kind {
+        "engine" => "Engine on / off",
+        "deploy" => "Extend / retract",
+        "chute" => "Arm parachute",
+        "converter" => "Converter on / off",
+        "fairing" => "Deploy fairing",
+        _ => "Action",
+    }
+}
+
+/// The part's action-group bindings: one row per action with a chip per group, lit when bound; a click
+/// binds or unbinds (`data-agbit`, `data-agkind`).
+pub fn action_groups_html(actions: &[(String, u32)], kinds: &[&str]) -> String {
+    if kinds.is_empty() {
+        return String::new();
+    }
+    let mut html = String::from("<div class=\"pam-sub ag-title\">Action groups</div>");
+    for kind in kinds {
+        let bits = actions
+            .iter()
+            .filter(|(a, _)| a == kind)
+            .fold(0u32, |m, (_, b)| m | b);
+        html.push_str(&format!(
+            "<div class=\"ag-row\"><span>{}</span><div class=\"ag-chips\">",
+            action_label(kind)
+        ));
+        for (bit, name) in ACTION_GROUPS {
+            html.push_str(&format!(
+                "<button class=\"ag-chip{on}\" data-agkind=\"{kind}\" data-agbit=\"{bit}\" title=\"bind to {name}\">{name}</button>",
+                on = if bits & bit != 0 { " on" } else { "" },
+            ));
+        }
+        html.push_str("</div></div>");
+    }
+    html
+}
+
+/// `actions` with `bit` toggled for `kind`: bound, or unbound when it was.
+pub fn toggle_action(actions: &mut Vec<(String, u32)>, kind: &str, bit: u32) {
+    let bits = actions
+        .iter()
+        .filter(|(a, _)| a == kind)
+        .fold(0u32, |m, (_, b)| m | b)
+        ^ bit;
+    actions.retain(|(a, _)| a != kind);
+    if bits != 0 {
+        actions.push((kind.to_string(), bits));
+    }
 }
 
 /// Categories in the order the original's picker shows them; anything else goes at the end.
@@ -1434,6 +1537,27 @@ pub fn stage_in_situation(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn action_bindings_toggle_per_group() {
+        let mut a = Vec::new();
+        toggle_action(&mut a, "engine", 0x10000);
+        toggle_action(&mut a, "engine", 0x4);
+        assert_eq!(a, vec![("engine".to_string(), 0x10004)]);
+        toggle_action(&mut a, "deploy", 0x80);
+        toggle_action(&mut a, "engine", 0x10000);
+        assert_eq!(
+            a,
+            vec![("deploy".to_string(), 0x80), ("engine".to_string(), 0x4)]
+        );
+        toggle_action(&mut a, "engine", 0x4);
+        assert_eq!(a, vec![("deploy".to_string(), 0x80)]);
+        let h = action_groups_html(&a, &["deploy"]);
+        assert!(
+            h.contains("ag-chip on\" data-agkind=\"deploy\" data-agbit=\"128\""),
+            "{h}"
+        );
+    }
+
     #[test]
     fn paint_swatches_and_hex() {
         assert_eq!(parse_hex("#d63a2f"), Some([0xd6, 0x3a, 0x2f]));

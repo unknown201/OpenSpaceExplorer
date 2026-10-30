@@ -1046,6 +1046,12 @@
     body.webgpu #vab-header #vab-sym[data-sym="8"] { --tool: url(assets/ui/hud/ToolsBar-ICO-SymEight-onRest.png); }
     body.webgpu #vab-header #vab-sym[data-sym="mirror"] { --tool: url(assets/ui/hud/ToolsBar-ICO-SymMirror-onRest.png); }
     body.webgpu #vab-header #vab-redo i { --ico: url(assets/ui/hud/ToolsBar-ICO-Redo-onRest.png) !important; transform: none; }
+    /* Action group bindings in the part windows (protocol 57). */
+    .pam-sub.ag-title { margin-top: 8px; color: #ffd25a; letter-spacing: 0.06em; text-transform: uppercase; font-size: 11px; }
+    .ag-row { margin: 4px 0; font-size: 11px; color: #cfd6e6; }
+    .ag-chips { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 2px; }
+    .ag-chip { margin: 0 !important; padding: 1px 5px !important; font-size: 10px !important; min-width: 0 !important; background: #16213a !important; color: #9fb0cc !important; border: 1px solid #2c3d63 !important; border-radius: 3px; cursor: pointer; pointer-events: auto; }
+    .ag-chip.on { background: #1f6b3a !important; color: #fff !important; border-color: #3fe05a !important; }
     /* The original's trash bin under the picker: a part dropped on it is deleted. */
     #vab-trash { margin-top: 6px; height: 34px; display: grid; place-items: center; border: 1px dashed #3b4a6a; border-radius: 4px; background: #0b1020aa; }
     #vab-trash i { width: 22px; height: 22px; background: #9fb0cc; -webkit-mask: url(assets/ui/hud/TrashBin-ICO-onRest.png) center / contain no-repeat; mask: url(assets/ui/hud/TrashBin-ICO-onRest.png) center / contain no-repeat; }
