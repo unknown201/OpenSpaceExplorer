@@ -6296,7 +6296,7 @@ impl App {
             }
             let lock = locked.contains(p.id.as_str());
             html.push_str(&format!(
-                "<li data-ose=\"vab-part\" data-ose-part=\"{id}\"{lock}><img class=\"pi\" src=\"assets/ui/parts/{id}.png\" alt=\"\" loading=\"lazy\" draggable=\"false\" onerror=\"this.parentNode.classList.add('noicon');this.remove()\" /><span class=\"pt\">{fav}{title}</span><small>{cat} \u{b7} size {size} \u{b7} {mass:.2} t{extra}</small></li>",
+                "<li data-ose=\"vab-part\" data-ose-part=\"{id}\"{lock}><img class=\"pi\" src=\"assets/ui/parts/{id}.png\" alt=\"\" loading=\"lazy\" draggable=\"false\" onerror=\"this.parentNode.classList.add('noicon');this.remove()\" /><span class=\"pb\" title=\"size {size}\">{badge}</span><span class=\"pstar{faved}\" title=\"favourite: middle click\">\u{2605}</span><span class=\"pt\">{fav}{title}</span><small>{cat} \u{b7} size {size} \u{b7} {mass:.2} t{extra}</small></li>",
                 id = esc(&p.id),
                 lock = if lock {
                     " class=\"locked\" title=\"not researched yet: the launch pad will refuse it\""
@@ -6311,6 +6311,18 @@ impl App {
                 },
                 cat = esc(&p.category),
                 size = esc(&p.size_category),
+                // The original's size badges: XS, SM, MD, LG, XL.
+                badge = match p.size_category.as_str() {
+                    "S" => "SM",
+                    "M" => "MD",
+                    "L" => "LG",
+                    other => other,
+                },
+                faved = if self.vab_favs.contains(&p.id) {
+                    " on"
+                } else {
+                    ""
+                },
                 mass = p.mass_t,
                 extra = if p.has_engine {
                     " \u{b7} engine"

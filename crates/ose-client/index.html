@@ -1008,6 +1008,13 @@
     /* Science transmission under way: the Transmit button fills, red when it stalls. */
     #flight-hud #fh-transmit.sending { background: linear-gradient(90deg, #1f6b8f var(--p, 0%), #10141bd9 var(--p, 0%)); color: #fff; }
     #flight-hud #fh-transmit.stalled { background: linear-gradient(90deg, #8f2f1f var(--p, 0%), #10141bd9 var(--p, 0%)); }
+    /* Part cards as the original's: a size badge at the top left, a favourite star at the top right. */
+    #vab-parts li[data-ose-part] { position: relative; }
+    #vab-parts li .pb { position: absolute; top: 3px; left: 3px; padding: 0 3px; border-radius: 2px; background: #e8a020; color: #10141b; font: 700 9px var(--hud-font); line-height: 13px; }
+    #vab-parts li .pb:empty { display: none; }
+    #vab-parts li .pstar { position: absolute; top: 2px; right: 4px; font-size: 13px; color: #ffffff30; }
+    #vab-parts li .pstar.on { color: #ffd25a; }
+    #vab-parts li .pt .fav { display: none; }
     /* The picker's family headings (the original's Group By: Type). */
     #vab-parts li.pg-head { grid-column: 1 / -1; list-style: none; margin: 8px 0 2px; padding: 0 2px; border: 0 !important; background: none !important; cursor: default; display: block; text-align: left; font: 600 13px var(--hud-font); letter-spacing: 0.14em; text-transform: uppercase; color: #e6ecf7; min-height: 0; height: auto; }
     #vab-parts li.pg-head::before { content: "\25BE  "; color: #9fb0cc; }
