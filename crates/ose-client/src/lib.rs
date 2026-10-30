@@ -190,6 +190,8 @@ struct App {
     /// Ctrl+C clipboard, and whether the fragment in hand is a paste (dropped nowhere it just goes away).
     vab_clipboard: Option<vab::Fragment>,
     vab_pasting: bool,
+    /// The part in hand came from a picker click (not a paste).
+    vab_from_picker: bool,
     /// The held part's turn and its yaw part (W/A/S/D/Q/E while holding, Space resets).
     vab_turn: ose_data::craft::Quat,
     vab_yaw: ose_data::craft::Quat,
@@ -694,6 +696,7 @@ pub fn start() -> Result<(), JsValue> {
         vab_snap: true,
         vab_clipboard: None,
         vab_pasting: false,
+        vab_from_picker: false,
         vab_turn: vab::NO_TURN,
         vab_yaw: vab::NO_TURN,
         vab_stages_readout: Vec::new(),
@@ -3448,7 +3451,7 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                     // A drag that ended in the hall already placed the part (or dropped it).
                     let dragged = std::mem::take(&mut a.borrow_mut().vab_dragged);
                     if !dragged {
-                        a.borrow_mut().vab_add(&id);
+                        a.borrow_mut().vab_hold_new(&id);
                     }
                     break;
                 }
@@ -3456,6 +3459,22 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
             }
         });
         parts.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+        // A double click adds the part at once, on the selected part (a shortcut of ours).
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let id = ev
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .and_then(|e| e.closest("[data-ose-part]").ok().flatten())
+                .and_then(|e| e.get_attribute("data-ose-part"));
+            if let Some(id) = id {
+                let mut app = a.borrow_mut();
+                app.vab_cancel_paste();
+                app.vab_add(&id);
+            }
+        });
+        parts.add_event_listener_with_callback("dblclick", cb.as_ref().unchecked_ref())?;
         cb.forget();
         // Press on a row: the start of a possible drag into the hall.
         let a = app.clone();
@@ -4107,9 +4126,13 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
             app.vab_grab = None;
             app.vab_grab_loose = None;
             let pasting = std::mem::take(&mut app.vab_pasting);
-            if let (Some(frag), Some(_)) = (app.vab_frag.take(), held.as_ref()) {
+            if let (Some(mut frag), Some(_)) = (app.vab_frag.take(), held.as_ref()) {
                 if pasting {
                     app.vab_record();
+                }
+                let from_picker = std::mem::take(&mut app.vab_from_picker);
+                if frag.symmetry == 0 {
+                    frag.symmetry = app.vab_symmetry;
                 }
                 if let Some(b) = app.doc.body() {
                     b.class_list().remove_1("vab-holding").ok();
@@ -4120,12 +4143,23 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                     let (x, y) = (ev.client_x() as f64, ev.client_y() as f64);
                     x >= r.left() && x <= r.right() && y >= r.top() && y <= r.bottom()
                 });
-                if over_trash {
+                // A part in hand let go over the picker goes back, as on the original's part list.
+                let over_picker = ev
+                    .target()
+                    .and_then(|t| t.dyn_into::<Element>().ok())
+                    .is_some_and(|e| e.closest("#vab-picker").ok().flatten().is_some());
+                if over_trash || (pasting && over_picker) {
                     if pasting {
                         // A paste dropped in the bin never reached the craft: nothing to undo.
                         let mut history = std::mem::take(&mut app.vab_history);
                         history.undo(&mut app.editor);
                         app.vab_history = history;
+                    }
+                    if !over_trash {
+                        app.press = None;
+                        app.drag = None;
+                        app.render_vab();
+                        return;
                     }
                     set_text(&app.doc, "vab-report", "deleted (Ctrl+Z to bring it back)");
                     app.press = None;
@@ -4182,6 +4216,9 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                     }
                 } else {
                     set_text(&app.doc, "vab-report", "");
+                    if from_picker {
+                        app.lesson_part(frag.root_id(), true);
+                    }
                 }
                 app.press = None;
                 app.render_vab();
@@ -6703,8 +6740,8 @@ impl App {
             )?;
             let sym = if !self.editor.counterparts(target).is_empty() {
                 1
-            } else if let Some(f) = &self.vab_frag {
-                f.symmetry.max(1)
+            } else if let Some(f) = self.vab_frag.as_ref().filter(|f| f.symmetry > 0) {
+                f.symmetry
             } else {
                 self.vab_symmetry
             };
@@ -6784,6 +6821,24 @@ impl App {
         let Some(frag) = self.vab_clipboard.clone() else {
             return;
         };
+        self.vab_clipboard_hold(frag);
+    }
+
+    /// A picker click: the part goes in hand, under the cursor, and the next click in the hall puts it on
+    /// (the original's way); Esc or a click back on the picker lets it go.
+    fn vab_hold_new(&mut self, part_id: &str) {
+        let Some(spec) = self.catalog.get(part_id) else {
+            set_text(&self.doc, "vab-report", &format!("unknown part {part_id}"));
+            return;
+        };
+        let frag = self.editor.new_part(spec);
+        self.lesson_part(part_id, false);
+        self.vab_clipboard_hold(frag);
+        self.vab_from_picker = true;
+    }
+
+    /// Hold `frag` under the cursor until a click puts it down.
+    fn vab_clipboard_hold(&mut self, frag: vab::Fragment) {
         #[cfg(target_arch = "wasm32")]
         {
             self.vab3d.held = Some((
@@ -6802,6 +6857,7 @@ impl App {
     }
 
     fn vab_cancel_paste(&mut self) {
+        self.vab_from_picker = false;
         self.vab_frag = None;
         self.vab_pasting = false;
         #[cfg(target_arch = "wasm32")]

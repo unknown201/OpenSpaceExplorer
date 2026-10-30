@@ -19,7 +19,7 @@ test("ground EVA and boarding render without animation errors", async ({ page, b
   await page.locator('[data-ose="vab-clear"]').click();
   for (const part of ["Tin Can", "Mk16-XL"]) {
     await page.locator('[data-ose="vab-search"]').fill(part);
-    await page.locator('[data-ose="vab-part"]').first().click();
+    await page.locator('[data-ose="vab-part"]').first().dblclick();
   }
   await page.locator('[data-ose="vab-name"]').fill("ladder pod");
   await page.locator('[data-ose="vab-launch"]').click();

@@ -799,6 +799,46 @@ impl Editor {
         Ok(root)
     }
 
+    /// A new `spec` in hand (a picker click): full tanks, the next stage if it stages, the hall's symmetry
+    /// (`symmetry` 0) when it goes on.
+    pub fn new_part(&self, spec: &PartSpec) -> Fragment {
+        let stage_index = if spec.is_stageable() {
+            self.next_stage_index()
+        } else {
+            0
+        };
+        let mut p = CraftPart {
+            symmetry: 0,
+            actions: Vec::new(),
+            flight: None,
+            colors: None,
+            guid: "p0".into(),
+            part_id: spec.id.clone(),
+            parent: None,
+            own_node: None,
+            parent_node: None,
+            local_position: DVec3::default(),
+            local_rotation: IDENTITY,
+            stage_index,
+            fuel_crossfeed: true,
+            resources: Vec::new(),
+            fuel_line_target: None,
+        };
+        p.resources = spec
+            .resource_containers
+            .iter()
+            .map(|c| StoredResource {
+                resource: c.resource.clone(),
+                stored_units: c.capacity_units,
+                capacity_units: c.capacity_units,
+            })
+            .collect();
+        Fragment {
+            parts: vec![p],
+            symmetry: 0,
+        }
+    }
+
     /// The other parts of part `i`'s symmetry set.
     pub fn counterparts(&self, i: usize) -> Vec<usize> {
         let Some(s) = self

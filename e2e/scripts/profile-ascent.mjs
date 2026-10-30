@@ -102,7 +102,7 @@ try {
     await page.locator('[data-ose="vab-clear"]').click();
     for (const part of ['Tin Can', 'FL-T200', 'LV-T45']) {
       await page.locator('[data-ose="vab-search"]').fill(part);
-      await page.locator('[data-ose="vab-part"]').first().click();
+      await page.locator('[data-ose="vab-part"]').first().dblclick();
     }
     await page.locator('[data-ose="vab-launch"]').click();
     await page.locator('[data-ose="flight"].open').waitFor();

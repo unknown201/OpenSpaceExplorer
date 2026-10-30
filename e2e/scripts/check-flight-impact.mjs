@@ -19,7 +19,7 @@ try {
  await page.locator('[data-ose="create"]').click();await page.locator('[data-ose="ksc"]').waitFor({state:'visible'});
  const build=async(parts,name)=>{
   await page.locator('[data-ose="ksc-vab"]').click();await page.locator('[data-ose="vab-clear"]').click();
-  for(const part of parts){await page.locator('[data-ose="vab-search"]').fill(part);await page.locator('[data-ose="vab-part"]').first().click();}
+  for(const part of parts){await page.locator('[data-ose="vab-search"]').fill(part);await page.locator('[data-ose="vab-part"]').first().dblclick();}
   await page.locator('[data-ose="vab-name"]').fill(name);await page.locator('[data-ose="vab-launch"]').click();
   await page.locator('[data-ose="flight"].open').waitFor();await page.waitForTimeout(3500);
   if(await page.locator('#ftue-off').isVisible())await page.locator('#ftue-off').click();

@@ -426,7 +426,7 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
           return failed(`no parts listed under ${category}`);
         }
         picked.push(((await part.getAttribute("data-ose-part")) ?? "?").trim());
-        await part.click();
+        await part.dblclick();
       }
       const drawn = await page.locator('[data-ose="vab-canvas"]').first().getAttribute("data-ose-vab-parts");
       if (drawn !== "3") return failed(`expected 3 parts on the canvas, saw ${drawn}`);
@@ -793,7 +793,7 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
           return failed(`no part found for ${JSON.stringify(q)}`);
         }
         picked.push(((await part.getAttribute("data-ose-part")) ?? "?").trim());
-        await part.click();
+        await part.dblclick();
       }
       await page.fill('[data-ose="vab-search"]', "");
       await page.fill('[data-ose="vab-name"]', "e2e rocket");
@@ -859,7 +859,7 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
       await page.locator('[data-ose="vab-clear"]').first().click();
       for (const q of ["Tin Can", "Mk16-XL"]) {
         await page.fill('[data-ose="vab-search"]', q);
-        await page.locator('[data-ose="vab-part"]').first().click();
+        await page.locator('[data-ose="vab-part"]').first().dblclick();
       }
       await page.fill('[data-ose="vab-search"]', "");
       await page.fill('[data-ose="vab-name"]', "e2e capsule");

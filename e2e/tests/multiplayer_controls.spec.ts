@@ -38,7 +38,7 @@ test("held flight controls with 30 ms added round-trip delay", async ({ page, ba
       // The card list re-renders after the search; wait for it as the gameplay chain does.
       const card = page.locator('[data-ose="vab-part"]').first();
       await card.waitFor({ timeout: 5000 });
-      await card.click();
+      await card.dblclick();
     }
     await page.locator('[data-ose="vab-search"]').fill("");
     await page.locator('[data-ose="vab-name"]').fill("Latency test rocket");
