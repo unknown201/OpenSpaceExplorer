@@ -105,8 +105,11 @@ def main() -> int:
             shader_name = ""
         tex_envs = dict(m.m_SavedProperties.m_TexEnvs)
         surface_extras = None
-        if shader_name == "KSP2_ksc_grass" and "baseColor" not in textures:
-            te = tex_envs.get("_MediumDiffuse")
+        # The campus ground around the facilities (KSP2/KSC/ksc_campus_vertexPaint) blends the same grassland maps
+        # (as _MediumTexture): drawn like the lawns, or it stands as a flat field with a hard line round them.
+        ground_tex = {"KSP2_ksc_grass": "_MediumDiffuse", "KSP2/KSC/ksc_campus_vertexPaint": "_MediumTexture"}
+        if shader_name in ground_tex and "baseColor" not in textures:
+            te = tex_envs.get(ground_tex[shader_name])
             try:
                 tex = te.m_Texture.read() if te and te.m_Texture and te.m_Texture.path_id else None
             except Exception:  # noqa: BLE001

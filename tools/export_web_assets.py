@@ -347,15 +347,18 @@ class Exporter:
             if self.verbose:
                 print(f"  texture {name}: cannot decode ({e})")
             return None
-        resized = img.width > self.max_texture or img.height > self.max_texture
+        # The KSC's extra-large ground textures (the runway's 1x4 strip) span a kilometre or more: kept at 4096
+        # on their long side, or they smear across the ground.
+        cap = 4096 if "exlarge" in name.lower() else self.max_texture
+        resized = img.width > cap or img.height > cap
         if resized:
-            sc = self.max_texture / max(img.width, img.height)
+            sc = cap / max(img.width, img.height)
             img = resize_bands(img, (max(1, int(img.width * sc)), max(1, int(img.height * sc))))
         if img.mode not in ("RGB", "RGBA"):
             img = img.convert("RGBA")
         rel = f"textures/{name}.png"
         # Resized textures are written again (earlier exports resized them with premultiplied alpha).
-        if resized or not (self.out / rel).exists():
+        if resized or cap != self.max_texture or not (self.out / rel).exists():
             img.save(self.out / rel, optimize=False)
         self.texture_files[name] = rel
         return rel
