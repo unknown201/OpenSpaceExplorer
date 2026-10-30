@@ -957,6 +957,21 @@
     #flight-hud .fh-appbar::after { content: "APP.BAR"; }
     body:has(#flight-hud.open) #hud > .warp::after { content: "TIME.WARP"; }
     body:has(#flight-hud.open) #hud > .warp button { padding: 1px 8px !important; min-width: 0 !important; }
+    /* SAS.CONTROL as the original's ring: the modes round stability assist, SAS and maneuver under it. */
+    #flight-hud .fh-bottom .fh-sas { display: block; position: relative; width: calc(156 * var(--u)); height: calc(196 * var(--u)); align-self: flex-end; }
+    #flight-hud .fh-bottom .fh-sas::before { content: ""; position: absolute; left: calc(6 * var(--u)); top: calc(6 * var(--u)); width: calc(144 * var(--u)); height: calc(144 * var(--u)); border-radius: 50%; background: #10141bd9; border: 1px solid #ffffff33; }
+    #flight-hud .fh-bottom .fh-sas button { position: absolute; width: calc(32 * var(--u)); height: calc(32 * var(--u)); border-radius: 50%; }
+    #flight-hud .fh-bottom .fh-sas #fh-sas-stability { left: calc(62 * var(--u)); top: calc(62 * var(--u)); }
+    #flight-hud .fh-bottom .fh-sas #fh-sas-toggle { left: calc(14 * var(--u)); top: calc(160 * var(--u)); width: calc(56 * var(--u)); border-radius: calc(16 * var(--u)); }
+    #flight-hud .fh-bottom .fh-sas #fh-sas-maneuver { left: calc(110 * var(--u)); top: calc(160 * var(--u)); }
+    #flight-hud .fh-bottom .fh-sas #fh-sas-prograde { left: calc(62 * var(--u)); top: calc(8 * var(--u)); }
+    #flight-hud .fh-bottom .fh-sas #fh-sas-radialout { left: calc(100 * var(--u)); top: calc(24 * var(--u)); }
+    #flight-hud .fh-bottom .fh-sas #fh-sas-antinormal { left: calc(116 * var(--u)); top: calc(62 * var(--u)); }
+    #flight-hud .fh-bottom .fh-sas #fh-sas-antitarget { left: calc(100 * var(--u)); top: calc(100 * var(--u)); }
+    #flight-hud .fh-bottom .fh-sas #fh-sas-retrograde { left: calc(62 * var(--u)); top: calc(116 * var(--u)); }
+    #flight-hud .fh-bottom .fh-sas #fh-sas-radialin { left: calc(24 * var(--u)); top: calc(100 * var(--u)); }
+    #flight-hud .fh-bottom .fh-sas #fh-sas-normal { left: calc(8 * var(--u)); top: calc(62 * var(--u)); }
+    #flight-hud .fh-bottom .fh-sas #fh-sas-target { left: calc(24 * var(--u)); top: calc(24 * var(--u)); }
     /* ORBITAL.INFO: Ap over Pe, each with its countdown, as the original's two lines. */
     #flight-hud .fh-bottom .fh-orbit { display: grid; grid-template-columns: auto 1fr auto; gap: 0 calc(8 * var(--u)); justify-items: start; }
     #flight-hud .fh-spd, #flight-hud .fh-alt { position: absolute; top: 50%; transform: translateY(-50%); min-width: calc(110 * var(--u)); background: #10141bf0; border: 2px solid; border-radius: calc(4 * var(--u)); padding: calc(2 * var(--u)) calc(8 * var(--u)); text-align: right; }
