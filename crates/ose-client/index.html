@@ -340,6 +340,16 @@
     body.webgpu #screen-vab #vab { height: calc(100vh - 32 * var(--u)); margin: 0; grid-template-columns: calc(340 * var(--u)) 1fr calc(320 * var(--u)); }
     body.webgpu #vab-picker, body.webgpu #vab-side { pointer-events: auto; background: #10141bf0; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)); padding: calc(12 * var(--u)); overflow: auto; }
     body.webgpu #vab-parts { max-height: calc(100vh - 230 * var(--u) - 64px); }
+    /* The original's staging stack: small, in the bottom-right corner over the hall; Details opens the stages'
+       delta-v, TWR and burn time and the rest of the craft panel. */
+    body.webgpu #screen-vab #vab { grid-template-columns: calc(340 * var(--u)) 1fr; }
+    body.webgpu #vab-side { position: fixed; right: calc(16 * var(--u)); bottom: calc(16 * var(--u)); width: calc(220 * var(--u)); max-height: 55vh; padding: calc(8 * var(--u)); z-index: 5; }
+    body.webgpu.vab-stack-open #vab-side { width: calc(320 * var(--u)); max-height: calc(100vh - 140 * var(--u)); padding: calc(12 * var(--u)); }
+    body.webgpu:not(.vab-stack-open) #vab-side :is(.vs-more, #vab-twr-body, #vab-stages li .sv) { display: none; }
+    body.webgpu:not(.vab-stack-open) #vab-stages li { padding: 4px 6px; margin-bottom: 3px; }
+    #vab-stack-more { display: none; flex: none; width: auto !important; min-width: 0 !important; margin: 0 0 0 auto !important; padding: 2px 8px !important; font-size: 10px !important; }
+    body.webgpu #vab-stack-more { display: inline-block; }
+    body.webgpu.vab-stack-open #vab-stack-more { background: #1f3d6b !important; color: #fff !important; }
     body.webgpu #vab-canvas { visibility: hidden; pointer-events: none; }
     body.webgpu #vab-parts li { cursor: grab; user-select: none; }
     body.vab-holding, body.vab-holding * { cursor: grabbing !important; }
@@ -1311,15 +1321,17 @@
           </div>
           <canvas id="vab-canvas" data-ose="vab-canvas" width="640" height="640"></canvas>
           <div id="vab-side">
-            <div class="vs-title">Staging <select id="vab-twr-body" data-ose="vab-twr-body" title="Delta-v tool: where the stages' thrust-to-weight is worked out"></select></div>
+            <div class="vs-title">Staging <select id="vab-twr-body" data-ose="vab-twr-body" title="Delta-v tool: where the stages' thrust-to-weight is worked out"></select><button id="vab-stack-more" class="secondary" data-ose="vab-stack-more" title="The stages' delta-v, TWR and burn time, and the selected part">Details</button></div>
             <ul id="vab-stages" data-ose="vab-stages"></ul>
+            <div class="vs-more">
             <div id="vab-stats" data-ose="vab-stats"></div>
             <div class="vs-title">Selected part</div>
             <div id="vab-selected" data-ose="vab-selected"></div>
             <div class="row"><button id="vab-remove" class="secondary" data-ose="vab-remove" title="Remove the part and everything attached under it (Delete)"><i class="vh-inline" style="--ico:url(assets/ui/hud/WB-ICO-Trash.png)"></i>Remove</button></div>
             <div class="row"><button id="vab-stage-up" class="secondary" data-ose="vab-stage-up" title="Fire this part one stage earlier">Stage earlier</button><button id="vab-stage-down" class="secondary" data-ose="vab-stage-down" title="Fire this part one stage later">Stage later</button></div>
+            </div>
             <div id="vab-report" data-ose="vab-report"></div>
-            <div class="vs-help">Drag parts from the list onto a green attach point. Drag a placed part to move it with everything under it. Right-drag to look around, wheel to zoom (Shift faster), Home resets the view. Delete removes, Ctrl+Z / Ctrl+Y undo and redo.</div>
+            <div class="vs-help vs-more">Drag parts from the list onto a green attach point. Drag a placed part to move it with everything under it. Right-drag to look around, wheel to zoom (Shift faster), Home resets the view. Delete removes, Ctrl+Z / Ctrl+Y undo and redo.</div>
           </div>
         </div>
       </div>

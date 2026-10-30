@@ -3414,6 +3414,21 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
             app.render_vab();
         }),
     )?;
+    // The staging stack's Details: the per-stage numbers and the craft panel (kept per browser).
+    if stored("ose.vabstack").as_deref() == Some("open") {
+        if let Some(b) = doc.body() {
+            b.class_list().add_1("vab-stack-open").ok();
+        }
+    }
+    wire(
+        "vab-stack-more",
+        Box::new(|a| {
+            if let Some(b) = a.borrow().doc.body() {
+                let open = b.class_list().toggle("vab-stack-open").unwrap_or(false);
+                store("ose.vabstack", if open { "open" } else { "closed" });
+            }
+        }),
+    )?;
     wire(
         "vab-launch",
         Box::new(|a| {
