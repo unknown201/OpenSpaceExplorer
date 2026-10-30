@@ -94,7 +94,12 @@ pub struct Overlay {
     pub height: usize,
     /// decimetres, row 0 north; `i16::MIN` where empty
     pub data: Vec<i16>,
+    /// `data` max-filtered over squares of 2^(k+1) - 1 cells either side, k = 0, 1, ... (`sample_max`)
+    pub max_levels: Vec<Vec<i16>>,
 }
+
+/// Levels of `Overlay::max_levels` (the last reaches 63 cells, about 5 km on the KSC campus's).
+const MAX_LEVELS: usize = 6;
 
 #[derive(Deserialize)]
 struct OverlayMeta {
@@ -121,13 +126,105 @@ impl Overlay {
             .iter()
             .map(|c| i16::from_le_bytes(*c))
             .collect();
-        (data.len() == meta.width * meta.height).then_some(Overlay {
-            lat_deg: meta.lat_deg,
-            lon_deg: meta.lon_deg,
-            width: meta.width,
-            height: meta.height,
-            data,
+        (data.len() == meta.width * meta.height).then(|| {
+            let mut o = Overlay {
+                lat_deg: meta.lat_deg,
+                lon_deg: meta.lon_deg,
+                width: meta.width,
+                height: meta.height,
+                data,
+                max_levels: Vec::new(),
+            };
+            o.build_max_levels();
+            o
         })
+    }
+
+    fn build_max_levels(&mut self) {
+        let (w, h) = (self.width, self.height);
+        let mut cur = self.data.clone();
+        self.max_levels.clear();
+        for k in 0..MAX_LEVELS {
+            // 2^k cells either side, separably, on the previous level: the radii add up to 2^(k+1) - 1
+            let r = 1usize << k;
+            let mut tmp = vec![i16::MIN; w * h];
+            for y in 0..h {
+                for x in 0..w {
+                    let (a, b) = (x.saturating_sub(r), (x + r).min(w - 1));
+                    tmp[y * w + x] = cur[y * w + a..=y * w + b].iter().copied().max().unwrap();
+                }
+            }
+            let mut next = vec![i16::MIN; w * h];
+            for y in 0..h {
+                let (a, b) = (y.saturating_sub(r), (y + r).min(h - 1));
+                for x in 0..w {
+                    next[y * w + x] = (a..=b).map(|yy| tmp[yy * w + x]).max().unwrap();
+                }
+            }
+            self.max_levels.push(next.clone());
+            cur = next;
+        }
+    }
+
+    /// The highest ground within about `reach_m` (bilinear over a max-filtered copy, so a coarse mesh through
+    /// samples of it stays above the ground between them); `None` where there is none near.
+    pub fn sample_max(
+        &self,
+        lat_deg: f64,
+        lon_deg: f64,
+        reach_m: f64,
+        body_radius_m: f64,
+    ) -> Option<f64> {
+        let cell_m =
+            (self.lat_deg[1] - self.lat_deg[0]).to_radians() * body_radius_m / self.height as f64;
+        let cells = reach_m / cell_m.max(1e-6);
+        if cells < 0.5 || self.max_levels.is_empty() {
+            return self.sample(lat_deg, lon_deg);
+        }
+        // level k reaches 2^(k+1) - 1 cells
+        let k = (0..self.max_levels.len())
+            .find(|&k| ((1usize << (k + 1)) - 1) as f64 >= cells)
+            .unwrap_or(self.max_levels.len() - 1);
+        let reach = ((1usize << (k + 1)) - 1) as f64;
+        let dlat = (self.lat_deg[1] - self.lat_deg[0]) / self.height as f64 * reach;
+        let dlon = (self.lon_deg[1] - self.lon_deg[0]) / self.width as f64 * reach;
+        let [la0, la1] = self.lat_deg;
+        let [lo0, lo1] = self.lon_deg;
+        if lat_deg < la0 - dlat
+            || lat_deg > la1 + dlat
+            || lon_deg < lo0 - dlon
+            || lon_deg > lo1 + dlon
+        {
+            return None;
+        }
+        Self::bilinear(
+            &self.max_levels[k],
+            self.width,
+            self.height,
+            (lon_deg - lo0) / (lo1 - lo0) * self.width as f64 - 0.5,
+            (la1 - lat_deg) / (la1 - la0) * self.height as f64 - 0.5,
+        )
+    }
+
+    fn bilinear(data: &[i16], w: usize, h: usize, fx: f64, fy: f64) -> Option<f64> {
+        let (x0, y0) = (fx.floor(), fy.floor());
+        let (tx, ty) = (fx - x0, fy - y0);
+        let (mut sum, mut wsum) = (0.0, 0.0);
+        for (dx, dy, wt) in [
+            (0, 0, (1.0 - tx) * (1.0 - ty)),
+            (1, 0, tx * (1.0 - ty)),
+            (0, 1, (1.0 - tx) * ty),
+            (1, 1, tx * ty),
+        ] {
+            let x = (x0 as i64 + dx).clamp(0, w as i64 - 1) as usize;
+            let y = (y0 as i64 + dy).clamp(0, h as i64 - 1) as usize;
+            let v = data[y * w + x];
+            if v != i16::MIN && wt > 0.0 {
+                sum += wt * v as f64 * 0.1;
+                wsum += wt;
+            }
+        }
+        (wsum > 1e-9).then(|| sum / wsum)
     }
 
     /// Bilinear over the cells that have ground; `None` outside or where none of the four has any.
@@ -137,26 +234,13 @@ impl Overlay {
         if lat_deg < la0 || lat_deg > la1 || lon_deg < lo0 || lon_deg > lo1 {
             return None;
         }
-        let fx = (lon_deg - lo0) / (lo1 - lo0) * self.width as f64 - 0.5;
-        let fy = (la1 - lat_deg) / (la1 - la0) * self.height as f64 - 0.5;
-        let (x0, y0) = (fx.floor(), fy.floor());
-        let (tx, ty) = (fx - x0, fy - y0);
-        let (mut sum, mut wsum) = (0.0, 0.0);
-        for (dx, dy, w) in [
-            (0, 0, (1.0 - tx) * (1.0 - ty)),
-            (1, 0, tx * (1.0 - ty)),
-            (0, 1, (1.0 - tx) * ty),
-            (1, 1, tx * ty),
-        ] {
-            let x = (x0 as i64 + dx).clamp(0, self.width as i64 - 1) as usize;
-            let y = (y0 as i64 + dy).clamp(0, self.height as i64 - 1) as usize;
-            let v = self.data[y * self.width + x];
-            if v != i16::MIN && w > 0.0 {
-                sum += w * v as f64 * 0.1;
-                wsum += w;
-            }
-        }
-        (wsum > 1e-9).then(|| sum / wsum)
+        Self::bilinear(
+            &self.data,
+            self.width,
+            self.height,
+            (lon_deg - lo0) / (lo1 - lo0) * self.width as f64 - 0.5,
+            (la1 - lat_deg) / (la1 - la0) * self.height as f64 - 0.5,
+        )
     }
 
     fn max_m(&self) -> f64 {
@@ -425,5 +509,33 @@ mod tests {
         assert!(m.terrain_m(-0.66, -74.80) < 1.0);
         assert!((m.height_m(-0.66, -74.80) - pad).abs() < 1e-9);
         assert!(m.max_m >= pad);
+    }
+
+    #[test]
+    fn the_campus_grounds_highest_point_nearby_bounds_the_ground_between_samples() {
+        let o = Overlay::for_body("Kerbin").expect("embedded KSC ground");
+        let r: f64 = 600_000.0;
+        // a grid of points around the campus edge: the maximum within a reach is at least the ground anywhere
+        // within that reach (what keeps a coarse terrain mesh over the campus's skirts)
+        let reach: f64 = 1500.0;
+        let deg = (reach / r).to_degrees();
+        for i in 0..12 {
+            for j in 0..12 {
+                let lat = -1.30 + i as f64 * 0.15;
+                let lon = -76.0 + j as f64 * 0.17;
+                let Some(top) = o.sample_max(lat, lon, reach, r) else {
+                    continue;
+                };
+                for (dy, dx) in [(0.7, 0.0), (-0.7, 0.3), (0.2, -0.7), (-0.5, -0.5)] {
+                    if let Some(g) = o.sample(lat + dy * deg, lon + dx * deg) {
+                        assert!(top >= g - 0.05, "{lat} {lon}: {top} < {g}");
+                    }
+                }
+                assert!(top >= o.sample(lat, lon).unwrap_or(f64::MIN));
+            }
+        }
+        // no reach is the plain sample; far away there is nothing
+        assert_eq!(o.sample_max(-0.66, -74.80, 0.0, r), o.sample(-0.66, -74.80));
+        assert!(o.sample_max(10.0, 10.0, reach, r).is_none());
     }
 }

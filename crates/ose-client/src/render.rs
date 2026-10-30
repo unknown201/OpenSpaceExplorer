@@ -76,6 +76,12 @@ struct ObjectUniform {
     /// The primitive's surface mode (`GpuPrimitive::surface`).
     surface: [f32; 4],
     surface2: [f32; 4],
+    /// Aerial perspective (`DrawItem::haze`): transmittance (w: its distance, m) and in-scatter (w: 1 on), and
+    /// the sun's and the sky's light there relative to a noon sun (rgb).
+    haze_t: [f32; 4],
+    haze_s: [f32; 4],
+    haze_sun: [f32; 4],
+    haze_sky: [f32; 4],
 }
 
 /// Depth from the sun for the shadow map.
@@ -91,7 +97,20 @@ fn vs_shadow(@location(0) pos: vec3<f32>, @location(1) normal: vec3<f32>, @locat
 
 const SHADER: &str = r#"
 struct Camera { view_proj: mat4x4<f32>, light_count: vec4<f32>, light_pos: array<vec4<f32>, 8>, light_dir: array<vec4<f32>, 8>, light_col: array<vec4<f32>, 8>, shadow_vp: mat4x4<f32>, shadow: vec4<f32> };
-struct Object { model: mat4x4<f32>, color: vec4<f32>, light_dir: vec4<f32>, light2: vec4<f32>, params: vec4<f32>, extra: vec4<f32>, paint_a: vec4<f32>, paint_b: vec4<f32>, surface: vec4<f32>, surface2: vec4<f32> };
+struct Object { model: mat4x4<f32>, color: vec4<f32>, light_dir: vec4<f32>, light2: vec4<f32>, params: vec4<f32>, extra: vec4<f32>, paint_a: vec4<f32>, paint_b: vec4<f32>, surface: vec4<f32>, surface2: vec4<f32>, haze_t: vec4<f32>, haze_s: vec4<f32>, haze_sun: vec4<f32>, haze_sky: vec4<f32> };
+
+// The planet's aerial perspective over a lit colour (outdoors, before the tone curve): the air measured to one
+// point (DrawItem::haze) scaled to this fragment's distance, as through an even medium.
+fn hazed(c: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
+    if object.haze_s.w < 0.5 {
+        return c;
+    }
+    let k = length(world) / max(object.haze_t.w, 1.0);
+    let t0 = clamp(object.haze_t.xyz, vec3<f32>(1e-4), vec3<f32>(1.0));
+    let t = pow(t0, vec3<f32>(k));
+    let share = select((1.0 - t) / max(1.0 - t0, vec3<f32>(1e-6)), vec3<f32>(k), (1.0 - t0) < vec3<f32>(1e-4));
+    return c * t + object.haze_s.xyz * share;
+}
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(0) @binding(1) var shadow_tex: texture_depth_2d;
 @group(0) @binding(2) var shadow_samp: sampler_comparison;
@@ -257,6 +276,11 @@ fn fs_mesh(in: VsOut) -> @location(0) vec4<f32> {
     }
     let fill = max(dot(n, normalize(object.light2.xyz)), 0.0) * object.light2.w;
     let ambient = max(object.params.w, 0.08);
+    // Outdoors under the planet's air (DrawItem::haze) the sunlight reddens and dims as the sun sinks and the
+    // sky's light with it, as on the terrain; elsewhere both stay white.
+    let outdoors = object.haze_s.w > 0.5;
+    let sunc = select(vec3<f32>(1.0), object.haze_sun.xyz, outdoors);
+    let skyc = select(vec3<f32>(1.0), object.haze_sky.xyz, outdoors);
     var water = vec3<f32>(0.0);
     let is_water = object.surface.x > 1.5 && object.surface.x < 2.5;
     if is_water {
@@ -277,25 +301,26 @@ fn fs_mesh(in: VsOut) -> @location(0) vec4<f32> {
         let fres = 0.02 + 0.98 * pow(1.0 - cos_v, object.surface.y);
         let day = clamp(ambient * 2.6, 0.08, 1.0);
         // KSP2's lakes read teal from above (its body colour under a soft sky sheen), the sky's blue at grazing.
-        let body = base.rgb * (ambient + (1.0 - ambient) * diffuse) * 0.6;
-        let refl = object.surface2.xyz * day * mix(0.03, 0.4, fres);
+        let body = base.rgb * (ambient * skyc + (1.0 - ambient) * diffuse * sunc) * 0.6;
+        let refl = object.surface2.xyz * skyc * day * mix(0.03, 0.4, fres);
         let hw = normalize(ldir + view);
-        let glint = pow(max(dot(nw, hw), 0.0), 2500.0) * 1.5 * diffuse;
-        var w = body + refl + vec3<f32>(glint);
+        let glint = pow(max(dot(nw, hw), 0.0), 2500.0) * 1.5 * diffuse * sunc;
+        var w = body + refl + glint;
         // The shore (the lake's baked shore mask, paint slot red: 0 at the edge, 1 about 140 m in): the water
         // shallows to a lighter teal, then meets the bank in its grassy colour, instead of a hard line.
         let shore = select(1.0, clamp(pm.r, 0.0, 1.0), pm.a > 0.5);
-        let shallow = base.rgb * (ambient + (1.0 - ambient) * diffuse) * 1.25 + vec3<f32>(0.002, 0.006, 0.004) * day;
+        let light = ambient * skyc + (1.0 - ambient) * diffuse * sunc;
+        let shallow = base.rgb * light * 1.25 + vec3<f32>(0.002, 0.006, 0.004) * day * skyc;
         w = mix(shallow + refl * 0.7, w, smoothstep(0.1, 0.55, shore));
-        let bank = vec3<f32>(0.035, 0.05, 0.022) * (ambient + (1.0 - ambient) * diffuse) * 2.0;
-        w = mix(bank, w, smoothstep(0.0, 0.12, shore));
+        let bank = vec3<f32>(0.035, 0.05, 0.022) * light * 2.0;
+        w = hazed(mix(bank, w, smoothstep(0.0, 0.12, shore)), in.world);
         // Outdoors through the same tone curve as the ground round it.
         if object.extra.y > 0.0 {
             w = vec3<f32>(1.0) - exp(-w * object.extra.y);
         }
         water = min(w, vec3<f32>(0.95));
     }
-    let lit = base.rgb * min(ambient + (1.0 - ambient) * diffuse + fill, 1.6);
+    let lit = base.rgb * min(ambient * skyc + (1.0 - ambient) * diffuse * sunc + fill * skyc, vec3<f32>(1.6));
     // Specular from the metallic-gloss map (metal in red, smoothness in alpha): a Blinn-Phong lobe whose
     // sharpness follows smoothness, tinted by the base colour on metal.
     // Outdoors the map is scaled by the material's metallicFactor (KSP2's _Metallic); indoors as before.
@@ -310,12 +335,12 @@ fn fs_mesh(in: VsOut) -> @location(0) vec4<f32> {
     // Outdoors (DrawItem::exposure) metal is metal: its diffuse light fades with metalness and it shows the
     // dim environment it reflects tinted by its colour, as KSP2's slate-dark launch tower. Indoors (the VAB's
     // lit hall) keeps the half-measure.
-    let shaded_in = lit * (1.0 - metal * 0.5) + spec_col * spec;
+    let shaded_in = lit * (1.0 - metal * 0.5) + spec_col * spec * sunc;
     // Mid-grey metal maps (KSP2's tower averages 0.54) mean bare steel: stretched so its diffuse nearly goes.
     // The environment a bare steel lattice reflects is mostly dim (shadowed girders, ground): KSP2's tower reads
     // about 60 sRGB in Josh's pad shot, and our outdoor tone curve lifts whatever is left.
     let m_true = clamp(metal_map * 2.0, 0.0, 1.0);
-    let shaded_out = lit * (1.0 - m_true) + base.rgb * m_true * ambient * 0.12 + spec_col * spec;
+    let shaded_out = lit * (1.0 - m_true) + base.rgb * m_true * ambient * skyc * 0.12 + spec_col * spec * sunc;
     var shaded = select(shaded_in, shaded_out, true_metal);
     // Outdoor parts (exposure set, not the campus) reflect the sky and ground round them as KSP2's do (its
     // reflection probes): a sky gradient about the local up (the fill light's direction), strong at grazing angles
@@ -327,7 +352,7 @@ fn fs_mesh(in: VsOut) -> @location(0) vec4<f32> {
         let day_k = clamp(ambient * 2.6, 0.08, 1.0) * object.light_dir.w;
         let sky_c = mix(vec3<f32>(0.42, 0.52, 0.62), vec3<f32>(0.16, 0.28, 0.58), smoothstep(0.0, 0.7, e));
         let ground_c = vec3<f32>(0.10, 0.12, 0.07);
-        let env = mix(ground_c, sky_c, smoothstep(-0.08, 0.06, e)) * day_k;
+        let env = mix(ground_c, sky_c, smoothstep(-0.08, 0.06, e)) * day_k * skyc;
         let fr = pow(1.0 - clamp(dot(n, view), 0.0, 1.0), 5.0);
         let f0 = mix(vec3<f32>(0.04), base.rgb, metal);
         let k_env = (f0 + (vec3<f32>(1.0) - f0) * fr) * (0.25 + 0.75 * smooth_ * smooth_);
@@ -347,7 +372,7 @@ fn fs_mesh(in: VsOut) -> @location(0) vec4<f32> {
             lamps += camera.light_col[k].rgb * max(dot(n, l), 0.0) * att * spot;
         }
     }
-    var lit_rgb = shaded + base.rgb * lamps;
+    var lit_rgb = hazed(shaded + base.rgb * lamps, in.world);
     // Outdoor exposure (DrawItem::exposure): the planet's tone curve.
     if object.extra.y > 0.0 {
         lit_rgb = vec3<f32>(1.0) - exp(-lit_rgb * object.extra.y);
@@ -537,6 +562,9 @@ pub struct DrawItem {
     pub paint: Option<([f32; 3], [f32; 3])>,
     /// Leave out this instance's meshes whose names contain this (an engine's shroud with nothing below it).
     pub hide_containing: Option<&'static str>,
+    /// The planet's air (`planet::Haze`): transmittance and its distance (m), in-scatter in this item's own
+    /// units (w 1), and the sun's and the sky's light relative to a noon sun (rgb); `None` draws it clear.
+    pub haze: Option<[[f32; 4]; 4]>,
 }
 
 impl DrawItem {
@@ -571,6 +599,7 @@ impl DrawItem {
             highlight: 0.0,
             paint: None,
             hide_containing: None,
+            haze: None,
         }
     }
 }
@@ -2035,6 +2064,10 @@ impl Renderer {
                         let s = model.meshes[*mesh_i].surface;
                         [s[4], s[5], s[6], s[7]]
                     },
+                    haze_t: item.haze.map(|h| h[0]).unwrap_or([1.0; 4]),
+                    haze_s: item.haze.map(|h| h[1]).unwrap_or([0.0; 4]),
+                    haze_sun: item.haze.map(|h| h[2]).unwrap_or([1.0; 4]),
+                    haze_sky: item.haze.map(|h| h[3]).unwrap_or([1.0; 4]),
                 };
                 self.queue
                     .write_buffer(&self.objects[slot].0, 0, bytemuck::bytes_of(&u));
@@ -2063,6 +2096,10 @@ impl Renderer {
                 paint_b: [1.0, 1.0, 1.0, 0.0],
                 surface: [0.0; 4],
                 surface2: [0.0; 4],
+                haze_t: [1.0; 4],
+                haze_s: [0.0; 4],
+                haze_sun: [1.0; 4],
+                haze_sky: [1.0; 4],
             };
             self.queue
                 .write_buffer(&self.objects[slot].0, 0, bytemuck::bytes_of(&u));

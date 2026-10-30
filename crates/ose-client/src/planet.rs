@@ -119,6 +119,8 @@ struct FrameU {
     /// x 1 when in use, y one texel in uv, z normal offset (m).
     shadow_vp: [[f32; 4]; 4],
     mesh_shadow: [f32; 4],
+    /// The haze probe's point in the model frame (km), w 1 when in use (`HazeProbe`).
+    probe: [f32; 4],
 }
 
 #[repr(C)]
@@ -346,9 +348,203 @@ pub struct PlanetRenderer {
     pub exposure_scale: f32,
     /// Ground kept free of scatter (the KSC campus), set by the flight view.
     exclusions: Vec<Exclusion>,
+    haze_probe: HazeProbe,
+}
+
+/// The air between the camera and the KSC campus, evaluated by the planet shader (`fs_haze_probe`) and read
+/// back a frame or two later, so the meshes it does not draw (the campus, its trees, craft) take the same
+/// aerial perspective as the terrain round them: from a few km up the campus stood out vivid in hazy land, and
+/// its ground showed in unhazed patches where it poked through the terrain.
+struct HazeProbe {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    pipeline: wgpu::RenderPipeline,
+    target: wgpu::Texture,
+    view: wgpu::TextureView,
+    readback: wgpu::Buffer,
+    /// 0 idle, 1 mapping, 2 mapped (set by the map callback)
+    state: Rc<std::cell::Cell<u8>>,
+    /// the camera's distance to the probe point when the pending probe was drawn (m)
+    pending_d0: f64,
+    /// The latest result: transmittance and in-scatter (times the planet's exposure) to a point `d0` m away.
+    pub result: Option<Haze>,
+}
+
+/// Aerial perspective to a point: `t` the air's transmittance, `s` its in-scatter (planet radiance times the
+/// planet's exposure, so a mesh with its own exposure divides by that), `d0` the distance (m); and the light
+/// there: `sun` the sunlight and `sky` the skylight, each relative to a sun overhead.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Haze {
+    pub t: [f32; 3],
+    pub s: [f32; 3],
+    pub sun: [f32; 3],
+    pub sky: [f32; 3],
+    pub d0: f32,
+}
+
+impl HazeProbe {
+    fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        shader: &wgpu::ShaderModule,
+        frame_plain: &wgpu::BindGroupLayout,
+    ) -> HazeProbe {
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("planet haze probe"),
+            bind_group_layouts: &[Some(frame_plain)],
+            immediate_size: 0,
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("planet haze probe"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: shader,
+                entry_point: Some("vs_sky"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: shader,
+                entry_point: Some("fs_haze_probe"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba32Float,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("planet haze probe"),
+            size: wgpu::Extent3d {
+                width: 4,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("planet haze probe"),
+            size: 256,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        HazeProbe {
+            device: device.clone(),
+            queue: queue.clone(),
+            pipeline,
+            target,
+            view,
+            readback,
+            state: Rc::new(std::cell::Cell::new(0)),
+            pending_d0: 0.0,
+            result: None,
+        }
+    }
+
+    fn clear(&mut self) {
+        self.result = None;
+    }
+
+    /// Collect a finished probe, and draw the next one when none is in flight.
+    fn run(&mut self, _body: &str, d0: f64, b: &Body) {
+        if self.state.get() == 2 {
+            if let Ok(m) = self.readback.slice(..).get_mapped_range() {
+                let f: &[f32] = bytemuck::cast_slice(&m[..64]);
+                let ok = f.iter().all(|v| v.is_finite());
+                if ok {
+                    self.result = Some(Haze {
+                        t: [f[0], f[1], f[2]],
+                        s: [f[4], f[5], f[6]],
+                        sun: [f[8], f[9], f[10]],
+                        sky: [f[12], f[13], f[14]],
+                        d0: self.pending_d0 as f32,
+                    });
+                }
+            }
+            self.readback.unmap();
+            self.state.set(0);
+        }
+        if self.state.get() != 0 {
+            return;
+        }
+        let Some(fb) = b.frame_plain_bind.as_ref() else {
+            return;
+        };
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("planet haze probe"),
+            });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("planet haze probe"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, fb, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.target,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &self.readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(256),
+                    rows_per_image: None,
+                },
+            },
+            wgpu::Extent3d {
+                width: 4,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.queue.submit(Some(encoder.finish()));
+        self.pending_d0 = d0;
+        self.state.set(1);
+        let state = self.state.clone();
+        self.readback.map_async(wgpu::MapMode::Read, .., move |r| {
+            state.set(if r.is_ok() { 2 } else { 0 })
+        });
+    }
 }
 
 impl PlanetRenderer {
+    /// The aerial perspective to the KSC campus (`HazeProbe`), once measured.
+    pub fn haze(&self) -> Option<Haze> {
+        self.haze_probe.result
+    }
+
     pub fn new(gpu: &Renderer) -> PlanetRenderer {
         let device = gpu.device().clone();
         let queue = gpu.queue().clone();
@@ -954,6 +1150,7 @@ impl PlanetRenderer {
                 }
             });
         }
+        let haze_probe = HazeProbe::new(&device, &queue, &shader, &frame_plain_layout);
         PlanetRenderer {
             ring_layout,
             ring_pipeline,
@@ -1009,6 +1206,7 @@ impl PlanetRenderer {
             debug: 0.0,
             exposure_scale: 1.0,
             exclusions: Vec::new(),
+            haze_probe,
         }
     }
 
@@ -1828,6 +2026,10 @@ impl PlanetRenderer {
             let mesh = {
                 let map = self.bodies[&id].map.as_ref();
                 let ex = &self.exclusions;
+                // About two vertex spacings (the geomorph slides odd vertices onto their parent's edges): the
+                // drape takes the campus ground's highest point within it, so the mesh between vertices stays
+                // over that ground too (from a few km up its skirts poked through the coarse quads in patches).
+                let reach = 4.0 * key.angular_radius() * radius / (planet_lod::GRID - 1) as f64;
                 planet_lod::build_quad(&key, radius, has_ocean, &|d| {
                     let h = planet_lod::map_height(map, d);
                     // A site model's own ground (the KSC campus: a 19 km plateau whose skirts slope below the
@@ -1836,9 +2038,22 @@ impl PlanetRenderer {
                     // flickered as the camera moved, so out of the facilities the terrain is draped 4 m over
                     // that ground (one textured surface, the ground craft stand on). Under the facilities it
                     // drops 20 m below it so the campus model's own lawns and roads show.
+                    // Out at sea, where both lie under the water, nothing is lifted (that raised shallow
+                    // shelves); elsewhere the lift is held to a slope from the ground here.
                     let campus = map.and_then(|m| {
                         let (lat, lon) = planet_lod::lat_lon(d);
-                        m.overlay.as_ref().and_then(|o| o.sample(lat, lon))
+                        let o = m.overlay.as_ref()?;
+                        let here = o.sample(lat, lon);
+                        if h < 0.0 && here.is_none_or(|c| c < 0.0) {
+                            return None;
+                        }
+                        // (and never past the sea where the ground here is under it: the coast keeps its line)
+                        let base = here.unwrap_or(h).max(h);
+                        if base < 0.0 {
+                            return None;
+                        }
+                        o.sample_max(lat, lon, reach, radius)
+                            .map(|c| c.min(base + 0.3 * reach))
                     });
                     let p = planet_lod::scale(d, radius + h);
                     let sink = ex
@@ -2113,6 +2328,15 @@ impl PlanetRenderer {
             },
             shadow_vp: gpu.shadow_uniform().0,
             mesh_shadow: gpu.shadow_uniform().1,
+            probe: match self.exclusions.first() {
+                Some(e) => [
+                    (e.origin[0] * 0.001) as f32,
+                    (e.origin[1] * 0.001) as f32,
+                    (e.origin[2] * 0.001) as f32,
+                    1.0,
+                ],
+                None => [0.0; 4],
+            },
             cam_tile: [
                 view.cam.x.rem_euclid(TILE_PERIOD) as f32,
                 view.cam.y.rem_euclid(TILE_PERIOD) as f32,
@@ -2140,6 +2364,17 @@ impl PlanetRenderer {
         };
         self.queue
             .write_buffer(&self.frame_buf, 0, bytemuck::bytes_of(&fu));
+        if fu.probe[3] > 0.0 {
+            let d0 = (DVec3::new(
+                self.exclusions[0].origin[0],
+                self.exclusions[0].origin[1],
+                self.exclusions[0].origin[2],
+            ) - view.cam)
+                .length();
+            self.haze_probe.run(&id, d0, &self.bodies[&id]);
+        } else {
+            self.haze_probe.clear();
+        }
         self.draws = draws;
         self.cloud_draws = cloud_draws;
         self.under_water = has_ocean && fu.water[0] < 0.0;

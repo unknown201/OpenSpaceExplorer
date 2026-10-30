@@ -41,6 +41,8 @@ struct Frame {
     // offset (m)
     shadow_vp: mat4x4<f32>,
     mesh_shadow: vec4<f32>,
+    // the haze probe (fs_haze_probe): a point in the model frame (km), w 1 when in use
+    probe: vec4<f32>,
 };
 
 struct Chunk {
@@ -521,10 +523,19 @@ fn tonemap(radiance: vec3<f32>) -> vec3<f32> {
 
 // Aerial perspective: the radiance reflected at `p` (km) as seen from the camera.
 fn through_air(radiance: vec3<f32>, p: vec3<f32>) -> vec3<f32> {
+    let s = air_to(p);
+    return radiance * s.transmittance + s.radiance;
+}
+
+// The air between the camera and `p` (km): what it lets through and what it adds.
+fn air_to(p: vec3<f32>) -> Sky {
     if frame.rayleigh.w < 0.5 {
-        return radiance;
+        var none: Sky;
+        none.radiance = vec3<f32>(0.0);
+        none.transmittance = vec3<f32>(1.0);
+        return none;
     }
-    let s = sky_to_point(frame.cam_km.xyz, p, frame.sun.xyz);
+    var s = sky_to_point(frame.cam_km.xyz, p, frame.sun.xyz);
     // From high up the original's haze over the ground differs from the LUT's by body: over Kerbin it is
     // stronger and bluer (Josh's shot at 89 km measures land 137, 186, 200 and sea 120, 169, 226: 130 %), over
     // Duna much lighter (its official orbit shot is a crisp, deep red with pale canyons: 40 %). Between the two
@@ -534,7 +545,34 @@ fn through_air(radiance: vec3<f32>, p: vec3<f32>) -> vec3<f32> {
     let blue = clamp((frame.rayleigh.z / max(frame.rayleigh.x, 1e-6) - 1.0) / 4.0, 0.0, 1.0);
     let haze = 1.0 + (mix(0.4, 1.3, blue) - 1.0) * smoothstep(10.0, 40.0, alt_km);
     // an eclipse dims the sunlit air too
-    return radiance * s.transmittance + s.radiance * haze * eclipse(frame.cam_km.xyz, frame.sun.xyz);
+    s.radiance = s.radiance * haze * eclipse(frame.cam_km.xyz, frame.sun.xyz);
+    return s;
+}
+
+// The haze probe: the air to `frame.probe` for the meshes drawn outside this shader (the KSC campus, craft),
+// read back by the CPU: pixel 0 its transmittance, pixel 1 its in-scatter times the exposure, pixels 2 and 3
+// the sunlight and the skylight there relative to a sun overhead (the meshes' lighting was tuned at noon).
+@fragment
+fn fs_haze_probe(in: SkyOut) -> @location(0) vec4<f32> {
+    let p = frame.probe.xyz;
+    if in.clip.x < 2.0 {
+        let s = air_to(p);
+        if in.clip.x < 1.0 {
+            return vec4<f32>(s.transmittance, 1.0);
+        }
+        return vec4<f32>(s.radiance * frame.sun.w, 1.0);
+    }
+    if frame.rayleigh.w < 0.5 {
+        return vec4<f32>(1.0);
+    }
+    let r = clamp(length(p), bottom_r() + 0.001, top_r());
+    let mu_s = dot(p, frame.sun.xyz) / length(p);
+    if in.clip.x < 3.0 {
+        let noon = max(transmittance_to_sun(r, 1.0), vec3<f32>(1e-4));
+        return vec4<f32>(transmittance_to_sun(r, mu_s) / noon, 1.0);
+    }
+    let noon = max(irradiance(r, 1.0), vec3<f32>(1e-6));
+    return vec4<f32>(irradiance(r, mu_s) / noon, 1.0);
 }
 
 // ---------------------------------------------------------------------------------------------------------
