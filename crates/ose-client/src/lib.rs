@@ -10580,8 +10580,10 @@ impl App {
             }
         }
         if let Some(el) = self.doc.get_element_by_id("fh-vres-list") {
-            if el.inner_html() != html {
+            let key = format!("{}:{}", html.len(), hud::fnv(&html));
+            if el.get_attribute("data-ose-key").as_deref() != Some(key.as_str()) {
                 el.set_inner_html(&html);
+                el.set_attribute("data-ose-key", &key).ok();
             }
         }
     }
@@ -10706,6 +10708,14 @@ impl App {
                 f.propellant_fraction * 100.0
             ),
         );
+        if let Some(el) = self.doc.get_element_by_id("fh-stage-res") {
+            let html = hud::stage_resources_html(&f.stage_resources);
+            let key = format!("{}:{}", html.len(), hud::fnv(&html));
+            if el.get_attribute("data-ose-key").as_deref() != Some(key.as_str()) {
+                el.set_inner_html(&html);
+                el.set_attribute("data-ose-key", &key).ok();
+            }
+        }
         let att = match f.attitude {
             ose_net::AttitudeMode::PitchHeading {
                 pitch_deg,

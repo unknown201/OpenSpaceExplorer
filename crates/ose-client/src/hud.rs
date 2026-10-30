@@ -1115,6 +1115,42 @@ pub fn parts_html(groups: &[(String, Vec<usize>)]) -> String {
     html
 }
 
+/// The short name the original's staging box gives a resource (`CH4`, `Ox`, `SF`...).
+pub fn resource_short(id: &str) -> &str {
+    match id {
+        "Methane" => "CH4",
+        "Oxidizer" => "Ox",
+        "LiquidFuel" => "LF",
+        "SolidFuel" => "SF",
+        "Hydrogen" => "H2",
+        "XenonGas" | "Xenon" => "Xe",
+        "MonoPropellant" => "MP",
+        "ElectricCharge" => "EC",
+        "Ablator" => "AB",
+        "IntakeAir" => "Air",
+        other => other,
+    }
+}
+
+/// The burning stage's propellants for the staging box: one row each with a bar and the units left.
+pub fn stage_resources_html(list: &[(String, f64, f64)]) -> String {
+    let mut html = String::new();
+    for (id, amount, cap) in list
+        .iter()
+        .filter(|r| r.2 > 0.0 && !matches!(r.0.as_str(), "ElectricCharge" | "Ablator"))
+    {
+        html.push_str(&format!(
+            "<div class=\"sr-row\" title=\"{name}\"><span>{short}</span><div class=\"sr-bar\"><i style=\"width:{pct:.0}%\"></i></div><b>{amount}/{cap}</b></div>",
+            name = crate::esc(&resource_name(id)),
+            short = crate::esc(resource_short(id)),
+            pct = (amount / cap).clamp(0.0, 1.0) * 100.0,
+            amount = units(*amount),
+            cap = units(*cap),
+        ));
+    }
+    html
+}
+
 /// Readable name of a resource id (`MonoPropellant` -> `Mono Propellant`).
 pub fn resource_name(id: &str) -> String {
     let mut out = String::new();

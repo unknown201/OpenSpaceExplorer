@@ -980,6 +980,12 @@
     #flight-hud .fh-vres .vr-gbar, #flight-hud .fh-vres .vr-bar { height: calc(7 * var(--u)); background: #ffffff1a; border-radius: 3px; overflow: hidden; }
     #flight-hud .fh-vres .vr-gbar i, #flight-hud .fh-vres .vr-bar i { display: block; height: 100%; background: #3fe05a; }
     #flight-hud .fh-vres .vr-gbar i.hi { background: #ff6a3a; }
+    /* The stage's propellants as the original's staging box: a short name, a bar and what is left. */
+    #flight-hud #fh-stage-res .sr-row { display: grid; grid-template-columns: calc(30 * var(--u)) 1fr calc(76 * var(--u)); align-items: center; gap: calc(6 * var(--u)); font: calc(11 * var(--u)) var(--hud-font); color: #e6ecf7; margin: calc(2 * var(--u)) 0; }
+    #flight-hud #fh-stage-res .sr-bar { height: calc(7 * var(--u)); background: #ffffff1a; border-radius: 3px; overflow: hidden; }
+    #flight-hud #fh-stage-res .sr-bar i { display: block; height: 100%; background: #3fe05a; }
+    #flight-hud #fh-stage-res b { text-align: right; font-weight: 600; }
+    #flight-hud .fh-staging #fh-ec { display: none; } /* shown in VESSEL-RESOURCES */
     /* ORBITAL.INFO: Ap over Pe, each with its countdown, as the original's two lines. */
     #flight-hud .fh-bottom .fh-orbit { display: grid; grid-template-columns: auto 1fr auto; gap: 0 calc(8 * var(--u)); justify-items: start; }
     #flight-hud .fh-spd, #flight-hud .fh-alt { position: absolute; top: 50%; transform: translateY(-50%); min-width: calc(110 * var(--u)); background: #10141bf0; border: 2px solid; border-radius: calc(4 * var(--u)); padding: calc(2 * var(--u)) calc(8 * var(--u)); text-align: right; }
@@ -1378,6 +1384,7 @@
     <div class="fh-staging">
       <ul id="fh-stages" data-ose="flight-stages" title="Stages still to fire; the bottom one goes next (Space)"></ul>
       <div id="fh-stage" class="fh-small">--</div>
+      <div id="fh-stage-res" data-ose="flight-stage-resources" title="Propellant left in the stage burning now"></div>
       <div id="fh-fuel" class="fh-small">--</div>
       <div class="fh-fuelbar" title="Propellant left in the stage burning now"><div id="fh-fuel-fill" data-ose="flight-fuel"></div></div>
       <div id="fh-ec" class="fh-small" data-ose="flight-ec">--</div>
