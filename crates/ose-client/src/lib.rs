@@ -10826,8 +10826,6 @@ impl App {
                 set_text(&self.doc, "loading-tip", &tip);
                 if let Some(el) = self.doc.get_element_by_id("loading") {
                     el.set_attribute("data-ose-art", art).ok();
-                    // The boot screen's own rules (hide when the menu is ready) end with the first place.
-                    el.class_list().remove_1("boot").ok();
                     el.class_list().add_1("show").ok();
                 }
                 self.loading_since = Some(now);
@@ -12521,20 +12519,6 @@ impl App {
                     }
                 }
                 let progress = self.menu3d.presentation_progress(gpu);
-                // The boot loading screen counts the menu scenery in.
-                if let Some(p) = progress {
-                    if self
-                        .doc
-                        .get_element_by_id("loading")
-                        .is_some_and(|l| l.class_list().contains("boot"))
-                    {
-                        set_text(
-                            &self.doc,
-                            "loading-tip",
-                            &format!("Loading the Kerbal Space Center: {p}%"),
-                        );
-                    }
-                }
                 if let Some(value) = progress {
                     let value = value.to_string();
                     if self
