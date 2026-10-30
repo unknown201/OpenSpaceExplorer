@@ -2994,6 +2994,7 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                 if let Some(p) = app.editor.craft.parts.get_mut(i) {
                     vab::toggle_action(&mut p.actions, &kind, bit);
                 }
+                app.editor.sync_symmetry(i);
                 if let Some(el) = app.doc.get_element_by_id("vab-pam") {
                     el.set_inner_html(&vab::pam_html(&app.editor.craft, i, &app.catalog));
                 }
@@ -3915,7 +3916,7 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                         app.loose_stamps.remove(k);
                     }
                     app.save_loose();
-                    let frag = vab::Fragment { parts };
+                    let frag = vab::Fragment { parts, symmetry: 1 };
                     let nodes = vab_nodes(&app.catalog, frag.root_id());
                     app.vab3d.held = Some((frag.root_id().to_string(), nodes));
                     app.vab_frag = Some(frag);
@@ -4222,6 +4223,8 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                                 if yaw != vab::NO_TURN {
                                     app.editor.turn_on_own_node(i, yaw, &cat);
                                 }
+                                app.editor.replicate(i, &cat);
+                                app.editor.selected = Some(i);
                             })
                         }
                         (Some(spec), None) if surface.is_some() => {
@@ -6698,8 +6701,10 @@ impl App {
                 &self.catalog,
                 self.vab_snap.then_some(15.0),
             )?;
-            let sym = if self.vab_frag.is_some() {
+            let sym = if !self.editor.counterparts(target).is_empty() {
                 1
+            } else if let Some(f) = &self.vab_frag {
+                f.symmetry.max(1)
             } else {
                 self.vab_symmetry
             };
@@ -6862,6 +6867,7 @@ impl App {
                 if let Some(p) = self.editor.craft.parts.get_mut(i) {
                     p.colors = new;
                 }
+                self.editor.sync_symmetry(i);
             }
             None => self.editor.craft.colors = new,
         }
@@ -7456,6 +7462,7 @@ impl App {
         if let Some(cf) = crossfeed {
             p.fuel_crossfeed = cf;
         }
+        self.editor.sync_symmetry(i);
         // Ask for a fresh staging readout (delta-v follows the fill) without redrawing the window.
         self.vab_report_due = Some(now_ms() + 300.0);
     }
@@ -12200,8 +12207,38 @@ impl App {
                 .and_then(|id| {
                     let (spot, sym) = self.vab_surface(&id)?;
                     let spec = self.catalog.get(&id)?;
-                    Some(self.editor.surface_poses(spec, &self.catalog, spot, sym))
+                    let mut poses = self.editor.surface_poses(spec, &self.catalog, spot, sym);
+                    // On a part of a symmetry set, a copy shows on each of the others too.
+                    let own = vab::mirror_own(Some(spec));
+                    if let Some(&(p, q)) = poses.first() {
+                        for (_, m) in self.editor.symmetry_maps(spot.target) {
+                            poses.push(m.pose(p, q, own));
+                        }
+                    }
+                    Some(poses)
                 })
+                .unwrap_or_default();
+            // Snapping on a node of a symmetric part shows the copies on its set; the set of the selected and
+            // the hovered part light up with it.
+            self.vab3d.sym_of = if self.vab3d.held.is_some() {
+                (0..self.editor.craft.parts.len())
+                    .filter_map(|i| {
+                        let m = self.editor.symmetry_maps(i);
+                        (!m.is_empty()).then(|| (i, m.into_iter().map(|(_, m)| m).collect()))
+                    })
+                    .collect()
+            } else {
+                Default::default()
+            };
+            self.vab3d.sym_lit = self
+                .editor
+                .selected
+                .map(|i| self.editor.counterparts(i))
+                .unwrap_or_default();
+            self.vab3d.sym_hover = self
+                .vab3d
+                .hovered
+                .map(|i| self.editor.counterparts(i))
                 .unwrap_or_default();
             let held = self.vab3d.held.as_ref().map(|(id, _)| id.clone());
             let free = self.snap_nodes(held.as_deref());
@@ -12774,6 +12811,7 @@ impl App {
                     glow: 0.0,
                     exposure: 0.0,
                     true_metal: false,
+                    highlight: 0.0,
                     paint: None,
                     hide_containing: None,
                 });

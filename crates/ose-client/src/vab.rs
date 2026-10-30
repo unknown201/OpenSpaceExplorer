@@ -161,6 +161,9 @@ impl Editor {
             plane_new: false,
         };
         e.plane_new = e.is_plane();
+        if e.craft.parts.iter().all(|p| p.symmetry == 0) {
+            e.infer_symmetry();
+        }
         e
     }
 
@@ -251,6 +254,7 @@ impl Editor {
         };
         if self.craft.parts.is_empty() {
             self.craft.parts.push(CraftPart {
+                symmetry: 0,
                 actions: Vec::new(),
                 flight: None,
                 colors: None,
@@ -342,6 +346,7 @@ impl Editor {
             self.craft.parts[target].local_position + quat_rotate(pq, local_position);
         let idx = self.craft.parts.len();
         self.craft.parts.push(CraftPart {
+            symmetry: 0,
             actions: Vec::new(),
             flight: None,
             colors: None,
@@ -377,37 +382,16 @@ impl Editor {
     /// Remove the selected part and everything attached to it; the selection moves to its parent.
     pub fn remove_selected(&mut self, catalog: &Catalog) -> Option<usize> {
         let sel = self.selected?;
-        let mut doomed = vec![false; self.craft.parts.len()];
-        doomed[sel] = true;
-        // Children may come after or before their parent; iterate to a fixed point.
-        loop {
-            let mut changed = false;
-            for (i, p) in self.craft.parts.iter().enumerate() {
-                if !doomed[i] && p.parent.is_some_and(|pi| doomed[pi]) {
-                    doomed[i] = true;
-                    changed = true;
-                }
-            }
-            if !changed {
-                break;
+        // The rest of its symmetry set goes with it, as in the original.
+        let mut doomed = self.subtree(sel);
+        for c in self.counterparts(sel) {
+            for (k, d) in self.subtree(c).into_iter().enumerate() {
+                doomed[k] |= d;
             }
         }
         let parent = self.craft.parts[sel].parent;
-        let mut remap: Vec<Option<usize>> = Vec::with_capacity(self.craft.parts.len());
-        let mut kept = Vec::new();
-        for (i, p) in self.craft.parts.iter().enumerate() {
-            if doomed[i] {
-                remap.push(None);
-            } else {
-                remap.push(Some(kept.len()));
-                kept.push(p.clone());
-            }
-        }
-        for p in &mut kept {
-            p.parent = p.parent.and_then(|pi| remap[pi]);
-        }
         let removed = doomed.iter().filter(|d| **d).count();
-        self.craft.parts = kept;
+        let remap = self.remove_mask(&doomed);
         self.selected = parent
             .and_then(|pi| remap[pi])
             .or(if self.craft.parts.is_empty() {
@@ -542,6 +526,8 @@ impl Editor {
 #[derive(Clone, Debug)]
 pub struct Fragment {
     pub parts: Vec<CraftPart>,
+    /// How many copies go back on the craft: a part lifted from a symmetry set takes its whole set along.
+    pub symmetry: u32,
 }
 
 impl Fragment {
@@ -633,10 +619,20 @@ impl Editor {
         if self.craft.parts.get(i).is_none_or(|p| p.parent.is_none()) {
             return false;
         }
-        let inside = self.subtree(i);
-        for (k, p) in self.craft.parts.iter_mut().enumerate() {
-            if inside[k] {
-                p.local_position = p.local_position + delta;
+        // The rest of its symmetry set moves the same way, turned or mirrored with it.
+        let moves: Vec<(usize, DVec3)> = std::iter::once((i, delta))
+            .chain(
+                self.symmetry_maps(i)
+                    .into_iter()
+                    .map(|(c, m)| (c, m.dir(delta))),
+            )
+            .collect();
+        for (j, d) in moves {
+            let inside = self.subtree(j);
+            for (k, p) in self.craft.parts.iter_mut().enumerate() {
+                if inside[k] {
+                    p.local_position = p.local_position + d;
+                }
             }
         }
         true
@@ -647,6 +643,23 @@ impl Editor {
         if i >= self.craft.parts.len() {
             return None;
         }
+        // A part of a symmetry set comes off with the whole set: the others go, and the fragment keeps how
+        // many to put back.
+        let others = self.counterparts(i);
+        let symmetry = others.len() as u32 + 1;
+        let i = if others.is_empty() {
+            i
+        } else {
+            let guid = self.craft.parts[i].guid.clone();
+            let mut doomed = vec![false; self.craft.parts.len()];
+            for c in others {
+                for (k, d) in self.subtree(c).into_iter().enumerate() {
+                    doomed[k] |= d;
+                }
+            }
+            self.remove_mask(&doomed);
+            self.craft.parts.iter().position(|p| p.guid == guid)?
+        };
         let inside = self.subtree(i);
         let origin = self.craft.parts[i].local_position;
         // Fragment order: the grabbed part first, then the rest in craft order.
@@ -657,7 +670,7 @@ impl Editor {
         for (n, &k) in order.iter().enumerate() {
             to_frag[k] = Some(n);
         }
-        let parts = order
+        let mut parts: Vec<CraftPart> = order
             .iter()
             .map(|&k| {
                 let mut p = self.craft.parts[k].clone();
@@ -686,9 +699,17 @@ impl Editor {
         }
         let parent = self.craft.parts[i].parent.and_then(|pi| remap[pi]);
         self.craft.parts = kept;
+        // A set split between the fragment and the craft is a set no longer.
+        for p in &mut parts {
+            if p.symmetry != 0 && self.craft.parts.iter().any(|q| q.symmetry == p.symmetry) {
+                p.symmetry = 0;
+            }
+        }
+        tidy_symmetry(&mut parts);
+        tidy_symmetry(&mut self.craft.parts);
         self.selected = parent;
         self.rebuild_stages(catalog);
-        Some(Fragment { parts })
+        Some(Fragment { parts, symmetry })
     }
 
     /// Turn a stack-attached part by `q` about its own attach node, so it stays on the node it hangs from.
@@ -710,7 +731,12 @@ impl Editor {
 
     /// A copy of part `i` and everything under it, the craft left as it is (Ctrl+C).
     pub fn copy(&self, i: usize, catalog: &Catalog) -> Option<Fragment> {
-        self.clone().detach(i, catalog)
+        let mut e = self.clone();
+        for c in e.counterparts(i) {
+            e.craft.parts[c].symmetry = 0;
+        }
+        tidy_symmetry(&mut e.craft.parts);
+        e.detach(i, catalog)
     }
 
     fn next_guid(&self) -> usize {
@@ -767,9 +793,399 @@ impl Editor {
             guid += 1;
             self.craft.parts.push(p);
         }
+        self.replicate(root, catalog);
         self.selected = Some(root);
         self.rebuild_stages(catalog);
         Ok(root)
+    }
+
+    /// The other parts of part `i`'s symmetry set.
+    pub fn counterparts(&self, i: usize) -> Vec<usize> {
+        let Some(s) = self
+            .craft
+            .parts
+            .get(i)
+            .map(|p| p.symmetry)
+            .filter(|s| *s != 0)
+        else {
+            return Vec::new();
+        };
+        (0..self.craft.parts.len())
+            .filter(|&k| k != i && self.craft.parts[k].symmetry == s)
+            .collect()
+    }
+
+    fn fresh_symmetry(&self) -> u32 {
+        self.craft
+            .parts
+            .iter()
+            .map(|p| p.symmetry)
+            .max()
+            .unwrap_or(0)
+            + 1
+    }
+
+    /// How part `i` maps onto each other part of its set: a mirror pair (one drawn mirrored) reflects across
+    /// the plane's middle, any other set turns about the axis it was spread around.
+    pub fn symmetry_maps(&self, i: usize) -> Vec<(usize, SymMap)> {
+        let others = self.counterparts(i);
+        let mirrored = |k: usize| {
+            self.craft.parts[k]
+                .flight
+                .as_ref()
+                .is_some_and(|f| f.mirrored)
+        };
+        if let [c] = others[..] {
+            if mirrored(c) != mirrored(i) {
+                let (centre, normal) = self.mirror_plane();
+                return vec![(c, SymMap::Mirror { centre, normal })];
+            }
+        }
+        let p = &self.craft.parts[i];
+        let qi = quat_conj(unit_or_identity(p.local_rotation));
+        others
+            .into_iter()
+            .map(|c| {
+                let q = &self.craft.parts[c];
+                let turn = unit_or_identity(quat_mul(unit_or_identity(q.local_rotation), qi));
+                (
+                    c,
+                    SymMap::Rigid {
+                        from: p.local_position,
+                        turn,
+                        to: q.local_position,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    /// Drop the parts marked in `doomed`; returns where each old index went.
+    fn remove_mask(&mut self, doomed: &[bool]) -> Vec<Option<usize>> {
+        let mut remap: Vec<Option<usize>> = Vec::with_capacity(self.craft.parts.len());
+        let mut kept = Vec::new();
+        for (i, p) in self.craft.parts.iter().enumerate() {
+            if doomed[i] {
+                remap.push(None);
+            } else {
+                remap.push(Some(kept.len()));
+                kept.push(p.clone());
+            }
+        }
+        for p in &mut kept {
+            p.parent = p.parent.and_then(|pi| remap[pi]);
+            p.fuel_line_target = p.fuel_line_target.and_then(|t| remap[t]);
+        }
+        self.craft.parts = kept;
+        tidy_symmetry(&mut self.craft.parts);
+        remap
+    }
+
+    /// Copy part `root` and everything under it once per `(parent, map)`: hung on `parent`, posed by `map`.
+    /// Each part of the tree forms one set with its copies, except a set wholly inside the tree (fins on a
+    /// booster), which stays a set within each copy. Returns the copies' roots.
+    fn clone_subtree(
+        &mut self,
+        root: usize,
+        copies: &[(usize, SymMap)],
+        catalog: &Catalog,
+    ) -> Vec<usize> {
+        if copies.is_empty() || root >= self.craft.parts.len() {
+            return Vec::new();
+        }
+        let inside = self.subtree(root);
+        let members: Vec<usize> = std::iter::once(root)
+            .chain((0..self.craft.parts.len()).filter(|&k| inside[k] && k != root))
+            .collect();
+        let inner: Vec<u32> = members
+            .iter()
+            .map(|&m| self.craft.parts[m].symmetry)
+            .filter(|&s| {
+                s != 0
+                    && self
+                        .craft
+                        .parts
+                        .iter()
+                        .enumerate()
+                        .all(|(k, p)| p.symmetry != s || inside[k])
+            })
+            .collect();
+        let mut next = self.fresh_symmetry();
+        for &m in &members {
+            if !inner.contains(&self.craft.parts[m].symmetry) {
+                self.craft.parts[m].symmetry = next;
+                next += 1;
+            }
+        }
+        let mut guid = self.next_guid();
+        let mut roots = Vec::new();
+        for &(parent, map) in copies {
+            let base = self.craft.parts.len();
+            let mut to_new = vec![None; base];
+            for (n, &m) in members.iter().enumerate() {
+                to_new[m] = Some(base + n);
+            }
+            let mut renumber: HashMap<u32, u32> = HashMap::new();
+            for &m in &members {
+                let mut p = self.craft.parts[m].clone();
+                let own = mirror_own(catalog.get(&p.part_id));
+                (p.local_position, p.local_rotation) =
+                    map.pose(p.local_position, p.local_rotation, own);
+                p.parent = if m == root {
+                    Some(parent)
+                } else {
+                    p.parent.and_then(|k| to_new[k])
+                };
+                p.fuel_line_target = p
+                    .fuel_line_target
+                    .and_then(|k| to_new.get(k).copied().flatten());
+                if inner.contains(&p.symmetry) {
+                    p.symmetry = *renumber.entry(p.symmetry).or_insert_with(|| {
+                        next += 1;
+                        next - 1
+                    });
+                }
+                if matches!(map, SymMap::Mirror { .. }) {
+                    let id = p.part_id.clone();
+                    let f = p
+                        .flight
+                        .get_or_insert_with(|| ose_data::flight_geometry::PartFlight {
+                            part_id: id,
+                            ..Default::default()
+                        });
+                    f.mirrored = !f.mirrored;
+                }
+                p.guid = format!("p{guid}");
+                guid += 1;
+                self.craft.parts.push(p);
+            }
+            roots.push(base);
+        }
+        roots
+    }
+
+    /// Put copies of the tree just placed at `root` on the rest of the set of the part it hangs on (the
+    /// original places a part on a symmetric part's whole set). Returns the copies' roots.
+    pub fn replicate(&mut self, root: usize, catalog: &Catalog) -> Vec<usize> {
+        let Some(parent) = self.craft.parts.get(root).and_then(|p| p.parent) else {
+            return Vec::new();
+        };
+        let maps = self.symmetry_maps(parent);
+        let out = self.clone_subtree(root, &maps, catalog);
+        if !out.is_empty() {
+            self.rebuild_stages(catalog);
+        }
+        out
+    }
+
+    /// `n` in all of the tree at `root` spread around the part it hangs on (a lifted set put back on a part
+    /// of no set); a plane's pair is mirrored across its middle.
+    pub fn replicate_around(&mut self, root: usize, n: u32, catalog: &Catalog) -> Vec<usize> {
+        let Some(t) = self.craft.parts.get(root).and_then(|p| p.parent) else {
+            return Vec::new();
+        };
+        if n < 2 {
+            return Vec::new();
+        }
+        let copies: Vec<(usize, SymMap)> = if n == 2 && self.is_plane() {
+            let (centre, normal) = self.mirror_plane();
+            vec![(t, SymMap::Mirror { centre, normal })]
+        } else {
+            let tp = &self.craft.parts[t];
+            let pq = unit_or_identity(tp.local_rotation);
+            let c = catalog
+                .get(&tp.part_id)
+                .map(|s| s.centre())
+                .unwrap_or_default();
+            let axis = tp.local_position + quat_rotate(pq, DVec3::new(c.x, 0.0, c.z));
+            (1..n)
+                .map(|k| {
+                    let th = std::f64::consts::TAU * k as f64 / n as f64;
+                    let ry = Quat {
+                        x: 0.0,
+                        y: (th * 0.5).sin(),
+                        z: 0.0,
+                        w: (th * 0.5).cos(),
+                    };
+                    let turn = quat_mul(quat_mul(pq, ry), quat_conj(pq));
+                    (
+                        t,
+                        SymMap::Rigid {
+                            from: axis,
+                            turn,
+                            to: axis,
+                        },
+                    )
+                })
+                .collect()
+        };
+        let out = self.clone_subtree(root, &copies, catalog);
+        self.rebuild_stages(catalog);
+        out
+    }
+
+    /// Carry part `i`'s settings (tank fill, crossfeed, action groups, paint) over to the rest of its set,
+    /// as the original keeps a set alike.
+    pub fn sync_symmetry(&mut self, i: usize) {
+        let Some(src) = self.craft.parts.get(i).cloned() else {
+            return;
+        };
+        for c in self.counterparts(i) {
+            let p = &mut self.craft.parts[c];
+            if p.part_id == src.part_id {
+                p.resources = src.resources.clone();
+                p.fuel_crossfeed = src.fuel_crossfeed;
+                p.actions = src.actions.clone();
+                p.colors = src.colors;
+            }
+        }
+    }
+
+    /// Find the symmetry sets of a craft saved without them (the stock crafts): parts of one kind on one
+    /// part's side, alike in stage, height and distance from its axis; then, set by set, what hangs alike on
+    /// each of its parts.
+    fn infer_symmetry(&mut self) {
+        const NEAR: f64 = 0.02;
+        let n = self.craft.parts.len();
+        let mut next = 1;
+        let mut sets: Vec<u32> = Vec::new();
+        for i in 0..n {
+            let a = &self.craft.parts[i];
+            if a.symmetry != 0 || a.parent_node.is_some() {
+                continue;
+            }
+            let Some(t) = a.parent else { continue };
+            let tp = &self.craft.parts[t];
+            let inv = quat_conj(unit_or_identity(tp.local_rotation));
+            let rel = |p: &CraftPart| {
+                let r = quat_rotate(inv, p.local_position - tp.local_position);
+                (r.y, (r.x * r.x + r.z * r.z).sqrt())
+            };
+            let (h, r) = rel(a);
+            if r < NEAR {
+                continue;
+            }
+            let alike: Vec<usize> = (i + 1..n)
+                .filter(|&k| {
+                    let b = &self.craft.parts[k];
+                    let (hb, rb) = rel(b);
+                    b.symmetry == 0
+                        && b.parent == Some(t)
+                        && b.parent_node.is_none()
+                        && b.part_id == a.part_id
+                        && b.stage_index == a.stage_index
+                        && (hb - h).abs() < NEAR
+                        && (rb - r).abs() < NEAR
+                })
+                .collect();
+            if alike.is_empty() {
+                continue;
+            }
+            for k in std::iter::once(i).chain(alike) {
+                self.craft.parts[k].symmetry = next;
+            }
+            sets.push(next);
+            next += 1;
+        }
+        // What hangs alike on every part of a set is a set too.
+        while let Some(s) = sets.pop() {
+            let Some(first) = self.craft.parts.iter().position(|p| p.symmetry == s) else {
+                continue;
+            };
+            let maps = self.symmetry_maps(first);
+            let children: Vec<usize> = (0..n)
+                .filter(|&k| self.craft.parts[k].parent == Some(first))
+                .collect();
+            for ch in children {
+                let c = &self.craft.parts[ch];
+                if c.symmetry != 0 {
+                    continue;
+                }
+                let mut found = vec![ch];
+                for (other, map) in &maps {
+                    let (pos, _) = map.pose(
+                        c.local_position,
+                        c.local_rotation,
+                        DVec3::new(0.0, 0.0, 1.0),
+                    );
+                    let hit = (0..n).find(|&k| {
+                        let b = &self.craft.parts[k];
+                        b.parent == Some(*other)
+                            && b.symmetry == 0
+                            && b.part_id == c.part_id
+                            && (b.local_position - pos).length() < NEAR
+                    });
+                    match hit {
+                        Some(k) => found.push(k),
+                        None => break,
+                    }
+                }
+                if found.len() == maps.len() + 1 {
+                    for k in found {
+                        self.craft.parts[k].symmetry = next;
+                    }
+                    sets.push(next);
+                    next += 1;
+                }
+            }
+        }
+    }
+}
+
+/// Clear set ids that only one part still has.
+fn tidy_symmetry(parts: &mut [CraftPart]) {
+    let mut count: HashMap<u32, usize> = HashMap::new();
+    for p in parts.iter() {
+        *count.entry(p.symmetry).or_default() += 1;
+    }
+    for p in parts.iter_mut() {
+        if count.get(&p.symmetry) == Some(&1) {
+            p.symmetry = 0;
+        }
+    }
+}
+
+/// How one part of a symmetry set maps onto another (the original's `SymmetrySetPositionerRadial` and
+/// `SymmetrySetPositionerMirror`): a turn about the axis the set is spread around, or a reflection across a
+/// plane's middle.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SymMap {
+    Rigid { from: DVec3, turn: Quat, to: DVec3 },
+    Mirror { centre: DVec3, normal: DVec3 },
+}
+
+impl SymMap {
+    /// A pose (craft frame) carried over; `own` is the part's face a mirror image keeps (`mirror_own`).
+    pub fn pose(&self, pos: DVec3, q: Quat, own: DVec3) -> (DVec3, Quat) {
+        match *self {
+            SymMap::Rigid { from, turn, to } => (
+                to + quat_rotate(turn, pos - from),
+                unit_or_identity(quat_mul(turn, q)),
+            ),
+            SymMap::Mirror { centre, normal } => mirror_pose(pos, q, centre, normal, own),
+        }
+    }
+
+    /// An offset carried over.
+    pub fn dir(&self, v: DVec3) -> DVec3 {
+        match *self {
+            SymMap::Rigid { turn, .. } => quat_rotate(turn, v),
+            SymMap::Mirror { normal, .. } => v - normal * (2.0 * v.dot(normal)),
+        }
+    }
+}
+
+/// The face of a part its mirror image keeps: a wing (surface node along +Z, the way it spans) across its
+/// thickness (+Y); anything else across +Z.
+pub fn mirror_own(spec: Option<&PartSpec>) -> DVec3 {
+    let d = spec
+        .and_then(surface_node)
+        .map(|n| n.orientation)
+        .unwrap_or_default();
+    if d.z.abs() > d.x.abs().max(d.y.abs()) {
+        DVec3::new(0.0, 1.0, 0.0)
+    } else {
+        DVec3::new(0.0, 0.0, 1.0)
     }
 }
 
@@ -1081,10 +1497,25 @@ impl Editor {
         spot: SurfaceSpot,
         symmetry: u32,
     ) -> Result<Vec<usize>, String> {
+        self.place_surface(spec, catalog, spot, symmetry, true)
+    }
+
+    /// `add_surface`; `spread` false leaves a symmetric target's other parts bare (the caller copies more).
+    fn place_surface(
+        &mut self,
+        spec: &PartSpec,
+        catalog: &Catalog,
+        spot: SurfaceSpot,
+        symmetry: u32,
+        spread: bool,
+    ) -> Result<Vec<usize>, String> {
         let node = surface_node(spec)
             .ok_or_else(|| format!("{} cannot go on another part's side", spec.display_title()))?
             .id
             .clone();
+        // On a part of a symmetry set the part goes on the whole set instead (the set's symmetry wins).
+        let on_set = !self.counterparts(spot.target).is_empty();
+        let symmetry = if on_set { 1 } else { symmetry };
         let poses = self.surface_poses(spec, catalog, spot, symmetry);
         if poses.is_empty() {
             return Err("no part to attach to there".into());
@@ -1109,6 +1540,7 @@ impl Editor {
             let mirrored = mirrored_pair && out.len() == 1;
             out.push(self.craft.parts.len());
             self.craft.parts.push(CraftPart {
+                symmetry: 0,
                 actions: Vec::new(),
                 flight: mirrored.then(|| ose_data::flight_geometry::PartFlight {
                     part_id: spec.id.clone(),
@@ -1129,6 +1561,16 @@ impl Editor {
                 fuel_line_target: None,
             });
         }
+        if out.len() > 1 {
+            let s = self.fresh_symmetry();
+            for &k in &out {
+                self.craft.parts[k].symmetry = s;
+            }
+        }
+        if on_set && spread {
+            let copies = self.replicate(out[0], catalog);
+            out.extend(copies);
+        }
         self.selected = out.first().copied();
         self.rebuild_stages(catalog);
         Ok(out)
@@ -1145,7 +1587,7 @@ impl Editor {
             .get(frag.root_id())
             .ok_or_else(|| format!("unknown part {}", frag.root_id()))?;
         let root = *self
-            .add_surface(spec, catalog, spot, 1)?
+            .place_surface(spec, catalog, spot, 1, false)?
             .first()
             .ok_or("nothing placed")?;
         let placed = self.craft.parts[root].clone();
@@ -1171,6 +1613,9 @@ impl Editor {
             p.local_rotation = quat_mul(turn, p.local_rotation);
             p.guid = format!("p{guid}");
             self.craft.parts.push(p);
+        }
+        if self.replicate(root, catalog).is_empty() {
+            self.replicate_around(root, frag.symmetry, catalog);
         }
         self.selected = Some(root);
         self.rebuild_stages(catalog);
@@ -2053,6 +2498,149 @@ mod tests {
         let r = e.attach_surface(&frag, &cat, spot).unwrap();
         let face = quat_rotate(e.craft.parts[r].local_rotation, DVec3::new(1.0, 0.0, 0.0));
         assert!(face.z < -0.99);
+    }
+
+    /// The original's symmetry sets: what is placed with symmetry stays a set; a part put on one part of a
+    /// set goes on all of them; the set moves, comes off, goes back and is deleted as one.
+    #[test]
+    fn symmetry_sets_act_as_one() {
+        let mut cat = catalog();
+        cat.insert(
+            "radial".into(),
+            PartSpec {
+                id: "radial".into(),
+                category: "Coupling".into(),
+                mass_t: 0.05,
+                stage_type: "DecouplerRadial".into(),
+                is_decoupler: true,
+                size_m: Some(DVec3::new(0.2, 0.6, 0.2)),
+                attach_nodes: vec![
+                    NodeSpec {
+                        id: "srfAttach".into(),
+                        node_type: "Surface".into(),
+                        position: DVec3::new(0.1, 0.0, 0.0),
+                        orientation: DVec3::new(1.0, 0.0, 0.0),
+                        size: 1,
+                    },
+                    node("top", 0.3, 1.0),
+                    node("bottom", -0.3, -1.0),
+                ],
+                ..Default::default()
+            },
+        );
+        let mut e = Editor::new("test");
+        e.add_part(&cat["pod"], &cat).unwrap();
+        let t = e.add_part(&cat["tank"], &cat).unwrap();
+        let spot = e
+            .surface_spot(t, DVec3::new(0.62, -1.0, 0.0), &cat, Some(15.0))
+            .unwrap();
+        let radials = e.add_surface(&cat["radial"], &cat, spot, 3).unwrap();
+        assert_eq!(radials.len(), 3);
+        assert_eq!(e.counterparts(radials[0]).len(), 2);
+
+        // A tank on one radial's bottom node: a tank under each of them, the three a set of their own.
+        let k = e
+            .add_part_on(&cat["tank"], &cat, radials[1], "bottom")
+            .unwrap();
+        let copies = e.replicate(k, &cat);
+        assert_eq!(copies.len(), 2);
+        assert_eq!(e.craft.parts.len(), 2 + 3 + 3);
+        let mut set = e.counterparts(k);
+        set.push(k);
+        set.sort();
+        let mut under: Vec<usize> = set
+            .iter()
+            .filter_map(|&i| e.craft.parts[i].parent)
+            .collect();
+        under.sort();
+        let mut want = radials.clone();
+        want.sort();
+        assert_eq!(under, want, "one tank under each radial");
+        // Each copy sits where its radial's tank would: the radial's pose carried over.
+        for &c in &copies {
+            let r = e.craft.parts[c].parent.unwrap();
+            let rel = e.craft.parts[c].local_position - e.craft.parts[r].local_position;
+            assert!(
+                (rel.length() - 1.3).abs() < 1e-6,
+                "tank under its radial: {rel:?}"
+            );
+        }
+        // An engine on one of those tanks goes on all three.
+        let g = e
+            .add_part_on(&cat["engine"], &cat, copies[0], "bottom")
+            .unwrap();
+        assert_eq!(e.replicate(g, &cat).len(), 2);
+        assert_eq!(e.craft.parts.len(), 11);
+        assert!(e.craft.is_tree());
+
+        // Tank fill and crossfeed carry across the set.
+        e.craft.parts[k].resources[0].stored_units = 40.0;
+        e.craft.parts[k].fuel_crossfeed = false;
+        e.sync_symmetry(k);
+        for c in e.counterparts(k) {
+            assert_eq!(e.craft.parts[c].resources[0].stored_units, 40.0);
+            assert!(!e.craft.parts[c].fuel_crossfeed);
+        }
+
+        // The offset tool moves the set alike: each radial (and what hangs on it) by the same amount
+        // outward from the tank's axis.
+        let axis_dist = |e: &Editor, i: usize| {
+            let p = e.craft.parts[i].local_position - e.craft.parts[t].local_position;
+            (p.x * p.x + p.z * p.z).sqrt()
+        };
+        let before: Vec<f64> = radials.iter().map(|&i| axis_dist(&e, i)).collect();
+        let out = e.craft.parts[radials[0]].local_position - e.craft.parts[t].local_position;
+        let out = DVec3::new(out.x, 0.0, out.z) * (1.0 / before[0]);
+        assert!(e.offset(radials[0], out * 0.2));
+        for (n, &i) in radials.iter().enumerate() {
+            assert!(
+                (axis_dist(&e, i) - before[n] - 0.2).abs() < 1e-6,
+                "radial {n} moved out"
+            );
+        }
+
+        // Grabbing one radial lifts the set; it goes back as three.
+        let frag = e.detach(radials[2], &cat).unwrap();
+        assert_eq!(frag.symmetry, 3);
+        assert_eq!(frag.parts.len(), 3, "a radial with its tank and engine");
+        assert_eq!(e.craft.parts.len(), 2);
+        let spot = e
+            .surface_spot(t, DVec3::new(0.0, -1.0, 0.62), &cat, Some(15.0))
+            .unwrap();
+        e.attach_surface(&frag, &cat, spot).unwrap();
+        assert_eq!(e.craft.parts.len(), 11);
+        assert!(e.craft.is_tree());
+        let r0 = e
+            .craft
+            .parts
+            .iter()
+            .position(|p| p.part_id == "radial")
+            .unwrap();
+        assert_eq!(e.counterparts(r0).len(), 2);
+        let tank0 = e
+            .craft
+            .parts
+            .iter()
+            .position(|p| p.part_id == "tank" && p.parent == Some(r0))
+            .unwrap();
+        assert_eq!(e.counterparts(tank0).len(), 2, "the tanks are a set again");
+
+        // Deleting one deletes the set with everything on it.
+        e.selected = Some(tank0);
+        assert_eq!(e.remove_selected(&cat), Some(6));
+        assert_eq!(e.craft.parts.len(), 5);
+        assert!(e.craft.is_tree());
+
+        // A copy is a single part again, and a saved craft without sets gets them back on load.
+        let frag = e.copy(r0, &cat).unwrap();
+        assert_eq!(frag.symmetry, 1);
+        let mut bare = e.craft.clone();
+        for p in &mut bare.parts {
+            p.symmetry = 0;
+        }
+        let loaded = Editor::from_craft(bare);
+        assert_eq!(loaded.counterparts(r0).len(), 2);
+        assert!(loaded.counterparts(t).is_empty());
     }
 
     #[test]

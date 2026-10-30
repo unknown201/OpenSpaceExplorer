@@ -274,7 +274,11 @@ fn fs_mesh(in: VsOut) -> @location(0) vec4<f32> {
     if object.extra.y > 0.0 {
         lit_rgb = vec3<f32>(1.0) - exp(-lit_rgb * object.extra.y);
     }
-    let rgb = mix(lit_rgb, base.rgb, object.params.x) + em;
+    // Editor highlight (DrawItem::highlight): a glow in the tint colour, strongest at the silhouette, that
+    // shows on painted parts too, as the original's part highlighter.
+    let rim = 1.0 - max(dot(n0, view), 0.0);
+    let glow_hl = object.color.rgb * object.extra.w * (0.18 + 0.8 * rim * rim);
+    let rgb = mix(lit_rgb, base.rgb, object.params.x) + em + glow_hl;
     // Water is opaque (one return for every path: an early one broke unrelated draws too).
     return select(vec4<f32>(rgb, base.a), vec4<f32>(water, 1.0), is_water);
 }
@@ -448,6 +452,8 @@ pub struct DrawItem {
     /// the KSC campus, whose exports carry KSP2's _Metallic. Parts keep the softer shading their looks were
     /// tuned with.
     pub true_metal: bool,
+    /// Editor highlight strength (0 none): the part glows in `color`, rim first (selected and hovered parts).
+    pub highlight: f32,
     /// The vessel's base and accent paint colours (linear rgb) for KSP2's paint-masked parts; `None` leaves
     /// parts as authored.
     pub paint: Option<([f32; 3], [f32; 3])>,
@@ -484,6 +490,7 @@ impl DrawItem {
             glow: 0.0,
             exposure: 0.0,
             true_metal: false,
+            highlight: 0.0,
             paint: None,
             hide_containing: None,
         }
@@ -1891,7 +1898,7 @@ impl Renderer {
                         item.glow,
                         item.exposure,
                         if item.true_metal { 1.0 } else { 0.0 },
-                        0.0,
+                        item.highlight,
                     ],
                     paint_a: item
                         .paint
