@@ -1662,7 +1662,9 @@ fn vc_density(p: vec3<f32>, base_r: f32, top_r: f32, t: f32, detail: bool) -> f3
     // wind: the coverage drifts east
     let drift = vec3<f32>(-up.z, 0.0, up.x) * (t * surface.clouds2.y);
     let uv = equi_uv(normalize(p + drift));
-    let cover = textureSampleLevel(clouds_tex, equi_samp, uv, 2.0).a * surface.clouds.y;
+    // the baked coverage sharpened into cumulus fields, as the far shell does (Josh's KSP2 pad shot: big,
+    // puffy clouds over about a third of the sky)
+    let cover = smoothstep(0.12, 0.6, textureSampleLevel(clouds_tex, equi_samp, uv, 2.0).a * surface.clouds.y);
     if cover < 0.04 {
         return 0.0;
     }
@@ -1671,7 +1673,7 @@ fn vc_density(p: vec3<f32>, base_r: f32, top_r: f32, t: f32, detail: bool) -> f3
     var d = cover * profile;
     if detail && d > 0.0 {
         let n = vc_noise(p + drift * 1.5);
-        d = clamp((d - (1.0 - n) * 0.65) * 2.2, 0.0, 1.0);
+        d = clamp((d - (1.0 - n) * 0.45) * 2.6, 0.0, 1.0);
     }
     return d;
 }
