@@ -2452,11 +2452,13 @@ impl FlightView {
             gpu.hide_meshes("ksc", &["ground", "KSCmain_LOD"]);
             if let Some(p) = self.planet.as_mut() {
                 for it in items.iter_mut() {
-                    it.exposure = if it.model == "ksc" {
+                    let campus = it.model == "ksc";
+                    it.exposure = if campus {
                         OUTDOOR_EXPOSURE
                     } else {
                         PART_EXPOSURE
                     };
+                    it.true_metal = campus;
                 }
                 items.extend(p.scatter_items(
                     gpu,

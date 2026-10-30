@@ -238,13 +238,23 @@ fn fs_mesh(in: VsOut) -> @location(0) vec4<f32> {
     let lit = base.rgb * min(ambient + (1.0 - ambient) * diffuse + fill, 1.6);
     // Specular from the metallic-gloss map (metal in red, smoothness in alpha): a Blinn-Phong lobe whose
     // sharpness follows smoothness, tinted by the base colour on metal.
-    let metal = mg.r * 0.8;
+    // Outdoors the map is scaled by the material's metallicFactor (KSP2's _Metallic); indoors as before.
+    let true_metal = object.extra.z > 0.5;
+    let metal_map = mg.r * select(1.0, object.surface2.w, true_metal);
+    let metal = metal_map * 0.8;
     let smooth_ = mg.a;
     let h = normalize(ldir + view);
     let spec_pow = mix(8.0, 256.0, smooth_ * smooth_);
     let spec = pow(max(dot(n, h), 0.0), spec_pow) * smooth_ * diffuse * (spec_pow + 8.0) / 64.0;
     let spec_col = mix(vec3<f32>(0.04), base.rgb, metal);
-    let shaded = lit * (1.0 - metal * 0.5) + spec_col * spec;
+    // Outdoors (DrawItem::exposure) metal is metal: its diffuse light fades with metalness and it shows the
+    // dim environment it reflects tinted by its colour, as KSP2's slate-dark launch tower. Indoors (the VAB's
+    // lit hall) keeps the half-measure.
+    let shaded_in = lit * (1.0 - metal * 0.5) + spec_col * spec;
+    // Mid-grey metal maps (KSP2's tower averages 0.54) mean bare steel: stretched so its diffuse nearly goes.
+    let m_true = clamp(metal_map * 1.6, 0.0, 1.0);
+    let shaded_out = lit * (1.0 - m_true) + base.rgb * m_true * ambient * 0.35 + spec_col * spec;
+    let shaded = select(shaded_in, shaded_out, true_metal);
     // Local lamps (craft lights): falloff with distance over their range, a soft cone for spots.
     var lamps = vec3<f32>(0.0);
     let nl = i32(camera.light_count.x);
@@ -434,6 +444,10 @@ pub struct DrawItem {
     /// Outdoor exposure: 0 draws linear (the VAB, the menu); k > 0 maps the lit colour through
     /// 1 - exp(-k x), the planet's own tone curve, so sunlit albedo reads as bright as the original's frame.
     pub exposure: f32,
+    /// Shade metal as metal (the material's metallicFactor scales its map; diffuse fades with metalness):
+    /// the KSC campus, whose exports carry KSP2's _Metallic. Parts keep the softer shading their looks were
+    /// tuned with.
+    pub true_metal: bool,
     /// The vessel's base and accent paint colours (linear rgb) for KSP2's paint-masked parts; `None` leaves
     /// parts as authored.
     pub paint: Option<([f32; 3], [f32; 3])>,
@@ -469,6 +483,7 @@ impl DrawItem {
             sun: 1.0,
             glow: 0.0,
             exposure: 0.0,
+            true_metal: false,
             paint: None,
             hide_containing: None,
         }
@@ -1872,7 +1887,12 @@ impl Renderer {
                         if item.atmosphere { 1.0 } else { 0.0 },
                         item.ambient,
                     ],
-                    extra: [item.glow, item.exposure, 0.0, 0.0],
+                    extra: [
+                        item.glow,
+                        item.exposure,
+                        if item.true_metal { 1.0 } else { 0.0 },
+                        0.0,
+                    ],
                     paint_a: item
                         .paint
                         .map(|p| [p.0[0], p.0[1], p.0[2], 1.0])
@@ -2400,17 +2420,21 @@ fn parse_glb(bytes: &[u8]) -> Result<CpuModel, String> {
                 })
                 .unwrap_or_default()
         };
+        // [7]: glTF metallicFactor, scaling the metallic map (KSP2's _Metallic).
+        let metal = m["pbrMetallicRoughness"]["metallicFactor"]
+            .as_f64()
+            .unwrap_or(1.0) as f32;
         let g = nums(&m["extras"]["ose_ground"]);
         if g.len() >= 3 {
             let tint = |i: usize| g.get(i).copied().unwrap_or(1.0);
-            return [1.0, g[0], g[1], g[2], tint(3), tint(4), tint(5), 0.0];
+            return [1.0, g[0], g[1], g[2], tint(3), tint(4), tint(5), metal];
         }
         let w = nums(&m["extras"]["ose_water"]);
         if w.len() >= 4 {
             let lin = |c: f32| srgb_to_linear(c as f64) as f32;
-            return [2.0, w[3], 0.0, 0.0, lin(w[0]), lin(w[1]), lin(w[2]), 0.0];
+            return [2.0, w[3], 0.0, 0.0, lin(w[0]), lin(w[1]), lin(w[2]), metal];
         }
-        [0.0; 8]
+        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, metal]
     };
     let material_blend = |mi: usize| -> bool {
         json["materials"]
@@ -2539,7 +2563,7 @@ fn parse_glb(bytes: &[u8]) -> Result<CpuModel, String> {
             let surface = prim["material"]
                 .as_u64()
                 .map(|m| material_surface(m as usize))
-                .unwrap_or([0.0; 8]);
+                .unwrap_or([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]);
             cpu_meshes.push((vertices, indices, texture, blend, color, surface));
             mesh_names.push(mesh["name"].as_str().unwrap_or("").to_string());
             by_key.insert((mi, pi), cpu_meshes.len() - 1);
