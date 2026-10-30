@@ -6,25 +6,27 @@ using BepInEx;
 using KSP.Game;
 using KSP.Modules;
 using KSP.Sim;
+using KSP.Sim.ResourceSystem;
 using KSP.Sim.impl;
 using UnityEngine;
 
 namespace OpenSpaceExplorer.Validation
 {
     // F8 is passive. F9 explicitly runs a temporary orbit/input fixture; never writes a save.
-    [BepInPlugin("org.openspaceexplorer.controlcapture", "OSE Control Capture", "0.2.0")]
+    [BepInPlugin("org.openspaceexplorer.controlcapture", "OSE Control Capture", "0.3.0")]
     [DefaultExecutionOrder(-32000)]
     public sealed class ControlCapture : BaseUnityPlugin
     {
         StreamWriter capture;
+        StreamWriter rcsCapture;
         string vesselId;
         double start, last;
-        bool pulse; double pulseStart; string pulseVessel;
+        bool pulse, rcsPulse; double pulseStart; string pulseVessel;
         LiveState pending; double pendingUt;
         sealed class LiveState {
             public QuaternionD q;
-            public Vector3d w, position, velocity, torque;
-            public double physicsMass, wheelInput, pendingPower, acceptedPower;
+            public Vector3d w, position, velocity, torque, rcsForce, rcsTorque;
+            public double physicsMass, wheelInput, pendingPower, acceptedPower, crewMass;
         }
         void Awake() {
             StartCoroutine(AfterPhysics());
@@ -32,11 +34,21 @@ namespace OpenSpaceExplorer.Validation
         }
         void Update()
         {
-            if (Input.GetKeyDown(KeyCode.F9)) {
+            if (Input.GetKeyDown(KeyCode.F9) || Input.GetKeyDown(KeyCode.F10)) {
                 var game = GameManager.Instance.Game;
                 var vessel = game.ViewController.GetActiveSimVessel();
                 if (vessel == null || !vessel.mainBody.bodyName.Equals("Kerbin")) return;
-                Stop(); vessel.SetAutopilotEnableDisable(false);
+                Stop(); rcsPulse=Input.GetKeyDown(KeyCode.F10); vessel.SetAutopilotEnableDisable(false);
+                if(rcsPulse) {
+                    vessel.IsRCSEnabled=true;
+                    foreach(var part in vessel.SimulationObject.PartOwner.Parts) {
+                        if(!game.SpaceSimulation.TryGetViewObject(part.SimulationObject,out var view))continue;
+                        foreach(var module in view.GetComponents<Module_ReactionWheel>()) {
+                            if(module.DataModules.Contains(typeof(Data_ReactionWheel)))
+                                ((Data_ReactionWheel)module.DataModules[typeof(Data_ReactionWheel)]).ToggleTorque.SetValue(false);
+                        }
+                    }
+                }
                 game.ViewController.flightInputHandler.OverrideInputThrottleCutoff(true);
                 game.SpaceSimulation.TeleportSimObjectToOrbit(vessel.GlobalId.ToString(), new KSP.Sim.State.KeplerOrbitState {
                     referenceBodyGuid = "Kerbin", semiMajorAxis = 700000, eccentricity = 0,
@@ -44,7 +56,7 @@ namespace OpenSpaceExplorer.Validation
                 }, false);
                 pulse = true; pulseStart = game.UniverseModel.UniverseTime + 2;
                 pulseVessel = vessel.GlobalId.ToString();
-                Logger.LogInfo("Orbit/pulse fixture armed: two seconds settling, then pitch/release/reverse/roll/yaw for 12 seconds.");
+                Logger.LogInfo("Orbit/pulse fixture armed: two seconds settling, then "+(rcsPulse?"RCS translation":"wheel rotation")+" for 12 seconds.");
             }
             bool trigger = Input.GetKeyDown(KeyCode.F8);
             if (!trigger) return;
@@ -63,8 +75,10 @@ namespace OpenSpaceExplorer.Validation
                 var path=Path.Combine(folder,DateTime.UtcNow.ToString("yyyyMMdd-HHmmss",CultureInfo.InvariantCulture)+".csv");
                 start=game.UniverseModel.UniverseTime;last=double.NegativeInfinity;vesselId=vessel.GlobalId.ToString();
                 capture=new StreamWriter(path,false);capture.AutoFlush=true;
-                capture.WriteLine("t,pitch,yaw,roll,throttle,qx,qy,qz,qw,wx,wy,wz,mass_t,px,py,pz,vx,vy,vz,ix,iy,iz,command_pitch,command_yaw,command_roll,translate_x,translate_y,translate_z,sas,ut,dt,unity_frame,fixed_count,end_qx,end_qy,end_qz,end_qw,end_wx,end_wy,end_wz,physics_mass_t,cached_wx,cached_wy,cached_wz,torque_x,torque_y,torque_z,wheel_input,pending_power,accepted_power");
-                File.WriteAllText(path+".metadata.txt","source=running_KSP2\nrecorder_version=0.2.0\nfixture="+(pulse?"orbit_input_pulse":"passive")+"\nphase=pre_physics_live_rigidbody\ninputs=interval_applied\nend_phase=wait_for_fixed_update_live_rigidbody\nframe=main_body_motion_frame\nhandedness=Unity\nvessel="+vesselId+"\nassembly="+typeof(VesselComponent).Assembly.GetName().Version+"\n");
+                capture.WriteLine("t,pitch,yaw,roll,throttle,qx,qy,qz,qw,wx,wy,wz,mass_t,px,py,pz,vx,vy,vz,ix,iy,iz,command_pitch,command_yaw,command_roll,translate_x,translate_y,translate_z,sas,ut,dt,unity_frame,fixed_count,end_qx,end_qy,end_qz,end_qw,end_wx,end_wy,end_wz,physics_mass_t,cached_wx,cached_wy,cached_wz,torque_x,torque_y,torque_z,wheel_input,pending_power,accepted_power,rcs,crew_t,end_px,end_py,end_pz,end_vx,end_vy,end_vz,end_mass_t,rcs_force_x,rcs_force_y,rcs_force_z,rcs_torque_x,rcs_torque_y,rcs_torque_z");
+                rcsCapture=new StreamWriter(path+".rcs.csv",false);rcsCapture.AutoFlush=true;
+                rcsCapture.WriteLine("t,part,nozzle,fx,fy,fz,px,py,pz,pending,requirement,received,delivery,remaining");
+                File.WriteAllText(path+".metadata.txt","source=running_KSP2\nrecorder_version=0.3.0\nfixture="+(pulse?(rcsPulse?"orbit_rcs_pulse":"orbit_input_pulse"):"passive")+"\nphase=pre_physics_live_rigidbody\ninputs=interval_applied\nend_phase=wait_for_fixed_update_live_rigidbody\nframe=main_body_motion_frame\nhandedness=Unity\nvessel="+vesselId+"\nassembly="+typeof(VesselComponent).Assembly.GetName().Version+"\n");
                 using(var parts=new StreamWriter(path+".parts.csv",false)) {
                     parts.WriteLine("part_id,guid,px,py,pz,qx,qy,qz,qw,com_x,com_y,com_z,dry_t,resource_t,crew_t,physics_t,ix,iy,iz,iqx,iqy,iqz,iqw");
                     var craftFrame=vessel.SimulationObject.transform.bodyFrame;
@@ -110,9 +124,14 @@ namespace OpenSpaceExplorer.Validation
                     if(vessel==null || vessel.GlobalId.ToString()!=pulseVessel || t>=12){Stop();return;}
                     // The stock override resets after every input FixedUpdate, so supply it
                     // before every physics tick, including multiple ticks in one render frame.
-                    FlightInputHandler.OverrideInputPitch(t>=1 && t<2?1f:t>=3 && t<4?-1f:0f);
-                    FlightInputHandler.OverrideInputRoll(t>=5 && t<6?1f:0f);
-                    FlightInputHandler.OverrideInputYaw(t>=8 && t<9?1f:0f);
+                    FlightInputHandler.OverrideInputPitch(!rcsPulse && t>=1 && t<2?1f:!rcsPulse && t>=3 && t<4?-1f:0f);
+                    FlightInputHandler.OverrideInputRoll(!rcsPulse && t>=5 && t<6?1f:0f);
+                    FlightInputHandler.OverrideInputYaw(!rcsPulse && t>=8 && t<9?1f:0f);
+                    if(rcsPulse) {
+                        FlightInputHandler.OverrideInputTranslateX(t>=1 && t<2?1f:t>=8 && t<9?-1f:0f);
+                        FlightInputHandler.OverrideInputTranslateY(t>=3 && t<4?1f:0f);
+                        FlightInputHandler.OverrideInputTranslateZ(t>=5 && t<6?1f:0f);
+                    }
                     if(t>=0 && capture==null)BeginCapture();
                 }
                 if(capture==null)return;
@@ -131,11 +150,13 @@ namespace OpenSpaceExplorer.Validation
             var frame=game.UniverseModel.inertialReferenceFrame.bodyMotionFrame;
             var state=new LiveState();
             Vector3d pos=Vector3d.zero,vel=Vector3d.zero,w=Vector3d.zero,torque=Vector3d.zero;
+            Vector3d rcsForce=Vector3d.zero,rcsMoment=Vector3d.zero;
             foreach(var part in vessel.SimulationObject.PartOwner.Parts) {
                 if(!game.SpaceSimulation.TryGetViewObject(part.SimulationObject,out var view))continue;
                 var body=view.Rigidbody?.activeRigidBody;
                 if(body==null || body.isKinematic)continue;
                 double mass=body.mass;state.physicsMass+=mass;
+                state.crewMass+=part.GreenMass;
                 pos+=(Vector3d)body.worldCenterOfMass*mass;
                 vel+=(Vector3d)body.velocity*mass;w+=(Vector3d)body.angularVelocity*mass;
                 foreach(var t in part.SimulationObject.Rigidbody.Torques)
@@ -147,6 +168,14 @@ namespace OpenSpaceExplorer.Validation
                     state.pendingPower+=data.HasPendingResourceActivity?1:0;
                     state.acceptedPower+=data.HasResourcesToOperate?1:0;
                 }
+                foreach(var module in view.GetComponents<Module_RCS>()) {
+                    if(module.thrustForces==null)continue;
+                    foreach(var force in module.thrustForces) {
+                        Vector3d f=view.transform.localToWorldMatrix.MultiplyVector(force.RelativeForce);
+                        Vector3d at=view.transform.localToWorldMatrix.MultiplyPoint3x4(force.RelativePosition);
+                        rcsForce+=f;rcsMoment+=Vector3d.Cross(at,f);
+                    }
+                }
             }
             if(state.physicsMass<=0)throw new InvalidOperationException("No live dynamic rigid bodies");
             var position=physics.PhysicsToPosition(pos/state.physicsMass);
@@ -154,12 +183,36 @@ namespace OpenSpaceExplorer.Validation
             state.velocity=Vector.Reframed(frame.ToRelativeVelocity(physics.PhysicsToVelocity(vel/state.physicsMass),position),frame.localFrame).vector;
             state.w=Vector.Reframed(frame.ToRelativeAngularVelocity(physics.PhysicsToAngularVelocity(w/state.physicsMass)),frame.localFrame).vector;
             state.torque=Vector.Reframed(physics.PhysicsToVector(torque),frame.localFrame).vector;
+            state.rcsForce=Vector.Reframed(physics.PhysicsToVector(rcsForce),frame.localFrame).vector;
+            state.rcsTorque=Vector.Reframed(physics.PhysicsToVector(rcsMoment-Vector3d.Cross(pos/state.physicsMass,rcsForce)),frame.localFrame).vector;
             var owner=vessel.GetControlOwner()??vessel.SimulationObject.PartOwner.RootPart;
             if(!game.SpaceSimulation.TryGetViewObject(owner.SimulationObject,out var controlView) || controlView.Rigidbody?.activeRigidBody==null)
                 throw new InvalidOperationException("No live control-owner rigid body");
             var local=owner.transform.bodyFrame.ToLocalRotation(vessel.ControlTransform.Rotation);
             state.q=frame.localFrame.ToLocalRotation(physics.PhysicsToRotation(controlView.Rigidbody.activeRigidBody.rotation))*local;
             return state;
+        }
+        void WriteRcs(VesselComponent vessel,double time)
+        {
+            int index=0;
+            foreach(var part in vessel.SimulationObject.PartOwner.Parts) {
+                int partIndex=index++;
+                var game=GameManager.Instance.Game;
+                if(!game.SpaceSimulation.TryGetViewObject(part.SimulationObject,out var view))continue;
+                foreach(var module in view.GetComponents<Module_RCS>()) {
+                    if(!module.DataModules.Contains(typeof(Data_RCS)) || module.thrustForces==null)continue;
+                    var data=(Data_RCS)module.DataModules[typeof(Data_RCS)];
+                    var state=data.PropellantState;if(state==null)continue;
+                    double delivery=state.requestHandle==ResourceFlowRequestHandle.InvalidID?0:part.PartResourceFlowRequestBroker.GetRequestState(state.requestHandle).LastTickDeliveryNormalized;
+                    for(int i=0;i<module.thrustForces.Count;i++) {
+                        var f=module.thrustForces[i];
+                        double[] values={time,partIndex,i,f.RelativeForce.x,f.RelativeForce.y,f.RelativeForce.z,
+                            f.RelativePosition.x,f.RelativePosition.y,f.RelativePosition.z,state.pendingRequest?1:0,
+                            state.currentRequirement,state.amountReceived,delivery,state.GetConnectedResourceRemaining(state.resourceID)};
+                        rcsCapture.WriteLine(string.Join(",",Array.ConvertAll(values,v=>v.ToString("R",CultureInfo.InvariantCulture))));
+                    }
+                }
+            }
         }
         IEnumerator AfterPhysics()
         {
@@ -184,12 +237,15 @@ namespace OpenSpaceExplorer.Validation
                     f.pitch,f.yaw,f.roll,f.X,f.Y,f.Z,vessel.Autopilot!=null && vessel.Autopilot.Enabled?1:0,pendingUt,
                     dt,Time.frameCount,game.FixedUpdateCount,end.q.x,end.q.y,end.q.z,end.q.w,end.w.x,end.w.y,end.w.z,
                     before.physicsMass,cached.x,cached.y,cached.z,end.torque.x,end.torque.y,end.torque.z,
-                    end.wheelInput,end.pendingPower,end.acceptedPower};
+                    end.wheelInput,end.pendingPower,end.acceptedPower,vessel.IsRCSEnabled?1:0,before.crewMass,
+                    end.position.x,end.position.y,end.position.z,end.velocity.x,end.velocity.y,end.velocity.z,vessel.totalMass,
+                    end.rcsForce.x,end.rcsForce.y,end.rcsForce.z,end.rcsTorque.x,end.rcsTorque.y,end.rcsTorque.z};
                 capture.WriteLine(string.Join(",",Array.ConvertAll(values,v=>v.ToString("R",CultureInfo.InvariantCulture))));
+                WriteRcs(vessel,pendingUt-start);
                 } catch(Exception error){Logger.LogError(error);Stop();}
             }
         }
-        void Stop(){pending=null;if(pulse){pulse=false;FlightInputHandler.OverrideInputPitch(0);FlightInputHandler.OverrideInputYaw(0);FlightInputHandler.OverrideInputRoll(0);}if(capture==null)return;capture.Dispose();capture=null;Logger.LogInfo("Control capture stopped.");}
+        void Stop(){pending=null;if(pulse){pulse=false;FlightInputHandler.OverrideInputPitch(0);FlightInputHandler.OverrideInputYaw(0);FlightInputHandler.OverrideInputRoll(0);if(rcsPulse){FlightInputHandler.OverrideInputTranslateX(0);FlightInputHandler.OverrideInputTranslateY(0);FlightInputHandler.OverrideInputTranslateZ(0);}}rcsPulse=false;if(rcsCapture!=null){rcsCapture.Dispose();rcsCapture=null;}if(capture==null)return;capture.Dispose();capture=null;Logger.LogInfo("Control capture stopped.");}
         void OnDestroy(){Stop();}
     }
 }

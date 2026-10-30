@@ -1,0 +1,36 @@
+{
+  "source": "running KSP2 0.2.2.0.32913",
+  "recorder_version": "0.3.0",
+  "captured_utc": [
+    "2026-10-30T03:40:39Z",
+    "2026-10-30T03:41:23Z"
+  ],
+  "baseline_commit": "7c98fb3ae2296972f5264f055b22712932904262",
+  "conditions": "Single Gumball, one occupied seat, 100 km Kerbin orbit, engine absent, SAS off, wheels disabled by F10, RCS on. Repeat retains prior delivery state and remaining propellant.",
+  "redaction": "Generated vessel/part GUID fields removed only from companions; primary/nozzle CSV bytes unchanged.",
+  "geometry": "Measured single-part principal inertia divided by independently measured physics mass, without trajectory fitting.",
+  "cleanup": {
+    "loader_removed": true,
+    "temporary_campaign_removed": true,
+    "default_campaign_unchanged": true,
+    "capture_files": 10
+  },
+  "default_files_unchanged": 75,
+  "owned_installed_files_removed": 22,
+  "status": "Failing end-to-end RCS timing fixture; shared request flow verified separately.",
+  "files": {
+    "gumball-rcs-after.json": "9737b411b1dfc6994d6f78d98aaee5c2973eb6da887e79a03a49f115617f6b25",
+    "gumball-rcs-before.json": "95bf5f9d846a768b8861292a3dac3262a7a5d05077970f2fa6d1c2c1d150c67d",
+    "gumball-rcs-repeat-after.json": "2115055896be1c7975c0e7b6f1f2240f2abd973a8d4467b2b1bcae0e446ddc5b",
+    "gumball-rcs-repeat.craft.json": "d87a86fb2a6c11e36adc88208816da9cc221926d989ea1ed6550d295eea60f7a",
+    "gumball-rcs-repeat.csv": "39931011c34350a9ea4a56d2221370c392d1c24a58c10c086b8c8e50ff941cc4",
+    "gumball-rcs-repeat.csv.metadata.txt": "784ca07bebd00374b296495afdb7a42d1362a3d2e9a00867f179764f1b463a22",
+    "gumball-rcs-repeat.csv.parts.csv": "b35008c98b88f39a1120535fbbc59ea27e0ffd42541f2a6b26021a0d609fb378",
+    "gumball-rcs-repeat.csv.rcs.csv": "47d579ed3ec83becb3bbfdc314b64a076ea9fe18f0bd45f41ba31134d0784ac5",
+    "gumball-rcs.craft.json": "7ad0148361df24346ea64837ddbfc0757913838deb62fab07f44817a492fd49e",
+    "gumball-rcs.csv": "0ce7e850c652322294e792372d37515a6ab6abaccf03be76523079dca97af469",
+    "gumball-rcs.csv.metadata.txt": "784ca07bebd00374b296495afdb7a42d1362a3d2e9a00867f179764f1b463a22",
+    "gumball-rcs.csv.parts.csv": "3610ee81f068b6862032e7e1fb141b65a31313e458c1e7edec2b32f385ed7e0f",
+    "gumball-rcs.csv.rcs.csv": "924b17e274cddfd8ebc0cc359944856095ebee4fb7abd5f0fc7dc909f29f2374"
+  }
+}

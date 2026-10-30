@@ -1,2 +1,3 @@
 # Preserve the recorded evidence bytes so manifest hashes are identical on Windows and Unix.
 tools/ksp2-control-capture/fixtures/jumping-flea-interval* -text whitespace=cr-at-eol
+tools/ksp2-control-capture/fixtures/gumball-rcs* -text whitespace=cr-at-eol

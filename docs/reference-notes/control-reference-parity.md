@@ -281,8 +281,23 @@ smaller retries, both transform paths, independent starvation in two modules, an
 all-ingredient retention when a mixture request is rejected. Definitions without
 the new optional rule deserialize to their legacy behavior.
 
-This increment does not claim complete RCS resource parity. The model still sums
-the nozzle demand conservatively per module and resolves delivery in the current
-simulation tick. KSP2's shared pending request handle, per-nozzle call order and
-render/physics timing require an executable RCS capture before changing that
-schedule. The SAS-off reaction-wheel fixture remains a separate passing check.
+The subsequent 0.3 recorder run provides two executable 600-interval RCS captures
+from a single Gumball, one occupied seat, SAS/wheels off. Their per-nozzle data
+confirms the shared-handle behavior: the final positive command in authored
+transform order replaces preceding commands, while each commanded nozzle applies
+its own force. Source definitions now charge that final command; legacy definitions
+retain summed demand. Unequal-nozzle and reversed-order tests distinguish the rule
+from summing or choosing the largest request. The recorded two-nozzle flow is also
+checked directly without an OSE self-comparison.
+
+The same capture's maximum mass error falls from 0.001300139 t to 0.0000339914 t.
+Its maximum angle/rate errors remain 4.22574 degrees / 0.0150627 rad/s, so this is
+still a failing RCS fixture. Translation comparisons now also reject different
+inputs/enable states and check position and velocity. The reference samples input
+in render updates, consumes a pending request later and applies a queued force on
+the next physics interval. First activation starts with no accepted request;
+subsequent activations can reuse prior delivery. Cached vessel mass lags actual
+connected-tank consumption. The simulation's current same-tick delivery does not
+match these stages. No input/time/pose offset or controller gain was fitted.
+The SAS-off reaction-wheel fixture remains a separate passing check. Capture
+cleanup removed the owned loader and campaign and verified all 75 Default files.

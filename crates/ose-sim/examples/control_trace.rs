@@ -34,10 +34,23 @@ fn main() {
         serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
     let res: Vec<ose_data::ResourceDef> =
         serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
-    let craft = crafts
-        .iter()
-        .find(|c| c.name == name)
-        .expect("stock craft name");
+    let owned_craft;
+    let craft = if std::path::Path::new(&name).is_file() {
+        owned_craft = serde_json::from_str::<ose_data::craft::Craft>(
+            &std::fs::read_to_string(&name).expect("fixture craft JSON"),
+        )
+        .expect("fixture craft");
+        &owned_craft
+    } else {
+        crafts
+            .iter()
+            .find(|c| c.name == name)
+            .expect("stock craft name")
+    };
+    let rcs_fixture = args.get(2).is_some_and(|path| {
+        std::fs::read_to_string(format!("{path}.metadata.txt"))
+            .is_ok_and(|text| text.lines().any(|line| line == "fixture=orbit_rcs_pulse"))
+    });
     let report = ose_data::staging::delta_v_by_stage(craft, &defs, &res);
     let spec = FlightSpec::from_report(&report, &[], &[], 1.5);
     let mut u = Universe::with_bodies(&bodies);
@@ -61,6 +74,21 @@ fn main() {
         );
         p.ignited = false;
         p.throttle = row["throttle"];
+        p.groups.rcs = row.get("rcs").is_some_and(|v| *v != 0.0);
+        if rcs_fixture {
+            // F10 explicitly disables every wheel before the two-second settling period.
+            p.part_controls = (0..craft.parts.len())
+                .map(|i| {
+                    (
+                        i as u16,
+                        ose_data::flight_geometry::PartControl {
+                            wheel_enabled: false,
+                            ..Default::default()
+                        },
+                    )
+                })
+                .collect();
+        }
         let q = glam::DQuat::from_xyzw(-row["qx"], -row["qy"], row["qz"], row["qw"]).normalize();
         let facing = q * glam::DVec3::Y;
         p.facing = DVec3::new(facing.x, facing.y, facing.z);
@@ -72,13 +100,27 @@ fn main() {
     }
     u.set_powered(vessel, p);
     u.set_structure(vessel, Structure::build(craft, &defs, &res));
+    if let Some(row) = initial.filter(|r| r.contains_key("crew_t")) {
+        // A single-capsule fixture has an unambiguous occupied-seat distribution.
+        assert_eq!(
+            craft.parts.len(),
+            1,
+            "crew distribution requires a single-part fixture"
+        );
+        let seats = (row["crew_t"] / 0.095).round() as usize;
+        assert!((seats as f64 * 0.095 - row["crew_t"]).abs() < 1e-8);
+        u.set_crew(
+            vessel,
+            (0..seats).map(|i| (0, format!("Reference {i}"))).collect(),
+        );
+    }
     if replay.is_some() {
         eprintln!(
             "OSE initial mass properties: {:?}",
             u.structure(vessel).unwrap().mass_properties()
         );
     }
-    println!("t,pitch,yaw,roll,throttle,qx,qy,qz,qw,wx,wy,wz,mass_t");
+    println!("t,pitch,yaw,roll,throttle,qx,qy,qz,qw,wx,wy,wz,mass_t,px,py,pz,vx,vy,vz,translate_x,translate_y,translate_z,rcs");
     let samples = replay
         .as_ref()
         .map(|rows| rows.len())
@@ -108,14 +150,51 @@ fn main() {
             u.set_controls(vessel, 0., Attitude::Fixed(f));
         }
         u.set_rotation(vessel, pitch, yaw, roll);
+        if let Some(rows) = &replay {
+            u.action_group(
+                vessel,
+                ose_sim::ActionGroup::Rcs,
+                Some(rows[step].get("rcs").is_some_and(|v| *v != 0.0)),
+            );
+        }
+        let translation = replay
+            .as_ref()
+            .map(|rows| {
+                let r = &rows[step];
+                DVec3::new(
+                    *r.get("translate_x").unwrap_or(&0.),
+                    *r.get("translate_z").unwrap_or(&0.),
+                    *r.get("translate_y").unwrap_or(&0.),
+                )
+            })
+            .unwrap_or(DVec3::ZERO);
+        u.set_translate(vessel, translation);
         let p = u.powered(vessel).unwrap();
         let (x, y, z) = ose_sim::flight::vessel_basis(p);
         let vector = |v: DVec3| glam::DVec3::new(v.x, v.y, v.z);
         let q = glam::DQuat::from_mat3(&glam::DMat3::from_cols(vector(x), vector(y), vector(z)));
         let w = p.angvel + p.facing * p.roll_rate;
         println!(
-            "{t:.9},{pitch},{yaw},{roll},{},{},{},{},{},{},{},{},{}",
-            p.throttle, q.x, q.y, q.z, q.w, w.x, w.y, w.z, p.mass_t
+            "{t:.9},{pitch},{yaw},{roll},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            p.throttle,
+            q.x,
+            q.y,
+            q.z,
+            q.w,
+            w.x,
+            w.y,
+            w.z,
+            p.mass_t,
+            p.r.x,
+            p.r.y,
+            p.r.z,
+            p.v.x,
+            p.v.y,
+            p.v.z,
+            translation.x,
+            translation.z,
+            translation.y,
+            u8::from(p.groups.rcs)
         );
         u.step();
     }

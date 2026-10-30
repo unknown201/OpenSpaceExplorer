@@ -1,0 +1,12 @@
+{
+  "samples": 600,
+  "duration_s": 11.979999732226133,
+  "max_angle_deg": 4.227124465304221,
+  "rms_angle_deg": 2.681676010872377,
+  "max_omega_rad_s": 0.015076604229876629,
+  "max_mass_t": 0.0013001390589955086,
+  "passed": false,
+  "max_position_m": 0.8901286772077569,
+  "max_velocity_m_s": 0.06476359457345175,
+  "linear_motion_checked": true
+}

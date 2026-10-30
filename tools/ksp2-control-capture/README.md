@@ -6,7 +6,7 @@ F9 is an explicit fixture: it prepares a 100 km Kerbin orbit, disables SAS and c
 throttle input, waits two seconds, then supplies pitch/release/reversal/roll/yaw
 through the stock FlightInputHandler override API for 12 seconds. It stops overrides
 and recording automatically. It never changes physics parameters or writes a save.
-The fixture does not ignite an engine; use an unignited craft. Version 0.2 records
+The fixture does not ignite an engine; use an unignited craft. Version 0.3 records
 live rigid-body intervals and supplies the stock one-shot overrides on every
 physics tick. Earlier 0.1 measurements remain immutable diagnostic fixtures.
 
@@ -141,3 +141,43 @@ this fixture: maximum attitude error 0.145481 degrees, angular-rate error
 12.770470 degrees / 0.6142401 rad/s. No input/time/pose offset, tensor multiplier
 or controller gain was fitted. This validates SAS-off wheel pulses in this craft;
 other craft, SAS/RCS, brownouts and joint/contact behavior still need captures.
+
+## RCS runtime evidence
+
+F10 prepares the same orbit, enables RCS, disables every reaction wheel and SAS,
+then pulses translation X, Y, Z and reverse X. It records 600 live intervals plus
+per-nozzle forces/positions, the shared pending propellant request, its delivered
+fraction and connected resource remaining. F9 remains the wheel fixture.
+
+`gumball-rcs.csv` and `gumball-rcs-repeat.csv` are actual captures from a single
+Gumball capsule with one occupied seat. The repeat preserves the first run's
+remaining propellant and previous request-delivery state. Their fixture JSONs use
+the independently measured part mass/shape; a single dynamic body's inertia is
+unscaled with that body's mass, rather than the multi-body scalar of 5.
+
+```powershell
+cargo run -q -p ose-sim --example control_trace -- tools/ksp2-control-capture/fixtures/gumball-rcs.craft.json tools/ksp2-control-capture/fixtures/gumball-rcs.csv > .cache/gumball-rcs-ose.csv
+python -B tools/compare_control_traces.py --reference-unity tools/ksp2-control-capture/fixtures/gumball-rcs.csv .cache/gumball-rcs-ose.csv
+```
+
+This replay **fails**. The shared-request correction reduces maximum mass error
+from 0.001300139 t to 0.0000339914 t; the attitude/rate errors remain 4.22574 degrees
+and 0.0150627 rad/s. The comparator also checks translation inputs, RCS enable,
+position (0.5 m) and velocity (0.05 m/s) for translation fixtures. No input, time,
+pose or controller adjustment was fitted. The first cold-start request, retained
+delivery on subsequent pulses, render-frame input sampling and queued physical
+force are exposed by the captures; the current simulation's same-tick schedule
+does not reproduce them yet. Cached vessel mass also lags the connected tank data.
+
+Both captures verify that two firing nozzles consume one module request per tick:
+`Module_RCS.CalculateThrust` repeatedly overwrites the same handle, and the final
+positive nozzle command survives. Source definitions now use that command in
+transform order; legacy definitions keep their summed demand. Unequal-command and
+reversed-order tests distinguish this rule from either summing or taking a maximum.
+
+KSP2 was closed and all 22 added loader/recorder files, owned generated directories
+and the `OSE RCS Validation 1029` campaign were removed. All 75 existing Default
+campaign files hash identically. Raw captures, logs, install manifest and the
+temporary campaign remain archived at `.cache/rcs-runtime-20261029` in this worktree.
+The committed manifest hashes primary/nozzle CSVs unchanged; only generated GUID
+fields were removed from companions. No game binaries or save files are committed.

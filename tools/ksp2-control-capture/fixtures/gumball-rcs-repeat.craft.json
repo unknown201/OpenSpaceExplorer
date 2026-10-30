@@ -1,0 +1,70 @@
+{
+  "name": "RCS reference capsule",
+  "description": "Single Gumball; one occupied seat; F10 disables wheels.",
+  "parts": [
+    {
+      "guid": "rcs-reference",
+      "part_id": "pod_2v_conical_crew",
+      "parent": null,
+      "own_node": null,
+      "parent_node": null,
+      "local_position": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "local_rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0,
+        "w": 1
+      },
+      "stage_index": 0,
+      "fuel_crossfeed": true,
+      "resources": [
+        {
+          "resource": "MonoPropellant",
+          "stored_units": 0.11873385325722087,
+          "capacity_units": 0.12
+        },
+        {
+          "resource": "ElectricCharge",
+          "stored_units": 150,
+          "capacity_units": 150
+        }
+      ],
+      "fuel_line_target": null,
+      "colors": null,
+      "flight": {
+        "part_id": "pod_2v_conical_crew",
+        "dry_mass_t": 2.6024999618530273,
+        "mass_offset_m": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 0.0
+        },
+        "inertia_per_t": [
+          {
+            "x": 0.5090327929865003,
+            "y": 2.5932231206415227e-12,
+            "z": 1.6931731852023135e-07
+          },
+          {
+            "x": 2.593223120373024e-12,
+            "y": 0.5058052239303074,
+            "z": 4.947894963741567e-08
+          },
+          {
+            "x": 1.6931731853042328e-07,
+            "y": 4.947894963741585e-08,
+            "z": 0.5090327929858605
+          }
+        ],
+        "surface": null
+      }
+    }
+  ],
+  "stages": [
+    []
+  ]
+}

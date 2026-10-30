@@ -2719,12 +2719,21 @@ impl Structure {
                 .iter()
                 .map(|&part| {
                     let def = self.rcs_defs[part].as_ref().unwrap();
-                    let thrust = nozzles
+                    let mut nozzle_thrusts = nozzles
                         .iter()
                         .zip(inputs)
                         .filter(|(a, _)| a.part == part)
-                        .map(|(a, u)| a.force_kn.length() * *u)
-                        .sum::<f64>();
+                        .map(|(a, u)| a.force_kn.length() * *u);
+                    let thrust = if def.request_minimum.is_some() {
+                        // Module_RCS.CalculateThrust calls SetCommands on the same
+                        // PropellantState handle for every active nozzle, in transform
+                        // order. The final positive command replaces earlier commands.
+                        // The live two-nozzle capsule capture consumes one nozzle's
+                        // flow per tick while both nozzles apply their force.
+                        nozzle_thrusts.rfind(|thrust| *thrust > 0.0).unwrap_or(0.0)
+                    } else {
+                        nozzle_thrusts.sum::<f64>()
+                    };
                     let pressure = self.last_rcs_pressure_atm;
                     let isp = def.isp_curve.evaluate(pressure);
                     let rate = if isp > 0.0 {
@@ -5897,6 +5906,68 @@ mod tests {
                 assert!((allocation.force_kn - force * scale).length() < 1e-9);
                 assert!((allocation.torque_knm - lever.cross(force) * scale).length() < 1e-9);
                 assert!((engine.burned_t - 0.1 * scale / (100.0 * ose_data::G0)).abs() < 1e-9);
+            }
+        }
+    }
+
+    #[test]
+    fn reference_rcs_last_active_nozzle_replaces_the_shared_module_request() {
+        for reference in [false, true] {
+            for reverse in [false, true] {
+                let (mut s, mut p, pair, body) = rcs_fixture();
+                s.rcs_defs[pair[1]] = None;
+                let part = pair[0];
+                let r = s.rcs_defs[part].as_mut().unwrap();
+                r.request_minimum = reference.then_some(0.5);
+                r.thrust_kn = 1.0;
+                r.thrusters = vec![
+                    ose_data::ThrustTransform {
+                        position_m: DVec3::new(1., 0., 0.),
+                        direction: DVec3::new(0., 1., 0.),
+                        weight: 1.,
+                    },
+                    ose_data::ThrustTransform {
+                        position_m: DVec3::new(0., 1., 0.),
+                        direction: DVec3::new(1., 0., 0.),
+                        weight: 1.,
+                    },
+                    // A later inactive nozzle must not erase the active request.
+                    ose_data::ThrustTransform {
+                        position_m: DVec3::new(-1., 0., 0.),
+                        direction: DVec3::new(0., -1., 0.),
+                        weight: 1.,
+                    },
+                ];
+                if reverse {
+                    r.thrusters.reverse();
+                }
+                // Authored geometry keeps legacy definitions on the nozzle path too.
+                s.geometry[part].rcs = r
+                    .thrusters
+                    .iter()
+                    .map(|t| ose_data::flight_geometry::Nozzle {
+                        position_m: t.position_m,
+                        direction: t.direction,
+                        weight: t.weight,
+                        gimbal: None,
+                    })
+                    .collect();
+                p.rcs.translate = DVec3::new(0.4, 0.8, 0.0);
+                let mut engine = s.propulsion(&p, Default::default(), 0.02);
+                s.configure_actuators(&p, Default::default(), &mut engine);
+                s.resolve_wheel_power(&mut p, &body, &mut engine, 0.02);
+                let allocation = engine.control_allocation.unwrap();
+                assert!((allocation.force_kn - DVec3::new(0.4, 0.8, 0.)).length() < 1e-10);
+                let charged = if reference {
+                    if reverse {
+                        0.8
+                    } else {
+                        0.4
+                    }
+                } else {
+                    1.2
+                };
+                assert!((engine.burned_t - charged * 0.02 / (100.0 * ose_data::G0)).abs() < 1e-12);
             }
         }
     }

@@ -37,17 +37,21 @@ def unity_to_ose(rows):
         converted=dict(row)
         # Quaternion and angular velocity are axial; position/velocity are polar.
         for key in ['qx','qy','wx','wy','pz','vz','end_qx','end_qy','end_wx','end_wy',
-                    'cached_wx','cached_wy','torque_x','torque_y']:
+                    'cached_wx','cached_wy','torque_x','torque_y',
+                    'end_pz','end_vz','rcs_force_z','rcs_torque_x','rcs_torque_y']:
             if key in converted: converted[key]=-converted[key]
         result.append(converted)
     return result
 
-def compare(a,b,angle_deg=0.5,omega=0.01,mass=1e-6):
+def compare(a,b,angle_deg=0.5,omega=0.01,mass=1e-6,position=0.5,velocity=0.05):
     if len(a)!=len(b):raise ValueError('sample counts differ; resample captures explicitly before comparing')
-    angles=[];rates=[];masses=[]
+    angles=[];rates=[];masses=[];positions=[];velocities=[]
+    translation=any(abs(r.get('translate_'+axis,0))>1e-6 for r in a for axis in 'xyz')
     for x,y in zip(a,b):
         if abs(x['t']-y['t'])>1e-6:raise ValueError('timestamps differ')
         if any(abs(x[k]-y[k])>1e-6 for k in ['pitch','yaw','roll','throttle']):raise ValueError('applied input traces differ')
+        for k in ['translate_x','translate_y','translate_z','rcs']:
+            if abs(x.get(k,0)-y.get(k,0))>1e-6:raise ValueError('applied RCS input traces differ')
         q=lambda r:[r[k] for k in ['qx','qy','qz','qw']]
         qa,qb=q(x),q(y);na=math.sqrt(sum(v*v for v in qa));nb=math.sqrt(sum(v*v for v in qb))
         if min(na,nb)<1e-9:raise ValueError('zero quaternion')
@@ -55,13 +59,24 @@ def compare(a,b,angle_deg=0.5,omega=0.01,mass=1e-6):
         angles.append(math.degrees(2*math.acos(min(1,dot))))
         rates.append(math.sqrt(sum((x[k]-y[k])**2 for k in ['wx','wy','wz'])))
         masses.append(abs(x['mass_t']-y['mass_t']))
+        if all(k in x and k in y for k in ['px','py','pz','vx','vy','vz']):
+            positions.append(math.sqrt(sum((x[k]-y[k])**2 for k in ['px','py','pz'])))
+            velocities.append(math.sqrt(sum((x[k]-y[k])**2 for k in ['vx','vy','vz'])))
+        elif translation:raise ValueError('translation comparison requires position and linear velocity in both traces')
     result={'samples':len(a),'duration_s':a[-1]['t']-a[0]['t'],'max_angle_deg':max(angles),'rms_angle_deg':math.sqrt(sum(x*x for x in angles)/len(a)),'max_omega_rad_s':max(rates),'max_mass_t':max(masses)}
     result['passed']=result['max_angle_deg']<=angle_deg and result['max_omega_rad_s']<=omega and result['max_mass_t']<=mass
+    if positions:
+        result['max_position_m']=max(positions);result['max_velocity_m_s']=max(velocities)
+        result['linear_motion_checked']=translation
+        if translation:
+            result['passed'] &= max(positions)<=position and max(velocities)<=velocity
     return result
 
 def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('reference',type=Path);p.add_argument('candidate',type=Path)
     p.add_argument('--angle-deg',type=float,default=0.5);p.add_argument('--omega',type=float,default=0.01);p.add_argument('--mass',type=float,default=1e-6)
+    p.add_argument('--position',type=float,default=0.5,help='Maximum translation-fixture position error, m')
+    p.add_argument('--velocity',type=float,default=0.05,help='Maximum translation-fixture linear velocity error, m/s')
     p.add_argument('--reference-unity',action='store_true',help='Reflect a recorder capture from Unity into the OSE main-body frame; never aligns time or pose')
     args=p.parse_args();reference=read(args.reference)
     if args.reference_unity:
@@ -70,7 +85,7 @@ def main():
         if fields.get('handedness')!='Unity' or fields.get('frame')!='main_body_motion_frame':
             raise ValueError('Unity conversion requires the recorder main-body-frame metadata')
         reference=unity_to_ose(reference)
-    result=compare(reference,read(args.candidate),args.angle_deg,args.omega,args.mass)
+    result=compare(reference,read(args.candidate),args.angle_deg,args.omega,args.mass,args.position,args.velocity)
     print(json.dumps(result,indent=2));raise SystemExit(0 if result['passed'] else 1)
 
 if __name__=='__main__':main()
