@@ -259,7 +259,12 @@ fn fs_mesh(in: VsOut) -> @location(0) vec4<f32> {
             lamps += camera.light_col[k].rgb * max(dot(n, l), 0.0) * att * spot;
         }
     }
-    let rgb = mix(shaded + base.rgb * lamps, base.rgb, object.params.x) + em;
+    var lit_rgb = shaded + base.rgb * lamps;
+    // Outdoor exposure (DrawItem::exposure): the planet's tone curve.
+    if object.extra.y > 0.0 {
+        lit_rgb = vec3<f32>(1.0) - exp(-lit_rgb * object.extra.y);
+    }
+    let rgb = mix(lit_rgb, base.rgb, object.params.x) + em;
     // Water is opaque (one return for every path: an early one broke unrelated draws too).
     return select(vec4<f32>(rgb, base.a), vec4<f32>(water, 1.0), is_water);
 }
@@ -426,6 +431,9 @@ pub struct DrawItem {
     pub sun: f32,
     /// Emissive map strength, 0 (off) to 1: the KSC's window and flood lights at night.
     pub glow: f32,
+    /// Outdoor exposure: 0 draws linear (the VAB, the menu); k > 0 maps the lit colour through
+    /// 1 - exp(-k x), the planet's own tone curve, so sunlit albedo reads as bright as the original's frame.
+    pub exposure: f32,
     /// The vessel's base and accent paint colours (linear rgb) for KSP2's paint-masked parts; `None` leaves
     /// parts as authored.
     pub paint: Option<([f32; 3], [f32; 3])>,
@@ -460,6 +468,7 @@ impl DrawItem {
             mirror_z: false,
             sun: 1.0,
             glow: 0.0,
+            exposure: 0.0,
             paint: None,
             hide_containing: None,
         }
@@ -1863,7 +1872,7 @@ impl Renderer {
                         if item.atmosphere { 1.0 } else { 0.0 },
                         item.ambient,
                     ],
-                    extra: [item.glow, 0.0, 0.0, 0.0],
+                    extra: [item.glow, item.exposure, 0.0, 0.0],
                     paint_a: item
                         .paint
                         .map(|p| [p.0[0], p.0[1], p.0[2], 1.0])

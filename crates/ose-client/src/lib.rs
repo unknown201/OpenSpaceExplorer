@@ -12473,6 +12473,7 @@ impl App {
                     mirror_z: true,
                     sun: 1.0,
                     glow: 0.0,
+                    exposure: 0.0,
                     paint: None,
                     hide_containing: None,
                 });

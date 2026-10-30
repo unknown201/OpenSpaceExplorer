@@ -260,7 +260,15 @@ fn lamp_frame(part_id: &str) -> (DVec3, DVec3) {
 /// The sun's strength on meshes outdoors (craft, the campus) against their albedo: the original's frame is
 /// brighter than plain albedo times sunlight (its pad concrete reads near white at noon in Josh's
 /// screenshots, ours mid grey), from its exposure. The VAB and menu keep their own lighting.
-pub(crate) const SUN_GAIN: f32 = 1.35;
+pub(crate) const SUN_GAIN: f32 = 1.0;
+
+/// Outdoor meshes' exposure (DrawItem::exposure): the pad's concrete (albedo about 0.24) reads near white at
+/// noon as in Josh's screenshots (217 sRGB), white parts roll off instead of clipping.
+pub(crate) const OUTDOOR_EXPOSURE: f32 = 4.2;
+
+/// Craft and Kerbals: their textures are much brighter than the campus's (white tanks near 0.7), which the
+/// campus's exposure blew out to flat white; this keeps their shading as KSP2's pad shots show.
+pub(crate) const PART_EXPOSURE: f32 = 2.4;
 
 /// The original's most common Kerbal skin colour (looks SKINCOLOR BADA55).
 pub const DEFAULT_SKIN: [u8; 3] = [0xBA, 0xDA, 0x55];
@@ -2437,6 +2445,13 @@ impl FlightView {
             // detailed buildings and stand as a slab past the campus edge.
             gpu.hide_meshes("ksc", &["ground", "KSCmain_LOD"]);
             if let Some(p) = self.planet.as_mut() {
+                for it in items.iter_mut() {
+                    it.exposure = if it.model == "ksc" {
+                        OUTDOOR_EXPOSURE
+                    } else {
+                        PART_EXPOSURE
+                    };
+                }
                 items.extend(p.scatter_items(
                     gpu,
                     &crate::planet::PlanetView {
