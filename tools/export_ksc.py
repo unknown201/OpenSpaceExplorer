@@ -119,7 +119,7 @@ def main() -> int:
                 # material tiles the medium map 75 times, the large 6 times, the small one at _TileRate 1800.
                 # Then a linear tint: the grassland map alone is far darker than the lawn KSP2 shows (its
                 # shader lifts and grades it); matched to Josh's KSC screenshot.
-                surface_extras = {"ose_ground": [85.0, 1070.0, 4.0, 1.0, 1.7, 2.9]}
+                surface_extras = {"ose_ground": [85.0, 1070.0, 4.0, 0.9, 1.35, 1.7]}
         elif shader_name == "KSP2/Environment/LandBasedWater":
             cols = dict(m.m_SavedProperties.m_Colors)
             floats = dict(m.m_SavedProperties.m_Floats)
