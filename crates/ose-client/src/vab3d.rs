@@ -36,6 +36,8 @@ fn quat_to_gltf(q: ose_data::craft::Quat) -> DQuat {
 }
 
 pub struct VabView {
+    /// Parts of the stage card the pointer is over, tinted in the hall (the original's stage highlight).
+    pub stage_lit: Vec<usize>,
     scene: Option<VabScene>,
     inbox: Rc<RefCell<Option<Result<VabScene, String>>>>,
     requested: bool,
@@ -121,6 +123,7 @@ impl VabView {
             cot: None,
             col: None,
             hovered: None,
+            stage_lit: Vec::new(),
             held_turn: crate::vab::NO_TURN,
             snap_turn: crate::vab::NO_TURN,
             held_yaw: crate::vab::NO_TURN,
@@ -482,6 +485,10 @@ impl VabView {
             if self.icon_mode {
             } else if Some(i) == selected {
                 item.color = [0.65, 1.0, 0.7, 1.0];
+            } else if self.stage_lit.contains(&i) {
+                // the parts of the stage card under the pointer
+                item.color = [0.7, 0.85, 1.0, 1.0];
+                item.ambient = 0.6;
             } else if Some(i) == self.hovered && self.held.is_none() {
                 item.color = [1.0, 1.0, 0.75, 1.0];
                 item.ambient = 0.6;

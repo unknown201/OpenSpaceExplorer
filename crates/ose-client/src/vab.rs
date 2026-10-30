@@ -452,6 +452,51 @@ impl Editor {
         self.rebuild_stages(catalog);
     }
 
+    /// Put stageable parts `parts` into the stage at `stages` index `stage` (a group of icons dropped on a
+    /// stage card).
+    pub fn move_parts_to_stage(&mut self, parts: &[usize], stage: usize, catalog: &Catalog) {
+        for &i in parts {
+            if self.stageable(i, catalog) {
+                self.craft.parts[i].stage_index = stage as i32 + 1;
+            }
+        }
+        self.rebuild_stages(catalog);
+    }
+
+    /// Put stageable parts `parts` into a new stage of their own at `stages` index `at` (0 on top, fires last;
+    /// `stages.len()` at the bottom, fires first): the drop between two stage cards.
+    pub fn insert_stage(&mut self, parts: &[usize], at: usize, catalog: &Catalog) {
+        let at = at as i32 + 1;
+        for (i, p) in self.craft.parts.iter_mut().enumerate() {
+            if !parts.contains(&i) && p.stage_index >= at {
+                p.stage_index += 1;
+            }
+        }
+        for &i in parts {
+            if self.stageable(i, catalog) {
+                self.craft.parts[i].stage_index = at;
+            }
+        }
+        self.rebuild_stages(catalog);
+    }
+
+    /// Move the whole stage at index `from` to the gap `to` (the original's stage drag); an empty stage
+    /// left behind closes up.
+    pub fn move_stage(&mut self, from: usize, to: usize, catalog: &Catalog) {
+        let Some(parts) = self.craft.stages.get(from).cloned() else {
+            return;
+        };
+        self.insert_stage(&parts, to, catalog);
+    }
+
+    fn stageable(&self, i: usize, catalog: &Catalog) -> bool {
+        self.craft
+            .parts
+            .get(i)
+            .and_then(|p| catalog.get(&p.part_id))
+            .is_some_and(|s| s.is_stageable())
+    }
+
     /// `Craft::stages`: stageable parts grouped by `stage_index`, lowest first, renumbered densely. The last
     /// stage (highest index) fires first.
     pub fn rebuild_stages(&mut self, catalog: &Catalog) {
