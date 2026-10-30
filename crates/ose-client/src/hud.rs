@@ -1680,7 +1680,11 @@ mod tests {
         assert!((vspeed_scale(999.0) - 1.0).abs() < 1e-9);
         assert!((vspeed_scale(-9.0) + 1.0 / 3.0).abs() < 1e-9);
         assert_eq!(vspeed_scale(1e6), 1.0);
-        let lit = |t: f64| navball_bezel_svg(t, 0.0, Some(90.0)).matches("#3fe05a\"/>").count();
+        let lit = |t: f64| {
+            navball_bezel_svg(t, 0.0, Some(90.0))
+                .matches("#3fe05a\"/>")
+                .count()
+        };
         assert_eq!(lit(0.0), 1, "only the lubber mark at no throttle");
         assert_eq!(lit(0.5), 11);
         assert_eq!(lit(1.0), 21);
