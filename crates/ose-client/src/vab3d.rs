@@ -728,6 +728,36 @@ impl VabView {
             let name = format!("part:{id}");
             gpu.request_model(&name, &format!("assets/parts/{id}.glb"));
             let best = self.nearest_node(gpu, free_nodes);
+            // Every free attach node shows while a part is in hand (the original's node markers), drawn over
+            // the craft; the one it would snap to stands out.
+            let r = ((self.distance * 0.012 * 100.0).round() / 100.0).max(0.03);
+            let rk = (r * 100.0) as i64;
+            for (k, (_, _, p, _)) in free_nodes.iter().enumerate() {
+                let hot = best.is_some_and(|(_, b)| b == k);
+                let color = if hot {
+                    [0.85, 1.0, 0.45, 1.0]
+                } else {
+                    [0.35, 1.0, 0.5, 0.75]
+                };
+                let at = centre + to_gltf(*p);
+                for (n, (a, b)) in [
+                    (DVec3::X, DVec3::Y),
+                    (DVec3::Y, DVec3::Z),
+                    (DVec3::Z, DVec3::X),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    lines.push(ring(
+                        format!("overlay:vab-node:{n}:{rk}:{hot}"),
+                        at,
+                        a,
+                        b,
+                        if hot { r * 1.6 } else { r },
+                        color,
+                    ));
+                }
+            }
             let at = match best {
                 Some((_, k)) => {
                     let (pi, nid, p, dir) = &free_nodes[k];
