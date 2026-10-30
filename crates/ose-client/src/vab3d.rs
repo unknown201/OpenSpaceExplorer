@@ -35,7 +35,36 @@ fn quat_to_gltf(q: ose_data::craft::Quat) -> DQuat {
     DQuat::from_xyzw(q.x, -q.y, -q.z, q.w).normalize()
 }
 
+/// A craft axis (0 X, 1 Y, 2 Z) in the glTF frame the hall is drawn in.
+fn gizmo_axis(k: usize) -> DVec3 {
+    let mut a = [0.0; 3];
+    a[k] = 1.0;
+    to_gltf(ose_math::DVec3::new(a[0], a[1], a[2]))
+}
+
+/// A gizmo drag's frame: pivot and axis tip on screen, size (metres), axis toward the camera.
+pub type GizmoFrame = ((f64, f64), (f64, f64), f64, bool);
+
+/// Distance (pixels) from `p` to the screen segment `a`-`b`.
+fn seg_dist(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let l2 = dx * dx + dy * dy;
+    let t = if l2 > 1e-9 {
+        (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / l2).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    ((p.0 - a.0 - t * dx).powi(2) + (p.1 - a.1 - t * dy).powi(2)).sqrt()
+}
+
 pub struct VabView {
+    /// The move and rotate tool's gizmo (the original's manipulation widget, tool 2) on the selected part:
+    /// its pivot in the craft frame.
+    pub gizmo: Option<ose_math::DVec3>,
+    /// The gizmo handle under the cursor or in hand: 0..3 move along X/Y/Z, 3..6 turn about X/Y/Z.
+    pub gizmo_hot: Option<usize>,
+    /// Keep the camera where it is (during a gizmo drag) instead of following the craft's middle.
+    pub hold_target: bool,
     /// The rest of the selected part's symmetry set, tinted with it.
     pub sym_lit: Vec<usize>,
     /// The rest of the hovered part's symmetry set, lit with it.
@@ -131,6 +160,9 @@ impl VabView {
             col: None,
             hovered: None,
             stage_lit: Vec::new(),
+            gizmo: None,
+            gizmo_hot: None,
+            hold_target: false,
             sym_lit: Vec::new(),
             sym_hover: Vec::new(),
             sym_of: Default::default(),
@@ -201,6 +233,58 @@ impl VabView {
             self.pitch.cos() * self.yaw.cos(),
         );
         (self.target + dir * self.distance, -dir)
+    }
+
+    /// The gizmo's size (metres): about the same on screen at any zoom, in steps so its lines stay cached.
+    fn gizmo_size(&self) -> f64 {
+        ((self.distance * 0.2 * 8.0).round() / 8.0).max(0.25)
+    }
+
+    /// The gizmo handle under the cursor (within 12 px): 0..3 the X/Y/Z arrows, 3..6 the rings about them.
+    pub fn gizmo_hit(&self, gpu: &Renderer) -> Option<usize> {
+        let p = self.gizmo?;
+        let at = self.centre() + to_gltf(p) - self.cam_pos;
+        let l = self.gizmo_size();
+        let mut best: Option<(f64, usize)> = None;
+        let mut consider = |d: f64, h: usize| {
+            if d < 12.0 && best.is_none_or(|(bd, _)| d < bd) {
+                best = Some((d, h));
+            }
+        };
+        for k in 0..3 {
+            let a = gizmo_axis(k);
+            if let (Some(s0), Some(s1)) = (gpu.project(at), gpu.project(at + a * l)) {
+                consider(seg_dist(self.cursor, s0, s1), k);
+            }
+            let (u, v) = (gizmo_axis((k + 1) % 3), gizmo_axis((k + 2) % 3));
+            let pts: Vec<Option<(f64, f64)>> = (0..=32)
+                .map(|n| {
+                    let t = n as f64 / 32.0 * std::f64::consts::TAU;
+                    gpu.project(at + (u * t.cos() + v * t.sin()) * (l * 0.7))
+                })
+                .collect();
+            for w in pts.windows(2) {
+                if let (Some(a), Some(b)) = (w[0], w[1]) {
+                    consider(seg_dist(self.cursor, a, b), 3 + k);
+                }
+            }
+        }
+        best.map(|(_, h)| h)
+    }
+
+    /// For a drag on gizmo handle `h`: the pivot on screen, the far end of its axis on screen, the gizmo's
+    /// size in metres, and whether the axis points toward the camera.
+    pub fn gizmo_frame(&self, gpu: &Renderer, h: usize) -> Option<GizmoFrame> {
+        let p = self.gizmo?;
+        let at = self.centre() + to_gltf(p) - self.cam_pos;
+        let l = self.gizmo_size();
+        let a = gizmo_axis(h % 3);
+        Some((
+            gpu.project(at)?,
+            gpu.project(at + a * l)?,
+            l,
+            a.dot(-at) > 0.0,
+        ))
     }
 
     /// The free node nearest the cursor on screen within 80 px: (distance, index into `free_nodes`). Uses
@@ -382,7 +466,10 @@ impl VabView {
             self.boxes.push((*i, lo, hi));
         }
         // Orbit the craft's centre (the build centre while empty).
-        self.target = if lo_all.is_finite() {
+        self.target = if self.hold_target {
+            // A gizmo drag: the camera stays put, so the part moves under the cursor alone.
+            self.target
+        } else if lo_all.is_finite() {
             let half = (hi_all.y - lo_all.y) * 0.5 + 2.0;
             self.pan_y = self.pan_y.clamp(-half, half);
             (lo_all + hi_all) * 0.5 + DVec3::Y * self.pan_y
@@ -592,6 +679,48 @@ impl VabView {
                     rel_origin_km: at - cam_pos,
                     color: [1.0, 0.35, 0.9, 1.0],
                 });
+            }
+        }
+        // The move and rotate gizmo: an arrow along each craft axis and a ring about it.
+        if let Some(p) = self.gizmo.filter(|_| self.held.is_none()) {
+            let at = centre + to_gltf(p);
+            let l = self.gizmo_size();
+            let size = (l * 100.0) as i64;
+            let colors = [
+                [1.0, 0.32, 0.3, 1.0],
+                [0.4, 1.0, 0.45, 1.0],
+                [0.35, 0.62, 1.0, 1.0],
+            ];
+            for (k, &base) in colors.iter().enumerate() {
+                let d = gizmo_axis(k);
+                let side = gizmo_axis((k + 1) % 3);
+                let lit = |h: usize| {
+                    if self.gizmo_hot == Some(h) {
+                        [1.0, 0.95, 0.55, 1.0]
+                    } else {
+                        base
+                    }
+                };
+                lines.push(crate::render::LineItem {
+                    key: format!("overlay:vab-gz:m{k}:{size}"),
+                    points_km: vec![
+                        DVec3::ZERO,
+                        d * l,
+                        d * (l * 0.84) + side * (l * 0.06),
+                        d * l,
+                        d * (l * 0.84) - side * (l * 0.06),
+                    ],
+                    rel_origin_km: at - cam_pos,
+                    color: lit(k),
+                });
+                lines.push(ring(
+                    format!("overlay:vab-gz:r{k}:{size}"),
+                    at,
+                    gizmo_axis((k + 1) % 3),
+                    gizmo_axis((k + 2) % 3),
+                    l * 0.7,
+                    lit(3 + k),
+                ));
             }
         }
         self.snap = None;

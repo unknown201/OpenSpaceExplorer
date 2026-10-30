@@ -638,6 +638,44 @@ impl Editor {
         true
     }
 
+    /// The rotate gizmo: turn part `i` and everything under it by `angle` (radians) about craft axis `axis`
+    /// through the part's own origin; the rest of its symmetry set turns alike (the other way round for a
+    /// mirror pair).
+    pub fn rotate(&mut self, i: usize, axis: DVec3, angle: f64) -> bool {
+        if i >= self.craft.parts.len() || angle == 0.0 {
+            return false;
+        }
+        let jobs: Vec<(usize, DVec3, f64)> = std::iter::once((i, axis, angle))
+            .chain(self.symmetry_maps(i).into_iter().map(|(c, m)| match m {
+                SymMap::Rigid { .. } => (c, m.dir(axis), angle),
+                SymMap::Mirror { .. } => (c, m.dir(axis), -angle),
+            }))
+            .collect();
+        for (j, ax, an) in jobs {
+            let len = ax.length();
+            if len < 1e-12 {
+                continue;
+            }
+            let ax = ax * (1.0 / len);
+            let (s, c) = (an * 0.5).sin_cos();
+            let q = Quat {
+                x: ax.x * s,
+                y: ax.y * s,
+                z: ax.z * s,
+                w: c,
+            };
+            let pivot = self.craft.parts[j].local_position;
+            let inside = self.subtree(j);
+            for (k, p) in self.craft.parts.iter_mut().enumerate() {
+                if inside[k] {
+                    p.local_position = pivot + quat_rotate(q, p.local_position - pivot);
+                    p.local_rotation = unit_or_identity(quat_mul(q, p.local_rotation));
+                }
+            }
+        }
+        true
+    }
+
     /// Lift part `i` and everything under it off the craft. Grabbing the root lifts the whole craft.
     pub fn detach(&mut self, i: usize, catalog: &Catalog) -> Option<Fragment> {
         if i >= self.craft.parts.len() {
@@ -2681,6 +2719,71 @@ mod tests {
         let loaded = Editor::from_craft(bare);
         assert_eq!(loaded.counterparts(r0).len(), 2);
         assert!(loaded.counterparts(t).is_empty());
+    }
+
+    /// The rotate gizmo turns a part about its own origin, and the rest of its set turns alike: the set still
+    /// maps onto itself by the same turn about the axis it is spread around.
+    #[test]
+    fn rotate_turns_the_set_alike() {
+        let cat = catalog();
+        let mut e = Editor::new("test");
+        e.add_part(&cat["pod"], &cat).unwrap();
+        let t = e.add_part(&cat["tank"], &cat).unwrap();
+        let spot = e
+            .surface_spot(t, DVec3::new(0.62, -1.0, 0.0), &cat, Some(15.0))
+            .unwrap();
+        let made = e.add_surface(&cat["light"], &cat, spot, 4).unwrap();
+        let before: Vec<Quat> = made
+            .iter()
+            .map(|&i| e.craft.parts[i].local_rotation)
+            .collect();
+        let pos: Vec<DVec3> = made
+            .iter()
+            .map(|&i| e.craft.parts[i].local_position)
+            .collect();
+        assert!(e.rotate(made[0], DVec3::new(0.0, 0.0, 1.0), 30f64.to_radians()));
+        for (n, &i) in made.iter().enumerate() {
+            let p = &e.craft.parts[i];
+            assert!(
+                (p.local_position - pos[n]).length() < 1e-9,
+                "turns about its own origin"
+            );
+            let turned = quat_mul(p.local_rotation, quat_conj(before[n]));
+            assert!(
+                turned.w.abs() < (10f64.to_radians()).cos(),
+                "light {n} turned"
+            );
+        }
+        // Each one turned the same way relative to where it hangs: the set's turn from one to the next holds.
+        let rel = |e: &Editor, a: usize, b: usize| {
+            quat_mul(
+                e.craft.parts[b].local_rotation,
+                quat_conj(e.craft.parts[a].local_rotation),
+            )
+        };
+        let r = rel(&e, made[0], made[1]);
+        let w0 = Editor {
+            craft: Craft {
+                parts: made
+                    .iter()
+                    .zip(&before)
+                    .map(|(&i, q)| CraftPart {
+                        local_rotation: *q,
+                        ..e.craft.parts[i].clone()
+                    })
+                    .collect(),
+                ..e.craft.clone()
+            },
+            selected: None,
+            plane_new: false,
+        };
+        let r0 = rel(&w0, 0, 1);
+        let same = (r.w * r0.w + r.x * r0.x + r.y * r0.y + r.z * r0.z).abs();
+        assert!(same > 1.0 - 1e-9, "the set keeps its symmetry");
+        // Undo-free reverse turn puts it back.
+        assert!(e.rotate(made[0], DVec3::new(0.0, 0.0, 1.0), -30f64.to_radians()));
+        let back = quat_mul(e.craft.parts[made[2]].local_rotation, quat_conj(before[2]));
+        assert!(back.w.abs() > 1.0 - 1e-9);
     }
 
     #[test]

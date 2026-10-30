@@ -192,6 +192,8 @@ struct App {
     vab_pasting: bool,
     /// The part in hand came from a picker click (not a paste).
     vab_from_picker: bool,
+    /// A gizmo drag: the handle, the part, where the cursor started (device px) and the craft before it.
+    vab_gizmo: Option<(usize, usize, (f64, f64), vab::Editor)>,
     /// The held part's turn and its yaw part (W/A/S/D/Q/E while holding, Space resets).
     vab_turn: ose_data::craft::Quat,
     vab_yaw: ose_data::craft::Quat,
@@ -697,6 +699,7 @@ pub fn start() -> Result<(), JsValue> {
         vab_clipboard: None,
         vab_pasting: false,
         vab_from_picker: false,
+        vab_gizmo: None,
         vab_turn: vab::NO_TURN,
         vab_yaw: vab::NO_TURN,
         vab_stages_readout: Vec::new(),
@@ -3867,6 +3870,27 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                 if ev.button() == 0 && app.vab_pasting {
                     return;
                 }
+                // A press on a gizmo handle starts moving or turning the selected part.
+                #[cfg(target_arch = "wasm32")]
+                if ev.button() == 0
+                    && app.in_session
+                    && app.vab_active()
+                    && app.vab3d.gizmo.is_some()
+                {
+                    let rect = app.gpu_canvas.get_bounding_client_rect();
+                    let (x, y) = (ev.client_x() as f64, ev.client_y() as f64);
+                    app.vab3d.cursor = ((x - rect.left()) * app.dpr, (y - rect.top()) * app.dpr);
+                    let hit = app.gpu.as_ref().and_then(|g| app.vab3d.gizmo_hit(g));
+                    if let (Some(h), Some(i)) = (hit, app.editor.selected) {
+                        app.vab_record();
+                        let base = app.editor.clone();
+                        let cursor = app.vab3d.cursor;
+                        app.vab_gizmo = Some((h, i, cursor, base));
+                        app.vab3d.gizmo_hot = Some(h);
+                        ev.prevent_default();
+                        return;
+                    }
+                }
                 #[cfg(target_arch = "wasm32")]
                 if ev.button() == 0 && app.in_session && app.vab_active() {
                     let rect = app.gpu_canvas.get_bounding_client_rect();
@@ -3921,6 +3945,16 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                 (ev.client_x() as f64 - rect.left()) * app.dpr,
                 (ev.client_y() as f64 - rect.top()) * app.dpr,
             );
+            return;
+        }
+        #[cfg(target_arch = "wasm32")]
+        if app.vab_gizmo.is_some() {
+            let rect = app.gpu_canvas.get_bounding_client_rect();
+            app.vab3d.cursor = (
+                (ev.client_x() as f64 - rect.left()) * app.dpr,
+                (ev.client_y() as f64 - rect.top()) * app.dpr,
+            );
+            app.vab_gizmo_drag(ev.shift_key());
             return;
         }
         // A loose assembly dragged off the floor is held whole, to put on the craft or elsewhere.
@@ -4039,6 +4073,14 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                     None
                 };
                 app.vab3d.hovered = hit;
+                // A gizmo handle under the pointer lights up.
+                app.vab3d.cursor = (px, py);
+                let hot = if over_hall {
+                    app.gpu.as_ref().and_then(|g| app.vab3d.gizmo_hit(g))
+                } else {
+                    None
+                };
+                app.vab3d.gizmo_hot = hot;
             }
             return;
         }
@@ -4108,6 +4150,12 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
         let mut app = a.borrow_mut();
         // A stage-card drag released anywhere else is dropped (the card list handles its own mouseup first).
         app.vab_stage_drag = None;
+        if app.vab_gizmo.take().is_some() {
+            app.press = None;
+            app.drag = None;
+            app.render_vab();
+            return;
+        }
         if let Some(b) = app.doc.body() {
             b.class_list().remove_1("stage-dragging").ok();
         }
@@ -6957,6 +7005,58 @@ impl App {
             el.set_attribute("data-ose-key", &hud::fnv(&html).to_string())
                 .ok();
         }
+    }
+
+    /// Moving or turning the selected part with the gizmo: the whole drag from where it started (the craft
+    /// as it was then), so steps do not pile up. Snap moves in 0.2 m and turns in 15 degrees (Shift: 0.05 m,
+    /// 5 degrees), as the original's widget.
+    #[cfg(target_arch = "wasm32")]
+    fn vab_gizmo_drag(&mut self, fine: bool) {
+        let Some((h, i, start, base)) = self.vab_gizmo.clone() else {
+            return;
+        };
+        let Some((s0, s1, l, toward)) =
+            self.gpu.as_ref().and_then(|g| self.vab3d.gizmo_frame(g, h))
+        else {
+            return;
+        };
+        let cur = self.vab3d.cursor;
+        let mut axis = ose_math::DVec3::default();
+        match h % 3 {
+            0 => axis.x = 1.0,
+            1 => axis.y = 1.0,
+            _ => axis.z = 1.0,
+        }
+        let mut e = base;
+        if h < 3 {
+            let (dx, dy) = (s1.0 - s0.0, s1.1 - s0.1);
+            let l2 = (dx * dx + dy * dy).max(1.0);
+            let mut m = ((cur.0 - start.0) * dx + (cur.1 - start.1) * dy) / l2 * l;
+            if self.vab_snap {
+                let step = if fine { 0.05 } else { 0.2 };
+                m = (m / step).round() * step;
+            }
+            e.offset(i, axis * m);
+        } else {
+            // Round the pivot on screen; seen from the axis tip, anticlockwise turns it the right-handed way
+            // (the hall draws the craft mirrored in X, so the craft turns the other way round).
+            let a0 = (start.1 - s0.1).atan2(start.0 - s0.0);
+            let a1 = (cur.1 - s0.1).atan2(cur.0 - s0.0);
+            let mut d = a1 - a0;
+            if d > std::f64::consts::PI {
+                d -= std::f64::consts::TAU;
+            } else if d < -std::f64::consts::PI {
+                d += std::f64::consts::TAU;
+            }
+            let world = if toward { -d } else { d };
+            let mut ang = -world;
+            if self.vab_snap {
+                let step = (if fine { 5.0_f64 } else { 15.0 }).to_radians();
+                ang = (ang / step).round() * step;
+            }
+            e.rotate(i, axis, ang);
+        }
+        self.editor = e;
     }
 
     fn vab_record(&mut self) {
@@ -12286,6 +12386,19 @@ impl App {
             } else {
                 Default::default()
             };
+            // The move and rotate tool (2) shows its gizmo on the selected part.
+            self.vab3d.gizmo = if self.vab_offset && self.vab3d.held.is_none() {
+                self.editor
+                    .selected
+                    .and_then(|i| self.editor.craft.parts.get(i))
+                    .map(|p| p.local_position)
+            } else {
+                None
+            };
+            if self.vab3d.gizmo.is_none() {
+                self.vab3d.gizmo_hot = None;
+            }
+            self.vab3d.hold_target = self.vab_gizmo.is_some();
             self.vab3d.sym_lit = self
                 .editor
                 .selected
