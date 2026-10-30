@@ -536,6 +536,7 @@ pub struct Renderer {
     mirror_pipeline: wgpu::RenderPipeline,
     blend_pipeline: wgpu::RenderPipeline,
     line_pipeline: wgpu::RenderPipeline,
+    line_overlay_pipeline: wgpu::RenderPipeline,
     /// The sun's shadow map: depth-only pipeline, the map, the sun's view-projection uniform.
     shadow_pipeline: wgpu::RenderPipeline,
     shadow_view: wgpu::TextureView,
@@ -898,12 +899,51 @@ impl Renderer {
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 depth_write_enabled: Some(false),
-                ..depth_state
+                ..depth_state.clone()
             }),
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
             cache: None,
         });
+        // Lines drawn over everything (the VAB's gizmo, keys starting `overlay:`), as the original's widget.
+        let line_overlay_pipeline =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("line overlay"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_line"),
+                    compilation_options: Default::default(),
+                    buffers: &[Some(wgpu::VertexBufferLayout {
+                        array_stride: 12,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &wgpu::vertex_attr_array![0 => Float32x3],
+                    })],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_line"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::LineStrip,
+                    strip_index_format: None,
+                    ..Default::default()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    depth_write_enabled: Some(false),
+                    depth_compare: Some(wgpu::CompareFunction::Always),
+                    ..depth_state.clone()
+                }),
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            });
         let camera_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("camera"),
             size: std::mem::size_of::<CameraUniform>() as u64,
@@ -1092,6 +1132,7 @@ impl Renderer {
             mirror_pipeline,
             blend_pipeline,
             line_pipeline,
+            line_overlay_pipeline,
             shadow_pipeline,
             shadow_view,
             shadow_cam_buf,
@@ -2054,13 +2095,22 @@ impl Renderer {
                     pass.draw_indexed(0..prim.index_count, 0, 0..1);
                 }
             }
-            pass.set_pipeline(&self.line_pipeline);
             pass.set_bind_group(2, &self.white, &[]);
-            for (key, s) in &line_draws {
-                let (buf, n) = &self.lines[key];
-                pass.set_bind_group(1, &self.objects[*s].1, &[]);
-                pass.set_vertex_buffer(0, buf.slice(..));
-                pass.draw(0..*n, 0..1);
+            for overlay in [false, true] {
+                pass.set_pipeline(if overlay {
+                    &self.line_overlay_pipeline
+                } else {
+                    &self.line_pipeline
+                });
+                for (key, s) in line_draws
+                    .iter()
+                    .filter(|(k, _)| k.starts_with("overlay:") == overlay)
+                {
+                    let (buf, n) = &self.lines[key];
+                    pass.set_bind_group(1, &self.objects[*s].1, &[]);
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..*n, 0..1);
+                }
             }
         }
         if self.fixture_grid {
