@@ -191,10 +191,23 @@ impl Navball {
                 532.0 - pitch * 3.15,
             )
         };
-        let px = ((x * sx) as i64).clamp(0, a.w as i64 - 1) as usize;
-        let py = ((y * sy) as i64).clamp(0, a.h as i64 - 1) as usize;
-        let i = (py * a.w as usize + px) * 4;
-        [a.rgba[i], a.rgba[i + 1], a.rgba[i + 2]]
+        // Bilinear between the four nearest atlas pixels: the lines and numbers stay smooth as the ball turns.
+        let (fx, fy) = (x * sx - 0.5, y * sy - 0.5);
+        let (x0, y0) = (fx.floor(), fy.floor());
+        let (tx, ty) = (fx - x0, fy - y0);
+        let px = |dx: f64, dy: f64| {
+            let cx = ((x0 + dx) as i64).clamp(0, a.w as i64 - 1) as usize;
+            let cy = ((y0 + dy) as i64).clamp(0, a.h as i64 - 1) as usize;
+            (cy * a.w as usize + cx) * 4
+        };
+        let (i00, i10, i01, i11) = (px(0.0, 0.0), px(1.0, 0.0), px(0.0, 1.0), px(1.0, 1.0));
+        let mut out = [0u8; 3];
+        for (k, o) in out.iter_mut().enumerate() {
+            let top = a.rgba[i00 + k] as f64 * (1.0 - tx) + a.rgba[i10 + k] as f64 * tx;
+            let bot = a.rgba[i01 + k] as f64 * (1.0 - tx) + a.rgba[i11 + k] as f64 * tx;
+            *o = (top * (1.0 - ty) + bot * ty).round() as u8;
+        }
+        out
     }
 
     /// Draw the ball for `nav` into `canvas` (square). Returns false until the atlas has loaded.
@@ -223,11 +236,13 @@ impl Navball {
                 let y = (half - py as f64 - 0.5) / half;
                 let r2 = x * x + y * y;
                 let i = (py * size + px) * 4;
-                if r2 > 1.0 {
+                // The rim fades over one pixel instead of stepping (coverage by distance to the edge).
+                let edge = ((1.0 - r2.sqrt()) * half + 0.5).clamp(0.0, 1.0);
+                if edge <= 0.0 {
                     self.buf[i + 3] = 0;
                     continue;
                 }
-                let z = (1.0 - r2).sqrt();
+                let z = (1.0 - r2.min(1.0)).sqrt();
                 let d = nav.right * x + nav.top * y + nav.forward * z;
                 let pitch = d.dot(nav.up).clamp(-1.0, 1.0).asin().to_degrees();
                 let heading = d
@@ -241,7 +256,7 @@ impl Navball {
                 self.buf[i] = (c[0] as f64 * shade) as u8;
                 self.buf[i + 1] = (c[1] as f64 * shade) as u8;
                 self.buf[i + 2] = (c[2] as f64 * shade) as u8;
-                self.buf[i + 3] = 255;
+                self.buf[i + 3] = (edge * 255.0).round() as u8;
             }
         }
         if let Ok(img) = ImageData::new_with_u8_clamped_array_and_sh(

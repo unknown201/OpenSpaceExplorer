@@ -9303,6 +9303,13 @@ impl App {
         else {
             return;
         };
+        // Draw at the size it is shown on this screen (CSS size times the device pixel ratio), so the browser
+        // does not rescale it: rescaling was what made the ball's lines jagged.
+        let want = (canvas.client_width() as f64 * self.dpr).round().max(64.0) as u32;
+        if canvas.client_width() > 0 && canvas.width() != want {
+            canvas.set_width(want);
+            canvas.set_height(want);
+        }
         canvas
             .set_attribute(
                 "data-ose-forward",
