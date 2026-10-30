@@ -5369,6 +5369,14 @@ impl App {
                     ),
                 };
                 set_text(&self.doc, "fh-note", &msg);
+                // Each experiment that could not start says why (no crew in its part, already stored...).
+                for s in skipped.iter().take(3) {
+                    hud::push(
+                        &self.doc,
+                        &format!("{}: {}", experiment_name(&s.experiment), s.reason),
+                        "alert",
+                    );
+                }
             }
             ServerMessage::ExperimentFinished {
                 part,
@@ -10789,12 +10797,18 @@ impl App {
         let running: Vec<String> = self
             .running
             .iter()
-            .map(|r| {
-                format!(
+            .map(|r| match &r.paused {
+                // Waiting (protocol 56): the original's experiment status says why, and the clock stops.
+                Some(why) => format!(
+                    "{} paused ({:.0} s left): {why}",
+                    experiment_name(&r.experiment),
+                    r.remaining_s.max(0.0).ceil()
+                ),
+                None => format!(
                     "{} {:.0} s",
                     experiment_name(&r.experiment),
                     (r.remaining_s - elapsed).max(0.0).ceil()
-                )
+                ),
             })
             .collect();
         if let Some(el) = self.doc.get_element_by_id("fh-running") {
