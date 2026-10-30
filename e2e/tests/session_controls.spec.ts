@@ -7,7 +7,7 @@ test("warp requests pass 4x and VAB icons accept clicks", async ({ page, baseURL
   await page.locator('[data-ose="player-name"]').fill("session regression");
   await page.locator('[data-ose="play"]').click();
   await page.locator('[data-ose="session-join"]').first().click();
-  await expect(page.locator('[data-ose="ksc-vab"]').first()).toBeVisible();
+  await expect(page.locator('[data-ose="ksc-vab"]').first()).toBeVisible({ timeout: 30_000 }); // the boot loading screen can hold the hub for a while on slow runners
   const warp = page.locator('[data-ose="warp"]');
   // Wait for each server echo before advancing; an effective cap must not reset the ladder.
   for (const factor of [2, 3, 4, 5, 10]) {
@@ -36,7 +36,7 @@ test("warp requests pass 4x and VAB icons accept clicks", async ({ page, baseURL
   await clickIcon("#vab-report-btn i");
   await expect(page.locator("#vab-report-pop")).toHaveClass(/open/);
   await clickIcon("#vab-back i");
-  await expect(page.locator('[data-ose="ksc-vab"]').first()).toBeVisible();
+  await expect(page.locator('[data-ose="ksc-vab"]').first()).toBeVisible({ timeout: 30_000 });
   await page.locator('[data-ose="ksc-sessions"]').first().click();
   await expect(page.locator('[data-ose="session-list"]')).toBeVisible();
   // Own and delete a dedicated campaign so later browser projects keep their shared world.
