@@ -71,6 +71,13 @@ pub struct Run {
     pub location: String,
     pub remaining_s: f64,
     pub electric_rate: f64,
+    /// Crew its part must hold (`CrewRequired`, counted in that part as the original does).
+    #[serde(default)]
+    pub crew_required: u32,
+    /// Why it is waiting (`ExperimentState`): away from where it started, too few crew in its part, no
+    /// charge. It goes on by itself when that clears.
+    #[serde(default)]
+    pub paused: Option<String>,
 }
 
 #[derive(Component, Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -157,15 +164,15 @@ impl Universe {
         // a vessel's parts, or a Kerbal on EVA with the experiments of the eva_kerbal part
         let mut st = self.world.entity_mut(e).take::<structure::Structure>();
         let kerbal = self.world.get::<crate::crew::EvaKerbal>(e).cloned();
-        let (experiments, crewed) = match (&st, &kerbal) {
-            (Some(st), _) => (
-                st.experiments.clone(),
-                (0..st.rigid.len()).any(|i| st.rigid.present[i] && st.crew[i] > 0)
-                    && !self.crew(e).is_empty(),
-            ),
-            (None, Some(k)) => (k.experiments.iter().map(|x| (0, x.clone())).collect(), true),
+        let eva = kerbal.is_some();
+        let experiments = match (&st, &kerbal) {
+            (Some(st), _) => st.experiments.clone(),
+            (None, Some(k)) => k.experiments.iter().map(|x| (0, x.clone())).collect(),
             (None, None) => return out,
         };
+        // the crew in each part (a Kerbal on EVA is their own crew)
+        let crew = self.crew(e);
+        let aboard = |part: usize| crew.iter().filter(|(p, _)| *p == part).count() as u32;
         let part_id = |st: &Option<structure::Structure>, part: usize| match st {
             Some(st) => st.part_ids[part].clone(),
             None => "eva_kerbal".to_string(),
@@ -199,8 +206,11 @@ impl Universe {
                 out.skipped.push(skip("unknown experiment"));
                 continue;
             };
-            if pe.crew_required > 0 && !crewed {
-                out.skipped.push(skip("needs crew"));
+            if pe.crew_required > 0 && !eva && aboard(part) < pe.crew_required {
+                out.skipped.push(skip(&format!(
+                    "needs {} crew in its part",
+                    pe.crew_required
+                )));
                 continue;
             }
             let reports = run_experiment(def, bs, loc.situation, loc.situation_scalar, region);
@@ -236,6 +246,8 @@ impl Universe {
                     location: location_id(&loc),
                     remaining_s: pe.time_to_complete_s,
                     electric_rate: pe.electric_rate,
+                    crew_required: if eva { 0 } else { pe.crew_required },
+                    paused: None,
                 };
                 runs.runs.push(run.clone());
                 self.world.entity_mut(e).insert(runs);
@@ -300,20 +312,31 @@ impl Universe {
                 continue;
             }
             let here = self.science_location(e);
+            let crew = self.crew(e);
             let mut st = self.world.entity_mut(e).take::<structure::Structure>();
             let mut done = Vec::new();
             let mut interrupted = Vec::new();
             runs.runs.retain_mut(|run| {
-                let Some(loc) = &here else {
-                    interrupted.push(run.clone());
-                    return false;
-                };
-                if location_id(loc) != run.location
-                    || st.as_ref().is_some_and(|s| !s.rigid.present[run.part])
-                {
+                // its part gone: it is over
+                if st.as_ref().is_some_and(|s| !s.rigid.present[run.part]) {
                     interrupted.push(run.clone());
                     return false;
                 }
+                // away from where it started it waits, and carries on when the vessel is back
+                // (`LOCATIONCHANGED`); so it does with too few crew in its part
+                if here
+                    .as_ref()
+                    .is_none_or(|loc| location_id(loc) != run.location)
+                {
+                    run.paused = Some("location changed".into());
+                    return true;
+                }
+                let aboard = crew.iter().filter(|(p, _)| *p == run.part).count() as u32;
+                if aboard < run.crew_required {
+                    run.paused = Some(format!("needs {} crew in its part", run.crew_required));
+                    return true;
+                }
+                run.paused = None;
                 // without the charge it needs it waits
                 let mut powered = true;
                 if run.electric_rate > 0.0 {
@@ -340,6 +363,8 @@ impl Universe {
                 }
                 if powered {
                     run.remaining_s -= dt;
+                } else {
+                    run.paused = Some("out of electric charge".into());
                 }
                 if run.remaining_s <= 0.0 {
                     done.push(run.clone());
@@ -678,6 +703,17 @@ mod tests {
         // transmitting empties the storage
         assert_eq!(u.take_science(v).len(), first.reports.len());
         assert!(u.science_carried(v).is_empty());
+        // crew elsewhere on the vessel does not count: the observation needs its own part crewed
+        let crew = u.crew(v);
+        u.set_crew(v, crew.iter().map(|(_, n)| (999, n.clone())).collect());
+        let out = u.run_experiments(v);
+        assert!(
+            out.skipped
+                .iter()
+                .any(|s| s.experiment == "CrewObservation" && s.reason.contains("crew in its part")),
+            "{:?}",
+            out.skipped
+        );
     }
 
     #[test]
@@ -712,17 +748,36 @@ mod tests {
         assert_eq!(ev.finished.len(), 1);
         assert_eq!(ev.finished[0].2[0].location, "Kerbin_Landed_KerbinKSC");
         assert_eq!(u.science_carried(v).len(), 1);
-        // a second run, then the vessel leaves the pad: interrupted
+        // a second run, then the vessel leaves the pad: it waits (`LOCATIONCHANGED`) and carries on back there
         u.take_science(v);
         u.run_experiments(v);
-        let mut p = u.powered(v).unwrap().clone();
+        let home = u.powered(v).unwrap().clone();
+        let mut p = home.clone();
         p.landed = false;
         p.r = p.r * (1.0 + 20_000.0 / p.r.length());
         u.set_powered(v, p);
         u.advance_experiments(1.0);
         let ev = u.take_experiment_events();
-        assert_eq!(ev.interrupted.len(), 1);
-        assert!(u.running_experiments(v).is_empty());
+        assert!(ev.interrupted.is_empty());
+        let run = u.running_experiments(v)[0].clone();
+        assert_eq!(run.paused.as_deref(), Some("location changed"));
+        for _ in 0..100 {
+            u.advance_experiments(1.0);
+        }
+        assert_eq!(
+            u.running_experiments(v)[0].remaining_s,
+            run.remaining_s,
+            "no progress away"
+        );
+        u.set_powered(v, home);
+        for _ in 0..60 {
+            u.advance_experiments(1.0);
+        }
+        assert_eq!(
+            u.take_experiment_events().finished.len(),
+            1,
+            "done back home"
+        );
     }
 
     #[test]

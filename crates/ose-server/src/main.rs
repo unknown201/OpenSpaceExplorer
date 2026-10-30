@@ -1864,6 +1864,7 @@ fn science_request(s: &Shared, player_id: u64, msg: ClientMessage) -> Vec<Server
                         part: r.part as u16,
                         experiment: r.experiment.clone(),
                         remaining_s: r.remaining_s,
+                        paused: r.paused.clone(),
                     })
                     .collect(),
             }]

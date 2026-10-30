@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 55;
+pub const PROTOCOL_VERSION: u16 = 56;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -392,6 +392,9 @@ pub struct RunningExperiment {
     pub part: u16,
     pub experiment: String,
     pub remaining_s: f64,
+    /// Why it is waiting (away from where it started, too few crew in its part, no charge); it goes on
+    /// by itself when that clears.
+    pub paused: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
