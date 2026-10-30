@@ -1494,8 +1494,8 @@ struct FIn {
     @location(0) pos: vec3<f32>,
     // size (m), centre height (m), atlas layer, frames
     @location(1) params: vec4<f32>,
-    // colour scale matching the mesh
-    @location(2) colour: vec3<f32>,
+    // colour scale matching the mesh, mesh range (m)
+    @location(2) colour: vec4<f32>,
 };
 
 struct FOut {
@@ -1506,6 +1506,7 @@ struct FOut {
     @location(3) @interpolate(flat) layer: i32,
     @location(4) facing: vec3<f32>,
     @location(5) colour: vec3<f32>,
+    @location(6) @interpolate(flat) near: f32,
 };
 
 fn octa_encode(n_in: vec3<f32>) -> vec2<f32> {
@@ -1553,7 +1554,8 @@ fn vs_far(@builtin(vertex_index) vi: u32, f: FIn) -> FOut {
     out.uv = (frame_xy + vec2<f32>(c.x, 1.0 - c.y)) / frames;
     out.uv.y = 1.0 - out.uv.y;
     out.layer = i32(f.params.z + 0.5);
-    out.colour = f.colour;
+    out.colour = f.colour.rgb;
+    out.near = f.colour.w;
     return out;
 }
 
@@ -1570,9 +1572,10 @@ fn fs_far(in: FOut) -> @location(0) vec4<f32> {
         discard;
     }
     let dist = length(in.rel);
-    // fade in past the meshes and out at the far edge (dithered)
+    // fade in as the meshes shrink away (from 85 % of their range) and out at the far edge (dithered)
     let dither = fract(sin(dot(in.clip.xy, vec2<f32>(12.9898, 78.233))) * 43758.547);
-    if dither > 1.0 - smoothstep(2000.0, 2500.0, dist) {
+    let fade_in = smoothstep(in.near * 0.85, in.near, dist);
+    if dither > fade_in * (1.0 - smoothstep(2000.0, 2500.0, dist)) {
         discard;
     }
     let n = normalize(in.up * 0.6 + in.facing * 0.4);
