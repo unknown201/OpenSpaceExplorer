@@ -186,6 +186,11 @@
     /* The loading screen: the original's art for the destination and a tip, over everything, never taking clicks. */
     #loading { position: fixed; inset: 0; z-index: 9000; background: #05060a; pointer-events: none; opacity: 0; visibility: hidden; transition: opacity .45s ease, visibility 0s linear .45s; }
     #loading.show { opacity: 1; visibility: visible; transition: opacity .15s ease; }
+    /* At boot the original shows the KSC aerial with its Loading bar until the menu is ready: the menu scene
+       finished (or there is no 3D menu), and never more than 20 s. */
+    body:has(#gpu:is([data-ose-menu-scene="ready"], [data-ose-menu-scene="static"])) #loading.boot { opacity: 0; visibility: hidden; transition: opacity .6s ease, visibility 0s linear .6s; }
+    #loading.boot { animation: boot-out 0.6s ease 20s forwards; }
+    @keyframes boot-out { to { opacity: 0; visibility: hidden; } }
     #loading img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
     #loading .loading-bar { position: absolute; left: 0; right: 0; bottom: 0; display: flex; align-items: center; gap: 24px; padding: 22px 36px; background: linear-gradient(transparent, #000000d0 40%); color: #fff; font: 600 18px var(--ui-font, sans-serif); letter-spacing: .02em; }
     #loading #loading-tip { flex: 1; text-align: center; text-shadow: 0 1px 3px #000; }
@@ -1148,7 +1153,7 @@
     <span id="status">loading...</span>
   </div>
   <div id="crumbs" data-ose="breadcrumbs"></div>
-  <div id="loading" data-ose="loading" aria-hidden="true"><img id="loading-art" alt="" /><div class="loading-bar"><span id="loading-tip"></span><span class="loading-word">Loading</span></div></div>
+  <div id="loading" class="show boot" data-ose="loading" data-ose-art="ksc" aria-hidden="true"><img id="loading-art" alt="" src="assets/loading/ksc.jpg" /><div class="loading-bar"><span id="loading-tip">Loading the Kerbal Space Center</span><span class="loading-word">Loading</span></div></div>
   <div id="menu" data-ose="menu">
     <div class="card" id="menu-card">
       <h1>OpenSpaceExplorer</h1>
