@@ -127,7 +127,7 @@ fn sun_visible(world: vec3<f32>, n: vec3<f32>) -> f32 {
 @group(2) @binding(5) var paint_tex: texture_2d<f32>;
 
 struct VsIn { @location(0) pos: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv: vec2<f32> };
-struct VsOut { @builtin(position) clip: vec4<f32>, @location(0) normal: vec3<f32>, @location(1) uv: vec2<f32>, @location(2) world: vec3<f32>, @location(3) local: vec3<f32> };
+struct VsOut { @builtin(position) clip: vec4<f32>, @location(0) normal: vec3<f32>, @location(1) uv: vec2<f32>, @location(2) world: vec3<f32>, @location(3) local: vec3<f32>, @location(4) local_n: vec3<f32> };
 
 @vertex
 fn vs_mesh(in: VsIn) -> VsOut {
@@ -145,7 +145,15 @@ fn vs_mesh(in: VsIn) -> VsOut {
     out.world = world.xyz;
     // The vertex in the mesh's own frame in metres (its scale applied): a fixed frame for maps tiled by position.
     out.local = in.pos * length(object.model[0].xyz);
+    out.local_n = in.normal;
     return out;
+}
+
+// A water ripple's surface slope (x, y) at a point on the surface (metres) and time (s).
+fn fn_ripple(p: vec2<f32>, t: f32) -> vec2<f32> {
+    let gx = 0.35 * cos(p.x * 0.31 + t * 0.8) + 0.25 * cos((p.x + p.y) * 0.53 + t * 1.3) + 0.15 * cos(p.x * 1.7 - t * 2.1);
+    let gy = 0.35 * cos(p.y * 0.27 - t * 0.7) + 0.25 * cos((p.x - p.y) * 0.47 - t * 1.1) + 0.15 * cos(p.y * 1.9 + t * 1.9);
+    return vec2<f32>(gx, gy);
 }
 
 @fragment
@@ -158,7 +166,10 @@ fn fs_mesh(in: VsOut) -> @location(0) vec4<f32> {
     var base = mix(object.color, texel * object.color, object.params.y);
     // Position-tiled maps (surface modes) sample with explicit gradients taken here, outside any branch:
     // implicit-derivative samples inside the branches broke unrelated draws on Chrome's D3D backend.
-    let p_local = in.local.xz;
+    // The plane the surface lies in within its mesh: the two axes across its normal's largest (some exports are
+    // Y up, the campus ground is Z up).
+    let an = abs(in.local_n);
+    let p_local = select(select(in.local.xz, in.local.xy, an.z > an.y), in.local.yz, an.x > max(an.y, an.z));
     let dp_x = dpdx(p_local);
     let dp_y = dpdy(p_local);
     if object.surface.x > 0.5 && object.surface.x < 1.5 {
@@ -218,22 +229,30 @@ fn fs_mesh(in: VsOut) -> @location(0) vec4<f32> {
         // KSP2's LandBasedWater: the body colour lit like the ground, the sky colour reflected by Fresnel
         // (with a floor for the sky's overall sheen), slow ripples and the sun's glint.
         let t = camera.light_count.y;
-        let p = p_local;
-        let gx = 0.35 * cos(p.x * 0.31 + t * 0.8) + 0.25 * cos((p.x + p.y) * 0.53 + t * 1.3) + 0.15 * cos(p.x * 1.7 - t * 2.1);
-        let gy = 0.35 * cos(p.y * 0.27 - t * 0.7) + 0.25 * cos((p.x - p.y) * 0.47 - t * 1.1) + 0.15 * cos(p.y * 1.9 + t * 1.9);
+        // Ripples at a scale that grows with distance in octaves (two blended by the fraction), so the lakes keep
+        // their texture from the air without aliasing into bands or crawling as the camera moves.
+        let dist = length(in.world);
+        let oct = log2(max(dist / 120.0, 1.0));
+        let lo = floor(oct);
+        let fo = oct - lo;
+        let ripple = fn_ripple(p_local / exp2(lo), t) * (1.0 - fo) + fn_ripple(p_local / exp2(lo + 1.0), t) * fo;
         let ta = normalize(cross(n0, select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 0.0, 1.0), abs(n0.x) > 0.9)));
         let tb = cross(n0, ta);
-        // Ripples fade out with distance before they alias into bands.
-        let near = 1.0 - smoothstep(60.0, 500.0, length(in.world));
-        let nw = normalize(n0 + (ta * gx + tb * gy) * 0.06 * near);
+        let nw = normalize(n0 + (ta * ripple.x + tb * ripple.y) * 0.16);
         let cos_v = max(dot(nw, view), 0.0);
         let fres = 0.02 + 0.98 * pow(1.0 - cos_v, object.surface.y);
         let day = clamp(ambient * 2.6, 0.08, 1.0);
-        let body = base.rgb * (ambient + (1.0 - ambient) * diffuse);
-        let refl = object.surface2.xyz * day * mix(0.14, 0.6, fres);
+        // KSP2's lakes read teal from above (its body colour under a soft sky sheen), the sky's blue at grazing.
+        let body = base.rgb * (ambient + (1.0 - ambient) * diffuse) * 0.6;
+        let refl = object.surface2.xyz * day * mix(0.03, 0.4, fres);
         let hw = normalize(ldir + view);
         let glint = pow(max(dot(nw, hw), 0.0), 2500.0) * 1.5 * diffuse;
-        water = min(body + refl + vec3<f32>(glint), vec3<f32>(0.9));
+        var w = body + refl + vec3<f32>(glint);
+        // Outdoors through the same tone curve as the ground round it.
+        if object.extra.y > 0.0 {
+            w = vec3<f32>(1.0) - exp(-w * object.extra.y);
+        }
+        water = min(w, vec3<f32>(0.95));
     }
     let lit = base.rgb * min(ambient + (1.0 - ambient) * diffuse + fill, 1.6);
     // Specular from the metallic-gloss map (metal in red, smoothness in alpha): a Blinn-Phong lobe whose
