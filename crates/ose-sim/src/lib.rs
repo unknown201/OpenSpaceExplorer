@@ -9,6 +9,7 @@ pub mod actuators;
 pub mod aero;
 pub mod bodies;
 pub mod campus;
+pub mod collide;
 pub mod commnet;
 pub mod contact;
 pub mod crew;
@@ -1316,6 +1317,12 @@ impl Universe {
                 vessels::Debris,
             ))
             .id();
+        // it starts out overlapping the vessel it left: they pass through each other for a moment
+        let until_ut = self.ut() + collide::SEPARATION_GRACE_S;
+        self.world.entity_mut(d).insert(collide::SeparatedFrom {
+            other: parent,
+            until_ut,
+        });
         if let Some(c) = craft {
             self.set_craft(d, c);
         }
@@ -2026,6 +2033,7 @@ impl Universe {
             self.update_commnet();
         }
         self.charge_on_rails(ticks.max(1) as f64 * dt, ut);
+        self.collide_vessels();
         self.run_transfers(ticks.max(1) as f64 * dt);
         self.run_transmissions(ticks.max(1) as f64 * dt);
         self.run_ladders(ticks.max(1) as f64 * dt);
