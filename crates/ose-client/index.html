@@ -626,6 +626,16 @@
     #vab-stages li span.p.sel { background: #1f3d6b; }
     #vab-stages li span.p i { width: 14px; height: 14px; background: #cfd6e6; -webkit-mask: var(--ico) center / contain no-repeat; mask: var(--ico) center / contain no-repeat; }
     #vab-stages li.empty { border-left-color: #2c3d63; color: #6f7f9c; }
+    /* Staging stack as the original's: grouped icons with a count, gaps between cards that open while
+       something is dragged (a new stage there), a header to drag the whole stage. */
+    #vab-stages li .pc { margin-left: 3px; color: #ffd25a; font-size: 10px; }
+    #vab-stages li .st { cursor: grab; }
+    #vab-stages li.sg { height: 2px; margin: 0; padding: 0; border: 0; background: transparent; transition: height .1s; }
+    body.stage-dragging #vab-stages li.sg { height: 14px; margin: 2px 0; border: 1px dashed #3b63a8; border-radius: 3px; background: #0b1020; }
+    body.stage-dragging #vab-stages li.sg:hover { background: #1f3d6b; border-color: #8cc4ff; }
+    body.stage-dragging #vab-stages li[data-ose-stage]:hover { border-color: #8cc4ff; background: #0f1a30; }
+    body.stage-dragging, body.stage-dragging * { cursor: grabbing !important; }
+    #vab-stages li[data-ose-stage]:hover { border-color: #3b63a8; }
     #vab-side .vs-help { font-size: 11px; color: #6f7f9c; margin-top: 10px; line-height: 1.4; }
     #vab-tip { position: fixed; z-index: 30; display: none; width: 300px; background: #0b1020f5; border: 1px solid #3b63a8; border-radius: 6px; padding: 10px 12px; color: #e6ecf7; font-size: 12px; pointer-events: none; box-shadow: 0 6px 20px #000a; }
     #vab-tip.open { display: block; }

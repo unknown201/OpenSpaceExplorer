@@ -197,7 +197,7 @@ struct App {
     /// again after an edit (ms; asked 300 ms after the last change).
     vab_stages_readout: Vec<ose_net::StageReadout>,
     /// A part pressed on a stage card, to drop on another card.
-    vab_stage_drag: Option<usize>,
+    vab_stage_drag: Option<StageDrag>,
     /// The trip planner's delta-v map, once loaded.
     trip: Option<trip::TripMap>,
     /// First-time hints: the scripts, the ones already shown (kept per browser) and the messages queued.
@@ -444,6 +444,13 @@ struct SciencePoints {
     submitted: usize,
     /// The reports themselves, for the R&D science archive.
     reports: Vec<ose_net::ReportInfo>,
+}
+
+/// What is being dragged in the VAB staging stack: a group of icons (the parts) or a whole stage.
+#[derive(Clone, Debug, PartialEq)]
+enum StageDrag {
+    Parts(Vec<usize>),
+    Stage(usize),
 }
 
 /// A maneuver node: an impulsive burn the player is planning. `anchor_ut` is UT when the node was added;
@@ -3146,17 +3153,41 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
     if let Some(list) = doc.get_element_by_id("vab-stages") {
         let a = app.clone();
         let down = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
-            let i = ev
-                .target()
-                .and_then(|t| t.dyn_into::<Element>().ok())
-                .and_then(|e| e.closest("[data-ose-index]").ok().flatten())
-                .and_then(|e| e.get_attribute("data-ose-index"))
+            if ev.button() != 0 {
+                return;
+            }
+            let t = ev.target().and_then(|t| t.dyn_into::<Element>().ok());
+            let group: Option<Vec<usize>> = t
+                .as_ref()
+                .and_then(|e| e.closest("[data-ose-group]").ok().flatten())
+                .and_then(|e| e.get_attribute("data-ose-group"))
+                .map(|v| v.split(',').filter_map(|x| x.parse().ok()).collect());
+            let head = t
+                .as_ref()
+                .and_then(|e| e.closest("[data-ose-stagehead]").ok().flatten())
+                .and_then(|e| e.get_attribute("data-ose-stagehead"))
                 .and_then(|v| v.parse::<usize>().ok());
-            if ev.button() == 0 {
-                if let Some(i) = i {
-                    ev.prevent_default();
-                    a.borrow_mut().vab_stage_drag = Some(i);
+            let drag = match (group, head) {
+                (Some(g), _) if !g.is_empty() => Some(StageDrag::Parts(g)),
+                (_, Some(n)) => Some(StageDrag::Stage(n)),
+                _ => None,
+            };
+            if let Some(d) = drag {
+                ev.prevent_default();
+                let app = a.borrow();
+                // Leave the search box (or any field): keys like Ctrl+Z belong to the editor again.
+                if let Some(f) = app
+                    .doc
+                    .active_element()
+                    .and_then(|e| e.dyn_into::<HtmlElement>().ok())
+                {
+                    f.blur().ok();
                 }
+                if let Some(b) = app.doc.body() {
+                    b.class_list().add_1("stage-dragging").ok();
+                }
+                drop(app);
+                a.borrow_mut().vab_stage_drag = Some(d);
             }
         });
         list.add_event_listener_with_callback("mousedown", down.as_ref().unchecked_ref())?;
@@ -3164,26 +3195,85 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         let a = app.clone();
         let up = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
             let mut app = a.borrow_mut();
-            let Some(i) = app.vab_stage_drag.take() else {
+            if let Some(b) = app.doc.body() {
+                b.class_list().remove_1("stage-dragging").ok();
+            }
+            let Some(drag) = app.vab_stage_drag.take() else {
                 return;
             };
-            let stage = ev
-                .target()
-                .and_then(|t| t.dyn_into::<Element>().ok())
-                .and_then(|e| e.closest("[data-ose-stage]").ok().flatten())
-                .and_then(|e| e.get_attribute("data-ose-stage"))
-                .and_then(|v| v.parse::<usize>().ok());
-            let current = app.editor.craft.stages.iter().position(|s| s.contains(&i));
-            if let Some(stage) = stage.filter(|s| Some(*s) != current) {
+            let t = ev.target().and_then(|t| t.dyn_into::<Element>().ok());
+            let attr = |sel: &str, name: &str| {
+                t.as_ref()
+                    .and_then(|e| e.closest(sel).ok().flatten())
+                    .and_then(|e| e.get_attribute(name))
+                    .and_then(|v| v.parse::<usize>().ok())
+            };
+            let gap = attr("[data-ose-gap]", "data-ose-gap");
+            let stage = attr("[data-ose-stage]", "data-ose-stage");
+            let parts = match &drag {
+                StageDrag::Parts(p) => p.clone(),
+                StageDrag::Stage(n) => app.editor.craft.stages.get(*n).cloned().unwrap_or_default(),
+            };
+            let current = parts
+                .first()
+                .and_then(|i| app.editor.craft.stages.iter().position(|s| s.contains(i)));
+            let cat = std::mem::take(&mut app.catalog);
+            let mut changed = false;
+            if let Some(g) = gap {
+                // Between cards: a stage of their own there (unless that is where they already are, alone).
+                let alone = current.is_some_and(|c| {
+                    app.editor.craft.stages[c].len() == parts.len() && (g == c || g == c + 1)
+                });
+                if !alone {
+                    app.vab_record();
+                    app.editor.insert_stage(&parts, g, &cat);
+                    changed = true;
+                }
+            } else if let Some(s) = stage.filter(|s| Some(*s) != current) {
                 app.vab_record();
-                let cat = std::mem::take(&mut app.catalog);
-                app.editor.move_to_stage(i, stage, &cat);
-                app.catalog = cat;
+                app.editor.move_parts_to_stage(&parts, s, &cat);
+                changed = true;
+            }
+            app.catalog = cat;
+            if changed {
                 app.render_vab();
             }
         });
         list.add_event_listener_with_callback("mouseup", up.as_ref().unchecked_ref())?;
         up.forget();
+    }
+    // The pointer over a stage card lights its parts in the hall (the original's stage highlight).
+    if let Some(list) = doc.get_element_by_id("vab-stages") {
+        let a = app.clone();
+        let over = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let n = ev
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .and_then(|e| e.closest("[data-ose-stage]").ok().flatten())
+                .and_then(|e| e.get_attribute("data-ose-stage"))
+                .and_then(|v| v.parse::<usize>().ok());
+            let mut app = a.borrow_mut();
+            let lit = n
+                .and_then(|n| app.editor.craft.stages.get(n).cloned())
+                .unwrap_or_default();
+            #[cfg(target_arch = "wasm32")]
+            {
+                app.vab3d.stage_lit = lit;
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            let _ = (&mut app, lit);
+        });
+        list.add_event_listener_with_callback("mouseover", over.as_ref().unchecked_ref())?;
+        over.forget();
+        let a = app.clone();
+        let out = Closure::<dyn FnMut()>::new(move || {
+            #[cfg(target_arch = "wasm32")]
+            a.borrow_mut().vab3d.stage_lit.clear();
+            #[cfg(not(target_arch = "wasm32"))]
+            let _ = &a;
+        });
+        list.add_event_listener_with_callback("mouseleave", out.as_ref().unchecked_ref())?;
+        out.forget();
     }
     // A part named on a stage card selects it.
     if let Some(list) = doc.get_element_by_id("vab-stages") {
@@ -3998,6 +4088,9 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
         let mut app = a.borrow_mut();
         // A stage-card drag released anywhere else is dropped (the card list handles its own mouseup first).
         app.vab_stage_drag = None;
+        if let Some(b) = app.doc.body() {
+            b.class_list().remove_1("stage-dragging").ok();
+        }
         if app.mnv_drag.take().is_some() {
             app.send_node();
             app.press = None;
@@ -7559,23 +7652,46 @@ impl App {
             let mut html = String::new();
             let count = self.editor.craft.stages.len();
             for (n, stage) in self.editor.craft.stages.iter().enumerate() {
-                let parts: Vec<String> = stage
+                // The same part more than once in a stage is one icon with a count, as the original's stack
+                // groups them; dragging it moves the whole group.
+                let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
+                for &i in stage {
+                    let Some(p) = self.editor.craft.parts.get(i) else {
+                        continue;
+                    };
+                    match groups.iter_mut().find(|(id, _)| *id == p.part_id) {
+                        Some((_, v)) => v.push(i),
+                        None => groups.push((p.part_id.clone(), vec![i])),
+                    }
+                }
+                let parts: Vec<String> = groups
                     .iter()
-                    .filter_map(|&i| self.editor.craft.parts.get(i).map(|p| (i, p)))
-                    .map(|(i, p)| {
-                        let spec = self.catalog.get(&p.part_id);
+                    .map(|(id, members)| {
+                        let spec = self.catalog.get(id);
                         let icon = match spec {
                             Some(s) if s.has_engine => "Staging-Icon-Thruster",
                             Some(s) if s.is_decoupler => "Staging-Icon-Inline",
                             Some(s) if s.stage_type.contains("Parachute") => "Staging-ICO-Chute-Stowed",
                             _ => "Staging-ICO-Structure01",
                         };
+                        let list: Vec<String> = members.iter().map(|i| i.to_string()).collect();
                         format!(
-                            "<span class=\"p{sel}\" data-ose-index=\"{i}\" title=\"select\"><i style=\"--ico:url(assets/ui/hud/{icon}.png)\"></i>{name}</span>",
-                            sel = if self.editor.selected == Some(i) { " sel" } else { "" },
+                            "<span class=\"p{sel}\" data-ose-index=\"{first}\" data-ose-group=\"{list}\" title=\"click to select, drag to another stage or between stages\"><i style=\"--ico:url(assets/ui/hud/{icon}.png)\"></i>{name}{count}</span>",
+                            sel = if self.editor.selected.is_some_and(|s| members.contains(&s)) {
+                                " sel"
+                            } else {
+                                ""
+                            },
+                            first = members[0],
+                            list = list.join(","),
                             name = spec
                                 .map(|s| esc(s.display_title()))
-                                .unwrap_or_else(|| esc(&p.part_id)),
+                                .unwrap_or_else(|| esc(id)),
+                            count = if members.len() > 1 {
+                                format!("<b class=\"pc\">\u{d7}{}</b>", members.len())
+                            } else {
+                                String::new()
+                            },
                         )
                     })
                     .collect();
@@ -7618,10 +7734,19 @@ impl App {
                         )
                     })
                     .unwrap_or_default();
+                // A gap above each card: drop icons there for a new stage of their own, or a stage to move it.
                 html.push_str(&format!(
-                    "<li data-ose-stage=\"{n}\"><span class=\"st\">STAGE {}</span>{stats}{}</li>",
+                    "<li class=\"sg\" data-ose-gap=\"{n}\" title=\"drop here for a new stage\"></li>"
+                ));
+                html.push_str(&format!(
+                    "<li data-ose-stage=\"{n}\"><span class=\"st\" data-ose-stagehead=\"{n}\" title=\"drag to move the whole stage\">STAGE {}</span>{stats}{}</li>",
                     count - n,
                     parts.join("")
+                ));
+            }
+            if count > 0 {
+                html.push_str(&format!(
+                    "<li class=\"sg\" data-ose-gap=\"{count}\" title=\"drop here for a new first stage\"></li>"
                 ));
             }
             if html.is_empty() {
