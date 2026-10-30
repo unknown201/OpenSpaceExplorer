@@ -972,6 +972,14 @@
     #flight-hud .fh-bottom .fh-sas #fh-sas-radialin { left: calc(24 * var(--u)); top: calc(100 * var(--u)); }
     #flight-hud .fh-bottom .fh-sas #fh-sas-normal { left: calc(8 * var(--u)); top: calc(62 * var(--u)); }
     #flight-hud .fh-bottom .fh-sas #fh-sas-target { left: calc(24 * var(--u)); top: calc(24 * var(--u)); }
+    /* VESSEL-RESOURCES at the top right (the original's small resource window and G-FORCE gauge). */
+    #flight-hud .fh-vres { position: absolute; top: calc(52 * var(--u)); right: calc(16 * var(--u)); width: calc(220 * var(--u)); background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)); padding: calc(6 * var(--u)) calc(8 * var(--u)); font-family: var(--hud-font); }
+    #flight-hud .fh-crewbox { right: calc(250 * var(--u)) !important; }
+    #flight-hud .fh-vres .vr-g, #flight-hud .fh-vres .vr-row { display: grid; grid-template-columns: calc(28 * var(--u)) 1fr calc(70 * var(--u)); align-items: center; gap: calc(6 * var(--u)); font-size: calc(11 * var(--u)); margin-top: calc(4 * var(--u)); color: #e6ecf7; }
+    #flight-hud .fh-vres b { text-align: right; font-weight: 600; }
+    #flight-hud .fh-vres .vr-gbar, #flight-hud .fh-vres .vr-bar { height: calc(7 * var(--u)); background: #ffffff1a; border-radius: 3px; overflow: hidden; }
+    #flight-hud .fh-vres .vr-gbar i, #flight-hud .fh-vres .vr-bar i { display: block; height: 100%; background: #3fe05a; }
+    #flight-hud .fh-vres .vr-gbar i.hi { background: #ff6a3a; }
     /* ORBITAL.INFO: Ap over Pe, each with its countdown, as the original's two lines. */
     #flight-hud .fh-bottom .fh-orbit { display: grid; grid-template-columns: auto 1fr auto; gap: 0 calc(8 * var(--u)); justify-items: start; }
     #flight-hud .fh-spd, #flight-hud .fh-alt { position: absolute; top: 50%; transform: translateY(-50%); min-width: calc(110 * var(--u)); background: #10141bf0; border: 2px solid; border-radius: calc(4 * var(--u)); padding: calc(2 * var(--u)) calc(8 * var(--u)); text-align: right; }
@@ -1379,6 +1387,9 @@
     </div>
     <div class="fh-actions" id="fh-actions" data-ose="flight-actions"></div>
     <div class="fh-crewbox" id="fh-crewbox" data-ose="flight-crew"></div>
+    <div class="fh-vres" id="fh-vres" data-ose="flight-vessel-resources"><div class="fh-label">VESSEL-RESOURCES</div>
+      <div class="vr-g" title="G-force: the acceleration the crew feels, in g"><span>G</span><div class="vr-gbar"><i id="fh-g-fill"></i></div><b id="fh-g-text">--</b></div>
+      <div id="fh-vres-list"></div></div>
     <div class="fh-crew fh-crew-acts"><button id="fh-eva" data-ose="flight-eva" class="hidden" title="a Kerbal climbs out">EVA</button><button id="fh-board" data-ose="flight-board" class="hidden" title="climb into the craft within reach (F)">Board</button><button id="fh-flag" data-ose="flight-flag" class="hidden" title="plant the agency flag">Plant flag</button><button id="fh-undock" data-ose="flight-undock" class="hidden" title="release the last docking">Undock</button></div>
     <div class="fh-vessel-acts"><button id="fh-science" data-ose="flight-science" title="Run every experiment on board">Experiments</button><button id="fh-transmit" data-ose="flight-transmit" title="Send the reports home">Transmit</button><button id="fh-recover" data-ose="flight-recover" title="Recover the vessel (landed or splashed down on Kerbin)">Recover</button></div>
     <div class="fh-views"><button id="fh-map" class="fh-missions-btn" data-ose="flight-map" title="Map view (M)"><i style="--ico:url(assets/ui/hud/ICO-Flight-Map.png)"></i></button><button id="fh-ksc" class="fh-missions-btn" data-ose="flight-ksc" title="Leave the vessel and go to the Kerbal Space Center"><i style="--ico:url(assets/ui/ICO-Map-KSC-16x16.png)"></i></button></div>

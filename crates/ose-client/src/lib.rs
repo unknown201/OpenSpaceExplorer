@@ -311,6 +311,8 @@ struct App {
     toasts: hud::Toasts,
     /// The flown vessel as last seen, for event toasts (signal, charge, sphere of influence, orbit, landing).
     flight_watch: std::cell::RefCell<Option<hud::FlightWatch>>,
+    /// G-force meter: (game time, velocity relative to the body, smoothed g) as last sampled.
+    gmeter: std::cell::RefCell<Option<(f64, ose_math::DVec3, f64)>>,
     /// Your other vessels' reference bodies as last seen (the original's inactive-vessel SOI notices).
     soi_seen: std::cell::RefCell<std::collections::HashMap<u64, u16>>,
     crash_report_due: std::cell::Cell<Option<(u64, f64)>>,
@@ -761,6 +763,7 @@ pub fn start() -> Result<(), JsValue> {
         apsis_ut: [f64::NAN; 2],
         toasts: hud::Toasts::default(),
         flight_watch: std::cell::RefCell::new(None),
+        gmeter: Default::default(),
         soi_seen: Default::default(),
         crash_report_due: std::cell::Cell::new(None),
         flight_records: std::cell::RefCell::new(None),
@@ -10505,6 +10508,84 @@ impl App {
     }
 
     /// Refresh the flight HUD from the vessel's readout.
+    /// VESSEL-RESOURCES: the G-force the crew feels (the change in velocity against the body, less gravity,
+    /// smoothed) and charge, monopropellant and ablator.
+    fn update_vessel_resources(&self, v: &ose_net::VesselState, f: &ose_net::FlightReadout) {
+        let Some(scene) = &self.scene else { return };
+        let rb = v.reference_body as usize;
+        let (Some(body), Some(snap)) = (scene.bodies.get(rb), scene.snapshot.get(rb)) else {
+            return;
+        };
+        let ut = self.time.ut_at(now_ms());
+        let rel_v = v.velocity_mps - snap.velocity_mps;
+        let r = v.position_m - snap.position_m;
+        let mut meter = self.gmeter.borrow_mut();
+        let g = match *meter {
+            // A new state from the server (the velocity moved): the acceleration since the last one.
+            Some((t0, v0, g0)) if rel_v != v0 && ut > t0 + 1e-3 => {
+                let a = (rel_v - v0) * (1.0 / (ut - t0));
+                let grav = -r * (body.mu / r.length().powi(3).max(1.0));
+                let felt = (a - grav).length() / 9.80665;
+                let g = if felt.is_finite() {
+                    g0 + (felt - g0) * 0.3
+                } else {
+                    g0
+                };
+                *meter = Some((ut, rel_v, g));
+                g
+            }
+            Some((_, _, g0)) => g0,
+            None => {
+                *meter = Some((
+                    ut,
+                    rel_v,
+                    if f.situation == ose_net::FlightSituation::Landed {
+                        1.0
+                    } else {
+                        0.0
+                    },
+                ));
+                return;
+            }
+        };
+        drop(meter);
+        set_text(&self.doc, "fh-g-text", &format!("{g:.1} g"));
+        if let Some(i) = self
+            .doc
+            .get_element_by_id("fh-g-fill")
+            .and_then(|e| e.dyn_into::<HtmlElement>().ok())
+        {
+            i.style()
+                .set_property(
+                    "width",
+                    &format!("{:.0}%", (g / 15.0).clamp(0.0, 1.0) * 100.0),
+                )
+                .ok();
+            i.class_list().toggle_with_force("hi", g > 6.0).ok();
+        }
+        let mut html = String::new();
+        for (id, short) in [
+            ("ElectricCharge", "EC"),
+            ("MonoPropellant", "MP"),
+            ("Ablator", "AB"),
+        ] {
+            if let Some((_, amount, cap)) = f.resources.iter().find(|r| r.0 == id && r.2 > 0.0) {
+                html.push_str(&format!(
+                    "<div class=\"vr-row\" title=\"{name}\"><span>{short}</span><div class=\"vr-bar\"><i style=\"width:{pct:.0}%\"></i></div><b>{amt}/{capt}</b></div>",
+                    amt = if *cap < 10.0 { format!("{amount:.2}") } else { format!("{amount:.0}") },
+                    capt = if *cap < 10.0 { format!("{cap:.2}") } else { format!("{cap:.0}") },
+                    name = hud::resource_name(id),
+                    pct = (amount / cap).clamp(0.0, 1.0) * 100.0,
+                ));
+            }
+        }
+        if let Some(el) = self.doc.get_element_by_id("fh-vres-list") {
+            if el.inner_html() != html {
+                el.set_inner_html(&html);
+            }
+        }
+    }
+
     fn update_flight_hud(&self) {
         let Some(id) = self.flying else { return };
         if let Some(el) = self.doc.get_element_by_id("flight-hud") {
@@ -10537,6 +10618,7 @@ impl App {
             set_text(&self.doc, "fh-situation", "on rails");
             return;
         };
+        self.update_vessel_resources(v, f);
         let alt = if f.altitude_m.abs() >= 100_000.0 {
             format!("{:.1} km", f.altitude_m / 1000.0)
         } else {
