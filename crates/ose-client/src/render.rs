@@ -282,6 +282,13 @@ fn fs_mesh(in: VsOut) -> @location(0) vec4<f32> {
         let hw = normalize(ldir + view);
         let glint = pow(max(dot(nw, hw), 0.0), 2500.0) * 1.5 * diffuse;
         var w = body + refl + vec3<f32>(glint);
+        // The shore (the lake's baked shore mask, paint slot red: 0 at the edge, 1 about 140 m in): the water
+        // shallows to a lighter teal, then meets the bank in its grassy colour, instead of a hard line.
+        let shore = select(1.0, clamp(pm.r, 0.0, 1.0), pm.a > 0.5);
+        let shallow = base.rgb * (ambient + (1.0 - ambient) * diffuse) * 1.25 + vec3<f32>(0.002, 0.006, 0.004) * day;
+        w = mix(shallow + refl * 0.7, w, smoothstep(0.1, 0.55, shore));
+        let bank = vec3<f32>(0.035, 0.05, 0.022) * (ambient + (1.0 - ambient) * diffuse) * 2.0;
+        w = mix(bank, w, smoothstep(0.0, 0.12, shore));
         // Outdoors through the same tone curve as the ground round it.
         if object.extra.y > 0.0 {
             w = vec3<f32>(1.0) - exp(-w * object.extra.y);

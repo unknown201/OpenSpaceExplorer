@@ -202,6 +202,8 @@ def main() -> int:
         materials[key] = idx
         return idx
 
+    lake_meshes: list[tuple] = []
+
     def mesh_index(mesh_pptr) -> int | None:
         key = mesh_pptr.path_id
         if key in meshes:
@@ -216,6 +218,8 @@ def main() -> int:
             meshes[key] = None
             return None
         mi = glb.mesh(mesh.m_Name, positions, normals, uvs, tris, None)
+        if mesh.m_Name.startswith("ksc_lake") and uvs:
+            lake_meshes.append((positions, uvs, tris))
         mesh_verts[key] = len(positions)
         mesh_bounds[key] = (
             tuple(min(p[i] for p in positions) for i in range(3)),
@@ -317,6 +321,39 @@ def main() -> int:
     gmesh = glb.mesh("ground", [(-half, ground_y, -half), (half, ground_y, -half), (half, ground_y, half), (-half, ground_y, half)], [(0.0, 1.0, 0.0)] * 4, [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)], [0, 2, 1, 0, 3, 2], gm)
     nodes_out.append(glb.node("ground", (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0), (1.0, 1.0, 1.0), gmesh, []))
     glb.roots = nodes_out
+    # The lakes' shores: KSP2 blends its LandBasedWater into the bank by depth; our lake meshes carry no depth, so a
+    # mask baked in their uv space gives each texel its distance to the shore (0 at the edge, 1 at SHORE_M in),
+    # carried in the paint-mask slot (the water shader reads its red channel).
+    lake_mat = next((i for i, m in enumerate(glb.materials) if m.get("name") == "ksc_lake_mat"), None)
+    if lake_meshes and lake_mat is not None:
+        import numpy as np
+        from PIL import Image, ImageDraw
+        from scipy.ndimage import distance_transform_edt
+
+        size_px, shore_m = 2048, 140.0
+        inside = Image.new("L", (size_px, size_px), 0)
+        draw = ImageDraw.Draw(inside)
+        m_per_uv = []
+        for positions, uvs, tris in lake_meshes:
+            pts = np.asarray(positions, float)
+            uv = np.asarray(uvs, float)
+            # Metres per uv unit along the mesh's long axis (the lakes' nodes scale them 100x).
+            ext_m = (pts.max(0) - pts.min(0)).max() * 100.0
+            ext_uv = (uv.max(0) - uv.min(0)).max()
+            m_per_uv.append(ext_m / max(ext_uv, 1e-6))
+            for k in range(0, len(tris), 3):
+                tri = [(uv[t][0] * size_px, uv[t][1] * size_px) for t in tris[k : k + 3]]
+                draw.polygon(tri, fill=255)
+        dist_px = distance_transform_edt(np.asarray(inside) > 0)
+        m_per_px = float(np.mean(m_per_uv)) / size_px
+        d = np.clip(dist_px * m_per_px / shore_m, 0.0, 1.0)
+        img = (d * 255).astype(np.uint8)
+        rel = "textures/ksc_lake_shore_mask.png"
+        Image.fromarray(np.stack([img, img, img], -1), "RGB").save(out / rel)
+        ti = glb.image_uri("../" + rel, "ksc_lake_shore_mask")
+        glb.materials[lake_mat].setdefault("extras", {})["ose_paint_mask"] = {"index": ti}
+        texture_count += 1
+        print(f"lake shore mask: {len(lake_meshes)} lakes, {m_per_px:.1f} m a texel")
     size = glb.write(out / "ksc" / "ksc.glb", {"source": BUNDLE, "instances": kept, "unique_meshes": len([m for m in meshes.values() if m is not None])})
     print(f"ksc.glb: {kept} instances of {len([m for m in meshes.values() if m is not None])} meshes ({instance_verts / 1e6:.1f} M instanced vertices, {sum(mesh_verts.values()) / 1e6:.2f} M unique), {len(glb.materials)} materials, {texture_count} textures, {size / 1e6:.1f} MB; skipped {skipped_lod} lower LODs, {skipped_prop} props, {skipped_missing} missing")
 
