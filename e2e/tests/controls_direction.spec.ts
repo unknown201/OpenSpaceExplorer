@@ -29,9 +29,16 @@ async function effect(page: Page, key: string): Promise<[number, number, number]
     const dt = sub(b.t, a.t);
     return [dot(df, a.t), dot(df, a.r), dot(dt, a.r)];
   };
-  await page.waitForTimeout(1500);
+  // From rest: SAS stops what the last key started, then lets go so it cannot fight this one.
+  const sas = page.locator("#fh-sas-toggle");
+  if (!(await sas.evaluate(e => e.classList.contains("on")))) await page.keyboard.press("t");
+  await expect(sas).toHaveClass(/on/);
+  await page.waitForTimeout(2500);
+  await page.keyboard.press("t");
+  await expect(sas).not.toHaveClass(/on/);
   const base = await span(null);
   const k = await span(key);
+  await page.keyboard.press("t");
   return [k[0] - base[0], k[1] - base[1], k[2] - base[2]];
 }
 
