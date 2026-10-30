@@ -1683,6 +1683,11 @@ fn launch_on_pad_now(
     }
     let (pad_lat, pad_lon) = (at.lat_deg, at.lon_deg);
     let e = u.spawn_powered_on_surface(&name, body, spec, pad_lat, pad_lon);
+    if !is_level {
+        // Rockets stand as KSP2's: top to the south, so D turns them east (the gravity turn). Before the
+        // structure is built from the pose, so the craft stands that way on the pad too, not only once it flies.
+        u.stand_south(e);
+    }
     u.set_craft(e, craft.clone());
     u.set_structure(
         e,
@@ -1690,9 +1695,6 @@ fn launch_on_pad_now(
     );
     if is_level {
         u.set_level(e, at.heading_deg);
-    } else {
-        // Rockets stand as KSP2's: top to the south, so D turns them east (the gravity turn).
-        u.stand_south(e);
     }
     if let Err(reason) = crew_launch(s, &mut u, e, crew) {
         u.despawn_vessel(e);
