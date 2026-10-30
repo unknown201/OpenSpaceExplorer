@@ -133,7 +133,7 @@ struct Args {
     #[arg(long, default_value_t = 60.0)]
     guest_sweep_s: f64,
     /// Test fixtures only: give each player with nothing in the campaign a probe in a 100 km orbit when
-    /// they connect, so the browser tests have a vessel before they launch one. A real world starts
+    /// they connect or start or resume a campaign, so the browser tests have a vessel before they launch one. A real world starts
     /// empty, as the original's does.
     #[arg(long)]
     test_probe: bool,
@@ -3237,6 +3237,9 @@ async fn session(mut socket: WebSocket, s: AppState) {
                             let reply = match switched {
                                 Ok(()) => {
                                     let name = display_name_for(&s, player_id);
+                                    if s.test_probe && !has_vessel(&s, player_id) {
+                                        spawn_test_probe(&s, player_id, &name);
+                                    }
                                     campaign_state(&s, player_id, Some(&name))
                                 }
                                 Err(reason) => ServerMessage::Rejected { reason },
@@ -3249,6 +3252,9 @@ async fn session(mut socket: WebSocket, s: AppState) {
                             let reply = match campaigns::switch(&s, player_id, campaigns::Target::New(new)) {
                                 Ok(()) => {
                                     let pname = display_name_for(&s, player_id);
+                                    if s.test_probe && !has_vessel(&s, player_id) {
+                                        spawn_test_probe(&s, player_id, &pname);
+                                    }
                                     let mut reply = campaign_state(&s, player_id, Some(&pname));
                                     if let ServerMessage::CampaignState { created: c, .. } = &mut reply {
                                         *c = true;
