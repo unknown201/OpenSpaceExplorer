@@ -1,0 +1,31 @@
+{
+  "source": "KSP2 executable live-rigidbody interval captures (recorder 0.4.0)",
+  "game_version": "0.2.2.0.32913",
+  "capture_date_utc": "2026-10-31",
+  "baseline_candidate_commit": "b628101",
+  "thresholds": {
+    "angle_deg": 0.5,
+    "omega_rad_s": 0.01,
+    "mass_t": 1e-06
+  },
+  "files": {
+    "jumping-flea-repeat.csv": "32fc023bd38f860fff790cf197d83319ea35a409dd336a919c37aad48bf2a158",
+    "jumping-flea-repeat.csv.metadata.txt": "35112454e90a9110d469dd22cb98aa20813e5fde5d3d36b84c15eb648a5fa99e",
+    "jumping-flea-repeat.csv.parts.csv": "889a6fb5a4d4b8d353756558333fea143792edd546d0effa989526809bda09d4",
+    "jumping-flea-repeat.csv.surfaces.csv": "ddc5fac00e1e5078ad177f60ca7a9ac65eab33c8b41fc3187a0483f3a0243a76",
+    "jumping-flea-repeat.csv.rcs.csv": "4e75408f52a64bfcebb06ed877c9750d4e0cf7e210e25867fd475c4fb6ebbede",
+    "jumping-flea-repeat-result.json": "494cf8ebce61130e4348e0f8065567db132c8c6fc7219c29bfd946f6acae6911",
+    "jumping-flea-repeatability.json": "4a23d20ca83d03556e01e64209c524eb67056c94efcebd510bcb6a7d2100816c",
+    "jumping-flea-sas.csv": "b70224397d137c4aa49a56607c4f22e7b9211078766ddff550b950dfc1073e21",
+    "jumping-flea-sas.csv.metadata.txt": "3e673ddc7ca69a772127dcb740a0678f46a9cc0095add803ec2c06e23baf6704",
+    "jumping-flea-sas.csv.parts.csv": "c335cc4a88abaf2786d5abcb69e5baa7567800acc6d1078a9efa95c6125bfdf4",
+    "jumping-flea-sas.csv.surfaces.csv": "ddc5fac00e1e5078ad177f60ca7a9ac65eab33c8b41fc3187a0483f3a0243a76",
+    "jumping-flea-sas.csv.rcs.csv": "4e75408f52a64bfcebb06ed877c9750d4e0cf7e210e25867fd475c4fb6ebbede",
+    "jumping-flea-sas-result.json": "9e7af6b0fc31c822f9e2fc4af5efee0a43cfce36e2f048442f02086429ec6474"
+  },
+  "cleanup": {
+    "loader_removed": true,
+    "temporary_campaign_removed": true,
+    "existing_save_files_unchanged": 87
+  }
+}

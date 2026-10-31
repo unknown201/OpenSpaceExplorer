@@ -68,10 +68,6 @@ fn main() {
     p.facing = DVec3::new(0., 1., 0.);
     p.attitude = Attitude::Free;
     if let Some(row) = initial {
-        assert_eq!(
-            row["sas"], 0.,
-            "replay currently supports SAS-off fixtures only"
-        );
         p.ignited = false;
         p.throttle = row["throttle"];
         p.groups.rcs = row.get("rcs").is_some_and(|v| *v != 0.0);
@@ -101,17 +97,26 @@ fn main() {
     u.set_powered(vessel, p);
     u.set_structure(vessel, Structure::build(craft, &defs, &res));
     if let Some(row) = initial.filter(|r| r.contains_key("crew_t")) {
-        // A single-capsule fixture has an unambiguous occupied-seat distribution.
+        // Seats fill the craft's only crewed part, so the distribution stays unambiguous.
+        let crewed: Vec<_> = (0..craft.parts.len())
+            .filter(|&i| {
+                defs.iter()
+                    .find(|d| d.id == craft.parts[i].part_id)
+                    .is_some_and(|d| d.crew_capacity > 0)
+            })
+            .collect();
         assert_eq!(
-            craft.parts.len(),
+            crewed.len(),
             1,
-            "crew distribution requires a single-part fixture"
+            "crew distribution requires one crewed part"
         );
         let seats = (row["crew_t"] / 0.095).round() as usize;
         assert!((seats as f64 * 0.095 - row["crew_t"]).abs() < 1e-8);
         u.set_crew(
             vessel,
-            (0..seats).map(|i| (0, format!("Reference {i}"))).collect(),
+            (0..seats)
+                .map(|i| (crewed[0], format!("Reference {i}")))
+                .collect(),
         );
     }
     if replay.is_some() {
@@ -145,6 +150,16 @@ fn main() {
                 (r["pitch"], r["yaw"], r["roll"])
             })
             .unwrap_or((pitch, 0., roll));
+        // A settled vessel goes on rails; the reference never does, so keep it in physics.
+        if u.powered(vessel).is_none() {
+            u.wake(vessel);
+        }
+        // F11 engages Stability Assist once its inputs have ended: hold the attitude at that moment.
+        let sas_on = |i: usize| replay.as_ref().is_some_and(|rows| rows[i]["sas"] != 0.);
+        if sas_on(step) && (step == 0 || !sas_on(step - 1)) {
+            let f = u.powered(vessel).unwrap().facing;
+            u.set_controls(vessel, 0., Attitude::Fixed(f));
+        }
         if replay.is_none() && step == 7 * TICKS_PER_SECOND as usize {
             let f = u.powered(vessel).unwrap().facing;
             u.set_controls(vessel, 0., Attitude::Fixed(f));

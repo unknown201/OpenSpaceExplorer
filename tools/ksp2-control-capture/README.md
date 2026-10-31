@@ -181,3 +181,49 @@ campaign files hash identically. Raw captures, logs, install manifest and the
 temporary campaign remain archived at `.cache/rcs-runtime-20261029` in this worktree.
 The committed manifest hashes primary/nozzle CSVs unchanged; only generated GUID
 fields were removed from companions. No game binaries or save files are committed.
+
+## Repeat wheel and SAS captures (2026-10-31)
+
+Recorder 0.4.0 adds F11: the F9 orbit setup, then pitch 1 for t in [1, 2), yaw 1
+for [1.5, 2.5), and Stability Assist engaged at t = 3 s. Both captures below come
+from one stock Jumping Flea with one occupied seat, in a temporary sandbox campaign.
+
+- `jumping-flea-repeat.csv` repeats the F9 wheel pulse of `jumping-flea-interval.csv`:
+  same craft, same inputs, same mass and inertia columns.
+- `jumping-flea-sas.csv` was pressed straight after the repeat, so it starts
+  from that run's ~2.9 rad/s tumble. SAS then has to stop it.
+
+`control_trace` now places a fixture's crew in the craft's only crewed part, keeps
+the vessel in physics (OSE would otherwise put a settled craft on rails), and
+engages SAS as `Attitude::Fixed` on the facing at the sample where `sas` turns on.
+
+```powershell
+cargo run -q -p ose-sim --example control_trace -- 'Jumping Flea' tools/ksp2-control-capture/fixtures/jumping-flea-repeat.csv > .cache/jf-repeat-ose.csv
+python -B tools/compare_control_traces.py --reference-unity tools/ksp2-control-capture/fixtures/jumping-flea-repeat.csv .cache/jf-repeat-ose.csv
+python -B tools/ksp2_repeatability.py tools/ksp2-control-capture/fixtures/jumping-flea-interval.csv tools/ksp2-control-capture/fixtures/jumping-flea-repeat.csv
+```
+
+**KSP2 is not repeatable to the comparator's thresholds.** In body frame, the two
+KSP2 runs of the same F9 fixture differ by up to 0.0659 rad/s, against a
+0.01 rad/s threshold. They agree to 0.0075 rad/s through the first six seconds.
+The runs part ways after the first pitch release: in one, |omega| rises by
+0.0013 rad/s while no input is applied; in the other, it falls by 0.0032 rad/s.
+The roll and yaw pulses at about 3 rad/s then amplify the difference.
+
+OSE replays `jumping-flea-interval` to 0.0025 rad/s. On `jumping-flea-repeat`
+it fails at 3.49 degrees and 0.0917 rad/s, which is the same order as KSP2's
+own spread (`jumping-flea-repeatability.json`). The SAS replay fails the
+per-sample test at 10.7 degrees and 0.145 rad/s, but its behaviour matches:
+- Both stop the 2.9 rad/s tumble within about 2 s of SAS engaging.
+- Both then hold with the same ±0.02 rad/s limit cycle.
+
+Nothing was fitted. A single capture cannot pin the simulation tighter than the
+game reproduces itself. Thresholds for long, fast-spinning fixtures should come
+from repeat captures, not from one trace.
+
+KSP2 was closed, and all 22 added loader and recorder files plus the owned BepInEx
+directories were removed. The `OSE Capture 1031` campaign was deleted, and all 87
+existing save files hash identically. Raw captures, the loader log and a copy of
+the temporary campaign are archived in `.cache/ksp2-capture-20261031` under the
+main checkout. Only the `vessel=` and part `guid` fields were removed from the
+committed copies.
