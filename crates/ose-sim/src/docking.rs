@@ -1,11 +1,14 @@
 //! Docking: finding docking ports that meet, and the craft surgery that joins two vessels into one and takes
-//! them apart again (see `docs/reference-notes/docking.md`).
+//! them apart again (remaining limits: P29 in `docs/PHYSICS-GAPS.md`).
 //!
-//! A vessel keeps its craft ([`CraftDoc`]) so it can be merged and split. Ports latch when they are within
-//! their acquire range, facing each other within the acquire angle and drifting slower than 1 m/s (the
-//! original pulls them together from there with its acquire force and latches at the capture range; we
-//! latch at once). The docked vessel's parts are re-rooted under the port they docked to, turned so the ports
-//! face each other, in the first vessel's craft frame.
+//! A vessel keeps its craft ([`CraftDoc`]) so it can be merged and split. The docking step follows the
+//! original's `Module_DockingNode`: ports within their acquire range, facing each other within the acquire
+//! angle, latch once they drift slower than the capture speed (0.3 m/s for every stock port); faster than that
+//! each pulls toward the other with half its acquire force and turns toward facing it with half its acquire
+//! torque. Ports facing each other meet at their faces instead of as hull spheres; misaligned ports strike as
+//! hulls do. The original's capture range and capture angle are defined but unused there, so here too. The
+//! docked vessel's parts are re-rooted under the port they docked to, turned so the ports face each other, in
+//! the first vessel's craft frame.
 
 use bevy_ecs::prelude::*;
 use ose_data::craft::{Craft, CraftPart, Quat};
@@ -26,11 +29,43 @@ pub struct Docked {
     pub links: Vec<(usize, usize)>,
 }
 
-/// After undocking, these two vessels do not latch again until they have moved apart.
+/// After undocking, two ports do not latch again until they are their `min_distance_to_reengage_m` apart
+/// (the original's `Disengaged` state).
 #[derive(Component, Clone, Debug, Default, PartialEq)]
 pub struct Undocked {
-    pub from: Vec<Entity>,
+    pub from: Vec<Disengaged>,
 }
+
+/// One port pair kept from latching: the other vessel, this vessel's port part and the other's (indices into
+/// each one's `current_craft`), and how far apart the ports must get first, m.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Disengaged {
+    pub other: Entity,
+    pub port: usize,
+    pub other_port: usize,
+    pub min_distance_m: f64,
+}
+
+/// Port pairs that face each other closely enough to dock, as (vessel, structure part) pairs: their parts do
+/// not strike as hulls (`collide_vessels`); the docking step handles their faces meeting.
+#[derive(Resource, Clone, Debug, Default)]
+pub struct AlignedPorts(pub Vec<(Entity, usize, Entity, usize)>);
+
+impl AlignedPorts {
+    pub fn contains(&self, a: Entity, part_a: usize, b: Entity, part_b: usize) -> bool {
+        self.0.iter().any(|&(x, i, y, j)| {
+            (x == a && i == part_a && y == b && j == part_b)
+                || (x == b && i == part_b && y == a && j == part_a)
+        })
+    }
+}
+
+/// The tick the docking step last ran at, to know how long its acquire forces act.
+#[derive(Resource, Clone, Copy, Debug)]
+struct LastDockTick(u64);
+
+/// How far apart two vessels' port faces can be for the docking step to look at them, m.
+const PORT_LOOK_M: f64 = 10.0;
 
 /// A free docking port of a craft, in the craft frame (Unity Y-up).
 #[derive(Clone, Debug, PartialEq)]
@@ -279,7 +314,8 @@ fn vessel_axes(facing: DVec3) -> (DVec3, DVec3, DVec3) {
     (x, y, z)
 }
 
-/// Where a craft-frame point of vessel `e` is now, body-centred inertial.
+/// Where a craft-frame point of vessel `e` is now, body-centred inertial: in the structure's frame, roll
+/// included, as its parts strike and are drawn.
 fn to_inertial(u: &Universe, e: Entity, craft_point: DVec3, is_dir: bool) -> Option<DVec3> {
     let r = u.position_of(e)?;
     let facing = u
@@ -288,23 +324,22 @@ fn to_inertial(u: &Universe, e: Entity, craft_point: DVec3, is_dir: bool) -> Opt
         .map(|p| p.facing)
         .or_else(|| u.world.get::<flight::Dormant>(e).map(|d| d.0.facing))
         .unwrap_or(DVec3::new(0.0, 0.0, 1.0));
-    let (bx, by, bz) = vessel_axes(facing);
     let vf = |p: DVec3| DVec3::new(p.x, p.y, -p.z);
-    let local = if is_dir {
-        vf(craft_point)
-    } else {
-        let centre = u
-            .world
-            .get::<structure::Structure>(e)
-            .map(|s| s.rigid.rest_centre())
-            .unwrap_or(DVec3::ZERO);
-        vf(craft_point) - centre
-    };
+    if let Some(st) = u.world.get::<structure::Structure>(e) {
+        return Some(if is_dir {
+            st.axis_inertial(facing, craft_point)
+        } else {
+            r + st.offset_inertial(facing, vf(craft_point) - st.rigid.rest_centre())
+        });
+    }
+    let (bx, by, bz) = vessel_axes(facing);
+    let local = vf(craft_point);
     let w = bx * local.x + by * local.y + bz * local.z;
     Some(if is_dir { w } else { r + w })
 }
 
-/// A pair of ports that can latch now: (vessel a, port a, vessel b, port b).
+/// Two vessels' ports near each other: (vessel a, port a, vessel b, port b), each port's face and outward
+/// axis now (inertial), how far apart the faces are and how fast the vessels drift relative to each other.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Latch {
     pub a: Entity,
@@ -312,6 +347,76 @@ pub struct Latch {
     pub b: Entity,
     pub port_b: Port,
     pub distance_m: f64,
+    pub face_a: DVec3,
+    pub face_b: DVec3,
+    pub axis_a: DVec3,
+    pub axis_b: DVec3,
+    pub rel_speed_mps: f64,
+}
+
+impl Latch {
+    /// How squarely the ports face each other (1 = head on).
+    pub fn facing(&self) -> f64 {
+        -self.axis_a.dot(self.axis_b)
+    }
+
+    /// Within either port's acquire range and facing within its acquire angle: the original pulls these
+    /// together (`ValidateDockingConfiguration`, the larger port's figures).
+    pub fn acquiring(&self) -> bool {
+        let range = self
+            .port_a
+            .def
+            .acquire_range_m
+            .max(self.port_b.def.acquire_range_m);
+        self.distance_m < range && self.aligned()
+    }
+
+    /// Facing within the acquire angle at any distance.
+    pub fn aligned(&self) -> bool {
+        let min_dot = self
+            .port_a
+            .def
+            .acquire_min_fwd_dot
+            .max(self.port_b.def.acquire_min_fwd_dot);
+        self.facing() > min_dot
+    }
+
+    /// Acquiring and drifting slower than the capture speed: the ports latch (`DockToModule`).
+    pub fn captures(&self) -> bool {
+        let max_rvel = self
+            .port_a
+            .def
+            .capture_max_rvel_mps
+            .min(self.port_b.def.capture_max_rvel_mps);
+        self.acquiring() && self.rel_speed_mps < max_rvel
+    }
+}
+
+/// A vessel's structure frame at one moment (`Structure::offset_inertial`), kept across a rebuild.
+struct Frame {
+    axes: [DVec3; 3],
+    centre: DVec3,
+    top: DVec3,
+}
+
+impl Frame {
+    /// A structure-frame offset, inertial.
+    fn offset(&self, v: DVec3) -> DVec3 {
+        self.axes[0] * v.x + self.axes[1] * v.y + self.axes[2] * v.z
+    }
+}
+
+/// A vessel's change of motion from an impulse `j` (kN·s) at `at` (offset from its centre, m) and an angular
+/// impulse `turn` (kN·m·s), for its mass and moment of inertia `moi` (t·m²); axial spin goes to `roll_rate`.
+fn push(p: &mut flight::Powered, j: DVec3, at: DVec3, turn: DVec3, moi: f64) {
+    if p.landed {
+        return;
+    }
+    p.v = p.v + j * (1.0 / p.mass_t.max(0.001));
+    let dw = (at.cross(j) + turn) * (1.0 / moi.max(1e-6));
+    let axial = dw.dot(p.facing);
+    p.roll_rate += axial;
+    p.angvel = p.angvel + (dw - p.facing * axial);
 }
 
 /// A vessel's parts as a save keeps them: its craft as launched (tanks holding what they hold now), which
@@ -708,8 +813,46 @@ impl Universe {
             .unwrap_or_default()
     }
 
-    /// Port pairs between nearby vessels that would latch now.
+    /// Port pairs between nearby vessels close enough to pull together or latch (`Latch::acquiring`).
     pub fn find_latches(&mut self, defs: &[PartDef]) -> Vec<Latch> {
+        let mut out: Vec<Latch> = self
+            .port_pairs(defs)
+            .into_iter()
+            .filter(Latch::acquiring)
+            .collect();
+        out.sort_by(|x, y| x.distance_m.total_cmp(&y.distance_m));
+        out
+    }
+
+    /// Where vessel `e`'s free port on part `part` (index into its `current_craft`) is now: its face and
+    /// outward axis, inertial.
+    fn port_now(&self, e: Entity, part: usize, defs: &[PartDef]) -> Option<(DVec3, DVec3)> {
+        let craft = self.current_craft(e)?;
+        let port = free_ports(&craft, defs)
+            .into_iter()
+            .find(|p| p.part == part)?;
+        Some((
+            to_inertial(self, e, port.position, false)?,
+            to_inertial(self, e, port.axis, true)?.normalized(),
+        ))
+    }
+
+    /// The structure's index of `current_craft` part `part` (the structure keeps lost parts' places).
+    fn structure_index(&self, e: Entity, part: usize) -> usize {
+        let len = self
+            .world
+            .get::<CraftDoc>(e)
+            .map(|c| c.0.parts.len())
+            .unwrap_or(0);
+        self.present_map(e, len)
+            .iter()
+            .position(|&m| m == Some(part))
+            .unwrap_or(part)
+    }
+
+    /// Every pair of fitting free ports on vessels under power whose faces are within `PORT_LOOK_M`, apart
+    /// from pairs kept apart after undocking.
+    fn port_pairs(&mut self, defs: &[PartDef]) -> Vec<Latch> {
         let vessels: Vec<Entity> = {
             let mut q = self
                 .world
@@ -725,14 +868,13 @@ impl Universe {
                 if d > 200.0 {
                     continue;
                 }
-                let blocked = |x: Entity, y: Entity| {
-                    self.world
-                        .get::<Undocked>(x)
-                        .is_some_and(|u| u.from.contains(&y))
+                let blocked = |x: Entity, y: Entity, px: usize, py: usize| {
+                    self.world.get::<Undocked>(x).is_some_and(|u| {
+                        u.from
+                            .iter()
+                            .any(|g| g.other == y && g.port == px && g.other_port == py)
+                    })
                 };
-                if blocked(a, b) || blocked(b, a) {
-                    continue;
-                }
                 let (Some(ca), Some(cb)) = (self.current_craft(a), self.current_craft(b)) else {
                     continue;
                 };
@@ -742,9 +884,10 @@ impl Universe {
                 ) else {
                     continue;
                 };
-                if (pa.v - pb.v).length() > 1.0 || pa.crashed || pb.crashed {
+                if pa.crashed || pb.crashed {
                     continue;
                 }
+                let rel_speed = (pa.v - pb.v).length();
                 for port_a in free_ports(&ca, defs) {
                     for port_b in free_ports(&cb, defs) {
                         if !port_a
@@ -752,6 +895,11 @@ impl Universe {
                             .sizes
                             .iter()
                             .any(|s| port_b.def.sizes.contains(s))
+                        {
+                            continue;
+                        }
+                        if blocked(a, b, port_a.part, port_b.part)
+                            || blocked(b, a, port_b.part, port_a.part)
                         {
                             continue;
                         }
@@ -764,21 +912,21 @@ impl Universe {
                             continue;
                         };
                         let dist = (wa - wb).length();
-                        let range = port_a.def.acquire_range_m.max(port_b.def.acquire_range_m);
-                        let facing = -xa.normalized().dot(xb.normalized());
-                        let min_dot = port_a
-                            .def
-                            .acquire_min_fwd_dot
-                            .max(port_b.def.acquire_min_fwd_dot);
-                        if dist <= range && facing >= min_dot {
-                            out.push(Latch {
-                                a,
-                                port_a: port_a.clone(),
-                                b,
-                                port_b: port_b.clone(),
-                                distance_m: dist,
-                            });
+                        if dist > PORT_LOOK_M {
+                            continue;
                         }
+                        out.push(Latch {
+                            a,
+                            port_a: port_a.clone(),
+                            b,
+                            port_b: port_b.clone(),
+                            distance_m: dist,
+                            face_a: wa,
+                            face_b: wb,
+                            axis_a: xa.normalized(),
+                            axis_b: xb.normalized(),
+                            rel_speed_mps: rel_speed,
+                        });
                     }
                 }
             }
@@ -786,18 +934,27 @@ impl Universe {
         out
     }
 
-    /// Clear undock blocks between vessels that are far enough apart again.
-    pub fn refresh_undock_blocks(&mut self) {
-        let blocked: Vec<(Entity, Vec<Entity>)> = {
+    /// Let undocked port pairs dock again once their faces are their `min_distance_m` apart (or either port is
+    /// gone).
+    fn refresh_undock_blocks(&mut self, defs: &[PartDef]) {
+        let blocked: Vec<(Entity, Vec<Disengaged>)> = {
             let mut q = self.world.query::<(Entity, &Undocked)>();
             q.iter(&self.world)
                 .map(|(e, u)| (e, u.from.clone()))
                 .collect()
         };
         for (e, from) in blocked {
-            let keep: Vec<Entity> = from
+            let keep: Vec<Disengaged> = from
                 .into_iter()
-                .filter(|&o| self.distance_between(e, o).is_some_and(|d| d < 3.0))
+                .filter(|g| {
+                    match (
+                        self.port_now(e, g.port, defs),
+                        self.port_now(g.other, g.other_port, defs),
+                    ) {
+                        (Some((x, _)), Some((y, _))) => (x - y).length() <= g.min_distance_m,
+                        _ => false,
+                    }
+                })
                 .collect();
             if keep.is_empty() {
                 self.world.entity_mut(e).remove::<Undocked>();
@@ -807,11 +964,16 @@ impl Universe {
         }
     }
 
-    /// Block latching between two vessels until they are 3 m apart.
-    pub fn block_relatch(&mut self, a: Entity, b: Entity) {
-        for (x, y) in [(a, b), (b, a)] {
+    /// Keep port `pa` of `a` and port `pb` of `b` from latching until they are `min_distance_m` apart.
+    fn block_relatch(&mut self, a: Entity, pa: usize, b: Entity, pb: usize, min_distance_m: f64) {
+        for (x, px, y, py) in [(a, pa, b, pb), (b, pb, a, pa)] {
             let mut u = self.world.get::<Undocked>(x).cloned().unwrap_or_default();
-            u.from.push(y);
+            u.from.push(Disengaged {
+                other: y,
+                port: px,
+                other_port: py,
+                min_distance_m,
+            });
             self.world.entity_mut(x).insert(u);
         }
     }
@@ -869,82 +1031,294 @@ impl Universe {
             .collect()
     }
 
-    /// Join every pair of vessels whose ports latch now: the second becomes part of the first (its crew,
-    /// tanks and reports go along). Returns (kept, absorbed) pairs; the absorbed vessels are gone.
+    /// The docking step, as the original's `Module_DockingNode` runs it each physics tick: port pairs
+    /// facing each other within the acquire angle are left out of hull contacts and stop each other at their
+    /// faces; within acquire range and faster than the capture speed they pull together and turn to face
+    /// each other (`ApplyAcquireForces`); slower than that they latch (`DockToModule`) and the second vessel
+    /// becomes part of the first (its crew, tanks and reports go along). The forces act for the time since
+    /// the step last ran. Returns (kept, absorbed) pairs; the absorbed vessels are gone.
     pub fn dock_latched(
         &mut self,
         defs: &[PartDef],
         resources: &[ose_data::ResourceDef],
         spec_for: &dyn Fn(&Craft) -> flight::FlightSpec,
     ) -> Vec<(Entity, Entity)> {
-        let latches = self.find_latches(defs);
+        let now = self.tick().0;
+        let dt = self
+            .world
+            .get_resource::<LastDockTick>()
+            .map(|t| now.saturating_sub(t.0) as f64 / crate::TICKS_PER_SECOND as f64)
+            .unwrap_or(0.0);
+        self.world.insert_resource(LastDockTick(now));
+        self.refresh_undock_blocks(defs);
+        let mut pairs = self.port_pairs(defs);
+        pairs.sort_by(|x, y| x.distance_m.total_cmp(&y.distance_m));
+        let aligned: Vec<(Entity, usize, Entity, usize)> = pairs
+            .iter()
+            .filter(|l| l.aligned())
+            .map(|l| {
+                (
+                    l.a,
+                    self.structure_index(l.a, l.port_a.part),
+                    l.b,
+                    self.structure_index(l.b, l.port_b.part),
+                )
+            })
+            .collect();
+        self.world.insert_resource(AlignedPorts(aligned));
+        for l in pairs.iter().filter(|l| l.aligned()) {
+            self.port_faces_meet(l);
+        }
+        if dt > 0.0 {
+            for l in pairs.iter().filter(|l| l.acquiring() && !l.captures()) {
+                self.pull_ports(l, dt);
+            }
+        }
         let mut used = Vec::new();
         let mut out = Vec::new();
-        for l in latches {
+        for l in pairs.into_iter().filter(Latch::captures) {
             if used.contains(&l.a) || used.contains(&l.b) {
                 continue;
             }
-            let (Some(ca), Some(cb)) = (self.current_craft(l.a), self.current_craft(l.b)) else {
-                continue;
-            };
-            let (Some(pa), Some(pb)) = (self.powered(l.a).cloned(), self.powered(l.b).cloned())
-            else {
-                continue;
-            };
-            let doc_len = |u: &Universe, e: Entity| {
-                u.world
-                    .get::<CraftDoc>(e)
-                    .map(|c| c.0.parts.len())
-                    .unwrap_or(0)
-            };
-            let map_a = self.present_map(l.a, doc_len(self, l.a));
-            let map_b = self.present_map(l.b, doc_len(self, l.b));
-            let off = ca.parts.len();
-            let merged = merge(&ca, &l.port_a, &cb, &l.port_b);
-            let pick = |m: &Vec<Option<usize>>, i: usize| m.get(i).copied().flatten();
-            let mut crew: Vec<(usize, String)> = self
-                .crew(l.a)
-                .into_iter()
-                .filter_map(|(i, n)| Some((pick(&map_a, i)?, n)))
-                .collect();
-            crew.extend(
-                self.crew(l.b)
-                    .into_iter()
-                    .filter_map(|(i, n)| Some((pick(&map_b, i)? + off, n))),
-            );
-            let mut links: Vec<(usize, usize)> = self
-                .docked_links(l.a)
-                .into_iter()
-                .filter_map(|(x, y)| Some((pick(&map_a, x)?, pick(&map_a, y)?)))
-                .collect();
-            links.extend(
-                self.docked_links(l.b)
-                    .into_iter()
-                    .filter_map(|(x, y)| Some((pick(&map_b, x)? + off, pick(&map_b, y)? + off))),
-            );
-            links.push((l.port_a.part, l.port_b.part + off));
-            let m = pa.mass_t + pb.mass_t;
-            let r = (pa.r * pa.mass_t + pb.r * pb.mass_t) * (1.0 / m);
-            let v = (pa.v * pa.mass_t + pb.v * pb.mass_t) * (1.0 / m);
-            let mut science = self.science_carried(l.a);
-            science.extend(self.science_carried(l.b));
-            self.rebuild_vessel(
-                l.a, &merged, r, v, pa.facing, crew, defs, resources, spec_for,
-            );
-            self.set_docked(l.a, links);
-            self.set_science_carried(l.a, science);
-            self.despawn_vessel(l.b);
-            used.push(l.a);
-            used.push(l.b);
-            out.push((l.a, l.b));
+            if self.join(&l, defs, resources, spec_for) {
+                used.push(l.a);
+                used.push(l.b);
+                out.push((l.a, l.b));
+            }
         }
-        self.refresh_undock_blocks();
         out
     }
 
+    /// Each port pulls toward the other with half its acquire force and turns toward facing it with half its
+    /// acquire torque, both growing as the faces close to 5 cm (`ApplyAcquireForces`), for `dt` seconds. The
+    /// roll torque is left out: every stock port's `AcquireTorqueRoll` is zero.
+    fn pull_ports(&mut self, l: &Latch, dt: f64) {
+        let (Some(mut pa), Some(mut pb)) = (self.powered(l.a).cloned(), self.powered(l.b).cloned())
+        else {
+            return;
+        };
+        let (Some(ia), Some(ib)) = (self.blow_inertia(l.a), self.blow_inertia(l.b)) else {
+            return;
+        };
+        let gap = l.face_b - l.face_a;
+        let num = 1.0 / gap.length().max(0.05);
+        let turn = l.axis_a.cross(l.axis_b * -1.0);
+        let (da, db) = (&l.port_a.def, &l.port_b.def);
+        let fa = gap * (num * da.acquire_force_kn * 0.5);
+        let fb = gap * (-num * db.acquire_force_kn * 0.5);
+        let ta = turn * (num * da.acquire_torque_knm * 0.5);
+        let tb = turn * (-num * db.acquire_torque_knm * 0.5);
+        let (ra, rb) = (l.face_a - pa.r, l.face_b - pb.r);
+        push(&mut pa, fa * dt, ra, ta * dt, ia);
+        push(&mut pb, fb * dt, rb, tb * dt, ib);
+        self.set_powered(l.a, pa);
+        self.set_powered(l.b, pb);
+    }
+
+    /// Ports facing each other stop at their faces: when `b`'s face has come through `a`'s (within the
+    /// port's width and depth) and they are still closing, an equal and opposite blow along `a`'s axis, with
+    /// the hull contacts' restitution, and they are pushed back to touching. A port struck past its crash
+    /// tolerance breaks off.
+    fn port_faces_meet(&mut self, l: &Latch) {
+        let n = l.axis_a;
+        let d = l.face_b - l.face_a;
+        let gap = d.dot(n);
+        if gap >= 0.0 {
+            return;
+        }
+        let size = |e: Entity, part: usize| {
+            self.world
+                .get::<structure::Structure>(e)
+                .map(|st| st.part_box(self.structure_index(e, part)).1)
+                .unwrap_or(DVec3::new(0.3, 0.3, 0.3))
+        };
+        let (sa, sb) = (size(l.a, l.port_a.part), size(l.b, l.port_b.part));
+        let width = sa.x.max(sa.z).max(sb.x).max(sb.z).max(0.1);
+        let depth = sa.y.max(sb.y).max(0.05) * 2.0;
+        if (d - n * gap).length() > width || gap < -depth {
+            return;
+        }
+        let (Some(pa), Some(pb)) = (self.powered(l.a).cloned(), self.powered(l.b).cloned()) else {
+            return;
+        };
+        let (Some(ia), Some(ib)) = (self.blow_inertia(l.a), self.blow_inertia(l.b)) else {
+            return;
+        };
+        let inv = |p: &flight::Powered, i: f64| {
+            if p.landed {
+                (0.0, 0.0)
+            } else {
+                (1.0 / p.mass_t.max(0.001), 1.0 / i.max(1e-6))
+            }
+        };
+        let ((inv_ma, inv_ia), (inv_mb, inv_ib)) = (inv(&pa, ia), inv(&pb, ib));
+        if inv_ma + inv_mb <= 0.0 {
+            return;
+        }
+        let (ra, rb) = (l.face_a - pa.r, l.face_b - pb.r);
+        let spin = |p: &flight::Powered| p.angvel + p.facing * p.roll_rate;
+        let va = pa.v + spin(&pa).cross(ra);
+        let vb = pb.v + spin(&pb).cross(rb);
+        let vn = (vb - va).dot(n);
+        let (mut na, mut nb) = (pa.clone(), pb.clone());
+        let (si, sj) = (
+            self.structure_index(l.a, l.port_a.part),
+            self.structure_index(l.b, l.port_b.part),
+        );
+        let mut broken = Vec::new();
+        if vn < 0.0 {
+            let k = inv_ma
+                + inv_mb
+                + ra.cross(n).length_squared() * inv_ia
+                + rb.cross(n).length_squared() * inv_ib;
+            let j = n * (-(1.0 + crate::collide::RESTITUTION) * vn / k);
+            push(&mut na, j * -1.0, ra, DVec3::ZERO, ia);
+            push(&mut nb, j, rb, DVec3::ZERO, ib);
+            self.world
+                .get_resource_or_insert_with(crate::collide::Contacts::default)
+                .0
+                .push(crate::collide::Contact {
+                    a: l.a,
+                    part_a: si,
+                    b: l.b,
+                    part_b: sj,
+                    speed_mps: -vn,
+                });
+            // a port struck harder than it can take breaks off, as hulls do
+            for (e, part) in [(l.a, si), (l.b, sj)] {
+                let tolerance = self
+                    .world
+                    .get::<structure::Structure>(e)
+                    .and_then(|st| st.crash_tolerance.get(part).copied())
+                    .filter(|t| *t > 0.0)
+                    .unwrap_or(flight::CRASH_SPEED_MPS);
+                if -vn > tolerance {
+                    broken.push((e, part));
+                }
+            }
+        }
+        let share = -gap / (inv_ma + inv_mb);
+        if !na.landed {
+            na.r = na.r - n * (share * inv_ma);
+        }
+        if !nb.landed {
+            nb.r = nb.r + n * (share * inv_mb);
+        }
+        self.set_powered(l.a, na);
+        self.set_powered(l.b, nb);
+        for (e, part) in broken {
+            self.break_struck_part(e, part);
+        }
+    }
+
+    /// Latch `l.b` onto `l.a` at their ports. `a` stays where it is; `b` is set onto `a`'s port, as the
+    /// original aligns the docking part to the other (`AlignToTransform`). Momentum is kept.
+    fn join(
+        &mut self,
+        l: &Latch,
+        defs: &[PartDef],
+        resources: &[ose_data::ResourceDef],
+        spec_for: &dyn Fn(&Craft) -> flight::FlightSpec,
+    ) -> bool {
+        let (Some(ca), Some(cb)) = (self.current_craft(l.a), self.current_craft(l.b)) else {
+            return false;
+        };
+        let (Some(pa), Some(pb)) = (self.powered(l.a).cloned(), self.powered(l.b).cloned()) else {
+            return false;
+        };
+        let doc_len = |u: &Universe, e: Entity| {
+            u.world
+                .get::<CraftDoc>(e)
+                .map(|c| c.0.parts.len())
+                .unwrap_or(0)
+        };
+        let map_a = self.present_map(l.a, doc_len(self, l.a));
+        let map_b = self.present_map(l.b, doc_len(self, l.b));
+        let off = ca.parts.len();
+        let merged = merge(&ca, &l.port_a, &cb, &l.port_b);
+        let pick = |m: &Vec<Option<usize>>, i: usize| m.get(i).copied().flatten();
+        let mut crew: Vec<(usize, String)> = self
+            .crew(l.a)
+            .into_iter()
+            .filter_map(|(i, n)| Some((pick(&map_a, i)?, n)))
+            .collect();
+        crew.extend(
+            self.crew(l.b)
+                .into_iter()
+                .filter_map(|(i, n)| Some((pick(&map_b, i)? + off, n))),
+        );
+        let mut links: Vec<(usize, usize)> = self
+            .docked_links(l.a)
+            .into_iter()
+            .filter_map(|(x, y)| Some((pick(&map_a, x)?, pick(&map_a, y)?)))
+            .collect();
+        links.extend(
+            self.docked_links(l.b)
+                .into_iter()
+                .filter_map(|(x, y)| Some((pick(&map_b, x)? + off, pick(&map_b, y)? + off))),
+        );
+        links.push((l.port_a.part, l.port_b.part + off));
+        let m = pa.mass_t + pb.mass_t;
+        let v = (pa.v * pa.mass_t + pb.v * pb.mass_t) * (1.0 / m);
+        let mut science = self.science_carried(l.a);
+        science.extend(self.science_carried(l.b));
+        let frame_a = self.frame_of(l.a);
+        self.rebuild_vessel(
+            l.a, &merged, pa.r, v, pa.facing, crew, defs, resources, spec_for,
+        );
+        self.keep_attitude(l.a, &pa, frame_a.as_ref());
+        // the joined centre where `a`'s parts still are
+        if let (Some(old), Some(new)) = (&frame_a, self.world.get::<structure::Structure>(l.a)) {
+            let shift = old.offset(new.rigid.rest_centre() - old.centre);
+            if let Some(mut p) = self.powered(l.a).cloned() {
+                p.r = pa.r + shift;
+                self.set_powered(l.a, p);
+            }
+        }
+        self.set_docked(l.a, links);
+        self.set_science_carried(l.a, science);
+        self.despawn_vessel(l.b);
+        true
+    }
+
+    /// Vessel `e`'s structure frame now: its axes, rest centre and roll reference.
+    fn frame_of(&self, e: Entity) -> Option<Frame> {
+        let facing = self.powered(e)?.facing;
+        let st = self.world.get::<structure::Structure>(e)?;
+        let axis = |v: DVec3| st.offset_inertial(facing, v);
+        Some(Frame {
+            axes: [
+                axis(DVec3::new(1.0, 0.0, 0.0)),
+                axis(DVec3::new(0.0, 1.0, 0.0)),
+                axis(DVec3::new(0.0, 0.0, 1.0)),
+            ],
+            centre: st.rigid.rest_centre(),
+            top: st.frame_top,
+        })
+    }
+
+    /// After a rebuild, the vessel turns and spins as `old` did, in the frame `frame` gave its parts.
+    fn keep_attitude(&mut self, e: Entity, old: &flight::Powered, frame: Option<&Frame>) {
+        let top = frame
+            .map(|f| f.top)
+            .filter(|t| t.length_squared() > 0.0)
+            .unwrap_or_else(|| flight::vessel_top(old));
+        if let Some(mut p) = self.powered(e).cloned() {
+            p.own_top = top;
+            p.angvel = old.angvel;
+            p.roll_rate = old.roll_rate;
+            self.set_powered(e, p);
+        }
+        if let Some(mut st) = self.world.get_mut::<structure::Structure>(e) {
+            st.frame_top = top;
+        }
+    }
+
     /// Undock at one of a vessel's docked joints (the last one docked when `port` is `None`, else the joint
-    /// with that port part on either side): what docked comes away as a new vessel, pushed off by the port's
-    /// ejection force for a second. Returns the new vessel.
+    /// with that port part on either side): what docked comes away as a new vessel. Both halves start where
+    /// their parts were, turning as the whole did, and are pushed apart along the port's axis by its ejection
+    /// force for a second; the two ports do not latch again until they are the port's re-engage distance
+    /// apart. Returns the new vessel.
     pub fn undock(
         &mut self,
         e: Entity,
@@ -959,7 +1333,7 @@ impl Universe {
             None => (!links.is_empty()).then(|| links.len() - 1),
         }
         .ok_or("not docked there")?;
-        let (_, pb) = links[link];
+        let (pa, pb) = links[link];
         let craft = self.current_craft(e).ok_or("vessel has no craft")?;
         let p = self.powered(e).cloned().ok_or("vessel is not in flight")?;
         let ((stay, map_stay), (go, map_go)) = split(&craft, pb);
@@ -990,18 +1364,33 @@ impl Universe {
         let dir = to_inertial(self, e, axis, true)
             .map(|d| d.normalized() * -1.0)
             .unwrap_or(p.facing);
-        let ejection = dock.map(|k| k.undock_ejection_kn).unwrap_or(0.4);
+        let ejection = dock.as_ref().map(|k| k.undock_ejection_kn).unwrap_or(0.4);
+        let reengage = dock
+            .as_ref()
+            .map(|k| k.min_distance_to_reengage_m)
+            .unwrap_or(1.0);
         let m_go = go.mass(defs, resources).wet_t().max(0.01);
         let m_stay = stay.mass(defs, resources).wet_t().max(0.01);
         let body = self.body_of(e).ok_or("no body")?;
+        // each half's centre where its parts are now
+        let frame = self.frame_of(e);
+        let at = |c: &Craft| match &frame {
+            Some(f) => {
+                let centre = structure::Structure::build(c, defs, resources)
+                    .rigid
+                    .rest_centre();
+                p.r + f.offset(centre - f.centre)
+            }
+            None => p.r,
+        };
+        let (r_stay, r_go) = (at(&stay), at(&go));
         let name = format!("{} (undocked)", go.name);
-        let r_go = p.r + dir * 2.0;
         let v_go = p.v + dir * (ejection / m_go);
         let ne = self.spawn_vessel(&name, body, r_go, v_go);
         self.rebuild_vessel(
             e,
             &stay,
-            p.r,
+            r_stay,
             p.v - dir * (ejection / m_stay),
             p.facing,
             crew_of(&map_stay),
@@ -1009,20 +1398,24 @@ impl Universe {
             resources,
             spec_for,
         );
+        self.keep_attitude(e, &p, frame.as_ref());
         self.set_docked(e, links_of(&map_stay));
         self.rebuild_vessel(
             ne,
             &go,
             r_go,
             v_go,
-            p.facing * -1.0,
+            p.facing,
             crew_of(&map_go),
             defs,
             resources,
             spec_for,
         );
+        self.keep_attitude(ne, &p, frame.as_ref());
         self.set_docked(ne, links_of(&map_go));
-        self.block_relatch(e, ne);
+        if let (Some(sa), Some(sb)) = (pick(&map_stay, pa), pick(&map_go, pb)) {
+            self.block_relatch(e, sa, ne, sb, reengage);
+        }
         Ok(ne)
     }
 }
@@ -1095,11 +1488,15 @@ mod tests {
         flight::FlightSpec::from_report(&report, &[], &[], 1.0)
     }
 
-    #[test]
-    fn two_ships_drifting_port_to_port_dock_and_undock() {
+    fn resources() -> Vec<ose_data::ResourceDef> {
+        serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap()
+    }
+
+    /// Ship A in a circular Kerbin orbit pointing +y, ship B ahead of it facing `b_facing`, B's port face
+    /// `gap_m` beyond A's along +y and B closing on A at `closing_mps`.
+    fn pair(gap_m: f64, closing_mps: f64, b_facing: DVec3) -> (Universe, Entity, Entity) {
         let d = defs();
-        let res: Vec<ose_data::ResourceDef> =
-            serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
+        let res = resources();
         let bodies: Vec<ose_data::CelestialBody> =
             serde_json::from_str(include_str!("../../../assets/own/kerbol-system.json")).unwrap();
         let mut kerbin = bodies.into_iter().find(|b| b.id == "Kerbin").unwrap();
@@ -1111,24 +1508,44 @@ mod tests {
         let mu = u.world.get::<bodies::Body>(body).unwrap().mu;
         let r0 = DVec3::new(700_000.0, 0.0, 0.0);
         let v0 = DVec3::new(0.0, (mu / 700_000.0).sqrt(), 0.0);
-        // ship A points +y (along its orbit), ship B ahead of it pointing back at it
-        let a_craft = ship("A");
-        let b_craft = ship("B");
         let place = |u: &mut Universe, c: &Craft, r: DVec3, facing: DVec3| {
             let e = u.spawn_vessel("ship", body, r, v0);
             u.rebuild_vessel(e, c, r, v0, facing, vec![], &d, &res, &spec);
             e
         };
+        let (a_craft, b_craft) = (ship("A"), ship("B"));
         let a = place(&mut u, &a_craft, r0, DVec3::new(0.0, 1.0, 0.0));
         let pa = free_ports(&a_craft, &d)[0].clone();
         let pb = free_ports(&b_craft, &d)[0].clone();
-        // B's port 0.5 m beyond A's port
         let wa = to_inertial(&u, a, pa.position, false).unwrap();
-        let b = place(&mut u, &b_craft, r0, DVec3::new(0.0, -1.0, 0.0));
+        let b = place(&mut u, &b_craft, r0, b_facing.normalized());
         let wb = to_inertial(&u, b, pb.position, false).unwrap();
         let mut p = u.powered(b).unwrap().clone();
-        p.r = p.r + (wa - wb) + DVec3::new(0.0, 0.5, 0.0);
+        p.r = p.r + (wa - wb) + DVec3::new(0.0, gap_m, 0.0);
+        p.v = p.v - DVec3::new(0.0, closing_mps, 0.0);
         u.set_powered(b, p);
+        (u, a, b)
+    }
+
+    /// Vessel `e`'s free port: its face and outward axis now.
+    fn port_of(u: &Universe, e: Entity) -> (DVec3, DVec3) {
+        let d = defs();
+        let part = free_ports(&u.current_craft(e).unwrap(), &d)[0].part;
+        u.port_now(e, part, &d).unwrap()
+    }
+
+    /// The faces of A's and B's ports and how far B's is in front of A's along A's axis.
+    fn faces(u: &Universe, a: Entity, b: Entity) -> (DVec3, DVec3, f64) {
+        let ((fa, xa), (fb, _)) = (port_of(u, a), port_of(u, b));
+        (fa, fb, (fb - fa).dot(xa))
+    }
+
+    #[test]
+    fn two_ships_drifting_port_to_port_dock_and_undock() {
+        let d = defs();
+        let res = resources();
+        // B's port 0.5 m beyond A's, drifting with it
+        let (mut u, a, b) = pair(0.5, 0.0, DVec3::new(0.0, -1.0, 0.0));
         let joined = u.dock_latched(&d, &res, &spec);
         assert_eq!(joined, vec![(a, b)]);
         assert!(u.vessel(b).is_none(), "B is part of A now");
@@ -1144,6 +1561,163 @@ mod tests {
         assert!(sep.length() > 0.01, "pushed apart ({sep:?})");
         // they do not latch again straight away
         assert!(u.dock_latched(&d, &res, &spec).is_empty());
+    }
+
+    #[test]
+    fn docking_and_undocking_leave_every_part_where_it_was() {
+        let d = defs();
+        let res = resources();
+        let (mut u, a, b) = pair(0.3, 0.0, DVec3::new(0.0, -1.0, 0.0));
+        let a_probe = to_inertial(&u, a, ship("A").parts[0].local_position, false).unwrap();
+        let b_probe = to_inertial(&u, b, ship("B").parts[0].local_position, false).unwrap();
+        assert_eq!(u.dock_latched(&d, &res, &spec), vec![(a, b)]);
+        let m = u.current_craft(a).unwrap();
+        let at = |u: &Universe, e: Entity, c: &Craft, i: usize| {
+            to_inertial(u, e, c.parts[i].local_position, false).unwrap()
+        };
+        // A's parts stay put; B's are set onto A's port (they were 0.3 m off it)
+        assert!((at(&u, a, &m, 0) - a_probe).length() < 1e-6);
+        assert!(((at(&u, a, &m, 2) - b_probe).length() - 0.3).abs() < 1e-6);
+        let before: Vec<DVec3> = (0..4).map(|i| at(&u, a, &m, i)).collect();
+        let n = u.undock(a, None, &d, &res, &spec).unwrap();
+        let (stay, go) = (u.current_craft(a).unwrap(), u.current_craft(n).unwrap());
+        // the half that stays holds parts 0 and 1, the half that leaves B's port (3) and probe (2)
+        for (e, c, i, was) in [
+            (a, &stay, 0, 0),
+            (a, &stay, 1, 1),
+            (n, &go, 0, 3),
+            (n, &go, 1, 2),
+        ] {
+            let now = at(&u, e, c, i);
+            assert!(
+                (now - before[was]).length() < 1e-6,
+                "part {was} moved {:?} on undocking",
+                now - before[was]
+            );
+        }
+    }
+
+    #[test]
+    fn undocked_ports_latch_again_only_past_their_reengage_distance() {
+        let d = defs();
+        let res = resources();
+        let (mut u, a, b) = pair(0.0, 0.0, DVec3::new(0.0, -1.0, 0.0));
+        assert_eq!(u.dock_latched(&d, &res, &spec), vec![(a, b)]);
+        let n = u.undock(a, None, &d, &res, &spec).unwrap();
+        let reengage = defs()
+            .into_iter()
+            .find(|p| p.id == "dockingport_1v_inline")
+            .unwrap()
+            .docking
+            .unwrap()
+            .min_distance_to_reengage_m;
+        // drift apart, then come back slowly
+        let mut cleared_at = None;
+        for _ in 0..(10 * crate::TICKS_PER_SECOND) {
+            u.step();
+            assert!(
+                u.dock_latched(&d, &res, &spec).is_empty(),
+                "relatched while leaving"
+            );
+            if u.world.get::<Undocked>(a).is_none() {
+                cleared_at = Some(faces(&u, a, n).2);
+                break;
+            }
+        }
+        let gap = cleared_at.expect("the block clears once they are apart");
+        assert!(gap > reengage, "cleared at {gap} m");
+        let pa = u.powered(a).unwrap().clone();
+        let mut p = u.powered(n).unwrap().clone();
+        p.v = pa.v - (p.r - pa.r).normalized() * 0.1;
+        u.set_powered(n, p);
+        let mut joined = Vec::new();
+        for _ in 0..(60 * crate::TICKS_PER_SECOND) {
+            u.step();
+            joined = u.dock_latched(&d, &res, &spec);
+            if !joined.is_empty() {
+                break;
+            }
+        }
+        assert!(
+            joined == vec![(a, n)] || joined == vec![(n, a)],
+            "docked again on the way back: {joined:?}"
+        );
+    }
+
+    #[test]
+    fn a_fast_approach_bounces_off_the_faces_then_the_ports_pull_together_and_latch() {
+        let d = defs();
+        let res = resources();
+        // 0.9 m apart inside the 1 m acquire range, closing at 0.6 m/s: too fast to capture (0.3 m/s)
+        let (mut u, a, b) = pair(0.9, 0.6, DVec3::new(0.0, -1.0, 0.0));
+        let mut fastest: f64 = 0.0;
+        let mut deepest: f64 = 0.0;
+        let mut bounced = false;
+        let mut joined = Vec::new();
+        u.dock_latched(&d, &res, &spec);
+        for _ in 0..(20 * crate::TICKS_PER_SECOND) {
+            u.step();
+            let rel = u.powered(b).unwrap().v - u.powered(a).unwrap().v;
+            fastest = fastest.max(rel.length());
+            joined = u.dock_latched(&d, &res, &spec);
+            if !joined.is_empty() {
+                break;
+            }
+            // once the docking step has run the faces are touching at most
+            deepest = deepest.min(faces(&u, a, b).2);
+            bounced |= rel.y > 0.0;
+        }
+        assert!(
+            fastest > 0.6,
+            "the acquire force pulled them faster ({fastest})"
+        );
+        assert!(bounced, "B came off A's face before latching");
+        assert!(
+            deepest > -1e-6,
+            "the faces did not pass through ({deepest} m)"
+        );
+        assert_eq!(joined, vec![(a, b)]);
+    }
+
+    #[test]
+    fn the_acquire_torque_turns_a_skewed_port_toward_facing_and_misaligned_ports_strike() {
+        let d = defs();
+        let res = resources();
+        // 30 degrees off head on (inside the acquire angle) and drifting apart at 0.5 m/s: no latch, but a
+        // turn toward facing
+        let skew = DVec3::new(0.5, -(3.0f64).sqrt() / 2.0, 0.0);
+        let (mut u, a, b) = pair(0.5, -0.5, skew);
+        let rel = (u.powered(a).unwrap().v - u.powered(b).unwrap().v).length();
+        let l = u.find_latches(&d);
+        assert_eq!(l.len(), 1, "acquiring");
+        assert!(!l[0].captures(), "{rel} m/s, facing {}", l[0].facing());
+        assert!(u.dock_latched(&d, &res, &spec).is_empty());
+        u.step();
+        let face = |u: &Universe| -port_of(u, a).1.dot(port_of(u, b).1);
+        let f0 = face(&u);
+        // one tick of acquire torque, then a tick of turning
+        assert!(u.dock_latched(&d, &res, &spec).is_empty());
+        u.step();
+        assert!(
+            face(&u) > f0,
+            "turned toward facing: {} -> {}",
+            f0,
+            face(&u)
+        );
+        // side by side (B turned 90 degrees) its port strikes A's as a hull does
+        let (mut u, a, b) = pair(-0.1, 0.2, DVec3::new(1.0, 0.0, 0.0));
+        u.dock_latched(&d, &res, &spec);
+        assert!(u
+            .world
+            .get_resource::<AlignedPorts>()
+            .is_some_and(|x| x.0.is_empty()));
+        u.step();
+        let hits = u.take_contacts();
+        assert!(
+            hits.iter()
+                .any(|h| (h.a == a && h.b == b) || (h.a == b && h.b == a)),
+            "struck: {hits:?}"
+        );
     }
 
     #[test]

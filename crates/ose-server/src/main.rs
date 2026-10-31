@@ -576,12 +576,10 @@ async fn main() -> anyhow::Result<()> {
                 *ticks += 1;
                 *ticks
             };
-            // docking ports latch ten times a second
-            if ticks.is_multiple_of(5) {
-                let msgs = crew_docking::dock_latched(sim);
-                if !msgs.is_empty() {
-                    sim.pending.lock().expect("pending lock").extend(msgs);
-                }
+            // docking ports pull together and latch every tick, as the original's run in each physics step
+            let msgs = crew_docking::dock_latched(sim);
+            if !msgs.is_empty() {
+                sim.pending.lock().expect("pending lock").extend(msgs);
             }
             // missions look at the agency's vessels once a second
             if ticks.is_multiple_of(ose_sim::TICKS_PER_SECOND) {

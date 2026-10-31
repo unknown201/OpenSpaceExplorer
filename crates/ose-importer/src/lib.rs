@@ -683,6 +683,9 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
                         capture_max_rvel_mps: f(o, "CaptureMaxRvel"),
                         undock_ejection_kn: f(o, "UndockEjectionForce"),
                         min_distance_to_reengage_m: f(o, "MinDistanceToReengage"),
+                        acquire_force_kn: f(o, "AcquireForce"),
+                        acquire_torque_knm: f(o, "AcquireTorque"),
+                        acquire_torque_roll_knm: f(o, "AcquireTorqueRoll"),
                     });
                 }
             }

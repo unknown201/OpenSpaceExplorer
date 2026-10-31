@@ -1,7 +1,7 @@
 //! Vessels and debris striking each other: each part a sphere round its box, contacts between the parts of
 //! two nearby vessels resolved with equal and opposite impulses (restitution and friction), and the parts
-//! that take a blow harder than their crash tolerance break off. Docking ports meeting each other are left
-//! to docking. Our own first model: no reference traces of the original's PhysX contacts yet.
+//! that take a blow harder than their crash tolerance break off. Docking ports facing each other are left
+//! to docking, which stops them at their faces. Our own first model: no reference traces of the original's PhysX contacts yet.
 
 use bevy_ecs::prelude::*;
 use ose_math::DVec3;
@@ -50,6 +50,19 @@ fn inertia(p: &flight::Powered, reach: f64) -> f64 {
         moi
     } else {
         0.4 * p.mass_t.max(0.01) * reach.max(0.5).powi(2)
+    }
+}
+
+impl Universe {
+    /// Vessel `e`'s moment of inertia for a blow, t·m² (as a contact uses it).
+    pub(crate) fn blow_inertia(&self, e: Entity) -> Option<f64> {
+        let p = self.world.get::<flight::Powered>(e)?;
+        let st = self.world.get::<structure::Structure>(e)?;
+        let reach = part_spheres(st, p.facing)
+            .iter()
+            .map(|(_, o, r)| o.length() + r)
+            .fold(0.0, f64::max);
+        Some(inertia(p, reach))
     }
 }
 
@@ -160,14 +173,12 @@ impl Universe {
                 let Some((depth, ia, ib, oa, ob)) = best else {
                     continue;
                 };
-                let ports = |e: Entity, part: usize| {
-                    self.world.get::<structure::Structure>(e).is_some_and(|st| {
-                        st.part_ids
-                            .get(part)
-                            .is_some_and(|id| id.starts_with("dock"))
-                    })
-                };
-                if ports(a, ia) && ports(b, ib) {
+                // ports facing each other meet at their faces in the docking step instead
+                if self
+                    .world
+                    .get_resource::<crate::docking::AlignedPorts>()
+                    .is_some_and(|x| x.contains(a, ia, b, ib))
+                {
                     continue;
                 }
                 let d = (pa.r + oa) - (pb.r + ob);
@@ -286,7 +297,7 @@ impl Universe {
 
     /// A part struck too hard leaves its vessel; what only it held breaks off as debris. The vessel is lost
     /// when it is the root.
-    fn break_struck_part(&mut self, e: Entity, part: usize) {
+    pub(crate) fn break_struck_part(&mut self, e: Entity, part: usize) {
         let Some(p) = self.world.get::<flight::Powered>(e).cloned() else {
             return;
         };

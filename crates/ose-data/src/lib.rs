@@ -765,6 +765,20 @@ pub struct DockingPort {
     pub undock_ejection_kn: f64,
     /// Distance before the two can dock again after undocking, m.
     pub min_distance_to_reengage_m: f64,
+    /// Pull toward the other port while acquiring, kN (`AcquireForce`; each port pulls with half its own).
+    #[serde(default = "default_acquire")]
+    pub acquire_force_kn: f64,
+    /// Turn toward facing the other port while acquiring, kN·m at 1 m apart (`AcquireTorque`).
+    #[serde(default = "default_acquire")]
+    pub acquire_torque_knm: f64,
+    /// Turn toward matching roll while acquiring, kN·m at 1 m apart (`AcquireTorqueRoll`).
+    #[serde(default)]
+    pub acquire_torque_roll_knm: f64,
+}
+
+/// `Data_DockingNode`'s own default `AcquireForce` and `AcquireTorque`.
+fn default_acquire() -> f64 {
+    2.0
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
