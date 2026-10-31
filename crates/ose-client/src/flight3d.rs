@@ -1050,13 +1050,16 @@ impl FlightView {
         let (kpos, krot) = self.ksc_pose(body_radius)?;
         let cam = kpos + krot * cam_local;
         let sun = (krot * sun_local).normalize_or_zero();
-        let ex = self.ksc_exclusions(kpos, krot);
+        // The terrain under the campus is sunk only once its model is there to cover it (see `frame`).
+        let ex = if gpu.has_model("ksc") {
+            self.ksc_exclusions(kpos, krot)
+        } else {
+            Vec::new()
+        };
         let planet = self
             .planet
             .get_or_insert_with(|| crate::planet::PlanetRenderer::new(gpu));
-        if !ex.is_empty() {
-            planet.set_exclusions(ex);
-        }
+        planet.set_exclusions(ex);
         let view = crate::planet::PlanetView {
             body_id: "Kerbin",
             radius_m: body_radius,
@@ -1382,13 +1385,18 @@ impl FlightView {
                 self.ksc_distance = (kpos - pos).length();
                 // No grass on the campus and no trees or rocks on its facilities, runways and pads (the original
                 // draws the campus over its own ground); see ksc_exclusions.
-                let ex = self.ksc_exclusions(kpos, krot);
-                if !ex.is_empty() {
-                    if let Some(p) = self.planet.as_mut() {
-                        p.set_exclusions(ex);
-                    }
-                }
+                // Only once the campus model can be drawn over it: the footprint's terrain is sunk 20 m, and
+                // while the model was still loading that hole lay under the sea, a pale sheet of shallow water
+                // over the land round the KSC.
                 gpu.request_model("ksc", "assets/ksc/ksc.glb");
+                let ex = if gpu.has_model("ksc") {
+                    self.ksc_exclusions(kpos, krot)
+                } else {
+                    Vec::new()
+                };
+                if let Some(p) = self.planet.as_mut() {
+                    p.set_exclusions(ex);
+                }
                 if gpu.has_model("ksc") {
                     let mut it = DrawItem::lit("ksc".into(), kpos - cam, krot, 1.0, sun);
                     it.ambient = 0.38;
