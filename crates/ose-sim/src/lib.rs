@@ -1113,7 +1113,7 @@ impl Universe {
                 debris: None,
             };
         }
-        let (outcome, r, v, facing, area) =
+        let (outcome, mut r, v, facing, area) =
             if let Some(mut p) = self.world.get_mut::<flight::Powered>(e) {
                 let o = p.stage_next();
                 (o, p.r, p.v, p.facing, p.spec.drag_area_m2)
@@ -1146,7 +1146,11 @@ impl Universe {
                 let part_mass: Vec<f64> =
                     (0..present.len()).map(|i| st.net.mass_of(&[i])).collect();
                 if let Some(mut p) = self.world.get_mut::<flight::Powered>(e) {
+                    // the stage that stays does not move: the vessel's position follows its centre of mass
+                    let centre = st.mass_properties().centre_m;
                     st.sync(&mut p);
+                    st.keep_in_place(&mut p, centre);
+                    r = p.r;
                 } else if let Some(mut d) = self.world.get_mut::<flight::Dormant>(e) {
                     st.sync(&mut d.0);
                 }
@@ -1677,29 +1681,26 @@ impl Universe {
                     let mut surfaces = 0.0;
                     // part drag (and heating) for the airflow now
                     p.drag_cda_m2 = atmo.as_ref().map(|a| {
-                        let omega = if body.rotation_period_s > 0.0 {
-                            std::f64::consts::TAU / body.rotation_period_s
-                        } else {
-                            0.0
-                        };
-                        let v_air = p.v - DVec3::new(0.0, 0.0, omega).cross(p.r);
                         let alt = p.r.length() - body.radius_m;
-                        let sound = a.speed_of_sound(alt);
-                        let mach = if sound > 0.0 {
-                            v_air.length() / sound
-                        } else {
-                            0.0
-                        };
                         let ground = flight::ground_radius(&body, terrain.as_deref(), p.r, ut);
+                        let height = p.r.length() - ground;
+                        // resting on the sea rather than on solid ground
+                        let splashed = p.landed
+                            && surface::solid_radius(&body, terrain.as_deref(), p.r, ut) + 0.5
+                                < ground;
+                        let flow = structure::Airflow::at(&p, &body, Some(a));
                         st.update_chutes(
-                            a.pressure_kpa(alt) / 101.325,
-                            p.r.length() - ground,
-                            mach,
-                            p.landed,
-                            v_air.length(),
+                            flow,
+                            structure::ChuteAir {
+                                pressure_atm: a.pressure_kpa(alt) / 101.325,
+                                height_m: height,
+                                temperature_k: a.temperature_k.evaluate(alt),
+                                conductivity: thermal::conductivity(height, a.depth_m),
+                                landed: p.landed,
+                                splashed,
+                            },
                             step_dt,
                         );
-                        let flow = structure::Airflow::at(&p, &body, Some(a));
                         let forces = st.aerodynamics_local(p.stage, flow);
                         p.aero_drag_kn = Some(forces.drag_kn);
                         let cda = forces.cda_m2;
@@ -1725,8 +1726,10 @@ impl Universe {
                     p.aero_torque_knm = torque;
                     p.surface_torque_knm = surfaces;
                     if !burned.is_empty() {
+                        let centre = st.mass_properties().centre_m;
                         match st.burn_up(&burned, p.facing) {
                             Some(off) => {
+                                st.keep_in_place(&mut p, centre);
                                 for piece in off {
                                     pieces.push((piece, p.r, p.v, p.facing));
                                 }
@@ -1840,6 +1843,7 @@ impl Universe {
                 if out.crashed {
                     if let Some(st) = &mut structure {
                         let centre = st.rigid.rest_centre();
+                        let mass_centre = st.mass_properties().centre_m;
                         let (off, lost) = if out.contact_damage.is_empty() {
                             let (_, off, lost) =
                                 st.crash(out.impact_mps, p.facing, out.impact_against, centre);
@@ -1854,6 +1858,7 @@ impl Universe {
                         if !lost {
                             p.crashed = false;
                             out.crashed = false;
+                            st.keep_in_place(&mut p, mass_centre);
                             for piece in off {
                                 pieces.push((piece, p.r, p.v, p.facing));
                             }
@@ -1915,7 +1920,12 @@ impl Universe {
                         p.controlled = false;
                         p.throttle = 0.0;
                     }
-                    for piece in st.apply(&p, &out, step_dt) {
+                    let centre = st.mass_properties().centre_m;
+                    let torn = st.apply(&p, &out, step_dt);
+                    if !torn.is_empty() {
+                        st.keep_in_place(&mut p, centre);
+                    }
+                    for piece in torn {
                         pieces.push((piece, p.r, p.v, p.facing));
                     }
                     if !pieces.is_empty() {
@@ -3693,8 +3703,19 @@ mod tests {
             }
         }
         assert!(u.stage(v).debris.is_some(), "tank and engine drop");
-        u.stage(v);
+        // The chute is staged once the capsule has fallen back into the low, thick air: armed while the
+        // capsule is still supersonic it would open as soon as its safety check passed, and at Mach 1.8 a
+        // Mk16 canopy overheats (`Module_Parachute.UpdateCut`; see the structure tests).
         let mut top: f64 = 0.0;
+        loop {
+            u.step();
+            let p = u.powered(v).unwrap();
+            top = top.max(p.r.length() - 600_000.0);
+            if p.v.dot(p.r.normalized()) < 0.0 && p.r.length() - 600_000.0 < 5_000.0 {
+                break;
+            }
+        }
+        u.stage(v);
         let mut landing_speed = 0.0;
         for _ in 0..(1_200 * TICKS_PER_SECOND) {
             let before = u.powered(v).unwrap().clone();
@@ -3723,6 +3744,88 @@ mod tests {
             st.chutes.contains(&structure::Chute::Cut),
             "cut away after landing"
         );
+    }
+
+    /// The lowest point of any present part below the ground under it, m (positive: buried).
+    fn deepest_burial(u: &Universe, v: Entity, body: Entity) -> f64 {
+        let p = u.powered(v).unwrap();
+        let st = u.structure(v).unwrap();
+        let b = u.world.get::<bodies::Body>(body).unwrap();
+        let (x, y, z) = flight::vessel_basis(p);
+        let world = |q: DVec3| x * q.x + y * q.y + z * q.z;
+        let centre = st.mass_properties().centre_m;
+        let up = p.r.normalized();
+        let ground = flight::ground_radius(b, None, p.r, u.ut());
+        (0..st.rigid.len())
+            .filter(|&i| st.rigid.present[i])
+            .map(|i| {
+                let (c, h) = st.part_box(i);
+                let bottom = (p.r + world(c - centre)).dot(up)
+                    - h.x * x.dot(up).abs()
+                    - h.y * y.dot(up).abs()
+                    - h.z * z.dot(up).abs();
+                ground - bottom
+            })
+            .fold(f64::NEG_INFINITY, f64::max)
+    }
+
+    #[test]
+    fn a_parachute_landing_with_the_engine_still_on_leaves_nothing_under_the_ground() {
+        // A reported flight: the starter rocket flies up, its pilot never drops the tank and engine, and it
+        // comes down on its one parachute with the engine underneath.
+        let (mut u, body, _, _) = k1_on_real_kerbin();
+        let crafts: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let defs: Vec<ose_data::PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let res: Vec<ose_data::ResourceDef> =
+            serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
+        let c = crafts
+            .iter()
+            .find(|c| c.name == "Stock12_StartRocket")
+            .unwrap();
+        let report = ose_data::staging::delta_v_by_stage(c, &defs, &res);
+        let spec = flight::FlightSpec::from_report(&report, &[], &[], 1.5);
+        let v = u.spawn_powered_on_surface("Start", body, spec, 0.0, 0.0);
+        u.set_structure(v, structure::Structure::build(c, &defs, &res));
+        assert!(u.set_controls(v, 1.0, flight::Attitude::Up));
+        u.stage(v);
+        for _ in 0..(8 * TICKS_PER_SECOND) {
+            u.step();
+        }
+        assert!(u.set_controls(v, 0.0, flight::Attitude::Up));
+        assert!(u.arm_parachutes(v).unwrap() > 0);
+        let parts = |u: &Universe| {
+            let st = u.structure(v).unwrap();
+            st.rigid.present.iter().filter(|x| **x).count()
+        };
+        let all = parts(&u);
+        let mut landing_speed = 0.0;
+        let spin = DVec3::new(0.0, 0.0, 2.0 * std::f64::consts::PI / 21_549.425);
+        for _ in 0..(1_200 * TICKS_PER_SECOND) {
+            let before = u.powered(v).unwrap().clone();
+            u.step();
+            let p = u.powered(v).unwrap();
+            if p.landed || parts(&u) < all {
+                landing_speed = (before.v - spin.cross(before.r)).length();
+                break;
+            }
+        }
+        // whatever broke on touchdown, the rest stays where it was and settles on top of the ground
+        for _ in 0..(10 * TICKS_PER_SECOND) {
+            u.step();
+            assert!(
+                deepest_burial(&u, v, body) < 0.05,
+                "a part sank {:.2} m into the ground ({landing_speed:.1} m/s, {} of {all} parts left)",
+                deepest_burial(&u, v, body),
+                parts(&u)
+            );
+        }
+        let p = u.powered(v).unwrap();
+        assert!(p.landed && !p.crashed, "{p:?}");
+        // the open Mk16 (DragMultiplier 2) brings even the engine down below its 10 m/s tolerance
+        assert!(landing_speed < 10.0, "{landing_speed}");
+        assert_eq!(parts(&u), all, "the engine survives the landing");
     }
 
     #[test]

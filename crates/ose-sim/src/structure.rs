@@ -180,6 +180,15 @@ pub struct Structure {
     pub chute_defs: Vec<Option<ose_data::Parachute>>,
     pub chutes: Vec<Chute>,
     pub chute_open: Vec<f64>,
+    pub chute_heat: Vec<ChuteHeat>,
+    /// A chute part's packed drag cube (its stowed shape), blended with the open ones by weight.
+    chute_packed: Vec<Option<ose_data::DragCube>>,
+    /// The attach nodes covering each part's faces (`SetExposedArea`), reapplied to a re-weighted shape.
+    face_covers: Vec<Vec<(DVec3, i32, usize)>>,
+    /// Each part's own faces before any attach node covers them.
+    base_faces: Vec<Option<Faces>>,
+    /// How many parts were attached when the covered faces were last worked out.
+    faces_for_parts: usize,
     /// Part temperatures and limits, K, thermal masses, and the re-entry heat each took last step, kW.
     pub temperature_k: Vec<f64>,
     pub max_temp_k: Vec<f64>,
@@ -249,9 +258,71 @@ pub enum Chute {
     Armed,
     SemiDeployed,
     Deployed,
-    /// Cut away (after landing) or torn off (opened too fast).
+    /// Cut away (after landing, in airless space) or burned away (opened too fast).
     Cut,
 }
+
+/// Whether an armed chute may open now (`DeploymentSafeStates`): the canopy is predicted to stay below its
+/// maximum temperature (`Safe`), to pass it within `SecondsForRisky` (`Risky`) or within `SecondsForUnsafe`
+/// (`Unsafe`); `None` out of the air or once open.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum DeploySafety {
+    #[default]
+    Safe,
+    Risky,
+    Unsafe,
+    None,
+}
+
+/// A canopy's heat (`Module_Parachute.CalculateThermalProperties` / `UpdateCut`): its temperature, the
+/// re-entry and air fluxes on it (kW) and how fast the re-entry flux is rising (kW/s).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ChuteHeat {
+    pub temp_k: f64,
+    pub entry_kw: f64,
+    pub d_entry_kw_s: f64,
+    pub atmo_kw: f64,
+    pub atmo_max_kw: f64,
+    pub safety: DeploySafety,
+    /// "Deploy" rather than arm: open at once whatever the safety (`_safetyBeDamned`).
+    pub now: bool,
+    /// The canopy overheated and was lost (`ParachuteDestroyed` notification).
+    pub destroyed: bool,
+}
+
+impl ChuteHeat {
+    fn new(c: Option<&ose_data::Parachute>) -> ChuteHeat {
+        ChuteHeat {
+            temp_k: c.map(|c| c.safety.starting_temp_k).unwrap_or(200.0),
+            entry_kw: 0.0,
+            d_entry_kw_s: 0.0,
+            atmo_kw: 0.0,
+            atmo_max_kw: 0.0,
+            safety: DeploySafety::Safe,
+            now: false,
+            destroyed: false,
+        }
+    }
+}
+
+/// The air the parachutes are in this step, besides the airflow (`Module_Parachute` reads these from the
+/// vessel).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ChuteAir {
+    pub pressure_atm: f64,
+    /// Height above the ground under the vessel (`AltitudeFromSurface`), m.
+    pub height_m: f64,
+    pub temperature_k: f64,
+    /// `GetThermalConductivity` at that height.
+    pub conductivity: f64,
+    pub landed: bool,
+    pub splashed: bool,
+}
+
+/// `Module_Parachute.chuteFluxThermalScale`.
+const CHUTE_FLUX_THERMAL_SCALE: f64 = 0.1;
+/// `PhysicsSettings.SpaceTemperature`, K.
+const SPACE_TEMPERATURE_K: f64 = 4.0;
 
 /// Drag coefficients of a fairing shell end on (a nose cone) and side on (a cylinder): our own figures.
 const FAIRING_CD_FRONT: f64 = 0.3;
@@ -346,6 +417,7 @@ impl Structure {
             self.gimbal_angles[j] = old.gimbal_angles[i].clone();
             self.chutes[j] = old.chutes[i];
             self.chute_open[j] = old.chute_open[i];
+            self.chute_heat[j] = old.chute_heat[i];
             self.temperature_k[j] = old.temperature_k[i];
             self.ablating[j] = old.ablating[i];
             self.gear_out[j] = old.gear_out[i];
@@ -450,12 +522,15 @@ impl Structure {
                     .map(Faces::from_cube)
             })
             .collect();
+        let base_faces = faces.clone();
+        // (node direction, node size, the part on the other side)
+        let mut face_covers: Vec<Vec<(DVec3, i32, usize)>> = vec![Vec::new(); craft.parts.len()];
         // a stack connection covers the faces on both sides of it
         for (i, p) in craft.parts.iter().enumerate() {
             let Some(parent) = p.parent else { continue };
-            for (part, node) in [
-                (i, p.own_node.as_deref()),
-                (parent, p.parent_node.as_deref()),
+            for (part, node, other) in [
+                (i, p.own_node.as_deref(), parent),
+                (parent, p.parent_node.as_deref(), i),
             ] {
                 let Some(n) = node.and_then(|n| {
                     def_of(part).and_then(|d| d.attach_nodes.iter().find(|a| a.id == n))
@@ -472,6 +547,7 @@ impl Structure {
                 };
                 if let Some(f) = faces[part].as_mut() {
                     f.occlude(dir, n.size);
+                    face_covers[part].push((dir, n.size, other));
                 }
             }
         }
@@ -650,6 +726,19 @@ impl Structure {
                 .collect(),
             chutes: vec![Chute::Stowed; n],
             chute_open: vec![0.0; n],
+            chute_heat: (0..n)
+                .map(|i| ChuteHeat::new(def_of(i).and_then(|d| d.parachute.as_ref())))
+                .collect(),
+            chute_packed: (0..n)
+                .map(|i| {
+                    def_of(i)
+                        .filter(|d| d.parachute.is_some())
+                        .and_then(|d| d.drag_cubes.first().cloned())
+                })
+                .collect(),
+            face_covers,
+            base_faces,
+            faces_for_parts: n,
             temperature_k: vec![thermal::INITIAL_TEMPERATURE_K; n],
             max_temp_k: (0..n)
                 .map(|i| def_of(i).map(|d| d.max_temp_k).unwrap_or(0.0))
@@ -1911,6 +2000,27 @@ impl Structure {
         )
     }
 
+    /// Uncover the faces whose neighbour has gone (`Module_Drag.OnPartDetached` / `OnPartDestroyed` recompute
+    /// `SetExposedArea`): a capsule whose decoupler has dropped meets the air with its whole base.
+    fn update_exposed_faces(&mut self) {
+        let attached = self.rigid.present.iter().filter(|x| **x).count();
+        if attached == self.faces_for_parts {
+            return;
+        }
+        self.faces_for_parts = attached;
+        for i in 0..self.faces.len() {
+            let Some(mut f) = self.base_faces[i] else {
+                continue;
+            };
+            for &(dir, size, other) in &self.face_covers[i] {
+                if self.rigid.present[other] {
+                    f.occlude(dir, size);
+                }
+            }
+            self.faces[i] = Some(f);
+        }
+    }
+
     /// Up on the ground in vessel axes: +Y standing, -Z with the craft lying level.
     fn up_axis(&self) -> DVec3 {
         if self.level {
@@ -1935,6 +2045,7 @@ impl Structure {
         }
         self.sync_structural_mass();
         p.mass_t = self.mass_properties().mass_t.max(0.001);
+        self.update_exposed_faces();
         self.update_shielding();
         self.sync_drive(p);
         self.sync_rcs(p);
@@ -2999,7 +3110,7 @@ impl Structure {
             };
             let du = DVec3::new(d.x, d.y, -d.z);
             let local = aero::rotate_inverse(self.part_rot[i], du);
-            let (airstream, cd, wetted) = match &self.faces[i] {
+            let (airstream, cd, wetted) = match &self.drag_faces(i) {
                 Some(f) => {
                     let (a, cd) = f.airstream(&self.curves, local, mach);
                     (a, cd, f.wetted())
@@ -3195,6 +3306,23 @@ impl Structure {
         (broken, pieces, lost)
     }
 
+    /// Parts have just left the structure (broken, burned, staged or torn off): the parts that remain do not
+    /// move, so the vessel's position, which stands for its centre of mass, moves with that centre from
+    /// `centre_before` (vessel frame, `mass_properties().centre_m` before the change) to where it is now, and
+    /// its velocity becomes that point's velocity on the turning hull. Without this the remaining parts
+    /// jump by the shift: an engine broken off on touchdown dropped the tank above it into the ground.
+    pub fn keep_in_place(&self, p: &mut crate::flight::Powered, centre_before: DVec3) {
+        let shift = self.mass_properties().centre_m - centre_before;
+        if !shift.length_squared().is_finite() || shift.length_squared() < 1e-18 {
+            return;
+        }
+        let (x, y, z) = crate::flight::vessel_basis(p);
+        let world = x * shift.x + y * shift.y + z * shift.z;
+        let omega = p.angvel + p.facing * p.roll_rate;
+        p.r = p.r + world;
+        p.v = p.v + omega.cross(world);
+    }
+
     /// Remove the actual parts struck by the bounds contact solver, preserving craft roll for debris.
     pub fn contact_damage(&mut self, parts: &[usize], p: &Powered) -> Option<Vec<Piece>> {
         if parts.contains(&self.root) {
@@ -3335,12 +3463,43 @@ impl Structure {
             .collect()
     }
 
+    /// Arm a packed chute (`ArmChute`): not under a fairing or in a closed bay unless it may open there.
     fn arm_chute(&mut self, i: usize) {
-        if self.chute_defs.get(i).is_some_and(|c| c.is_some())
-            && self.rigid.present[i]
+        let Some(c) = self.chute_defs.get(i).and_then(|c| c.as_ref()) else {
+            return;
+        };
+        if self.rigid.present[i]
             && self.chutes[i] == Chute::Stowed
+            && (!self.shielded[i] || c.shielded_can_deploy)
         {
             self.chutes[i] = Chute::Armed;
+        }
+    }
+
+    /// Open a packed chute at once whatever its safety (`DeployNow`); whether it was packed.
+    pub fn deploy_chute_now(&mut self, i: usize) -> bool {
+        let before = self.chutes.get(i).copied();
+        self.arm_chute(i);
+        if before == Some(Chute::Stowed) && self.chutes[i] == Chute::Armed {
+            self.chute_heat[i].now = true;
+            return true;
+        }
+        false
+    }
+
+    /// Cut an open chute away (`CutParachute`), or disarm an armed one; whether anything changed.
+    pub fn cut_chute(&mut self, i: usize) -> bool {
+        match self.chutes.get(i) {
+            Some(Chute::SemiDeployed | Chute::Deployed) => {
+                self.chutes[i] = Chute::Cut;
+                true
+            }
+            Some(Chute::Armed) => {
+                self.chutes[i] = Chute::Stowed;
+                self.chute_heat[i].now = false;
+                true
+            }
+            _ => false,
         }
     }
 
@@ -3353,18 +3512,46 @@ impl Structure {
         self.chutes.iter().filter(|c| **c == Chute::Armed).count() - before
     }
 
-    /// Advance the parachutes: an armed one opens partly once the air is thick enough, fully below its deploy
-    /// altitude above the ground, opening at its animation rate; it is cut away once landed and nearly
-    /// still, and torn off if it opens fully faster than about Mach 1 (`MachSafetyScalar` 0.95).
-    pub fn update_chutes(
-        &mut self,
-        pressure_atm: f64,
-        height_m: f64,
-        mach: f64,
-        landed: bool,
-        speed: f64,
-        dt: f64,
-    ) {
+    /// A chute part's drag faces as they are now (`SetDragCubes_Stowed`, `SetDragCube_SemiDeployed`,
+    /// `SetDragCube_Deployed`): its packed, semi-deployed and deployed cubes weighted by how far it is open,
+    /// blended face by face, then covered by its attach nodes again. `None` for other parts.
+    pub fn chute_faces(&self, i: usize) -> Option<Faces> {
+        let c = self.chute_defs.get(i)?.as_ref()?;
+        let packed = self.chute_packed[i].as_ref()?;
+        let t = self.chute_open[i].clamp(0.0, 1.0);
+        let mut faces = match (self.chutes[i], &c.semi_cube, &c.deployed_cube) {
+            (Chute::SemiDeployed, Some(semi), _) => {
+                Faces::weighted(&[(packed, 1.0 - t), (semi, t)])
+            }
+            (Chute::Deployed, Some(semi), Some(open)) => {
+                Faces::weighted(&[(semi, 1.0 - t), (open, t)])
+            }
+            _ => Some(Faces::from_cube(packed)),
+        }?;
+        for &(dir, size, other) in &self.face_covers[i] {
+            if self.rigid.present[other] {
+                faces.occlude(dir, size);
+            }
+        }
+        Some(faces)
+    }
+
+    /// The faces the airflow meets on part `i`: a parachute's current shape, otherwise its own.
+    fn drag_faces(&self, i: usize) -> Option<Faces> {
+        self.chute_faces(i).or(self.faces[i])
+    }
+
+    /// Advance the parachutes one physics step as `Module_Parachute.OnModuleFixedUpdate` does: an armed chute
+    /// opens partly once moving, below its deploy altitude or in air thicker than its minimum pressure, and
+    /// (in its default SAFE mode) only while opening is safe for the canopy; it opens fully below its deploy
+    /// altitude; each stage blends the drag cubes over `1 / speed` seconds. An open canopy heats above
+    /// `MachSafetyScalar` and is lost past its maximum temperature; it is cut away once landed and nearly
+    /// still, or out of the air.
+    pub fn update_chutes(&mut self, flow: Airflow, air: ChuteAir, dt: f64) {
+        let speed = flow.velocity.length();
+        let mach = flow.mach(speed);
+        let centre = self.mass_properties().centre_m;
+        let (bx, by, bz) = flow.frame;
         for i in 0..self.chutes.len() {
             let Some(c) = self.chute_defs[i].clone() else {
                 continue;
@@ -3372,32 +3559,143 @@ impl Structure {
             if !self.rigid.present[i] {
                 continue;
             }
-            match self.chutes[i] {
-                Chute::Armed if pressure_atm >= c.min_pressure_atm && !landed => {
-                    self.chutes[i] = Chute::SemiDeployed;
-                    self.chute_open[i] = 0.0;
+            let safety = c.safety;
+            let area = safety.area_deployed_m2;
+            let inv_thermal_mass = 1.0 / (area * safety.thermal_mass_per_area).max(1e-9);
+            // `CalculateThermalProperties`: re-entry flux on the canopy above the safety Mach, from the
+            // part's drag coefficient in its local airflow
+            if mach > safety.mach_safety {
+                let v = self.part_air_velocity(i, flow, centre);
+                let part_speed = v.length();
+                let cd = match self.chute_faces(i) {
+                    Some(f) if part_speed > 0.0 => {
+                        let d = v * (1.0 / part_speed);
+                        let du = DVec3::new(d.dot(bx), d.dot(by), -d.dot(bz));
+                        let local = aero::rotate_inverse(self.part_rot[i], du);
+                        f.airstream(&self.curves, local, flow.mach(part_speed)).1
+                    }
+                    _ => 0.0,
+                };
+                let entry = thermal::REENTRY_FLUX_SCALE
+                    * mach.powf(thermal::REENTRY_MACH_EXPONENT)
+                    * flow
+                        .density
+                        .max(0.0)
+                        .powf(thermal::REENTRY_DENSITY_EXPONENT)
+                    * thermal::REENTRY_SKIN_FRICTION_SCALE
+                    * cd.max(0.0).powf(thermal::THERMAL_SKIN_FRICTION)
+                    * (safety.fraction_exposed * area)
+                    * CHUTE_FLUX_THERMAL_SCALE;
+                let heat = &mut self.chute_heat[i];
+                if dt > 0.0 {
+                    heat.d_entry_kw_s = ((entry - heat.entry_kw) / dt).max(0.0);
                 }
-                Chute::SemiDeployed => {
-                    self.chute_open[i] =
-                        (self.chute_open[i] + c.semi_deploy_rate.max(0.05) * dt).min(1.0);
-                    if height_m <= c.deploy_altitude_m && self.chute_open[i] >= 1.0 {
-                        self.chutes[i] = Chute::Deployed;
+                heat.entry_kw = entry;
+            } else {
+                self.chute_heat[i].entry_kw = 0.0;
+            }
+            let heat = &mut self.chute_heat[i];
+            let air_flux = |t: f64| {
+                (air.temperature_k - t)
+                    * thermal::ATMOSPHERE_FLUX_SCALE
+                    * air.conductivity
+                    * area
+                    * CHUTE_FLUX_THERMAL_SCALE
+            };
+            heat.atmo_kw = air_flux(heat.temp_k);
+            heat.atmo_max_kw = air_flux(safety.max_temp_k);
+            // `UpdateDeploySafety`, while packed or armed in the air
+            heat.safety = DeploySafety::None;
+            if flow.density > 0.0 && matches!(self.chutes[i], Chute::Stowed | Chute::Armed) {
+                let lerp = (heat.atmo_max_kw + heat.atmo_kw) * safety.atmosphere_flux_safety_lerp;
+                let after = |seconds: f64| {
+                    heat.temp_k
+                        + (heat.entry_kw + heat.d_entry_kw_s * seconds + lerp)
+                            * inv_thermal_mass
+                            * seconds
+                };
+                heat.safety = if heat.entry_kw + (heat.atmo_max_kw + heat.atmo_kw) / 2.0
+                    < safety.flux_safety
+                    || mach < safety.mach_safety
+                {
+                    DeploySafety::Safe
+                } else if after(safety.seconds_for_unsafe) >= safety.max_temp_k {
+                    DeploySafety::Unsafe
+                } else if after(safety.seconds_for_risky) >= safety.max_temp_k {
+                    DeploySafety::Risky
+                } else {
+                    DeploySafety::Safe
+                };
+            }
+            match self.chutes[i] {
+                Chute::Armed => {
+                    // `ShouldDeployWhenArmed` (the SAFE deploy mode every stock chute starts in)
+                    let open = if heat.now {
+                        heat.now = false;
+                        true
+                    } else {
+                        speed * speed >= c.min_speed_to_deploy
+                            && (air.height_m <= c.deploy_altitude_m
+                                || air.pressure_atm >= c.min_pressure_atm)
+                            && heat.safety == DeploySafety::Safe
+                    };
+                    if open {
+                        self.chutes[i] = Chute::SemiDeployed;
                         self.chute_open[i] = 0.0;
                     }
+                }
+                Chute::SemiDeployed => {
+                    self.chute_open[i] += c.semi_deploy_rate.max(0.05) * dt;
+                    if self.chute_open[i] >= 1.0 && air.height_m < c.deploy_altitude_m {
+                        self.chutes[i] = Chute::Deployed;
+                        self.chute_open[i] = 0.0;
+                    } else {
+                        self.chute_open[i] = self.chute_open[i].min(1.0);
+                    }
+                    self.update_cut(i, &c, speed, flow.density, air, dt);
                 }
                 Chute::Deployed => {
                     self.chute_open[i] =
                         (self.chute_open[i] + c.deploy_rate.max(0.05) * dt).min(1.0);
-                    if mach > 0.95 {
-                        self.chutes[i] = Chute::Cut;
-                    }
+                    self.update_cut(i, &c, speed, flow.density, air, dt);
                 }
                 _ => {}
             }
-            if landed
-                && speed < c.auto_cut_speed_mps.max(0.5)
-                && matches!(self.chutes[i], Chute::SemiDeployed | Chute::Deployed)
-            {
+        }
+    }
+
+    /// `Module_Parachute.UpdateCut`: an open chute is cut away once landed slower than its auto-cut speed or
+    /// out of the air; otherwise its canopy takes the step's heat and is lost past its maximum temperature.
+    fn update_cut(
+        &mut self,
+        i: usize,
+        c: &ose_data::Parachute,
+        speed: f64,
+        density: f64,
+        air: ChuteAir,
+        dt: f64,
+    ) {
+        let safety = c.safety;
+        let shielded = self.shielded[i] && !c.shielded_can_deploy;
+        let heat = &mut self.chute_heat[i];
+        if speed < c.auto_cut_speed_mps && (air.landed || air.splashed) {
+            self.chutes[i] = Chute::Cut;
+        } else if density <= 1.401298464324817e-45 {
+            self.chutes[i] = Chute::Cut;
+        } else if air.splashed {
+            heat.temp_k = air.temperature_k;
+        } else if !shielded {
+            if heat.temp_k < SPACE_TEMPERATURE_K {
+                heat.temp_k = safety.starting_temp_k;
+            }
+            let inv_thermal_mass =
+                1.0 / (safety.area_deployed_m2 * safety.thermal_mass_per_area).max(1e-9);
+            heat.temp_k += (heat.entry_kw + heat.atmo_kw) * inv_thermal_mass * dt;
+            if heat.temp_k.is_nan() || heat.temp_k < SPACE_TEMPERATURE_K {
+                heat.temp_k = SPACE_TEMPERATURE_K;
+            }
+            if heat.temp_k > safety.max_temp_k {
+                heat.destroyed = true;
                 self.chutes[i] = Chute::Cut;
             }
         }
@@ -4019,27 +4317,11 @@ impl Structure {
             let mach = flow.mach(speed);
             let rho = flow.density;
             let local = aero::rotate_inverse(self.part_rot[i], du);
-            let mut area_drag = match &self.faces[i] {
+            // an opening parachute takes its weighted packed, semi-deployed and deployed shapes
+            let area_drag = match self.drag_faces(i) {
                 Some(f) => f.area_drag(&self.curves, local, mach),
                 None => 0.0,
             };
-            // an opening parachute blends from its packed shape to its semi-deployed and deployed shapes
-            if let Some(c) = &self.chute_defs[i] {
-                let shape = |cube: &Option<ose_data::DragCube>| {
-                    cube.as_ref()
-                        .map(|q| Faces::from_cube(q).area_drag(&self.curves, local, mach))
-                        .unwrap_or(area_drag)
-                };
-                let t = self.chute_open[i];
-                area_drag = match self.chutes[i] {
-                    Chute::SemiDeployed => area_drag + (shape(&c.semi_cube) - area_drag) * t,
-                    Chute::Deployed => {
-                        let semi = shape(&c.semi_cube);
-                        semi + (shape(&c.deployed_cube) - semi) * t
-                    }
-                    _ => area_drag,
-                };
-            }
             let cda = if self.drag_properties[i].drag_enabled {
                 aero::cda_m2(&self.curves, area_drag, rho * speed)
             } else {
@@ -4538,10 +4820,7 @@ mod tests {
         let offset =
             s.mass_properties().centre_m - s.rigid.rest_position(wing) + DVec3::new(2.0, 0.0, 0.0);
         s.pressure_offsets_m[wing] = crate::rigid::to_vessel(offset);
-        s.faces[wing] = Some(Faces {
-            area: [1.0; 6],
-            drag: [1.0; 6],
-        });
+        s.faces[wing] = Some(Faces::new([1.0; 6], [1.0; 6]));
         let constant = ose_data::Curve {
             keys: vec![ose_data::CurveKey {
                 v: 1.0,
@@ -4831,10 +5110,7 @@ mod tests {
         };
         let mut s = Structure::build(&craft, &defs, &resources);
         s.faces.fill(None);
-        s.faces[1] = Some(Faces {
-            area: [1.0; 6],
-            drag: [1.0; 6],
-        });
+        s.faces[1] = Some(Faces::new([1.0; 6], [1.0; 6]));
         for props in &mut s.drag_properties {
             props.body_lift_enabled = false;
             props.drag_enabled = true;
@@ -4875,10 +5151,7 @@ mod tests {
         let frame = crate::flight::vessel_basis(&p);
         let air = DVec3::new(0.0, 100.0, -10.0);
         assert!(s.lift(frame, air, 1.0, 0.3).length() > 1.0);
-        s.faces[wing] = Some(Faces {
-            area: [1.0; 6],
-            drag: [1.0; 6],
-        });
+        s.faces[wing] = Some(Faces::new([1.0; 6], [1.0; 6]));
         assert!(s.aerodynamics(0, frame, air, 1.0, 0.3).cda_m2 > 0.0);
         let (lift, drag) = s.part_aero_kn[wing];
         let resolved = s
@@ -4912,10 +5185,7 @@ mod tests {
     #[test]
     fn distinct_authored_drag_and_lift_points_retain_their_moments_under_mount_rotation() {
         let (mut s, _, wing) = airflow_fixture();
-        s.faces[wing] = Some(Faces {
-            area: [1.0; 6],
-            drag: [1.0; 6],
-        });
+        s.faces[wing] = Some(Faces::new([1.0; 6], [1.0; 6]));
         let h = 0.5_f64.sqrt();
         s.part_rot[wing] = [0.0, h, 0.0, h];
         s.pressure_offsets_m[wing] = DVec3::new(2.0, 0.0, 0.0);
@@ -4982,10 +5252,7 @@ mod tests {
         surface.axis = DVec3::new(0.0, 1.0, 0.0);
         surface.pressure_offset_m = DVec3::new(1.0, 0.0, 0.0);
         s.pressure_offsets_m[wing] = DVec3::new(1.0, 0.0, 0.0);
-        s.faces[wing] = Some(Faces {
-            area: [1.0; 6],
-            drag: [1.0; 6],
-        });
+        s.faces[wing] = Some(Faces::new([1.0; 6], [1.0; 6]));
         let constant = ose_data::Curve {
             keys: vec![ose_data::CurveKey {
                 t: 0.0,
@@ -5029,10 +5296,7 @@ mod tests {
         s.net.tanks.clear();
         s.part_rot[wing] = [0.0, 0.0, 0.0, 1.0];
         s.lift_defs.fill(None);
-        s.faces[wing] = Some(Faces {
-            area: [2.0, 0.0, 1.0, 0.0, 0.0, 0.0],
-            drag: [1.0; 6],
-        });
+        s.faces[wing] = Some(Faces::new([2.0, 0.0, 1.0, 0.0, 0.0, 0.0], [1.0; 6]));
         s.drag_properties[wing] = ose_data::DragProperties {
             drag_enabled: false,
             body_lift_enabled: true,
@@ -5144,10 +5408,7 @@ mod tests {
     fn rolling_changes_anisotropic_drag_and_rotating_the_airflow_preserves_it() {
         let (mut s, mut p, wing) = airflow_fixture();
         s.lift_defs.fill(None);
-        s.faces[wing] = Some(Faces {
-            area: [8.0, 8.0, 1.0, 1.0, 2.0, 2.0],
-            drag: [1.0; 6],
-        });
+        s.faces[wing] = Some(Faces::new([8.0, 8.0, 1.0, 1.0, 2.0, 2.0], [1.0; 6]));
         let air = DVec3::new(100.0, 0.0, 0.0);
         let face_x = s.aero(0, crate::flight::vessel_basis(&p), air, 1.0, 0.3);
         p.roll_rad = std::f64::consts::FRAC_PI_2;
@@ -5204,10 +5465,7 @@ mod tests {
     fn local_drag_uses_local_mach_and_has_nonpositive_total_power() {
         let (mut s, p, wing) = airflow_fixture();
         s.lift_defs.fill(None);
-        s.faces[wing] = Some(Faces {
-            area: [1.0; 6],
-            drag: [1.0; 6],
-        });
+        s.faces[wing] = Some(Faces::new([1.0; 6], [1.0; 6]));
         let frame = crate::flight::vessel_basis(&p);
         let flow = Airflow {
             frame,
@@ -5278,10 +5536,7 @@ mod tests {
     fn local_drag_reduces_a_free_tumbles_kinetic_energy_over_time() {
         let (mut s, mut p, _) = airflow_fixture();
         s.lift_defs.fill(None);
-        s.faces.fill(Some(Faces {
-            area: [1.0; 6],
-            drag: [1.0; 6],
-        }));
+        s.faces.fill(Some(Faces::new([1.0; 6], [1.0; 6])));
         let mass = s.mass_properties();
         p.mass_t = mass.mass_t;
         p.v = DVec3::ZERO;
@@ -8243,45 +8498,230 @@ mod tests {
         assert!(s.deploy_panels(true) == 0, "already out");
     }
 
-    #[test]
-    fn a_parachute_opens_in_thick_air_and_drags_hard_when_fully_open() {
+    /// Air at sea level, standing still on the ground or falling through it.
+    fn chute_air(pressure_atm: f64, height_m: f64, landed: bool) -> ChuteAir {
+        ChuteAir {
+            pressure_atm,
+            height_m,
+            temperature_k: 288.0,
+            conductivity: thermal::conductivity(height_m, 70_000.0),
+            landed,
+            splashed: false,
+        }
+    }
+
+    fn starter_chute() -> (Structure, usize) {
         let (crafts, defs, res) = assets();
         let c = crafts
             .iter()
             .find(|c| c.name == "Stock12_StartRocket")
             .unwrap();
-        let mut s = Structure::build(c, &defs, &res);
+        let s = Structure::build(c, &defs, &res);
         let chute = (0..c.parts.len())
             .find(|&i| s.chute_defs[i].is_some())
             .unwrap();
+        (s, chute)
+    }
+
+    #[test]
+    fn a_parachute_opens_in_thick_air_and_drags_hard_when_fully_open() {
+        let (mut s, chute) = starter_chute();
         // falling nose up at 100 m/s
         let fall = DVec3::new(-100.0, 0.0, 0.0);
         let facing = DVec3::new(1.0, 0.0, 0.0);
+        let flow = Airflow::uniform(basis(facing), fall, 1.0, 0.3);
         let packed = s.aero(0, basis(facing), fall, 1.0, 0.3);
-        // its stage arms it; thin air keeps it packed
+        // its stage arms it; thin air high up keeps it packed
         let last = s.stage_activations.len() - 1;
         s.activate_stage(last);
         assert_eq!(s.chutes[chute], Chute::Armed);
-        s.update_chutes(0.01, 5_000.0, 0.3, false, 100.0, 1.0);
+        s.update_chutes(flow, chute_air(0.01, 5_000.0, false), 1.0);
         assert_eq!(s.chutes[chute], Chute::Armed);
-        // thick air: opens partly, then fully below 1 km
-        for _ in 0..20 {
-            s.update_chutes(0.8, 3_000.0, 0.3, false, 100.0, 0.5);
+        // thick air: opens partly over 1 / semiDeploymentSpeed = 2 s, and stays so above its 1 km
+        s.update_chutes(flow, chute_air(0.8, 3_000.0, false), 0.02);
+        assert_eq!(s.chutes[chute], Chute::SemiDeployed);
+        for _ in 0..105 {
+            s.update_chutes(flow, chute_air(0.8, 3_000.0, false), 0.02);
         }
         assert_eq!(s.chutes[chute], Chute::SemiDeployed);
+        assert_eq!(s.chute_open[chute], 1.0);
         let semi = s.aero(0, basis(facing), fall, 1.0, 0.3);
-        for _ in 0..40 {
-            s.update_chutes(0.9, 800.0, 0.3, false, 100.0, 0.5);
-        }
+        // below 1 km: opens fully over 1 / deploymentSpeed = 8.3 s
+        s.update_chutes(flow, chute_air(0.9, 800.0, false), 0.02);
         assert_eq!(s.chutes[chute], Chute::Deployed);
+        for _ in 0..410 {
+            s.update_chutes(flow, chute_air(0.9, 800.0, false), 0.02);
+        }
+        assert!(s.chute_open[chute] < 1.0, "{}", s.chute_open[chute]);
+        for _ in 0..10 {
+            s.update_chutes(flow, chute_air(0.9, 800.0, false), 0.02);
+        }
+        assert_eq!(s.chute_open[chute], 1.0);
         let open = s.aero(0, basis(facing), fall, 1.0, 0.3);
         assert!(
             semi > packed && open > 5.0 * semi,
             "packed {packed} semi {semi} open {open}"
         );
         // landed and still: cut away
-        s.update_chutes(1.0, 0.0, 0.0, true, 0.1, 0.1);
+        let still = Airflow::uniform(basis(facing), DVec3::new(-0.1, 0.0, 0.0), 1.2, 0.0);
+        s.update_chutes(still, chute_air(1.0, 0.0, true), 0.02);
         assert_eq!(s.chutes[chute], Chute::Cut);
+        assert!(!s.chute_heat[chute].destroyed);
+    }
+
+    #[test]
+    fn an_armed_chute_opens_below_its_deploy_altitude_even_in_thin_air_and_not_when_still() {
+        let (mut s, chute) = starter_chute();
+        let facing = DVec3::new(1.0, 0.0, 0.0);
+        s.arm_all_chutes();
+        // a slow drift (below `minimumSpeedToDeploy`) leaves it armed
+        let drift = Airflow::uniform(basis(facing), DVec3::new(-0.5, 0.0, 0.0), 0.01, 0.0);
+        s.update_chutes(drift, chute_air(0.01, 900.0, false), 0.02);
+        assert_eq!(s.chutes[chute], Chute::Armed);
+        // under 1 km it opens whatever the pressure (`ShouldDeployWhenArmed`)
+        let fall = Airflow::uniform(basis(facing), DVec3::new(-20.0, 0.0, 0.0), 0.01, 0.1);
+        s.update_chutes(fall, chute_air(0.01, 900.0, false), 0.02);
+        assert_eq!(s.chutes[chute], Chute::SemiDeployed);
+        // out of the air an open chute is cut away
+        let space = Airflow::uniform(basis(facing), DVec3::new(-20.0, 0.0, 0.0), 0.0, 0.0);
+        s.update_chutes(space, chute_air(0.0, 900.0, false), 0.02);
+        assert_eq!(s.chutes[chute], Chute::Cut);
+    }
+
+    #[test]
+    fn a_capsule_meets_the_air_with_its_whole_base_once_its_decoupler_drops() {
+        // `Module_Drag.OnPartDetached` recomputes the exposed area: the stack node no longer covers the face
+        let (crafts, defs, res) = assets();
+        let c = crafts
+            .iter()
+            .find(|c| c.name == "Stock12_StartRocket")
+            .unwrap();
+        let mut s = Structure::build(c, &defs, &res);
+        let base_first = DVec3::new(0.0, -1.0, 0.0);
+        let curves = s.curves.clone();
+        let covered = s.faces[s.root].unwrap().area_drag(&curves, base_first, 0.5);
+        let mut p = flying(DVec3::new(0.0, 1.0, 0.0));
+        p.stage = s.stage_parts.len() - 1;
+        s.sync(&mut p);
+        assert!(!s.rigid.present[1], "the decoupler is gone");
+        let open = s.faces[s.root].unwrap().area_drag(&curves, base_first, 0.5);
+        assert!(open > 3.0 * covered, "covered {covered} open {open}");
+        // the base (-Y) is whole again; the top stays covered by the parachute still on it
+        let (now, base) = (s.faces[s.root].unwrap(), s.base_faces[s.root].unwrap());
+        assert_eq!(now.area[3], base.area[3]);
+        assert!(now.area[2] < base.area[2]);
+    }
+
+    #[test]
+    fn parachute_shapes_blend_by_weight_with_their_drag_multipliers() {
+        // the original's Mk16 open cube carries DragMultiplier 2 on every face, its semi-deployed cube 1.6
+        let (mut s, chute) = starter_chute();
+        let def = s.chute_defs[chute].clone().unwrap();
+        let open_cube = def.deployed_cube.clone().unwrap();
+        assert_eq!(open_cube.drag_multiplier, [2.0; 6]);
+        assert_eq!(def.semi_cube.as_ref().unwrap().drag_multiplier, [1.6; 6]);
+        assert_eq!(def.safety.max_temp_k, 750.0);
+        let curves = s.curves.clone();
+        let down = DVec3::new(0.0, -1.0, 0.0);
+        s.chutes[chute] = Chute::Deployed;
+        s.chute_open[chute] = 1.0;
+        let full = s.chute_faces(chute).unwrap();
+        let mut plain = open_cube.clone();
+        plain.drag_multiplier = [1.0; 6];
+        let mut expected = Faces::from_cube(&plain);
+        for &(dir, size, _) in &s.face_covers[chute] {
+            expected.occlude(dir, size);
+        }
+        let ratio = full.area_drag(&curves, down, 0.03) / expected.area_drag(&curves, down, 0.03);
+        assert!((ratio - 2.0).abs() < 1e-9, "{ratio}");
+        // halfway the faces are averaged, not the drag
+        s.chute_open[chute] = 0.5;
+        let half = s.chute_faces(chute).unwrap();
+        let semi = def.semi_cube.clone().unwrap();
+        for k in 0..6 {
+            assert!((half.drag[k] - 0.5 * (semi.drag[k] + open_cube.drag[k])).abs() < 1e-12);
+            assert!((half.mult[k] - 1.8).abs() < 1e-12);
+            assert!((half.full[k] - 0.5 * (semi.area[k] + open_cube.area[k])).abs() < 1e-12);
+        }
+        // packed again once cut
+        s.chutes[chute] = Chute::Cut;
+        let packed = s.chute_faces(chute).unwrap();
+        assert_eq!(packed.mult, [1.0; 6]);
+    }
+
+    #[test]
+    fn a_mk16_lowers_the_starter_rocket_slower_than_its_engine_can_take() {
+        // `Module_Drag`: F = AreaDrag * 0.1 * pseudoRe * 8 * q / 1000. At sea level the open Mk16 holds up
+        // the whole starter rocket, tanks empty, below 10 m/s (the engine's crash tolerance) and its capsule
+        // alone below 6 m/s.
+        let (mut s, chute) = starter_chute();
+        s.chutes[chute] = Chute::Deployed;
+        s.chute_open[chute] = 1.0;
+        let facing = DVec3::new(0.0, 1.0, 0.0);
+        for tank in &mut s.net.tanks {
+            tank.stored = 0.0;
+        }
+        let terminal = |s: &mut Structure, mass_t: f64| {
+            let mut v: f64 = 10.0;
+            for _ in 0..50 {
+                let cda = s.aero(0, basis(facing), DVec3::new(0.0, -v, 0.0), 1.225, v / 340.0);
+                v = (2.0 * mass_t * 1000.0 * 9.81 / (1.225 * cda)).sqrt();
+            }
+            v
+        };
+        let whole = s.mass_properties().mass_t;
+        let v_whole = terminal(&mut s, whole);
+        assert!(
+            v_whole < 10.0 && v_whole > 7.0,
+            "{whole} t at {v_whole} m/s"
+        );
+        s.trim_to(s.stage_parts.len() - 1);
+        let capsule = s.mass_properties().mass_t;
+        let v_capsule = terminal(&mut s, capsule);
+        assert!(
+            v_capsule < 6.0 && v_capsule > 4.0,
+            "{capsule} t at {v_capsule} m/s"
+        );
+    }
+
+    #[test]
+    fn a_chute_armed_too_fast_waits_and_one_opened_too_fast_burns_away() {
+        let (mut s, chute) = starter_chute();
+        let facing = DVec3::new(1.0, 0.0, 0.0);
+        // Mach 2.5 through thick air, 1 km up
+        let fast = Airflow::uniform(basis(facing), DVec3::new(-850.0, 0.0, 0.0), 1.0, 2.5);
+        s.arm_all_chutes();
+        for _ in 0..50 {
+            s.update_chutes(fast, chute_air(0.9, 1_000.0, false), 0.02);
+        }
+        assert_eq!(s.chutes[chute], Chute::Armed, "SAFE mode waits");
+        assert_eq!(s.chute_heat[chute].safety, DeploySafety::Unsafe);
+        // slowed below Mach 0.95 it is safe again and opens
+        let slow = Airflow::uniform(basis(facing), DVec3::new(-250.0, 0.0, 0.0), 1.0, 0.75);
+        s.update_chutes(slow, chute_air(0.9, 1_000.0, false), 0.02);
+        assert_eq!(s.chutes[chute], Chute::SemiDeployed);
+        assert!(!s.chute_heat[chute].destroyed);
+        // "Deploy" ignores safety: the canopy heats and is lost within seconds at Mach 2.5
+        let (mut s, chute) = starter_chute();
+        assert!(s.deploy_chute_now(chute));
+        let mut t = 0.0;
+        while s.chutes[chute] != Chute::Cut && t < 30.0 {
+            s.update_chutes(fast, chute_air(0.9, 1_000.0, false), 0.02);
+            t += 0.02;
+        }
+        assert_eq!(s.chutes[chute], Chute::Cut);
+        assert!(s.chute_heat[chute].destroyed, "burned away after {t:.2} s");
+        assert!(s.chute_heat[chute].temp_k > 750.0);
+        assert!(t < 10.0, "{t}");
+        // opened below the safety Mach the canopy only warms towards the air
+        let (mut s, chute) = starter_chute();
+        assert!(s.deploy_chute_now(chute));
+        for _ in 0..500 {
+            s.update_chutes(slow, chute_air(0.9, 1_000.0, false), 0.02);
+        }
+        assert!(!s.chute_heat[chute].destroyed);
+        let temp = s.chute_heat[chute].temp_k;
+        assert!(temp > 200.0 && temp <= 288.0, "{temp}");
     }
 
     #[test]

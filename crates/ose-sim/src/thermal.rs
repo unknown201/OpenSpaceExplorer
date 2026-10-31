@@ -10,16 +10,16 @@ pub const INITIAL_TEMPERATURE_K: f64 = 280.0;
 /// Thermal mass per tonne (`StandardSpecificHeatCapacity`) and the smallest thermal mass.
 pub const SPECIFIC_HEAT: f64 = 500.0;
 pub const MIN_THERMAL_MASS: f64 = 1e-4;
-const ATMOSPHERE_FLUX_SCALE: f64 = 50.0;
+pub const ATMOSPHERE_FLUX_SCALE: f64 = 50.0;
 const POSITIVE_RATE_SCALE: f64 = 1.0;
 const NEGATIVE_RATE_SCALE: f64 = 5.0;
 const BACKGROUND_RATE_SCALE: f64 = 1.0;
 const BACKGROUND_EPSILON_K: f64 = 1.0;
-const REENTRY_FLUX_SCALE: f64 = 500.0;
-const REENTRY_SKIN_FRICTION_SCALE: f64 = 1.0;
-const REENTRY_MACH_EXPONENT: f64 = 3.0;
-const REENTRY_DENSITY_EXPONENT: f64 = 0.53;
-const THERMAL_SKIN_FRICTION: f64 = 0.3;
+pub const REENTRY_FLUX_SCALE: f64 = 500.0;
+pub const REENTRY_SKIN_FRICTION_SCALE: f64 = 1.0;
+pub const REENTRY_MACH_EXPONENT: f64 = 3.0;
+pub const REENTRY_DENSITY_EXPONENT: f64 = 0.53;
+pub const THERMAL_SKIN_FRICTION: f64 = 0.3;
 const ATMOSPHERIC_CONDUCTIVITY: f64 = 0.026;
 const THERMAL_WINDOW_SMOOTHING_M: f64 = 500.0;
 

@@ -114,19 +114,59 @@ const NORMALS: [(f64, f64, f64); 6] = [
     (0.0, 0.0, -1.0),
 ];
 
-/// A part's drag faces after occlusion by attached parts.
+/// A part's drag faces: `area` after occlusion by attached parts (`weightedExposedArea`), `full` before it
+/// (`weightedArea`), and the per-face `drag` and `mult` (`weightedDrag`, `weightedDragMultiplier`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Faces {
     pub area: [f64; 6],
+    pub full: [f64; 6],
     pub drag: [f64; 6],
+    pub mult: [f64; 6],
 }
 
 impl Faces {
+    /// Faces with these areas and drag values, nothing covered and no extra multiplier.
+    pub fn new(area: [f64; 6], drag: [f64; 6]) -> Faces {
+        Faces {
+            area,
+            full: area,
+            drag,
+            mult: [1.0; 6],
+        }
+    }
+
     pub fn from_cube(c: &DragCube) -> Faces {
         Faces {
             area: c.area,
+            full: c.area,
             drag: c.drag,
+            mult: c.drag_multiplier,
         }
+    }
+
+    /// Several cubes blended by weight (`Data_Drag.SetDragWeightsList`): each face's area, drag and
+    /// multiplier are the weighted means, not the blended results (a parachute opening). `None` when no cube
+    /// has weight.
+    pub fn weighted(cubes: &[(&DragCube, f64)]) -> Option<Faces> {
+        let total: f64 = cubes.iter().map(|(_, w)| *w).filter(|w| *w != 0.0).sum();
+        if total == 0.0 {
+            return None;
+        }
+        let mut f = Faces {
+            area: [0.0; 6],
+            full: [0.0; 6],
+            drag: [0.0; 6],
+            mult: [0.0; 6],
+        };
+        for (c, w) in cubes.iter().filter(|(_, w)| *w != 0.0) {
+            for i in 0..6 {
+                f.area[i] += c.area[i] * w / total;
+                f.drag[i] += c.drag[i] * w / total;
+                f.mult[i] += c.drag_multiplier[i] * w / total;
+            }
+        }
+        f.full = f.area;
+        Some(f)
     }
 
     /// Cover the face an attach node sits on by the node's cross-section (`SetExposedArea`).
@@ -163,7 +203,8 @@ impl Faces {
             let normal = DVec3::new(n.0, n.1, n.2);
             let dot = normal.dot(direction);
             if dot > 0.0 {
-                sum - normal * (dot * self.area[i] * self.drag[i] * lift_curve.evaluate(dot))
+                sum - normal
+                    * (dot * self.area[i] * self.drag[i] * self.mult[i] * lift_curve.evaluate(dot))
             } else {
                 sum
             }
@@ -193,7 +234,7 @@ impl Faces {
             } else {
                 self.drag[i]
             };
-            area_drag += self.area[i] * curve_val * cd;
+            area_drag += self.area[i] * curve_val * cd * self.mult[i];
         }
         area_drag
     }
@@ -219,7 +260,8 @@ impl Faces {
             } else {
                 surface + (tip - surface) * ((dot_n - 0.5) * 2.0)
             } * mult;
-            airstream += self.area[i] * dot.clamp(0.0, 1.0);
+            // the airstream area counts the faces whole, covered or not (`weightedArea`)
+            airstream += self.full[i] * dot.clamp(0.0, 1.0);
             area += self.area[i] * curve_val;
         }
         let cd = if area > 0.0 {
@@ -288,11 +330,11 @@ mod tests {
 
     fn tank() -> Faces {
         // the 1.25 m methalox tank's cube (fueltank_1v_inline_methalox_1x4)
-        Faces {
-            area: [
+        Faces::new(
+            [
                 2.500088, 2.500088, 1.21755731, 1.21755731, 2.379063, 2.379063,
             ],
-            drag: [
+            [
                 0.7823667,
                 0.7823462,
                 0.8810437,
@@ -300,7 +342,7 @@ mod tests {
                 0.765476644,
                 0.7651058,
             ],
-        }
+        )
     }
 
     #[test]

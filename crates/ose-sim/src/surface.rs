@@ -742,9 +742,25 @@ mod tests {
             p.v.y < -4.0,
             "breaking a weak foot cannot erase the surviving hull's impact"
         );
+        // where the surviving part is before the struck one goes
+        let f = flight::vessel_basis(&p);
+        let survivor = |st: &Structure, p: &Powered| {
+            p.r + world(f, st.part_box(0).0 - st.mass_properties().centre_m)
+        };
+        let before = survivor(&st, &p);
+        let centre = st.mass_properties().centre_m;
         assert!(st.contact_damage(&out.contact_damage, &p).is_some());
         assert!(st.rigid.present[0] && !st.rigid.present[1]);
         assert!(st.net.present[0] && !st.net.present[1]);
+        // the vessel's position follows the centre of mass up into the survivor; the survivor stays put
+        let r = p.r;
+        st.keep_in_place(&mut p, centre);
+        assert!((survivor(&st, &p) - before).length() < 1e-9);
+        assert!(
+            ((p.r - r).dot(r.normalized()) - 1.0).abs() < 1e-9,
+            "{:?}",
+            p.r - r
+        );
     }
 
     #[test]

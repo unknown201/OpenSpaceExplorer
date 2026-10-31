@@ -305,8 +305,10 @@ impl Universe {
             return;
         }
         let mut q = p.clone();
+        let centre = st.mass_properties().centre_m;
         match st.burn_up(&[part], p.facing) {
             Some(pieces) => {
+                st.keep_in_place(&mut q, centre);
                 st.sync(&mut q);
                 self.world.entity_mut(e).insert(st).insert(q.clone());
                 let area = q.spec.drag_area_m2;

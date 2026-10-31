@@ -677,6 +677,74 @@ pub struct Parachute {
     pub deploy_rate: f64,
     pub semi_cube: Option<DragCube>,
     pub deployed_cube: Option<DragCube>,
+    /// Parachute safety (`Data_Parachute`, "Parachute Safety"): the canopy heats while it is open faster than
+    /// `mach_safety` and is destroyed above `max_temp_k`; an armed chute in the default SAFE mode waits until
+    /// opening is predicted not to reach that temperature within `seconds_for_unsafe`.
+    #[serde(default)]
+    pub safety: ChuteSafety,
+    /// The canopy turns to trail the airflow at this rate, degrees per second (`rotationSpeedDPS`).
+    #[serde(default = "chute_rotation_dps")]
+    pub rotation_speed_dps: f64,
+    /// Symmetric chutes lean apart by this much per sibling, degrees (`spreadAngle`, at most 45).
+    #[serde(default = "chute_spread_deg")]
+    pub spread_angle_deg: f64,
+    /// Opens even under a fairing or in a bay (`shieldedCanDeploy`).
+    #[serde(default)]
+    pub shielded_can_deploy: bool,
+    /// An armed chute opens only moving faster than this, m/s (`minimumSpeedToDeploy`, compared squared).
+    #[serde(default = "one")]
+    pub min_speed_to_deploy: f64,
+}
+
+fn chute_rotation_dps() -> f64 {
+    90.0
+}
+
+fn chute_spread_deg() -> f64 {
+    7.0
+}
+
+/// The canopy's heat budget (`Data_Parachute` safety fields; the defaults are the class defaults, which the
+/// EVA chute keeps for the fields it does not set).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChuteSafety {
+    /// `chuteMaxTemp`, K.
+    pub max_temp_k: f64,
+    /// `ChuteThermalMassPerArea` (kJ/K per m^2 of `areaDeployed`).
+    pub thermal_mass_per_area: f64,
+    /// `ChuteFractionExposed`.
+    pub fraction_exposed: f64,
+    /// `areaDeployed`, m^2.
+    pub area_deployed_m2: f64,
+    /// `startingTemp`, K.
+    pub starting_temp_k: f64,
+    /// `SecondsForRisky`, `SecondsForUnsafe`.
+    pub seconds_for_risky: f64,
+    pub seconds_for_unsafe: f64,
+    /// `MachSafetyScalar`: below this Mach opening is always safe and the canopy takes no re-entry heat.
+    pub mach_safety: f64,
+    /// `FluxSafetyScalar`, kW.
+    pub flux_safety: f64,
+    /// `AtmosphereFluxSafetyLerp`.
+    pub atmosphere_flux_safety_lerp: f64,
+}
+
+impl Default for ChuteSafety {
+    fn default() -> Self {
+        ChuteSafety {
+            max_temp_k: 600.0,
+            thermal_mass_per_area: 0.06,
+            fraction_exposed: 0.65,
+            area_deployed_m2: 5.0,
+            starting_temp_k: 200.0,
+            seconds_for_risky: 2.0,
+            seconds_for_unsafe: 0.35,
+            mach_safety: 0.95,
+            flux_safety: 1.0,
+            atmosphere_flux_safety_lerp: 0.65,
+        }
+    }
 }
 
 /// A docking port as the original defines it (`Data_DockingNode`).
@@ -774,8 +842,19 @@ pub struct DragCube {
     pub area: [f64; 6],
     pub drag: [f64; 6],
     pub depth: [f64; 6],
+    /// Per-face drag multiplier (`DragMultiplier`): 1 on every stock cube but the parachutes' open shapes.
+    #[serde(default = "ones6", skip_serializing_if = "all_ones")]
+    pub drag_multiplier: [f64; 6],
     pub center: ose_math::DVec3,
     pub size: ose_math::DVec3,
+}
+
+fn ones6() -> [f64; 6] {
+    [1.0; 6]
+}
+
+fn all_ones(m: &[f64; 6]) -> bool {
+    m.iter().all(|x| *x == 1.0)
 }
 
 /// Everything the sim needs to start a universe, in one file.

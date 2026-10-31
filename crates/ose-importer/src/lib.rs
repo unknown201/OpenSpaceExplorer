@@ -657,6 +657,11 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
                         deploy_rate: f(o, "deploymentSpeed"),
                         semi_cube: None,
                         deployed_cube: None,
+                        safety: chute_safety(o),
+                        rotation_speed_dps: o["rotationSpeedDPS"].as_f64().unwrap_or(90.0),
+                        spread_angle_deg: o["spreadAngle"]["storedValue"].as_f64().unwrap_or(7.0),
+                        shielded_can_deploy: b(o, "shieldedCanDeploy"),
+                        min_speed_to_deploy: o["minimumSpeedToDeploy"].as_f64().unwrap_or(1.0),
                     });
                 }
                 for entry in entries.iter().filter(|x| x["Name"] == "Data_DockingNode") {
@@ -736,6 +741,11 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
                                 area: arr6("Area"),
                                 drag: arr6("Drag"),
                                 depth: arr6("Depth"),
+                                drag_multiplier: if c["DragMultiplier"].is_array() {
+                                    arr6("DragMultiplier")
+                                } else {
+                                    [1.0; 6]
+                                },
                                 center: vec3(&c["Center"]),
                                 size: vec3(&c["Size"]),
                             });
@@ -1699,5 +1709,23 @@ mod tests {
                 .count(),
             9
         );
+    }
+}
+
+/// `Data_Parachute`'s safety fields, the class defaults where a part leaves one out (the EVA chute).
+fn chute_safety(o: &serde_json::Value) -> ose_data::ChuteSafety {
+    let d = ose_data::ChuteSafety::default();
+    let g = |k: &str, default: f64| o[k].as_f64().unwrap_or(default);
+    ose_data::ChuteSafety {
+        max_temp_k: g("chuteMaxTemp", d.max_temp_k),
+        thermal_mass_per_area: g("ChuteThermalMassPerArea", d.thermal_mass_per_area),
+        fraction_exposed: g("ChuteFractionExposed", d.fraction_exposed),
+        area_deployed_m2: g("areaDeployed", d.area_deployed_m2),
+        starting_temp_k: g("startingTemp", d.starting_temp_k),
+        seconds_for_risky: g("SecondsForRisky", d.seconds_for_risky),
+        seconds_for_unsafe: g("SecondsForUnsafe", d.seconds_for_unsafe),
+        mach_safety: g("MachSafetyScalar", d.mach_safety),
+        flux_safety: g("FluxSafetyScalar", d.flux_safety),
+        atmosphere_flux_safety_lerp: g("AtmosphereFluxSafetyLerp", d.atmosphere_flux_safety_lerp),
     }
 }
