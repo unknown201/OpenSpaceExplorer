@@ -278,8 +278,9 @@ impl ScienceData {
         Ok(())
     }
 
-    /// Parts of a craft the campaign has not researched (always empty in sandbox; parts no node unlocks are
-    /// free).
+    /// Parts of a craft the campaign has not researched (always empty in sandbox): every part no researched
+    /// node unlocks, parts no node unlocks at all included (the colony trunks, scanners and service bays the
+    /// original's tree leaves out are not in its campaign's VAB either).
     pub fn locked_parts(&self, c: &Campaign, craft: &ose_data::craft::Craft) -> Vec<String> {
         if c.mode != SessionMode::Exploration {
             return Vec::new();
@@ -289,10 +290,7 @@ impl ScienceData {
             .parts
             .iter()
             .map(|p| p.part_id.clone())
-            .filter(|id| {
-                self.tech.iter().any(|n| n.parts.contains(id))
-                    && !have.iter().any(|n| n.parts.contains(id))
-            })
+            .filter(|id| !have.iter().any(|n| n.parts.contains(id)))
             .collect();
         out.sort();
         out.dedup();
@@ -534,6 +532,13 @@ mod tests {
             stages: vec![],
         };
         assert!(d.locked_parts(&c, &craft).is_empty());
+        // a part no node unlocks is not offered in a campaign either
+        let mut stray = craft.clone();
+        stray.parts[0].part_id = "servicebay_1v".into();
+        assert_eq!(
+            d.locked_parts(&c, &stray),
+            vec!["servicebay_1v".to_string()]
+        );
     }
 
     #[test]

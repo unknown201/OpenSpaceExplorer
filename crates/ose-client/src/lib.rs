@@ -6556,6 +6556,7 @@ impl App {
         let query = input_string(&self.doc, "vab-search")
             .unwrap_or_default()
             .to_lowercase();
+        let locked = self.locked_parts();
         let mut parts: Vec<&vab::PartSpec> = self
             .catalog
             .values()
@@ -6572,6 +6573,8 @@ impl App {
                 }
             })
             .filter(|p| self.vab_size.as_ref().is_none_or(|s| &p.size_category == s))
+            // As the original, a campaign's VAB offers only the parts it has researched.
+            .filter(|p| !locked.contains(&p.id))
             .collect();
         let size_rank = |s: &str| {
             ["XS", "S", "M", "L", "XL", "XXL"]
@@ -6613,17 +6616,6 @@ impl App {
             }
             chips.set_inner_html(&h);
         }
-        // Parts of technologies the campaign has not researched are greyed out (the pad refuses them).
-        let locked: std::collections::HashSet<&str> =
-            if self.science.as_ref().map(|s| s.tech_tree).unwrap_or(false) {
-                self.tech
-                    .iter()
-                    .filter(|n| !self.researched.contains(&n.id))
-                    .flat_map(|n| n.parts.iter().map(|p| p.as_str()))
-                    .collect()
-            } else {
-                Default::default()
-            };
         let mut html = String::new();
         let mut group = String::new();
         for p in parts {
@@ -6634,15 +6626,9 @@ impl App {
                     esc(&vab::part_group(&group).0)
                 ));
             }
-            let lock = locked.contains(p.id.as_str());
             html.push_str(&format!(
-                "<li data-ose=\"vab-part\" data-ose-part=\"{id}\"{lock}><img class=\"pi\" src=\"assets/ui/parts/{id}.png\" alt=\"\" loading=\"lazy\" draggable=\"false\" onerror=\"this.parentNode.classList.add('noicon');this.remove()\" /><span class=\"pb\" title=\"size {size}\">{badge}</span><span class=\"pstar{faved}\" title=\"favourite: middle click\">\u{2605}</span><span class=\"pt\">{fav}{title}</span><small>{cat} \u{b7} size {size} \u{b7} {mass:.2} t{extra}</small></li>",
+                "<li data-ose=\"vab-part\" data-ose-part=\"{id}\"><img class=\"pi\" src=\"assets/ui/parts/{id}.png\" alt=\"\" loading=\"lazy\" draggable=\"false\" onerror=\"this.parentNode.classList.add('noicon');this.remove()\" /><span class=\"pb\" title=\"size {size}\">{badge}</span><span class=\"pstar{faved}\" title=\"favourite: middle click\">\u{2605}</span><span class=\"pt\">{fav}{title}</span><small>{cat} \u{b7} size {size} \u{b7} {mass:.2} t{extra}</small></li>",
                 id = esc(&p.id),
-                lock = if lock {
-                    " class=\"locked\" title=\"not researched yet: the launch pad will refuse it\""
-                } else {
-                    ""
-                },
                 title = esc(p.display_title()),
                 fav = if self.vab_favs.contains(&p.id) {
                     "<span class=\"fav\" title=\"favourite (middle click to remove)\">\u{2605}</span> "
@@ -6763,11 +6749,6 @@ impl App {
                 ),
             ));
         }
-        let locked = if row.class_list().contains("locked") {
-            "<p style=\"color:#f0a070\">Not researched yet: the launch pad will refuse a craft with it.</p>"
-        } else {
-            ""
-        };
         // The original's part info panel: maker, name, "# subtitle", description, "## Statistics".
         let stats: String = rows
             .iter()
@@ -6780,7 +6761,7 @@ impl App {
             })
             .collect();
         tip.set_inner_html(&format!(
-            "<div class=\"mk\">{maker}</div><h4>{title}</h4><div class=\"sub\">{subtitle}</div><p>{desc}</p>{locked}<div class=\"sh\">## Statistics</div>{stats}",
+            "<div class=\"mk\">{maker}</div><h4>{title}</h4><div class=\"sub\">{subtitle}</div><p>{desc}</p><div class=\"sh\">## Statistics</div>{stats}",
             maker = esc(&loc("Manufacturer").unwrap_or_default()),
             title = esc(spec.display_title()),
             subtitle = loc("Subtitle")
@@ -9198,15 +9179,22 @@ impl App {
         }
     }
 
-    /// Parts the campaign has not researched (empty in sandbox or before the science state arrives).
+    /// Parts the campaign has not researched (empty in sandbox or before the science state arrives): every
+    /// part no researched node unlocks, those no node unlocks at all included, as the server counts them.
     fn locked_parts(&self) -> std::collections::HashSet<String> {
         if !self.science.as_ref().map(|s| s.tech_tree).unwrap_or(false) {
             return Default::default();
         }
-        self.tech
+        let unlocked: std::collections::HashSet<&str> = self
+            .tech
             .iter()
-            .filter(|n| !self.researched.contains(&n.id))
-            .flat_map(|n| n.parts.iter().cloned())
+            .filter(|n| self.researched.contains(&n.id))
+            .flat_map(|n| n.parts.iter().map(|p| p.as_str()))
+            .collect();
+        self.catalog
+            .keys()
+            .filter(|id| !unlocked.contains(id.as_str()))
+            .cloned()
             .collect()
     }
 
