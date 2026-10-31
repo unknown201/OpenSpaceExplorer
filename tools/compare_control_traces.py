@@ -43,11 +43,38 @@ def unity_to_ose(rows):
         result.append(converted)
     return result
 
+def rebase_shifts(rows):
+    """Cumulative position change between one interval's end and the next interval's start.
+
+    The recorder reads the rigidbody after the physics step and again before the next one; any
+    difference happened outside physics (KSP2 re-bases the single-precision rigidbody each tick, in
+    1.4/2.9 mm steps at orbital radius). Removing it compares only motion that physics produced.
+    """
+    shifts=[[0.0,0.0,0.0]]
+    for previous,row in zip(rows,rows[1:]):
+        jump=[row[k]-previous['end_'+k] if 'end_'+k in previous else 0.0 for k in ['px','py','pz']]
+        shifts.append([s+j for s,j in zip(shifts[-1],jump)])
+    return shifts
+
+def cached_mass_rows(rows):
+    """Candidate sample whose mass the reference's cached vessel mass shows.
+
+    KSP2 refreshes the cached vessel mass once per render frame: a sample in render frame F shows
+    the tank state from the tick before F's first physics tick. Without frame numbers, the same sample.
+    """
+    if 'unity_frame' not in rows[0]:return list(range(len(rows)))
+    first=0;out=[]
+    for i,row in enumerate(rows):
+        if i and row['unity_frame']!=rows[i-1]['unity_frame']:first=i
+        out.append(max(first-1,0))
+    return out
+
 def compare(a,b,angle_deg=0.5,omega=0.01,mass=1e-6,position=0.5,velocity=0.05):
     if len(a)!=len(b):raise ValueError('sample counts differ; resample captures explicitly before comparing')
     angles=[];rates=[];masses=[];positions=[];velocities=[]
     translation=any(abs(r.get('translate_'+axis,0))>1e-6 for r in a for axis in 'xyz')
-    for x,y in zip(a,b):
+    shifts=rebase_shifts(a);cached=cached_mass_rows(a)
+    for i,(x,y) in enumerate(zip(a,b)):
         if abs(x['t']-y['t'])>1e-6:raise ValueError('timestamps differ')
         if any(abs(x[k]-y[k])>1e-6 for k in ['pitch','yaw','roll','throttle']):raise ValueError('applied input traces differ')
         for k in ['translate_x','translate_y','translate_z','rcs']:
@@ -58,9 +85,9 @@ def compare(a,b,angle_deg=0.5,omega=0.01,mass=1e-6,position=0.5,velocity=0.05):
         dot=abs(sum(u*v for u,v in zip(qa,qb))/(na*nb))
         angles.append(math.degrees(2*math.acos(min(1,dot))))
         rates.append(math.sqrt(sum((x[k]-y[k])**2 for k in ['wx','wy','wz'])))
-        masses.append(abs(x['mass_t']-y['mass_t']))
+        masses.append(abs(x['mass_t']-b[cached[i]]['mass_t']))
         if all(k in x and k in y for k in ['px','py','pz','vx','vy','vz']):
-            positions.append(math.sqrt(sum((x[k]-y[k])**2 for k in ['px','py','pz'])))
+            positions.append(math.sqrt(sum((x[k]-shifts[i][n]-y[k])**2 for n,k in enumerate(['px','py','pz']))))
             velocities.append(math.sqrt(sum((x[k]-y[k])**2 for k in ['vx','vy','vz'])))
         elif translation:raise ValueError('translation comparison requires position and linear velocity in both traces')
     result={'samples':len(a),'duration_s':a[-1]['t']-a[0]['t'],'max_angle_deg':max(angles),'rms_angle_deg':math.sqrt(sum(x*x for x in angles)/len(a)),'max_omega_rad_s':max(rates),'max_mass_t':max(masses)}

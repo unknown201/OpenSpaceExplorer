@@ -160,14 +160,33 @@ cargo run -q -p ose-sim --example control_trace -- tools/ksp2-control-capture/fi
 python -B tools/compare_control_traces.py --reference-unity tools/ksp2-control-capture/fixtures/gumball-rcs.csv .cache/gumball-rcs-ose.csv
 ```
 
-This replay **fails**. The shared-request correction reduces maximum mass error
-from 0.001300139 t to 0.0000339914 t; the attitude/rate errors remain 4.22574 degrees
-and 0.0150627 rad/s. The comparator also checks translation inputs, RCS enable,
-position (0.5 m) and velocity (0.05 m/s) for translation fixtures. No input, time,
-pose or controller adjustment was fitted. The first cold-start request, retained
-delivery on subsequent pulses, render-frame input sampling and queued physical
-force are exposed by the captures; the current simulation's same-tick schedule
-does not reproduce them yet. Cached vessel mass also lags the connected tank data.
+This replay **passed** once the timing below was modelled. It was **failing** before
+that change: 4.22574 degrees and 0.0150627 rad/s. Nothing is fitted; every rule
+is read from the captures' own frame, request and end-of-interval columns.
+
+- **Render-frame input.** `Module_RCS` reads translation in Update. A physics tick
+  sees the input as of the end of the previous render frame (`unity_frame`).
+  `control_trace` feeds the simulation that input and prints the applied input
+  unchanged.
+- **Retained delivery.** A module scales its command by the delivery fraction its
+  previous request received. The request posted on a tick is filled after the module
+  has computed that tick's thrust. So a module's first request yields nothing, and an
+  idle module keeps its last delivery. The repeat capture starts with delivery 1,
+  which `control_trace` reads from the first `.rcs.csv` row.
+- **Queued force.** RigidbodyBehavior applies the computed thrust on the following tick.
+- **Rigidbody re-basing.** The start of one interval sits 1.4 or 2.9 mm from the end
+  of the previous one along the orbital radius. That movement happens outside
+  physics. The comparator removes the accumulated discontinuity: 0.579 m over the run.
+- **Cached vessel mass.** `mass_t` is refreshed once per render frame and shows the
+  tank state from the tick before that frame's first physics tick. The comparator
+  reads the candidate's mass at that tick.
+
+| Fixture | Angle | Rate | Position | Mass |
+|---|---|---|---|---|
+| `gumball-rcs` | 0.00037° | 1.8e-6 rad/s | 5.8 mm | 8.9e-10 t |
+| `gumball-rcs-repeat` | 0.0011° | 4.9e-6 rad/s | 5.6 mm | 3.1e-9 t |
+
+The results are in `gumball-rcs-timing.json` and `gumball-rcs-repeat-timing.json`.
 
 Both captures verify that two firing nozzles consume one module request per tick:
 `Module_RCS.CalculateThrust` repeatedly overwrites the same handle, and the final

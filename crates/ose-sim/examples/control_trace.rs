@@ -95,7 +95,22 @@ fn main() {
         p.angvel = w - p.facing * p.roll_rate;
     }
     u.set_powered(vessel, p);
-    u.set_structure(vessel, Structure::build(craft, &defs, &res));
+    let mut structure = Structure::build(craft, &defs, &res);
+    // A repeat capture starts with the delivery its RCS module kept from the previous run.
+    if let Some(path) = args.get(2) {
+        let retained = std::fs::read_to_string(format!("{path}.rcs.csv"))
+            .ok()
+            .and_then(|text| {
+                let mut lines = text.lines();
+                let header: Vec<_> = lines.next()?.split(',').collect();
+                let column = header.iter().position(|c| *c == "delivery")?;
+                lines.next()?.split(',').nth(column)?.parse::<f64>().ok()
+            });
+        if let Some(fraction) = retained {
+            structure.retain_rcs_delivery(fraction);
+        }
+    }
+    u.set_structure(vessel, structure);
     if let Some(row) = initial.filter(|r| r.contains_key("crew_t")) {
         // Seats fill the craft's only crewed part, so the distribution stays unambiguous.
         let crewed: Vec<_> = (0..craft.parts.len())
@@ -172,18 +187,30 @@ fn main() {
                 Some(rows[step].get("rcs").is_some_and(|v| *v != 0.0)),
             );
         }
-        let translation = replay
+        let translation_at = |i: usize| {
+            replay
+                .as_ref()
+                .map(|rows| {
+                    let r = &rows[i];
+                    DVec3::new(
+                        *r.get("translate_x").unwrap_or(&0.),
+                        *r.get("translate_z").unwrap_or(&0.),
+                        *r.get("translate_y").unwrap_or(&0.),
+                    )
+                })
+                .unwrap_or(DVec3::ZERO)
+        };
+        let translation = translation_at(step);
+        // Module_RCS reads translation in Update: a tick sees the input as of the end of the
+        // previous render frame.
+        let seen = replay
             .as_ref()
-            .map(|rows| {
-                let r = &rows[step];
-                DVec3::new(
-                    *r.get("translate_x").unwrap_or(&0.),
-                    *r.get("translate_z").unwrap_or(&0.),
-                    *r.get("translate_y").unwrap_or(&0.),
-                )
+            .and_then(|rows| {
+                let frame = |i: usize| rows[i].get("unity_frame").copied();
+                (0..step).rev().find(|&j| frame(j) < frame(step))
             })
-            .unwrap_or(DVec3::ZERO);
-        u.set_translate(vessel, translation);
+            .unwrap_or(step);
+        u.set_translate(vessel, translation_at(seen));
         let p = u.powered(vessel).unwrap();
         let (x, y, z) = ose_sim::flight::vessel_basis(p);
         let vector = |v: DVec3| glam::DVec3::new(v.x, v.y, v.z);

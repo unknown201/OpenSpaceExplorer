@@ -117,6 +117,10 @@ pub struct Structure {
     wheel_previous_manual: Vec<DVec3>,
     wheel_queued_torque: Vec<DVec3>,
     wheel_accepted_power: Vec<bool>,
+    /// Source RCS modules: the delivery their last propellant request received (kept while idle, 0
+    /// before the first request), and each nozzle's command computed last tick, applied this tick.
+    rcs_retained_delivery: Vec<f64>,
+    rcs_queued_inputs: Vec<Vec<f64>>,
     geometry: Vec<ose_data::flight_geometry::FlightGeometry>,
     controls: Vec<ose_data::flight_geometry::PartControl>,
     control_sources: Vec<bool>,
@@ -397,6 +401,12 @@ impl Structure {
         bx * u.x + by * u.y + bz * (-u.z)
     }
 
+    /// Start every RCS module as if its last propellant request had received `fraction` (a craft that
+    /// has fired before; a new one starts at 0).
+    pub fn retain_rcs_delivery(&mut self, fraction: f64) {
+        self.rcs_retained_delivery.fill(fraction);
+    }
+
     /// Take over what the parts of `old` were doing (`map`: old part index to this structure's): panels,
     /// chutes, heat, gear, converters, fairings, bays.
     pub fn carry_state_from(&mut self, old: &Structure, map: &[Option<usize>]) {
@@ -414,6 +424,8 @@ impl Structure {
             self.wheel_previous_manual[j] = old.wheel_previous_manual[i];
             self.wheel_queued_torque[j] = old.wheel_queued_torque[i];
             self.wheel_accepted_power[j] = old.wheel_accepted_power[i];
+            self.rcs_retained_delivery[j] = old.rcs_retained_delivery[i];
+            self.rcs_queued_inputs[j] = old.rcs_queued_inputs[i].clone();
             self.gimbal_angles[j] = old.gimbal_angles[i].clone();
             self.chutes[j] = old.chutes[i];
             self.chute_open[j] = old.chute_open[i];
@@ -640,6 +652,8 @@ impl Structure {
             wheel_previous_manual: vec![DVec3::ZERO; n],
             wheel_queued_torque: vec![DVec3::ZERO; n],
             wheel_accepted_power: vec![false; n],
+            rcs_retained_delivery: vec![0.; n],
+            rcs_queued_inputs: vec![Vec::new(); n],
             occupied_mass_t: vec![0.; n],
             mirrored: craft
                 .parts
@@ -2980,9 +2994,33 @@ impl Structure {
         if source_broadcast {
             // Module_RCS broadcasts each nozzle's command. Scarce propellant scales
             // that module's delivery; it does not move the command to another nozzle.
+            // The command is scaled by the delivery its previous request received: the
+            // request posted now is filled after the module has computed its thrust, so
+            // a module's first request yields nothing and an idle module keeps its last
+            // delivery. RigidbodyBehavior applies that thrust on the following tick.
+            let mut computed = vec![Vec::new(); self.rigid.len()];
+            for (a, input) in nozzles.iter().zip(&planned.inputs) {
+                computed[a.part].push(input * self.rcs_retained_delivery[a.part]);
+            }
+            for (index, &part) in parts.iter().enumerate() {
+                let demanded = nozzles
+                    .iter()
+                    .zip(&planned.inputs)
+                    .any(|(a, u)| a.part == part && *u > 0.0);
+                if demanded {
+                    self.rcs_retained_delivery[part] = delivered[index];
+                }
+            }
+            let mut cursor = vec![0; self.rigid.len()];
             for (a, input) in nozzles.iter().zip(&mut planned.inputs) {
-                let index = parts.iter().position(|i| *i == a.part).unwrap();
-                *input *= delivered[index];
+                *input = self.rcs_queued_inputs[a.part]
+                    .get(cursor[a.part])
+                    .copied()
+                    .unwrap_or(0.0);
+                cursor[a.part] += 1;
+            }
+            for &part in &parts {
+                self.rcs_queued_inputs[part] = std::mem::take(&mut computed[part]);
             }
         } else if delivered.iter().any(|f| *f < 1.0 - 1e-10) {
             for ((part, budget), fraction) in budgets.iter_mut().zip(delivered) {
@@ -3030,6 +3068,8 @@ impl Structure {
         p.rcs.usage = planned.inputs.iter().sum();
         p.rcs.powered = if requested > 0.0 {
             (p.rcs.usage / requested).min(1.0)
+        } else if p.rcs.usage > 0.0 {
+            1.0 // the queued thrust of a command already released
         } else {
             0.0
         };
@@ -6309,9 +6349,14 @@ mod tests {
                     })
                     .collect();
                 p.rcs.translate = DVec3::new(0.4, 0.8, 0.0);
+                // A module that has fired before: its thrust lands the tick after it is computed.
+                s.retain_rcs_delivery(1.0);
                 let mut engine = s.propulsion(&p, Default::default(), 0.02);
-                s.configure_actuators(&p, Default::default(), &mut engine);
-                s.resolve_wheel_power(&mut p, &body, &mut engine, 0.02);
+                for _ in 0..2 {
+                    engine = s.propulsion(&p, Default::default(), 0.02);
+                    s.configure_actuators(&p, Default::default(), &mut engine);
+                    s.resolve_wheel_power(&mut p, &body, &mut engine, 0.02);
+                }
                 let allocation = engine.control_allocation.unwrap();
                 assert!((allocation.force_kn - DVec3::new(0.4, 0.8, 0.)).length() < 1e-10);
                 let charged = if reference {
@@ -6351,11 +6396,17 @@ mod tests {
                 s.configure_actuators(&p, Default::default(), &mut engine);
                 s.resolve_wheel_power(&mut p, &body, &mut engine, 0.1);
                 let expected = if fraction >= 0.5 { fraction } else { 0.0 };
+                // A nozzle module's delivery scales its next thrust; a mount applies it now.
+                let delivered = |s: &Structure, engine: &crate::flight::Propulsion| {
+                    if has_nozzle {
+                        s.rcs_retained_delivery[pair[0]]
+                    } else {
+                        engine.control_allocation.as_ref().unwrap().force_kn.y
+                            / (100.0 * ose_data::G0)
+                    }
+                };
                 assert!(
-                    (engine.control_allocation.unwrap().force_kn.y
-                        - 100.0 * ose_data::G0 * expected)
-                        .abs()
-                        < 1e-8,
+                    (delivered(&s, &engine) - expected).abs() < 1e-8,
                     "fraction={fraction}"
                 );
                 assert!((engine.burned_t - 0.1 * expected).abs() < 1e-9);
@@ -6368,10 +6419,9 @@ mod tests {
                     s.configure_actuators(&p, Default::default(), &mut engine);
                     s.resolve_wheel_power(&mut p, &body, &mut engine, 0.1);
                     assert!((engine.burned_t - 0.025).abs() < 1e-9);
-                    assert!(
-                        (engine.control_allocation.unwrap().force_kn.y - 25.0 * ose_data::G0).abs()
-                            < 1e-8
-                    );
+                    // 0.025 of the 0.04 requested: above the half-delivery minimum.
+                    let full = if has_nozzle { 1.0 } else { 0.4 };
+                    assert!((delivered(&s, &engine) - 0.625 * full).abs() < 1e-8);
                 }
             }
         }
@@ -6405,19 +6455,48 @@ mod tests {
             s.configure_actuators(&p, Default::default(), &mut engine);
             s.resolve_wheel_power(&mut p, &body, &mut engine, 0.1);
             let first = if fraction >= 0.5 { fraction } else { 0.0 };
-            let allocation = engine.control_allocation.as_ref().unwrap();
-            for (a, input) in engine
-                .actuators
-                .as_ref()
-                .unwrap()
-                .iter()
-                .zip(&allocation.inputs)
-            {
-                assert!((*input - if a.part == pair[0] { first } else { 1.0 }).abs() < 1e-9);
-            }
-            assert!((allocation.force_kn.y - 1.0 - first).abs() < 1e-9);
-            assert!((allocation.torque_knm.z - first + 1.0).abs() < 1e-9);
+            // Each module keeps its own delivery; the starved one is not topped up by the other.
+            assert!((s.rcs_retained_delivery[pair[0]] - first).abs() < 1e-9);
+            assert!((s.rcs_retained_delivery[pair[1]] - 1.0).abs() < 1e-9);
             assert!((engine.burned_t - wants[0] * first - wants[1]).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn reference_rcs_thrust_uses_the_previous_delivery_and_lands_a_tick_later() {
+        // Live KSP2 captures: a module's first request yields nothing, a module that fired before
+        // keeps its delivery, and the computed thrust is applied on the following tick.
+        for warm in [false, true] {
+            let (mut s, mut p, pair, body) = rcs_fixture();
+            s.rcs_defs[pair[1]] = None;
+            let r = s.rcs_defs[pair[0]].as_mut().unwrap();
+            r.request_minimum = Some(0.5);
+            r.thrust_kn = 1.0;
+            r.thrusters = vec![ose_data::ThrustTransform {
+                position_m: DVec3::new(1.0, 0.0, 0.0),
+                direction: DVec3::new(0.0, 1.0, 0.0),
+                weight: 1.0,
+            }];
+            if warm {
+                s.retain_rcs_delivery(1.0);
+            }
+            let mut forces = vec![];
+            for command in [1.0, 1.0, 1.0, 0.0, 0.0] {
+                p.rcs.translate.y = command;
+                let mut engine = s.propulsion(&p, Default::default(), 0.02);
+                s.configure_actuators(&p, Default::default(), &mut engine);
+                s.resolve_wheel_power(&mut p, &body, &mut engine, 0.02);
+                assert!(engine.burned_t > 0.0 || command == 0.0);
+                forces.push(engine.control_allocation.unwrap().force_kn.y);
+            }
+            let expected = if warm {
+                [0.0, 1.0, 1.0, 1.0, 0.0]
+            } else {
+                [0.0, 0.0, 1.0, 1.0, 0.0]
+            };
+            for (force, want) in forces.iter().zip(expected) {
+                assert!((force - want).abs() < 1e-9, "warm={warm} {forces:?}");
+            }
         }
     }
 
@@ -6458,8 +6537,8 @@ mod tests {
         let mut engine = s.propulsion(&p, Default::default(), 0.1);
         s.configure_actuators(&p, Default::default(), &mut engine);
         s.resolve_wheel_power(&mut p, &body, &mut engine, 0.1);
-        assert!((engine.control_allocation.unwrap().force_kn.y - 0.25).abs() < 1e-9);
         assert!((engine.burned_t - want * 0.25).abs() < 1e-12);
+        assert_eq!(s.rcs_retained_delivery[pair[0]], 1.0);
     }
 
     #[test]

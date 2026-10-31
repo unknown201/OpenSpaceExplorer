@@ -6,7 +6,7 @@
   "max_omega_rad_s": 0.14509618248395564,
   "max_mass_t": 1.610169420018792e-08,
   "passed": false,
-  "max_position_m": 0.8571814695864287,
+  "max_position_m": 0.017177291634203267,
   "max_velocity_m_s": 0.0027708815687091794,
   "linear_motion_checked": false
 }
