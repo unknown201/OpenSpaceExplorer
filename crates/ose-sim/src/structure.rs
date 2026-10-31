@@ -3678,9 +3678,9 @@ impl Structure {
         let safety = c.safety;
         let shielded = self.shielded[i] && !c.shielded_can_deploy;
         let heat = &mut self.chute_heat[i];
-        if speed < c.auto_cut_speed_mps && (air.landed || air.splashed) {
-            self.chutes[i] = Chute::Cut;
-        } else if density <= 1.401298464324817e-45 {
+        if (speed < c.auto_cut_speed_mps && (air.landed || air.splashed))
+            || density <= 1.401298464324817e-45
+        {
             self.chutes[i] = Chute::Cut;
         } else if air.splashed {
             heat.temp_k = air.temperature_k;

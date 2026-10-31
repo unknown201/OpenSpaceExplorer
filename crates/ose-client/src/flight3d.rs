@@ -385,6 +385,126 @@ impl Stand {
 }
 
 /// Open canopy diameter for a chute part, m: the Mk16-XL main, the radial Mk16-R and the drogue.
+/// How a parachute canopy hangs from its part (`Module_Parachute.OnModuleFixedUpdate`/`OnLateUpdate`): the
+/// direction it trails in, turned towards the airflow at `rotationSpeedDPS`, and the phase of its
+/// turbulence layer (`fTurbulenceSpeedMul`).
+#[derive(Clone, Copy, Debug)]
+pub struct ChuteLook {
+    dir: DVec3,
+    phase: f32,
+    last_ms: f64,
+}
+
+/// The canopy turns at most this fast towards the airflow, degrees per second (`rotationSpeedDPS`).
+const CHUTE_TURN_DPS: f64 = 90.0;
+/// `oscillationAnimationVelocityThreshold` (m/s) and `oscillationAnimationFrequencyMultiplier`.
+const CHUTE_OSCILLATION_SPEED: f64 = 2.0;
+const CHUTE_OSCILLATION_FREQUENCY: f64 = 0.02;
+/// `spreadAngle` per symmetric sibling, degrees, at most 45 (a third while partly open).
+const CHUTE_SPREAD_DEG: f64 = 7.0;
+
+/// The part's own canopy clip for its state (the original's animator: `isDeployed` opens it partly with
+/// `*_deploy_partial` played over `1 / semiDeploymentSpeed`, `canOpen` the rest of the way with
+/// `*_trans_partial_to_full` over `1 / deploymentSpeed`, then the deployed loop holds). `open` is the
+/// server's 0..1 progress through the current stage; packed and armed chutes show `*_closed`.
+fn chute_clip(
+    rig: &crate::animation::Rig,
+    state: ose_net::ChuteState,
+    open: f32,
+    now_s: f64,
+) -> Option<crate::animation::ClipSample> {
+    use ose_net::ChuteState as S;
+    let find = |suffix: &str| rig.clips.iter().position(|c| c.name.ends_with(suffix));
+    let (clip, time, looping) = match state {
+        S::Stowed | S::Armed => (find("_closed")?, 0.0, false),
+        S::SemiDeployed if open < 1.0 => {
+            let c = find("_deploy_partial")?;
+            (c, open * rig.clips[c].duration, false)
+        }
+        S::SemiDeployed => (find("_deployed_partial")?, now_s as f32, true),
+        S::Deployed if open < 1.0 => {
+            let c = find("_trans_partial_to_full")?;
+            (c, open * rig.clips[c].duration, false)
+        }
+        // Cut keeps the open pose with its canopy hidden (`PlayCutTransition`).
+        S::Deployed | S::Cut => (find("_deployed_full")?, now_s as f32, true),
+    };
+    Some(crate::animation::ClipSample {
+        clip,
+        time,
+        looping,
+    })
+}
+
+/// Turns on the canopy bones that make an opened chute sway: its turbulence clip blended over the open pose
+/// with weight `speed / 2 m/s` (rotation only).
+fn chute_turbulence(
+    rig: &crate::animation::Rig,
+    base: Option<crate::animation::ClipSample>,
+    partial: bool,
+    phase: f32,
+    weight: f32,
+) -> Vec<(usize, glam::Quat)> {
+    let suffix = if partial {
+        "turbulence_partial"
+    } else {
+        "turbulence_full"
+    };
+    let Some(clip) = rig.clips.iter().position(|c| c.name.ends_with(suffix)) else {
+        return Vec::new();
+    };
+    if weight <= 0.0 {
+        return Vec::new();
+    }
+    let open = rig.pose(base);
+    let sway = rig.pose(Some(crate::animation::ClipSample {
+        clip,
+        time: phase,
+        looping: true,
+    }));
+    open.iter()
+        .zip(&sway)
+        .enumerate()
+        .filter(|(_, (a, b))| a.rotation.dot(b.rotation).abs() < 0.999_999)
+        .map(|(i, (a, b))| {
+            let target = a.rotation.slerp(b.rotation, weight);
+            (i, (a.rotation.inverse() * target).normalize())
+        })
+        .collect()
+}
+
+/// The turn on `bone_parachute_parent` that lays the canopy along `trail` (model space): the bone's local
+/// rotation is followed by `Rb^-1 * Q * Rb`, with `Q` the model-space turn from where the canopy points now
+/// (towards `bone_canopy_parent`) to the trail.
+fn chute_aim(
+    rig: &crate::animation::Rig,
+    sample: Option<crate::animation::ClipSample>,
+    extra: &[(usize, glam::Quat)],
+    trail_model: glam::Vec3,
+) -> Option<(usize, glam::Quat)> {
+    let bone = rig
+        .nodes
+        .iter()
+        .position(|n| n.name == "bone_parachute_parent")?;
+    let canopy = rig
+        .nodes
+        .iter()
+        .position(|n| n.name == "bone_canopy_parent")?;
+    let mut pose = rig.pose(sample);
+    for (i, turn) in extra {
+        pose[*i].rotation = (pose[*i].rotation * *turn).normalize();
+    }
+    let world = rig.world_matrices(&pose);
+    let (_, rb, at) = world[bone].to_scale_rotation_translation();
+    let towards = (world[canopy].w_axis.truncate() - at).normalize_or_zero();
+    let trail = trail_model.normalize_or_zero();
+    if towards == glam::Vec3::ZERO || trail == glam::Vec3::ZERO {
+        return None;
+    }
+    let q = glam::Quat::from_rotation_arc(towards, trail);
+    Some((bone, (rb.inverse() * q * rb).normalize()))
+}
+
 fn canopy_diameter(part_id: &str) -> f64 {
     match part_id {
         "parachute_1v" => 12.0,
@@ -555,6 +675,8 @@ pub struct FlightView {
     wheel_travel: f64,
     wheel_last_ms: f64,
     deployments: HashMap<(u64, usize), crate::animation::Deployment>,
+    /// Each open parachute's canopy direction and sway, by (vessel, part).
+    chute_looks: HashMap<(u64, usize), ChuteLook>,
     gimbals: HashMap<(u64, usize), crate::gimbal::Driver>,
     /// Craft axes and local horizon of the last frame, for the navball.
     /// Height above the ground under the vessel (the altimeter's terrain mode), once the body's map is loaded.
@@ -665,6 +787,7 @@ impl FlightView {
             wheel_travel: 0.0,
             wheel_last_ms: 0.0,
             deployments: HashMap::new(),
+            chute_looks: HashMap::new(),
             gimbals: HashMap::new(),
             agl_m: None,
             pick_boxes: Vec::new(),
@@ -1911,13 +2034,22 @@ impl FlightView {
             }
             self.deployments
                 .retain(|(v, i), _| *v == inp.vessel.id && parts.iter().any(|p| p.0 == *i));
-            // The chute parts' own canopy meshes are skinned in their open pose; the canopy is drawn from the
-            // chute's state instead (below).
+            self.chute_looks
+                .retain(|(v, i), _| *v == inp.vessel.id && parts.iter().any(|p| p.0 == *i));
+            // The chute parts' own canopy meshes are skinned in their open pose. A part exported with its
+            // canopy clips is posed from them (below); an older export without them draws the stand-in
+            // canopy instead.
             for name in [
                 "part:parachute_1v",
                 "part:parachute_1v_radial",
                 "part:parachute_0v_radial_drogue",
             ] {
+                if gpu
+                    .model(name)
+                    .is_some_and(|m| m.rig.clips.iter().any(|c| c.name.ends_with("_closed")))
+                {
+                    continue;
+                }
                 gpu.hide_meshes(
                     name,
                     &[
@@ -2156,8 +2288,105 @@ impl FlightView {
                         it.emissive = 0.6 * g;
                     }
                 }
+                // The chute's own animated canopy, trailing the airflow (`Module_Parachute`).
+                let mut animated_chute = false;
+                if let (Some((state, open)), Some(model)) =
+                    (chutes.get(&(i as u16)), gpu.model(&it.model))
+                {
+                    let now_s = inp.now_ms / 1000.0;
+                    let sample = chute_clip(&model.rig, *state, *open, now_s);
+                    if sample.is_some() {
+                        animated_chute = true;
+                        it.animation = sample;
+                        let opened = matches!(
+                            state,
+                            ose_net::ChuteState::SemiDeployed | ose_net::ChuteState::Deployed
+                        );
+                        if *state == ose_net::ChuteState::Cut {
+                            // `PlayCutTransition`: the canopy is gone, the open cap stays
+                            it.hide_containing = Some("canopy");
+                        }
+                        let speed = readout.map(|f| f.surface_speed_mps).unwrap_or(0.0);
+                        let key = (inp.vessel.id, i);
+                        let previous = self.chute_looks.get(&key).copied();
+                        let dt = previous
+                            .map(|l| ((inp.now_ms - l.last_ms) / 1000.0).clamp(0.0, 0.25))
+                            .unwrap_or(0.0);
+                        // symmetric chutes lean apart, a third as much while partly open
+                        let siblings = craft
+                            .parts
+                            .iter()
+                            .enumerate()
+                            .filter(|(j, q)| {
+                                *j != i
+                                    && q.part_id == craft.parts[i].part_id
+                                    && !gone.get(*j).copied().unwrap_or(false)
+                            })
+                            .count();
+                        let mut want = trail;
+                        if siblings > 0 {
+                            let mut spread = (CHUTE_SPREAD_DEG * siblings as f64).min(45.0);
+                            if *state == ose_net::ChuteState::SemiDeployed {
+                                spread /= 3.0;
+                            }
+                            let out = (wpos - pos) - trail * (wpos - pos).dot(trail);
+                            if out.length() > 1e-3 {
+                                let axis = trail.cross(out.normalize()).normalize();
+                                want = DQuat::from_axis_angle(axis, spread.to_radians()) * trail;
+                            }
+                        }
+                        // packed, the canopy follows the airflow at once; open, it swings round at most
+                        // `rotationSpeedDPS`
+                        let dir = match previous.filter(|_| opened) {
+                            Some(l) => {
+                                let angle = l.dir.angle_between(want);
+                                let step = (CHUTE_TURN_DPS * dt).to_radians();
+                                if angle <= step || angle < 1e-6 {
+                                    want
+                                } else {
+                                    let axis = l.dir.cross(want);
+                                    if axis.length() < 1e-9 {
+                                        want
+                                    } else {
+                                        DQuat::from_axis_angle(axis.normalize(), step) * l.dir
+                                    }
+                                }
+                            }
+                            None => want,
+                        };
+                        let phase = previous.map(|l| l.phase).unwrap_or(0.0)
+                            + (dt * CHUTE_OSCILLATION_FREQUENCY * speed) as f32;
+                        self.chute_looks.insert(
+                            key,
+                            ChuteLook {
+                                dir,
+                                phase,
+                                last_ms: inp.now_ms,
+                            },
+                        );
+                        if opened && *open >= 1.0 {
+                            let weight = (speed / CHUTE_OSCILLATION_SPEED).clamp(0.0, 1.0) as f32;
+                            let sway = chute_turbulence(
+                                &model.rig,
+                                sample,
+                                *state == ose_net::ChuteState::SemiDeployed,
+                                phase,
+                                weight,
+                            );
+                            it.node_rotations.extend(sway);
+                        }
+                        if opened || *state == ose_net::ChuteState::Cut {
+                            let trail_model = (it.rotation.inverse() * dir).as_vec3();
+                            if let Some(aim) =
+                                chute_aim(&model.rig, sample, &it.node_rotations, trail_model)
+                            {
+                                it.node_rotations.push(aim);
+                            }
+                        }
+                    }
+                }
                 items.push(it);
-                if let Some((state, open)) = chutes.get(&(i as u16)) {
+                if let Some((state, open)) = chutes.get(&(i as u16)).filter(|_| !animated_chute) {
                     let open = match state {
                         ose_net::ChuteState::SemiDeployed => open.clamp(0.05, 1.0) * 0.35,
                         ose_net::ChuteState::Deployed => open.clamp(0.05, 1.0),

@@ -1188,6 +1188,24 @@ pub fn import_dir(data_dir: &Path, cov: &mut Coverage) -> anyhow::Result<GameDat
     })
 }
 
+/// `Data_Parachute`'s safety fields, the class defaults where a part leaves one out (the EVA chute).
+fn chute_safety(o: &serde_json::Value) -> ose_data::ChuteSafety {
+    let d = ose_data::ChuteSafety::default();
+    let g = |k: &str, default: f64| o[k].as_f64().unwrap_or(default);
+    ose_data::ChuteSafety {
+        max_temp_k: g("chuteMaxTemp", d.max_temp_k),
+        thermal_mass_per_area: g("ChuteThermalMassPerArea", d.thermal_mass_per_area),
+        fraction_exposed: g("ChuteFractionExposed", d.fraction_exposed),
+        area_deployed_m2: g("areaDeployed", d.area_deployed_m2),
+        starting_temp_k: g("startingTemp", d.starting_temp_k),
+        seconds_for_risky: g("SecondsForRisky", d.seconds_for_risky),
+        seconds_for_unsafe: g("SecondsForUnsafe", d.seconds_for_unsafe),
+        mach_safety: g("MachSafetyScalar", d.mach_safety),
+        flux_safety: g("FluxSafetyScalar", d.flux_safety),
+        atmosphere_flux_safety_lerp: g("AtmosphereFluxSafetyLerp", d.atmosphere_flux_safety_lerp),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1709,23 +1727,5 @@ mod tests {
                 .count(),
             9
         );
-    }
-}
-
-/// `Data_Parachute`'s safety fields, the class defaults where a part leaves one out (the EVA chute).
-fn chute_safety(o: &serde_json::Value) -> ose_data::ChuteSafety {
-    let d = ose_data::ChuteSafety::default();
-    let g = |k: &str, default: f64| o[k].as_f64().unwrap_or(default);
-    ose_data::ChuteSafety {
-        max_temp_k: g("chuteMaxTemp", d.max_temp_k),
-        thermal_mass_per_area: g("ChuteThermalMassPerArea", d.thermal_mass_per_area),
-        fraction_exposed: g("ChuteFractionExposed", d.fraction_exposed),
-        area_deployed_m2: g("areaDeployed", d.area_deployed_m2),
-        starting_temp_k: g("startingTemp", d.starting_temp_k),
-        seconds_for_risky: g("SecondsForRisky", d.seconds_for_risky),
-        seconds_for_unsafe: g("SecondsForUnsafe", d.seconds_for_unsafe),
-        mach_safety: g("MachSafetyScalar", d.mach_safety),
-        flux_safety: g("FluxSafetyScalar", d.flux_safety),
-        atmosphere_flux_safety_lerp: g("AtmosphereFluxSafetyLerp", d.atmosphere_flux_safety_lerp),
     }
 }

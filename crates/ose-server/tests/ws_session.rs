@@ -1773,15 +1773,14 @@ async fn a_plane_launched_on_the_runway_lies_level_facing_down_it() {
         _ => None,
     })
     .await;
-    assert_eq!(
-        sites
-            .iter()
-            .find(|s| s.id == "Runway_1")
-            .unwrap()
-            .occupied_by
-            .as_deref(),
-        Some("pilot")
-    );
+    let runway = sites.iter().find(|s| s.id == "Runway_1").unwrap();
+    assert_eq!(runway.occupied_by.as_deref(), Some("pilot"));
+    // the vessel standing there, so its owner can fly it again or recover it from the launch dialog
+    assert_eq!(runway.occupant, Some(vessel));
+    assert!(runway
+        .occupant_name
+        .as_deref()
+        .is_some_and(|n| !n.is_empty()));
     assert!(sites
         .iter()
         .filter(|s| !s.runway)

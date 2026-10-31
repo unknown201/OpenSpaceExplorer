@@ -146,6 +146,36 @@ clamped ends:
   (0.1, 1.2, -0.785/-0.391), (1, 1), (100, 1), (200, 0.82), (500, 0.86, 1.9e-4), (1000, 0.9, 1.5e-5), (10000, 0.95)
 - `LiftMultiplier` 0.036, `LiftDragMultiplier` 0.015 (lifting surfaces, wings; separate module).
 
+Blended cubes (`Data_Drag.SetDragWeightsList`) average each face's area, drag, depth and drag multiplier by
+weight before the formula above, so a parachute half open is not the average of its two drag results. Every stock
+cube has `dragMultiplier` 1 except the parachutes' open shapes (`Module_Parachute.SetDragCube_*`): Mk16
+(`parachute_0v`) SEMIDEPLOYED 1.6 / DEPLOYED 2.0, Mk16-XL (`parachute_1v`) 0.8 / 0.8, radial (`parachute_1v_radial`)
+1.15 / 1.5, drogues 1.5 / 1.3 (`parachute_0v_radial_drogue`) and 7.0 / 0.5 (`parachute_1v_drogue`). An open Mk16 on its
+own brings a ~1 t capsule down at about 5 m/s and the whole 2.4 t starter rocket below 10 m/s.
+
+## Parachutes (`Module_Parachute`, `Data_Parachute`)
+
+- Staging or the deploy action arms a packed chute (not while shielded unless `shieldedCanDeploy`). An armed chute
+  opens partly once moving (`|v|^2 >= minimumSpeedToDeploy`) and either below `deployAltitude` above the ground or in
+  air of at least `minAirPressureToOpen` atm, and, in the default SAFE mode, only while `deploymentSafetyState` is SAFE.
+- SEMIDEPLOYED blends PACKED into SEMIDEPLOYED over `1 / semiDeploymentSpeed` s (2 s stock); once fully semi-open and
+  below `deployAltitude` it goes DEPLOYED, blending SEMIDEPLOYED into DEPLOYED over `1 / deploymentSpeed` s (8.3 s).
+- Canopy heat (`CalculateThermalProperties`, `UpdateCut`): above vessel Mach `MachSafetyScalar` (0.95) the canopy takes
+  `500 M^3 rho^0.53 Cd^0.3 (ChuteFractionExposed areaDeployed) 0.1` kW (`chuteFluxThermalScale` 0.1, read from the
+  prefab), and exchanges `(T_air - T) 50 k areaDeployed 0.1` kW with the air (`k` the conductivity at the height above
+  the ground); thermal mass `areaDeployed * ChuteThermalMassPerArea`. Past `chuteMaxTemp` (750 K stock, 600 K EVA) it is
+  destroyed and cut ("Parachute Destroyed"). There is no KSP1-style speed or dynamic-pressure snap.
+- `UpdateDeploySafety`: SAFE when `entry + (atmoMax + atmo) / 2 < FluxSafetyScalar` or Mach below 0.95; otherwise UNSAFE
+  if the predicted temperature after `SecondsForUnsafe` reaches the maximum, RISKY after `SecondsForRisky`, else SAFE.
+  The prediction uses the packed shape's drag coefficient, so a chute judged SAFE while still supersonic can overheat
+  once its larger open shape meets the flow.
+- An open chute is cut once landed or splashed slower than `autoCutSpeed` (0.5 m/s) and in airless space.
+- Look: the part's animator plays `*_deploy_partial` (semi, scaled by `semiDeploymentSpeed`), `*_trans_partial_to_full`
+  (scaled by `deploymentSpeed`), then the deployed loops with a turbulence layer weighted `|v| / 2 m/s` at speed
+  `0.02 |v|`; `bone_parachute_parent` looks along `-v`, turning at most `rotationSpeedDPS` (90 deg/s), symmetric chutes
+  lean apart by `spreadAngle` (7 deg) per sibling up to 45 deg, a third of that while semi-deployed. A cut chute hides its
+  canopy mesh.
+
 These curves are exported from the loaded `PhysicsSettings` JSON; we
 should load the curves from data rather than hard-coding them.
 

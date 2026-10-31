@@ -1625,6 +1625,8 @@ struct FlightSoundState {
     panels: bool,
     hot: Vec<u16>,
     chutes: Vec<(u16, ose_net::ChuteState)>,
+    /// Parachute canopies burned away.
+    chutes_lost: Vec<u16>,
     bays: Vec<(u16, bool)>,
     fairings_gone: usize,
     /// When the last footstep played (page ms).
@@ -3620,6 +3622,31 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                 .and_then(|s| s.parse::<u64>().ok());
             if let Some(id) = id {
                 a.borrow_mut().launch_craft(id);
+                return;
+            }
+            let attr = |name: &str| {
+                ev.target()
+                    .and_then(|t| t.dyn_into::<Element>().ok())
+                    .and_then(|e| e.closest(&format!("[{name}]")).ok().flatten())
+                    .and_then(|e| e.get_attribute(name))
+                    .and_then(|s| s.parse::<u64>().ok())
+            };
+            if let Some(vessel) = attr("data-ose-lp-fly") {
+                a.borrow_mut().fly_vessel_on_site(vessel);
+                return;
+            }
+            if let Some(vessel) = attr("data-ose-lp-recover") {
+                // `Menu/Launchpad/ConfirmRecoverMessage`
+                let sure = web_sys::window()
+                    .and_then(|w| {
+                        w.confirm_with_message("Do you want to recover your vehicle?")
+                            .ok()
+                    })
+                    .unwrap_or(true);
+                let app = a.borrow();
+                if let (true, Some(ws)) = (sure, &app.ws) {
+                    send(ws, &ClientMessage::RecoverVessel { vessel });
+                }
                 return;
             }
             let orbit = ev
@@ -8585,6 +8612,30 @@ impl App {
         let Some(el) = self.doc.get_element_by_id("lp-info") else {
             return;
         };
+        if let Some(window) = self.doc.get_element_by_id("lp-window") {
+            window
+                .class_list()
+                .toggle_with_force("occupied", self.vessel_on_chosen_site().is_some())
+                .ok();
+        }
+        // A vessel of ours on the pad: the original shows it in place of the vehicle list, with Recover and
+        // Launch (which flies it).
+        if let Some((vessel, name)) = self.vessel_on_chosen_site() {
+            el.set_inner_html(&format!(
+                "<div class=\"lp-occupant\" data-ose=\"lp-occupant\" data-ose-vessel=\"{vessel}\">                 <div class=\"lp-at\">Vessel at {site}</div><h3>{name}</h3>                 <p>Launch to take control of it again, or recover it to clear the pad.</p>                 <div class=\"lp-actions\"><button data-ose=\"lp-recover\" data-ose-lp-recover=\"{vessel}\">Recover</button>                 <button class=\"go\" data-ose=\"lp-fly\" data-ose-lp-fly=\"{vessel}\">Launch</button></div></div>",
+                site = esc(&self.launch_site_name()),
+                name = esc(&name),
+            ));
+            return;
+        }
+        if let Some(owner) = self.chosen_site().and_then(|s| s.occupied_by.clone()) {
+            el.set_inner_html(&format!(
+                "<div class=\"lp-occupant\" data-ose=\"lp-occupied\"><div class=\"lp-at\">{site}</div>                 <h3>In use by {owner}</h3><p>Choose another launch site.</p></div>",
+                site = esc(&self.launch_site_name()),
+                owner = esc(&owner),
+            ));
+            return;
+        }
         let Some(c) = self
             .lp_selected
             .and_then(|id| self.crafts.iter().find(|c| c.id == id))
@@ -9008,6 +9059,51 @@ impl App {
             .unwrap_or_else(|| "Launchpad 1".to_string())
     }
 
+    /// The chosen launch site as the server last listed it.
+    fn chosen_site(&self) -> Option<&ose_net::LaunchSite> {
+        let id = self.launch_site.as_deref().unwrap_or("LaunchPad_1");
+        self.launch_sites.iter().find(|s| s.id == id)
+    }
+
+    /// Whether the vessel standing on a launch site is the player's own.
+    fn site_is_mine(&self, site: &ose_net::LaunchSite) -> bool {
+        let Some(vessel) = site.occupant else {
+            return false;
+        };
+        match self.scene.as_ref().and_then(|s| s.vessel(vessel)) {
+            Some(v) => v.owner.is_some() && v.owner == self.player_id,
+            // before the vessel list arrives: the owner's display name is ours
+            None => site.occupied_by.as_deref() == Some(self.player_name.as_str()),
+        }
+    }
+
+    /// The player's own vessel on the chosen launch site (`LaunchpadDialog`: "Vessel at Launchpad 1").
+    fn vessel_on_chosen_site(&self) -> Option<(u64, String)> {
+        let site = self.chosen_site()?;
+        if !self.site_is_mine(site) {
+            return None;
+        }
+        Some((
+            site.occupant?,
+            site.occupant_name
+                .clone()
+                .unwrap_or_else(|| "Vessel".into()),
+        ))
+    }
+
+    /// Take control of the vessel standing on the launch site (`TakeControlOfVesselAtLauchsite`): back into
+    /// the flight view on it, as the original's Launch does while its pad is occupied.
+    fn fly_vessel_on_site(&mut self, vessel: u64) {
+        self.pending_launch = None;
+        self.tracking_open = false;
+        let craft = stored(&self.craft_link_key(vessel)).and_then(|c| c.parse::<u64>().ok());
+        self.start_flight(vessel, craft);
+        self.show_menu(false);
+        if let Some(name) = self.vessel_name(vessel) {
+            hud::push(&self.doc, &format!("Switched to {name}"), "passive");
+        }
+    }
+
     /// Fill the launch-site choosers (VAB header and launch pad dialog) from the server's list.
     fn render_launch_sites(&self) {
         let chosen = self.launch_site.clone().unwrap_or_default();
@@ -9015,16 +9111,16 @@ impl App {
         for s in &self.launch_sites {
             html.push_str(&format!(
                 "<option value=\"{id}\"{sel}{disabled}>{name}  -  {status}</option>",
-                disabled = if s.occupied_by.is_some() {
+                disabled = if s.occupied_by.is_some() && !self.site_is_mine(s) {
                     " disabled"
                 } else {
                     ""
                 },
-                status = esc(&s
-                    .occupied_by
-                    .as_ref()
-                    .map(|name| format!("In use by {name}"))
-                    .unwrap_or_else(|| "Available".into())),
+                status = esc(&match (&s.occupied_by, &s.occupant_name) {
+                    (Some(_), Some(vessel)) if self.site_is_mine(s) => format!("Your {vessel}"),
+                    (Some(name), _) => format!("In use by {name}"),
+                    _ => "Available".into(),
+                }),
                 id = esc(&s.id),
                 sel = if s.id == chosen || (chosen.is_empty() && s.id == "LaunchPad_1") {
                     " selected"
@@ -9060,6 +9156,12 @@ impl App {
     }
 
     fn launch_craft(&mut self, id: u64) {
+        // the original's Launch takes control of the vessel standing on the pad instead of rolling out
+        // another one (`LaunchpadDialog.LaunchVehicle`)
+        if let Some((vessel, _)) = self.vessel_on_chosen_site() {
+            self.fly_vessel_on_site(vessel);
+            return;
+        }
         let on_pad = !self
             .launch_site
             .as_deref()
@@ -10917,6 +11019,7 @@ impl App {
                 .map(|h| h.0)
                 .collect(),
             chutes,
+            chutes_lost: f.chute_safety.iter().filter(|c| c.3).map(|c| c.0).collect(),
             bays: f.cargo_bays.clone(),
             fairings_gone: f.fairings.iter().filter(|x| x.1).count(),
             step_at: self
@@ -10996,6 +11099,14 @@ impl App {
                         _ => {}
                     }
                 }
+            }
+            // `Module_Parachute.UpdateCut`: "Parachute Destroyed" (PartModules/Notifications)
+            if now.chutes_lost.iter().any(|p| !was.chutes_lost.contains(p)) {
+                hud::push(
+                    &self.doc,
+                    "Parachute Destroyed: parachute was destroyed by aerodynamic or thermal forces",
+                    "alert",
+                );
             }
         }
         self.flight_sound_state = Some(now);

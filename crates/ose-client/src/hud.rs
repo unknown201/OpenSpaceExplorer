@@ -741,6 +741,16 @@ pub fn flight_pam_html(
     }
     if let Some((_, st, open)) = f.parachutes.iter().find(|c| c.0 == i) {
         rows.push_str(&row("Parachute", format!("{st:?} {:.0}%", open * 100.0)));
+        // `deploymentSafetyState`, shown while packed or armed
+        if let Some((_, safety, _, _)) = f
+            .chute_safety
+            .iter()
+            .find(|c| c.0 == i)
+            .filter(|_| matches!(st, ChuteState::Stowed | ChuteState::Armed))
+            .filter(|c| c.1 != ose_net::ChuteSafety::None)
+        {
+            rows.push_str(&row("Chute Safety", format!("{safety:?}")));
+        }
         if matches!(st, ChuteState::Stowed) {
             acts.push_str("<button data-act=\"fh-act-chutes\">Arm parachutes</button>");
         }

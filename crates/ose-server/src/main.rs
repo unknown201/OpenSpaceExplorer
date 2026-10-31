@@ -1284,6 +1284,25 @@ fn flight_readout(
                     .collect()
             })
             .unwrap_or_default(),
+        chute_safety: u
+            .structure(e)
+            .map(|st| {
+                (0..st.chutes.len())
+                    .filter(|&i| st.chute_defs[i].is_some() && st.rigid.present[i])
+                    .map(|i| {
+                        use ose_sim::structure::DeploySafety;
+                        let h = st.chute_heat[i];
+                        let safety = match h.safety {
+                            DeploySafety::Safe => ose_net::ChuteSafety::Safe,
+                            DeploySafety::Risky => ose_net::ChuteSafety::Risky,
+                            DeploySafety::Unsafe => ose_net::ChuteSafety::Unsafe,
+                            DeploySafety::None => ose_net::ChuteSafety::None,
+                        };
+                        (i as u16, safety, h.temp_k as f32, h.destroyed)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
         heat: u
             .structure(e)
             .map(|st| {
@@ -1440,6 +1459,8 @@ fn launch_sites(_home: &str) -> Vec<ose_net::LaunchSite> {
                 name: name.into(),
                 runway,
                 occupied_by: None,
+                occupant: None,
+                occupant_name: None,
                 lat_deg: lat,
                 lon_deg: lon,
                 // planes face down the runway (the scene's +X)
@@ -1449,14 +1470,21 @@ fn launch_sites(_home: &str) -> Vec<ose_net::LaunchSite> {
         .collect()
 }
 
+/// Who stands on a launch site: the owner's display name, the vessel and its name.
+struct Occupant {
+    owner: String,
+    vessel: u64,
+    name: String,
+}
+
 /// Read occupancy under the same universe lock used to spawn, preventing concurrent rollouts.
-fn launch_site_occupant(s: &Shared, u: &Universe, site: &ose_net::LaunchSite) -> Option<String> {
+fn launch_site_occupant(s: &Shared, u: &Universe, site: &ose_net::LaunchSite) -> Option<Occupant> {
     let home = u.body_entity("Kerbin")?;
     let body = u.world.get::<ose_sim::bodies::Body>(home)?;
     let ut = u.tick().seconds();
     let list = s.vessels.lock().expect("vessels lock");
-    for &(entity, _, owner) in list.iter() {
-        let Some((_, reference, _)) = u.vessel(entity) else {
+    for &(entity, vessel, owner) in list.iter() {
+        let Some((v, reference, _)) = u.vessel(entity) else {
             continue;
         };
         if reference != home {
@@ -1470,11 +1498,13 @@ fn launch_site_occupant(s: &Shared, u: &Universe, site: &ose_net::LaunchSite) ->
             * site.lat_deg.to_radians().cos();
         let height = p.r.length() - ose_sim::flight::ground_radius(body, None, p.r, ut);
         if north.hypot(east).hypot(height) < 100.0 {
-            return Some(
-                owner
+            return Some(Occupant {
+                owner: owner
                     .map(|id| display_name_for(s, id))
                     .unwrap_or_else(|| "Unowned vessel".into()),
-            );
+                vessel,
+                name: v.name.clone(),
+            });
         }
     }
     None
@@ -1484,7 +1514,11 @@ fn launch_sites_message(s: &Shared) -> ServerMessage {
     let u = s.universe.lock().expect("sim lock");
     let mut sites = launch_sites("Kerbin");
     for site in &mut sites {
-        site.occupied_by = launch_site_occupant(s, &u, site);
+        if let Some(o) = launch_site_occupant(s, &u, site) {
+            site.occupied_by = Some(o.owner);
+            site.occupant = Some(o.vessel);
+            site.occupant_name = Some(o.name);
+        }
     }
     ServerMessage::LaunchSites { sites }
 }
@@ -1710,8 +1744,8 @@ fn launch_on_pad_now(
     let Some(at) = at.cloned() else {
         return fail(format!("no launch site {}", site.unwrap_or("")));
     };
-    if let Some(owner) = launch_site_occupant(s, &u, &at) {
-        return fail(format!("{} is in use by {}", at.name, owner));
+    if let Some(o) = launch_site_occupant(s, &u, &at) {
+        return fail(format!("{} is in use by {}", at.name, o.owner));
     }
     let (pad_lat, pad_lon) = (at.lat_deg, at.lon_deg);
     let e = u.spawn_powered_on_surface(&name, body, spec, pad_lat, pad_lon);

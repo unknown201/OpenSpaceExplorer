@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 59;
+pub const PROTOCOL_VERSION: u16 = 60;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -736,6 +736,9 @@ pub struct FlightReadout {
     pub tipped: bool,
     /// Parachutes: (craft part index, state, how far open 0..1).
     pub parachutes: Vec<(u16, ChuteState, f32)>,
+    /// Each attached parachute's deploy safety (`deploymentSafetyState`, shown while packed or armed), its
+    /// canopy temperature (K) and whether the canopy burned away (`ParachuteDestroyed`).
+    pub chute_safety: Vec<(u16, ChuteSafety, f32, bool)>,
     /// Parts that are heating up or warm: (craft part index, temperature K, maximum K, re-entry heat kW).
     /// Listed when re-entry heat reaches them or they are above 40% of their maximum.
     pub heat: Vec<(u16, f32, f32, f32)>,
@@ -827,6 +830,12 @@ pub struct LaunchSite {
     /// Display name of the owner of a vessel occupying the spawn area.
     #[serde(default)]
     pub occupied_by: Option<String>,
+    /// The vessel standing there and its name (`LaunchpadDialog`: the vessel at the launch pad, which the
+    /// owner can fly again or recover).
+    #[serde(default)]
+    pub occupant: Option<u64>,
+    #[serde(default)]
+    pub occupant_name: Option<String>,
     pub runway: bool,
     pub lat_deg: f64,
     pub lon_deg: f64,
@@ -878,6 +887,16 @@ pub enum SaveAction {
     QuickLoad,
     RevertToLaunch,
     RevertToEditor,
+}
+
+/// Whether an armed parachute may open now (`Data_Parachute.DeploymentSafeStates`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ChuteSafety {
+    Safe,
+    Risky,
+    Unsafe,
+    /// Out of the air, or already open.
+    None,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
