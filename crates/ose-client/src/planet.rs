@@ -11,7 +11,7 @@ use crate::planet_lod::{self, QuadKey, TerrainVertex};
 use crate::planet_scatter::{
     surface_distance, Exclusion, Far, FarPlacement, Grass, Instance, ScatterFile, FAR_RANGE_M,
 };
-use crate::render::{fetch_bitmap, fetch_bytes, DrawItem, ExtraPass, Renderer};
+use crate::render::{fetch_bitmap, fetch_bytes, srgb_to_linear, DrawItem, ExtraPass, Renderer};
 use glam::{DMat4, DVec3};
 use ose_data::terrain::{TerrainIndex, TerrainMap, TerrainPack};
 use std::cell::RefCell;
@@ -302,6 +302,8 @@ pub struct PlanetRenderer {
     shafts: bool,
     /// sunlight scale for props and their impostors, matching the terrain's exposure
     prop_sun: f32,
+    /// The ground's light at night per unit albedo, after the exposure (`night_light`).
+    night_light: f32,
     grass_pipeline: wgpu::RenderPipeline,
     far_pipeline: wgpu::RenderPipeline,
     far_chunk_buf: wgpu::Buffer,
@@ -540,6 +542,12 @@ impl HazeProbe {
 }
 
 impl PlanetRenderer {
+    /// How bright the ground is at night per unit albedo, in the frame's units (exposure applied): meshes
+    /// outdoors floor their skylight to this, so at night they are as dark as the land around them.
+    pub fn night_light(&self) -> f32 {
+        self.night_light
+    }
+
     /// The aerial perspective to the KSC campus (`HazeProbe`), once measured.
     pub fn haze(&self) -> Option<Haze> {
         self.haze_probe.result
@@ -1162,6 +1170,7 @@ impl PlanetRenderer {
             shadow_map: (gpu.shadow_map().0.clone(), gpu.shadow_map().1.clone()),
             shafts: false,
             prop_sun: 1.0,
+            night_light: 0.0,
             waves_tex,
             waves_view,
             ocean: None,
@@ -2234,6 +2243,22 @@ impl PlanetRenderer {
         // blow out to white.
         self.prop_sun = ((exposure * solar_mean / std::f64::consts::PI) as f32).clamp(1.0, 2.5)
             * (6.0 / exposure as f32).min(1.0);
+        // The terrain's night ambient (planet.wgsl `ambient`: the linear colour times 2/pi) through the exposure.
+        let night = b
+            .info
+            .as_ref()
+            .and_then(|v| v["lighting"]["ambient_night"].as_array())
+            .map(|c| {
+                c.iter()
+                    .take(3)
+                    .filter_map(|v| v.as_f64())
+                    .map(srgb_to_linear)
+                    .sum::<f64>()
+                    / 3.0
+            })
+            .unwrap_or(0.02);
+        self.night_light =
+            (night * 2.0 / std::f64::consts::PI * exposure) as f32 * self.exposure_scale;
         // FFT waves while the camera is low over an ocean world with a spectrum
         let waves_live = has_ocean
             && quality() > 0

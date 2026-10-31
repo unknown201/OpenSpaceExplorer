@@ -2492,11 +2492,14 @@ impl FlightView {
                 ));
                 // The terrain's air on everything drawn outdoors (the campus, its trees, craft): its aerial
                 // perspective, the in-scatter brought to each item's own exposure, and its light as the sun
-                // sinks (the campus stayed noon-bright over darkening land; a floor keeps it from going black,
-                // the terrain's night ambient).
+                // sinks (the campus stayed noon-bright over darkening land). At night the skylight is floored at
+                // the terrain's own night ambient, brought to the item's ambient and exposure: a flat 0.12 left
+                // the campus four times brighter than the black land round it.
                 if let Some(h) = p.haze() {
-                    let sky = h.sky.map(|c| c.max(0.12));
+                    let night = p.night_light();
                     for it in items.iter_mut().filter(|it| it.exposure > 0.0) {
+                        let floor = night / (it.ambient.max(0.08) * it.exposure);
+                        let sky = h.sky.map(|c| c.max(floor));
                         let k = 1.0 / it.exposure;
                         it.haze = Some([
                             [h.t[0], h.t[1], h.t[2], h.d0],
