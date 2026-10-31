@@ -111,11 +111,20 @@ def inverse(m):
 
 
 def decompose(m):
-    """-> (translation, quaternion, scale) of a Unity-frame TRS matrix."""
+    """-> (translation, quaternion, scale) of a Unity-frame TRS matrix.
+
+    A mirrored transform (negative determinant: a prefab placed with a negative scale, as the KSC's dock
+    warehouse, crane, HVAC units and the pads' hypergolic facilities are) keeps its mirror in a negative X scale
+    so the rest is a proper rotation; read as a rotation the reflection came out tilted and turned."""
     t = (m[0][3], m[1][3], m[2][3])
-    s = tuple(math.sqrt(sum(m[i][j] ** 2 for i in range(3))) or 1.0 for j in range(3))
+    s = [math.sqrt(sum(m[i][j] ** 2 for i in range(3))) or 1.0 for j in range(3)]
+    det = (m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+           - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+           + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]))
+    if det < 0:
+        s[0] = -s[0]
     r = [[m[i][j] / s[j] for j in range(3)] for i in range(3)]
-    return t, mat_to_quat(r), s
+    return t, mat_to_quat(r), tuple(s)
 
 
 def to_gltf_trs(m):

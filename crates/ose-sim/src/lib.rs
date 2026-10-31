@@ -1479,6 +1479,14 @@ impl Universe {
         let Some((_, body, orbit)) = self.vessel(e) else {
             return Vec::new();
         };
+        // landed, splashed down or wrecked: no trajectory (the original's map draws none)
+        if self
+            .world
+            .get::<flight::Powered>(e)
+            .is_some_and(|p| p.landed || p.splashed || p.crashed)
+        {
+            return Vec::new();
+        }
         let index = self.world.resource::<bodies::BodyIndex>();
         let mut burns = self.scheduled_burns(e).into_iter();
         let mut kept = Vec::new();
@@ -1684,10 +1692,11 @@ impl Universe {
                         let alt = p.r.length() - body.radius_m;
                         let ground = flight::ground_radius(&body, terrain.as_deref(), p.r, ut);
                         let height = p.r.length() - ground;
-                        // resting on the sea rather than on solid ground
-                        let splashed = p.landed
-                            && surface::solid_radius(&body, terrain.as_deref(), p.r, ut) + 0.5
-                                < ground;
+                        // in the water (`Splashed`): afloat, or resting on the sea rather than on solid ground
+                        let splashed = p.splashed
+                            || (p.landed
+                                && surface::solid_radius(&body, terrain.as_deref(), p.r, ut) + 0.5
+                                    < ground);
                         let flow = structure::Airflow::at(&p, &body, Some(a));
                         st.update_chutes(
                             flow,
@@ -1765,6 +1774,8 @@ impl Universe {
                         };
                     }
                 }
+                // down before this step (the surface setup below already marks a splashdown)
+                let was_landed = p.landed || p.splashed;
                 let env = flight::EngineEnvironment::at(&p, &body, atmo.as_ref());
                 let step_ut = start_ut + i as f64 * step_dt;
                 let propulsion = structure.as_mut().map(|st| {
@@ -1792,7 +1803,6 @@ impl Universe {
                     propulsion
                 });
                 let before = p.clone();
-                let was_landed = p.landed;
                 let mut out = flight::integrate_with_propulsion(
                     &mut p,
                     &body,

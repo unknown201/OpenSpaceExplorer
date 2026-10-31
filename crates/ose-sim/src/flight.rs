@@ -157,6 +157,8 @@ pub enum Attitude {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Situation {
     Landed,
+    /// Afloat or sitting in the water (`VesselSituations.Splashed`).
+    Splashed,
     Flying,
     SubOrbital,
     Orbit,
@@ -184,6 +186,9 @@ pub struct Powered {
     pub attitude: Attitude,
     pub landed: bool,
     pub crashed: bool,
+    /// In the water (`Splashed`): some part is under the sea surface and it is not standing on the ground.
+    #[serde(default)]
+    pub splashed: bool,
     /// Universal time since which the vessel has been coasting above the atmosphere (for the rails handoff).
     pub coasting_since: Option<f64>,
     /// Thrust axis, unit vector in the body-centred inertial frame.
@@ -835,6 +840,7 @@ impl Powered {
             attitude: Attitude::Up,
             landed,
             crashed: false,
+            splashed: false,
             coasting_since: None,
             facing: if r.length_squared() > 0.0 {
                 r.normalized()
@@ -2177,6 +2183,9 @@ pub fn situation(p: &Powered, body: &Body, atmo: Option<&Atmo>) -> Situation {
     }
     if p.landed {
         return Situation::Landed;
+    }
+    if p.splashed {
+        return Situation::Splashed;
     }
     let alt = p.r.length() - body.radius_m;
     if let Some(a) = atmo {

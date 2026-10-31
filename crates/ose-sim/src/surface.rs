@@ -185,6 +185,7 @@ impl Structure {
         self.surface_loads.clear();
         self.suspension_compression_m.fill(0.0);
         propulsion.per_part_contacts = true;
+        p.splashed = false;
         if p.crashed {
             return;
         }
@@ -215,6 +216,7 @@ impl Structure {
                         submerged_box(half, local(frame, up), water - at.length());
                     if volume > 0.0 {
                         p.landed = false;
+                        p.splashed = true;
                         let r = offset + centroid;
                         let arm = world(frame, r);
                         let v = p.v + omega.cross(arm) - spin(body).cross(p.r + arm);

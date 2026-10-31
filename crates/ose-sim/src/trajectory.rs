@@ -208,30 +208,47 @@ fn next_patch(
         end: Transition::Final,
     };
 
-    // 1. Collision with the reference body.
-    // like the original's WillCollideWithParent: test against the highest terrain, not the nominal radius
-    let surface = b.radius_m
-        + world
-            .get::<crate::flight::Terrain>(body)
-            .map(|t| t.0.max_m.max(0.0))
-            .unwrap_or(0.0);
+    // 1. Collision with the reference body: like the original's `WillCollideWithParent` the highest terrain
+    // decides whether to look at all, then the path ends where it first meets the ground under it (terrain,
+    // the sea, the campus), as the original's map draws an impact rather than an orbit through the planet.
+    let terrain = world
+        .get::<crate::flight::Terrain>(body)
+        .map(|t| t.0.clone());
+    let surface = b.radius_m + terrain.as_ref().map(|t| t.max_m.max(0.0)).unwrap_or(0.0);
     if orbit.periapsis() < surface {
+        let height = |t: f64| {
+            let r = orbit.position_at(t);
+            r.length() - crate::flight::ground_radius(b, terrain.as_deref(), r, t)
+        };
+        // up to the next periapsis, or a whole revolution when that lies behind
         let tpe = orbit.time_to_periapsis(start_ut);
-        let mut lo = start_ut;
-        let mut hi = start_ut + tpe.max(0.0);
-        // only if we are currently above the surface and will go below it before periapsis
-        if orbit.position_at(lo).length() > surface && orbit.position_at(hi).length() < surface {
-            for _ in 0..60 {
-                let mid = 0.5 * (lo + hi);
-                if orbit.position_at(mid).length() > surface {
-                    lo = mid;
-                } else {
-                    hi = mid;
+        let span = if tpe > 0.0 && tpe.is_finite() {
+            tpe
+        } else if orbit.period.is_finite() {
+            orbit.period
+        } else {
+            0.0
+        };
+        let steps = 512;
+        let mut prev = (start_ut, height(start_ut));
+        for k in 1..=steps {
+            let t = start_ut + span * k as f64 / steps as f64;
+            let h = height(t);
+            if prev.1 >= 0.0 && h < 0.0 {
+                let (mut lo, mut hi) = (prev.0, t);
+                for _ in 0..50 {
+                    let mid = 0.5 * (lo + hi);
+                    if height(mid) >= 0.0 {
+                        lo = mid;
+                    } else {
+                        hi = mid;
+                    }
                 }
+                patch.end_ut = hi;
+                patch.end = Transition::Collision;
+                return (patch, None);
             }
-            patch.end_ut = hi;
-            patch.end = Transition::Collision;
-            return (patch, None);
+            prev = (t, h);
         }
     }
 
@@ -486,6 +503,44 @@ mod tests {
             "entry {}",
             first.end_ut
         );
+    }
+
+    #[test]
+    fn a_hop_below_the_highest_mountain_ends_where_it_meets_the_ground() {
+        // Kerbin with mountains up to 6 km somewhere but flat sea-level ground under this hop: the path must
+        // end at the ground, not run on through the planet because it started below the highest peak.
+        let (mut world, index) = system(0.0);
+        let kerbin = index.by_id["Kerbin"];
+        let radius = world.get::<Body>(kerbin).unwrap().radius_m;
+        world
+            .entity_mut(kerbin)
+            .insert(crate::flight::Terrain(std::sync::Arc::new(
+                ose_data::terrain::TerrainMap {
+                    width: 2,
+                    height: 2,
+                    scale_m: 0.0,
+                    offset_m: 0.0,
+                    has_ocean: false,
+                    body_radius_m: radius,
+                    data: vec![0; 4],
+                    max_m: 6_000.0,
+                    detail: None,
+                    overlay: None,
+                    flats: vec![],
+                },
+            )));
+        let r0 = radius + 1_000.0;
+        let up = DVec3::new(r0, 0.0, 0.0);
+        let hop = Orbit::from_state_vectors(KERBIN_MU, up, DVec3::new(250.0, 100.0, 0.0), 0.0);
+        let p = predict(&world, &index, kerbin, hop, 0.0, &SolverParams::default());
+        assert_eq!(p[0].end, Transition::Collision, "{p:?}");
+        let impact = p[0].orbit.position_at(p[0].end_ut).length();
+        assert!(
+            (impact - radius).abs() < 1.0,
+            "impact {:.1} m above the ground",
+            impact - radius
+        );
+        assert!(p[0].end_ut > 30.0 && p[0].end_ut < 200.0, "{}", p[0].end_ut);
     }
 
     #[test]

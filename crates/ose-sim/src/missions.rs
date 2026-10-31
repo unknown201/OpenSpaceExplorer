@@ -65,7 +65,8 @@ impl Universe {
             .unwrap_or_default()
     }
 
-    /// Record one flight step for missions: altitude, a touchdown, a crash.
+    /// Record one flight step for missions: altitude, a touchdown or splashdown, a crash. `was_landed` is
+    /// whether the vessel was down (landed or splashed) before the step.
     pub(crate) fn log_flight_step(
         &mut self,
         e: Entity,
@@ -88,7 +89,9 @@ impl Universe {
         let Some(mut log) = self.log_mut(e) else {
             return;
         };
-        if !p.landed {
+        // down on the ground or in the water: the original's Landed and Splashed situations
+        let down = p.landed || p.splashed;
+        if !down {
             log.max_ground_altitude_m = log.max_ground_altitude_m.max(alt);
         }
         if p.crashed && !was_landed {
@@ -100,10 +103,10 @@ impl Universe {
             });
             return;
         }
-        if p.landed && !was_landed {
+        if down && !was_landed {
             log.event(
                 tick,
-                if on_water {
+                if p.splashed || on_water {
                     MissionEvent::LandedOnWater
                 } else {
                     MissionEvent::LandedOnGround
@@ -264,5 +267,106 @@ mod tests {
         assert!(progress.complete, "stuck at stage {}", progress.stage);
         assert_eq!(earned, first.science_reward());
         assert!(u.flight_log(v).unwrap().max_ground_altitude_m > 10_000.0);
+    }
+
+    #[test]
+    fn the_first_mission_completes_when_the_capsule_splashes_down_in_the_sea() {
+        let bodies: Vec<ose_data::CelestialBody> =
+            serde_json::from_str(include_str!("../../../assets/own/kerbol-system.json")).unwrap();
+        let mut kerbin = bodies.into_iter().find(|b| b.id == "Kerbin").unwrap();
+        kerbin.parent = None;
+        kerbin.orbit = None;
+        kerbin.soi_radius_m = None;
+        assert!(kerbin.ocean.is_some(), "Kerbin has a sea");
+        let crafts: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let defs: Vec<ose_data::PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let res: Vec<ose_data::ResourceDef> =
+            serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
+        let missions: Vec<MissionDef> =
+            serde_json::from_str(include_str!("../../../assets/own/missions.json")).unwrap();
+        let first = missions.iter().find(|m| m.id == "Main_Kerbin_01").unwrap();
+        let mut u = Universe::with_bodies(&[kerbin]);
+        let body = u.body_entity("Kerbin").unwrap();
+        // open sea 200 m deep everywhere
+        u.world
+            .entity_mut(body)
+            .insert(flight::Terrain(std::sync::Arc::new(
+                ose_data::terrain::TerrainMap {
+                    width: 2,
+                    height: 2,
+                    scale_m: 0.0,
+                    offset_m: -200.0,
+                    has_ocean: true,
+                    body_radius_m: 600_000.0,
+                    data: vec![0; 4],
+                    max_m: 0.0,
+                    detail: None,
+                    overlay: None,
+                    flats: vec![],
+                },
+            )));
+        // the capsule and its parachute, falling from 11 km
+        let start = crafts
+            .iter()
+            .find(|c| c.name == "Stock12_StartRocket")
+            .unwrap();
+        let report = ose_data::staging::delta_v_by_stage(start, &defs, &res);
+        let spec = flight::FlightSpec::from_report(&report, &[], &[], 1.5);
+        let v = u.spawn_powered_on_surface("Capsule", body, spec, 0.0, 0.0);
+        let mut st = structure::Structure::build(start, &defs, &res);
+        let last = st.stage_parts.len() - 1;
+        st.trim_to(last);
+        u.set_structure(v, st);
+        {
+            let mut p = u.world.get_mut::<flight::Powered>(v).unwrap();
+            let up = p.r.normalized();
+            p.r = up * (600_000.0 + 11_000.0);
+            p.v = p.v - up * 150.0;
+            p.landed = false;
+            p.stage = last;
+            p.ignited = true;
+        }
+        assert!(u.arm_parachutes(v).unwrap() > 0);
+        let mut progress = MissionProgress::default();
+        let mut stage_start = 0;
+        for t in 0..(900 * crate::TICKS_PER_SECOND) {
+            u.step();
+            if t % 25 == 0 {
+                let facts = u.mission_facts(v, stage_start).unwrap();
+                let (_, moved) = progress.advance(first, &[(1, facts)], &AgencyFacts::default());
+                if moved {
+                    stage_start = u.tick().0;
+                }
+                if progress.complete {
+                    break;
+                }
+            }
+        }
+        let p = u.powered(v).unwrap();
+        assert!(p.splashed && !p.landed && !p.crashed, "{p:?}");
+        assert_eq!(
+            flight::situation(p, u.world.get::<bodies::Body>(body).unwrap(), None),
+            flight::Situation::Splashed
+        );
+        let log = u.flight_log(v).unwrap();
+        assert!(log
+            .events
+            .iter()
+            .any(|(_, e)| *e == MissionEvent::LandedOnWater));
+        assert!(log.landed_on.contains(&"Kerbin".to_string()));
+        assert!(u.predict(v).is_empty(), "no trajectory once in the water");
+        assert!(progress.complete, "stuck at stage {}", progress.stage);
+        // afloat and settled, the parachute is cut away as on land (`UpdateCut`: LandedOrSplashed)
+        for _ in 0..(60 * crate::TICKS_PER_SECOND) {
+            u.step();
+        }
+        let st = u.structure(v).unwrap();
+        let chute = (0..st.chutes.len())
+            .find(|&i| st.chute_defs[i].is_some() && st.rigid.present[i])
+            .unwrap();
+        assert_eq!(st.chutes[chute], structure::Chute::Cut);
+        assert!(!st.chute_heat[chute].destroyed);
     }
 }

@@ -506,4 +506,135 @@ mod tests {
             "altitude latched earlier"
         );
     }
+
+    /// Make `v` and `a` meet `c` (the first branch of an Any/OneOf; a Not is left to the defaults).
+    fn satisfy(c: &Condition, v: &mut VesselFacts, a: &mut AgencyFacts) {
+        let num = |op: Op, value: f64| match op {
+            Op::Greater => value + 1.0,
+            Op::Lesser => value - 1.0,
+            Op::Equal => value,
+        };
+        match c {
+            Condition::All(cs) => cs.iter().for_each(|c| satisfy(c, v, a)),
+            Condition::Any(cs) | Condition::OneOf(cs) => {
+                if let Some(c) = cs.first() {
+                    satisfy(c, v, a);
+                }
+            }
+            Condition::Not(_) => {}
+            Condition::Event(e) => v.events.push(e.clone()),
+            Condition::Property {
+                watch,
+                op,
+                value,
+                count,
+                text,
+                input,
+                expect,
+                ..
+            } => {
+                let wanted = if input.is_empty() { text } else { input }.clone();
+                let put = |list: &mut Vec<String>| {
+                    if *expect {
+                        list.push(wanted.clone());
+                    }
+                };
+                match watch {
+                    Watch::Soi => v.soi = text.clone(),
+                    Watch::GroundAltitude => v.ground_altitude_m = num(*op, *value),
+                    Watch::SeaLevelAltitude => v.sea_level_altitude_m = num(*op, *value),
+                    Watch::MaxGroundAltitude => v.max_ground_altitude_m = num(*op, *value),
+                    Watch::PeriapsisAltitude => v.periapsis_altitude_m = num(*op, *value),
+                    Watch::ApoapsisAltitude => v.apoapsis_altitude_m = num(*op, *value),
+                    Watch::OrbitSpeed => v.orbit_speed_mps = num(*op, *value),
+                    Watch::Mass => v.mass_t = num(*op, *value),
+                    Watch::CrewCount => v.crew = num(*op, *count as f64) as i64,
+                    Watch::WheelCount => v.wheels = num(*op, *count as f64) as i64,
+                    Watch::HasPart => put(&mut v.parts),
+                    Watch::HasPartInGroup => put(&mut v.part_families),
+                    Watch::PartActivated => put(&mut v.activated_parts),
+                    Watch::HasStoredReport => put(&mut v.stored_reports),
+                    Watch::HasScoredReport => put(&mut a.scored_reports),
+                    Watch::ResearchLocation => v.research_location = text.clone(),
+                    Watch::EscapePredictedSoi => put(&mut v.predicted_sois),
+                    Watch::LandedOnBody => put(&mut v.landed_on),
+                    Watch::IsEva => {
+                        v.eva = if input.is_empty() {
+                            true
+                        } else {
+                            input == "true"
+                        }
+                    }
+                    Watch::LastDestroyedMaxGroundAltitude => {
+                        a.last_destroyed_max_ground_altitude_m = num(*op, *value)
+                    }
+                    Watch::DestroyedByCollision => {
+                        if *expect {
+                            a.last_destroyed_hit = wanted.clone();
+                        }
+                    }
+                    Watch::Other(_) => {}
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_stage_of_every_offered_mission_can_be_met() {
+        let missions: Vec<MissionDef> =
+            serde_json::from_str(include_str!("../../../assets/own/missions.json")).unwrap();
+        let playable: Vec<&MissionDef> = missions.iter().filter(|m| m.playable()).collect();
+        assert!(playable.len() >= 30, "{} playable", playable.len());
+        for m in playable {
+            let mut progress = MissionProgress::default();
+            let mut earned = 0.0;
+            for (k, stage) in m.stages.iter().enumerate() {
+                assert_eq!(progress.stage, k, "{}", m.id);
+                let mut v = VesselFacts::default();
+                let mut a = AgencyFacts::default();
+                if let Some(c) = &stage.condition {
+                    satisfy(c, &mut v, &mut a);
+                }
+                let (got, moved) = progress.advance(m, &[(1, v)], &a);
+                earned += got;
+                assert!(
+                    moved,
+                    "{} stage {} ({}) cannot be met",
+                    m.id, k, stage.objective_key
+                );
+                if progress.complete {
+                    break;
+                }
+            }
+            assert!(
+                progress.complete,
+                "{} stuck at stage {}",
+                m.id, progress.stage
+            );
+            assert_eq!(earned, m.science_reward(), "{}", m.id);
+        }
+    }
+
+    #[test]
+    fn landing_objectives_count_a_splashdown_wherever_the_original_does() {
+        // the return-home stages ask for VesselLandedAfterFlight, which the original sends for Landed and
+        // Splashed alike; the water-only ones ask for VesselLandedWaterAtRestMessage
+        let missions: Vec<MissionDef> =
+            serde_json::from_str(include_str!("../../../assets/own/missions.json")).unwrap();
+        let first = missions.iter().find(|m| m.id == "Main_Kerbin_01").unwrap();
+        for down in [MissionEvent::LandedOnGround, MissionEvent::LandedOnWater] {
+            let mut progress = MissionProgress {
+                stage: 1,
+                ..Default::default()
+            };
+            let v = VesselFacts {
+                soi: "Kerbin".into(),
+                max_ground_altitude_m: 12_000.0,
+                events: vec![down.clone(), MissionEvent::LandedAfterFlight],
+                ..Default::default()
+            };
+            progress.advance(first, &[(1, v)], &AgencyFacts::default());
+            assert!(progress.complete, "{down:?}");
+        }
+    }
 }

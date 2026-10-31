@@ -458,6 +458,19 @@ impl Camera {
     }
 }
 
+/// Whether a craft document (the library craft a vessel was launched from) still has every part the vessel
+/// flies, by guid. A craft edited and saved again after the launch does not, and drawing the vessel from it
+/// hides the vessel's parts it no longer lists.
+pub fn craft_covers(doc: Option<&ose_data::craft::Craft>, flown: &ose_data::craft::Craft) -> bool {
+    let Some(doc) = doc else {
+        return false;
+    };
+    flown
+        .parts
+        .iter()
+        .all(|p| doc.parts.iter().any(|d| d.guid == p.guid))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -642,5 +655,52 @@ mod tests {
         c.zoom_at(0.5, sx, sy);
         let (sx2, sy2) = c.to_screen(p, centre);
         assert!((sx - sx2).abs() < 1e-6 && (sy - sy2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_craft_edited_after_its_launch_no_longer_covers_the_vessel() {
+        let part = |guid: &str| ose_data::craft::CraftPart {
+            symmetry: 0,
+            actions: Vec::new(),
+            flight: None,
+            colors: None,
+            guid: guid.into(),
+            part_id: "pod_1v_conical_crew".into(),
+            parent: None,
+            own_node: None,
+            parent_node: None,
+            local_position: ose_math::DVec3::ZERO,
+            local_rotation: ose_data::craft::Quat {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                w: 1.0,
+            },
+            stage_index: 0,
+            fuel_crossfeed: true,
+            resources: vec![],
+            fuel_line_target: None,
+        };
+        let craft = |guids: &[&str]| ose_data::craft::Craft {
+            colors: None,
+            loose: Vec::new(),
+            name: "c".into(),
+            description: String::new(),
+            parts: guids.iter().map(|g| part(g)).collect(),
+            stages: Vec::new(),
+        };
+        let flown = craft(&["p1", "p2", "p3"]);
+        // staged since: the vessel has fewer parts, the document still draws it
+        assert!(craft_covers(
+            Some(&craft(&["p1", "p2", "p3"])),
+            &craft(&["p1", "p2"])
+        ));
+        assert!(craft_covers(Some(&craft(&["p1", "p2", "p3"])), &flown));
+        // edited and saved again: tank and engine replaced, a science part added
+        assert!(!craft_covers(
+            Some(&craft(&["p1", "p7", "p8", "p9"])),
+            &flown
+        ));
+        assert!(!craft_covers(None, &flown));
     }
 }

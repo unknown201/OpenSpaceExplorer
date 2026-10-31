@@ -3159,3 +3159,206 @@ async fn session_ownership_presence_and_cleanup() {
     .await;
     assert!(sessions.iter().all(|s| s.id != "shared"));
 }
+
+#[tokio::test]
+async fn a_second_vab_rocket_rolls_out_whole_after_the_pad_is_cleared() {
+    let (_server, addr) = spawn_server_with(&["--db", ":memory:", "--save", "none"], None).await;
+    let mut ws = connect_ws(&addr).await;
+    hello(&mut ws, None, "pilot").await;
+    send_msg(
+        &mut ws,
+        &ClientMessage::CreateSession {
+            name: "Pad twice".into(),
+            mode: ose_net::SessionMode::Sandbox,
+            difficulty: Vec::new(),
+        },
+    )
+    .await;
+    wait_for(&mut ws, |m| {
+        matches!(m, ServerMessage::CampaignState { .. }).then_some(())
+    })
+    .await;
+    let mut craft = starter_craft();
+    craft.parts[1].resources = vec![ose_data::craft::StoredResource {
+        resource: "Methalox".into(),
+        stored_units: 1.0,
+        capacity_units: 1.0,
+    }];
+    craft.parts[2].stage_index = 1;
+    // a science part on the side of the tank, as the editor attaches it
+    let mut science = craft.parts[1].clone();
+    science.guid = "d".into();
+    science.part_id = "collector_0v_radial_science_general".into();
+    science.parent = Some(1);
+    science.own_node = Some("srfAttach".into());
+    science.parent_node = None;
+    science.local_position = ose_math::DVec3::new(0.66, -1.0, 0.0);
+    science.resources = vec![];
+    craft.parts.push(science);
+    let parts = craft.parts.len();
+    for round in 0..2 {
+        send_msg(
+            &mut ws,
+            &ClientMessage::LaunchAt {
+                craft: craft.clone(),
+                site: None,
+                crew: None,
+            },
+        )
+        .await;
+        let vessel = wait_for(&mut ws, |m| match m {
+            ServerMessage::CraftLaunched { vessel, reason, .. } => {
+                assert!(reason.is_none(), "round {round}: {reason:?}");
+                vessel
+            }
+            _ => None,
+        })
+        .await;
+        // for a few seconds on the pad: nothing breaks off, it does not move
+        let mut first_alt = None;
+        for _ in 0..30 {
+            let (rev, f, others) = wait_for(&mut ws, |m| match m {
+                ServerMessage::Vessels { vessels, .. } => {
+                    let v = vessels.iter().find(|v| v.id == vessel)?;
+                    Some((v.craft_rev, v.flight.clone()?, vessels.len()))
+                }
+                _ => None,
+            })
+            .await;
+            assert_eq!(
+                rev % 1024,
+                0,
+                "round {round}: parts were lost on the pad ({others} vessels)"
+            );
+            assert_eq!(
+                f.situation,
+                ose_net::FlightSituation::Landed,
+                "round {round}: {f:?}"
+            );
+            let alt = *first_alt.get_or_insert(f.altitude_m);
+            assert!(
+                (f.altitude_m - alt).abs() < 0.05,
+                "round {round}: {alt} -> {}",
+                f.altitude_m
+            );
+        }
+        let _ = parts;
+        if round == 0 {
+            // another player cannot clear it away
+            let mut other = connect_ws(&addr).await;
+            hello(&mut other, None, "other pilot").await;
+            send_msg(&mut other, &ClientMessage::ClearLaunchSite { site: None }).await;
+            wait_for(&mut other, |m| match m {
+                ServerMessage::LaunchSiteCleared {
+                    cleared, reason, ..
+                } => {
+                    assert_eq!(cleared, 0);
+                    assert!(reason.unwrap().contains("in use by pilot"));
+                    Some(())
+                }
+                _ => None,
+            })
+            .await;
+            // the VAB's "clear the launchpad?": the owner clears it and rolls the next one out
+            send_msg(&mut ws, &ClientMessage::ClearLaunchSite { site: None }).await;
+            wait_for(&mut ws, |m| match m {
+                ServerMessage::LaunchSiteCleared {
+                    cleared, reason, ..
+                } => {
+                    assert!(reason.is_none(), "{reason:?}");
+                    assert_eq!(cleared, 1);
+                    Some(())
+                }
+                _ => None,
+            })
+            .await;
+        } else {
+            send_msg(&mut ws, &ClientMessage::RecoverVessel { vessel }).await;
+            wait_for(&mut ws, |m| match m {
+                ServerMessage::ScienceSubmitted {
+                    vessel: v,
+                    recovered,
+                    reason,
+                    ..
+                } if v == vessel => {
+                    assert!(recovered, "round {round}: {reason:?}");
+                    Some(())
+                }
+                _ => None,
+            })
+            .await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_capsule_decoupled_on_the_pad_comes_down_onto_the_deck() {
+    let (_server, addr) = spawn_server_with(&["--db", ":memory:", "--save", "none"], None).await;
+    let mut ws = connect_ws(&addr).await;
+    hello(&mut ws, None, "pilot").await;
+    send_msg(
+        &mut ws,
+        &ClientMessage::CreateSession {
+            name: "Pad drop".into(),
+            mode: ose_net::SessionMode::Sandbox,
+            difficulty: Vec::new(),
+        },
+    )
+    .await;
+    wait_for(&mut ws, |m| {
+        matches!(m, ServerMessage::CampaignState { .. }).then_some(())
+    })
+    .await;
+    let mut craft = starter_craft();
+    // pod, decoupler, tank, Swivel: the decoupler fires in the second stage
+    let mut decoupler = craft.parts[1].clone();
+    decoupler.guid = "e".into();
+    decoupler.part_id = "decoupler_1v_inline".into();
+    decoupler.local_position = ose_math::DVec3::new(0.0, -0.39, 0.0);
+    craft.parts.insert(1, decoupler);
+    craft.parts[2].parent = Some(1);
+    craft.parts[2].local_position = ose_math::DVec3::new(0.0, -0.9, 0.0);
+    craft.parts[3].parent = Some(2);
+    craft.parts[3].local_position = ose_math::DVec3::new(0.0, -2.18, 0.0);
+    craft.stages = vec![vec![1], vec![3]];
+    send_msg(
+        &mut ws,
+        &ClientMessage::LaunchAt {
+            craft,
+            site: None,
+            crew: None,
+        },
+    )
+    .await;
+    let vessel = wait_for(&mut ws, |m| match m {
+        ServerMessage::CraftLaunched { vessel, reason, .. } => {
+            assert!(reason.is_none(), "{reason:?}");
+            vessel
+        }
+        _ => None,
+    })
+    .await;
+    let flight = |m: ServerMessage| match m {
+        ServerMessage::Vessels { vessels, .. } => vessels
+            .iter()
+            .find(|v| v.id == vessel)
+            .and_then(|v| v.flight.clone()),
+        _ => None,
+    };
+    let standing = wait_for(&mut ws, flight).await;
+    // light the (throttled down) engine, then fire the decoupler on the pad
+    send_msg(&mut ws, &ClientMessage::Stage { vessel }).await;
+    send_msg(&mut ws, &ClientMessage::Stage { vessel }).await;
+    let mut last = standing.clone();
+    for _ in 0..60 {
+        last = wait_for(&mut ws, flight).await;
+    }
+    assert!(last.stage >= 1, "{last:?}");
+    assert!(
+        last.altitude_m < standing.altitude_m,
+        "the capsule rests on the deck, not where it sat on the tank: {:.2} m -> {:.2} m ({:?})",
+        standing.altitude_m,
+        last.altitude_m,
+        last.situation
+    );
+}

@@ -233,6 +233,17 @@ pub fn steer_target(
     }
 }
 
+/// Whether E (Ctrl+E anywhere) sends a Kerbal out of the hatch. The original has no EVA key (its crew
+/// portraits' EVA button does it) and binds E to roll right in flight, so plain E goes EVA only where rolling
+/// means nothing: standing on the ground or afloat. Ctrl+E works in the air and in space as well.
+pub fn eva_key(situation: ose_net::FlightSituation, crew: usize, on_eva: bool, ctrl: bool) -> bool {
+    use ose_net::FlightSituation as S;
+    crew > 0
+        && !on_eva
+        && situation != S::Crashed
+        && (ctrl || matches!(situation, S::Landed | S::Splashed))
+}
+
 /// Keys the player can rebind (Settings > Input, the original's `InputRebindingController`): the action's
 /// name and its default physical key. The rest of the client handles the default keys; [`Remap`] turns a
 /// pressed key into the default key of the action it is bound to.
@@ -478,5 +489,20 @@ mod tests {
         assert_eq!(k.pitch(), 0.0);
         k.clear();
         assert_eq!(k.throttle(), 0.0);
+    }
+
+    #[test]
+    fn e_goes_on_eva_on_the_ground_and_in_the_water_and_ctrl_e_anywhere() {
+        use ose_net::FlightSituation as S;
+        assert!(eva_key(S::Landed, 1, false, false));
+        assert!(eva_key(S::Splashed, 1, false, false));
+        // in flight E rolls; Ctrl+E still opens the hatch (a space walk)
+        assert!(!eva_key(S::Orbit, 1, false, false));
+        assert!(eva_key(S::Orbit, 1, false, true));
+        assert!(eva_key(S::SubOrbital, 2, false, true));
+        // nobody aboard, already a Kerbal, a wreck
+        assert!(!eva_key(S::Landed, 0, false, true));
+        assert!(!eva_key(S::Landed, 1, true, false));
+        assert!(!eva_key(S::Crashed, 1, false, true));
     }
 }

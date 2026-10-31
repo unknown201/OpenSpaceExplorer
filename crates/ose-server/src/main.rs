@@ -922,6 +922,7 @@ fn flight_readout(
         Situation::Orbit => ose_net::FlightSituation::Orbit,
         Situation::Escaping => ose_net::FlightSituation::Escaping,
         Situation::Crashed => ose_net::FlightSituation::Crashed,
+        Situation::Splashed => ose_net::FlightSituation::Splashed,
     };
     let stage_prop = p.current_stage().map(|s| s.propellant_t).unwrap_or(0.0);
     let ec = u
@@ -1479,8 +1480,31 @@ struct Occupant {
 
 /// Read occupancy under the same universe lock used to spawn, preventing concurrent rollouts.
 fn launch_site_occupant(s: &Shared, u: &Universe, site: &ose_net::LaunchSite) -> Option<Occupant> {
-    let home = u.body_entity("Kerbin")?;
-    let body = u.world.get::<ose_sim::bodies::Body>(home)?;
+    site_vessels(s, u, site)
+        .into_iter()
+        .next()
+        .map(|(_, vessel, owner, name)| Occupant {
+            owner: owner
+                .map(|id| display_name_for(s, id))
+                .unwrap_or_else(|| "Unowned vessel".into()),
+            vessel,
+            name,
+        })
+}
+
+/// Every vessel within 100 m of a launch site (`GetAllVesselsInRange`): (entity, id, owner, name).
+fn site_vessels(
+    s: &Shared,
+    u: &Universe,
+    site: &ose_net::LaunchSite,
+) -> Vec<(bevy_ecs::entity::Entity, u64, Option<u64>, String)> {
+    let mut found = Vec::new();
+    let Some(home) = u.body_entity("Kerbin") else {
+        return found;
+    };
+    let Some(body) = u.world.get::<ose_sim::bodies::Body>(home) else {
+        return found;
+    };
     let ut = u.tick().seconds();
     let list = s.vessels.lock().expect("vessels lock");
     for &(entity, vessel, owner) in list.iter() {
@@ -1498,16 +1522,54 @@ fn launch_site_occupant(s: &Shared, u: &Universe, site: &ose_net::LaunchSite) ->
             * site.lat_deg.to_radians().cos();
         let height = p.r.length() - ose_sim::flight::ground_radius(body, None, p.r, ut);
         if north.hypot(east).hypot(height) < 100.0 {
-            return Some(Occupant {
-                owner: owner
-                    .map(|id| display_name_for(s, id))
-                    .unwrap_or_else(|| "Unowned vessel".into()),
-                vessel,
-                name: v.name.clone(),
-            });
+            found.push((entity, vessel, owner, v.name.clone()));
         }
     }
-    None
+    found
+}
+
+/// `ClearLaunchSite`: remove the player's own vessels from a launch site, as the original's VAB does before
+/// rolling out onto an occupied pad (`OABProvider.ClearVesselsAtSelectedLaunchSite`).
+fn clear_launch_site(s: &Shared, player_id: u64, site: Option<&str>) -> ServerMessage {
+    let sites = launch_sites("Kerbin");
+    let at = match site {
+        None => sites.first(),
+        Some(id) => sites.iter().find(|x| x.id == id),
+    };
+    let Some(at) = at.cloned() else {
+        return ServerMessage::LaunchSiteCleared {
+            site: site.unwrap_or("").into(),
+            cleared: 0,
+            reason: Some(format!("no launch site {}", site.unwrap_or(""))),
+        };
+    };
+    let mut u = s.universe.lock().expect("sim lock");
+    let there = site_vessels(s, &u, &at);
+    if let Some((_, _, owner, _)) = there
+        .iter()
+        .find(|(_, _, owner, _)| owner.is_some_and(|o| o != player_id))
+    {
+        let name = owner.map(|o| display_name_for(s, o)).unwrap_or_default();
+        return ServerMessage::LaunchSiteCleared {
+            site: at.id,
+            cleared: 0,
+            reason: Some(format!("{} is in use by {}", at.name, name)),
+        };
+    }
+    for (e, _, _, _) in &there {
+        u.despawn_vessel(*e);
+    }
+    let gone: Vec<_> = there.iter().map(|(e, _, _, _)| *e).collect();
+    s.vessels
+        .lock()
+        .expect("vessels lock")
+        .retain(|(e, _, _)| !gone.contains(e));
+    tracing::info!(player = player_id, site = %at.id, cleared = gone.len(), "launch site cleared");
+    ServerMessage::LaunchSiteCleared {
+        site: at.id,
+        cleared: gone.len() as u32,
+        reason: None,
+    }
 }
 
 fn launch_sites_message(s: &Shared) -> ServerMessage {
@@ -2009,9 +2071,14 @@ fn science_request(s: &Shared, player_id: u64, msg: ClientMessage) -> Vec<Server
                         .vessel(e)
                         .and_then(|(_, body, _)| u.body_id(body).map(|b| b == home))
                         .unwrap_or(false);
-                    let landed = u.powered(e).is_some_and(|p| p.landed && !p.crashed);
+                    // the original recovers a vessel Landed or Splashed on the home world
+                    let landed = u
+                        .powered(e)
+                        .is_some_and(|p| (p.landed || p.splashed) && !p.crashed);
                     if !(on_home && landed) {
-                        return fail("only a vessel standing on Kerbin can be recovered");
+                        return fail(
+                            "only a vessel landed or splashed down on Kerbin can be recovered",
+                        );
                     }
                 }
                 if !recover {
@@ -3362,6 +3429,10 @@ async fn session(mut socket: WebSocket, s: AppState) {
                         }
                         Ok(ClientMessage::KerbalRoster) => {
                             let reply = kerbal_roster(&s);
+                            if !send(&mut socket, &reply).await { break; }
+                        }
+                        Ok(ClientMessage::ClearLaunchSite { site }) => {
+                            let reply = clear_launch_site(&s, player_id, site.as_deref());
                             if !send(&mut socket, &reply).await { break; }
                         }
                         Ok(ClientMessage::LaunchAt { craft, site, crew }) => {

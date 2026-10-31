@@ -37,6 +37,7 @@ pub fn situation(
         Some(FlightSituation::Orbit) => "Orbiting",
         Some(FlightSituation::Escaping) => "Escaping",
         Some(FlightSituation::Crashed) => "Crashed",
+        Some(FlightSituation::Splashed) => "Splashed",
         None if periapsis_m < radius_m + atmosphere_m => "Sub-orbital",
         None => "Orbiting",
     }
@@ -126,7 +127,7 @@ pub fn render_list(
 
 /// The selected vessel's card.
 pub fn render_info(r: &Row) -> String {
-    let recover = r.mine && r.situation == "Landed" && r.body == "Kerbin";
+    let recover = r.mine && matches!(r.situation, "Landed" | "Splashed") && r.body == "Kerbin";
     format!(
         "<h3>{name}</h3><div class=\"ts-owner\">{owner}</div><dl>\
          <dt>Body</dt><dd>{body}</dd><dt>Situation</dt><dd>{sit}</dd><dt>Altitude</dt><dd>{alt}</dd>\
@@ -156,7 +157,7 @@ pub fn render_info(r: &Row) -> String {
         rec = if recover {
             ""
         } else {
-            " disabled title=\"land your vessel on Kerbin to recover it\""
+            " disabled title=\"land or splash down on Kerbin to recover it\""
         },
     )
 }
@@ -218,7 +219,7 @@ pub fn render_vessel_map_info(r: &Row, x: &VesselExtra) -> String {
     sit.push_str(&row(
         "Trajectory Type",
         match r.situation {
-            "Landed" | "Crashed" => "none",
+            "Landed" | "Splashed" | "Crashed" => "none",
             "Escaping" => "escape",
             "Sub-orbital" | "Flying" => "sub-orbital",
             _ => "orbit",
@@ -445,6 +446,11 @@ mod tests {
         assert!(!mine.contains("data-ose-ts-recover=\"2\" disabled"));
         let theirs = render_info(&rows[0]);
         assert!(theirs.contains("data-ose-ts-fly=\"1\" disabled"));
+        // splashed down is as recoverable as landed; flying is not
+        let splashed = render_info(&row(3, "Wet", true, "Splashed"));
+        assert!(!splashed.contains("data-ose-ts-recover=\"3\" disabled"));
+        let flying = render_info(&row(4, "Up", true, "Flying"));
+        assert!(flying.contains("data-ose-ts-recover=\"4\" disabled"));
         assert_eq!(km(1_500.0), "1500 m");
         assert_eq!(km(85_000.0), "85.0 km");
     }

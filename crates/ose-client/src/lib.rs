@@ -381,6 +381,8 @@ struct App {
     raw_rotation_sent: Option<(u64, [f32; 3])>,
     /// Launch sites from the server (protocol 30) and the one chosen (None: launch pad 1), kept per browser.
     launch_sites: Vec<ose_net::LaunchSite>,
+    /// A craft to roll out once the launch site has been cleared of the player's vessel on it.
+    launch_after_clear: Option<u64>,
     launch_site: Option<String>,
     /// The campaign's astronauts (`KerbalRoster`), the one shown in the Training Center, and the launch
     /// dialog's crew picks with the craft they were made for.
@@ -844,6 +846,7 @@ pub fn start() -> Result<(), JsValue> {
         precision_sent: None,
         raw_rotation_sent: None,
         launch_sites: Vec::new(),
+        launch_after_clear: None,
         launch_site: stored("ose.launchSite"),
         loading_place: None,
         vessel_crafts: Default::default(),
@@ -4701,7 +4704,20 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
             if app.flying.is_some() && !menu_open {
                 // The original's flight bindings (KSP.Input/GameInput.cs). Rotation, throttle steps and wheels
                 // act while held and are read every frame (flight_keys_tick); these act once.
+                let eva_key = app
+                    .flying
+                    .and_then(|id| app.scene.as_ref()?.vessel(id))
+                    .and_then(|v| v.flight.as_ref())
+                    .is_some_and(|f| {
+                        input::eva_key(f.situation, f.crew.len(), f.eva, ev.ctrl_key())
+                    });
                 let handled = match code.as_str() {
+                    // out of the hatch: E on the ground or afloat, Ctrl+E anywhere (`input::eva_key`)
+                    "KeyE" if !ev.repeat() && !ev.alt_key() && eva_key => {
+                        ev.prevent_default();
+                        app.crew_eva(None);
+                        true
+                    }
                     "F12" => {
                         ev.prevent_default();
                         app.aero_overlay = !app.aero_overlay;
@@ -5878,6 +5894,15 @@ impl App {
             }
             ServerMessage::VesselCraft { vessel, craft } => {
                 let rev = self.vessel_craft_asked.get(&vessel).copied().unwrap_or(0);
+                // The library document the flown vessel was launched from may have been edited and saved
+                // again since: when it lacks parts the vessel has, draw the vessel's own craft instead.
+                if let (Some(c), true) = (&craft, self.flying == Some(vessel)) {
+                    if !scene::craft_covers(self.flight_craft.as_ref(), c) {
+                        self.flight_craft =
+                            Some(ose_data::craft::level_layout(c).unwrap_or_else(|| c.clone()));
+                        self.flight_craft_id = None;
+                    }
+                }
                 self.vessel_crafts.insert(vessel, (rev, craft));
             }
             ServerMessage::KerbalRoster { kerbals } => {
@@ -5889,6 +5914,31 @@ impl App {
                     self.render_launchpad_info();
                 }
             }
+            ServerMessage::LaunchSiteCleared {
+                site,
+                cleared: _,
+                reason,
+            } => match reason {
+                None => {
+                    // the next snapshot lists the site free; until then it is free here too
+                    if let Some(s) = self.launch_sites.iter_mut().find(|s| s.id == site) {
+                        s.occupied_by = None;
+                        s.occupant = None;
+                        s.occupant_name = None;
+                    }
+                    self.render_launch_sites();
+                    if let Some(id) = self.launch_after_clear.take() {
+                        self.launch_craft(id);
+                    }
+                }
+                Some(why) => {
+                    self.launch_after_clear = None;
+                    set_text(&self.doc, "menu-note", &format!("launch refused: {why}"));
+                    if self.vab_active() {
+                        set_text(&self.doc, "vab-report", &format!("launch refused: {why}"));
+                    }
+                }
+            },
             ServerMessage::LaunchSites { sites } => {
                 if self.launch_sites == sites {
                     return;
@@ -8759,7 +8809,9 @@ impl App {
         let low = f.is_some_and(|f| {
             matches!(
                 f.situation,
-                ose_net::FlightSituation::Landed | ose_net::FlightSituation::Flying
+                ose_net::FlightSituation::Landed
+                    | ose_net::FlightSituation::Splashed
+                    | ose_net::FlightSituation::Flying
             )
         });
         let speed = match f {
@@ -9156,10 +9208,27 @@ impl App {
     }
 
     fn launch_craft(&mut self, id: u64) {
-        // the original's Launch takes control of the vessel standing on the pad instead of rolling out
-        // another one (`LaunchpadDialog.LaunchVehicle`)
-        if let Some((vessel, _)) = self.vessel_on_chosen_site() {
-            self.fly_vessel_on_site(vessel);
+        // A vessel of ours still on the pad: the original's VAB asks to clear the launchpad first and rolls
+        // the new craft out after (`ObjectAssemblyBuilder.HandleOccupiedLaunchpadWarningModal`,
+        // `ClearAndLaunch`). Flying the old vessel instead put an earlier, edited craft on screen with the
+        // new craft's parts missing.
+        if let Some((_, name)) = self.vessel_on_chosen_site() {
+            let sure = web_sys::window()
+                .and_then(|w| {
+                    w.confirm_with_message(&format!(
+                        "Selected launchpad is occupied by your {name}. Do you want to clear the launchpad?"
+                    ))
+                    .ok()
+                })
+                .unwrap_or(true);
+            if !sure {
+                return;
+            }
+            let site = self.chosen_site().map(|s| s.id.clone());
+            if let Some(ws) = &self.ws {
+                self.launch_after_clear = Some(id);
+                send(ws, &ClientMessage::ClearLaunchSite { site });
+            }
             return;
         }
         let on_pad = !self
@@ -10771,8 +10840,11 @@ impl App {
                 .part_resources
                 .iter()
                 .any(|r| r.1 == "Ablator" && r.3 > 0.0 && r.2 < 1e-3),
-            recoverable: matches!(f.situation, ose_net::FlightSituation::Landed)
-                && body.is_some_and(|b| b.id == "Kerbin")
+            // the original recovers a vessel Landed or Splashed on the home world
+            recoverable: matches!(
+                f.situation,
+                ose_net::FlightSituation::Landed | ose_net::FlightSituation::Splashed
+            ) && body.is_some_and(|b| b.id == "Kerbin")
                 && !f.eva,
             transferring: f.transfer.is_some(),
         };

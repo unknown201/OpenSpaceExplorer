@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 60;
+pub const PROTOCOL_VERSION: u16 = 61;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -160,6 +160,12 @@ pub enum ClientMessage {
     /// `ScienceSubmitted`.
     RecoverVessel {
         vessel: u64,
+    },
+    /// Clear a launch site of the player's own vessels before rolling out another (the original's VAB
+    /// "Selected launchpad is occupied. Do you want to clear the launchpad?", `ClearVesselsAtSelectedLaunchSite`).
+    /// Refused while another player's vessel stands there. Answers `LaunchSiteCleared`.
+    ClearLaunchSite {
+        site: Option<String>,
     },
     /// Ask for the campaign's science, tech tree and missions; answers `ScienceState`.
     ScienceInfo,
@@ -629,6 +635,8 @@ pub enum FlightSituation {
     Orbit,
     Escaping,
     Crashed,
+    /// In the water: afloat or sitting on the sea floor in the shallows.
+    Splashed,
 }
 
 /// Powered-flight readout, present on a `VesselState` while the vessel is under the flight model.
@@ -1144,6 +1152,12 @@ pub enum ServerMessage {
     /// The launch sites, sent after `DifficultyOptions`.
     LaunchSites {
         sites: Vec<LaunchSite>,
+    },
+    /// Answer to `ClearLaunchSite`: how many vessels were removed, or why not.
+    LaunchSiteCleared {
+        site: String,
+        cleared: u32,
+        reason: Option<String>,
     },
     /// Answer to `ClientMessage::StageReport`: per stage, first-firing first, and the whole craft's vacuum
     /// delta-v.
