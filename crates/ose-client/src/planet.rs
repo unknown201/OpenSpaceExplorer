@@ -1998,6 +1998,21 @@ impl PlanetRenderer {
         }
         let radius = view.radius_m;
         let cam = [view.cam.x, view.cam.y, view.cam.z];
+        // Grass and far impostors are drawn in this pass but placed by `scatter_items`, which the map view never
+        // calls: left from the KSC or a flight, they stood in space around the map's camera. Above their range
+        // nothing of them can be seen, so they go (and are placed again when the camera comes back down).
+        {
+            let b = self.bodies.get_mut(&id).unwrap();
+            let ground = planet_lod::map_height(b.map.as_ref(), cam);
+            let left = b.grass.is_some() || b.far.is_some() || b.far_pending.is_some();
+            if left && view.cam.length() - radius - ground > FAR_RANGE_M {
+                b.grass = None;
+                b.grass_at = None;
+                b.far = None;
+                b.far_at = None;
+                b.far_pending = None;
+            }
+        }
         let has_ocean = self.bodies[&id]
             .map
             .as_ref()

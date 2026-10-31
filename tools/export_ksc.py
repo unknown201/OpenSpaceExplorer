@@ -32,6 +32,8 @@ BUNDLE = "kerbin-ksc_assets_all.bundle"
 NAV_ENUM = ["Invalid", "AirTraffic", "AstronautComplex", "TrackingCenter", "ResearchCenter", "TrainingCenter", "VAB", "Launchpad_1", "Launchpad_2", "Launchpad_3", "Launchpad_4", "Runway_1", "Runway_2", "Boat_Launch", "Launch_Site_Generic"]
 # Small props that add thousands of draws and nothing to a replica seen from the KSC camera.
 SKIP_MESH_SUBSTRINGS = ("runway_light", "light_housing", "ksc_light_aviation", "tireMarks", "_Sign", "streetlight", "street_light", "ksc_prop_lights")
+# The campus trees: they looked nothing like KSP2's spaceport.
+SKIP_TREE_SUBSTRINGS = ("SM_FLTree",)
 
 
 def main() -> int:
@@ -297,6 +299,9 @@ def main() -> int:
             skipped_missing += 1
             continue
         if not a.keep_lights and any(s in mesh_name for s in SKIP_MESH_SUBSTRINGS):
+            skipped_prop += 1
+            continue
+        if any(s in mesh_name or s in n.name for s in SKIP_TREE_SUBSTRINGS):
             skipped_prop += 1
             continue
         mi = mesh_index(mfr.m_Mesh)

@@ -92,6 +92,46 @@ use ose_net::{
 
 const BODY_LABEL_CLASS: &str = "body";
 
+/// The menu's screens (`screen-<name>` in index.html).
+const MENU_SCREENS: [&str; 9] = [
+    "name",
+    "sessions",
+    "ksc",
+    "launchpad",
+    "vab",
+    "rnd",
+    "mission",
+    "training",
+    "paused",
+];
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum EscAction {
+    /// Open the Game Menu over what is showing.
+    Pause,
+    /// Close the Game Menu, back to where it was opened.
+    Resume,
+    /// Leave a facility for the KSC.
+    ToKsc,
+    /// Bring the hidden title menu back.
+    ShowMenu,
+    Nothing,
+}
+
+/// What Esc does, given whether the player is in a campaign and the menu screen showing (`None`: the menu is
+/// hidden, in flight, the map or the tracking station). As the original: Esc closes a facility to the KSC and
+/// opens the Game Menu elsewhere; it never hides the menu over nothing (that left the bare orbital view of
+/// whichever body had focus).
+fn esc_action(in_session: bool, screen: Option<&str>) -> EscAction {
+    match (in_session, screen) {
+        (false, None) => EscAction::ShowMenu,
+        (false, Some(_)) => EscAction::Nothing,
+        (true, Some("paused")) => EscAction::Resume,
+        (true, Some("rnd" | "mission" | "training" | "launchpad")) => EscAction::ToKsc,
+        (true, _) => EscAction::Pause,
+    }
+}
+
 struct App {
     doc: Document,
     canvas: HtmlCanvasElement,
@@ -229,6 +269,8 @@ struct App {
     flying: Option<u64>,
     flight_craft: Option<ose_data::craft::Craft>,
     map_mode: bool,
+    /// The menu screen the Game Menu was opened over (the KSC, the VAB), for Resume and Esc to go back to.
+    paused_from: std::cell::Cell<Option<&'static str>>,
     /// Craft id of a launch waiting for `CraftLaunched`.
     pending_launch: Option<u64>,
     /// Body spin from `BodyRotation`, index-aligned with the catalog (empty until it arrives).
@@ -736,6 +778,7 @@ pub fn start() -> Result<(), JsValue> {
         flying: None,
         flight_craft: None,
         map_mode: false,
+        paused_from: std::cell::Cell::new(None),
         pending_launch: None,
         body_spins: Vec::new(),
         tech: rnd::tree(),
@@ -1933,7 +1976,7 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         Box::new(|a| a.borrow().menu_screen("name")),
     )?;
     wire("to-sessions", Box::new(|a| a.borrow_mut().leave_session()))?;
-    wire("resume", Box::new(|a| a.borrow().show_menu(false)))?;
+    wire("resume", Box::new(|a| a.borrow().resume()))?;
     wire("ksc-sessions", Box::new(|a| a.borrow_mut().leave_session()))?;
     wire(
         "to-ksc",
@@ -4851,17 +4894,16 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
             }
             match ev.key().as_str() {
                 "f" | "F" => app.frame_focus(),
-                "Escape" => {
-                    let open = app
-                        .doc
-                        .get_element_by_id("menu")
-                        .map(|m| !m.class_list().contains("hidden"))
-                        .unwrap_or(false);
-                    app.show_menu(!open);
-                    if !open && app.in_session {
+                "Escape" => match esc_action(app.in_session, app.open_menu_screen()) {
+                    EscAction::Pause => {
+                        app.show_menu(true);
                         app.audio.play("ui_esc_open");
                     }
-                }
+                    EscAction::Resume => app.resume(),
+                    EscAction::ToKsc => app.open_ksc(),
+                    EscAction::ShowMenu => app.show_menu(true),
+                    EscAction::Nothing => {}
+                },
                 "." | ">" => {
                     app.warp_to = None;
                     let w = kerbin_time::next_warp(app.requested_warp);
@@ -6192,7 +6234,28 @@ impl App {
         }
     }
 
+    /// The menu screen showing, if the menu is open.
+    fn open_menu_screen(&self) -> Option<&'static str> {
+        MENU_SCREENS.into_iter().find(|s| self.screen_open(s))
+    }
+
+    /// Leave the Game Menu for where it was opened: the KSC or the VAB behind the menu, or the flight, map or
+    /// tracking station when the menu was over nothing (hiding it then showed the last orbital view instead).
+    fn resume(&self) {
+        match self.paused_from.take() {
+            Some(screen) if self.in_session => self.menu_screen(screen),
+            _ if self.in_session && self.flying.is_none() && !self.tracking_open => self.open_ksc(),
+            _ => self.show_menu(false),
+        }
+    }
+
     fn show_menu(&self, open: bool) {
+        if open {
+            self.paused_from.set(
+                self.open_menu_screen()
+                    .filter(|s| !matches!(*s, "paused" | "name" | "sessions")),
+            );
+        }
         if let Some(m) = self.doc.get_element_by_id("menu") {
             if open {
                 m.class_list().remove_1("hidden").ok();
@@ -6232,17 +6295,7 @@ impl App {
                 )
                 .ok();
         }
-        for id in [
-            "name",
-            "sessions",
-            "ksc",
-            "launchpad",
-            "vab",
-            "rnd",
-            "mission",
-            "training",
-            "paused",
-        ] {
+        for id in MENU_SCREENS {
             if let Some(el) = self.doc.get_element_by_id(&format!("screen-{id}")) {
                 if id == which {
                     el.class_list().add_1("open").ok();
@@ -11177,6 +11230,33 @@ impl App {
         }
     }
 
+    /// The Mission Tracker in the corner: the missions taken on, at the KSC, in the VAB and in the tracking
+    /// station; not in sandbox (no missions), on the facility screens or the menus. Flight has its own, on the
+    /// app bar (`fh-missions`).
+    fn update_mission_tracker(&self) {
+        let Some(el) = self.doc.get_element_by_id("mission-tracker") else {
+            return;
+        };
+        let tracked = self
+            .science
+            .as_ref()
+            .filter(|s| s.tech_tree)
+            .map(|s| missions::tracked(&s.missions))
+            .unwrap_or_default();
+        let place = matches!(self.open_menu_screen(), None | Some("ksc" | "vab"));
+        let show = self.in_session && self.flying.is_none() && place && !tracked.is_empty();
+        el.class_list().toggle_with_force("open", show).ok();
+        if !show {
+            return;
+        }
+        let html = missions::render_tracker(&tracked, &self.loc);
+        let key = format!("{}:{}", html.len(), hud::fnv(&html));
+        if el.get_attribute("data-ose-key").as_deref() != Some(key.as_str()) {
+            el.set_inner_html(&html);
+            el.set_attribute("data-ose-key", &key).ok();
+        }
+    }
+
     fn update_flight_hud(&self) {
         let Some(id) = self.flying else { return };
         if let Some(el) = self.doc.get_element_by_id("flight-hud") {
@@ -12313,6 +12393,7 @@ impl App {
             self.update_hud(ut);
         }
         self.update_flight_hud();
+        self.update_mission_tracker();
         self.update_flight_instruments();
         self.toasts.watch(&self.doc, "fh-note", "alert");
         self.flight_keys_tick(now);
@@ -13776,4 +13857,26 @@ fn vab_nodes(catalog: &vab::Catalog, id: &str) -> Vec<(glam::DVec3, glam::DVec3)
                 .collect()
         })
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn esc_never_hides_the_menu_over_nothing() {
+        // the KSC and the VAB open the Game Menu, which Esc closes again
+        assert_eq!(esc_action(true, Some("ksc")), EscAction::Pause);
+        assert_eq!(esc_action(true, Some("vab")), EscAction::Pause);
+        assert_eq!(esc_action(true, Some("paused")), EscAction::Resume);
+        // the facilities go back to the KSC
+        for s in ["rnd", "mission", "training", "launchpad"] {
+            assert_eq!(esc_action(true, Some(s)), EscAction::ToKsc);
+        }
+        // flight, map, tracking station
+        assert_eq!(esc_action(true, None), EscAction::Pause);
+        // the title menu stays up
+        assert_eq!(esc_action(false, Some("sessions")), EscAction::Nothing);
+        assert_eq!(esc_action(false, None), EscAction::ShowMenu);
+    }
 }

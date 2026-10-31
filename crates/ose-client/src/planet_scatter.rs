@@ -193,9 +193,8 @@ pub struct Exclusion {
     pub az: V3,
     pub x: [f64; 2],
     pub z: [f64; 2],
-    /// Keeps trees, rocks and far impostors out (a facility); `false` for an area that only sinks the terrain
-    /// under a site model and keeps grass off it (the campus footprint, whose lawns and banks the original
-    /// plants as its vegetation mask says).
+    /// A facility; `false` for the area that sinks the terrain under a site model (the campus footprint). Every
+    /// exclusion keeps grass, trees and rocks off it.
     pub props: bool,
 }
 
@@ -222,9 +221,10 @@ fn excluded(ex: &[Exclusion], p: V3) -> bool {
     ex.iter().any(|e| e.contains(p))
 }
 
-/// Trees, rocks and far impostors: only the facilities keep them out.
+/// Trees, rocks and their far impostors stay off the whole campus footprint: the trees and boulders grown on
+/// its banks and lawns did not look like KSP2's spaceport, whose grounds are kept clear.
 fn excluded_props(ex: &[Exclusion], p: V3) -> bool {
-    ex.iter().any(|e| e.props && e.contains(p))
+    excluded(ex, p)
 }
 
 /// On a launch pad's island in a site model (the KSC campus): within 480 m of a pad, on the model's own

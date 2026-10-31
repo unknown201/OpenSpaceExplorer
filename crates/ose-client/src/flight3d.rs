@@ -841,8 +841,8 @@ impl FlightView {
     }
 
     /// The campus in the model frame for the planet renderer: the footprint (all facility boxes, 300 m wider),
-    /// which sinks the terrain under the campus model and keeps grass off it, then each facility 100 m wider,
-    /// which keeps trees and rocks off it (around them the original's vegetation grows up to the campus).
+    /// which sinks the terrain under the campus model and keeps grass, trees and rocks off it, then each
+    /// facility 100 m wider.
     fn ksc_exclusions(&self, pos: DVec3, rot: DQuat) -> Vec<crate::planet_scatter::Exclusion> {
         let Some(foot) = self.ksc_exclusion(pos, rot) else {
             return Vec::new();

@@ -179,13 +179,16 @@ pub struct BodyCard {
     pub orbit: Option<(String, f64, f64, f64, f64)>,
 }
 
-/// One row of the body list: catalog index, name, depth in the hierarchy (0 the star).
+/// One row of the body list: catalog index, name, depth in the hierarchy (0 the star). Each body shows its
+/// render (`assets/ui/bodies/<id>.png`, tools/render_body_icons.py), as the original's list does; without it,
+/// the flat planet glyph.
 pub fn render_body_list(bodies: &[(usize, String, usize)], selected: Option<usize>) -> String {
     let mut html = String::from("<li class=\"ts-section\">Celestial Bodies</li>");
     for (i, name, depth) in bodies {
         html.push_str(&format!(
             "<li class=\"ts-body{sel}\" data-ose=\"ts-body\" data-ose-body=\"{i}\" style=\"padding-left:{pad}px\">\
-             <span class=\"name\">{name}</span></li>",
+             <span class=\"name\"><img class=\"bi\" src=\"assets/ui/bodies/{name}.png\" alt=\"\" \
+             onerror=\"this.parentNode.classList.add('noicon');this.remove()\" />{name}</span></li>",
             sel = if selected == Some(*i) { " selected" } else { "" },
             pad = 10 + 14 * depth,
             name = esc(name),

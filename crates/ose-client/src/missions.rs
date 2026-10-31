@@ -223,6 +223,65 @@ pub fn render_briefing(
     )
 }
 
+/// Missions shown in the tracker: those taken on and not yet handed in.
+pub fn tracked(progress: &[ose_net::MissionInfo]) -> Vec<&ose_net::MissionInfo> {
+    let mut t: Vec<_> = progress
+        .iter()
+        .filter(|m| m.accepted && !m.turned_in)
+        .collect();
+    t.sort_by_key(|m| !m.primary);
+    t
+}
+
+/// The original's Mission Tracker: each tracked mission's name and current objective, under Primary and
+/// Secondary Missions; a completed one says to hand it in at Mission Control.
+pub fn render_tracker(missions: &[&ose_net::MissionInfo], loc: &HashMap<String, String>) -> String {
+    let mut html = format!(
+        "<div class=\"mt-head\">{}</div>",
+        esc(&text(loc, "Missions/MissionTracker/Header"))
+    );
+    for primary in [true, false] {
+        let group: Vec<_> = missions.iter().filter(|m| m.primary == primary).collect();
+        if group.is_empty() {
+            continue;
+        }
+        html.push_str(&format!(
+            "<div class=\"mt-group\">{}</div>",
+            esc(&text(
+                loc,
+                if primary {
+                    "Missions/MissionTracker/PrimaryMissions"
+                } else {
+                    "Missions/MissionTracker/SecondaryMissions"
+                }
+            ))
+        ));
+        for m in group {
+            let (cls, objective) = if m.complete {
+                (
+                    " complete",
+                    format!(
+                        "{}: {}",
+                        text(loc, "Missions/MissionControl/Completed"),
+                        text(loc, "Missions/MissionTracker/GoToMissionControl")
+                    ),
+                )
+            } else {
+                ("", text(loc, &m.objective_key).into_owned())
+            };
+            html.push_str(&format!(
+                "<div class=\"mt-mission{cls}\" data-ose-mission=\"{id}\"><div class=\"mt-name\">{name}</div>                 <div class=\"mt-objective\">{objective}<span class=\"mt-stage\">{stage}/{stages}</span></div></div>",
+                id = esc(&m.id),
+                name = esc(&text(loc, &m.name_key)),
+                objective = esc(&objective),
+                stage = (m.stage + u32::from(!m.complete)).min(m.stages),
+                stages = m.stages,
+            ));
+        }
+    }
+    html
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,5 +297,57 @@ mod tests {
         assert!(list.contains("data-ose=\"mc-mission\""));
         let b = render_briefing(&m[0], &loc, None);
         assert!(b.contains("<h3>"));
+    }
+
+    fn info(
+        id: &str,
+        primary: bool,
+        accepted: bool,
+        turned_in: bool,
+        complete: bool,
+    ) -> ose_net::MissionInfo {
+        ose_net::MissionInfo {
+            id: id.into(),
+            name_key: format!("Missions/{id}/Name"),
+            description_key: String::new(),
+            primary,
+            granter: String::new(),
+            stage: 1,
+            stages: 3,
+            objective_key: if complete {
+                String::new()
+            } else {
+                format!("Missions/{id}/Obj")
+            },
+            complete,
+            science_reward: 0.0,
+            accepted,
+            turned_in,
+        }
+    }
+
+    #[test]
+    fn tracker_lists_taken_missions_primary_first() {
+        let all = [
+            info("side", false, true, false, false),
+            info("offered", true, false, false, false),
+            info("done", true, true, true, true),
+            info("main", true, true, false, false),
+            info("ready", false, true, false, true),
+        ];
+        let t = tracked(&all);
+        let ids: Vec<_> = t.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["main", "side", "ready"]);
+        let loc = HashMap::from([
+            ("Missions/main/Obj".to_string(), "Reach orbit".to_string()),
+            (
+                "Missions/MissionTracker/Header".to_string(),
+                "Mission Tracker".to_string(),
+            ),
+        ]);
+        let html = render_tracker(&t, &loc);
+        assert!(html.contains("Mission Tracker"));
+        assert!(html.contains("Reach orbit<span class=\"mt-stage\">2/3</span>"));
+        assert!(html.contains("mt-mission complete"));
     }
 }

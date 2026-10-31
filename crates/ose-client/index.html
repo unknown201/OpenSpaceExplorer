@@ -674,6 +674,18 @@
     #vab-pam .pam-row input[type=checkbox] { justify-self: start; }
     /* Notification toasts, top right (the original's NotificationManager). Flight notes show here instead of
        under the altimeter. */
+    /* The Mission Tracker outside flight (the KSC, the VAB, the tracking station): the missions taken on. */
+    #mission-tracker { display: none; position: fixed; top: calc(60 * var(--u, 1px)); right: calc(16 * var(--u, 1px)); z-index: 30; width: calc(280 * var(--u, 1px)); max-height: 45vh; overflow-y: auto; background: #10141be6; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u, 1px)); padding: calc(8 * var(--u, 1px)) calc(10 * var(--u, 1px)); color: #e6ecf7; font: calc(12 * var(--u, 1px)) var(--ui-font, system-ui); pointer-events: none; }
+    #mission-tracker.open { display: block; }
+    #mission-tracker .mt-head { font-weight: 700; font-size: calc(13 * var(--u, 1px)); color: #fff; }
+    #mission-tracker .mt-group { margin-top: calc(6 * var(--u, 1px)); color: #9fb0cc; font-size: calc(10 * var(--u, 1px)); text-transform: uppercase; letter-spacing: 0.04em; }
+    #mission-tracker .mt-mission { padding: calc(4 * var(--u, 1px)) 0; border-top: 1px solid #ffffff14; }
+    #mission-tracker .mt-name { color: #fff; font-weight: 600; }
+    #mission-tracker .mt-objective { color: #c4d0e4; display: flex; gap: 6px; justify-content: space-between; }
+    #mission-tracker .mt-stage { color: #9fb0cc; flex: none; }
+    #mission-tracker .complete .mt-objective { color: #7dff8a; }
+    body:has(#mission-tracker.open) #toasts { top: auto; bottom: calc(80 * var(--u, 1px)); }
+    body.ui-hidden #mission-tracker { display: none !important; }
     #toasts { position: fixed; top: calc(92 * var(--u, 1px)); right: calc(16 * var(--u, 1px)); z-index: 40; display: flex; flex-direction: column; gap: 6px; pointer-events: none; max-width: 360px; }
     #toasts .toast { background: #10141bf0; border: 1px solid #ffffff2a; border-left: 4px solid #9fb0cc; border-radius: 6px; padding: 8px 12px; color: #e6ecf7; font: 13px var(--ui-font, system-ui); box-shadow: 0 4px 14px #0008; animation: toast-in 0.2s ease-out, toast-out 0.6s ease-in 5.4s forwards; }
     #labels #map-ap, #labels #map-pe, #labels .apsis.event { pointer-events: auto; cursor: pointer; }
@@ -927,6 +939,8 @@
     .ts-section { padding: calc(8 * var(--u)) calc(6 * var(--u)) calc(4 * var(--u)); font-weight: 700; font-size: calc(12 * var(--u)); letter-spacing: 0.06em; text-transform: uppercase; color: #4a5068; }
     .ts-body { padding-top: calc(4 * var(--u)); padding-bottom: calc(4 * var(--u)); margin-bottom: calc(2 * var(--u)); background: #fff; border-left: calc(4 * var(--u)) solid #fff; cursor: pointer; font-size: calc(14 * var(--u)); }
     .ts-body:hover { background: #e3eeff; } .ts-body.selected { background: #cde6ff; border-left-color: #2f8fff; }
+    .ts-body .name .bi { width: calc(20 * var(--u)); height: calc(20 * var(--u)); margin-right: calc(6 * var(--u)); vertical-align: middle; }
+    .ts-body .name:not(.noicon)::before { display: none; }
     .ts-body .name::before { content: ""; display: inline-block; width: 12px; height: 12px; margin-right: 5px; vertical-align: -1px; background: #3d4560; -webkit-mask: url(assets/ui/hud/ICO-Map-Planet-16x16.png) center / contain no-repeat; mask: url(assets/ui/hud/ICO-Map-Planet-16x16.png) center / contain no-repeat; }
     #ts-info { max-height: 52vh; overflow: auto; }
     #ts-info h4 { margin: calc(8 * var(--u)) 0 calc(4 * var(--u)); font-size: calc(13 * var(--u)); color: #ffd25a; text-transform: uppercase; letter-spacing: 0.05em; }
@@ -1392,6 +1406,7 @@
   <div id="vab-tip" data-ose="vab-tip"></div>
   <div id="vab-pam" data-ose="vab-pam"></div>
   <div id="fh-pam" class="fh-pam" data-ose="flight-pam"></div>
+  <div id="mission-tracker" data-ose="mission-tracker"></div>
   <div id="toasts" data-ose="toasts"></div>
   <div id="fps" data-ose="fps"></div>
   <div id="flight-report" data-ose="flight-report"></div>

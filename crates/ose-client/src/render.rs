@@ -2502,6 +2502,12 @@ async fn bitmap_response(resp: web_sys::Response) -> Result<web_sys::ImageBitmap
 // ---------------------------------------------------------------------------------------------------------------
 // GLB parsing (the subset tools/export_web_assets.py writes)
 
+/// Meshes left out of every model: the KSC campus's trees (`SM_FLTree_*`), which looked nothing like KSP2's
+/// spaceport. `tools/export_ksc.py` skips them too; this covers campus exports made before it did.
+fn dropped_node(name: &str) -> bool {
+    name.starts_with("SM_FLTree")
+}
+
 fn parse_glb(bytes: &[u8]) -> Result<CpuModel, String> {
     if bytes.len() < 20 || &bytes[0..4] != b"glTF" {
         return Err("not a GLB".into());
@@ -2635,7 +2641,11 @@ fn parse_glb(bytes: &[u8]) -> Result<CpuModel, String> {
         .nodes
         .iter()
         .enumerate()
-        .filter_map(|(i, n)| n.mesh.filter(|_| n.visible).map(|m| (m, world[i], i)))
+        .filter_map(|(i, n)| {
+            n.mesh
+                .filter(|_| n.visible && !dropped_node(&n.name))
+                .map(|m| (m, world[i], i))
+        })
         .collect();
     let access = crate::animation::Accessors { json: &json, bin };
     let meshes = json["meshes"].as_array().cloned().unwrap_or_default();
