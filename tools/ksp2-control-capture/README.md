@@ -246,3 +246,18 @@ existing save files hash identically. Raw captures, the loader log and a copy of
 the temporary campaign are archived in `.cache/ksp2-capture-20261031` under the
 main checkout. Only the `vessel=` and part `guid` fields were removed from the
 committed copies.
+
+## Replay gate in CI
+
+`fixtures/replay.json` registers every capture with a status.
+
+- `pass` fixtures must meet the comparator thresholds.
+- `capped` fixtures cannot yet, for the reason stated with each. Their recorded
+  errors are a ceiling against regression, not a parity claim. A capped fixture
+  that starts passing fails the gate until it is promoted to `pass`.
+
+`tools/tests/test_ksp2_replay.py` replays all of them with `control_trace` in CI,
+and also fails on any capture CSV that is not registered.
+`tools/tests/test_control_traces.py` holds the comparator and evidence-hash tests.
+`.gitattributes` keeps capture bytes unconverted, so the manifest hashes hold on
+every platform.

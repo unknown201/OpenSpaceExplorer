@@ -14,14 +14,12 @@
     "jumping-flea-repeat.csv.parts.csv": "889a6fb5a4d4b8d353756558333fea143792edd546d0effa989526809bda09d4",
     "jumping-flea-repeat.csv.surfaces.csv": "ddc5fac00e1e5078ad177f60ca7a9ac65eab33c8b41fc3187a0483f3a0243a76",
     "jumping-flea-repeat.csv.rcs.csv": "4e75408f52a64bfcebb06ed877c9750d4e0cf7e210e25867fd475c4fb6ebbede",
-    "jumping-flea-repeat-result.json": "6396d9b0f5548901ae7eaaa2badcc39c6e336b038a4de2e8aac7cac460d9245f",
     "jumping-flea-repeatability.json": "4a23d20ca83d03556e01e64209c524eb67056c94efcebd510bcb6a7d2100816c",
     "jumping-flea-sas.csv": "b70224397d137c4aa49a56607c4f22e7b9211078766ddff550b950dfc1073e21",
     "jumping-flea-sas.csv.metadata.txt": "3e673ddc7ca69a772127dcb740a0678f46a9cc0095add803ec2c06e23baf6704",
     "jumping-flea-sas.csv.parts.csv": "c335cc4a88abaf2786d5abcb69e5baa7567800acc6d1078a9efa95c6125bfdf4",
     "jumping-flea-sas.csv.surfaces.csv": "ddc5fac00e1e5078ad177f60ca7a9ac65eab33c8b41fc3187a0483f3a0243a76",
-    "jumping-flea-sas.csv.rcs.csv": "4e75408f52a64bfcebb06ed877c9750d4e0cf7e210e25867fd475c4fb6ebbede",
-    "jumping-flea-sas-result.json": "4c3c1666b542c5e068d69f94b5f9eeb5d8f589e8cbcb4a3ccab9e74ec004cc19"
+    "jumping-flea-sas.csv.rcs.csv": "4e75408f52a64bfcebb06ed877c9750d4e0cf7e210e25867fd475c4fb6ebbede"
   },
   "cleanup": {
     "loader_removed": true,

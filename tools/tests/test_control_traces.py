@@ -1,7 +1,12 @@
 import unittest
-from compare_control_traces import compare, unity_to_ose, validate_intervals, read
+import importlib.util
 from pathlib import Path
 import csv,hashlib,json,math
+
+TOOLS=Path(__file__).parents[1]
+spec=importlib.util.spec_from_file_location('compare_control_traces',TOOLS/'compare_control_traces.py')
+traces=importlib.util.module_from_spec(spec);spec.loader.exec_module(traces)
+compare,unity_to_ose,validate_intervals,read=traces.compare,traces.unity_to_ose,traces.validate_intervals,traces.read
 
 class TraceTests(unittest.TestCase):
     def rows(self):
@@ -41,7 +46,7 @@ class TraceTests(unittest.TestCase):
         b[1]['px']=0;b[1]['vz']=0.051
         self.assertFalse(compare(a,b)['passed'])
     def test_rcs_evidence_is_contiguous_and_immutable(self):
-        root=Path(__file__).parent/'ksp2-control-capture/fixtures'
+        root=TOOLS/'ksp2-control-capture/fixtures'
         manifest=json.loads((root/'gumball-rcs-manifest.json').read_text())
         for name,digest in manifest['files'].items():
             self.assertEqual(hashlib.sha256((root/name).read_bytes()).hexdigest(),digest)
@@ -50,7 +55,7 @@ class TraceTests(unittest.TestCase):
             self.assertEqual(len(rows),600)
             self.assertTrue(all(r['rcs']==1 and r['sas']==0 for r in rows))
     def test_live_two_nozzle_capture_charges_one_shared_request(self):
-        root=Path(__file__).parent/'ksp2-control-capture/fixtures'
+        root=TOOLS/'ksp2-control-capture/fixtures'
         for name in ['gumball-rcs','gumball-rcs-repeat']:
             primary=read(root/(name+'.csv'))
             with (root/(name+'.csv.rcs.csv')).open(newline='') as f:
@@ -71,7 +76,7 @@ class TraceTests(unittest.TestCase):
                 checked+=1
             self.assertGreater(checked,100)
     def test_live_interval_evidence_is_contiguous_and_immutable(self):
-        fixture=Path(__file__).parent/'ksp2-control-capture/fixtures/jumping-flea-interval.csv'
+        fixture=TOOLS/'ksp2-control-capture/fixtures/jumping-flea-interval.csv'
         rows=read(fixture)
         self.assertEqual(len(rows),600)
         manifest=json.loads(fixture.with_name('jumping-flea-interval-manifest.json').read_text())
@@ -83,6 +88,31 @@ class TraceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'missing physics tick'):validate_intervals(changed)
         changed=[dict(row) for row in rows];changed[1]['t']+=0.001
         with self.assertRaisesRegex(ValueError,'noncontiguous'):validate_intervals(changed)
+    def test_rigidbody_rebasing_between_intervals_is_not_motion(self):
+        a=self.rows();b=self.rows()
+        for rows in [a,b]:
+            for row in rows:row.update(translate_x=1,translate_y=0,translate_z=0,rcs=1,px=0,py=0,pz=0,vx=0,vy=0,vz=0)
+        # The reference starts its second interval 0.6 m from where the first ended.
+        a[0].update(end_px=0,end_py=0,end_pz=0);a[1]['px']=0.6
+        self.assertTrue(compare(a,b)['passed'])
+        # Motion inside an interval is still compared.
+        a[0]['end_px']=0.6
+        self.assertFalse(compare(a,b)['passed'])
+    def test_cached_vessel_mass_is_read_at_its_render_frame(self):
+        a=[dict(r,unity_frame=f) for r,f in zip(self.rows()*2,[7,7,8,8])]
+        for i,r in enumerate(a):r['t']=0.02*i
+        b=[dict(r) for r in a]
+        for r,m in zip(b,[10,9.9,9.8,9.7]):r['mass_t']=m
+        # Frame 8's cache shows the tick before its first tick: candidate sample 1.
+        for r,m in zip(a,[10,10,9.9,9.9]):r['mass_t']=m
+        self.assertTrue(compare(a,b)['passed'])
+        a[3]['mass_t']=9.7
+        self.assertFalse(compare(a,b)['passed'])
+    def test_1031_captures_are_immutable(self):
+        root=TOOLS/'ksp2-control-capture/fixtures'
+        manifest=json.loads((root/'jumping-flea-1031-manifest.json').read_text())
+        for name,digest in manifest['files'].items():
+            self.assertEqual(hashlib.sha256((root/name).read_bytes()).hexdigest(),digest)
     def test_unity_reflection_distinguishes_axial_and_polar_vectors(self):
         row=dict(t=2,pitch=1,yaw=-1,roll=0.5,px=1,py=2,pz=3,vx=4,vy=5,vz=6,
                  qx=0.1,qy=0.2,qz=0.3,qw=0.9,wx=7,wy=8,wz=9,
