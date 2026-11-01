@@ -39,7 +39,7 @@ pub const INPUT: &[(&str, &[Binding])] = &[
             ),
             (
                 "W / S, A / D, Q / E (on EVA)",
-                "Walk, turn, step sideways",
+                "Walk relative to the camera (jetpack: push, turn, step sideways)",
                 true,
             ),
             (

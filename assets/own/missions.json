@@ -30,7 +30,8 @@
         "condition": null,
         "science_reward": 3000.0
       }
-    ]
+    ],
+    "activates": []
   },
   {
     "id": "KSP2Mission_Secondary_Dres_Flag",
@@ -70,6 +71,9 @@
         "condition": null,
         "science_reward": 8000.0
       }
+    ],
+    "activates": [
+      "KSP2Mission_Secondary_Dres_Rover"
     ]
   },
   {
@@ -122,7 +126,8 @@
         "condition": null,
         "science_reward": 3000.0
       }
-    ]
+    ],
+    "activates": []
   },
   {
     "id": "KSP2Mission_Secondary_Eeloo_Rover",
@@ -171,6 +176,9 @@
         "condition": null,
         "science_reward": 8000.0
       }
+    ],
+    "activates": [
+      "CHANGE_THIS_MSSION_ID"
     ]
   },
   {
@@ -204,6 +212,9 @@
         "condition": null,
         "science_reward": 8000.0
       }
+    ],
+    "activates": [
+      "KSP2Mission_Secondary_Eeloo_Rover"
     ]
   },
   {
@@ -275,6 +286,9 @@
         "condition": null,
         "science_reward": 8000.0
       }
+    ],
+    "activates": [
+      "CHANGE_THIS_MSSION_ID"
     ]
   },
   {
@@ -308,6 +322,11 @@
         "condition": null,
         "science_reward": 3000.0
       }
+    ],
+    "activates": [
+      "KSP2Mission_Secondary_Moho_LandingMohole",
+      "KSP2Mission_Secondary_Gilly_ExperimentImpact",
+      "KSP2Mission_Secondary_Eve_LandCrew"
     ]
   },
   {
@@ -341,7 +360,8 @@
         "condition": null,
         "science_reward": 3000.0
       }
-    ]
+    ],
+    "activates": []
   },
   {
     "id": "KSP2Mission_Secondary_Ike_LandingCrewed",
@@ -393,7 +413,8 @@
         "condition": null,
         "science_reward": 1000.0
       }
-    ]
+    ],
+    "activates": []
   },
   {
     "id": "KSP2Mission_Secondary_Jool_ExperimentAtmosphere",
@@ -478,6 +499,10 @@
         "condition": null,
         "science_reward": 3000.0
       }
+    ],
+    "activates": [
+      "KSP2Mission_Secondary_Laythe_ExperimentFossil",
+      "KSP2Mission_Secondary_Pol_Flag"
     ]
   },
   {
@@ -546,7 +571,8 @@
         "condition": null,
         "science_reward": 40.0
       }
-    ]
+    ],
+    "activates": []
   },
   {
     "id": "KSP2Mission_Secondary_Kerbin_EVASpace",
@@ -607,7 +633,8 @@
         "condition": null,
         "science_reward": 40.0
       }
-    ]
+    ],
+    "activates": []
   },
   {
     "id": "KSP2Mission_Secondary_Kerbin_Experiment",
@@ -659,7 +686,8 @@
         "condition": null,
         "science_reward": 25.0
       }
-    ]
+    ],
+    "activates": []
   },
   {
     "id": "KSP2Mission_Secondary_Kerbin_ExperimentKapy",
@@ -748,6 +776,9 @@
         "condition": null,
         "science_reward": 400.0
       }
+    ],
+    "activates": [
+      "KSP2Mission_Secondary_Kerbin_ExperimentStargazer"
     ]
   },
   {
@@ -837,7 +868,8 @@
         "condition": null,
         "science_reward": 400.0
       }
-    ]
+    ],
+    "activates": []
   },
   {
     "id": "KSP2Mission_Secondary_Kerbin_OrbitCircular",
@@ -958,6 +990,9 @@
         "condition": null,
         "science_reward": 100.0
       }
+    ],
+    "activates": [
+      "KSP2Mission_Secondary_Kerbin_OrbitEccentric"
     ]
   },
   {
@@ -1079,7 +1114,8 @@
         "condition": null,
         "science_reward": 100.0
       }
-    ]
+    ],
+    "activates": []
   },
   {
     "id": "KSP2Mission_Secondary_Kerbin_OrbitFuelStation",
@@ -1176,6 +1212,9 @@
         "condition": null,
         "science_reward": 35.0
       }
+    ],
+    "activates": [
+      "CHANGE_THIS_MSSION_ID"
     ]
   },
   {
@@ -1333,7 +1372,8 @@
         "condition": null,
         "science_reward": 300.0
       }
-    ]
+    ],
+    "activates": []
   },
   {
     "id": "KSP2Mission_Secondary_Kerbin_Rover",
@@ -1366,6 +1406,9 @@
         "condition": null,
         "science_reward": 50.0
       }
+    ],
+    "activates": [
+      "KSP2Mission_Secondary_Kerbin_ExperimentKapy"
     ]
   },
   {
@@ -1451,7 +1494,8 @@
         "condition": null,
         "science_reward": 100.0
       }
-    ]
+    ],
+    "activates": []
   },
   {
     "id": "KSP2Mission_Secondary_Kerbol_SOI",
@@ -1484,7 +1528,8 @@
         "condition": null,
         "science_reward": 50.0
       }
-    ]
+    ],
+    "activates": []
   },
   {
     "id": "KSP2Mission_Secondary_Laythe_ExperimentFossil",
@@ -1517,6 +1562,10 @@
         "condition": null,
         "science_reward": 3000.0
       }
+    ],
+    "activates": [
+      "KSP2Mission_Secondary_Bop_ExperimentFossil",
+      "KSP2Mission_Secondary_Laythe_Plane"
     ]
   },
   {
@@ -1630,7 +1679,8 @@
         "condition": null,
         "science_reward": 3000.0
       }
-    ]
+    ],
+    "activates": []
   },
   {
     "id": "KSP2Mission_Secondary_Minmus_LandHeavy",
@@ -1682,6 +1732,9 @@
         "condition": null,
         "science_reward": 35.0
       }
+    ],
+    "activates": [
+      "CHANGE_THIS_MSSION_ID"
     ]
   },
   {
@@ -1770,7 +1823,8 @@
         "condition": null,
         "science_reward": 0.0
       }
-    ]
+    ],
+    "activates": []
   },
   {
     "id": "KSP2Mission_Secondary_Moho_ExperimentCroissant",
@@ -1803,7 +1857,8 @@
         "condition": null,
         "science_reward": 3000.0
       }
-    ]
+    ],
+    "activates": []
   },
   {
     "id": "KSP2Mission_Secondary_Moho_LandingMohole",
@@ -1836,6 +1891,9 @@
         "condition": null,
         "science_reward": 3000.0
       }
+    ],
+    "activates": [
+      "KSP2Mission_Secondary_Moho_ExperimentCroissant"
     ]
   },
   {
@@ -1876,7 +1934,8 @@
         "condition": null,
         "science_reward": 100.0
       }
-    ]
+    ],
+    "activates": []
   },
   {
     "id": "KSP2Mission_Secondary_Pol_ExperimentHighlands",
@@ -1909,7 +1968,8 @@
         "condition": null,
         "science_reward": 3000.0
       }
-    ]
+    ],
+    "activates": []
   },
   {
     "id": "KSP2Mission_Secondary_Vall_LandLair",
@@ -1942,7 +2002,8 @@
         "condition": null,
         "science_reward": 3000.0
       }
-    ]
+    ],
+    "activates": []
   },
   {
     "id": "Main_Duna_01",
@@ -1975,6 +2036,13 @@
         "condition": null,
         "science_reward": 2000.0
       }
+    ],
+    "activates": [
+      "Main_Jool_BetterSignal",
+      "KSP2Mission_Secondary_Ike_LandingCrewed",
+      "KSP2Mission_Secondary_Duna_LandingHeavy",
+      "KSP2Mission_Secondary_Eve_SOI",
+      "KSP2Mission_Secondary_Jool_ExperimentAtmosphere"
     ]
   },
   {
@@ -2088,6 +2156,9 @@
         "condition": null,
         "science_reward": 5000.0
       }
+    ],
+    "activates": [
+      "Main_Tylo_01"
     ]
   },
   {
@@ -2208,6 +2279,9 @@
         "condition": null,
         "science_reward": 25.0
       }
+    ],
+    "activates": [
+      "Main_Kerbin_02"
     ]
   },
   {
@@ -2293,6 +2367,10 @@
         "condition": null,
         "science_reward": 50.0
       }
+    ],
+    "activates": [
+      "Main_Kerbin_03",
+      "KSP2Mission_Secondary_Kerbin_Buoyancy"
     ]
   },
   {
@@ -2354,6 +2432,11 @@
         "condition": null,
         "science_reward": 75.0
       }
+    ],
+    "activates": [
+      "Main_MunOrBust_04",
+      "KSP2Mission_Secondary_Kerbin_EVASpace",
+      "KSP2Mission_Secondary_Kerbin_Experiment"
     ]
   },
   {
@@ -2387,6 +2470,10 @@
         "condition": null,
         "science_reward": 750.0
       }
+    ],
+    "activates": [
+      "Main_Duna_01",
+      "KSP2Mission_Secondary_Kerbin_OrbitFuelStation"
     ]
   },
   {
@@ -2448,6 +2535,11 @@
         "condition": null,
         "science_reward": 400.0
       }
+    ],
+    "activates": [
+      "Main_Minmus_01",
+      "KSP2Mission_Secondary_Kerbin_OrbitKeostationary",
+      "KSP2Mission_Secondary_Minmus_LandHeavy"
     ]
   },
   {
@@ -2521,6 +2613,11 @@
         "condition": null,
         "science_reward": 150.0
       }
+    ],
+    "activates": [
+      "Main_Mun_OSS",
+      "KSP2Mission_Secondary_Kerbin_OrbitCircular",
+      "KSP2Mission_Secondary_Mun_Flag"
     ]
   },
   {
@@ -2554,6 +2651,10 @@
         "condition": null,
         "science_reward": 350.0
       }
+    ],
+    "activates": [
+      "Main_Minmus_BadSignal",
+      "KSP2Mission_Secondary_Kerbin_Rover"
     ]
   },
   {
@@ -2606,6 +2707,9 @@
         "condition": null,
         "science_reward": -0.0
       }
+    ],
+    "activates": [
+      "Main_Mun_01"
     ]
   },
   {
@@ -2646,6 +2750,11 @@
         "condition": null,
         "science_reward": 300.0
       }
+    ],
+    "activates": [
+      "Main_Mun_01",
+      "KSP2Mission_Secondary_Kerbin_Satellite",
+      "KSP2Mission_Secondary_Kerbol_SOI"
     ]
   },
   {
@@ -2679,6 +2788,10 @@
         "condition": null,
         "science_reward": 10000.0
       }
+    ],
+    "activates": [
+      "KSP2Mission_Secondary_Eeloo_SOI",
+      "KSP2Mission_Secondary_Dres_Flag"
     ]
   },
   {
@@ -2719,7 +2832,8 @@
         "condition": null,
         "science_reward": 0.0
       }
-    ]
+    ],
+    "activates": []
   },
   {
     "id": "Secondary_Dres_02",
@@ -2759,7 +2873,8 @@
         "condition": null,
         "science_reward": 0.0
       }
-    ]
+    ],
+    "activates": []
   },
   {
     "id": "Secondary_Duna_02",
@@ -2799,7 +2914,8 @@
         "condition": null,
         "science_reward": 50.0
       }
-    ]
+    ],
+    "activates": []
   },
   {
     "id": "Secondary_Eeloo_02",
@@ -2839,7 +2955,8 @@
         "condition": null,
         "science_reward": 0.0
       }
-    ]
+    ],
+    "activates": []
   },
   {
     "id": "Secondary_Eve_02",
@@ -2886,7 +3003,8 @@
         "condition": null,
         "science_reward": 0.0
       }
-    ]
+    ],
+    "activates": []
   },
   {
     "id": "Secondary_Gilly_02",
@@ -2926,7 +3044,8 @@
         "condition": null,
         "science_reward": 0.0
       }
-    ]
+    ],
+    "activates": []
   },
   {
     "id": "Secondary_Ike_02",
@@ -2966,7 +3085,8 @@
         "condition": null,
         "science_reward": 0.0
       }
-    ]
+    ],
+    "activates": []
   },
   {
     "id": "Secondary_Laythe_02",
@@ -3013,7 +3133,8 @@
         "condition": null,
         "science_reward": 0.0
       }
-    ]
+    ],
+    "activates": []
   },
   {
     "id": "Secondary_Minmus_02",
@@ -3053,7 +3174,8 @@
         "condition": null,
         "science_reward": 50.0
       }
-    ]
+    ],
+    "activates": []
   },
   {
     "id": "Secondary_Moho_02",
@@ -3093,7 +3215,8 @@
         "condition": null,
         "science_reward": 0.0
       }
-    ]
+    ],
+    "activates": []
   },
   {
     "id": "Secondary_Mun_02",
@@ -3133,7 +3256,8 @@
         "condition": null,
         "science_reward": 0.0
       }
-    ]
+    ],
+    "activates": []
   },
   {
     "id": "Secondary_Pol_02",
@@ -3173,7 +3297,8 @@
         "condition": null,
         "science_reward": 0.0
       }
-    ]
+    ],
+    "activates": []
   },
   {
     "id": "Secondary_Tylo_02",
@@ -3213,7 +3338,8 @@
         "condition": null,
         "science_reward": 0.0
       }
-    ]
+    ],
+    "activates": []
   },
   {
     "id": "Secondary_Vall_02",
@@ -3260,6 +3386,7 @@
         "condition": null,
         "science_reward": 0.0
       }
-    ]
+    ],
+    "activates": []
   }
 ]

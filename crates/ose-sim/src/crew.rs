@@ -519,10 +519,26 @@ impl Universe {
                     p.facing,
                     crate::aero::rotate(st.part_rot[i], DVec3::new(0.0, 1.0, 0.0)),
                 );
-                let mid = st.offset_inertial(p.facing, centre - c);
+                let mut mid = st.offset_inertial(p.facing, centre - c);
                 // the box's extent along the part's axis
                 let a = crate::aero::rotate_inverse(st.part_rot[i], DVec3::new(0.0, 1.0, 0.0));
                 let reach = (half.x * a.x.abs() + half.y * a.y.abs() + half.z * a.z.abs()).max(0.3);
+                if !st.part_ids[i].starts_with("ladder_") {
+                    // A pod's built-in ladder is on its hull, not down its middle: out from the vessel's
+                    // axis, or on the craft's top side (the side the flight camera starts on) for a pod
+                    // on the axis.
+                    let radial = mid - p.facing * mid.dot(p.facing);
+                    let out = if radial.length() > 0.1 {
+                        radial.normalized()
+                    } else {
+                        st.offset_inertial(p.facing, DVec3::new(0.0, 0.0, 1.0))
+                            .normalized()
+                    };
+                    let across = (half.x * (1.0 - a.x.abs()))
+                        .max(half.y * (1.0 - a.y.abs()))
+                        .max(half.z * (1.0 - a.z.abs()));
+                    mid = mid + out * across;
+                }
                 (i, mid - axis * reach, mid + axis * reach)
             })
             .collect()
@@ -632,8 +648,10 @@ impl Universe {
             let side = point - facing * point.dot(facing);
             let out = if side.length() > 1e-3 {
                 side.normalized()
-            } else {
+            } else if facing.cross(up).length() > 1e-3 {
                 facing.cross(up).normalized()
+            } else {
+                crate::structure::basis(facing).0
             };
             if let Some(mut p) = self.world.get_mut::<flight::Powered>(k) {
                 p.r = r + point + out * LADDER_STANDOFF_M;
@@ -909,6 +927,23 @@ mod tests {
         let (mut u, v) = k1_on_pad();
         let jeb = u.go_eva(v, None).unwrap();
         assert_eq!(u.on_ladder(jeb), Some((v, 0)), "on the pod's ladder");
+        u.step();
+        // beside the pod's hull, level with it, not inside it or down by the engines
+        let (k, p) = (u.powered(jeb).unwrap().r, u.powered(v).unwrap().clone());
+        let st = u.structure(v).unwrap();
+        let (pod, half) = st.part_box(0);
+        let pod_up = (pod - st.rigid.rest_centre()).y;
+        let d = k - p.r;
+        let up = d.dot(p.facing);
+        let out = (d - p.facing * up).length();
+        assert!(
+            (up - pod_up).abs() < half.y + 0.1,
+            "level with the pod ({up} vs {pod_up} m)"
+        );
+        assert!(
+            out > half.x.max(half.z),
+            "outside the hull ({out} m from the axis)"
+        );
         let d0 = u.distance_between(jeb, v).unwrap();
         for _ in 0..(3 * crate::TICKS_PER_SECOND) {
             u.step();

@@ -1016,8 +1016,14 @@ async fn exploration_science_tech_tree_and_recovery() {
         "{missions:?}"
     );
 
-    // Mission Control: the first mission is taken on already; a secondary has to be accepted, and nothing
-    // can be handed in before it is complete
+    // Mission Control: the first mission is taken on already; nothing else is offered until the missions
+    // before it in the chain are complete, and nothing can be handed in before it is complete
+    assert!(
+        missions
+            .iter()
+            .all(|m| m.id == "Main_Kerbin_01" && m.accepted && !m.turned_in),
+        "{missions:?}"
+    );
     send_msg(
         &mut ws,
         &ClientMessage::AcceptMission {
@@ -1032,18 +1038,10 @@ async fn exploration_science_tech_tree_and_recovery() {
         _ => None,
     })
     .await;
-    assert!(ok, "{reason:?}");
-    let missions = wait_for(&mut ws, |m| match m {
-        ServerMessage::ScienceState { missions, .. } => Some(missions),
-        _ => None,
-    })
-    .await;
-    assert!(missions
-        .iter()
-        .any(|m| m.id == "KSP2Mission_Secondary_Kerbin_Rover" && m.accepted));
-    assert!(missions
-        .iter()
-        .any(|m| m.id == "Main_Kerbin_01" && m.accepted && !m.turned_in));
+    assert!(
+        !ok && reason.as_deref() == Some("not offered yet"),
+        "{reason:?}"
+    );
     send_msg(
         &mut ws,
         &ClientMessage::TurnInMission {

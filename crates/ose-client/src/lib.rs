@@ -6135,7 +6135,18 @@ impl App {
                         let cat = std::mem::take(&mut self.catalog);
                         self.editor.rebuild_stages(&cat);
                         self.catalog = cat;
+                        self.paused_from.set(None);
                         self.open_vab(None);
+                        self.reset_camera();
+                    } else if action != ose_net::SaveAction::QuickSave && self.flying.is_some() {
+                        // Back on the pad (or at the loaded moment): the Game Menu closes and the flight
+                        // camera starts over, out of the map.
+                        self.paused_from.set(None);
+                        if self.screen_open("paused") {
+                            self.show_menu(false);
+                        }
+                        self.map_mode = false;
+                        self.reset_camera();
                     }
                 } else {
                     let why = reason.unwrap_or_else(|| "refused".into());
@@ -9407,6 +9418,32 @@ impl App {
                 .unwrap_or(false)
     }
 
+    /// The Game Menu is open over a view (it is an overlay: what it was opened over keeps drawing behind it).
+    fn paused_over(&self, screens: &[&str]) -> bool {
+        self.screen_open("paused") && self.paused_from.get().is_some_and(|s| screens.contains(&s))
+    }
+
+    /// The flight view is on screen, alone or behind the Game Menu.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    fn flight_visible(&self) -> bool {
+        self.flight_active()
+            || (self.flying.is_some()
+                && !self.map_mode
+                && self.screen_open("paused")
+                && self.paused_from.get().is_none())
+    }
+
+    /// The VAB is on screen, alone or behind the Game Menu.
+    fn vab_visible(&self) -> bool {
+        self.vab_active() || self.paused_over(&["vab"])
+    }
+
+    /// The KSC (or its launch pad view) is on screen, alone or behind the Game Menu.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    fn ksc_visible(&self) -> bool {
+        self.ksc_active() || self.launchpad_active() || self.paused_over(&["ksc", "launchpad"])
+    }
+
     fn start_flight(&mut self, vessel: u64, craft_id: Option<u64>) {
         self.ftue("FTUE_Flight");
         self.carried.clear();
@@ -10011,6 +10048,14 @@ impl App {
 
     /// Where the vessel points now as pitch above the horizon and compass heading, from the flight view's
     /// navball frame (None before the first flight frame).
+    /// The compass heading the flight camera looks along, once it has drawn (degrees).
+    fn camera_look_heading(&self) -> Option<f64> {
+        #[cfg(target_arch = "wasm32")]
+        return self.flight3d.look_heading_deg;
+        #[cfg(not(target_arch = "wasm32"))]
+        None
+    }
+
     fn facing_pitch_heading(&self) -> Option<(f64, f64)> {
         let nav = self.current_nav()?;
         let f = nav.forward;
@@ -10174,13 +10219,17 @@ impl App {
             .is_some_and(|f| f.eva)
     }
 
-    /// A Kerbal on EVA, as the original's EVA keys (protocol 33). On the ground W walks ahead, S backs up,
-    /// A/D turn, Q/E step sideways, Shift runs and Space jumps. In the air the jetpack: Shift or Space up,
-    /// Ctrl down, W/S and Q/E push ahead, back and sideways. The server walks a Kerbal with throttle and a
-    /// level heading; the pack takes `Translate` (y up along the Kerbal, z its front, x its right).
+    /// A Kerbal on EVA, as the original's EVA keys (protocol 33). On the ground W/S/A/D (and Q/E) walk away
+    /// from, toward, left and right of the camera and the Kerbal turns to face where it walks, as the
+    /// original's `MoveGroundKerbalCharacterStateHandler`; Shift runs and Space jumps. In the air the
+    /// jetpack: Shift or Space up, Ctrl down, W/S and Q/E push ahead, back and sideways, A/D turn. The server
+    /// walks a Kerbal with throttle and a level heading; the pack takes `Translate` (y up along the Kerbal,
+    /// z its front, x its right).
     fn eva_keys_tick(&mut self, now: f64, dt: f64) {
         let k = &self.keys;
         let (walk, strafe, turn) = (-k.pitch(), k.roll(), k.yaw());
+        // On the ground A/D step sideways like Q/E.
+        let side = (strafe + turn).clamp(-1.0, 1.0);
         let shift = k.is("ShiftLeft") || k.is("ShiftRight");
         let ctrl = k.is("ControlLeft") || k.is("ControlRight");
         let space = k.is("Space");
@@ -10195,7 +10244,12 @@ impl App {
             ose_net::AttitudeMode::PitchHeading { heading_deg, .. } => heading_deg,
             _ => self.facing_pitch_heading().map(|(_, h)| h).unwrap_or(90.0),
         };
-        let heading = (heading + turn * 90.0 * dt).rem_euclid(360.0);
+        let heading = if landed {
+            heading
+        } else {
+            (heading + turn * 90.0 * dt).rem_euclid(360.0)
+        };
+        let look = self.camera_look_heading();
         // On a ladder (protocol 45): W/S climb while held, Space lets go; nothing else moves the Kerbal.
         let on_ladder = self
             .scene
@@ -10259,9 +10313,10 @@ impl App {
                 );
             }
         }
-        // Walking: the direction relative to the Kerbal's own heading (ahead, back, either side or between).
-        // Under the pack in the air the Kerbal stands upright and keeps its heading.
-        let moving = landed && (walk != 0.0 || strafe != 0.0);
+        // Walking: the direction relative to the camera (ahead, back, either side or between), or to the
+        // Kerbal's own heading before the camera has drawn. Under the pack in the air the Kerbal stands
+        // upright and keeps its heading.
+        let moving = landed && (walk != 0.0 || side != 0.0);
         let held_pitch = match self.attitude {
             ose_net::AttitudeMode::PitchHeading { pitch_deg, .. } => pitch_deg,
             _ => 0.0,
@@ -10272,11 +10327,11 @@ impl App {
             // A hop or a coast: hold the pose it has.
             (held_pitch, heading, 0.0)
         } else if moving {
-            let off = strafe.atan2(walk).to_degrees();
+            let off = side.atan2(walk).to_degrees();
             (
                 0.0,
-                (heading + off).rem_euclid(360.0),
-                walk.hypot(strafe).min(1.0),
+                (look.unwrap_or(heading) + off).rem_euclid(360.0),
+                walk.hypot(side).min(1.0),
             )
         } else {
             (0.0, heading, 0.0)
@@ -10287,22 +10342,16 @@ impl App {
             // the Kerbal's own.
             heading_deg,
         };
-        self.attitude = if moving {
-            ose_net::AttitudeMode::PitchHeading {
-                pitch_deg: 0.0,
-                heading_deg: heading,
-            }
-        } else {
-            attitude
-        };
-        let changed = throttle != self.throttle || turn != 0.0 || moving;
+        // Walking, the Kerbal turns to face the way it goes and keeps that heading when it stops.
+        self.attitude = attitude;
+        let changed = throttle != self.throttle || (!landed && turn != 0.0) || moving;
         if changed || self.controls_dirty {
             self.throttle = throttle;
             self.controls_dirty = true;
         }
         if self
             .control_cadence
-            .due(now, self.controls_dirty, [walk, turn, strafe])
+            .due(now, self.controls_dirty, [walk, turn, side])
         {
             self.controls_dirty = false;
             if let Some(ws) = &self.ws {
@@ -11386,7 +11435,7 @@ impl App {
         });
         let scene = match &flight {
             _ if !self.in_session || front => audio::Scene::MainMenu,
-            _ if self.vab_active() => audio::Scene::Vab,
+            _ if self.vab_visible() => audio::Scene::Vab,
             _ if self.tracking_open && self.flying.is_none() && !menu_open => {
                 audio::Scene::Tracking
             }
@@ -11398,6 +11447,8 @@ impl App {
         self.audio.music(Some(audio::scene_music(scene)));
         let place = match scene {
             audio::Scene::MainMenu => None,
+            // The Game Menu is an overlay: opening or closing it is not a trip anywhere.
+            _ if self.screen_open("paused") => self.loading_place,
             audio::Scene::Vab => Some("vab"),
             audio::Scene::Rnd => Some("rnd"),
             audio::Scene::Mission => Some("mission"),
@@ -12679,7 +12730,7 @@ impl App {
                 format!("planet-{}", preview.body)
             } else if !self.in_session {
                 "menu".into()
-            } else if self.flight_active() {
+            } else if self.flight_visible() {
                 self.scene
                     .as_ref()
                     .and_then(|scene| {
@@ -12690,11 +12741,11 @@ impl App {
                         ))
                     })
                     .unwrap_or_else(|| "flight-shared".into())
-            } else if self.vab_active() {
+            } else if self.vab_visible() {
                 "vab".into()
             } else if self.screen_open("mission") {
                 "mission-control".into()
-            } else if self.ksc_active() || self.launchpad_active() {
+            } else if self.ksc_visible() {
                 "ksc".into()
             } else {
                 "core".into()
@@ -12769,7 +12820,7 @@ impl App {
             return;
         }
         #[cfg(target_arch = "wasm32")]
-        if self.flight_active() && self.frame_flight(ut) {
+        if self.flight_visible() && self.frame_flight(ut) {
             return;
         }
         let dpr = self.dpr;
@@ -12786,7 +12837,7 @@ impl App {
             self.place_ksc_tooltip();
         }
         #[cfg(target_arch = "wasm32")]
-        if self.in_session && self.vab_active() {
+        if self.in_session && self.vab_visible() {
             let empty = self.editor.is_empty();
             self.vab3d.com = self.vab_com.filter(|_| self.vab_show_com && !empty);
             self.vab3d.cot = self.vab_cot.filter(|_| self.vab_show_cot && !empty);
@@ -12872,8 +12923,8 @@ impl App {
             }
         }
         #[cfg(target_arch = "wasm32")]
-        if self.in_session && (self.ksc_active() || self.launchpad_active()) {
-            let on_pad = self.launchpad_active();
+        if self.in_session && self.ksc_visible() {
+            let on_pad = self.launchpad_active() || self.paused_over(&["launchpad"]);
             if on_pad != self.ksc_on_pad {
                 self.ksc_on_pad = on_pad;
                 self.ksc3d
@@ -13505,30 +13556,6 @@ impl App {
                         2.25
                     };
                     let origin = to_km(positions[patch.body as usize]) - cam_km;
-                    // Arrowheads along the path the way the vessel travels, a steady size on screen.
-                    let marks = 6;
-                    for m in 0..marks {
-                        let k = (pts.len() * (2 * m + 1)) / (2 * marks);
-                        let (Some(&a), Some(&b)) = (pts.get(k), pts.get(k + 1)) else {
-                            continue;
-                        };
-                        let dir = (b - a).normalize_or_zero();
-                        let far = (origin + a).length();
-                        // Quantised so the head's strip is cached until the zoom changes noticeably.
-                        let step = (far.max(1e-6).log2() * 4.0).round();
-                        let len = 2f64.powf(step / 4.0) * 0.03;
-                        traj.push(render::LineItem::arrowhead(
-                            format!(
-                                "traj-arrow:{}:{}:{}:{m}:{step}",
-                                v.id, pi, self.traj_version
-                            ),
-                            a - dir * (len * 0.5),
-                            a + dir * (len * 0.5),
-                            origin,
-                            colour,
-                            width * 4.0,
-                        ));
-                    }
                     traj.push(render::LineItem::new(
                         format!("traj:{}:{}:{}", v.id, pi, self.traj_version),
                         pts,

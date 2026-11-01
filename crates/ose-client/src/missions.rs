@@ -3,8 +3,8 @@
 //! briefing on the right (title, granter, description, objectives in order, science reward). Text comes from
 //! the original's English localization.
 //!
-//! Mission progress is not in the protocol yet: missions marked active at the start of a campaign show as
-//! active and the rest as not yet offered.
+//! The server offers missions along the original's chain (each completed mission activates the next ones);
+//! before its progress arrives only the missions active at the start of a campaign are listed.
 
 use crate::rnd::text;
 use serde::Deserialize;
@@ -75,7 +75,7 @@ pub fn reward(m: &Mission) -> f64 {
 }
 
 /// The mission log for one tab (primary or secondary). With the server's progress, offered missions are
-/// listed (active first, completed after); without it, every mission.
+/// listed (active first, completed after); without it, the missions active from the start.
 pub fn render_list(
     missions: &[Mission],
     loc: &HashMap<String, String>,
@@ -98,6 +98,9 @@ pub fn render_list(
             }
         })
         .collect();
+    if progress.is_none() {
+        rows.retain(|m| m.active_at_start);
+    }
     if let Some(p) = progress {
         rows.retain(|m| p.iter().any(|i| i.id == m.id));
         rows.sort_by_key(|m| {
@@ -119,8 +122,7 @@ pub fn render_list(
             Some(i) if i.complete => "ready",
             Some(i) if !i.accepted => "offered",
             Some(_) => "active",
-            None if m.active_at_start => "active",
-            None => "offered-later",
+            None => "active",
         };
         html.push_str(&format!(
             "<li class=\"mc-mission {state}{sel}\" data-ose=\"mc-mission\" data-ose-mission=\"{id}\">\

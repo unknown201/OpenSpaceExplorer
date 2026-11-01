@@ -323,6 +323,9 @@ pub struct MissionDef {
     /// Active from the start of a campaign (`state: Active`).
     pub active_at_start: bool,
     pub stages: Vec<MissionStage>,
+    /// Missions this one offers once it is complete (its `ActivateMissionAction`s): the campaign's chain.
+    #[serde(default)]
+    pub activates: Vec<String>,
 }
 
 impl MissionDef {
@@ -454,6 +457,7 @@ mod tests {
                     science_reward: 0.0,
                 },
             ],
+            activates: vec!["Main_Kerbin_02".into()],
         }
     }
 

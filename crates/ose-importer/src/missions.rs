@@ -87,7 +87,38 @@ pub fn mission(v: &Value) -> MissionDef {
         },
         active_at_start: s(v, "state") == "Active",
         stages,
+        activates: activations(v),
     }
+}
+
+/// Every `ActivateMissionAction` target anywhere in the mission (its content branches run them as it
+/// completes), in order, without duplicates.
+fn activations(v: &Value) -> Vec<String> {
+    fn walk(v: &Value, out: &mut Vec<String>) {
+        match v {
+            Value::Object(o) => {
+                let is_activate = o
+                    .get("$type")
+                    .and_then(Value::as_str)
+                    .is_some_and(|t| type_name(t) == "ActivateMissionAction");
+                if let (true, Some(id)) = (
+                    is_activate,
+                    o.get("TargetMissionID").and_then(Value::as_str),
+                ) {
+                    if !id.is_empty() && !out.iter().any(|x| x == id) {
+                        out.push(id.to_string());
+                    }
+                }
+                o.values().for_each(|c| walk(c, out));
+            }
+            Value::Array(a) => a.iter().for_each(|c| walk(c, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    walk(v, &mut out);
+    out.retain(|id| id != &s(v, "ID"));
+    out
 }
 
 pub fn import_missions(data_dir: &Path) -> anyhow::Result<Vec<MissionDef>> {

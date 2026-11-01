@@ -689,6 +689,9 @@ pub struct FlightView {
     /// Craft axes and local horizon of the last frame, for the navball.
     /// Height above the ground under the vessel (the altimeter's terrain mode), once the body's map is loaded.
     pub agl_m: Option<f64>,
+    /// The compass heading the camera looks along (degrees, clockwise from north), from the last frame: a
+    /// Kerbal on the ground walks relative to it, as the original's.
+    pub look_heading_deg: Option<f64>,
     /// Part boxes relative to the camera (craft part index, min, max) and the camera's forward and up from
     /// the last frame, for picking a part under the pointer (the part window on right click).
     pick_boxes: Vec<(usize, DVec3, DVec3)>,
@@ -803,6 +806,7 @@ impl FlightView {
             chute_looks: HashMap::new(),
             gimbals: HashMap::new(),
             agl_m: None,
+            look_heading_deg: None,
             pick_boxes: Vec::new(),
             pick_poses: Vec::new(),
             hovered: None,
@@ -1190,6 +1194,13 @@ impl FlightView {
         let offs = self.pitch.cos() * (self.yaw.cos() * b_n + self.yaw.sin() * b_e)
             + self.pitch.sin() * b_u;
         self.cam_frame = Some((mode, offs));
+        let look = -offs - up * (-offs).dot(up);
+        self.look_heading_deg = (look.length() > 1e-3).then(|| {
+            look.dot(east)
+                .atan2(look.dot(north))
+                .to_degrees()
+                .rem_euclid(360.0)
+        });
         // After a crash the vessel point is the impact: look at the wreck scattered round it instead, from
         // far enough out to take it all in, and never from under the ground.
         let crashed = inp

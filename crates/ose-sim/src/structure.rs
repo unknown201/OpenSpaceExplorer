@@ -380,7 +380,7 @@ fn vessel_box(q: ose_data::craft::Quat, b: ose_data::PartBounds) -> (DVec3, DVec
 }
 
 /// An orthonormal basis with `y` along the vessel axis.
-fn basis(facing: DVec3) -> (DVec3, DVec3, DVec3) {
+pub(crate) fn basis(facing: DVec3) -> (DVec3, DVec3, DVec3) {
     let y = facing.normalized();
     let reference = if y.z.abs() < 0.9 {
         DVec3::new(0.0, 0.0, 1.0)

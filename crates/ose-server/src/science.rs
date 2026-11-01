@@ -9,9 +9,6 @@ use serde::{Deserialize, Serialize};
 use crate::save::Campaign;
 use crate::Shared;
 
-/// Primary missions are offered in this order; the rest of the primaries open once these are done.
-const PRIMARY_ORDER: [&str; 3] = ["Main_Kerbin_01", "Main_Kerbin_02", "Main_Kerbin_03"];
-
 /// Static definitions.
 pub struct ScienceData {
     pub tech: Vec<TechNode>,
@@ -116,26 +113,28 @@ impl ScienceData {
         self.unlocked(p).iter().map(|n| n.required_science).sum()
     }
 
-    /// Whether a mission is offered now.
+    /// Whether a mission is offered now: active from the start, or activated by a mission the agency has
+    /// completed (the original's `ActivateMissionAction` chain).
     pub fn available(&self, def: &MissionDef, p: &ScienceProgress) -> bool {
         if !def.playable() {
             return false;
         }
-        if !def.primary || def.active_at_start {
-            return true;
-        }
-        let done = |id: &str| p.missions.iter().any(|m| m.id == id && m.progress.complete);
-        match PRIMARY_ORDER.iter().position(|&x| x == def.id) {
-            Some(0) => true,
-            Some(i) => done(PRIMARY_ORDER[i - 1]),
-            None => PRIMARY_ORDER.iter().all(|&x| done(x)),
-        }
+        def.active_at_start
+            || self.missions.iter().any(|prev| {
+                prev.activates.iter().any(|a| a == &def.id)
+                    && p.missions
+                        .iter()
+                        .any(|m| m.id == prev.id && m.progress.complete)
+            })
     }
 
     pub fn missions_info(&self, p: &ScienceProgress) -> Vec<MissionInfo> {
         self.missions
             .iter()
-            .filter(|d| self.available(d, p) || p.missions.iter().any(|m| m.id == d.id))
+            // offered now, or already taken on (an older save may hold missions offered before the chain)
+            .filter(|d| {
+                self.available(d, p) || p.missions.iter().any(|m| m.id == d.id && m.accepted)
+            })
             .map(|d| {
                 let prog = p
                     .missions
@@ -553,6 +552,14 @@ mod tests {
                 .collect()
         };
         assert_eq!(open(&c), vec!["Main_Kerbin_01".to_string()]);
+        // nothing else is offered until the chain reaches it
+        assert_eq!(
+            d.missions_info(&c.science)
+                .iter()
+                .map(|m| m.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Main_Kerbin_01"]
+        );
         c.science.missions.push(SavedMission {
             id: "Main_Kerbin_01".into(),
             progress: MissionProgress {
@@ -578,5 +585,21 @@ mod tests {
             d.accept(&mut c, "Main_Kerbin_03", 10).is_err(),
             "not offered yet"
         );
+        // completing the second opens the third and its secondary
+        c.science
+            .missions
+            .iter_mut()
+            .find(|m| m.id == "Main_Kerbin_02")
+            .unwrap()
+            .progress
+            .complete = true;
+        let ids: Vec<String> = d
+            .missions_info(&c.science)
+            .into_iter()
+            .map(|m| m.id)
+            .collect();
+        assert!(ids.contains(&"Main_Kerbin_03".to_string()));
+        assert!(ids.contains(&"KSP2Mission_Secondary_Kerbin_Buoyancy".to_string()));
+        assert!(!ids.contains(&"Main_MunOrBust_04".to_string()));
     }
 }
