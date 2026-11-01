@@ -10,6 +10,8 @@ pub struct Row {
     pub id: u64,
     pub name: String,
     pub mine: bool,
+    /// This player may fly it (their own, or any agency vessel in a co-op campaign).
+    pub can_fly: bool,
     pub body: String,
     pub situation: &'static str,
     pub altitude_m: f64,
@@ -127,7 +129,7 @@ pub fn render_list(
 
 /// The selected vessel's card.
 pub fn render_info(r: &Row) -> String {
-    let recover = r.mine && matches!(r.situation, "Landed" | "Splashed") && r.body == "Kerbin";
+    let recover = r.can_fly && matches!(r.situation, "Landed" | "Splashed") && r.body == "Kerbin";
     format!(
         "<h3>{name}</h3><div class=\"ts-owner\">{owner}</div><dl>\
          <dt>Body</dt><dd>{body}</dd><dt>Situation</dt><dd>{sit}</dd><dt>Altitude</dt><dd>{alt}</dd>\
@@ -153,7 +155,11 @@ pub fn render_info(r: &Row) -> String {
         },
         pe = km(r.periapsis_m),
         id = r.id,
-        fly = if r.mine { "" } else { " disabled title=\"not your vessel\"" },
+        fly = if r.can_fly {
+            ""
+        } else {
+            " disabled title=\"not your vessel\""
+        },
         rec = if recover {
             ""
         } else {
@@ -421,6 +427,7 @@ mod tests {
             id,
             name: name.into(),
             mine,
+            can_fly: mine,
             body: "Kerbin".into(),
             situation: sit,
             altitude_m: 80_000.0,

@@ -2182,12 +2182,17 @@ fn science_request(s: &Shared, player_id: u64, msg: ClientMessage) -> Vec<Server
 }
 
 fn owned_vessel(s: &Shared, id: u64, player: u64) -> Option<bevy_ecs::entity::Entity> {
+    // A co-op campaign (`Shared_Vessel_Control`, on unless the campaign turns it off) lets every player fly
+    // every agency vessel; otherwise only its owner can.
+    let shared = campaigns::allowed(s, "Shared_Vessel_Control");
     let e = s
         .vessels
         .lock()
         .expect("vessels lock")
         .iter()
-        .find(|&&(_, vid, owner)| vid == id && owner == Some(player))
+        .find(|&&(_, vid, owner)| {
+            vid == id && (owner == Some(player) || (shared && owner.is_some()))
+        })
         .map(|&(e, _, _)| e);
     if e.is_some() {
         // commanding a vessel is flying it

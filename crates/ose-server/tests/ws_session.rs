@@ -1287,6 +1287,39 @@ async fn teammates_see_who_is_online_and_what_they_fly() {
 }
 
 #[tokio::test]
+async fn in_a_coop_campaign_a_teammate_can_fly_the_pilots_craft() {
+    let (_server, addr) = spawn_server().await;
+    let mut ws = connect_ws(&addr).await;
+    hello(&mut ws, None, "pilot").await;
+    send_msg(&mut ws, &ClientMessage::JoinCampaign).await;
+    let vessel = launch_to_orbit(&mut ws, 120_000.0).await;
+    let mut mate = connect_ws(&addr).await;
+    hello(&mut mate, None, "teammate").await;
+    send_msg(&mut mate, &ClientMessage::JoinCampaign).await;
+    // Shared_Vessel_Control is on unless the campaign turns it off
+    send_msg(
+        &mut mate,
+        &ClientMessage::SetRotation {
+            vessel,
+            pitch: 0.5,
+            yaw: 0.0,
+            roll: 0.0,
+        },
+    )
+    .await;
+    let (accepted, reason) = wait_for(&mut mate, |m| match m {
+        ServerMessage::FlightAck {
+            vessel: v,
+            accepted,
+            reason,
+        } if v == vessel => Some((accepted, reason)),
+        _ => None,
+    })
+    .await;
+    assert!(accepted, "{reason:?}");
+}
+
+#[tokio::test]
 async fn a_pad_launch_lights_while_a_teammate_is_connected() {
     let (_server, addr) = spawn_server().await;
     // a teammate joins the campaign and sits there

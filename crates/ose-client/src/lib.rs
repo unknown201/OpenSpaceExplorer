@@ -173,6 +173,8 @@ struct App {
     /// Launch as soon as the next `CraftSaved` arrives.
     launch_after_save: bool,
     difficulty_defs: Vec<DifficultyDefinition>,
+    /// The live campaign lets every player fly every agency vessel (`Shared_Vessel_Control`).
+    shared_control: bool,
     difficulty_presets: Vec<DifficultyPreset>,
     agency_sent: bool,
     warp_holder: Option<u64>,
@@ -693,6 +695,7 @@ pub fn start() -> Result<(), JsValue> {
         vab_craft_id: None,
         launch_after_save: false,
         difficulty_defs: Vec::new(),
+        shared_control: true,
         difficulty_presets: Vec::new(),
         agency_sent: false,
         warp_holder: None,
@@ -5571,8 +5574,12 @@ impl App {
                 members,
                 you_are_member,
                 created,
+                difficulty,
                 ..
             } => {
+                self.shared_control = !difficulty.iter().any(|d| {
+                    d.id == "Shared_Vessel_Control" && d.value == DifficultyValue::Bool(false)
+                });
                 let names: Vec<&str> = members
                     .iter()
                     .filter(|m| m.online)
@@ -6315,7 +6322,7 @@ impl App {
         let mut ids: Vec<u64> = scene
             .vessels
             .iter()
-            .filter(|v| v.owner.is_some() && v.owner == self.player_id && v.flight.is_some())
+            .filter(|v| self.can_fly(v) && v.flight.is_some())
             .filter(|v| (scene.vessel_position(v, ut) - here).length() < 2500.0)
             .map(|v| v.id)
             .collect();
@@ -6335,11 +6342,16 @@ impl App {
     }
 
     /// Double click on the map or in the station: take control of that vessel when it is yours.
+    /// Whether this player may fly `v`: their own, or any agency vessel in a co-op campaign.
+    fn can_fly(&self, v: &ose_net::VesselState) -> bool {
+        v.owner.is_some() && (v.owner == self.player_id || self.shared_control)
+    }
+
     fn control_vessel(&mut self, id: u64) {
         let Some(v) = self.scene.as_ref().and_then(|s| s.vessel(id)) else {
             return;
         };
-        if v.owner.is_none() || v.owner != self.player_id {
+        if !self.can_fly(v) {
             hud::push(&self.doc, "Not your vessel", "passive");
             return;
         }
@@ -8988,6 +9000,7 @@ impl App {
                     id: v.id,
                     name: v.name.clone(),
                     mine: v.owner.is_some() && v.owner == self.player_id,
+                    can_fly: self.can_fly(v),
                     body: body.id.clone(),
                     situation: tracking::situation(v, body.radius_m, atmo, pe),
                     altitude_m: altitude,
