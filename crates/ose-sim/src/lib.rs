@@ -2112,8 +2112,14 @@ impl Universe {
                     .max(terrain.as_ref().map(|t| t.max_m.max(0.0)).unwrap_or(0.0));
             let safe_coast = orbit.eccentricity() >= 1.0 || orbit.periapsis() > clear_top;
             let flying_burn = self.world.get::<vessels::ExecutingBurn>(e).is_some();
+            // a Kerbal on a ladder and the craft it holds stay in physics together
+            let held = self.world.get::<crew::OnLadder>(e).is_some() || {
+                let mut q = self.world.query::<&crew::OnLadder>();
+                q.iter(&self.world).any(|l| l.vessel == e)
+            };
             let hand_off = p.coasting_since.is_some_and(|t| ut - t >= 10.0)
                 && !flying_burn
+                && !held
                 && !p.landed
                 && !p.crashed
                 && safe_coast

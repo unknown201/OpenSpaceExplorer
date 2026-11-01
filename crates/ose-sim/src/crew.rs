@@ -410,6 +410,10 @@ impl Universe {
             p.rcs.isp_asl_s = isp_asl;
             p.jetpack = Some(jetpack);
             p.groups.rcs = true;
+            // a Kerbal has no SAS: it keeps the attitude it stepped out in rather than turning to a mode
+            p.attitude = flight::Attitude::Free;
+            p.angvel = DVec3::ZERO;
+            p.roll_rate = 0.0;
             p.ground_clearance_m = 0.55;
             p.footprint_m = 0.3;
             p.crash_tolerance_mps = 50.0;
@@ -838,6 +842,33 @@ mod tests {
             u.step();
         }
         panic!("never reached the ground");
+    }
+
+    #[test]
+    fn in_orbit_the_kerbal_holds_on_while_the_craft_coasts_and_keeps_its_own_attitude() {
+        let (mut u, v) = k1_on_pad();
+        let body = u.body_entity("Kerbin").unwrap();
+        let mu = u.world.get::<bodies::Body>(body).unwrap().mu;
+        let mut p = u.powered(v).unwrap().clone();
+        p.r = DVec3::new(700_000.0, 0.0, 0.0);
+        p.v = DVec3::new(0.0, (mu / 700_000.0_f64).sqrt(), 0.0);
+        p.landed = false;
+        p.attitude = flight::Attitude::Free;
+        u.set_powered(v, p);
+        let jeb = u.go_eva(v, None).unwrap();
+        // a Kerbal has no SAS to turn it toward a mode
+        assert_eq!(u.powered(jeb).unwrap().attitude, flight::Attitude::Free);
+        // a quiet coast would put the craft on rails after ten seconds; with a Kerbal on its ladder it stays
+        for _ in 0..(40 * crate::TICKS_PER_SECOND) {
+            u.step();
+        }
+        assert_eq!(u.on_ladder(jeb), Some((v, 0)), "still holding on");
+        let (pv, pj) = (u.powered(v).unwrap(), u.powered(jeb).unwrap());
+        assert!(
+            (pv.angvel + pv.facing * pv.roll_rate).length() < 1e-4,
+            "the craft does not turn"
+        );
+        assert!((pv.r - pj.r).length() < 15.0, "together");
     }
 
     #[test]
