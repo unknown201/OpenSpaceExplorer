@@ -356,6 +356,7 @@ impl Universe {
             area,
             &piece.parts,
             piece.spin,
+            None,
         )
     }
 

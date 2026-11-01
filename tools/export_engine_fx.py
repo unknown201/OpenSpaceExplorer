@@ -191,6 +191,17 @@ class EngineFxExporter:
                 # editor pose. Keep its scale and every child transform, not the preview offset.
                 crash_origin = mul(trs((0,0,0),(0,0,0,1),tuple(getattr(root.tf.m_LocalScale,c) for c in 'xyz')),
                     inverse(root.world)) if part.startswith('fx_') else None
+                if part == 'eva_kerbal':
+                    # The jetpack hangs from bone_kerbal_eva_root; the drawn Kerbal stands on its feet while
+                    # the prefab's root is its centre. Move the effects with the container onto that bone.
+                    from export_particles import kerbal_bone
+                    from export_web_assets import to_gltf_pos
+                    container = next((n for n in root.walk() if n.name.startswith('fx_eva_spacesuit')), None)
+                    if container is not None:
+                        here = to_gltf_pos(tuple(container.world[i][3] for i in range(3)))
+                        bone = kerbal_bone(self.ex, 'bone_kerbal_eva_root')
+                        shift = to_gltf_pos(tuple(a - b for a, b in zip(bone, here)))  # its own inverse
+                        crash_origin = trs(shift,(0,0,0,1),(1,1,1))
                 manager = root.behaviour("ThrottleVFXManager") or {}
                 events = {}
                 if part.startswith('rcs_'):

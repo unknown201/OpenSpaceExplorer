@@ -120,6 +120,9 @@ pub struct NearVessel<'a> {
     pub paint: Option<ose_data::craft::Paint>,
     /// A Kerbal's clip when not standing idle: on a ladder or climbing in through a hatch.
     pub clip: Option<&'static str>,
+    pub id: u64,
+    /// Its instruments when it is in physics: which engines fire (a stage that came off still burning).
+    pub flight: Option<&'a ose_net::FlightReadout>,
 }
 
 /// The paint a part is drawn in (linear rgb base and accent): its own colours, else its craft's, else the
@@ -2610,11 +2613,44 @@ impl FlightView {
                 } else {
                     (lo_all + hi_all) * 0.5
                 };
-                for (name, lp, lq, paint, shroud) in placed {
+                for (k, (name, lp, lq, paint, shroud)) in placed.into_iter().enumerate() {
                     if !gpu.has_model(&name) {
                         continue;
                     }
                     let at = p + crot * (lp - anchor);
+                    let part_id = &craft.parts[k].part_id;
+                    if let Some(f) = near.flight.filter(|f| {
+                        f.firing_engines.contains(&(k as u16))
+                            && (part_id.starts_with("engine_") || part_id.starts_with("booster_"))
+                    }) {
+                        engine_draws.push(crate::engine_fx_gpu::EngineDraw {
+                            gimbal_poses: Vec::new(),
+                            gimbal: DQuat::IDENTITY,
+                            instance: 0x0020000000000000 | (near.id << 16) | k as u64,
+                            part: part_id.clone(),
+                            model: glam::DMat4::from_rotation_translation(crot * lq, at - cam),
+                            throttle: crate::particles::exhaust_throttle(
+                                true,
+                                f.thrust_kn,
+                                f.throttle,
+                                part_id.starts_with("booster_"),
+                                f.situation == ose_net::FlightSituation::Crashed,
+                            ),
+                            pressure: crate::particles::pressure_multiplier(f.static_pressure_kpa),
+                            atmosphere_density: f.atmosphere_density,
+                            gravity_mps2: f.gravity_mps2,
+                            relative_velocity: f.surface_speed_mps,
+                            mode: 0,
+                            time: inp.now_ms * 0.001,
+                            simulation_time: inp.ut,
+                            commanded: f.throttle,
+                            vapor: None,
+                            reentry: None,
+                            thrust_kn: f.thrust_kn,
+                            distance_from_spawn: 0.0,
+                            vertical_deviation: 1.0,
+                        });
+                    }
                     let mut it = DrawItem::lit(name, at - cam, crot * lq, 1.0, sun);
                     it.paint = paint;
                     it.hide_containing = shroud;

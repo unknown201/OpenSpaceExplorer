@@ -18,6 +18,9 @@ pub struct WorldSetup {
     pub jetpack: ose_data::Jetpack,
     pub science: ose_data::science::ScienceCatalog,
     pub regions: Vec<u8>,
+    /// The part catalog and resources, so pieces that come off a craft can be built as vessels.
+    pub parts: Vec<ose_data::PartDef>,
+    pub resources: Vec<ose_data::ResourceDef>,
 }
 
 impl WorldSetup {
@@ -38,6 +41,7 @@ impl WorldSetup {
             });
         }
         u.set_kerbal_part(self.kerbal_experiments.clone());
+        u.set_part_catalog(self.parts.clone(), self.resources.clone());
         u.set_jetpack(self.jetpack.clone());
         // craft at the KSC stand on the campus the client draws
         u.set_site("Kerbin", crate::ksc_site());
@@ -62,6 +66,8 @@ impl Default for WorldSetup {
             jetpack: Default::default(),
             science: Default::default(),
             regions: Vec::new(),
+            parts: Vec::new(),
+            resources: Vec::new(),
         }
     }
 }

@@ -13017,6 +13017,8 @@ impl App {
                         .flight
                         .as_ref()
                         .is_some_and(|f| f.situation == ose_net::FlightSituation::Landed),
+                    id: o.id,
+                    flight: o.flight.as_ref(),
                 }
             })
             .collect();

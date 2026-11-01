@@ -475,6 +475,8 @@ async fn main() -> anyhow::Result<()> {
     }
     setup.science = serde_json::from_str(EMBEDDED_SCIENCE)?;
     setup.regions = EMBEDDED_REGIONS.to_vec();
+    setup.parts = part_defs.clone();
+    setup.resources = serde_json::from_str(EMBEDDED_RESOURCES)?;
     // the first campaign starts on a morning at the KSC unless a save says otherwise
     let mut universe = setup.new_campaign_universe();
     let mut shelf: Vec<save::ShelvedCampaign> = Vec::new();

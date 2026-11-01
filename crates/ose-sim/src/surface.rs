@@ -183,6 +183,7 @@ impl Structure {
         propulsion: &mut Propulsion,
     ) {
         self.surface_loads.clear();
+        self.water_strikes.clear();
         self.suspension_compression_m.fill(0.0);
         propulsion.per_part_contacts = true;
         p.splashed = false;
@@ -208,6 +209,7 @@ impl Structure {
             let (centre, half) = self.part_box(i);
             let offset = centre - mass.centre_m;
             let at = p.r + world(frame, offset);
+            let was_wet = std::mem::replace(&mut self.in_water[i], false);
             if let Some(ocean) = &body.ocean {
                 let water = body.radius_m;
                 // Land and built facilities displace the water, too.
@@ -217,9 +219,20 @@ impl Structure {
                     if volume > 0.0 {
                         p.landed = false;
                         p.splashed = true;
+                        self.in_water[i] = true;
                         let r = offset + centroid;
                         let arm = world(frame, r);
                         let v = p.v + omega.cross(arm) - spin(body).cross(p.r + arm);
+                        // Striking the water is an impact like striking the ground: a part entering it
+                        // faster than its crash tolerance breaks.
+                        let tolerance = if self.crash_tolerance[i] > 0.0 {
+                            self.crash_tolerance[i]
+                        } else {
+                            flight::CRASH_SPEED_MPS
+                        };
+                        if !was_wet && v.length() > tolerance {
+                            self.water_strikes.push((i, v.length()));
+                        }
                         let density = ocean.density.max(0.0);
                         let buoyancy = up * (density * volume * gravity);
                         // Share an implicit generalized-mass drag cap across the parts. This bounds
@@ -300,6 +313,13 @@ impl Structure {
     ) {
         if p.crashed || dt <= 0.0 {
             return;
+        }
+        for (i, speed) in std::mem::take(&mut self.water_strikes) {
+            out.crashed = true;
+            out.impact_mps = out.impact_mps.max(speed);
+            if !out.contact_damage.contains(&i) {
+                out.contact_damage.push(i);
+            }
         }
         if before.landed {
             // The rolling/parked proxy changes pitch on the runway. Seat its current rotated bounds

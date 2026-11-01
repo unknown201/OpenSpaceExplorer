@@ -161,6 +161,10 @@ pub struct Structure {
     pub crew: Vec<u32>,
     /// Each part's crash tolerance, m/s.
     pub crash_tolerance: Vec<f64>,
+    /// Parts under the sea surface after the last surface step, and those that struck the water this
+    /// step faster than they can take: (part, speed m/s).
+    pub(crate) in_water: Vec<bool>,
+    pub(crate) water_strikes: Vec<(usize, f64)>,
     /// Deployable solar panels (and antennas) folded out.
     pub deployed: Vec<bool>,
     /// Antennas that extend and retract (`Data_Deployable` beside `Data_Transmitter`); they start retracted.
@@ -424,6 +428,7 @@ impl Structure {
             self.wheel_previous_manual[j] = old.wheel_previous_manual[i];
             self.wheel_queued_torque[j] = old.wheel_queued_torque[i];
             self.wheel_accepted_power[j] = old.wheel_accepted_power[i];
+            self.in_water[j] = old.in_water[i];
             self.rcs_retained_delivery[j] = old.rcs_retained_delivery[i];
             self.rcs_queued_inputs[j] = old.rcs_queued_inputs[i].clone();
             self.gimbal_angles[j] = old.gimbal_angles[i].clone();
@@ -688,6 +693,8 @@ impl Structure {
             rcs_nozzles: Vec::new(),
             last_rcs_pressure_atm: 0.0,
             surface_loads: Vec::new(),
+            in_water: vec![false; n],
+            water_strikes: Vec::new(),
             suspension_compression_m: vec![0.0; n],
             engine_isp: (0..n)
                 .map(|i| {
@@ -3400,6 +3407,29 @@ impl Structure {
             .unwrap_or(0.0)
             * 0.5
             * 0.02
+    }
+
+    /// Fill this structure's tanks from `tanks`, another structure's tanks whose parts `map` sends to
+    /// this one's (a piece that came off keeps the propellant it carried).
+    pub fn carry_tanks_from(&mut self, tanks: &[crate::resources::Tank], map: &[Option<usize>]) {
+        for t in &mut self.net.tanks {
+            if let Some(old) = tanks.iter().find(|o| {
+                map.get(o.part).copied().flatten() == Some(t.part) && o.resource == t.resource
+            }) {
+                t.stored = old.stored.clamp(0.0, t.capacity);
+            }
+        }
+    }
+
+    /// Run exactly `engines` in flight stage `stage` (engines still burning when their piece came off).
+    pub fn run_engines(&mut self, stage: usize, engines: &[usize]) {
+        if self.stage_engines.len() <= stage {
+            self.stage_engines.resize(stage + 1, Vec::new());
+        }
+        self.stage_engines[stage] = engines.to_vec();
+        for &i in engines {
+            self.engine_shutdown[i] = false;
+        }
     }
 
     /// Fire flight stage `stage`'s activations: parachutes in it arm, fairings in it jettison.

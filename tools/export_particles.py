@@ -12,6 +12,27 @@ from export_web_assets import DEFAULT_INSTALL, ROOT, Exporter, to_gltf_pos
 from export_menu_scene import load_scene, transform_dir
 
 
+def kerbal_bone(ex: Exporter, name: str) -> tuple[float, float, float]:
+    """Rest position of a bone in the exported Kerbal model (glTF frame, feet at the origin)."""
+    import struct
+    import numpy as np
+    data = (ex.out / 'kerbal' / 'kerbal_m.glb').read_bytes()
+    size = struct.unpack('<I', data[12:16])[0]
+    nodes = json.loads(data[20:20 + size])['nodes']
+    parent = {c: i for i, n in enumerate(nodes) for c in n.get('children', [])}
+    def local(n):
+        x, y, z, w = n.get('rotation', [0, 0, 0, 1])
+        r = np.array([[1-2*(y*y+z*z), 2*(x*y-z*w), 2*(x*z+y*w)], [2*(x*y+z*w), 1-2*(x*x+z*z), 2*(y*z-x*w)],
+                      [2*(x*z-y*w), 2*(y*z+x*w), 1-2*(x*x+y*y)]])
+        m = np.eye(4); m[:3, :3] = r * np.array(n.get('scale', [1, 1, 1])); m[:3, 3] = n.get('translation', [0, 0, 0])
+        return m
+    i = next(i for i, n in enumerate(nodes) if n.get('name') == name)
+    m = local(nodes[i])
+    while i in parent:
+        i = parent[i]; m = local(nodes[i]) @ m
+    return tuple(float(v) for v in m[:3, 3])
+
+
 def export_engines(ex: Exporter) -> dict:
     engines = {}
     for key in sorted(ex.cat.string_keys()):
@@ -28,6 +49,14 @@ def export_engines(ex: Exporter) -> dict:
                     continue
                 if part == 'eva_kerbal':
                     transforms = {n.tf.object_reader.path_id:n for n in root.walk()}
+                    # The jetpack effects hang from bone_kerbal_eva_root. The prefab's root is the Kerbal's
+                    # centre; the drawn Kerbal model stands on its feet. Re-anchor the nozzles from the
+                    # effect container to that bone's rest position in the model.
+                    container = next((n for n in root.walk() if n.name.startswith('fx_eva_spacesuit')), None)
+                    shift = (0.0, 0.0, 0.0)
+                    if container is not None:
+                        here = to_gltf_pos(tuple(container.world[i][3] for i in range(3)))
+                        shift = tuple(a - b for a, b in zip(kerbal_bone(ex, 'bone_kerbal_eva_root'), here))
                     for node in root.walk():
                         jetpack = node.behaviour('JetpackVFXManager')
                         if not jetpack: continue
@@ -37,7 +66,8 @@ def export_engines(ex: Exporter) -> dict:
                             visual = transforms[effect['Visual']['m_PathID']]
                             d = transform_dir(direction.world,(0,1,0))
                             rotate = group >= len(moves)
-                            nozzles.append({'position':list(to_gltf_pos(tuple(visual.world[i][3] for i in range(3)))),
+                            at = to_gltf_pos(tuple(visual.world[i][3] for i in range(3)))
+                            nozzles.append({'position':[a + b for a, b in zip(at, shift)],
                                 'direction':list((d[0],-d[1],-d[2]) if rotate else to_gltf_pos(d)),
                                 'mode':group,'rotate':rotate})
                     continue

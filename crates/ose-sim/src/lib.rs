@@ -62,6 +62,20 @@ impl Default for WarpFactor {
     }
 }
 
+/// The part catalog, when the server has provided one (`Universe::set_part_catalog`).
+#[derive(Resource)]
+pub struct PartCatalog {
+    pub defs: Vec<ose_data::PartDef>,
+    pub resources: Vec<ose_data::ResourceDef>,
+}
+
+/// What was burning when a stage came off: parent part indices, the throttle and the tanks.
+pub struct DebrisFire {
+    burning: Vec<usize>,
+    throttle: f64,
+    tanks: Vec<resources::Tank>,
+}
+
 /// What `Universe::stage` did.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct StageResult {
@@ -1113,6 +1127,18 @@ impl Universe {
                 debris: None,
             };
         }
+        // engines burning now, and the propellant they draw on: a piece that comes off keeps both
+        let fire = match (
+            self.world.get::<flight::Powered>(e),
+            self.world.get::<structure::Structure>(e),
+        ) {
+            (Some(p), Some(st)) if p.ignited && !p.crashed => Some(DebrisFire {
+                burning: st.firing_engines(p.stage, p.throttle),
+                throttle: p.throttle,
+                tanks: st.net.tanks.clone(),
+            }),
+            _ => None,
+        };
         let (outcome, mut r, v, facing, area) =
             if let Some(mut p) = self.world.get_mut::<flight::Powered>(e) {
                 let o = p.stage_next();
@@ -1217,6 +1243,7 @@ impl Universe {
                     area,
                     &[],
                     DVec3::ZERO,
+                    None,
                 )
             } else {
                 let mut first = None;
@@ -1243,6 +1270,7 @@ impl Universe {
                         area,
                         &parts,
                         tumble,
+                        fire.as_ref(),
                     );
                     match (first, d) {
                         (None, Some(d)) => first = Some(d),
@@ -1274,6 +1302,7 @@ impl Universe {
         drag_area_m2: f64,
         parts: &[usize],
         angvel: DVec3,
+        fire: Option<&DebrisFire>,
     ) -> Option<Entity> {
         let top = match self.world.get::<flight::Powered>(parent) {
             Some(p) => flight::vessel_top(p),
@@ -1283,11 +1312,58 @@ impl Universe {
                 .map(|d| flight::vessel_top(&d.0))
                 .unwrap_or(DVec3::ZERO),
         };
-        let craft = self
+        let subset = self
             .world
             .get::<docking::CraftDoc>(parent)
             .filter(|_| !parts.is_empty())
-            .map(|d| docking::subset(&d.0, parts).0);
+            .map(|d| docking::subset(&d.0, parts));
+        // A piece is built from its own parts when the catalog is known: it floats, sinks and breaks part
+        // by part like any craft, and keeps the propellant it carried. One carrying an engine that was
+        // burning keeps burning (KSP2 leaves a separated stage's engines running) at the same throttle.
+        let (parent_tanks, parent_wet) = self
+            .world
+            .get::<structure::Structure>(parent)
+            .map(|st| (Some(st.net.tanks.clone()), st.in_water.clone()))
+            .unwrap_or_default();
+        // Only pieces that need it are built: one still burning, or one in the sea (where it must float);
+        // a spent stage or a wreck on land stays a cheap single body.
+        let afloat = self
+            .world
+            .get::<flight::Powered>(parent)
+            .is_some_and(|p| p.splashed)
+            || parent_wet.iter().any(|w| *w);
+        let lit = |map: &[Option<usize>]| {
+            fire.is_some_and(|f| f.burning.iter().any(|&i| map[i].is_some()))
+        };
+        let burning = match (&subset, self.world.get_resource::<PartCatalog>()) {
+            (Some((craft, map)), Some(catalog)) if afloat || lit(map) => {
+                let mut st = structure::Structure::build(craft, &catalog.defs, &catalog.resources);
+                if let Some(tanks) = fire.map(|f| &f.tanks).or(parent_tanks.as_ref()) {
+                    st.carry_tanks_from(tanks, map);
+                }
+                // parts already in the sea do not strike it again
+                for (i, wet) in parent_wet.iter().enumerate() {
+                    if let Some(j) = map.get(i).copied().flatten() {
+                        st.in_water[j] = *wet;
+                    }
+                }
+                let engines: Vec<usize> = fire
+                    .map(|f| f.burning.iter().filter_map(|&i| map[i]).collect())
+                    .unwrap_or_default();
+                let throttle = if engines.is_empty() {
+                    None
+                } else {
+                    st.run_engines(0, &engines);
+                    fire.map(|f| f.throttle)
+                };
+                let report =
+                    ose_data::staging::delta_v_by_stage(craft, &catalog.defs, &catalog.resources);
+                let spec = flight::FlightSpec::from_report(&report, &[], &[], drag_area_m2);
+                Some((st, spec, throttle))
+            }
+            _ => None,
+        };
+        let craft = subset.map(|s| s.0);
         let body = self.world.get::<bodies::ReferenceBody>(parent)?.0;
         let mu = self.world.get::<bodies::Body>(body)?.mu;
         let name = format!(
@@ -1307,12 +1383,21 @@ impl Universe {
             drag_area_m2,
             drag_cd: flight::DEFAULT_CD,
         };
+        let (spec, structure) = match burning {
+            Some((st, spec, throttle)) => (spec, Some((st, throttle))),
+            None => (spec, None),
+        };
         let mut p = flight::Powered::new(spec, r2, v2, false);
         p.facing = facing;
         // it tumbles freely in the frame it left with
         p.attitude = flight::Attitude::Free;
         p.own_top = top;
         p.angvel = angvel;
+        if let Some((_, Some(throttle))) = &structure {
+            p.ignited = true;
+            p.stage = 0;
+            p.throttle = *throttle;
+        }
         let orbit = Orbit::from_state_vectors(mu, r2, v2, ut);
         let d = self
             .world
@@ -1333,7 +1418,22 @@ impl Universe {
         if let Some(c) = craft {
             self.set_craft(d, c);
         }
+        if let Some((st, _)) = structure {
+            // the rebuild seats nobody: crew stays with the vessel they rode in
+            self.set_crew(d, Vec::new());
+            self.set_structure(d, st);
+        }
         Some(d)
+    }
+
+    /// The part catalog and resource definitions the server loaded, so pieces that come off a craft can
+    /// be built as vessels of their own.
+    pub fn set_part_catalog(
+        &mut self,
+        defs: Vec<ose_data::PartDef>,
+        resources: Vec<ose_data::ResourceDef>,
+    ) {
+        self.world.insert_resource(PartCatalog { defs, resources });
     }
 
     /// Atmosphere of a body, if any.
@@ -1873,6 +1973,9 @@ impl Universe {
                                 pieces.push((piece, p.r, p.v, p.facing));
                             }
                         } else {
+                            // the root broke: the vessel is lost, whatever struck it
+                            p.crashed = true;
+                            p.throttle = 0.0;
                             // the wreck flies apart: the blow bounced back weakly, scattered, tumbling
                             let up = p.r.normalized();
                             let v_in = out.impact_velocity;
@@ -1967,10 +2070,14 @@ impl Universe {
                     area,
                     &piece.parts,
                     tumble,
+                    None,
                 ) {
                     if wreck {
                         if let Some(mut q) = self.world.get_mut::<flight::Powered>(d) {
                             q.crash_tolerance_mps = 1.0e4;
+                        }
+                        if let Some(mut st) = self.world.get_mut::<structure::Structure>(d) {
+                            st.crash_tolerance.fill(1.0e4);
                         }
                     }
                     self.broken_off.push((e, d));
@@ -2421,6 +2528,187 @@ mod tests {
         assert!(!p.landed && p.v.length() > 100.0, "climbing");
         assert!(u.take_broken_off().is_empty());
         assert_eq!(u.structure(v).unwrap().rigid.groups().len(), 1);
+    }
+
+    /// Kerbin over open sea 200 m deep, with the part catalog, and `name` falling into it from `height` m
+    /// above the surface at `speed` m/s, leaning `lean` radians from upright.
+    fn into_the_sea(name: &str, lean: f64, speed: f64, height: f64) -> (Universe, Entity) {
+        let bodies: Vec<ose_data::CelestialBody> =
+            serde_json::from_str(include_str!("../../../assets/own/kerbol-system.json")).unwrap();
+        let mut kerbin = bodies.into_iter().find(|b| b.id == "Kerbin").unwrap();
+        kerbin.parent = None;
+        kerbin.orbit = None;
+        kerbin.soi_radius_m = None;
+        let crafts: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let defs: Vec<ose_data::PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let res: Vec<ose_data::ResourceDef> =
+            serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
+        let craft = crafts.iter().find(|c| c.name == name).unwrap();
+        let mut u = Universe::with_bodies(&[kerbin]);
+        u.set_part_catalog(defs.clone(), res.clone());
+        let body = u.body_entity("Kerbin").unwrap();
+        u.world
+            .entity_mut(body)
+            .insert(flight::Terrain(std::sync::Arc::new(
+                ose_data::terrain::TerrainMap {
+                    width: 2,
+                    height: 2,
+                    scale_m: 0.0,
+                    offset_m: -200.0,
+                    has_ocean: true,
+                    body_radius_m: 600_000.0,
+                    data: vec![0; 4],
+                    max_m: 0.0,
+                    detail: None,
+                    overlay: None,
+                    flats: vec![],
+                },
+            )));
+        let report = ose_data::staging::delta_v_by_stage(craft, &defs, &res);
+        let spec = flight::FlightSpec::from_report(&report, &[], &[], 1.5);
+        let v = u.spawn_powered_on_surface(name, body, spec, 0.0, 0.0);
+        u.set_craft(v, craft.clone());
+        u.set_structure(v, structure::Structure::build(craft, &defs, &res));
+        {
+            let mut p = u.world.get_mut::<flight::Powered>(v).unwrap();
+            let up = p.r.normalized();
+            let east = DVec3::new(0.0, 0.0, 1.0).cross(up).normalized();
+            p.facing = (up * lean.cos() + east * lean.sin()).normalized();
+            p.r = up * (600_000.0 + height);
+            p.v = DVec3::new(0.0, 0.0, 2.0 * std::f64::consts::PI / 21_549.425).cross(p.r)
+                - up * speed;
+            p.attitude = flight::Attitude::Free;
+            p.landed = false;
+        }
+        (u, v)
+    }
+
+    #[test]
+    fn a_gentle_splashdown_floats_and_a_fast_one_breaks_up() {
+        let (mut u, v) = into_the_sea("Stock12_StartRocket", 0.0, 5.0, 2.0);
+        let parts = u
+            .structure(v)
+            .unwrap()
+            .rigid
+            .present
+            .iter()
+            .filter(|p| **p)
+            .count();
+        for _ in 0..(10 * TICKS_PER_SECOND) {
+            u.step();
+        }
+        let p = u.powered(v).unwrap();
+        assert!(p.splashed && !p.crashed, "afloat");
+        assert_eq!(
+            u.structure(v)
+                .unwrap()
+                .rigid
+                .present
+                .iter()
+                .filter(|p| **p)
+                .count(),
+            parts,
+            "every part came through"
+        );
+        // striking the water at 50 m/s is a crash like striking the ground
+        let (mut u, v) = into_the_sea("Stock12_StartRocket", 0.0, 50.0, 8.0);
+        for _ in 0..(3 * TICKS_PER_SECOND) {
+            u.step();
+        }
+        let lost = u.powered(v).is_none_or(|p| p.crashed);
+        let left = u
+            .structure(v)
+            .map(|s| s.rigid.present.iter().filter(|p| **p).count())
+            .unwrap_or(0);
+        assert!(
+            lost || left < parts,
+            "the impact broke it ({left} of {parts} parts)"
+        );
+        // a vessel whose root broke is lost, not a hull of no parts drifting down
+        if left == 0 {
+            assert!(u.powered(v).is_none_or(|p| p.crashed));
+        }
+    }
+
+    #[test]
+    fn pieces_broken_off_in_the_sea_float_rather_than_vanish() {
+        let (mut u, _) = into_the_sea("Kerbal K1", 1.57, 40.0, 8.0);
+        let mut pieces = Vec::new();
+        for _ in 0..(5 * TICKS_PER_SECOND) {
+            u.step();
+            pieces.extend(u.take_broken_off().into_iter().map(|(_, d)| d));
+        }
+        assert!(!pieces.is_empty(), "a flat 40 m/s impact breaks parts off");
+        let floating = pieces
+            .iter()
+            .filter(|&&d| u.powered(d).is_some_and(|p| p.splashed && !p.crashed))
+            .count();
+        assert!(
+            floating * 2 > pieces.len(),
+            "most pieces float ({floating} of {})",
+            pieces.len()
+        );
+        for &d in &pieces {
+            if let Some(p) = u.powered(d) {
+                assert!(p.r.length().is_finite() && p.mass_t > 0.0, "no empty hulls");
+            }
+        }
+    }
+
+    #[test]
+    fn boosters_dropped_while_burning_keep_burning_their_own_fuel() {
+        let (mut u, body, spec, st) = k1_on_real_kerbin();
+        let defs: Vec<ose_data::PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let res: Vec<ose_data::ResourceDef> =
+            serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
+        u.set_part_catalog(defs, res);
+        let crafts: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let v = u.spawn_powered_on_surface("K1", body, spec, 0.0, 0.0);
+        u.set_craft(
+            v,
+            crafts.into_iter().find(|c| c.name == "Kerbal K1").unwrap(),
+        );
+        u.set_structure(v, st);
+        assert!(u.set_controls(v, 1.0, flight::Attitude::Up));
+        u.stage(v);
+        for _ in 0..(3 * TICKS_PER_SECOND) {
+            u.step();
+        }
+        let d = u.stage(v).debris.expect("boosters come off");
+        let solid = |u: &Universe, e: Entity| {
+            let s = u
+                .structure(e)
+                .expect("a burning piece is built from its parts");
+            let r = s.net.resource("SolidFuel").unwrap();
+            s.net
+                .tanks
+                .iter()
+                .filter(|t| t.resource == r)
+                .map(|t| t.stored)
+                .sum::<f64>()
+        };
+        let p = u.powered(d).unwrap().clone();
+        assert!(p.ignited && p.throttle == 1.0);
+        let st = u.structure(d).unwrap();
+        assert!(!st.firing_engines(p.stage, p.throttle).is_empty());
+        let sf0 = solid(&u, d);
+        assert!(sf0 > 0.0, "they carry what was left in them");
+        assert!(u.crew(d).is_empty(), "nobody rides on the boosters");
+        let (v0, up) = (p.v, p.r.normalized());
+        for _ in 0..TICKS_PER_SECOND {
+            u.step();
+        }
+        let q = u.powered(d).unwrap();
+        assert!(solid(&u, d) < sf0, "and burn it");
+        assert!(
+            (q.v - v0).dot(up) > 0.0,
+            "still pushing up against gravity ({:?})",
+            q.v - v0
+        );
     }
 
     #[test]

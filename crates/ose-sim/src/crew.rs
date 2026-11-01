@@ -348,7 +348,7 @@ impl Universe {
                 (r, v, false, r.normalized())
             }
         };
-        let (_, kname) = crew.remove(idx);
+        let (seat, kname) = crew.remove(idx);
         self.set_crew(e, crew);
         let jetpack = self
             .world
@@ -423,6 +423,19 @@ impl Universe {
             name: kname,
             experiments,
         });
+        // As in the original, a Kerbal steps out holding the hatch's ladder rather than dropping off it.
+        if self.world.get::<flight::Powered>(e).is_none() {
+            self.wake(e);
+        }
+        if let Some((_, foot, top)) = self.ladders(e).into_iter().find(|l| l.0 == seat) {
+            self.world.entity_mut(kerbal).insert(OnLadder {
+                vessel: e,
+                part: seat,
+                along_m: (top - foot).length() * 0.5,
+                climb: 0.0,
+            });
+            self.run_ladders(0.0);
+        }
         Ok(kerbal)
     }
 
@@ -811,6 +824,64 @@ mod tests {
         (u, v)
     }
 
+    /// Let go of the ladder the Kerbal stepped out onto, and wait until they are on the ground.
+    fn let_go_and_land(u: &mut Universe, jeb: Entity) {
+        assert_eq!(
+            u.grab_ladder(jeb),
+            Ok(false),
+            "stepped out holding the ladder"
+        );
+        for _ in 0..(20 * crate::TICKS_PER_SECOND) {
+            if u.powered(jeb).unwrap().landed {
+                return;
+            }
+            u.step();
+        }
+        panic!("never reached the ground");
+    }
+
+    #[test]
+    fn a_kerbal_steps_out_onto_the_hatch_ladder_and_holds_on() {
+        let (mut u, v) = k1_on_pad();
+        let jeb = u.go_eva(v, None).unwrap();
+        assert_eq!(u.on_ladder(jeb), Some((v, 0)), "on the pod's ladder");
+        let d0 = u.distance_between(jeb, v).unwrap();
+        for _ in 0..(3 * crate::TICKS_PER_SECOND) {
+            u.step();
+        }
+        assert_eq!(u.on_ladder(jeb), Some((v, 0)), "still holding on");
+        let d = u.distance_between(jeb, v).unwrap();
+        assert!(
+            (d - d0).abs() < 0.05,
+            "stays with the craft ({d0} -> {d} m)"
+        );
+        assert!(!u.powered(jeb).unwrap().landed, "not dropped to the ground");
+        // and in orbit, beside a craft on rails
+        let body = u.body_entity("Kerbin").unwrap();
+        let mu = u.world.get::<bodies::Body>(body).unwrap().mu;
+        let mut p = u.powered(v).unwrap().clone();
+        u.grab_ladder(jeb).unwrap();
+        u.board(jeb, v).unwrap();
+        for _ in 0..crate::TICKS_PER_SECOND {
+            u.step();
+        }
+        p.r = DVec3::new(700_000.0, 0.0, 0.0);
+        p.v = DVec3::new(0.0, (mu / 700_000.0_f64).sqrt(), 0.0);
+        p.landed = false;
+        u.set_powered(v, p);
+        let jeb = u.go_eva(v, None).unwrap();
+        let d0 = u.distance_between(jeb, v).unwrap();
+        for _ in 0..(3 * crate::TICKS_PER_SECOND) {
+            u.step();
+        }
+        assert_eq!(u.on_ladder(jeb), Some((v, 0)));
+        let d = u.distance_between(jeb, v).unwrap();
+        assert!(
+            (d - d0).abs() < 0.05,
+            "floats with the craft ({d0} -> {d} m)"
+        );
+    }
+
     #[test]
     fn jeb_walks_out_plants_a_flag_takes_a_sample_and_climbs_back_in() {
         let (mut u, v) = k1_on_pad();
@@ -818,9 +889,9 @@ mod tests {
         let jeb = u.go_eva(v, None).unwrap();
         assert!(u.crew(v).is_empty());
         assert_eq!(u.eva_kerbal(jeb).unwrap().name, "Jebediah Kerman");
+        let_go_and_land(&mut u, jeb);
         let d = u.distance_between(jeb, v).unwrap();
-        assert!((2.0..8.0).contains(&d), "beside the craft ({d} m)");
-        assert!(u.powered(jeb).unwrap().landed);
+        assert!(d < 12.0, "at the foot of the craft ({d} m)");
         // a flag on the KSC
         let flag = u.plant_flag(jeb, "Agency flag").unwrap();
         assert!(u.is_flag(flag));
@@ -879,6 +950,8 @@ mod tests {
     fn a_kerbal_walks_across_the_ground() {
         let (mut u, v) = k1_on_pad();
         let jeb = u.go_eva(v, None).unwrap();
+        let_go_and_land(&mut u, jeb);
+        let fuel = u.powered(jeb).unwrap().propellant_t;
         let body = u.body_entity("Kerbin").unwrap();
         let b = u.world.get::<bodies::Body>(body).unwrap().clone();
         let here = |u: &Universe| flight::lat_lon(&b, u.position_of(jeb).unwrap(), u.ut());
@@ -897,7 +970,7 @@ mod tests {
         }
         let p = u.powered(jeb).unwrap();
         assert!(p.landed);
-        assert_eq!(p.propellant_t, JETPACK_PROPELLANT_T);
+        assert_eq!(p.propellant_t, fuel, "walking uses no propellant");
         // across the surface (the body turns under it too): 0.8 m/s, about 3.2 m north
         let end = here(&u);
         let north_m = (end.0 - start.0).to_radians() * b.radius_m;
@@ -921,10 +994,7 @@ mod tests {
         }
         let p = u.powered(jeb).unwrap();
         assert!(p.landed && !p.crashed);
-        assert_eq!(
-            p.propellant_t, JETPACK_PROPELLANT_T,
-            "walking and jumping burn nothing"
-        );
+        assert_eq!(p.propellant_t, fuel, "walking and jumping burn nothing");
         // the jetpack lifts it straight up (Translate along the Kerbal's axis)
         u.set_controls(jeb, 0.0, flight::Attitude::Up);
         assert!(u.set_translate(jeb, DVec3::new(0.0, 1.0, 0.0)));
@@ -948,6 +1018,7 @@ mod tests {
         carrier.facing = DVec3::new(1.0, 0.0, 0.0);
         u.set_powered(vessel, carrier);
         let eva = u.go_eva(vessel, Some("Jebediah Kerman")).unwrap();
+        u.grab_ladder(eva).unwrap();
         let mut p = u.powered(eva).unwrap().clone();
         let dt = 1.0 / crate::TICKS_PER_SECOND as f64;
         let fuel = 0.25 / (240.0 * ose_data::G0) * dt * 0.25;
@@ -997,6 +1068,7 @@ mod tests {
         p.landed = false;
         u.set_powered(v, p);
         let jeb = u.go_eva(v, Some("Jebediah Kerman")).unwrap();
+        assert_eq!(u.grab_ladder(jeb), Ok(false), "lets go of the ladder");
         let v0 = u.powered(jeb).unwrap().v;
         u.set_controls(jeb, 1.0, flight::Attitude::OrbitPrograde);
         for _ in 0..(5 * crate::TICKS_PER_SECOND) {
