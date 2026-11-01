@@ -44,4 +44,8 @@ test("the game menu overlays the flight and a revert closes it", async ({ page, 
   await page.locator('#screen-paused [data-save-action="RevertToLaunch"]').click();
   await expect(page.locator("#menu")).toHaveClass(/hidden/);
   await expect(page.locator("#flight-hud")).not.toHaveClass(/map/);
+  // Leave the pad clear for the tests that join this campaign after us.
+  await page.keyboard.press("Escape");
+  await page.locator('[data-ose="to-recover"]').click();
+  await expect(page.locator('[data-ose="flight"].open')).toBeHidden();
 });
