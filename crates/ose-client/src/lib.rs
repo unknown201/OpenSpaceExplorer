@@ -229,6 +229,9 @@ struct App {
     /// Symmetry count for surface parts (X / Shift+X) and angle snap (C), as the original's toolbar.
     vab_symmetry: u32,
     vab_snap: bool,
+    /// The part the VAB camera pivots on (V or a middle click on it), to toggle back to the whole craft.
+    #[cfg(target_arch = "wasm32")]
+    vab_focused: Option<usize>,
     /// Ctrl+C clipboard, and whether the fragment in hand is a paste (dropped nowhere it just goes away).
     vab_clipboard: Option<vab::Fragment>,
     vab_pasting: bool,
@@ -447,6 +450,10 @@ struct App {
     /// Screen points (CSS px) along the planning vessel's current orbit with their UT, from the last map
     /// frame: a click near one adds a maneuver node there, as clicking an orbit does in the original.
     orbit_pick: Vec<(f64, f64, f64)>,
+    /// The pointer over the 3D view (CSS px from its corner), for lighting up the path a click would put a
+    /// node on.
+    #[cfg(target_arch = "wasm32")]
+    map_cursor: Option<(f64, f64)>,
     /// Maneuver gizmo: each handle's screen direction from the node (CSS px, unit) from the last map frame,
     /// and the handle being dragged (index, press x, y, the node's delta-v components at the press).
     mnv_dirs: [(f64, f64); 6],
@@ -743,6 +750,8 @@ pub fn start() -> Result<(), JsValue> {
         vab_frag: None,
         vab_symmetry: 1,
         vab_snap: true,
+        #[cfg(target_arch = "wasm32")]
+        vab_focused: None,
         vab_clipboard: None,
         vab_pasting: false,
         vab_from_picker: false,
@@ -886,6 +895,8 @@ pub fn start() -> Result<(), JsValue> {
         eva_on_ladder: false,
         eva_jump: false,
         orbit_pick: Vec::new(),
+        #[cfg(target_arch = "wasm32")]
+        map_cursor: None,
         mnv_dirs: [(0.0, 0.0); 6],
         mnv_drag: None,
         mnv_sent_ms: 0.0,
@@ -4124,6 +4135,20 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
             return;
         }
         #[cfg(target_arch = "wasm32")]
+        {
+            let rect = app.gpu_canvas.get_bounding_client_rect();
+            let over = ev
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .is_some_and(|e| e.id() == "gpu" || e.id() == "labels");
+            app.map_cursor = over.then(|| {
+                (
+                    ev.client_x() as f64 - rect.left(),
+                    ev.client_y() as f64 - rect.top(),
+                )
+            });
+        }
+        #[cfg(target_arch = "wasm32")]
         if app.vab_pasting {
             let rect = app.gpu_canvas.get_bounding_client_rect();
             app.vab3d.cursor = (
@@ -4269,7 +4294,7 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                 } else {
                     None
                 };
-                app.vab3d.gizmo_hot = hot;
+                app.vab3d.gizmo_hover = hot;
             }
             return;
         }
@@ -4340,6 +4365,10 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
         // A stage-card drag released anywhere else is dropped (the card list handles its own mouseup first).
         app.vab_stage_drag = None;
         if app.vab_gizmo.take().is_some() {
+            #[cfg(target_arch = "wasm32")]
+            {
+                app.vab3d.gizmo_hot = None;
+            }
             app.press = None;
             app.drag = None;
             app.render_vab();
@@ -4586,6 +4615,17 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                 let (px, py) = ((nx - rect.left()) * app.dpr, (ny - rect.top()) * app.dpr);
                 let hit = app.gpu.as_ref().and_then(|g| app.flight3d.pick(g, px, py));
                 app.flight_open_pam(hit, nx, ny);
+            } else if ev.button() == 1
+                && (nx - x).abs() < 4.0
+                && (ny - y).abs() < 4.0
+                && app.in_session
+                && app.vab_active()
+            {
+                // A middle click (not a drag) pivots the camera on the part, or on the whole craft off it.
+                let rect = app.gpu_canvas.get_bounding_client_rect();
+                let (px, py) = ((nx - rect.left()) * app.dpr, (ny - rect.top()) * app.dpr);
+                let hit = app.gpu.as_ref().and_then(|g| app.vab3d.pick(g, px, py));
+                app.vab_focus(hit);
             } else if ev.button() == 2
                 && (nx - x).abs() < 4.0
                 && (ny - y).abs() < 4.0
@@ -4751,6 +4791,16 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                     "KeyC" if !ctrl => {
                         app.vab_snap = !app.vab_snap;
                         app.render_vab();
+                        true
+                    }
+                    // V: the camera pivots on the part under the pointer (or the selected one); again, or over
+                    // nothing, frames the whole craft.
+                    "KeyV" if !ctrl => {
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            let part = app.vab3d.hovered.or(app.editor.selected);
+                            app.vab_focus(part);
+                        }
                         true
                     }
                     "KeyF" if !ctrl => {
@@ -5234,6 +5284,7 @@ impl App {
         self.gpu_canvas.set_height((gh * self.dpr) as u32);
         #[cfg(target_arch = "wasm32")]
         if let Some(gpu) = &mut self.gpu {
+            gpu.dpr = self.dpr as f32;
             gpu.resize((gw * self.dpr) as u32, (gh * self.dpr) as u32);
         }
     }
@@ -10041,6 +10092,16 @@ impl App {
                 .set_attribute(attr, &format!("{:.6},{:.6},{:.6}", d.x, d.y, d.z))
                 .ok();
         }
+        // And where the nose points on screen, for which way a key turns the craft as the player sees it.
+        #[cfg(target_arch = "wasm32")]
+        if let Some(((cx, cy), (nx, ny))) = self.flight3d.nose_screen {
+            canvas
+                .set_attribute(
+                    "data-ose-nose-screen",
+                    &format!("{:.2},{:.2}", nx - cx, ny - cy),
+                )
+                .ok();
+        }
         if self.navball.draw(&canvas, &nav) {
             canvas.set_attribute("data-ose-navball", "drawn").ok();
         }
@@ -11047,6 +11108,33 @@ impl App {
     }
 
     /// Home: put the camera of the current screen back where it starts.
+    /// Pivot the VAB camera on a part, or on the whole craft for `None` or the part it already pivots on.
+    #[cfg(target_arch = "wasm32")]
+    fn vab_focus(&mut self, part: Option<usize>) {
+        let on = part.filter(|&i| {
+            let again = self.vab_focused == Some(i) && self.vab3d.focus.is_some();
+            !again && self.vab3d.focus_part(i)
+        });
+        if on.is_none() {
+            self.vab3d.focus = None;
+        }
+        self.vab_focused = on;
+        let note = match on {
+            Some(i) => format!(
+                "Camera on {}: V or a middle click off it for the whole craft",
+                self.editor
+                    .craft
+                    .parts
+                    .get(i)
+                    .and_then(|p| self.catalog.get(&p.part_id))
+                    .map(|d| d.title.clone())
+                    .unwrap_or_else(|| "the part".into())
+            ),
+            None => "Camera on the whole craft".into(),
+        };
+        hud::push(&self.doc, &note, "passive");
+    }
+
     fn reset_camera(&mut self) {
         #[cfg(target_arch = "wasm32")]
         {
@@ -11064,6 +11152,7 @@ impl App {
                 (self.vab3d.yaw, self.vab3d.pitch, self.vab3d.distance) =
                     (d.yaw, d.pitch, d.distance);
                 self.vab3d.pan_y = 0.0;
+                self.vab3d.focus = None;
                 return;
             }
             if self.in_session && self.ksc_active() {
@@ -13234,6 +13323,7 @@ impl App {
     fn frame_3d(&mut self, ut: f64, positions: &[ose_math::DVec3], centre: ose_math::DVec3) {
         use glam::{DQuat, DVec3 as GV};
         let planner = self.my_vessel().map(|(id, _)| id);
+        let in_flight = self.flight_active();
         let target = match self.target {
             Some(ose_net::TargetId::Vessel(id)) => Some(id),
             _ => None,
@@ -13333,19 +13423,33 @@ impl App {
                     .collect();
                 let origin = to_km(positions[p as usize]) - cam_km;
                 let focus = i == self.camera.focus;
-                lines.push(render::LineItem {
-                    key: format!("orbit:{}", b.id),
-                    points_km: pts,
-                    rel_origin_km: origin,
-                    color: if focus {
+                lines.push(render::LineItem::new(
+                    format!("orbit:{}", b.id),
+                    pts,
+                    origin,
+                    if focus {
                         [0.55, 0.65, 0.95, 0.9]
                     } else {
                         [0.45, 0.55, 0.8, 0.45]
                     },
-                });
+                    if focus { 2.5 } else { 1.75 },
+                ));
             }
         }
-        // Vessel trajectories: one strip per patch, keyed by the prediction version.
+        // Vessel trajectories: one strip per patch, keyed by the prediction version. The planning vessel's
+        // path grows and brightens with the pointer over it, where a click puts a maneuver node.
+        // (As `map_click`: not from flight, where the path takes no clicks.)
+        let path_hover = !in_flight
+            && self.map_cursor.is_some_and(|(x, y)| {
+                self.orbit_pick
+                    .iter()
+                    .any(|(px, py, _)| (px - x).powi(2) + (py - y).powi(2) < 14.0 * 14.0)
+            });
+        let planning = planner;
+        self.gpu_canvas
+            .class_list()
+            .toggle_with_force("over-path", path_hover)
+            .ok();
         let mut traj: Vec<render::LineItem> = Vec::new();
         for v in &scene.vessels {
             let mine = v.owner.is_some() && v.owner == self.player_id;
@@ -13382,13 +13486,56 @@ impl App {
                         #[allow(unreachable_patterns)]
                         _ => [0.8, 0.8, 0.8, 0.7],
                     };
-                    let _ = mine;
-                    traj.push(render::LineItem {
-                        key: format!("traj:{}:{}:{}", v.id, pi, self.traj_version),
-                        points_km: pts,
-                        rel_origin_km: to_km(positions[patch.body as usize]) - cam_km,
-                        color: colour,
-                    });
+                    let lit = path_hover && planning == Some(v.id);
+                    let colour = if lit {
+                        [
+                            colour[0] + (1.0 - colour[0]) * 0.4,
+                            colour[1] + (1.0 - colour[1]) * 0.4,
+                            colour[2] + (1.0 - colour[2]) * 0.4,
+                            1.0,
+                        ]
+                    } else {
+                        colour
+                    };
+                    let width = if lit {
+                        5.0
+                    } else if mine {
+                        3.0
+                    } else {
+                        2.25
+                    };
+                    let origin = to_km(positions[patch.body as usize]) - cam_km;
+                    // Arrowheads along the path the way the vessel travels, a steady size on screen.
+                    let marks = 6;
+                    for m in 0..marks {
+                        let k = (pts.len() * (2 * m + 1)) / (2 * marks);
+                        let (Some(&a), Some(&b)) = (pts.get(k), pts.get(k + 1)) else {
+                            continue;
+                        };
+                        let dir = (b - a).normalize_or_zero();
+                        let far = (origin + a).length();
+                        // Quantised so the head's strip is cached until the zoom changes noticeably.
+                        let step = (far.max(1e-6).log2() * 4.0).round();
+                        let len = 2f64.powf(step / 4.0) * 0.03;
+                        traj.push(render::LineItem::arrowhead(
+                            format!(
+                                "traj-arrow:{}:{}:{}:{m}:{step}",
+                                v.id, pi, self.traj_version
+                            ),
+                            a - dir * (len * 0.5),
+                            a + dir * (len * 0.5),
+                            origin,
+                            colour,
+                            width * 4.0,
+                        ));
+                    }
+                    traj.push(render::LineItem::new(
+                        format!("traj:{}:{}:{}", v.id, pi, self.traj_version),
+                        pts,
+                        origin,
+                        colour,
+                        width,
+                    ));
                 }
             }
         }
@@ -13804,6 +13951,8 @@ impl App {
                     style.set_property("left", &format!("{x:.1}px")).ok();
                     style.set_property("top", &format!("{y:.1}px")).ok();
                     style.set_property("visibility", "visible").ok();
+                    let a = dirs[k].1.atan2(dirs[k].0).to_degrees();
+                    style.set_property("--a", &format!("{a:.1}deg")).ok();
                 }
                 _ => {
                     style.set_property("visibility", "hidden").ok();

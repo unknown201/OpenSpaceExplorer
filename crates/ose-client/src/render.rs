@@ -37,6 +37,20 @@ struct CameraUniform {
     shadow: [f32; 4],
 }
 
+/// A line strip's points read twice, one apart, as per-instance segment ends (`vs_line`).
+const LINE_BUFFERS: [Option<wgpu::VertexBufferLayout<'static>>; 2] = [
+    Some(wgpu::VertexBufferLayout {
+        array_stride: 12,
+        step_mode: wgpu::VertexStepMode::Instance,
+        attributes: &wgpu::vertex_attr_array![0 => Float32x3],
+    }),
+    Some(wgpu::VertexBufferLayout {
+        array_stride: 12,
+        step_mode: wgpu::VertexStepMode::Instance,
+        attributes: &wgpu::vertex_attr_array![1 => Float32x3],
+    }),
+];
+
 /// The sun's shadow map size (texels a side).
 const SHADOW_SIZE: u32 = 4096;
 
@@ -386,19 +400,71 @@ fn fs_mesh(in: VsOut) -> @location(0) vec4<f32> {
     return select(vec4<f32>(rgb, base.a), vec4<f32>(water, 1.0), is_water);
 }
 
-struct LineIn { @location(0) pos: vec3<f32> };
-struct LineOut { @builtin(position) clip: vec4<f32> };
+// Lines are ribbons a few pixels wide that face the screen: each segment of a strip is one instance, a quad
+// from point `a` to point `b` widened across its direction on screen (`object.params.x`, device pixels;
+// `params.y` 1 tapers it to a point at `b`, an arrowhead; `extra.xy` the viewport), with soft edges and a
+// rounded, tube-like shading across it.
+struct SegIn { @location(0) a: vec3<f32>, @location(1) b: vec3<f32> };
+struct LineOut {
+    @builtin(position) clip: vec4<f32>,
+    // Distance from the centre line and the half width there, pixels.
+    @location(0) across: f32,
+    @location(1) half: f32,
+};
 
 @vertex
-fn vs_line(in: LineIn) -> LineOut {
+fn vs_line(in: SegIn, @builtin(vertex_index) vi: u32) -> LineOut {
     var out: LineOut;
-    out.clip = camera.view_proj * (object.model * vec4<f32>(in.pos, 1.0));
+    var ca = camera.view_proj * (object.model * vec4<f32>(in.a, 1.0));
+    var cb = camera.view_proj * (object.model * vec4<f32>(in.b, 1.0));
+    // Clip the segment at a plane just in front of the eye, so a strip passing behind the camera keeps the
+    // part in view instead of flipping across the screen.
+    let near = 1e-6;
+    if ca.w < near && cb.w < near {
+        out.clip = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        return out;
+    }
+    if ca.w < near {
+        ca = mix(ca, cb, (near - ca.w) / (cb.w - ca.w));
+    }
+    if cb.w < near {
+        cb = mix(cb, ca, (near - cb.w) / (ca.w - cb.w));
+    }
+    let half_vp = max(object.extra.xy, vec2<f32>(1.0)) * 0.5;
+    let sa = ca.xy / ca.w * half_vp;
+    let sb = cb.xy / cb.w * half_vp;
+    let d = sb - sa;
+    let len = length(d);
+    let dir = select(vec2<f32>(1.0, 0.0), d / len, len > 1e-4);
+    let nrm = vec2<f32>(-dir.y, dir.x);
+    let end = f32(vi / 2u);
+    let side = select(-1.0, 1.0, (vi & 1u) == 1u);
+    let taper = object.params.y > 0.5;
+    var half = object.params.x * 0.5;
+    if taper {
+        half = half * (1.0 - end);
+    }
+    // One pixel more for the soft edge; plain segments run on by half their width so a bend has no notch.
+    let edge = half + 1.0;
+    let run = select((end * 2.0 - 1.0) * half, 0.0, taper);
+    let c = mix(ca, cb, end);
+    let off = (nrm * side * edge + dir * run) / half_vp;
+    out.clip = c + vec4<f32>(off * c.w, 0.0, 0.0);
+    out.across = side * edge;
+    out.half = half;
     return out;
 }
 
 @fragment
-fn fs_line(_in: LineOut) -> @location(0) vec4<f32> {
-    return object.color;
+fn fs_line(in: LineOut) -> @location(0) vec4<f32> {
+    let h = max(in.half, 0.5);
+    let coverage = clamp(h + 0.5 - abs(in.across), 0.0, 1.0);
+    let t = clamp(abs(in.across) / h, 0.0, 1.0);
+    // Rounded across its width: darker at the rim, a bright core, as a lit tube.
+    let tube = 0.62 + 0.38 * sqrt(1.0 - t * t);
+    let core = 0.22 * pow(1.0 - t * t, 6.0);
+    let rgb = object.color.rgb * tube + vec3<f32>(core);
+    return vec4<f32>(rgb, object.color.a * coverage);
 }
 "#;
 
@@ -647,6 +713,49 @@ pub struct LineItem {
     /// Strip origin relative to the camera, kilometres.
     pub rel_origin_km: DVec3,
     pub color: [f32; 4],
+    /// Width on screen, CSS pixels.
+    pub width_px: f32,
+    /// Narrow to a point at the strip's end (an arrowhead, `LineItem::arrowhead`).
+    pub taper: bool,
+}
+
+impl LineItem {
+    /// A strip `width_px` wide.
+    pub fn new(
+        key: String,
+        points_km: Vec<DVec3>,
+        rel_origin_km: DVec3,
+        color: [f32; 4],
+        width_px: f32,
+    ) -> LineItem {
+        LineItem {
+            key,
+            points_km,
+            rel_origin_km,
+            color,
+            width_px,
+            taper: false,
+        }
+    }
+
+    /// An arrowhead: a triangle `width_px` across at `base`, narrowing to its point at `tip` (strip frame).
+    pub fn arrowhead(
+        key: String,
+        base: DVec3,
+        tip: DVec3,
+        rel_origin_km: DVec3,
+        color: [f32; 4],
+        width_px: f32,
+    ) -> LineItem {
+        LineItem {
+            key,
+            points_km: vec![base, tip],
+            rel_origin_km,
+            color,
+            width_px,
+            taper: true,
+        }
+    }
 }
 
 type ModelInbox = Rc<RefCell<Vec<(String, CpuModel)>>>;
@@ -724,6 +833,8 @@ pub struct Renderer {
     /// Meshes (by glTF mesh name) left out of a model for the next frame only, see `hide_meshes`.
     hidden: HashMap<String, Vec<String>>,
     pub width: u32,
+    /// Device pixels per CSS pixel, for line widths given in CSS pixels.
+    pub dpr: f32,
     pub height: u32,
 }
 
@@ -1018,11 +1129,7 @@ impl Renderer {
                 module: &shader,
                 entry_point: Some("vs_line"),
                 compilation_options: Default::default(),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: 12,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x3],
-                })],
+                buffers: &LINE_BUFFERS,
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
@@ -1035,7 +1142,7 @@ impl Renderer {
                 })],
             }),
             primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::LineStrip,
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
                 strip_index_format: None,
                 ..Default::default()
             },
@@ -1056,11 +1163,7 @@ impl Renderer {
                     module: &shader,
                     entry_point: Some("vs_line"),
                     compilation_options: Default::default(),
-                    buffers: &[Some(wgpu::VertexBufferLayout {
-                        array_stride: 12,
-                        step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &wgpu::vertex_attr_array![0 => Float32x3],
-                    })],
+                    buffers: &LINE_BUFFERS,
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
@@ -1073,7 +1176,7 @@ impl Renderer {
                     })],
                 }),
                 primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::LineStrip,
+                    topology: wgpu::PrimitiveTopology::TriangleStrip,
                     strip_index_format: None,
                     ..Default::default()
                 },
@@ -1305,6 +1408,7 @@ impl Renderer {
             texture_inbox: Rc::new(RefCell::new(Vec::new())),
             visible_models: Rc::default(),
             lines: HashMap::new(),
+            dpr: 1.0,
             view_proj: DMat4::IDENTITY,
             hidden: HashMap::new(),
             width,
@@ -2146,8 +2250,13 @@ impl Renderer {
                 color: l.color,
                 light_dir: [0.0; 4],
                 light2: [0.0; 4],
-                params: [1.0, 0.0, 0.0, 0.0],
-                extra: [0.0; 4],
+                params: [
+                    l.width_px * self.dpr,
+                    if l.taper { 1.0 } else { 0.0 },
+                    0.0,
+                    0.0,
+                ],
+                extra: [self.width as f32, self.height as f32, 0.0, 0.0],
                 paint_a: [1.0, 1.0, 1.0, 0.0],
                 paint_b: [1.0, 1.0, 1.0, 0.0],
                 surface: [0.0; 4],
@@ -2278,9 +2387,13 @@ impl Renderer {
                     .filter(|(k, _)| k.starts_with("overlay:") == overlay)
                 {
                     let (buf, n) = &self.lines[key];
+                    if *n < 2 {
+                        continue;
+                    }
                     pass.set_bind_group(1, &self.objects[*s].1, &[]);
                     pass.set_vertex_buffer(0, buf.slice(..));
-                    pass.draw(0..*n, 0..1);
+                    pass.set_vertex_buffer(1, buf.slice(12..));
+                    pass.draw(0..4, 0..*n - 1);
                 }
             }
         }

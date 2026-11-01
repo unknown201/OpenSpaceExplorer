@@ -46,6 +46,51 @@ fn gizmo_axis(k: usize) -> DVec3 {
 pub type GizmoFrame = ((f64, f64), (f64, f64), f64, bool);
 
 /// Distance (pixels) from `p` to the screen segment `a`-`b`.
+/// The part a ray hits first, by its drawn triangles: a box test alone lets a big tank's box swallow a thin
+/// panel or antenna on its side, though the pointer is right over it. Parts the ray crosses only by their box
+/// (a mesh not loaded, or an animated part such as an unfolded panel away from its rest shape) count when no
+/// drawn shape is hit, the smallest box first.
+pub(crate) fn pick_part(
+    gpu: &Renderer,
+    ro: DVec3,
+    rd: DVec3,
+    boxes: &[(usize, DVec3, DVec3)],
+    poses: &[(usize, String, DVec3, DQuat)],
+) -> Option<usize> {
+    let mut mesh: Option<(f64, usize)> = None;
+    let mut boxed: Option<(f64, usize)> = None;
+    for (i, lo, hi) in boxes {
+        if crate::ksc3d::ray_box(ro, rd, *lo, *hi).is_none() {
+            continue;
+        }
+        let hit = poses
+            .iter()
+            .find(|p| p.0 == *i)
+            .and_then(|(_, name, wpos, wrot)| {
+                let m = gpu.model(name).filter(|m| !m.tris.is_empty())?;
+                let inv = wrot.inverse();
+                Some(
+                    m.ray_hit((inv * (ro - *wpos)).as_vec3(), (inv * rd).as_vec3())
+                        .map(|(t, _)| t as f64),
+                )
+            });
+        match hit {
+            Some(Some(t)) => {
+                if mesh.is_none_or(|(bt, _)| t < bt) {
+                    mesh = Some((t, *i));
+                }
+            }
+            _ => {
+                let size = (*hi - *lo).length();
+                if boxed.is_none_or(|(bs, _)| size < bs) {
+                    boxed = Some((size, *i));
+                }
+            }
+        }
+    }
+    mesh.or(boxed).map(|(_, i)| i)
+}
+
 fn seg_dist(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
     let (dx, dy) = (b.0 - a.0, b.1 - a.1);
     let l2 = dx * dx + dy * dy;
@@ -114,12 +159,19 @@ pub struct VabView {
     pub col: Option<ose_math::DVec3>,
     /// The part under the pointer, drawn lighter.
     pub hovered: Option<usize>,
+    /// The gizmo handle under the pointer (`gizmo_hit`), drawn lighter and thicker.
+    pub gizmo_hover: Option<usize>,
     pub held_turn: ose_data::craft::Quat,
     /// The rotation of the part the held part snaps to (it takes it on).
     snap_turn: ose_data::craft::Quat,
     pub held_yaw: ose_data::craft::Quat,
     /// Vertical camera offset from the craft's centre, metres (arrow keys and middle drag, Home resets).
     pub pan_y: f64,
+    /// The point the camera pivots on instead of the craft's centre (craft frame): a part's centre, set by a
+    /// middle click or V on it, for working on one end of a tall rocket. `None` (Home) frames the whole craft.
+    pub focus: Option<ose_math::DVec3>,
+    /// Whether `target` has been placed yet (the first frame goes straight there instead of gliding).
+    target_set: bool,
     /// Part icon mode (`?particons`, tools/export_part_icons.mjs): no hall, markers or tints, a plain
     /// backdrop, and the camera framing the craft to fill a 600 px square at the centre of the view.
     pub icon_mode: bool,
@@ -158,10 +210,13 @@ impl VabView {
             held_at: None,
             paint: None,
             pan_y: 0.0,
+            focus: None,
+            target_set: false,
             com: None,
             cot: None,
             col: None,
             hovered: None,
+            gizmo_hover: None,
             stage_lit: Vec::new(),
             gizmo: None,
             gizmo_hot: None,
@@ -205,6 +260,19 @@ impl VabView {
     /// Move the camera up (positive) or down along the craft, in screen pixels of a drag.
     pub fn pan(&mut self, dy_px: f64) {
         self.pan_y += dy_px * self.distance * 0.002;
+    }
+
+    /// Pivot the camera on part `i` (its drawn centre), coming in closer if the whole craft was in view.
+    /// Returns false when the part is not drawn.
+    pub fn focus_part(&mut self, i: usize) -> bool {
+        let Some((_, lo, hi)) = self.boxes.iter().find(|b| b.0 == i) else {
+            return false;
+        };
+        self.focus = Some(self.world_to_craft((*lo + *hi) * 0.5));
+        self.pan_y = 0.0;
+        let size = (*hi - *lo).length();
+        self.distance = self.distance.min((size * 3.0).max(6.0));
+        true
     }
 
     pub fn zoom(&mut self, factor: f64) {
@@ -378,7 +446,7 @@ impl VabView {
         Some((i, ose_math::DVec3::new(-w.x, w.y, w.z), n))
     }
 
-    /// Craft part under a pixel (ray against part boxes, nearest first).
+    /// Craft part under a pixel (ray against the parts' drawn shapes, nearest first).
     pub fn pick(&self, gpu: &Renderer, x_px: f64, y_px: f64) -> Option<usize> {
         let (pos, forward) = self.camera();
         let up = DVec3::Y;
@@ -389,15 +457,7 @@ impl VabView {
         let ndc_y = 1.0 - y_px / gpu.height.max(1) as f64 * 2.0;
         let t = (self.fov_rad * 0.5).tan();
         let dir = (forward + right * (ndc_x * t * aspect) + cam_up * (ndc_y * t)).normalize();
-        let mut best: Option<(f64, usize)> = None;
-        for (i, lo, hi) in &self.boxes {
-            if let Some(d) = crate::ksc3d::ray_box(pos, dir, *lo, *hi) {
-                if best.map(|(bd, _)| d < bd).unwrap_or(true) {
-                    best = Some((d, *i));
-                }
-            }
-        }
-        best.map(|(_, i)| i)
+        pick_part(gpu, pos, dir, &self.boxes, &self.poses)
     }
 
     /// The loose assembly under the cursor, if any.
@@ -494,17 +554,28 @@ impl VabView {
             hi_all = hi_all.max(hi);
             self.boxes.push((*i, lo, hi));
         }
-        // Orbit the craft's centre (the build centre while empty).
-        self.target = if self.hold_target {
+        // Orbit the focused part, or the craft's centre (the build centre while empty).
+        let want = if self.hold_target {
             // A gizmo drag: the camera stays put, so the part moves under the cursor alone.
             self.target
         } else if lo_all.is_finite() {
-            let half = (hi_all.y - lo_all.y) * 0.5 + 2.0;
-            self.pan_y = self.pan_y.clamp(-half, half);
-            (lo_all + hi_all) * 0.5 + DVec3::Y * self.pan_y
+            let mid = (lo_all + hi_all) * 0.5;
+            let pivot = self.focus.map_or(mid, |f| self.craft_to_world(f));
+            // Panning stays within the craft's height, wherever the pivot is.
+            self.pan_y = self
+                .pan_y
+                .clamp(lo_all.y - 2.0 - pivot.y, hi_all.y + 2.0 - pivot.y);
+            pivot + DVec3::Y * self.pan_y
         } else {
             centre
         };
+        // Glide to a new pivot rather than jump, so the craft stays readable as the view moves.
+        self.target = if self.target_set && !self.hold_target {
+            self.target + (want - self.target) * 0.25
+        } else {
+            want
+        };
+        self.target_set = true;
         if self.icon_mode && lo_all.is_finite() {
             // The original's picker angle: a little above, turned to show the side.
             self.pitch = 0.35;
@@ -637,18 +708,13 @@ impl VabView {
             0.5
         };
         let ring = |key: String, at: DVec3, a: DVec3, b: DVec3, r: f64, color: [f32; 4]| {
-            let pts = (0..=32)
+            let pts = (0..=48)
                 .map(|k| {
-                    let t = k as f64 / 32.0 * std::f64::consts::TAU;
+                    let t = k as f64 / 48.0 * std::f64::consts::TAU;
                     (a * t.cos() + b * t.sin()) * r
                 })
                 .collect();
-            crate::render::LineItem {
-                key,
-                points_km: pts,
-                rel_origin_km: at - cam_pos,
-                color,
-            }
+            crate::render::LineItem::new(key, pts, at - cam_pos, color, 2.5)
         };
         if let Some(c) = self.com {
             let at = centre + to_gltf(c);
@@ -701,13 +767,23 @@ impl VabView {
                     half * 1.15,
                     [1.0, 0.35, 0.9, 1.0],
                 ));
-                lines.push(crate::render::LineItem {
-                    key: "vab-cot:line".into(),
-                    // Along the exhaust, as the original draws the thrust arrow.
-                    points_km: vec![DVec3::ZERO, -dir * (half * 4.0 + 2.0)],
-                    rel_origin_km: at - cam_pos,
-                    color: [1.0, 0.35, 0.9, 1.0],
-                });
+                // Along the exhaust, as the original draws the thrust arrow.
+                let len = half * 4.0 + 2.0;
+                lines.push(crate::render::LineItem::new(
+                    "vab-cot:line".into(),
+                    vec![DVec3::ZERO, -dir * (len * 0.88)],
+                    at - cam_pos,
+                    [1.0, 0.35, 0.9, 1.0],
+                    3.0,
+                ));
+                lines.push(crate::render::LineItem::arrowhead(
+                    "vab-cot:head".into(),
+                    -dir * (len * 0.86),
+                    -dir * len,
+                    at - cam_pos,
+                    [1.0, 0.35, 0.9, 1.0],
+                    13.0,
+                ));
             }
         }
         // The move and rotate gizmo: an arrow along each craft axis and a ring about it.
@@ -722,34 +798,65 @@ impl VabView {
             ];
             for (k, &base) in colors.iter().enumerate() {
                 let d = gizmo_axis(k);
-                let side = gizmo_axis((k + 1) % 3);
-                let lit = |h: usize| {
+                // Held: yellow; under the pointer: lighter and thicker, so it is plain what a press will grab.
+                let look = |h: usize| {
                     if self.gizmo_hot == Some(h) {
-                        [1.0, 0.95, 0.55, 1.0]
+                        ([1.0, 0.95, 0.55, 1.0], 1.6)
+                    } else if self.gizmo_hover == Some(h) {
+                        (
+                            [
+                                base[0] + (1.0 - base[0]) * 0.45,
+                                base[1] + (1.0 - base[1]) * 0.45,
+                                base[2] + (1.0 - base[2]) * 0.45,
+                                1.0,
+                            ],
+                            1.6,
+                        )
                     } else {
-                        base
+                        (base, 1.0)
                     }
                 };
-                lines.push(crate::render::LineItem {
-                    key: format!("overlay:vab-gz:m{k}:{size}"),
-                    points_km: vec![
-                        DVec3::ZERO,
-                        d * l,
-                        d * (l * 0.84) + side * (l * 0.06),
-                        d * l,
-                        d * (l * 0.84) - side * (l * 0.06),
-                    ],
-                    rel_origin_km: at - cam_pos,
-                    color: lit(k),
-                });
-                lines.push(ring(
+                // Move: a shaft and an arrowhead along the axis.
+                let (color, grow) = look(k);
+                lines.push(crate::render::LineItem::new(
+                    format!("overlay:vab-gz:m{k}:{size}"),
+                    vec![DVec3::ZERO, d * (l * 0.8)],
+                    at - cam_pos,
+                    color,
+                    4.0 * grow,
+                ));
+                lines.push(crate::render::LineItem::arrowhead(
+                    format!("overlay:vab-gz:h{k}:{size}"),
+                    d * (l * 0.78),
+                    d * (l * 1.05),
+                    at - cam_pos,
+                    color,
+                    15.0 * grow,
+                ));
+                // Turn: a ring about the axis, with arrowheads round it the way it turns.
+                let (color, grow) = look(3 + k);
+                let (u, v) = (gizmo_axis((k + 1) % 3), gizmo_axis((k + 2) % 3));
+                let mut r = ring(
                     format!("overlay:vab-gz:r{k}:{size}"),
                     at,
-                    gizmo_axis((k + 1) % 3),
-                    gizmo_axis((k + 2) % 3),
+                    u,
+                    v,
                     l * 0.7,
-                    lit(3 + k),
-                ));
+                    color,
+                );
+                r.width_px = 3.5 * grow;
+                lines.push(r);
+                for (n, t0) in [0.9f64, 0.9 + std::f64::consts::PI].into_iter().enumerate() {
+                    let on = |t: f64| (u * t.cos() + v * t.sin()) * (l * 0.7);
+                    lines.push(crate::render::LineItem::arrowhead(
+                        format!("overlay:vab-gz:a{k}{n}:{size}"),
+                        on(t0),
+                        on(t0 + 0.28),
+                        at - cam_pos,
+                        color,
+                        13.0 * grow,
+                    ));
+                }
             }
         }
         self.snap = None;
@@ -810,12 +917,13 @@ impl VabView {
                         .unwrap_or(DVec3::ZERO);
                     let wn = centre + to_gltf(*p);
                     for axis in [DVec3::X, DVec3::Y, DVec3::Z] {
-                        lines.push(crate::render::LineItem {
-                            key: format!("vab-snap:{pi}:{nid}:{axis:?}"),
-                            points_km: vec![-axis * 0.6, axis * 0.6],
-                            rel_origin_km: wn - cam_pos,
-                            color: [0.4, 1.0, 0.5, 1.0],
-                        });
+                        lines.push(crate::render::LineItem::new(
+                            format!("vab-snap:{pi}:{nid}:{axis:?}"),
+                            vec![-axis * 0.6, axis * 0.6],
+                            wn - cam_pos,
+                            [0.4, 1.0, 0.5, 1.0],
+                            2.5,
+                        ));
                     }
                     wn - DVec3::new(-own.x, own.y, own.z)
                 }

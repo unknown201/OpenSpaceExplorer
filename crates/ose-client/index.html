@@ -705,6 +705,13 @@
     /* Maneuver gizmo handles around the node: prograde/retrograde green-yellow, normal violet, radial cyan. */
     #labels .node { pointer-events: auto; cursor: grab; z-index: 3; }
     #labels .mnv-h { pointer-events: auto; z-index: 3; position: absolute; width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%; border: 2px solid currentColor; background: #06080fcc; cursor: grab; box-shadow: 0 0 6px currentColor; }
+    /* Each handle grows and brightens under the pointer, and has an arrow pointing the way it pulls and a stem back
+       to the node (--a: its direction on screen, set per frame). */
+    #labels .mnv-h { transition: transform 0.12s, filter 0.12s, box-shadow 0.12s; }
+    #labels .mnv-h:hover { transform: scale(1.35); filter: brightness(1.35); box-shadow: 0 0 12px currentColor; }
+    #labels .mnv-h::after { content: ''; position: absolute; left: 50%; top: 50%; width: 0; height: 0; border-left: 8px solid currentColor; border-top: 5px solid transparent; border-bottom: 5px solid transparent; transform: translate(-50%, -50%) rotate(var(--a, 0deg)) translateX(14px); pointer-events: none; }
+    #labels .mnv-h::before { content: ''; position: absolute; left: 50%; top: 50%; width: 30px; height: 3px; margin-top: -1.5px; border-radius: 2px; background: currentColor; opacity: 0.7; transform-origin: 0 50%; transform: rotate(var(--a, 0deg)) translateX(-40px); pointer-events: none; }
+    #gpu.over-path { cursor: pointer; }
     #labels .mnv-h.prograde, #labels .mnv-h.retrograde { color: #e6e65a; } #labels .mnv-h.retrograde { background: #e6e65a55; }
     #labels .mnv-h.normal, #labels .mnv-h.antinormal { color: #c070ff; } #labels .mnv-h.antinormal { background: #c070ff55; }
     #labels .mnv-h.radialout, #labels .mnv-h.radialin { color: #5ae6e6; } #labels .mnv-h.radialin { background: #5ae6e655; }
@@ -1356,7 +1363,7 @@
             <div class="row"><button id="vab-stage-up" class="secondary" data-ose="vab-stage-up" title="Fire this part one stage earlier">Stage earlier</button><button id="vab-stage-down" class="secondary" data-ose="vab-stage-down" title="Fire this part one stage later">Stage later</button></div>
             </div>
             <div id="vab-report" data-ose="vab-report"></div>
-            <div class="vs-help vs-more">Drag parts from the list onto a green attach point. Drag a placed part to move it with everything under it. Right-drag to look around, wheel to zoom (Shift faster), Home resets the view. Delete removes, Ctrl+Z / Ctrl+Y undo and redo.</div>
+            <div class="vs-help vs-more">Drag parts from the list onto a green attach point. Drag a placed part to move it with everything under it. Right-drag to look around, wheel to zoom (Shift faster); V or a middle click on a part turns the view about that part (again, or off the craft, for the whole craft), Home resets the view. Delete removes, Ctrl+Z / Ctrl+Y undo and redo.</div>
           </div>
         </div>
       </div>

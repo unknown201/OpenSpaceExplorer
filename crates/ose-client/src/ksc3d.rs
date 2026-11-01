@@ -382,16 +382,17 @@ impl KscView {
                     vec![c(lo.x, lo.y, hi.z), c(lo.x, hi.y, hi.z)],
                 ];
                 for (k, pts) in strips.into_iter().enumerate() {
-                    lines.push(LineItem {
-                        key: format!(
+                    lines.push(LineItem::new(
+                        format!(
                             "ksc-outline:{}:{k}:{}",
                             b.facility,
                             u8::from(planet.is_some())
                         ),
-                        points_km: pts.into_iter().map(|p| rot * p).collect(),
-                        rel_origin_km: rot * -pos,
-                        color: [0.6, 0.95, 1.0, 0.9],
-                    });
+                        pts.into_iter().map(|p| rot * p).collect(),
+                        rot * -pos,
+                        [0.6, 0.95, 1.0, 0.9],
+                        2.5,
+                    ));
                 }
             }
         }

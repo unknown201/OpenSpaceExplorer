@@ -649,6 +649,11 @@ impl CameraMode {
     }
 }
 
+/// The camera starts south-south-east of the craft looking north (yaw from north toward east): on the pad
+/// that is the side a rocket's top faces (it stands top to the south), so as in the original D turns it to
+/// the right on screen (east) and W tips it away from the camera.
+pub const DEFAULT_YAW: f64 = std::f64::consts::PI - 0.4;
+
 pub struct FlightView {
     pub mode: CameraMode,
     /// The flown vessel's distance from the KSC campus (m) while on Kerbin and low, else infinity: the pad's
@@ -687,11 +692,16 @@ pub struct FlightView {
     /// Part boxes relative to the camera (craft part index, min, max) and the camera's forward and up from
     /// the last frame, for picking a part under the pointer (the part window on right click).
     pick_boxes: Vec<(usize, DVec3, DVec3)>,
+    /// Per part: model name and pose relative to the camera, for rays against its drawn shape.
+    pick_poses: Vec<(usize, String, DVec3, DQuat)>,
     /// The part under the pointer and the part whose window is open: both drawn lit, as the original's
     /// highlights.
     pub hovered: Option<usize>,
     pub selected: Option<usize>,
     pick_cam: (DVec3, DVec3),
+    /// The vessel's centre and a point 5 m along its nose on screen (device pixels), last frame: lets a test
+    /// see which way a key turns the craft as the player sees it.
+    pub nose_screen: Option<((f64, f64), (f64, f64))>,
     /// Terrain, ocean, sky and clouds of the body (planet.rs), created with the first frame.
     planet: Option<crate::planet::PlanetRenderer>,
     fx_nozzles: std::rc::Rc<std::cell::RefCell<HashMap<String, Vec<Nozzle>>>>,
@@ -772,7 +782,7 @@ impl FlightView {
             aero_segments: Vec::new(),
             mode: CameraMode::Auto,
             ksc_distance: f64::INFINITY,
-            yaw: 0.8,
+            yaw: DEFAULT_YAW,
             pitch: 0.25,
             cam_frame: None,
             distance: 35.0,
@@ -794,9 +804,11 @@ impl FlightView {
             gimbals: HashMap::new(),
             agl_m: None,
             pick_boxes: Vec::new(),
+            pick_poses: Vec::new(),
             hovered: None,
             selected: None,
             pick_cam: (DVec3::NEG_Z, DVec3::Y),
+            nose_screen: None,
             planet: None,
             fx_nozzles: Default::default(),
             fx_requested: false,
@@ -869,15 +881,7 @@ impl FlightView {
         let ndc_y = 1.0 - y_px / gpu.height.max(1) as f64 * 2.0;
         let t = (60f64.to_radians() * 0.5).tan();
         let dir = (forward + right * (ndc_x * t * aspect) + cam_up * (ndc_y * t)).normalize();
-        let mut best: Option<(f64, usize)> = None;
-        for (i, lo, hi) in &self.pick_boxes {
-            if let Some(d) = crate::ksc3d::ray_box(DVec3::ZERO, dir, *lo, *hi) {
-                if best.map(|(bd, _)| d < bd).unwrap_or(true) {
-                    best = Some((d, *i));
-                }
-            }
-        }
-        best.map(|(_, i)| i)
+        crate::vab3d::pick_part(gpu, DVec3::ZERO, dir, &self.pick_boxes, &self.pick_poses)
     }
 
     pub fn zoom(&mut self, f: f64) {
@@ -1220,7 +1224,11 @@ impl FlightView {
         let far = (distance * 50.0).clamp(4.0e6, 5.0e8);
         gpu.set_camera(look, cam_up, 60f64.to_radians(), near, far);
         self.pick_cam = (look, cam_up);
+        self.nose_screen = gpu
+            .project(pos - cam)
+            .zip(gpu.project(pos - cam + dir * 5.0));
         self.pick_boxes.clear();
+        self.pick_poses.clear();
 
         let sun = dir_to_model(
             r,
@@ -2207,6 +2215,7 @@ impl FlightView {
                         hi = hi.max(w);
                     }
                     self.pick_boxes.push((i, lo, hi));
+                    self.pick_poses.push((i, name.clone(), wpos - cam, rot));
                 }
                 let pid = craft.parts[i].part_id.as_str();
                 let mut it = DrawItem::lit(name, wpos - cam, vessel_rot * lq, 1.0, sun);

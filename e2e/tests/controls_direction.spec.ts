@@ -115,12 +115,24 @@ test("a rocket leaving the pad turns east with D", async ({ page, baseURL }) => 
   await page.keyboard.press("z");
   await page.keyboard.press("Space");
   await page.waitForTimeout(3000);
+  // As the player sees it too: from the default camera D leans the rocket to the right on screen, not the left
+  // (the craft turned east correctly while the camera looked at it from the north, so it seemed reversed).
+  // (Only with the 3D view: headless Firefox has no WebGPU adapter and draws no craft.)
+  const noseX = () => page.evaluate(() => {
+    const a = document.getElementById("fh-navball")!.getAttribute("data-ose-nose-screen");
+    return a === null ? null : Number(a.split(",")[0]);
+  });
+  const x0 = await noseX();
   // Read while D is held, once the nose has left the vertical: held longer, a small rocket's tip-over
   // swings the heading round as it passes level.
   await page.keyboard.down("d");
   await page.waitForTimeout(1200);
   const heading = parseFloat((await page.locator("#fh-heading").textContent()) ?? "");
+  const x1 = await noseX();
   await page.keyboard.up("d");
+  if (x0 !== null && x1 !== null) {
+    expect(x1 - x0, `D leans the rocket right on screen (nose ${x0} -> ${x1} px)`).toBeGreaterThan(5);
+  }
   expect(heading, `D tips a rising rocket east (heading ${heading})`).toBeGreaterThan(45);
   expect(heading).toBeLessThan(135);
 });
