@@ -969,10 +969,30 @@ impl RigidVessel {
     /// Each attached part's pose away from rest from the bends between it and the root; parts that moved
     /// less than `min_rad` / `min_m` are left out.
     pub fn flex(&self, min_rad: f64, min_m: f64) -> Vec<PartFlex> {
+        let (rot, off) = self.bent_poses();
+        let mut out = Vec::new();
+        for i in self.subtree_order() {
+            if !self.links.iter().any(|l| l.intact() && l.child == i) {
+                continue;
+            }
+            let rv = q_to_rotvec(rot[i]);
+            if rv.length() >= min_rad || off[i].length() >= min_m {
+                out.push(PartFlex {
+                    part: i,
+                    rotation: rv,
+                    offset_m: off[i],
+                });
+            }
+        }
+        out
+    }
+
+    /// Every part's turn and shift away from rest from the bends between it and the root (identity and
+    /// zero for the root and parts on no intact joint).
+    fn bent_poses(&self) -> (Vec<[f64; 4]>, Vec<DVec3>) {
         let n = self.len();
         let mut rot = vec![[0.0, 0.0, 0.0, 1.0]; n];
         let mut off = vec![DVec3::ZERO; n];
-        let mut out = Vec::new();
         for i in self.subtree_order() {
             let Some(l) = self.links.iter().find(|l| l.intact() && l.child == i) else {
                 continue;
@@ -986,16 +1006,24 @@ impl RigidVessel {
             let pos = anchor + q_rotate(q, self.rest_pos[i] - l.anchor_rest);
             rot[i] = q;
             off[i] = pos - self.rest_pos[i];
-            let rv = q_to_rotvec(q);
-            if rv.length() >= min_rad || off[i].length() >= min_m {
-                out.push(PartFlex {
-                    part: i,
-                    rotation: rv,
-                    offset_m: off[i],
-                });
-            }
         }
-        out
+        (rot, off)
+    }
+
+    /// A force on a part as it is now bent: `(force, offset from the part's rest position)` at rest, turned
+    /// and moved with the part. Thrust from an engine on a flexing stack pushes the way the engine points,
+    /// so a bending craft steers itself as in the original. `None` while nothing is bent.
+    pub fn bend_mapper(&self) -> Option<impl Fn(usize, DVec3, DVec3) -> (DVec3, DVec3) + '_> {
+        if self.links.iter().all(|l| l.bend.length() < 1e-9) {
+            return None;
+        }
+        let (rot, off) = self.bent_poses();
+        Some(move |part: usize, force: DVec3, offset: DVec3| {
+            (
+                q_rotate(rot[part], force),
+                off[part] + q_rotate(rot[part], offset),
+            )
+        })
     }
 
     /// Parts in depth-first order over the intact joints, parents before children.

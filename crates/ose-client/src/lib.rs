@@ -4179,6 +4179,10 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                 let cat = std::mem::take(&mut app.catalog);
                 let frag = app.editor.detach(i, &cat);
                 if let Some(frag) = frag {
+                    // The hall's symmetry shows the set in hand, so X changes it from there.
+                    if vab::SYMMETRY.contains(&frag.symmetry) {
+                        app.vab_symmetry = frag.symmetry;
+                    }
                     let nodes = vab_nodes(&cat, frag.root_id());
                     app.vab3d.held = Some((frag.root_id().to_string(), nodes));
                     app.vab_frag = Some(frag);
@@ -7011,10 +7015,11 @@ impl App {
         {
             let spec = self.catalog.get(id)?;
             vab::surface_node(spec)?;
-            let (target, hit) = self.vab3d.surface_hit(self.gpu.as_ref()?)?;
-            let spot = self.editor.surface_spot(
+            let (target, hit, normal) = self.vab3d.surface_hit(self.gpu.as_ref()?)?;
+            let spot = self.editor.surface_spot_on(
                 target,
                 hit,
+                normal,
                 &self.catalog,
                 self.vab_snap.then_some(15.0),
             )?;
@@ -7158,6 +7163,10 @@ impl App {
             .unwrap_or(0);
         let j = if back { (i + n - 1) % n } else { (i + 1) % n };
         self.vab_symmetry = vab::SYMMETRY[j];
+        // A part in hand goes back on in the new count, as in the original.
+        if let Some(f) = self.vab_frag.as_mut() {
+            f.symmetry = self.vab_symmetry;
+        }
         self.render_vab();
     }
 

@@ -86,6 +86,8 @@ pub struct VabView {
     cam_pos: DVec3,
     /// Per drawn part: craft index and world-space box, for picking.
     boxes: Vec<(usize, DVec3, DVec3)>,
+    /// Per drawn part: craft index, model name and world pose, for rays against its drawn shape.
+    poses: Vec<(usize, String, DVec3, DQuat)>,
     /// A part being dragged from the picker: its id and attach nodes (position, direction; Unity frame), the
     /// cursor in device
     /// pixels, and the free node it snaps to (part index, node id) when close enough.
@@ -146,6 +148,7 @@ impl VabView {
             target: DVec3::ZERO,
             cam_pos: DVec3::ZERO,
             boxes: Vec::new(),
+            poses: Vec::new(),
             held: None,
             cursor: (0.0, 0.0),
             snap: None,
@@ -335,19 +338,44 @@ impl VabView {
     }
 
     /// The craft part under the cursor and the point hit on it, in the craft frame (for surface attachment).
-    pub fn surface_hit(&self, gpu: &Renderer) -> Option<(usize, ose_math::DVec3)> {
+    pub fn surface_hit(
+        &self,
+        gpu: &Renderer,
+    ) -> Option<(usize, ose_math::DVec3, Option<ose_math::DVec3>)> {
         let (ro, rd) = self.cursor_ray(gpu);
-        let mut best: Option<(f64, usize)> = None;
+        // Nearest point on a part's drawn triangles, among the parts whose box the ray crosses; the box
+        // alone where the mesh is not loaded yet.
+        let mut best: Option<(f64, usize, Option<DVec3>)> = None;
         for (i, lo, hi) in &self.boxes {
-            if let Some(d) = crate::ksc3d::ray_box(ro, rd, *lo, *hi) {
-                if best.map(|(bd, _)| d < bd).unwrap_or(true) {
-                    best = Some((d, *i));
+            let Some(d) = crate::ksc3d::ray_box(ro, rd, *lo, *hi) else {
+                continue;
+            };
+            let pose = self.poses.iter().find(|p| p.0 == *i);
+            let model = pose
+                .and_then(|p| gpu.model(&p.1))
+                .filter(|m| !m.tris.is_empty());
+            let hit = match (pose, model) {
+                (Some((_, _, wpos, wrot)), Some(m)) => {
+                    let inv = wrot.inverse();
+                    let lo_ro = (inv * (ro - *wpos)).as_vec3();
+                    let lo_rd = (inv * rd).as_vec3();
+                    match m.ray_hit(lo_ro, lo_rd) {
+                        Some((t, n)) => Some((t as f64, Some(*wrot * n.as_dvec3()))),
+                        None => continue,
+                    }
+                }
+                _ => Some((d, None)),
+            };
+            if let Some((t, n)) = hit {
+                if best.as_ref().is_none_or(|(bt, _, _)| t < *bt) {
+                    best = Some((t, *i, n));
                 }
             }
         }
-        let (d, i) = best?;
+        let (d, i, n) = best?;
         let w = ro + rd * d - self.centre();
-        Some((i, ose_math::DVec3::new(-w.x, w.y, w.z)))
+        let n = n.map(|n| ose_math::DVec3::new(-n.x, n.y, n.z));
+        Some((i, ose_math::DVec3::new(-w.x, w.y, w.z), n))
     }
 
     /// Craft part under a pixel (ray against part boxes, nearest first).
@@ -440,6 +468,7 @@ impl VabView {
             gpu.request_model(&name, &format!("assets/parts/{}.glb", p.part_id));
             placed.push((i, name, centre + to_gltf(*pos), quat_to_gltf(*q)));
         }
+        self.poses.clone_from(&placed);
         for (i, name, wpos, wrot) in &placed {
             let (lo, hi) = match gpu.model(name) {
                 Some(m) => {

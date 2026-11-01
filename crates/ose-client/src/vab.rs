@@ -1276,6 +1276,10 @@ pub struct SurfaceSpot {
     pub height: f64,
     /// The held part's own turn (W/A/S/D/Q/E in the original), applied after it is turned to face the side.
     pub turn: Quat,
+    /// Where the cursor met the part's drawn shape: the point and the outward surface normal, both in the
+    /// target's own frame. The part goes flat on that face, as the original's surface attachment; `None`
+    /// puts it on the side of the target's bounding cylinder.
+    pub contact: Option<(DVec3, DVec3)>,
 }
 
 /// No rotation.
@@ -1449,6 +1453,80 @@ fn facing_in(azimuth: f64) -> Quat {
     }
 }
 
+/// A turn of `angle` radians about +Y, the same way round as an azimuth (from +X towards +Z).
+fn about_y(angle: f64) -> Quat {
+    let h = -angle * 0.5;
+    Quat {
+        x: 0.0,
+        y: h.sin(),
+        z: 0.0,
+        w: h.cos(),
+    }
+}
+
+/// The turn that points a part's +X (its surface node's way) into a face with outward normal `n`, its +Y
+/// kept as near the target's +Y as the face allows (straight out from the axis, `radial`, on a face that is
+/// level). On an upright side this is `facing_in`.
+fn facing_into(n: DVec3, radial: DVec3) -> Quat {
+    let x = (n * -1.0).normalized();
+    let up = DVec3::new(0.0, 1.0, 0.0);
+    let mut y = up - x * up.dot(x);
+    if y.length() < 1e-3 {
+        y = DVec3::new(radial.x, 0.0, radial.z);
+        y = y - x * y.dot(x);
+        if y.length() < 1e-3 {
+            y = DVec3::new(1.0, 0.0, 0.0);
+            y = y - x * y.dot(x);
+        }
+    }
+    let y = y.normalized();
+    let z = x.cross(y);
+    quat_from_basis(x, y, z)
+}
+
+/// The rotation that takes +X, +Y, +Z to `x`, `y`, `z` (orthonormal, right-handed).
+fn quat_from_basis(x: DVec3, y: DVec3, z: DVec3) -> Quat {
+    // Columns x, y, z of the rotation matrix.
+    let (m00, m01, m02) = (x.x, y.x, z.x);
+    let (m10, m11, m12) = (x.y, y.y, z.y);
+    let (m20, m21, m22) = (x.z, y.z, z.z);
+    let tr = m00 + m11 + m22;
+    let q = if tr > 0.0 {
+        let s = (tr + 1.0).sqrt() * 2.0;
+        Quat {
+            w: 0.25 * s,
+            x: (m21 - m12) / s,
+            y: (m02 - m20) / s,
+            z: (m10 - m01) / s,
+        }
+    } else if m00 > m11 && m00 > m22 {
+        let s = (1.0 + m00 - m11 - m22).sqrt() * 2.0;
+        Quat {
+            w: (m21 - m12) / s,
+            x: 0.25 * s,
+            y: (m01 + m10) / s,
+            z: (m02 + m20) / s,
+        }
+    } else if m11 > m22 {
+        let s = (1.0 + m11 - m00 - m22).sqrt() * 2.0;
+        Quat {
+            w: (m02 - m20) / s,
+            x: (m01 + m10) / s,
+            y: 0.25 * s,
+            z: (m12 + m21) / s,
+        }
+    } else {
+        let s = (1.0 + m22 - m00 - m11).sqrt() * 2.0;
+        Quat {
+            w: (m10 - m01) / s,
+            x: (m02 + m20) / s,
+            y: (m12 + m21) / s,
+            z: 0.25 * s,
+        }
+    };
+    unit_or_identity(q)
+}
+
 impl Editor {
     /// Where a surface attachment at craft-frame point `hit` on part `target` goes: the angle around the
     /// part's axis (snapped to `snap_deg` steps when given) and the height of the hit.
@@ -1459,22 +1537,48 @@ impl Editor {
         catalog: &Catalog,
         snap_deg: Option<f64>,
     ) -> Option<SurfaceSpot> {
+        self.surface_spot_on(target, hit, None, catalog, snap_deg)
+    }
+
+    /// `surface_spot` on the drawn shape: `normal` (craft frame) is the face the cursor is on at `hit`.
+    pub fn surface_spot_on(
+        &self,
+        target: usize,
+        hit: DVec3,
+        normal: Option<DVec3>,
+        catalog: &Catalog,
+        snap_deg: Option<f64>,
+    ) -> Option<SurfaceSpot> {
         let p = self.craft.parts.get(target)?;
         let spec = catalog.get(&p.part_id)?;
         // In the part's own frame, where its long axis is +Y (a plane's fuselage lies along the floor).
         let pq = unit_or_identity(p.local_rotation);
         let h = quat_rotate(quat_conj(pq), hit - p.local_position);
         let axis = spec.centre();
-        let mut azimuth = (h.z - axis.z).atan2(h.x - axis.x);
+        let raw = (h.z - axis.z).atan2(h.x - axis.x);
+        let mut azimuth = raw;
         if let Some(step) = snap_deg.filter(|s| *s > 0.0) {
             let s = step.to_radians();
             azimuth = (azimuth / s).round() * s;
         }
+        // A snapped angle carries the contact round the axis with it.
+        let contact = normal
+            .map(|n| quat_rotate(quat_conj(pq), n))
+            .filter(|n| n.length() > 1e-9)
+            .map(|n| {
+                let turn = about_y(azimuth - raw);
+                let c = DVec3::new(axis.x, 0.0, axis.z);
+                (
+                    c + quat_rotate(turn, h - c),
+                    quat_rotate(turn, n.normalized()),
+                )
+            });
         Some(SurfaceSpot {
             target,
             azimuth,
             height: h.y,
             turn: IDENTITY,
+            contact,
         })
     }
 
@@ -1535,10 +1639,25 @@ impl Editor {
         }
         (0..symmetry.max(1))
             .map(|k| {
-                let az = spot.azimuth + std::f64::consts::TAU * k as f64 / symmetry.max(1) as f64;
-                let out = DVec3::new(az.cos(), 0.0, az.sin());
-                let contact = DVec3::new(axis.x, spot.height, axis.z) + out * radius;
-                let q = quat_mul(quat_mul(facing_in(az), spot.turn), align);
+                let step = std::f64::consts::TAU * k as f64 / symmetry.max(1) as f64;
+                let az = spot.azimuth + step;
+                let (contact, face) = match spot.contact {
+                    // On the drawn face: turned round the axis for each copy, the part's node facing into it.
+                    Some((at, n)) => {
+                        let turn = about_y(step);
+                        let c = DVec3::new(axis.x, 0.0, axis.z);
+                        let at = c + quat_rotate(turn, at - c);
+                        (at, facing_into(quat_rotate(turn, n), at - c))
+                    }
+                    None => {
+                        let out = DVec3::new(az.cos(), 0.0, az.sin());
+                        (
+                            DVec3::new(axis.x, spot.height, axis.z) + out * radius,
+                            facing_in(az),
+                        )
+                    }
+                };
+                let q = quat_mul(quat_mul(face, spot.turn), align);
                 let local = contact - quat_rotate(q, node);
                 (p.local_position + quat_rotate(pq, local), quat_mul(pq, q))
             })
@@ -2576,6 +2695,95 @@ mod tests {
         let r = e.attach_surface(&frag, &cat, spot).unwrap();
         let face = quat_rotate(e.craft.parts[r].local_rotation, DVec3::new(1.0, 0.0, 0.0));
         assert!(face.z < -0.99);
+    }
+
+    /// On the drawn shape a part sits on the face the cursor is on, its node into that face: upright sides as
+    /// before, a sloped pod side tilted with it, the level top standing the part on its back.
+    #[test]
+    fn surface_parts_sit_on_the_face_under_the_cursor() {
+        // An upright side gives the same turn as the cylinder placement.
+        for az in [0.0, 0.7, 2.0, -2.5] {
+            let n = DVec3::new(f64::cos(az), 0.0, f64::sin(az));
+            let (a, b) = (facing_into(n, n), facing_in(az));
+            for v in [DVec3::new(1.0, 0.0, 0.0), DVec3::new(0.0, 0.0, 1.0)] {
+                assert!((quat_rotate(a, v) - quat_rotate(b, v)).length() < 1e-9);
+            }
+        }
+        let mut cat = catalog();
+        cat.insert(
+            "panel".into(),
+            PartSpec {
+                id: "panel".into(),
+                category: "Electrical".into(),
+                mass_t: 0.01,
+                size_m: Some(DVec3::new(0.05, 0.4, 0.2)),
+                attach_nodes: vec![NodeSpec {
+                    id: "srfAttach".into(),
+                    node_type: "Surface".into(),
+                    position: DVec3::new(0.02, 0.0, 0.0),
+                    orientation: DVec3::new(1.0, 0.0, 0.0),
+                    size: 0,
+                }],
+                ..Default::default()
+            },
+        );
+        let mut e = Editor::new("test");
+        let pod = e.add_part(&cat["pod"], &cat).unwrap();
+        let base = e.craft.parts[pod].local_position;
+        // A cone side leaning in by 30 degrees, hit a little off +X: snapped onto +X with its slope.
+        let slope = 30f64.to_radians();
+        let n = DVec3::new(slope.cos(), slope.sin(), 0.0);
+        let at = base + DVec3::new(0.4, 0.1, 0.0);
+        let turn = about_y(0.05);
+        let spot = e
+            .surface_spot_on(
+                pod,
+                quat_rotate(turn, at - base) + base,
+                Some(quat_rotate(turn, n)),
+                &cat,
+                Some(15.0),
+            )
+            .unwrap();
+        let made = e.add_surface(&cat["panel"], &cat, spot, 2).unwrap();
+        assert_eq!(made.len(), 2);
+        for (k, &i) in made.iter().enumerate() {
+            let p = &e.craft.parts[i];
+            let into = quat_rotate(p.local_rotation, DVec3::new(1.0, 0.0, 0.0));
+            let node = p.local_position + quat_rotate(p.local_rotation, DVec3::new(0.02, 0.0, 0.0));
+            let (want_at, want_n) = if k == 0 {
+                (at, n)
+            } else {
+                (
+                    base + DVec3::new(-0.4, 0.1, 0.0),
+                    DVec3::new(-slope.cos(), slope.sin(), 0.0),
+                )
+            };
+            assert!(
+                (node - want_at).length() < 1e-9,
+                "copy {k} node on the face"
+            );
+            assert!(
+                (into + want_n).length() < 1e-9,
+                "copy {k} faces into the slope"
+            );
+            // Its +Y leans with the slope instead of standing off the surface.
+            let up = quat_rotate(p.local_rotation, DVec3::new(0.0, 1.0, 0.0));
+            assert!(up.dot(want_n).abs() < 1e-9 && up.y > 0.8);
+        }
+        // The level top: the node points down, the part's +Y out from the axis.
+        let spot = e
+            .surface_spot_on(
+                pod,
+                base + DVec3::new(0.0, 0.5, 0.2),
+                Some(DVec3::new(0.0, 1.0, 0.0)),
+                &cat,
+                None,
+            )
+            .unwrap();
+        let made = e.add_surface(&cat["panel"], &cat, spot, 1).unwrap();
+        let p = &e.craft.parts[made[0]];
+        assert!(quat_rotate(p.local_rotation, DVec3::new(1.0, 0.0, 0.0)).y < -0.999);
+        assert!(quat_rotate(p.local_rotation, DVec3::new(0.0, 1.0, 0.0)).z > 0.999);
     }
 
     /// The original's symmetry sets: what is placed with symmetry stays a set; a part put on one part of a

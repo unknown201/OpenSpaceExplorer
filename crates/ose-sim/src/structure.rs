@@ -1317,11 +1317,17 @@ impl Structure {
             let before = self.net.mass_t();
             let fractions = self.net.process(&requests, dt);
             out.burned_t = (before - self.net.mass_t()).max(0.0);
+            let bent = self.rigid.bend_mapper();
             for (demand, fraction) in active.iter().zip(fractions) {
                 let thrust = demand.thrust_kn * fraction;
                 delivered[demand.part] = thrust;
                 out.thrust_kn += thrust;
-                for force in self.engine_forces(demand.part, thrust) {
+                for mut force in self.engine_forces(demand.part, thrust) {
+                    // A bent joint turns the engine, and its thrust with it.
+                    if let Some(bend) = &bent {
+                        (force.force_kn, force.offset_m) =
+                            bend(force.part, force.force_kn, force.offset_m);
+                    }
                     out.force_kn = out.force_kn + force.force_kn;
                     out.torque_knm = out.torque_knm
                         + (self.rigid.rest_position(force.part) + force.offset_m
@@ -8555,6 +8561,46 @@ mod tests {
             s.apply(&p, &quiet, 0.02);
         }
         assert!(booster(&s) < 0.1 * settled, "{}", booster(&s));
+    }
+
+    #[test]
+    fn a_bent_engine_pushes_the_way_it_points() {
+        let (crafts, defs, res) = assets();
+        let k1 = crafts.iter().find(|c| c.name == "Kerbal K1").unwrap();
+        let mut s = Structure::build(k1, &defs, &res);
+        let mut p = flying(DVec3::new(1.0, 0.0, 0.0));
+        p.ignited = true;
+        p.throttle = 1.0;
+        // a stage with an engine hanging on a joint
+        let (stage, engine) = (0..k1.stages.len().max(1) + 1)
+            .find_map(|st| {
+                s.fed_engines(st)
+                    .into_iter()
+                    .find(|&e| s.rigid.links.iter().any(|l| l.child == e))
+                    .map(|e| (st, e))
+            })
+            .expect("an engine on a joint");
+        p.stage = stage;
+        let env = crate::flight::EngineEnvironment::default();
+        let straight = s.propulsion(&p, env, 0.02);
+        let thrust = s.resolved_engine_thrust.as_ref().unwrap()[engine];
+        assert!(thrust > 0.0);
+        let link = s
+            .rigid
+            .links
+            .iter_mut()
+            .find(|l| l.child == engine)
+            .unwrap();
+        link.bend = DVec3::new(0.05, 0.0, 0.0);
+        let bent = s.propulsion(&p, env, 0.02);
+        // the engine's thrust turns by the bend: a side force of about thrust * 0.05, and a torque from it
+        let side = (bent.force_kn - straight.force_kn).length();
+        assert!(
+            (side - thrust * 0.05).abs() < thrust * 0.01,
+            "side force {side} from {thrust} kN"
+        );
+        assert!((bent.torque_knm - straight.torque_knm).length() > 1e-3);
+        assert!((bent.thrust_kn - straight.thrust_kn).abs() < 1e-9);
     }
 
     #[test]

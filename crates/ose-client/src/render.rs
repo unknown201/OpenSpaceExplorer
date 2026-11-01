@@ -438,9 +438,44 @@ pub struct Model {
     /// Bounds of all primitives in model units, for framing in the editor.
     pub bounds_min: Vec3,
     pub bounds_max: Vec3,
+    /// Opaque triangles in model units, kept for parts (`part:` models) so the editor can find where a ray
+    /// meets the drawn shape, not just its box.
+    pub tris: Vec<[Vec3; 3]>,
 }
 
 impl Model {
+    /// Nearest point where the ray `ro + rd t` (model units) meets the model's triangles: (t, face normal
+    /// turned to face the ray). `None` when no triangles were kept or none is hit.
+    pub fn ray_hit(&self, ro: Vec3, rd: Vec3) -> Option<(f32, Vec3)> {
+        let mut best: Option<(f32, Vec3)> = None;
+        for [a, b, c] in &self.tris {
+            // Moller-Trumbore, both faces.
+            let (e1, e2) = (*b - *a, *c - *a);
+            let pv = rd.cross(e2);
+            let det = e1.dot(pv);
+            if det.abs() < 1e-12 {
+                continue;
+            }
+            let inv = 1.0 / det;
+            let tv = ro - *a;
+            let u = tv.dot(pv) * inv;
+            if !(0.0..=1.0).contains(&u) {
+                continue;
+            }
+            let qv = tv.cross(e1);
+            let v = rd.dot(qv) * inv;
+            if v < 0.0 || u + v > 1.0 {
+                continue;
+            }
+            let t = e2.dot(qv) * inv;
+            if t > 1e-6 && best.is_none_or(|(bt, _)| t < bt) {
+                let n = e1.cross(e2).normalize_or_zero();
+                best = Some((t, if n.dot(rd) > 0.0 { -n } else { n }));
+            }
+        }
+        best
+    }
+
     /// Pose bounds include skin deformation, so unfolding legs do not use the bind-pose ground anchor.
     pub fn pose_bounds(&self, sample: Option<crate::animation::ClipSample>) -> (Vec3, Vec3) {
         if self.rest_vertices.iter().all(Vec::is_empty) {
@@ -1550,7 +1585,28 @@ impl Renderer {
                     }
                 })
                 .collect();
+            let tris = if name.starts_with("part:") {
+                let mut tris = Vec::new();
+                for (mi, transform, _) in &cpu.primitives {
+                    let Some((vertices, indices, _, blend, _, _)) = cpu.meshes.get(*mi) else {
+                        continue;
+                    };
+                    if *blend {
+                        continue;
+                    }
+                    for t in indices.as_chunks::<3>().0 {
+                        let v = |i: u32| {
+                            transform.transform_point3(Vec3::from(vertices[i as usize].pos))
+                        };
+                        tris.push([v(t[0]), v(t[1]), v(t[2])]);
+                    }
+                }
+                tris
+            } else {
+                Vec::new()
+            };
             let mut model = Model {
+                tris,
                 rig: cpu.rig,
                 rest_vertices,
                 influences: cpu.influences,
