@@ -9553,14 +9553,11 @@ impl App {
             .map(|f| f.stage as usize)
             .unwrap_or(0);
         let catalog = &self.catalog;
-        let is_dec = |pid: &str| catalog.get(pid).map(|p| p.is_decoupler).unwrap_or(false);
-        #[cfg(target_arch = "wasm32")]
-        let gone = flight3d::jettisoned(craft, fired, &is_dec);
-        #[cfg(not(target_arch = "wasm32"))]
-        let gone = {
-            let _ = (fired, &is_dec);
-            vec![false; craft.parts.len()]
-        };
+        let gone: Vec<bool> = self
+            .flight_present(craft, fired)
+            .into_iter()
+            .map(|p| !p)
+            .collect();
         let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
         for (i, p) in craft.parts.iter().enumerate() {
             if gone.get(i).copied().unwrap_or(false) {
@@ -9693,6 +9690,22 @@ impl App {
     /// Which parts of the craft as launched are still on the flown vessel (stages dropped, debris gone).
     #[cfg_attr(not(target_arch = "wasm32"), allow(clippy::unused_self))]
     fn flight_present(&self, craft: &ose_data::craft::Craft, fired: usize) -> Vec<bool> {
+        // The parts the server last said the vessel has, even when a newer revision is on its way: a guess
+        // from the stages fired cannot follow stages rearranged in flight or radial decouplers and could
+        // bring back a part already gone.
+        if let Some(known) = self
+            .flying
+            .and_then(|id| self.vessel_crafts.get(&id))
+            .and_then(|k| k.1.as_ref())
+        {
+            let guids: std::collections::HashSet<&str> =
+                known.parts.iter().map(|p| p.guid.as_str()).collect();
+            return craft
+                .parts
+                .iter()
+                .map(|p| guids.contains(p.guid.as_str()))
+                .collect();
+        }
         #[cfg(target_arch = "wasm32")]
         {
             let catalog = &self.catalog;
@@ -13091,10 +13104,11 @@ impl App {
                 .ok();
         }
         // What the server says the flown vessel still has, by part guid.
+        // The last craft the server sent, even a revision behind (a newer one is asked for): guessing from
+        // the stages fired instead can show parts that are gone.
         let present: Option<std::collections::HashSet<String>> = self
             .vessel_crafts
             .get(&id)
-            .filter(|k| k.0 == v.craft_rev)
             .and_then(|k| k.1.as_ref())
             .map(|c| c.parts.iter().map(|p| p.guid.clone()).collect());
         let inp = flight3d::FlightInput {
