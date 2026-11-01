@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 61;
+pub const PROTOCOL_VERSION: u16 = 62;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -391,6 +391,14 @@ pub enum ClientMessage {
         pitch: f32,
         yaw: f32,
         roll: f32,
+    },
+    /// Replace the vessel's whole stage stack (protocol 62): `stages` lists parts of the craft as
+    /// `GetVesselCraft` gives it, in `Craft::stages` order (the last fires first), each stageable part once.
+    /// Parts move between unfired stages and new stages can go anywhere below the one lit; the stages that
+    /// have fired must stay as they are. Answers `FlightAck`; `craft_rev` changes.
+    SetStages {
+        vessel: u64,
+        stages: Vec<Vec<u16>>,
     },
 }
 

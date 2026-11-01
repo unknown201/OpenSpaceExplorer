@@ -3778,6 +3778,18 @@ async fn session(mut socket: WebSocket, s: AppState) {
                             };
                             if !send(&mut socket, &reply).await { break; }
                         }
+                        Ok(ClientMessage::SetStages { vessel, stages }) => {
+                            let reply = match owned_vessel(&s, vessel, player_id) {
+                                Some(e) => {
+                                    let spec_for = |c: &ose_data::craft::Craft| flight_spec_for(&s, c);
+                                    let stages = stages.into_iter().map(|l| l.into_iter().map(usize::from).collect()).collect();
+                                    let r = s.universe.lock().expect("sim lock").set_stages(e, stages, &s.parts, &s.resources, &spec_for);
+                                    ServerMessage::FlightAck { vessel, accepted: r.is_ok(), reason: r.err().map(String::from) }
+                                }
+                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
+                            };
+                            if !send(&mut socket, &reply).await { break; }
+                        }
                         Ok(ClientMessage::ConfigurePart { vessel, part, settings }) => {
                             let ok = owned_vessel(&s, vessel, player_id).is_some_and(|e| s.universe.lock().expect("sim lock").configure_part(e, part, settings));
                             if !send(&mut socket, &ServerMessage::FlightAck { vessel, accepted: ok, reason: (!ok).then(|| "invalid part settings or ownership".into()) }).await { break; }

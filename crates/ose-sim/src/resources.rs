@@ -113,9 +113,12 @@ impl FlowNet {
         let decoupler = |i: usize| {
             def_of(i).is_some_and(|d| d.stage_type.to_ascii_lowercase().contains("decoupler"))
         };
+        // A part feeds across its attachments when its definition allows it (decouplers and separators do
+        // not) and the craft has not switched it off: the same rule as the staging report.
         let edge_from = |from: usize, to: usize| Edge {
             to,
-            crossfeed: craft.parts[from].fuel_crossfeed,
+            crossfeed: craft.parts[from].fuel_crossfeed
+                && def_of(from).is_none_or(|d| d.fuel_cross_feed),
             boundary: decoupler(from),
             fuel_line: false,
         };
@@ -447,6 +450,30 @@ mod tests {
             .filter(|t| t.part == part && t.resource == r)
             .map(|t| t.stored)
             .sum()
+    }
+
+    #[test]
+    fn decouplers_block_crossfeed_even_when_the_craft_leaves_every_part_switched_on() {
+        // A VAB craft stores crossfeed on for every part; the decoupler's definition still blocks it, so
+        // stacks joined only through decouplers each feed their own engine.
+        let (crafts, defs, res) = assets();
+        let mut c = crafts.into_iter().find(|c| c.name == "Kerbal K1").unwrap();
+        for p in &mut c.parts {
+            p.fuel_crossfeed = true;
+        }
+        let net = FlowNet::build(&c, &defs, &res);
+        let ox = net.resource("Oxidizer").unwrap();
+        let parts: Vec<usize> = net
+            .groups(36, ox)
+            .concat()
+            .iter()
+            .map(|&t| net.tanks[t].part)
+            .collect();
+        assert!(parts.contains(&18), "{parts:?}");
+        assert!(
+            !parts.contains(&7),
+            "the core cannot reach the upper stage: {parts:?}"
+        );
     }
 
     #[test]

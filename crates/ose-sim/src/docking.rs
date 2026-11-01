@@ -612,6 +612,7 @@ impl Universe {
         craft: Craft,
         facing: DVec3,
         own_top: DVec3,
+        lit: Option<usize>,
         defs: &[PartDef],
         resources: &[ose_data::ResourceDef],
         spec_for: &dyn Fn(&Craft) -> flight::FlightSpec,
@@ -635,7 +636,6 @@ impl Universe {
             .into_iter()
             .filter_map(|(i, n)| Some((map.get(i).copied().flatten()?, n)))
             .collect();
-        let lit = self.lit_stage(e);
         let old_st = self.world.entity_mut(e).take::<structure::Structure>();
         let mut p = old.clone();
         p.spec = spec_for(&craft);
@@ -672,6 +672,59 @@ impl Universe {
         }
         self.set_structure(e, st);
         Ok(())
+    }
+
+    /// Replace the vessel's whole stage stack in flight (`stages` lists parts of `current_craft`; empty
+    /// stages are dropped), as the staging panel's drags do: parts move between unfired stages, and stages
+    /// can be added or reordered below the one lit. The stages that have fired stay as they were.
+    pub fn set_stages(
+        &mut self,
+        e: Entity,
+        stages: Vec<Vec<usize>>,
+        defs: &[PartDef],
+        resources: &[ose_data::ResourceDef],
+        spec_for: &dyn Fn(&Craft) -> flight::FlightSpec,
+    ) -> Result<(), &'static str> {
+        let mut craft = self.current_craft(e).ok_or("vessel has no parts")?;
+        let stages: Vec<Vec<usize>> = stages.into_iter().filter(|s| !s.is_empty()).collect();
+        let sorted = |l: &[Vec<usize>]| {
+            let mut v: Vec<usize> = l.concat();
+            v.sort_unstable();
+            v
+        };
+        if sorted(&stages) != sorted(&craft.stages) {
+            return Err("the stages must hold the same parts, each once");
+        }
+        let p = match self.world.get::<flight::Powered>(e) {
+            Some(p) => p.clone(),
+            None => self
+                .world
+                .get::<flight::Dormant>(e)
+                .map(|d| d.0.clone())
+                .ok_or("not under power")?,
+        };
+        // stages fire from the highest index down: the lit one and those above it are spent
+        let lit = match self.lit_stage(e) {
+            None => None,
+            Some(lit) => {
+                let spent = craft.stages.len().saturating_sub(lit);
+                let at = stages
+                    .len()
+                    .checked_sub(spent)
+                    .ok_or("that stage has already fired")?;
+                if stages[at..] != craft.stages[craft.stages.len() - spent..] {
+                    return Err("that stage has already fired");
+                }
+                Some(at)
+            }
+        };
+        if stages == craft.stages {
+            return Ok(());
+        }
+        craft.stages = stages;
+        self.refit(
+            e, craft, p.facing, p.own_top, lit, defs, resources, spec_for,
+        )
     }
 
     /// Move a part (index into `current_craft`) to another stage (index into its `stages`, as
@@ -717,7 +770,10 @@ impl Universe {
             craft.stages.push(Vec::new());
         }
         craft.stages[stage].push(part);
-        self.refit(e, craft, p.facing, p.own_top, defs, resources, spec_for)
+        let lit = self.lit_stage(e);
+        self.refit(
+            e, craft, p.facing, p.own_top, lit, defs, resources, spec_for,
+        )
     }
 
     /// Control the vessel from one of its parts (index into `current_craft`; the root to go back): the
@@ -768,7 +824,8 @@ impl Universe {
                 w: q.w,
             },
         );
-        self.refit(e, turned, facing, top, defs, resources, spec_for)?;
+        let lit = self.lit_stage(e);
+        self.refit(e, turned, facing, top, lit, defs, resources, spec_for)?;
         if let Some(mut p) = self.world.get_mut::<flight::Powered>(e) {
             // a hold keeps pointing where it did
             if let flight::Attitude::Fixed(_) = p.attitude {

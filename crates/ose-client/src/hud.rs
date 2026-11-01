@@ -544,8 +544,138 @@ pub fn update(doc: &Document, s: &HudState) {
     );
 }
 
-/// The flight staging stack (`FlightStagingStackInstrument`): one card per stage still to fire, the next one
-/// at the bottom and lit, each with its parts' icons and parachute states.
+/// How a stage stack is drawn: the VAB's and the flight panel's cards come from the same builder, so they
+/// look and handle the same way.
+pub struct StageCards<'a> {
+    /// The part picked in the editor (its icon group is highlighted).
+    pub selected: Option<usize>,
+    /// Which cards appear (stages that have fired and dropped away are left out in flight).
+    pub shown: &'a dyn Fn(usize) -> bool,
+    /// Extra class for a card: "next" (fires on the next press), "burning", or none.
+    pub class: &'a dyn Fn(usize) -> &'static str,
+    /// The figures on a card (delta-v, TWR, burn time), already formatted, or empty.
+    pub stats: &'a dyn Fn(usize) -> String,
+    /// A part's icon (the editor's from its kind; in flight a parachute shows its state).
+    pub icon: &'a dyn Fn(usize, Option<&crate::vab::PartSpec>) -> &'static str,
+    /// Whether a card takes and gives up parts (in flight, only stages that have not fired).
+    pub editable: &'a dyn Fn(usize) -> bool,
+}
+
+/// The icon for a part by its kind, as the staging stack shows it before anything fires.
+pub fn stage_icon(spec: Option<&crate::vab::PartSpec>) -> &'static str {
+    match spec {
+        Some(s) if s.has_engine => "Staging-Icon-Thruster",
+        Some(s) if s.is_decoupler => "Staging-Icon-Inline",
+        Some(s) if s.stage_type.contains("Parachute") => "Staging-ICO-Chute-Stowed",
+        _ => "Staging-ICO-Structure01",
+    }
+}
+
+/// One card per stage, the last to fire on top and the first at the bottom, as the original's staging stack.
+/// The highest stage index fires first (ose_data::staging), so the cards run in index order and count up
+/// from the bottom. The same part more than once in a stage is one icon with a count, as the original's
+/// stack groups them; dragging it moves the whole group. Editable cards carry the drag hooks
+/// (`data-ose-group`, `data-ose-stagehead`) and a gap above them for a new stage of its own.
+pub fn stage_cards_html(
+    craft: &ose_data::craft::Craft,
+    catalog: &crate::vab::Catalog,
+    o: &StageCards,
+) -> String {
+    let esc = |s: &str| {
+        s.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('"', "&quot;")
+    };
+    let count = craft.stages.len();
+    // A gap at `g` sits above card `g`: dropping there makes a stage between cards g - 1 and g.
+    let gap_ok = |g: usize| (g < count && (o.editable)(g)) || (g > 0 && (o.editable)(g - 1));
+    let mut html = String::new();
+    for (n, stage) in craft.stages.iter().enumerate() {
+        if !(o.shown)(n) || stage.is_empty() {
+            continue;
+        }
+        let editable = (o.editable)(n);
+        let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
+        for &i in stage {
+            let Some(p) = craft.parts.get(i) else {
+                continue;
+            };
+            match groups.iter_mut().find(|(id, _)| *id == p.part_id) {
+                Some((_, v)) => v.push(i),
+                None => groups.push((p.part_id.clone(), vec![i])),
+            }
+        }
+        let parts: Vec<String> = groups
+            .iter()
+            .map(|(id, members)| {
+                let spec = catalog.get(id);
+                let icon = (o.icon)(members[0], spec);
+                let list: Vec<String> = members.iter().map(|i| i.to_string()).collect();
+                let hooks = if editable {
+                    format!(
+                        " data-ose-group=\"{}\" title=\"click to select, drag to another stage or between stages\"",
+                        list.join(",")
+                    )
+                } else {
+                    String::new()
+                };
+                format!(
+                    "<span class=\"p{sel}\" data-ose-index=\"{first}\"{hooks}><i style=\"--ico:url(assets/ui/hud/{icon}.png)\"></i>{name}{count}</span>",
+                    sel = if o.selected.is_some_and(|s| members.contains(&s)) {
+                        " sel"
+                    } else {
+                        ""
+                    },
+                    first = members[0],
+                    name = spec
+                        .map(|s| esc(s.display_title()))
+                        .unwrap_or_else(|| esc(id)),
+                    count = if members.len() > 1 {
+                        format!("<b class=\"pc\">\u{d7}{}</b>", members.len())
+                    } else {
+                        String::new()
+                    },
+                )
+            })
+            .collect();
+        if gap_ok(n) {
+            html.push_str(&format!(
+                "<li class=\"sg\" data-ose-gap=\"{n}\" title=\"drop here for a new stage\"></li>"
+            ));
+        }
+        let class = (o.class)(n);
+        let (card, head) = if editable {
+            (
+                format!(" data-ose-stage=\"{n}\""),
+                format!(" data-ose-stagehead=\"{n}\" title=\"drag to move the whole stage\""),
+            )
+        } else {
+            (String::new(), String::new())
+        };
+        html.push_str(&format!(
+            "<li{class}{card}><span class=\"st\"{head}>STAGE {}</span>{}{}</li>",
+            count - n,
+            (o.stats)(n),
+            parts.join(""),
+            class = if class.is_empty() {
+                String::new()
+            } else {
+                format!(" class=\"{class}\"")
+            },
+        ));
+    }
+    if count > 0 && gap_ok(count) {
+        html.push_str(&format!(
+            "<li class=\"sg\" data-ose-gap=\"{count}\" title=\"drop here for a new first stage\"></li>"
+        ));
+    }
+    html
+}
+
+/// The flight panel's stage stack: the editor's cards, with the stage that fires next and the one burning
+/// marked, parachutes showing their state and the server's figures for each stage where the vessel is.
+/// `next_stage` counts stages fired (0 before the first press). Stages that have not fired can still be
+/// rearranged (`SetStages`).
 pub fn staging_html(
     craft: &ose_data::craft::Craft,
     catalog: &crate::vab::Catalog,
@@ -553,12 +683,9 @@ pub fn staging_html(
     chutes: &[(u16, ChuteState, f32)],
     readouts: &[ose_net::StageReadout],
 ) -> String {
-    let mut html = String::new();
     let stages = &craft.stages;
-    // The highest index fires first: firing step k is craft stage len - 1 - k. Cards run from the last to
-    // fire (index 0) at the top to the next one at the bottom, numbered from the bottom up.
-    // Once something has fired, the stage burning now (fired last) stays at the bottom, as the original's
-    // active stage does, until its engines are dropped.
+    // Firing step k is craft stage len - 1 - k. Once something has fired, the stage burning now (fired last)
+    // stays at the bottom, as the original's active stage does, until its engines are dropped.
     let burning = (next_stage > 0)
         .then(|| stages.len().checked_sub(next_stage))
         .flatten();
@@ -567,40 +694,21 @@ pub fn staging_html(
         .checked_sub(next_stage + 1)
         .or(burning.map(|_| usize::MAX))
     else {
-        return html;
+        return String::new();
     };
     let shown = burning.map(|b| b + 1).unwrap_or(next.wrapping_add(1));
-    for (n, stage) in stages.iter().enumerate().take(shown) {
-        if stage.is_empty() && Some(n) == burning {
-            continue;
+    let unfired = |n: usize| next != usize::MAX && n <= next;
+    let class = |n: usize| {
+        if n == next {
+            "next"
+        } else if Some(n) == burning {
+            "burning"
+        } else {
+            ""
         }
-        let mut icons = String::new();
-        for &i in stage {
-            let Some(p) = craft.parts.get(i) else {
-                continue;
-            };
-            let spec = catalog.get(&p.part_id);
-            let chute = chutes.iter().find(|(pi, _, _)| *pi as usize == i);
-            let icon = match (spec, chute) {
-                (_, Some((_, ChuteState::Armed, _))) => "Staging-ICO-Chute-Armed",
-                (_, Some((_, ChuteState::SemiDeployed | ChuteState::Deployed, _))) => {
-                    "Staging-ICO-Chute-Deployed"
-                }
-                (_, Some((_, ChuteState::Cut, _))) => "Staging-ICO-Chute-Cut",
-                (_, Some(_)) => "Staging-ICO-Chute-Stowed",
-                (Some(s), None) if s.has_engine => "Staging-Icon-Thruster",
-                (Some(s), None) if s.is_decoupler => "Staging-Icon-Inline",
-                (Some(s), None) if s.stage_type.contains("Parachute") => "Staging-ICO-Chute-Stowed",
-                _ => "Staging-ICO-Structure01",
-            };
-            let title = spec.map(|s| s.display_title()).unwrap_or(&p.part_id);
-            icons.push_str(&format!(
-                "<i title=\"{}\" style=\"--ico:url(assets/ui/hud/{icon}.png)\"></i>",
-                title.replace('"', "&quot;")
-            ));
-        }
-        // The server's figures for the stage as the vessel is now (protocol 38): delta-v and TWR where it is.
-        let stats = readouts
+    };
+    let stats = |n: usize| {
+        readouts
             .iter()
             .find(|r| r.stage_id as usize == n && r.delta_v_vacuum_mps > 0.0)
             .map(|r| {
@@ -611,20 +719,66 @@ pub fn staging_html(
                     r.burn_time_s.max(0.0)
                 )
             })
-            .unwrap_or_default();
-        html.push_str(&format!(
-            "<li class=\"{}\"><b>{}</b>{icons}{stats}</li>",
-            if n == next {
-                "next"
-            } else if Some(n) == burning {
-                "burning"
-            } else {
-                ""
-            },
-            stages.len() - n
-        ));
+            .unwrap_or_default()
+    };
+    let icon = |i: usize, spec: Option<&crate::vab::PartSpec>| match chutes
+        .iter()
+        .find(|(pi, _, _)| *pi as usize == i)
+    {
+        Some((_, ChuteState::Armed, _)) => "Staging-ICO-Chute-Armed",
+        Some((_, ChuteState::SemiDeployed | ChuteState::Deployed, _)) => {
+            "Staging-ICO-Chute-Deployed"
+        }
+        Some((_, ChuteState::Cut, _)) => "Staging-ICO-Chute-Cut",
+        Some(_) => "Staging-ICO-Chute-Stowed",
+        None => stage_icon(spec),
+    };
+    stage_cards_html(
+        craft,
+        catalog,
+        &StageCards {
+            selected: None,
+            shown: &|n| n < shown,
+            class: &class,
+            stats: &stats,
+            icon: &icon,
+            editable: &unfired,
+        },
+    )
+}
+
+/// The stage stack after moving `parts` onto the card at `to` (the flight panel's drop on a card).
+pub fn stages_moved_to(stages: &[Vec<usize>], parts: &[usize], to: usize) -> Vec<Vec<usize>> {
+    stages
+        .iter()
+        .enumerate()
+        .map(|(k, s)| {
+            let mut kept: Vec<usize> = s.iter().copied().filter(|i| !parts.contains(i)).collect();
+            if k == to {
+                kept.extend_from_slice(parts);
+            }
+            kept
+        })
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// The stage stack after putting `parts` in a stage of their own above card `at` (`stages.len()`: below
+/// the last card, firing first): the flight panel's drop on a gap.
+pub fn stages_inserted_at(stages: &[Vec<usize>], parts: &[usize], at: usize) -> Vec<Vec<usize>> {
+    let mut out = Vec::new();
+    for (k, s) in stages.iter().enumerate() {
+        if k == at {
+            out.push(parts.to_vec());
+        }
+        out.push(s.iter().copied().filter(|i| !parts.contains(i)).collect());
     }
-    html
+    if at >= stages.len() {
+        out.push(parts.to_vec());
+    }
+    out.into_iter()
+        .filter(|s: &Vec<usize>| !s.is_empty())
+        .collect()
 }
 
 /// FNV-1a of a string, to tell rendered HTML apart cheaply.
@@ -1724,6 +1878,25 @@ mod tests {
         assert_eq!(
             report_place("Mun_Landed_MunHighlands"),
             "Mun, Landed, Highlands"
+        );
+    }
+
+    #[test]
+    fn stage_drops_move_parts_and_open_new_stages() {
+        let stages = vec![vec![1], vec![2, 3], vec![4]];
+        // onto another card; a card left empty closes up
+        assert_eq!(
+            super::stages_moved_to(&stages, &[1], 2),
+            vec![vec![2, 3], vec![4, 1]]
+        );
+        // between cards, or below the last for a stage that fires first
+        assert_eq!(
+            super::stages_inserted_at(&stages, &[3], 1),
+            vec![vec![1], vec![3], vec![2], vec![4]]
+        );
+        assert_eq!(
+            super::stages_inserted_at(&stages, &[2, 3], 3),
+            vec![vec![1], vec![4], vec![2, 3]]
         );
     }
 

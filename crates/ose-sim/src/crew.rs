@@ -841,6 +841,39 @@ mod tests {
     }
 
     #[test]
+    fn stepping_out_does_not_turn_the_craft() {
+        for orbit in [false, true] {
+            let (mut u, v) = k1_on_pad();
+            if orbit {
+                let body = u.body_entity("Kerbin").unwrap();
+                let mu = u.world.get::<bodies::Body>(body).unwrap().mu;
+                let mut p = u.powered(v).unwrap().clone();
+                p.r = DVec3::new(700_000.0, 0.0, 0.0);
+                p.v = DVec3::new(0.0, (mu / 700_000.0_f64).sqrt(), 0.0);
+                p.landed = false;
+                p.attitude = flight::Attitude::Fixed(p.facing);
+                u.set_powered(v, p);
+                // long enough to be put on rails
+                for _ in 0..(20 * crate::TICKS_PER_SECOND) {
+                    u.step();
+                }
+            }
+            let jeb = u.go_eva(v, None).unwrap();
+            let f0 = u.powered(v).unwrap().facing;
+            for _ in 0..(5 * crate::TICKS_PER_SECOND) {
+                u.step();
+            }
+            let p = u.powered(v).unwrap();
+            let w = (p.angvel + p.facing * p.roll_rate).length();
+            assert!(w < 1e-3, "orbit {orbit}: spinning at {w} rad/s");
+            // on the pad the body's turn shows in the inertial facing: 5 s of it is a few hundredths
+            let turned = p.facing.dot(f0).clamp(-1.0, 1.0).acos().to_degrees();
+            assert!(turned < 0.2, "orbit {orbit}: turned {turned} degrees");
+            assert!(u.on_ladder(jeb).is_some());
+        }
+    }
+
+    #[test]
     fn a_kerbal_steps_out_onto_the_hatch_ladder_and_holds_on() {
         let (mut u, v) = k1_on_pad();
         let jeb = u.go_eva(v, None).unwrap();

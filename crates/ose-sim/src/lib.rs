@@ -3708,6 +3708,80 @@ mod tests {
     }
 
     #[test]
+    fn the_stage_stack_is_rearranged_in_flight_below_the_stage_that_burns() {
+        let (mut u, body, _, _) = k1_on_real_kerbin();
+        let crafts: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let defs: Vec<ose_data::PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let res: Vec<ose_data::ResourceDef> =
+            serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
+        let c = crafts.iter().find(|c| c.name == "Kerbal K1").unwrap();
+        let spec_for = |c: &ose_data::craft::Craft| {
+            let report = ose_data::staging::delta_v_by_stage(c, &defs, &res);
+            flight::FlightSpec::from_report(&report, &[], &[], 1.5)
+        };
+        let v = u.spawn_powered_on_surface("K1", body, spec_for(c), 0.0, 0.0);
+        u.set_craft(v, c.clone());
+        u.set_structure(v, structure::Structure::build(c, &defs, &res));
+        u.step();
+        let craft = u.current_craft(v).unwrap();
+        let n = craft.stages.len();
+        assert!(n >= 3, "{:?}", craft.stages);
+        // a part alone in a new stage between the bottom two cards
+        let part = craft.stages[n - 2][0];
+        let mut stages = craft.stages.clone();
+        stages[n - 2].retain(|&x| x != part);
+        stages.insert(n - 1, vec![part]);
+        u.set_stages(v, stages.clone(), &defs, &res, &spec_for)
+            .unwrap();
+        let expect: Vec<Vec<usize>> = stages.iter().filter(|s| !s.is_empty()).cloned().collect();
+        assert_eq!(u.current_craft(v).unwrap().stages, expect);
+        // parts cannot be dropped or doubled
+        let mut lost = expect.clone();
+        lost[0].pop();
+        assert!(u.set_stages(v, lost, &defs, &res, &spec_for).is_err());
+        // once the first stage is lit it stays as it is; the rest can still be rearranged, even into a new
+        // stage, and the burning stage keeps burning
+        u.set_controls(v, 1.0, flight::Attitude::Up);
+        u.stage(v);
+        for _ in 0..TICKS_PER_SECOND {
+            u.step();
+        }
+        let now = u.current_craft(v).unwrap().stages;
+        let k = now.len();
+        let mut fired = now.clone();
+        let top = fired[0].pop().unwrap();
+        fired[k - 1].push(top);
+        assert!(
+            u.set_stages(v, fired, &defs, &res, &spec_for).is_err(),
+            "the lit stage is spent"
+        );
+        let mut split = now.clone();
+        if split[0].len() > 1 {
+            let x = split[0].pop().unwrap();
+            split.insert(1, vec![x]);
+        } else {
+            split.swap(0, 1.min(k - 2));
+        }
+        u.set_stages(v, split.clone(), &defs, &res, &spec_for)
+            .unwrap();
+        assert_eq!(
+            u.current_craft(v).unwrap().stages.last(),
+            now.last(),
+            "the lit stage is still the last"
+        );
+        let p = u.powered(v).unwrap().clone();
+        assert!(p.ignited);
+        for _ in 0..TICKS_PER_SECOND {
+            u.step();
+        }
+        let q = u.powered(v).unwrap();
+        let up = q.r.normalized();
+        assert!(q.v.dot(up) > p.v.dot(up), "still climbing on the lit stage");
+    }
+
+    #[test]
     fn a_held_yaw_with_sas_off_keeps_turning_about_the_same_axis() {
         let (mut u, body, spec, st) = k1_on_real_kerbin();
         let v = u.spawn_vessel_in_circular_orbit("K1", body, 100_000.0);

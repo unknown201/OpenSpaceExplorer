@@ -466,12 +466,20 @@
     #fh-missions-list li small { color: #9fb0cc; } #fh-missions-list .done { color: #7dff8a; } #fh-missions-list li.empty { color: #9fb0cc; }
     body.ui-hidden .fh-missions, body.ui-hidden .fh-appbar, body.ui-hidden .fh-parts, body.ui-hidden .fh-res, body.ui-hidden .fh-ag, body.ui-hidden .fh-vessel-acts, body.ui-hidden .fh-views, body.ui-hidden .fh-crew-acts { display: none !important; }
     #fh-stages { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: calc(3 * var(--u)); max-height: calc(360 * var(--u)); overflow: auto; }
-    #fh-stages li { display: flex; flex-wrap: wrap; align-items: center; gap: calc(3 * var(--u)); padding: calc(3 * var(--u)) calc(6 * var(--u)); border: 1px solid #ffffff22; border-left: 3px solid #e0a04066; border-radius: calc(4 * var(--u)); background: #06080fcc; }
-    #fh-stages li b { font-size: calc(11 * var(--u)); color: #e0a040; min-width: calc(14 * var(--u)); }
-    #fh-stages li.next { border-left-color: #7dff8a; background: #17321ccc; } #fh-stages li.next b { color: #7dff8a; }
+    #fh-stages li { display: block; padding: calc(4 * var(--u)) calc(6 * var(--u)); border: 1px solid #ffffff22; border-left: 3px solid #e0a04066; border-radius: calc(4 * var(--u)); background: #06080fcc; color: #e6ecf7; font-size: calc(11 * var(--u)); }
+    #fh-stages li .st { display: block; font-size: calc(11 * var(--u)); font-weight: 700; color: #e0a040; margin-bottom: calc(2 * var(--u)); }
+    #fh-stages li[data-ose-stage] .st { cursor: grab; }
+    #fh-stages li.next { border-left-color: #7dff8a; background: #17321ccc; } #fh-stages li.next .st { color: #7dff8a; }
     #fh-stages li.burning { border-left-color: #e0a040; opacity: 0.75; }
-    #fh-stages li .sv { flex-basis: 100%; font-size: calc(10 * var(--u)); color: #9fb0cc; }
-    #fh-stages li i { width: calc(20 * var(--u)); height: calc(20 * var(--u)); background: #cfd6e6; -webkit-mask: var(--ico) center / contain no-repeat; mask: var(--ico) center / contain no-repeat; }
+    #fh-stages li .sv { float: right; font-size: calc(10 * var(--u)); color: #9fb0cc; }
+    #fh-stages li span.p { display: inline-flex; align-items: center; gap: calc(3 * var(--u)); margin: 0 calc(5 * var(--u)) calc(2 * var(--u)) 0; padding: 1px calc(3 * var(--u)); border-radius: 3px; user-select: none; }
+    #fh-stages li span.p[data-ose-group] { cursor: grab; } #fh-stages li span.p[data-ose-group]:active { cursor: grabbing; }
+    #fh-stages li span.p i { width: calc(16 * var(--u)); height: calc(16 * var(--u)); background: #cfd6e6; -webkit-mask: var(--ico) center / contain no-repeat; mask: var(--ico) center / contain no-repeat; }
+    #fh-stages li .pc { margin-left: 3px; color: #ffd25a; font-size: calc(10 * var(--u)); }
+    #fh-stages li.sg { height: 2px; margin: 0; padding: 0; border: 0; background: transparent; transition: height .1s; }
+    body.stage-dragging #fh-stages li.sg { height: calc(12 * var(--u)); border: 1px dashed #3b63a8; border-radius: 3px; background: #0b1020; }
+    body.stage-dragging #fh-stages li.sg:hover { background: #1f3d6b; border-color: #8cc4ff; }
+    body.stage-dragging #fh-stages li[data-ose-stage]:hover { border-color: #8cc4ff; background: #0f1a30; }
     #fh-speed-mode { cursor: pointer; text-decoration: underline dotted; pointer-events: auto; }
     #fh-throttle-pct { position: absolute; bottom: calc(4 * var(--u)); left: 0; right: 0; text-align: center; font-size: calc(9 * var(--u)); color: #fff; }
     .fh-orbit b { min-width: calc(70 * var(--u)) !important; font-size: calc(15 * var(--u)) !important; }

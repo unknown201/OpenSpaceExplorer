@@ -3297,6 +3297,100 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         list.add_event_listener_with_callback("mouseup", up.as_ref().unchecked_ref())?;
         up.forget();
     }
+    // In flight the stage stack takes the same drags as the editor's, for stages that have not fired: a part
+    // group onto another card, or a group or whole stage into a gap for a stage of its own (`SetStages`).
+    if let Some(list) = doc.get_element_by_id("fh-stages") {
+        let a = app.clone();
+        let down = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            if ev.button() != 0 {
+                return;
+            }
+            let t = ev.target().and_then(|t| t.dyn_into::<Element>().ok());
+            let group: Option<Vec<usize>> = t
+                .as_ref()
+                .and_then(|e| e.closest("[data-ose-group]").ok().flatten())
+                .and_then(|e| e.get_attribute("data-ose-group"))
+                .map(|v| v.split(',').filter_map(|x| x.parse().ok()).collect());
+            let head = t
+                .as_ref()
+                .and_then(|e| e.closest("[data-ose-stagehead]").ok().flatten())
+                .and_then(|e| e.get_attribute("data-ose-stagehead"))
+                .and_then(|v| v.parse::<usize>().ok());
+            let drag = match (group, head) {
+                (Some(g), _) if !g.is_empty() => Some(StageDrag::Parts(g)),
+                (_, Some(n)) => Some(StageDrag::Stage(n)),
+                _ => None,
+            };
+            if let Some(d) = drag {
+                ev.prevent_default();
+                let app = a.borrow();
+                if let Some(b) = app.doc.body() {
+                    b.class_list().add_1("stage-dragging").ok();
+                }
+                drop(app);
+                a.borrow_mut().vab_stage_drag = Some(d);
+            }
+        });
+        list.add_event_listener_with_callback("mousedown", down.as_ref().unchecked_ref())?;
+        down.forget();
+        let a = app.clone();
+        let up = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let mut app = a.borrow_mut();
+            if let Some(b) = app.doc.body() {
+                b.class_list().remove_1("stage-dragging").ok();
+            }
+            let Some(drag) = app.vab_stage_drag.take() else {
+                return;
+            };
+            let (Some(vessel), Some(stages)) = (app.flying, app.flight_stages_now()) else {
+                return;
+            };
+            let t = ev.target().and_then(|t| t.dyn_into::<Element>().ok());
+            let attr = |sel: &str, name: &str| {
+                t.as_ref()
+                    .and_then(|e| e.closest(sel).ok().flatten())
+                    .and_then(|e| e.get_attribute(name))
+                    .and_then(|v| v.parse::<usize>().ok())
+            };
+            let gap = attr("[data-ose-gap]", "data-ose-gap");
+            let stage = attr("[data-ose-stage]", "data-ose-stage");
+            let parts = match &drag {
+                StageDrag::Parts(p) => p.clone(),
+                StageDrag::Stage(n) => stages.get(*n).cloned().unwrap_or_default(),
+            };
+            let next = match (gap, stage) {
+                (Some(g), _) => hud::stages_inserted_at(&stages, &parts, g),
+                (None, Some(s)) => hud::stages_moved_to(&stages, &parts, s),
+                _ => return,
+            };
+            if next == stages {
+                return;
+            }
+            // The server counts parts of the craft as it flies now, not as launched.
+            let Some(now) = next
+                .iter()
+                .map(|l| {
+                    l.iter()
+                        .map(|&i| app.flight_cur_part(i).map(|c| c as u16))
+                        .collect::<Option<Vec<u16>>>()
+                })
+                .collect::<Option<Vec<Vec<u16>>>>()
+            else {
+                return;
+            };
+            if let Some(ws) = &app.ws {
+                send(
+                    ws,
+                    &ClientMessage::SetStages {
+                        vessel,
+                        stages: now,
+                    },
+                );
+            }
+        });
+        list.add_event_listener_with_callback("mouseup", up.as_ref().unchecked_ref())?;
+        up.forget();
+    }
     // The pointer over a stage card lights its parts in the hall (the original's stage highlight).
     if let Some(list) = doc.get_element_by_id("vab-stages") {
         let a = app.clone();
@@ -7935,74 +8029,25 @@ impl App {
             );
         }
         if let Some(list) = self.doc.get_element_by_id("vab-stages") {
-            // One card per stage, the last to fire on top and the first (Space) at the bottom, as the
-            // original's staging stack. The highest stage index fires first (ose_data::staging), so the cards
-            // run in index order and count up from the bottom.
-            let mut html = String::new();
-            let count = self.editor.craft.stages.len();
-            for (n, stage) in self.editor.craft.stages.iter().enumerate() {
-                // The same part more than once in a stage is one icon with a count, as the original's stack
-                // groups them; dragging it moves the whole group.
-                let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
-                for &i in stage {
-                    let Some(p) = self.editor.craft.parts.get(i) else {
-                        continue;
-                    };
-                    match groups.iter_mut().find(|(id, _)| *id == p.part_id) {
-                        Some((_, v)) => v.push(i),
-                        None => groups.push((p.part_id.clone(), vec![i])),
-                    }
-                }
-                let parts: Vec<String> = groups
-                    .iter()
-                    .map(|(id, members)| {
-                        let spec = self.catalog.get(id);
-                        let icon = match spec {
-                            Some(s) if s.has_engine => "Staging-Icon-Thruster",
-                            Some(s) if s.is_decoupler => "Staging-Icon-Inline",
-                            Some(s) if s.stage_type.contains("Parachute") => "Staging-ICO-Chute-Stowed",
-                            _ => "Staging-ICO-Structure01",
-                        };
-                        let list: Vec<String> = members.iter().map(|i| i.to_string()).collect();
-                        format!(
-                            "<span class=\"p{sel}\" data-ose-index=\"{first}\" data-ose-group=\"{list}\" title=\"click to select, drag to another stage or between stages\"><i style=\"--ico:url(assets/ui/hud/{icon}.png)\"></i>{name}{count}</span>",
-                            sel = if self.editor.selected.is_some_and(|s| members.contains(&s)) {
-                                " sel"
-                            } else {
-                                ""
-                            },
-                            first = members[0],
-                            list = list.join(","),
-                            name = spec
-                                .map(|s| esc(s.display_title()))
-                                .unwrap_or_else(|| esc(id)),
-                            count = if members.len() > 1 {
-                                format!("<b class=\"pc\">\u{d7}{}</b>", members.len())
-                            } else {
-                                String::new()
-                            },
-                        )
-                    })
-                    .collect();
-                // The server's readout for this stage: delta-v, TWR at its start (Kerbin's sea level, or in
-                // vacuum on the surface the delta-v tool names), burn time.
-                // The delta-v tool's situation: a body's surface (its air pressure) or Kerbin's vacuum.
-                let (body_id, vacuum) = match self.vab_twr_body.as_deref() {
-                    None => ("Kerbin", false),
-                    Some("Kerbin@vacuum") => ("Kerbin", true),
-                    Some(b) => (b, false),
-                };
-                let surface_g = self.scene.as_ref().and_then(|s| {
-                    let body = s.bodies.iter().find(|x| x.id == body_id)?;
-                    Some(body.mu / (body.radius_m * body.radius_m))
-                });
-                let p_atm = if vacuum {
-                    0.0
-                } else {
-                    vab::surface_pressure_atm(body_id)
-                };
-                let stats = self
-                    .vab_stages_readout
+            // The delta-v tool's situation: a body's surface (its air pressure) or Kerbin's vacuum.
+            let (body_id, vacuum) = match self.vab_twr_body.as_deref() {
+                None => ("Kerbin", false),
+                Some("Kerbin@vacuum") => ("Kerbin", true),
+                Some(b) => (b, false),
+            };
+            let surface_g = self.scene.as_ref().and_then(|s| {
+                let body = s.bodies.iter().find(|x| x.id == body_id)?;
+                Some(body.mu / (body.radius_m * body.radius_m))
+            });
+            let p_atm = if vacuum {
+                0.0
+            } else {
+                vab::surface_pressure_atm(body_id)
+            };
+            // The server's readout for each stage: delta-v, TWR at its start (Kerbin's sea level, or in
+            // vacuum on the surface the delta-v tool names), burn time.
+            let stats = |n: usize| {
+                self.vab_stages_readout
                     .iter()
                     .find(|r| r.stage_id as usize == n)
                     .map(|r| {
@@ -8022,22 +8067,20 @@ impl App {
                             dv.max(0.0), twr.max(0.0), r.burn_time_s.max(0.0)
                         )
                     })
-                    .unwrap_or_default();
-                // A gap above each card: drop icons there for a new stage of their own, or a stage to move it.
-                html.push_str(&format!(
-                    "<li class=\"sg\" data-ose-gap=\"{n}\" title=\"drop here for a new stage\"></li>"
-                ));
-                html.push_str(&format!(
-                    "<li data-ose-stage=\"{n}\"><span class=\"st\" data-ose-stagehead=\"{n}\" title=\"drag to move the whole stage\">STAGE {}</span>{stats}{}</li>",
-                    count - n,
-                    parts.join("")
-                ));
-            }
-            if count > 0 {
-                html.push_str(&format!(
-                    "<li class=\"sg\" data-ose-gap=\"{count}\" title=\"drop here for a new first stage\"></li>"
-                ));
-            }
+                    .unwrap_or_default()
+            };
+            let mut html = hud::stage_cards_html(
+                &self.editor.craft,
+                &self.catalog,
+                &hud::StageCards {
+                    selected: self.editor.selected,
+                    shown: &|_| true,
+                    class: &|_| "",
+                    stats: &stats,
+                    icon: &|_, spec| hud::stage_icon(spec),
+                    editable: &|_| true,
+                },
+            );
             if html.is_empty() {
                 html = "<li class=\"empty\">No stages yet: engines, decouplers and parachutes get one each.</li>".into();
             }
