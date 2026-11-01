@@ -7,11 +7,8 @@ test("the game menu overlays the flight and a revert closes it", async ({ page, 
   await page.goto(baseURL!);
   await page.locator('[data-ose="player-name"]').fill("overlay pilot");
   await page.locator('[data-ose="play"]').click();
-  await page.locator('[data-ose="session-join"]').first().waitFor();
-  if (!(await page.locator("#create-name").isVisible())) await page.locator("#create-details > summary").click();
-  await page.selectOption("#create-mode", "Sandbox");
-  await page.fill("#create-name", `overlay ${test.info().project.name}`);
-  await page.locator('[data-ose="create"]').click();
+  // The live campaign, as the tests after this one join it: creating one here would change theirs.
+  await page.locator('[data-ose="session-join"]').first().click();
   await page.locator('[data-ose="ksc-vab"]').click();
   await page.locator('[data-ose="vab-clear"]').click();
   for (const part of ["Tin Can", "Mk16-XL"]) {
