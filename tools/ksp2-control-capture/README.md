@@ -261,3 +261,40 @@ and also fails on any capture CSV that is not registered.
 `tools/tests/test_control_traces.py` holds the comparator and evidence-hash tests.
 `.gitattributes` keeps capture bytes unconverted, so the manifest hashes hold on
 every platform.
+
+## Joint flex and render rate (2026-11-01)
+
+Recorder 0.5.0 adds `.bodies.csv`: every part's own rigidbody after each step. It
+holds angular velocity, offset from the vessel's centre of mass, mass, angular and
+linear drag, maximum angular velocity and sleep state. A `trigger.txt` file holding
+`F8`–`F11` in `BepInEx/ose-control-traces` starts that fixture. Synthetic key
+events do not reach Unity's input over remote desktop.
+
+Five captures were taken in one session at about 32 frames per second
+(1.56 physics ticks per frame):
+- three F9 wheel pulses, `jumping-flea-32fps-1..3`;
+- two F11 SAS holds from rest, `jumping-flea-sas-32fps-1..2`.
+
+- **No joint flex.** Through the whole pulse sequence, each part's angular velocity
+  stays within 0.0008 rad/s of the vessel's mass-weighted mean (mean 0.00007 rad/s).
+  Angular drag is 0 on every part. A multi-body flex model would not change these
+  traces.
+- **KSP2 repeats at 32 fps.** The three F9 runs agree to 0.0011 rad/s in body frame,
+  and each conserves rotational energy while coasting. OSE passes all three, with
+  the comparator unchanged: max 0.149 degrees and 0.0028 rad/s.
+- **The 60 fps captures are the outlier.** `jumping-flea-repeat` and
+  `jumping-flea-sas` were recorded at about 60 frames per second on the local
+  display. That repeat loses rotational energy at 0.7%/s while coasting. Every
+  32 fps capture, including the 10/29 runs, conserves it. The difference follows
+  KSP2's render rate, not joint physics. Those two fixtures stay capped with this
+  reason.
+- **SAS remains open.** OSE replays the two 32 fps SAS runs at 0.92 and 0.76
+  degrees and 0.040 and 0.036 rad/s. Before SAS engages, OSE tracks run 1 within
+  0.001 rad/s. Once SAS engages, the arrest differs by about 0.03 rad/s. The
+  captures record KSP2's SAS commands (`command_pitch/yaw/roll`), so the controller
+  can be compared command by command. KSP2's own two SAS runs differ by 0.07 rad/s
+  before engagement, so these fixtures are capped, not failed.
+
+Cleanup removed all 22 added files and both temporary campaigns. All 87 existing
+save files hash identically. Raw captures, the loader log and the campaigns are
+archived in `.cache/ksp2-capture-20261031b` under the main checkout.

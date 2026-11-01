@@ -113,6 +113,28 @@ class TraceTests(unittest.TestCase):
         manifest=json.loads((root/'jumping-flea-1031-manifest.json').read_text())
         for name,digest in manifest['files'].items():
             self.assertEqual(hashlib.sha256((root/name).read_bytes()).hexdigest(),digest)
+    def test_32fps_captures_show_rigid_joints_and_repeat(self):
+        root=TOOLS/'ksp2-control-capture/fixtures'
+        manifest=json.loads((root/'jumping-flea-32fps-manifest.json').read_text())
+        for name,digest in manifest['files'].items():
+            self.assertEqual(hashlib.sha256((root/name).read_bytes()).hexdigest(),digest)
+        for n in (1,2,3):
+            with (root/f'jumping-flea-32fps-{n}.csv.bodies.csv').open(newline='') as f:
+                rows=[{k:float(v) for k,v in r.items()} for r in csv.DictReader(f)]
+            ticks={}
+            for r in rows:ticks.setdefault(r['t'],[]).append(r)
+            for parts in ticks.values():
+                mass=sum(r['mass_t'] for r in parts)
+                mean=[sum(r[k]*r['mass_t'] for r in parts)/mass for k in ['wx','wy','wz']]
+                # Each part turns with the craft: the joints do not flex measurably.
+                self.assertLess(max(math.dist(mean,[r[k] for k in ['wx','wy','wz']]) for r in parts),0.001)
+                self.assertTrue(all(r['angular_drag']==0 for r in parts))
+        spec=importlib.util.spec_from_file_location('ksp2_repeatability',TOOLS/'ksp2_repeatability.py')
+        repeat=importlib.util.module_from_spec(spec);spec.loader.exec_module(repeat)
+        first,_=repeat.body_rates(root/'jumping-flea-32fps-1.csv')
+        for n in (2,3):
+            other,_=repeat.body_rates(root/f'jumping-flea-32fps-{n}.csv')
+            self.assertLess(max(math.dist(a,b) for a,b in zip(first,other)),0.002)
     def test_unity_reflection_distinguishes_axial_and_polar_vectors(self):
         row=dict(t=2,pitch=1,yaw=-1,roll=0.5,px=1,py=2,pz=3,vx=4,vy=5,vz=6,
                  qx=0.1,qy=0.2,qz=0.3,qw=0.9,wx=7,wy=8,wz=9,

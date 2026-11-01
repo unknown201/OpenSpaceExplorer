@@ -14,12 +14,12 @@ namespace OpenSpaceExplorer.Validation
 {
     // F8 is passive. F9 (wheels), F10 (RCS) and F11 (SAS) explicitly run a temporary orbit/input fixture;
     // never writes a save.
-    [BepInPlugin("org.openspaceexplorer.controlcapture", "OSE Control Capture", "0.4.0")]
+    [BepInPlugin("org.openspaceexplorer.controlcapture", "OSE Control Capture", "0.5.0")]
     [DefaultExecutionOrder(-32000)]
     public sealed class ControlCapture : BaseUnityPlugin
     {
         StreamWriter capture;
-        StreamWriter rcsCapture;
+        StreamWriter rcsCapture, bodyCapture;
         string vesselId;
         double start, last;
         bool pulse, rcsPulse, sasPulse, sasOn; double pulseStart; string pulseVessel;
@@ -35,11 +35,19 @@ namespace OpenSpaceExplorer.Validation
         }
         void Update()
         {
-            if (Input.GetKeyDown(KeyCode.F9) || Input.GetKeyDown(KeyCode.F10) || Input.GetKeyDown(KeyCode.F11)) {
+            // A file named trigger.txt holding F8, F9, F10 or F11 acts as that key (for remote sessions
+            // where synthetic key events do not reach Unity's input). It is removed when read.
+            string fileKey=null;
+            if (Time.frameCount%15==0) {
+                var triggerFile=Path.Combine(Paths.GameRootPath,"BepInEx","ose-control-traces","trigger.txt");
+                if (File.Exists(triggerFile)) { fileKey=File.ReadAllText(triggerFile).Trim(); File.Delete(triggerFile); }
+            }
+            bool f9=Input.GetKeyDown(KeyCode.F9)||fileKey=="F9", f10=Input.GetKeyDown(KeyCode.F10)||fileKey=="F10", f11=Input.GetKeyDown(KeyCode.F11)||fileKey=="F11";
+            if (f9 || f10 || f11) {
                 var game = GameManager.Instance.Game;
                 var vessel = game.ViewController.GetActiveSimVessel();
                 if (vessel == null || !vessel.mainBody.bodyName.Equals("Kerbin")) return;
-                Stop(); rcsPulse=Input.GetKeyDown(KeyCode.F10); sasPulse=Input.GetKeyDown(KeyCode.F11); sasOn=false;
+                Stop(); rcsPulse=f10; sasPulse=f11; sasOn=false;
                 vessel.SetAutopilotEnableDisable(false);
                 if(rcsPulse) {
                     vessel.IsRCSEnabled=true;
@@ -60,7 +68,7 @@ namespace OpenSpaceExplorer.Validation
                 pulseVessel = vessel.GlobalId.ToString();
                 Logger.LogInfo("Orbit/pulse fixture armed: two seconds settling, then "+(rcsPulse?"RCS translation":sasPulse?"wheel pulses and SAS hold":"wheel rotation")+" for 12 seconds.");
             }
-            bool trigger = Input.GetKeyDown(KeyCode.F8);
+            bool trigger = Input.GetKeyDown(KeyCode.F8)||fileKey=="F8";
             if (!trigger) return;
             if (capture != null) { Stop(); return; }
             BeginCapture();
@@ -80,7 +88,9 @@ namespace OpenSpaceExplorer.Validation
                 capture.WriteLine("t,pitch,yaw,roll,throttle,qx,qy,qz,qw,wx,wy,wz,mass_t,px,py,pz,vx,vy,vz,ix,iy,iz,command_pitch,command_yaw,command_roll,translate_x,translate_y,translate_z,sas,ut,dt,unity_frame,fixed_count,end_qx,end_qy,end_qz,end_qw,end_wx,end_wy,end_wz,physics_mass_t,cached_wx,cached_wy,cached_wz,torque_x,torque_y,torque_z,wheel_input,pending_power,accepted_power,rcs,crew_t,end_px,end_py,end_pz,end_vx,end_vy,end_vz,end_mass_t,rcs_force_x,rcs_force_y,rcs_force_z,rcs_torque_x,rcs_torque_y,rcs_torque_z");
                 rcsCapture=new StreamWriter(path+".rcs.csv",false);rcsCapture.AutoFlush=true;
                 rcsCapture.WriteLine("t,part,nozzle,fx,fy,fz,px,py,pz,pending,requirement,received,delivery,remaining");
-                File.WriteAllText(path+".metadata.txt","source=running_KSP2\nrecorder_version=0.4.0\nfixture="+(pulse?(rcsPulse?"orbit_rcs_pulse":sasPulse?"orbit_sas_hold":"orbit_input_pulse"):"passive")+"\nphase=pre_physics_live_rigidbody\ninputs=interval_applied\nend_phase=wait_for_fixed_update_live_rigidbody\nframe=main_body_motion_frame\nhandedness=Unity\nvessel="+vesselId+"\nassembly="+typeof(VesselComponent).Assembly.GetName().Version+"\n");
+                bodyCapture=new StreamWriter(path+".bodies.csv",false);bodyCapture.AutoFlush=true;
+                bodyCapture.WriteLine("t,part,wx,wy,wz,rx,ry,rz,mass_t,angular_drag,drag,max_angular_velocity,sleeping");
+                File.WriteAllText(path+".metadata.txt","source=running_KSP2\nrecorder_version=0.5.0\nfixture="+(pulse?(rcsPulse?"orbit_rcs_pulse":sasPulse?"orbit_sas_hold":"orbit_input_pulse"):"passive")+"\nphase=pre_physics_live_rigidbody\ninputs=interval_applied\nend_phase=wait_for_fixed_update_live_rigidbody\nframe=main_body_motion_frame\nhandedness=Unity\nvessel="+vesselId+"\nassembly="+typeof(VesselComponent).Assembly.GetName().Version+"\n");
                 using(var parts=new StreamWriter(path+".parts.csv",false)) {
                     parts.WriteLine("part_id,guid,px,py,pz,qx,qy,qz,qw,com_x,com_y,com_z,dry_t,resource_t,crew_t,physics_t,ix,iy,iz,iqx,iqy,iqz,iqw");
                     var craftFrame=vessel.SimulationObject.transform.bodyFrame;
@@ -227,6 +237,34 @@ namespace OpenSpaceExplorer.Validation
                 }
             }
         }
+        // Each part's own rigidbody after the step: angular velocity and offset from the vessel's centre
+        // of mass in the main-body frame, plus the damping PhysX applies to it. Measures joint flex directly.
+        void WriteBodies(VesselComponent vessel,double time)
+        {
+            var game=GameManager.Instance.Game;
+            var physics=game.UniverseView.PhysicsSpace;
+            var frame=game.UniverseModel.inertialReferenceFrame.bodyMotionFrame;
+            Vector3d centre=Vector3d.zero;double total=0;
+            foreach(var part in vessel.SimulationObject.PartOwner.Parts) {
+                if(!game.SpaceSimulation.TryGetViewObject(part.SimulationObject,out var view))continue;
+                var body=view.Rigidbody?.activeRigidBody;
+                if(body==null || body.isKinematic)continue;
+                centre+=(Vector3d)body.worldCenterOfMass*body.mass;total+=body.mass;
+            }
+            if(total<=0)return;
+            centre/=total;
+            int index=0;
+            foreach(var part in vessel.SimulationObject.PartOwner.Parts) {
+                int partIndex=index++;
+                if(!game.SpaceSimulation.TryGetViewObject(part.SimulationObject,out var view))continue;
+                var body=view.Rigidbody?.activeRigidBody;
+                if(body==null || body.isKinematic)continue;
+                var w=Vector.Reframed(frame.ToRelativeAngularVelocity(physics.PhysicsToAngularVelocity(body.angularVelocity)),frame.localFrame).vector;
+                var r=Vector.Reframed(physics.PhysicsToVector((Vector3d)body.worldCenterOfMass-centre),frame.localFrame).vector;
+                double[] values={time,partIndex,w.x,w.y,w.z,r.x,r.y,r.z,body.mass,body.angularDrag,body.drag,body.maxAngularVelocity,body.IsSleeping()?1:0};
+                bodyCapture.WriteLine(string.Join(",",Array.ConvertAll(values,v=>v.ToString("R",CultureInfo.InvariantCulture))));
+            }
+        }
         IEnumerator AfterPhysics()
         {
             while(true) {
@@ -255,10 +293,11 @@ namespace OpenSpaceExplorer.Validation
                     end.rcsForce.x,end.rcsForce.y,end.rcsForce.z,end.rcsTorque.x,end.rcsTorque.y,end.rcsTorque.z};
                 capture.WriteLine(string.Join(",",Array.ConvertAll(values,v=>v.ToString("R",CultureInfo.InvariantCulture))));
                 WriteRcs(vessel,pendingUt-start);
+                WriteBodies(vessel,pendingUt-start);
                 } catch(Exception error){Logger.LogError(error);Stop();}
             }
         }
-        void Stop(){pending=null;if(pulse){pulse=false;FlightInputHandler.OverrideInputPitch(0);FlightInputHandler.OverrideInputYaw(0);FlightInputHandler.OverrideInputRoll(0);if(rcsPulse){FlightInputHandler.OverrideInputTranslateX(0);FlightInputHandler.OverrideInputTranslateY(0);FlightInputHandler.OverrideInputTranslateZ(0);}}rcsPulse=false;sasPulse=false;if(rcsCapture!=null){rcsCapture.Dispose();rcsCapture=null;}if(capture==null)return;capture.Dispose();capture=null;Logger.LogInfo("Control capture stopped.");}
+        void Stop(){pending=null;if(pulse){pulse=false;FlightInputHandler.OverrideInputPitch(0);FlightInputHandler.OverrideInputYaw(0);FlightInputHandler.OverrideInputRoll(0);if(rcsPulse){FlightInputHandler.OverrideInputTranslateX(0);FlightInputHandler.OverrideInputTranslateY(0);FlightInputHandler.OverrideInputTranslateZ(0);}}rcsPulse=false;sasPulse=false;if(rcsCapture!=null){rcsCapture.Dispose();rcsCapture=null;}if(bodyCapture!=null){bodyCapture.Dispose();bodyCapture=null;}if(capture==null)return;capture.Dispose();capture=null;Logger.LogInfo("Control capture stopped.");}
         void OnDestroy(){Stop();}
     }
 }

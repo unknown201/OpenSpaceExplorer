@@ -1,0 +1,43 @@
+{
+  "source": "KSP2 executable live-rigidbody interval captures (recorder 0.5.0, per-part rigidbodies)",
+  "game_version": "0.2.2.0.32913",
+  "capture_date_utc": "2026-11-01",
+  "render_rate": "about 32 frames per second (1.56 physics ticks per frame)",
+  "files": {
+    "jumping-flea-32fps-1.csv": "e74f58361ccd85cb919b64d5ce06d12b8131ab7b4d85a5ade78b032089d87a0c",
+    "jumping-flea-32fps-1.csv.surfaces.csv": "67a6cf933e6c0548077d833f66b1505cd3399c789829e1eb8b5f51bb6c91a8dd",
+    "jumping-flea-32fps-1.csv.rcs.csv": "4e75408f52a64bfcebb06ed877c9750d4e0cf7e210e25867fd475c4fb6ebbede",
+    "jumping-flea-32fps-1.csv.bodies.csv": "0c15f03d49ea0dc35246eb572dcc7aad1e1fb707428d20f42a681d1483d39a94",
+    "jumping-flea-32fps-1.csv.metadata.txt": "f70e1d8d93da4ec0bbefb7c3daf66a2a882745a8890d69310bb729cf3ec3a986",
+    "jumping-flea-32fps-1.csv.parts.csv": "b2e478db6f60e719bac6ed16c9b6ff143115e35b172f08d156a9181ee81513dc",
+    "jumping-flea-32fps-2.csv": "52ed4c3c33fb7626f07d7007b1b0e14cc822011213bec4048243fcf8c8eff066",
+    "jumping-flea-32fps-2.csv.surfaces.csv": "42b14e8fb7d78370899190a1c196e641c23294ab520410b12341c014811b2f0e",
+    "jumping-flea-32fps-2.csv.rcs.csv": "4e75408f52a64bfcebb06ed877c9750d4e0cf7e210e25867fd475c4fb6ebbede",
+    "jumping-flea-32fps-2.csv.bodies.csv": "3ae004bed1adecd0c9ade3f6c128e858226ee568c5aa16201bfb74833fdc19e2",
+    "jumping-flea-32fps-2.csv.metadata.txt": "f70e1d8d93da4ec0bbefb7c3daf66a2a882745a8890d69310bb729cf3ec3a986",
+    "jumping-flea-32fps-2.csv.parts.csv": "743d97740b3da25d3cf85f48379d4822913075cae3ec92cccf9c2d48dc75141c",
+    "jumping-flea-32fps-3.csv": "38b8044a5172f56dc00635cc376ad19108120920aa17776c9cdde8d2ff2f7e43",
+    "jumping-flea-32fps-3.csv.surfaces.csv": "42b14e8fb7d78370899190a1c196e641c23294ab520410b12341c014811b2f0e",
+    "jumping-flea-32fps-3.csv.rcs.csv": "4e75408f52a64bfcebb06ed877c9750d4e0cf7e210e25867fd475c4fb6ebbede",
+    "jumping-flea-32fps-3.csv.bodies.csv": "f0ec57a263ad79f0b040fc421b85879b711aacc74ce4d70f0cc0d737dce45834",
+    "jumping-flea-32fps-3.csv.metadata.txt": "f70e1d8d93da4ec0bbefb7c3daf66a2a882745a8890d69310bb729cf3ec3a986",
+    "jumping-flea-32fps-3.csv.parts.csv": "4f07310ec6aa9263c6a8badd85fef44269d5580457e59fa7dc14b801c1b50629",
+    "jumping-flea-sas-32fps-1.csv": "ddb07a44802b38ddf97796a7571cef7256e8a0be13bc3c58746c89a5adb75cb2",
+    "jumping-flea-sas-32fps-1.csv.surfaces.csv": "da1c8a8d2173e109422b593207023fd32af9d94bf8b406967c02ad9438b96f3b",
+    "jumping-flea-sas-32fps-1.csv.rcs.csv": "4e75408f52a64bfcebb06ed877c9750d4e0cf7e210e25867fd475c4fb6ebbede",
+    "jumping-flea-sas-32fps-1.csv.bodies.csv": "6e47b19b1d567f593d0c270c2a914f672614f50a3cd71835218897c9c691be37",
+    "jumping-flea-sas-32fps-1.csv.metadata.txt": "030f9b03d3fe1fea31714cca5298b724058ada941eafe75cb69f990137e1d14c",
+    "jumping-flea-sas-32fps-1.csv.parts.csv": "9ff24e20dce8bf9f8f0924f20c8a36bbfc9cd7bf8624b212278997be583d8471",
+    "jumping-flea-sas-32fps-2.csv": "4daa8bdd768981ed149fc3c2c0bb8a53eb8194d32bec62902a9c8329a5747680",
+    "jumping-flea-sas-32fps-2.csv.surfaces.csv": "da1c8a8d2173e109422b593207023fd32af9d94bf8b406967c02ad9438b96f3b",
+    "jumping-flea-sas-32fps-2.csv.rcs.csv": "4e75408f52a64bfcebb06ed877c9750d4e0cf7e210e25867fd475c4fb6ebbede",
+    "jumping-flea-sas-32fps-2.csv.bodies.csv": "0f3da4bbdf2da31ed263944f9e11d2f6cf2274f0800108a464ab1b924fb6a959",
+    "jumping-flea-sas-32fps-2.csv.metadata.txt": "030f9b03d3fe1fea31714cca5298b724058ada941eafe75cb69f990137e1d14c",
+    "jumping-flea-sas-32fps-2.csv.parts.csv": "fc13c6a80475840024a10047bf5c0b43680eca88615f042611fc0c0f8888d122"
+  },
+  "cleanup": {
+    "loader_removed": true,
+    "temporary_campaigns_removed": 2,
+    "existing_save_files_unchanged": 87
+  }
+}

@@ -1,23 +1,75 @@
 {
   "comment": "Every KSP2 capture replayed by tools/tests/test_ksp2_replay.py. 'pass' fixtures must meet the comparator thresholds. 'capped' fixtures cannot yet, for the stated reason; their recorded errors are a regression ceiling, not a parity claim.",
   "fixtures": [
-    {"capture": "jumping-flea-interval.csv", "craft": "Jumping Flea", "expect": "pass"},
-    {"capture": "gumball-rcs.csv", "craft": "gumball-rcs.craft.json", "expect": "pass"},
-    {"capture": "gumball-rcs-repeat.csv", "craft": "gumball-rcs-repeat.craft.json", "expect": "pass"},
     {
-      "capture": "jumping-flea-repeat.csv", "craft": "Jumping Flea", "expect": "capped",
-      "reason": "KSP2's two runs of this fixture differ by 0.066 rad/s (jumping-flea-repeatability.json): joint flex between part rigidbodies, which a single rigid body does not reproduce.",
-      "max_angle_deg": 3.6, "max_omega_rad_s": 0.095
+      "capture": "jumping-flea-interval.csv",
+      "craft": "Jumping Flea",
+      "expect": "pass"
     },
     {
-      "capture": "jumping-flea-sas.csv", "craft": "Jumping Flea", "expect": "capped",
-      "reason": "Starts from the repeat's 2.9 rad/s tumble, so the same run-to-run spread is integrated before SAS engages; SAS arrest and hold match qualitatively.",
-      "max_angle_deg": 11.0, "max_omega_rad_s": 0.15
+      "capture": "gumball-rcs.csv",
+      "craft": "gumball-rcs.craft.json",
+      "expect": "pass"
     },
     {
-      "capture": "jumping-flea.csv", "craft": "Jumping Flea", "expect": "capped",
+      "capture": "gumball-rcs-repeat.csv",
+      "craft": "gumball-rcs-repeat.craft.json",
+      "expect": "pass"
+    },
+    {
+      "capture": "jumping-flea-repeat.csv",
+      "craft": "Jumping Flea",
+      "expect": "capped",
+      "reason": "Recorded at about 60 frames per second. At that render rate KSP2 loses rotational energy while coasting (0.7%/s at 1.4 rad/s, angular drag 0); every capture at about 32 frames per second conserves it, and three of them repeat to 0.0011 rad/s and pass. Per-part rigidbodies show no joint flex (mean 0.00007 rad/s spread).",
+      "max_angle_deg": 3.6,
+      "max_omega_rad_s": 0.095
+    },
+    {
+      "capture": "jumping-flea-sas.csv",
+      "craft": "Jumping Flea",
+      "expect": "capped",
+      "reason": "Recorded at about 60 frames per second straight after jumping-flea-repeat, so it starts from that run's 2.9 rad/s tumble with the same render-rate damping.",
+      "max_angle_deg": 11.0,
+      "max_omega_rad_s": 0.15
+    },
+    {
+      "capture": "jumping-flea.csv",
+      "craft": "Jumping Flea",
+      "expect": "capped",
       "reason": "Recorder 0.1 sampled after Update rather than at live physics intervals; superseded by jumping-flea-interval.",
-      "max_angle_deg": 0.05, "max_omega_rad_s": 0.052
+      "max_angle_deg": 0.05,
+      "max_omega_rad_s": 0.052
+    },
+    {
+      "capture": "jumping-flea-32fps-1.csv",
+      "craft": "Jumping Flea",
+      "expect": "pass"
+    },
+    {
+      "capture": "jumping-flea-32fps-2.csv",
+      "craft": "Jumping Flea",
+      "expect": "pass"
+    },
+    {
+      "capture": "jumping-flea-32fps-3.csv",
+      "craft": "Jumping Flea",
+      "expect": "pass"
+    },
+    {
+      "capture": "jumping-flea-sas-32fps-1.csv",
+      "craft": "Jumping Flea",
+      "expect": "capped",
+      "reason": "OSE's Stability Assist arrests the pulse 0.03 rad/s differently from KSP2's once it engages (the capture records KSP2's SAS commands for a command-level comparison). KSP2's two SAS runs already differ by 0.07 rad/s before SAS engages.",
+      "max_angle_deg": 1.0,
+      "max_omega_rad_s": 0.042
+    },
+    {
+      "capture": "jumping-flea-sas-32fps-2.csv",
+      "craft": "Jumping Flea",
+      "expect": "capped",
+      "reason": "As jumping-flea-sas-32fps-1.",
+      "max_angle_deg": 0.85,
+      "max_omega_rad_s": 0.039
     }
   ]
 }
