@@ -890,6 +890,11 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
         await restore();
         return failed(`EVA did not hand the view to a Kerbal (${why})`);
       }
+      // Like the original, the Kerbal steps out holding the hatch's ladder; Space lets go and they drop to
+      // the pad.
+      await sleep(500);
+      await page.keyboard.press("Space");
+      await sleep(3000);
       // Walk: hold W and the Kerbal moves along the ground (data-ose-latlon, degrees; Kerbin's radius turns
       // them into metres).
       const latlon = async () => ((await hud.first().getAttribute("data-ose-latlon")) ?? "0,0").split(",").map(Number);
