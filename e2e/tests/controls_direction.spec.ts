@@ -135,4 +135,22 @@ test("a rocket leaving the pad turns east with D", async ({ page, baseURL }) => 
   }
   expect(heading, `D tips a rising rocket east (heading ${heading})`).toBeGreaterThan(45);
   expect(heading).toBeLessThan(135);
+  // Back on the pad after a revert the hold is the restored one: the last flight's (turned east by D, then
+  // held there) once steered the new launch away whatever the keys said.
+  await page.keyboard.down("a");
+  await page.waitForTimeout(1500);
+  await page.keyboard.up("a");
+  await page.keyboard.press("Escape");
+  await page.locator('#screen-paused [data-save-action="RevertToLaunch"]').click();
+  await expect(page.locator("#menu")).toHaveClass(/hidden/);
+  await page.waitForTimeout(1000);
+  await page.keyboard.press("z");
+  await page.keyboard.press("Space");
+  await page.waitForTimeout(3000);
+  await page.keyboard.down("d");
+  await page.waitForTimeout(1200);
+  const again = parseFloat((await page.locator("#fh-heading").textContent()) ?? "");
+  await page.keyboard.up("d");
+  expect(again, `after a revert D still tips it east (heading ${again})`).toBeGreaterThan(45);
+  expect(again).toBeLessThan(135);
 });

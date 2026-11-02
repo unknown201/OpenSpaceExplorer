@@ -6130,6 +6130,14 @@ impl App {
                         if let Some(scene) = &mut self.scene {
                             scene.reset_attitudes();
                         }
+                        // The restored craft holds what it held then (on the pad, upright): drop this
+                        // flight's hold and throttle and take the restored ones, or the next controls sent
+                        // would steer the craft back toward where the flight before pointed.
+                        self.attitude = ose_net::AttitudeMode::Up;
+                        self.throttle = 0.0;
+                        self.adopt_hold_after_ms = None;
+                        self.adopt_attitude = true;
+                        self.adopt_after_ms = now_ms() + 300.0;
                     }
                     hud::push(&self.doc, &format!("{what} done"), "triumph");
                     if let (ose_net::SaveAction::RevertToEditor, Some(c)) = (action, craft) {
