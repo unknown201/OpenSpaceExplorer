@@ -721,6 +721,18 @@ pub fn ground_normal(
     (up - east * slope(east) - north * slope(north)).normalized()
 }
 
+/// At rest on the ground or the sea: not crashed, not driving or pushed by RCS, and its engines off or dry (a
+/// craft that landed with its throttle left up and its tanks empty; rotation keys left held do not move it). Such a craft does not hold time warp to physics
+/// speeds; above them it turns with its body, as the original packs it.
+pub fn resting(p: &Powered) -> bool {
+    (p.landed || p.splashed)
+        && !p.crashed
+        && (p.throttle <= 0.0 || p.propellant_t <= 1e-6)
+        && p.drive.throttle == 0.0
+        && p.drive.speed_mps.abs() < 0.05
+        && p.rcs.translate.length_squared() == 0.0
+}
+
 /// Whether a grounded craft can safely use the long-step co-rotation optimization.
 pub fn resting_on_ground(
     p: &Powered,

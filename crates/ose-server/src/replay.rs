@@ -359,6 +359,11 @@ pub struct Report {
     pub divergences: Vec<Divergence>,
     pub expectations_failed: Vec<String>,
     pub final_vessels: Vec<VesselState>,
+    /// The time warp in effect and universal time at the end.
+    pub final_warp: u32,
+    pub final_ut: f64,
+    /// Vessels holding time warp to physics speeds at the end (by id).
+    pub warp_held_by: Vec<u64>,
     /// Replies the server sent that refused something (a reason), for reading the run.
     pub refusals: Vec<String>,
     pub ok: bool,
@@ -542,6 +547,17 @@ pub fn run(s: &Shared, rep: &ReplayFile, home_radius_m: f64) -> Report {
     report.divergences.truncate(50);
     report.steps = s.steps.load(Ordering::SeqCst) - rep.start_step;
     report.final_vessels = vessel_states(s);
+    {
+        let mut u = s.universe.lock().expect("sim lock");
+        report.final_warp = u.warp();
+        report.final_ut = u.ut();
+        let list = s.vessels.lock().expect("vessels lock");
+        report.warp_held_by = u
+            .warp_holders()
+            .into_iter()
+            .filter_map(|e| list.iter().find(|v| v.0 == e).map(|v| v.1))
+            .collect();
+    }
     report.expectations_failed = rep
         .expect
         .iter()

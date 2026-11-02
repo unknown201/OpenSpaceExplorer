@@ -966,10 +966,21 @@ impl Universe {
 
     /// Whether any vessel is flying under power (time warp is then capped at physics warp). Vessels standing
     /// on the ground with the throttle at zero, and wrecks, do not count.
+    /// The vessels holding time warp to physics speeds now (see `has_powered`).
+    pub fn warp_holders(&mut self) -> Vec<Entity> {
+        let mut q = self.world.query::<(Entity, &flight::Powered)>();
+        q.iter(&self.world)
+            .filter(|(_, p)| !p.crashed && !flight::resting(p))
+            .map(|(e, _)| e)
+            .collect()
+    }
+
+    /// A vessel in physics that holds time warp to physics speeds: not a wreck, and not at rest on the
+    /// ground or the sea (`flight::resting`).
     pub fn has_powered(&mut self) -> bool {
         let mut q = self.world.query::<&flight::Powered>();
         q.iter(&self.world)
-            .any(|p| !p.crashed && (!p.landed || p.throttle > 0.0))
+            .any(|p| !p.crashed && !flight::resting(p))
     }
 
     /// Give a vessel a part structure so flight loads its joints and pieces can break off.
@@ -1703,6 +1714,30 @@ impl Universe {
                 .get::<flight::Powered>(e)
                 .expect("powered")
                 .clone();
+            // Above physics warp a craft at rest on the ground or the sea (or a wreck) turns with its body
+            // and nothing else (integrating it tick by tick at x100000 would never keep up, and its contact
+            // or buoyancy at one long step would not hold).
+            if warp > flight::MAX_PHYSICS_WARP as u64 && (flight::resting(&p) || p.crashed) {
+                let omega = if body.rotation_period_s > 0.0 {
+                    std::f64::consts::TAU / body.rotation_period_s
+                } else {
+                    0.0
+                };
+                let (s, c) = (omega * ticks.max(1) as f64 * dt).sin_cos();
+                let turn = |v: DVec3| DVec3::new(v.x * c - v.y * s, v.x * s + v.y * c, v.z);
+                p.r = turn(p.r);
+                p.v = turn(p.v);
+                p.facing = turn(p.facing);
+                if p.own_top.length_squared() > 0.0 {
+                    p.own_top = turn(p.own_top);
+                }
+                let orbit = Orbit::from_state_vectors(body.mu, p.r, p.v, ut);
+                self.world
+                    .entity_mut(e)
+                    .insert(bodies::OnRails(orbit))
+                    .insert(p);
+                continue;
+            }
             // under power the planned burns are flown by hand: once the next one's time comes, the one
             // before is done
             if self
@@ -2534,6 +2569,57 @@ mod tests {
         assert!(!p.landed && p.v.length() > 100.0, "climbing");
         assert!(u.take_broken_off().is_empty());
         assert_eq!(u.structure(v).unwrap().rigid.groups().len(), 1);
+    }
+
+    #[test]
+    fn craft_resting_on_the_ground_do_not_hold_warp_down() {
+        let (mut u, body, _, _) = k1_on_real_kerbin();
+        // landed with the throttle left up and nothing to burn (no stages: no propellant)
+        let dry = flight::FlightSpec {
+            stages: Vec::new(),
+            drag_area_m2: 1.0,
+            drag_cd: flight::DEFAULT_CD,
+        };
+        let v = u.spawn_powered_on_surface("dry", body, dry, 0.0, 0.0);
+        assert!(u.set_controls(v, 1.0, flight::Attitude::Up));
+        // and a roll key left held when its pilot moved on
+        u.set_rotation(v, 0.0, 0.0, 1.0);
+        for _ in 0..TICKS_PER_SECOND {
+            u.step();
+        }
+        let b = u.world.get::<bodies::Body>(body).unwrap().clone();
+        let before = {
+            let p = u.powered(v).unwrap();
+            (flight::lat_lon(&b, p.r, u.ut()), p.r.length())
+        };
+        u.set_warp(1000);
+        assert_eq!(u.warp(), 1000, "a dry landed craft does not cap warp");
+        for _ in 0..20 {
+            u.step();
+        }
+        assert!(u.ut() > 100.0, "time ran at warp ({})", u.ut());
+        let p = u.powered(v).unwrap();
+        let ((lat, lon), r) = (flight::lat_lon(&b, p.r, u.ut()), p.r.length());
+        assert!(
+            (lat - before.0 .0).abs() < 1e-6 && (lon - before.0 .1).abs() < 1e-6,
+            "stayed put"
+        );
+        assert!(
+            (r - before.1).abs() < 0.01,
+            "on the ground ({r} vs {})",
+            before.1
+        );
+        assert!(p.landed && !p.crashed);
+        // a craft that can thrust still holds warp down
+        let (spec, st) = {
+            let (_, _, spec, st) = k1_on_real_kerbin();
+            (spec, st)
+        };
+        let k1 = u.spawn_powered_on_surface("K1", body, spec, 0.0, 1.0);
+        u.set_structure(k1, st);
+        assert!(u.set_controls(k1, 1.0, flight::Attitude::Up));
+        u.set_warp(1000);
+        assert_eq!(u.warp(), flight::MAX_PHYSICS_WARP);
     }
 
     #[test]
