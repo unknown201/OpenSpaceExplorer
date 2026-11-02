@@ -496,6 +496,10 @@ async fn main() -> anyhow::Result<()> {
                 registry = save::restore(&mut universe, &file, &defs, &res);
                 campaign = file.campaign.clone();
                 crafts = file.crafts.clone();
+                // designs saved before the editor's guids were unique
+                for c in &mut crafts {
+                    c.craft.dedupe_guids();
+                }
                 shelf = file.shelf.clone();
                 tracing::info!(path = %p.display(), tick = file.tick.0, vessels = registry.len(), "save loaded");
             }
@@ -3436,10 +3440,14 @@ async fn session(mut socket: WebSocket, s: AppState) {
                             if !send(&mut socket, &reply).await { break; }
                         }
                         Ok(ClientMessage::LaunchCraft { craft, altitude_m }) => {
+                            let mut craft = craft;
+                            craft.dedupe_guids();
                             let reply = launch_craft(&s, player_id, &craft, altitude_m);
                             if !send(&mut socket, &reply).await { break; }
                         }
                         Ok(ClientMessage::SaveCraft { craft }) => {
+                            let mut craft = craft;
+                            craft.dedupe_guids();
                             let reply = save_craft(&s, player_id, craft);
                             if !send(&mut socket, &reply).await { break; }
                         }
@@ -3465,6 +3473,8 @@ async fn session(mut socket: WebSocket, s: AppState) {
                             if !send(&mut socket, &reply).await { break; }
                         }
                         Ok(ClientMessage::LaunchAt { craft, site, crew }) => {
+                            let mut craft = craft;
+                            craft.dedupe_guids();
                             let reply = launch_at(&s, player_id, &craft, site.as_deref(), crew.as_deref());
                             if !send(&mut socket, &reply).await { break; }
                         }
@@ -3485,6 +3495,8 @@ async fn session(mut socket: WebSocket, s: AppState) {
                             if !send(&mut socket, &reply).await { break; }
                         }
                         Ok(ClientMessage::LaunchOnPad { craft }) => {
+                            let mut craft = craft;
+                            craft.dedupe_guids();
                             let reply = launch_on_pad(&s, player_id, &craft);
                             if !send(&mut socket, &reply).await { break; }
                         }
@@ -3677,6 +3689,8 @@ async fn session(mut socket: WebSocket, s: AppState) {
                             if !send(&mut socket, &reply).await { break; }
                         }
                         Ok(ClientMessage::StageReport { craft }) => {
+                            let mut craft = craft;
+                            craft.dedupe_guids();
                             let mut filled = craft;
                             fill_default_resources(&s, &mut filled);
                             let report = ose_data::staging::delta_v_by_stage(&filled, &s.parts, &s.resources);

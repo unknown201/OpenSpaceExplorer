@@ -5494,8 +5494,10 @@ impl App {
             }
             ServerMessage::CraftDocument {
                 id,
-                craft: Some(craft),
+                craft: Some(mut craft),
             } => {
+                // as the server does on load: parts are matched by guid in flight
+                craft.dedupe_guids();
                 if self.flying.is_some() && self.flight_craft_id == Some(id) {
                     self.flight_craft = Some(
                         ose_data::craft::level_layout(&craft).unwrap_or_else(|| craft.clone()),

@@ -256,6 +256,35 @@ pub fn delta_v_vacuum_mps(craft: &Craft, parts: &[PartDef], resources: &[Resourc
 }
 
 impl Craft {
+    /// Give every part its own guid: a repeat keeps the first part's and the later ones get new `p<n>` past the
+    /// highest in use. Parts are matched by guid between a craft and its flight (what is still attached, which
+    /// stage holds what), and an editor that once numbered new parts by count left repeats after deletions.
+    /// Returns whether anything changed.
+    pub fn dedupe_guids(&mut self) -> bool {
+        let mut next = self
+            .parts
+            .iter()
+            .filter_map(|p| {
+                p.guid
+                    .strip_prefix('p')
+                    .and_then(|n| n.parse::<usize>().ok())
+            })
+            .max()
+            .unwrap_or(0)
+            + 1;
+        let mut seen = std::collections::HashSet::new();
+        let mut changed = false;
+        for p in &mut self.parts {
+            if !seen.insert(p.guid.clone()) {
+                p.guid = format!("p{next}");
+                next += 1;
+                seen.insert(p.guid.clone());
+                changed = true;
+            }
+        }
+        changed
+    }
+
     /// Children of part `i`.
     pub fn children(&self, i: usize) -> impl Iterator<Item = usize> + '_ {
         self.parts
@@ -345,5 +374,31 @@ mod rotation_tests {
                 }
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod guid_tests {
+    use super::Craft;
+
+    #[test]
+    fn repeated_guids_get_new_ones_past_the_highest() {
+        let crafts: Vec<Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let mut c = crafts.into_iter().find(|c| c.parts.len() >= 5).unwrap();
+        for (k, g) in ["p1", "p3", "p3", "p2", "p2"].into_iter().enumerate() {
+            c.parts[k].guid = g.into();
+        }
+        for (k, p) in c.parts.iter_mut().enumerate().skip(5) {
+            p.guid = format!("x{k}");
+        }
+        assert!(c.dedupe_guids());
+        let g: Vec<&str> = c.parts[..5].iter().map(|p| p.guid.as_str()).collect();
+        assert_eq!(
+            g,
+            ["p1", "p3", "p4", "p2", "p5"],
+            "first keeps its guid, repeats go past p3"
+        );
+        assert!(!c.dedupe_guids(), "already unique");
     }
 }

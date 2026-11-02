@@ -156,7 +156,8 @@ impl Editor {
         }
     }
 
-    pub fn from_craft(craft: Craft) -> Editor {
+    pub fn from_craft(mut craft: Craft) -> Editor {
+        craft.dedupe_guids();
         let selected = if craft.parts.is_empty() {
             None
         } else {
@@ -352,12 +353,13 @@ impl Editor {
         let local_position =
             self.craft.parts[target].local_position + quat_rotate(pq, local_position);
         let idx = self.craft.parts.len();
+        let guid = self.next_guid();
         self.craft.parts.push(CraftPart {
             symmetry: 0,
             actions: Vec::new(),
             flight: None,
             colors: None,
-            guid: format!("p{}", idx + 1),
+            guid: format!("p{guid}"),
             part_id: spec.id.clone(),
             parent: Some(target),
             own_node,
