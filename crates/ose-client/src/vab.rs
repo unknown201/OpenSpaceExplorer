@@ -35,6 +35,9 @@ pub struct PartSpec {
     pub has_engine: bool,
     #[serde(default)]
     pub is_decoupler: bool,
+    /// Fuel flows through the part (decouplers and separators: never, whatever the craft says).
+    #[serde(default = "yes")]
+    pub fuel_cross_feed: bool,
     /// `(resource, capacity_units)`; filled to capacity when the part is placed.
     #[serde(default)]
     pub resource_containers: Vec<ContainerSpec>,
@@ -73,6 +76,10 @@ pub struct ContainerSpec {
     pub resource: String,
     #[serde(default)]
     pub capacity_units: f64,
+}
+
+fn yes() -> bool {
+    true
 }
 
 impl PartSpec {
@@ -1961,11 +1968,22 @@ pub fn pam_html(craft: &Craft, i: usize, catalog: &Catalog) -> String {
         ));
     }
     let kinds = spec.map(part_action_kinds).unwrap_or_default();
+    // A decoupler never passes fuel (its definition's `fuel_cross_feed` is off, which the resource flow and the
+    // staging report follow whatever the craft says): only a fuel line feeds across it.
+    let crossfeed = if spec.is_some_and(|s| !s.fuel_cross_feed) {
+        "<label class=\"pam-row\" title=\"A decoupler never passes fuel: add a fuel line to feed across it\">\
+         <span>Fuel crossfeed</span><input type=\"checkbox\" id=\"pam-crossfeed\" disabled /><b>blocked</b></label>"
+            .to_string()
+    } else {
+        format!(
+            "<label class=\"pam-row\"><span>Fuel crossfeed</span><input type=\"checkbox\" id=\"pam-crossfeed\"{} /></label>",
+            if p.fuel_crossfeed { " checked" } else { "" }
+        )
+    };
     format!(
         "<div class=\"pam-head\"><b>{title}</b><button id=\"pam-close\" title=\"Close (Esc)\">&#10005;</button></div>{stage}\
-         <label class=\"pam-row\"><span>Fuel crossfeed</span><input type=\"checkbox\" id=\"pam-crossfeed\"{cf} /></label>{rows}{groups}",
+         {crossfeed}{rows}{groups}",
         title = esc(title),
-        cf = if p.fuel_crossfeed { " checked" } else { "" },
         groups = action_groups_html(&p.actions, &kinds),
     )
 }
@@ -2374,6 +2392,28 @@ mod tests {
         assert_eq!(e.craft.stages, vec![vec![en]]);
         assert!((e.dry_mass_t(&cat) - 1.75).abs() < 1e-9);
         assert!(e.craft.is_tree());
+    }
+
+    #[test]
+    fn a_decoupler_shows_its_crossfeed_blocked() {
+        let mut cat = catalog();
+        cat.get_mut("tank").unwrap().fuel_cross_feed = true;
+        let mut e = Editor::new("test");
+        e.add_part(&cat["pod"], &cat).unwrap();
+        let t = e.add_part(&cat["tank"], &cat).unwrap();
+        let d = e.add_part(&cat["decoupler"], &cat).unwrap();
+        // every part is saved with crossfeed on; the decoupler's own definition blocks it
+        assert!(e.craft.parts[d].fuel_crossfeed);
+        let html = pam_html(&e.craft, d, &cat);
+        assert!(
+            html.contains("disabled") && html.contains("blocked"),
+            "{html}"
+        );
+        let html = pam_html(&e.craft, t, &cat);
+        assert!(
+            html.contains("checked") && !html.contains("blocked"),
+            "{html}"
+        );
     }
 
     #[test]

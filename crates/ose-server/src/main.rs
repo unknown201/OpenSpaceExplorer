@@ -183,6 +183,8 @@ struct PartInfo {
     engines: Vec<EngineInfo>,
     has_engine: bool,
     is_decoupler: bool,
+    /// Fuel flows through the part (decouplers and separators: never).
+    fuel_cross_feed: bool,
 }
 
 #[derive(serde::Serialize)]
@@ -283,6 +285,7 @@ fn part_infos(parts: &[ose_data::PartDef]) -> Vec<PartInfo> {
                     p.stage_type.as_str(),
                     "DecouplerHorizontal" | "DecouplerVertical"
                 ) || p.category == "Coupling",
+                fuel_cross_feed: p.fuel_cross_feed,
             }
         })
         .collect()

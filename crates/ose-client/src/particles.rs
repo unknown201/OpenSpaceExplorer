@@ -169,9 +169,13 @@ impl EffectEdges {
 pub struct Burst {
     pub instance: u64,
     pub asset: String,
+    /// Where it plays: in the body's frame, or (`on_vessel`) relative to the flown vessel's position.
     pub model: glam::DMat4,
     pub started: f64,
     pub relative_velocity: f64,
+    /// Rides with the vessel (a decoupler's puff, a chute opening): in orbit the craft moves kilometres a
+    /// second, and a puff left in the body's frame was out of sight before it showed.
+    pub on_vessel: bool,
 }
 #[derive(Default)]
 pub struct Bursts {
@@ -193,7 +197,23 @@ impl Bursts {
             model,
             started: ut,
             relative_velocity,
+            on_vessel: false,
         });
+    }
+    /// A burst that rides with the vessel at `vessel` (the model's position is taken relative to it).
+    pub fn queue_on_vessel(
+        &mut self,
+        asset: impl Into<String>,
+        mut model: glam::DMat4,
+        vessel: glam::DVec3,
+        ut: f64,
+        relative_velocity: f64,
+    ) {
+        model.w_axis -= vessel.extend(0.0);
+        self.queue(asset, model, ut, relative_velocity);
+        if let Some(b) = self.active.last_mut() {
+            b.on_vessel = true;
+        }
     }
     pub fn expire(&mut self, ut: f64) {
         self.active

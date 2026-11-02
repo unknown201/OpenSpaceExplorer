@@ -7750,6 +7750,34 @@ impl App {
 
     /// The flown vessel's stages as the server has them now (they change with `MoveToStage`), listing
     /// parts of the craft as launched.
+    /// Of the first `fired` stages to fire (the craft's last stages), how many have no part left on the craft
+    /// flown now: the server's craft has dropped them from its stage list.
+    fn fired_stages_gone(&self, craft: &ose_data::craft::Craft, fired: usize) -> usize {
+        let Some(now) = self
+            .flying
+            .and_then(|id| self.vessel_crafts.get(&id))
+            .and_then(|k| k.1.as_ref())
+        else {
+            return 0;
+        };
+        let here: std::collections::HashSet<&str> =
+            now.parts.iter().map(|p| p.guid.as_str()).collect();
+        craft
+            .stages
+            .iter()
+            .rev()
+            .take(fired)
+            .filter(|st| {
+                !st.iter().any(|&i| {
+                    craft
+                        .parts
+                        .get(i)
+                        .is_some_and(|p| here.contains(p.guid.as_str()))
+                })
+            })
+            .count()
+    }
+
     fn flight_stages_now(&self) -> Option<Vec<Vec<usize>>> {
         let craft = self.flight_craft.as_ref()?;
         let Some(now) = self
@@ -10926,6 +10954,10 @@ impl App {
                 || f.thrust_kn > 0.1
                 || f.situation != ose_net::FlightSituation::Landed;
             let next = f.stage as usize + usize::from(lit);
+            // The server's craft drops a stage once all its parts are gone (the boosters a fired stage
+            // dropped), but `stage` counts the original's: take each fired stage that went off the count, or
+            // the list ran past its end (after dropping side tanks only the parachute showed, at 0.0 t).
+            let next = next.saturating_sub(self.fired_stages_gone(craft, next));
             // Stages as the server has them now: parts moved in flight (`MoveToStage`) show where they went.
             let moved = self
                 .flight_stages_now()
@@ -11840,14 +11872,26 @@ impl App {
             "fh-twr",
             &format!("TWR {:.2} \u{b7} {:.0} kN", f.twr, f.thrust_kn),
         );
+        // A stage with no propellant of its own (decouplers only): the fuel waiting in the next stage with
+        // engines, so it does not read as an empty craft.
+        let next_fuel = f
+            .stage_list
+            .iter()
+            .filter(|s| s.thrust_kn > 0.0)
+            .max_by_key(|s| s.stage_id)
+            .map(|s| (s.start_mass_t - s.end_mass_t).max(0.0))
+            .filter(|&t| t > 0.0 && f.propellant_t <= 1e-6);
         set_text(
             &self.doc,
             "fh-fuel",
-            &format!(
-                "{:.1} t ({:.0}%)",
-                f.propellant_t,
-                f.propellant_fraction * 100.0
-            ),
+            &match next_fuel {
+                Some(t) => format!("next stage {t:.1} t (Space)"),
+                None => format!(
+                    "{:.1} t ({:.0}%)",
+                    f.propellant_t,
+                    f.propellant_fraction * 100.0
+                ),
+            },
         );
         if let Some(el) = self.doc.get_element_by_id("fh-stage-res") {
             let html = hud::stage_resources_html(&f.stage_resources);

@@ -1630,20 +1630,25 @@ impl FlightView {
                         vessel_rot * DQuat::from_xyzw(q.x, -q.y, -q.z, q.w).normalize(),
                         pos + vessel_rot * (DVec3::new(-pp.x, pp.y, pp.z) + origin),
                     );
-                    let separated = gone.get(i).copied().unwrap_or(false);
+                    // A decoupler puffs when its stage fires, whichever side keeps it (a radial decoupler
+                    // stays on the core: waiting for it to leave the craft, it never puffed), once.
+                    let separated =
+                        gone.get(i).copied().unwrap_or(false) || fired_parts.contains(&i);
                     if self.effect_edges.rising(1, i, separated) && (inp.is_decoupler)(&p.part_id) {
-                        self.bursts.queue(
+                        self.bursts.queue_on_vessel(
                             format!("fx_decouple_{suffix}"),
                             matrix,
+                            pos,
                             inp.ut,
                             f.surface_speed_mps,
                         );
                     }
                     let fairing = f.fairings.iter().any(|x| x.0 as usize == i && x.1);
                     if self.effect_edges.rising(2, i, fairing) {
-                        self.bursts.queue(
+                        self.bursts.queue_on_vessel(
                             format!("fx_decouple_{suffix}"),
                             matrix,
+                            pos,
                             inp.ut,
                             f.surface_speed_mps,
                         );
@@ -1656,9 +1661,10 @@ impl FlightView {
                             )
                     });
                     if self.effect_edges.rising(3, i, chute) {
-                        self.bursts.queue(
+                        self.bursts.queue_on_vessel(
                             format!("fx_parachutedeploy_{suffix}"),
                             matrix,
+                            pos,
                             inp.ut,
                             f.surface_speed_mps,
                         );
@@ -1666,9 +1672,10 @@ impl FlightView {
                     if self.effect_edges.rising(4, i, fired_parts.contains(&i))
                         && p.part_id.contains("launchclamp")
                     {
-                        self.bursts.queue(
+                        self.bursts.queue_on_vessel(
                             format!("fx_launchclamp_{suffix}"),
                             matrix,
+                            pos,
                             inp.ut,
                             f.surface_speed_mps,
                         );
@@ -1678,12 +1685,22 @@ impl FlightView {
                         .iter()
                         .any(|(a, b)| *a as usize == i || *b as usize == i);
                     if self.effect_edges.rising(5, i, docked) {
-                        self.bursts
-                            .queue("fx_dock_00", matrix, inp.ut, f.surface_speed_mps);
+                        self.bursts.queue_on_vessel(
+                            "fx_dock_00",
+                            matrix,
+                            pos,
+                            inp.ut,
+                            f.surface_speed_mps,
+                        );
                     }
                     if self.effect_edges.rising(6, i, !docked) {
-                        self.bursts
-                            .queue("fx_undock_00", matrix, inp.ut, f.surface_speed_mps);
+                        self.bursts.queue_on_vessel(
+                            "fx_undock_00",
+                            matrix,
+                            pos,
+                            inp.ut,
+                            f.surface_speed_mps,
+                        );
                     }
                 }
             }
@@ -2798,6 +2815,9 @@ impl FlightView {
         if let Some(f) = readout {
             for burst in &self.bursts.active {
                 let mut model = burst.model;
+                if burst.on_vessel {
+                    model.w_axis += pos.extend(0.0);
+                }
                 model.w_axis -= cam.extend(0.0);
                 engine_draws.push(crate::engine_fx_gpu::EngineDraw {
                     gimbal_poses: Vec::new(),
