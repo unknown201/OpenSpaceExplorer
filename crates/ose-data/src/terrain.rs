@@ -21,6 +21,10 @@ use serde::{Deserialize, Serialize};
 
 pub use crate::terrain_detail::{Detail, TerrainPack};
 
+/// How far the planet renderer drapes the terrain over a site model's own ground away from its facilities
+/// (where the two would otherwise fight for the pixels), m: what craft stand on there.
+pub const OVERLAY_DRAPE_M: f64 = 4.0;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TerrainIndex {
     pub version: u32,
@@ -289,7 +293,10 @@ impl TerrainMap {
             data.iter().copied().max().unwrap_or(0) as f64 / 65535.0 * m.scale_m + m.offset_m;
         let flat_max = flats.iter().map(|f| f.altitude_m).fold(f64::MIN, f64::max);
         let overlay = Overlay::for_body(&entry.id).map(std::sync::Arc::new);
-        let overlay_max = overlay.as_ref().map(|o| o.max_m()).unwrap_or(f64::MIN);
+        let overlay_max = overlay
+            .as_ref()
+            .map(|o| o.max_m() + OVERLAY_DRAPE_M)
+            .unwrap_or(f64::MIN);
         Some(TerrainMap {
             width: m.width,
             height: m.height,
@@ -359,7 +366,9 @@ impl TerrainMap {
     }
 
     /// Ground height, m above the nominal radius: the terrain with its flattened sites, or a site model's own
-    /// ground (the KSC campus) where that is higher.
+    /// ground (the KSC campus) where that is higher, under the terrain the renderer drapes `OVERLAY_DRAPE_M`
+    /// over it (craft and props stand on the drawn surface, not inside it). A built site's facilities (the
+    /// pads, runway and lawns) are surfaces of their own, `ose_sim::campus::Site::ground_radius`.
     pub fn height_m(&self, lat_deg: f64, lon_deg: f64) -> f64 {
         let h = self.terrain_m(lat_deg, lon_deg);
         match self
@@ -367,7 +376,7 @@ impl TerrainMap {
             .as_ref()
             .and_then(|o| o.sample(lat_deg, lon_deg))
         {
-            Some(o) => h.max(o),
+            Some(o) => h.max(o + OVERLAY_DRAPE_M),
             None => h,
         }
     }
@@ -507,7 +516,8 @@ mod tests {
         };
         let m = TerrainMap::from_entry(&entry, &[0u8; 16], 600_000.0).unwrap();
         assert!(m.terrain_m(-0.66, -74.80) < 1.0);
-        assert!((m.height_m(-0.66, -74.80) - pad).abs() < 1e-9);
+        // what the renderer drapes over it
+        assert!((m.height_m(-0.66, -74.80) - (pad + OVERLAY_DRAPE_M)).abs() < 1e-9);
         assert!(m.max_m >= pad);
     }
 

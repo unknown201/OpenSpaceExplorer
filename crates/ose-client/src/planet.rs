@@ -2084,7 +2084,10 @@ impl PlanetRenderer {
                         .map(|e| e.inner_weight(p, 300.0, 150.0))
                         .fold(0.0, f64::max);
                     match campus {
-                        Some(c) => h.max(c + 4.0) * (1.0 - sink) + (h.min(c) - 20.0) * sink,
+                        Some(c) => {
+                            h.max(c + ose_data::terrain::OVERLAY_DRAPE_M) * (1.0 - sink)
+                                + (h.min(c) - 20.0) * sink
+                        }
                         None => h - 20.0 * sink,
                     }
                 })

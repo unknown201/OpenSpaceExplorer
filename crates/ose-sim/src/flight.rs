@@ -1808,6 +1808,11 @@ pub fn integrate_with_propulsion(
         p.steer_cmd = right * i.x.clamp(-1.0, 1.0) - top * i.y.clamp(-1.0, 1.0)
             + p.facing * i.z.clamp(-1.0, 1.0);
     } else {
+        // Up is the stability hold a flight starts in (SAS on, as the original's Stability Assist): the
+        // pilot's keys override it, and it holds wherever they let go instead of swinging back upright.
+        if p.rotation_input.length_squared() > 1e-6 && p.attitude == Attitude::Up {
+            p.attitude = Attitude::Fixed(p.facing);
+        }
         let target = attitude_direction(p.attitude, p.r, p.v, omega);
         let max_thrust = p
             .current_stage()

@@ -194,3 +194,58 @@ fn masked_layers_and_late_constraints_work_through_parents() {
             < 1e-5
     );
 }
+
+/// Two legs from a pelvis at the origin's height, knees bent a little forward: on a 20 degree slope the
+/// solver lowers the model and bends the uphill leg so both feet land on the slope, at the legs' own lengths.
+#[test]
+fn feet_plant_on_a_slope() {
+    let leg = |side: f32, base: usize| {
+        vec![
+            json!({"name": format!("thigh{base}"), "translation":[side*0.1, 0.0, 0.0], "children":[base+1]}),
+            json!({"name": format!("knee{base}"), "translation":[0.0, -0.5, 0.05], "children":[base+2]}),
+            json!({"name": format!("foot{base}"), "translation":[0.0, -0.5, -0.05]}),
+        ]
+    };
+    let mut nodes = vec![json!({"name":"pelvis","translation":[0.0, 1.0, 0.0],"children":[1, 4]})];
+    nodes.extend(leg(1.0, 1));
+    nodes.extend(leg(-1.0, 4));
+    let j = json!({"scene":0,"scenes":[{"nodes":[0]}],"nodes":nodes});
+    let rig = Rig::from_gltf(&j, &[]).unwrap();
+    let legs = [("thigh1", "knee1", "foot1"), ("thigh4", "knee4", "foot4")];
+    assert!(
+        rig.plant_feet(None, Vec3::Y, &legs).is_none(),
+        "flat ground"
+    );
+    // the ground rises toward -x (thigh4's side)
+    let n = Quat::from_rotation_z(20f32.to_radians()) * Vec3::Y;
+    let (drop, turns) = rig.plant_feet(None, n, &legs).unwrap();
+    assert!(drop < 0.0, "lowered for the downhill foot ({drop})");
+    let mut pose = rig.pose(None);
+    for (i, t) in &turns {
+        pose[*i].rotation = (pose[*i].rotation * *t).normalize();
+    }
+    let world = rig.world_matrices(&pose);
+    let at = |name: &str| {
+        let i = rig.nodes.iter().position(|b| b.name == name).unwrap();
+        world[i].w_axis.truncate()
+    };
+    // the ground in the model's frame: the slope through the stand point (y 0), raised by the drop
+    let ground = |p: Vec3| -(n.x * p.x + n.z * p.z) / n.y - drop;
+    for (thigh, knee, foot) in legs {
+        let f = at(foot);
+        assert!(
+            (f.y - ground(f)).abs() < 0.01,
+            "{foot} on the slope: {} vs {}",
+            f.y,
+            ground(f)
+        );
+        assert!(
+            ((at(knee) - at(thigh)).length() - 0.5025).abs() < 1e-3,
+            "thigh length kept"
+        );
+        assert!(
+            ((f - at(knee)).length() - 0.5025).abs() < 1e-3,
+            "shin length kept"
+        );
+    }
+}

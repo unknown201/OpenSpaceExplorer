@@ -2536,6 +2536,56 @@ mod tests {
         assert_eq!(u.structure(v).unwrap().rigid.groups().len(), 1);
     }
 
+    #[test]
+    fn a_turn_under_the_launch_hold_stays_where_the_keys_let_go() {
+        let (mut u, body, spec, st) = k1_on_real_kerbin();
+        let v = u.spawn_powered_on_surface("K1", body, spec, 0.0, 0.0);
+        u.set_structure(v, st);
+        u.stand_south(v);
+        assert!(u.set_controls(v, 1.0, flight::Attitude::Up));
+        u.stage(v);
+        for _ in 0..(3 * TICKS_PER_SECOND) {
+            u.step();
+        }
+        // D (yaw right) for a moment, then let go
+        u.set_rotation(v, 0.0, 1.0, 0.0);
+        for _ in 0..TICKS_PER_SECOND {
+            u.step();
+        }
+        u.set_rotation(v, 0.0, 0.0, 0.0);
+        let tilt = |u: &Universe| {
+            let p = u.powered(v).unwrap();
+            p.facing
+                .dot(p.r.normalized())
+                .clamp(-1.0, 1.0)
+                .acos()
+                .to_degrees()
+        };
+        let leaned = tilt(&u);
+        assert!(leaned > 3.0, "the keys turned it ({leaned} degrees)");
+        let p = u.powered(v).unwrap();
+        let heading = flight::heading_of(p.r, p.facing).to_degrees();
+        assert!((heading - 90.0).abs() < 30.0, "D turns it east ({heading})");
+        for _ in 0..(4 * TICKS_PER_SECOND) {
+            u.step();
+        }
+        // The hold is where the keys let go (the air pushing on a tall rocket may hold it off a little).
+        let p = u.powered(v).unwrap();
+        let flight::Attitude::Fixed(hold) = p.attitude else {
+            panic!("a fixed hold, not {:?}", p.attitude);
+        };
+        let held = hold.normalized().dot(p.r.normalized()).acos().to_degrees();
+        assert!(
+            (held - leaned).abs() < 2.0,
+            "held at {held}, let go at {leaned}"
+        );
+        let after = tilt(&u);
+        assert!(
+            after > leaned * 0.5,
+            "not back upright ({leaned} -> {after} degrees)"
+        );
+    }
+
     /// Kerbin over open sea 200 m deep, with the part catalog, and `name` falling into it from `height` m
     /// above the surface at `speed` m/s, leaning `lean` radians from upright.
     fn into_the_sea(name: &str, lean: f64, speed: f64, height: f64) -> (Universe, Entity) {

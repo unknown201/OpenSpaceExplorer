@@ -431,6 +431,9 @@ struct App {
     adopt_attitude: bool,
     /// When the steering keys were last let go (ms): the hold the server kept is adopted a moment later.
     adopt_after_ms: f64,
+    /// When a manual turn under the stability hold ended: once the server has settled the hold where the
+    /// turn left the craft, the client takes that hold over (ms).
+    adopt_hold_after_ms: Option<f64>,
     /// The flown vessel's part whose window is open (right click in flight).
     flight_pam: Option<usize>,
     analog: analog::Config,
@@ -882,6 +885,7 @@ pub fn start() -> Result<(), JsValue> {
         loading_since: None,
         adopt_attitude: false,
         adopt_after_ms: 0.0,
+        adopt_hold_after_ms: None,
         lin_mode: false,
         flight_pam: None,
         analog: stored("ose.analog")
@@ -10392,6 +10396,23 @@ impl App {
                 self.adopt_attitude = false;
             }
         }
+        if self.adopt_hold_after_ms.is_some_and(|t| now >= t) {
+            self.adopt_hold_after_ms = None;
+            let held = self
+                .scene
+                .as_ref()
+                .and_then(|s| s.vessel(vessel))
+                .and_then(|v| v.flight.as_ref())
+                .map(|f| f.attitude);
+            if let Some(att @ ose_net::AttitudeMode::Fixed(_)) = held {
+                if matches!(
+                    self.attitude,
+                    ose_net::AttitudeMode::Up | ose_net::AttitudeMode::Fixed(_)
+                ) {
+                    self.attitude = att;
+                }
+            }
+        }
         if self.flying_eva() {
             self.eva_keys_tick(now, dt);
             return;
@@ -10486,6 +10507,30 @@ impl App {
         let s = 1.0_f32;
         let rotation = (pitch_in as f32 * s, yaw_in as f32 * s, roll);
         if rotation != self.rotation_sent {
+            // The stability hold follows the keys on the server and stays where they let go: until the
+            // client has that hold, its controls must not send the old one back.
+            let turning = |r: (f32, f32, f32)| r.0 != 0.0 || r.1 != 0.0;
+            if turning(rotation)
+                && matches!(
+                    self.attitude,
+                    ose_net::AttitudeMode::Up | ose_net::AttitudeMode::Fixed(_)
+                )
+            {
+                self.adopt_hold_after_ms = None;
+                if let Some(f) = self.current_nav().map(|n| n.forward) {
+                    self.attitude =
+                        ose_net::AttitudeMode::Fixed(ose_math::DVec3::new(f.x, f.y, f.z));
+                }
+            } else if turning(self.rotation_sent) && !turning(rotation) {
+                // Where the craft points now, until the server's own hold arrives.
+                if matches!(self.attitude, ose_net::AttitudeMode::Fixed(_)) {
+                    if let Some(f) = self.current_nav().map(|n| n.forward) {
+                        self.attitude =
+                            ose_net::AttitudeMode::Fixed(ose_math::DVec3::new(f.x, f.y, f.z));
+                    }
+                    self.adopt_hold_after_ms = Some(now + 300.0);
+                }
+            }
             self.rotation_sent = rotation;
             if let Some(ws) = &self.ws {
                 send(
@@ -11073,6 +11118,10 @@ impl App {
         let agl = self.flight3d.agl_m;
         #[cfg(not(target_arch = "wasm32"))]
         let agl: Option<f64> = None;
+        // Height above the drawn ground, unclamped: below zero means the craft is under what is drawn.
+        if let (Some(h), Some(el)) = (agl, self.doc.get_element_by_id("flight-hud")) {
+            el.set_attribute("data-ose-agl", &format!("{h:.2}")).ok();
+        }
         match (self.alt_terrain, agl) {
             (true, Some(h)) => {
                 set_text(&self.doc, "fh-alt-mode", "TERRAIN");
@@ -11657,6 +11706,26 @@ impl App {
         let Some(v) = self.scene.as_ref().and_then(|s| s.vessel(id)) else {
             return;
         };
+        // A Kerbal on a ladder: where it is drawn from the craft it holds (along local up, and out from it), m.
+        if let (Some(scene), Some((holder, _))) = (
+            self.scene.as_ref(),
+            v.flight.as_ref().and_then(|f| f.on_ladder),
+        ) {
+            if let (Some(h), Some(el)) = (
+                scene.vessel(holder),
+                self.doc.get_element_by_id("flight-hud"),
+            ) {
+                let ut = self.time.ut_at(now_ms());
+                let d = scene.vessel_position(v, ut) - scene.vessel_position(h, ut);
+                let up = (scene.vessel_position(h, ut)
+                    - scene.position(h.reference_body as usize, ut))
+                .normalized();
+                let along = d.dot(up);
+                let out = (d - up * along).length();
+                el.set_attribute("data-ose-ladder", &format!("{along:.2},{out:.2}"))
+                    .ok();
+            }
+        }
         let Some(f) = &v.flight else {
             // On rails: the readout's last values would be stale; altitude and speed from the orbit.
             if let Some(scene) = &self.scene {

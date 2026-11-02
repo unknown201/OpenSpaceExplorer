@@ -33,6 +33,20 @@ struct Nozzle {
 
 /// Launch pad 1 (`kerbin_KSCLaunchpad_spawn_01`, docs/reference-notes/terrain.md) and the other pads used to
 /// orient the campus.
+/// The Kerbal rig's legs: thigh, knee and foot bones (`kerbal_m.glb` / `kerbal_f.glb`).
+const KERBAL_LEGS: [(&str, &str, &str); 2] = [
+    (
+        "bone_kerbal_l_thigh",
+        "bone_kerbal_l_knee",
+        "bone_kerbal_l_foot",
+    ),
+    (
+        "bone_kerbal_r_thigh",
+        "bone_kerbal_r_knee",
+        "bone_kerbal_r_foot",
+    ),
+];
+
 const KSC_PADS: [(f64, f64, f64); 4] = [
     (-0.6836, -74.8198, 115.2),
     (-0.4360, -75.0270, 111.0),
@@ -113,8 +127,9 @@ pub struct NearVessel<'a> {
     pub stand: Stand,
     pub craft: Option<&'a Craft>,
     pub facing: Option<(DVec3, DVec3)>,
-    /// On the ground: it stands on its lowest point there. In flight the vessel point is its centre (the
-    /// server places a piece that comes off at the parent's point plus the piece's offset).
+    /// On the ground: without a readout (no centre of mass) it stands on its lowest point there. In flight the
+    /// vessel point is its centre (the server places a piece that comes off at the parent's point plus the
+    /// piece's offset).
     pub landed: bool,
     /// The owner's agency colours, for parts and crafts without their own.
     pub paint: Option<ose_data::craft::Paint>,
@@ -2445,7 +2460,21 @@ impl FlightView {
             let rot = match inp.stand {
                 Stand::Craft => vessel_rot,
                 Stand::Kerbal { .. } => {
-                    let ahead = vessel_rot * DVec3::Y;
+                    // Standing, the server's facing is straight up: the Kerbal faces the way it walks (its
+                    // held heading, as the original turns it at 800 degrees a second), and on a ladder the
+                    // craft it climbs. In the air (the jetpack) it faces where it points.
+                    let flight = inp.vessel.flight.as_ref();
+                    let holder = flight
+                        .and_then(|f| f.on_ladder)
+                        .and_then(|(id, _)| inp.nearby_vessels.iter().find(|n| n.id == id))
+                        .map(|n| to_model(n.pos - inp.body_pos, spin, inp.ut) - pos);
+                    let ahead = match holder {
+                        Some(to_craft) => to_craft,
+                        None if landed && matches!(att, AttitudeMode::PitchHeading { .. }) => {
+                            dir_to_model(r, attitude_dir(&att, r, v_rel, spin), spin, inp.ut)
+                        }
+                        None => vessel_rot * DVec3::Y,
+                    };
                     let level = (ahead - up * ahead.dot(up)).normalize_or_zero();
                     if level.length() > 0.5 {
                         quat_from_basis(up.cross(level), up, level)
@@ -2505,12 +2534,55 @@ impl FlightView {
                     rot = (rot * DQuat::from_rotation_z(0.07 * s)).normalize();
                 }
             }
+            // Standing on sloped terrain the Kerbal's feet follow the ground (IK); on a pad deck or the campus,
+            // surfaces of their own and level, the clip's feet already stand on it.
+            let mut foot_ik: Vec<(usize, glam::Quat)> = Vec::new();
+            if matches!(kerbal_clip, Some("idle" | "walk" | "run")) {
+                let normal = self.planet.as_ref().and_then(|planet| {
+                    let ground = |d: DVec3| planet.ground_m(inp.body_id, d.normalize_or_zero());
+                    let here = ground(pos)?;
+                    // the server stands a Kerbal this far above the ground (`crew::go_eva`)
+                    if (r.length() - inp.body_radius - 0.55 - here).abs() > 0.5 {
+                        return None;
+                    }
+                    let north = (DVec3::Y - up * up.y).normalize_or_zero();
+                    let east = north.cross(up);
+                    let d = 0.75;
+                    let de = (ground(pos + east * d)? - ground(pos - east * d)?) / (2.0 * d);
+                    let dn = (ground(pos + north * d)? - ground(pos - north * d)?) / (2.0 * d);
+                    Some((up - east * de - north * dn).normalize_or_zero())
+                });
+                if let Some(n) = normal {
+                    for (name, _, _) in inp.stand.models(gpu) {
+                        if !name.starts_with("kerbal:anim") {
+                            continue;
+                        }
+                        let sample =
+                            kerbal_sample(gpu, name, kerbal_clip.unwrap_or("idle"), inp.now_ms);
+                        let Some(model) = gpu.model(name) else {
+                            continue;
+                        };
+                        if let Some((drop, turns)) = model.rig.plant_feet(
+                            sample,
+                            (rot.inverse() * n).as_vec3(),
+                            &KERBAL_LEGS,
+                        ) {
+                            at += up * drop as f64;
+                            foot_ik = turns;
+                        }
+                        break;
+                    }
+                }
+            }
             for (name, _, scale) in inp.stand.models(gpu) {
                 let mut it = DrawItem::lit(name.to_string(), at - cam, rot, scale, sun);
 
                 it.ambient = part_ambient;
                 it.sun = sun_share;
                 it.animation = kerbal_sample(gpu, name, kerbal_clip.unwrap_or("idle"), inp.now_ms);
+                if name.starts_with("kerbal:anim") {
+                    it.node_rotations.extend(foot_ik.iter().copied());
+                }
                 if let Some(c) = inp.stand.tint(name) {
                     it.color = c;
                 }
@@ -2581,7 +2653,7 @@ impl FlightView {
             let rot = DQuat::from_rotation_arc(DVec3::Y, p.normalize_or_zero());
             if let Some(craft) = near.craft.filter(|c| !c.parts.is_empty()) {
                 // The craft as it stands: its nose along its facing (upright on the ground otherwise), its
-                // lowest point on the vessel's position, as the flown craft is placed.
+                // centre of mass on the vessel's position, as the flown craft is placed.
                 let up_o = p.normalize_or_zero();
                 let (dir, roll) = match near.facing {
                     Some((f, r)) if f.length() > 0.5 => (
@@ -2626,7 +2698,12 @@ impl FlightView {
                     let shroud = bare_engine(craft, k).then_some("fairing");
                     placed.push((name, lp, lq, part_paint(craft, k, near.paint), shroud));
                 }
-                let anchor = if !lo_all.is_finite() {
+                // The vessel point is the craft's centre of mass when the server sends it (in physics, on the
+                // ground too), as the flown craft is placed: standing it on its lowest point there lifted a
+                // landed craft by that height, and a Kerbal on its ladder hung down by its engine.
+                let anchor = if let Some(f) = near.flight {
+                    -crate::orientation::mesh_origin(f.centre_of_mass_m)
+                } else if !lo_all.is_finite() {
                     DVec3::ZERO
                 } else if near.landed {
                     DVec3::new(0.0, lo_all.y, 0.0)

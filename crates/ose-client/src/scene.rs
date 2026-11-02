@@ -208,6 +208,17 @@ impl Scene {
     /// carried on under gravity and its own acceleration under power. Falls back to the sent position if
     /// the reference body is unknown.
     fn raw_position(&self, v: &VesselState, ut: f64) -> DVec3 {
+        // A Kerbal holding a ladder moves with the craft it holds (the server pins it there each tick); carried
+        // on by itself under gravity it sagged down the craft between snapshots, by metres.
+        if let Some(holder) = v
+            .flight
+            .as_ref()
+            .and_then(|f| f.on_ladder)
+            .and_then(|(id, _)| self.vessels.iter().find(|h| h.id == id && h.id != v.id))
+            .filter(|h| h.flight.as_ref().is_none_or(|f| f.on_ladder.is_none()))
+        {
+            return self.raw_position(holder, ut) + (v.position_m - holder.position_m);
+        }
         let rb = v.reference_body as usize;
         // A craft standing on the ground turns with its body: keep its offset from the body's centre and rotate
         // it by the spin since the snapshot. Its orbit elements describe a fall through the planet, which made

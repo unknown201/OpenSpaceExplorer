@@ -458,6 +458,79 @@ impl Rig {
             .normalize();
     }
 
+    /// Foot IK on a slope (`normal`, the ground's up in the model's frame, the model standing on the point under
+    /// its origin): how far to lower the whole model so the downhill foot reaches the ground, and the turns for
+    /// `legs` (thigh, knee, foot bones) that put each foot on the slope and tilt it to match, the legs bending
+    /// in the plane the clip bends them in. Applied as `node_rotations` (local turns after the clip). Nothing on
+    /// flat ground, or for a rig without those bones.
+    pub fn plant_feet(
+        &self,
+        sample: Option<ClipSample>,
+        normal: Vec3,
+        legs: &[(&str, &str, &str); 2],
+    ) -> Option<(f32, Vec<(usize, Quat)>)> {
+        let n = normal.normalize_or_zero();
+        if n.y < 0.5 || n.y > 0.9995 {
+            return None;
+        }
+        let bone = |name: &str| self.nodes.iter().position(|b| b.name == name);
+        let legs = [
+            (bone(legs[0].0)?, bone(legs[0].1)?, bone(legs[0].2)?),
+            (bone(legs[1].0)?, bone(legs[1].1)?, bone(legs[1].2)?),
+        ];
+        let pose = self.pose(sample);
+        let world = self.world_matrices(&pose);
+        let at = |i: usize| world[i].w_axis.truncate();
+        let turn_of = |i: usize| world[i].to_scale_rotation_translation().1;
+        // The slope plane through the point the Kerbal stands on: its height under each foot.
+        let rise = |f: Vec3| -(n.x * f.x + n.z * f.z) / n.y;
+        let deltas = legs.map(|(_, _, foot)| rise(at(foot)));
+        let drop = deltas[0].min(deltas[1]).min(0.0);
+        let tilt = Quat::from_rotation_arc(Vec3::Y, n);
+        let mut turns = Vec::new();
+        for ((thigh, knee, foot), delta) in legs.into_iter().zip(deltas) {
+            let (h, k, f) = (at(thigh), at(knee), at(foot));
+            let t = f + Vec3::Y * (delta - drop);
+            let (a, b) = ((k - h).length(), (f - k).length());
+            if a < 1e-5 || b < 1e-5 {
+                continue;
+            }
+            let c = (t - h).length().clamp((a - b).abs() + 1e-4, a + b - 1e-4);
+            let dir = (t - h).normalize_or_zero();
+            // the plane the leg bends in, and the side the knee points to
+            let axis = (f - h).cross(k - h).normalize_or_zero();
+            if dir == Vec3::ZERO || axis == Vec3::ZERO {
+                continue;
+            }
+            let hip_angle = ((a * a + c * c - b * b) / (2.0 * a * c))
+                .clamp(-1.0, 1.0)
+                .acos();
+            let k_new = h + Quat::from_axis_angle(axis, -hip_angle) * dir * a;
+            let k_alt = h + Quat::from_axis_angle(axis, hip_angle) * dir * a;
+            let side = |p: Vec3| {
+                let along = (p - h).dot(dir);
+                p - h - dir * along
+            };
+            let ref_side = side(k);
+            let k_new = if side(k_new).dot(ref_side) >= side(k_alt).dot(ref_side) {
+                k_new
+            } else {
+                k_alt
+            };
+            let q1 = Quat::from_rotation_arc((k - h).normalize(), (k_new - h).normalize());
+            let f1 = h + q1 * (f - h);
+            let q2 = Quat::from_rotation_arc((f1 - k_new).normalize(), (t - k_new).normalize());
+            let (rt, rk, rf) = (turn_of(thigh), turn_of(knee), turn_of(foot));
+            let rk1 = q1 * rk;
+            turns.push((thigh, (rt.inverse() * q1 * rt).normalize()));
+            turns.push((knee, (rk1.inverse() * q2 * rk1).normalize()));
+            // the foot keeps its world turn, tilted with the slope
+            let rf2 = q2 * q1 * rf;
+            turns.push((foot, (rf2.inverse() * tilt * rf).normalize()));
+        }
+        Some((drop, turns))
+    }
+
     /// Model-space position constraint, including parents with rotation or scale.
     pub fn copy_position(&self, pose: &mut [Transform], node: usize, source: usize, weight: f32) {
         if node >= pose.len()
