@@ -23,11 +23,11 @@ systemctl restart ose
 # keep the last five releases for rollback (ln -sfn /opt/ose/releases/<id> /opt/ose/current && systemctl restart ose)
 ls -1dt /opt/ose/releases/* | tail -n +6 | xargs -r rm -rf
 rm -f "$tar"
-# the server reads the terrain packs from the assets directory before it listens: give it up to 30 s
+# the server reads the terrain packs from the assets directory before it listens: give it up to 120 s (about a minute in late 2026)
 i=0
 until curl -fsS http://127.0.0.1:7777/health; do
   i=$((i + 1))
-  [ "$i" -ge 30 ] && exit 1
+  [ "$i" -ge 120 ] && exit 1
   sleep 1
 done
 echo " <- $id"
