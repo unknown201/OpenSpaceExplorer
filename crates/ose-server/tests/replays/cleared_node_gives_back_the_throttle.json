@@ -1,0 +1,7882 @@
+{
+ "version": 1,
+ "protocol": 62,
+ "note": "Unable to control thrust, or heading. (Mun orbit, flat battery; a planned burn was being flown when the node was cleared)",
+ "filed_by": "Pilot",
+ "filed_unix": 1793594034,
+ "start_step": 30000,
+ "baseline": {
+  "version": 1,
+  "tick": 5364912,
+  "warp": 10,
+  "vessels": [
+   {
+    "id": 6,
+    "name": "Go High",
+    "owner": 12,
+    "body": "Mun",
+    "elements": {
+     "semi_major_axis": 425252.83429359435,
+     "eccentricity": 0.12038082212206574,
+     "inclination_deg": 12.710066036876134,
+     "longitude_of_ascending_node_deg": 311.3598060541778,
+     "argument_of_periapsis_deg": 251.227177126221,
+     "mean_anomaly_at_epoch": 0.3367770228181832,
+     "epoch": 106547.4
+    },
+    "burn": {
+     "ut": 107390.19603359092,
+     "prograde_mps": -11.151442663463705,
+     "normal_mps": 0.0,
+     "radial_mps": 0.0
+    },
+    "later_burns": [],
+    "flight": null,
+    "dormant": {
+     "spec": {
+      "stages": [
+       {
+        "stage_id": 4,
+        "thrust_vac_kn": 1200.0,
+        "thrust_asl_kn": 1000.0,
+        "isp_vac_s": 209.99999999999997,
+        "isp_asl_s": 175.0,
+        "propellant_t": 24.59999999999999,
+        "start_mass_t": 62.1711,
+        "moi_tm2": 470.4340271262929,
+        "wheel_torque_knm": 20.0,
+        "gimbal_torque_knm": 0.0
+       },
+       {
+        "stage_id": 3,
+        "thrust_vac_kn": 430.0,
+        "thrust_asl_kn": 376.25000000000006,
+        "isp_vac_s": 319.99999999999994,
+        "isp_asl_s": 280.0,
+        "propellant_t": 15.999999999999996,
+        "start_mass_t": 31.3711,
+        "moi_tm2": 251.24810391786144,
+        "wheel_torque_knm": 20.0,
+        "gimbal_torque_knm": 99.8986461654685
+       },
+       {
+        "stage_id": 2,
+        "thrust_vac_kn": 215.0,
+        "thrust_asl_kn": 188.125,
+        "isp_vac_s": 320.0,
+        "isp_asl_s": 280.0,
+        "propellant_t": 6.0,
+        "start_mass_t": 10.4191,
+        "moi_tm2": 69.82517914277976,
+        "wheel_torque_knm": 20.0,
+        "gimbal_torque_knm": 44.48552372010469
+       },
+       {
+        "stage_id": 1,
+        "thrust_vac_kn": 0.0,
+        "thrust_asl_kn": 0.0,
+        "isp_vac_s": 0.0,
+        "isp_asl_s": 0.0,
+        "propellant_t": 0.0,
+        "start_mass_t": 2.2291,
+        "moi_tm2": 0.7498514047735593,
+        "wheel_torque_knm": 20.0,
+        "gimbal_torque_knm": 0.0
+       },
+       {
+        "stage_id": 0,
+        "thrust_vac_kn": 0.0,
+        "thrust_asl_kn": 0.0,
+        "isp_vac_s": 0.0,
+        "isp_asl_s": 0.0,
+        "propellant_t": 0.0,
+        "start_mass_t": 2.2291,
+        "moi_tm2": 0.7498514047735593,
+        "wheel_torque_knm": 20.0,
+        "gimbal_torque_knm": 0.0
+       }
+      ],
+      "drag_area_m2": 1.5422299013041885,
+      "drag_cd": 0.35
+     },
+     "accel_ng_mps2": {
+      "x": 0.0,
+      "y": 0.0,
+      "z": 0.0
+     },
+     "stage": 2,
+     "propellant_t": 1.4760187460783372,
+     "mass_t": 5.990118746078338,
+     "r": {
+      "x": -249828.7431394534,
+      "y": -270996.5817096152,
+      "z": -82681.3483268301
+     },
+     "v": {
+      "x": 306.95879809257093,
+      "y": -312.1748466583354,
+      "z": 5.438986687989566
+     },
+     "throttle": 0.0,
+     "attitude": {
+      "Maneuver": {
+       "x": -0.5843368176617069,
+       "y": 0.8115111166573112,
+       "z": -0.0004371116483240454
+      }
+     },
+     "landed": false,
+     "crashed": false,
+     "splashed": false,
+     "coasting_since": 106547.22,
+     "facing": {
+      "x": -0.5189897008015385,
+      "y": 0.8540361670271737,
+      "z": -0.03566392955722971
+     },
+     "angvel": {
+      "x": -0.05738485089201943,
+      "y": -0.032922179997312645,
+      "z": 0.04669743913760277
+     },
+     "thrust_scale": 1.0,
+     "locked_thrust_fraction": -0.0,
+     "drag_cda_m2": null,
+     "wheel_scale": 0.0,
+     "controlled": true,
+     "ignited": true,
+     "ground_clearance_m": 5.23324591807359,
+     "footprint_m": 0.6254575180013269,
+     "crash_tolerance_mps": 10.0,
+     "tipped": false,
+     "walker": false,
+     "jetpack": null,
+     "drive": {
+      "wheels": [],
+      "forward": [
+       0.0,
+       1.0
+      ],
+      "wheelbase_m": 1.0,
+      "throttle": 0.0,
+      "steer": 0.0,
+      "brakes": false,
+      "speed_mps": 0.0,
+      "heading_rad": 3.141592653589793,
+      "powered": 1.0
+     },
+     "roll_rad": -0.5652120344321695,
+     "roll_input": 0.0,
+     "groups": {
+      "lights": false,
+      "rcs": false,
+      "abort": false,
+      "custom": [
+       false,
+       false,
+       false,
+       false,
+       false,
+       false,
+       false,
+       false,
+       false,
+       false
+      ]
+     },
+     "rotation_input": {
+      "x": 0.0,
+      "y": 0.0,
+      "z": 0.0
+     },
+     "raw_rotation_input": {
+      "x": 0.0,
+      "y": 0.0,
+      "z": 0.0
+     },
+     "manual_steering": false,
+     "sas": {
+      "pid": [
+       {
+        "integral": 0.0737402724744456,
+        "previous": 0.07955230488621123
+       },
+       {
+        "integral": 0.003476204015750087,
+        "previous": -0.006578082347594716
+       },
+       {
+        "integral": 0.0,
+        "previous": 0.0
+       }
+      ],
+      "lock": [
+       0.16184334907241502,
+       -0.3511364020006082,
+       0.31263650866686926,
+       0.8676222513281241
+      ],
+      "last": [
+       0.08678813312530398,
+       -0.3695222214661652,
+       0.2553183522752336,
+       0.889232077009593
+      ],
+      "initialized": true,
+      "acquiring_fixed_target": false,
+      "response": [
+       0.2040304619547952,
+       -0.008232563877155208,
+       0.0
+      ],
+      "decay": [
+       1.0,
+       0.1,
+       0.965
+      ],
+      "decay_locked": false,
+      "damping": false,
+      "cooldown": 0,
+      "kill_rotation": false
+     },
+     "control_axes": {
+      "x": 0.2040304619547952,
+      "y": -0.008232563877155208,
+      "z": 0.0
+     },
+     "part_controls": [],
+     "control_point": null,
+     "control_rotation": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ],
+     "sas_warp": 4.0,
+     "roll_rate": -0.00455224095198487,
+     "trim": {
+      "x": 0.0,
+      "y": 0.0,
+      "z": 0.0
+     },
+     "own_top": {
+      "x": 0.0,
+      "y": 0.0,
+      "z": 0.0
+     },
+     "aero_overlay": false,
+     "rcs": {
+      "precision": false,
+      "thrust_kn": 0.0,
+      "torque_knm": 0.0,
+      "isp_vac_s": 0.0,
+      "isp_asl_s": 0.0,
+      "translate": {
+       "x": 0.0,
+       "y": 0.0,
+       "z": 0.0
+      },
+      "usage": 0.0,
+      "powered": 0.0
+     },
+     "eva_run": false,
+     "eva_jump": false,
+     "eva_hop": false,
+     "lift_kn": {
+      "x": 0.0,
+      "y": 0.0,
+      "z": 0.0
+     },
+     "aero_torque_knm": {
+      "x": 0.0,
+      "y": 0.0,
+      "z": 0.0
+     },
+     "surface_torque_knm": 0.0,
+     "steer_cmd": {
+      "x": 0.04157726973713757,
+      "y": 0.024158997673614496,
+      "z": 0.04761121791380189
+     },
+     "jet": null,
+     "intakes": false,
+     "level": false
+    },
+    "science": [
+     {
+      "experiment": "EnvironmentSurvey",
+      "sample": true,
+      "location": "Kerbin_LowOrbit_KerbinGrasslands",
+      "value": 30.0
+     },
+     {
+      "experiment": "EnvironmentSurvey",
+      "sample": true,
+      "location": "Kerbin_LowOrbit_KerbinDesert",
+      "value": 30.0
+     },
+     {
+      "experiment": "EnvironmentSurvey",
+      "sample": true,
+      "location": "Kerbin_HighOrbit_KerbinWater",
+      "value": 60.0
+     },
+     {
+      "experiment": "EnvironmentSurvey",
+      "sample": true,
+      "location": "Mun_HighOrbit_MunMare",
+      "value": 50.0
+     },
+     {
+      "experiment": "EnvironmentSurvey",
+      "sample": true,
+      "location": "Mun_HighOrbit_MunHighlands",
+      "value": 50.0
+     },
+     {
+      "experiment": "CrewObservation",
+      "sample": false,
+      "location": "Mun_HighOrbit_MunHighlands",
+      "value": 40.0
+     },
+     {
+      "experiment": "EnvironmentSurvey",
+      "sample": false,
+      "location": "Mun_HighOrbit_MunHighlands",
+      "value": 50.0
+     }
+    ],
+    "experiments": [],
+    "craft": {
+     "name": "Go High",
+     "description": "",
+     "parts": [
+      {
+       "guid": "p1",
+       "part_id": "pod_1v_conical_crew",
+       "parent": null,
+       "own_node": null,
+       "parent_node": null,
+       "local_position": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0
+       },
+       "local_rotation": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 1.0
+       },
+       "stage_index": 0,
+       "fuel_crossfeed": true,
+       "resources": [
+        {
+         "resource": "ElectricCharge",
+         "stored_units": 0.0,
+         "capacity_units": 50.0
+        },
+        {
+         "resource": "MonoPropellant",
+         "stored_units": 0.04,
+         "capacity_units": 0.04
+        }
+       ],
+       "fuel_line_target": null,
+       "colors": null,
+       "flight": null,
+       "actions": [],
+       "symmetry": 0
+      },
+      {
+       "guid": "p5",
+       "part_id": "parachute_0v",
+       "parent": 0,
+       "own_node": "bottom",
+       "parent_node": "top",
+       "local_position": {
+        "x": 0.0,
+        "y": 0.572000028565526,
+        "z": 0.0
+       },
+       "local_rotation": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 1.0
+       },
+       "stage_index": 1,
+       "fuel_crossfeed": true,
+       "resources": [],
+       "fuel_line_target": null,
+       "colors": null,
+       "flight": null,
+       "actions": [],
+       "symmetry": 0
+      },
+      {
+       "guid": "p3",
+       "part_id": "collector_1v_science_general",
+       "parent": 0,
+       "own_node": "top",
+       "parent_node": "bottom",
+       "local_position": {
+        "x": 0.0,
+        "y": -0.5900000035762787,
+        "z": 0.0
+       },
+       "local_rotation": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 1.0
+       },
+       "stage_index": 0,
+       "fuel_crossfeed": true,
+       "resources": [],
+       "fuel_line_target": null,
+       "colors": null,
+       "flight": null,
+       "actions": [],
+       "symmetry": 0
+      },
+      {
+       "guid": "p6",
+       "part_id": "storage_0v_battery_electricity_radial",
+       "parent": 0,
+       "own_node": "srfAttach",
+       "parent_node": null,
+       "local_position": {
+        "x": -0.10815347172356624,
+        "y": 0.14690928056874278,
+        "z": 0.40462586715199034
+       },
+       "local_rotation": {
+        "x": -0.11130395471233902,
+        "y": 0.588952245567143,
+        "z": -0.14864605391434013,
+        "w": 0.7865437259062641
+       },
+       "stage_index": 0,
+       "fuel_crossfeed": true,
+       "resources": [
+        {
+         "resource": "ElectricCharge",
+         "stored_units": 0.0,
+         "capacity_units": 100.0
+        }
+       ],
+       "fuel_line_target": null,
+       "colors": null,
+       "flight": null,
+       "actions": [],
+       "symmetry": 0
+      },
+      {
+       "guid": "p7",
+       "part_id": "solararray_0v_flat",
+       "parent": 0,
+       "own_node": "srfAttach",
+       "parent_node": null,
+       "local_position": {
+        "x": -0.3914419921394828,
+        "y": 0.08425614604896581,
+        "z": 0.22587959431299703
+       },
+       "local_rotation": {
+        "x": -0.04973738034762499,
+        "y": 0.2631553239717857,
+        "z": -0.17893178068438984,
+        "w": 0.9467095047175632
+       },
+       "stage_index": 0,
+       "fuel_crossfeed": true,
+       "resources": [],
+       "fuel_line_target": null,
+       "colors": null,
+       "flight": null,
+       "actions": [],
+       "symmetry": 0
+      },
+      {
+       "guid": "p8",
+       "part_id": "solararray_0v_flat",
+       "parent": 0,
+       "own_node": "srfAttach",
+       "parent_node": null,
+       "local_position": {
+        "x": 0.2310029965421944,
+        "y": 0.05858885021754906,
+        "z": 0.40054400175956734
+       },
+       "local_rotation": {
+        "x": -0.16284081554015772,
+        "y": 0.8614706876519019,
+        "z": -0.08933776356115242,
+        "w": 0.4726202356148827
+       },
+       "stage_index": 0,
+       "fuel_crossfeed": true,
+       "resources": [],
+       "fuel_line_target": null,
+       "colors": null,
+       "flight": null,
+       "actions": [],
+       "symmetry": 0
+      },
+      {
+       "guid": "p47",
+       "part_id": "stabilizer_1v_reactionwheel",
+       "parent": 2,
+       "own_node": "top",
+       "parent_node": "bottom",
+       "local_position": {
+        "x": 0.0,
+        "y": -1.0390267035762788,
+        "z": 0.0
+       },
+       "local_rotation": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 1.0
+       },
+       "stage_index": 0,
+       "fuel_crossfeed": true,
+       "resources": [],
+       "fuel_line_target": null,
+       "colors": null,
+       "flight": null,
+       "actions": [],
+       "symmetry": 0
+      },
+      {
+       "guid": "p48",
+       "part_id": "decoupler_1v_inline",
+       "parent": 6,
+       "own_node": "top",
+       "parent_node": "bottom",
+       "local_position": {
+        "x": 0.0,
+        "y": -1.2863534035762787,
+        "z": 0.0
+       },
+       "local_rotation": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 1.0
+       },
+       "stage_index": 2,
+       "fuel_crossfeed": true,
+       "resources": [],
+       "fuel_line_target": null,
+       "colors": null,
+       "flight": null,
+       "actions": [],
+       "symmetry": 0
+      },
+      {
+       "guid": "p9",
+       "part_id": "fueltank_1v_inline_methalox_1x4",
+       "parent": 7,
+       "own_node": "top",
+       "parent_node": "bottom",
+       "local_position": {
+        "x": 0.0,
+        "y": -2.2721534035762785,
+        "z": 0.0
+       },
+       "local_rotation": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 1.0
+       },
+       "stage_index": 0,
+       "fuel_crossfeed": true,
+       "resources": [
+        {
+         "resource": "Methane",
+         "stored_units": 0.09840124973855581,
+         "capacity_units": 0.4
+        },
+        {
+         "resource": "Oxidizer",
+         "stored_units": 0.39360499895422324,
+         "capacity_units": 1.6
+        }
+       ],
+       "fuel_line_target": null,
+       "colors": null,
+       "flight": null,
+       "actions": [],
+       "symmetry": 0
+      },
+      {
+       "guid": "p11",
+       "part_id": "fueltank_1v_inline_methalox_1x4",
+       "parent": 8,
+       "own_node": "top",
+       "parent_node": "bottom",
+       "local_position": {
+        "x": 0.0,
+        "y": -4.1471534035762785,
+        "z": 0.0
+       },
+       "local_rotation": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 1.0
+       },
+       "stage_index": 0,
+       "fuel_crossfeed": true,
+       "resources": [
+        {
+         "resource": "Methane",
+         "stored_units": 0.09840124973855581,
+         "capacity_units": 0.4
+        },
+        {
+         "resource": "Oxidizer",
+         "stored_units": 0.39360499895422324,
+         "capacity_units": 1.6
+        }
+       ],
+       "fuel_line_target": null,
+       "colors": null,
+       "flight": null,
+       "actions": [],
+       "symmetry": 0
+      },
+      {
+       "guid": "p51",
+       "part_id": "fueltank_1v_inline_methalox_1x4",
+       "parent": 9,
+       "own_node": "top",
+       "parent_node": "bottom",
+       "local_position": {
+        "x": 0.0,
+        "y": -6.0221534035762785,
+        "z": 0.0
+       },
+       "local_rotation": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 1.0
+       },
+       "stage_index": 0,
+       "fuel_crossfeed": true,
+       "resources": [
+        {
+         "resource": "Methane",
+         "stored_units": 0.09840124973855581,
+         "capacity_units": 0.4
+        },
+        {
+         "resource": "Oxidizer",
+         "stored_units": 0.39360499895422324,
+         "capacity_units": 1.6
+        }
+       ],
+       "fuel_line_target": null,
+       "colors": null,
+       "flight": null,
+       "actions": [],
+       "symmetry": 0
+      },
+      {
+       "guid": "p46",
+       "part_id": "engine_1v_methalox_swivel",
+       "parent": 10,
+       "own_node": "top",
+       "parent_node": "bottom",
+       "local_position": {
+        "x": 0.0,
+        "y": -7.761553403576278,
+        "z": 0.0
+       },
+       "local_rotation": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 1.0
+       },
+       "stage_index": 3,
+       "fuel_crossfeed": true,
+       "resources": [],
+       "fuel_line_target": null,
+       "colors": null,
+       "flight": null,
+       "actions": [],
+       "symmetry": 0
+      }
+     ],
+     "stages": [
+      [
+       1
+      ],
+      [
+       7
+      ],
+      [
+       11
+      ]
+     ],
+     "loose": [],
+     "colors": null
+    },
+    "parts": {
+     "craft": {
+      "name": "Go High",
+      "description": "",
+      "parts": [
+       {
+        "guid": "p1",
+        "part_id": "pod_1v_conical_crew",
+        "parent": null,
+        "own_node": null,
+        "parent_node": null,
+        "local_position": {
+         "x": 0.0,
+         "y": 0.0,
+         "z": 0.0
+        },
+        "local_rotation": {
+         "x": 0.0,
+         "y": 0.0,
+         "z": 0.0,
+         "w": 1.0
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [
+         {
+          "resource": "ElectricCharge",
+          "stored_units": 0.0,
+          "capacity_units": 50.0
+         },
+         {
+          "resource": "MonoPropellant",
+          "stored_units": 0.04,
+          "capacity_units": 0.04
+         }
+        ],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 0
+       },
+       {
+        "guid": "p5",
+        "part_id": "parachute_0v",
+        "parent": 0,
+        "own_node": "bottom",
+        "parent_node": "top",
+        "local_position": {
+         "x": 0.0,
+         "y": 0.572000028565526,
+         "z": 0.0
+        },
+        "local_rotation": {
+         "x": 0.0,
+         "y": 0.0,
+         "z": 0.0,
+         "w": 1.0
+        },
+        "stage_index": 1,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 0
+       },
+       {
+        "guid": "p3",
+        "part_id": "collector_1v_science_general",
+        "parent": 0,
+        "own_node": "top",
+        "parent_node": "bottom",
+        "local_position": {
+         "x": 0.0,
+         "y": -0.5900000035762787,
+         "z": 0.0
+        },
+        "local_rotation": {
+         "x": 0.0,
+         "y": 0.0,
+         "z": 0.0,
+         "w": 1.0
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 0
+       },
+       {
+        "guid": "p6",
+        "part_id": "storage_0v_battery_electricity_radial",
+        "parent": 0,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+         "x": -0.10815347172356624,
+         "y": 0.14690928056874278,
+         "z": 0.40462586715199034
+        },
+        "local_rotation": {
+         "x": -0.11130395471233902,
+         "y": 0.588952245567143,
+         "z": -0.14864605391434013,
+         "w": 0.7865437259062641
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [
+         {
+          "resource": "ElectricCharge",
+          "stored_units": 0.0,
+          "capacity_units": 100.0
+         }
+        ],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 0
+       },
+       {
+        "guid": "p7",
+        "part_id": "solararray_0v_flat",
+        "parent": 0,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+         "x": -0.3914419921394828,
+         "y": 0.08425614604896581,
+         "z": 0.22587959431299703
+        },
+        "local_rotation": {
+         "x": -0.04973738034762499,
+         "y": 0.2631553239717857,
+         "z": -0.17893178068438984,
+         "w": 0.9467095047175632
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 0
+       },
+       {
+        "guid": "p8",
+        "part_id": "solararray_0v_flat",
+        "parent": 0,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+         "x": 0.2310029965421944,
+         "y": 0.05858885021754906,
+         "z": 0.40054400175956734
+        },
+        "local_rotation": {
+         "x": -0.16284081554015772,
+         "y": 0.8614706876519019,
+         "z": -0.08933776356115242,
+         "w": 0.4726202356148827
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 0
+       },
+       {
+        "guid": "p47",
+        "part_id": "stabilizer_1v_reactionwheel",
+        "parent": 2,
+        "own_node": "top",
+        "parent_node": "bottom",
+        "local_position": {
+         "x": 0.0,
+         "y": -1.0390267035762788,
+         "z": 0.0
+        },
+        "local_rotation": {
+         "x": 0.0,
+         "y": 0.0,
+         "z": 0.0,
+         "w": 1.0
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 0
+       },
+       {
+        "guid": "p48",
+        "part_id": "decoupler_1v_inline",
+        "parent": 6,
+        "own_node": "top",
+        "parent_node": "bottom",
+        "local_position": {
+         "x": 0.0,
+         "y": -1.2863534035762787,
+         "z": 0.0
+        },
+        "local_rotation": {
+         "x": 0.0,
+         "y": 0.0,
+         "z": 0.0,
+         "w": 1.0
+        },
+        "stage_index": 2,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 0
+       },
+       {
+        "guid": "p9",
+        "part_id": "fueltank_1v_inline_methalox_1x4",
+        "parent": 7,
+        "own_node": "top",
+        "parent_node": "bottom",
+        "local_position": {
+         "x": 0.0,
+         "y": -2.2721534035762785,
+         "z": 0.0
+        },
+        "local_rotation": {
+         "x": 0.0,
+         "y": 0.0,
+         "z": 0.0,
+         "w": 1.0
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [
+         {
+          "resource": "Methane",
+          "stored_units": 0.09840124973855581,
+          "capacity_units": 0.4
+         },
+         {
+          "resource": "Oxidizer",
+          "stored_units": 0.39360499895422324,
+          "capacity_units": 1.6
+         }
+        ],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 0
+       },
+       {
+        "guid": "p11",
+        "part_id": "fueltank_1v_inline_methalox_1x4",
+        "parent": 8,
+        "own_node": "top",
+        "parent_node": "bottom",
+        "local_position": {
+         "x": 0.0,
+         "y": -4.1471534035762785,
+         "z": 0.0
+        },
+        "local_rotation": {
+         "x": 0.0,
+         "y": 0.0,
+         "z": 0.0,
+         "w": 1.0
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [
+         {
+          "resource": "Methane",
+          "stored_units": 0.09840124973855581,
+          "capacity_units": 0.4
+         },
+         {
+          "resource": "Oxidizer",
+          "stored_units": 0.39360499895422324,
+          "capacity_units": 1.6
+         }
+        ],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 0
+       },
+       {
+        "guid": "p18",
+        "part_id": "decoupler_1v_radial",
+        "parent": 9,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+         "x": 0.5166572432044473,
+         "y": -4.0681355675832265,
+         "z": 0.39385153810613294
+        },
+        "local_rotation": {
+         "x": 0.0,
+         "y": 0.94693007183385,
+         "z": 0.0,
+         "w": 0.321439635167693
+        },
+        "stage_index": 3,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 4
+       },
+       {
+        "guid": "p19",
+        "part_id": "decoupler_1v_radial",
+        "parent": 9,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+         "x": -0.5166577200416053,
+         "y": -4.0681355675832265,
+         "z": -0.393851538106133
+        },
+        "local_rotation": {
+         "x": 0.0,
+         "y": 0.3214396351676931,
+         "z": 0.0,
+         "w": -0.94693007183385
+        },
+        "stage_index": 3,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 4
+       },
+       {
+        "guid": "p20",
+        "part_id": "fueltank_1v_inline_methalox_1x4",
+        "parent": 10,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+         "x": 1.1357163170625015,
+         "y": -3.714030526985967,
+         "z": 0.8392287915369843
+        },
+        "local_rotation": {
+         "x": -7.191251417690165e-08,
+         "y": 0.9469299750660488,
+         "z": -2.4411047732848665e-08,
+         "w": 0.3214399202361254
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [
+         {
+          "resource": "Methane",
+          "stored_units": 0.0,
+          "capacity_units": 0.4
+         },
+         {
+          "resource": "Oxidizer",
+          "stored_units": 0.0,
+          "capacity_units": 1.6
+         }
+        ],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 5
+       },
+       {
+        "guid": "p21",
+        "part_id": "fueltank_1v_inline_methalox_1x4",
+        "parent": 11,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+         "x": -1.1357167938996595,
+         "y": -3.714030526985967,
+         "z": -0.8392287915369844
+        },
+        "local_rotation": {
+         "x": -2.4411047732848665e-08,
+         "y": 0.3214399202361254,
+         "z": 7.191251417690164e-08,
+         "w": -0.9469299750660486
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [
+         {
+          "resource": "Methane",
+          "stored_units": 0.0,
+          "capacity_units": 0.4
+         },
+         {
+          "resource": "Oxidizer",
+          "stored_units": 0.0,
+          "capacity_units": 1.6
+         }
+        ],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 5
+       },
+       {
+        "guid": "p22",
+        "part_id": "fueltank_1v_inline_methalox_1x4",
+        "parent": 13,
+        "own_node": "bottom",
+        "parent_node": "top",
+        "local_position": {
+         "x": -1.1357165679642969,
+         "y": -1.8390305269859888,
+         "z": -0.8392286181703382
+        },
+        "local_rotation": {
+         "x": -2.4411047732848665e-08,
+         "y": 0.32143992023612544,
+         "z": 7.191251417690165e-08,
+         "w": -0.9469299750660488
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [
+         {
+          "resource": "Methane",
+          "stored_units": 0.0,
+          "capacity_units": 0.4
+         },
+         {
+          "resource": "Oxidizer",
+          "stored_units": 0.0,
+          "capacity_units": 1.6
+         }
+        ],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 6
+       },
+       {
+        "guid": "p23",
+        "part_id": "fueltank_1v_inline_methalox_1x4",
+        "parent": 12,
+        "own_node": "bottom",
+        "parent_node": "top",
+        "local_position": {
+         "x": 1.135716091127139,
+         "y": -1.8390305269859888,
+         "z": 0.8392286181703381
+        },
+        "local_rotation": {
+         "x": -7.191251417690165e-08,
+         "y": 0.9469299750660488,
+         "z": -2.4411047732848655e-08,
+         "w": 0.32143992023612533
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [
+         {
+          "resource": "Methane",
+          "stored_units": 0.0,
+          "capacity_units": 0.4
+         },
+         {
+          "resource": "Oxidizer",
+          "stored_units": 0.0,
+          "capacity_units": 1.6
+         }
+        ],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 6
+       },
+       {
+        "guid": "p26",
+        "part_id": "nosecone_1v_hemisphere",
+        "parent": 14,
+        "own_node": "bottom01",
+        "parent_node": "top",
+        "local_position": {
+         "x": -1.1357164483691782,
+         "y": -0.846530526986,
+         "z": -0.8392285264015935
+        },
+        "local_rotation": {
+         "x": -2.4411047732848665e-08,
+         "y": 0.32143992023612544,
+         "z": 7.191251417690165e-08,
+         "w": -0.9469299750660488
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 8
+       },
+       {
+        "guid": "p27",
+        "part_id": "nosecone_1v_hemisphere",
+        "parent": 15,
+        "own_node": "bottom01",
+        "parent_node": "top",
+        "local_position": {
+         "x": 1.1357159715320202,
+         "y": -0.846530526986,
+         "z": 0.8392285264015934
+        },
+        "local_rotation": {
+         "x": -7.191251417690165e-08,
+         "y": 0.9469299750660488,
+         "z": -2.4411047732848655e-08,
+         "w": 0.32143992023612533
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 8
+       },
+       {
+        "guid": "p49",
+        "part_id": "fueltank_1v_inline_methalox_1x4",
+        "parent": 13,
+        "own_node": "top",
+        "parent_node": "bottom",
+        "local_position": {
+         "x": -1.1357170198350222,
+         "y": -5.589030526985946,
+         "z": -0.8392289649036305
+        },
+        "local_rotation": {
+         "x": -2.4411047732848665e-08,
+         "y": 0.32143992023612544,
+         "z": 7.191251417690165e-08,
+         "w": -0.9469299750660488
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [
+         {
+          "resource": "Methane",
+          "stored_units": 0.0,
+          "capacity_units": 0.4
+         },
+         {
+          "resource": "Oxidizer",
+          "stored_units": 0.0,
+          "capacity_units": 1.6
+         }
+        ],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 9
+       },
+       {
+        "guid": "p28",
+        "part_id": "fueltank_1v_inline_methalox_1x4",
+        "parent": 12,
+        "own_node": "top",
+        "parent_node": "bottom",
+        "local_position": {
+         "x": 1.1357165429978642,
+         "y": -5.589030526985946,
+         "z": 0.8392289649036304
+        },
+        "local_rotation": {
+         "x": -7.191251417690165e-08,
+         "y": 0.9469299750660488,
+         "z": -2.4411047732848655e-08,
+         "w": 0.32143992023612533
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [
+         {
+          "resource": "Methane",
+          "stored_units": 0.0,
+          "capacity_units": 0.4
+         },
+         {
+          "resource": "Oxidizer",
+          "stored_units": 0.0,
+          "capacity_units": 1.6
+         }
+        ],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 9
+       },
+       {
+        "guid": "p31",
+        "part_id": "decoupler_2v_radial",
+        "parent": 9,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+         "x": 0.17563937814159197,
+         "y": -4.292501781584271,
+         "z": 0.6450790032278167
+        },
+        "local_rotation": {
+         "x": 0.0,
+         "y": 0.8101436573938495,
+         "z": 0.0,
+         "w": 0.5862314000328854
+        },
+        "stage_index": 4,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 11
+       },
+       {
+        "guid": "p32",
+        "part_id": "decoupler_2v_radial",
+        "parent": 9,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+         "x": 0.6450787648092378,
+         "y": -4.292501781584271,
+         "z": -0.1756396165601708
+        },
+        "local_rotation": {
+         "x": 0.0,
+         "y": 0.987386272186199,
+         "z": 0.0,
+         "w": -0.15832987557072503
+        },
+        "stage_index": 4,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 11
+       },
+       {
+        "guid": "p33",
+        "part_id": "decoupler_2v_radial",
+        "parent": 9,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+         "x": -0.17563985497874984,
+         "y": -4.292501781584271,
+         "z": -0.6450790032278167
+        },
+        "local_rotation": {
+         "x": 0.0,
+         "y": 0.5862314000328854,
+         "z": 0.0,
+         "w": -0.8101436573938495
+        },
+        "stage_index": 4,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 11
+       },
+       {
+        "guid": "p34",
+        "part_id": "decoupler_2v_radial",
+        "parent": 9,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+         "x": -0.6450792416463959,
+         "y": -4.292501781584271,
+         "z": 0.1756396165601708
+        },
+        "local_rotation": {
+         "x": 0.0,
+         "y": -0.15832987557072503,
+         "z": 0.0,
+         "w": -0.987386272186199
+        },
+        "stage_index": 4,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 11
+       },
+       {
+        "guid": "p50",
+        "part_id": "fueltank_1v_inline_methalox_1x4",
+        "parent": 18,
+        "own_node": "top",
+        "parent_node": "bottom",
+        "local_position": {
+         "x": -1.1357172457703848,
+         "y": -7.464030526985924,
+         "z": -0.8392291382702767
+        },
+        "local_rotation": {
+         "x": -2.4411047732848665e-08,
+         "y": 0.3214399202361254,
+         "z": 7.191251417690164e-08,
+         "w": -0.9469299750660486
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [
+         {
+          "resource": "Methane",
+          "stored_units": 0.0,
+          "capacity_units": 0.4
+         },
+         {
+          "resource": "Oxidizer",
+          "stored_units": 0.0,
+          "capacity_units": 1.6
+         }
+        ],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 14
+       },
+       {
+        "guid": "p43",
+        "part_id": "fueltank_1v_inline_methalox_1x4",
+        "parent": 19,
+        "own_node": "top",
+        "parent_node": "bottom",
+        "local_position": {
+         "x": 1.1357167689332268,
+         "y": -7.464030526985924,
+         "z": 0.8392291382702766
+        },
+        "local_rotation": {
+         "x": -7.191251417690164e-08,
+         "y": 0.9469299750660488,
+         "z": -2.4411047732848642e-08,
+         "w": 0.3214399202361252
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [
+         {
+          "resource": "Methane",
+          "stored_units": 0.0,
+          "capacity_units": 0.4
+         },
+         {
+          "resource": "Oxidizer",
+          "stored_units": 0.0,
+          "capacity_units": 1.6
+         }
+        ],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 14
+       },
+       {
+        "guid": "p44",
+        "part_id": "engine_1v_methalox_swivel",
+        "parent": 24,
+        "own_node": "top",
+        "parent_node": "bottom",
+        "local_position": {
+         "x": -1.135717455366102,
+         "y": -9.203430526985905,
+         "z": -0.839229299099047
+        },
+        "local_rotation": {
+         "x": -2.4411047732848665e-08,
+         "y": 0.32143992023612544,
+         "z": 7.191251417690164e-08,
+         "w": -0.9469299750660486
+        },
+        "stage_index": 4,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 15
+       },
+       {
+        "guid": "p45",
+        "part_id": "engine_1v_methalox_swivel",
+        "parent": 25,
+        "own_node": "top",
+        "parent_node": "bottom",
+        "local_position": {
+         "x": 1.135716978528944,
+         "y": -9.203430526985905,
+         "z": 0.8392292990990469
+        },
+        "local_rotation": {
+         "x": -7.191251417690164e-08,
+         "y": 0.9469299750660488,
+         "z": -2.4411047732848642e-08,
+         "w": 0.3214399202361252
+        },
+        "stage_index": 4,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 15
+       },
+       {
+        "guid": "p51",
+        "part_id": "fueltank_1v_inline_methalox_1x4",
+        "parent": 9,
+        "own_node": "top",
+        "parent_node": "bottom",
+        "local_position": {
+         "x": 0.0,
+         "y": -6.0221534035762785,
+         "z": 0.0
+        },
+        "local_rotation": {
+         "x": 0.0,
+         "y": 0.0,
+         "z": 0.0,
+         "w": 1.0
+        },
+        "stage_index": 0,
+        "fuel_crossfeed": true,
+        "resources": [
+         {
+          "resource": "Methane",
+          "stored_units": 0.09840124973855581,
+          "capacity_units": 0.4
+         },
+         {
+          "resource": "Oxidizer",
+          "stored_units": 0.39360499895422324,
+          "capacity_units": 1.6
+         }
+        ],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 0
+       },
+       {
+        "guid": "p46",
+        "part_id": "engine_1v_methalox_swivel",
+        "parent": 28,
+        "own_node": "top",
+        "parent_node": "bottom",
+        "local_position": {
+         "x": 0.0,
+         "y": -7.761553403576278,
+         "z": 0.0
+        },
+        "local_rotation": {
+         "x": 0.0,
+         "y": 0.0,
+         "z": 0.0,
+         "w": 1.0
+        },
+        "stage_index": 3,
+        "fuel_crossfeed": true,
+        "resources": [],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 0
+       },
+       {
+        "guid": "p52",
+        "part_id": "booster_1v_solid_thumper",
+        "parent": 20,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+         "x": 0.5609300545971372,
+         "y": -4.625690976387993,
+         "z": 1.8495185856919405
+        },
+        "local_rotation": {
+         "x": 0.0,
+         "y": 0.8052153566194024,
+         "z": 0.0,
+         "w": 0.5929824866421342
+        },
+        "stage_index": 5,
+        "fuel_crossfeed": true,
+        "resources": [
+         {
+          "resource": "SolidFuel",
+          "stored_units": 0.0,
+          "capacity_units": 6.15
+         }
+        ],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 16
+       },
+       {
+        "guid": "p53",
+        "part_id": "booster_1v_solid_thumper",
+        "parent": 21,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+         "x": 1.8495183472733616,
+         "y": -4.625690976387993,
+         "z": -0.5609302930157158
+        },
+        "local_rotation": {
+         "x": 0.0,
+         "y": 0.988675176410638,
+         "z": 0.0,
+         "w": -0.15007130155160914
+        },
+        "stage_index": 5,
+        "fuel_crossfeed": true,
+        "resources": [
+         {
+          "resource": "SolidFuel",
+          "stored_units": 0.0,
+          "capacity_units": 6.15
+         }
+        ],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 16
+       },
+       {
+        "guid": "p54",
+        "part_id": "booster_1v_solid_thumper",
+        "parent": 22,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+         "x": -0.560930531434295,
+         "y": -4.625690976387993,
+         "z": -1.8495185856919405
+        },
+        "local_rotation": {
+         "x": 0.0,
+         "y": 0.5929824866421342,
+         "z": 0.0,
+         "w": -0.8052153566194024
+        },
+        "stage_index": 5,
+        "fuel_crossfeed": true,
+        "resources": [
+         {
+          "resource": "SolidFuel",
+          "stored_units": 0.0,
+          "capacity_units": 6.15
+         }
+        ],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 16
+       },
+       {
+        "guid": "p55",
+        "part_id": "booster_1v_solid_thumper",
+        "parent": 23,
+        "own_node": "srfAttach",
+        "parent_node": null,
+        "local_position": {
+         "x": -1.8495188241105196,
+         "y": -4.625690976387993,
+         "z": 0.5609302930157158
+        },
+        "local_rotation": {
+         "x": 0.0,
+         "y": -0.15007130155160914,
+         "z": 0.0,
+         "w": -0.988675176410638
+        },
+        "stage_index": 5,
+        "fuel_crossfeed": true,
+        "resources": [
+         {
+          "resource": "SolidFuel",
+          "stored_units": 0.0,
+          "capacity_units": 6.15
+         }
+        ],
+        "fuel_line_target": null,
+        "colors": null,
+        "flight": null,
+        "actions": [],
+        "symmetry": 16
+       }
+      ],
+      "stages": [
+       [
+        1
+       ],
+       [
+        7
+       ],
+       [
+        10,
+        11,
+        29
+       ],
+       [
+        20,
+        21,
+        22,
+        23,
+        26,
+        27
+       ],
+       [
+        30,
+        31,
+        32,
+        33
+       ]
+      ],
+      "loose": [],
+      "colors": null
+     },
+     "present": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false
+     ],
+     "deployed": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+     ],
+     "chutes": [
+      "Stowed",
+      "Stowed",
+      "Stowed",
+      "Stowed",
+      "Stowed",
+      "Stowed",
+      "Stowed",
+      "Stowed",
+      "Stowed",
+      "Stowed",
+      "Stowed",
+      "Stowed",
+      "Stowed",
+      "Stowed",
+      "Stowed",
+      "Stowed",
+      "Stowed",
+      "Stowed",
+      "Stowed",
+      "Stowed",
+      "Stowed",
+      "Stowed",
+      "Stowed",
+      "Stowed",
+      "Stowed",
+      "Stowed",
+      "Stowed",
+      "Stowed",
+      "Stowed",
+      "Stowed",
+      "Stowed",
+      "Stowed",
+      "Stowed",
+      "Stowed"
+     ],
+     "chute_open": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     "temperature_k": [
+      180.73264618789904,
+      132.48357218838433,
+      187.331221264262,
+      18.423939300455235,
+      6.542272068097046,
+      6.542272068097046,
+      117.57312035615524,
+      53.251567377205255,
+      118.90852474110068,
+      118.9090257660615,
+      143.0425712503457,
+      143.0425712503457,
+      178.00247466920507,
+      178.00245867759776,
+      178.10231202292158,
+      178.10235929091746,
+      206.174596771448,
+      206.34236560689664,
+      178.00244942065905,
+      178.00246540028672,
+      243.1670734874199,
+      244.8806817916377,
+      242.48392996178583,
+      244.9979398494567,
+      178.00244016486909,
+      178.0024561329169,
+      202.67913525081485,
+      202.68948623957183,
+      118.9119214831609,
+      186.4587887612904,
+      241.66886788166553,
+      244.22050236357956,
+      241.88136442789525,
+      243.96643586595297
+     ],
+     "gear_out": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+     ],
+     "converter_on": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+     ],
+     "fairing_deployed": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+     ],
+     "bay_open": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+     ],
+     "engine_shutdown": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+     ],
+     "control_part": null,
+     "debris": false
+    },
+    "crew": [
+     [
+      0,
+      "Aaron L Kerman"
+     ]
+    ],
+    "docked": [],
+    "eva": null,
+    "flag": null
+   }
+  ],
+  "campaign": {
+   "id": "c1793573632",
+   "name": "ToTheMun",
+   "started_tick": 0,
+   "members": [
+    {
+     "player_id": 12,
+     "display_name": "Pilot",
+     "joined_tick": 0,
+     "agency": {
+      "flag_id": "default",
+      "primary_rgb": [
+       74,
+       163,
+       255
+      ],
+      "secondary_rgb": [
+       255,
+       216,
+       122
+      ]
+     }
+    }
+   ],
+   "owner": 12,
+   "mode": "Exploration",
+   "difficulty": [
+    {
+     "id": "AllowRevert",
+     "value": {
+      "Bool": true
+     }
+    },
+    {
+     "id": "AllowQuickLoad",
+     "value": {
+      "Bool": true
+     }
+    },
+    {
+     "id": "IncludeStockVessels",
+     "value": {
+      "Bool": true
+     }
+    },
+    {
+     "id": "InfiniteFuel",
+     "value": {
+      "Bool": false
+     }
+    },
+    {
+     "id": "InfinitePower",
+     "value": {
+      "Bool": false
+     }
+    },
+    {
+     "id": "DockingTolerance",
+     "value": {
+      "Number": 1.5
+     }
+    },
+    {
+     "id": "CommNetRequired",
+     "value": {
+      "Bool": true
+     }
+    },
+    {
+     "id": "UnbreakableJoints",
+     "value": {
+      "Bool": false
+     }
+    },
+    {
+     "id": "HeatEnabled",
+     "value": {
+      "Bool": true
+     }
+    },
+    {
+     "id": "HeatScaling",
+     "value": {
+      "Number": 1.0
+     }
+    },
+    {
+     "id": "HeatPartDestruction",
+     "value": {
+      "Bool": true
+     }
+    },
+    {
+     "id": "Shared_Vessel_Control",
+     "value": {
+      "Bool": true
+     }
+    }
+   ],
+   "last_played_unix": 1793593112,
+   "science": {
+    "submitted": [
+     {
+      "report": {
+       "experiment": "CrewObservation",
+       "sample": false,
+       "location": "Kerbin_Atmosphere_KerbinWater",
+       "value": 4.0
+      },
+      "by": 12,
+      "tick": 237923
+     },
+     {
+      "report": {
+       "experiment": "CrewObservation",
+       "sample": false,
+       "location": "Kerbin_LowOrbit_KerbinWater",
+       "value": 24.0
+      },
+      "by": 12,
+      "tick": 237923
+     },
+     {
+      "report": {
+       "experiment": "CrewObservation",
+       "sample": false,
+       "location": "Kerbin_LowOrbit_KerbinGrasslands",
+       "value": 24.0
+      },
+      "by": 12,
+      "tick": 237923
+     },
+     {
+      "report": {
+       "experiment": "CrewObservation",
+       "sample": false,
+       "location": "Kerbin_Atmosphere_KerbinGrasslands",
+       "value": 4.0
+      },
+      "by": 12,
+      "tick": 237923
+     },
+     {
+      "report": {
+       "experiment": "CrewObservation",
+       "sample": false,
+       "location": "Kerbin_Landed_KerbinGrasslands",
+       "value": 4.0
+      },
+      "by": 12,
+      "tick": 237923
+     },
+     {
+      "report": {
+       "experiment": "EnvironmentSurvey",
+       "sample": false,
+       "location": "Kerbin_Atmosphere_KerbinWater",
+       "value": 5.0
+      },
+      "by": 12,
+      "tick": 278045
+     },
+     {
+      "report": {
+       "experiment": "EnvironmentSurvey",
+       "sample": true,
+       "location": "Kerbin_Atmosphere_KerbinWater",
+       "value": 5.0
+      },
+      "by": 12,
+      "tick": 278045
+     },
+     {
+      "report": {
+       "experiment": "CrewObservation",
+       "sample": false,
+       "location": "Kerbin_Atmosphere_KerbinHighlands",
+       "value": 4.0
+      },
+      "by": 12,
+      "tick": 361415
+     },
+     {
+      "report": {
+       "experiment": "EnvironmentSurvey",
+       "sample": false,
+       "location": "Kerbin_Atmosphere_KerbinHighlands",
+       "value": 5.0
+      },
+      "by": 12,
+      "tick": 362165
+     },
+     {
+      "report": {
+       "experiment": "EnvironmentSurvey",
+       "sample": false,
+       "location": "Kerbin_LowOrbit_KerbinWater",
+       "value": 30.0
+      },
+      "by": 12,
+      "tick": 751742
+     },
+     {
+      "report": {
+       "experiment": "CrewObservation",
+       "sample": false,
+       "location": "Kerbin_LowOrbit_KerbinHighlands",
+       "value": 24.0
+      },
+      "by": 12,
+      "tick": 788539
+     },
+     {
+      "report": {
+       "experiment": "EnvironmentSurvey",
+       "sample": false,
+       "location": "Kerbin_LowOrbit_KerbinHighlands",
+       "value": 30.0
+      },
+      "by": 12,
+      "tick": 795394
+     },
+     {
+      "report": {
+       "experiment": "EnvironmentSurvey",
+       "sample": false,
+       "location": "Kerbin_LowOrbit_KerbinGrasslands",
+       "value": 30.0
+      },
+      "by": 12,
+      "tick": 1031272
+     },
+     {
+      "report": {
+       "experiment": "CrewObservation",
+       "sample": false,
+       "location": "Kerbin_LowOrbit_KerbinDesert",
+       "value": 24.0
+      },
+      "by": 12,
+      "tick": 1032872
+     },
+     {
+      "report": {
+       "experiment": "EnvironmentSurvey",
+       "sample": false,
+       "location": "Kerbin_LowOrbit_KerbinDesert",
+       "value": 30.0
+      },
+      "by": 12,
+      "tick": 1059401
+     },
+     {
+      "report": {
+       "experiment": "CrewObservation",
+       "sample": false,
+       "location": "Kerbin_HighOrbit_KerbinWater",
+       "value": 48.0
+      },
+      "by": 12,
+      "tick": 1082059
+     },
+     {
+      "report": {
+       "experiment": "CrewObservation",
+       "sample": false,
+       "location": "Mun_HighOrbit_MunMare",
+       "value": 40.0
+      },
+      "by": 12,
+      "tick": 1865199
+     },
+     {
+      "report": {
+       "experiment": "EnvironmentSurvey",
+       "sample": false,
+       "location": "Mun_HighOrbit_MunMare",
+       "value": 50.0
+      },
+      "by": 12,
+      "tick": 1865199
+     },
+     {
+      "report": {
+       "experiment": "CrewObservation",
+       "sample": false,
+       "location": "Mun_HighOrbit_MunHighlands",
+       "value": 40.0
+      },
+      "by": 12,
+      "tick": 1986375
+     },
+     {
+      "report": {
+       "experiment": "EnvironmentSurvey",
+       "sample": false,
+       "location": "Mun_HighOrbit_MunHighlands",
+       "value": 50.0
+      },
+      "by": 12,
+      "tick": 1987125
+     }
+    ],
+    "unlocked": [
+     "tNode_1v_rockets_01",
+     "tNode_1v_aero_01",
+     "tNode_1v_rockets_02",
+     "tNode_1v_rockets_03",
+     "tNode_1v_science_01",
+     "tNode_0v_electronics",
+     "tNode_1v_construction_01",
+     "tNode_1v_decouplers_01",
+     "tNode_0v_utility",
+     "tNode_1v_utility_01",
+     "tNode_1v_rockets_04",
+     "tNode_2v_rockets_01",
+     "tNode_2v_rockets_02"
+    ],
+    "missions": [
+     {
+      "id": "Main_Kerbin_01",
+      "progress": {
+       "stage": 3,
+       "complete": true,
+       "latched": []
+      },
+      "stage_started_tick": 15740,
+      "accepted": true,
+      "turned_in": true
+     },
+     {
+      "id": "Main_Kerbin_02",
+      "progress": {
+       "stage": 3,
+       "complete": true,
+       "latched": []
+      },
+      "stage_started_tick": 237086,
+      "accepted": true,
+      "turned_in": true
+     },
+     {
+      "id": "Main_Kerbin_03",
+      "progress": {
+       "stage": 2,
+       "complete": true,
+       "latched": []
+      },
+      "stage_started_tick": 748192,
+      "accepted": true,
+      "turned_in": true
+     },
+     {
+      "id": "KSP2Mission_Secondary_Kerbin_Buoyancy",
+      "progress": {
+       "stage": 0,
+       "complete": false,
+       "latched": [
+        [
+         1,
+         [
+          false,
+          false,
+          false
+         ]
+        ],
+        [
+         2,
+         [
+          false,
+          false,
+          false
+         ]
+        ],
+        [
+         3,
+         [
+          false,
+          false,
+          false
+         ]
+        ],
+        [
+         4,
+         [
+          false,
+          false,
+          false
+         ]
+        ],
+        [
+         5,
+         [
+          false,
+          false,
+          false
+         ]
+        ],
+        [
+         8,
+         [
+          false,
+          false,
+          false
+         ]
+        ],
+        [
+         6,
+         [
+          false,
+          false,
+          false
+         ]
+        ]
+       ]
+      },
+      "stage_started_tick": 252329,
+      "accepted": true,
+      "turned_in": false
+     },
+     {
+      "id": "Main_MunOrBust_04",
+      "progress": {
+       "stage": 0,
+       "complete": false,
+       "latched": [
+        [
+         1,
+         [
+          false,
+          false,
+          false,
+          false
+         ]
+        ],
+        [
+         2,
+         [
+          false,
+          false,
+          false,
+          false
+         ]
+        ],
+        [
+         3,
+         [
+          false,
+          false,
+          false,
+          false
+         ]
+        ],
+        [
+         4,
+         [
+          false,
+          false,
+          false,
+          false
+         ]
+        ],
+        [
+         5,
+         [
+          false,
+          false,
+          false,
+          false
+         ]
+        ],
+        [
+         6,
+         [
+          false,
+          false,
+          false,
+          false
+         ]
+        ]
+       ]
+      },
+      "stage_started_tick": 915433,
+      "accepted": true,
+      "turned_in": false
+     }
+    ],
+    "rev": 41
+   },
+   "roster": [
+    [
+     "Jebediah Kerman",
+     0.0
+    ],
+    [
+     "Bill Kerman",
+     0.0
+    ],
+    [
+     "Bob Kerman",
+     0.0
+    ],
+    [
+     "Valentina Kerman",
+     0.0
+    ],
+    [
+     "Aaron L Kerman",
+     0.0
+    ],
+    [
+     "Abel A Kerman",
+     0.0
+    ],
+    [
+     "Adam J Kerman",
+     0.0
+    ],
+    [
+     "Alexandra E Kerman",
+     0.0
+    ]
+   ],
+   "quicksave": null
+  },
+  "crafts": [],
+  "shelf": []
+ },
+ "revert": null,
+ "sessions": {
+  "connected": [
+   [
+    12,
+    "Pilot",
+    1
+   ]
+  ],
+  "playing": [
+   12
+  ],
+  "warp": [
+   [
+    12,
+    10
+   ]
+  ],
+  "flying": [
+   [
+    12,
+    6
+   ]
+  ]
+ },
+ "inputs": [
+  {
+   "step": 30160,
+   "tick": 5366512,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "RequestWarp": {
+      "factor": 5
+     }
+    }
+   }
+  },
+  {
+   "step": 30360,
+   "tick": 5367512,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "RequestWarp": {
+      "factor": 4
+     }
+    }
+   }
+  },
+  {
+   "step": 30410,
+   "tick": 5367712,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "RequestWarp": {
+      "factor": 3
+     }
+    }
+   }
+  },
+  {
+   "step": 30477,
+   "tick": 5367913,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "RequestWarp": {
+      "factor": 2
+     }
+    }
+   }
+  },
+  {
+   "step": 30576,
+   "tick": 5368111,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "RequestWarp": {
+      "factor": 1
+     }
+    }
+   }
+  },
+  {
+   "step": 31860,
+   "tick": 5369395,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.0,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 31862,
+   "tick": 5369397,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.0,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 31866,
+   "tick": 5369401,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.0,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 31867,
+   "tick": 5369402,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.0,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 31870,
+   "tick": 5369405,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.0,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 31872,
+   "tick": 5369407,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.0,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 31876,
+   "tick": 5369411,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.0,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 31877,
+   "tick": 5369412,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.0,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 31880,
+   "tick": 5369415,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.0,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 31882,
+   "tick": 5369417,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.0,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 31885,
+   "tick": 5369420,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.0,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 31887,
+   "tick": 5369422,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.0,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 32300,
+   "tick": 5369835,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "ClearBurn": {
+      "vessel": 6
+     }
+    }
+   }
+  },
+  {
+   "step": 32459,
+   "tick": 5369994,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "RunExperiments": {
+      "vessel": 6
+     }
+    }
+   }
+  },
+  {
+   "step": 32534,
+   "tick": 5370069,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "TransmitScience": {
+      "vessel": 6
+     }
+    }
+   }
+  },
+  {
+   "step": 32649,
+   "tick": 5370184,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "TransmitScience": {
+      "vessel": 6
+     }
+    }
+   }
+  },
+  {
+   "step": 32657,
+   "tick": 5370192,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "TransmitScience": {
+      "vessel": 6
+     }
+    }
+   }
+  },
+  {
+   "step": 32666,
+   "tick": 5370201,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "TransmitScience": {
+      "vessel": 6
+     }
+    }
+   }
+  },
+  {
+   "step": 32674,
+   "tick": 5370209,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "TransmitScience": {
+      "vessel": 6
+     }
+    }
+   }
+  },
+  {
+   "step": 33830,
+   "tick": 5371365,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetTarget": {
+      "vessel": 6,
+      "target": null
+     }
+    }
+   }
+  },
+  {
+   "step": 34203,
+   "tick": 5371738,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "ScheduleBurns": {
+      "vessel": 6,
+      "burns": [
+       {
+        "ut": 107554.76196856888,
+        "prograde_mps": 0.0,
+        "normal_mps": 0.0,
+        "radial_mps": 0.0
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "step": 34203,
+   "tick": 5371738,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "ScheduleBurns": {
+      "vessel": 6,
+      "burns": [
+       {
+        "ut": 112189.41585644873,
+        "prograde_mps": 0.0,
+        "normal_mps": 0.0,
+        "radial_mps": 0.0
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "step": 34252,
+   "tick": 5371787,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "ScheduleBurns": {
+      "vessel": 6,
+      "burns": [
+       {
+        "ut": 112189.41585644873,
+        "prograde_mps": 0.0,
+        "normal_mps": 0.0,
+        "radial_mps": 0.0
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "step": 34263,
+   "tick": 5371798,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "ScheduleBurns": {
+      "vessel": 6,
+      "burns": [
+       {
+        "ut": 112189.41585644873,
+        "prograde_mps": 0.0,
+        "normal_mps": 0.0,
+        "radial_mps": 0.0
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "step": 34268,
+   "tick": 5371803,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "ScheduleBurns": {
+      "vessel": 6,
+      "burns": [
+       {
+        "ut": 112189.41585644873,
+        "prograde_mps": -1.9926977728274764,
+        "normal_mps": 0.0,
+        "radial_mps": 0.0
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "step": 34275,
+   "tick": 5371810,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "ScheduleBurns": {
+      "vessel": 6,
+      "burns": [
+       {
+        "ut": 112189.41585644873,
+        "prograde_mps": -3.9853970693835663,
+        "normal_mps": 0.0,
+        "radial_mps": 0.0
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "step": 34285,
+   "tick": 5371820,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "ScheduleBurns": {
+      "vessel": 6,
+      "burns": [
+       {
+        "ut": 112189.41585644873,
+        "prograde_mps": -4.981749395014187,
+        "normal_mps": 0.0,
+        "radial_mps": 0.0
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "step": 34302,
+   "tick": 5371837,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "ScheduleBurns": {
+      "vessel": 6,
+      "burns": [
+       {
+        "ut": 112189.41585644873,
+        "prograde_mps": -5.978105645094581,
+        "normal_mps": 0.0,
+        "radial_mps": 0.0
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "step": 34328,
+   "tick": 5371863,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "ScheduleBurns": {
+      "vessel": 6,
+      "burns": [
+       {
+        "ut": 112189.41585644873,
+        "prograde_mps": -8.96717237465685,
+        "normal_mps": 0.0,
+        "radial_mps": 0.0
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "step": 34335,
+   "tick": 5371870,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "ScheduleBurns": {
+      "vessel": 6,
+      "burns": [
+       {
+        "ut": 112189.41585644873,
+        "prograde_mps": -9.96352902925404,
+        "normal_mps": 0.0,
+        "radial_mps": 0.0
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "step": 34351,
+   "tick": 5371886,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "ScheduleBurns": {
+      "vessel": 6,
+      "burns": [
+       {
+        "ut": 112189.41585644873,
+        "prograde_mps": -9.963530010493445,
+        "normal_mps": 0.0,
+        "radial_mps": 0.0
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "step": 34886,
+   "tick": 5372421,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "RequestWarp": {
+      "factor": 2
+     }
+    }
+   }
+  },
+  {
+   "step": 34907,
+   "tick": 5372463,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "RequestWarp": {
+      "factor": 3
+     }
+    }
+   }
+  },
+  {
+   "step": 34932,
+   "tick": 5372538,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "RequestWarp": {
+      "factor": 4
+     }
+    }
+   }
+  },
+  {
+   "step": 34958,
+   "tick": 5372642,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "RequestWarp": {
+      "factor": 5
+     }
+    }
+   }
+  },
+  {
+   "step": 35027,
+   "tick": 5372987,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "RequestWarp": {
+      "factor": 10
+     }
+    }
+   }
+  },
+  {
+   "step": 35138,
+   "tick": 5374097,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "RequestWarp": {
+      "factor": 1000
+     }
+    }
+   }
+  },
+  {
+   "step": 35174,
+   "tick": 5410097,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "RequestWarp": {
+      "factor": 100
+     }
+    }
+   }
+  },
+  {
+   "step": 36959,
+   "tick": 5588597,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "RequestWarp": {
+      "factor": 50
+     }
+    }
+   }
+  },
+  {
+   "step": 37158,
+   "tick": 5598547,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "RequestWarp": {
+      "factor": 10
+     }
+    }
+   }
+  },
+  {
+   "step": 37951,
+   "tick": 5606477,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "RequestWarp": {
+      "factor": 5
+     }
+    }
+   }
+  },
+  {
+   "step": 38151,
+   "tick": 5607477,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "RequestWarp": {
+      "factor": 4
+     }
+    }
+   }
+  },
+  {
+   "step": 38201,
+   "tick": 5607677,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "RequestWarp": {
+      "factor": 3
+     }
+    }
+   }
+  },
+  {
+   "step": 38266,
+   "tick": 5607872,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "RequestWarp": {
+      "factor": 2
+     }
+    }
+   }
+  },
+  {
+   "step": 38366,
+   "tick": 5608072,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "RequestWarp": {
+      "factor": 1
+     }
+    }
+   }
+  },
+  {
+   "step": 40654,
+   "tick": 5610360,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.0,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 40678,
+   "tick": 5610384,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.0,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 40731,
+   "tick": 5610437,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.008800000011920928,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 40733,
+   "tick": 5610439,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.060000000000000005,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 40737,
+   "tick": 5610443,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.11120000004768371,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 40757,
+   "tick": 5610463,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.12000000005960464,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 40760,
+   "tick": 5610466,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.17820000004768374,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 40762,
+   "tick": 5610468,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.22330000007152562,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 40766,
+   "tick": 5610472,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.2577000000476838,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 40834,
+   "tick": 5610540,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.2666000000834466,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 40838,
+   "tick": 5610544,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.3238000000715257,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 40840,
+   "tick": 5610546,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.3720000000596048,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 40844,
+   "tick": 5610550,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.38090000003576296,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 40847,
+   "tick": 5610553,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.4375000000596049,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 40849,
+   "tick": 5610555,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.4726000000238421,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 40858,
+   "tick": 5610564,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.46340000003576304,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 40860,
+   "tick": 5610566,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.41069999998807927,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 40863,
+   "tick": 5610569,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.359100000023842,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 40865,
+   "tick": 5610571,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.33730000001192106,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 40872,
+   "tick": 5610578,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.34990000003576294,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 40874,
+   "tick": 5610580,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.402900000035763,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 40876,
+   "tick": 5610582,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.419900000035763,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 40937,
+   "tick": 5610643,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "ClearBurn": {
+      "vessel": 6
+     }
+    }
+   }
+  },
+  {
+   "step": 40992,
+   "tick": 5610698,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRawRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": -1.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 40992,
+   "tick": 5610698,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": -1.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 41006,
+   "tick": 5610712,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRawRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": 0.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 41006,
+   "tick": 5610712,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": 0.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 41022,
+   "tick": 5610728,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRawRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": -1.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 41022,
+   "tick": 5610728,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": -1.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 41028,
+   "tick": 5610734,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRawRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": 0.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 41028,
+   "tick": 5610734,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": 0.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 41082,
+   "tick": 5610788,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRawRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": 1.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 41082,
+   "tick": 5610788,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": 1.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 41091,
+   "tick": 5610797,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRawRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": 0.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 41091,
+   "tick": 5610797,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": 0.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 41100,
+   "tick": 5610806,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRawRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": -1.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 41100,
+   "tick": 5610806,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": -1.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 41113,
+   "tick": 5610819,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRawRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": 0.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 41113,
+   "tick": 5610819,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": 0.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 41126,
+   "tick": 5610832,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.428400000035763,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 41128,
+   "tick": 5610834,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.4828000000119212,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 41132,
+   "tick": 5610838,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.5331000000238421,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 41132,
+   "tick": 5610838,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.542900000035763,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 41155,
+   "tick": 5610861,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.551900000035763,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 41158,
+   "tick": 5610864,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.6039000000357628,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 41161,
+   "tick": 5610867,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.6323000000715256,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 41245,
+   "tick": 5610951,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.6410000000596047,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 41248,
+   "tick": 5610954,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.6927000001072883,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 41251,
+   "tick": 5610957,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.7447000001072882,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 41253,
+   "tick": 5610959,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.7826000000834463,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 41285,
+   "tick": 5610991,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.7948000000715254,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 41287,
+   "tick": 5610993,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.8474000000357625,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 41290,
+   "tick": 5610996,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.8987000000476835,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 41340,
+   "tick": 5611046,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.8987000000476835,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7969487508435703,
+        "y": -0.4990703985113169,
+        "z": -0.3402960855764119
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 41389,
+   "tick": 5611095,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRawRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": -1.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 41389,
+   "tick": 5611095,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": -1.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 41405,
+   "tick": 5611111,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRawRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": 0.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 41405,
+   "tick": 5611111,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": 0.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 41424,
+   "tick": 5611130,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRawRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": -1.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 41424,
+   "tick": 5611130,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": -1.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 41433,
+   "tick": 5611139,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRawRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": 0.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 41433,
+   "tick": 5611139,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": 0.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 41471,
+   "tick": 5611177,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRawRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": -1.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 41471,
+   "tick": 5611177,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": -1.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 41478,
+   "tick": 5611184,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRawRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": 1.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 41478,
+   "tick": 5611184,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": 1.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 41487,
+   "tick": 5611193,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRawRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": 0.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 41487,
+   "tick": 5611193,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": 0.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 41504,
+   "tick": 5611210,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRawRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": 1.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 41504,
+   "tick": 5611210,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": 1.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 41534,
+   "tick": 5611240,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRawRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": 0.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 41534,
+   "tick": 5611240,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": 0.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 41564,
+   "tick": 5611270,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRawRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": -1.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 41564,
+   "tick": 5611270,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": -1.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 41602,
+   "tick": 5611308,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRawRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": 0.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 41602,
+   "tick": 5611308,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": 0.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 41640,
+   "tick": 5611346,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.9073000000119207,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 41642,
+   "tick": 5611348,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.9589000000357625,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 41643,
+   "tick": 5611349,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.9966000000238415,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 41678,
+   "tick": 5611384,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 41681,
+   "tick": 5611387,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 41684,
+   "tick": 5611390,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 41686,
+   "tick": 5611392,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 41691,
+   "tick": 5611397,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 41693,
+   "tick": 5611399,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 41695,
+   "tick": 5611401,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 41937,
+   "tick": 5611643,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 41941,
+   "tick": 5611647,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 41943,
+   "tick": 5611649,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 41945,
+   "tick": 5611651,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 41970,
+   "tick": 5611676,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 41972,
+   "tick": 5611678,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 41975,
+   "tick": 5611681,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 41979,
+   "tick": 5611685,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 41981,
+   "tick": 5611687,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 41983,
+   "tick": 5611689,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 41985,
+   "tick": 5611691,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 41987,
+   "tick": 5611693,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 41990,
+   "tick": 5611696,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42141,
+   "tick": 5611847,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42144,
+   "tick": 5611850,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42146,
+   "tick": 5611852,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42148,
+   "tick": 5611854,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42150,
+   "tick": 5611856,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42171,
+   "tick": 5611877,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42175,
+   "tick": 5611881,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42178,
+   "tick": 5611884,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42179,
+   "tick": 5611885,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42181,
+   "tick": 5611887,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42184,
+   "tick": 5611890,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42187,
+   "tick": 5611893,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42189,
+   "tick": 5611895,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42190,
+   "tick": 5611896,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42208,
+   "tick": 5611914,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42211,
+   "tick": 5611917,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42213,
+   "tick": 5611919,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42216,
+   "tick": 5611922,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42218,
+   "tick": 5611924,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42220,
+   "tick": 5611926,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42222,
+   "tick": 5611928,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42226,
+   "tick": 5611932,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42227,
+   "tick": 5611933,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42238,
+   "tick": 5611944,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42257,
+   "tick": 5611963,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42258,
+   "tick": 5611964,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42261,
+   "tick": 5611967,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42263,
+   "tick": 5611969,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42266,
+   "tick": 5611972,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42267,
+   "tick": 5611973,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42281,
+   "tick": 5611987,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42300,
+   "tick": 5612006,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42325,
+   "tick": 5612031,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42341,
+   "tick": 5612047,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42347,
+   "tick": 5612053,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42358,
+   "tick": 5612064,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42368,
+   "tick": 5612074,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42371,
+   "tick": 5612077,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42374,
+   "tick": 5612080,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42376,
+   "tick": 5612082,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42377,
+   "tick": 5612083,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42389,
+   "tick": 5612095,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42393,
+   "tick": 5612099,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42395,
+   "tick": 5612101,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42398,
+   "tick": 5612104,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42399,
+   "tick": 5612105,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42402,
+   "tick": 5612108,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42415,
+   "tick": 5612121,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.9918999999761582,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42417,
+   "tick": 5612123,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.9373999999761583,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42420,
+   "tick": 5612126,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.8865999999642374,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42422,
+   "tick": 5612128,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.8390000000000003,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42426,
+   "tick": 5612132,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.7847999999523169,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42428,
+   "tick": 5612134,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.741599999964238,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42429,
+   "tick": 5612135,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.722899999976159,
+      "attitude": {
+       "Fixed": {
+        "x": -0.7590430749193283,
+        "y": -0.5390334445059454,
+        "z": -0.36509800892509264
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 42568,
+   "tick": 5612274,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "ScheduleBurns": {
+      "vessel": 6,
+      "burns": [
+       {
+        "ut": 112365.47861150999,
+        "prograde_mps": 0.0,
+        "normal_mps": 0.0,
+        "radial_mps": 0.0
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "step": 42568,
+   "tick": 5612274,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "ScheduleBurns": {
+      "vessel": 6,
+      "burns": [
+       {
+        "ut": 112332.55859108001,
+        "prograde_mps": 0.0,
+        "normal_mps": 0.0,
+        "radial_mps": 0.0
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "step": 42626,
+   "tick": 5612332,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "ScheduleBurns": {
+      "vessel": 6,
+      "burns": [
+       {
+        "ut": 112332.55859108001,
+        "prograde_mps": 0.0,
+        "normal_mps": 0.0,
+        "radial_mps": 0.0
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "step": 42630,
+   "tick": 5612336,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "ScheduleBurns": {
+      "vessel": 6,
+      "burns": [
+       {
+        "ut": 112332.55859108001,
+        "prograde_mps": 2.23604400469538,
+        "normal_mps": 0.0,
+        "radial_mps": 0.0
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "step": 42636,
+   "tick": 5612342,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "ScheduleBurns": {
+      "vessel": 6,
+      "burns": [
+       {
+        "ut": 112332.55859108001,
+        "prograde_mps": 8.503180271642083,
+        "normal_mps": 0.0,
+        "radial_mps": 0.0
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "step": 42657,
+   "tick": 5612363,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "ScheduleBurns": {
+      "vessel": 6,
+      "burns": [
+       {
+        "ut": 112332.55859108001,
+        "prograde_mps": 11.641931465424946,
+        "normal_mps": 0.0,
+        "radial_mps": 0.0
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "step": 42663,
+   "tick": 5612369,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "ScheduleBurns": {
+      "vessel": 6,
+      "burns": [
+       {
+        "ut": 112332.55859108001,
+        "prograde_mps": 3.579742374208754,
+        "normal_mps": 0.0,
+        "radial_mps": 0.0
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "step": 42668,
+   "tick": 5612374,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "ScheduleBurns": {
+      "vessel": 6,
+      "burns": [
+       {
+        "ut": 112332.55859108001,
+        "prograde_mps": -4.923441150683088,
+        "normal_mps": 0.0,
+        "radial_mps": 0.0
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "step": 42680,
+   "tick": 5612386,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "ScheduleBurns": {
+      "vessel": 6,
+      "burns": [
+       {
+        "ut": 112332.55859108001,
+        "prograde_mps": -5.815786928750481,
+        "normal_mps": 0.0,
+        "radial_mps": 0.0
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "step": 42687,
+   "tick": 5612393,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "ScheduleBurns": {
+      "vessel": 6,
+      "burns": [
+       {
+        "ut": 112332.55859108001,
+        "prograde_mps": -6.708131873888772,
+        "normal_mps": 0.0,
+        "radial_mps": 0.0
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "step": 42692,
+   "tick": 5612398,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "ScheduleBurns": {
+      "vessel": 6,
+      "burns": [
+       {
+        "ut": 112332.55859108001,
+        "prograde_mps": -10.73923012791461,
+        "normal_mps": 0.0,
+        "radial_mps": 0.0
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "step": 42704,
+   "tick": 5612410,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "ScheduleBurns": {
+      "vessel": 6,
+      "burns": [
+       {
+        "ut": 112332.55859108001,
+        "prograde_mps": -10.739231344561173,
+        "normal_mps": 0.0,
+        "radial_mps": 0.0
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "step": 42733,
+   "tick": 5612439,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "ScheduleBurns": {
+      "vessel": 6,
+      "burns": [
+       {
+        "ut": 112332.55859108001,
+        "prograde_mps": -11.631577344098375,
+        "normal_mps": 0.0,
+        "radial_mps": 0.0
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "step": 42761,
+   "tick": 5612467,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "ScheduleBurns": {
+      "vessel": 6,
+      "burns": [
+       {
+        "ut": 112332.55859108001,
+        "prograde_mps": -12.082935446999777,
+        "normal_mps": 0.0,
+        "radial_mps": 0.0
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "step": 42893,
+   "tick": 5612599,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "RequestWarp": {
+      "factor": 10
+     }
+    }
+   }
+  },
+  {
+   "step": 42923,
+   "tick": 5612719,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "RequestWarp": {
+      "factor": 10
+     }
+    }
+   }
+  },
+  {
+   "step": 42953,
+   "tick": 5612839,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "RequestWarp": {
+      "factor": 10
+     }
+    }
+   }
+  },
+  {
+   "step": 42984,
+   "tick": 5612963,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "RequestWarp": {
+      "factor": 10
+     }
+    }
+   }
+  },
+  {
+   "step": 43014,
+   "tick": 5613083,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "RequestWarp": {
+      "factor": 10
+     }
+    }
+   }
+  },
+  {
+   "step": 43044,
+   "tick": 5613203,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "RequestWarp": {
+      "factor": 10
+     }
+    }
+   }
+  },
+  {
+   "step": 43074,
+   "tick": 5613323,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "RequestWarp": {
+      "factor": 10
+     }
+    }
+   }
+  },
+  {
+   "step": 43104,
+   "tick": 5613443,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "RequestWarp": {
+      "factor": 10
+     }
+    }
+   }
+  },
+  {
+   "step": 43134,
+   "tick": 5613563,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "RequestWarp": {
+      "factor": 10
+     }
+    }
+   }
+  },
+  {
+   "step": 43164,
+   "tick": 5613683,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "RequestWarp": {
+      "factor": 5
+     }
+    }
+   }
+  },
+  {
+   "step": 43195,
+   "tick": 5613807,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "RequestWarp": {
+      "factor": 5
+     }
+    }
+   }
+  },
+  {
+   "step": 43225,
+   "tick": 5613927,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "RequestWarp": {
+      "factor": 5
+     }
+    }
+   }
+  },
+  {
+   "step": 43255,
+   "tick": 5614047,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "RequestWarp": {
+      "factor": 5
+     }
+    }
+   }
+  },
+  {
+   "step": 43264,
+   "tick": 5614083,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.722899999976159,
+      "attitude": "Maneuver"
+     }
+    }
+   }
+  },
+  {
+   "step": 43285,
+   "tick": 5614167,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "RequestWarp": {
+      "factor": 5
+     }
+    }
+   }
+  },
+  {
+   "step": 43316,
+   "tick": 5614291,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "RequestWarp": {
+      "factor": 5
+     }
+    }
+   }
+  },
+  {
+   "step": 43346,
+   "tick": 5614411,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "RequestWarp": {
+      "factor": 5
+     }
+    }
+   }
+  },
+  {
+   "step": 43357,
+   "tick": 5614455,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "RequestWarp": {
+      "factor": 5
+     }
+    }
+   }
+  },
+  {
+   "step": 43388,
+   "tick": 5614579,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "RequestWarp": {
+      "factor": 5
+     }
+    }
+   }
+  },
+  {
+   "step": 43451,
+   "tick": 5614831,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "RequestWarp": {
+      "factor": 3
+     }
+    }
+   }
+  },
+  {
+   "step": 43518,
+   "tick": 5615032,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "RequestWarp": {
+      "factor": 2
+     }
+    }
+   }
+  },
+  {
+   "step": 43617,
+   "tick": 5615230,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "RequestWarp": {
+      "factor": 1
+     }
+    }
+   }
+  },
+  {
+   "step": 45240,
+   "tick": 5616853,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "ClearBurn": {
+      "vessel": 6
+     }
+    }
+   }
+  },
+  {
+   "step": 45439,
+   "tick": 5617052,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.722899999976159,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45576,
+   "tick": 5617189,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRawRotation": {
+      "vessel": 6,
+      "pitch": -1.0,
+      "yaw": 0.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 45576,
+   "tick": 5617189,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRotation": {
+      "vessel": 6,
+      "pitch": -1.0,
+      "yaw": 0.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 45587,
+   "tick": 5617200,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRawRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": 0.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 45587,
+   "tick": 5617200,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": 0.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 45594,
+   "tick": 5617207,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRawRotation": {
+      "vessel": 6,
+      "pitch": -1.0,
+      "yaw": 0.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 45594,
+   "tick": 5617207,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRotation": {
+      "vessel": 6,
+      "pitch": -1.0,
+      "yaw": 0.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 45597,
+   "tick": 5617210,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRawRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": 0.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 45597,
+   "tick": 5617210,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": 0.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 45604,
+   "tick": 5617217,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRawRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": 1.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 45604,
+   "tick": 5617217,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": 1.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 45639,
+   "tick": 5617252,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRawRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": 0.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 45639,
+   "tick": 5617252,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": 0.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 45642,
+   "tick": 5617255,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRawRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": -1.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 45642,
+   "tick": 5617255,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": -1.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 45650,
+   "tick": 5617263,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRawRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": 0.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 45650,
+   "tick": 5617263,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetRotation": {
+      "vessel": 6,
+      "pitch": 0.0,
+      "yaw": 0.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 45670,
+   "tick": 5617283,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.731099999964238,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45672,
+   "tick": 5617285,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.787299999952317,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45674,
+   "tick": 5617287,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.8038999999761589,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45695,
+   "tick": 5617308,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.812099999964238,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45698,
+   "tick": 5617311,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.8687999999523168,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45700,
+   "tick": 5617313,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.8783999999761587,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45702,
+   "tick": 5617315,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.9331999999284748,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45705,
+   "tick": 5617318,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.9666999999284748,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45710,
+   "tick": 5617323,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.9752999999523166,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45713,
+   "tick": 5617326,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45738,
+   "tick": 5617351,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45740,
+   "tick": 5617353,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45742,
+   "tick": 5617355,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45759,
+   "tick": 5617372,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45763,
+   "tick": 5617376,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45765,
+   "tick": 5617378,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45772,
+   "tick": 5617385,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45775,
+   "tick": 5617388,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45786,
+   "tick": 5617399,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45790,
+   "tick": 5617403,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45793,
+   "tick": 5617406,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45799,
+   "tick": 5617412,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45802,
+   "tick": 5617415,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45803,
+   "tick": 5617416,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45808,
+   "tick": 5617421,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45810,
+   "tick": 5617423,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45814,
+   "tick": 5617427,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45819,
+   "tick": 5617432,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45821,
+   "tick": 5617434,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45824,
+   "tick": 5617437,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45828,
+   "tick": 5617441,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45831,
+   "tick": 5617444,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45833,
+   "tick": 5617446,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45840,
+   "tick": 5617453,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45842,
+   "tick": 5617455,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45846,
+   "tick": 5617459,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45846,
+   "tick": 5617459,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45856,
+   "tick": 5617469,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45859,
+   "tick": 5617472,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45861,
+   "tick": 5617474,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45862,
+   "tick": 5617475,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45900,
+   "tick": 5617513,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45903,
+   "tick": 5617516,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45905,
+   "tick": 5617518,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45909,
+   "tick": 5617522,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45910,
+   "tick": 5617523,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45911,
+   "tick": 5617524,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45918,
+   "tick": 5617531,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45921,
+   "tick": 5617534,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45925,
+   "tick": 5617538,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45926,
+   "tick": 5617539,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45929,
+   "tick": 5617542,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45932,
+   "tick": 5617545,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45935,
+   "tick": 5617548,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45936,
+   "tick": 5617549,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45940,
+   "tick": 5617553,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45942,
+   "tick": 5617555,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 45944,
+   "tick": 5617557,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 1.0,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 46015,
+   "tick": 5617628,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.9916000000238419,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 46018,
+   "tick": 5617631,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.9270000000000002,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 46021,
+   "tick": 5617634,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.8900000000000001,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 46024,
+   "tick": 5617637,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.8403000000119212,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 46025,
+   "tick": 5617638,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.7901000000238423,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 46029,
+   "tick": 5617642,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.7381000000238424,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 46031,
+   "tick": 5617644,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.6863000000119216,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 46033,
+   "tick": 5617646,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.6351999999880799,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 46036,
+   "tick": 5617649,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.5821000000238429,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  },
+  {
+   "step": 46037,
+   "tick": 5617650,
+   "player": 12,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 6,
+      "throttle": 0.5660000000000011,
+      "attitude": "SurfaceRetrograde"
+     }
+    }
+   }
+  }
+ ],
+ "checkpoints": [],
+ "expect": [
+  {
+   "vessel": "Go High",
+   "field": "propellant_t",
+   "op": "lt",
+   "value": 1.0,
+   "why": "the throttle answers once the node is cleared (it was stuck at 1.49 t)"
+  },
+  {
+   "vessel": "Go High",
+   "field": "crashed",
+   "op": "eq",
+   "value": 0
+  }
+ ]
+}

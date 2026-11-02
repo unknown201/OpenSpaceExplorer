@@ -899,6 +899,28 @@ fn to_net_attitude(a: Attitude) -> ose_net::AttitudeMode {
     }
 }
 
+fn set_controls_reply(
+    s: &Shared,
+    e: bevy_ecs::entity::Entity,
+    vessel: u64,
+    throttle: f64,
+    attitude: ose_net::AttitudeMode,
+) -> ServerMessage {
+    let ok =
+        s.universe
+            .lock()
+            .expect("sim lock")
+            .set_controls(e, throttle, from_net_attitude(attitude));
+    ServerMessage::FlightAck {
+        vessel,
+        accepted: ok,
+        reason: (!ok).then(|| {
+            "vessel has no flight state (bare probe), has crashed, or has no power for its probe core"
+                .to_string()
+        }),
+    }
+}
+
 fn from_net_attitude(a: ose_net::AttitudeMode) -> Attitude {
     use ose_net::AttitudeMode as M;
     match a {
@@ -3481,39 +3503,33 @@ fn handle_decoded(
             attitude,
         }) => {
             let reply = match owned_vessel(s, vessel, player_id) {
-                Some(e)
-                    if attitude == ose_net::AttitudeMode::Maneuver
-                        && s.universe
-                            .lock()
-                            .expect("sim lock")
-                            .scheduled_burn(e)
-                            .is_none() =>
-                {
-                    ServerMessage::FlightAck {
-                        vessel,
-                        accepted: false,
-                        reason: Some("no maneuver planned".into()),
-                    }
-                }
-                Some(e)
-                    if matches!(
-                        attitude,
-                        ose_net::AttitudeMode::Target | ose_net::AttitudeMode::AntiTarget
-                    ) && s.universe.lock().expect("sim lock").target(e).is_none() =>
-                {
-                    ServerMessage::FlightAck {
-                        vessel,
-                        accepted: false,
-                        reason: Some("no target set".into()),
-                    }
-                }
+                // a hold with nothing to point at still takes the throttle, and keeps the current heading
                 Some(e) => {
-                    let ok = s.universe.lock().expect("sim lock").set_controls(
-                        e,
-                        throttle,
-                        from_net_attitude(attitude),
-                    );
-                    ServerMessage::FlightAck { vessel, accepted: ok, reason: (!ok).then(|| "vessel has no flight state (bare probe), has crashed, or has no power for its probe core".to_string()) }
+                    let mut u = s.universe.lock().expect("sim lock");
+                    let nothing_to_hold = match attitude {
+                        ose_net::AttitudeMode::Maneuver => u
+                            .scheduled_burn(e)
+                            .is_none()
+                            .then_some("no maneuver planned"),
+                        ose_net::AttitudeMode::Target | ose_net::AttitudeMode::AntiTarget => {
+                            u.target(e).is_none().then_some("no target set")
+                        }
+                        _ => None,
+                    };
+                    match nothing_to_hold.zip(u.facing(e)) {
+                        Some((why, facing)) => {
+                            u.set_controls(e, throttle, Attitude::Fixed(facing));
+                            ServerMessage::FlightAck {
+                                vessel,
+                                accepted: false,
+                                reason: Some(format!("{why}: holding the current heading")),
+                            }
+                        }
+                        None => {
+                            drop(u);
+                            set_controls_reply(s, e, vessel, throttle, attitude)
+                        }
+                    }
                 }
                 None => ServerMessage::FlightAck {
                     vessel,

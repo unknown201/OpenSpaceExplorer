@@ -669,6 +669,14 @@ impl Universe {
         if (pitch != 0.0 || yaw != 0.0 || roll != 0.0) && self.warp() <= flight::MAX_PHYSICS_WARP {
             self.wake(e);
         }
+        let steering = pitch != 0.0 || yaw != 0.0 || roll != 0.0;
+        // steering by hand takes over from a planned burn being flown: hold where it points now
+        if steering && self.stop_flying_burn(e) {
+            if let Some(mut p) = self.world.get_mut::<flight::Powered>(e) {
+                p.attitude = flight::Attitude::Fixed(flight::control_basis(&p).1);
+                p.sas.reset();
+            }
+        }
         match self.world.get_mut::<flight::Powered>(e) {
             Some(mut p) => {
                 p.rotation_input = DVec3::new(pitch, yaw, roll);
@@ -677,6 +685,26 @@ impl Universe {
             }
             None => false,
         }
+    }
+
+    /// Stop flying the planned burn under way, if any, and close the throttle it was driving. The node stays
+    /// planned. True if a burn was being flown.
+    fn stop_flying_burn(&mut self, e: Entity) -> bool {
+        if self.world.get::<vessels::ExecutingBurn>(e).is_none() {
+            return false;
+        }
+        self.world.entity_mut(e).remove::<vessels::ExecutingBurn>();
+        if let Some(mut p) = self.world.get_mut::<flight::Powered>(e) {
+            p.throttle = 0.0;
+        }
+        true
+    }
+
+    /// The direction the vessel's control axis points (its nose), for a hold on the current heading.
+    pub fn facing(&self, e: Entity) -> Option<DVec3> {
+        self.powered(e)
+            .or_else(|| self.dormant(e))
+            .map(|p| flight::control_basis(p).1)
     }
 
     /// A Kerbal on EVA runs (held) and jumps (once, from the ground); false for anything else.
@@ -1079,6 +1107,10 @@ impl Universe {
     /// when the throttle is above zero. False for a crashed vessel or one with no flight state.
     pub fn set_controls(&mut self, e: Entity, throttle: f64, attitude: flight::Attitude) -> bool {
         let throttle = throttle.clamp(0.0, 1.0);
+        // any hold but the maneuver one takes over from a planned burn being flown
+        if !matches!(attitude, flight::Attitude::Maneuver(_)) {
+            self.stop_flying_burn(e);
+        }
         if self.world.get::<flight::Powered>(e).is_none() {
             if self.world.get::<flight::Dormant>(e).is_none() {
                 return false;
@@ -1566,6 +1598,10 @@ impl Universe {
             return false;
         }
         burns.sort_by(|a, b| a.ut.total_cmp(&b.ut));
+        // clearing or changing the next node ends the burn being flown for it
+        if burns.first() != self.scheduled_burn(e).as_ref() {
+            self.stop_flying_burn(e);
+        }
         let mut ent = self.world.entity_mut(e);
         ent.remove::<vessels::ScheduledBurn>()
             .remove::<vessels::LaterBurns>();
@@ -4614,6 +4650,77 @@ mod tests {
             u.step();
         }
         assert!((u.vessel(probe).unwrap().2.apoapsis() - before).abs() < 1.0);
+    }
+
+    #[test]
+    fn clearing_the_node_or_taking_the_controls_stops_the_burn_being_flown() {
+        let (mut u, body, spec, st) = k1_on_real_kerbin();
+        let v = u.spawn_vessel_in_circular_orbit("K1", body, 100_000.0);
+        let (r, vel) = u.vessel(v).unwrap().2.state_at(u.ut());
+        let mut p = flight::Powered::new(spec, r, vel, false);
+        // pointed well away from the burn, so the engines wait for the turn
+        p.facing = r.normalized();
+        p.ignited = true;
+        p.stage = p
+            .spec
+            .stages
+            .iter()
+            .rposition(|s| s.thrust_vac_kn > 0.0)
+            .unwrap();
+        u.set_dormant(v, p);
+        u.set_structure(v, st);
+        let burn = vessels::ScheduledBurn {
+            ut: u.ut() + 5.0,
+            prograde_mps: 100.0,
+            normal_mps: 0.0,
+            radial_mps: 0.0,
+        };
+        let fly_it = |u: &mut Universe| {
+            let ut = u.ut() + 5.0;
+            assert!(u.schedule_burn(v, vessels::ScheduledBurn { ut, ..burn }));
+            for _ in 0..(2 * TICKS_PER_SECOND) {
+                u.step();
+            }
+            assert!(u.burn_left(v).is_some(), "the burn is under way");
+        };
+        let throttle_holds = |u: &mut Universe, how: &str| {
+            for _ in 0..TICKS_PER_SECOND {
+                u.step();
+            }
+            let p = u.powered(v).unwrap();
+            assert!(u.burn_left(v).is_none(), "{how}: no burn flown");
+            assert!(
+                (p.throttle - 0.7).abs() < 1e-9,
+                "{how}: throttle {}",
+                p.throttle
+            );
+            assert!(
+                !matches!(p.attitude, flight::Attitude::Maneuver(_)),
+                "{how}"
+            );
+        };
+        // clearing the node gives the throttle back
+        fly_it(&mut u);
+        assert!(u.schedule_burns(v, Vec::new()));
+        let facing = u.facing(v).unwrap();
+        assert!(u.set_controls(v, 0.7, flight::Attitude::Fixed(facing)));
+        throttle_holds(&mut u, "cleared");
+        // so does another hold, with the node still planned
+        assert!(u.set_controls(v, 0.0, flight::Attitude::Maneuver(DVec3::ZERO)));
+        fly_it(&mut u);
+        assert!(u.set_controls(v, 0.7, flight::Attitude::OrbitPrograde));
+        throttle_holds(&mut u, "prograde hold");
+        // and steering by hand
+        assert!(u.schedule_burns(v, Vec::new()));
+        assert!(u.set_controls(v, 0.0, flight::Attitude::Maneuver(DVec3::ZERO)));
+        fly_it(&mut u);
+        assert!(u.set_rotation(v, 0.0, 1.0, 0.0));
+        assert!(u.burn_left(v).is_none(), "steering takes over");
+        assert!(u.scheduled_burn(v).is_some(), "the node stays planned");
+        assert!(u.set_rotation(v, 0.0, 0.0, 0.0));
+        let att = u.powered(v).unwrap().attitude;
+        assert!(u.set_controls(v, 0.7, att));
+        throttle_holds(&mut u, "steered");
     }
 
     #[test]
