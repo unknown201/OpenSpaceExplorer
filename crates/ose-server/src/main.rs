@@ -14,6 +14,7 @@ mod campaigns;
 mod crew_docking;
 mod packages;
 mod previews;
+mod replay;
 mod save;
 mod science;
 mod streaming;
@@ -137,6 +138,12 @@ struct Args {
     /// empty, as the original's does.
     #[arg(long)]
     test_probe: bool,
+    /// Run a filed replay (`replay.rs`) from its baseline as fast as the simulation goes, write the report
+    /// (`--replay-out`, else stdout) and exit; nothing is served or saved.
+    #[arg(long)]
+    replay: Option<PathBuf>,
+    #[arg(long)]
+    replay_out: Option<PathBuf>,
 }
 
 fn has_vessel(s: &Shared, player: u64) -> bool {
@@ -338,6 +345,10 @@ struct Shared {
     flying: Mutex<std::collections::HashMap<u64, u64>>,
     /// `--test-probe`: hand each player a probe on connecting (browser test fixtures only).
     test_probe: bool,
+    /// Simulation steps taken since start (a replay starts it at its recording's).
+    steps: std::sync::atomic::AtomicU64,
+    /// The rolling recording a bug report files (`replay.rs`).
+    recorder: Mutex<replay::Recorder>,
 }
 
 /// Apply lowest-wins warp arbitration. Returns (effective warp, the player holding it down, if any).
@@ -419,6 +430,10 @@ async fn main() -> anyhow::Result<()> {
         .json()
         .init();
     let args = Args::parse();
+    let replaying = match &args.replay {
+        Some(p) => Some(replay::read(p)?),
+        None => None,
+    };
 
     let bodies_json = match &args.bodies {
         Some(p) => std::fs::read_to_string(p)?,
@@ -483,12 +498,22 @@ async fn main() -> anyhow::Result<()> {
     // the first campaign starts on a morning at the KSC unless a save says otherwise
     let mut universe = setup.new_campaign_universe();
     let mut shelf: Vec<save::ShelvedCampaign> = Vec::new();
-    let save_path = (args.save.to_string_lossy() != "none").then(|| args.save.clone());
+    let save_path =
+        (args.save.to_string_lossy() != "none" && replaying.is_none()).then(|| args.save.clone());
     let mut registry: Vec<save::VesselEntry> = Vec::new();
     let mut campaign = save::Campaign::default();
     let mut crafts: Vec<save::SavedCraft> = Vec::new();
-    if let Some(p) = &save_path {
-        match save::read(p) {
+    let loaded = match (&replaying, &save_path) {
+        (Some(r), _) => Ok(Some(r.baseline.clone())),
+        (None, Some(p)) => save::read(p),
+        (None, None) => Ok(None),
+    };
+    let p = save_path
+        .clone()
+        .or_else(|| args.replay.clone())
+        .unwrap_or_default();
+    {
+        match loaded {
             Ok(Some(file)) => {
                 let defs: Vec<ose_data::PartDef> = serde_json::from_str(EMBEDDED_PARTS)?;
                 let res: Vec<ose_data::ResourceDef> = serde_json::from_str(EMBEDDED_RESOURCES)?;
@@ -523,7 +548,12 @@ async fn main() -> anyhow::Result<()> {
         parts: serde_json::from_str(EMBEDDED_PARTS)?,
         resources: serde_json::from_str(EMBEDDED_RESOURCES)?,
         accounts: Mutex::new({
-            let acc = accounts::Accounts::open(&args.db)?;
+            let db = if replaying.is_some() {
+                PathBuf::from(":memory:")
+            } else {
+                args.db.clone()
+            };
+            let acc = accounts::Accounts::open(&db)?;
             tracing::info!(db = %args.db.display(), players = acc.count()?, "accounts opened");
             acc
         }),
@@ -543,7 +573,25 @@ async fn main() -> anyhow::Result<()> {
         last_roster: Mutex::new(None),
         flying: Mutex::new(std::collections::HashMap::new()),
         test_probe: args.test_probe,
+        steps: std::sync::atomic::AtomicU64::new(0),
+        recorder: Mutex::new(replay::Recorder::default()),
     });
+
+    if let Some(rep) = &replaying {
+        let radius = defs
+            .iter()
+            .find(|b| b.id == "Kerbin")
+            .map(|b| b.radius_m)
+            .unwrap_or(600_000.0);
+        let report = replay::run(&shared, rep, radius);
+        let text = serde_json::to_string_pretty(&report)?;
+        match &args.replay_out {
+            Some(path) => std::fs::write(path, text)?,
+            None => println!("{text}"),
+        }
+        return Ok(());
+    }
+    replay::begin(&shared);
 
     streaming::start(shared.clone());
     let sim = shared.clone();
@@ -559,7 +607,6 @@ async fn main() -> anyhow::Result<()> {
         // and overshoot what a player (or the bot) is coasting toward.
         const MAX_CATCH_UP: u32 = 5;
         let mut due = tokio::time::Instant::now();
-        let mut ticks: u64 = 0;
         loop {
             interval.tick().await;
             let now = tokio::time::Instant::now();
@@ -573,52 +620,10 @@ async fn main() -> anyhow::Result<()> {
                 owed += 1;
             }
             for _ in 0..owed {
-                step_once(&sim, &mut ticks);
+                step_once(&sim);
             }
         }
     });
-
-    fn step_once(sim: &Shared, ticks: &mut u64) {
-        {
-            sim.universe.lock().expect("sim lock").step();
-            let ticks = {
-                *ticks += 1;
-                *ticks
-            };
-            // docking ports pull together and latch every tick, as the original's run in each physics step
-            let msgs = crew_docking::dock_latched(sim);
-            if !msgs.is_empty() {
-                sim.pending.lock().expect("pending lock").extend(msgs);
-            }
-            // missions look at the agency's vessels once a second
-            if ticks.is_multiple_of(ose_sim::TICKS_PER_SECOND) {
-                push_roster(sim);
-                science::evaluate_missions(sim);
-                science::deliver_experiment_events(sim);
-                deliver_transmitted(sim);
-                let (required, heat) = {
-                    let c = sim.campaign.lock().expect("campaign lock");
-                    let get = |id: &str| c.difficulty.iter().find(|d| d.id == id).map(|d| &d.value);
-                    let on = |id: &str, default: bool| match get(id) {
-                        Some(ose_net::DifficultyValue::Bool(b)) => *b,
-                        _ => default,
-                    };
-                    let heat = ose_sim::thermal::HeatSettings {
-                        enabled: on("HeatEnabled", true),
-                        scale: match get("HeatScaling") {
-                            Some(ose_net::DifficultyValue::Number(x)) => *x,
-                            _ => 1.0,
-                        },
-                        part_destruction: on("HeatPartDestruction", true),
-                    };
-                    (on("CommNetRequired", false), heat)
-                };
-                let mut u = sim.universe.lock().expect("sim lock");
-                u.set_commnet_required(required);
-                u.set_heat_settings(heat);
-            }
-        }
-    }
 
     if let Some(p) = save_path.clone() {
         let saver = shared.clone();
@@ -670,6 +675,11 @@ async fn main() -> anyhow::Result<()> {
         )
         .route(WS_PATH, get(ws_upgrade))
         .route(
+            "/api/replays",
+            get(replay::list_route).post(replay::file_route),
+        )
+        .route("/api/replays/{id}", get(replay::get_route))
+        .route(
             "/parts.json",
             get({
                 let body = Arc::new(serde_json::to_string(&part_infos(&shared.parts))?);
@@ -712,6 +722,62 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(listen = %args.listen, "server listening");
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+/// One simulation step and what runs with it (docking latches; once a second missions, the roster, science
+/// and the campaign's settings), then the replay recorder. Live and in a replay alike.
+fn step_once(sim: &Shared) {
+    {
+        sim.universe.lock().expect("sim lock").step();
+        let ticks = sim.steps.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        // docking ports pull together and latch every tick, as the original's run in each physics step
+        let msgs = crew_docking::dock_latched(sim);
+        if !msgs.is_empty() {
+            sim.pending.lock().expect("pending lock").extend(msgs);
+        }
+        // missions look at the agency's vessels once a second
+        if ticks.is_multiple_of(ose_sim::TICKS_PER_SECOND) {
+            push_roster(sim);
+            science::evaluate_missions(sim);
+            science::deliver_experiment_events(sim);
+            deliver_transmitted(sim);
+            let (required, heat) = {
+                let c = sim.campaign.lock().expect("campaign lock");
+                let get = |id: &str| c.difficulty.iter().find(|d| d.id == id).map(|d| &d.value);
+                let on = |id: &str, default: bool| match get(id) {
+                    Some(ose_net::DifficultyValue::Bool(b)) => *b,
+                    _ => default,
+                };
+                let heat = ose_sim::thermal::HeatSettings {
+                    enabled: on("HeatEnabled", true),
+                    scale: match get("HeatScaling") {
+                        Some(ose_net::DifficultyValue::Number(x)) => *x,
+                        _ => 1.0,
+                    },
+                    part_destruction: on("HeatPartDestruction", true),
+                };
+                (on("CommNetRequired", false), heat)
+            };
+            let mut u = sim.universe.lock().expect("sim lock");
+            u.set_commnet_required(required);
+            u.set_heat_settings(heat);
+        }
+    }
+    maintain_registry(sim);
+    replay::after_step(sim, sim.steps.load(std::sync::atomic::Ordering::SeqCst));
+}
+
+/// The vessel registry follows the world each step: pieces that broke off are registered (with their
+/// parent's owner), vessels that are gone are dropped. On the step, not a timer, so a replay matches.
+fn maintain_registry(s: &Shared) {
+    let mut u = s.universe.lock().expect("sim lock");
+    let mut list = s.vessels.lock().expect("vessels lock");
+    for (from, debris) in u.take_broken_off() {
+        let owner = list.iter().find(|v| v.0 == from).and_then(|v| v.2);
+        let id = list.iter().map(|&(_, id, _)| id).max().unwrap_or(0) + 1;
+        list.push((debris, id, owner));
+    }
+    list.retain(|&(e, _, _)| u.vessel(e).is_some());
 }
 
 async fn ws_upgrade(ws: WebSocketUpgrade, State(s): State<AppState>) -> impl IntoResponse {
@@ -3111,6 +3177,1202 @@ fn launch_craft(
     }
 }
 
+/// One client message from `player_id`, as a session receives it (decoded or not): its effects on the world
+/// and the replies, pushed to `out` in order. Sessions send `out`; a replay runs the same messages at the
+/// ticks they were recorded at (`replay`).
+fn handle_decoded(
+    s: &Shared,
+    player_id: u64,
+    decoded: Result<ClientMessage, String>,
+    out: &mut Vec<ServerMessage>,
+) {
+    match decoded {
+        Ok(ClientMessage::RequestWarp { factor }) => {
+            let f = factor.clamp(1, 10_000_000);
+            s.warp_requests
+                .lock()
+                .expect("warp lock")
+                .insert(player_id, f);
+            let (eff, _) = apply_warp(s);
+            tracing::info!(
+                player = player_id,
+                requested = f,
+                effective = eff,
+                "warp request"
+            );
+        }
+        Ok(ClientMessage::Ping { sent_tick }) => {
+            out.push((ServerMessage::Pong { sent_tick }).clone());
+        }
+        Ok(ClientMessage::ScheduleBurn {
+            vessel,
+            ut,
+            prograde_mps,
+            normal_mps,
+            radial_mps,
+        }) => {
+            let reply = match owned_vessel(s, vessel, player_id) {
+                Some(e) => {
+                    let burn = ose_sim::vessels::ScheduledBurn {
+                        ut,
+                        prograde_mps,
+                        normal_mps,
+                        radial_mps,
+                    };
+                    let ok = s.universe.lock().expect("sim lock").schedule_burn(e, burn);
+                    ServerMessage::BurnState {
+                        vessel,
+                        scheduled: ok,
+                        reason: (!ok).then(|| "burn time is in the past".to_string()),
+                    }
+                }
+                None => ServerMessage::BurnState {
+                    vessel,
+                    scheduled: false,
+                    reason: Some("not your vessel".into()),
+                },
+            };
+            out.push((reply).clone());
+            for msg in trajectories(s) {
+                out.push((msg).clone());
+            }
+        }
+        Ok(ClientMessage::ScheduleBurns { vessel, burns }) => {
+            let reply = match owned_vessel(s, vessel, player_id) {
+                Some(e) => {
+                    let burns = burns
+                        .iter()
+                        .map(|b| ose_sim::vessels::ScheduledBurn {
+                            ut: b.ut,
+                            prograde_mps: b.prograde_mps,
+                            normal_mps: b.normal_mps,
+                            radial_mps: b.radial_mps,
+                        })
+                        .collect();
+                    let ok = s
+                        .universe
+                        .lock()
+                        .expect("sim lock")
+                        .schedule_burns(e, burns);
+                    ServerMessage::BurnState {
+                        vessel,
+                        scheduled: ok,
+                        reason: (!ok).then(|| "a burn time is in the past".to_string()),
+                    }
+                }
+                None => ServerMessage::BurnState {
+                    vessel,
+                    scheduled: false,
+                    reason: Some("not your vessel".into()),
+                },
+            };
+            out.push((reply).clone());
+            for msg in trajectories(s) {
+                out.push((msg).clone());
+            }
+        }
+        Ok(ClientMessage::ClearBurn { vessel }) => {
+            let reply = match owned_vessel(s, vessel, player_id) {
+                Some(e) => {
+                    s.universe
+                        .lock()
+                        .expect("sim lock")
+                        .schedule_burns(e, Vec::new());
+                    ServerMessage::BurnState {
+                        vessel,
+                        scheduled: false,
+                        reason: None,
+                    }
+                }
+                None => ServerMessage::BurnState {
+                    vessel,
+                    scheduled: false,
+                    reason: Some("not your vessel".into()),
+                },
+            };
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::JoinCampaign) => {
+            let name = display_name_for(s, player_id);
+            let reply = campaign_state(s, player_id, Some(&name));
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::CampaignInfo) => {
+            let reply = campaign_state(s, player_id, None);
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::ListSessions) => {
+            let reply = session_list(s);
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::SelectSession { id }) => {
+            let live = s.campaign.lock().expect("campaign lock").id.clone();
+            let switched = if id == live {
+                Ok(())
+            } else {
+                campaigns::switch(s, player_id, campaigns::Target::Shelved(id.clone()))
+            };
+            let reply = match switched {
+                Ok(()) => {
+                    let name = display_name_for(s, player_id);
+                    if s.test_probe && !has_vessel(s, player_id) {
+                        spawn_test_probe(s, player_id, &name);
+                    }
+                    campaign_state(s, player_id, Some(&name))
+                }
+                Err(reason) => ServerMessage::Rejected { reason },
+            };
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::CreateSession {
+            name,
+            mode,
+            difficulty,
+        }) => {
+            let name = if name.trim().is_empty() {
+                "New campaign".to_string()
+            } else {
+                name.trim().to_string()
+            };
+            let new = campaigns::NewCampaign {
+                name,
+                mode,
+                difficulty,
+            };
+            let reply = match campaigns::switch(s, player_id, campaigns::Target::New(new)) {
+                Ok(()) => {
+                    let pname = display_name_for(s, player_id);
+                    if s.test_probe && !has_vessel(s, player_id) {
+                        spawn_test_probe(s, player_id, &pname);
+                    }
+                    let mut reply = campaign_state(s, player_id, Some(&pname));
+                    if let ServerMessage::CampaignState { created: c, .. } = &mut reply {
+                        *c = true;
+                    }
+                    reply
+                }
+                Err(reason) => ServerMessage::Rejected { reason },
+            };
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::LeaveSession) => {
+            if s.playing.lock().expect("playing lock").remove(&player_id) {
+                push_campaign(s, player_id);
+            }
+            apply_warp(s);
+            let reply = session_list(s);
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::ClaimSession { id }) => {
+            let reply = match campaigns::manage(s, player_id, &id, false) {
+                Ok(()) => session_list(s),
+                Err(reason) => ServerMessage::Rejected { reason },
+            };
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::DeleteSession { id }) => {
+            let reply = match campaigns::manage(s, player_id, &id, true) {
+                Ok(()) => session_list(s),
+                Err(reason) => ServerMessage::Rejected { reason },
+            };
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::SetAgency { agency }) => {
+            {
+                let mut c = s.campaign.lock().expect("campaign lock");
+                if let Some(m) = c.members.iter_mut().find(|m| m.player_id == player_id) {
+                    m.agency = Some(agency.clone());
+                } else {
+                    let tick = s.universe.lock().expect("sim lock").tick();
+                    c.members.push(save::CampaignMember {
+                        player_id,
+                        display_name: display_name_for(s, player_id),
+                        joined_tick: tick,
+                        agency: Some(agency.clone()),
+                    });
+                }
+            }
+            let reply = campaign_state(s, player_id, None);
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::LaunchCraft { craft, altitude_m }) => {
+            let mut craft = craft;
+            craft.dedupe_guids();
+            let reply = launch_craft(s, player_id, &craft, altitude_m);
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::SaveCraft { craft }) => {
+            let mut craft = craft;
+            craft.dedupe_guids();
+            let reply = save_craft(s, player_id, craft);
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::DeleteCraft { id }) => {
+            s.crafts
+                .lock()
+                .expect("crafts lock")
+                .retain(|c| !(c.id == id && c.owner == player_id));
+            let reply = craft_list(s, player_id);
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::CraftList) => {
+            let reply = craft_list(s, player_id);
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::GetCraft { id }) => {
+            let craft = find_craft(s, id, player_id);
+            out.push((ServerMessage::CraftDocument { id, craft }).clone());
+        }
+        Ok(ClientMessage::KerbalRoster) => {
+            let reply = kerbal_roster(s);
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::ClearLaunchSite { site }) => {
+            let reply = clear_launch_site(s, player_id, site.as_deref());
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::LaunchAt { craft, site, crew }) => {
+            let mut craft = craft;
+            craft.dedupe_guids();
+            let reply = launch_at(s, player_id, &craft, site.as_deref(), crew.as_deref());
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::LaunchSavedAt { id, site, crew }) => {
+            let reply = match find_craft(s, id, player_id) {
+                Some(c) => launch_at(s, player_id, &c, site.as_deref(), crew.as_deref()),
+                None => ServerMessage::CraftLaunched {
+                    vessel: None,
+                    name: String::new(),
+                    parts: 0,
+                    wet_mass_t: 0.0,
+                    dry_mass_t: 0.0,
+                    delta_v_vacuum_mps: 0.0,
+                    stages: Vec::new(),
+                    reason: Some(format!("no craft {id} in your library")),
+                },
+            };
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::LaunchOnPad { craft }) => {
+            let mut craft = craft;
+            craft.dedupe_guids();
+            let reply = launch_on_pad(s, player_id, &craft);
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::LaunchSavedOnPad { id }) => {
+            let reply = match find_craft(s, id, player_id) {
+                Some(c) => launch_on_pad(s, player_id, &c),
+                None => ServerMessage::CraftLaunched {
+                    vessel: None,
+                    name: String::new(),
+                    parts: 0,
+                    wet_mass_t: 0.0,
+                    dry_mass_t: 0.0,
+                    delta_v_vacuum_mps: 0.0,
+                    stages: Vec::new(),
+                    reason: Some(format!("no craft {id} in your library")),
+                },
+            };
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::SetControls {
+            vessel,
+            throttle,
+            attitude,
+        }) => {
+            let reply = match owned_vessel(s, vessel, player_id) {
+                Some(e)
+                    if attitude == ose_net::AttitudeMode::Maneuver
+                        && s.universe
+                            .lock()
+                            .expect("sim lock")
+                            .scheduled_burn(e)
+                            .is_none() =>
+                {
+                    ServerMessage::FlightAck {
+                        vessel,
+                        accepted: false,
+                        reason: Some("no maneuver planned".into()),
+                    }
+                }
+                Some(e)
+                    if matches!(
+                        attitude,
+                        ose_net::AttitudeMode::Target | ose_net::AttitudeMode::AntiTarget
+                    ) && s.universe.lock().expect("sim lock").target(e).is_none() =>
+                {
+                    ServerMessage::FlightAck {
+                        vessel,
+                        accepted: false,
+                        reason: Some("no target set".into()),
+                    }
+                }
+                Some(e) => {
+                    let ok = s.universe.lock().expect("sim lock").set_controls(
+                        e,
+                        throttle,
+                        from_net_attitude(attitude),
+                    );
+                    ServerMessage::FlightAck { vessel, accepted: ok, reason: (!ok).then(|| "vessel has no flight state (bare probe), has crashed, or has no power for its probe core".to_string()) }
+                }
+                None => ServerMessage::FlightAck {
+                    vessel,
+                    accepted: false,
+                    reason: Some("not your vessel".into()),
+                },
+            };
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::Stage { vessel }) => {
+            let reply = match owned_vessel(s, vessel, player_id) {
+                Some(e) => {
+                    let res = s.universe.lock().expect("sim lock").stage(e);
+                    if let Some(d) = res.debris {
+                        let mut list = s.vessels.lock().expect("vessels lock");
+                        let id = list.iter().map(|&(_, id, _)| id).max().unwrap_or(0) + 1;
+                        list.push((d, id, Some(player_id)));
+                    }
+                    let ok = res.fired;
+                    ServerMessage::FlightAck {
+                        vessel,
+                        accepted: ok,
+                        reason: (!ok).then(|| "no further stage".to_string()),
+                    }
+                }
+                None => ServerMessage::FlightAck {
+                    vessel,
+                    accepted: false,
+                    reason: Some("not your vessel".into()),
+                },
+            };
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::LaunchSavedCraft { id, altitude_m }) => {
+            let reply = match find_craft(s, id, player_id) {
+                Some(c) => launch_craft(s, player_id, &c, altitude_m),
+                None => ServerMessage::CraftLaunched {
+                    vessel: None,
+                    name: String::new(),
+                    parts: 0,
+                    wet_mass_t: 0.0,
+                    dry_mass_t: 0.0,
+                    delta_v_vacuum_mps: 0.0,
+                    stages: Vec::new(),
+                    reason: Some(format!("no craft {id} in your library")),
+                },
+            };
+            out.push((reply).clone());
+        }
+        Ok(
+            msg @ (ClientMessage::RunExperiments { .. }
+            | ClientMessage::TransmitScience { .. }
+            | ClientMessage::RecoverVessel { .. }
+            | ClientMessage::ScienceInfo
+            | ClientMessage::UnlockTechNode { .. }
+            | ClientMessage::AcceptMission { .. }
+            | ClientMessage::TurnInMission { .. }),
+        ) => {
+            out.extend(science_request(s, player_id, msg));
+        }
+        Ok(ClientMessage::DeployParachutes { vessel }) => {
+            let reply = match owned_vessel(s, vessel, player_id) {
+                Some(e) => match s.universe.lock().expect("sim lock").arm_parachutes(e) {
+                    Some(n) if n > 0 => ServerMessage::FlightAck {
+                        vessel,
+                        accepted: true,
+                        reason: None,
+                    },
+                    _ => ServerMessage::FlightAck {
+                        vessel,
+                        accepted: false,
+                        reason: Some("no packed parachutes".into()),
+                    },
+                },
+                None => ServerMessage::FlightAck {
+                    vessel,
+                    accepted: false,
+                    reason: Some("not your vessel".into()),
+                },
+            };
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::Translate { vessel, x, y, z }) => {
+            let reply = match owned_vessel(s, vessel, player_id) {
+                Some(e) => {
+                    let t = ose_math::DVec3::new(x as f64, y as f64, z as f64);
+                    let ok = s.universe.lock().expect("sim lock").set_translate(e, t);
+                    ServerMessage::FlightAck {
+                        vessel,
+                        accepted: ok,
+                        reason: (!ok).then(|| "not under power".into()),
+                    }
+                }
+                None => ServerMessage::FlightAck {
+                    vessel,
+                    accepted: false,
+                    reason: Some("not your vessel".into()),
+                },
+            };
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::SetRotation {
+            vessel,
+            pitch,
+            yaw,
+            roll,
+        }) => {
+            let reply = match owned_vessel(s, vessel, player_id) {
+                Some(e) => {
+                    let ok = s.universe.lock().expect("sim lock").set_rotation(
+                        e,
+                        pitch as f64,
+                        yaw as f64,
+                        roll as f64,
+                    );
+                    ServerMessage::FlightAck {
+                        vessel,
+                        accepted: ok,
+                        reason: (!ok).then(|| "not under power".into()),
+                    }
+                }
+                None => ServerMessage::FlightAck {
+                    vessel,
+                    accepted: false,
+                    reason: Some("not your vessel".into()),
+                },
+            };
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::EvaControls {
+            vessel,
+            run,
+            jump,
+            grab,
+            climb,
+        }) => {
+            let reply = match owned_vessel(s, vessel, player_id) {
+                Some(e) => {
+                    let mut u = s.universe.lock().expect("sim lock");
+                    let grabbed = if grab {
+                        u.grab_ladder(e).map(|_| ())
+                    } else {
+                        Ok(())
+                    };
+                    u.set_climb(e, climb as f64);
+                    let ok = u.set_eva(e, run, jump);
+                    match grabbed {
+                        Err(reason) => ServerMessage::FlightAck {
+                            vessel,
+                            accepted: false,
+                            reason: Some(reason.into()),
+                        },
+                        Ok(()) => ServerMessage::FlightAck {
+                            vessel,
+                            accepted: ok,
+                            reason: (!ok).then(|| "not a Kerbal on EVA".into()),
+                        },
+                    }
+                }
+                None => ServerMessage::FlightAck {
+                    vessel,
+                    accepted: false,
+                    reason: Some("not your vessel".into()),
+                },
+            };
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::SetTrim {
+            vessel,
+            pitch,
+            yaw,
+            roll,
+        }) => {
+            let reply = match owned_vessel(s, vessel, player_id) {
+                Some(e) => {
+                    let t = ose_math::DVec3::new(pitch as f64, yaw as f64, roll as f64);
+                    let ok = s.universe.lock().expect("sim lock").set_trim(e, t);
+                    ServerMessage::FlightAck {
+                        vessel,
+                        accepted: ok,
+                        reason: (!ok).then(|| "not under power".into()),
+                    }
+                }
+                None => ServerMessage::FlightAck {
+                    vessel,
+                    accepted: false,
+                    reason: Some("not your vessel".into()),
+                },
+            };
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::SetRawRotation {
+            vessel,
+            pitch,
+            yaw,
+            roll,
+        }) => {
+            let ok = owned_vessel(s, vessel, player_id).is_some_and(|e| {
+                s.universe.lock().expect("sim lock").set_raw_rotation(
+                    e,
+                    ose_math::DVec3::new(pitch as f64, yaw as f64, roll as f64),
+                )
+            });
+            out.push(ServerMessage::FlightAck {
+                vessel,
+                accepted: ok,
+                reason: (!ok).then(|| "invalid raw input or ownership".into()),
+            });
+        }
+        Ok(ClientMessage::SetPrecision { vessel, enabled }) => {
+            let ok = owned_vessel(s, vessel, player_id).is_some_and(|e| {
+                s.universe
+                    .lock()
+                    .expect("sim lock")
+                    .set_precision(e, enabled)
+            });
+            out.push(ServerMessage::FlightAck {
+                vessel,
+                accepted: ok,
+                reason: (!ok).then(|| "invalid vessel or ownership".into()),
+            });
+        }
+        Ok(ClientMessage::AeroOverlay { vessel, on }) => {
+            // anyone may look at any vessel's airflow
+            let e = s
+                .vessels
+                .lock()
+                .expect("vessels lock")
+                .iter()
+                .find(|x| x.1 == vessel)
+                .map(|x| x.0);
+            let ok =
+                e.is_some_and(|e| s.universe.lock().expect("sim lock").set_aero_overlay(e, on));
+            let reply = ServerMessage::FlightAck {
+                vessel,
+                accepted: ok,
+                reason: (!ok).then(|| "no such vessel under power".into()),
+            };
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::GetVesselCraft { vessel }) => {
+            let e = s
+                .vessels
+                .lock()
+                .expect("vessels lock")
+                .iter()
+                .find(|x| x.1 == vessel)
+                .map(|x| x.0);
+            let craft = e.and_then(|e| s.universe.lock().expect("sim lock").current_craft(e));
+            let reply = ServerMessage::VesselCraft { vessel, craft };
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::SetRoll { vessel, input }) => {
+            let reply = match owned_vessel(s, vessel, player_id) {
+                Some(e) => {
+                    let ok = s
+                        .universe
+                        .lock()
+                        .expect("sim lock")
+                        .set_roll(e, input as f64);
+                    ServerMessage::FlightAck {
+                        vessel,
+                        accepted: ok,
+                        reason: (!ok).then(|| "not under power".into()),
+                    }
+                }
+                None => ServerMessage::FlightAck {
+                    vessel,
+                    accepted: false,
+                    reason: Some("not your vessel".into()),
+                },
+            };
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::ActionGroup { vessel, group, on }) => {
+            let group = match group {
+                ose_net::ActionGroup::Lights => ose_sim::ActionGroup::Lights,
+                ose_net::ActionGroup::Rcs => ose_sim::ActionGroup::Rcs,
+                ose_net::ActionGroup::Abort => ose_sim::ActionGroup::Abort,
+                ose_net::ActionGroup::Custom(n) => ose_sim::ActionGroup::Custom(n),
+            };
+            let reply = match owned_vessel(s, vessel, player_id) {
+                Some(e) => {
+                    let state = s
+                        .universe
+                        .lock()
+                        .expect("sim lock")
+                        .action_group(e, group, on);
+                    ServerMessage::FlightAck {
+                        vessel,
+                        accepted: state.is_some(),
+                        reason: state
+                            .is_none()
+                            .then(|| "not under power, or no such group".into()),
+                    }
+                }
+                None => ServerMessage::FlightAck {
+                    vessel,
+                    accepted: false,
+                    reason: Some("not your vessel".into()),
+                },
+            };
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::StageReport { craft }) => {
+            let mut craft = craft;
+            craft.dedupe_guids();
+            let mut filled = craft;
+            fill_default_resources(s, &mut filled);
+            let report = ose_data::staging::delta_v_by_stage(&filled, &s.parts, &s.resources);
+            let (com_m, cot_m, thrust_dir) = balance(s, &filled, &report);
+            let col_m = centre_of_lift(s, &filled);
+            let reply = ServerMessage::StageReport {
+                stages: stage_readouts(s, &filled, &report),
+                delta_v_vacuum_mps: vacuum_dv(s, &filled, &report),
+                com_m,
+                cot_m,
+                thrust_dir,
+                col_m,
+            };
+            out.push((reply).clone());
+        }
+        Ok(
+            msg @ (ClientMessage::QuickSave
+            | ClientMessage::QuickLoad
+            | ClientMessage::RevertToLaunch
+            | ClientMessage::RevertToEditor),
+        ) => {
+            let reply = save_request(s, player_id, &msg);
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::SetTarget { vessel, target }) => {
+            let reply = match owned_vessel(s, vessel, player_id) {
+                Some(e) => {
+                    let t = match target {
+                        None => Ok(None),
+                        Some(ose_net::TargetId::Vessel(id)) => s
+                            .vessels
+                            .lock()
+                            .expect("vessels lock")
+                            .iter()
+                            .find(|x| x.1 == id)
+                            .map(|x| Some(x.0))
+                            .ok_or("no such vessel"),
+                        Some(ose_net::TargetId::Body(i)) => {
+                            let u = s.universe.lock().expect("sim lock");
+                            s.catalog
+                                .get(i as usize)
+                                .and_then(|b| u.body_entity(&b.id))
+                                .map(Some)
+                                .ok_or("no such body")
+                        }
+                    };
+                    match t {
+                        Ok(t) => {
+                            let ok = s.universe.lock().expect("sim lock").set_target(e, t);
+                            ServerMessage::FlightAck {
+                                vessel,
+                                accepted: ok,
+                                reason: (!ok).then(|| "cannot target that".into()),
+                            }
+                        }
+                        Err(reason) => ServerMessage::FlightAck {
+                            vessel,
+                            accepted: false,
+                            reason: Some(reason.into()),
+                        },
+                    }
+                }
+                None => ServerMessage::FlightAck {
+                    vessel,
+                    accepted: false,
+                    reason: Some("not your vessel".into()),
+                },
+            };
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::DeployFairings { vessel }) => {
+            let reply = match owned_vessel(s, vessel, player_id) {
+                Some(e) => match s.universe.lock().expect("sim lock").deploy_fairings(e) {
+                    Some(n) if n > 0 => ServerMessage::FlightAck {
+                        vessel,
+                        accepted: true,
+                        reason: None,
+                    },
+                    _ => ServerMessage::FlightAck {
+                        vessel,
+                        accepted: false,
+                        reason: Some("no fairings on".into()),
+                    },
+                },
+                None => ServerMessage::FlightAck {
+                    vessel,
+                    accepted: false,
+                    reason: Some("not your vessel".into()),
+                },
+            };
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::SetCargoBays { vessel, open }) => {
+            let reply = match owned_vessel(s, vessel, player_id) {
+                Some(e) => match s
+                    .universe
+                    .lock()
+                    .expect("sim lock")
+                    .open_cargo_bays(e, open)
+                {
+                    Some(n) if n > 0 => ServerMessage::FlightAck {
+                        vessel,
+                        accepted: true,
+                        reason: None,
+                    },
+                    _ => ServerMessage::FlightAck {
+                        vessel,
+                        accepted: false,
+                        reason: Some(
+                            if open {
+                                "no closed cargo bays"
+                            } else {
+                                "no open cargo bays"
+                            }
+                            .into(),
+                        ),
+                    },
+                },
+                None => ServerMessage::FlightAck {
+                    vessel,
+                    accepted: false,
+                    reason: Some("not your vessel".into()),
+                },
+            };
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::SetConverters { vessel, on }) => {
+            let reply = match owned_vessel(s, vessel, player_id) {
+                Some(e) => match s.universe.lock().expect("sim lock").set_converters(e, on) {
+                    Some(n) if n > 0 => ServerMessage::FlightAck {
+                        vessel,
+                        accepted: true,
+                        reason: None,
+                    },
+                    Some(_) => ServerMessage::FlightAck {
+                        vessel,
+                        accepted: false,
+                        reason: Some(
+                            if on {
+                                "no converters off"
+                            } else {
+                                "no converters on"
+                            }
+                            .into(),
+                        ),
+                    },
+                    None => ServerMessage::FlightAck {
+                        vessel,
+                        accepted: false,
+                        reason: Some("vessel has no parts".into()),
+                    },
+                },
+                None => ServerMessage::FlightAck {
+                    vessel,
+                    accepted: false,
+                    reason: Some("not your vessel".into()),
+                },
+            };
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::Drive {
+            vessel,
+            throttle,
+            steer,
+            brakes,
+        }) => {
+            let reply = match owned_vessel(s, vessel, player_id) {
+                Some(e) => {
+                    let ok = s.universe.lock().expect("sim lock").set_drive(
+                        e,
+                        throttle as f64,
+                        steer as f64,
+                        brakes,
+                    );
+                    ServerMessage::FlightAck {
+                        vessel,
+                        accepted: ok,
+                        reason: (!ok).then(|| "not under power".into()),
+                    }
+                }
+                None => ServerMessage::FlightAck {
+                    vessel,
+                    accepted: false,
+                    reason: Some("not your vessel".into()),
+                },
+            };
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::DeployGear { vessel, deploy }) => {
+            let reply = match owned_vessel(s, vessel, player_id) {
+                Some(e) => match s.universe.lock().expect("sim lock").deploy_gear(e, deploy) {
+                    Some(n) if n > 0 => ServerMessage::FlightAck {
+                        vessel,
+                        accepted: true,
+                        reason: None,
+                    },
+                    Some(_) => ServerMessage::FlightAck {
+                        vessel,
+                        accepted: false,
+                        reason: Some(
+                            if deploy {
+                                "no folded gear"
+                            } else {
+                                "no gear out"
+                            }
+                            .into(),
+                        ),
+                    },
+                    None => ServerMessage::FlightAck {
+                        vessel,
+                        accepted: false,
+                        reason: Some("vessel has no parts".into()),
+                    },
+                },
+                None => ServerMessage::FlightAck {
+                    vessel,
+                    accepted: false,
+                    reason: Some("not your vessel".into()),
+                },
+            };
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::DeployAntennas { vessel, deploy }) => {
+            let reply = match owned_vessel(s, vessel, player_id) {
+                Some(e) => match s
+                    .universe
+                    .lock()
+                    .expect("sim lock")
+                    .deploy_antennas(e, deploy)
+                {
+                    Some(n) if n > 0 => ServerMessage::FlightAck {
+                        vessel,
+                        accepted: true,
+                        reason: None,
+                    },
+                    Some(_) => ServerMessage::FlightAck {
+                        vessel,
+                        accepted: false,
+                        reason: Some(
+                            if deploy {
+                                "no retracted antennas"
+                            } else {
+                                "no antennas extended"
+                            }
+                            .into(),
+                        ),
+                    },
+                    None => ServerMessage::FlightAck {
+                        vessel,
+                        accepted: false,
+                        reason: Some("vessel has no parts".into()),
+                    },
+                },
+                None => ServerMessage::FlightAck {
+                    vessel,
+                    accepted: false,
+                    reason: Some("not your vessel".into()),
+                },
+            };
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::MoveToStage {
+            vessel,
+            part,
+            stage,
+        }) => {
+            let reply = match owned_vessel(s, vessel, player_id) {
+                Some(e) => {
+                    let spec_for = |c: &ose_data::craft::Craft| flight_spec_for(s, c);
+                    let r = s.universe.lock().expect("sim lock").move_to_stage(
+                        e,
+                        part as usize,
+                        stage as usize,
+                        &s.parts,
+                        &s.resources,
+                        &spec_for,
+                    );
+                    ServerMessage::FlightAck {
+                        vessel,
+                        accepted: r.is_ok(),
+                        reason: r.err().map(String::from),
+                    }
+                }
+                None => ServerMessage::FlightAck {
+                    vessel,
+                    accepted: false,
+                    reason: Some("not your vessel".into()),
+                },
+            };
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::SetStages { vessel, stages }) => {
+            let reply = match owned_vessel(s, vessel, player_id) {
+                Some(e) => {
+                    let spec_for = |c: &ose_data::craft::Craft| flight_spec_for(s, c);
+                    let stages = stages
+                        .into_iter()
+                        .map(|l| l.into_iter().map(usize::from).collect())
+                        .collect();
+                    let r = s.universe.lock().expect("sim lock").set_stages(
+                        e,
+                        stages,
+                        &s.parts,
+                        &s.resources,
+                        &spec_for,
+                    );
+                    ServerMessage::FlightAck {
+                        vessel,
+                        accepted: r.is_ok(),
+                        reason: r.err().map(String::from),
+                    }
+                }
+                None => ServerMessage::FlightAck {
+                    vessel,
+                    accepted: false,
+                    reason: Some("not your vessel".into()),
+                },
+            };
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::ConfigurePart {
+            vessel,
+            part,
+            settings,
+        }) => {
+            let ok = owned_vessel(s, vessel, player_id).is_some_and(|e| {
+                s.universe
+                    .lock()
+                    .expect("sim lock")
+                    .configure_part(e, part, settings)
+            });
+            out.push(
+                (ServerMessage::FlightAck {
+                    vessel,
+                    accepted: ok,
+                    reason: (!ok).then(|| "invalid part settings or ownership".into()),
+                })
+                .clone(),
+            );
+        }
+        Ok(ClientMessage::ControlFrom { vessel, part }) => {
+            let reply = match owned_vessel(s, vessel, player_id) {
+                Some(e) => {
+                    let r = s
+                        .universe
+                        .lock()
+                        .expect("sim lock")
+                        .set_control_point(e, part)
+                        .then_some(())
+                        .ok_or("part cannot control this vessel");
+                    ServerMessage::FlightAck {
+                        vessel,
+                        accepted: r.is_ok(),
+                        reason: r.err().map(String::from),
+                    }
+                }
+                None => ServerMessage::FlightAck {
+                    vessel,
+                    accepted: false,
+                    reason: Some("not your vessel".into()),
+                },
+            };
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::MoveCrew {
+            vessel,
+            kerbal,
+            to_part,
+        }) => {
+            let reply = match owned_vessel(s, vessel, player_id) {
+                Some(e) => {
+                    let r = s.universe.lock().expect("sim lock").move_crew(
+                        e,
+                        &kerbal,
+                        to_part as usize,
+                    );
+                    ServerMessage::FlightAck {
+                        vessel,
+                        accepted: r.is_ok(),
+                        reason: r.err().map(String::from),
+                    }
+                }
+                None => ServerMessage::FlightAck {
+                    vessel,
+                    accepted: false,
+                    reason: Some("not your vessel".into()),
+                },
+            };
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::TransferResource {
+            vessel,
+            resource,
+            from,
+            to,
+        }) => {
+            let reply = match owned_vessel(s, vessel, player_id) {
+                Some(e) => {
+                    let from: Vec<usize> = from.iter().map(|&i| i as usize).collect();
+                    let to: Vec<usize> = to.iter().map(|&i| i as usize).collect();
+                    let r = s
+                        .universe
+                        .lock()
+                        .expect("sim lock")
+                        .transfer_resource(e, &resource, &from, &to);
+                    ServerMessage::FlightAck {
+                        vessel,
+                        accepted: r.is_ok(),
+                        reason: r.err().map(String::from),
+                    }
+                }
+                None => ServerMessage::FlightAck {
+                    vessel,
+                    accepted: false,
+                    reason: Some("not your vessel".into()),
+                },
+            };
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::SetPartActions {
+            vessel,
+            part,
+            actions,
+        }) => {
+            let reply = match owned_vessel(s, vessel, player_id) {
+                Some(e) => {
+                    let r = s.universe.lock().expect("sim lock").set_part_actions(
+                        e,
+                        part as usize,
+                        actions,
+                    );
+                    ServerMessage::FlightAck {
+                        vessel,
+                        accepted: r.is_ok(),
+                        reason: r.err().map(String::from),
+                    }
+                }
+                None => ServerMessage::FlightAck {
+                    vessel,
+                    accepted: false,
+                    reason: Some("not your vessel".into()),
+                },
+            };
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::PartAction {
+            vessel,
+            part,
+            action,
+            on,
+        }) => {
+            let reply = match owned_vessel(s, vessel, player_id) {
+                Some(e) => {
+                    let ok = s.universe.lock().expect("sim lock").part_action(
+                        e,
+                        part as usize,
+                        &action,
+                        on,
+                    );
+                    ServerMessage::FlightAck {
+                        vessel,
+                        accepted: ok,
+                        reason: (!ok).then(|| "that part has no such action".into()),
+                    }
+                }
+                None => ServerMessage::FlightAck {
+                    vessel,
+                    accepted: false,
+                    reason: Some("not your vessel".into()),
+                },
+            };
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::RenameVessel { vessel, name }) => {
+            let name = name.trim().to_string();
+            let reply = match owned_vessel(s, vessel, player_id) {
+                Some(_) if name.is_empty() || name.chars().count() > 64 => {
+                    ServerMessage::FlightAck {
+                        vessel,
+                        accepted: false,
+                        reason: Some("a name is 1 to 64 characters".into()),
+                    }
+                }
+                Some(e) => {
+                    let ok = s.universe.lock().expect("sim lock").rename_vessel(e, &name);
+                    ServerMessage::FlightAck {
+                        vessel,
+                        accepted: ok,
+                        reason: (!ok).then(|| "not a vessel".into()),
+                    }
+                }
+                None => ServerMessage::FlightAck {
+                    vessel,
+                    accepted: false,
+                    reason: Some("not your vessel".into()),
+                },
+            };
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::DeployPanels { vessel, deploy }) => {
+            let reply = match owned_vessel(s, vessel, player_id) {
+                Some(e) => match s
+                    .universe
+                    .lock()
+                    .expect("sim lock")
+                    .deploy_panels(e, deploy)
+                {
+                    Some(n) if n > 0 => ServerMessage::FlightAck {
+                        vessel,
+                        accepted: true,
+                        reason: None,
+                    },
+                    Some(_) => ServerMessage::FlightAck {
+                        vessel,
+                        accepted: false,
+                        reason: Some(
+                            if deploy {
+                                "no folded panels"
+                            } else {
+                                "no panels out"
+                            }
+                            .into(),
+                        ),
+                    },
+                    None => ServerMessage::FlightAck {
+                        vessel,
+                        accepted: false,
+                        reason: Some("vessel has no parts".into()),
+                    },
+                },
+                None => ServerMessage::FlightAck {
+                    vessel,
+                    accepted: false,
+                    reason: Some("not your vessel".into()),
+                },
+            };
+            out.push((reply).clone());
+        }
+        Ok(
+            msg @ (ClientMessage::GoEva { .. }
+            | ClientMessage::Board { .. }
+            | ClientMessage::PlantFlag { .. }
+            | ClientMessage::Undock { .. }),
+        ) => {
+            let reply = crew_request(s, player_id, msg);
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::Hello { .. }) => {}
+        Err(e) => tracing::warn!(player = player_id, error = %e, "bad client message"),
+    }
+}
+
 async fn session(mut socket: WebSocket, s: AppState) {
     // Handshake.
     let player_id = loop {
@@ -3192,23 +4454,14 @@ async fn session(mut socket: WebSocket, s: AppState) {
                         {
                             return;
                         }
-                        if s.test_probe && !has_vessel(&s, id) {
-                            spawn_test_probe(&s, id, &display_name);
-                        }
-                        *s.connections
-                            .lock()
-                            .expect("connections lock")
-                            .entry(id)
-                            .or_default() += 1;
-                        s.warp_requests
-                            .lock()
-                            .expect("warp lock")
-                            .entry(id)
-                            .or_insert(1);
-                        s.names
-                            .lock()
-                            .expect("names lock")
-                            .insert(id, display_name.clone());
+                        replay::record_event(
+                            &s,
+                            id,
+                            replay::Event::Joined {
+                                name: display_name.clone(),
+                            },
+                        );
+                        player_joined(&s, id, &display_name);
                         break id;
                     }
                     Ok(_) => {
@@ -3297,637 +4550,56 @@ async fn session(mut socket: WebSocket, s: AppState) {
             }
             incoming = socket.recv() => {
                 match incoming {
-                    Some(Ok(Message::Binary(b))) => match ose_net::decode::<ClientMessage>(&b) {
-                        Ok(ClientMessage::RequestWarp { factor }) => {
-                            let f = factor.clamp(1, 10_000_000);
-                            s.warp_requests.lock().expect("warp lock").insert(player_id, f);
-                            let (eff, _) = apply_warp(&s);
-                            tracing::info!(player = player_id, requested = f, effective = eff, "warp request");
+                    Some(Ok(Message::Binary(b))) => {
+                        let decoded = ose_net::decode::<ClientMessage>(&b).map_err(|e| e.to_string());
+                        if let Ok(msg) = &decoded {
+                            replay::record_event(&s, player_id, replay::Event::Msg(msg.clone()));
                         }
-                        Ok(ClientMessage::Ping { sent_tick }) => {
-                            if !send(&mut socket, &ServerMessage::Pong { sent_tick }).await { break; }
+                        let mut out = Vec::new();
+                        handle_decoded(&s, player_id, decoded, &mut out);
+                        for m in &out {
+                            if !send(&mut socket, m).await { break 'session; }
                         }
-                        Ok(ClientMessage::ScheduleBurn { vessel, ut, prograde_mps, normal_mps, radial_mps }) => {
-                            let reply = match owned_vessel(&s, vessel, player_id) {
-                                Some(e) => {
-                                    let burn = ose_sim::vessels::ScheduledBurn { ut, prograde_mps, normal_mps, radial_mps };
-                                    let ok = s.universe.lock().expect("sim lock").schedule_burn(e, burn);
-                                    ServerMessage::BurnState { vessel, scheduled: ok, reason: (!ok).then(|| "burn time is in the past".to_string()) }
-                                }
-                                None => ServerMessage::BurnState { vessel, scheduled: false, reason: Some("not your vessel".into()) },
-                            };
-                            if !send(&mut socket, &reply).await { break; }
-                            for msg in trajectories(&s) {
-                                if !send(&mut socket, &msg).await { break 'session; }
-                            }
-                        }
-                        Ok(ClientMessage::ScheduleBurns { vessel, burns }) => {
-                            let reply = match owned_vessel(&s, vessel, player_id) {
-                                Some(e) => {
-                                    let burns = burns
-                                        .iter()
-                                        .map(|b| ose_sim::vessels::ScheduledBurn { ut: b.ut, prograde_mps: b.prograde_mps, normal_mps: b.normal_mps, radial_mps: b.radial_mps })
-                                        .collect();
-                                    let ok = s.universe.lock().expect("sim lock").schedule_burns(e, burns);
-                                    ServerMessage::BurnState { vessel, scheduled: ok, reason: (!ok).then(|| "a burn time is in the past".to_string()) }
-                                }
-                                None => ServerMessage::BurnState { vessel, scheduled: false, reason: Some("not your vessel".into()) },
-                            };
-                            if !send(&mut socket, &reply).await { break; }
-                            for msg in trajectories(&s) {
-                                if !send(&mut socket, &msg).await { break 'session; }
-                            }
-                        }
-                        Ok(ClientMessage::ClearBurn { vessel }) => {
-                            let reply = match owned_vessel(&s, vessel, player_id) {
-                                Some(e) => {
-                                    s.universe.lock().expect("sim lock").schedule_burns(e, Vec::new());
-                                    ServerMessage::BurnState { vessel, scheduled: false, reason: None }
-                                }
-                                None => ServerMessage::BurnState { vessel, scheduled: false, reason: Some("not your vessel".into()) },
-                            };
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::JoinCampaign) => {
-                            let name = display_name_for(&s, player_id);
-                            let reply = campaign_state(&s, player_id, Some(&name));
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::CampaignInfo) => {
-                            let reply = campaign_state(&s, player_id, None);
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::ListSessions) => {
-                            let reply = session_list(&s);
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::SelectSession { id }) => {
-                            let live = s.campaign.lock().expect("campaign lock").id.clone();
-                            let switched = if id == live {
-                                Ok(())
-                            } else {
-                                campaigns::switch(&s, player_id, campaigns::Target::Shelved(id.clone()))
-                            };
-                            let reply = match switched {
-                                Ok(()) => {
-                                    let name = display_name_for(&s, player_id);
-                                    if s.test_probe && !has_vessel(&s, player_id) {
-                                        spawn_test_probe(&s, player_id, &name);
-                                    }
-                                    campaign_state(&s, player_id, Some(&name))
-                                }
-                                Err(reason) => ServerMessage::Rejected { reason },
-                            };
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::CreateSession { name, mode, difficulty }) => {
-                            let name = if name.trim().is_empty() { "New campaign".to_string() } else { name.trim().to_string() };
-                            let new = campaigns::NewCampaign { name, mode, difficulty };
-                            let reply = match campaigns::switch(&s, player_id, campaigns::Target::New(new)) {
-                                Ok(()) => {
-                                    let pname = display_name_for(&s, player_id);
-                                    if s.test_probe && !has_vessel(&s, player_id) {
-                                        spawn_test_probe(&s, player_id, &pname);
-                                    }
-                                    let mut reply = campaign_state(&s, player_id, Some(&pname));
-                                    if let ServerMessage::CampaignState { created: c, .. } = &mut reply {
-                                        *c = true;
-                                    }
-                                    reply
-                                }
-                                Err(reason) => ServerMessage::Rejected { reason },
-                            };
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::LeaveSession) => {
-                            if s.playing.lock().expect("playing lock").remove(&player_id) {
-                                push_campaign(&s, player_id);
-                            }
-                            apply_warp(&s);
-                            let reply = session_list(&s);
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::ClaimSession { id }) => {
-                            let reply = match campaigns::manage(&s, player_id, &id, false) {
-                                Ok(()) => session_list(&s),
-                                Err(reason) => ServerMessage::Rejected { reason },
-                            };
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::DeleteSession { id }) => {
-                            let reply = match campaigns::manage(&s, player_id, &id, true) {
-                                Ok(()) => session_list(&s),
-                                Err(reason) => ServerMessage::Rejected { reason },
-                            };
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::SetAgency { agency }) => {
-                            {
-                                let mut c = s.campaign.lock().expect("campaign lock");
-                                if let Some(m) = c.members.iter_mut().find(|m| m.player_id == player_id) {
-                                    m.agency = Some(agency.clone());
-                                } else {
-                                    let tick = s.universe.lock().expect("sim lock").tick();
-                                    c.members.push(save::CampaignMember {
-                                        player_id,
-                                        display_name: display_name_for(&s, player_id),
-                                        joined_tick: tick,
-                                        agency: Some(agency.clone()),
-                                    });
-                                }
-                            }
-                            let reply = campaign_state(&s, player_id, None);
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::LaunchCraft { craft, altitude_m }) => {
-                            let mut craft = craft;
-                            craft.dedupe_guids();
-                            let reply = launch_craft(&s, player_id, &craft, altitude_m);
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::SaveCraft { craft }) => {
-                            let mut craft = craft;
-                            craft.dedupe_guids();
-                            let reply = save_craft(&s, player_id, craft);
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::DeleteCraft { id }) => {
-                            s.crafts.lock().expect("crafts lock").retain(|c| !(c.id == id && c.owner == player_id));
-                            let reply = craft_list(&s, player_id);
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::CraftList) => {
-                            let reply = craft_list(&s, player_id);
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::GetCraft { id }) => {
-                            let craft = find_craft(&s, id, player_id);
-                            if !send(&mut socket, &ServerMessage::CraftDocument { id, craft }).await { break; }
-                        }
-                        Ok(ClientMessage::KerbalRoster) => {
-                            let reply = kerbal_roster(&s);
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::ClearLaunchSite { site }) => {
-                            let reply = clear_launch_site(&s, player_id, site.as_deref());
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::LaunchAt { craft, site, crew }) => {
-                            let mut craft = craft;
-                            craft.dedupe_guids();
-                            let reply = launch_at(&s, player_id, &craft, site.as_deref(), crew.as_deref());
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::LaunchSavedAt { id, site, crew }) => {
-                            let reply = match find_craft(&s, id, player_id) {
-                                Some(c) => launch_at(&s, player_id, &c, site.as_deref(), crew.as_deref()),
-                                None => ServerMessage::CraftLaunched {
-                                    vessel: None,
-                                    name: String::new(),
-                                    parts: 0,
-                                    wet_mass_t: 0.0,
-                                    dry_mass_t: 0.0,
-                                    delta_v_vacuum_mps: 0.0,
-                                    stages: Vec::new(),
-                                    reason: Some(format!("no craft {id} in your library")),
-                                },
-                            };
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::LaunchOnPad { craft }) => {
-                            let mut craft = craft;
-                            craft.dedupe_guids();
-                            let reply = launch_on_pad(&s, player_id, &craft);
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::LaunchSavedOnPad { id }) => {
-                            let reply = match find_craft(&s, id, player_id) {
-                                Some(c) => launch_on_pad(&s, player_id, &c),
-                                None => ServerMessage::CraftLaunched {
-                                    vessel: None,
-                                    name: String::new(),
-                                    parts: 0,
-                                    wet_mass_t: 0.0,
-                                    dry_mass_t: 0.0,
-                                    delta_v_vacuum_mps: 0.0,
-                                    stages: Vec::new(),
-                                    reason: Some(format!("no craft {id} in your library")),
-                                },
-                            };
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::SetControls { vessel, throttle, attitude }) => {
-                            let reply = match owned_vessel(&s, vessel, player_id) {
-                                Some(e) if attitude == ose_net::AttitudeMode::Maneuver
-                                    && s.universe.lock().expect("sim lock").scheduled_burn(e).is_none() =>
-                                {
-                                    ServerMessage::FlightAck { vessel, accepted: false, reason: Some("no maneuver planned".into()) }
-                                }
-                                Some(e) if matches!(attitude, ose_net::AttitudeMode::Target | ose_net::AttitudeMode::AntiTarget)
-                                    && s.universe.lock().expect("sim lock").target(e).is_none() =>
-                                {
-                                    ServerMessage::FlightAck { vessel, accepted: false, reason: Some("no target set".into()) }
-                                }
-                                Some(e) => {
-                                    let ok = s.universe.lock().expect("sim lock").set_controls(e, throttle, from_net_attitude(attitude));
-                                    ServerMessage::FlightAck { vessel, accepted: ok, reason: (!ok).then(|| "vessel has no flight state (bare probe), has crashed, or has no power for its probe core".to_string()) }
-                                }
-                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
-                            };
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::Stage { vessel }) => {
-                            let reply = match owned_vessel(&s, vessel, player_id) {
-                                Some(e) => {
-                                    let res = s.universe.lock().expect("sim lock").stage(e);
-                                    if let Some(d) = res.debris {
-                                        let mut list = s.vessels.lock().expect("vessels lock");
-                                        let id = list.iter().map(|&(_, id, _)| id).max().unwrap_or(0) + 1;
-                                        list.push((d, id, Some(player_id)));
-                                    }
-                                    let ok = res.fired;
-                                    ServerMessage::FlightAck { vessel, accepted: ok, reason: (!ok).then(|| "no further stage".to_string()) }
-                                }
-                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
-                            };
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::LaunchSavedCraft { id, altitude_m }) => {
-                            let reply = match find_craft(&s, id, player_id) {
-                                Some(c) => launch_craft(&s, player_id, &c, altitude_m),
-                                None => ServerMessage::CraftLaunched {
-                                    vessel: None,
-                                    name: String::new(),
-                                    parts: 0,
-                                    wet_mass_t: 0.0,
-                                    dry_mass_t: 0.0,
-                                    delta_v_vacuum_mps: 0.0,
-                                    stages: Vec::new(),
-                                    reason: Some(format!("no craft {id} in your library")),
-                                },
-                            };
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(msg @ (ClientMessage::RunExperiments { .. }
-                        | ClientMessage::TransmitScience { .. }
-                        | ClientMessage::RecoverVessel { .. }
-                        | ClientMessage::ScienceInfo
-                        | ClientMessage::UnlockTechNode { .. }
-                        | ClientMessage::AcceptMission { .. }
-                        | ClientMessage::TurnInMission { .. })) => {
-                            let replies = science_request(&s, player_id, msg);
+                        // science replies carry the state already
+                        if out.iter().any(|m| matches!(m, ServerMessage::ScienceState { .. })) {
                             science_rev = s.campaign.lock().expect("campaign lock").science.rev;
-                            let mut ok = true;
-                            for r in &replies {
-                                ok = ok && send(&mut socket, r).await;
-                            }
-                            if !ok { break; }
                         }
-                        Ok(ClientMessage::DeployParachutes { vessel }) => {
-                            let reply = match owned_vessel(&s, vessel, player_id) {
-                                Some(e) => match s.universe.lock().expect("sim lock").arm_parachutes(e) {
-                                    Some(n) if n > 0 => ServerMessage::FlightAck { vessel, accepted: true, reason: None },
-                                    _ => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("no packed parachutes".into()) },
-                                },
-                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
-                            };
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::Translate { vessel, x, y, z }) => {
-                            let reply = match owned_vessel(&s, vessel, player_id) {
-                                Some(e) => {
-                                    let t = ose_math::DVec3::new(x as f64, y as f64, z as f64);
-                                    let ok = s.universe.lock().expect("sim lock").set_translate(e, t);
-                                    ServerMessage::FlightAck { vessel, accepted: ok, reason: (!ok).then(|| "not under power".into()) }
-                                }
-                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
-                            };
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::SetRotation { vessel, pitch, yaw, roll }) => {
-                            let reply = match owned_vessel(&s, vessel, player_id) {
-                                Some(e) => {
-                                    let ok = s.universe.lock().expect("sim lock").set_rotation(e, pitch as f64, yaw as f64, roll as f64);
-                                    ServerMessage::FlightAck { vessel, accepted: ok, reason: (!ok).then(|| "not under power".into()) }
-                                }
-                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
-                            };
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::EvaControls { vessel, run, jump, grab, climb }) => {
-                            let reply = match owned_vessel(&s, vessel, player_id) {
-                                Some(e) => {
-                                    let mut u = s.universe.lock().expect("sim lock");
-                                    let grabbed = if grab { u.grab_ladder(e).map(|_| ()) } else { Ok(()) };
-                                    u.set_climb(e, climb as f64);
-                                    let ok = u.set_eva(e, run, jump);
-                                    match grabbed {
-                                        Err(reason) => ServerMessage::FlightAck { vessel, accepted: false, reason: Some(reason.into()) },
-                                        Ok(()) => ServerMessage::FlightAck { vessel, accepted: ok, reason: (!ok).then(|| "not a Kerbal on EVA".into()) },
-                                    }
-                                }
-                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
-                            };
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::SetTrim { vessel, pitch, yaw, roll }) => {
-                            let reply = match owned_vessel(&s, vessel, player_id) {
-                                Some(e) => {
-                                    let t = ose_math::DVec3::new(pitch as f64, yaw as f64, roll as f64);
-                                    let ok = s.universe.lock().expect("sim lock").set_trim(e, t);
-                                    ServerMessage::FlightAck { vessel, accepted: ok, reason: (!ok).then(|| "not under power".into()) }
-                                }
-                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
-                            };
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::SetRawRotation {vessel,pitch,yaw,roll}) => {
-                            let ok=owned_vessel(&s,vessel,player_id).is_some_and(|e|s.universe.lock().expect("sim lock").set_raw_rotation(e,ose_math::DVec3::new(pitch as f64,yaw as f64,roll as f64)));
-                            if !send(&mut socket,&ServerMessage::FlightAck {vessel,accepted:ok,reason:(!ok).then(||"invalid raw input or ownership".into())}).await {break;}
-                        }
-                        Ok(ClientMessage::SetPrecision {vessel,enabled}) => {
-                            let ok=owned_vessel(&s,vessel,player_id).is_some_and(|e|s.universe.lock().expect("sim lock").set_precision(e,enabled));
-                            if !send(&mut socket,&ServerMessage::FlightAck {vessel,accepted:ok,reason:(!ok).then(||"invalid vessel or ownership".into())}).await {break;}
-                        }
-                        Ok(ClientMessage::AeroOverlay { vessel, on }) => {
-                            // anyone may look at any vessel's airflow
-                            let e = s.vessels.lock().expect("vessels lock").iter().find(|x| x.1 == vessel).map(|x| x.0);
-                            let ok = e.is_some_and(|e| s.universe.lock().expect("sim lock").set_aero_overlay(e, on));
-                            let reply = ServerMessage::FlightAck { vessel, accepted: ok, reason: (!ok).then(|| "no such vessel under power".into()) };
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::GetVesselCraft { vessel }) => {
-                            let e = s.vessels.lock().expect("vessels lock").iter().find(|x| x.1 == vessel).map(|x| x.0);
-                            let craft = e.and_then(|e| s.universe.lock().expect("sim lock").current_craft(e));
-                            let reply = ServerMessage::VesselCraft { vessel, craft };
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::SetRoll { vessel, input }) => {
-                            let reply = match owned_vessel(&s, vessel, player_id) {
-                                Some(e) => {
-                                    let ok = s.universe.lock().expect("sim lock").set_roll(e, input as f64);
-                                    ServerMessage::FlightAck { vessel, accepted: ok, reason: (!ok).then(|| "not under power".into()) }
-                                }
-                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
-                            };
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::ActionGroup { vessel, group, on }) => {
-                            let group = match group {
-                                ose_net::ActionGroup::Lights => ose_sim::ActionGroup::Lights,
-                                ose_net::ActionGroup::Rcs => ose_sim::ActionGroup::Rcs,
-                                ose_net::ActionGroup::Abort => ose_sim::ActionGroup::Abort,
-                                ose_net::ActionGroup::Custom(n) => ose_sim::ActionGroup::Custom(n),
-                            };
-                            let reply = match owned_vessel(&s, vessel, player_id) {
-                                Some(e) => {
-                                    let state = s.universe.lock().expect("sim lock").action_group(e, group, on);
-                                    ServerMessage::FlightAck { vessel, accepted: state.is_some(), reason: state.is_none().then(|| "not under power, or no such group".into()) }
-                                }
-                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
-                            };
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::StageReport { craft }) => {
-                            let mut craft = craft;
-                            craft.dedupe_guids();
-                            let mut filled = craft;
-                            fill_default_resources(&s, &mut filled);
-                            let report = ose_data::staging::delta_v_by_stage(&filled, &s.parts, &s.resources);
-                            let (com_m, cot_m, thrust_dir) = balance(&s, &filled, &report);
-                            let col_m = centre_of_lift(&s, &filled);
-                            let reply = ServerMessage::StageReport {
-                                stages: stage_readouts(&s, &filled, &report),
-                                delta_v_vacuum_mps: vacuum_dv(&s, &filled, &report),
-                                com_m,
-                                cot_m,
-                                thrust_dir,
-                                col_m,
-                            };
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(msg @ (ClientMessage::QuickSave
-                        | ClientMessage::QuickLoad
-                        | ClientMessage::RevertToLaunch
-                        | ClientMessage::RevertToEditor)) => {
-                            let reply = save_request(&s, player_id, &msg);
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::SetTarget { vessel, target }) => {
-                            let reply = match owned_vessel(&s, vessel, player_id) {
-                                Some(e) => {
-                                    let t = match target {
-                                        None => Ok(None),
-                                        Some(ose_net::TargetId::Vessel(id)) => s
-                                            .vessels
-                                            .lock()
-                                            .expect("vessels lock")
-                                            .iter()
-                                            .find(|x| x.1 == id)
-                                            .map(|x| Some(x.0))
-                                            .ok_or("no such vessel"),
-                                        Some(ose_net::TargetId::Body(i)) => {
-                                            let u = s.universe.lock().expect("sim lock");
-                                            s.catalog
-                                                .get(i as usize)
-                                                .and_then(|b| u.body_entity(&b.id))
-                                                .map(Some)
-                                                .ok_or("no such body")
-                                        }
-                                    };
-                                    match t {
-                                        Ok(t) => {
-                                            let ok = s.universe.lock().expect("sim lock").set_target(e, t);
-                                            ServerMessage::FlightAck { vessel, accepted: ok, reason: (!ok).then(|| "cannot target that".into()) }
-                                        }
-                                        Err(reason) => ServerMessage::FlightAck { vessel, accepted: false, reason: Some(reason.into()) },
-                                    }
-                                }
-                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
-                            };
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::DeployFairings { vessel }) => {
-                            let reply = match owned_vessel(&s, vessel, player_id) {
-                                Some(e) => match s.universe.lock().expect("sim lock").deploy_fairings(e) {
-                                    Some(n) if n > 0 => ServerMessage::FlightAck { vessel, accepted: true, reason: None },
-                                    _ => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("no fairings on".into()) },
-                                },
-                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
-                            };
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::SetCargoBays { vessel, open }) => {
-                            let reply = match owned_vessel(&s, vessel, player_id) {
-                                Some(e) => match s.universe.lock().expect("sim lock").open_cargo_bays(e, open) {
-                                    Some(n) if n > 0 => ServerMessage::FlightAck { vessel, accepted: true, reason: None },
-                                    _ => ServerMessage::FlightAck { vessel, accepted: false, reason: Some(if open { "no closed cargo bays" } else { "no open cargo bays" }.into()) },
-                                },
-                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
-                            };
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::SetConverters { vessel, on }) => {
-                            let reply = match owned_vessel(&s, vessel, player_id) {
-                                Some(e) => match s.universe.lock().expect("sim lock").set_converters(e, on) {
-                                    Some(n) if n > 0 => ServerMessage::FlightAck { vessel, accepted: true, reason: None },
-                                    Some(_) => ServerMessage::FlightAck { vessel, accepted: false, reason: Some(if on { "no converters off" } else { "no converters on" }.into()) },
-                                    None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("vessel has no parts".into()) },
-                                },
-                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
-                            };
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::Drive { vessel, throttle, steer, brakes }) => {
-                            let reply = match owned_vessel(&s, vessel, player_id) {
-                                Some(e) => {
-                                    let ok = s.universe.lock().expect("sim lock").set_drive(e, throttle as f64, steer as f64, brakes);
-                                    ServerMessage::FlightAck { vessel, accepted: ok, reason: (!ok).then(|| "not under power".into()) }
-                                }
-                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
-                            };
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::DeployGear { vessel, deploy }) => {
-                            let reply = match owned_vessel(&s, vessel, player_id) {
-                                Some(e) => match s.universe.lock().expect("sim lock").deploy_gear(e, deploy) {
-                                    Some(n) if n > 0 => ServerMessage::FlightAck { vessel, accepted: true, reason: None },
-                                    Some(_) => ServerMessage::FlightAck { vessel, accepted: false, reason: Some(if deploy { "no folded gear" } else { "no gear out" }.into()) },
-                                    None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("vessel has no parts".into()) },
-                                },
-                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
-                            };
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::DeployAntennas { vessel, deploy }) => {
-                            let reply = match owned_vessel(&s, vessel, player_id) {
-                                Some(e) => match s.universe.lock().expect("sim lock").deploy_antennas(e, deploy) {
-                                    Some(n) if n > 0 => ServerMessage::FlightAck { vessel, accepted: true, reason: None },
-                                    Some(_) => ServerMessage::FlightAck { vessel, accepted: false, reason: Some(if deploy { "no retracted antennas" } else { "no antennas extended" }.into()) },
-                                    None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("vessel has no parts".into()) },
-                                },
-                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
-                            };
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::MoveToStage { vessel, part, stage }) => {
-                            let reply = match owned_vessel(&s, vessel, player_id) {
-                                Some(e) => {
-                                    let spec_for = |c: &ose_data::craft::Craft| flight_spec_for(&s, c);
-                                    let r = s.universe.lock().expect("sim lock").move_to_stage(e, part as usize, stage as usize, &s.parts, &s.resources, &spec_for);
-                                    ServerMessage::FlightAck { vessel, accepted: r.is_ok(), reason: r.err().map(String::from) }
-                                }
-                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
-                            };
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::SetStages { vessel, stages }) => {
-                            let reply = match owned_vessel(&s, vessel, player_id) {
-                                Some(e) => {
-                                    let spec_for = |c: &ose_data::craft::Craft| flight_spec_for(&s, c);
-                                    let stages = stages.into_iter().map(|l| l.into_iter().map(usize::from).collect()).collect();
-                                    let r = s.universe.lock().expect("sim lock").set_stages(e, stages, &s.parts, &s.resources, &spec_for);
-                                    ServerMessage::FlightAck { vessel, accepted: r.is_ok(), reason: r.err().map(String::from) }
-                                }
-                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
-                            };
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::ConfigurePart { vessel, part, settings }) => {
-                            let ok = owned_vessel(&s, vessel, player_id).is_some_and(|e| s.universe.lock().expect("sim lock").configure_part(e, part, settings));
-                            if !send(&mut socket, &ServerMessage::FlightAck { vessel, accepted: ok, reason: (!ok).then(|| "invalid part settings or ownership".into()) }).await { break; }
-                        }
-                        Ok(ClientMessage::ControlFrom { vessel, part }) => {
-                            let reply = match owned_vessel(&s, vessel, player_id) {
-                                Some(e) => {
-                                    let r = s.universe.lock().expect("sim lock").set_control_point(e, part).then_some(()).ok_or("part cannot control this vessel");
-                                    ServerMessage::FlightAck { vessel, accepted: r.is_ok(), reason: r.err().map(String::from) }
-                                }
-                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
-                            };
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::MoveCrew { vessel, kerbal, to_part }) => {
-                            let reply = match owned_vessel(&s, vessel, player_id) {
-                                Some(e) => {
-                                    let r = s.universe.lock().expect("sim lock").move_crew(e, &kerbal, to_part as usize);
-                                    ServerMessage::FlightAck { vessel, accepted: r.is_ok(), reason: r.err().map(String::from) }
-                                }
-                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
-                            };
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::TransferResource { vessel, resource, from, to }) => {
-                            let reply = match owned_vessel(&s, vessel, player_id) {
-                                Some(e) => {
-                                    let from: Vec<usize> = from.iter().map(|&i| i as usize).collect();
-                                    let to: Vec<usize> = to.iter().map(|&i| i as usize).collect();
-                                    let r = s.universe.lock().expect("sim lock").transfer_resource(e, &resource, &from, &to);
-                                    ServerMessage::FlightAck { vessel, accepted: r.is_ok(), reason: r.err().map(String::from) }
-                                }
-                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
-                            };
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::SetPartActions { vessel, part, actions }) => {
-                            let reply = match owned_vessel(&s, vessel, player_id) {
-                                Some(e) => {
-                                    let r = s.universe.lock().expect("sim lock").set_part_actions(e, part as usize, actions);
-                                    ServerMessage::FlightAck { vessel, accepted: r.is_ok(), reason: r.err().map(String::from) }
-                                }
-                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
-                            };
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::PartAction { vessel, part, action, on }) => {
-                            let reply = match owned_vessel(&s, vessel, player_id) {
-                                Some(e) => {
-                                    let ok = s.universe.lock().expect("sim lock").part_action(e, part as usize, &action, on);
-                                    ServerMessage::FlightAck { vessel, accepted: ok, reason: (!ok).then(|| "that part has no such action".into()) }
-                                }
-                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
-                            };
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::RenameVessel { vessel, name }) => {
-                            let name = name.trim().to_string();
-                            let reply = match owned_vessel(&s, vessel, player_id) {
-                                Some(_) if name.is_empty() || name.chars().count() > 64 => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("a name is 1 to 64 characters".into()) },
-                                Some(e) => {
-                                    let ok = s.universe.lock().expect("sim lock").rename_vessel(e, &name);
-                                    ServerMessage::FlightAck { vessel, accepted: ok, reason: (!ok).then(|| "not a vessel".into()) }
-                                }
-                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
-                            };
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::DeployPanels { vessel, deploy }) => {
-                            let reply = match owned_vessel(&s, vessel, player_id) {
-                                Some(e) => match s.universe.lock().expect("sim lock").deploy_panels(e, deploy) {
-                                    Some(n) if n > 0 => ServerMessage::FlightAck { vessel, accepted: true, reason: None },
-                                    Some(_) => ServerMessage::FlightAck { vessel, accepted: false, reason: Some(if deploy { "no folded panels" } else { "no panels out" }.into()) },
-                                    None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("vessel has no parts".into()) },
-                                },
-                                None => ServerMessage::FlightAck { vessel, accepted: false, reason: Some("not your vessel".into()) },
-                            };
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(msg @ (ClientMessage::GoEva { .. }
-                        | ClientMessage::Board { .. }
-                        | ClientMessage::PlantFlag { .. }
-                        | ClientMessage::Undock { .. })) => {
-                            let reply = crew_request(&s, player_id, msg);
-                            if !send(&mut socket, &reply).await { break; }
-                        }
-                        Ok(ClientMessage::Hello { .. }) => {}
-                        Err(e) => tracing::warn!(player = player_id, error = %e, "bad client message"),
-                    },
+                    }
                     Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
                     Some(Ok(_)) => {}
                 }
             }
         }
     }
+    replay::record_event(&s, player_id, replay::Event::Left);
+    player_left(&s, player_id);
+    let _ = s.accounts.lock().expect("accounts lock").touch(player_id);
+    tracing::info!(player = player_id, "player left");
+}
+
+/// A connection's player is registered (after Hello): live sessions and replays alike.
+fn player_joined(s: &Shared, id: u64, display_name: &str) {
+    if s.test_probe && !has_vessel(s, id) {
+        spawn_test_probe(s, id, display_name);
+    }
+    *s.connections
+        .lock()
+        .expect("connections lock")
+        .entry(id)
+        .or_default() += 1;
+    s.warp_requests
+        .lock()
+        .expect("warp lock")
+        .entry(id)
+        .or_insert(1);
+    s.names
+        .lock()
+        .expect("names lock")
+        .insert(id, display_name.to_string());
+}
+
+/// A connection closed: the player's last one takes them out of the session and its warp vote.
+fn player_left(s: &Shared, player_id: u64) {
     let mut left_session = false;
     let mut connections = s.connections.lock().expect("connections lock");
     if let Some(count) = connections.get_mut(&player_id) {
@@ -3943,11 +4615,9 @@ async fn session(mut socket: WebSocket, s: AppState) {
     }
     drop(connections);
     if left_session {
-        push_campaign(&s, player_id);
+        push_campaign(s, player_id);
     }
-    apply_warp(&s);
-    let _ = s.accounts.lock().expect("accounts lock").touch(player_id);
-    tracing::info!(player = player_id, "player left");
+    apply_warp(s);
 }
 
 #[cfg(test)]

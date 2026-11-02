@@ -1,0 +1,1280 @@
+{
+ "version": 1,
+ "protocol": 62,
+ "note": "Kerbal K1 launched in a sandbox, turned a little east with D, then staged once: the four radial boosters drop as four pieces of debris and the core keeps its fuel.",
+ "filed_by": "fixture",
+ "filed_unix": 1793589315,
+ "start_step": 0,
+ "baseline": {
+  "version": 1,
+  "tick": 0,
+  "warp": 1,
+  "vessels": [],
+  "campaign": {
+   "id": "shared",
+   "name": "Shared campaign",
+   "started_tick": 0,
+   "members": [],
+   "owner": null,
+   "mode": "Exploration",
+   "difficulty": [],
+   "last_played_unix": 0,
+   "science": {
+    "submitted": [],
+    "unlocked": [],
+    "missions": [],
+    "rev": 0
+   },
+   "roster": [],
+   "quicksave": null
+  },
+  "crafts": [],
+  "shelf": []
+ },
+ "revert": null,
+ "sessions": {
+  "connected": [],
+  "playing": [],
+  "warp": [],
+  "flying": []
+ },
+ "inputs": [
+  {
+   "step": 534,
+   "tick": 534,
+   "player": 1,
+   "event": {
+    "Joined": {
+     "name": "replay pilot"
+    }
+   }
+  },
+  {
+   "step": 534,
+   "tick": 534,
+   "player": 1,
+   "event": {
+    "Msg": "ListSessions"
+   }
+  },
+  {
+   "step": 543,
+   "tick": 543,
+   "player": 1,
+   "event": {
+    "Msg": {
+     "CreateSession": {
+      "name": "replay sandbox",
+      "mode": "Sandbox",
+      "difficulty": [
+       {
+        "id": "AllowRevert",
+        "value": {
+         "Bool": true
+        }
+       },
+       {
+        "id": "AllowQuickLoad",
+        "value": {
+         "Bool": true
+        }
+       },
+       {
+        "id": "IncludeStockVessels",
+        "value": {
+         "Bool": true
+        }
+       },
+       {
+        "id": "InfiniteFuel",
+        "value": {
+         "Bool": false
+        }
+       },
+       {
+        "id": "InfinitePower",
+        "value": {
+         "Bool": false
+        }
+       },
+       {
+        "id": "DockingTolerance",
+        "value": {
+         "Number": 1.5
+        }
+       },
+       {
+        "id": "CommNetRequired",
+        "value": {
+         "Bool": true
+        }
+       },
+       {
+        "id": "UnbreakableJoints",
+        "value": {
+         "Bool": false
+        }
+       },
+       {
+        "id": "Shared_Vessel_Control",
+        "value": {
+         "Bool": true
+        }
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "step": 545,
+   "tick": 2,
+   "player": 1,
+   "event": {
+    "Msg": {
+     "SetAgency": {
+      "agency": {
+       "flag_id": "default",
+       "primary_rgb": [
+        74,
+        163,
+        255
+       ],
+       "secondary_rgb": [
+        255,
+        216,
+        122
+       ]
+      }
+     }
+    }
+   }
+  },
+  {
+   "step": 555,
+   "tick": 12,
+   "player": 1,
+   "event": {
+    "Msg": {
+     "LaunchSavedAt": {
+      "id": 5,
+      "site": null,
+      "crew": null
+     }
+    }
+   }
+  },
+  {
+   "step": 555,
+   "tick": 12,
+   "player": 1,
+   "event": {
+    "Msg": {
+     "SetTarget": {
+      "vessel": 1,
+      "target": null
+     }
+    }
+   }
+  },
+  {
+   "step": 557,
+   "tick": 14,
+   "player": 1,
+   "event": {
+    "Msg": {
+     "SetRawRotation": {
+      "vessel": 1,
+      "pitch": 0.0,
+      "yaw": 0.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 557,
+   "tick": 14,
+   "player": 1,
+   "event": {
+    "Msg": {
+     "SetPrecision": {
+      "vessel": 1,
+      "enabled": false
+     }
+    }
+   }
+  },
+  {
+   "step": 558,
+   "tick": 15,
+   "player": 1,
+   "event": {
+    "Msg": {
+     "GetVesselCraft": {
+      "vessel": 1
+     }
+    }
+   }
+  },
+  {
+   "step": 663,
+   "tick": 120,
+   "player": 1,
+   "event": {
+    "Msg": {
+     "SetControls": {
+      "vessel": 1,
+      "throttle": 1.0,
+      "attitude": "Up"
+     }
+    }
+   }
+  },
+  {
+   "step": 664,
+   "tick": 121,
+   "player": 1,
+   "event": {
+    "Msg": {
+     "Stage": {
+      "vessel": 1
+     }
+    }
+   }
+  },
+  {
+   "step": 867,
+   "tick": 324,
+   "player": 1,
+   "event": {
+    "Msg": {
+     "SetRawRotation": {
+      "vessel": 1,
+      "pitch": 0.0,
+      "yaw": 1.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 867,
+   "tick": 324,
+   "player": 1,
+   "event": {
+    "Msg": {
+     "SetRotation": {
+      "vessel": 1,
+      "pitch": 0.0,
+      "yaw": 1.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 909,
+   "tick": 366,
+   "player": 1,
+   "event": {
+    "Msg": {
+     "SetRawRotation": {
+      "vessel": 1,
+      "pitch": 0.0,
+      "yaw": 0.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 909,
+   "tick": 366,
+   "player": 1,
+   "event": {
+    "Msg": {
+     "SetRotation": {
+      "vessel": 1,
+      "pitch": 0.0,
+      "yaw": 0.0,
+      "roll": 0.0
+     }
+    }
+   }
+  },
+  {
+   "step": 1309,
+   "tick": 766,
+   "player": 1,
+   "event": {
+    "Msg": {
+     "Stage": {
+      "vessel": 1
+     }
+    }
+   }
+  },
+  {
+   "step": 1312,
+   "tick": 769,
+   "player": 1,
+   "event": {
+    "Msg": {
+     "GetVesselCraft": {
+      "vessel": 2
+     }
+    }
+   }
+  },
+  {
+   "step": 1312,
+   "tick": 769,
+   "player": 1,
+   "event": {
+    "Msg": {
+     "GetVesselCraft": {
+      "vessel": 1
+     }
+    }
+   }
+  },
+  {
+   "step": 1317,
+   "tick": 774,
+   "player": 1,
+   "event": {
+    "Msg": {
+     "GetVesselCraft": {
+      "vessel": 3
+     }
+    }
+   }
+  },
+  {
+   "step": 1317,
+   "tick": 774,
+   "player": 1,
+   "event": {
+    "Msg": {
+     "GetVesselCraft": {
+      "vessel": 4
+     }
+    }
+   }
+  },
+  {
+   "step": 1317,
+   "tick": 774,
+   "player": 1,
+   "event": {
+    "Msg": {
+     "GetVesselCraft": {
+      "vessel": 5
+     }
+    }
+   }
+  }
+ ],
+ "checkpoints": [
+  {
+   "step": 50,
+   "tick": 50,
+   "vessels": []
+  },
+  {
+   "step": 100,
+   "tick": 100,
+   "vessels": []
+  },
+  {
+   "step": 150,
+   "tick": 150,
+   "vessels": []
+  },
+  {
+   "step": 200,
+   "tick": 200,
+   "vessels": []
+  },
+  {
+   "step": 250,
+   "tick": 250,
+   "vessels": []
+  },
+  {
+   "step": 300,
+   "tick": 300,
+   "vessels": []
+  },
+  {
+   "step": 350,
+   "tick": 350,
+   "vessels": []
+  },
+  {
+   "step": 400,
+   "tick": 400,
+   "vessels": []
+  },
+  {
+   "step": 450,
+   "tick": 450,
+   "vessels": []
+  },
+  {
+   "step": 500,
+   "tick": 500,
+   "vessels": []
+  },
+  {
+   "step": 550,
+   "tick": 7,
+   "vessels": []
+  },
+  {
+   "step": 600,
+   "tick": 57,
+   "vessels": [
+    {
+     "id": 1,
+     "name": "Kerbal K1",
+     "owner": 1,
+     "r": [
+      579085.8543641145,
+      157325.94599267654,
+      -7159.895665435211
+     ],
+     "v": [
+      -45.87166814424581,
+      168.84458549293737,
+      0.0
+     ],
+     "stage": 0,
+     "propellant_t": 19.279999999999998,
+     "landed": true,
+     "crashed": false,
+     "parts": 38
+    }
+   ]
+  },
+  {
+   "step": 650,
+   "tick": 107,
+   "vessels": [
+    {
+     "id": 1,
+     "name": "Kerbal K1",
+     "owner": 1,
+     "r": [
+      579039.9580815362,
+      157494.7838883554,
+      -7159.895665435211
+     ],
+     "v": [
+      -45.920896361955776,
+      168.83120347237997,
+      0.0
+     ],
+     "stage": 0,
+     "propellant_t": 19.279999999999998,
+     "landed": true,
+     "crashed": false,
+     "parts": 38
+    }
+   ]
+  },
+  {
+   "step": 700,
+   "tick": 157,
+   "vessels": [
+    {
+     "id": 1,
+     "name": "Kerbal K1",
+     "owner": 1,
+     "r": [
+      579000.7692863556,
+      157665.4465183526,
+      -7159.9790560026595
+     ],
+     "v": [
+      -27.650888215735367,
+      173.80124535039445,
+      -0.2260829879174638
+     ],
+     "stage": 0,
+     "propellant_t": 18.888799601840024,
+     "landed": false,
+     "crashed": false,
+     "parts": 38
+    }
+   ]
+  },
+  {
+   "step": 750,
+   "tick": 207,
+   "vessels": [
+    {
+     "id": 1,
+     "name": "Kerbal K1",
+     "owner": 1,
+     "r": [
+      578986.3061641826,
+      157842.83601701984,
+      -7160.368185780881
+     ],
+     "v": [
+      -1.6860315849823713,
+      180.86710127594384,
+      -0.5470790015806543
+     ],
+     "stage": 0,
+     "propellant_t": 18.345465715506723,
+     "landed": false,
+     "crashed": false,
+     "parts": 38
+    }
+   ]
+  },
+  {
+   "step": 800,
+   "tick": 257,
+   "vessels": [
+    {
+     "id": 1,
+     "name": "Kerbal K1",
+     "owner": 1,
+     "r": [
+      578998.1347922283,
+      158027.38434570562,
+      -7161.082313170528
+     ],
+     "v": [
+      24.914017233534103,
+      188.11457408257894,
+      -0.875818126781654
+     ],
+     "stage": 0,
+     "propellant_t": 17.802131829173426,
+     "landed": false,
+     "crashed": false,
+     "parts": 38
+    }
+   ]
+  },
+  {
+   "step": 850,
+   "tick": 307,
+   "vessels": [
+    {
+     "id": 1,
+     "name": "Kerbal K1",
+     "owner": 1,
+     "r": [
+      579036.8728770909,
+      158219.2681469417,
+      -7162.128915221489
+     ],
+     "v": [
+      52.116961911471535,
+      195.53155507796262,
+      -1.2119225247520808
+     ],
+     "stage": 0,
+     "propellant_t": 17.258797942840125,
+     "landed": false,
+     "crashed": false,
+     "parts": 38
+    }
+   ]
+  },
+  {
+   "step": 900,
+   "tick": 357,
+   "vessels": [
+    {
+     "id": 1,
+     "name": "Kerbal K1",
+     "owner": 1,
+     "r": [
+      579102.9263525472,
+      158418.0019784435,
+      -7163.511237698156
+     ],
+     "v": [
+      78.90831891949158,
+      202.44948550536984,
+      -1.541735099366322
+     ],
+     "stage": 0,
+     "propellant_t": 16.715464056506825,
+     "landed": false,
+     "crashed": false,
+     "parts": 38
+    }
+   ]
+  },
+  {
+   "step": 950,
+   "tick": 407,
+   "vessels": [
+    {
+     "id": 1,
+     "name": "Kerbal K1",
+     "owner": 1,
+     "r": [
+      579191.6376293763,
+      158632.11982019237,
+      -7165.201195767444
+     ],
+     "v": [
+      99.57089730718347,
+      223.28154100170755,
+      -1.8423505994974563
+     ],
+     "stage": 0,
+     "propellant_t": 16.172130170173524,
+     "landed": false,
+     "crashed": false,
+     "parts": 38
+    }
+   ]
+  },
+  {
+   "step": 1000,
+   "tick": 457,
+   "vessels": [
+    {
+     "id": 1,
+     "name": "Kerbal K1",
+     "owner": 1,
+     "r": [
+      579305.15374357,
+      158861.37627495168,
+      -7167.221891968357
+     ],
+     "v": [
+      127.08439355381554,
+      235.0905655067263,
+      -2.194220170684229
+     ],
+     "stage": 0,
+     "propellant_t": 15.628796283840227,
+     "landed": false,
+     "crashed": false,
+     "parts": 38
+    }
+   ]
+  },
+  {
+   "step": 1050,
+   "tick": 507,
+   "vessels": [
+    {
+     "id": 1,
+     "name": "Kerbal K1",
+     "owner": 1,
+     "r": [
+      579446.2966948259,
+      159103.32147786778,
+      -7169.5983111652195
+     ],
+     "v": [
+      154.87493325698338,
+      248.27660197817048,
+      -2.5533057505024854
+     ],
+     "stage": 0,
+     "propellant_t": 15.085462397506967,
+     "landed": false,
+     "crashed": false,
+     "parts": 38
+    }
+   ]
+  },
+  {
+   "step": 1100,
+   "tick": 557,
+   "vessels": [
+    {
+     "id": 1,
+     "name": "Kerbal K1",
+     "owner": 1,
+     "r": [
+      579615.5908688108,
+      159358.4525884943,
+      -7172.337973579945
+     ],
+     "v": [
+      183.2763639378672,
+      261.69132196692766,
+      -2.920106788636765
+     ],
+     "stage": 0,
+     "propellant_t": 14.542128511173713,
+     "landed": false,
+     "crashed": false,
+     "parts": 38
+    }
+   ]
+  },
+  {
+   "step": 1150,
+   "tick": 607,
+   "vessels": [
+    {
+     "id": 1,
+     "name": "Kerbal K1",
+     "owner": 1,
+     "r": [
+      579813.6099525621,
+      159627.10392648922,
+      -7175.448449925753
+     ],
+     "v": [
+      212.28875700180942,
+      275.3764866489716,
+      -3.294708267358319
+     ],
+     "stage": 0,
+     "propellant_t": 13.998794624840453,
+     "landed": false,
+     "crashed": false,
+     "parts": 38
+    }
+   ]
+  },
+  {
+   "step": 1200,
+   "tick": 657,
+   "vessels": [
+    {
+     "id": 1,
+     "name": "Kerbal K1",
+     "owner": 1,
+     "r": [
+      580040.9295766666,
+      159909.57295788225,
+      -7178.937252073953
+     ],
+     "v": [
+      241.77106562242636,
+      289.29568954331734,
+      -3.675457378246648
+     ],
+     "stage": 0,
+     "propellant_t": 13.455460738507199,
+     "landed": false,
+     "crashed": false,
+     "parts": 38
+    }
+   ]
+  },
+  {
+   "step": 1250,
+   "tick": 707,
+   "vessels": [
+    {
+     "id": 1,
+     "name": "Kerbal K1",
+     "owner": 1,
+     "r": [
+      580297.5483392492,
+      160205.90708853077,
+      -7182.804640789229
+     ],
+     "v": [
+      270.7592190545017,
+      303.05022034335985,
+      -4.050254645486521
+     ],
+     "stage": 0,
+     "propellant_t": 12.912126852173945,
+     "landed": false,
+     "crashed": false,
+     "parts": 38
+    }
+   ]
+  },
+  {
+   "step": 1300,
+   "tick": 757,
+   "vessels": [
+    {
+     "id": 1,
+     "name": "Kerbal K1",
+     "owner": 1,
+     "r": [
+      580582.8702972115,
+      160515.88973478103,
+      -7187.043270254976
+     ],
+     "v": [
+      299.34031265966047,
+      316.65769406549225,
+      -4.419930986939716
+     ],
+     "stage": 0,
+     "propellant_t": 12.368792965840692,
+     "landed": false,
+     "crashed": false,
+     "parts": 38
+    }
+   ]
+  },
+  {
+   "step": 1350,
+   "tick": 807,
+   "vessels": [
+    {
+     "id": 1,
+     "name": "Kerbal K1",
+     "owner": 1,
+     "r": [
+      580888.0813057647,
+      160835.7748246359,
+      -7191.540313786935
+     ],
+     "v": [
+      304.1712950439889,
+      320.1296440624582,
+      -4.485690644120469
+     ],
+     "stage": 1,
+     "propellant_t": 7.100012848424546,
+     "landed": false,
+     "crashed": false,
+     "parts": 26
+    },
+    {
+     "id": 2,
+     "name": "Kerbal K1 debris",
+     "owner": 1,
+     "r": [
+      580906.9248772538,
+      160843.8251594725,
+      -7196.140497479219
+     ],
+     "v": [
+      346.48076049896855,
+      338.2634846762427,
+      -40.475873083640025
+     ],
+     "stage": 0,
+     "propellant_t": 1.1813615577707217,
+     "landed": false,
+     "crashed": false,
+     "parts": 3
+    },
+    {
+     "id": 3,
+     "name": "Kerbal K1 debris",
+     "owner": 1,
+     "r": [
+      580908.6971797245,
+      160839.81116187372,
+      -7191.790320852201
+     ],
+     "v": [
+      360.8693486987271,
+      305.6883169273104,
+      -5.101385229235306
+     ],
+     "stage": 0,
+     "propellant_t": 1.1813615577707217,
+     "landed": false,
+     "crashed": false,
+     "parts": 3
+    },
+    {
+     "id": 4,
+     "name": "Kerbal K1 debris",
+     "owner": 1,
+     "r": [
+      580907.0270398884,
+      160843.85094423327,
+      -7187.4247033349175
+     ],
+     "v": [
+      347.30729700159816,
+      338.46791623836253,
+      30.405773314311656
+     ],
+     "stage": 0,
+     "propellant_t": 1.1813615577707217,
+     "landed": false,
+     "crashed": false,
+     "parts": 3
+    },
+    {
+     "id": 5,
+     "name": "Kerbal K1 debris",
+     "owner": 1,
+     "r": [
+      580905.3045389833,
+      160847.82550063878,
+      -7191.774244541154
+     ],
+     "v": [
+      333.13648459056316,
+      370.8476566006032,
+      -4.965847338566413
+     ],
+     "stage": 0,
+     "propellant_t": 1.1813615577707217,
+     "landed": false,
+     "crashed": false,
+     "parts": 3
+    }
+   ]
+  },
+  {
+   "step": 1400,
+   "tick": 857,
+   "vessels": [
+    {
+     "id": 1,
+     "name": "Kerbal K1",
+     "owner": 1,
+     "r": [
+      581192.1066974947,
+      161156.5517750644,
+      -7196.026142070226
+     ],
+     "v": [
+      303.95738872277826,
+      321.4259739019335,
+      -4.486874596229971
+     ],
+     "stage": 1,
+     "propellant_t": 7.031500665365111,
+     "landed": false,
+     "crashed": false,
+     "parts": 26
+    },
+    {
+     "id": 2,
+     "name": "Kerbal K1 debris",
+     "owner": 1,
+     "r": [
+      581220.1502761373,
+      161168.65052272173,
+      -7304.727775299081
+     ],
+     "v": [
+      259.77085460836173,
+      302.5601213661203,
+      -131.621362391929
+     ],
+     "stage": 0,
+     "propellant_t": 1.0626561319522667,
+     "landed": false,
+     "crashed": false,
+     "parts": 3
+    },
+    {
+     "id": 3,
+     "name": "Kerbal K1 debris",
+     "owner": 1,
+     "r": [
+      581264.2597026004,
+      161069.24944077397,
+      -7196.615860159596
+     ],
+     "v": [
+      311.9368486934988,
+      185.29054545932263,
+      -4.195403425379747
+     ],
+     "stage": 0,
+     "propellant_t": 1.0626561319522667,
+     "landed": false,
+     "crashed": false,
+     "parts": 3
+    },
+    {
+     "id": 4,
+     "name": "Kerbal K1 debris",
+     "owner": 1,
+     "r": [
+      581222.6718535399,
+      161169.27572613693,
+      -7088.0673928459055
+     ],
+     "v": [
+      262.7436879249729,
+      303.3016481702112,
+      123.77153308983459
+     ],
+     "stage": 0,
+     "propellant_t": 1.0626561319522667,
+     "landed": false,
+     "crashed": false,
+     "parts": 3
+    },
+    {
+     "id": 5,
+     "name": "Kerbal K1 debris",
+     "owner": 1,
+     "r": [
+      581178.9714183335,
+      161268.67909091403,
+      -7196.198633657796
+     ],
+     "v": [
+      211.07038258316157,
+      420.7956404719663,
+      -3.7051453139732247
+     ],
+     "stage": 0,
+     "propellant_t": 1.0626561319522667,
+     "landed": false,
+     "crashed": false,
+     "parts": 3
+    }
+   ]
+  },
+  {
+   "step": 1450,
+   "tick": 907,
+   "vessels": [
+    {
+     "id": 1,
+     "name": "Kerbal K1",
+     "owner": 1,
+     "r": [
+      581496.1507920724,
+      161478.71120174514,
+      -7200.516096014453
+     ],
+     "v": [
+      304.20772320712643,
+      322.9081992684267,
+      -4.493916963547171
+     ],
+     "stage": 1,
+     "propellant_t": 6.962988482305676,
+     "landed": false,
+     "crashed": false,
+     "parts": 26
+    },
+    {
+     "id": 2,
+     "name": "Kerbal K1 debris",
+     "owner": 1,
+     "r": [
+      581445.7652305295,
+      161457.25888320443,
+      -7396.6437327181875
+     ],
+     "v": [
+      237.57583153905713,
+      294.5660520835649,
+      -48.79922737205975
+     ],
+     "stage": 0,
+     "propellant_t": 0.9439507061338117,
+     "landed": false,
+     "crashed": false,
+     "parts": 3
+    },
+    {
+     "id": 3,
+     "name": "Kerbal K1 debris",
+     "owner": 1,
+     "r": [
+      581526.0892374667,
+      161276.30195486746,
+      -7200.290036917247
+     ],
+     "v": [
+      256.24509086138727,
+      252.39540057262522,
+      -3.7368388262854473
+     ],
+     "stage": 0,
+     "propellant_t": 0.9439507061338117,
+     "landed": false,
+     "crashed": false,
+     "parts": 3
+    },
+    {
+     "id": 4,
+     "name": "Kerbal K1 debris",
+     "owner": 1,
+     "r": [
+      581450.3187153642,
+      161458.39149091428,
+      -7003.1154702865415
+     ],
+     "v": [
+      238.57269774402286,
+      294.8065489512169,
+      41.49960075744357
+     ],
+     "stage": 0,
+     "propellant_t": 0.9439507061338117,
+     "landed": false,
+     "crashed": false,
+     "parts": 3
+    },
+    {
+     "id": 5,
+     "name": "Kerbal K1 debris",
+     "owner": 1,
+     "r": [
+      581370.5987079472,
+      161639.14387161183,
+      -7199.53614286295
+     ],
+     "v": [
+      220.0712608604068,
+      335.75603285221376,
+      -3.5617275011241287
+     ],
+     "stage": 0,
+     "propellant_t": 0.9439507061338117,
+     "landed": false,
+     "crashed": false,
+     "parts": 3
+    }
+   ]
+  },
+  {
+   "step": 1500,
+   "tick": 957,
+   "vessels": [
+    {
+     "id": 1,
+     "name": "Kerbal K1",
+     "owner": 1,
+     "r": [
+      581800.672752955,
+      161802.46505334615,
+      -7205.015957142412
+     ],
+     "v": [
+      304.89363855440615,
+      324.5871843757889,
+      -4.506459675088639
+     ],
+     "stage": 1,
+     "propellant_t": 6.89447629924624,
+     "landed": false,
+     "crashed": false,
+     "parts": 26
+    },
+    {
+     "id": 2,
+     "name": "Kerbal K1 debris",
+     "owner": 1,
+     "r": [
+      581672.3388065058,
+      161747.9067290443,
+      -7489.419789787913
+     ],
+     "v": [
+      177.49406051532947,
+      270.0141491862893,
+      -101.71902278052107
+     ],
+     "stage": 0,
+     "propellant_t": 0.8252452803153567,
+     "landed": false,
+     "crashed": false,
+     "parts": 3
+    },
+    {
+     "id": 3,
+     "name": "Kerbal K1 debris",
+     "owner": 1,
+     "r": [
+      581789.5298416218,
+      161484.43142242922,
+      -7203.988884002419
+     ],
+     "v": [
+      218.3717965715881,
+      178.74576154768943,
+      -3.0969556006459626
+     ],
+     "stage": 0,
+     "propellant_t": 0.8252452803153567,
+     "landed": false,
+     "crashed": false,
+     "parts": 3
+    },
+    {
+     "id": 4,
+     "name": "Kerbal K1 debris",
+     "owner": 1,
+     "r": [
+      581678.9745723873,
+      161749.54766113608,
+      -6917.386239406249
+     ],
+     "v": [
+      179.8206209313078,
+      270.57715718304706,
+      95.978102201901
+     ],
+     "stage": 0,
+     "propellant_t": 0.8252452803153567,
+     "landed": false,
+     "crashed": false,
+     "parts": 3
+    },
+    {
+     "id": 5,
+     "name": "Kerbal K1 debris",
+     "owner": 1,
+     "r": [
+      581563.3343521642,
+      162011.56456599466,
+      -7202.880658060003
+     ],
+     "v": [
+      139.94634882259302,
+      361.1092686498354,
+      -2.696360822943908
+     ],
+     "stage": 0,
+     "propellant_t": 0.8252452803153567,
+     "landed": false,
+     "crashed": false,
+     "parts": 3
+    }
+   ]
+  }
+ ],
+ "expect": [
+  {
+   "vessel": "Kerbal K1",
+   "field": "parts",
+   "op": "eq",
+   "value": 26,
+   "why": "the four boosters (three parts each) came off"
+  },
+  {
+   "vessel": "Kerbal K1 debris",
+   "field": "count",
+   "op": "eq",
+   "value": 4,
+   "why": "each booster is its own piece"
+  },
+  {
+   "vessel": "Kerbal K1",
+   "field": "propellant_t",
+   "op": "gt",
+   "value": 6.0,
+   "why": "the core still has its methalox"
+  },
+  {
+   "vessel": "Kerbal K1",
+   "field": "altitude_m",
+   "op": "gt",
+   "value": 200,
+   "why": "it flew"
+  }
+ ]
+}

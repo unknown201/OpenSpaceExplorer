@@ -35,3 +35,6 @@ ose-save.json*
 ose-accounts.json*
 assets/web/
 __pycache__/
+
+# replays a local server files (tests/replays/ holds the kept fixtures)
+/replays/

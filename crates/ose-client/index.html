@@ -7,7 +7,9 @@
   <link data-trunk rel="rust" />
   <link data-trunk rel="copy-file" href="asset-worker.js" />
   <link data-trunk rel="copy-file" href="asset-packages.js" />
+  <link data-trunk rel="copy-file" href="report-bug.js" />
   <script src="asset-packages.js" defer></script>
+  <script src="report-bug.js" defer></script>
   <style>
     html, body { margin: 0; height: 100%; overflow: hidden; background: #06080f; color: #cfd6e6;
       font: 14px system-ui, sans-serif; }
@@ -1412,6 +1414,7 @@
         <button id="to-quickload" class="secondary" data-ose="to-quickload" data-save-action="QuickLoad" title="F9">Quickload</button>
         <button id="to-settings" class="secondary" data-ose="to-settings" data-open-settings>Settings</button>
         <button id="to-sessions" class="secondary" data-ose="to-sessions">Exit to Main Menu</button>
+        <button id="report-bug" class="secondary" data-ose="report-bug" title="File a bug report with a replay of the last few minutes">Report a bug</button>
         <button id="sound-toggle" class="secondary sound-toggle" data-ose="sound-toggle">Sound: on</button>
         <button id="leave" class="secondary" data-ose="leave">Leave session</button>
       </div>

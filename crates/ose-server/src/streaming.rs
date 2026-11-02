@@ -82,17 +82,6 @@ pub fn start(s: super::AppState) {
         loop {
             tokio::select! {
                 _ = snapshots.tick() => {
-                    // Registry maintenance belongs to the world, not to any particular connection.
-                    {
-                        let mut u = s.universe.lock().expect("sim lock");
-                        let mut list = s.vessels.lock().expect("vessels lock");
-                        for (from, debris) in u.take_broken_off() {
-                            let owner = list.iter().find(|v| v.0 == from).and_then(|v| v.2);
-                            let id = list.iter().map(|&(_, id, _)| id).max().unwrap_or(0) + 1;
-                            list.push((debris, id, owner));
-                        }
-                        list.retain(|&(e, _, _)| u.vessel(e).is_some());
-                    }
                     if s.streams.snapshots.receiver_count() > 0 {
                         let started = std::time::Instant::now();
                         publish(&s.streams.snapshots, || {
