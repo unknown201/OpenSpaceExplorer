@@ -5,7 +5,7 @@ use bevy_ecs::prelude::*;
 use ose_data::missions::{MissionEvent, VesselFacts};
 use serde::{Deserialize, Serialize};
 
-use crate::{bodies, flight, science, structure, Universe};
+use crate::{bodies, flight, science, structure, trajectory, Universe};
 
 /// A vessel's flight history for missions.
 #[derive(Component, Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -178,7 +178,12 @@ impl Universe {
                 None => format!("{}_{}", loc.body, loc.situation.name()),
             };
         }
-        for patch in self.predict(e) {
+        // the trajectory as flown (planned burns are not), as the original's escape/encounter watcher sees it
+        for patch in self
+            .predict(e)
+            .into_iter()
+            .take_while(|p| p.start != trajectory::Transition::Maneuver)
+        {
             if let Some(id) = self.body_id(patch.body) {
                 if id != body.id && !f.predicted_sois.iter().any(|x| x == id) {
                     f.predicted_sois.push(id.to_string());

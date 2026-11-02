@@ -2246,6 +2246,7 @@ impl Universe {
         }
         self.charge_on_rails(ticks.max(1) as f64 * dt, ut);
         self.collide_vessels();
+        self.kerbals_meet_hulls();
         self.run_transfers(ticks.max(1) as f64 * dt);
         self.run_transmissions(ticks.max(1) as f64 * dt);
         self.run_ladders(ticks.max(1) as f64 * dt);

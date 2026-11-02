@@ -469,7 +469,7 @@ impl Structure {
         }
     }
 
-    fn frame(&self, facing: DVec3) -> (DVec3, DVec3, DVec3) {
+    pub(crate) fn frame(&self, facing: DVec3) -> (DVec3, DVec3, DVec3) {
         let y = facing.normalized();
         let z = self.frame_top - y * self.frame_top.dot(y);
         if z.length_squared() < 0.25 {

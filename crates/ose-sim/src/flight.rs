@@ -1985,8 +1985,11 @@ pub fn integrate_with_propulsion(
             } else {
                 WALK_SPEED_MPS
             };
-            if let Some(dir) = walk_dir {
-                p.r = p.r + dir * (pace * p.throttle.min(1.0) * dt);
+            // walking: moved along the ground, and that is its velocity too (the client carries it between
+            // snapshots)
+            let walked = walk_dir.map(|dir| dir * (pace * p.throttle.min(1.0)));
+            if let Some(w) = walked {
+                p.r = p.r + w * dt;
             }
             // a Kerbal jumps off the ground, carrying the walk forward
             if p.walker && p.eva_jump && !p.crashed {
@@ -2000,7 +2003,7 @@ pub fn integrate_with_propulsion(
                 return out;
             }
             // on wheels: drive along the ground (a level craft along its nose, pushed by its engines too)
-            let mut rolling = DVec3::ZERO;
+            let mut rolling = walked.unwrap_or(DVec3::ZERO);
             if !p.tipped && !p.drive.wheels.is_empty() {
                 let dir = if p.level {
                     heading_dir(p.r, p.drive.heading_rad)

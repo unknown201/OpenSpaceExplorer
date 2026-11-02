@@ -369,6 +369,131 @@ impl Universe {
     }
 }
 
+/// A Kerbal on EVA as the hull test sees it: spheres this big round points along its body, m (our own
+/// figures for a 1 m Kerbal standing on its centre).
+const KERBAL_RADIUS_M: f64 = 0.25;
+const KERBAL_POINTS_M: [f64; 2] = [-0.25, 0.3];
+
+impl Universe {
+    /// A Kerbal on EVA does not pass through a craft: it is pushed out of the parts' boxes, sideways (a hull
+    /// is a wall to it, not a floor: it does not come to rest on a fin), and stops going into them. Kerbals
+    /// on a ladder are left to the ladder.
+    pub(crate) fn kerbals_meet_hulls(&mut self) {
+        let ut = self.ut();
+        let (kerbals, crafts): (Vec<_>, Vec<_>) = {
+            let mut q = self.world.query::<(
+                Entity,
+                &flight::Powered,
+                &bodies::ReferenceBody,
+                Has<crate::crew::OnLadder>,
+                Has<structure::Structure>,
+            )>();
+            q.iter(&self.world)
+                .filter(|(_, p, _, ladder, _)| !p.crashed && !ladder)
+                .map(|(e, p, b, _, st)| (e, b.0, p.walker, st))
+                .partition(|&(_, _, walker, _)| walker)
+        };
+        for &(k, body, _, _) in &kerbals {
+            for &(c, craft_body, _, has_parts) in &crafts {
+                if craft_body != body || !has_parts {
+                    continue;
+                }
+                let grace = |x: Entity, y: Entity| {
+                    self.world
+                        .get::<SeparatedFrom>(x)
+                        .is_some_and(|s| s.other == y && s.until_ut > ut)
+                };
+                if grace(k, c) || grace(c, k) {
+                    continue;
+                }
+                let (Some(pk), Some(pc), Some(st)) = (
+                    self.world.get::<flight::Powered>(k),
+                    self.world.get::<flight::Powered>(c),
+                    self.world.get::<structure::Structure>(c),
+                ) else {
+                    continue;
+                };
+                let Some(push) = hull_push(pk, pc, st) else {
+                    continue;
+                };
+                let craft_v = pc.v;
+                let mut pk = pk.clone();
+                let n = push.normalized();
+                pk.r = pk.r + push;
+                let into = (pk.v - craft_v).dot(n);
+                if into < 0.0 {
+                    pk.v = pk.v - n * into;
+                }
+                self.world.entity_mut(k).insert(pk);
+            }
+        }
+    }
+}
+
+/// How far to move a Kerbal `pk` (inertial) to clear the parts of craft `pc`, or None when it is clear.
+fn hull_push(
+    pk: &flight::Powered,
+    pc: &flight::Powered,
+    st: &structure::Structure,
+) -> Option<DVec3> {
+    let (bx, by, bz) = st.frame(pc.facing);
+    let c = st.rigid.rest_centre();
+    let up = pk.r.normalized();
+    let mut total = DVec3::ZERO;
+    for along in KERBAL_POINTS_M {
+        let d = pk.r + up * along + total - pc.r;
+        // the point in craft coordinates
+        let local = DVec3::new(d.dot(bx), d.dot(by), d.dot(bz)) + c;
+        let mut deepest: Option<DVec3> = None;
+        for i in (0..st.rigid.len()).filter(|&i| st.rigid.present[i]) {
+            let (centre, half) = st.part_box(i);
+            let rel = local - centre;
+            let q = DVec3::new(
+                rel.x.clamp(-half.x, half.x),
+                rel.y.clamp(-half.y, half.y),
+                rel.z.clamp(-half.z, half.z),
+            );
+            let out = rel - q;
+            let gap = out.length();
+            let push = if gap > 1e-9 {
+                if gap >= KERBAL_RADIUS_M {
+                    continue;
+                }
+                out * ((KERBAL_RADIUS_M - gap) / gap)
+            } else {
+                // inside the box: out through the nearest side face
+                let faces = [
+                    (half.x - rel.x.abs(), DVec3::new(rel.x.signum(), 0.0, 0.0)),
+                    (half.y - rel.y.abs(), DVec3::new(0.0, rel.y.signum(), 0.0)),
+                    (half.z - rel.z.abs(), DVec3::new(0.0, 0.0, rel.z.signum())),
+                ];
+                let Some((depth, dir)) = faces
+                    .into_iter()
+                    .filter(|(_, d)| (bx * d.x + by * d.y + bz * d.z).dot(up).abs() < 0.7)
+                    .min_by(|a, b| a.0.total_cmp(&b.0))
+                else {
+                    continue;
+                };
+                dir * (depth + KERBAL_RADIUS_M)
+            };
+            // sideways only
+            let world = bx * push.x + by * push.y + bz * push.z;
+            let world = world - up * world.dot(up);
+            if world.length() < 1e-9 {
+                continue;
+            }
+            let push = DVec3::new(world.dot(bx), world.dot(by), world.dot(bz));
+            if deepest.is_none_or(|x| push.length() > x.length()) {
+                deepest = Some(push);
+            }
+        }
+        if let Some(p) = deepest {
+            total = total + bx * p.x + by * p.y + bz * p.z;
+        }
+    }
+    (total.length() > 1e-9).then_some(total)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1089,6 +1089,32 @@ mod tests {
     }
 
     #[test]
+    fn a_kerbal_walking_into_its_craft_stops_at_the_hull() {
+        let (mut u, v) = k1_on_pad();
+        let jeb = u.go_eva(v, None).unwrap();
+        let_go_and_land(&mut u, jeb);
+        let level = |x: DVec3, up: DVec3| x - up * x.dot(up);
+        // walk straight at the rocket for a while
+        for _ in 0..(20 * crate::TICKS_PER_SECOND) {
+            let craft = u.powered(v).unwrap().r;
+            let k = u.powered(jeb).unwrap().r;
+            let toward = level(craft - k, craft.normalized()).normalized();
+            u.set_controls(jeb, 1.0, flight::Attitude::Fixed(toward));
+            u.step();
+        }
+        let craft = u.powered(v).unwrap().r;
+        let k = u.powered(jeb).unwrap();
+        assert!(k.landed && !k.crashed);
+        let apart = level(k.r - craft, craft.normalized()).length();
+        // the K1's pod and tanks are 1.25 m across: it stands outside them
+        assert!(
+            apart > 0.6,
+            "walked into the craft: {apart:.2} m from its axis"
+        );
+        assert!(apart < 2.0, "it did get to the hull: {apart:.2} m");
+    }
+
+    #[test]
     fn a_kerbal_walks_across_the_ground() {
         let (mut u, v) = k1_on_pad();
         let jeb = u.go_eva(v, None).unwrap();
@@ -1119,6 +1145,13 @@ mod tests {
         let east_m = (end.1 - start.1).to_radians() * b.radius_m;
         assert!((2.8..3.6).contains(&north_m), "walked {north_m} m north");
         assert!(east_m.abs() < 1.0, "{east_m} m east");
+        // and its velocity says so, for the client to carry it between snapshots
+        let omega = std::f64::consts::TAU / b.rotation_period_s;
+        let over_ground = p.v - DVec3::new(0.0, 0.0, omega).cross(p.r);
+        assert!(
+            (over_ground.length() - flight::WALK_SPEED_MPS).abs() < 0.05,
+            "{over_ground:?}"
+        );
         // running: 2.2 m/s
         assert!(u.set_eva(jeb, true, false));
         for _ in 0..(4 * crate::TICKS_PER_SECOND) {

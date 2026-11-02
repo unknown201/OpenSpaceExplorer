@@ -268,9 +268,14 @@ impl Condition {
                         has(&a.scored_reports, wanted(input, text)) == *expect
                     }
                     Watch::ResearchLocation => v.research_location.eq_ignore_ascii_case(text),
-                    Watch::EscapePredictedSoi => {
-                        has(&v.predicted_sois, wanted(input, text)) == *expect
-                    }
+                    // the body the trajectory enters next ("" when it stays put), against the watched string:
+                    // the original passes `Inputstring` to input watchers only, and this one is not, so an
+                    // "orbit the Mun" stage reads "no SOI change ahead"
+                    Watch::EscapePredictedSoi => v
+                        .predicted_sois
+                        .first()
+                        .map_or("", String::as_str)
+                        .eq_ignore_ascii_case(text),
                     Watch::LandedOnBody => has(&v.landed_on, wanted(input, text)) == *expect,
                     Watch::IsEva => v.eva == (wanted(input, "true") == "true"),
                     Watch::LastDestroyedMaxGroundAltitude => {
@@ -560,7 +565,13 @@ mod tests {
                     Watch::HasStoredReport => put(&mut v.stored_reports),
                     Watch::HasScoredReport => put(&mut a.scored_reports),
                     Watch::ResearchLocation => v.research_location = text.clone(),
-                    Watch::EscapePredictedSoi => put(&mut v.predicted_sois),
+                    Watch::EscapePredictedSoi => {
+                        v.predicted_sois = if text.is_empty() {
+                            Vec::new()
+                        } else {
+                            vec![text.clone()]
+                        }
+                    }
                     Watch::LandedOnBody => put(&mut v.landed_on),
                     Watch::IsEva => {
                         v.eva = if input.is_empty() {
@@ -617,6 +628,33 @@ mod tests {
             );
             assert_eq!(earned, m.science_reward(), "{}", m.id);
         }
+    }
+
+    #[test]
+    fn mun_or_bust_wants_an_orbit_around_the_mun_not_a_flyby() {
+        let missions: Vec<MissionDef> =
+            serde_json::from_str(include_str!("../../../assets/own/missions.json")).unwrap();
+        let m = missions
+            .iter()
+            .find(|m| m.id == "Main_MunOrBust_04")
+            .unwrap();
+        let at = |ap: f64, next: &[&str]| {
+            let mut progress = MissionProgress::default();
+            let v = VesselFacts {
+                soi: "Mun".into(),
+                periapsis_altitude_m: 80_000.0,
+                apoapsis_altitude_m: ap,
+                predicted_sois: next.iter().map(|s| s.to_string()).collect(),
+                ..Default::default()
+            };
+            progress.advance(m, &[(1, v)], &AgencyFacts::default());
+            progress.complete
+        };
+        assert!(at(200_000.0, &[]), "a closed orbit around the Mun");
+        assert!(
+            !at(f64::INFINITY, &["Kerbin"]),
+            "a flyby back out to Kerbin"
+        );
     }
 
     #[test]

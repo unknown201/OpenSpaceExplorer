@@ -45,6 +45,10 @@ struct Correction {
 pub const CORRECTION_S: f64 = 0.1;
 /// Larger prediction errors are shown at once: they are teleports (loads, docking, decoupling), not jitter.
 pub const MAX_CORRECTION_M: f64 = 25.0;
+/// How far past its snapshot a craft standing on the ground is carried along at its ground speed, s.
+const MAX_GROUND_CARRY_S: f64 = 0.5;
+/// Faster than this over the ground is no walk or drive (a bad state): it is not carried.
+const MAX_GROUND_SPEED_MPS: f64 = 60.0;
 
 /// `ose-math` orbit from wire elements around a body with gravitational parameter `mu`.
 pub fn orbit_from(mu: f64, o: &OrbitElements) -> Orbit {
@@ -119,13 +123,16 @@ impl Scene {
     ) {
         use crate::orientation::{from_axes, Context, Track};
         // Where each predicted vessel is drawn right now, before the new state replaces the old.
+        // (a craft standing on the ground too: a walking Kerbal or a rover moves between snapshots)
         let drawn: Vec<(u64, DVec3)> = vessels
             .iter()
-            .filter(|v| Self::predicted(v) && !self.legacy)
+            .filter(|v| (Self::predicted(v) || Self::standing(v)) && !self.legacy)
             .filter_map(|v| {
                 let old = self.vessel(v.id)?;
-                (old.reference_body == v.reference_body && Self::predicted(old))
-                    .then(|| (v.id, self.vessel_position(old, display_ut)))
+                (old.reference_body == v.reference_body
+                    && Self::predicted(old) == Self::predicted(v)
+                    && Self::standing(old) == Self::standing(v))
+                .then(|| (v.id, self.vessel_position(old, display_ut)))
             })
             .collect();
         let live: std::collections::HashSet<_> = vessels
@@ -228,10 +235,21 @@ impl Scene {
         // A craft standing on the ground turns with its body: keep its offset from the body's centre and rotate
         // it by the spin since the snapshot. Its orbit elements describe a fall through the planet, which made
         // a craft on the pad bob up and down between snapshots.
+        // A Kerbal walking or a rover driving carries on along the ground at its speed over it (for at most
+        // a moment past the snapshot, should the next be late).
         let standing = Self::standing(v);
         if standing && rb < self.bodies.len() {
             let w = self.spin_omega.get(rb).copied().unwrap_or(0.0);
-            let rel = v.position_m - self.position(rb, self.vessels_ut);
+            let mut rel = v.position_m - self.position(rb, self.vessels_ut);
+            if !self.legacy {
+                let over_ground = v.velocity_mps
+                    - self.body_velocity(rb, self.vessels_ut)
+                    - DVec3::new(0.0, 0.0, w).cross(rel);
+                let tau = (ut - self.vessels_ut).clamp(0.0, MAX_GROUND_CARRY_S);
+                if over_ground.length() < MAX_GROUND_SPEED_MPS {
+                    rel = rel + over_ground * tau;
+                }
+            }
             let a = w * (ut - self.vessels_ut);
             let (s, c) = a.sin_cos();
             let turned = DVec3::new(rel.x * c - rel.y * s, rel.x * s + rel.y * c, rel.z);

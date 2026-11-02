@@ -304,6 +304,17 @@ pub enum Stand {
     Flag,
 }
 
+/// How far a stand model is drawn above the vessel point, m. The original's portable flag has its origin
+/// at the top of its pole (the pole runs 0.8 model units below it, 1.2 m as drawn): stood on that origin it
+/// sank into the ground to its cloth. Its tip goes 10 cm into the ground, planted.
+fn model_lift_m(model: &str) -> f64 {
+    if model == "kerbal:flag" {
+        0.8 * 1.5 - 0.1
+    } else {
+        0.0
+    }
+}
+
 impl Stand {
     /// A Kerbal on EVA reads `eva` in its flight readout; a planted flag is named "<agency> flag".
     pub fn of(v: &ose_net::VesselState) -> Stand {
@@ -2592,6 +2603,7 @@ impl FlightView {
                 }
             }
             for (name, _, scale) in inp.stand.models(gpu) {
+                let at = at + up * model_lift_m(name);
                 let mut it = DrawItem::lit(name.to_string(), at - cam, rot, scale, sun);
 
                 it.ambient = part_ambient;
@@ -2791,7 +2803,8 @@ impl FlightView {
                 _ => rot,
             };
             for (name, _, scale) in stand.models(gpu) {
-                let mut it = DrawItem::lit(name.to_string(), p - cam, rot, scale, sun);
+                let at = p + p.normalize_or_zero() * model_lift_m(name);
+                let mut it = DrawItem::lit(name.to_string(), at - cam, rot, scale, sun);
 
                 it.ambient = part_ambient;
                 it.sun = sun_share;
