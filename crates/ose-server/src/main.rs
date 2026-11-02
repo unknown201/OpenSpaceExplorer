@@ -2058,7 +2058,7 @@ fn science_request(s: &Shared, player_id: u64, msg: ClientMessage) -> Vec<Server
             let Some(e) = owned_vessel(s, vessel, player_id) else {
                 return fail("not your vessel");
             };
-            let (reports, tick) = {
+            let (reports, tick, gone) = {
                 let mut u = s.universe.lock().expect("sim lock");
                 if recover {
                     let home = s
@@ -2100,17 +2100,35 @@ fn science_request(s: &Shared, player_id: u64, msg: ClientMessage) -> Vec<Server
                         Err(reason) => fail(reason),
                     };
                 }
-                let r = u.take_science(e);
+                let mut r = u.take_science(e);
+                let mut gone = vec![e];
                 if recover {
-                    u.despawn_vessel(e);
+                    // A Kerbal recovered beside its landed craft brings the craft (and the science in it) home
+                    // too: the player's own, or any agency craft in a co-op campaign.
+                    if u.eva_kerbal(e).is_some() {
+                        let shared = campaigns::allowed(s, "Shared_Vessel_Control");
+                        let list = s.vessels.lock().expect("vessels lock").clone();
+                        for c in u.landed_craft_near(e, RECOVER_WITH_KERBAL_M) {
+                            let mine = list.iter().any(|&(v, _, owner)| {
+                                v == c && (owner == Some(player_id) || (shared && owner.is_some()))
+                            });
+                            if mine {
+                                r.extend(u.take_science(c));
+                                gone.push(c);
+                            }
+                        }
+                    }
+                    for &v in &gone {
+                        u.despawn_vessel(v);
+                    }
                 }
-                (r, u.tick().0)
+                (r, u.tick().0, gone)
             };
             if recover {
                 s.vessels
                     .lock()
                     .expect("vessels lock")
-                    .retain(|&(v, _, _)| v != e);
+                    .retain(|&(v, _, _)| !gone.contains(&v));
             }
             let (reports, earned) = {
                 let mut c = s.campaign.lock().expect("campaign lock");
@@ -2180,6 +2198,9 @@ fn science_request(s: &Shared, player_id: u64, msg: ClientMessage) -> Vec<Server
         _ => Vec::new(),
     }
 }
+
+/// How near a Kerbal recovered on EVA a landed craft is recovered with it, m.
+const RECOVER_WITH_KERBAL_M: f64 = 50.0;
 
 fn owned_vessel(s: &Shared, id: u64, player: u64) -> Option<bevy_ecs::entity::Entity> {
     // A co-op campaign (`Shared_Vessel_Control`, on unless the campaign turns it off) lets every player fly

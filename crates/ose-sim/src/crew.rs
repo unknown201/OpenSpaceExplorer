@@ -443,6 +443,27 @@ impl Universe {
         Ok(kerbal)
     }
 
+    /// Craft standing on the ground (or the sea) within `radius_m` of a Kerbal on EVA: what is recovered with
+    /// the Kerbal when it is recovered beside its landed craft.
+    pub fn landed_craft_near(&mut self, kerbal: Entity, radius_m: f64) -> Vec<Entity> {
+        if self.world.get::<EvaKerbal>(kerbal).is_none() {
+            return Vec::new();
+        }
+        self.vessels()
+            .into_iter()
+            .filter(|&v| v != kerbal && self.world.get::<EvaKerbal>(v).is_none())
+            .filter(|&v| {
+                self.world
+                    .get::<flight::Powered>(v)
+                    .is_some_and(|p| (p.landed || p.splashed) && !p.crashed)
+            })
+            .filter(|&v| {
+                self.distance_between(kerbal, v)
+                    .is_some_and(|d| d <= radius_m)
+            })
+            .collect()
+    }
+
     /// A Kerbal on EVA climbs into a vessel within reach that has a free seat.
     pub fn board(&mut self, kerbal: Entity, target: Entity) -> Result<(), String> {
         let name = self
@@ -979,6 +1000,28 @@ mod tests {
             (d - d0).abs() < 0.05,
             "floats with the craft ({d0} -> {d} m)"
         );
+    }
+
+    #[test]
+    fn a_kerbal_beside_his_landed_craft_finds_it_for_recovery() {
+        let (mut u, v) = k1_on_pad();
+        for _ in 0..crate::TICKS_PER_SECOND {
+            u.step();
+        }
+        let jeb = u.go_eva(v, None).unwrap();
+        let_go_and_land(&mut u, jeb);
+        assert_eq!(u.landed_craft_near(jeb, 50.0), vec![v]);
+        assert!(
+            u.landed_craft_near(v, 50.0).is_empty(),
+            "only a Kerbal on EVA"
+        );
+        // out of reach once the craft stands 100 m away
+        let mut p = u.powered(v).unwrap().clone();
+        let r = p.r;
+        let side = r.cross(DVec3::new(0.0, 0.0, 1.0)).normalized();
+        p.r = (r + side * 100.0).normalized() * r.length();
+        u.set_powered(v, p);
+        assert!(u.landed_craft_near(jeb, 50.0).is_empty());
     }
 
     #[test]
