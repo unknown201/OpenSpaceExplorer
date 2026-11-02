@@ -85,6 +85,9 @@ pub struct StageResult {
 }
 
 /// The whole universe.
+/// How long a crashed craft stays in the world after the crash, s of game time.
+pub const WRECK_LINGER_S: f64 = 30.0;
+
 pub struct Universe {
     pub world: World,
     params: trajectory::SolverParams,
@@ -226,7 +229,7 @@ impl Universe {
                 {
                     continue;
                 }
-                let p = p.clone();
+                let p = flight::packed(p.clone());
                 self.world
                     .entity_mut(e)
                     .remove::<flight::Powered>()
@@ -1037,7 +1040,9 @@ impl Universe {
     /// Keep a flight state for a vessel on rails so it can be woken later (crafts launched straight into
     /// orbit, restored saves).
     pub fn set_dormant(&mut self, e: Entity, p: flight::Powered) {
-        self.world.entity_mut(e).insert(flight::Dormant(p));
+        self.world
+            .entity_mut(e)
+            .insert(flight::Dormant(flight::packed(p)));
     }
 
     pub fn dormant(&self, e: Entity) -> Option<&flight::Powered> {
@@ -2194,7 +2199,7 @@ impl Universe {
             if let Some(p) = self.world.get::<flight::Powered>(e).cloned() {
                 let mut ent = self.world.entity_mut(e);
                 ent.remove::<flight::Powered>();
-                ent.insert(flight::Dormant(p));
+                ent.insert(flight::Dormant(flight::packed(p)));
             }
             vessels::refresh_next_transition(&mut self.world, &index, e, ut, &self.params);
         }
@@ -2208,18 +2213,30 @@ impl Universe {
         self.run_transfers(ticks.max(1) as f64 * dt);
         self.run_transmissions(ticks.max(1) as f64 * dt);
         self.run_ladders(ticks.max(1) as f64 * dt);
-        // crashed debris is gone
-        let wrecks: Vec<Entity> = {
-            let mut q = self
-                .world
-                .query_filtered::<(Entity, &flight::Powered), With<vessels::Debris>>();
+        // crashed debris is gone at once; a crashed craft stays for `WRECK_LINGER_S` (its pilot sees the crash
+        // and its report) and then is gone too, as the original destroys it
+        let wrecks: Vec<(Entity, bool, Option<f64>)> = {
+            let mut q = self.world.query::<(
+                Entity,
+                &flight::Powered,
+                Has<vessels::Debris>,
+                Option<&vessels::CrashedAt>,
+            )>();
             q.iter(&self.world)
-                .filter(|(_, p)| p.crashed)
-                .map(|(e, _)| e)
+                .filter(|(_, p, _, _)| p.crashed)
+                .map(|(e, _, debris, at)| (e, debris, at.map(|a| a.0)))
                 .collect()
         };
-        for e in wrecks {
-            self.world.despawn(e);
+        for (e, debris, at) in wrecks {
+            match at {
+                _ if debris => self.world.despawn(e),
+                Some(t) if ut - t >= WRECK_LINGER_S => self.world.despawn(e),
+                Some(_) => true,
+                None => {
+                    self.world.entity_mut(e).insert(vessels::CrashedAt(ut));
+                    true
+                }
+            };
         }
         for e in self.vessels() {
             if self.world.get::<flight::Powered>(e).is_some() {
@@ -2569,6 +2586,53 @@ mod tests {
         assert!(!p.landed && p.v.length() > 100.0, "climbing");
         assert!(u.take_broken_off().is_empty());
         assert_eq!(u.structure(v).unwrap().rigid.groups().len(), 1);
+    }
+
+    #[test]
+    fn a_craft_goes_on_rails_without_its_spin() {
+        let (mut u, body, spec, st) = k1_on_real_kerbin();
+        let v = u.spawn_powered_on_surface("K1", body, spec, 0.0, 0.0);
+        u.set_structure(v, st);
+        let mu = u.world.get::<bodies::Body>(body).unwrap().mu;
+        let mut p = u.powered(v).unwrap().clone();
+        p.r = DVec3::new(700_000.0, 0.0, 0.0);
+        p.v = DVec3::new(0.0, (mu / 700_000.0_f64).sqrt(), 0.0);
+        p.landed = false;
+        p.facing = DVec3::new(0.0, 1.0, 0.0);
+        p.attitude = flight::Attitude::Fixed(p.facing);
+        p.angvel = DVec3::new(0.0, 0.0, 0.3);
+        u.set_powered(v, p);
+        for _ in 0..(20 * TICKS_PER_SECOND) {
+            u.step();
+            if u.powered(v).is_none() {
+                break;
+            }
+        }
+        let d = u.dormant(v).expect("on rails after a quiet coast");
+        assert_eq!(d.angvel, DVec3::ZERO);
+        assert_eq!(d.roll_rate, 0.0);
+    }
+
+    #[test]
+    fn a_crashed_craft_is_gone_a_little_after_the_crash() {
+        let (mut u, body, spec, st) = k1_on_real_kerbin();
+        let v = u.spawn_powered_on_surface("K1", body, spec, 0.0, 0.0);
+        u.set_structure(v, st);
+        let mut p = u.powered(v).unwrap().clone();
+        p.crashed = true;
+        p.landed = false;
+        u.set_powered(v, p);
+        for _ in 0..(10 * TICKS_PER_SECOND) {
+            u.step();
+        }
+        assert!(
+            u.vessel(v).is_some(),
+            "the wreck is there to see for a while"
+        );
+        for _ in 0..((WRECK_LINGER_S as u64 - 5) * TICKS_PER_SECOND) {
+            u.step();
+        }
+        assert!(u.vessel(v).is_none(), "and then gone");
     }
 
     #[test]

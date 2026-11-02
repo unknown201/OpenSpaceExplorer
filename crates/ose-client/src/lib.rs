@@ -9091,6 +9091,12 @@ impl App {
         scene
             .vessels
             .iter()
+            // a wreck is gone (the server removes it shortly after the crash)
+            .filter(|v| {
+                v.flight
+                    .as_ref()
+                    .is_none_or(|f| f.situation != ose_net::FlightSituation::Crashed)
+            })
             .filter_map(|v| {
                 let body = scene.bodies.get(v.reference_body as usize)?;
                 let orbit = scene::orbit_from(body.mu, &v.orbit);
@@ -10418,6 +10424,21 @@ impl App {
             .map(|m| !m.class_list().contains("hidden"))
             .unwrap_or(false);
         let Some(vessel) = self.flying else { return };
+        // The wreck flown here is gone (the server removes a crashed craft after a while): back to the KSC.
+        let crashed_here = self.flight_watch.borrow().as_ref().is_some_and(|w| {
+            w.vessel == vessel && w.situation == Some(ose_net::FlightSituation::Crashed)
+        });
+        if crashed_here
+            && self
+                .scene
+                .as_ref()
+                .is_some_and(|s| s.vessel(vessel).is_none())
+        {
+            self.tracking_open = false;
+            self.end_flight();
+            self.open_ksc();
+            return;
+        }
         if menu_open {
             self.keys.clear();
         }

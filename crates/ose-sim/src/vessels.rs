@@ -10,6 +10,10 @@ use bevy_ecs::prelude::*;
 use ose_math::{DVec3, Orbit};
 
 /// Marks a vessel that is a separated stage (no engines, no control); removed once it crashes.
+/// When a craft crashed (game time, s): it is removed `WRECK_LINGER_S` later.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct CrashedAt(pub f64);
+
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct Debris;
 

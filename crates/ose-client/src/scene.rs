@@ -158,7 +158,12 @@ impl Scene {
                 }
             }
             if let Some(track) = self.attitudes.get_mut(&v.id) {
-                track.set_world_velocity(g(flight.angvel));
+                // on rails nothing turns (an older save kept a spin there)
+                track.set_world_velocity(if v.on_rails {
+                    glam::DVec3::ZERO
+                } else {
+                    g(flight.angvel)
+                });
             }
         }
         self.vessels_ut = ut;

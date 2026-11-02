@@ -721,6 +721,14 @@ pub fn ground_normal(
     (up - east * slope(east) - north * slope(north)).normalized()
 }
 
+/// A flight state put on rails: it keeps its attitude but stops turning (the original packs a vessel without
+/// rotation). A spin kept there was reported to clients that drew the craft turning and snapping back.
+pub fn packed(mut p: Powered) -> Powered {
+    p.angvel = DVec3::ZERO;
+    p.roll_rate = 0.0;
+    p
+}
+
 /// At rest on the ground or the sea: not crashed, not driving or pushed by RCS, and its engines off or dry (a
 /// craft that landed with its throttle left up and its tanks empty; rotation keys left held do not move it). Such a craft does not hold time warp to physics
 /// speeds; above them it turns with its body, as the original packs it.
