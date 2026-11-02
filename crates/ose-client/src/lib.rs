@@ -449,6 +449,9 @@ struct App {
     eva_grab_pending: bool,
     eva_climb_sent: f32,
     eva_on_ladder: bool,
+    /// The Kerbal's heading when the walk keys went down, walked relative to while no camera has drawn (the
+    /// heading it then turns to is the walk's, so backing up from it flipped round each tick).
+    eva_walk_base: Option<f64>,
     eva_jump: bool,
     /// Screen points (CSS px) along the planning vessel's current orbit with their UT, from the last map
     /// frame: a click near one adds a maneuver node there, as clicking an orbit does in the original.
@@ -897,6 +900,7 @@ pub fn start() -> Result<(), JsValue> {
         eva_grab_pending: false,
         eva_climb_sent: 0.0,
         eva_on_ladder: false,
+        eva_walk_base: None,
         eva_jump: false,
         orbit_pick: Vec::new(),
         #[cfg(target_arch = "wasm32")]
@@ -10376,14 +10380,21 @@ impl App {
             (held_pitch, heading, 0.0)
         } else if moving {
             let off = side.atan2(walk).to_degrees();
+            let base = match look {
+                Some(l) => l,
+                None => *self.eva_walk_base.get_or_insert(heading),
+            };
             (
                 0.0,
-                (look.unwrap_or(heading) + off).rem_euclid(360.0),
+                (base + off).rem_euclid(360.0),
                 walk.hypot(side).min(1.0),
             )
         } else {
             (0.0, heading, 0.0)
         };
+        if !moving {
+            self.eva_walk_base = None;
+        }
         let attitude = ose_net::AttitudeMode::PitchHeading {
             pitch_deg,
             // Backing up or stepping sideways faces the walk direction for the server; the kept heading stays

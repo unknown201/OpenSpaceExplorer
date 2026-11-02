@@ -895,8 +895,9 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
       await sleep(500);
       await page.keyboard.press("Space");
       await sleep(3000);
-      // Walk: hold W and the Kerbal moves along the ground (data-ose-latlon, degrees; Kerbin's radius turns
-      // them into metres).
+      // Walk: hold S and the Kerbal backs away along the ground (data-ose-latlon, degrees; Kerbin's radius
+      // turns them into metres). It dropped off the ladder facing its craft, with the camera behind it: W
+      // walks into the hull, which stops a Kerbal.
       const latlon = async () => ((await hud.first().getAttribute("data-ose-latlon")) ?? "0,0").split(",").map(Number);
       await sleep(1000);
       const [la0, lo0] = await latlon();
@@ -911,24 +912,24 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
         }
       });
       let stepped = false;
-      await page.keyboard.down("KeyW");
+      await page.keyboard.down("KeyS");
       const tw = Date.now();
       while (Date.now() - tw < 2000) {
         if ((await page.locator("#audio").getAttribute("data-ose-sfx")) === "footstep") stepped = true;
         await sleep(100);
       }
-      await page.keyboard.up("KeyW");
+      await page.keyboard.up("KeyS");
       await sleep(500);
       const [la1, lo1] = await latlon();
-      // Back up the same way (S), so the capsule stays within boarding reach (6 m).
-      await page.keyboard.down("KeyS");
+      // Walk back the same way (W), so the capsule stays within boarding reach (6 m).
+      await page.keyboard.down("KeyW");
       await sleep(2000);
-      await page.keyboard.up("KeyS");
+      await page.keyboard.up("KeyW");
       const deg = Math.hypot(la1 - la0, (lo1 - lo0) * Math.cos((la0 * Math.PI) / 180));
       const walked = (deg * Math.PI * 600_000) / 180;
       if (!(walked > 0.5)) {
         await restore();
-        return failed(`holding W did not walk the Kerbal (moved ${walked.toFixed(2)} m)`);
+        return failed(`holding S did not walk the Kerbal (moved ${walked.toFixed(2)} m)`);
       }
       if (hasStep && !stepped) {
         await restore();
