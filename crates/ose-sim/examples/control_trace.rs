@@ -145,6 +145,7 @@ fn main() {
         .as_ref()
         .map(|rows| rows.len())
         .unwrap_or(12 * TICKS_PER_SECOND as usize);
+    let mut spin = None;
     for step in 0..samples {
         let t = replay
             .as_ref()
@@ -165,9 +166,15 @@ fn main() {
                 (r["pitch"], r["yaw"], r["roll"])
             })
             .unwrap_or((pitch, 0., roll));
-        // A settled vessel goes on rails; the reference never does, so keep it in physics.
+        // A settled vessel goes on rails; the reference never does, so keep it in physics, with the spin
+        // going on rails leaves behind.
         if u.powered(vessel).is_none() {
             u.wake(vessel);
+            if let (Some(mut p), Some((w, roll))) = (u.powered(vessel).cloned(), spin) {
+                p.angvel = w;
+                p.roll_rate = roll;
+                u.set_powered(vessel, p);
+            }
         }
         // F11 engages Stability Assist once its inputs have ended: hold the attitude at that moment.
         let sas_on = |i: usize| replay.as_ref().is_some_and(|rows| rows[i]["sas"] != 0.);
@@ -238,6 +245,7 @@ fn main() {
             translation.y,
             u8::from(p.groups.rcs)
         );
+        spin = u.powered(vessel).map(|p| (p.angvel, p.roll_rate));
         u.step();
     }
 }
