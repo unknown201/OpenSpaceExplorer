@@ -801,6 +801,11 @@ pub struct Renderer {
     shadow_u: ([[f32; 4]; 4], [f32; 4]),
     /// Seconds for animated surfaces, set with the camera.
     anim_s: f32,
+    /// Screen-space ambient occlusion (ssao.rs) and this frame's strength (0 off; `set_ao` after `set_camera`).
+    ssao: crate::ssao::Ssao,
+    ao_strength: f32,
+    /// The camera's vertical field of view (rad), for the occlusion's projection.
+    fov_y: f64,
     engine_fx: crate::engine_fx_gpu::EngineFxGpu,
     post: crate::fx_post::FxPost,
     /// The sun's lens flare (lens_flare.rs), drawn into the HDR scene before the post pass.
@@ -1365,6 +1370,7 @@ impl Renderer {
         let engine_fx =
             crate::engine_fx_gpu::EngineFxGpu::new(&device, &queue, &depth, &post.snapshot_view);
         let lens_flare = crate::lens_flare::LensFlare::new(&device, &depth);
+        let ssao = crate::ssao::Ssao::new(&device, &depth, width, height);
         Some(Renderer {
             software_adapter,
             lens_flare,
@@ -1386,6 +1392,9 @@ impl Renderer {
             shadow_sampler,
             shadow_u: ([[0.0; 4]; 4], [0.0; 4]),
             anim_s: 0.0,
+            ssao,
+            ao_strength: 0.0,
+            fov_y: 1.0,
             engine_fx,
             post,
             view: DMat4::IDENTITY,
@@ -1515,6 +1524,12 @@ impl Renderer {
         self.engine_fx
             .resize(&self.device, &self.depth, &self.post.snapshot_view);
         self.lens_flare.resize(&self.device, &self.depth);
+        self.ssao.resize(&self.device, &self.depth, width, height);
+    }
+
+    /// Ambient occlusion this frame (after `set_camera`, which turns it off): 0 none, 1 black creases.
+    pub fn set_ao(&mut self, strength: f32) {
+        self.ao_strength = strength.clamp(0.0, 1.0);
     }
 
     /// Ask for the sun's lens flare this frame (the planet renderer does, while a body is drawn).
@@ -1867,6 +1882,8 @@ impl Renderer {
         self.view = view;
         self.near = near;
         let proj = perspective_rh(fov_y_rad, aspect, near, far);
+        self.fov_y = fov_y_rad;
+        self.ao_strength = 0.0;
         self.view_proj = proj * view;
         // A new camera starts with no lamps and no shadow; a view that has them sets them after
         // (set_lights, set_shadow).
@@ -2396,6 +2413,19 @@ impl Renderer {
                     pass.draw(0..4, 0..*n - 1);
                 }
             }
+        }
+        if self.ao_strength > 0.0 {
+            self.ssao.draw(
+                &self.queue,
+                &mut encoder,
+                &self.post.view,
+                crate::ssao::AoView {
+                    near: self.near as f32,
+                    f: (1.0 / (self.fov_y * 0.5).tan()) as f32,
+                    aspect: self.width as f32 / self.height.max(1) as f32,
+                    strength: self.ao_strength,
+                },
+            );
         }
         if self.fixture_grid {
             self.post.reference_grid(&mut encoder);

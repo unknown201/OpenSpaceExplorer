@@ -64,6 +64,8 @@ pub mod render;
 pub mod rnd;
 pub mod scene;
 pub mod settings;
+#[cfg(target_arch = "wasm32")]
+mod ssao;
 pub mod thumb;
 pub mod tracking;
 pub mod training;
