@@ -37,7 +37,7 @@ listed here only so it is not lost.
 
 | ID | Gap | KSP2 | OSE (measured) | Evidence | Owner |
 |---|---|---|---|---|---|
-| SBS-P1 | Atmospheric drag on a coasting/falling craft is near zero | A Mk1 pod + FL-T200 + LV-T45 decelerates hard through the lower atmosphere; terminal velocity near sea level is a few hundred m/s | Burnout at 7.6 km and 760 m/s, apoapsis 39.6 km at T+104 s (no-drag ballistic value: about 39 km). Falls from 39.6 km to the ground in 95 s (vacuum free fall: 91 s) and is still doing about 790 m/s at 4 km | `reference/ose-shots/log.txt` (ascent trace), `10-ascent-25km.png`, flight report: fastest 801 m/s | server/sim thread (P16) |
+| SBS-P1 | **Unverified.** Drag on a coasting/falling craft looks low | Not yet flown in KSP2. Trace to capture: same craft straight up at full throttle, record apoapsis and speed passing 4 km on the way down | Burnout at 7.6 km and 760 m/s, apoapsis 39.6 km at T+104 s (close to the no-drag ballistic value of about 39 km). Still doing about 790 m/s at 4 km on the way down. The server/sim thread checked the code: it follows KSP2's Module_Drag/Data_Drag with KSP2's exported curves, and the low supersonic drag comes from KSP's Mach-power model (sea-level terminal speed for this craft is about 470 m/s) | `reference/ose-shots/log.txt` (ascent trace), `10-ascent-25km.png` | needs a KSP2 trace (this thread), then server/sim |
 | SBS-P2 | No KSP2 trace exists for any flight, so ascent, SAS, wheel and gimbal feel are unproven | `tools/ksp2-control-capture` records time, inputs, attitude, rates, mass | `tools/compare_control_traces.py` is ready but has nothing to compare | `tools/ksp2-control-capture/README.md` | this thread, **blocked on Josh** (BepInEx install approval) |
 
 ### Visual fidelity
