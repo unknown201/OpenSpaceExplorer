@@ -192,7 +192,7 @@ namespace OpenSpaceExplorer.Validation
                 yield return Shot("v1-ksc-night-before-vab");
             }
             bool orbital = scenario == "rotation" || scenario == "rcs";
-            var snapshot = IOProvider.FromJsonFile<OABHistoricalSnapshot>(Path.Combine(dir, scenario == "rcs" ? "craft-rcs.json" : scenario == "rover" ? "craft-rover.json" : orbital ? "craft-rotation.json" : (scenario == "k1" || scenario == "partdump") ? "craft-k1.json" : "craft.json"));
+            var snapshot = IOProvider.FromJsonFile<OABHistoricalSnapshot>(Path.Combine(dir, scenario == "rcs" ? "craft-rcs.json" : scenario == "rover" ? "craft-rover.json" : scenario == "legs" ? "craft-legs.json" : orbital ? "craft-rotation.json" : (scenario == "k1" || scenario == "partdump") ? "craft-k1.json" : "craft.json"));
             var config = orbital
                 ? new OABConfig(OABVariant.VAB, OABEnvironmentType.Orbital, OABConstructionType.User, null)
                 : new OABConfig(OABVariant.VAB, OABEnvironmentType.Terrestrial, OABConstructionType.User, "Kerbin");
@@ -216,6 +216,7 @@ namespace OpenSpaceExplorer.Validation
             if (scenario == "rover") { yield return Rover(vessel); yield break; }
             if (scenario == "eva") { yield return Eva(vessel); yield break; }
             if (scenario == "partdump") { yield return PartDump(vessel); yield break; }
+            if (scenario == "legs") { yield return Legs(vessel); yield break; }
             if (scenario == "visuals")
             {
                 vessel.SetActionGroup(KSPActionGroup.Lights, true);
@@ -486,6 +487,43 @@ namespace OpenSpaceExplorer.Validation
                 }
             }
             Mark("parts dumped, vessel mass " + vessel.totalMass.ToString("R", CultureInfo.InvariantCulture));
+            File.WriteAllText(Path.Combine(dir, "out", "done.txt"), "ok");
+            yield return new WaitForSeconds(2f);
+            Application.Quit();
+        }
+
+        // T15 landing legs: legs deployed on the pad 10 s, then 0.3 s of full throttle, cut, and the drop back
+        // onto the legs; logs until 15 s after touching down. Also lists the vessel's parts.
+        IEnumerator Legs(VesselComponent vessel)
+        {
+            var names = new System.Collections.Generic.List<string>();
+            foreach (var part in vessel.SimulationObject.PartOwner.Parts) names.Add(part.Name);
+            Mark("parts " + string.Join(" ", names));
+            vessel.SetActionGroup(KSPActionGroup.Gear, true);
+            vessel.SetAutopilotEnableDisable(true);
+            Begin(vessel, "legs-trace.csv");
+            yield return new WaitForSeconds(10f);
+            Mark("hop");
+            G.ViewController.flightInputHandler.OverrideInputMaxThrottle(true);
+            vessel.ActivateNextStage();
+            yield return new WaitForSeconds(0.3f);
+            G.ViewController.flightInputHandler.OverrideInputThrottleCutoff(true);
+            Mark("cutoff");
+            bool up = false; float t = 0, down = -1;
+            while (!done && t < 120)
+            {
+                t += Time.deltaTime;
+                vessel = G.ViewController.GetActiveSimVessel();
+                if (vessel == null || vessel.GlobalId.ToString() != vesselId) { Mark("vessel gone"); break; }
+                if (!up && vessel.Situation == VesselSituations.Flying) up = true;
+                if (up && down < 0 && vessel.Situation == VesselSituations.Landed) { down = t; Mark("touchdown"); }
+                if (down >= 0 && t - down > 15) break;
+                yield return null;
+            }
+            int left = 0;
+            if (vessel != null) foreach (var part in vessel.SimulationObject.PartOwner.Parts) left++;
+            Mark("parts left " + left);
+            Stop();
             File.WriteAllText(Path.Combine(dir, "out", "done.txt"), "ok");
             yield return new WaitForSeconds(2f);
             Application.Quit();
