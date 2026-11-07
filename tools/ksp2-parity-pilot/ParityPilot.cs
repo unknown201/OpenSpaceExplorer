@@ -47,6 +47,10 @@ namespace OpenSpaceExplorer.Validation
 
         IEnumerator Shot(string name)
         {
+            // wait for the loading curtain to lift and the scene to settle, so the shot is gameplay, not loading art
+            float waited = 0;
+            while (G?.UI != null && G.UI.GetCurtainVisibility() && waited < 120) { waited += Time.unscaledDeltaTime; yield return null; }
+            yield return new WaitForSecondsRealtime(waited > 0 ? 4f : 0.5f);
             yield return new WaitForEndOfFrame();
             ScreenCapture.CaptureScreenshot(Path.Combine(dir, "out", name + ".png"));
             Mark("shot " + name);
@@ -70,7 +74,15 @@ namespace OpenSpaceExplorer.Validation
             yield return Shot("01-main-menu");
 
             var slm = G.SaveLoadManager;
-            if (slm.CampaignExists(CampaignType.SinglePlayer, Campaign) && slm.TryGetLatestFilePathFromCampaign(Campaign, CampaignType.SinglePlayer, out var path))
+            var campaignDir = slm.GetCampaignFolderPath(CampaignType.SinglePlayer, Campaign);
+            string path = null;
+            if (Directory.Exists(campaignDir))
+            {
+                DateTime newest = DateTime.MinValue;
+                foreach (var f in Directory.GetFiles(campaignDir, "*.json"))
+                    if (File.GetLastWriteTimeUtc(f) > newest) { newest = File.GetLastWriteTimeUtc(f); path = f; }
+            }
+            if (path != null)
             {
                 Mark("loading " + path);
                 slm.LoadGameFromFile(path, (_, ok) => Mark("load finished " + ok));
@@ -114,8 +126,13 @@ namespace OpenSpaceExplorer.Validation
             Mark("ksc");
             yield return Shot("02-ksc");
 
-            var snapshot = IOProvider.FromJsonFile<OABHistoricalSnapshot>(Path.Combine(dir, "craft.json"));
-            var config = new OABConfig(OABVariant.VAB, OABEnvironmentType.Terrestrial, OABConstructionType.User, "Kerbin");
+            var scenario = File.ReadAllText(Path.Combine(dir, "run.txt")).Trim();
+            Mark("scenario " + scenario);
+            bool orbital = scenario == "rotation";
+            var snapshot = IOProvider.FromJsonFile<OABHistoricalSnapshot>(Path.Combine(dir, orbital ? "craft-rotation.json" : "craft.json"));
+            var config = orbital
+                ? new OABConfig(OABVariant.VAB, OABEnvironmentType.Orbital, OABConstructionType.User, null)
+                : new OABConfig(OABVariant.VAB, OABEnvironmentType.Terrestrial, OABConstructionType.User, "Kerbin");
             bool shown = false;
             G.OAB.ShowOAB(config, snapshot, null, () => shown = true);
             t = 0;
@@ -129,8 +146,9 @@ namespace OpenSpaceExplorer.Validation
             t = 0;
             while ((vessel = G.ViewController.GetActiveSimVessel()) == null && t < 120) { t += Time.unscaledDeltaTime; yield return null; }
             yield return new WaitForSeconds(12f);
-            Mark("pad, situation " + vessel.Situation + ", mass " + vessel.totalMass);
-            yield return Shot("04-pad");
+            Mark("in flight, situation " + vessel.Situation + ", mass " + vessel.totalMass + ", alt " + vessel.AltitudeFromSeaLevel);
+            yield return Shot(orbital ? "04-orbit" : "04-pad");
+            if (orbital) { yield return Rotation(vessel); yield break; }
 
             vessel.SetAutopilotEnableDisable(true);
             G.ViewController.flightInputHandler.OverrideInputMaxThrottle(true);
@@ -172,13 +190,45 @@ namespace OpenSpaceExplorer.Validation
             Application.Quit();
         }
 
-        void Begin(VesselComponent vessel)
+        IEnumerator Rotation(VesselComponent vessel)
+        {
+            vessel.SetAutopilotEnableDisable(false);
+            yield return new WaitForSeconds(2f);
+            Begin(vessel, "rotation-trace.csv");
+            yield return new WaitForSeconds(2f);
+            foreach (var axis in new[] { "pitch", "yaw", "roll" })
+            {
+                Mark(axis + " +1 for 1 s");
+                // the handler consumes an override once per frame, so hold it every frame
+                float held = 0;
+                while (held < 1f) { Set(axis, 1f); held += Time.deltaTime; yield return null; }
+                Set(axis, 0f);
+                yield return new WaitForSeconds(4f);
+            }
+            Mark("SAS on");
+            vessel.SetAutopilotEnableDisable(true);
+            yield return new WaitForSeconds(12f);
+            Stop();
+            Mark("finished rotation");
+            File.WriteAllText(Path.Combine(dir, "out", "done.txt"), "ok");
+            yield return new WaitForSeconds(3f);
+            Application.Quit();
+        }
+
+        static void Set(string axis, float v)
+        {
+            if (axis == "pitch") FlightInputHandler.OverrideInputPitch(v);
+            else if (axis == "yaw") FlightInputHandler.OverrideInputYaw(v);
+            else FlightInputHandler.OverrideInputRoll(v);
+        }
+
+        void Begin(VesselComponent vessel, string file = "drag-trace.csv")
         {
             vesselId = vessel.GlobalId.ToString();
             start = G.UniverseModel.UniverseTime;
             last = double.NegativeInfinity;
-            trace = new StreamWriter(Path.Combine(dir, "out", "drag-trace.csv"), false) { AutoFlush = true };
-            trace.WriteLine("t,alt_m,vspeed,srf_speed,mach,q_kpa,density,static_kpa,mass_t,throttle,qx,qy,qz,qw,wx,wy,wz,sas,situation,ut");
+            trace = new StreamWriter(Path.Combine(dir, "out", file), false) { AutoFlush = true };
+            trace.WriteLine("t,alt_m,vspeed,srf_speed,mach,q_kpa,density,static_kpa,mass_t,throttle,qx,qy,qz,qw,wx,wy,wz,sas,pitch,yaw,roll,situation,ut");
         }
 
         void FixedUpdate()
@@ -196,7 +246,8 @@ namespace OpenSpaceExplorer.Validation
                 var w = Vector.Reframed(frame.ToRelativeAngularVelocity(vessel.AngularVelocityMassAvg), frame.localFrame).vector;
                 double[] v = { ut - start, vessel.AltitudeFromSeaLevel, vessel.VerticalSrfSpeed, vessel.SrfSpeedMagnitude, vessel.MachNumber,
                     vessel.DynamicPressure_kPa, vessel.AtmDensity, vessel.StaticPressure_kPa, vessel.totalMass, vessel.flightCtrlState.mainThrottle,
-                    q.x, q.y, q.z, q.w, w.x, w.y, w.z, vessel.Autopilot != null && vessel.Autopilot.Enabled ? 1 : 0 };
+                    q.x, q.y, q.z, q.w, w.x, w.y, w.z, vessel.Autopilot != null && vessel.Autopilot.Enabled ? 1 : 0,
+                    vessel.flightCtrlState.pitch, vessel.flightCtrlState.yaw, vessel.flightCtrlState.roll };
                 trace.WriteLine(string.Join(",", Array.ConvertAll(v, x => x.ToString("R", CultureInfo.InvariantCulture))) + "," + vessel.Situation + "," + ut.ToString("R", CultureInfo.InvariantCulture));
             }
             catch (Exception e) { Logger.LogError(e); Stop(); }
