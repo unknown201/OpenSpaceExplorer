@@ -27,7 +27,7 @@ import numpy as np
 
 RADIUS = 600_000.0
 # as crates/ose-server/src/main.rs: KSC_ANCHOR, KSC_YAW_DEG and the first launch pad spawn (the anchor)
-SITE = (-0.6836, -74.8198, 115.2)
+SITE = (-0.6836, -74.8198, 110.0)
 YAW_DEG = 0.0410
 ANCHOR = (10.088_055, -117.589_006, -2_104.040_008)
 MESHES = ("ksc_campus_VertexPaint_02", "ksc_campus_final")
