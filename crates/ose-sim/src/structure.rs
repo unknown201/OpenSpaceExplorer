@@ -1891,19 +1891,6 @@ impl Structure {
                         .is_some_and(|g| !g.leg && g.radius_m > 0.0)
             })
             .collect();
-        p.drive.wheels = wheels
-            .iter()
-            .map(|&i| {
-                let g = self.gear_defs[i].as_ref().expect("gear");
-                crate::flight::DriveWheel {
-                    radius_m: g.radius_m,
-                    torque_knm: g.motor.as_ref().map(|m| m.torque_curve.clone()),
-                    ec_per_s: g.motor.as_ref().map(|m| m.ec_per_s).unwrap_or(0.0),
-                    brake_knm: g.brake_torque_knm,
-                    steers: g.steerable,
-                }
-            })
-            .collect();
         // the root part points the way it drives (a probe core's up), laid flat; craft +Z otherwise
         let up = aero::rotate(root_rotation, DVec3::new(0.0, 1.0, 0.0));
         let flat = (up.x * up.x + up.z * up.z).sqrt();
@@ -1912,19 +1899,49 @@ impl Structure {
         } else {
             [0.0, 1.0]
         };
-        // wheel spread along that direction (positions in craft axes: vessel z is craft -Z); a level craft
-        // drives along its nose
-        let along: Vec<f64> = wheels
+        let mass = self.mass_properties();
+        // wheel places from the centre of mass, along that direction and to its right (positions in
+        // craft axes: vessel z is craft -Z; craft +X lies to the left of the drive direction on the
+        // ground); a level craft drives along its nose with its belly down
+        let [f0, f1] = p.drive.forward;
+        let level = self.level;
+        let place = |r: DVec3| -> [f64; 2] {
+            if level {
+                [r.y, r.x]
+            } else {
+                [r.x * f0 - r.z * f1, -(r.x * f1 + r.z * f0)]
+            }
+        };
+        let previous = std::mem::take(&mut p.drive.wheels);
+        let carry = previous.len() == wheels.len();
+        p.drive.wheels = wheels
             .iter()
-            .map(|&i| {
-                let r = self.rigid.rest_position(i);
-                if self.level {
-                    r.y
-                } else {
-                    r.x * p.drive.forward[0] - r.z * p.drive.forward[1]
+            .enumerate()
+            .map(|(k, &i)| {
+                let g = self.gear_defs[i].as_ref().expect("gear");
+                crate::flight::DriveWheel {
+                    radius_m: g.radius_m,
+                    torque_knm: g.motor.as_ref().map(|m| m.torque_curve.clone()),
+                    ec_per_s: g.motor.as_ref().map(|m| m.ec_per_s).unwrap_or(0.0),
+                    brake_knm: g.brake_torque_knm,
+                    steers: g.steerable,
+                    at_m: place(self.rigid.rest_position(i) - mass.centre_m),
+                    dynamics: g.dynamics.clone(),
+                    state: if carry {
+                        previous[k].state.clone()
+                    } else {
+                        Default::default()
+                    },
                 }
             })
             .collect();
+        // turning about the vertical: a standing craft's Y, a level craft's Z
+        p.drive.yaw_inertia_tm2 = if level {
+            mass.inertia.z.z
+        } else {
+            mass.inertia.y.y
+        };
+        let along: Vec<f64> = p.drive.wheels.iter().map(|w| w.at_m[0]).collect();
         let spread = along.iter().cloned().fold(f64::MIN, f64::max)
             - along.iter().cloned().fold(f64::MAX, f64::min);
         p.drive.wheelbase_m = if spread.is_finite() {

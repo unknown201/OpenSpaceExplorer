@@ -623,6 +623,60 @@ pub struct LandingGear {
     pub brake_torque_knm: f64,
     #[serde(default)]
     pub steerable: bool,
+    /// How the wheel grips and how its drive, brakes and steering respond.
+    #[serde(default)]
+    pub dynamics: WheelDynamics,
+}
+
+/// A wheel's tyre and response settings as the original defines them: `Data_WheelBase` (wheel mass,
+/// friction curve), `Data_WheelMotor.driveResponse`/`tractionControlScale`, `Data_WheelBrakes.BrakeResponse`
+/// and `Data_WheelSteering` (response and the steering curves). Defaults are the original's class defaults.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WheelDynamics {
+    /// Wheel mass, t (`Mass`); its spin inertia is `mass * r^2 / 2`, at least 0.01 t·m².
+    pub mass_t: f64,
+    /// Friction coefficients and slip speeds, m/s (`FrictionAdherent`, `PeakStart`/`FrictionPeak`,
+    /// `LimitStart`/`FrictionLimit`), scaled with gravity by `GeeBias`.
+    pub friction_adherent: f64,
+    pub peak_slip_mps: f64,
+    pub friction_peak: f64,
+    pub limit_slip_mps: f64,
+    pub friction_limit: f64,
+    pub gee_bias: f64,
+    /// Least tyre load, kN (`MinimumDownforce`).
+    pub min_downforce_kn: f64,
+    /// Drive input slew, 1/s (`driveResponse`), and traction control (`tractionControlScale`).
+    pub drive_response: f64,
+    pub traction_control: f64,
+    /// Brake input slew, 1/s (`BrakeResponse`).
+    pub brake_response: f64,
+    /// Steering slew, 1/s (`SteeringResponse`); steering range, degrees, against wheel speed
+    /// (`SteeringCurve`), and the share of it allowed against wheel speed (`SteeringMaxAngleCurve`).
+    pub steering_response: f64,
+    pub steering_curve: Curve,
+    pub steering_max_angle_curve: Curve,
+}
+
+impl Default for WheelDynamics {
+    fn default() -> Self {
+        WheelDynamics {
+            mass_t: 0.0,
+            friction_adherent: 0.25,
+            peak_slip_mps: 4.0,
+            friction_peak: 1.45,
+            limit_slip_mps: 7.0,
+            friction_limit: 1.1,
+            gee_bias: 1.6,
+            min_downforce_kn: 0.5,
+            drive_response: 3.0,
+            traction_control: 1.0,
+            brake_response: 1.0,
+            steering_response: 8.0,
+            steering_curve: Curve::default(),
+            steering_max_angle_curve: Curve::default(),
+        }
+    }
 }
 
 /// A wheel's drive motor as the original defines it (`Data_WheelMotor`).
