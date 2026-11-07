@@ -1236,6 +1236,8 @@ impl FlightView {
             .is_some_and(|f| f.situation == ose_net::FlightSituation::Crashed);
         let (mut focus, mut distance) = (pos, self.distance);
         if crashed {
+            // the crash site with its fire and smoke, not a close-up of the grass at the impact
+            distance = distance.max(90.0);
             let pieces: Vec<DVec3> = inp
                 .nearby_vessels
                 .iter()
@@ -1273,6 +1275,8 @@ impl FlightView {
             spin,
             inp.ut,
         );
+        // Soft occlusion in creases and at the feet of things (SBS-V4).
+        gpu.set_ao(0.55);
         // Sun shadows around what the camera looks at: the craft on itself, on the pad and the ground.
         gpu.set_shadow(
             focus - cam,
