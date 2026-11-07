@@ -71,7 +71,7 @@ Camera rule that runs through every map: **the right button drags the camera, th
 | F5 | Rovers: W/S wheel throttle, A/D steer, B brakes | same, through `Drive` while landed | done |
 | F6 | Staging stack: one card per stage with part icons and fuel bars, Space fires the next | one card per stage still to fire with part and parachute icons, the next one lit at the bottom, and a fuel bar for the stage burning now | done |
 | F7 | Orbital readout Ap/Pe with time to each; altimeter sea level / terrain toggle; speed orbit / surface / target toggle | Ap/Pe with countdowns, SURFACE/ORBIT/TARGET speed toggle, SEA LEVEL/TERRAIN altimeter toggle | done |
-| F8 | Right-drag orbits the camera, wheel zooms, V cycles camera modes, Home resets | right-drag (and left) orbits, Home resets, V cycles Auto, Free, Orbital, Chase and Locked | done |
+| F8 | Right-drag orbits the camera, wheel zooms, V cycles camera modes, Home resets; the camera starts a few craft lengths out (`UpdateDefaultGimbalStateDistance`) | right-drag (and left) orbits, Home resets, V cycles Auto, Free, Orbital, Chase and Locked; a new vessel and Home start the camera at the original's distance for the craft's size (half its longest side over tan 30 degrees, plus 17.5 m: about 21 m for a three-part rocket) until the player zooms | done |
 | F9 | `]` `[` switch to the next/previous vessel nearby | in flight `]` `[` take control of your other vessels within 2.5 km (dropped stages, Kerbals on EVA); on the map they change the followed vessel | done |
 | F10 | F to board/interact on EVA, EVA from the crew portrait | EVA, Board, Plant Flag and Undock buttons ("Build 3D world and menu replica"); F on EVA boards the craft within reach | done |
 | F11 | Vessel labels F4 | F4 toggles labels | done |

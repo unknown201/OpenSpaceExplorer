@@ -680,6 +680,8 @@ impl CameraMode {
 /// the right on screen (east) and W tips it away from the camera.
 pub const DEFAULT_YAW: f64 = std::f64::consts::PI - 0.4;
 
+use crate::orientation::{fit_distance, MAX_DISTANCE, MIN_DISTANCE};
+
 pub struct FlightView {
     pub mode: CameraMode,
     /// The flown vessel's distance from the KSC campus (m) while on Kerbin and low, else infinity: the pad's
@@ -691,6 +693,11 @@ pub struct FlightView {
     /// Auto switches frames (into orbital above the air) the view carries on from where it was.
     cam_frame: Option<(CameraMode, DVec3)>,
     pub distance: f64,
+    /// The vessel the camera distance was last fitted to, how many of its part models were loaded then and
+    /// whether the server's part list had arrived: a new vessel (a launch, a switch) or Home fits the camera
+    /// to the craft's size again, refined while its models and part list arrive, until the player zooms.
+    framed: Option<(u64, usize, bool)>,
+    auto_fit: bool,
     spins: HashMap<String, Spin>,
     ksc: Option<(DVec3, DQuat)>,
     ksc_scene_req: bool,
@@ -815,6 +822,8 @@ impl FlightView {
             pitch: 0.25,
             cam_frame: None,
             distance: 35.0,
+            framed: None,
+            auto_fit: true,
             spins: body_spins(),
             ksc: None,
             ksc_scene_req: false,
@@ -915,7 +924,20 @@ impl FlightView {
     }
 
     pub fn zoom(&mut self, f: f64) {
-        self.distance = (self.distance * f).clamp(4.0, 5.0e6);
+        self.distance = (self.distance * f).clamp(MIN_DISTANCE, MAX_DISTANCE);
+        self.auto_fit = false;
+    }
+
+    /// Home: the starting angles, and the distance fitted to the craft again on the next frame.
+    pub fn reset_view(&mut self) {
+        let d = FlightView::new();
+        (self.yaw, self.pitch) = (d.yaw, d.pitch);
+        if let Some((_, loaded, known)) = self.framed.as_mut() {
+            (*loaded, *known) = (0, false);
+        } else {
+            self.distance = d.distance;
+        }
+        self.auto_fit = true;
     }
 
     /// Campus placement in the Kerbin model frame: launch pad 1's flame trench top on the pad site, turned
@@ -2248,6 +2270,12 @@ impl FlightView {
                 lamps.sort_by(|a, b| a.pos.length().total_cmp(&b.pos.length()));
                 gpu.set_lights(&lamps);
             }
+            // The craft's box in its own frame, for fitting the camera distance to it.
+            let (mut craft_lo, mut craft_hi, mut loaded) = (
+                DVec3::splat(f64::INFINITY),
+                DVec3::splat(f64::NEG_INFINITY),
+                0usize,
+            );
             for (i, name, lp, lq, animation) in parts {
                 if !gpu.has_model(&name) {
                     continue;
@@ -2258,6 +2286,7 @@ impl FlightView {
                     let rot = vessel_rot * lq;
                     let mut lo = DVec3::splat(f64::INFINITY);
                     let mut hi = DVec3::splat(f64::NEG_INFINITY);
+                    loaded += 1;
                     for c in 0..8 {
                         let corner = DVec3::new(
                             if c & 1 == 0 { bmin.x } else { bmax.x },
@@ -2267,6 +2296,9 @@ impl FlightView {
                         let w = wpos - cam + rot * corner;
                         lo = lo.min(w);
                         hi = hi.max(w);
+                        let local = lp + lq * corner;
+                        craft_lo = craft_lo.min(local);
+                        craft_hi = craft_hi.max(local);
                     }
                     self.pick_boxes.push((i, lo, hi));
                     self.pick_poses.push((i, name.clone(), wpos - cam, rot));
@@ -2479,6 +2511,20 @@ impl FlightView {
                             items.push(c);
                         }
                     }
+                }
+            }
+            // A new vessel starts the camera a few craft lengths out; the distance follows the part models as
+            // they load, and stays put once the player zooms. EVA Kerbals and flags have no craft and keep
+            // the distance they had.
+            if self.framed.map(|f| f.0) != Some(inp.vessel.id) {
+                self.framed = Some((inp.vessel.id, 0, false));
+                self.auto_fit = true;
+            }
+            let known = inp.present.is_some();
+            if let Some((_, fitted, fitted_known)) = self.framed.as_mut() {
+                if self.auto_fit && loaded > 0 && (loaded > *fitted || (known && !*fitted_known)) {
+                    (*fitted, *fitted_known) = (loaded, known);
+                    self.distance = fit_distance(craft_hi - craft_lo);
                 }
             }
         } else {

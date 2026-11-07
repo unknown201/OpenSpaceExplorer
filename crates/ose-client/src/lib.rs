@@ -11311,12 +11311,7 @@ impl App {
         #[cfg(target_arch = "wasm32")]
         {
             if self.flight_active() {
-                let d = flight3d::FlightView::new();
-                (
-                    self.flight3d.yaw,
-                    self.flight3d.pitch,
-                    self.flight3d.distance,
-                ) = (d.yaw, d.pitch, d.distance);
+                self.flight3d.reset_view();
                 return;
             }
             if self.in_session && self.vab_active() {
