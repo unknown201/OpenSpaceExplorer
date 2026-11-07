@@ -24,7 +24,8 @@ source-level [feature gap analysis](ksp2-feature-gap-analysis.md), the [physics 
 ## Summary
 
 The HUD, VAB layout, launch pad and ascent-altitude visuals are close to KSP2. The largest gaps a player notices are
-(1) the rocket falls through the lower atmosphere at almost vacuum speed, (2) the KSC has no trees and a different
+(1) a coasting rocket keeps almost vacuum speed through the lower atmosphere (unverified: the drag model follows
+KSP2's own formula, so this needs a KSP2 trace), (2) the KSC has no trees and a different
 coastline, (3) the in-flight map opens on the whole Kerbin system instead of the vessel, and (4) the flight camera
 starts far from the craft. Physics and control feel cannot be closed with proof until KSP2 traces are recorded.
 
