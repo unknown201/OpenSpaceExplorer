@@ -3,6 +3,7 @@ using System.Collections;
 using System.Globalization;
 using System.IO;
 using BepInEx;
+using KSP;
 using KSP.Game;
 using KSP.IO;
 using KSP.OAB;
@@ -156,6 +157,40 @@ namespace OpenSpaceExplorer.Validation
 
             var scenario = File.ReadAllText(Path.Combine(dir, "run.txt")).Trim();
             Mark("scenario " + scenario);
+            double darkUT = -1, brightUT = -1;
+            if (scenario == "visuals")
+            {
+                // KSC every 45 game minutes across one 6 h Kerbin day; remember the darkest and brightest moments
+                float darkest = float.MaxValue, brightest = -1f;
+                for (int sweep = 0; sweep < 8; sweep++)
+                {
+                    if (sweep > 0)
+                    {
+                        double target = G.UniverseModel.UniverseTime + 2700;
+                        G.ViewController.TimeWarp.WarpTo(target, 1f, 1000f);
+                        float w = 0;
+                        while (G.UniverseModel.UniverseTime < target - 1 && w < 120) { w += Time.unscaledDeltaTime; yield return null; }
+                        yield return new WaitForSecondsRealtime(4f);
+                    }
+                    double ut = G.UniverseModel.UniverseTime;
+                    yield return new WaitForEndOfFrame();
+                    var tex = ScreenCapture.CaptureScreenshotAsTexture();
+                    var px = tex.GetPixels32();
+                    double sum = 0; for (int i = 0; i < px.Length; i += 97) sum += px[i].r + px[i].g + px[i].b;
+                    float lum = (float)(sum / (px.Length / 97.0) / 3.0);
+                    File.WriteAllBytes(Path.Combine(dir, "out", "v1-ksc-ut" + ((long)ut).ToString(CultureInfo.InvariantCulture) + "-lum" + ((int)lum) + ".png"), ImageConversion.EncodeToPNG(tex));
+                    Destroy(tex);
+                    Mark("ksc ut " + ut.ToString("F0", CultureInfo.InvariantCulture) + " lum " + lum.ToString("F0", CultureInfo.InvariantCulture));
+                    if (lum < darkest) { darkest = lum; darkUT = ut; }
+                    if (lum > brightest) { brightest = lum; brightUT = ut; }
+                }
+                // go on to the next darkest moment for the night pad shot
+                double night = darkUT; while (night < G.UniverseModel.UniverseTime + 60) night += 21600;
+                G.ViewController.TimeWarp.WarpTo(night, 1f, 1000f);
+                float w2 = 0; while (G.UniverseModel.UniverseTime < night - 1 && w2 < 180) { w2 += Time.unscaledDeltaTime; yield return null; }
+                yield return new WaitForSecondsRealtime(4f);
+                yield return Shot("v1-ksc-night-before-vab");
+            }
             bool orbital = scenario == "rotation" || scenario == "rcs";
             var snapshot = IOProvider.FromJsonFile<OABHistoricalSnapshot>(Path.Combine(dir, scenario == "rcs" ? "craft-rcs.json" : scenario == "rover" ? "craft-rover.json" : orbital ? "craft-rotation.json" : scenario == "k1" ? "craft-k1.json" : "craft.json"));
             var config = orbital
@@ -179,6 +214,19 @@ namespace OpenSpaceExplorer.Validation
             if (scenario == "rcs") { yield return Rcs(vessel); yield break; }
             if (orbital) { yield return Rotation(vessel); yield break; }
             if (scenario == "rover") { yield return Rover(vessel); yield break; }
+            if (scenario == "eva") { yield return Eva(vessel); yield break; }
+            if (scenario == "visuals")
+            {
+                vessel.SetActionGroup(KSPActionGroup.Lights, true);
+                yield return new WaitForSecondsRealtime(3f);
+                yield return Shot("v3-pad-night-lights");
+                // morning for the flight
+                double day = brightUT; while (day < G.UniverseModel.UniverseTime + 60) day += 21600;
+                G.ViewController.TimeWarp.WarpTo(day, 1f, 1000f);
+                float w3 = 0; while (G.UniverseModel.UniverseTime < day - 1 && w3 < 180) { w3 += Time.unscaledDeltaTime; yield return null; }
+                yield return new WaitForSecondsRealtime(4f);
+                yield return Shot("v3-pad-day");
+            }
             if (scenario == "hop") { yield return Hop(vessel); yield break; }
             if (scenario == "k1") { yield return Staged(vessel); yield break; }
 
@@ -189,8 +237,9 @@ namespace OpenSpaceExplorer.Validation
             vessel.ActivateNextStage();
             Mark("staged");
 
-            double[] marks = { 150, 1500, 8000, 25000 };
-            string[] names = { "05-liftoff", "06-ascent-1km", "07-ascent-8km", "08-ascent-25km" };
+            double[] marks = scenario == "visuals" ? new double[] { 15000, 45000 } : new double[] { 150, 1500, 8000, 25000 };
+            string[] names = scenario == "visuals" ? new[] { "v4-flight-15km", "v4-flight-45km" } : new[] { "05-liftoff", "06-ascent-1km", "07-ascent-8km", "08-ascent-25km" };
+            bool re40 = false, re25 = false;
             int k = 0;
             bool mapped = false, apo = false;
             double top = 0;
@@ -204,7 +253,9 @@ namespace OpenSpaceExplorer.Validation
                 top = Math.Max(top, alt);
                 if (k < marks.Length && alt >= marks[k]) { yield return Shot(names[k]); k++; }
                 if (!apo && vessel.VerticalSrfSpeed < 0 && alt > 1000) { apo = true; Mark("apoapsis " + top.ToString("F1", CultureInfo.InvariantCulture)); }
-                if (apo && !mapped && alt < 30000 && top > 31000)
+                if (scenario == "visuals" && apo && !re40 && alt < 40000) { re40 = true; yield return Shot("v5-reentry-40km"); }
+                if (scenario == "visuals" && apo && !re25 && alt < 25000) { re25 = true; yield return Shot("v5-reentry-25km"); }
+                if (scenario != "visuals" && apo && !mapped && alt < 30000 && top > 31000)
                 {
                     mapped = true;
                     G.GlobalGameState.SetState(GameState.Map3DView);
@@ -364,6 +415,42 @@ namespace OpenSpaceExplorer.Validation
             yield return Shot("12-rover");
             Stop();
             Mark("finished rover");
+            File.WriteAllText(Path.Combine(dir, "out", "done.txt"), "ok");
+            yield return new WaitForSeconds(3f);
+            Application.Quit();
+        }
+
+        // T19/T20 EVA: launch, the first crew member steps out of the pod, then (camera fixed) walks forward 6 s,
+        // stands 3 s, jumps, stands 4 s, walks back 4 s; logs the Kerbal vessel.
+        IEnumerator Eva(VesselComponent vessel)
+        {
+            G.ViewController.flightInputHandler.OverrideInputThrottleCutoff(true);
+            yield return new WaitForSeconds(3f);
+            PartBehavior pod = null;
+            foreach (var part in vessel.SimulationObject.PartOwner.Parts)
+                if (part.Name.StartsWith("pod_") && G.SpaceSimulation.TryGetViewObject(part.SimulationObject, out var view)) { pod = view.GetComponent<PartBehavior>(); break; }
+            Mark("pod " + (pod != null));
+            bool ok = pod != null && EVAUtils.TryStartEVA(pod, 0);
+            Mark("TryStartEVA " + ok);
+            float t = 0;
+            VesselComponent kerbal = null;
+            while (t < 30) { t += Time.deltaTime; kerbal = G.ViewController.GetActiveSimVessel(); if (kerbal != null && kerbal.IsKerbalEVA) break; yield return null; }
+            Mark("kerbal active " + (kerbal != null && kerbal.IsKerbalEVA) + " situation " + kerbal?.Situation + " mass " + kerbal?.totalMass);
+            yield return new WaitForSeconds(5f);
+            yield return Shot("13-eva");
+            Begin(kerbal, "eva-trace.csv");
+            yield return new WaitForSeconds(1f);
+            Mark("walk forward"); InputHolder.Z = -1f; yield return new WaitForSeconds(6f);
+            InputHolder.Z = 0f; Mark("stand"); yield return new WaitForSeconds(3f);
+            Mark("jump");
+            FlightInputHandler.OverrideInputStage(true); yield return null; yield return new WaitForFixedUpdate();
+            FlightInputHandler.OverrideInputStage(false);
+            yield return new WaitForSeconds(4f);
+            Mark("walk back"); InputHolder.Z = 1f; yield return new WaitForSeconds(4f);
+            InputHolder.Z = 0f; yield return new WaitForSeconds(2f);
+            yield return Shot("14-eva-end");
+            Stop();
+            Mark("finished eva");
             File.WriteAllText(Path.Combine(dir, "out", "done.txt"), "ok");
             yield return new WaitForSeconds(3f);
             Application.Quit();
