@@ -2203,8 +2203,12 @@ impl Universe {
                 && p.rotation_input.length_squared() == 0.0
                 && p.roll_input == 0.0
                 && p.rcs.translate.length_squared() == 0.0
-                && (p.attitude != flight::Attitude::Free
-                    || (p.angvel.length() < 1e-5 && p.roll_rate.abs() < 1e-5));
+                // a spinning craft stays under power until it is still, SAS holding or not: going on rails
+                // would freeze its spin (KSP2 keeps the active craft in physics while SAS damps it)
+                && {
+                    let still = if p.attitude == flight::Attitude::Free { 1e-5 } else { 1e-4 };
+                    p.angvel.length() < still && p.roll_rate.abs() < still
+                };
             self.world
                 .entity_mut(e)
                 .insert(bodies::OnRails(orbit))
@@ -4022,6 +4026,57 @@ mod tests {
         let q = u.powered(v).unwrap();
         let up = q.r.normalized();
         assert!(q.v.dot(up) > p.v.dot(up), "still climbing on the lit stage");
+    }
+
+    #[test]
+    fn a_spinning_craft_stays_in_physics_while_sas_damps_it() {
+        // KSP2 trace T5: SAS takes about 2 s to stop a 1 rad/s spin and wobbles on; going on rails mid-spin
+        // froze it at once instead
+        let (mut u, body, spec, st) = k1_on_real_kerbin();
+        let v = u.spawn_vessel_in_circular_orbit("K1", body, 100_000.0);
+        let mut p = flight::Powered::new(
+            spec,
+            DVec3::new(700_000.0, 0.0, 0.0),
+            DVec3::new(0.0, 2_246.0, 0.0),
+            false,
+        );
+        p.facing = DVec3::new(0.0, 1.0, 0.0);
+        // long coasting already: the rails hand-off is due as soon as the craft allows it
+        p.coasting_since = Some(-60.0);
+        u.set_powered(v, p);
+        u.set_structure(v, st);
+        u.step();
+        let mut q = u.powered(v).unwrap().clone();
+        q.angvel = DVec3::new(0.3, 0.0, 0.0);
+        q.attitude = flight::Attitude::Fixed(q.facing);
+        q.coasting_since = Some(-60.0);
+        u.set_powered(v, q);
+        let spin = |u: &Universe| {
+            u.powered(v)
+                .map(|p| (p.angvel + p.facing * p.roll_rate).length())
+        };
+        u.step();
+        let first = spin(&u).expect("still under power while it spins");
+        assert!(first > 0.25, "the spin is damped, not dropped: {first}");
+        let mut last = first;
+        for i in 0..(10 * TICKS_PER_SECOND) {
+            u.step();
+            match spin(&u) {
+                Some(w) => {
+                    // SAS settles it (it may wobble a little, as KSP2's does) and never adds spin
+                    assert!(w <= first, "{w} above the spin it started with");
+                    if i == 3 * TICKS_PER_SECOND {
+                        assert!(w < 0.5 * first, "SAS is taking the spin out: {w}");
+                    }
+                    last = w;
+                }
+                // on rails only once it is still
+                None => {
+                    assert!(last < 1e-3, "went on rails spinning at {last} rad/s");
+                    break;
+                }
+            }
+        }
     }
 
     #[test]
