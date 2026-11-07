@@ -309,6 +309,8 @@ impl KscView {
         } else {
             DVec3::new(0.2, 1.0, 0.1)
         };
+        // Soft occlusion where buildings meet the ground and in their recesses (SBS-V4).
+        gpu.set_ao(0.6);
         // Buildings, the tower and the dish cast the sun's shadows over the campus around the view.
         if elev > 0.0 {
             gpu.set_shadow(
