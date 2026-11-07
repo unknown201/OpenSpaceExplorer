@@ -801,6 +801,8 @@ pub struct Renderer {
     shadow_u: ([[f32; 4]; 4], [f32; 4]),
     /// Seconds for animated surfaces, set with the camera.
     anim_s: f32,
+    /// Builds every mesh texture's mip chain on upload.
+    mip: crate::planet::Mipmapper,
     /// Screen-space ambient occlusion (ssao.rs) and this frame's strength (0 off; `set_ao` after `set_camera`).
     ssao: crate::ssao::Ssao,
     ao_strength: f32,
@@ -1370,6 +1372,7 @@ impl Renderer {
         let engine_fx =
             crate::engine_fx_gpu::EngineFxGpu::new(&device, &queue, &depth, &post.snapshot_view);
         let lens_flare = crate::lens_flare::LensFlare::new(&device, &depth);
+        let mip = crate::planet::Mipmapper::new(&device);
         let ssao = crate::ssao::Ssao::new(&device, &depth, width, height);
         Some(Renderer {
             software_adapter,
@@ -1392,6 +1395,7 @@ impl Renderer {
             shadow_sampler,
             shadow_u: ([[0.0; 4]; 4], [0.0; 4]),
             anim_s: 0.0,
+            mip,
             ssao,
             ao_strength: 0.0,
             fov_y: 1.0,
@@ -1768,11 +1772,14 @@ impl Renderer {
             height: h,
             depth_or_array_layers: 1,
         };
+        // A full mip chain: without one, every texture seen from far away (the campus from the KSC camera, a
+        // craft's parts from the chase camera) samples a few scattered texels per pixel and sparkles as the
+        // camera moves.
         let mips = (32 - w.max(h).leading_zeros()).max(1);
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("image"),
             size,
-            mip_level_count: 1,
+            mip_level_count: mips,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: if linear {
@@ -1785,9 +1792,9 @@ impl Renderer {
                 | wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
-        let _ = mips;
         // Software WebGPU adapters cannot always import a decoded bitmap's backing image. Upload
         // readable RGBA bytes there; hardware adapters retain the direct GPU-copy path.
+        let mut uploaded = false;
         if self.software_adapter {
             if let Some(pixels) = bitmap_pixels(bitmap) {
                 self.queue.write_texture(
@@ -1800,25 +1807,29 @@ impl Renderer {
                     },
                     size,
                 );
-                return texture.create_view(&wgpu::TextureViewDescriptor::default());
+                uploaded = true;
             }
         }
-        self.queue.copy_external_image_to_texture(
-            &wgpu::CopyExternalImageSourceInfo {
-                source: wgpu::ExternalImageSource::ImageBitmap(bitmap.clone()),
-                origin: wgpu::Origin2d::ZERO,
-                flip_y: false,
-            },
-            wgpu::CopyExternalImageDestInfo {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-                color_space: wgpu::PredefinedColorSpace::Srgb,
-                premultiplied_alpha: false,
-            },
-            size,
-        );
+        if !uploaded {
+            self.queue.copy_external_image_to_texture(
+                &wgpu::CopyExternalImageSourceInfo {
+                    source: wgpu::ExternalImageSource::ImageBitmap(bitmap.clone()),
+                    origin: wgpu::Origin2d::ZERO,
+                    flip_y: false,
+                },
+                wgpu::CopyExternalImageDestInfo {
+                    texture: &texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                    color_space: wgpu::PredefinedColorSpace::Srgb,
+                    premultiplied_alpha: false,
+                },
+                size,
+            );
+        }
+        self.mip
+            .generate(&self.device, &self.queue, &texture, mips, 1);
         texture.create_view(&wgpu::TextureViewDescriptor::default())
     }
 

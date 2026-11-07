@@ -1773,6 +1773,17 @@ impl PlanetRenderer {
         b.luts.iter().all(|l| l.is_some())
     }
 
+    /// Whether a body with an atmosphere is still waiting for its atmosphere tables: until they arrive its sky
+    /// draws black with stars (the KSC view keeps its own sky until then).
+    pub fn atmosphere_pending(&self, id: &str) -> bool {
+        self.bodies.get(id).is_none_or(|b| {
+            b.info
+                .as_ref()
+                .is_none_or(|i| i.get("atmosphere").is_some())
+                && !Self::atmosphere_ready(b)
+        })
+    }
+
     fn rebind(&mut self, id: &str) {
         let b = &self.bodies[id];
         let get = |t: Tex| b.tex.get(&t).unwrap_or(&self.defaults[&t]);
@@ -3273,7 +3284,8 @@ impl ExtraPass for PlanetRenderer {
 }
 
 /// Mipmap generation by repeated half-size blits (WebGPU has no built-in).
-struct Mipmapper {
+/// Fills a texture's mip chain from its level 0 by successive linear downsampling (also used by render.rs).
+pub(crate) struct Mipmapper {
     shader: wgpu::ShaderModule,
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
@@ -3295,7 +3307,7 @@ struct O { @builtin(position) p: vec4<f32>, @location(0) uv: vec2<f32> };
 "#;
 
 impl Mipmapper {
-    fn new(device: &wgpu::Device) -> Mipmapper {
+    pub(crate) fn new(device: &wgpu::Device) -> Mipmapper {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("mip"),
             source: wgpu::ShaderSource::Wgsl(MIP_SHADER.into()),
@@ -3335,7 +3347,7 @@ impl Mipmapper {
         }
     }
 
-    fn generate(
+    pub(crate) fn generate(
         &self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,

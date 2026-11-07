@@ -1128,7 +1128,9 @@ impl FlightView {
             occluders: &[],
             sun_radius_rad: 0.0047,
         };
-        if !planet.prepare(gpu, &view) {
+        // Not until the atmosphere tables are in as well: before they arrive the sky draws black with stars
+        // over the campus (the scripted pilot's KSC shot right after loading).
+        if !planet.prepare(gpu, &view) || planet.atmosphere_pending("Kerbin") {
             return None;
         }
         let items = planet.scatter_items(gpu, &view);
