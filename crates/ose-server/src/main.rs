@@ -3175,7 +3175,11 @@ fn launch_craft(
     if !spec.stages.is_empty() {
         if let Some((_, _, orbit)) = u.vessel(e) {
             let (r, v) = orbit.state_at(u.ut());
-            u.set_dormant(e, ose_sim::flight::Powered::new(spec, r, v, false));
+            let mut p = ose_sim::flight::Powered::new(spec, r, v, false);
+            // nothing is active until the first stage press, in orbit as on the pad: otherwise the
+            // first stage's solid boosters would light the moment the craft appears
+            p.ignited = false;
+            u.set_dormant(e, p);
             u.set_craft(e, craft.clone());
             u.set_structure(
                 e,
