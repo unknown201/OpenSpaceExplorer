@@ -154,6 +154,16 @@ stopped falling for 1 s.
 | Stage-1 burnout altitude | 75.9 km | 73.7 km | -2.9% |
 | Speed at T+150 s | 1,916 m/s | 1,878 m/s | -2.0% |
 
+**Driving delta (T16), run 8.** Stock Inquisitive Rover on the pad; KSP2 trace `reference/ksp2-run8-rover/`.
+
+| Channel | KSP2 | OSE | Delta |
+|---|---|---|---|
+| Speed at +1 / +2 / +4 / +7 s of full throttle | 1.8 / 3.3 / 5.9 / 7.8 m/s | 4.1 / 6.7 / 9.0 / 10.0 m/s | **about 2x** |
+| Speed after 15 s | 9.8 m/s | 11.9-12.7 m/s (ripples) | **+21-29%** |
+| Brakes from about 10 m/s to a stop | about 1.5 s | about 1 s | close |
+| Half throttle, full steer, 10 s | 1.2 to 2.5 m/s, yaw up to 1.33 rad/s | 5.4 to 9.0 m/s, heading turns up to 3.2 rad/s | **too fast** |
+| Yaw after the steering is released | decays over about 3 s | stops at once | **instant** |
+
 Other findings from these runs: OSE ignites a craft's solid boosters by themselves when it is launched straight into
 orbit (stock K2 via `LaunchSavedCraft` burns its four SRBs at stage 0 with the throttle at 0). These rows are with
 the sim thread.
@@ -171,7 +181,7 @@ P2 completeness.
 | T2 | Drag and Mach model (surface area, drag cubes) | P0 | Run 1 coast and fall; run 4 hop | speed vs altitude on descent within 5% | **verified** (apoapsis -0.3%, 8.5 km fall +2.0%, subsonic fall +0.8%, air density -0.15%) |
 | T3 | Mass and CoM shift as fuel drains | P0 | Run 1 with CoM logged | CoM along the stack vs fuel fraction within 2 cm | not traced |
 | T4 | Crossfeed and fuel-flow order, staging, decouplers | P0 | Stock Kerbal K1 (boosters, decouplers, 5 stages) | mass and speed vs time per stage | **failing**: +232 kg in the lower stages, solid booster thrust curve (+17% early, -3.7% late); with the sim thread |
-| T5 | SAS hold, reaction wheels, torque | P0 | Pod with wheel: step pitch input 1 s, release, SAS on | attitude and angular rate vs time within 5% | wheel torque **verified** (+2% pitch, about +5% yaw/roll); SAS **failing** (stops instantly instead of in about 2 s), with the sim thread |
+| T5 | SAS hold, reaction wheels, torque | P0 | Pod with wheel: step pitch input 1 s, release, SAS on | attitude and angular rate vs time within 5% | **verified**: wheel torque +2% pitch, about +5% yaw/roll; SAS damping matches after PR 41 (sim thread replay within 1% at +1, +2, +8 s; rerun here shows the 2 s stop and wobble) |
 | T6 | Gimbal response | P0 | Engine gimbal step under SAS | gimbal angle and body rate vs time | not traced |
 | T7 | Input response and precision mode | P0 | Keyboard pitch hold, CapsLock precision, trim | rate build-up and latency per tick | full-input step **verified** with T5; precision and trim not traced |
 | T8 | Orbits, SOI changes, time warp (rails and physics) | P0 | 100 km orbit, warp x100, Mun encounter | apsides after warp, SOI exit time within 1 s | not traced |
@@ -182,7 +192,7 @@ P2 completeness.
 | T13 | Joints, flex, wobble, struts | P1 | Tall 6-tank stack under full thrust and roll | top-part deflection vs time, break threshold | not traced |
 | T14 | Collisions, crash tolerance, part breakage | P1 | Drop pod on pad at 5, 10, 15 m/s | survive/destroy per part matches | not traced |
 | T15 | Landing legs and ground contact | P1 | Lander touching down at 3 m/s | suspension travel, bounce, settle time | not traced |
-| T16 | Wheels and driving | P1 | Stock rover: full throttle 20 s, brake, steer | speed vs time, stopping distance, turn radius | not traced |
+| T16 | Wheels and driving | P1 | Stock Inquisitive Rover: full wheel throttle 15 s, coast 3 s, brakes 8 s, half throttle full steer 10 s | speed vs time, stopping, yaw rate | **failing**: about 2x acceleration, top speed 12.7 vs 9.8 m/s, turn 5.4-9.0 vs 1.2-2.5 m/s and up to 3.2 vs 1.33 rad/s, yaw stops instantly on release; brakes match. Rover mass 0.977 vs 0.924 t |
 | T17 | RCS translation and rotation | P1 | Stock KSS Hub: 2 s forward, 2 s right, 1 s pitch | monoprop use, rate | **verified** (fuel within 2%, pitch rate 0%); craft mass +3.4% is with the sim thread |
 | T18 | Docking | P1 | Two ports approaching at 0.3 m/s | capture distance, merged mass and CoM | not traced |
 | T19 | EVA exit, ladders | P1 | Kerbal exits Tin Can on the pad, climbs ladder | exit position, climb speed | not traced |
