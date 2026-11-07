@@ -1773,6 +1773,14 @@ impl PlanetRenderer {
         b.luts.iter().all(|l| l.is_some())
     }
 
+    /// Whether a body with an atmosphere is still waiting for its atmosphere tables: until they arrive its sky
+    /// draws black with stars (the KSC view keeps its own sky until then).
+    pub fn atmosphere_pending(&self, id: &str) -> bool {
+        self.bodies.get(id).is_none_or(|b| {
+            b.info.as_ref().is_none_or(|i| i.get("atmosphere").is_some()) && !Self::atmosphere_ready(b)
+        })
+    }
+
     fn rebind(&mut self, id: &str) {
         let b = &self.bodies[id];
         let get = |t: Tex| b.tex.get(&t).unwrap_or(&self.defaults[&t]);
