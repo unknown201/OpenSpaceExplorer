@@ -1777,7 +1777,10 @@ impl PlanetRenderer {
     /// draws black with stars (the KSC view keeps its own sky until then).
     pub fn atmosphere_pending(&self, id: &str) -> bool {
         self.bodies.get(id).is_none_or(|b| {
-            b.info.as_ref().is_none_or(|i| i.get("atmosphere").is_some()) && !Self::atmosphere_ready(b)
+            b.info
+                .as_ref()
+                .is_none_or(|i| i.get("atmosphere").is_some())
+                && !Self::atmosphere_ready(b)
         })
     }
 
