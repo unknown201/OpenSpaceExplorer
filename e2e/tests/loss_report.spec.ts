@@ -8,8 +8,14 @@ test("a lost vessel's report offers the reverts and Revert to Launch flies again
   await page.goto(baseURL!);
   await page.locator('[data-ose="player-name"]').fill("crash pilot");
   await page.locator('[data-ose="play"]').click();
-  // The live campaign, as the other tests join it.
-  await page.locator('[data-ose="session-join"]').first().click();
+  // A Sandbox campaign of its own: every part, and nobody else online to block the reverts.
+  await page.locator('[data-ose="session-join"]').first().waitFor();
+  if (!(await page.locator("#create-name").isVisible())) {
+    await page.locator("#create-details > summary").click();
+  }
+  await page.selectOption("#create-mode", "Sandbox");
+  await page.fill("#create-name", "loss report");
+  await page.locator('[data-ose="create"]').click();
   await page.locator('[data-ose="ksc-vab"]').click();
   await page.locator('[data-ose="vab-clear"]').click();
   for (const part of ["Tin Can", "FL-T400", "LV-T45"]) {
@@ -50,7 +56,7 @@ test("a lost vessel's report offers the reverts and Revert to Launch flies again
   await expect(page.locator("#flight-report")).not.toHaveClass(/open/);
   await expect(flight).not.toHaveAttribute("data-ose-situation", "Crashed");
   await expect(page.locator('[data-ose="flight"].open')).toBeVisible();
-  // Leave the pad clear for the tests that join this campaign after us.
+  // Leave the pad clear.
   await page.keyboard.press("Escape");
   await page.locator('[data-ose="to-recover"]').click();
   await expect(page.locator('[data-ose="flight"].open')).toBeHidden();
