@@ -1473,7 +1473,8 @@ fn terrain_index() -> ose_data::terrain::TerrainIndex {
 /// scene's launch pad 1 spawn on the pad site, turned by the yaw that lines pads 2 to 4 up with their
 /// offsets in the campus model (pad 1's install site is some 850 m off the layout, so it does not set the
 /// yaw), rigid and unscaled. Its spawn points and flat areas (scene coordinates, glTF axes) follow.
-const KSC_ANCHOR: (f64, f64, f64) = (-0.6836, -74.8198, 115.2);
+/// (pad 1's site stands at 115.2 m in KSP2's data, but KSP2 stands craft `KSP2_PAD_DROP_M` lower: 110.0 m)
+const KSC_ANCHOR: (f64, f64, f64) = (-0.6836, -74.8198, 110.0);
 const KSC_YAW_DEG: f64 = 0.0410;
 const KSC_SPAWNS: [(&str, &str, bool, [f64; 3]); 5] = [
     (

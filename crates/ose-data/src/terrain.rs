@@ -256,9 +256,14 @@ impl Overlay {
     }
 }
 
-/// Flatten a disc around each launch pad, held at the pad's altitude. Other sites (base anchors such as
-/// `kerbin_KSC_Object` at 221.7 m) are reference points, not ground: a disc there stood 100 m above the KSC
-/// campus, so they get none. The ground around them comes from the map and, with a pack, the decals.
+/// How far below its LocalSimObjectsData site KSP2 actually stands a launch pad: a Mk1 pod, FL-T200 and LV-T45
+/// on pad 1 reads 111.9 m in KSP2 (reference/ksp2-run3, PreLaunch) and 117.1 m here with the site's 115.2 m.
+pub const KSP2_PAD_DROP_M: f64 = 5.2;
+
+/// Flatten a disc around each launch pad, held at the pad's altitude (its site's, less `KSP2_PAD_DROP_M`).
+/// Other sites (base anchors such as `kerbin_KSC_Object` at 221.7 m) are reference points, not ground: a disc
+/// there stood 100 m above the KSC campus, so they get none. The ground around them comes from the map and,
+/// with a pack, the decals.
 pub(crate) fn flats_for(sites: &[Site]) -> Vec<Flat> {
     sites
         .iter()
@@ -268,7 +273,7 @@ pub(crate) fn flats_for(sites: &[Site]) -> Vec<Flat> {
             lon_deg: s.lon_deg,
             radius_m: 250.0,
             falloff_m: 800.0,
-            altitude_m: s.altitude_m,
+            altitude_m: s.altitude_m - KSP2_PAD_DROP_M,
         })
         .collect()
 }
@@ -483,12 +488,13 @@ mod tests {
             altitude_m: 120.0,
         };
         let m = map(64, 32, |_, _| 0, vec![pad], false);
-        assert!((m.height_m(0.0, 0.0) - 120.0).abs() < 1e-9);
+        // (KSP2 stands craft KSP2_PAD_DROP_M below a pad's site)
+        assert!((m.height_m(0.0, 0.0) - (120.0 - KSP2_PAD_DROP_M)).abs() < 1e-9);
         // 2 km away (beyond 250 + 800 m) the map is back
         let deg = 2_000.0 / (std::f64::consts::PI / 180.0 * 100_000.0);
         let far = m.height_m(0.0, deg);
         assert!((far + 500.0).abs() < 1e-6, "far {far}");
-        assert!(m.max_m >= 120.0);
+        assert!(m.max_m >= 120.0 - KSP2_PAD_DROP_M);
     }
 
     #[test]
@@ -497,7 +503,7 @@ mod tests {
         assert!(Overlay::for_body("Mun").is_none());
         // the plateau between the launch pad and the VAB is the campus height
         let pad = o.sample(-0.66, -74.80).unwrap();
-        assert!((pad - 107.0).abs() < 5.0, "{pad}");
+        assert!((pad - 101.8).abs() < 5.0, "{pad}");
         // nothing far from the KSC
         assert!(o.sample(10.0, 10.0).is_none());
         // the ground is the higher of the two
