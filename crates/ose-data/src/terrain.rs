@@ -565,6 +565,18 @@ mod tests {
     }
 
     #[test]
+    fn the_campus_ground_carries_ksp2s_sand_rim() {
+        let o = Overlay::for_body("Kerbin").expect("embedded KSC ground");
+        assert_eq!(o.sand.len(), o.width * o.height);
+        // a third of the grid is beach, none of it far away
+        let sandy = o.sand.iter().filter(|&&v| v > 128).count() as f64 / o.sand.len() as f64;
+        assert!(sandy > 0.15 && sandy < 0.6, "{sandy}");
+        assert_eq!(o.sample_sand(10.0, 10.0), 0.0);
+        // the launch pad's plateau is grass, not sand
+        assert!(o.sample_sand(-0.6836, -74.8198) < 0.3);
+    }
+
+    #[test]
     fn the_campus_grounds_highest_point_nearby_bounds_the_ground_between_samples() {
         let o = Overlay::for_body("Kerbin").expect("embedded KSC ground");
         let r: f64 = 600_000.0;
