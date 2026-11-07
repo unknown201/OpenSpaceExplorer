@@ -154,6 +154,22 @@ pub enum Attitude {
     AntiTarget(DVec3),
 }
 
+impl Attitude {
+    /// Holds whose direction turns with the orbit: the craft turns once an orbit to keep them.
+    pub fn follows_the_orbit(&self) -> bool {
+        matches!(
+            self,
+            Attitude::Up
+                | Attitude::SurfacePrograde
+                | Attitude::SurfaceRetrograde
+                | Attitude::OrbitPrograde
+                | Attitude::OrbitRetrograde
+                | Attitude::RadialOut
+                | Attitude::RadialIn
+        )
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Situation {
     Landed,
