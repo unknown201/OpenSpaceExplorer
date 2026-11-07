@@ -108,14 +108,55 @@ later than KSP2's, which accounts for most of the early lead.
 | Speed falling through 8.5 km | 1,323.0 m/s | 1,349.8 m/s | +2.0% |
 | Pad altitude (sea level) | 111.9 m | 118.1 m | +6.2 m (SBS-P3) |
 
-**Rotation delta (T5/T7), run 2.** Same craft in a 200 km orbit, SAS off, full input for 1 s on pitch, then yaw,
-then roll (4 s apart), then SAS on in stability mode.
+**Rotation delta (T5/T7), run 7.** Same craft in a 200 km orbit, SAS off, full input for 1 s on pitch, then yaw,
+then roll (4 s apart), then SAS on in stability mode. Run 2 is void: KSP2's input handler consumes an override once
+per frame while a frame holds two or three physics ticks, so the held input reached only 64% of the ticks. The pilot
+now re-applies held inputs before the handler on every physics tick (`InputHolder`).
 
 | Channel | KSP2 | OSE | Delta |
 |---|---|---|---|
-| Pitch rate after 1 s of full pitch | 0.301 rad/s | 0.479 rad/s | **+59%** |
-| Yaw rate after 1 s of full yaw | 0.299 rad/s | about 0.49 rad/s | **+64%** |
-| Time for SAS to stop the tumble | about 2.0 s, then a 0.05-0.07 rad/s wobble that dies out over about 10 s | under 0.5 s, then exactly 0 | **SAS stops instantly** |
+| Pitch rate after 1 s of full pitch | 0.469 rad/s | 0.479 rad/s | +2.1% |
+| Yaw added by 1 s of full yaw | about 0.47 rad/s | about 0.49 rad/s | about +5% |
+| Roll after 1 s of full roll (total rate) | 1.66 rad/s | about 1.74 rad/s | about +5% |
+| SAS (stability) stopping a 1.66 rad/s tumble | 0.38 rad/s after 1 s, 0.09 after 2 s, then a 0.03-0.07 rad/s wobble for 10+ s | 0 within 0.5 s | **SAS stops instantly** |
+
+**RCS delta (T17), run 6.** Stock KSS Hub in a 200 km orbit, SAS off, RCS on, translate forward 2 s, right 2 s,
+then pitch 1 s (inputs held every tick).
+
+| Channel | KSP2 | OSE | Delta |
+|---|---|---|---|
+| Craft mass | 28.545 t | 29.505 t | **+0.96 t (+3.4%)** |
+| Monopropellant, 2 s forward | 13.73 kg | 13.60 kg | -0.9% |
+| Monopropellant, 2 s right | 8.29 kg | 8.12 kg | -2.0% |
+| Monopropellant, 1 s RCS pitch | 4.47 kg | 4.40 kg | -1.6% |
+| Yaw induced by the right translation | 0.0812 rad/s | 0.0739 rad/s | -9% (heavier craft) |
+| Pitch rate after 1 s (RCS + wheels) | 0.273 rad/s | 0.273 rad/s | 0.0% |
+
+**Hop and parachute delta (T2 subsonic, T12), run 4.** Same craft as run 1: 8 s at full throttle, cut, parachute
+staged below 2.5 km.
+
+| Channel | KSP2 | OSE | Delta |
+|---|---|---|---|
+| Apoapsis | 4,217 m | 4,420 m | +4.8% (OSE cut about 0.2 s later, pad 6 m higher) |
+| Fastest fall before the canopy | 228.2 m/s at 1,051 m | 230.0 m/s at 1,095 m | +0.8% |
+| Canopy slows the craft below 100 m/s at | 680 m | 703 m | +3.4% |
+| Descent under the canopy, 100 m / 5 m above ground | 10.16 / 10.10 m/s | 10.10 / 10.04 m/s | -0.6% |
+| Air density at the ground | 1.2090 kg/m3 | 1.2072 kg/m3 | -0.15% |
+
+**Staging delta (T4), run 5.** Stock Kerbal K1 straight up, SAS on, full throttle, next stage each time the mass has
+stopped falling for 1 s.
+
+| Channel | KSP2 | OSE | Delta |
+|---|---|---|---|
+| Mass on the pad | 27.112 t | 27.344 t | **+232 kg** |
+| Mass at stage-1 burnout | 9.872 t | 10.148 t | **+276 kg** (gone after the decouplers drop: 4.108 vs 4.123 t) |
+| Speed at T+5 s / T+40 s | 120.6 / 890.5 m/s | 141.8 / 858.2 m/s | **+17% / -3.7%** (solid booster thrust curve) |
+| Stage-1 burnout altitude | 75.9 km | 73.7 km | -2.9% |
+| Speed at T+150 s | 1,916 m/s | 1,878 m/s | -2.0% |
+
+Other findings from these runs: OSE ignites a craft's solid boosters by themselves when it is launched straight into
+orbit (stock K2 via `LaunchSavedCraft` burns its four SRBs at stage 0 with the throttle at 0). These rows are with
+the sim thread.
 
 ## Parity checklist (trace-verified)
 
@@ -127,22 +168,22 @@ P2 completeness.
 | # | System | Pri | KSP2 scenario to trace | Compared channels and tolerance | Status |
 |---|---|---|---|---|---|
 | T1 | Thrust, Isp vs pressure, fuel burn | P0 | Run 1 craft, full throttle from the pad | mass(t), thrust, burn time; burnout altitude/speed within 2% | **verified** (mass flow and burn time within 0.3%, peak speed -0.2%) |
-| T2 | Drag and Mach model (surface area, drag cubes) | P0 | Run 1 coast and fall; a blunt pod falling from 30 km | speed vs altitude on descent, terminal speed at 5 km within 5% | **verified at high Mach** (apoapsis -0.3%, 8.5 km fall speed +2.0%); subsonic terminal speed still to trace |
+| T2 | Drag and Mach model (surface area, drag cubes) | P0 | Run 1 coast and fall; run 4 hop | speed vs altitude on descent within 5% | **verified** (apoapsis -0.3%, 8.5 km fall +2.0%, subsonic fall +0.8%, air density -0.15%) |
 | T3 | Mass and CoM shift as fuel drains | P0 | Run 1 with CoM logged | CoM along the stack vs fuel fraction within 2 cm | not traced |
-| T4 | Crossfeed and fuel-flow order, staging, decouplers | P0 | Two-stage stack with a decoupler, radial tanks with fuel lines | per-tank amounts vs time, separation impulse | not traced |
-| T5 | SAS hold, reaction wheels, torque | P0 | Pod with wheel: step pitch input 1 s, release, SAS on | attitude and angular rate vs time within 5% | **failing**: rate +59-64% per second of input; SAS stops the spin instantly instead of in about 2 s |
+| T4 | Crossfeed and fuel-flow order, staging, decouplers | P0 | Stock Kerbal K1 (boosters, decouplers, 5 stages) | mass and speed vs time per stage | **failing**: +232 kg in the lower stages, solid booster thrust curve (+17% early, -3.7% late); with the sim thread |
+| T5 | SAS hold, reaction wheels, torque | P0 | Pod with wheel: step pitch input 1 s, release, SAS on | attitude and angular rate vs time within 5% | wheel torque **verified** (+2% pitch, about +5% yaw/roll); SAS **failing** (stops instantly instead of in about 2 s), with the sim thread |
 | T6 | Gimbal response | P0 | Engine gimbal step under SAS | gimbal angle and body rate vs time | not traced |
-| T7 | Input response and precision mode | P0 | Keyboard pitch hold, CapsLock precision, trim | rate build-up and latency per tick | full-input step traced with T5 (failing with it); precision and trim not traced |
+| T7 | Input response and precision mode | P0 | Keyboard pitch hold, CapsLock precision, trim | rate build-up and latency per tick | full-input step **verified** with T5; precision and trim not traced |
 | T8 | Orbits, SOI changes, time warp (rails and physics) | P0 | 100 km orbit, warp x100, Mun encounter | apsides after warp, SOI exit time within 1 s | not traced |
 | T9 | Maneuver node execution | P1 | Prograde 100 m/s node, burn by node timer | resulting apsides within 1% | not traced |
 | T10 | Control surfaces and lift | P1 | Stock jet takeoff roll and pitch-up | lift vs AoA and speed, rotation speed | not traced |
 | T11 | Heating and reentry | P1 | Pod reentering from 100 km x 30 km orbit | skin temperature vs time, ablator use | not traced |
-| T12 | Parachutes | P1 | Mk16 deploy at 2.5 km over water | deploy timing, descent speed at sea level within 3% | not traced |
+| T12 | Parachutes | P1 | Mk16 staged below 2.5 km after a hop | deploy timing, descent speed at sea level within 3% | **verified** (canopy descent -0.6%, deploy altitude +3.4%) |
 | T13 | Joints, flex, wobble, struts | P1 | Tall 6-tank stack under full thrust and roll | top-part deflection vs time, break threshold | not traced |
 | T14 | Collisions, crash tolerance, part breakage | P1 | Drop pod on pad at 5, 10, 15 m/s | survive/destroy per part matches | not traced |
 | T15 | Landing legs and ground contact | P1 | Lander touching down at 3 m/s | suspension travel, bounce, settle time | not traced |
 | T16 | Wheels and driving | P1 | Stock rover: full throttle 20 s, brake, steer | speed vs time, stopping distance, turn radius | not traced |
-| T17 | RCS translation and rotation | P1 | Probe with RCS: 2 s translate, 2 s rotate | delta-v, monoprop use, rate | not traced |
+| T17 | RCS translation and rotation | P1 | Stock KSS Hub: 2 s forward, 2 s right, 1 s pitch | monoprop use, rate | **verified** (fuel within 2%, pitch rate 0%); craft mass +3.4% is with the sim thread |
 | T18 | Docking | P1 | Two ports approaching at 0.3 m/s | capture distance, merged mass and CoM | not traced |
 | T19 | EVA exit, ladders | P1 | Kerbal exits Tin Can on the pad, climbs ladder | exit position, climb speed | not traced |
 | T20 | EVA walk, run, jump | P1 | Walk 10 s, run 10 s, jump | speeds (0.8 / 2.2 m/s documented), jump height | not traced |
