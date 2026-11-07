@@ -2207,8 +2207,17 @@ impl Universe {
                 // a spinning craft stays under power until it is still, SAS holding or not: going on rails
                 // would freeze its spin (KSP2 keeps the active craft in physics while SAS damps it)
                 && {
-                    let still = if p.attitude == flight::Attitude::Free { 1e-5 } else { 1e-4 };
-                    p.angvel.length() < still && p.roll_rate.abs() < still
+                    // a hold that follows the orbit (prograde, radial, up...) turns the craft once an
+                    // orbit, and SAS chasing it jitters by a few mrad/s about that turn: still means not
+                    // turning against that frame by more than the chase does (0.3 deg/s, nothing to see)
+                    let (still, frame) = if p.attitude == flight::Attitude::Free {
+                        (1e-5, DVec3::ZERO)
+                    } else if p.attitude.follows_the_orbit() {
+                        (5e-3, p.r.cross(p.v) * (1.0 / p.r.length_squared().max(1.0)))
+                    } else {
+                        (1e-4, DVec3::ZERO)
+                    };
+                    (p.angvel - frame).length() < still && p.roll_rate.abs() < still
                 };
             self.world
                 .entity_mut(e)
@@ -4185,6 +4194,32 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_craft_holding_prograde_in_orbit_goes_back_on_rails() {
+        // holding prograde turns the craft once an orbit (3e-3 rad/s at 100 km); that is not a spin
+        let (mut u, body, spec, st) = k1_on_real_kerbin();
+        let v = u.spawn_vessel_in_circular_orbit("K1", body, 100_000.0);
+        let (r, vel) = u.vessel(v).unwrap().2.state_at(u.ut());
+        let mut p = flight::Powered::new(spec, r, vel, false);
+        p.facing = vel.normalized();
+        p.attitude = flight::Attitude::OrbitPrograde;
+        p.angvel = r.cross(vel) * (1.0 / r.length_squared());
+        u.set_powered(v, p);
+        u.set_structure(v, st);
+        for _ in 0..(60 * TICKS_PER_SECOND) {
+            u.step();
+            if u.powered(v).is_none() {
+                return;
+            }
+        }
+        let p = u.powered(v).unwrap();
+        panic!(
+            "still under power after 60 s: |w| {:.2e}, coasting since {:?}",
+            p.angvel.length(),
+            p.coasting_since
+        );
     }
 
     #[test]

@@ -1223,6 +1223,26 @@ fn fs_terrain(in: VOut) -> @location(0) vec4<f32> {
             }
         }
     }
+    // A site model's sand paint (the KSC campus ground's beaches along its shores and banks, its vertex paint
+    // alpha, planet_lod::build_quad_painted): the terrain draped over that ground shows it above the water,
+    // keeping the detail's light and shade.
+    // Beaches elsewhere: KSP2's coasts show a band of sand from the waterline a few metres up (seen from 1 to
+    // 8 km); land within that height of the sea on ocean worlds, on gentle slopes, takes it too.
+    if frame.water.y > 0.5 && in.height > 0.0 && in.height < 14.0 {
+        let flat = smoothstep(0.93, 0.985, dot(normalize(in.normal), up));
+        let beach = (1.0 - smoothstep(4.0, 14.0, in.height)) * flat;
+        let w = max(smoothstep(0.45, 0.85, in.extra), beach) * smoothstep(0.0, 1.0, in.height);
+        if w > 0.0 {
+            let shade = select(1.0, dot(dbg * 2.0, vec3<f32>(0.3, 0.5, 0.2)), dot(dbg, dbg) > 0.0);
+            let sand = vec3<f32>(0.50, 0.44, 0.33) * mix(1.0, clamp(shade, 0.6, 1.4), 0.6);
+            albedo = mix(albedo, sand, w);
+        }
+    } else if in.extra > 0.01 && in.height > 0.0 {
+        let w = smoothstep(0.45, 0.85, in.extra);
+        let shade = select(1.0, dot(dbg * 2.0, vec3<f32>(0.3, 0.5, 0.2)), dot(dbg, dbg) > 0.0);
+        let sand = vec3<f32>(0.50, 0.44, 0.33) * mix(1.0, clamp(shade, 0.6, 1.4), 0.6);
+        albedo = mix(albedo, sand, w);
+    }
 
     if surface.flags.z > 1.5 && surface.flags.z < 2.5 {
         return vec4<f32>(dbg, 1.0);
@@ -1386,7 +1406,9 @@ fn fs_ocean(in: VOut) -> @location(0) vec4<f32> {
     // Lagoons: in clear seas the sandy floor lights the shallows a bright turquoise around coasts and islands,
     // the rings the original shows even from orbit (not in murky seas such as Eve's).
     let clear = smoothstep(1.0, 10.0, surface.foam.w);
-    let lagoon = exp(-max(depth, 0.0) / clamp(2.0 * surface.deep.w, 2.0, 8.0)) * clear * (1.0 - fres * 0.6);
+    // (KSP2's turquoise reaches a few hundred metres off its beaches, out to some 20 m of water: 8 m showed only
+    // a line at the shore)
+    let lagoon = exp(-max(depth, 0.0) / clamp(2.0 * surface.deep.w, 6.0, 22.0)) * clear * (1.0 - fres * 0.6);
     let turquoise = min(surface.shallow.rgb * 2.8, vec3<f32>(0.95));
     radiance = mix(radiance, turquoise / PI * (light.sun + light.sky) * 0.9, lagoon * 0.85);
     radiance = through_air(radiance, p_km);

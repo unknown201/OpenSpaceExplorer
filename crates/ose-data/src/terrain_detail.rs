@@ -676,7 +676,7 @@ mod real_data {
                 s.name, s.altitude_m, h, raw
             );
             if s.name.to_ascii_lowercase().contains("launchpad") {
-                assert!((h - s.altitude_m).abs() < 1.0);
+                assert!((h - (s.altitude_m - crate::terrain::KSP2_PAD_DROP_M)).abs() < 1.0);
             }
         }
         let ksc = pack
