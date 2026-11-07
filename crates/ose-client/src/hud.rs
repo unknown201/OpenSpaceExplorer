@@ -1192,8 +1192,16 @@ impl FlightRecords {
     }
 }
 
-/// The flight report window: how the flight ended, its records and the science it brought home.
-pub fn flight_report_html(r: &FlightRecords, ended: &str, ut: f64, science: Option<f64>) -> String {
+/// The flight report window: how the flight ended, its records and the science it brought home. After a loss
+/// (`lost`) it offers what the original's `FlightReportUIManager.OnActiveVesselDestroyed` enables: Revert to
+/// Launch and Revert to VAB (off, with the reason, when `lost` holds one), the Tracking Station and the KSC.
+pub fn flight_report_html(
+    r: &FlightRecords,
+    ended: &str,
+    ut: f64,
+    science: Option<f64>,
+    lost: Option<Option<&str>>,
+) -> String {
     let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;");
     let row = |k: &str, v: String| format!("<tr><td>{k}</td><td>{v}</td></tr>");
     let mut rows = String::new();
@@ -1208,8 +1216,17 @@ pub fn flight_report_html(r: &FlightRecords, ended: &str, ut: f64, science: Opti
     if let Some(s) = science {
         rows.push_str(&row("Science", format!("{s:.0}")));
     }
+    let mut buttons = String::new();
+    if let Some(revert_off) = lost {
+        let off = revert_off
+            .map(|why| format!(" disabled title=\"{}\"", esc(why).replace('"', "&quot;")))
+            .unwrap_or_default();
+        buttons.push_str(&format!(
+            "<div class=\"fr-actions\"><button id=\"fr-revert-launch\" data-ose=\"fr-revert-launch\" data-save-action=\"RevertToLaunch\"{off}>Revert to Launch</button><button id=\"fr-revert-vab\" data-ose=\"fr-revert-vab\" data-save-action=\"RevertToEditor\"{off}>Revert to VAB</button><button id=\"fr-tracking\" data-ose=\"fr-tracking\">Tracking Station</button><button id=\"fr-ksc\" data-ose=\"fr-ksc\">KSC</button></div>"
+        ));
+    }
     format!(
-        "<h3>Flight report</h3><div class=\"fr-name\">{}</div><div class=\"fr-ended\">{}</div><table>{rows}</table><button id=\"fr-close\">Continue</button>",
+        "<h3>Flight report</h3><div class=\"fr-name\">{}</div><div class=\"fr-ended\">{}</div><table>{rows}</table>{buttons}<button id=\"fr-close\" data-ose=\"fr-close\">Continue</button>",
         esc(&r.name),
         esc(ended)
     )
@@ -2007,7 +2024,33 @@ mod tests {
         assert_eq!(r.bodies, vec!["Kerbin", "Mun"]);
         assert_eq!(fmt_met(3725.0), "01:02:05");
         assert_eq!(fmt_met(21_600.0 + 61.0), "1d 00:01:01");
-        assert!(flight_report_html(&r, "Recovered", 100.0, Some(12.0)).contains("Fastest speed"));
+        let recovered = flight_report_html(&r, "Recovered", 100.0, Some(12.0), None);
+        assert!(recovered.contains("Fastest speed"));
+        assert!(!recovered.contains("Revert"));
+    }
+
+    #[test]
+    fn loss_report_offers_the_reverts_and_the_way_back() {
+        let r = FlightRecords::default();
+        let html = flight_report_html(&r, "Vessel Destroyed", 0.0, None, Some(None));
+        for want in [
+            "data-save-action=\"RevertToLaunch\">Revert to Launch",
+            "data-save-action=\"RevertToEditor\">Revert to VAB",
+            ">Tracking Station<",
+            ">KSC<",
+            "id=\"fr-close\"",
+        ] {
+            assert!(html.contains(want), "{want} in {html}");
+        }
+        assert!(!html.contains("disabled"));
+        let off = flight_report_html(
+            &r,
+            "Vessel Destroyed",
+            0.0,
+            None,
+            Some(Some("revert is off")),
+        );
+        assert_eq!(off.matches(" disabled title=\"revert is off\"").count(), 2);
     }
 
     #[test]

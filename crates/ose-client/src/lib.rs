@@ -64,6 +64,8 @@ pub mod render;
 pub mod rnd;
 pub mod scene;
 pub mod settings;
+#[cfg(target_arch = "wasm32")]
+mod ssao;
 pub mod thumb;
 pub mod tracking;
 pub mod training;
@@ -175,6 +177,12 @@ struct App {
     difficulty_defs: Vec<DifficultyDefinition>,
     /// The live campaign lets every player fly every agency vessel (`Shared_Vessel_Control`).
     shared_control: bool,
+    /// The live campaign allows reverting a flight (`AllowRevert`), and another of its players is online (the
+    /// server refuses reverts then).
+    allow_revert: bool,
+    others_online: bool,
+    /// The vessel this player last launched: the server's revert points are for that launch.
+    revert_vessel: Option<u64>,
     difficulty_presets: Vec<DifficultyPreset>,
     agency_sent: bool,
     warp_holder: Option<u64>,
@@ -709,6 +717,9 @@ pub fn start() -> Result<(), JsValue> {
         launch_after_save: false,
         difficulty_defs: Vec::new(),
         shared_control: true,
+        allow_revert: true,
+        others_online: false,
+        revert_vessel: None,
         difficulty_presets: Vec::new(),
         agency_sent: false,
         warp_holder: None,
@@ -2128,7 +2139,7 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                     e.class_list().remove_1("open").ok();
                 }
             } else {
-                app.show_flight_report("In flight", None);
+                app.show_flight_report("In flight", None, None);
             }
         }),
     )?;
@@ -2811,13 +2822,34 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
     }
     if let Some(fr) = doc.get_element_by_id("flight-report") {
         let f2 = fr.clone();
+        let a = app.clone();
         let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
-            let close = ev
+            let id = ev
                 .target()
                 .and_then(|t| t.dyn_into::<Element>().ok())
-                .is_some_and(|e| e.id() == "fr-close");
-            if close {
-                f2.class_list().remove_1("open").ok();
+                .and_then(|e| e.closest("button").ok().flatten())
+                .filter(|b| !b.has_attribute("disabled"))
+                .map(|b| b.id());
+            match id.as_deref() {
+                Some("fr-close") => {
+                    f2.class_list().remove_1("open").ok();
+                }
+                // the reverts are asked for by the document's [data-save-action] listener; the report
+                // closes when the server accepts
+                Some("fr-ksc") => {
+                    f2.class_list().remove_1("open").ok();
+                    let mut app = a.borrow_mut();
+                    app.tracking_open = false;
+                    app.end_flight();
+                    app.open_ksc();
+                }
+                Some("fr-tracking") => {
+                    f2.class_list().remove_1("open").ok();
+                    let mut app = a.borrow_mut();
+                    app.end_flight();
+                    app.open_tracking();
+                }
+                _ => {}
             }
         });
         fr.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
@@ -5591,6 +5623,7 @@ impl App {
                 ..
             } => match (vessel, reason) {
                 (Some(id), _) => {
+                    self.revert_vessel = Some(id);
                     if let Some(craft_id) = self.pending_launch.take() {
                         self.start_flight(id, Some(craft_id));
                     }
@@ -5645,6 +5678,12 @@ impl App {
                 self.shared_control = !difficulty.iter().any(|d| {
                     d.id == "Shared_Vessel_Control" && d.value == DifficultyValue::Bool(false)
                 });
+                self.allow_revert = !difficulty
+                    .iter()
+                    .any(|d| d.id == "AllowRevert" && d.value == DifficultyValue::Bool(false));
+                self.others_online = members
+                    .iter()
+                    .any(|m| m.online && Some(m.player_id) != self.player_id);
                 let names: Vec<&str> = members
                     .iter()
                     .filter(|m| m.online)
@@ -5941,7 +5980,7 @@ impl App {
                     .retain(|c| !reports.iter().any(|r| r.key == c.key));
                 self.render_inventory();
                 if recovered {
-                    self.show_flight_report("Recovered", Some(earned));
+                    self.show_flight_report("Recovered", Some(earned), None);
                     self.tracking_open = false;
                     self.end_flight();
                     self.open_ksc();
@@ -6132,7 +6171,20 @@ impl App {
                     ose_net::SaveAction::RevertToEditor => "Revert to the VAB",
                 };
                 if accepted {
+                    if matches!(
+                        action,
+                        ose_net::SaveAction::QuickLoad | ose_net::SaveAction::RevertToEditor
+                    ) {
+                        self.revert_vessel = None;
+                    }
                     if action != ose_net::SaveAction::QuickSave {
+                        // a new start for the flight: the loss report and its records go
+                        if let Some(e) = self.doc.get_element_by_id("flight-report") {
+                            e.class_list().remove_1("open").ok();
+                        }
+                        self.flight_records.replace(None);
+                        self.flight_watch.replace(None);
+                        self.crash_report_due.set(None);
                         if let Some(scene) = &mut self.scene {
                             scene.reset_attitudes();
                         }
@@ -6155,6 +6207,14 @@ impl App {
                         self.catalog = cat;
                         self.paused_from.set(None);
                         self.open_vab(None);
+                        self.reset_camera();
+                    } else if let (ose_net::SaveAction::RevertToLaunch, None, Some(v)) =
+                        (action, self.flying, self.revert_vessel)
+                    {
+                        // reverted from the loss report after the wreck was gone (back at the KSC): fly the
+                        // craft back on the pad
+                        self.paused_from.set(None);
+                        self.fly_vessel_on_site(v);
                         self.reset_camera();
                     } else if action != ose_net::SaveAction::QuickSave && self.flying.is_some() {
                         // Back on the pad (or at the loaded moment): the Game Menu closes and the flight
@@ -6370,6 +6430,7 @@ impl App {
             send(ws, &ClientMessage::LeaveSession);
         }
         self.end_flight();
+        self.revert_vessel = None;
         self.in_session = false;
         self.requested_warp = 1;
         self.tracking_open = false;
@@ -7391,7 +7452,7 @@ impl App {
     }
 
     /// The flight report window for the flight's records, how it ended and the science recovered.
-    fn show_flight_report(&self, ended: &str, science: Option<f64>) {
+    fn show_flight_report(&self, ended: &str, science: Option<f64>, lost: Option<Option<&str>>) {
         let Some(r) = self.flight_records.borrow().clone() else {
             return;
         };
@@ -7399,7 +7460,7 @@ impl App {
             return;
         };
         let ut = self.time.ut_at(now_ms());
-        el.set_inner_html(&hud::flight_report_html(&r, ended, ut, science));
+        el.set_inner_html(&hud::flight_report_html(&r, ended, ut, science, lost));
         el.class_list().add_1("open").ok();
     }
 
@@ -11136,7 +11197,17 @@ impl App {
                 self.crash_report_due.set(None);
             } else if now_ms() >= due {
                 self.crash_report_due.set(None);
-                self.show_flight_report("The vessel was lost", None);
+                // the original's FailureStatus, with its reverts when the campaign and the server allow them
+                let revert_off = if !self.allow_revert {
+                    Some("Revert is off for this campaign")
+                } else if self.others_online {
+                    Some("Another player is playing this campaign")
+                } else if self.revert_vessel != Some(id) {
+                    Some("Nothing to revert to")
+                } else {
+                    None
+                };
+                self.show_flight_report("Vessel Destroyed", None, Some(revert_off));
             }
         }
         // Event toasts from what changed since the last frame.
@@ -11317,12 +11388,7 @@ impl App {
         #[cfg(target_arch = "wasm32")]
         {
             if self.flight_active() {
-                let d = flight3d::FlightView::new();
-                (
-                    self.flight3d.yaw,
-                    self.flight3d.pitch,
-                    self.flight3d.distance,
-                ) = (d.yaw, d.pitch, d.distance);
+                self.flight3d.reset_view();
                 return;
             }
             if self.in_session && self.vab_active() {

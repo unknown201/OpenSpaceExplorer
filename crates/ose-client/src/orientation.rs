@@ -111,9 +111,40 @@ impl Track {
     }
 }
 
+/// Closest and farthest the flight camera zooms (m).
+pub const MIN_DISTANCE: f64 = 4.0;
+pub const MAX_DISTANCE: f64 = 5.0e6;
+
+/// The original's starting camera distance for a vessel (BasicCameraRigSolution.UpdateDefaultGimbalStateDistance):
+/// half the craft's longest box side over tan(half the 60 degree field of view), plus its vessel-switch backoff
+/// (2.5) and padding (15 m). A three-part rocket sits about 21 m out, a 40 m launcher about 52 m.
+pub fn fit_distance(extent: DVec3) -> f64 {
+    let half = if extent.is_finite() {
+        extent.max_element().max(0.0) * 0.5
+    } else {
+        0.0
+    };
+    (half / (60f64.to_radians() * 0.5).tan() + 2.5 + 15.0).clamp(MIN_DISTANCE, MAX_DISTANCE)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flight_camera_starts_a_few_craft_lengths_out_like_the_original() {
+        // Tin Can + FL-T200 + LV-T45: about 1.25 m wide, 4 m tall.
+        let small = fit_distance(DVec3::new(1.25, 4.0, 1.25));
+        assert!((small - (2.0 * 3f64.sqrt() + 17.5)).abs() < 1e-9, "{small}");
+        // A 40 m launcher stands about 52 m out, still well inside the zoom range.
+        let big = fit_distance(DVec3::new(10.0, 40.0, 10.0));
+        assert!((51.0..53.0).contains(&big), "{big}");
+        // Nothing loaded yet (an empty box) or junk bounds: the padding alone, never NaN.
+        let empty = fit_distance(DVec3::splat(f64::NEG_INFINITY));
+        assert_eq!(empty, 17.5);
+        assert!(fit_distance(DVec3::splat(1.0e9)) <= MAX_DISTANCE);
+        assert!(fit_distance(DVec3::ZERO) >= MIN_DISTANCE);
+    }
 
     #[test]
     fn authoritative_spin_stops_prediction_after_release_despite_jitter() {
