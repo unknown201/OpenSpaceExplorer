@@ -57,7 +57,7 @@ listed here only so it is not lost.
 |---|---|---|---|---|---|
 | SBS-C1 | The flight camera starts far from the craft on the pad | Camera starts a few craft-lengths behind the vessel, which fills a good part of the screen | Camera frames the whole pad structure; a 3-part rocket is about 20 px tall at 1080p | `side-by-side/pad.jpg` | this thread (flight camera) |
 | SBS-C2 | The in-flight map opens at system scale | M opens on the active vessel: Kerbin fills the view with the trajectory and AP/PE markers on it | Opens on the full Kerbin system (Mun and Minmus orbits); Kerbin and the trajectory are a few pixels in the centre | `side-by-side/map.jpg` | this thread (map camera), confirm with UI thread |
-| SBS-C3 | VAB camera starts far from a small craft | Craft centred and filling the hall's lower third | Craft small at the right edge of the hall | `side-by-side/vab.jpg` | UI/VAB thread |
+| SBS-C3 | VAB camera starts far from a small craft | Craft centred and filling the hall's lower third | Craft small at the right edge of the hall | `side-by-side/vab.jpg` | UI/VAB thread: **done** in PR 32 (`8874924`) |
 | SBS-C4 | Input latency and control response not measured against KSP2 | Needs a trace | Needs a trace | n/a | **blocked on Josh** |
 
 ### Features
