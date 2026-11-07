@@ -333,7 +333,7 @@ def main() -> int:
     if lake_meshes and lake_mat is not None:
         import numpy as np
         from PIL import Image, ImageDraw
-        from scipy.ndimage import distance_transform_edt
+        from scipy.ndimage import binary_closing, distance_transform_edt
 
         size_px, shore_m = 2048, 140.0
         inside = Image.new("L", (size_px, size_px), 0)
@@ -349,7 +349,11 @@ def main() -> int:
             for k in range(0, len(tris), 3):
                 tri = [(uv[t][0] * size_px, uv[t][1] * size_px) for t in tris[k : k + 3]]
                 draw.polygon(tri, fill=255)
-        dist_px = distance_transform_edt(np.asarray(inside) > 0)
+        # Drawing the triangles one by one leaves one-texel gaps along shared edges (78 cracks across the two
+        # lakes); a crack reads as shore in mid-river, drawn as a bright streak of bank colour (SBS-V3). Close them
+        # before measuring (islands, far wider than 2 texels, stay open).
+        filled = binary_closing(np.asarray(inside) > 0, iterations=2) | (np.asarray(inside) > 0)
+        dist_px = distance_transform_edt(filled)
         m_per_px = float(np.mean(m_per_uv)) / size_px
         d = np.clip(dist_px * m_per_px / shore_m, 0.0, 1.0)
         img = (d * 255).astype(np.uint8)
