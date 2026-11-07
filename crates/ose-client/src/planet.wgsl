@@ -1670,7 +1670,7 @@ fn fs_far(in: FOut) -> @location(0) vec4<f32> {
     // fade in as the meshes shrink away (from 85 % of their range) and out at the far edge (dithered)
     let dither = fract(sin(dot(in.clip.xy, vec2<f32>(12.9898, 78.233))) * 43758.547);
     let fade_in = smoothstep(in.near * 0.85, in.near, dist);
-    if dither > fade_in * (1.0 - smoothstep(2000.0, 2500.0, dist)) {
+    if dither > fade_in * (1.0 - smoothstep(4000.0, 5000.0, dist)) {
         discard;
     }
     // the atlas's object-space normal (Unity: x east, y up, z north), stored in an sRGB array: back to its
