@@ -688,10 +688,11 @@ async fn hello_catalog_and_snapshots() {
                 .expect("pad vessel streamed");
             let f = v.flight.as_ref().expect("flight readout");
             assert_eq!(f.situation, ose_net::FlightSituation::Landed);
-            // KSP2's launch pad 1 stands 115.2 m above sea level (Kerbin LocalSimObjectsData); the altitude
-            // is the craft's centre of mass, which stands above the pad on its lowest part
+            // KSP2's launch pad 1 deck stands 110.0 m above sea level (its LocalSimObjectsData site's 115.2 m less
+            // the 5.2 m KSP2 stands craft below it); the altitude is the craft's centre of mass, which stands above
+            // the pad on its lowest part
             assert!(
-                f.altitude_m > 115.2 && f.altitude_m < 135.0,
+                f.altitude_m > 110.0 && f.altitude_m < 130.0,
                 "pad alt {}",
                 f.altitude_m
             );
@@ -1911,11 +1912,11 @@ async fn every_launch_site_stands_the_craft_on_the_drawn_campus() {
     // where the client draws each spawn (ksc_pose over the KSC scene), metres above sea level: a flat
     // campus on a round world stands higher off the sphere further from pad 1
     for (site, deck) in [
-        ("LaunchPad_1", 115.2),
-        ("LaunchPad_2", 120.55),
-        ("LaunchPad_3", 124.35),
-        ("LaunchPad_4", 139.15),
-        ("Runway_1", 131.48),
+        ("LaunchPad_1", 110.0),
+        ("LaunchPad_2", 115.35),
+        ("LaunchPad_3", 119.15),
+        ("LaunchPad_4", 133.95),
+        ("Runway_1", 126.28),
     ] {
         send_msg(
             &mut ws,
