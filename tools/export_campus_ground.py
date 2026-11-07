@@ -12,7 +12,11 @@ embeds it and takes the higher of terrain and overlay, so the server stands craf
 
 Writes assets/own/terrain/ksc_ground.bin (int16 decimetres, row 0 north) and ksc_ground.json (bounds, size).
 
-Usage: python tools/export_campus_ground.py [--glb assets/web/ksc/ksc.glb] [--out assets/own/terrain]
+With the KSP2 install (`--install`, default the Steam path), also ksc_ground_sand.bin: the ground mesh's vertex
+paint alpha (its `_AGrassColor` layer, the sand rim KSP2 paints round the campus along its shores and banks) on
+the same grid, uint8, so the terrain draped over that ground near the coast shows its beaches.
+
+Usage: python tools/export_campus_ground.py [--glb assets/web/ksc/ksc.glb] [--out assets/own/terrain] [--no-sand]
 """
 
 from __future__ import annotations
@@ -31,6 +35,7 @@ SITE = (-0.6836, -74.8198, 110.0)
 YAW_DEG = 0.0410
 ANCHOR = (10.088_055, -117.589_006, -2_104.040_008)
 MESHES = ("ksc_campus_VertexPaint_02", "ksc_campus_final")
+PAINTED = "ksc_campus_VertexPaint_02"
 GRID = 256
 EMPTY = -32768
 
@@ -59,6 +64,97 @@ def accessor(j, blob, i, comps, dtype):
     stride = bv.get("byteStride", item)
     raw = np.frombuffer(blob, dtype=np.uint8, count=stride * a["count"], offset=off).reshape(a["count"], stride)
     return raw[:, :item].copy().view(dtype).reshape(a["count"], comps)
+
+
+def vertex_paint(install: str):
+    """The painted ground mesh's vertex colours (n, 4) from KSP2's KSC bundle, in its vertex order (which
+    export_ksc.py keeps in ksc.glb)."""
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).parent))
+    from UnityPy.helpers.MeshHelper import MeshHandler
+
+    from export_web_assets import Exporter
+
+    ex = Exporter(Path(install), Path("."), 256, verbose=False)
+    env = ex.env("kerbin-ksc_assets_all.bundle")
+    bundle = next(iter(env.files.values()))
+    sf = next(f for f in bundle.files.values() if hasattr(f, "objects") and f.objects)
+    for o in sf.objects.values():
+        if o.type.name != "Mesh":
+            continue
+        try:
+            m = o.read()
+        except Exception:  # noqa: BLE001 (meshes in Unity's built-in resources)
+            continue
+        if m.m_Name == PAINTED:
+            h = MeshHandler(m)
+            h.process()
+            return np.array([tuple(c) for c in h.m_Colors], float)
+    raise SystemExit(f"{PAINTED} not found in the KSC bundle")
+
+
+def painted_triangles(glb: Path, colours):
+    """World triangles of the painted ground mesh and their vertex colours, (n, 3, 3) and (n, 3, 4)."""
+    j, blob = read_glb(glb)
+    parent = {c: i for i, nd in enumerate(j["nodes"]) for c in nd.get("children", [])}
+
+    def local(nd):
+        m = np.eye(4)
+        m[:3, :3] = quat_mat(nd.get("rotation", [0, 0, 0, 1])) * np.array(nd.get("scale", [1, 1, 1]))
+        m[:3, 3] = nd.get("translation", [0, 0, 0])
+        return m
+
+    for i, nd in enumerate(j["nodes"]):
+        if nd.get("mesh") is None or j["meshes"][nd["mesh"]].get("name") != PAINTED:
+            continue
+        w = local(nd)
+        k = i
+        while k in parent:
+            k = parent[k]
+            w = local(j["nodes"][k]) @ w
+        pr = j["meshes"][nd["mesh"]]["primitives"][0]
+        p = accessor(j, blob, pr["attributes"]["POSITION"], 3, np.float32).astype(np.float64)
+        if len(p) != len(colours):
+            raise SystemExit(f"{PAINTED}: {len(p)} vertices in the glb, {len(colours)} colours in the bundle")
+        p = (w[:3, :3] @ p.T).T + w[:3, 3]
+        ia = j["accessors"][pr["indices"]]
+        dt = {5121: np.uint8, 5123: np.uint16, 5125: np.uint32}[ia["componentType"]]
+        idx = accessor(j, blob, pr["indices"], 1, dt).reshape(-1, 3)
+        return p[idx], colours[idx]
+    raise SystemExit(f"{PAINTED} not in {glb}")
+
+
+def rasterise_paint(tris, cols, bounds):
+    """Vertex paint alpha of the highest painted triangle over each cell of the overlay grid, 0..1."""
+    lat0, lat1, lon0, lon1 = bounds
+    flat = tris.reshape(-1, 3)
+    lat, lon, alt = (a.reshape(-1, 3) for a in place(flat))
+    gy = (lat1 - (np.arange(GRID) + 0.5) / GRID * (lat1 - lat0))
+    gx = (lon0 + (np.arange(GRID) + 0.5) / GRID * (lon1 - lon0))
+    best = np.full((GRID, GRID), -np.inf)
+    out = np.zeros((GRID, GRID))
+    for t in range(len(lat)):
+        y, x, h, c = lat[t], lon[t], alt[t], cols[t, :, 3]
+        c0 = max(int(np.searchsorted(gx, x.min())), 0)
+        c1 = min(int(np.searchsorted(gx, x.max())), GRID)
+        r0 = max(int(np.searchsorted(-gy, -y.max())), 0)
+        r1 = min(int(np.searchsorted(-gy, -y.min())), GRID)
+        if c0 >= c1 or r0 >= r1:
+            continue
+        px, py = np.meshgrid(gx[c0:c1], gy[r0:r1])
+        den = (y[1] - y[2]) * (x[0] - x[2]) + (x[2] - x[1]) * (y[0] - y[2])
+        if abs(den) < 1e-18:
+            continue
+        a = ((y[1] - y[2]) * (px - x[2]) + (x[2] - x[1]) * (py - y[2])) / den
+        b = ((y[2] - y[0]) * (px - x[2]) + (x[0] - x[2]) * (py - y[2])) / den
+        cc = 1 - a - b
+        inside = (a >= -1e-6) & (b >= -1e-6) & (cc >= -1e-6)
+        z = a * h[0] + b * h[1] + cc * h[2]
+        win = inside & (z > best[r0:r1, c0:c1])
+        best[r0:r1, c0:c1][win] = z[win]
+        out[r0:r1, c0:c1][win] = (a * c[0] + b * c[1] + cc * c[2])[win]
+    return np.clip(out, 0.0, 1.0)
 
 
 def campus_triangles(glb: Path):
@@ -147,6 +243,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--glb", default="assets/web/ksc/ksc.glb")
     ap.add_argument("--out", default="assets/own/terrain")
+    ap.add_argument("--install", default=r"C:\Program Files (x86)\Steam\steamapps\common\Kerbal Space Program 2")
+    ap.add_argument("--no-sand", action="store_true", help="leave ksc_ground_sand.bin as it is")
     a = ap.parse_args()
     grid, (lat0, lat1, lon0, lon1) = rasterise(campus_triangles(Path(a.glb)))
     dm = np.where(np.isfinite(grid), np.clip(np.round(grid * 10), -32767, 32767), EMPTY).astype("<i2")
@@ -161,6 +259,12 @@ def main() -> int:
         "units": "int16 decimetres above sea level, row 0 north, -32768 empty",
         "site": {"lat_deg": SITE[0], "lon_deg": SITE[1], "alt_m": SITE[2], "yaw_deg": YAW_DEG},
     }
+    if not a.no_sand:
+        tris, cols = painted_triangles(Path(a.glb), vertex_paint(a.install))
+        sand = rasterise_paint(tris, cols, (lat0, lat1, lon0, lon1))
+        (out / "ksc_ground_sand.bin").write_bytes(np.round(sand * 255).astype(np.uint8).tobytes())
+        print(f"sand: {(sand > 0.5).mean() * 100:.0f}% of cells")
+    meta["sand"] = "ksc_ground_sand.bin: uint8 vertex paint alpha (the sand rim), same grid"
     (out / "ksc_ground.json").write_text(json.dumps(meta, indent=1), encoding="utf-8")
     filled = np.isfinite(grid)
     print(f"{filled.mean() * 100:.0f}% filled, {grid[filled].min():.0f} to {grid[filled].max():.0f} m, "
