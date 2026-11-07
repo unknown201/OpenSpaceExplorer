@@ -1275,6 +1275,8 @@ impl FlightView {
             spin,
             inp.ut,
         );
+        // Soft occlusion in creases and at the feet of things (SBS-V4).
+        gpu.set_ao(0.55);
         // Sun shadows around what the camera looks at: the craft on itself, on the pad and the ground.
         gpu.set_shadow(
             focus - cam,
