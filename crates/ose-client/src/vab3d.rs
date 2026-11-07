@@ -2,8 +2,10 @@
 //! `tools/export_vab.py` to `assets/vab/vab.glb` and `scene.json`) with the craft under construction drawn
 //! from the same `assets/parts/<id>.glb` meshes as everywhere else, at the build area centre.
 //!
-//! The camera orbits the craft (drag turns, wheel zooms, starting 20 m out as the original's
-//! `initialCameraPivotDistance`); a click on a part selects it, the selected part is tinted.
+//! The camera orbits the craft (drag turns, wheel zooms), starting as the original's `ResetCamera`: 20 m
+//! out (`initialCameraPivotDistance`) on the main assembly's anchor (the root part), looking straight down
+//! the hall (`DefaultVerticalCameraRotation`, identity; a plane's view is turned 45 degrees); a click on a
+//! part selects it, the selected part is tinted.
 
 use crate::render::{DrawItem, Renderer};
 use glam::{DQuat, DVec3};
@@ -102,6 +104,10 @@ fn seg_dist(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
     ((p.0 - a.0 - t * dx).powi(2) + (p.1 - a.1 - t * dy).powi(2)).sqrt()
 }
 
+/// The hall view the original resets to: looking along the hall's +Z (`Quaternion.identity`), the mural
+/// ahead.
+const RESET_YAW: f64 = std::f64::consts::PI;
+
 pub struct VabView {
     /// The move and rotate tool's gizmo (the original's manipulation widget, tool 2) on the selected part:
     /// its pivot in the craft frame.
@@ -193,8 +199,8 @@ impl VabView {
             inbox: Rc::new(RefCell::new(None)),
             requested: false,
             failed: false,
-            yaw: 0.6,
-            pitch: 0.15,
+            yaw: RESET_YAW,
+            pitch: 0.0,
             distance: 20.0,
             fov_rad: 60f64.to_radians(),
             target: DVec3::ZERO,
@@ -273,6 +279,21 @@ impl VabView {
         let size = (*hi - *lo).length();
         self.distance = self.distance.min((size * 3.0).max(6.0));
         true
+    }
+
+    /// The original's camera reset (on entering the hall and with Home): 20 m from the root part, looking
+    /// straight down the hall, or turned 45 degrees for a plane (`DefaultHorizontalCameraRotation`).
+    pub fn reset_view(&mut self, plane: bool) {
+        self.yaw = if plane {
+            RESET_YAW - std::f64::consts::FRAC_PI_4
+        } else {
+            RESET_YAW
+        };
+        self.pitch = 0.0;
+        self.distance = 20.0;
+        self.pan_y = 0.0;
+        self.focus = None;
+        self.target_set = false;
     }
 
     pub fn zoom(&mut self, factor: f64) {
@@ -559,7 +580,11 @@ impl VabView {
             // A gizmo drag: the camera stays put, so the part moves under the cursor alone.
             self.target
         } else if lo_all.is_finite() {
-            let mid = (lo_all + hi_all) * 0.5;
+            // The original pivots on the main assembly's anchor: the root part's centre.
+            let root = craft.parts.iter().position(|p| p.parent.is_none());
+            let mid = root
+                .and_then(|r| self.boxes.iter().find(|b| b.0 == r))
+                .map_or((lo_all + hi_all) * 0.5, |(_, lo, hi)| (*lo + *hi) * 0.5);
             let pivot = self.focus.map_or(mid, |f| self.craft_to_world(f));
             // Panning stays within the craft's height, wherever the pivot is.
             self.pan_y = self

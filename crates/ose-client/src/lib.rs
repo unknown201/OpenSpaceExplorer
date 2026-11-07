@@ -6788,6 +6788,12 @@ impl App {
             }
         }
         set_text(&self.doc, "vab-report", "");
+        // Each visit starts from the original's camera reset.
+        #[cfg(target_arch = "wasm32")]
+        {
+            let plane = self.editor.is_plane();
+            self.vab3d.reset_view(plane);
+        }
         self.load_loose();
         self.render_vab_picker();
         self.render_vab();
@@ -11320,11 +11326,8 @@ impl App {
                 return;
             }
             if self.in_session && self.vab_active() {
-                let d = vab3d::VabView::new();
-                (self.vab3d.yaw, self.vab3d.pitch, self.vab3d.distance) =
-                    (d.yaw, d.pitch, d.distance);
-                self.vab3d.pan_y = 0.0;
-                self.vab3d.focus = None;
+                let plane = self.editor.is_plane();
+                self.vab3d.reset_view(plane);
                 return;
             }
             if self.in_session && self.ksc_active() {
