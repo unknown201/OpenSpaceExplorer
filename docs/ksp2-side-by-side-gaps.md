@@ -164,6 +164,23 @@ stopped falling for 1 s.
 | Half throttle, full steer, 10 s | 1.2 to 2.5 m/s, yaw up to 1.33 rad/s | 5.4 to 9.0 m/s, heading turns up to 3.2 rad/s | **too fast** |
 | Yaw after the steering is released | decays over about 3 s | stops at once | **instant** |
 
+**Heating delta (T11), run 11.** Run 1 craft, straight up to 127 km and back down; hottest part temperature.
+
+| Altitude on the way down | KSP2 speed / hottest part | OSE speed / hottest part |
+|---|---|---|
+| 30 km | 1,220 m/s / 183 K | 1,219 m/s / 194 K |
+| 10 km | 1,324 m/s / 269 K | 1,345 m/s / 273 K |
+| 2 km | 1,286 m/s / 359 K | 1,354 m/s / 361 K |
+| 0.5 km | 1,269 m/s / 377 K | 1,349 m/s / 379 K |
+| Peak during the ascent | 392 K | 389 K |
+
+The same run shows a small drag gap in dense air at high Mach: below 10 km KSP2 slows from 1,324 to 1,269 m/s, OSE
+holds about 1,350 m/s (+6% at 0.5 km). Added to T2.
+
+**K1 per-part mass and drag (run 10).** `reference/ksp2-run10-k1-parts/parts.csv` lists every part's dry, resource
+and physics mass, PhysicsMode and per-face drag area and Cd. KSP2's vessel mass (27.112 t) leaves out the 12
+PhysicsMode None parts (28 kg); the rest of OSE's +232 kg is in other parts. Handed to the sim thread.
+
 Other findings from these runs: OSE ignites a craft's solid boosters by themselves when it is launched straight into
 orbit (stock K2 via `LaunchSavedCraft` burns its four SRBs at stage 0 with the throttle at 0). These rows are with
 the sim thread.
@@ -178,7 +195,7 @@ P2 completeness.
 | # | System | Pri | KSP2 scenario to trace | Compared channels and tolerance | Status |
 |---|---|---|---|---|---|
 | T1 | Thrust, Isp vs pressure, fuel burn | P0 | Run 1 craft, full throttle from the pad | mass(t), thrust, burn time; burnout altitude/speed within 2% | **verified** (mass flow and burn time within 0.3%, peak speed -0.2%) |
-| T2 | Drag and Mach model (surface area, drag cubes) | P0 | Run 1 coast and fall; run 4 hop | speed vs altitude on descent within 5% | **verified** (apoapsis -0.3%, 8.5 km fall +2.0%, subsonic fall +0.8%, air density -0.15%) |
+| T2 | Drag and Mach model (surface area, drag cubes) | P0 | Run 1 coast and fall; run 4 hop | speed vs altitude on descent within 5% | **verified** (apoapsis -0.3%, 8.5 km fall +2.0%, subsonic fall +0.8%, air density -0.15%); dense air at Mach 4 below 2 km is 5-6% too fast in OSE (run 11) |
 | T3 | Mass and CoM shift as fuel drains | P0 | Run 1 with CoM logged | CoM along the stack vs fuel fraction within 2 cm | not traced |
 | T4 | Crossfeed and fuel-flow order, staging, decouplers | P0 | Stock Kerbal K1 (boosters, decouplers, 5 stages) | mass and speed vs time per stage | **failing**: +232 kg in the lower stages, solid booster thrust curve (+17% early, -3.7% late); with the sim thread |
 | T5 | SAS hold, reaction wheels, torque | P0 | Pod with wheel: step pitch input 1 s, release, SAS on | attitude and angular rate vs time within 5% | **verified**: wheel torque +2% pitch, about +5% yaw/roll; SAS damping matches after PR 41 (sim thread replay within 1% at +1, +2, +8 s; rerun here shows the 2 s stop and wobble) |
@@ -187,7 +204,7 @@ P2 completeness.
 | T8 | Orbits, SOI changes, time warp (rails and physics) | P0 | 100 km orbit, warp x100, Mun encounter | apsides after warp, SOI exit time within 1 s | not traced |
 | T9 | Maneuver node execution | P1 | Prograde 100 m/s node, burn by node timer | resulting apsides within 1% | not traced |
 | T10 | Control surfaces and lift | P1 | Stock jet takeoff roll and pitch-up | lift vs AoA and speed, rotation speed | not traced |
-| T11 | Heating and reentry | P1 | Pod reentering from 100 km x 30 km orbit | skin temperature vs time, ablator use | not traced |
+| T11 | Heating and reentry | P1 | Run 1 craft falling from 127 km at Mach 4.5 (run 11) | hottest part temperature vs altitude | **verified**: peak 392 vs 389 K, 10 km 269 vs 273 K, ground 377 vs 379 K (within 2%; +11 K at 30 km). Ablator not traced |
 | T12 | Parachutes | P1 | Mk16 staged below 2.5 km after a hop | deploy timing, descent speed at sea level within 3% | **verified** (canopy descent -0.6%, deploy altitude +3.4%) |
 | T13 | Joints, flex, wobble, struts | P1 | Tall 6-tank stack under full thrust and roll | top-part deflection vs time, break threshold | not traced |
 | T14 | Collisions, crash tolerance, part breakage | P1 | Drop pod on pad at 5, 10, 15 m/s | survive/destroy per part matches | not traced |

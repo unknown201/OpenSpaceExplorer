@@ -55,7 +55,7 @@ async fn main() -> Result<()> {
     let mut f = std::fs::File::create(&out)?;
     writeln!(
         f,
-        "t,alt_m,vspeed,srf_speed,mach,q_kpa,density,static_kpa,mass_t,throttle,situation,ut"
+        "t,alt_m,vspeed,srf_speed,mach,q_kpa,density,static_kpa,mass_t,throttle,temp_max_k,situation,ut"
     )?;
     let mut t0 = None;
     let mut top: f64 = 0.0;
@@ -76,7 +76,7 @@ async fn main() -> Result<()> {
         falling |= r.vertical_speed_mps < 0.0 && r.altitude_m > 1000.0;
         writeln!(
             f,
-            "{t},{},{},{},{},{},{},{},{},{},{:?},{ut}",
+            "{t},{},{},{},{},{},{},{},{},{},{},{:?},{ut}",
             r.altitude_m,
             r.vertical_speed_mps,
             r.surface_speed_mps,
@@ -86,6 +86,7 @@ async fn main() -> Result<()> {
             r.static_pressure_kpa,
             r.mass_t,
             r.throttle,
+            r.heat.iter().map(|h| h.1).fold(0.0f32, f32::max),
             r.situation
         )?;
         if falling

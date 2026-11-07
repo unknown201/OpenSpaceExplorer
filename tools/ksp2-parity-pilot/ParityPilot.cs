@@ -192,7 +192,7 @@ namespace OpenSpaceExplorer.Validation
                 yield return Shot("v1-ksc-night-before-vab");
             }
             bool orbital = scenario == "rotation" || scenario == "rcs";
-            var snapshot = IOProvider.FromJsonFile<OABHistoricalSnapshot>(Path.Combine(dir, scenario == "rcs" ? "craft-rcs.json" : scenario == "rover" ? "craft-rover.json" : orbital ? "craft-rotation.json" : scenario == "k1" ? "craft-k1.json" : "craft.json"));
+            var snapshot = IOProvider.FromJsonFile<OABHistoricalSnapshot>(Path.Combine(dir, scenario == "rcs" ? "craft-rcs.json" : scenario == "rover" ? "craft-rover.json" : orbital ? "craft-rotation.json" : (scenario == "k1" || scenario == "partdump") ? "craft-k1.json" : "craft.json"));
             var config = orbital
                 ? new OABConfig(OABVariant.VAB, OABEnvironmentType.Orbital, OABConstructionType.User, null)
                 : new OABConfig(OABVariant.VAB, OABEnvironmentType.Terrestrial, OABConstructionType.User, "Kerbin");
@@ -215,6 +215,7 @@ namespace OpenSpaceExplorer.Validation
             if (orbital) { yield return Rotation(vessel); yield break; }
             if (scenario == "rover") { yield return Rover(vessel); yield break; }
             if (scenario == "eva") { yield return Eva(vessel); yield break; }
+            if (scenario == "partdump") { yield return PartDump(vessel); yield break; }
             if (scenario == "visuals")
             {
                 vessel.SetActionGroup(KSPActionGroup.Lights, true);
@@ -456,6 +457,40 @@ namespace OpenSpaceExplorer.Validation
             Application.Quit();
         }
 
+        // Per-part mass and drag of the craft standing on the pad, for comparing KSP2's mass model with OSE's.
+        IEnumerator PartDump(VesselComponent vessel)
+        {
+            yield return new WaitForSeconds(5f);
+            using (var w = new StreamWriter(Path.Combine(dir, "out", "parts.csv"), false))
+            {
+                w.WriteLine("index,name,physics_mode,dry_t,resource_t,green_t,total_t,physics_mass_t,drag_area_xp,drag_area_xn,drag_area_yp,drag_area_yn,drag_area_zp,drag_area_zn,drag_cd_xp,drag_cd_xn,drag_cd_yp,drag_cd_yn,drag_cd_zp,drag_cd_zn,drag_enabled");
+                int i = 0;
+                foreach (var part in vessel.SimulationObject.PartOwner.Parts)
+                {
+                    string drag = string.Join(",", new string[13]);
+                    if (G.SpaceSimulation.TryGetViewObject(part.SimulationObject, out var view))
+                    {
+                        var m = view.GetComponent<KSP.Modules.Module_Drag>();
+                        if (m != null && m.DataModules.Contains(typeof(KSP.Modules.Data_Drag)))
+                        {
+                            var d = (KSP.Modules.Data_Drag)m.DataModules[typeof(KSP.Modules.Data_Drag)];
+                            var vals = new System.Collections.Generic.List<string>();
+                            foreach (var a in d.weightedArea) vals.Add(a.ToString("R", CultureInfo.InvariantCulture));
+                            foreach (var c in d.weightedDrag) vals.Add(c.ToString("R", CultureInfo.InvariantCulture));
+                            vals.Add(d.DragEnabled ? "1" : "0");
+                            drag = string.Join(",", vals);
+                        }
+                    }
+                    double[] mass = { part.DryMass, part.ResourceMass, part.GreenMass, part.TotalMass, part.PhysicsMass };
+                    w.WriteLine(i++ + "," + part.Name + "," + part.PhysicsMode + "," + string.Join(",", Array.ConvertAll(mass, x => x.ToString("R", CultureInfo.InvariantCulture))) + "," + drag);
+                }
+            }
+            Mark("parts dumped, vessel mass " + vessel.totalMass.ToString("R", CultureInfo.InvariantCulture));
+            File.WriteAllText(Path.Combine(dir, "out", "done.txt"), "ok");
+            yield return new WaitForSeconds(2f);
+            Application.Quit();
+        }
+
         IEnumerator Drive(float seconds, float throttle, float steer)
         {
             // OverrideInputWheelSteering writes the roll override (a game bug), so the holder raises the flag
@@ -478,7 +513,7 @@ namespace OpenSpaceExplorer.Validation
             start = G.UniverseModel.UniverseTime;
             last = double.NegativeInfinity;
             trace = new StreamWriter(Path.Combine(dir, "out", file), false) { AutoFlush = true };
-            trace.WriteLine("t,alt_m,vspeed,srf_speed,mach,q_kpa,density,static_kpa,mass_t,throttle,qx,qy,qz,qw,wx,wy,wz,sas,pitch,yaw,roll,vx,vy,vz,gx,gy,gz,tx,ty,tz,wheel_throttle,wheel_steer,situation,ut");
+            trace.WriteLine("t,alt_m,vspeed,srf_speed,mach,q_kpa,density,static_kpa,mass_t,throttle,qx,qy,qz,qw,wx,wy,wz,sas,pitch,yaw,roll,vx,vy,vz,gx,gy,gz,tx,ty,tz,wheel_throttle,wheel_steer,temp_max_k,temp_pod_k,temp_engine_k,situation,ut");
         }
 
         void FixedUpdate()
@@ -495,13 +530,20 @@ namespace OpenSpaceExplorer.Validation
                 var q = frame.localFrame.ToLocalRotation(vessel.ControlTransform.Rotation);
                 var w = Vector.Reframed(frame.ToRelativeAngularVelocity(vessel.AngularVelocityMassAvg), frame.localFrame).vector;
                 var ov = Vector.Reframed(vessel.OrbitalVelocity, frame.localFrame).vector;
+                double tmax = 0, tpod = 0, teng = 0;
+                foreach (var part in vessel.SimulationObject.PartOwner.Parts)
+                {
+                    tmax = Math.Max(tmax, part.Temperature);
+                    if (part.Name.StartsWith("pod_")) tpod = part.Temperature;
+                    if (part.Name.StartsWith("engine_")) teng = part.Temperature;
+                }
                 var gv = Vector.Reframed(vessel.gravityForPos, frame.localFrame).vector;
                 double[] v = { ut - start, vessel.AltitudeFromSeaLevel, vessel.VerticalSrfSpeed, vessel.SrfSpeedMagnitude, vessel.MachNumber,
                     vessel.DynamicPressure_kPa, vessel.AtmDensity, vessel.StaticPressure_kPa, vessel.totalMass, vessel.flightCtrlState.mainThrottle,
                     q.x, q.y, q.z, q.w, w.x, w.y, w.z, vessel.Autopilot != null && vessel.Autopilot.Enabled ? 1 : 0,
                     vessel.flightCtrlState.pitch, vessel.flightCtrlState.yaw, vessel.flightCtrlState.roll,
                     ov.x, ov.y, ov.z, gv.x, gv.y, gv.z, vessel.flightCtrlState.X, vessel.flightCtrlState.Y, vessel.flightCtrlState.Z,
-                    vessel.flightCtrlState.wheelThrottle, vessel.flightCtrlState.wheelSteer };
+                    vessel.flightCtrlState.wheelThrottle, vessel.flightCtrlState.wheelSteer, tmax, tpod, teng };
                 trace.WriteLine(string.Join(",", Array.ConvertAll(v, x => x.ToString("R", CultureInfo.InvariantCulture))) + "," + vessel.Situation + "," + ut.ToString("R", CultureInfo.InvariantCulture));
             }
             catch (Exception e) { Logger.LogError(e); Stop(); }
