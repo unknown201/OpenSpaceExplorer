@@ -2975,12 +2975,15 @@ mod tests {
         let v = u.spawn_powered_on_surface("K1", body, spec, 0.0, 0.0);
         u.set_structure(v, st);
         let m0 = u.powered(v).unwrap().mass_t;
+        // the staging report counts every part; in flight the K1's physicsless parts (8 flat solar panels
+        // at 0.8 kg and 4 radial batteries at 5 kg) weigh nothing, as the original's vessel TotalMass
+        let physicsless = 8.0 * 0.0008 + 4.0 * 0.005;
         assert!(
-            (m0 - spec_mass
+            (m0 - spec_mass + physicsless
                 - u.crew(v).len() as f64 * (crew::KERBAL_MASS_T + crew::JETPACK_PROPELLANT_T))
                 .abs()
                 < 1e-6,
-            "tank and occupied-seat mass {m0} matches the staging report {spec_mass} plus crew"
+            "tank and occupied-seat mass {m0} matches the staging report {spec_mass} plus crew,              less the physicsless parts"
         );
         let sf = |u: &Universe| {
             let s = u.structure(v).unwrap();
