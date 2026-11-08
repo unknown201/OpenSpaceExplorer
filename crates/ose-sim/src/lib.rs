@@ -3535,7 +3535,12 @@ mod tests {
             .transfer_resource(v, &methalox, &[lower], &[upper])
             .is_ok());
         assert!(u.transfer(v).is_some());
-        for _ in 0..(12 * TICKS_PER_SECOND) {
+        // the original moves each tank's share as a per-second flow: done in about a second
+        for _ in 0..(TICKS_PER_SECOND / 2) {
+            u.step();
+        }
+        assert!(u.transfer(v).is_some(), "still moving at half a second");
+        for _ in 0..(TICKS_PER_SECOND / 2 + 2) {
             u.step();
         }
         assert!(u.transfer(v).is_none(), "done by itself");
@@ -3554,6 +3559,27 @@ mod tests {
                 .is_err(),
             "nothing to move"
         );
+        // Balance (a tank in both lists): the two end with equal units, and nothing is made
+        {
+            let mut st = u.world.get_mut::<structure::Structure>(v).unwrap();
+            for t in st.net.tanks.iter_mut().filter(|t| t.part == upper) {
+                t.stored *= 0.25;
+            }
+        }
+        let (u0, l0) = (stored(&u, upper).0, stored(&u, lower).0);
+        let r = u.transfer_resource(v, &methalox, &[lower, upper], &[lower, upper]);
+        assert!(r.is_ok(), "{r:?}: upper {u0}, lower {l0}");
+        for _ in 0..(TICKS_PER_SECOND + 2) {
+            u.step();
+        }
+        assert!(u.transfer(v).is_none());
+        let (u1, l1) = (stored(&u, upper).0, stored(&u, lower).0);
+        assert!((u1 - l1).abs() < 1e-6, "balanced: {u1} vs {l1}");
+        assert!(((u1 + l1) - (u0 + l0)).abs() < 1e-6, "nothing made");
+        // one tank alone has nothing to balance with
+        assert!(u
+            .transfer_resource(v, &methalox, &[upper], &[upper])
+            .is_err());
     }
 
     #[test]

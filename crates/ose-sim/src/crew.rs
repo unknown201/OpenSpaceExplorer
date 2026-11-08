@@ -68,20 +68,84 @@ pub const LADDER_STANDOFF_M: f64 = 0.4;
 pub const HATCH_ALONG: f64 = 0.75;
 pub const BOARDING_S: f64 = 1.0;
 
-/// A resource transfer running on a vessel (the Resource Manager): from these tanks into those.
+/// A resource transfer running on a vessel (the Resource Manager): the tanks it was started with, and how
+/// many units each still has to give (positive) or take (negative).
 #[derive(Component, Clone, Debug, PartialEq)]
 pub struct Transfer {
     pub resource: String,
+    /// The parts asked to give, and to take; a part in both is balanced with the others in both.
     pub from: Vec<usize>,
     pub to: Vec<usize>,
-    /// Units a second it moves.
-    pub rate: f64,
+    /// (part, units still to move out (+) or in (-), units a second: out (+) or in (-)).
+    pub moves: Vec<(usize, f64, f64)>,
 }
 
-/// How long a transfer takes to move what it can, s (our own figure: the original's flow requests
-/// deliver over a few seconds), and the least it moves a second.
-pub const TRANSFER_TIME_S: f64 = 10.0;
-pub const TRANSFER_MIN_RATE: f64 = 0.01;
+/// How long each tank's share of a transfer takes, s: the original's Resource Manager asks every tank for its
+/// whole share as a per-second flow (`ResourceFlowRequestCommandConfig.FlowUnits = TargetUnits`, the default
+/// `FLOW_UNITS_PER_SECOND`), so each finishes in a second.
+pub const TRANSFER_TIME_S: f64 = 1.0;
+
+/// Equal shares of `amount` over `caps` (index, cap), the smallest cap first, each capped: the original's
+/// loop over its sorted containers (`amount_left / containers_left`, at most the cap).
+fn equal_shares(caps: &[(usize, f64)], amount: f64) -> Vec<(usize, f64)> {
+    let mut l = caps.to_vec();
+    l.sort_by(|a, b| a.1.total_cmp(&b.1));
+    let n = l.len();
+    let mut left = amount;
+    l.into_iter()
+        .enumerate()
+        .map(|(i, (k, c))| {
+            let give = (left / (n - i) as f64).min(c).max(0.0);
+            left -= give;
+            (k, give)
+        })
+        .collect()
+}
+
+/// The original's split of a transfer (`ResourceManagerUI.StartResourceTransfer`): units each tank gives
+/// (+) or takes (-), keyed by part. `into`, `out_of` and `balance` are (part, stored, capacity).
+///
+/// Into and out of: when the giving tanks hold at least the receiving ones' room, every receiver fills and
+/// the givers share that amount, the emptiest first; otherwise every giver empties and the receivers share
+/// it, the fullest first. Balance: the tanks end with equal units (the original's average); a tank that
+/// cannot hold the average stays full and the rest is shared among the others, so nothing is made or lost
+/// (the original would add past the tank's capacity, which its container clamps away).
+pub fn transfer_split(
+    into: &[(usize, f64, f64)],
+    out_of: &[(usize, f64, f64)],
+    balance: &[(usize, f64, f64)],
+) -> Vec<(usize, f64)> {
+    let mut out = Vec::new();
+    let room = |t: &(usize, f64, f64)| (t.2 - t.1).max(0.0);
+    let held = |t: &(usize, f64, f64)| t.1.max(0.0);
+    if !into.is_empty() && !out_of.is_empty() {
+        let total_in: f64 = into.iter().map(room).sum();
+        let total_out: f64 = out_of.iter().map(held).sum();
+        if total_out >= total_in {
+            out.extend(into.iter().map(|t| (t.0, -room(t))));
+            let caps: Vec<(usize, f64)> = out_of.iter().map(|t| (t.0, held(t))).collect();
+            out.extend(equal_shares(&caps, total_in));
+        } else {
+            let caps: Vec<(usize, f64)> = into.iter().map(|t| (t.0, room(t))).collect();
+            out.extend(
+                equal_shares(&caps, total_out)
+                    .into_iter()
+                    .map(|(k, u)| (k, -u)),
+            );
+            out.extend(out_of.iter().map(|t| (t.0, held(t))));
+        }
+    }
+    if balance.len() > 1 {
+        let total: f64 = balance.iter().map(held).sum();
+        let caps: Vec<(usize, f64)> = balance.iter().map(|t| (t.0, t.2.max(0.0))).collect();
+        for (k, want) in equal_shares(&caps, total) {
+            let now = balance.iter().find(|t| t.0 == k).map(held).unwrap_or(0.0);
+            out.push((k, now - want));
+        }
+    }
+    out.retain(|(_, u)| u.abs() > 1e-12);
+    out
+}
 
 impl Universe {
     /// Move a Kerbal aboard to another crewed part of the same vessel (part index into the craft).
@@ -118,8 +182,9 @@ impl Universe {
     }
 
     /// Start moving `resource` from the `from` tanks into the `to` tanks (part indices); empty lists stop
-    /// the vessel's transfer. Like the original's Resource Manager it fills the receiving tanks with what
-    /// the giving ones hold, then stops.
+    /// the vessel's transfer. A part in both lists is balanced with the others in both (the original's Balance
+    /// state). Like the original's Resource Manager it works out each tank's share at the start
+    /// (`transfer_split`) and moves it at that many units a second, then stops.
     pub fn transfer_resource(
         &mut self,
         e: Entity,
@@ -131,9 +196,6 @@ impl Universe {
             self.world.entity_mut(e).remove::<Transfer>();
             return Ok(());
         }
-        if from.iter().any(|p| to.contains(p)) {
-            return Err("a tank cannot give and take at once");
-        }
         let st = self
             .world
             .get::<structure::Structure>(e)
@@ -144,22 +206,27 @@ impl Universe {
             .iter()
             .position(|r| r.eq_ignore_ascii_case(resource))
             .ok_or("the vessel holds none of that")?;
-        let tanks = |parts: &[usize]| {
+        let tanks = |want: &dyn Fn(usize) -> bool| -> Vec<(usize, f64, f64)> {
             st.net
                 .tanks
                 .iter()
-                .filter(|t| t.resource == ri && parts.contains(&t.part) && st.rigid.present[t.part])
-                .cloned()
-                .collect::<Vec<_>>()
+                .filter(|t| t.resource == ri && want(t.part) && st.rigid.present[t.part])
+                .map(|t| (t.part, t.stored, t.capacity))
+                .collect()
         };
-        let (out, into) = (tanks(from), tanks(to));
-        if out.is_empty() || into.is_empty() {
-            return Err("pick tanks of that resource on both sides");
+        let both = |p: usize| from.contains(&p) && to.contains(&p);
+        let out_of = tanks(&|p| from.contains(&p) && !both(p));
+        let into = tanks(&|p| to.contains(&p) && !both(p));
+        let balance = tanks(&|p| both(p));
+        // the original's check (`IsResourceValidForFlowRequest`): givers and takers, or two to balance
+        if (out_of.is_empty() || into.is_empty()) && balance.len() < 2 {
+            return Err("pick tanks of that resource on both sides, or two to balance");
         }
-        let held: f64 = out.iter().map(|t| t.stored).sum();
-        let room: f64 = into.iter().map(|t| (t.capacity - t.stored).max(0.0)).sum();
-        let amount = held.min(room);
-        if amount <= 1e-9 {
+        let moves: Vec<(usize, f64, f64)> = transfer_split(&into, &out_of, &balance)
+            .into_iter()
+            .map(|(p, u)| (p, u, u / TRANSFER_TIME_S))
+            .collect();
+        if moves.is_empty() {
             return Err("nothing to move");
         }
         let resource = st.net.resources[ri].clone();
@@ -167,7 +234,7 @@ impl Universe {
             resource,
             from: from.to_vec(),
             to: to.to_vec(),
-            rate: (amount / TRANSFER_TIME_S).max(TRANSFER_MIN_RATE),
+            moves,
         });
         Ok(())
     }
@@ -177,8 +244,9 @@ impl Universe {
         self.world.get::<Transfer>(e)
     }
 
-    /// Run the vessels' transfers for `dt` seconds: the giving tanks drain in proportion to what they hold,
-    /// the receiving ones fill in proportion to their room; a transfer ends when one side runs out.
+    /// Run the vessels' transfers for `dt` seconds: each tank moves its share at its rate, never past empty
+    /// or full; a transfer ends when every share is moved. Takers only get what givers gave this step, so
+    /// nothing is made.
     pub(crate) fn run_transfers(&mut self, dt: f64) {
         let running: Vec<(Entity, Transfer)> = self
             .world
@@ -186,49 +254,85 @@ impl Universe {
             .iter(&self.world)
             .map(|(e, t)| (e, t.clone()))
             .collect();
-        for (e, t) in running {
+        for (e, mut t) in running {
             let done = match self.world.get_mut::<structure::Structure>(e) {
                 None => true,
                 Some(mut st) => {
                     let st = &mut *st;
-                    let Some(ri) = st.net.resources.iter().position(|r| r == &t.resource) else {
-                        self.world.entity_mut(e).remove::<Transfer>();
-                        continue;
-                    };
-                    let present = st.rigid.present.clone();
-                    let pick = |t2: &crate::resources::Tank, parts: &[usize]| {
-                        t2.resource == ri && parts.contains(&t2.part) && present[t2.part]
-                    };
-                    let held: f64 = st
-                        .net
-                        .tanks
-                        .iter()
-                        .filter(|x| pick(x, &t.from))
-                        .map(|x| x.stored)
-                        .sum();
-                    let room: f64 = st
-                        .net
-                        .tanks
-                        .iter()
-                        .filter(|x| pick(x, &t.to))
-                        .map(|x| (x.capacity - x.stored).max(0.0))
-                        .sum();
-                    let step = (t.rate * dt).min(held).min(room);
-                    if step > 0.0 {
-                        for x in st.net.tanks.iter_mut() {
-                            if pick(x, &t.from) && held > 0.0 {
-                                x.stored = (x.stored - step * x.stored / held).max(0.0);
-                            } else if pick(x, &t.to) && room > 0.0 {
-                                let free = (x.capacity - x.stored).max(0.0);
-                                x.stored = (x.stored + step * free / room).min(x.capacity);
+                    match st.net.resources.iter().position(|r| r == &t.resource) {
+                        None => true,
+                        Some(ri) => {
+                            let present = st.rigid.present.clone();
+                            let tank_of = |part: usize, tanks: &[crate::resources::Tank]| {
+                                tanks.iter().position(|x| {
+                                    x.resource == ri && x.part == part && present[part]
+                                })
+                            };
+                            // out first, then in, limited to what came out
+                            let mut pool = 0.0;
+                            for m in t.moves.iter_mut().filter(|m| m.1 > 0.0) {
+                                let Some(k) = tank_of(m.0, &st.net.tanks) else {
+                                    m.1 = 0.0;
+                                    continue;
+                                };
+                                let x = &mut st.net.tanks[k];
+                                let step = (m.2.abs() * dt).min(m.1).min(x.stored.max(0.0));
+                                x.stored -= step;
+                                m.1 -= step;
+                                pool += step;
+                                if x.stored <= 1e-12 {
+                                    m.1 = 0.0;
+                                }
                             }
+                            let wanted: f64 = t
+                                .moves
+                                .iter()
+                                .filter(|m| m.1 < 0.0)
+                                .map(|m| (m.2.abs() * dt).min(-m.1))
+                                .sum();
+                            let scale = if wanted > 0.0 {
+                                (pool / wanted).min(1.0)
+                            } else {
+                                0.0
+                            };
+                            for m in t.moves.iter_mut().filter(|m| m.1 < 0.0) {
+                                let Some(k) = tank_of(m.0, &st.net.tanks) else {
+                                    m.1 = 0.0;
+                                    continue;
+                                };
+                                let x = &mut st.net.tanks[k];
+                                let step = ((m.2.abs() * dt).min(-m.1) * scale)
+                                    .min((x.capacity - x.stored).max(0.0));
+                                x.stored += step;
+                                pool -= step;
+                                m.1 += step;
+                                if x.capacity - x.stored <= 1e-12 {
+                                    m.1 = 0.0;
+                                }
+                            }
+                            // whatever no taker could hold goes back where it came from
+                            if pool > 1e-12 {
+                                for m in t.moves.iter().filter(|m| m.2 > 0.0) {
+                                    // a giver (its rate is outward)
+                                    if let Some(k) = tank_of(m.0, &st.net.tanks) {
+                                        let x = &mut st.net.tanks[k];
+                                        let back = pool.min((x.capacity - x.stored).max(0.0));
+                                        x.stored += back;
+                                        pool -= back;
+                                    }
+                                }
+                            }
+                            let gives = t.moves.iter().any(|m| m.1 > 1e-9);
+                            let takes = t.moves.iter().any(|m| m.1 < -1e-9);
+                            !(gives && takes)
                         }
                     }
-                    held - step <= 1e-9 || room - step <= 1e-9
                 }
             };
             if done {
                 self.world.entity_mut(e).remove::<Transfer>();
+            } else {
+                self.world.entity_mut(e).insert(t);
             }
         }
     }
@@ -1403,5 +1507,55 @@ mod tests {
         assert!(dv > 5.0, "dv {dv}");
         // too far from the craft now to board
         assert!(u.board(jeb, v).is_err());
+    }
+}
+
+#[cfg(test)]
+mod transfer_tests {
+    use super::*;
+
+    fn get(v: &[(usize, f64)], k: usize) -> f64 {
+        v.iter().filter(|x| x.0 == k).map(|x| x.1).sum()
+    }
+
+    #[test]
+    fn plenty_to_give_fills_every_taker_and_the_emptiest_givers_give_first() {
+        // takers: room 30 and 10; givers hold 5, 50, 100
+        let into = [(1, 70.0, 100.0), (2, 90.0, 100.0)];
+        let out_of = [(3, 5.0, 100.0), (4, 50.0, 100.0), (5, 100.0, 100.0)];
+        let s = transfer_split(&into, &out_of, &[]);
+        assert_eq!(get(&s, 1), -30.0);
+        assert_eq!(get(&s, 2), -10.0);
+        // 40 over three givers, the emptiest first: 5 (all it has), then 17.5 and 17.5
+        assert_eq!(get(&s, 3), 5.0);
+        assert_eq!(get(&s, 4), 17.5);
+        assert_eq!(get(&s, 5), 17.5);
+        assert!(
+            s.iter().map(|x| x.1).sum::<f64>().abs() < 1e-12,
+            "nothing made"
+        );
+    }
+
+    #[test]
+    fn too_little_to_give_empties_every_giver_and_the_fullest_takers_fill_first() {
+        // givers hold 12 in all; takers have room 2 and 50
+        let into = [(1, 98.0, 100.0), (2, 50.0, 100.0)];
+        let out_of = [(3, 4.0, 100.0), (4, 8.0, 100.0)];
+        let s = transfer_split(&into, &out_of, &[]);
+        assert_eq!(get(&s, 3), 4.0);
+        assert_eq!(get(&s, 4), 8.0);
+        assert_eq!(get(&s, 1), -2.0);
+        assert_eq!(get(&s, 2), -10.0);
+    }
+
+    #[test]
+    fn balance_evens_units_and_a_small_tank_stays_full() {
+        let s = transfer_split(&[], &[], &[(1, 90.0, 100.0), (2, 10.0, 100.0)]);
+        assert_eq!(get(&s, 1), 40.0);
+        assert_eq!(get(&s, 2), -40.0);
+        // 120 units over tanks of 20 and 200: the small one fills, the big one takes the rest
+        let s = transfer_split(&[], &[], &[(1, 0.0, 20.0), (2, 120.0, 200.0)]);
+        assert_eq!(get(&s, 1), -20.0);
+        assert_eq!(get(&s, 2), 20.0);
     }
 }
