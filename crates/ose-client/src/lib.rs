@@ -1893,7 +1893,7 @@ fn load_localization(app: Shared) {
         a.loc = i18n::merge(en, table);
         a.localize_parts();
         #[cfg(target_arch = "wasm32")]
-        i18n::apply(&a.doc, &a.loc);
+        i18n::apply(&a.doc, &a.loc, lang == "en");
         if let Some(root) = a.doc.document_element() {
             root.set_attribute("lang", &lang).ok();
         }
@@ -9806,9 +9806,11 @@ impl App {
             .map(|(id, _)| id)
     }
 
-    /// Show the crew buttons that apply: EVA with crew aboard, Board and Plant Flag for a Kerbal (the flag on
-    /// the ground), Undock while docked.
-    /// Parts the catalog has no title for take theirs from the localization table (`Parts/Title/<id>`).
+    /// A label OSE writes itself, in the player's language: the game's `term`, or OSE's own English (`own`).
+    fn tr(&self, term: &str, own: &str) -> String {
+        i18n::pick_text(&self.loc, term, own, self.lang == "en").to_string()
+    }
+
     /// Part names in the chosen language (the game's `Parts/Title/<id>`); in English only parts the catalog
     /// left untitled change, and switching back puts the catalog's own names back.
     fn localize_parts(&mut self) {
@@ -11240,6 +11242,11 @@ impl App {
                 f,
                 attitude: &self.attitude,
                 orbit_speed: self.speed_orbit,
+                speed_label: &if self.speed_orbit {
+                    self.tr("HUD/Orbit", "ORBIT")
+                } else {
+                    self.tr("HUD/Surface", "SURFACE")
+                },
                 orbital_speed_mps: (v.velocity_mps - body_vel).length(),
                 apsides,
                 brakes_latched: self.brakes_latched,
@@ -11253,7 +11260,11 @@ impl App {
             &self.doc,
             "fh-met",
             &if launch_ut > 0.0 {
-                format!("MET {}", hud::fmt_met(ut - launch_ut))
+                format!(
+                    "{} {}",
+                    self.tr("HUD/MET", "MET"),
+                    hud::fmt_met(ut - launch_ut)
+                )
             } else {
                 String::new()
             },
@@ -11362,10 +11373,18 @@ impl App {
         }
         match (self.alt_terrain, agl) {
             (true, Some(h)) => {
-                set_text(&self.doc, "fh-alt-mode", "TERRAIN");
+                set_text(
+                    &self.doc,
+                    "fh-alt-mode",
+                    &self.tr("HUD/Ground Level", "TERRAIN"),
+                );
                 set_text(&self.doc, "fh-altitude", &hud::fmt_dist(h.max(0.0)));
             }
-            _ => set_text(&self.doc, "fh-alt-mode", "SEA LEVEL"),
+            _ => set_text(
+                &self.doc,
+                "fh-alt-mode",
+                &self.tr("HUD/Sea Level", "SEA LEVEL"),
+            ),
         }
         // Target: distance and closing speed, the TARGET speed mode, and the SAS target buttons.
         let tgt = match self.target {
@@ -11420,10 +11439,14 @@ impl App {
         if self.speed_target {
             match &rel {
                 Some((_, _, speed)) => {
-                    set_text(&self.doc, "fh-speed-mode", "TARGET");
+                    set_text(&self.doc, "fh-speed-mode", &self.tr("HUD/Target", "TARGET"));
                     set_text(&self.doc, "fh-speed", &format!("{speed:.1} m/s"));
                 }
-                None => set_text(&self.doc, "fh-speed-mode", "SURFACE"),
+                None => set_text(
+                    &self.doc,
+                    "fh-speed-mode",
+                    &self.tr("HUD/Surface", "SURFACE"),
+                ),
             }
         }
         for id in ["fh-sas-target", "fh-sas-antitarget"] {
