@@ -199,7 +199,7 @@ namespace OpenSpaceExplorer.Validation
                 yield return Shot("v1-ksc-night-before-vab");
             }
             bool orbital = scenario == "rotation" || scenario == "rcs";
-            var snapshot = IOProvider.FromJsonFile<OABHistoricalSnapshot>(Path.Combine(dir, scenario == "rcs" ? "craft-rcs.json" : scenario == "rover" ? "craft-rover.json" : scenario == "legs" ? "craft-legs.json" : orbital ? "craft-rotation.json" : (scenario == "k1" || scenario == "partdump") ? "craft-k1.json" : "craft.json"));
+            var snapshot = IOProvider.FromJsonFile<OABHistoricalSnapshot>(Path.Combine(dir, scenario == "rcs" ? "craft-rcs.json" : scenario == "rover" ? "craft-rover.json" : scenario == "legs" ? "craft-legs.json" : scenario == "stack" ? "craft-stack.json" : scenario.StartsWith("drop ") ? "craft-drop-" + scenario.Split(' ')[1] + ".json" : orbital ? "craft-rotation.json" : (scenario == "k1" || scenario == "partdump") ? "craft-k1.json" : "craft.json"));
             var config = orbital
                 ? new OABConfig(OABVariant.VAB, OABEnvironmentType.Orbital, OABConstructionType.User, null)
                 : new OABConfig(OABVariant.VAB, OABEnvironmentType.Terrestrial, OABConstructionType.User, "Kerbin");
@@ -224,6 +224,8 @@ namespace OpenSpaceExplorer.Validation
             if (scenario == "eva") { yield return Eva(vessel); yield break; }
             if (scenario == "partdump") { yield return PartDump(vessel); yield break; }
             if (scenario == "legs") { yield return Legs(vessel); yield break; }
+            if (scenario == "stack") { yield return Stack(vessel); yield break; }
+            if (scenario.StartsWith("drop ")) { yield return Drop(vessel, double.Parse(scenario.Split(' ')[2], CultureInfo.InvariantCulture)); yield break; }
             if (scenario == "visuals")
             {
                 SetGroup(KSPActionGroup.Lights, true);
@@ -614,6 +616,83 @@ namespace OpenSpaceExplorer.Validation
 
         // Action groups through the active vehicle's controllable groups, as the flight keys do
         // (VesselComponent.SetActionGroup does not reach them for a freshly launched craft).
+        // T14 crash tolerance: put the craft 0.5 m above where it rests, upright, falling at `speed`, and log
+        // the parts aboard every tick until 8 s after the drop.
+        IEnumerator Drop(VesselComponent vessel, double speed)
+        {
+            var before = new System.Collections.Generic.List<string>();
+            foreach (var part in vessel.SimulationObject.PartOwner.Parts) before.Add(part.Name);
+            Mark("parts before " + string.Join(" ", before));
+            var state = new KSP.Sim.State.SurfaceTeleportState { ReferenceBodyGuid = vessel.mainBody.Name, Altitude = 1.0 /* above the terrain, not sea level */, Latitude = vessel.Latitude, Longitude = vessel.Longitude, VerticalSpeed = -speed };
+            Begin(vessel, "drop-trace.csv");
+            using (var log = new StreamWriter(Path.Combine(dir, "out", "drop-parts.csv"), false))
+            {
+                log.WriteLine("t,parts,names");
+                G.SpaceSimulation.TeleportSimObjectToSurface(vessel.SimulationObject, state);
+                Mark("teleported, falling at " + speed.ToString(CultureInfo.InvariantCulture));
+                float t = 0; int last = -1;
+                while (t < 12)
+                {
+                    t += Time.fixedDeltaTime;
+                    yield return new WaitForFixedUpdate();
+                    var v = G.ViewController.GetActiveSimVessel();
+                    if (v == null) { log.WriteLine(t.ToString("F2", CultureInfo.InvariantCulture) + ",0,"); Mark("vessel gone at " + t.ToString("F2", CultureInfo.InvariantCulture)); break; }
+                    var names = new System.Collections.Generic.List<string>();
+                    foreach (var part in v.SimulationObject.PartOwner.Parts) names.Add(part.Name);
+                    if (names.Count != last) { log.WriteLine(t.ToString("F2", CultureInfo.InvariantCulture) + "," + names.Count + "," + string.Join(" ", names)); last = names.Count; }
+                }
+            }
+            yield return Shot("16-after-drop");
+            Stop();
+            Mark("finished drop");
+            File.WriteAllText(Path.Combine(dir, "out", "done.txt"), "ok");
+            yield return new WaitForSeconds(2f);
+            Application.Quit();
+        }
+
+        // T13 joints: pod + six 1x4 tanks + Swivel; SAS on, full throttle 5 s, then full roll 3 s, then 3 s free.
+        // Logs, every physics tick, each part's position in the pod's frame (pod = root) and the part count.
+        IEnumerator Stack(VesselComponent vessel)
+        {
+            vessel.SetAutopilotEnableDisable(true);
+            G.ViewController.flightInputHandler.OverrideInputMaxThrottle(true);
+            yield return new WaitForSeconds(0.5f);
+            Begin(vessel, "stack-trace.csv");
+            var inv = CultureInfo.InvariantCulture;
+            using (var w = new StreamWriter(Path.Combine(dir, "out", "stack-parts.csv"), false))
+            {
+                w.WriteLine("t,phase,parts,index,name,x,y,z");
+                vessel.ActivateNextStage();
+                Mark("staged");
+                float t = 0; string phase = "thrust";
+                while (t < 11.5f)
+                {
+                    yield return new WaitForFixedUpdate();
+                    t += Time.fixedDeltaTime;
+                    if (phase == "thrust" && t >= 5f) { phase = "roll"; InputHolder.Roll = 1f; Mark("roll"); }
+                    if (phase == "roll" && t >= 8f) { phase = "free"; InputHolder.Roll = 0f; Mark("roll off"); }
+                    var v = G.ViewController.GetActiveSimVessel();
+                    if (v == null) { Mark("vessel gone"); break; }
+                    Transform root = null; var views = new System.Collections.Generic.List<(string, Transform)>();
+                    foreach (var part in v.SimulationObject.PartOwner.Parts)
+                        if (G.SpaceSimulation.TryGetViewObject(part.SimulationObject, out var view)) { views.Add((part.Name, view.transform)); if (root == null) root = view.transform; }
+                    if (root == null) continue;
+                    for (int i = 0; i < views.Count; i++)
+                    {
+                        var rel = Quaternion.Inverse(root.rotation) * (views[i].Item2.position - root.position);
+                        w.WriteLine(t.ToString("F2", inv) + "," + phase + "," + views.Count + "," + i + "," + views[i].Item1 + "," + rel.x.ToString("R", inv) + "," + rel.y.ToString("R", inv) + "," + rel.z.ToString("R", inv));
+                    }
+                }
+            }
+            InputHolder.Roll = 0f;
+            yield return Shot("17-stack");
+            Stop();
+            Mark("finished stack");
+            File.WriteAllText(Path.Combine(dir, "out", "done.txt"), "ok");
+            yield return new WaitForSeconds(2f);
+            Application.Quit();
+        }
+
         static void SetGroup(KSPActionGroup group, bool on)
         {
             if (G.ViewController.TryGetActiveVehicle(out var v)) v.ControllableActionGroups?.SetGroup(group, on);
