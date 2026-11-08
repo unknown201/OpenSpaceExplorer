@@ -62,7 +62,7 @@ namespace OpenSpaceExplorer.Validation
     {
         const string Campaign = "OSE Parity";
         string dir;
-        StreamWriter trace;
+        StreamWriter trace, comLog;
         double start, last;
         string vesselId;
         bool done;
@@ -199,7 +199,7 @@ namespace OpenSpaceExplorer.Validation
                 yield return Shot("v1-ksc-night-before-vab");
             }
             bool orbital = scenario == "rotation" || scenario == "rcs" || scenario == "docking";
-            var snapshot = IOProvider.FromJsonFile<OABHistoricalSnapshot>(Path.Combine(dir, scenario == "rcs" ? "craft-rcs.json" : scenario == "rover" ? "craft-rover.json" : scenario == "legs" ? "craft-legs.json" : scenario == "stack" ? "craft-stack.json" : scenario == "docking" ? "craft-docking.json" : scenario.StartsWith("drop ") ? "craft-drop-" + scenario.Split(' ')[1] + ".json" : orbital ? "craft-rotation.json" : (scenario == "k1" || scenario == "partdump") ? "craft-k1.json" : "craft.json"));
+            var snapshot = IOProvider.FromJsonFile<OABHistoricalSnapshot>(Path.Combine(dir, scenario == "rcs" ? "craft-rcs.json" : scenario == "rover" ? "craft-rover.json" : scenario == "legs" ? "craft-legs.json" : scenario == "stack" ? "craft-stack.json" : scenario == "reentry" ? "craft-reentry.json" : scenario == "docking" ? "craft-docking.json" : scenario.StartsWith("drop ") ? "craft-drop-" + scenario.Split(' ')[1] + ".json" : orbital ? "craft-rotation.json" : (scenario == "k1" || scenario == "partdump") ? "craft-k1.json" : "craft.json"));
             var config = orbital
                 ? new OABConfig(OABVariant.VAB, OABEnvironmentType.Orbital, OABConstructionType.User, null)
                 : new OABConfig(OABVariant.VAB, OABEnvironmentType.Terrestrial, OABConstructionType.User, "Kerbin");
@@ -226,6 +226,7 @@ namespace OpenSpaceExplorer.Validation
             if (scenario == "partdump") { yield return PartDump(vessel); yield break; }
             if (scenario == "legs") { yield return Legs(vessel); yield break; }
             if (scenario == "stack") { yield return Stack(vessel); yield break; }
+            if (scenario == "reentry") { yield return Reentry(vessel); yield break; }
             if (scenario.StartsWith("drop ")) { yield return Drop(vessel, double.Parse(scenario.Split(' ')[2], CultureInfo.InvariantCulture)); yield break; }
             if (scenario == "visuals")
             {
@@ -245,6 +246,12 @@ namespace OpenSpaceExplorer.Validation
             G.ViewController.flightInputHandler.OverrideInputMaxThrottle(true);
             yield return new WaitForSeconds(0.5f);
             Begin(vessel);
+            // T3: the vessel's centre of mass in the root part's frame every tick, as the tanks drain
+            if (scenario == "com")
+            {
+                comLog = new StreamWriter(Path.Combine(dir, "out", "com-trace.csv"), false) { AutoFlush = true };
+                comLog.WriteLine("t,mass_t,parts,com_x,com_y,com_z,resource_t");
+            }
             vessel.ActivateNextStage();
             Mark("staged");
 
@@ -754,11 +761,73 @@ namespace OpenSpaceExplorer.Validation
                     ov.x, ov.y, ov.z, gv.x, gv.y, gv.z, vessel.flightCtrlState.X, vessel.flightCtrlState.Y, vessel.flightCtrlState.Z,
                     vessel.flightCtrlState.wheelThrottle, vessel.flightCtrlState.wheelSteer, tmax, tpod, teng };
                 trace.WriteLine(string.Join(",", Array.ConvertAll(v, x => x.ToString("R", CultureInfo.InvariantCulture))) + "," + vessel.Situation + "," + ut.ToString("R", CultureInfo.InvariantCulture));
+                if (comLog != null) LogCom(vessel, ut - start);
             }
             catch (Exception e) { Logger.LogError(e); Stop(); }
         }
 
-        void Stop() { if (trace == null) return; trace.Dispose(); trace = null; }
+        // the centre of mass (PartOwnerComponent.CenterOfMass) in the root part's frame, Unity axes
+        void LogCom(VesselComponent vessel, double t)
+        {
+            var inv = CultureInfo.InvariantCulture;
+            Transform root = null; double res = 0; int n = 0;
+            foreach (var part in vessel.SimulationObject.PartOwner.Parts)
+            {
+                n++;
+                res += part.ResourceMass;
+                if (root == null && G.SpaceSimulation.TryGetViewObject(part.SimulationObject, out var view)) root = view.transform;
+            }
+            if (root == null) return;
+            Vector3 c = G.UniverseView.PhysicsSpace.PositionToPhysics(vessel.CenterOfMass);
+            var rel = Quaternion.Inverse(root.rotation) * (c - root.position);
+            comLog.WriteLine(t.ToString("R", inv) + "," + vessel.totalMass.ToString("R", inv) + "," + n + "," + rel.x.ToString("R", inv) + "," + rel.y.ToString("R", inv) + "," + rel.z.ToString("R", inv) + "," + res.ToString("R", inv));
+        }
+
+        // T11/T15 heat shield: the Mk1 pod over a 1.25 m heat shield, held upright by SAS, put 70 km above the
+        // ground falling at 2,300 m/s; every tick each part's temperature, re-entry flux and ablator, until the
+        // craft is down or gone (or 6 minutes).
+        IEnumerator Reentry(VesselComponent vessel)
+        {
+            vessel.SetAutopilotEnableDisable(true);
+            yield return new WaitForSeconds(0.5f);
+            var state = new KSP.Sim.State.SurfaceTeleportState { ReferenceBodyGuid = vessel.mainBody.Name, Altitude = 70000.0, Latitude = vessel.Latitude, Longitude = vessel.Longitude, VerticalSpeed = -2300.0 };
+            Begin(vessel, "reentry-trace.csv");
+            var inv = CultureInfo.InvariantCulture;
+            var db = G.ResourceDefinitionDatabase;
+            using (var w = new StreamWriter(Path.Combine(dir, "out", "reentry-parts.csv"), false))
+            {
+                w.WriteLine("t,alt_m,mach,density,part,temp_k,max_temp_k,reentry_flux,ablator_units,ablator_capacity");
+                G.SpaceSimulation.TeleportSimObjectToSurface(vessel.SimulationObject, state);
+                Mark("teleported to 70 km, falling at 2300");
+                float t = 0; bool shot60 = false, shot30 = false;
+                while (t < 360)
+                {
+                    yield return new WaitForFixedUpdate();
+                    t += Time.fixedDeltaTime;
+                    var v = G.ViewController.GetActiveSimVessel();
+                    if (v == null || v.GlobalId.ToString() != vesselId) { Mark("vessel gone at " + t.ToString("F2", inv)); break; }
+                    foreach (var part in v.SimulationObject.PartOwner.Parts)
+                    {
+                        double units = 0, cap = 0;
+                        foreach (var r in part.PartResourceContainer.GetAllResourcesContainedData())
+                            if (db.GetResourceNameFromID(r.ResourceID) == "Ablator") { units += r.StoredUnits; cap += r.CapacityUnits; }
+                        w.WriteLine(t.ToString("F2", inv) + "," + v.AltitudeFromSeaLevel.ToString("R", inv) + "," + v.MachNumber.ToString("R", inv) + "," + v.AtmDensity.ToString("R", inv) + "," + part.Name + "," + part.Temperature.ToString("R", inv) + "," + part.MaxTemp.ToString("R", inv) + "," + part.ThermalData.ReentryFlux.ToString("R", inv) + "," + units.ToString("R", inv) + "," + cap.ToString("R", inv));
+                    }
+                    if (!shot60 && v.AltitudeFromSeaLevel < 60000) { shot60 = true; yield return Shot("18-reentry-60km"); }
+                    if (!shot30 && v.AltitudeFromSeaLevel < 30000) { shot30 = true; yield return Shot("19-reentry-30km"); }
+                    if (v.Situation == VesselSituations.Landed || v.Situation == VesselSituations.Splashed) { Mark("down " + v.Situation + " at " + t.ToString("F2", inv)); break; }
+                }
+            }
+            Stop();
+            yield return Finish("reentry");
+        }
+
+        void Stop()
+        {
+            if (comLog != null) { comLog.Dispose(); comLog = null; }
+            if (trace == null) return;
+            trace.Dispose(); trace = null;
+        }
         void OnDestroy() { Stop(); }
     }
 }
