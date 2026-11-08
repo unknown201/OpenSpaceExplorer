@@ -454,7 +454,9 @@ fn sun_and_sky(p: vec3<f32>, n: vec3<f32>, sun: vec3<f32>) -> Light {
     let r = clamp(length(p), bottom_r() + 0.001, top_r());
     let mu_s = dot(p, sun) / length(p);
     out.sky = irradiance(r, mu_s) * (1.0 + dot(n, p) / length(p)) * 0.5;
-    out.sun = frame.solar.xyz * transmittance_to_sun(r, mu_s) * ndl;
+    // the ground hides the sun once it is under the horizon (slopes facing it caught it from below and lit the
+    // land yellow-green at night)
+    out.sun = frame.solar.xyz * transmittance_to_sun(r, mu_s) * ndl * smoothstep(-0.03, 0.05, mu_s);
     return out;
 }
 
@@ -1718,8 +1720,18 @@ fn fs_far(in: FOut) -> @location(0) vec4<f32> {
     // Lit as the renderer lights the props' meshes (ambient 0.3, the rest by the sun, no exposure), so a prop
     // keeps its brightness when it turns into its impostor; on a dark body the planet's exposure would blow
     // bright rocks out to white. That colour is taken back through the tone map so the air can veil it.
-    let diffuse = max(dot(n, sun), 0.0) * eclipse(p_km, sun) * shade;
-    let lit = min(albedo * (0.3 + 0.7 * diffuse * frame.quality.w), vec3<f32>(0.95));
+    // The ambient follows the sun as the ground's does (planet.wgsl `ambient`): the meshes' 0.3 by day, the
+    // body's night ambient through the exposure after dusk (at 0.3 the trees glowed yellow-green under a black
+    // sky; KSP2's are near black at night).
+    // (through dusk too: the sky still lights the ground there)
+    let day = smoothstep(-0.2, 0.1, dot(normalize(p_km), sun));
+    // (a crown shades most of itself from the night sky: 0.4 of the ground's, so trees read darker than the
+    // lawn round them as KSP2's do, not twice as bright)
+    let amb = mix(surface.ambient_night.rgb * (2.0 / PI) * frame.sun.w * 0.4, vec3<f32>(0.3), day);
+    // (no sunlight once the sun is under the horizon: a crown's side normals caught it from below)
+    let up_sun = smoothstep(-0.03, 0.05, dot(normalize(p_km), sun));
+    let diffuse = max(dot(n, sun), 0.0) * eclipse(p_km, sun) * shade * up_sun;
+    let lit = min(albedo * (amb + 0.7 * diffuse * frame.quality.w), vec3<f32>(0.95));
     var radiance = -log(vec3<f32>(1.0) - lit) / max(frame.sun.w, 0.1);
     radiance = through_air(radiance, p_km);
     return vec4<f32>(tonemap(radiance), 1.0);
