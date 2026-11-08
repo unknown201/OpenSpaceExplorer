@@ -425,7 +425,11 @@ impl Detail {
             height += self.layers(&self.large, uv2, top, m, blend);
             height += self.layers(&self.medium, uv2, top, m, blend);
         }
-        let r = self.radius_m + height;
+        // The original's mesh job (`PQJob`, whose vertices are the ground drawn and collided with) passes a sphere
+        // radius of `radius - oceanAltitude`, so sea level meets the decals' centres at `radius`. (The CPU query
+        // `PQS.GetSurfaceHeight` passes `radius` and so tests every decal 4.27 km too high on Kerbin, culling
+        // those under 8.5 km across; the ground everyone sees is the job's.)
+        let r = self.radius_m + map.offset_m + height;
         let p = [dir[0] * r, dir[1] * r, dir[2] * r];
         let mut cur = height;
         for d in &self.decals {

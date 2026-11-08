@@ -3144,8 +3144,12 @@ impl FlightView {
         if planet_ready {
             // The planet's terrain replaces the hub scene's flat 60 km ground plane.
             // The campus's far LOD (KSCmain_LOD, a 13 km stand-in for the whole centre) would draw over the
-            // detailed buildings and stand as a slab past the campus edge.
-            gpu.hide_meshes("ksc", &["ground", "KSCmain_LOD"]);
+            // detailed buildings and stand as a slab past the campus edge. The outer ground mesh is a collider
+            // without a renderer in the original (the sea shows over it).
+            gpu.hide_meshes(
+                "ksc",
+                &["ground", "KSCmain_LOD", crate::ksc3d::KSC_COLLIDER_GROUND],
+            );
             if let Some(p) = self.planet.as_mut() {
                 for it in items.iter_mut() {
                     let campus = it.model == "ksc";

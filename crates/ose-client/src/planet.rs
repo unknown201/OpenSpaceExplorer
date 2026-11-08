@@ -1683,7 +1683,7 @@ impl PlanetRenderer {
         }
         if let Some(pack) = b.pack.take() {
             let (pack, blob) = *pack;
-            b.map = TerrainMap::from_pack(&pack, &blob);
+            b.map = TerrainMap::from_pack(&pack, &blob).map(TerrainMap::drawn_ground);
             if let Some(d) = b.map.as_ref().and_then(|m| m.detail.as_ref()) {
                 if let Some((view, params)) =
                     slope_texture(&self.device, &self.queue, &d.layer_slopes())
@@ -1742,7 +1742,7 @@ impl PlanetRenderer {
                     .as_ref()
                     .and_then(|v| v["surface"]["Radius"].as_f64())
                     .unwrap_or(1.0);
-                b.map = TerrainMap::from_entry(entry, blob, radius);
+                b.map = TerrainMap::from_entry(entry, blob, radius).map(TerrainMap::drawn_ground);
             }
             // A body without any height map (Jool) is drawn as the sphere.
             b.no_terrain = b.map.is_none();
