@@ -243,11 +243,54 @@ fn campus_tree_kept_off(
     (lat, lon): (f64, f64),
     grove: f64,
 ) -> bool {
-    kind == "tree" && grove < GROVE && excluded(ex, p) && on_campus_level(map, lat, lon)
+    kind == "tree"
+        && grove < GROVE
+        && excluded(ex, p)
+        && on_campus_level(map, lat, lon)
+        && !near_campus_bank(map, lat, lon)
+}
+
+/// Trees along a site model's banks grow as a full belt, without their item's thinning noise: KSP2's KSC rings its
+/// rivers and pad islands with dense, mature tree lines (behind the launch pad from its deck).
+fn campus_belt(item: &Item, map: &TerrainMap, lat: f64, lon: f64) -> bool {
+    item.kind == "tree" && near_campus_bank(map, lat, lon)
+}
+
+/// On the bed of a site model's lakes and rivers: its ground there lies well below the ground some tens of
+/// metres round it (the KSC's beds sit about 60 m under their banks, under the campus's own water). Props
+/// placed there stood under the water, unseen: most of the trees round the pad islands were lost that way.
+fn in_campus_water(map: &TerrainMap, lat: f64, lon: f64) -> bool {
+    let Some(o) = map.overlay.as_ref() else {
+        return false;
+    };
+    let Some(h) = o.sample(lat, lon) else {
+        return false;
+    };
+    o.sample_max(lat, lon, 60.0, map.body_radius_m)
+        .is_some_and(|top| h < top - 12.0)
+}
+
+/// Within about 150 m of where a site model's ground drops away to its rivers and lakes: KSP2 plants a belt of
+/// mature trees along those banks, round the pad islands too (the tree line behind the launch pad).
+fn near_campus_bank(map: &TerrainMap, lat: f64, lon: f64) -> bool {
+    let Some(o) = map.overlay.as_ref() else {
+        return false;
+    };
+    let Some(h) = o.sample(lat, lon) else {
+        return false;
+    };
+    // about 60, 100 and 140 m on Kerbin, eight ways
+    [0.00058, 0.00095, 0.00135].iter().any(|&r| {
+        (0..8).any(|k| {
+            let a = k as f64 * std::f64::consts::FRAC_PI_4;
+            o.sample(lat + r * a.sin(), lon + r * a.cos())
+                .is_none_or(|v| v < h - 3.0)
+        })
+    })
 }
 
 /// Share of the noise range (from its top) where groves stand on the campus lawns.
-const GROVE: f64 = 0.62;
+const GROVE: f64 = 0.5;
 /// Grove noise scale on the campus lawns (m).
 const GROVE_M: f64 = 220.0;
 
@@ -480,7 +523,10 @@ impl ScatterFile {
                             }
                         }
                         let (nx, ny) = (a * metres_per_unit, b * metres_per_unit);
-                        if let Some((sc, inverse)) = item.noise_density {
+                        if let Some((sc, inverse)) = item
+                            .noise_density
+                            .filter(|_| !campus_belt(item, map, lat, lon))
+                        {
                             let v = noise(nx / sc.max(1.0), ny / sc.max(1.0), seed);
                             let v = if inverse { 1.0 - v } else { v };
                             if unit(h, 5) > v {
@@ -519,7 +565,9 @@ impl ScatterFile {
                             item.y_offset[0] + (item.y_offset[1] - item.y_offset[0]) * unit(h, 7);
                         let pos = scale(d, radius + hgt + yo * s);
                         if excluded_props(exclude, pos, &item.kind)
-                            || on_campus_lawn(map, lat, lon)
+                            || (on_campus_lawn(map, lat, lon)
+                                && !(item.kind == "tree" && near_campus_bank(map, lat, lon)))
+                            || in_campus_water(map, lat, lon)
                             || campus_tree_kept_off(
                                 exclude,
                                 pos,
@@ -758,7 +806,10 @@ impl ScatterFile {
                         }
                     }
                     let (nx, ny) = (a * metres_per_unit, b * metres_per_unit);
-                    if let Some((sc, inverse)) = item.noise_density {
+                    if let Some((sc, inverse)) = item
+                        .noise_density
+                        .filter(|_| !campus_belt(item, map, lat, lon))
+                    {
                         let v = noise(nx / sc.max(1.0), ny / sc.max(1.0), seed);
                         let v = if inverse { 1.0 - v } else { v };
                         if unit(h, 5) > v {
@@ -776,7 +827,9 @@ impl ScatterFile {
                     // sunk a metre so the drawn terrain, coarser out there, never shows under it.
                     let world = scale(d, radius + planet_lod::ground_height(Some(map), d) - 1.0);
                     if excluded_props(exclude, world, &item.kind)
-                        || on_campus_lawn(map, lat, lon)
+                        || (on_campus_lawn(map, lat, lon)
+                            && !(item.kind == "tree" && near_campus_bank(map, lat, lon)))
+                        || in_campus_water(map, lat, lon)
                         || campus_tree_kept_off(
                             exclude,
                             world,
@@ -1020,6 +1073,41 @@ mod tests {
         assert!(excluded_props(&ex, pad, "tree"));
         assert!(excluded_props(&ex, lawn, "large_object"));
         assert!(!excluded_props(&ex, outside, "large_object"));
+    }
+
+    #[test]
+    fn trees_line_the_campus_banks_and_none_stand_in_its_lakes() {
+        let entry = BodyTerrain {
+            id: "Kerbin".into(),
+            has_ocean: true,
+            sites: vec![],
+            map: Some(MapRef {
+                offset: 0,
+                width: 16,
+                height: 8,
+                scale_m: 1.0,
+                offset_m: 0.0,
+                source: String::new(),
+            }),
+        };
+        let map = TerrainMap::from_entry(&entry, &[0u8; 16 * 8 * 2], 600_000.0).unwrap();
+        let at = |deg: f64, m: f64| {
+            let d = (m / 600_000.0f64).to_degrees();
+            (
+                -0.6836 + d * deg.to_radians().sin(),
+                -74.8198 + d * deg.to_radians().cos(),
+            )
+        };
+        // the lake ring round launch pad 1, about 600 m out to the east, is water; the pad's lawn is not
+        let (la, lo) = at(90.0, 620.0);
+        assert!(in_campus_water(&map, la, lo));
+        let (la, lo) = at(45.0, 300.0);
+        assert!(!in_campus_water(&map, la, lo));
+        // its bank, 500 m out to the north-east, carries the tree belt; the pad's own lawn does not
+        let (la, lo) = at(45.0, 520.0);
+        assert!(near_campus_bank(&map, la, lo));
+        let (la, lo) = at(45.0, 300.0);
+        assert!(!near_campus_bank(&map, la, lo));
     }
 
     #[test]

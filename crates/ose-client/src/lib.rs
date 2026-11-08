@@ -796,9 +796,10 @@ pub fn start() -> Result<(), JsValue> {
         vab_com: None,
         vab_cot: None,
         vab_col: None,
-        vab_show_col: stored("ose.vab.col").as_deref() != Some("off"),
-        vab_show_com: stored("ose.vab.com").as_deref() != Some("off"),
-        vab_show_cot: stored("ose.vab.cot").as_deref() != Some("off"),
+        // The original's centre-of-mass, lift and thrust markers start hidden.
+        vab_show_col: stored("ose.vab.col").as_deref() == Some("on"),
+        vab_show_com: stored("ose.vab.com").as_deref() == Some("on"),
+        vab_show_cot: stored("ose.vab.cot").as_deref() == Some("on"),
         vab_pam: None,
         vab_pam_recorded: false,
         vab_report_due: None,
@@ -8213,11 +8214,14 @@ impl App {
                 .get(&sel.part_id)
                 .map(|s| s.display_title().to_string())
                 .unwrap_or_else(|| sel.part_id.clone());
-            let stage = if sel.stage_index > 0 {
-                format!(" \u{b7} stage {}", sel.stage_index)
-            } else {
-                String::new()
-            };
+            // Numbered as the stage cards are: 01 fires first, at the bottom of the stack.
+            let stages = &self.editor.craft.stages;
+            let stage = self
+                .editor
+                .selected
+                .and_then(|i| stages.iter().position(|s| s.contains(&i)))
+                .map(|n| format!(" \u{b7} stage {:02}", stages.len() - n))
+                .unwrap_or_default();
             set_text(
                 &self.doc,
                 "vab-selected",
@@ -11969,6 +11973,17 @@ impl App {
                 f.stages.max(1),
                 f.delta_v_now_mps.max(0.0) + 0.0
             ),
+        );
+        // The GO button carries the stages left to fire and the delta-v, as the original's.
+        set_text(
+            &self.doc,
+            "fh-go-n",
+            &f.stages.saturating_sub(f.stage).to_string(),
+        );
+        set_text(
+            &self.doc,
+            "fh-go-dv",
+            &format!("\u{394}v {:.0} m/s", f.delta_v_now_mps.max(0.0) + 0.0),
         );
         set_text(
             &self.doc,
