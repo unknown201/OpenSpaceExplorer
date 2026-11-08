@@ -193,6 +193,8 @@ struct PartInfo {
     is_decoupler: bool,
     /// Fuel flows through the part (decouplers and separators: never).
     fuel_cross_feed: bool,
+    /// The player can switch its crossfeed (decouplers, separators, docking ports).
+    crossfeed_toggle: bool,
     /// A parachute's default opening pressure (atm) and full-deploy height (m), for its part window.
     #[serde(skip_serializing_if = "Option::is_none")]
     parachute: Option<ChuteInfo>,
@@ -305,6 +307,7 @@ fn part_infos(parts: &[ose_data::PartDef]) -> Vec<PartInfo> {
                     "DecouplerHorizontal" | "DecouplerVertical"
                 ) || p.category == "Coupling",
                 fuel_cross_feed: p.fuel_cross_feed,
+                crossfeed_toggle: p.crossfeed_toggle(),
                 parachute: p.parachute.as_ref().map(|c| ChuteInfo {
                     min_pressure_atm: c.min_pressure_atm,
                     deploy_altitude_m: c.deploy_altitude_m,
@@ -536,7 +539,7 @@ async fn main() -> anyhow::Result<()> {
     let mut crafts: Vec<save::SavedCraft> = Vec::new();
     let loaded = match (&replaying, &save_path) {
         (Some(r), _) => Ok(Some(r.baseline.clone())),
-        (None, Some(p)) => save::read(p),
+        (None, Some(p)) => save::read(p, &part_defs),
         (None, None) => Ok(None),
     };
     let p = save_path

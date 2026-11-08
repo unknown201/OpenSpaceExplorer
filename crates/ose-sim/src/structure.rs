@@ -280,6 +280,8 @@ pub struct Structure {
     >,
     pub fairing_panel_t: Vec<f64>,
     pub cargo_bay: Vec<bool>,
+    /// Parts whose crossfeed the pilot can switch (`PartDef::crossfeed_toggle`).
+    pub crossfeed_toggle: Vec<bool>,
     pub bay_open: Vec<bool>,
     pub shielded: Vec<bool>,
     /// The craft's +Z in flight (`flight::vessel_top`), inertial, kept current by the universe: with the
@@ -1151,6 +1153,14 @@ impl Structure {
                 })
                 .map(|m| m.unwrap_or(0.0))
                 .collect(),
+            crossfeed_toggle: craft
+                .parts
+                .iter()
+                .map(|p| {
+                    defs.iter()
+                        .any(|d| d.id == p.part_id && d.crossfeed_toggle())
+                })
+                .collect(),
             cargo_bay: (0..n)
                 .map(|i| def_of(i).is_some_and(|d| d.cargo_bay))
                 .collect(),
@@ -1278,6 +1288,10 @@ impl Structure {
             }
             "converter" if self.converter_defs[i].is_some() => {
                 self.converter_on[i] = on;
+                true
+            }
+            "crossfeed" if self.crossfeed_toggle.get(i).copied().unwrap_or(false) => {
+                self.net.set_crossfeed(i, on);
                 true
             }
             "fairing" if on && self.fairing_payload[i].is_some() => {

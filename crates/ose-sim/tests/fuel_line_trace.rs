@@ -33,7 +33,18 @@ fn burn(
     res: &[ResourceDef],
     seconds: f64,
 ) -> Vec<(f64, usize, String, f64)> {
+    burn_with(craft, defs, res, seconds, |_| {})
+}
+
+fn burn_with(
+    craft: &Craft,
+    defs: &[PartDef],
+    res: &[ResourceDef],
+    seconds: f64,
+    prep: impl Fn(&mut Structure),
+) -> Vec<(f64, usize, String, f64)> {
     let mut s = Structure::build(craft, defs, res);
+    prep(&mut s);
     let stage = (0..craft.stages.len().max(1))
         .find(|&k| !s.fed_engines(k).is_empty())
         .expect("a stage with a fed engine");
@@ -171,4 +182,43 @@ fn per_tank_drain_matches_the_ksp2_trace() {
         checked += 1;
     }
     assert!(checked > 100);
+}
+
+/// The decoupler's own crossfeed switch (the original's ToggleCrossfeed): off as built it keeps tank A to
+/// itself; switched on in the VAB, or in flight through the part action, the engine below reaches A.
+#[test]
+fn a_decoupler_with_crossfeed_switched_on_passes_fuel() {
+    let (mut craft, defs, res) = craft();
+    let first = (0..craft.parts.len())
+        .find(|&i| craft.parts[i].fuel_line_target.is_some())
+        .unwrap();
+    craft.parts[first].fuel_line_target = None;
+    let dec = (0..craft.parts.len())
+        .find(|&i| craft.parts[i].part_id.starts_with("decoupler"))
+        .unwrap();
+    let a = (0..craft.parts.len())
+        .find(|&i| craft.parts[i].part_id.starts_with("fueltank"))
+        .unwrap();
+    assert!(!craft.parts[dec].fuel_crossfeed, "built with crossfeed off");
+    let blocked = burn(&craft, &defs, &res, 400.0);
+    let full = stored(&blocked, 0.02, a, "Oxidizer");
+    let end_blocked = blocked.last().unwrap().0;
+    assert!((stored(&blocked, end_blocked, a, "Oxidizer") - full).abs() < 1e-9);
+
+    // in flight: the part action switches it on
+    let flight = burn_with(&craft, &defs, &res, 400.0, |s| {
+        assert!(s.part_action(dec, "crossfeed", true));
+        assert!(!s.part_action(a, "crossfeed", true), "a tank has no switch");
+    });
+    let end = flight.last().unwrap().0;
+    assert!(
+        stored(&flight, end, a, "Oxidizer") < 1e-6,
+        "A drained across the decoupler"
+    );
+    assert!(end > end_blocked * 1.8, "{end} s vs {end_blocked} s");
+
+    // built with it on: the same
+    craft.parts[dec].fuel_crossfeed = true;
+    let built = burn(&craft, &defs, &res, 400.0);
+    assert!((built.last().unwrap().0 - end).abs() < 0.05);
 }

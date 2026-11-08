@@ -336,6 +336,13 @@ impl PartDef {
             .iter()
             .any(|m| m == "PartComponentModule_FuelLine")
     }
+    /// The player can switch the part's crossfeed (`PartComponentModule_ToggleCrossfeed`: decouplers,
+    /// separators, docking ports), in the VAB and in flight.
+    pub fn crossfeed_toggle(&self) -> bool {
+        self.module_names
+            .iter()
+            .any(|m| m == "PartComponentModule_ToggleCrossfeed")
+    }
     /// A strut: a two-anchor part that braces the part it hangs on to the part at its far end.
     pub fn is_strut(&self) -> bool {
         self.module_names

@@ -38,6 +38,9 @@ pub struct PartSpec {
     /// Fuel flows through the part (decouplers and separators: never, whatever the craft says).
     #[serde(default = "yes")]
     pub fuel_cross_feed: bool,
+    /// Its crossfeed can be switched (decouplers, separators, docking ports): the craft's value decides.
+    #[serde(default)]
+    pub crossfeed_toggle: bool,
     /// `(resource, capacity_units)`; filled to capacity when the part is placed.
     #[serde(default)]
     pub resource_containers: Vec<ContainerSpec>,
@@ -297,7 +300,7 @@ impl Editor {
                     IDENTITY
                 },
                 stage_index,
-                fuel_crossfeed: true,
+                fuel_crossfeed: spec.fuel_cross_feed,
                 resources,
                 fuel_line_target: None,
             });
@@ -389,7 +392,7 @@ impl Editor {
             local_position,
             local_rotation: pq,
             stage_index,
-            fuel_crossfeed: true,
+            fuel_crossfeed: spec.fuel_cross_feed,
             resources,
             fuel_line_target: None,
         });
@@ -917,7 +920,7 @@ impl Editor {
             local_position: DVec3::default(),
             local_rotation: IDENTITY,
             stage_index,
-            fuel_crossfeed: true,
+            fuel_crossfeed: spec.fuel_cross_feed,
             resources: Vec::new(),
             fuel_line_target: None,
         };
@@ -1826,7 +1829,7 @@ impl Editor {
                 local_position: pos,
                 local_rotation: q,
                 stage_index,
-                fuel_crossfeed: true,
+                fuel_crossfeed: spec.fuel_cross_feed,
                 resources,
                 fuel_line_target: None,
             });
@@ -2214,9 +2217,9 @@ pub fn pam_html(craft: &Craft, i: usize, catalog: &Catalog) -> String {
         ));
     }
     let kinds = spec.map(part_action_kinds).unwrap_or_default();
-    // A decoupler never passes fuel (its definition's `fuel_cross_feed` is off, which the resource flow and the
-    // staging report follow whatever the craft says): only a fuel line feeds across it.
-    let crossfeed = if spec.is_some_and(|s| !s.fuel_cross_feed) {
+    // A decoupler, separator or docking port passes fuel only with its crossfeed switched on (off as built);
+    // a part with crossfeed off in its definition and no switch never does: only a fuel line feeds across it.
+    let crossfeed = if spec.is_some_and(|s| !s.fuel_cross_feed && !s.crossfeed_toggle) {
         "<label class=\"pam-row\" title=\"A decoupler never passes fuel: add a fuel line to feed across it\">\
          <span>Fuel crossfeed</span><input type=\"checkbox\" id=\"pam-crossfeed\" disabled /><b>blocked</b></label>"
             .to_string()
@@ -2551,6 +2554,9 @@ pub fn part_action_kinds(spec: &PartSpec) -> Vec<&'static str> {
     if id.starts_with("fairing") {
         kinds.push("fairing");
     }
+    if spec.crossfeed_toggle {
+        kinds.push("crossfeed");
+    }
     kinds
 }
 
@@ -2657,6 +2663,10 @@ pub fn action_label(kind: &str) -> String {
             "Converter on / off",
         ),
         "fairing" => ("", "Deploy fairing"),
+        "crossfeed" => (
+            "PartModules/Resources/ToggleCrossFeed",
+            "Crossfeed on / off",
+        ),
         _ => ("", "Action"),
     };
     crate::i18n::t(term, own)
@@ -3218,8 +3228,8 @@ mod tests {
         e.add_part(&cat["pod"], &cat).unwrap();
         let t = e.add_part(&cat["tank"], &cat).unwrap();
         let d = e.add_part(&cat["decoupler"], &cat).unwrap();
-        // every part is saved with crossfeed on; the decoupler's own definition blocks it
-        assert!(e.craft.parts[d].fuel_crossfeed);
+        // a part saves its definition's crossfeed; one with no switch shows it blocked
+        assert!(!e.craft.parts[d].fuel_crossfeed);
         let html = pam_html(&e.craft, d, &cat);
         assert!(
             html.contains("disabled") && html.contains("blocked"),
@@ -3230,6 +3240,16 @@ mod tests {
             html.contains("checked") && !html.contains("blocked"),
             "{html}"
         );
+        // with the original's crossfeed switch: off as built, and the checkbox works
+        cat.get_mut("decoupler").unwrap().crossfeed_toggle = true;
+        let d2 = e.add_part(&cat["decoupler"], &cat).unwrap();
+        assert!(!e.craft.parts[d2].fuel_crossfeed);
+        let html = pam_html(&e.craft, d2, &cat);
+        assert!(
+            !html.contains("disabled") && !html.contains("checked"),
+            "{html}"
+        );
+        assert!(part_action_kinds(&cat["decoupler"]).contains(&"crossfeed"));
     }
 
     #[test]
