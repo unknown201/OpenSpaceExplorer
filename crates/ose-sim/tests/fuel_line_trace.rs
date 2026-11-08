@@ -141,3 +141,34 @@ fn the_engine_below_the_decoupler_drains_the_tank_above_through_the_fuel_line_fi
         "half the propellant: {end_alone} s vs {end} s"
     );
 }
+
+/// Against KSP2's own trace of the same craft (run 2026-11-08, `tests/data/ksp2-fuelline-tanks.csv`):
+/// every second, each tank's stored oxidizer within 1% of its capacity. KSP2 starts drawing one physics
+/// tick or so after staging; the tanks then empty at 29.3 s and 58.5 s, OSE's at 29.2 s and 58.4 s.
+#[test]
+fn per_tank_drain_matches_the_ksp2_trace() {
+    let (craft, defs, res) = craft();
+    let tanks: Vec<usize> = (0..craft.parts.len())
+        .filter(|&i| craft.parts[i].part_id.starts_with("fueltank"))
+        .collect();
+    let trace = burn(&craft, &defs, &res, 400.0);
+    let ksp2 = include_str!("data/ksp2-fuelline-tanks.csv");
+    let mut checked = 0;
+    for line in ksp2
+        .lines()
+        .filter(|l| !l.starts_with('#') && !l.starts_with("t,"))
+    {
+        let f: Vec<&str> = line.split(',').collect();
+        let t: f64 = f[0].parse().unwrap();
+        let part = if f[1] == "A" { tanks[0] } else { tanks[1] };
+        let want: f64 = f[3].parse().unwrap();
+        let got = stored(&trace, t.max(0.02), part, "Oxidizer");
+        assert!(
+            (got - want).abs() < 0.016,
+            "t {t} s tank {}: OSE {got:.4} vs KSP2 {want:.4}",
+            f[1]
+        );
+        checked += 1;
+    }
+    assert!(checked > 100);
+}
