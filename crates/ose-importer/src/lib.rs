@@ -732,6 +732,14 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
                                     .is_some_and(|a| a.iter().any(|i| i["name"] == "IntakeAir")),
                                 vel_curve: b(em, "useVelCurve").then(|| curve(&em["velCurve"])),
                                 atm_curve: b(em, "useAtmCurve").then(|| curve(&em["atmCurve"])),
+                                response: b(em, "useEngineResponseTime").then(|| {
+                                    ose_data::EngineResponse {
+                                        acceleration_per_s: f(em, "engineAccelerationSpeed"),
+                                        deceleration_per_s: f(em, "engineDecelerationSpeed"),
+                                        spool_per_s: f(em, "engineSpoolTime"),
+                                        spool_idle: f(em, "engineSpoolIdle"),
+                                    }
+                                }),
                             });
                         }
                     }
