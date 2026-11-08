@@ -8,6 +8,7 @@
 pub mod craft;
 pub mod flight_geometry;
 pub mod missions;
+pub mod procedural;
 pub mod science;
 pub mod staging;
 pub mod terrain;
