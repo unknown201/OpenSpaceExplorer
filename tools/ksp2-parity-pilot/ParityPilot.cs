@@ -24,7 +24,8 @@ namespace OpenSpaceExplorer.Validation
     [DefaultExecutionOrder(-32000)]
     public sealed class InputHolder : MonoBehaviour
     {
-        public static float? Pitch, Yaw, Roll, X, Y, Z, WheelThrottle, WheelSteer, EvaFrontBack, EvaLeftRight;
+        public static float? Pitch, Yaw, Roll, X, Y, Z, WheelThrottle, WheelSteer, EvaFrontBack, EvaLeftRight, EvaUpDown;
+        public static Vector3? KerbalMove;
         public static bool? EvaJump, EvaRun;
         static readonly System.Reflection.BindingFlags Priv = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
         static void SetEva(string field, object value)
@@ -44,6 +45,17 @@ namespace OpenSpaceExplorer.Validation
             if (Z.HasValue) FlightInputHandler.OverrideInputTranslateZ(Z.Value);
             if (EvaFrontBack.HasValue) SetEva("_moveFrontBack", EvaFrontBack.Value);
             if (EvaLeftRight.HasValue) SetEva("_moveLeftRight", EvaLeftRight.Value);
+            if (EvaUpDown.HasValue) SetEva("_moveUpDown", EvaUpDown.Value);
+            if (KerbalMove.HasValue)
+            {
+                var v = GameManager.Instance?.Game?.ViewController?.GetActiveSimVessel();
+                if (v != null && v.IsKerbalEVA)
+                {
+                    var st = v.flightCtrlState;
+                    st.X = KerbalMove.Value.x; st.Y = KerbalMove.Value.y; st.Z = KerbalMove.Value.z;
+                    v.SetFlightControlState(st);
+                }
+            }
             if (EvaJump.HasValue) SetEva("_jump", EvaJump.Value);
             if (EvaRun.HasValue) SetEva("_run", EvaRun.Value);
             if (WheelThrottle.HasValue || WheelSteer.HasValue)
@@ -53,7 +65,7 @@ namespace OpenSpaceExplorer.Validation
                 FlightCtrlStateInputOverride.InputWheelSteeringOverride = WheelSteer ?? 0f;
             }
         }
-        public static void Clear() { Pitch = Yaw = Roll = X = Y = Z = WheelThrottle = WheelSteer = EvaFrontBack = EvaLeftRight = null; EvaJump = EvaRun = null; }
+        public static void Clear() { Pitch = Yaw = Roll = X = Y = Z = WheelThrottle = WheelSteer = EvaFrontBack = EvaLeftRight = EvaUpDown = null; KerbalMove = null; EvaJump = EvaRun = null; }
     }
 
     [BepInPlugin("org.openspaceexplorer.paritypilot", "OSE Parity Pilot", "0.1.0")]
@@ -198,7 +210,7 @@ namespace OpenSpaceExplorer.Validation
                 yield return new WaitForSecondsRealtime(4f);
                 yield return Shot("v1-ksc-night-before-vab");
             }
-            bool orbital = scenario == "rotation" || scenario == "rcs" || scenario == "docking" || scenario == "thrustwarp";
+            bool orbital = scenario == "rotation" || scenario == "rcs" || scenario == "docking" || scenario == "thrustwarp" || scenario == "warp" || scenario == "burn" || scenario == "jetpack";
             var snapshot = IOProvider.FromJsonFile<OABHistoricalSnapshot>(Path.Combine(dir, scenario == "rcs" ? "craft-rcs.json" : scenario == "jet" ? "craft-jet.json" : scenario == "rover" ? "craft-rover.json" : scenario == "legs" ? "craft-legs.json" : scenario == "fuelline" ? "craft-fuelline.json" : scenario == "crossfeed" ? "craft-crossfeed.json" : (scenario == "stack" || scenario == "thrustwarp") ? "craft-stack.json" : scenario == "reentry" ? "craft-reentry.json" : scenario == "docking" ? "craft-docking.json" : scenario.StartsWith("drop ") ? "craft-drop-" + scenario.Split(' ')[1] + ".json" : orbital ? "craft-rotation.json" : (scenario == "k1" || scenario == "partdump") ? "craft-k1.json" : "craft.json"));
             var config = orbital
                 ? new OABConfig(OABVariant.VAB, OABEnvironmentType.Orbital, OABConstructionType.User, null)
@@ -237,6 +249,9 @@ namespace OpenSpaceExplorer.Validation
                 Application.Quit();
                 yield break;
             }
+            if (scenario == "warp") { yield return OrbitScenarios.Warp(vessel, dir, Mark); yield return Finish("warp"); yield break; }
+            if (scenario == "burn") { yield return OrbitScenarios.Burn(vessel, dir, Mark); yield return Finish("burn"); yield break; }
+            if (scenario == "jetpack") { yield return OrbitScenarios.Jetpack(vessel, dir, Mark, (v, f) => Begin(v, f), Stop); yield return Finish("jetpack"); yield break; }
             if (orbital) { yield return Rotation(vessel); yield break; }
             if (scenario == "rover") { yield return Rover(vessel); yield break; }
             if (scenario == "eva") { yield return Eva(vessel); yield break; }

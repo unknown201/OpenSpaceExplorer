@@ -80,7 +80,7 @@ try {
     foreach ($s in $Scenarios) {
         $out = Join-Path $pilotDir "out"
         if (Test-Path $out) { Remove-Item -Recurse -Force $out }
-        Set-Content -Encoding ascii -NoNewline (Join-Path $pilotDir "run.txt") $s
+        Set-Content -Path (Join-Path $pilotDir "run.txt") -Value $s -Encoding ascii -NoNewline
         Write-Host "Starting KSP2 for '$s'..."
         Start-Process "steam://rungameid/954850"
         $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
