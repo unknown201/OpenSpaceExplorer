@@ -35,6 +35,7 @@ mod fx_post;
 pub mod gimbal;
 pub mod hud;
 pub mod input;
+pub mod interaction;
 pub mod kerbin_time;
 #[cfg(target_arch = "wasm32")]
 pub mod ksc3d;
@@ -406,6 +407,10 @@ struct App {
     tc_lessons: bool,
     /// Flight mouselook (Tab): moving the mouse turns the camera.
     mouselook: bool,
+    /// The last frame's real seconds (KSP2's flight camera orbit scales mouse pixels by it).
+    frame_dt_s: f64,
+    /// When the last frame started (ms).
+    frame_at_ms: f64,
     /// The aero overlay (F12) and the control trim (Alt + W/A/S/D/Q/E, Alt+X clears it): pitch, yaw, roll.
     aero_overlay: bool,
     /// For each loose assembly, the undo depth when it was left on the floor (0 for ones loaded).
@@ -890,6 +895,8 @@ pub fn start() -> Result<(), JsValue> {
         vab_grab_loose: None,
         loose_stamps: Vec::new(),
         mouselook: false,
+        frame_dt_s: 1.0 / 60.0,
+        frame_at_ms: 0.0,
         aero_overlay: false,
         vab_local_frame: false,
         lesson_selected: None,
@@ -4062,6 +4069,10 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
             if ev.shift_key() {
                 factor = factor.powi(3);
             }
+            // KSP2's zoom inputs: wheel notches through each action map's scroll scale (interaction.rs).
+            let notches = interaction::wheel_notches(ev.delta_y(), ev.delta_mode());
+            #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
+            let fine = ev.alt_key();
             let mut app = a.borrow_mut();
             #[cfg(target_arch = "wasm32")]
             if app.in_session && app.ksc_active() {
@@ -4070,18 +4081,25 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
             }
             #[cfg(target_arch = "wasm32")]
             if app.in_session && app.vab_active() {
-                app.vab3d.zoom(factor);
+                app.vab3d.zoom(notches, ev.shift_key(), fine);
                 app.lesson_event("CameraZoomedMessage");
                 return;
             }
             #[cfg(target_arch = "wasm32")]
             if app.flight_active() && app.gpu.is_some() {
-                app.flight3d.zoom(factor);
+                let f = interaction::flight_zoom(
+                    1.0,
+                    notches * interaction::FLIGHT_ZOOM_PER_NOTCH,
+                    fine,
+                );
+                app.flight3d.zoom(f);
                 app.lesson_event("CameraZoomedMessage");
                 return;
             }
             if app.is_3d() {
-                app.orbit_dist_km = (app.orbit_dist_km * factor).clamp(1.0e-2, 1.0e10);
+                // The map: one exponential step a notch, by its sign (a trackpad's fractions scale it).
+                let f = interaction::map_zoom(1.0, notches.signum()).powf(notches.abs().max(0.0));
+                app.orbit_dist_km = (app.orbit_dist_km * f).clamp(1.0e-2, 1.0e10);
             } else {
                 app.camera
                     .zoom_at(factor, ev.offset_x() as f64, ev.offset_y() as f64);
@@ -4168,8 +4186,11 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
         // Mouselook (Tab): the flight camera follows the mouse without a button held.
         #[cfg(target_arch = "wasm32")]
         if app.mouselook && app.flying.is_some() && !app.map_mode && ev.buttons() == 0 {
-            app.flight3d
-                .orbit(ev.movement_x() as f64, ev.movement_y() as f64);
+            let (dt, fine) = (app.frame_dt_s, ev.alt_key());
+            app.flight3d.orbit(
+                interaction::flight_orbit_degrees(ev.movement_x() as f64, dt, fine).to_radians(),
+                interaction::flight_orbit_degrees(ev.movement_y() as f64, dt, fine).to_radians(),
+            );
         }
         if app.mnv_drag.is_some() {
             app.mnv_drag_to(ev.client_x() as f64, ev.client_y() as f64, ev.shift_key());
@@ -4308,7 +4329,11 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
         if app.in_session && app.vab_active() {
             if let Some((x, y)) = app.drag {
                 let (nx, ny) = (ev.client_x() as f64, ev.client_y() as f64);
-                app.vab3d.orbit(nx - x, ny - y);
+                let fine = ev.alt_key();
+                app.vab3d.orbit(
+                    interaction::vab_orbit_radians(nx - x, fine),
+                    interaction::vab_orbit_radians(ny - y, fine),
+                );
                 app.lesson_event("CameraRotatedMessage");
                 app.drag = Some((nx, ny));
             } else {
@@ -4343,7 +4368,11 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
         if app.flight_active() && app.gpu.is_some() {
             if let Some((x, y)) = app.drag {
                 let (nx, ny) = (ev.client_x() as f64, ev.client_y() as f64);
-                app.flight3d.orbit(nx - x, ny - y);
+                let (dt, fine) = (app.frame_dt_s, ev.alt_key());
+                app.flight3d.orbit(
+                    interaction::flight_orbit_degrees(nx - x, dt, fine).to_radians(),
+                    interaction::flight_orbit_degrees(ny - y, dt, fine).to_radians(),
+                );
                 app.lesson_event("CameraRotatedMessage");
                 app.drag = Some((nx, ny));
             } else {
@@ -4389,8 +4418,11 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
         if let Some((x, y)) = app.drag {
             let (nx, ny) = (ev.client_x() as f64, ev.client_y() as f64);
             if app.is_3d() {
-                app.orbit_yaw -= (nx - x) * 0.005;
-                app.orbit_pitch = (app.orbit_pitch - (ny - y) * 0.005).clamp(-1.5, 1.5);
+                let (pitch, fine) = (app.orbit_pitch.to_degrees(), ev.alt_key());
+                app.orbit_yaw -= interaction::map_orbit_degrees(nx - x, pitch, fine).to_radians();
+                app.orbit_pitch = (app.orbit_pitch
+                    - interaction::map_orbit_degrees(ny - y, pitch, fine).to_radians())
+                .clamp(-1.5, 1.5);
             } else {
                 app.camera.pan_px(nx - x, ny - y);
             }
@@ -4958,10 +4990,10 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                         #[cfg(target_arch = "wasm32")]
                         {
                             let (dx, dy) = match code.as_str() {
-                                "ArrowLeft" => (-30.0, 0.0),
-                                "ArrowRight" => (30.0, 0.0),
-                                "ArrowUp" => (0.0, -30.0),
-                                _ => (0.0, 30.0),
+                                "ArrowLeft" => (-0.15, 0.0),
+                                "ArrowRight" => (0.15, 0.0),
+                                "ArrowUp" => (0.0, -0.15),
+                                _ => (0.0, 0.15),
                             };
                             app.flight3d.orbit(dx, dy);
                             app.lesson_event("CameraRotatedMessage");
@@ -7207,13 +7239,7 @@ impl App {
     /// W/S pitch, A/D yaw, Q/E roll the held part: 90 degrees a press with angle snap, 15 without (5 with
     /// Shift), as the original's rotate keys; Space puts it back upright.
     fn vab_turn_held(&mut self, code: &str, fine: bool) {
-        let step = if fine {
-            5.0
-        } else if self.vab_snap {
-            90.0
-        } else {
-            15.0
-        };
+        let step = interaction::rotation_step_degrees(self.vab_snap, fine);
         let (axis, sign) = match code {
             "KeyW" => (0, 1.0),
             "KeyS" => (0, -1.0),
@@ -12574,7 +12600,7 @@ impl App {
         }
         let (ux, uy) = self.mnv_dirs[k];
         let along = (x - x0) * ux + (y - y0) * uy;
-        let dv = along * if fine { 0.1 } else { 1.0 };
+        let dv = interaction::maneuver_delta_mps(along, fine);
         let (axis, sign) = (k / 2, if k % 2 == 0 { 1.0 } else { -1.0 });
         let Some(node) = self.node.as_mut() else {
             return;
@@ -12963,6 +12989,11 @@ impl App {
     }
 
     fn frame(&mut self) {
+        let t = now_ms();
+        if self.frame_at_ms > 0.0 {
+            self.frame_dt_s = ((t - self.frame_at_ms) / 1000.0).clamp(0.001, 0.1);
+        }
+        self.frame_at_ms = t;
         #[cfg(target_arch = "wasm32")]
         if let Some(gpu) = &self.gpu {
             let usage = if let Some(preview) = &self.planet_preview {
