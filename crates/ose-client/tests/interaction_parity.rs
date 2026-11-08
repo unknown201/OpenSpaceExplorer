@@ -137,3 +137,33 @@ fn warp_ladder_warp_to_and_drop_match_recorded_ksp2_equations() {
     }
     assert!(checked >= 30, "warp coverage was removed ({checked})");
 }
+
+/// T33 and T34: held-part rotation keys turn 90 degrees with snap on or off (Shift 5), and a held maneuver
+/// handle adds (pixels / (strength x DPI))^2 m/s every frame.
+#[test]
+fn rotation_keys_and_maneuver_handle_match_recorded_ksp2_equations() {
+    let fixture = reference();
+    let mut checked = 0;
+    for case in fixture["cases"].as_array().unwrap() {
+        let input = &case["input"];
+        let n = |k: &str| input[k].as_f64().unwrap();
+        let actual = match case["op"].as_str().unwrap() {
+            "rotation" => interaction::rotation_step_degrees(
+                input["snap"].as_bool().unwrap(),
+                input["fine"].as_bool().unwrap(),
+            ),
+            "maneuver" => {
+                n("frames") * interaction::maneuver_frame_mps(n("pixels"), n("dpi"), n("strength"))
+            }
+            _ => continue,
+        };
+        let expected = case["expected"].as_f64().unwrap();
+        assert!(
+            (actual - expected).abs() <= 1e-6 + 2e-6 * expected.abs(),
+            "{}: KSP2 {expected}, OSE {actual}",
+            case["id"]
+        );
+        checked += 1;
+    }
+    assert!(checked >= 28, "coverage was removed ({checked})");
+}
