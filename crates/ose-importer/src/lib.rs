@@ -777,6 +777,7 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
                                 mode_exit_running_s: f(em, "ModeExitRunningWaitTime"),
                                 mode_enter_s: f(em, "ModeEnterWaitTime"),
                                 mode_enter_running_s: f(em, "ModeEnterRunningWaitTime"),
+                                exhaust_damage: em["exhaustDamage"].as_bool().unwrap_or(true),
                             });
                         }
                     }

@@ -421,6 +421,7 @@ mod tests {
                         mode_exit_running_s: 0.0,
                         mode_enter_s: 0.0,
                         mode_enter_running_s: 0.0,
+                        exhaust_damage: true,
                     }]
                 })
                 .unwrap_or_default(),

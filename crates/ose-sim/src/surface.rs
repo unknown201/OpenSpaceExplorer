@@ -378,7 +378,9 @@ impl Structure {
                     let foot_v = p.v + omega.cross(arm) - spin(body).cross(foot);
                     let slide = foot_v - n * foot_v.dot(n);
                     let slide_mps = slide.length();
-                    let grip = if load > 0.0 && slide_mps > 1e-9 {
+                    // only a leg's foot: a wheel rolls, its grip is the tyre's (`wheels`), and a wheel
+                    // that scrubbed here held a plane on the runway with its full load (T41)
+                    let grip = if gear.leg && load > 0.0 && slide_mps > 1e-9 {
                         let along = local(frame, slide * (1.0 / slide_mps));
                         let inverse = inverse_effective_mass(mass, local(frame, arm), along);
                         let stop = slide_mps / (dt * inverse * gear_count as f64);
