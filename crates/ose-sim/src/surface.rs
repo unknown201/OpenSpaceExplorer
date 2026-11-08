@@ -197,6 +197,16 @@ impl Structure {
         }
         let mass = propulsion.mass;
         let frame = flight::vessel_basis(p);
+        // engine exhaust blasting the craft's own parts: heat (taken up by the next heat step) and a push
+        for push in self.exhaust_blast(p.throttle) {
+            let r = self.rigid.rest_position(push.part) + push.offset_m - mass.centre_m;
+            propulsion.force_kn = propulsion.force_kn + push.force_kn;
+            propulsion.torque_knm = propulsion.torque_knm + r.cross(push.force_kn);
+            self.surface_loads.push(PartForce {
+                force_kn: world(frame, push.force_kn),
+                ..push
+            });
+        }
         let up = p.r.normalized();
         let gravity = body.mu / p.r.length_squared();
         let omega = p.angvel + p.facing * p.roll_rate;

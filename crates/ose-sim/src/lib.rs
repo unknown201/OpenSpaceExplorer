@@ -15,6 +15,7 @@ pub mod contact;
 pub mod crew;
 pub mod docking;
 pub mod dynamics;
+pub mod exhaust;
 pub mod flight;
 pub mod jetpack;
 pub mod missions;
@@ -1963,6 +1964,10 @@ impl Universe {
                     if atmo.is_none() {
                         // Clear the overlay and saved part loads on an airless SOI transition.
                         st.aerodynamics_local(p.stage, structure::Airflow::at(&p, &body, None));
+                        // out of the air, engine exhaust is all that heats a part
+                        if heat.enabled {
+                            burned = st.apply_exhaust_heat(&heat, step_dt);
+                        }
                     }
                     p.lift_kn = lift;
                     p.aero_torque_knm = torque;
