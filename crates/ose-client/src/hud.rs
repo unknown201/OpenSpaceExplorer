@@ -892,6 +892,8 @@ pub fn flight_pam_html(
     part: PamPart,
 ) -> String {
     let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;");
+    // The game's part action wording in the player's language (OSE's own in English).
+    let l = |term: &str, own: &str| esc(&crate::i18n::t(term, own));
     let i = idx as u16;
     let mut rows = String::new();
     let mut acts = String::new();
@@ -910,10 +912,23 @@ pub fn flight_pam_html(
         .map(|c| c.1.as_str())
         .collect();
     if !crew.is_empty() {
-        rows.push_str(&row("Crew", esc(&crew.join(", "))));
+        rows.push_str(&row(
+            &l("Map/Info/Manifest/Crew", "Crew"),
+            esc(&crew.join(", ")),
+        ));
     }
     if let Some((_, st, open)) = f.parachutes.iter().find(|c| c.0 == i) {
-        rows.push_str(&row("Parachute", format!("{st:?} {:.0}%", open * 100.0)));
+        rows.push_str(&row(
+            &l("PartModules/Parachute/Name", "Parachute"),
+            format!(
+                "{} {:.0}%",
+                l(
+                    &format!("PartModules/Parachute/DeploymentStates/{st:?}"),
+                    &format!("{st:?}")
+                ),
+                open * 100.0
+            ),
+        ));
         // `deploymentSafetyState`, shown while packed or armed
         if let Some((_, safety, _, _)) = f
             .chute_safety
@@ -922,22 +937,44 @@ pub fn flight_pam_html(
             .filter(|_| matches!(st, ChuteState::Stowed | ChuteState::Armed))
             .filter(|c| c.1 != ose_net::ChuteSafety::None)
         {
-            rows.push_str(&row("Chute Safety", format!("{safety:?}")));
+            rows.push_str(&row(
+                &l("PartModules/Parachute/ChuteSafety", "Chute Safety"),
+                l(
+                    &format!("PartModules/Parachute/DeploymentSafeStates/{safety:?}"),
+                    &format!("{safety:?}"),
+                ),
+            ));
         }
         if matches!(st, ChuteState::Stowed) {
-            acts.push_str("<button data-act=\"fh-act-chutes\">Arm parachutes</button>");
+            acts.push_str(&format!(
+                "<button data-act=\"fh-act-chutes\">{}</button>",
+                l("PartModules/Parachute/Armed/Enable", "Arm parachutes")
+            ));
         }
     }
     if let Some((_, out)) = f.gear.iter().find(|g| g.0 == i) {
-        rows.push_str(&row("Gear", if *out { "out" } else { "stowed" }.into()));
+        rows.push_str(&row(
+            &l("HUD/Tooltips/Gear", "Gear"),
+            if *out { "out" } else { "stowed" }.into(),
+        ));
         acts.push_str(&format!(
             "<button data-act=\"fh-act-gear\">{}</button>",
-            if *out { "Retract gear" } else { "Deploy gear" }
+            if *out {
+                l(
+                    "PartModules/Deployable/ToggleExtended/RetractGear",
+                    "Retract gear",
+                )
+            } else {
+                l(
+                    "PartModules/Deployable/ToggleExtended/ExtendGear",
+                    "Deploy gear",
+                )
+            }
         ));
     }
     if let Some((_, on, rate)) = f.converters.iter().find(|c| c.0 == i) {
         rows.push_str(&row(
-            "Converter",
+            &l("PartModules/ResourceConverter/Name", "Converter"),
             if *on {
                 format!("running {:.0}%", rate * 100.0)
             } else {
@@ -946,12 +983,16 @@ pub fn flight_pam_html(
         ));
         acts.push_str(&format!(
             "<button data-act=\"fh-act-converters\">{}</button>",
-            if *on { "Stop" } else { "Start" }
+            if *on {
+                l("PartModules/ResourceConverter/StopConverter", "Stop")
+            } else {
+                l("PartModules/ResourceConverter/StartConverter", "Start")
+            }
         ));
     }
     if is_solar {
         rows.push_str(&row(
-            "Panels",
+            &l("PartModules/SolarPanel/Name", "Panels"),
             if f.panels_deployed {
                 "deployed"
             } else {
@@ -962,9 +1003,15 @@ pub fn flight_pam_html(
         acts.push_str(&format!(
             "<button data-act=\"fh-act-solar\">{}</button>",
             if f.panels_deployed {
-                "Retract panels"
+                l(
+                    "PartModules/Deployable/ToggleExtended/RetractPanels",
+                    "Retract panels",
+                )
             } else {
-                "Extend panels"
+                l(
+                    "PartModules/Deployable/ToggleExtended/ExtendPanels",
+                    "Extend panels",
+                )
             }
         ));
     }
@@ -985,7 +1032,17 @@ pub fn flight_pam_html(
         ));
         acts.push_str(&format!(
             "<button data-act=\"fh-act-bays\">{}</button>",
-            if *open { "Close bay" } else { "Open bay" }
+            if *open {
+                l(
+                    "PartModules/Deployable/ToggleExtended/RetractDoors",
+                    "Close bay",
+                )
+            } else {
+                l(
+                    "PartModules/Deployable/ToggleExtended/ExtendDoors",
+                    "Open bay",
+                )
+            }
         ));
     }
     if f.shielded.contains(&i) {
@@ -1000,9 +1057,15 @@ pub fn flight_pam_html(
         acts.push_str(&format!(
             "<button data-act=\"fh-act-antenna\">{}</button>",
             if *out {
-                "Retract antenna"
+                l(
+                    "PartModules/Deployable/ToggleExtended/RetractAntenna",
+                    "Retract antenna",
+                )
             } else {
-                "Extend antenna"
+                l(
+                    "PartModules/Deployable/ToggleExtended/ExtendAntenna",
+                    "Extend antenna",
+                )
             }
         ));
     }
@@ -1010,14 +1073,23 @@ pub fn flight_pam_html(
         rows.push_str(&row("Control", "from here".into()));
         acts.push_str("<button data-act=\"fh-act-control\">Control from root</button>");
     } else if part.can_control {
-        acts.push_str("<button data-act=\"fh-act-control\">Control from here</button>");
+        acts.push_str(&format!(
+            "<button data-act=\"fh-act-control\">{}</button>",
+            l("PartModules/Command/ControlFromHere", "Control from here")
+        ));
     }
     if part.can_control {
-        acts.push_str("<button data-act=\"fh-act-rename\">Rename vessel</button>");
+        acts.push_str(&format!(
+            "<button data-act=\"fh-act-rename\">{}</button>",
+            l("PartModules/Command/RenameVessel", "Rename vessel")
+        ));
     }
     if let Some((s, n)) = part.stage {
         // Numbered as the staging stack shows it (the top, firing last, has the highest number).
-        rows.push_str(&row("Stage", (n - s).to_string()));
+        rows.push_str(&row(
+            &l("VAB/DeltaVTool/Stage", "Stage"),
+            (n - s).to_string(),
+        ));
         // The highest stage fires first; one past the end makes a new first stage.
         if s < n {
             acts.push_str("<button data-act=\"fh-act-stage-earlier\">Stage earlier</button>");
@@ -1053,16 +1125,32 @@ pub fn flight_pam_html(
     if capabilities & 1 != 0 {
         rows.push_str(&checkbox(
             "wheel_enabled",
-            "Reaction wheels",
+            &l("PartModules/ReactionWheel/TorqueEnabled", "Reaction wheels"),
             settings.wheel_enabled,
         ));
         rows.push_str(&percent(
             "wheel_authority",
-            "Wheel authority",
+            &l(
+                "PartModules/ReactionWheel/WheelAuthority",
+                "Wheel authority",
+            ),
             settings.wheel_authority,
         ));
-        rows.push_str("<label class='pam-row'>Wheel mode <select data-part-control='wheel_mode'>");
-        for (mode, label) in ["All", "Manual only", "SAS only"].iter().enumerate() {
+        rows.push_str(&format!(
+            "<label class='pam-row'>{} <select data-part-control='wheel_mode'>",
+            l("PartModules/ReactionWheel/WheelSetting", "Wheel mode")
+        ));
+        for (mode, label) in [
+            l("PartModules/ReactionWheel/WheelSetting/All", "All"),
+            l(
+                "PartModules/ReactionWheel/WheelSetting/ManualOnly",
+                "Manual only",
+            ),
+            l("PartModules/ReactionWheel/WheelSetting/SASOnly", "SAS only"),
+        ]
+        .iter()
+        .enumerate()
+        {
             rows.push_str(&format!(
                 "<option value='{mode}' {}>{label}</option>",
                 if settings.wheel_mode as usize == mode {
@@ -1077,18 +1165,30 @@ pub fn flight_pam_html(
     if capabilities & 2 != 0 {
         rows.push_str(&checkbox(
             "gimbal_enabled",
-            "Engine gimbal",
+            &l("PartModules/Gimbal/IsEnabled", "Engine gimbal"),
             settings.gimbal_enabled,
         ));
         rows.push_str(&percent(
             "gimbal_limiter",
-            "Gimbal travel",
+            &l("PartModules/Gimbal/Limiter", "Gimbal travel"),
             settings.gimbal_limiter,
         ));
         for (key, label, on) in [
-            ("pitch", "Gimbal pitch", settings.pitch),
-            ("yaw", "Gimbal yaw", settings.yaw),
-            ("roll", "Gimbal roll", settings.roll),
+            (
+                "pitch",
+                &l("PartModules/Gimbal/PitchEnabled", "Gimbal pitch"),
+                settings.pitch,
+            ),
+            (
+                "yaw",
+                &l("PartModules/Gimbal/YawEnabled", "Gimbal yaw"),
+                settings.yaw,
+            ),
+            (
+                "roll",
+                &l("PartModules/Gimbal/RollEnabled", "Gimbal roll"),
+                settings.roll,
+            ),
         ] {
             rows.push_str(&checkbox(key, label, on));
         }
@@ -1096,39 +1196,46 @@ pub fn flight_pam_html(
     if capabilities & 4 != 0 {
         rows.push_str(&checkbox(
             "rcs_enabled",
-            "RCS thrusters",
+            &l("PartModules/RCS/IsEnabled", "RCS thrusters"),
             settings.rcs_enabled,
         ));
         rows.push_str(&percent(
             "rcs_limiter",
-            "RCS authority",
+            &l("PartModules/RCS/RCSThrust", "RCS authority"),
             settings.rcs_limiter,
         ));
     }
     if capabilities & 8 != 0 {
         rows.push_str(&percent(
             "surface_authority",
-            "Control surface authority",
+            &l(
+                "PartModules/ControlSurface/AuthorityLimiter",
+                "Control surface authority",
+            ),
             settings.surface_authority,
         ));
         rows.push_str(&checkbox(
             "surface_deploy",
-            "Deploy surface",
+            &l("PartModules/ControlSurface/Deploy", "Deploy surface"),
             settings.surface_deploy,
         ));
         rows.push_str(&percent(
             "surface_deploy_fraction",
-            "Deploy angle",
+            &l("PartModules/ControlSurface/DeployAngle", "Deploy angle"),
             settings.surface_deploy_fraction,
         ));
         rows.push_str(&checkbox(
             "surface_invert",
-            "Invert surface",
+            &l("PartModules/ControlSurface/Invert", "Invert surface"),
             settings.surface_invert,
         ));
-        for (j, label) in ["Surface pitch", "Surface roll", "Surface yaw"]
-            .iter()
-            .enumerate()
+        for (j, label) in [
+            l("PartModules/ControlSurface/PitchEnabled", "Surface pitch"),
+            l("PartModules/ControlSurface/RollEnabled", "Surface roll"),
+            l("PartModules/ControlSurface/YawEnabled", "Surface yaw"),
+        ]
+        .iter()
+        .enumerate()
         {
             rows.push_str(&checkbox(
                 &format!("surface_axis-{j}"),
@@ -1139,12 +1246,12 @@ pub fn flight_pam_html(
     }
     if capabilities & 4 != 0 {
         for (j, label) in [
-            "RCS pitch",
-            "RCS roll",
-            "RCS yaw",
-            "RCS X",
-            "RCS Y",
-            "RCS Z",
+            l("PartModules/RCS/Pitch", "RCS pitch"),
+            l("PartModules/RCS/Roll", "RCS roll"),
+            l("PartModules/RCS/Yaw", "RCS yaw"),
+            "RCS X".to_string(),
+            "RCS Y".to_string(),
+            "RCS Z".to_string(),
         ]
         .iter()
         .enumerate()
@@ -1159,12 +1266,15 @@ pub fn flight_pam_html(
     if capabilities & 16 != 0 {
         rows.push_str(&percent(
             "thrust_limiter",
-            "Thrust limiter",
+            &l("PartModules/Engine/EngineThrustLimiter", "Thrust limiter"),
             settings.thrust_limiter,
         ));
     }
     if capabilities & 32 != 0 {
-        acts.push_str("<button data-control-from>Control from here</button>");
+        acts.push_str(&format!(
+            "<button data-control-from>{}</button>",
+            l("PartModules/Command/ControlFromHere", "Control from here")
+        ));
     }
     if rows.is_empty() {
         rows.push_str("<div class=\"pam-sub\">Nothing to set on this part.</div>");
