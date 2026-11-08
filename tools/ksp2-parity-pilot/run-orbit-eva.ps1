@@ -1,0 +1,118 @@
+<#
+.SYNOPSIS
+  KSP2 reference runs for time warp and SOI change (warp, T8), a 100 m/s prograde burn (burn, T9) and the EVA
+  jetpack (jetpack, T21), then puts everything back.
+
+.DESCRIPTION
+  Run by hand from the repository root, with KSP2 closed and a visible desktop (screenshots need a display):
+
+      powershell -ExecutionPolicy Bypass -File tools\ksp2-parity-pilot\run-orbit-eva.ps1
+
+  What it does:
+    1. Builds the parity pilot (tools\ksp2-parity-pilot) into a temp folder.
+    2. Backs up what it is about to change in the KSP2 folder: BepInEx\plugins\OSE.ParityPilot.dll,
+       BepInEx\ose-parity\run.txt, BepInEx\ose-parity\craft-rotation.json, BepInEx\ose-parity\out, and the
+       "OSE Parity" campaign folder under %USERPROFILE%\AppData\LocalLow\Intercept Games\Kerbal Space Program 2\
+       Saves\SinglePlayer. Nothing else is touched; your own campaigns are never opened.
+    3. Installs the new pilot and craft-rotation.json (the run-1 craft), then for each scenario writes run.txt,
+       starts KSP2 through Steam, waits for the pilot to finish (it quits KSP2 itself) and copies
+       BepInEx\ose-parity\out to reference\ksp2-warp-soi, reference\ksp2-burn-100 and reference\ksp2-jetpack.
+         warp:    100 km circular Kerbin orbit, 60 s real at x100, 30 s at x1000, then a Mun orbit (pe 100 km, ap
+                  past the SOI) at x100 until the SOI changes; apsides, UT, body, warp each second (warp-trace.csv).
+         burn:    100 km circular orbit, SAS prograde, full throttle until the orbital speed grew 100 m/s; apsides,
+                  speed, mass every tick (burn-trace.csv); start/end UT and fuel used in steps.log.
+         jetpack: 100 km orbit, the pilot goes on EVA, jetpack up 2 s, coast 2 s, forward 2 s; velocity and mass
+                  every tick (jetpack-trace.csv).
+    4. Always (also on failure or Ctrl+C) restores everything from step 2, so the KSP2 folder and the parity
+       campaign are as they were.
+
+  Each scenario takes 3-6 minutes. Pass -Scenarios warp (or burn, jetpack) to run only one.
+#>
+param(
+    [string]$Ksp2 = "C:\Program Files (x86)\Steam\steamapps\common\Kerbal Space Program 2",
+    [string[]]$Scenarios = @("warp", "burn", "jetpack"),
+    [int]$TimeoutMinutes = 20
+)
+$ErrorActionPreference = "Stop"
+$repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$pilotDir = Join-Path $Ksp2 "BepInEx\ose-parity"
+$plugin = Join-Path $Ksp2 "BepInEx\plugins\OSE.ParityPilot.dll"
+$campaign = Join-Path $env:USERPROFILE "AppData\LocalLow\Intercept Games\Kerbal Space Program 2\Saves\SinglePlayer\OSE Parity"
+$outNames = @{ warp = "ksp2-warp-soi"; burn = "ksp2-burn-100"; jetpack = "ksp2-jetpack" }
+
+if (-not (Test-Path $pilotDir)) { throw "No ${pilotDir}: the parity pilot (BepInEx) is not installed in KSP2." }
+if (Get-Process -Name "KSP2_x64" -ErrorAction SilentlyContinue) { throw "KSP2 is running; close it first." }
+foreach ($s in $Scenarios) { if (-not $outNames.ContainsKey($s)) { throw "Unknown scenario '$s' (warp, burn, jetpack)." } }
+
+$stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+$work = Join-Path $env:TEMP "ose-parity-$stamp"
+$backup = Join-Path $work "backup"
+New-Item -ItemType Directory -Force $backup | Out-Null
+Write-Host "Backup and build folder: $work"
+
+# 1. build the pilot
+$build = Join-Path $work "pilot"
+& dotnet build -c Release (Join-Path $PSScriptRoot "ParityPilot.csproj") `
+    "-p:BepInExCoreDir=$Ksp2\BepInEx\core" "-p:GameManagedDir=$Ksp2\KSP2_x64_Data\Managed" -o $build | Out-Host
+if ($LASTEXITCODE -ne 0) { throw "Pilot build failed." }
+
+# 2. back up what this run changes
+function Save-Item($path, $name) {
+    if (Test-Path $path) { Copy-Item -Recurse -Force $path (Join-Path $backup $name) }
+    else { New-Item -ItemType File (Join-Path $backup "$name.absent") | Out-Null }
+}
+Save-Item $plugin "OSE.ParityPilot.dll"
+Save-Item (Join-Path $pilotDir "run.txt") "run.txt"
+Save-Item (Join-Path $pilotDir "craft-rotation.json") "craft-rotation.json"
+Save-Item (Join-Path $pilotDir "out") "out"
+Save-Item $campaign "OSE Parity"
+
+function Restore-Item($path, $name) {
+    $saved = Join-Path $backup $name
+    if (Test-Path "$saved.absent") { if (Test-Path $path) { Remove-Item -Recurse -Force $path } }
+    elseif (Test-Path $saved) {
+        if (Test-Path $path) { Remove-Item -Recurse -Force $path }
+        Copy-Item -Recurse -Force $saved $path
+    }
+}
+
+try {
+    # 3. install and run
+    Copy-Item -Force (Join-Path $build "OSE.ParityPilot.dll") $plugin
+    Copy-Item -Force (Join-Path $PSScriptRoot "craft-rotation.json") (Join-Path $pilotDir "craft-rotation.json")
+    foreach ($s in $Scenarios) {
+        $out = Join-Path $pilotDir "out"
+        if (Test-Path $out) { Remove-Item -Recurse -Force $out }
+        Set-Content -Path (Join-Path $pilotDir "run.txt") -Value $s -Encoding ascii -NoNewline
+        Write-Host "Starting KSP2 for '$s'..."
+        Start-Process "steam://rungameid/954850"
+        $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
+        $started = $false
+        while ((Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds 5
+            $running = [bool](Get-Process -Name "KSP2_x64" -ErrorAction SilentlyContinue)
+            if ($running) { $started = $true }
+            if ($started -and -not $running) { break }
+        }
+        if (Get-Process -Name "KSP2_x64" -ErrorAction SilentlyContinue) {
+            Write-Warning "KSP2 still running after $TimeoutMinutes minutes; closing it."
+            Stop-Process -Name "KSP2_x64" -Force
+            Start-Sleep -Seconds 5
+        }
+        $dest = Join-Path $repo ("reference\" + $outNames[$s])
+        if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
+        if (Test-Path $out) { Copy-Item -Recurse -Force $out $dest }
+        $ok = Test-Path (Join-Path $dest "done.txt")
+        Write-Host ("'$s': " + $(if ($ok) { "done" } else { "did not finish" }) + " -> $dest")
+    }
+}
+finally {
+    # 4. put everything back
+    if (Get-Process -Name "KSP2_x64" -ErrorAction SilentlyContinue) { Stop-Process -Name "KSP2_x64" -Force; Start-Sleep -Seconds 5 }
+    Restore-Item $plugin "OSE.ParityPilot.dll"
+    Restore-Item (Join-Path $pilotDir "run.txt") "run.txt"
+    Restore-Item (Join-Path $pilotDir "craft-rotation.json") "craft-rotation.json"
+    Restore-Item (Join-Path $pilotDir "out") "out"
+    Restore-Item $campaign "OSE Parity"
+    Write-Host "Restored the pilot, its run files and the OSE Parity campaign (backup kept in $backup)."
+}
