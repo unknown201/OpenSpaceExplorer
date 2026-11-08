@@ -263,27 +263,46 @@ fn draining_across_a_switched_on_decoupler_matches_the_ksp2_trace() {
     assert!(checked > 100);
 }
 
-/// Print OSE's per-tank trace of the asparagus craft (exploration; `--ignored --nocapture`).
+/// Asparagus against KSP2 (pilot scenario `asparagus`, run 2026-11-08, `tests/data/ksp2-asparagus-tanks.csv`):
+/// a core tank and two radial boosters, each with a Swivel, and a fuel line from each booster into the core.
+/// The core engine draws the boosters over the lines, so they empty first (19.6 s in KSP2) while the core
+/// stays full, then the core alone (empty at 48.7 s). Every second, each tank within 1% of its capacity.
 #[test]
-#[ignore]
-fn asparagus_trace_print() {
+fn asparagus_drain_order_matches_the_ksp2_trace() {
     let (craft, defs, res) = craft_from(include_str!(
         "../../../tools/ksp2-parity-pilot/craft-asparagus.json"
     ));
-    for (i, p) in craft.parts.iter().enumerate() {
-        println!(
-            "{i} {} parent {:?} target {:?}",
-            p.part_id, p.parent, p.fuel_line_target
-        );
-    }
+    let tanks: Vec<usize> = (0..craft.parts.len())
+        .filter(|&i| craft.parts[i].part_id.starts_with("fueltank"))
+        .collect();
+    // core first, then the +X and -X boosters, as the craft lists them
+    let (core, plus, minus) = (tanks[0], tanks[1], tanks[2]);
     let trace = burn(&craft, &defs, &res, 400.0);
-    let end = trace.last().unwrap().0;
-    for t in [0.02, 5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 40.0, 50.0, end] {
-        let row: Vec<String> = trace
-            .iter()
-            .filter(|x| (x.0 - t).abs() < 0.011 && x.2 == "Oxidizer")
-            .map(|x| format!("{}:{:.3}", x.1, x.3))
-            .collect();
-        println!("t {t:.2}: {}", row.join(" "));
+    let mut checked = 0;
+    for line in include_str!("data/ksp2-asparagus-tanks.csv")
+        .lines()
+        .filter(|l| !l.starts_with('#') && !l.starts_with("t,"))
+    {
+        let f: Vec<&str> = line.split(',').collect();
+        let t: f64 = f[0].parse().unwrap();
+        let part = match f[1] {
+            "C" => core,
+            "P" => plus,
+            _ => minus,
+        };
+        let want: f64 = f[3].parse().unwrap();
+        let got = stored(
+            &trace,
+            t.clamp(0.02, trace.last().unwrap().0),
+            part,
+            "Oxidizer",
+        );
+        assert!(
+            (got - want).abs() < 0.016,
+            "t {t} s tank {}: OSE {got:.4} vs KSP2 {want:.4}",
+            f[1]
+        );
+        checked += 1;
     }
+    assert!(checked > 140);
 }
