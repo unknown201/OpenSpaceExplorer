@@ -2530,6 +2530,21 @@ impl Structure {
         } else {
             mass.inertia.y.y
         };
+        // the centre of mass over the contact patches: along a level craft's Z (its belly), a standing
+        // craft's Y, plus the wheels' radius
+        let heights: Vec<f64> = wheels
+            .iter()
+            .map(|&i| {
+                let r = self.rigid.rest_position(i) - mass.centre_m;
+                let below = if level { r.z } else { r.y };
+                below.abs() + self.gear_defs[i].as_ref().map_or(0.0, |g| g.radius_m)
+            })
+            .collect();
+        p.drive.cg_height_m = if heights.is_empty() {
+            0.0
+        } else {
+            heights.iter().sum::<f64>() / heights.len() as f64
+        };
         let along: Vec<f64> = p.drive.wheels.iter().map(|w| w.at_m[0]).collect();
         let spread = along.iter().cloned().fold(f64::MIN, f64::max)
             - along.iter().cloned().fold(f64::MAX, f64::min);
@@ -3957,6 +3972,13 @@ impl Structure {
             let Some(def) = self.exhaust_defs[i].filter(|_| self.rigid.present[i]) else {
                 continue;
             };
+            // Module_Engine.EngineExhaustDamage returns at once for a mode without `exhaustDamage`
+            if self.engine_modes[i]
+                .get(self.engine_mode[i])
+                .is_some_and(|m| !m.exhaust_damage)
+            {
+                continue;
+            }
             let radius = self.exhaust_diameter_m[i] * 0.5 * def.radius_multiplier;
             let range = def.max_range_m - 2.0 * radius;
             for nozzle in self

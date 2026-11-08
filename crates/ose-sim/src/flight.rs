@@ -549,6 +549,13 @@ pub struct Drive {
     /// Moment of inertia about the vertical through the centre of mass, t·m² (0: from the wheels).
     #[serde(default)]
     pub yaw_inertia_tm2: f64,
+    /// Height of the centre of mass over the wheels' contact, m (0: the weight is not shifted), and the
+    /// craft's acceleration along and across its drive direction at the last wheel step, m/s²: the
+    /// load on each wheel follows them, as each KSP2 wheel's suspension load does.
+    #[serde(default)]
+    pub cg_height_m: f64,
+    #[serde(default)]
+    pub acceleration_mps2: [f64; 2],
     /// Share of the motors' charge that was delivered (0..1).
     pub powered: f64,
 }
@@ -567,6 +574,8 @@ impl Default for Drive {
             lateral_mps: 0.0,
             yaw_rate_rad_s: 0.0,
             yaw_inertia_tm2: 0.0,
+            cg_height_m: 0.0,
+            acceleration_mps2: [0.0, 0.0],
             powered: 1.0,
         }
     }
@@ -642,6 +651,8 @@ pub const JUMP_PUSH_S: f64 = 0.286;
 /// takes some back before it moves: KSP2 trace run 14 (walk set to 0.8 m/s, run to 2.2) moves at 0.65 and
 /// 2.05 m/s, the same 0.15 m/s a 0.02 s tick, which is this friction coefficient times gravity times the tick.
 pub const KERBAL_GROUND_FRICTION: f64 = 0.765;
+/// How fast the attitude hold stops a rolling craft's yaw, s (a stability-assist time constant).
+pub const GROUND_YAW_HOLD_S: f64 = 0.25;
 
 fn yes() -> bool {
     true
@@ -2060,12 +2071,27 @@ pub fn integrate_with_propulsion(
                 let behind = ground_radius(body, terrain, p.r - dir * 2.0, ut + dt);
                 let rise = (ahead - behind) / 4.0;
                 let slope_acc = -g * rise / (1.0 + rise * rise).sqrt();
-                let moved = p.drive.step(
+                // the airflow's turn about the vertical (fins weathervaning a rolling plane straight, as on
+                // KSP2's rigidbody); the drive's yaw is positive to the right, clockwise seen from above
+                let mut yaw_torque = -p.aero_torque_knm.dot(up);
+                // KSP2's SAS keeps acting on the runway: holding an attitude, it damps the yaw with its
+                // reaction wheels and, at speed, the rudders (`surface_torque_knm`), as far as they reach
+                if p.controlled && p.level && p.attitude != Attitude::Free {
+                    let wheels = p
+                        .current_stage()
+                        .map_or(0.0, |s| s.wheel_torque_knm * p.wheel_scale.clamp(0.0, 1.0));
+                    let reach = wheels + p.surface_torque_knm.max(0.0);
+                    let damp =
+                        -p.drive.yaw_rate_rad_s * p.drive.yaw_inertia(p.mass_t) / GROUND_YAW_HOLD_S;
+                    yaw_torque += damp.clamp(-reach, reach);
+                }
+                let moved = p.drive.step_turning(
                     p.mass_t,
                     g,
                     body.mu / (body.radius_m * body.radius_m) / G0,
                     [slope_acc, 0.0],
                     [push.dot(dir), push.dot(right)],
+                    yaw_torque,
                     dt,
                 );
                 p.r = p.r + dir * moved[0] + right * moved[1];

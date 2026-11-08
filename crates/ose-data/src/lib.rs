@@ -975,6 +975,9 @@ pub struct EngineMode {
     pub mode_enter_s: f64,
     #[serde(default)]
     pub mode_enter_running_s: f64,
+    /// `exhaustDamage`: this mode's exhaust blasts what it meets (the Wheesley's Reverse does not).
+    #[serde(default = "yes")]
+    pub exhaust_damage: bool,
 }
 
 /// An air intake, as Module_ResourceIntake gathers IntakeAir each physics tick: while open, in air with oxygen
