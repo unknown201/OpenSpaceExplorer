@@ -98,6 +98,9 @@ namespace OpenSpaceExplorer.Validation
             var w = new StreamWriter(Path.Combine(dir, "out", "docking-trace.csv"), false);
             w.WriteLine("t,phase,gap_m,closing_mps,lateral_m,facing_dot,state_a,state_b,same_vessel,active_mass_t,a_mass_t,b_mass_t,com_x,com_y,com_z,input");
             string phase = "settle";
+            // time is game time (UT) since the trace began: the coroutine resumes once a frame, which can span
+            // several physics ticks when the frame rate drops, so counting fixedDeltaTime would run slow
+            double ut0 = G.UniverseModel.UniverseTime, lastUt = ut0;
             float t = 0, input = 0;
             Vector3 lastRel = Vector3.zero;
             bool haveLast = false;
@@ -108,12 +111,15 @@ namespace OpenSpaceExplorer.Validation
             IEnumerator Tick()
             {
                 yield return new WaitForFixedUpdate();
-                t += Time.fixedDeltaTime;
+                double now = G.UniverseModel.UniverseTime;
+                float step = (float)(now - lastUt);
+                lastUt = now;
+                t = (float)(now - ut0);
                 if (!Resolve(a) || !Resolve(b)) { w.WriteLine(t.ToString("F3", Inv) + "," + phase + ",,,,,,,,,,,,,,"); haveLast = false; yield break; }
                 var rel = b.Face.position - a.Face.position;
                 fwd = a.Face.forward;
                 gap = rel.magnitude;
-                if (haveLast) closing = -Vector3.Dot(rel - lastRel, gap > 1e-4f ? rel / gap : fwd) / Time.fixedDeltaTime;
+                if (haveLast && step > 1e-6f) closing = -Vector3.Dot(rel - lastRel, gap > 1e-4f ? rel / gap : fwd) / step;
                 lastRel = rel; haveLast = true;
                 var lateral = (rel - fwd * Vector3.Dot(rel, fwd)).magnitude;
                 var facing = Vector3.Dot(fwd, -b.Face.forward);

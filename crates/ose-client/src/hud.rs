@@ -1707,12 +1707,23 @@ pub fn transfers_html(
         ))
     );
     if let Some((res, from, to)) = running {
+        let bal = from.iter().filter(|p| to.contains(p)).count();
+        let (from_n, to_n) = (from.len() - bal, to.len() - bal);
+        let what = match (from_n > 0 && to_n > 0, bal > 1) {
+            (true, true) => format!(
+                "from {from_n} to {to_n} tank{}, balancing {bal}",
+                if to_n == 1 { "" } else { "s" }
+            ),
+            (false, true) => format!("balancing {bal} tanks"),
+            _ => format!(
+                "from {from_n} to {to_n} tank{}",
+                if to_n == 1 { "" } else { "s" }
+            ),
+        };
         html.push_str(&format!(
-            "<div class=\"rs-xfer-run\">Moving {} from {} to {} tank{}<button data-xfer-stop=\"1\" data-ose=\"xfer-stop\">{}</button></div>",
+            "<div class=\"rs-xfer-run\">Moving {} {}<button data-xfer-stop=\"1\" data-ose=\"xfer-stop\">{}</button></div>",
             crate::esc(&resource_name(res)),
-            from.len(),
-            to.len(),
-            if to.len() == 1 { "" } else { "s" },
+            what,
             crate::esc(&crate::i18n::t("Flight/ResourceManager/Stop", "Stop"))
         ));
     }
@@ -1735,16 +1746,20 @@ pub fn transfers_html(
             crate::esc(&resource_name(res))
         ));
         for (part, title, _, stored, cap) in list {
-            let out = picked && pick.1.contains(part);
-            let into = picked && pick.2.contains(part);
+            // a part in both lists is balanced with the others in both (the original's Balance state)
+            let bal = picked && pick.1.contains(part) && pick.2.contains(part);
+            let out = picked && pick.1.contains(part) && !bal;
+            let into = picked && pick.2.contains(part) && !bal;
             html.push_str(&format!(
                 "<div class=\"rs-row rs-tank\"><span>{title}</span><span>{s} / {c}</span>\
                  <span class=\"rs-xfer-btns\"><button class=\"{o}\" data-xfer-out=\"{part}\" data-xfer-res=\"{r}\">{out_t}</button>\
-                 <button class=\"{i}\" data-xfer-in=\"{part}\" data-xfer-res=\"{r}\">{in_t}</button></span>\
+                 <button class=\"{i}\" data-xfer-in=\"{part}\" data-xfer-res=\"{r}\">{in_t}</button><button class=\"{b}\" data-xfer-bal=\"{part}\" data-xfer-res=\"{r}\">{bal_t}</button></span>\
                  <div class=\"rs-bar\"><i style=\"width:{pct:.1}%\"></i></div></div>",
                 title = crate::esc(title),
                 out_t = crate::esc(&crate::i18n::t("Flight/ResourceManager/Out", "Out")),
                 in_t = crate::esc(&crate::i18n::t("Flight/ResourceManager/In", "In")),
+                bal_t = crate::esc(&crate::i18n::t("Flight/ResourceManager/Balance", "Balance")),
+                b = if bal { "on" } else { "" },
                 s = units(*stored),
                 c = units(*cap),
                 o = if out { "on" } else { "" },
@@ -1753,7 +1768,10 @@ pub fn transfers_html(
                 pct = (stored / cap).clamp(0.0, 1.0) * 100.0,
             ));
         }
-        if picked && !pick.1.is_empty() && !pick.2.is_empty() {
+        let balancing = pick.1.iter().filter(|p| pick.2.contains(p)).count();
+        let giving = pick.1.len() - balancing;
+        let taking = pick.2.len() - balancing;
+        if picked && ((giving > 0 && taking > 0) || balancing > 1) {
             html.push_str(&format!(
                 "<button class=\"rs-xfer-go\" data-xfer-go=\"{}\" data-ose=\"xfer-go\">Transfer</button>",
                 crate::esc(res)
@@ -2017,6 +2035,28 @@ pub fn players_html(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transfer_rows_offer_balance_and_a_part_in_both_lists_shows_as_balancing() {
+        let tanks: Vec<Tank> = vec![
+            (1, "A".into(), "Methane".into(), 10.0, 40.0),
+            (2, "B".into(), "Methane".into(), 30.0, 40.0),
+        ];
+        let none = (String::new(), Vec::new(), Vec::new());
+        let html = transfers_html(&tanks, &none, None);
+        assert!(html.contains("data-xfer-bal=\"1\""), "{html}");
+        // two tanks picked to balance: the Transfer button shows, both Balance buttons are on
+        let pick = ("Methane".to_string(), vec![1, 2], vec![1, 2]);
+        let html = transfers_html(&tanks, &pick, None);
+        assert!(html.contains("data-xfer-go"), "{html}");
+        assert!(html.contains("class=\"on\" data-xfer-bal=\"1\""), "{html}");
+        assert!(!html.contains("class=\"on\" data-xfer-out"), "{html}");
+        // one alone has nothing to balance with
+        let pick = ("Methane".to_string(), vec![1], vec![1]);
+        assert!(!transfers_html(&tanks, &pick, None).contains("data-xfer-go"));
+        let running = ("Methane".to_string(), vec![1, 2], vec![1, 2]);
+        assert!(transfers_html(&tanks, &none, Some(&running)).contains("balancing 2 tanks"));
+    }
 
     #[test]
     fn delta_v_reads_with_thousands_commas() {

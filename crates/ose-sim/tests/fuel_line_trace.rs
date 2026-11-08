@@ -222,3 +222,41 @@ fn a_decoupler_with_crossfeed_switched_on_passes_fuel() {
     let built = burn(&craft, &defs, &res, 400.0);
     assert!((built.last().unwrap().0 - end).abs() < 0.05);
 }
+
+/// Against KSP2's trace of the same craft with no fuel line and the decoupler's crossfeed switched on (run
+/// 2026-11-08, `tests/data/ksp2-crossfeed-tanks.csv`): both tanks drain together and empty at 58.5 s; every
+/// second, each tank's stored oxidizer within 1% of its capacity.
+#[test]
+fn draining_across_a_switched_on_decoupler_matches_the_ksp2_trace() {
+    let (mut craft, defs, res) = craft();
+    let first = (0..craft.parts.len())
+        .find(|&i| craft.parts[i].fuel_line_target.is_some())
+        .unwrap();
+    craft.parts[first].fuel_line_target = None;
+    let dec = (0..craft.parts.len())
+        .find(|&i| craft.parts[i].part_id.starts_with("decoupler"))
+        .unwrap();
+    craft.parts[dec].fuel_crossfeed = true;
+    let tanks: Vec<usize> = (0..craft.parts.len())
+        .filter(|&i| craft.parts[i].part_id.starts_with("fueltank"))
+        .collect();
+    let trace = burn(&craft, &defs, &res, 400.0);
+    let mut checked = 0;
+    for line in include_str!("data/ksp2-crossfeed-tanks.csv")
+        .lines()
+        .filter(|l| !l.starts_with('#') && !l.starts_with("t,"))
+    {
+        let f: Vec<&str> = line.split(',').collect();
+        let t: f64 = f[0].parse().unwrap();
+        let part = if f[1] == "A" { tanks[0] } else { tanks[1] };
+        let want: f64 = f[3].parse().unwrap();
+        let got = stored(&trace, t.max(0.02), part, "Oxidizer");
+        assert!(
+            (got - want).abs() < 0.016,
+            "t {t} s tank {}: OSE {got:.4} vs KSP2 {want:.4}",
+            f[1]
+        );
+        checked += 1;
+    }
+    assert!(checked > 100);
+}
