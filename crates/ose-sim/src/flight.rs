@@ -571,6 +571,14 @@ pub struct Drive {
     pub cg_height_m: f64,
     #[serde(default)]
     pub acceleration_mps2: [f64; 2],
+    /// A level craft's pitch on its gear (nose up from level), rad, how fast it changes, rad/s, and its
+    /// pitch moment of inertia about the centre of mass, t·m².
+    #[serde(default)]
+    pub pitch_rad: f64,
+    #[serde(default)]
+    pub pitch_rate_rad_s: f64,
+    #[serde(default)]
+    pub pitch_inertia_tm2: f64,
     /// Share of the motors' charge that was delivered (0..1).
     pub powered: f64,
 }
@@ -591,6 +599,9 @@ impl Default for Drive {
             yaw_inertia_tm2: 0.0,
             cg_height_m: 0.0,
             acceleration_mps2: [0.0, 0.0],
+            pitch_rad: 0.0,
+            pitch_rate_rad_s: 0.0,
+            pitch_inertia_tm2: 0.0,
             powered: 1.0,
         }
     }
@@ -614,9 +625,71 @@ pub struct DriveWheel {
     pub state: crate::wheels::WheelState,
 }
 
-/// A plane on its wheels rotates its nose up above this ground speed, at most this far, rad.
-pub const ROTATE_SPEED_MPS: f64 = 20.0;
+/// A plane on its main gear rotates its nose up at most this far, rad (its tail meets the runway).
 pub const MAX_ROTATE_RAD: f64 = 0.21;
+/// KSP2 run 21: a full stick turns the jet's nose up at this rate, rad/s², at `GROUND_ROTATE_REF_MPS`,
+/// scaling with dynamic pressure; below `GROUND_ROTATE_MIN_MPS` the elevators cannot lift the nose.
+pub const GROUND_ROTATE_ACCEL: f64 = 0.51;
+pub const GROUND_ROTATE_REF_MPS: f64 = 60.0;
+pub const GROUND_ROTATE_MIN_MPS: f64 = 20.0;
+
+/// A level craft rolling on its gear pitches its nose with the stick, as KSP2's Stock04_Jet does on the
+/// runway (run 21: full pitch-up at 60 m/s turns the nose up at 0.51 rad/s², about 13° in 0.95 s, and it
+/// flies): the pitch accelerates with the stick in proportion to the dynamic pressure against 60 m/s
+/// (the elevators' bite), from `GROUND_ROTATE_MIN_MPS`. With the stick released an attitude hold (SAS)
+/// stops the pitching; without one the nose settles back onto its wheel. The nose wheel holds it from
+/// going lower than level, the tail from going past `MAX_ROTATE_RAD`. Returns the pitch, rad.
+fn ground_pitch(p: &mut Powered, body: &Body, _flat: DVec3, up: DVec3, dt: f64) -> f64 {
+    let speed = p.drive.speed_mps.abs();
+    let stick = if p.controlled {
+        (p.rotation_input.x + p.trim.x).clamp(-1.0, 1.0)
+    } else {
+        0.0
+    };
+    let bite = if speed > GROUND_ROTATE_MIN_MPS {
+        (speed / GROUND_ROTATE_REF_MPS).powi(2).min(4.0)
+    } else {
+        0.0
+    };
+    let mut rate = p.drive.pitch_rate_rad_s;
+    let reach = GROUND_ROTATE_ACCEL * bite;
+    let steered = !matches!(p.attitude, Attitude::Free | Attitude::Fixed(_));
+    let accel = if stick != 0.0 && bite > 0.0 {
+        GROUND_ROTATE_ACCEL * stick * bite
+    } else if steered && p.controlled {
+        // an autopilot direction (pitch and heading, prograde ...) steers the nose toward its pitch with
+        // the same elevator bite, a critically damped turn
+        let omega = if body.rotation_period_s > 0.0 {
+            std::f64::consts::TAU / body.rotation_period_s
+        } else {
+            0.0
+        };
+        let want = attitude_direction(p.attitude, p.r, p.v, omega)
+            .dot(up)
+            .clamp(-1.0, 1.0)
+            .asin()
+            .clamp(0.0, MAX_ROTATE_RAD);
+        let k = 4.0;
+        ((want - p.drive.pitch_rad) * k * k - 2.0 * k * rate).clamp(-reach.max(1e-3), reach)
+    } else if p.attitude != Attitude::Free && p.controlled {
+        -rate / GROUND_YAW_HOLD_S
+    } else {
+        // weight brings the nose back down onto its wheel
+        -rate / GROUND_YAW_HOLD_S - p.drive.pitch_rad * 4.0
+    };
+    rate += accel * dt;
+    let mut pitch = p.drive.pitch_rad + rate * dt;
+    if pitch <= 0.0 {
+        pitch = 0.0;
+        rate = rate.max(0.0);
+    } else if pitch >= MAX_ROTATE_RAD {
+        pitch = MAX_ROTATE_RAD;
+        rate = rate.min(0.0);
+    }
+    p.drive.pitch_rad = pitch;
+    p.drive.pitch_rate_rad_s = rate;
+    pitch
+}
 
 /// The horizontal direction of compass heading `heading_rad` (clockwise from north) at `r`.
 pub fn heading_dir(r: DVec3, heading_rad: f64) -> DVec3 {
@@ -1346,8 +1419,36 @@ pub fn plan_actuators(
         0.0
     };
     let (request, _) = control_request(p, engine, target, frac, dt);
-    let request = if p.landed { DVec3::ZERO } else { request };
+    // on the ground the controls answer the pilot's stick (elevators rotate a plane on its main gear), the
+    // attitude hold does not steer
+    let request = if p.landed {
+        manual_request(p, channels)
+    } else {
+        request
+    };
     allocate_actuator_request(p, engine, channels, request)
+}
+
+/// The rotation the pilot asks for, as torque: each axis's input times the actuators' authority about it.
+fn manual_request(p: &Powered, channels: &[crate::actuators::Actuator]) -> DVec3 {
+    let authority = channels.iter().fold(DVec3::ZERO, |sum, a| {
+        let v = crate::aero::rotate_inverse(p.control_rotation, a.torque_knm);
+        sum + DVec3::new(v.x.abs(), v.y.abs(), v.z.abs())
+    });
+    let input = [
+        p.rotation_input.x + p.trim.x,
+        p.roll_input + p.rotation_input.z + p.trim.z,
+        p.rotation_input.y + p.trim.y,
+    ]
+    .map(|v| v.clamp(-1.0, 1.0));
+    crate::aero::rotate(
+        p.control_rotation,
+        DVec3::new(
+            input[0] * authority.x,
+            input[1] * authority.y,
+            -input[2] * authority.z,
+        ),
+    )
 }
 
 fn allocate_actuator_request(
@@ -1877,18 +1978,7 @@ pub fn integrate_with_propulsion(
                 // nose up toward the commanded pitch (as far as its tail clears the runway)
                 let up = p.r.normalized();
                 let flat = heading_dir(p.r, p.drive.heading_rad);
-                let want = attitude_direction(p.attitude, p.r, p.v, omega);
-                let wanted_pitch = if p.attitude == Attitude::Free {
-                    // a plane's +Z is its belly: nose up is pitch toward -Z
-                    (-p.rotation_input.x).clamp(0.0, 1.0) * MAX_ROTATE_RAD
-                } else {
-                    want.dot(up).clamp(-1.0, 1.0).asin()
-                };
-                let pitch = if p.drive.speed_mps.abs() > ROTATE_SPEED_MPS {
-                    wanted_pitch.clamp(0.0, MAX_ROTATE_RAD)
-                } else {
-                    0.0
-                };
+                let pitch = ground_pitch(p, body, flat, up, dt);
                 (flat * pitch.cos() + up * pitch.sin()).normalized()
             } else {
                 p.r.normalized()

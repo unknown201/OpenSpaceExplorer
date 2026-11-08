@@ -1280,15 +1280,23 @@ impl Universe {
                     part_b: sj,
                     speed_mps: -vn,
                 });
-            // a port struck harder than it can take breaks off, as hulls do
-            for (e, part) in [(l.a, si), (l.b, sj)] {
+            // a port struck harder than it can take breaks off, as hulls do (`collide::crash_breaks`)
+            let speed = (vb - va).length();
+            let part_mass = |e: Entity, part: usize, p: &flight::Powered| {
+                self.world
+                    .get::<structure::Structure>(e)
+                    .and_then(|st| st.rigid.masses_t.get(part).copied())
+                    .unwrap_or(p.mass_t)
+            };
+            let (mass_a, mass_b) = (part_mass(l.a, si, &pa), part_mass(l.b, sj, &pb));
+            for (e, part, other_mass) in [(l.a, si, mass_b), (l.b, sj, mass_a)] {
                 let tolerance = self
                     .world
                     .get::<structure::Structure>(e)
                     .and_then(|st| st.crash_tolerance.get(part).copied())
                     .filter(|t| *t > 0.0)
                     .unwrap_or(flight::CRASH_SPEED_MPS);
-                if -vn > tolerance {
+                if crate::collide::crash_breaks(speed, other_mass, tolerance) {
                     broken.push((e, part));
                 }
             }

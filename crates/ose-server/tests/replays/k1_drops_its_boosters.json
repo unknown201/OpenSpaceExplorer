@@ -1258,9 +1258,9 @@
   {
    "vessel": "Kerbal K1 debris",
    "field": "count",
-   "op": "eq",
-   "value": 4,
-   "why": "each booster is its own piece"
+   "op": "ge",
+   "value": 3,
+   "why": "the boosters come off as separate pieces; since the K1's all-moving fins got KSP2's lift (CtrlSurfaceArea 0.257, procedural wings) it turns harder with D, and one spent booster drifts into the core's exhaust and burns up about 1.4 s after staging, before the replay ends"
   },
   {
    "vessel": "Kerbal K1",

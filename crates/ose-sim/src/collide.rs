@@ -1,6 +1,7 @@
 //! Vessels and debris striking each other: each part a sphere round its box, contacts between the parts of
 //! two nearby vessels resolved with equal and opposite impulses (restitution and friction), and the parts
-//! that take a blow harder than their crash tolerance break off. Docking ports facing each other are left
+//! that take a blow harder than their crash tolerance (and than KSP2's `IsSurvivableCrash`, speed times the
+//! striking part's mass, allows) break off. Docking ports facing each other are left
 //! to docking, which stops them at their faces. Our own first model: no reference traces of the original's PhysX contacts yet.
 
 use bevy_ecs::prelude::*;
@@ -15,6 +16,13 @@ pub const FRICTION: f64 = 0.5;
 /// How much of a part's box the sphere round it covers (the half diagonal reaches the corners; parts are
 /// rarely their whole box).
 const SPHERE_SHARE: f64 = 0.8;
+
+/// Whether a part struck by another at `speed`, m/s, breaks (`PartBehavior`): faster than its crash tolerance,
+/// and with the speed times the mass of the part that struck it, t, over that tolerance too
+/// (`IsSurvivableCrash`).
+pub fn crash_breaks(speed: f64, other_mass_t: f64, tolerance: f64) -> bool {
+    speed > tolerance && speed * other_mass_t > tolerance
+}
 
 /// One part as the contact test sees it: (part, centre inertial offset from the vessel, radius).
 fn part_spheres(st: &structure::Structure, facing: DVec3) -> Vec<(usize, DVec3, f64)> {
@@ -257,15 +265,25 @@ impl Universe {
                         part_b: ib,
                         speed_mps: -vn,
                     });
-                    // what the blow breaks
-                    for (e, part) in [(a, ia), (b, ib)] {
+                    // what the blow breaks (`PartBehavior.OnCollisionEnter` / `IsSurvivableCrash`): a part struck
+                    // faster than its crash tolerance breaks unless the speed times the mass of the part that
+                    // struck it is within that tolerance too, so light debris cannot break a heavy part
+                    let speed = rel.length();
+                    let part_mass = |e: Entity, part: usize, p: &flight::Powered| {
+                        self.world
+                            .get::<structure::Structure>(e)
+                            .and_then(|st| st.rigid.masses_t.get(part).copied())
+                            .unwrap_or(p.mass_t)
+                    };
+                    let (mass_a, mass_b) = (part_mass(a, ia, &pa), part_mass(b, ib, &pb));
+                    for (e, part, other_mass) in [(a, ia, mass_b), (b, ib, mass_a)] {
                         let tolerance = self
                             .world
                             .get::<structure::Structure>(e)
                             .and_then(|st| st.crash_tolerance.get(part).copied())
                             .filter(|t| *t > 0.0)
                             .unwrap_or(flight::CRASH_SPEED_MPS);
-                        if -vn > tolerance {
+                        if crash_breaks(speed, other_mass, tolerance) {
                             broken.push((e, part));
                         }
                     }
@@ -851,6 +869,18 @@ mod tests {
             "{step_change:?} vs gravity {g_step}"
         );
         assert!(!pa.crashed && !pb.crashed, "a bump breaks nothing");
+    }
+
+    #[test]
+    fn light_parts_cannot_break_heavy_ones_as_in_ksp2() {
+        // the Mk1 pod (15 m/s): struck by a 1 t part at 20 m/s it breaks; by a 0.04 t decoupler at 20 m/s
+        // (0.8 t*m/s) it does not, and the decoupler would need 375 m/s
+        assert!(crash_breaks(20.0, 1.0, 15.0));
+        assert!(!crash_breaks(20.0, 0.04, 15.0));
+        assert!(!crash_breaks(370.0, 0.04, 15.0));
+        assert!(crash_breaks(380.0, 0.04, 15.0));
+        // never below the tolerance itself, however heavy the other part
+        assert!(!crash_breaks(14.0, 100.0, 15.0));
     }
 
     #[test]
