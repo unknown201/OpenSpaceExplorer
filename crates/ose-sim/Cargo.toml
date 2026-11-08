@@ -13,3 +13,6 @@ serde_json = { workspace = true }
 ose-math = { workspace = true }
 ose-data = { workspace = true }
 glam = "0.34"
+
+[dev-dependencies]
+ose-importer = { path = "../ose-importer" }
