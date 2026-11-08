@@ -18,6 +18,11 @@ use serde::{Deserialize, Serialize};
 pub const IDEAL_GAS_CONSTANT: f64 = 8.31447;
 /// Relative impact speed above this counts as a crash (wheel touchdown uses sink speed).
 pub const CRASH_SPEED_MPS: f64 = 12.0;
+/// How far over its crash tolerance a part must be struck for the craft behind it to carry on at full speed
+/// once it breaks, m/s. KSP2's crash drops (tall stack and pod on tank, 10 to 45 m/s): parts struck 0.6 and
+/// 0.9 m/s over their tolerance broke and the craft stopped on them; 5.4 m/s and more over, the craft fell on
+/// at full speed and its next layer struck in turn.
+pub const CRASH_PASS_THROUGH_MPS: f64 = 3.0;
 /// Highest warp allowed while any vessel is under powered flight (the original's physics warp).
 pub const MAX_PHYSICS_WARP: u32 = 4;
 /// Time warp a craft burning its engines in orbit allows (KSP2 keeps warping under thrust above the atmosphere
