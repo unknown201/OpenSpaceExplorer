@@ -15,7 +15,7 @@ New-Item -ItemType Directory -Force "$K\BepInEx\ose-wings" | Out-Null
 Copy-Item assets/ksp2/data/stockassemblies/Stock04_Jet.json "$K\BepInEx\ose-wings\craft.json"
 Copy-Item tools/ksp2-wing-probe/shapes.txt "$K\BepInEx\ose-wings\"
 Copy-Item .cache/wingprobe/OSE.WingProbe.dll "$K\BepInEx\plugins\"
-Set-Content "$K\BepInEx\ose-wings\run.txt" wings
+Set-Content -Path "$K\BepInEx\ose-wings\run.txt" -Value 'wings' -Encoding ascii
 Start-Process steam://rungameid/954850   # quits by itself; results in BepInEx\ose-wings\out\wings.csv
 ```
 
