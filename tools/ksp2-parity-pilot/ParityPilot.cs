@@ -226,7 +226,7 @@ namespace OpenSpaceExplorer.Validation
             if (scenario == "legs") { yield return Legs(vessel); yield break; }
             if (scenario == "visuals")
             {
-                vessel.SetActionGroup(KSPActionGroup.Lights, true);
+                SetGroup(KSPActionGroup.Lights, true);
                 yield return new WaitForSecondsRealtime(3f);
                 yield return Shot("v3-pad-night-lights");
                 // morning for the flight
@@ -382,7 +382,7 @@ namespace OpenSpaceExplorer.Validation
         IEnumerator Rcs(VesselComponent vessel)
         {
             vessel.SetAutopilotEnableDisable(false);
-            vessel.SetActionGroup(KSPActionGroup.RCS, true);
+            SetGroup(KSPActionGroup.RCS, true);
             vessel.IsRCSEnabled = true;
             yield return new WaitForSeconds(2f);
             Mark("rcs group " + vessel.GetActionGroupState(KSPActionGroup.RCS) + " IsRCSEnabled " + vessel.IsRCSEnabled + " mass " + vessel.totalMass);
@@ -415,9 +415,9 @@ namespace OpenSpaceExplorer.Validation
             Mark("coast");
             yield return Drive(3f, 0f, 0f);
             Mark("brakes");
-            vessel.SetActionGroup(KSPActionGroup.Brakes, true);
+            SetGroup(KSPActionGroup.Brakes, true);
             yield return Drive(8f, 0f, 0f);
-            vessel.SetActionGroup(KSPActionGroup.Brakes, false);
+            SetGroup(KSPActionGroup.Brakes, false);
             Mark("turn");
             yield return Drive(10f, 0.5f, 1f);
             yield return Drive(3f, 0f, 0f);
@@ -571,10 +571,12 @@ namespace OpenSpaceExplorer.Validation
             var names = new System.Collections.Generic.List<string>();
             foreach (var part in vessel.SimulationObject.PartOwner.Parts) names.Add(part.Name);
             Mark("parts " + string.Join(" ", names));
-            vessel.SetActionGroup(KSPActionGroup.Gear, true);
+            SetGroup(KSPActionGroup.Gear, true);
             vessel.SetAutopilotEnableDisable(true);
             Begin(vessel, "legs-trace.csv");
-            yield return new WaitForSeconds(10f);
+            yield return new WaitForSeconds(8f);
+            yield return Shot("15-legs-deployed");
+            yield return new WaitForSeconds(2f);
             Mark("hop");
             G.ViewController.flightInputHandler.OverrideInputMaxThrottle(true);
             vessel.ActivateNextStage();
@@ -608,6 +610,13 @@ namespace OpenSpaceExplorer.Validation
             InputHolder.WheelThrottle = throttle;
             InputHolder.WheelSteer = steer;
             yield return new WaitForSeconds(seconds);
+        }
+
+        // Action groups through the active vehicle's controllable groups, as the flight keys do
+        // (VesselComponent.SetActionGroup does not reach them for a freshly launched craft).
+        static void SetGroup(KSPActionGroup group, bool on)
+        {
+            if (G.ViewController.TryGetActiveVehicle(out var v)) v.ControllableActionGroups?.SetGroup(group, on);
         }
 
         static void Set(string axis, float v)
