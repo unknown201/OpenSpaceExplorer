@@ -11,6 +11,10 @@ use serde::Deserialize;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+/// The campus model's outer ground mesh (21 x 19 km): KSP2 keeps its MeshCollider and switches its renderer off,
+/// so over the planet's terrain it is never drawn (`ose_data::terrain::Overlay::drawn_for_body`).
+pub const KSC_COLLIDER_GROUND: &str = "ksc_campus_VertexPaint_02";
+
 #[derive(Deserialize, Clone, Debug)]
 pub struct KscScene {
     pub file: String,
@@ -443,8 +447,9 @@ impl KscView {
         match planet {
             Some((_, scatter, pass)) => {
                 // Kerbin's terrain replaces the campus's flat ground plane and far stand-in, and its sky the
-                // plain backdrop.
-                gpu.hide_meshes("ksc", &["ground", "KSCmain_LOD"]);
+                // plain backdrop. The 21 km outer ground mesh is a collider only in the original (its renderer
+                // is off): the terrain and the sea show there, open sea behind the VAB.
+                gpu.hide_meshes("ksc", &["ground", "KSCmain_LOD", KSC_COLLIDER_GROUND]);
                 // The trees and rocks keep a fixed sky fill; at night it fades with the campus's own, so they do
                 // not glow in the dark round an unlit campus.
                 let fill = (0.1 + 0.9 * day) as f32;

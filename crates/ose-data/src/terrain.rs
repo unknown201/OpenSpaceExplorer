@@ -89,9 +89,23 @@ pub struct TerrainMap {
     pub overlay: Option<std::sync::Arc<Overlay>>,
 }
 
+impl TerrainMap {
+    /// The map with only the site ground the original draws (`Overlay::drawn_for_body`), for drawing the ground
+    /// and placing scenery: the KSC campus's outer ground mesh is a collider without a renderer in KSP2, so the
+    /// terrain and the sea show over it. `height_m` on the server's map (all of it) is what craft stand on.
+    pub fn drawn_ground(mut self) -> TerrainMap {
+        if let Some(o) = &self.overlay {
+            self.overlay = Overlay::drawn_for_body(&o.body).map(std::sync::Arc::new);
+        }
+        self
+    }
+}
+
 /// A height field on a latitude/longitude rectangle (m above sea level, `None` where it has no ground).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Overlay {
+    /// The body the ground belongs to.
+    pub body: String,
     pub lat_deg: [f64; 2],
     pub lon_deg: [f64; 2],
     pub width: usize,
@@ -117,15 +131,32 @@ struct OverlayMeta {
 }
 
 impl Overlay {
-    /// The KSC campus ground for `body`, embedded from `assets/own/terrain/ksc_ground.*`.
+    /// The KSC campus ground for `body`, embedded from `assets/own/terrain/ksc_ground.*`: every ground mesh the
+    /// campus model has, as KSP2 collides with them (what craft stand on).
     pub fn for_body(body: &str) -> Option<Overlay> {
+        Self::embedded(
+            body,
+            include_bytes!("../../../assets/own/terrain/ksc_ground.bin"),
+        )
+    }
+
+    /// The part of that ground KSP2 draws (`ksc_ground_drawn.bin`): its outer 21 km ground mesh is a collider
+    /// without a renderer, so over most of it the terrain and the sea show (open sea behind the VAB). For
+    /// drawing and for placing scenery.
+    pub fn drawn_for_body(body: &str) -> Option<Overlay> {
+        Self::embedded(
+            body,
+            include_bytes!("../../../assets/own/terrain/ksc_ground_drawn.bin"),
+        )
+    }
+
+    fn embedded(body: &str, bytes: &[u8]) -> Option<Overlay> {
         let meta: OverlayMeta =
             serde_json::from_str(include_str!("../../../assets/own/terrain/ksc_ground.json"))
                 .ok()?;
         if meta.body != body {
             return None;
         }
-        let bytes = include_bytes!("../../../assets/own/terrain/ksc_ground.bin");
         let data: Vec<i16> = bytes
             .as_chunks::<2>()
             .0
@@ -134,6 +165,7 @@ impl Overlay {
             .collect();
         (data.len() == meta.width * meta.height).then(|| {
             let mut o = Overlay {
+                body: meta.body.clone(),
                 lat_deg: meta.lat_deg,
                 lon_deg: meta.lon_deg,
                 width: meta.width,
@@ -562,6 +594,24 @@ mod tests {
         // what the renderer drapes over it
         assert!((m.height_m(-0.66, -74.80) - (pad + OVERLAY_DRAPE_M)).abs() < 1e-9);
         assert!(m.max_m >= pad);
+    }
+
+    #[test]
+    fn behind_the_vab_ksp2_draws_the_sea_over_the_campus_collider() {
+        let all = Overlay::for_body("Kerbin").expect("embedded KSC ground");
+        let drawn = Overlay::drawn_for_body("Kerbin").expect("embedded KSC drawn ground");
+        assert!(Overlay::drawn_for_body("Mun").is_none());
+        // the launch pad's plateau is drawn ground
+        let pad = drawn.sample(-0.66, -74.80).unwrap();
+        assert!(
+            (pad - all.sample(-0.66, -74.80).unwrap()).abs() < 1.0,
+            "{pad}"
+        );
+        // 5 km east of pad 1 craft still stand on the outer ground mesh at the campus height, but nothing is
+        // drawn there above the sea
+        let (lat, lon) = (-0.6836, -74.8198 + 5_000.0 / 10_472.0);
+        assert!(all.sample(lat, lon).unwrap() > 100.0);
+        assert!(drawn.sample(lat, lon).is_none_or(|h| h < 0.0));
     }
 
     #[test]

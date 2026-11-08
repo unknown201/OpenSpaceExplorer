@@ -10,7 +10,10 @@ This rasterises those meshes, placed as the server places the campus (`ose_sim::
 the highest mesh altitude per cell (metres above sea level; empty cells hold -32768). `ose_data::terrain`
 embeds it and takes the higher of terrain and overlay, so the server stands craft on what the client draws.
 
-Writes assets/own/terrain/ksc_ground.bin (int16 decimetres, row 0 north) and ksc_ground.json (bounds, size).
+Writes assets/own/terrain/ksc_ground.bin (int16 decimetres, row 0 north) and ksc_ground.json (bounds, size),
+and ksc_ground_drawn.bin, the same grid from the meshes KSP2 draws only (`DRAWN`): KSP2 keeps the big
+`ksc_campus_VertexPaint_02` as a collider without a renderer, so craft stand on it (`ksc_ground.bin`, physics)
+but the sea shows over it (the client drapes the terrain over `ksc_ground_drawn.bin`).
 
 With the KSP2 install (`--install`, default the Steam path), also ksc_ground_sand.bin: the ground mesh's vertex
 paint alpha (its `_AGrassColor` layer, the sand rim KSP2 paints round the campus along its shores and banks) on
@@ -35,6 +38,9 @@ SITE = (-0.6836, -74.8198, 110.0)
 YAW_DEG = 0.0410
 ANCHOR = (10.088_055, -117.589_006, -2_104.040_008)
 MESHES = ("ksc_campus_VertexPaint_02", "ksc_campus_final")
+# The meshes KSP2 draws: `ksc_campus_VertexPaint_02`'s MeshRenderer is disabled in the KSC bundle (only its
+# MeshCollider, on the Local Scenery layer, is live), so the ground seen is the terrain and `ksc_campus_final`.
+DRAWN = ("ksc_campus_final",)
 PAINTED = "ksc_campus_VertexPaint_02"
 GRID = 256
 EMPTY = -32768
@@ -157,7 +163,7 @@ def rasterise_paint(tris, cols, bounds):
     return np.clip(out, 0.0, 1.0)
 
 
-def campus_triangles(glb: Path):
+def campus_triangles(glb: Path, meshes=MESHES):
     """World (scene) triangles of the campus ground meshes, (n, 3, 3)."""
     j, blob = read_glb(glb)
     parent = {c: i for i, nd in enumerate(j["nodes"]) for c in nd.get("children", [])}
@@ -177,7 +183,7 @@ def campus_triangles(glb: Path):
 
     tris = []
     for i, nd in enumerate(j["nodes"]):
-        if nd.get("mesh") is None or j["meshes"][nd["mesh"]].get("name") not in MESHES:
+        if nd.get("mesh") is None or j["meshes"][nd["mesh"]].get("name") not in meshes:
             continue
         w = world(i)
         for pr in j["meshes"][nd["mesh"]]["primitives"]:
@@ -208,10 +214,10 @@ def place(p):
     return lat, lon, r - RADIUS
 
 
-def rasterise(tris):
+def rasterise(tris, bounds=None):
     flat = tris.reshape(-1, 3)
     lat, lon, alt = place(flat)
-    lat0, lat1, lon0, lon1 = lat.min(), lat.max(), lon.min(), lon.max()
+    lat0, lat1, lon0, lon1 = bounds or (lat.min(), lat.max(), lon.min(), lon.max())
     grid = np.full((GRID, GRID), -np.inf)
     # cell centres; row 0 north
     gy = (lat1 - (np.arange(GRID) + 0.5) / GRID * (lat1 - lat0))
@@ -247,9 +253,13 @@ def main() -> int:
     ap.add_argument("--no-sand", action="store_true", help="leave ksc_ground_sand.bin as it is")
     a = ap.parse_args()
     grid, (lat0, lat1, lon0, lon1) = rasterise(campus_triangles(Path(a.glb)))
-    dm = np.where(np.isfinite(grid), np.clip(np.round(grid * 10), -32767, 32767), EMPTY).astype("<i2")
+    def decimetres(g):
+        return np.where(np.isfinite(g), np.clip(np.round(g * 10), -32767, 32767), EMPTY).astype("<i2")
+
     out = Path(a.out)
-    (out / "ksc_ground.bin").write_bytes(dm.tobytes())
+    (out / "ksc_ground.bin").write_bytes(decimetres(grid).tobytes())
+    drawn, _ = rasterise(campus_triangles(Path(a.glb), DRAWN), (lat0, lat1, lon0, lon1))
+    (out / "ksc_ground_drawn.bin").write_bytes(decimetres(drawn).tobytes())
     meta = {
         "body": "Kerbin",
         "lat_deg": [lat0, lat1],
@@ -265,6 +275,7 @@ def main() -> int:
         (out / "ksc_ground_sand.bin").write_bytes(np.round(sand * 255).astype(np.uint8).tobytes())
         print(f"sand: {(sand > 0.5).mean() * 100:.0f}% of cells")
     meta["sand"] = "ksc_ground_sand.bin: uint8 vertex paint alpha (the sand rim), same grid"
+    meta["drawn"] = "ksc_ground_drawn.bin: the meshes KSP2 draws (DRAWN), same grid and units"
     (out / "ksc_ground.json").write_text(json.dumps(meta, indent=1), encoding="utf-8")
     filled = np.isfinite(grid)
     print(f"{filled.mean() * 100:.0f}% filled, {grid[filled].min():.0f} to {grid[filled].max():.0f} m, "
