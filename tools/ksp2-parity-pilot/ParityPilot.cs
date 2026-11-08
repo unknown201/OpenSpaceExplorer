@@ -199,7 +199,7 @@ namespace OpenSpaceExplorer.Validation
                 yield return Shot("v1-ksc-night-before-vab");
             }
             bool orbital = scenario == "rotation" || scenario == "rcs" || scenario == "docking" || scenario == "thrustwarp";
-            var snapshot = IOProvider.FromJsonFile<OABHistoricalSnapshot>(Path.Combine(dir, scenario == "rcs" ? "craft-rcs.json" : scenario == "rover" ? "craft-rover.json" : scenario == "legs" ? "craft-legs.json" : (scenario == "stack" || scenario == "thrustwarp") ? "craft-stack.json" : scenario == "reentry" ? "craft-reentry.json" : scenario == "docking" ? "craft-docking.json" : scenario.StartsWith("drop ") ? "craft-drop-" + scenario.Split(' ')[1] + ".json" : orbital ? "craft-rotation.json" : (scenario == "k1" || scenario == "partdump") ? "craft-k1.json" : "craft.json"));
+            var snapshot = IOProvider.FromJsonFile<OABHistoricalSnapshot>(Path.Combine(dir, scenario == "rcs" ? "craft-rcs.json" : scenario == "jet" ? "craft-jet.json" : scenario == "rover" ? "craft-rover.json" : scenario == "legs" ? "craft-legs.json" : (scenario == "stack" || scenario == "thrustwarp") ? "craft-stack.json" : scenario == "reentry" ? "craft-reentry.json" : scenario == "docking" ? "craft-docking.json" : scenario.StartsWith("drop ") ? "craft-drop-" + scenario.Split(' ')[1] + ".json" : orbital ? "craft-rotation.json" : (scenario == "k1" || scenario == "partdump") ? "craft-k1.json" : "craft.json"));
             var config = orbital
                 ? new OABConfig(OABVariant.VAB, OABEnvironmentType.Orbital, OABConstructionType.User, null)
                 : new OABConfig(OABVariant.VAB, OABEnvironmentType.Terrestrial, OABConstructionType.User, "Kerbin");
@@ -210,6 +210,13 @@ namespace OpenSpaceExplorer.Validation
             yield return new WaitForSeconds(10f);
             Mark("vab " + State);
             yield return Shot("03-vab");
+            if (scenario == "jet")
+            {
+                // a plane: the hangar orientation and the runway, as the stock assembly's own launch site
+                G.OAB.Current.eventsUI.OnSetOABOrientationMode?.Invoke(OABOrientation.AIRPLANE);
+                G.OAB.SetLaunchSite(OABProvider.LaunchLocationNameToEnum("Runway_1"));
+                yield return new WaitForSeconds(2f);
+            }
             G.OAB.Current.eventsUI.OnLaunch?.Invoke();
             yield return WaitState(GameState.FlightView, 600);
             VesselComponent vessel = null;
@@ -221,6 +228,15 @@ namespace OpenSpaceExplorer.Validation
             if (scenario == "rcs") { yield return Rcs(vessel); yield break; }
             if (scenario == "docking") { yield return DockingScenario.Run(vessel, dir, Mark); yield return Finish("docking"); yield break; }
             if (scenario == "thrustwarp") { yield return ThrustWarp(vessel); yield break; }
+            if (scenario == "jet")
+            {
+                yield return JetScenario.Run(this, vessel, dir, Mark);
+                Mark("finished jet");
+                File.WriteAllText(Path.Combine(dir, "out", "done.txt"), "ok");
+                yield return new WaitForSeconds(3f);
+                Application.Quit();
+                yield break;
+            }
             if (orbital) { yield return Rotation(vessel); yield break; }
             if (scenario == "rover") { yield return Rover(vessel); yield break; }
             if (scenario == "eva") { yield return Eva(vessel); yield break; }
