@@ -96,7 +96,9 @@ It uses absolute tolerance 1e-6 and relative tolerance 2e-6 for C# float/Rust
 double differences, exact booleans and matching array lengths. Its full report
 is written to `.cache/interaction-parity-report.json`.
 
-Initial result: **49/130 cases aligned, 81 differed**. Throttle and radial
+Initial result (2026-10-29): **49/130 cases aligned, 81 differed**. After T27-T34 (2026-11-08: the camera gains,
+warp ladder/warp-to/drop, 90 degree rotation keys and the held-rate maneuver handle): **130/130 aligned** against
+this source-only reference; live input calibration is still open. Throttle and radial
 symmetry pass completely. The full parity gate intentionally exits 1 for
 the documented differences; it is not a passing end-to-end parity claim.
 Comparator unit tests use clearly marked synthetic results to test the gate

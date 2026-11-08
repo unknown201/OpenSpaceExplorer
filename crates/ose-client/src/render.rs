@@ -648,6 +648,8 @@ struct CpuModel {
 
 pub struct DrawItem {
     pub animation: Option<crate::animation::ClipSample>,
+    /// Clips blended by weight in place of `animation` when not empty (a Kerbal's animator cross-fades).
+    pub blend: Vec<(crate::animation::ClipSample, f32)>,
     /// Extra turns on named nodes after the animation pose, about a point in the node's own frame (a control
     /// surface on its hinge bone, a wing's flap about its leading edge).
     pub node_turns: Vec<(&'static str, glam::Quat, glam::Vec3)>,
@@ -706,6 +708,7 @@ impl DrawItem {
     ) -> DrawItem {
         DrawItem {
             animation: None,
+            blend: Vec::new(),
             node_turns: Vec::new(),
             node_rotations: Vec::new(),
             model,
@@ -2202,9 +2205,13 @@ impl Renderer {
                 item.rotation,
                 item.rel_pos_km,
             );
-            let mut pose = model
-                .rig
-                .pose(item.animation.or_else(|| model.rig.default_sample()));
+            let mut pose = if item.blend.is_empty() {
+                model
+                    .rig
+                    .pose(item.animation.or_else(|| model.rig.default_sample()))
+            } else {
+                model.rig.blended_pose(&item.blend)
+            };
             for (node, turn, pivot) in &item.node_turns {
                 if let Some(i) = model.rig.nodes.iter().position(|n| n.name == *node) {
                     // L' = L * T(p) * turn * T(-p), for the node's (uniform) scale s.
