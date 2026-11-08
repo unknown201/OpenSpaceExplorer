@@ -15,10 +15,10 @@
 
 use std::collections::HashMap;
 
-use ose_data::PartDef;
 use ose_data::craft::Craft;
+use ose_data::PartDef;
 
-use crate::rigid::{Link, joint_settings};
+use crate::rigid::{joint_settings, Link};
 
 /// The original strut joint: stack type, node size 0, not rigid, unbreakable.
 fn strut_stiffness() -> f64 {
@@ -49,10 +49,7 @@ fn path(links: &[Link], a: usize, b: usize) -> Vec<usize> {
     };
     let (ua, ub) = (up(a), up(b));
     // the lowest part both reach
-    let Some(meet) = ua
-        .iter()
-        .position(|(p, _)| ub.iter().any(|(q, _)| q == p))
-    else {
+    let Some(meet) = ua.iter().position(|(p, _)| ub.iter().any(|(q, _)| q == p)) else {
         return Vec::new();
     };
     let common = ua[meet].0;
@@ -170,7 +167,8 @@ mod tests {
         assert_eq!(defs.len(), 3, "test parts present in the catalog");
         let loose = RigidVessel::build(&booster(false), &defs, &[]);
         let braced = RigidVessel::build(&booster(true), &defs, &[]);
-        let link = |v: &RigidVessel, c: usize| v.links.iter().find(|l| l.child == c).unwrap().limits;
+        let link =
+            |v: &RigidVessel, c: usize| v.links.iter().find(|l| l.child == c).unwrap().limits;
         // the decoupler's two joints are on the strut's path: stronger and stiffer by the same factor
         for c in [1, 2] {
             let (a, b) = (link(&loose, c), link(&braced, c));

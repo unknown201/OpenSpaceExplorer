@@ -255,6 +255,8 @@ struct App {
     /// Ctrl+C clipboard, and whether the fragment in hand is a paste (dropped nowhere it just goes away).
     vab_clipboard: Option<vab::Fragment>,
     vab_pasting: bool,
+    /// A fuel line or strut just put on: its first anchor, waiting for a click on the part it runs to.
+    vab_linking: Option<usize>,
     /// The part in hand came from a picker click (not a paste).
     vab_from_picker: bool,
     /// A gizmo drag: the handle, the part, where the cursor started (device px) and the craft before it.
@@ -920,6 +922,7 @@ pub fn start() -> Result<(), JsValue> {
         vab_focused: None,
         vab_clipboard: None,
         vab_pasting: false,
+        vab_linking: None,
         vab_from_picker: false,
         vab_gizmo: None,
         vab_turn: vab::NO_TURN,
@@ -4454,6 +4457,12 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                     let rect = app.gpu_canvas.get_bounding_client_rect();
                     let (x, y) = (ev.client_x() as f64, ev.client_y() as f64);
                     let (px, py) = ((x - rect.left()) * app.dpr, (y - rect.top()) * app.dpr);
+                    if app.vab_linking.is_some() {
+                        // a click picks where the fuel line or strut runs to; a drag still turns the view
+                        app.drag = Some((x, y));
+                        app.press = Some((x, y));
+                        return;
+                    }
                     if let Some(i) = app.gpu.as_ref().and_then(|g| app.vab3d.pick(g, px, py)) {
                         app.vab_grab = Some((i, x, y));
                         app.press = Some((x, y));
@@ -4866,6 +4875,7 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                     if from_picker {
                         app.lesson_part(frag.root_id(), true);
                     }
+                    app.vab_start_link();
                 }
                 app.press = None;
                 app.render_vab();
@@ -4923,7 +4933,10 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                     };
                     app.catalog = cat;
                     match result {
-                        Ok(()) => app.lesson_part(&id, true),
+                        Ok(()) => {
+                            app.lesson_part(&id, true);
+                            app.vab_start_link();
+                        }
                         Err(e) => set_text(&app.doc, "vab-report", &e),
                     }
                     app.render_vab();
@@ -4980,12 +4993,16 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
             {
                 let rect = app.gpu_canvas.get_bounding_client_rect();
                 let (px, py) = ((nx - rect.left()) * app.dpr, (ny - rect.top()) * app.dpr);
-                let hit = app.gpu.as_ref().and_then(|g| app.vab3d.pick(g, px, py));
-                if let Some(i) = hit {
-                    app.editor.selected = Some(i);
-                    app.render_vab();
+                if app.vab_linking.is_some() {
+                    app.vab_finish_link(px, py);
+                } else {
+                    let hit = app.gpu.as_ref().and_then(|g| app.vab3d.pick(g, px, py));
+                    if let Some(i) = hit {
+                        app.editor.selected = Some(i);
+                        app.render_vab();
+                    }
+                    app.vab_open_pam(None, 0.0, 0.0);
                 }
-                app.vab_open_pam(None, 0.0, 0.0);
             } else if ev.button() == 2
                 && (nx - x).abs() < 4.0
                 && (ny - y).abs() < 4.0
@@ -5157,6 +5174,10 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                     }
                     "Escape" if app.vab_pasting => {
                         app.vab_cancel_paste();
+                        true
+                    }
+                    "Escape" if app.vab_linking.is_some() => {
+                        app.vab_cancel_link();
                         true
                     }
                     "KeyX" if !ctrl => {
@@ -7829,6 +7850,90 @@ impl App {
 
     fn vab_record(&mut self) {
         self.vab_history.record(&self.editor);
+    }
+
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    /// After a part goes on: a fuel line or strut still needs its far end, so the next click in the hall
+    /// picks the part it runs to (the original's compound part tool).
+    fn vab_start_link(&mut self) {
+        self.vab_linking = self.editor.unlinked(&self.catalog).into_iter().next();
+        if let Some(f) = self.vab_linking {
+            let strut = self
+                .catalog
+                .get(&self.editor.craft.parts[f].part_id)
+                .is_some_and(|s| s.compound == "strut");
+            let what = if strut { "strut" } else { "fuel line" };
+            set_text(
+                &self.doc,
+                "vab-report",
+                &format!("Click the part the {what} runs to (Esc takes it off)"),
+            );
+            if let Some(b) = self.doc.body() {
+                b.class_list().add_1("vab-linking").ok();
+            }
+        }
+    }
+
+    /// The click that finishes a fuel line or strut: its far end goes where the cursor meets a part.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables, dead_code))]
+    fn vab_finish_link(&mut self, px: f64, py: f64) {
+        let Some(first) = self.vab_linking else {
+            return;
+        };
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.vab3d.cursor = (px, py);
+            let Some((target, hit, normal)) =
+                self.gpu.as_ref().and_then(|g| self.vab3d.surface_hit(g))
+            else {
+                set_text(
+                    &self.doc,
+                    "vab-report",
+                    "Click a part to run it to (Esc takes it off)",
+                );
+                return;
+            };
+            self.vab_record();
+            let cat = std::mem::take(&mut self.catalog);
+            let result = self.editor.link(first, target, hit, normal, &cat);
+            self.catalog = cat;
+            match result {
+                Ok(_) => {
+                    self.vab_linking = None;
+                    if let Some(b) = self.doc.body() {
+                        b.class_list().remove_1("vab-linking").ok();
+                    }
+                    set_text(&self.doc, "vab-report", "");
+                }
+                Err(e) => {
+                    // nothing changed: drop the undo step just recorded
+                    let mut history = std::mem::take(&mut self.vab_history);
+                    history.undo(&mut self.editor);
+                    self.vab_history = history;
+                    set_text(&self.doc, "vab-report", &e);
+                }
+            }
+            self.render_vab();
+        }
+    }
+
+    /// Esc while a fuel line or strut waits for its far end: it comes off again (Ctrl+Z puts it back).
+    fn vab_cancel_link(&mut self) {
+        let Some(first) = self.vab_linking.take() else {
+            return;
+        };
+        if let Some(b) = self.doc.body() {
+            b.class_list().remove_1("vab-linking").ok();
+        }
+        if self.editor.unlinked(&self.catalog).contains(&first) {
+            self.vab_record();
+            self.editor.selected = Some(first);
+            let cat = std::mem::take(&mut self.catalog);
+            self.editor.remove_selected(&cat);
+            self.catalog = cat;
+        }
+        set_text(&self.doc, "vab-report", "");
+        self.render_vab();
     }
 
     /// The flight report window for the flight's records, how it ended and the science recovered.
@@ -13787,6 +13892,24 @@ impl App {
                 .hovered
                 .map(|i| self.editor.counterparts(i))
                 .unwrap_or_default();
+            // A fuel line or strut waiting for its far end: a line from it to the part under the cursor.
+            if self
+                .vab_linking
+                .is_some_and(|f| !self.editor.unlinked(&self.catalog).contains(&f))
+            {
+                // undone or removed meanwhile
+                self.vab_linking = None;
+            }
+            self.vab3d.link_preview = self.vab_linking.and_then(|f| {
+                let from = self.editor.craft.parts.get(f)?.local_position;
+                let to = self
+                    .gpu
+                    .as_ref()
+                    .and_then(|g| self.vab3d.surface_hit(g))
+                    .filter(|(t, _, _)| *t != f)
+                    .map(|(_, h, _)| h);
+                Some((from, to))
+            });
             let held = self.vab3d.held.as_ref().map(|(id, _)| id.clone());
             let free = self.snap_nodes(held.as_deref());
             // The builder's agency colours paint parts without colours of their own.
