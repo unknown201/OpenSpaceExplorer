@@ -217,6 +217,9 @@ pub struct Structure {
     /// Each part's bounds as a box (centre relative to the part origin, half size), vessel frame; landing
     /// gear also folded out.
     stowed_box: Vec<(DVec3, DVec3)>,
+    /// Each stack part's hull as the frustum between its bottom and top stack nodes (`None` for any other
+    /// part, which keeps its box): a Mk1 pod narrows from 1.25 m at its base to 0.625 m at its top.
+    hull_taper: Vec<Option<Taper>>,
     extended_box: Vec<Option<(DVec3, DVec3)>>,
     /// Landing gear: definition and whether it is out.
     pub gear_defs: Vec<Option<ose_data::LandingGear>>,
@@ -367,6 +370,60 @@ pub struct Piece {
 
 /// A part's bounds (part space, Unity axes) as a box in the vessel frame: centre relative to the part
 /// origin and half size of the rotated box.
+/// A stack part's hull between its stack nodes, vessel frame: the part's axis, and the distance along it
+/// from the part origin and the hull radius at its bottom and top nodes, m.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Taper {
+    pub axis: DVec3,
+    pub bottom: (f64, f64),
+    pub top: (f64, f64),
+}
+
+impl Taper {
+    /// Hull radius this far along the axis from the part origin (straight between the nodes, on past them).
+    pub fn radius_at(&self, along: f64) -> f64 {
+        let (y0, r0) = self.bottom;
+        let (y1, r1) = self.top;
+        if (y1 - y0).abs() < 1e-6 {
+            return r0.max(r1);
+        }
+        (r0 + (r1 - r0) * (along - y0) / (y1 - y0)).max(0.05)
+    }
+}
+
+/// Diameter of a stack node size, m (the original's 0.625 / 1.25 / 2.5 / 3.75 / 5 m sizes).
+fn node_diameter_m(size: i32) -> Option<f64> {
+    [0.625, 1.25, 2.5, 3.75, 5.0]
+        .get(usize::try_from(size).ok()?)
+        .copied()
+}
+
+fn part_taper(q: ose_data::craft::Quat, def: &PartDef, half: DVec3) -> Option<Taper> {
+    let node = |id: &str| {
+        def.attach_nodes
+            .iter()
+            .find(|n| n.id == id && n.node_type == "Stack")
+            .and_then(|n| Some((n.position.y, node_diameter_m(n.size)? * 0.5)))
+    };
+    let (bottom, top) = (node("bottom")?, node("top")?);
+    if top.0 <= bottom.0 {
+        return None;
+    }
+    let q = q.normalized();
+    let u = aero::rotate([q.x, q.y, q.z, q.w], DVec3::new(0.0, 1.0, 0.0));
+    let axis = DVec3::new(u.x, u.y, -u.z).normalized();
+    // no wider than the part's own box across its axis
+    let across = (half.x * (1.0 - axis.x.abs()))
+        .max(half.y * (1.0 - axis.y.abs()))
+        .max(half.z * (1.0 - axis.z.abs()));
+    let fit = |(y, r): (f64, f64)| (y, r.min(across.max(0.05)));
+    Some(Taper {
+        axis,
+        bottom: fit(bottom),
+        top: fit(top),
+    })
+}
+
 fn vessel_box(q: ose_data::craft::Quat, b: ose_data::PartBounds) -> (DVec3, DVec3) {
     let q = q.normalized();
     let q = [q.x, q.y, q.z, q.w];
@@ -799,6 +856,14 @@ impl Structure {
                         Some(b) => vessel_box(q, b),
                         None => (DVec3::ZERO, sizes[i] * 0.5),
                     }
+                })
+                .collect(),
+            hull_taper: (0..n)
+                .map(|i| {
+                    let q = craft.parts[i].local_rotation;
+                    let def = def_of(i)?;
+                    let half = def.bounds.map(|b| vessel_box(q, b).1)?;
+                    part_taper(q, def, half)
                 })
                 .collect(),
             extended_box: (0..n)
@@ -1825,6 +1890,11 @@ impl Structure {
             _ => self.stowed_box[i],
         };
         (self.rigid.rest_position(i) + offset, half)
+    }
+
+    /// A stack part's hull between its stack nodes (`None`: the part is its box).
+    pub fn hull_taper(&self, i: usize) -> Option<Taper> {
+        self.hull_taper[i]
     }
 
     /// The RCS thrusters still attached: thrust, turning torque (each thruster at its distance from the
