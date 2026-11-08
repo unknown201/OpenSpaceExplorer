@@ -556,8 +556,17 @@ impl Universe {
             .iter(&self.world)
             .collect();
         for e in sending {
+            // KSP2 stops sending when the vessel has no control (`VesselControlState.NoControl`: no crew
+            // and no powered probe core), as it does without a connection
+            let controlled = self
+                .world
+                .get::<flight::Powered>(e)
+                .or_else(|| self.world.get::<flight::Dormant>(e).map(|d| &d.0))
+                .is_none_or(|p| p.controlled);
             let stalled = if !self.comm_link(e).connected {
                 Some("no CommNet connection to the KSC")
+            } else if !controlled {
+                Some("no control (no crew and no powered probe core)")
             } else if let Some((part, packet, interval, ec_rate)) = self.best_transmitter(e) {
                 let power = match self.world.get_mut::<structure::Structure>(e) {
                     Some(mut st) if ec_rate > 0.0 => match st.net.resource("ElectricCharge") {
@@ -627,6 +636,84 @@ impl Universe {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_vessel_without_control_does_not_send_its_reports() {
+        // KSP2's PartComponentModule_DataTransmitter stops on `VesselControlState.NoControl`
+        let bodies: Vec<ose_data::CelestialBody> =
+            serde_json::from_str(include_str!("../../../assets/own/kerbol-system.json")).unwrap();
+        let mut kerbin = bodies.into_iter().find(|b| b.id == "Kerbin").unwrap();
+        kerbin.parent = None;
+        kerbin.orbit = None;
+        kerbin.soi_radius_m = None;
+        let crafts: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let defs: Vec<ose_data::PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let res: Vec<ose_data::ResourceDef> =
+            serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
+        let drone = crafts.iter().find(|c| c.name == "Stock03_Drone").unwrap();
+        let mut u = Universe::with_bodies(&[kerbin]);
+        let body = u.body_entity("Kerbin").unwrap();
+        u.set_ground_station(crate::commnet::GroundStation {
+            body,
+            lat_deg: -0.6274,
+            lon_deg: -74.8305,
+            altitude_m: 221.7,
+            range_m: crate::commnet::KSC_RANGE_M,
+        });
+        let v = u.spawn_vessel_in_circular_orbit("drone", body, 100_000.0);
+        let (r, vel) = u.vessel(v).unwrap().2.state_at(u.ut());
+        let report = ose_data::science::ResearchReport {
+            experiment: "CrewReport".into(),
+            sample: false,
+            location: "Kerbin_InSpaceLow".into(),
+            value: 8.0,
+        };
+        let mut p = flight::Powered::new(
+            flight::FlightSpec {
+                stages: vec![],
+                drag_area_m2: 0.0,
+                drag_cd: 0.0,
+            },
+            r,
+            vel,
+            false,
+        );
+        p.controlled = false;
+        u.set_dormant(v, p);
+        u.set_structure(v, structure::Structure::build(drone, &defs, &res));
+        // its batteries flat: the probe core has no power
+        {
+            let mut st = u.world.get_mut::<structure::Structure>(v).unwrap();
+            let ec = st.net.resource("ElectricCharge").unwrap();
+            for part in 0..st.rigid.len() {
+                st.net.process(
+                    &[crate::resources::Request {
+                        part,
+                        instructions: vec![crate::resources::Instruction {
+                            resource: ec,
+                            units_per_s: 1.0e9,
+                        }],
+                        priority: 0,
+                    }],
+                    1.0,
+                );
+            }
+        }
+        u.set_science_carried(v, vec![report]);
+        assert_eq!(u.start_transmission(v), Ok(1));
+        let mut arrived = Vec::new();
+        for _ in 0..(20 * crate::TICKS_PER_SECOND) {
+            u.step();
+            arrived.extend(u.take_transmitted());
+        }
+        assert!(arrived.is_empty(), "sent without control: {arrived:?}");
+        assert_eq!(
+            u.transmission(v).map(|t| t.3),
+            Some(Some("no control (no crew and no powered probe core)"))
+        );
+    }
 
     fn science() -> (ScienceCatalog, Vec<u8>) {
         (
