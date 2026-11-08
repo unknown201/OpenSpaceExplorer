@@ -159,6 +159,33 @@ struct Tyre<'a> {
     external: [f64; 2],
 }
 
+/// Solve the 3x3 system `m x = b` (Cramer's rule); `None` when it is singular.
+fn solve3(m: [[f64; 3]; 3], b: [f64; 3]) -> Option<[f64; 3]> {
+    let det = |a: [[f64; 3]; 3]| {
+        a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1])
+            - a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0])
+            + a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0])
+    };
+    let d = det(m);
+    if d.abs() < 1e-12 {
+        return None;
+    }
+    let mut x = [0.0; 3];
+    for (k, xk) in x.iter_mut().enumerate() {
+        let mut a = m;
+        for (row, bi) in a.iter_mut().zip(b) {
+            row[k] = bi;
+        }
+        *xk = det(a) / d;
+    }
+    Some(x)
+}
+
+/// Rounded to single precision, as the original's `float` wheel state.
+fn f32r(x: f64) -> f64 {
+    x as f32 as f64
+}
+
 /// `Mathf.InverseLerp`.
 fn inverse_lerp(a: f64, b: f64, v: f64) -> f64 {
     if a != b {
@@ -202,9 +229,13 @@ impl Tyre<'_> {
     /// Run the wheel's substeps from spin `spin` (rad/s) with drive and brake torques (kN·m) over `dt`:
     /// the mean force on the craft (sideways, forward), kN, and the spin at the end.
     fn frame(&self, spin: f64, drive: f64, brake: f64, dt: f64) -> ([f64; 2], f64) {
-        let h = dt / SUBSTEPS as f64;
-        let (r, inertia) = (self.radius, self.inertia);
-        let [vx, vy] = self.velocity;
+        // VPP keeps the wheel in single precision (`float`), doing only the slips in double: rounding at
+        // the same places matters, because a wheel rolling with the ground sits at zero slip, where the
+        // adherent tyre's force flips sign
+        let h = f32r(dt / SUBSTEPS as f64);
+        let (r, inertia) = (f32r(self.radius), f32r(self.inertia));
+        let inv_inertia = f32r(1.0 / inertia);
+        let [vx, vy] = self.velocity.map(f32r);
         let speed = vx.hypot(vy);
         let adherent_slip = self.friction.adherent(speed);
         let per = if adherent_slip > 0.0 {
@@ -212,12 +243,12 @@ impl Tyre<'_> {
         } else {
             0.0
         };
-        let mut l = spin * inertia;
+        let mut l = f32r(spin * inertia);
         let mut impulse = [0.0, 0.0];
         for _ in 0..SUBSTEPS {
-            let w = l / inertia;
+            let w = f32r(l * inv_inertia);
             // ComputeStateUpstream
-            let forward_slip = w * r - vy;
+            let forward_slip = f32r(w * r - vy);
             let slip = vx.hypot(forward_slip);
             let adherent = slip < adherent_slip;
             let (mut tyre_x, tyre_y, adherent_y) = if adherent {
@@ -237,8 +268,8 @@ impl Tyre<'_> {
             // EvaluateTorqueDownstream (DirectDrive passes the motor torque straight through)
             let tyre_torque = tyre_y * r;
             let brake_torque = brake * sign(-l);
-            let stop = -l / h;
-            let sync = (vy / r - w) * inertia / h;
+            let stop = f32r(-l / h);
+            let sync = f32r(f32r(f32r(vy / r - w) * inertia) / h);
             let mut sum = drive + tyre_torque + brake_torque;
             if stop.abs() < sync.abs() || (sync.abs() - stop.abs()).abs() < 1e-6 {
                 sum = solve_symmetric(sum, brake_torque, stop);
@@ -287,7 +318,7 @@ impl Tyre<'_> {
                 tyre_x = -per * x;
             }
             let fx = clamp(self.external[0], -tyre_x.abs(), tyre_x.abs());
-            l += sum * h;
+            l = f32r(l + f32r(sum * h));
             impulse[0] += fx * h;
             impulse[1] += fy * h;
         }
@@ -310,6 +341,23 @@ impl Drive {
         acc: [f64; 2],
         dt: f64,
     ) -> [f64; 2] {
+        self.step_turning(mass_t, g, gee, slope_acc, acc, 0.0, dt)
+    }
+
+    /// `step` with a torque about the vertical from outside the wheels (the airflow on fins and wings),
+    /// kN·m, positive turning right: a rolling plane's tail straightens it into the wind as KSP2's
+    /// rigidbody does.
+    #[allow(clippy::too_many_arguments)]
+    pub fn step_turning(
+        &mut self,
+        mass_t: f64,
+        g: f64,
+        gee: f64,
+        slope_acc: [f64; 2],
+        acc: [f64; 2],
+        yaw_torque_knm: f64,
+        dt: f64,
+    ) -> [f64; 2] {
         if self.wheels.is_empty() || mass_t <= 0.0 || dt <= 0.0 {
             self.speed_mps = 0.0;
             self.lateral_mps = 0.0;
@@ -325,16 +373,67 @@ impl Drive {
             let (s, c) = turned.sin_cos();
             moved[0] += (fwd * c - right * s) * h;
             moved[1] += (fwd * s + right * c) * h;
-            self.frame(mass_t, g, gee, slope_acc, acc, h);
+            self.frame(mass_t, g, gee, slope_acc, acc, yaw_torque_knm, h);
             turned += self.yaw_rate_rad_s * h;
         }
         self.heading_rad = (self.heading_rad + turned).rem_euclid(std::f64::consts::TAU);
         moved
     }
 
+    /// The mass each wheel carries, t: the craft's weight over its wheels with no net moment about the
+    /// centre of mass, the least-squares split for three or more wheels, shifted toward the outside of a
+    /// turn and the back under acceleration by `cg_height_m` (Σ N·x = -m·a_x·h, Σ N·y = -m·a_y·h). A wheel
+    /// that would lift carries nothing.
+    fn load_shares(&self, mass_t: f64, g: f64) -> Vec<f64> {
+        let n = self.wheels.len();
+        let even = vec![mass_t / n.max(1) as f64; n];
+        if n < 2 || g <= 0.0 {
+            return even;
+        }
+        let tilt = self.cg_height_m / g;
+        let b = [
+            mass_t,
+            -mass_t * self.acceleration_mps2[0] * tilt,
+            -mass_t * self.acceleration_mps2[1] * tilt,
+        ];
+        // rows: 1, x, y; minimum-norm solution m = Aᵀ (A Aᵀ)⁻¹ b, with a little regularisation for wheels
+        // in a line (no lateral or longitudinal moment arm)
+        let rows: Vec<[f64; 3]> = self
+            .wheels
+            .iter()
+            .map(|w| [1.0, w.at_m[0], w.at_m[1]])
+            .collect();
+        let mut m = [[0.0; 3]; 3];
+        for row in &rows {
+            for i in 0..3 {
+                for j in 0..3 {
+                    m[i][j] += row[i] * row[j];
+                }
+            }
+        }
+        for (i, row) in m.iter_mut().enumerate() {
+            row[i] += 1e-6;
+        }
+        let Some(lambda) = solve3(m, b) else {
+            return even;
+        };
+        let mut shares: Vec<f64> = rows
+            .iter()
+            .map(|row| (row[0] * lambda[0] + row[1] * lambda[1] + row[2] * lambda[2]).max(0.0))
+            .collect();
+        let total: f64 = shares.iter().sum();
+        if total <= 0.0 {
+            return even;
+        }
+        for s in &mut shares {
+            *s *= mass_t / total;
+        }
+        shares
+    }
+
     /// The yaw moment of inertia used on the ground, t·m²: the craft's own, or its mass spread over its
     /// wheels when it has none.
-    fn yaw_inertia(&self, mass_t: f64) -> f64 {
+    pub fn yaw_inertia(&self, mass_t: f64) -> f64 {
         if self.yaw_inertia_tm2 > 0.0 {
             return self.yaw_inertia_tm2;
         }
@@ -348,15 +447,24 @@ impl Drive {
         mass_t * spread.max(0.25)
     }
 
-    fn frame(&mut self, mass_t: f64, g: f64, gee: f64, slope_acc: [f64; 2], acc: [f64; 2], h: f64) {
-        let n = self.wheels.len() as f64;
-        let share_t = mass_t / n;
+    #[allow(clippy::too_many_arguments)]
+    fn frame(
+        &mut self,
+        mass_t: f64,
+        g: f64,
+        gee: f64,
+        slope_acc: [f64; 2],
+        acc: [f64; 2],
+        yaw_torque_knm: f64,
+        h: f64,
+    ) {
+        let shares = self.load_shares(mass_t, g);
         let throttle = self.throttle.clamp(-1.0, 1.0) * self.powered.clamp(0.0, 1.0);
         let (u, w, r) = (self.speed_mps, self.lateral_mps, self.yaw_rate_rad_s);
         let mut force = [0.0, 0.0];
         let mut torque = 0.0;
         let mut held = true;
-        for wheel in &mut self.wheels {
+        for (wheel, &share_t) in self.wheels.iter_mut().zip(&shares) {
             let d = &wheel.dynamics;
             let st = &mut wheel.state;
             let [px, py] = wheel.at_m;
@@ -480,7 +588,10 @@ impl Drive {
         // the craft: a rigid body on the ground plane, in axes that turn with it
         let ax = force[0] / mass_t + slope_acc[0] + acc[0];
         let ay = force[1] / mass_t + slope_acc[1] + acc[1];
-        let nr = r + torque / self.yaw_inertia(mass_t) * h;
+        // what the wheels feel next step: the change of velocity in the turning frame plus the turn's
+        // centripetal pull (to the right while turning right)
+        self.acceleration_mps2 = [ax - w * r, ay + u * r];
+        let nr = r + (torque + yaw_torque_knm) / self.yaw_inertia(mass_t) * h;
         let (s, c) = (r * h).sin_cos();
         let (nu, nw) = (u + ax * h, w + ay * h);
         self.speed_mps = nu * c + nw * s;
