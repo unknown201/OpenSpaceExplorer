@@ -34,6 +34,7 @@ mod fx_fixture;
 mod fx_post;
 pub mod gimbal;
 pub mod hud;
+pub mod i18n;
 pub mod input;
 pub mod kerbin_time;
 #[cfg(target_arch = "wasm32")]
@@ -292,6 +293,9 @@ struct App {
     /// and the node shown in the R&D info panel.
     tech: Vec<rnd::TechNode>,
     loc: std::collections::HashMap<String, String>,
+    /// The language the game's text is shown in (`i18n::LANGUAGES` code), and the catalog's own part names.
+    lang: String,
+    part_titles: std::collections::HashMap<String, String>,
     researched: std::collections::HashSet<String>,
     rd_selected: Option<String>,
     /// The campaign's science from `ScienceState` (protocol 13): tech tree on, points, missions in progress.
@@ -825,6 +829,14 @@ pub fn start() -> Result<(), JsValue> {
         body_spins: Vec::new(),
         tech: rnd::tree(),
         loc: std::collections::HashMap::new(),
+        lang: i18n::pick(
+            stored("ose.lang").as_deref(),
+            web_sys::window()
+                .and_then(|w| w.navigator().language())
+                .as_deref(),
+        )
+        .to_string(),
+        part_titles: std::collections::HashMap::new(),
         researched: ["tNode_1v_start".to_string()].into_iter().collect(),
         rd_selected: None,
         science: None,
@@ -961,6 +973,7 @@ pub fn start() -> Result<(), JsValue> {
         }
     }
     load_part_sizes(app.clone());
+    install_language(&app)?;
     load_localization(app.clone());
     load_trip_planner(app.clone());
     load_ftue(app.clone());
@@ -1840,39 +1853,91 @@ fn load_trip_planner(app: Shared) {
     });
 }
 
+/// Fetch one of the exported string tables (`assets/loc/<code>.json`).
+async fn fetch_table(code: &str) -> Option<std::collections::HashMap<String, String>> {
+    let window = web_sys::window()?;
+    let resp = wasm_bindgen_futures::JsFuture::from(
+        window.fetch_with_str(&format!("assets/loc/{code}.json")),
+    )
+    .await
+    .ok()?
+    .dyn_into::<web_sys::Response>()
+    .ok()?;
+    if !resp.ok() {
+        return None;
+    }
+    let text = wasm_bindgen_futures::JsFuture::from(resp.text().ok()?)
+        .await
+        .ok()?;
+    serde_json::from_str(&text.as_string()?).ok()
+}
+
+/// Load the game's text in the chosen language over English (`i18n`), then show it: the page's own
+/// KSP2-worded text, part names, and the R&D and Mission Control screens if open.
 fn load_localization(app: Shared) {
     wasm_bindgen_futures::spawn_local(async move {
-        let Some(window) = web_sys::window() else {
+        let lang = app.borrow().lang.clone();
+        let Some(en) = fetch_table("en").await else {
             return;
         };
-        let Ok(resp) =
-            wasm_bindgen_futures::JsFuture::from(window.fetch_with_str("assets/loc/en.json")).await
-        else {
-            return;
+        let table = if lang == "en" {
+            None
+        } else {
+            fetch_table(&lang).await
         };
-        let Ok(resp) = resp.dyn_into::<web_sys::Response>() else {
-            return;
-        };
-        if !resp.ok() {
+        let mut a = app.borrow_mut();
+        if a.lang != lang {
+            // the player picked another language meanwhile; its own load shows it
             return;
         }
-        let Ok(text) = resp.text() else { return };
-        let Ok(text) = wasm_bindgen_futures::JsFuture::from(text).await else {
-            return;
-        };
-        let Some(text) = text.as_string() else { return };
-        if let Ok(map) = serde_json::from_str::<std::collections::HashMap<String, String>>(&text) {
-            let mut a = app.borrow_mut();
-            a.loc = map;
-            a.name_untitled_parts();
-            if a.rd_selected.is_some() {
-                a.render_rnd();
-            }
-            if a.mc_selected.is_some() {
-                a.render_missions();
-            }
+        a.loc = i18n::merge(en, table);
+        a.localize_parts();
+        #[cfg(target_arch = "wasm32")]
+        i18n::apply(&a.doc, &a.loc);
+        if let Some(root) = a.doc.document_element() {
+            root.set_attribute("lang", &lang).ok();
         }
+        if a.rd_selected.is_some() {
+            a.render_rnd();
+        }
+        if a.mc_selected.is_some() {
+            a.render_missions();
+        }
+        a.render_vab_picker();
     });
+}
+
+/// The language picker (Settings > Interface): the game's languages, each in its own name.
+fn install_language(app: &Shared) -> Result<(), JsValue> {
+    let doc = app.borrow().doc.clone();
+    let Some(sel) = doc
+        .get_element_by_id("settings-lang")
+        .and_then(|e| e.dyn_into::<web_sys::HtmlSelectElement>().ok())
+    else {
+        return Ok(());
+    };
+    let lang = app.borrow().lang.clone();
+    let html: String = i18n::LANGUAGES
+        .iter()
+        .map(|(code, name)| {
+            format!(
+                "<option value=\"{code}\"{}>{name}</option>",
+                if *code == lang { " selected" } else { "" }
+            )
+        })
+        .collect();
+    sel.set_inner_html(&html);
+    let a = app.clone();
+    let s2 = sel.clone();
+    let cb = Closure::<dyn FnMut()>::new(move || {
+        let code = i18n::pick(Some(&s2.value()), None).to_string();
+        store("ose.lang", &code);
+        a.borrow_mut().lang = code;
+        load_localization(a.clone());
+    });
+    sel.add_event_listener_with_callback("change", cb.as_ref().unchecked_ref())?;
+    cb.forget();
+    Ok(())
 }
 
 fn load_part_sizes(app: Shared) {
@@ -1920,7 +1985,7 @@ fn load_part_sizes(app: Shared) {
                     }
                     a.catalog.insert(p.id.clone(), p);
                 }
-                a.name_untitled_parts();
+                a.localize_parts();
                 log(&format!(
                     "part catalog loaded for {} parts",
                     a.catalog.len()
@@ -9744,14 +9809,22 @@ impl App {
     /// Show the crew buttons that apply: EVA with crew aboard, Board and Plant Flag for a Kerbal (the flag on
     /// the ground), Undock while docked.
     /// Parts the catalog has no title for take theirs from the localization table (`Parts/Title/<id>`).
-    fn name_untitled_parts(&mut self) {
+    /// Part names in the chosen language (the game's `Parts/Title/<id>`); in English only parts the catalog
+    /// left untitled change, and switching back puts the catalog's own names back.
+    fn localize_parts(&mut self) {
+        let english = self.lang == "en";
         let loc = &self.loc;
         for p in self.catalog.values_mut() {
-            if p.display_title() == p.id {
-                if let Some(t) = loc.get(&format!("Parts/Title/{}", p.id)) {
-                    p.title = t.clone();
-                }
-            }
+            let own = self
+                .part_titles
+                .entry(p.id.clone())
+                .or_insert_with(|| p.title.clone())
+                .clone();
+            let term = loc.get(&format!("Parts/Title/{}", p.id));
+            p.title = match term {
+                Some(t) if !english || own.is_empty() || own == p.id => t.clone(),
+                _ => own,
+            };
         }
     }
 

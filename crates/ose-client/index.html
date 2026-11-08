@@ -1246,11 +1246,11 @@
     <span id="player" data-ose="player"></span>
     <span id="campaign" data-ose="campaign"></span>
     <button id="add-node" data-ose="add-node" title="Plan a burn on your vessel's orbit">Add node</button>
-    <button id="ksc-button" data-ose="ksc-button" title="Kerbal Space Center">KSC</button>
+    <button id="ksc-button" data-ose="ksc-button" title="Kerbal Space Center" data-loc="Menu/KSC/KSC">KSC</button>
     <span id="status">loading...</span>
   </div>
   <div id="crumbs" data-ose="breadcrumbs"></div>
-  <div id="loading" data-ose="loading" aria-hidden="true"><img id="loading-art" alt="" /><div class="loading-bar"><span id="loading-tip"></span><span class="loading-word">Loading</span></div></div>
+  <div id="loading" data-ose="loading" aria-hidden="true"><img id="loading-art" alt="" /><div class="loading-bar"><span id="loading-tip"></span><span class="loading-word" data-loc="Application/Loading">Loading</span></div></div>
   <div id="menu" data-ose="menu">
     <div class="card" id="menu-card">
       <h1>OpenSpaceExplorer</h1>
@@ -1258,9 +1258,9 @@
       <div class="screen open" id="screen-name" data-ose="menu-name">
         <div id="logo" title="Kerbal Space Program 2, in the browser"><div class="logo-title">OPENSPACE<br />EXPLORER</div><img src="assets/ui/sno_logo-wht_red_2x.png" alt="Kerbal Space Program 2" fetchpriority="high" onload="this.parentElement.classList.add('logo-ready')" onerror="this.remove()" /></div>
         <ul id="main-items">
-          <li><button id="play" data-ose="play" disabled>Campaign</button></li>
-          <li><button id="main-settings" data-ose="main-settings" data-open-settings title="Controls, interface and sound">Settings</button></li>
-          <li><button id="main-extras" data-ose="main-extras" title="Credits">Extras</button></li>
+          <li><button id="play" data-ose="play" disabled data-loc="Menu/Campaigns/Campaigns">Campaign</button></li>
+          <li><button id="main-settings" data-ose="main-settings" data-open-settings title="Controls, interface and sound" data-loc="Menu/Main/Settings">Settings</button></li>
+          <li><button id="main-extras" data-ose="main-extras" title="Credits" data-loc="Menu/Main/Extras">Extras</button></li>
           <li><button id="main-sound" class="sound-toggle" data-ose="sound-toggle">Sound: on</button></li>
         </ul>
         <div id="login-bar">
@@ -1274,7 +1274,7 @@
        <div id="campaign">
         <div id="campaign-left">
           <div class="divider"></div>
-          <div class="title-row"><button id="sessions-back" data-ose="session-back" title="Back to the main menu">&#8592;</button><h2>Campaign</h2></div>
+          <div class="title-row"><button id="sessions-back" data-ose="session-back" title="Back to the main menu">&#8592;</button><h2 data-loc="Menu/Campaigns/Campaigns">Campaign</h2></div>
           <div class="subtitle"><b>##</b>Shared server</div>
           <div class="divider"></div>
           <div class="options">
@@ -1287,15 +1287,15 @@
         </div>
         <div id="campaign-right">
         <details id="create-details" data-ose="create-session">
-          <summary>Start a new campaign</summary>
+          <summary data-loc="Menu/Campaigns/Start New Campaign">Start a new campaign</summary>
           <div class="create">
             <h3>Create New Campaign</h3>
-            <div class="field"><span>Game Mode</span>
-              <select id="create-mode" data-ose="create-mode"><option value="Sandbox">Sandbox</option><option value="Exploration" selected>Exploration</option></select></div>
-            <div class="field"><span>Difficulty</span><select id="create-preset" data-ose="create-preset"></select></div>
-            <div class="field"><span>Campaign Name</span><input id="create-name" data-ose="create-name" type="text" maxlength="48" value="New campaign" /></div>
+            <div class="field"><span data-loc="Menu/NewCampaign/Game Mode">Game Mode</span>
+              <select id="create-mode" data-ose="create-mode"><option value="Sandbox" data-loc="GameMode/Sandbox">Sandbox</option><option value="Exploration" selected data-loc="GameMode/Exploration">Exploration</option></select></div>
+            <div class="field"><span data-loc="Menu/NewCampaign/Difficulty">Difficulty</span><select id="create-preset" data-ose="create-preset"></select></div>
+            <div class="field"><span data-loc="Menu/NewCampaign/Campaign Name">Campaign Name</span><input id="create-name" data-ose="create-name" type="text" maxlength="48" value="New campaign" /></div>
             <details class="sub"><summary>Difficulty options</summary><div id="difficulty" data-ose="difficulty"></div></details>
-            <div class="start"><button id="create" data-ose="create">Start Campaign</button></div>
+            <div class="start"><button id="create" data-ose="create" data-loc="Menu/NewCampaign/Start Campaign">Start Campaign</button></div>
             <div class="info">Each campaign stays on the list after you exit, to resume later.</div>
           </div>
         </details>
@@ -1303,10 +1303,10 @@
           <summary>Your agency</summary>
           <div class="create">
             <h3>Agency Flag and Colors</h3>
-            <div class="field"><span>Agency Flag</span><input id="agency-flag" data-ose="agency-flag" type="text" maxlength="32" value="default" /></div>
-            <div class="field"><span>Base</span><input id="agency-primary" type="color" value="#a7aaaf" /></div>
-            <div class="field"><span>Accent</span><input id="agency-secondary" type="color" value="#697184" /></div>
-            <div class="start"><button id="agency-apply" class="secondary" data-ose="agency-apply">Set Agency Colors</button></div>
+            <div class="field"><span data-loc="Menu/NewCampaign/Agency Flag">Agency Flag</span><input id="agency-flag" data-ose="agency-flag" type="text" maxlength="32" value="default" /></div>
+            <div class="field"><span data-loc="Menu/NewCampaign/Primary">Base</span><input id="agency-primary" type="color" value="#a7aaaf" /></div>
+            <div class="field"><span data-loc="Menu/NewCampaign/Secondary">Accent</span><input id="agency-secondary" type="color" value="#697184" /></div>
+            <div class="start"><button id="agency-apply" class="secondary" data-ose="agency-apply" data-loc="Menu/NewCampaign/Set as New Agency Colors">Set Agency Colors</button></div>
           </div>
         </details>
         </div>
@@ -1349,13 +1349,13 @@
         <div id="vab-header" data-ose="vab-header">
           <div class="vh-group">
             <button id="vab-clear" class="secondary" data-ose="vab-clear" title="New vehicle: clear the workspace (Ctrl+N)">New</button>
-            <span class="vh-pop-wrap"><button id="vab-load" class="secondary" data-ose="vab-load" title="Load a saved vehicle into the workspace">Load</button>
+            <span class="vh-pop-wrap"><button id="vab-load" class="secondary" data-ose="vab-load" title="Load a saved vehicle into the workspace" data-loc="Menu/VAB/Load">Load</button>
               <div id="vab-load-pop" class="vh-pop"><ul id="vab-load-list" data-ose="vab-load-list"></ul></div></span>
             <button id="vab-undo" class="secondary vh-ico" data-ose="vab-undo" title="Undo (Ctrl+Z)"><i style="--ico:url(assets/ui/hud/ToolsBar-ICO-Undo-onRest.png)"></i></button>
             <button id="vab-redo" class="secondary vh-ico vh-flip" data-ose="vab-redo" title="Redo (Ctrl+Y)"><i style="--ico:url(assets/ui/hud/ToolsBar-ICO-Undo-onRest.png)"></i></button>
             <button id="vab-orient" class="secondary" data-ose="vab-orient" title="Build standing (a rocket) or lying along the floor (a plane, launched from the runway)">Rocket</button>
             <button id="vab-sym" class="secondary" data-ose="vab-sym" title="Symmetry for parts on a side: 1, 2, 3, 4, 6 or 8 copies around the part (X, Shift+X back)">&#215;1</button>
-            <button id="vab-snap" class="secondary on" data-ose="vab-snap" title="Angle snap: side parts go at 15 degree steps (C)">Snap</button>
+            <button id="vab-snap" class="secondary on" data-ose="vab-snap" title="Angle snap: side parts go at 15 degree steps (C)" data-loc="VAB/Toolbar/Snap">Snap</button>
             <button id="vab-frame" class="secondary" data-ose="vab-frame" title="Frame of reference (F): W/A/S/D/Q/E turn the part in hand about the craft's axes (Absolute) or its own (Local)">Absolute</button>
             <button id="vab-offset" class="secondary" data-ose="vab-offset" title="Offset tool (2; 1 back to placing): arrow keys and Q/E move the selected part and what hangs on it, Shift for bigger steps">Offset</button>
             <button id="vab-com" class="secondary" data-ose="vab-com" title="Centre of mass marker (yellow), full tanks">CoM</button>
@@ -1374,9 +1374,9 @@
             <span class="vh-pop-wrap"><button id="vab-report-btn" class="secondary vh-ico" data-ose="vab-report-btn" title="Engineer's report: what the vehicle lacks"><i style="--ico:url(assets/ui/hud/WB-ICO-EngineersReport.png)"></i><b id="vab-report-count"></b></button>
               <div id="vab-report-pop" class="vh-pop right"><div class="vh-pop-title">Engineer's report</div><ul id="vab-flaws" data-ose="vab-flaws"></ul></div></span>
             <span id="vab-dv" data-ose="vab-dv" title="Total delta-v in vacuum, from the server's report when the craft is saved"></span>
-            <button id="vab-save" data-ose="vab-save" class="secondary" title="Save to the craft library (Ctrl+S)">Save</button>
+            <button id="vab-save" data-ose="vab-save" class="secondary" title="Save to the craft library (Ctrl+S)" data-loc="Menu/SaveLoad/Save">Save</button>
             <select id="vab-site" data-ose="vab-site" title="Where to launch from: a launch pad or the runway (planes)" style="display:none"></select>
-            <button id="vab-launch" data-ose="vab-launch" class="vh-launch" title="Save and roll out to the launch pad"><i style="--ico:url(assets/ui/hud/Workspace-ICO-LaunchVessel-Normal-Active.png)"></i>Launch</button>
+            <button id="vab-launch" data-ose="vab-launch" class="vh-launch" title="Save and roll out to the launch pad"><i style="--ico:url(assets/ui/hud/Workspace-ICO-LaunchVessel-Normal-Active.png)"></i><span data-loc="VAB/LaunchButton/Launch">Launch</span></button>
             <button id="vab-back" class="secondary vh-ico" data-ose="vab-back" title="Back to the Kerbal Space Center"><i style="--ico:url(assets/ui/WB-ICO-Close-X.png)"></i></button>
           </div>
         </div>
@@ -1385,7 +1385,7 @@
             <div id="vab-cats" data-ose="vab-categories"></div>
             <input id="vab-search" data-ose="vab-search" type="search" placeholder="search parts (Ctrl+F)" />
             <div id="vab-filter"><span id="vab-sizes" data-ose="vab-sizes"></span>
-              <select id="vab-sort" data-ose="vab-sort" title="Group or sort the parts"><option value="0">Group by type</option><option value="1">Name</option><option value="2">Mass</option></select></div>
+              <select id="vab-sort" data-ose="vab-sort" title="Group or sort the parts"><option value="0">Group by type</option><option value="1" data-loc="Menu/SaveLoad/Name">Name</option><option value="2" data-loc="Menu/Launchpad/Mass">Mass</option></select></div>
             <ul id="vab-parts" data-ose="vab-parts"></ul>
             <div id="vab-trash" data-ose="vab-trash" title="Drop a part here to delete it (and what hangs on it)"><i></i></div>
           </div>
@@ -1409,7 +1409,7 @@
         <div id="rd">
           <div id="rd-head"><h2>Research &amp; Development</h2><span id="rd-summary" data-ose="rd-summary"></span>
             <button id="rnd-archive" class="secondary" data-ose="rnd-archive" title="The research reports submitted so far">Science archive</button>
-            <button id="rnd-back" class="secondary" data-ose="rnd-back">Back to KSC</button></div>
+            <button id="rnd-back" class="secondary" data-ose="rnd-back" data-loc="HUD/VesselStatus/BackToKSC">Back to KSC</button></div>
           <div id="rd-body">
             <div id="rd-tree" data-ose="rd-tree"></div>
             <div id="rd-info" data-ose="rd-info"></div>
@@ -1419,8 +1419,8 @@
       <div class="screen" id="screen-mission" data-ose="mission">
         <div id="mc">
           <div id="mc-log">
-            <div class="mc-head"><h2>Mission Control</h2><button id="mc-back" class="secondary" data-ose="mc-back">Back to KSC</button></div>
-            <div class="mc-tabs"><button id="mc-tab-primary" data-ose="mc-tab-primary" class="on">Primary</button><button id="mc-tab-secondary" data-ose="mc-tab-secondary">Secondary</button><button id="mc-tab-completed" data-ose="mc-tab-completed" title="Missions handed in">Completed</button></div>
+            <div class="mc-head"><h2 data-loc="Menu/KSC/MissionControl">Mission Control</h2><button id="mc-back" class="secondary" data-ose="mc-back" data-loc="HUD/VesselStatus/BackToKSC">Back to KSC</button></div>
+            <div class="mc-tabs"><button id="mc-tab-primary" data-ose="mc-tab-primary" class="on" data-loc="Missions/MissionControl/Primary">Primary</button><button id="mc-tab-secondary" data-ose="mc-tab-secondary" data-loc="Missions/MissionControl/Secondary">Secondary</button><button id="mc-tab-completed" data-ose="mc-tab-completed" title="Missions handed in" data-loc="Missions/MissionControl/Completed">Completed</button></div>
             <ul id="mc-list" data-ose="mc-list"></ul>
           </div>
           <div id="mc-briefing" data-ose="mc-briefing"></div>
@@ -1429,8 +1429,8 @@
       <div class="screen" id="screen-training" data-ose="training">
         <div id="tc">
           <div id="tc-roster">
-            <div class="mc-head"><h2>Training Center</h2><button id="tc-back" class="secondary" data-ose="tc-back">Back to KSC</button></div>
-            <div class="tc-tabs"><button id="tc-tab-kerbals" class="on" data-ose="tc-tab-kerbals">Kerbals</button><button id="tc-tab-lessons" data-ose="tc-tab-lessons" title="Kerbal Space Academy: lessons with PAIGE">Lessons</button></div>
+            <div class="mc-head"><h2 data-loc="Menu/KSC/TrainingCenter">Training Center</h2><button id="tc-back" class="secondary" data-ose="tc-back" data-loc="HUD/VesselStatus/BackToKSC">Back to KSC</button></div>
+            <div class="tc-tabs"><button id="tc-tab-kerbals" class="on" data-ose="tc-tab-kerbals">Kerbals</button><button id="tc-tab-lessons" data-ose="tc-tab-lessons" title="Kerbal Space Academy: lessons with PAIGE" data-loc="Menu/TrainingCenter/Lessons">Lessons</button></div>
             <div id="tc-count" class="tc-count"></div>
             <ul id="tc-list" data-ose="tc-list"></ul>
             <ul id="tl-list" data-ose="tl-list" class="hidden"></ul>
@@ -1440,15 +1440,15 @@
       </div>
       <div class="screen" id="screen-paused" data-ose="menu-paused">
         <div class="pm-title"><img src="assets/ui/ICO-Map-KSC-16x16.png" alt="" /><h2>Game Menu</h2></div>
-        <button id="resume" data-ose="resume">Resume</button>
-        <button id="to-ksc" class="secondary" data-ose="to-ksc">Kerbal Space Center</button>
-        <button id="to-tracking" class="secondary" data-ose="to-tracking">Tracking Station</button>
-        <button id="to-revert-launch" class="secondary pm-flight" data-ose="to-revert-launch" data-save-action="RevertToLaunch">Revert to Launch</button>
-        <button id="to-revert-editor" class="secondary pm-flight" data-ose="to-revert-editor" data-save-action="RevertToEditor">Revert to VAB</button>
-        <button id="to-recover" class="secondary pm-flight" data-ose="to-recover" title="Recover the vessel (landed or splashed down on Kerbin)">Recover Vessel</button>
-        <button id="to-quicksave" class="secondary" data-ose="to-quicksave" data-save-action="QuickSave" title="F5">Quicksave</button>
+        <button id="resume" data-ose="resume" data-loc="Menu/Main/Resume">Resume</button>
+        <button id="to-ksc" class="secondary" data-ose="to-ksc" data-loc="Menu/KSC/Kerbal Space Center">Kerbal Space Center</button>
+        <button id="to-tracking" class="secondary" data-ose="to-tracking" data-loc="Menu/KSC/TrackingStation">Tracking Station</button>
+        <button id="to-revert-launch" class="secondary pm-flight" data-ose="to-revert-launch" data-save-action="RevertToLaunch" data-loc="Flight/FlightReport/RevertToLaunch">Revert to Launch</button>
+        <button id="to-revert-editor" class="secondary pm-flight" data-ose="to-revert-editor" data-save-action="RevertToEditor" data-loc="Flight/FlightReport/RevertToVAB">Revert to VAB</button>
+        <button id="to-recover" class="secondary pm-flight" data-ose="to-recover" title="Recover the vessel (landed or splashed down on Kerbin)" data-loc="HUD/VesselStatus/RecoverVessel">Recover Vessel</button>
+        <button id="to-quicksave" class="secondary" data-ose="to-quicksave" data-save-action="QuickSave" title="F5" data-loc="Menu/Main/Quicksave">Quicksave</button>
         <button id="to-quickload" class="secondary" data-ose="to-quickload" data-save-action="QuickLoad" title="F9">Quickload</button>
-        <button id="to-settings" class="secondary" data-ose="to-settings" data-open-settings>Settings</button>
+        <button id="to-settings" class="secondary" data-ose="to-settings" data-open-settings data-loc="Menu/Main/Settings">Settings</button>
         <button id="to-sessions" class="secondary" data-ose="to-sessions">Exit to Main Menu</button>
         <button id="report-bug" class="secondary" data-ose="report-bug" title="File a bug report with a replay of the last few minutes">Report a bug</button>
         <button id="sound-toggle" class="secondary sound-toggle" data-ose="sound-toggle">Sound: on</button>
@@ -1470,7 +1470,7 @@
   <svg id="aero-svg" data-ose="aero-svg" preserveAspectRatio="none"></svg>
   <div id="credits" data-ose="credits">
     <div class="set-card">
-      <div class="set-head"><h2>Credits</h2><button id="credits-close" data-ose="credits-close" title="Close (Esc)">&#10005;</button></div>
+      <div class="set-head"><h2 data-loc="Menu/Main/Credits">Credits</h2><button id="credits-close" data-ose="credits-close" title="Close (Esc)">&#10005;</button></div>
       <div class="set-body">
         <h4>OpenSpaceExplorer</h4>
         <p>A shared Kerbol system played in the browser: everyone in a campaign flies in the same universe.</p>
@@ -1484,19 +1484,20 @@
   </div>
   <div id="settings" data-ose="settings">
     <div class="set-card">
-      <div class="set-head"><h2>Settings</h2><button id="settings-close" data-ose="settings-close" title="Close (Esc)">&#10005;</button></div>
-      <div class="set-tabs" id="settings-tabs"><button data-tab="input" class="on">Input</button><button data-tab="interface">Interface</button><button data-tab="audio">Audio</button><button data-tab="graphics">Graphics</button></div>
+      <div class="set-head"><h2 data-loc="Menu/Main/Settings">Settings</h2><button id="settings-close" data-ose="settings-close" title="Close (Esc)">&#10005;</button></div>
+      <div class="set-tabs" id="settings-tabs"><button data-tab="input" class="on" data-loc="Menu/Settings/Input">Input</button><button data-tab="interface">Interface</button><button data-tab="audio" data-loc="Menu/Settings/Audio">Audio</button><button data-tab="graphics" data-loc="Menu/Settings/Graphics">Graphics</button></div>
       <div class="set-body">
         <section data-tab="input" class="on" id="settings-input"></section>
         <section data-tab="interface">
+          <label class="set-row"><span data-loc="Menu/Settings/Language">Language</span><select id="settings-lang" data-ose="settings-lang"></select></label>
           <label class="set-row"><span>Interface scale</span><input id="settings-scale" data-ose="settings-scale" type="range" min="50" max="150" step="5" value="100" /><b id="settings-scale-text">100%</b></label>
           <label class="set-row"><span>First-time hints (PAIGE)</span><input id="settings-ftue" data-ose="settings-ftue" type="checkbox" checked /></label>
           <label class="set-row"><span>Show key hints on screen</span><input id="settings-hints" data-ose="settings-hints" type="checkbox" checked /></label>
         </section>
         <section data-tab="graphics">
           <label class="set-row"><span>Render resolution</span><input id="settings-res" data-ose="settings-res" type="range" min="50" max="100" step="5" value="100" /><b id="settings-res-text">100%</b></label>
-          <label class="set-row"><span>Show FPS</span><input id="settings-fps" data-ose="settings-fps" type="checkbox" /></label>
-          <label class="set-row"><span>Planet detail</span><select id="settings-quality" data-ose="settings-quality"><option value="low">Low</option><option value="medium">Medium</option><option value="high" selected>High</option></select></label>
+          <label class="set-row"><span data-loc="Menu/Settings/Show FPS">Show FPS</span><input id="settings-fps" data-ose="settings-fps" type="checkbox" /></label>
+          <label class="set-row"><span>Planet detail</span><select id="settings-quality" data-ose="settings-quality"><option value="low" data-loc="Menu/Graphics/Low">Low</option><option value="medium" data-loc="Menu/Graphics/Medium">Medium</option><option value="high" selected data-loc="Menu/Graphics/High">High</option></select></label>
         </section>
         <section data-tab="audio">
           <div class="set-row"><span>Sound</span><button id="settings-sound" class="sound-toggle" data-ose="sound-toggle">Sound: on</button></div>
@@ -1508,12 +1509,12 @@
   </div>
   <div id="audio" data-ose="audio" hidden></div>
   <div id="tracking" data-ose="tracking">
-    <div class="ts-head"><span class="flag"><img src="assets/ui/ICO-Tracking-Station-Med.png" alt="" /></span><h2>Tracking Station</h2></div>
+    <div class="ts-head"><span class="flag"><img src="assets/ui/ICO-Tracking-Station-Med.png" alt="" /></span><h2 data-loc="Menu/KSC/TrackingStation">Tracking Station</h2></div>
     <div class="ts-tabs"><button id="ts-tab-all" data-ose="ts-tab-all" class="on">All vessels</button><button id="ts-tab-mine" data-ose="ts-tab-mine">Mine</button></div>
     <div id="ts-filters" class="ts-filters" data-ose="ts-filters"></div>
     <ul id="ts-list" data-ose="ts-list"></ul>
     <div id="ts-info" data-ose="ts-info"></div>
-    <button id="ts-back" data-ose="ts-back">Back to KSC</button>
+    <button id="ts-back" data-ose="ts-back" data-loc="HUD/VesselStatus/BackToKSC">Back to KSC</button>
   </div>
   <div id="flight-hud" data-ose="flight">
     <div class="fh-top"><div id="fh-recoverable" data-ose="flight-recoverable" title="Landed on Kerbin: Recover brings the crew, parts and science home">// RECOVERABLE //</div><div id="fh-situation" class="fh-small">--</div><div id="fh-met" class="fh-small" data-ose="flight-met" title="Mission elapsed time"></div><div id="fh-note" class="fh-small" style="color:#f0a070"></div><div id="fh-running" class="fh-small" data-ose="flight-running" style="color:#8fd08f"></div><div id="fh-control" data-ose="flight-control" style="color:#ff6a5a;font-weight:700"></div></div>
@@ -1530,7 +1531,7 @@
       <div class="fh-core">
         <div class="fh-row"><span class="fh-label">VERTICAL</span><b id="fh-vspeed">--</b></div>
         <div class="fh-row fh-burn" id="fh-burn" data-ose="flight-burn" title="Burn timer: start burning when it reaches zero, pointed at the maneuver marker"></div>
-        <div class="fh-row fh-orbit" data-ose="flight-apsides"><span class="fh-label" title="Apoapsis: highest point of the orbit and the time to it">AP</span><b id="fh-ap">--</b><span id="fh-ap-t" class="fh-small">--</span><span class="fh-label" title="Periapsis: lowest point of the orbit and the time to it">PE</span><b id="fh-pe">--</b><span id="fh-pe-t" class="fh-small">--</span></div>
+        <div class="fh-row fh-orbit" data-ose="flight-apsides"><span class="fh-label" title="Apoapsis: highest point of the orbit and the time to it" data-loc="Map/Trajectory/AP">AP</span><b id="fh-ap">--</b><span id="fh-ap-t" class="fh-small">--</span><span class="fh-label" title="Periapsis: lowest point of the orbit and the time to it" data-loc="Map/Trajectory/PE">PE</span><b id="fh-pe">--</b><span id="fh-pe-t" class="fh-small">--</span></div>
         <div class="fh-row"><span id="fh-attitude">--</span><span id="fh-twr" class="fh-small">--</span><span id="fh-target" class="fh-small" data-ose="flight-target" title="Target: distance and relative speed"></span><span id="fh-aero" class="fh-small" data-ose="flight-aero" title="Lift from wings; jets: thrust follows speed and air, and needs an intake"></span></div>
       </div>
     </div>
@@ -1545,15 +1546,15 @@
       <div class="fh-small" title="worst joint load against its break limit">STRESS</div>
       <div class="fh-stress" data-ose="flight-stress"><div id="fh-stress-fill"></div></div>
       </div>
-      <button id="fh-stage-btn" data-ose="flight-stage" title="Stage (Space)"><span class="go">GO</span><b id="fh-go-n" title="stages left"></b><small id="fh-go-dv"></small></button>
+      <button id="fh-stage-btn" data-ose="flight-stage" title="Stage (Space)"><span class="go" data-loc="HUD/GO">GO</span><b id="fh-go-n" title="stages left"></b><small id="fh-go-dv"></small></button>
     </div>
     <div class="fh-actions" id="fh-actions" data-ose="flight-actions"></div>
     <div class="fh-crewbox" id="fh-crewbox" data-ose="flight-crew"></div>
     <div class="fh-vres" id="fh-vres" data-ose="flight-vessel-resources"><div class="fh-label">VESSEL-RESOURCES</div>
       <div class="vr-g" title="G-force: the acceleration the crew feels, in g"><span>G</span><div class="vr-gbar"><i id="fh-g-fill"></i></div><b id="fh-g-text">--</b></div>
       <div id="fh-vres-list"></div></div>
-    <div class="fh-crew fh-crew-acts"><button id="fh-eva" data-ose="flight-eva" class="hidden" title="a Kerbal climbs out">EVA</button><button id="fh-board" data-ose="flight-board" class="hidden" title="climb into the craft within reach (F)">Board</button><button id="fh-flag" data-ose="flight-flag" class="hidden" title="plant the agency flag">Plant flag</button><button id="fh-undock" data-ose="flight-undock" class="hidden" title="release the last docking">Undock</button></div>
-    <div class="fh-vessel-acts"><button id="fh-science" data-ose="flight-science" title="Run every experiment on board">Experiments</button><button id="fh-transmit" data-ose="flight-transmit" title="Send the reports home">Transmit</button><button id="fh-recover" data-ose="flight-recover" title="Recover the vessel (landed or splashed down on Kerbin)">Recover</button></div>
+    <div class="fh-crew fh-crew-acts"><button id="fh-eva" data-ose="flight-eva" class="hidden" title="a Kerbal climbs out" data-loc="Flight/EVA">EVA</button><button id="fh-board" data-ose="flight-board" class="hidden" title="climb into the craft within reach (F)">Board</button><button id="fh-flag" data-ose="flight-flag" class="hidden" title="plant the agency flag">Plant flag</button><button id="fh-undock" data-ose="flight-undock" class="hidden" title="release the last docking" data-loc="PartModules/Docking/Undock">Undock</button></div>
+    <div class="fh-vessel-acts"><button id="fh-science" data-ose="flight-science" title="Run every experiment on board" data-loc="HUD/Tooltips/Science">Experiments</button><button id="fh-transmit" data-ose="flight-transmit" title="Send the reports home">Transmit</button><button id="fh-recover" data-ose="flight-recover" title="Recover the vessel (landed or splashed down on Kerbin)" data-loc="Menu/Launchpad/Recover">Recover</button></div>
     <div class="fh-views"><button id="fh-map" class="fh-missions-btn" data-ose="flight-map" title="Map view (M)"><i style="--ico:url(assets/ui/hud/ICO-Flight-Map.png)"></i></button><button id="fh-ksc" class="fh-missions-btn" data-ose="flight-ksc" title="Leave the vessel and go to the Kerbal Space Center"><i style="--ico:url(assets/ui/ICO-Map-KSC-16x16.png)"></i></button></div>
     <div class="fh-appbar" id="fh-appbar" data-ose="flight-appbar">
       <button class="fh-missions-btn" id="fh-missions-btn" data-ose="flight-missions-btn" title="Mission tracker: the missions you have taken on"><i style="--ico:url(assets/ui/hud/ICO-AppBar-MissionTracker-24x24.png)"></i></button>
@@ -1582,7 +1583,7 @@
     <label>normal <input id="node-normal" type="range" min="-1500" max="1500" step="1" value="0" /><span id="node-normal-text">0 m/s</span></label>
     <label>radial <input id="node-radial" type="range" min="-1500" max="1500" step="1" value="0" /><span id="node-radial-text">0 m/s</span></label>
     <div class="reason" id="node-reason"></div>
-    <button id="node-warp" data-ose="node-warp" title="Warp to just before the burn: the warp steps down as it gets close (any warp key cancels)">Warp to</button>
+    <button id="node-warp" data-ose="node-warp" title="Warp to just before the burn: the warp steps down as it gets close (any warp key cancels)" data-loc="Map/WarpTo">Warp to</button>
     <button id="clear-node" data-ose="clear-node" title="Delete this maneuver node (the others stay)">Delete node</button>
     <button id="add-next-node" data-ose="add-next-node" title="Plan another node after the last one; or click the orbit after a node">Add next</button>
   </div>
