@@ -352,7 +352,7 @@ struct App {
     /// Object kinds the station's filters hide.
     ts_hidden: Vec<&'static str>,
     /// The resource manager's transfer picks: (resource, out tanks, in tanks), craft part indices.
-    xfer_pick: (String, Vec<u16>, Vec<u16>),
+    xfer_pick: Vec<hud::XferPick>,
     /// The Kerbal picked in the Kerbal Manager to move.
     km_selected: Option<String>,
     /// The VAB Colors tool paints the selected part rather than the whole vehicle.
@@ -2424,10 +2424,7 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                 let Ok(part) = part.parse::<u16>() else {
                     return;
                 };
-                let pick = &mut app.xfer_pick;
-                if pick.0 != res {
-                    *pick = (res, Vec::new(), Vec::new());
-                }
+                let pick = xfer_pick_for(&mut app.xfer_pick, res);
                 let was = pick.1.contains(&part) && pick.2.contains(&part);
                 pick.1.retain(|p| *p != part);
                 pick.2.retain(|p| *p != part);
@@ -2445,10 +2442,7 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                     return;
                 };
                 let out = t.has_attribute("data-xfer-out");
-                let pick = &mut app.xfer_pick;
-                if pick.0 != res {
-                    *pick = (res, Vec::new(), Vec::new());
-                }
+                let pick = xfer_pick_for(&mut app.xfer_pick, res);
                 // In or Out replaces a Balance
                 if pick.1.contains(&part) && pick.2.contains(&part) {
                     pick.1.retain(|p| *p != part);
@@ -2467,14 +2461,25 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                 }
                 app.render_resource_manager();
                 return;
-            } else if let Some(res) = attr("data-xfer-go") {
-                let (_, from, to) = std::mem::take(&mut app.xfer_pick);
-                ClientMessage::TransferResource {
-                    vessel,
-                    resource: res,
-                    from,
-                    to,
+            } else if attr("data-xfer-go").is_some() {
+                // every resource set up moves at once, as the original's Start
+                let mut msgs: Vec<ClientMessage> = std::mem::take(&mut app.xfer_pick)
+                    .into_iter()
+                    .filter(hud::xfer_pick_valid)
+                    .map(|(resource, from, to)| ClientMessage::TransferResource {
+                        vessel,
+                        resource,
+                        from,
+                        to,
+                    })
+                    .collect();
+                let Some(last) = msgs.pop() else { return };
+                if let Some(ws) = &app.ws {
+                    for m in &msgs {
+                        send(ws, m);
+                    }
                 }
+                last
             } else if t.has_attribute("data-xfer-stop") {
                 let resource = app
                     .scene
@@ -15382,6 +15387,18 @@ fn vab_nodes(catalog: &vab::Catalog, id: &str) -> Vec<(glam::DVec3, glam::DVec3)
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// The Resource Manager pick for `res`, made empty when there is none yet.
+fn xfer_pick_for(picks: &mut Vec<hud::XferPick>, res: String) -> &mut hud::XferPick {
+    let k = match picks.iter().position(|p| p.0 == res) {
+        Some(k) => k,
+        None => {
+            picks.push((res, Vec::new(), Vec::new()));
+            picks.len() - 1
+        }
+    };
+    &mut picks[k]
 }
 
 #[cfg(test)]
