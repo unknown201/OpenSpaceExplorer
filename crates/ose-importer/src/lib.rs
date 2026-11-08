@@ -477,6 +477,7 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
     let mut jetpack = None;
     let mut lifting_surface: Option<ose_data::LiftingSurface> = None;
     let mut intake_area_m2 = 0.0;
+    let mut intake = None;
     let mut ctrl = (0.0, 0.0);
     let mut ctrl_pressure_offset_m = DVec3::ZERO;
     if let Some(mods) = d["serializedPartModules"].as_array() {
@@ -534,6 +535,18 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
                     }
                     if entry["Name"] == "Data_ResourceIntake" {
                         intake_area_m2 = f(o, "area");
+                        intake = Some(ose_data::Intake {
+                            area_m2: f(o, "area"),
+                            intake_speed_mps: f(o, "intakeSpeed"),
+                            unit_scalar: f(o, "unitScalar"),
+                            mach_curve: o["machCurve"]["fCurve"]["keys"]
+                                .as_array()
+                                .is_some_and(|k| !k.is_empty())
+                                .then(|| curve(&o["machCurve"])),
+                            kpa_threshold: f(o, "kPaThreshold"),
+                            occlude_node: s(o, "occludeNode"),
+                            check_oxygen: o["checkForOxygen"].as_bool().unwrap_or(true),
+                        });
                     }
                     if entry["Name"] == "Data_Kerbal" {
                         jetpack = Some(ose_data::Jetpack {
@@ -751,6 +764,19 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
                                         spool_idle: f(em, "engineSpoolIdle"),
                                     }
                                 }),
+                                intake_air_per_unit: em["propellant"]["ingredientOverrides"]
+                                    .as_array()
+                                    .into_iter()
+                                    .flatten()
+                                    .filter(|i| i["name"] == "IntakeAir")
+                                    .map(|i| f(i, "unitsPerRecipeUnit"))
+                                    .sum(),
+                                flameout_bar: f(em, "flameoutBar"),
+                                ignition_threshold: em["ignitionThreshold"].as_f64().unwrap_or(0.1),
+                                mode_exit_s: f(em, "ModeExitWaitTime"),
+                                mode_exit_running_s: f(em, "ModeExitRunningWaitTime"),
+                                mode_enter_s: f(em, "ModeEnterWaitTime"),
+                                mode_enter_running_s: f(em, "ModeEnterRunningWaitTime"),
                             });
                         }
                     }
@@ -935,6 +961,7 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
         ctrl_area: ctrl.1,
         ctrl_pressure_offset_m,
         intake_area_m2,
+        intake,
         drag_cubes,
         module_names,
         raw_modules,

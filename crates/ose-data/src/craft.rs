@@ -123,8 +123,8 @@ impl ChuteSettings {
 /// The part actions a group can run: on with the group on, off with it off.
 /// `engine`: the engine runs or is shut down; `deploy`: panels, antennas, gear and bays extend or retract;
 /// `chute`: parachutes arm (on only); `converter`: converters run or stop; `fairing`: the fairing comes
-/// off (on only).
-pub const ACTIONS: [&str; 5] = ["engine", "deploy", "chute", "converter", "fairing"];
+/// off (on only); `mode`: a multi-mode engine switches to its second mode (on) or back to its first (off).
+pub const ACTIONS: [&str; 6] = ["engine", "deploy", "chute", "converter", "fairing", "mode"];
 
 /// The `KSPActionGroup` bit of custom group `n` (1..10).
 pub fn custom_group_bit(n: u8) -> u32 {
