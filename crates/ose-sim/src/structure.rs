@@ -6076,6 +6076,63 @@ mod tests {
     }
 
     #[test]
+    fn a_lander_standing_on_its_legs_reads_landed_and_its_feet_grip() {
+        // KSP2 trace T15 (run 16): a craft on its deployed legs reads Landed, and after touching down with
+        // some slide it settles in about a second; the legs grip with VehiclePhysics friction
+        let (c, defs, res) = lander();
+        let bodies: Vec<ose_data::CelestialBody> =
+            serde_json::from_str(include_str!("../../../assets/own/kerbol-system.json")).unwrap();
+        let mut kerbin = bodies.into_iter().find(|b| b.id == "Kerbin").unwrap();
+        kerbin.parent = None;
+        kerbin.orbit = None;
+        kerbin.soi_radius_m = None;
+        let mut u = crate::Universe::with_bodies(&[kerbin]);
+        let body = u.body_entity("Kerbin").unwrap();
+        let report = ose_data::staging::delta_v_by_stage(&c, &defs, &res);
+        let spec = crate::flight::FlightSpec::from_report(&report, &[], &[], 1.5);
+        let v = u.spawn_powered_on_surface("lander", body, spec, 0.0, 0.0);
+        let mut st = Structure::build(&c, &defs, &res);
+        assert_eq!(st.deploy_gear(true), 3);
+        u.set_structure(v, st);
+        // dropped from just above the ground onto its legs
+        let mut p = u.powered(v).unwrap().clone();
+        let up = p.r.normalized();
+        p.landed = false;
+        p.r = p.r + up * 1.5;
+        u.set_powered(v, p);
+        for _ in 0..(3 * crate::TICKS_PER_SECOND) {
+            u.step();
+        }
+        let p = u.powered(v).unwrap();
+        assert!(!p.crashed, "it lands on its legs");
+        assert_eq!(
+            u.situation(v),
+            Some(crate::flight::Situation::Landed),
+            "standing on its legs"
+        );
+        // sliding sideways at 2 m/s, its feet stop it within a second
+        let spin =
+            |p: &Powered| DVec3::new(0.0, 0.0, std::f64::consts::TAU / 21_549.425).cross(p.r);
+        let mut p = p.clone();
+        let east = DVec3::new(0.0, 0.0, 1.0)
+            .cross(p.r.normalized())
+            .normalized();
+        p.v = p.v + east * 2.0;
+        u.set_powered(v, p);
+        for _ in 0..crate::TICKS_PER_SECOND {
+            u.step();
+        }
+        let p = u.powered(v).unwrap();
+        let slide = p.v - spin(p);
+        let sideways = slide - p.r.normalized() * slide.dot(p.r.normalized());
+        assert!(
+            sideways.length() < 0.2,
+            "still sliding at {} m/s",
+            sideways.length()
+        );
+    }
+
+    #[test]
     fn landing_legs_fold_out_below_the_engine_widen_the_stance_and_take_a_hard_landing() {
         let (c, defs, res) = lander();
         let mut s = Structure::build(&c, &defs, &res);
