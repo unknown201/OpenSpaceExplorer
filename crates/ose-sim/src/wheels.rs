@@ -159,6 +159,11 @@ struct Tyre<'a> {
     external: [f64; 2],
 }
 
+/// Rounded to single precision, as the original's `float` wheel state.
+fn f32r(x: f64) -> f64 {
+    x as f32 as f64
+}
+
 /// `Mathf.InverseLerp`.
 fn inverse_lerp(a: f64, b: f64, v: f64) -> f64 {
     if a != b {
@@ -202,9 +207,13 @@ impl Tyre<'_> {
     /// Run the wheel's substeps from spin `spin` (rad/s) with drive and brake torques (kN·m) over `dt`:
     /// the mean force on the craft (sideways, forward), kN, and the spin at the end.
     fn frame(&self, spin: f64, drive: f64, brake: f64, dt: f64) -> ([f64; 2], f64) {
-        let h = dt / SUBSTEPS as f64;
-        let (r, inertia) = (self.radius, self.inertia);
-        let [vx, vy] = self.velocity;
+        // VPP keeps the wheel in single precision (`float`), doing only the slips in double: rounding at
+        // the same places matters, because a wheel rolling with the ground sits at zero slip, where the
+        // adherent tyre's force flips sign
+        let h = f32r(dt / SUBSTEPS as f64);
+        let (r, inertia) = (f32r(self.radius), f32r(self.inertia));
+        let inv_inertia = f32r(1.0 / inertia);
+        let [vx, vy] = self.velocity.map(f32r);
         let speed = vx.hypot(vy);
         let adherent_slip = self.friction.adherent(speed);
         let per = if adherent_slip > 0.0 {
@@ -212,12 +221,12 @@ impl Tyre<'_> {
         } else {
             0.0
         };
-        let mut l = spin * inertia;
+        let mut l = f32r(spin * inertia);
         let mut impulse = [0.0, 0.0];
         for _ in 0..SUBSTEPS {
-            let w = l / inertia;
+            let w = f32r(l * inv_inertia);
             // ComputeStateUpstream
-            let forward_slip = w * r - vy;
+            let forward_slip = f32r(w * r - vy);
             let slip = vx.hypot(forward_slip);
             let adherent = slip < adherent_slip;
             let (mut tyre_x, tyre_y, adherent_y) = if adherent {
@@ -237,8 +246,8 @@ impl Tyre<'_> {
             // EvaluateTorqueDownstream (DirectDrive passes the motor torque straight through)
             let tyre_torque = tyre_y * r;
             let brake_torque = brake * sign(-l);
-            let stop = -l / h;
-            let sync = (vy / r - w) * inertia / h;
+            let stop = f32r(-l / h);
+            let sync = f32r(f32r(f32r(vy / r - w) * inertia) / h);
             let mut sum = drive + tyre_torque + brake_torque;
             if stop.abs() < sync.abs() || (sync.abs() - stop.abs()).abs() < 1e-6 {
                 sum = solve_symmetric(sum, brake_torque, stop);
@@ -287,7 +296,7 @@ impl Tyre<'_> {
                 tyre_x = -per * x;
             }
             let fx = clamp(self.external[0], -tyre_x.abs(), tyre_x.abs());
-            l += sum * h;
+            l = f32r(l + f32r(sum * h));
             impulse[0] += fx * h;
             impulse[1] += fy * h;
         }
