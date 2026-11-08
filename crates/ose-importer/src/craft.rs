@@ -78,6 +78,44 @@ fn part_shape(v: &Value) -> Option<ose_data::procedural::WingShape> {
     })
 }
 
+/// A custom fairing's wall (`Data_Fairing.CrossSections` of a CUSTOM construction).
+fn part_fairing(v: &Value) -> Option<ose_data::fairing::FairingShape> {
+    fn find(v: &Value) -> Option<&Value> {
+        match v {
+            Value::Object(m) => {
+                if m.get("Name").and_then(|n| n.as_str()) == Some("Data_Fairing") {
+                    return m.get("DataObject");
+                }
+                m.values().find_map(find)
+            }
+            Value::Array(a) => a.iter().find_map(find),
+            _ => None,
+        }
+    }
+    let d = find(v)?;
+    let stored = |k: &str| d[k].get("storedValue").unwrap_or(&d[k]).clone();
+    let sections: Vec<(f64, f64)> = d["CrossSections"]
+        .as_array()?
+        .iter()
+        .filter_map(|c| Some((c["Height"].as_f64()?, c["Radius"].as_f64()?)))
+        .collect();
+    if sections.len() < 2 {
+        return None;
+    }
+    let pieces = match stored("DeployType").as_str() {
+        Some("Clamshellx2") => 2,
+        Some("Clamshellx3") => 3,
+        Some("Shroud") => 0,
+        _ => 4,
+    };
+    Some(ose_data::fairing::FairingShape {
+        sections,
+        capped: d["IsCapped"].as_bool().unwrap_or(false),
+        pieces,
+        ejection_force: stored("EjectionForce").as_f64().unwrap_or(100.0),
+    })
+}
+
 /// The part at the far end of a two-anchor part (fuel line, strut): `Data_CompoundPart.OtherEndAnchor`.
 fn compound_other_end(v: &Value) -> Option<String> {
     match v {
@@ -190,6 +228,7 @@ pub fn craft_from_value(v: &Value) -> anyhow::Result<Craft> {
         };
         parts.push(CraftPart {
             shape: part_shape(p).filter(|sh| sh.valid_for(&s(p, "partName"))),
+            fairing: part_fairing(p).filter(|f| f.valid_for(&s(p, "partName"))),
             chute: None,
             symmetry: 0,
             actions: Vec::new(),

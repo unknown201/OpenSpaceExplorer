@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 pub mod craft;
+pub mod fairing;
 pub mod flight_geometry;
 pub mod missions;
 pub mod procedural;

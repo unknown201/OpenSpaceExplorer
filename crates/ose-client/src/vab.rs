@@ -273,6 +273,7 @@ impl Editor {
             self.craft.parts.push(CraftPart {
                 chute: None,
                 shape: None,
+                fairing: None,
                 symmetry: 0,
                 actions: Vec::new(),
                 flight: None,
@@ -368,6 +369,7 @@ impl Editor {
         self.craft.parts.push(CraftPart {
             chute: None,
             shape: None,
+            fairing: None,
             symmetry: 0,
             actions: Vec::new(),
             flight: None,
@@ -881,6 +883,7 @@ impl Editor {
         let mut p = CraftPart {
             chute: None,
             shape: None,
+            fairing: None,
             symmetry: 0,
             actions: Vec::new(),
             flight: None,
@@ -1782,6 +1785,7 @@ impl Editor {
             self.craft.parts.push(CraftPart {
                 chute: None,
                 shape: None,
+                fairing: None,
                 symmetry: 0,
                 actions: Vec::new(),
                 flight: mirrored.then(|| ose_data::flight_geometry::PartFlight {

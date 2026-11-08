@@ -411,6 +411,7 @@ async fn hello_catalog_and_snapshots() {
         parts: vec![
             ose_data::craft::CraftPart {
                 shape: None,
+                fairing: None,
                 chute: None,
                 symmetry: 0,
                 actions: Vec::new(),
@@ -435,6 +436,7 @@ async fn hello_catalog_and_snapshots() {
             },
             ose_data::craft::CraftPart {
                 shape: None,
+                fairing: None,
                 chute: None,
                 symmetry: 0,
                 actions: Vec::new(),
@@ -938,6 +940,7 @@ fn starter_craft() -> ose_data::craft::Craft {
                 y: f64| {
         ose_data::craft::CraftPart {
             shape: None,
+            fairing: None,
             chute: None,
             symmetry: 0,
             actions: Vec::new(),

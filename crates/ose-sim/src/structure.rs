@@ -242,6 +242,14 @@ pub struct Structure {
     /// reach (no drag, no re-entry heat).
     pub fairing_payload: Vec<Option<Vec<usize>>>,
     pub fairing_deployed: Vec<bool>,
+    /// A shaped fairing's wall and base definition (`CraftPart::fairing`), and its panels' mass, t.
+    pub fairing_shape: Vec<
+        Option<(
+            ose_data::fairing::FairingShape,
+            ose_data::fairing::FairingDef,
+        )>,
+    >,
+    pub fairing_panel_t: Vec<f64>,
     pub cargo_bay: Vec<bool>,
     pub bay_open: Vec<bool>,
     pub shielded: Vec<bool>,
@@ -525,6 +533,10 @@ impl Structure {
             self.gear_out[j] = old.gear_out[i];
             self.converter_on[j] = old.converter_on[i];
             self.fairing_deployed[j] = old.fairing_deployed[i];
+            if old.fairing_deployed[i] {
+                // panels already gone: so is their mass
+                self.shed_fairing_panels(j);
+            }
             self.bay_open[j] = old.bay_open[i];
             self.engine_shutdown[j] = old.engine_shutdown[i];
         }
@@ -1043,6 +1055,23 @@ impl Structure {
                 })
                 .collect(),
             fairing_deployed: vec![false; n],
+            fairing_shape: craft
+                .parts
+                .iter()
+                .map(|p| {
+                    let f = p.fairing.as_ref().filter(|f| f.valid_for(&p.part_id))?;
+                    Some((f.clone(), ose_data::fairing::def(&p.part_id)?.clone()))
+                })
+                .collect(),
+            fairing_panel_t: craft
+                .parts
+                .iter()
+                .map(|p| {
+                    let f = p.fairing.as_ref().filter(|f| f.valid_for(&p.part_id))?;
+                    Some(f.panel_mass_t(ose_data::fairing::def(&p.part_id)?))
+                })
+                .map(|m| m.unwrap_or(0.0))
+                .collect(),
             cargo_bay: (0..n)
                 .map(|i| def_of(i).is_some_and(|d| d.cargo_bay))
                 .collect(),
@@ -1072,7 +1101,29 @@ impl Structure {
             staged_to: 0,
         };
         s.trim_to(0);
+        s.enclose_shaped_fairings();
         s
+    }
+
+    /// A shaped fairing covers what fits inside its wall (`Module_Fairing.FindEnclosedParts`), not the stack
+    /// on its top node; the wall stands along the vessel's long axis from the fairing node.
+    fn enclose_shaped_fairings(&mut self) {
+        for f in 0..self.rigid.len() {
+            let Some((shape, def)) = self.fairing_shape[f].clone() else {
+                continue;
+            };
+            let base = self.rigid.rest_position(f);
+            let payload = (0..self.rigid.len())
+                .filter(|&j| j != f && self.rigid.present[j])
+                .filter(|&j| {
+                    let (c, h) = self.part_box(j);
+                    let d = c - base;
+                    shape.encloses(&def, [d.x, d.y, d.z], [h.x, h.y, h.z])
+                })
+                .collect();
+            self.fairing_payload[f] = Some(payload);
+        }
+        self.update_shielding();
     }
 
     /// Drop the parts that are not attached in flight stage `stage` (they were staged away).
@@ -3670,11 +3721,24 @@ impl Structure {
             .unwrap_or_default();
         for i in parts {
             self.arm_chute(i);
-            if self.fairing_payload[i].is_some() && self.rigid.present[i] {
+            if self.fairing_payload[i].is_some()
+                && self.rigid.present[i]
+                && !self.fairing_deployed[i]
+            {
                 self.fairing_deployed[i] = true;
+                self.shed_fairing_panels(i);
             }
         }
         self.update_shielding();
+    }
+
+    /// The panels' mass leaves with them (`Data_Fairing.MassModifierAmount`).
+    fn shed_fairing_panels(&mut self, i: usize) {
+        let panels = std::mem::take(&mut self.fairing_panel_t[i]);
+        if panels > 0.0 {
+            self.net.dry_t[i] = (self.net.dry_t[i] - panels).max(0.001);
+            self.sync_structural_mass();
+        }
     }
 
     /// Jettison every fairing; returns how many.
@@ -3686,6 +3750,7 @@ impl Structure {
                 && !self.fairing_deployed[i]
             {
                 self.fairing_deployed[i] = true;
+                self.shed_fairing_panels(i);
                 n += 1;
             }
         }
@@ -3711,7 +3776,11 @@ impl Structure {
         let n = self.rigid.len();
         let mut shielded = vec![false; n];
         for f in 0..n {
-            if let Some(payload) = &self.fairing_payload[f] {
+            // `ShieldEnclosedParts(IsCapped)`: an open-topped wall leaves its contents in the airflow.
+            let open_top = self.fairing_shape[f]
+                .as_ref()
+                .is_some_and(|(sh, _)| !sh.capped);
+            if let Some(payload) = self.fairing_payload[f].as_ref().filter(|_| !open_top) {
                 if self.rigid.present[f] && !self.fairing_deployed[f] {
                     for &j in payload {
                         shielded[j] = true;
@@ -3741,7 +3810,14 @@ impl Structure {
         (0..self.rigid.len())
             .filter_map(|f| {
                 let payload = self.fairing_payload[f].as_ref()?;
-                if !self.rigid.present[f] || self.fairing_deployed[f] || payload.is_empty() {
+                if !self.rigid.present[f] || self.fairing_deployed[f] {
+                    return None;
+                }
+                if let Some((shape, _)) = &self.fairing_shape[f] {
+                    let (front, side) = shape.drag_areas_m2();
+                    return Some((f, front, side));
+                }
+                if payload.is_empty() {
                     return None;
                 }
                 let (fc, _) = self.part_box(f);
@@ -6061,6 +6137,67 @@ mod tests {
         assert!(!s.shielded[pod]);
         s.aero(0, basis(facing), sideways, 1.0, 0.6);
         assert!(s.part_cda_m2[pod] > 0.0);
+    }
+
+    /// A shaped fairing (`Data_Fairing.CrossSections`) covers what fits inside its wall, shields it only once
+    /// capped, weighs its panels and loses them when jettisoned.
+    #[test]
+    fn a_shaped_fairing_encloses_by_its_wall_and_sheds_its_panels() {
+        let (crafts, defs, res) = assets();
+        let mut c = crafts
+            .iter()
+            .find(|c| c.name == "Stock12_StartRocket")
+            .unwrap()
+            .clone();
+        let pod = 0;
+        let fairing = c.parts.len();
+        let mut f = c.parts[1].clone();
+        f.guid = "fairing".into();
+        f.part_id = "fairing_1v_procedural".into();
+        c.parts.push(f);
+        c.parts[fairing].parent = Some(1);
+        c.parts[fairing].own_node = Some("bottom".into());
+        c.parts[fairing].parent_node = Some("top".into());
+        c.parts[1].parent = None;
+        c.parts[pod].parent = Some(fairing);
+        c.parts[pod].own_node = Some("bottom".into());
+        c.parts[pod].parent_node = Some("top".into());
+        c.stages.push(vec![fairing]);
+        let fd = ose_data::fairing::def("fairing_1v_procedural").unwrap();
+        // too narrow for the 1.25 m pod: it is not inside
+        let mut narrow = ose_data::fairing::FairingShape::cylinder(fd, 3.0);
+        for sec in &mut narrow.sections {
+            sec.1 = sec.1.min(0.3);
+        }
+        c.parts[fairing].fairing = Some(narrow);
+        let s = Structure::build(&c, &defs, &res);
+        assert!(!s.fairing_payload[fairing].as_ref().unwrap().contains(&pod));
+        // wide and tall enough, but open at the top: enclosed, still in the airflow
+        let mut open = ose_data::fairing::FairingShape::cylinder(fd, 4.0);
+        for sec in &mut open.sections {
+            sec.1 = 0.9;
+        }
+        open.capped = false;
+        c.parts[fairing].fairing = Some(open.clone());
+        let s = Structure::build(&c, &defs, &res);
+        assert!(s.fairing_payload[fairing].as_ref().unwrap().contains(&pod));
+        assert!(!s.shielded[pod], "an open wall shields nothing");
+        // capped: shielded, and the panels weigh in until they go
+        open.capped = true;
+        c.parts[fairing].fairing = Some(open.clone());
+        c.apply_shapes(&defs);
+        let mut s = Structure::build(&c, &defs, &res);
+        assert!(s.shielded[pod]);
+        let before = s.mass_properties().mass_t;
+        let panels = open.panel_mass_t(fd);
+        assert!(panels > 0.1, "{panels}");
+        assert_eq!(s.deploy_fairings(), 1);
+        assert!(!s.shielded[pod]);
+        let after = s.mass_properties().mass_t;
+        assert!(
+            (before - after - panels).abs() < 1e-6,
+            "{before} -> {after}, panels {panels}"
+        );
     }
 
     #[test]

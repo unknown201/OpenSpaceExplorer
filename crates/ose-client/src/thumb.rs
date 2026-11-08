@@ -143,6 +143,7 @@ mod tests {
     fn part(part_id: &str, parent: Option<usize>, pos: DVec3, stage: i32) -> CraftPart {
         CraftPart {
             shape: None,
+            fairing: None,
             chute: None,
             symmetry: 0,
             actions: Vec::new(),

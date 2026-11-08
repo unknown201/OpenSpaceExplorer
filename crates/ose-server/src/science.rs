@@ -513,6 +513,7 @@ mod tests {
             description: String::new(),
             parts: vec![ose_data::craft::CraftPart {
                 shape: None,
+                fairing: None,
                 chute: None,
                 symmetry: 0,
                 actions: Vec::new(),

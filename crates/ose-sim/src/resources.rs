@@ -632,6 +632,7 @@ mod tests {
         // decoupler: a line hanging on tank 7 feeding tank 19
         let line = ose_data::craft::CraftPart {
             shape: None,
+            fairing: None,
             chute: None,
             symmetry: 0,
             actions: Vec::new(),

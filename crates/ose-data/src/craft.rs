@@ -79,6 +79,9 @@ pub struct CraftPart {
     /// A procedural wing's shape (`Data_ProceduralPart`); `None` keeps the authored start shape.
     #[serde(default)]
     pub shape: Option<crate::procedural::WingShape>,
+    /// A procedural fairing's wall (`Data_Fairing.CrossSections`); `None` wraps whatever stands on the base.
+    #[serde(default)]
+    pub fairing: Option<crate::fairing::FairingShape>,
     /// A parachute's deploy settings when changed from the part's own (`Data_Parachute` `DeploymentMode`,
     /// `minAirPressureToOpen`, `deployAltitude`); `None` keeps the part's defaults.
     #[serde(default)]
@@ -133,6 +136,21 @@ impl CraftPart {
     /// replacing whatever `flight` held. Run wherever a craft is accepted (the server on launch, the editor on
     /// every change) so a client cannot claim its own numbers. Other parts are left alone.
     pub fn apply_shape(&mut self, def: &PartDef) {
+        // A shaped fairing weighs its base and its panels (`Data_Fairing.MassModifierAmount`).
+        match (crate::fairing::def(&def.id), self.fairing.take()) {
+            (Some(fd), Some(f)) if f.valid_for(&def.id) => {
+                let flight =
+                    self.flight
+                        .get_or_insert_with(|| crate::flight_geometry::PartFlight {
+                            part_id: def.id.clone(),
+                            ..Default::default()
+                        });
+                flight.part_id = def.id.clone();
+                flight.dry_mass_t = Some(def.mass_t + f.panel_mass_t(fd));
+                self.fairing = Some(f);
+            }
+            _ => {}
+        }
         if !crate::procedural::is_procedural_wing(&def.id) {
             self.shape = None;
             return;
