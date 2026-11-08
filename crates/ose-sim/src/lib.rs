@@ -152,6 +152,10 @@ fn connected_groups(craft: &ose_data::craft::Craft, parts: &[usize]) -> Vec<Vec<
     groups
 }
 
+/// Steps since the universe started, for the CommNet rebuild timer.
+#[derive(Resource, Clone, Copy, Debug, Default)]
+struct CommNetSteps(u64);
+
 impl Universe {
     pub fn new() -> Self {
         let mut world = World::new();
@@ -2438,8 +2442,17 @@ impl Universe {
             vessels::refresh_next_transition(&mut self.world, &index, e, ut, &self.params);
         }
         self.advance_experiments(ticks.max(1) as f64 * dt);
-        // the network once a simulated second
-        if now / TICKS_PER_SECOND != (now + ticks.max(1)) / TICKS_PER_SECOND {
+        // the network every 3 s of real time, as the original rebuilds its graph (one step is a fiftieth of a
+        // second of real time at any warp)
+        let rebuild_every = (commnet::REBUILD_S * TICKS_PER_SECOND as f64) as u64;
+        let calls = {
+            let mut c = self
+                .world
+                .get_resource_or_insert_with(CommNetSteps::default);
+            c.0 += 1;
+            c.0
+        };
+        if calls % rebuild_every == 1 || rebuild_every <= 1 {
             self.update_commnet();
         }
         self.charge_on_rails(ticks.max(1) as f64 * dt, ut);
