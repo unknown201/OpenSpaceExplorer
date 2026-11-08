@@ -1694,9 +1694,20 @@ pub type Tank = (u16, String, String, f64, f64);
 /// The resource manager's transfer section (the original's tank-to-tank transfer): for each resource held
 /// by two tanks or more, every tank with Out and In toggles, and Transfer once both sides are picked;
 /// `pick` is (resource, out, in); `running` the transfer under way.
+/// The Resource Manager's picks for one resource: (resource, giving parts, taking parts); a part in both is
+/// balanced. One per resource, so methane and oxidizer can be set up and moved together.
+pub type XferPick = (String, Vec<u16>, Vec<u16>);
+
+/// Whether a pick moves anything: tanks on both sides, or two to balance (the original's
+/// `IsResourceValidForFlowRequest`).
+pub fn xfer_pick_valid(p: &XferPick) -> bool {
+    let balancing = p.1.iter().filter(|k| p.2.contains(k)).count();
+    (p.1.len() > balancing && p.2.len() > balancing) || balancing > 1
+}
+
 pub fn transfers_html(
     tanks: &[Tank],
-    pick: &(String, Vec<u16>, Vec<u16>),
+    picks: &[XferPick],
     running: Option<&(String, Vec<u16>, Vec<u16>)>,
 ) -> String {
     let mut html = format!(
@@ -1740,6 +1751,8 @@ pub fn transfers_html(
             continue;
         }
         any = true;
+        let none: XferPick = Default::default();
+        let pick = picks.iter().find(|p| p.0 == res).unwrap_or(&none);
         let picked = pick.0 == res;
         html.push_str(&format!(
             "<div class=\"rs-xfer-res\">{}</div>",
@@ -1768,15 +1781,12 @@ pub fn transfers_html(
                 pct = (stored / cap).clamp(0.0, 1.0) * 100.0,
             ));
         }
-        let balancing = pick.1.iter().filter(|p| pick.2.contains(p)).count();
-        let giving = pick.1.len() - balancing;
-        let taking = pick.2.len() - balancing;
-        if picked && ((giving > 0 && taking > 0) || balancing > 1) {
-            html.push_str(&format!(
-                "<button class=\"rs-xfer-go\" data-xfer-go=\"{}\" data-ose=\"xfer-go\">Transfer</button>",
-                crate::esc(res)
-            ));
-        }
+    }
+    // one Transfer for every resource set up, as the original's Start moves them all at once
+    if picks.iter().any(xfer_pick_valid) {
+        html.push_str(
+            "<button class=\"rs-xfer-go\" data-xfer-go=\"all\" data-ose=\"xfer-go\">Transfer</button>",
+        );
     }
     if !any {
         html.push_str("<div class=\"rs-row\"><span>no two tanks share a resource</span></div>");
@@ -2042,20 +2052,39 @@ mod tests {
             (1, "A".into(), "Methane".into(), 10.0, 40.0),
             (2, "B".into(), "Methane".into(), 30.0, 40.0),
         ];
-        let none = (String::new(), Vec::new(), Vec::new());
-        let html = transfers_html(&tanks, &none, None);
+        let html = transfers_html(&tanks, &[], None);
         assert!(html.contains("data-xfer-bal=\"1\""), "{html}");
         // two tanks picked to balance: the Transfer button shows, both Balance buttons are on
-        let pick = ("Methane".to_string(), vec![1, 2], vec![1, 2]);
+        let pick = vec![("Methane".to_string(), vec![1, 2], vec![1, 2])];
         let html = transfers_html(&tanks, &pick, None);
         assert!(html.contains("data-xfer-go"), "{html}");
         assert!(html.contains("class=\"on\" data-xfer-bal=\"1\""), "{html}");
         assert!(!html.contains("class=\"on\" data-xfer-out"), "{html}");
         // one alone has nothing to balance with
-        let pick = ("Methane".to_string(), vec![1], vec![1]);
+        let pick = vec![("Methane".to_string(), vec![1], vec![1])];
         assert!(!transfers_html(&tanks, &pick, None).contains("data-xfer-go"));
         let running = ("Methane".to_string(), vec![1, 2], vec![1, 2]);
-        assert!(transfers_html(&tanks, &none, Some(&running)).contains("balancing 2 tanks"));
+        assert!(transfers_html(&tanks, &[], Some(&running)).contains("balancing 2 tanks"));
+        // methane and oxidizer set up together: one Transfer for both
+        let tanks2: Vec<Tank> = tanks
+            .iter()
+            .cloned()
+            .chain([
+                (1, "A".into(), "Oxidizer".into(), 10.0, 40.0),
+                (2, "B".into(), "Oxidizer".into(), 30.0, 40.0),
+            ])
+            .collect();
+        let picks = vec![
+            ("Methane".to_string(), vec![2], vec![1]),
+            ("Oxidizer".to_string(), vec![2], vec![1]),
+        ];
+        let html = transfers_html(&tanks2, &picks, None);
+        assert_eq!(html.matches("data-xfer-go").count(), 1, "{html}");
+        assert_eq!(
+            html.matches("class=\"on\" data-xfer-out").count(),
+            2,
+            "{html}"
+        );
     }
 
     #[test]

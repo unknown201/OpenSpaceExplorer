@@ -89,6 +89,10 @@ pub struct PartRig {
     pub mesh_area_lift_multiplier: f64,
     /// `CtrlSurfacePivotTransformName`: the bone the moving surface hangs from.
     pub ctrl_pivot: String,
+    /// `CtrlTransformRotAxis`: the pivot axis the moving surface turns about (X on wings and stabilizers, Y on
+    /// control surfaces and fins).
+    #[serde(default = "axis_x")]
+    pub ctrl_rot_axis: String,
     pub options: Vec<OptionRig>,
 }
 
@@ -181,6 +185,10 @@ pub struct RigMesh {
     pub uvs: Vec<f32>,
     pub influences: Vec<Vec<(u16, f32)>>,
     pub triangles: Vec<u32>,
+}
+
+fn axis_x() -> String {
+    "X".into()
 }
 
 static RIGS: OnceLock<Rigs> = OnceLock::new();
@@ -685,6 +693,10 @@ fn pose(option: &OptionRig, shape: &WingShape) -> Vec<Aff> {
     // Offsets add up per bone and mode on top of the rest pose (`ApplyOffsets`).
     let mut pos_add = vec![[0.0; 3]; n];
     let mut scale_add = vec![[0.0; 3]; n];
+    // `CONSTRAINT_POS` / `CONSTRAINT_SCALE` targets move the weights of a two-source constraint instead: the
+    // first source gains the offset's x, the second loses it, each clamped to 0..100 (`ApplyOffsetByMode`).
+    let mut pos_weight_add = vec![0.0; n];
+    let mut scale_weight_add = vec![0.0; n];
     for (i, v) in final_values(option, shape) {
         for t in &option.sliders[i].targets {
             let Ok(b) = usize::try_from(t.bone) else {
@@ -697,6 +709,8 @@ fn pose(option: &OptionRig, shape: &WingShape) -> Vec<Aff> {
             match t.mode.as_str() {
                 "position" => pos_add[b] = add(pos_add[b], off),
                 "scale" => scale_add[b] = add(scale_add[b], off),
+                "constraint_pos" => pos_weight_add[b] += off[0],
+                "constraint_scale" => scale_weight_add[b] += off[0],
                 _ => {}
             }
         }
@@ -738,14 +752,23 @@ fn pose(option: &OptionRig, shape: &WingShape) -> Vec<Aff> {
                 .ok()
                 .filter(|pi| *pi < n)
                 .map_or(Aff::IDENTITY, |pi| w[pi]);
+            let shift = match c.kind.as_str() {
+                "position" => pos_weight_add[b],
+                "scale" => scale_weight_add[b],
+                _ => 0.0,
+            };
             let sources: Vec<(usize, f64)> = c
                 .sources
                 .iter()
-                .filter_map(|(i, wt)| {
-                    usize::try_from(*i)
-                        .ok()
-                        .filter(|i| *i < n)
-                        .map(|i| (i, *wt))
+                .enumerate()
+                .filter_map(|(k, (i, wt))| {
+                    let wt = if c.sources.len() == 2 && shift != 0.0 {
+                        let sign = if k == 0 { 1.0 } else { -1.0 };
+                        (wt + sign * shift).clamp(0.0, 100.0)
+                    } else {
+                        *wt
+                    };
+                    usize::try_from(*i).ok().filter(|i| *i < n).map(|i| (i, wt))
                 })
                 .collect();
             let total: f64 = sources.iter().map(|(_, wt)| wt).sum();
@@ -813,14 +836,57 @@ pub fn evaluate(part_id: &str, shape: &WingShape, mirrored: bool) -> Option<Wing
     let mut all_tris: Vec<[u32; 3]> = Vec::new();
     let mut ctrl_points: Vec<[f64; 3]> = Vec::new();
     let mut ctrl_tris: Vec<[u32; 3]> = Vec::new();
+    // The moving surface: the baked groups hung from the pivot bone (`CtrlSurfacePivotTransformName`) or
+    // below it. Its frame as the original measures it at run time: the hinge along the pivot's
+    // `CtrlTransformRotAxis`, the lift axis along the wing's thickness (the original's flap pivot carries its
+    // `CtrlTransformDir` there, checked against the stock jet's wing and stabilizer in KSP2).
     let ctrl_bone = option
-        .attach
-        .get("CONTROLSURFACE")
-        .and_then(|b| usize::try_from(*b).ok())
+        .bones
+        .iter()
+        .position(|b| b.name == rig.ctrl_pivot)
         .filter(|b| *b < w.len());
+    let under_pivot = |mut b: i32| {
+        let mut hops = 0;
+        while let (Ok(i), Some(pivot)) = (usize::try_from(b), ctrl_bone) {
+            if i == pivot {
+                return true;
+            }
+            b = option.bones.get(i).map_or(-1, |x| x.parent);
+            hops += 1;
+            if hops > 64 {
+                break;
+            }
+        }
+        false
+    };
+    let moving_groups: Vec<&str> = option
+        .attach
+        .iter()
+        .filter(|(_, b)| under_pivot(**b))
+        .map(|(g, _)| g.as_str())
+        .collect();
     let ctrl_frame = ctrl_bone.map(|b| {
         let rot = w[b].rotation();
-        (w[b].t, rot)
+        let j = if rig.ctrl_rot_axis == "Y" { 1 } else { 0 };
+        let hinge = [rot[0][j], rot[1][j], rot[2][j]];
+        // The thickness axis: option -Y is the part's +X.
+        let normal = [0.0, -1.0, 0.0];
+        let along = dot(hinge, normal);
+        let h = sub(hinge, scale3(normal, along));
+        let l = len(h);
+        let hinge = if l > 1e-9 {
+            scale3(h, 1.0 / l)
+        } else {
+            [0.0, 0.0, 1.0]
+        };
+        let third = cross(normal, hinge);
+        // columns: hinge, third, normal
+        let frame = [
+            [hinge[0], third[0], normal[0]],
+            [hinge[1], third[1], normal[1]],
+            [hinge[2], third[2], normal[2]],
+        ];
+        (w[b].t, frame)
     });
     for m in &option.meshes {
         let skin: Vec<Aff> = m
@@ -880,7 +946,7 @@ pub fn evaluate(part_id: &str, shape: &WingShape, mirrored: bool) -> Option<Wing
                 .iter()
                 .map(|t| [t[0] + base, t[1] + base, t[2] + base]),
         );
-        if m.group == "CONTROLSURFACE" {
+        if moving_groups.contains(&m.group.as_str()) {
             if let Some((origin, rot)) = ctrl_frame {
                 // `GetMeshArea` on a copy of the pivot turned to the identity: the flap in the pivot's axes.
                 let rt = transpose(&rot);
@@ -918,7 +984,7 @@ pub fn evaluate(part_id: &str, shape: &WingShape, mirrored: bool) -> Option<Wing
     let (moving, pivot, hinge, normal, center) = match (ctrl_frame, ctrl_points.is_empty()) {
         (Some((origin, rot)), false) => {
             let flap = drag_cube(&ctrl_points, &ctrl_tris);
-            // `CtrlTransformDir` Z, sign +1 on the procedural wings and stabilizers.
+            // Along the lift axis (the frame's Z, built above).
             let area = flap.cross_section([0.0, 0.0, 1.0]);
             let axis = |j: usize| flip(to_part([rot[0][j], rot[1][j], rot[2][j]]));
             (
@@ -1088,6 +1154,19 @@ mod tests {
         let r = evaluate("wing_1v_procedural_light", &s, false).unwrap();
         let total = r.fixed_lift_coeff + r.moving_lift_coeff;
         assert!((total - 2.61946).abs() < 0.01, "{total}");
+        // KSP2 (tools/ksp2-wing-probe, reference/ksp2-wings): LiftingCtrlSurfaceArea 1.95327, CtrlSurfaceArea
+        // 0.66619, flight dry mass 0.17855 t.
+        assert!(
+            (r.fixed_lift_coeff - 1.95327).abs() < 0.02,
+            "{}",
+            r.fixed_lift_coeff
+        );
+        assert!(
+            (r.moving_lift_coeff - 0.66619).abs() < 0.01,
+            "{}",
+            r.moving_lift_coeff
+        );
+        assert!((r.mass_t - 0.17855).abs() < 0.002, "{}", r.mass_t);
     }
 
     #[test]
@@ -1107,6 +1186,109 @@ mod tests {
         let r = evaluate("stabilizer_1v_procedural_light", &s, false).unwrap();
         let total = r.fixed_lift_coeff + r.moving_lift_coeff;
         assert!((total - 0.40812).abs() < 0.003, "{total}");
+        // KSP2: 0.27433 fixed, 0.13379 moving, 0.03813 t.
+        assert!(
+            (r.fixed_lift_coeff - 0.27433).abs() < 0.002,
+            "{}",
+            r.fixed_lift_coeff
+        );
+        assert!(
+            (r.moving_lift_coeff - 0.13379).abs() < 0.002,
+            "{}",
+            r.moving_lift_coeff
+        );
+        assert!((r.mass_t - 0.03813).abs() < 0.0005, "{}", r.mass_t);
+    }
+
+    /// Shapes reshaped through KSP2's own editor (the wing probe): control surface sliders move constraint
+    /// weights, and the moving part's area follows.
+    #[test]
+    fn reshaped_wings_match_the_originals_editor() {
+        let mut jet = shape(&[
+            ("WING_SPAN", 0.2),
+            ("ROOT_LENGTH", 0.33),
+            ("TIP_LENGTH", 0.03),
+            ("WING_ANGLE", 0.36),
+            ("ROOT_THICKNESS", 0.1),
+            ("TIP_THICKNESS", 0.04),
+            ("TIP_ANGLE", 0.9),
+            ("CONTROL_SPAN", 0.5),
+            ("CONTROL_LENGTH", 0.8),
+            ("CONTROL_POSITION", 0.3),
+        ]);
+        let r = evaluate("wing_1v_procedural_light", &jet, false).unwrap();
+        assert!(
+            (r.fixed_lift_coeff - 2.13668).abs() < 0.02,
+            "{}",
+            r.fixed_lift_coeff
+        );
+        assert!(
+            (r.moving_lift_coeff - 0.48244).abs() < 0.01,
+            "{}",
+            r.moving_lift_coeff
+        );
+        jet.set_slider("CONTROL_SPAN", 1.0);
+        jet.set_slider("CONTROL_LENGTH", 0.5);
+        jet.set_slider("CONTROL_POSITION", 1.0);
+        jet.set_slider("WING_SPAN", 0.6);
+        let r = evaluate("wing_1v_procedural_light", &jet, false).unwrap();
+        assert!(
+            (r.fixed_lift_coeff - 5.64518).abs() < 0.08,
+            "{}",
+            r.fixed_lift_coeff
+        );
+        assert!(
+            (r.moving_lift_coeff - 1.99763).abs() < 0.05,
+            "{}",
+            r.moving_lift_coeff
+        );
+        // the stock jet wing without its control surface (mesh option 0): flight mass 0.18388 t
+        let mut plain = shape(&[
+            ("WING_SPAN", 0.2),
+            ("ROOT_LENGTH", 0.33),
+            ("TIP_LENGTH", 0.03),
+            ("WING_ANGLE", 0.36),
+            ("ROOT_THICKNESS", 0.1),
+            ("TIP_THICKNESS", 0.04),
+            ("TIP_ANGLE", 0.9),
+        ]);
+        plain.option = 0;
+        let r = evaluate("wing_1v_procedural_light", &plain, false).unwrap();
+        assert_eq!(r.moving_lift_coeff, 0.0);
+        assert!((r.mass_t - 0.18388).abs() < 0.002, "{}", r.mass_t);
+    }
+
+    /// The Kerbal K1's all-moving control surfaces (stock file, current KSP2 values): CtrlSurfaceArea 0.25691,
+    /// LiftingCtrlSurfaceArea 0.02310 (below 0.1, so the fixed part does not lift).
+    #[test]
+    fn k1_control_surfaces_move_whole_as_the_originals() {
+        let s = WingShape {
+            option: 0,
+            sliders: [
+                ("WING_SPAN", 0.0541097),
+                ("ROOT_LENGTH", 0.05),
+                ("TIP_LENGTH", 0.04),
+                ("WING_ANGLE", 0.4011904),
+                ("ROOT_THICKNESS", 0.111),
+                ("TIP_THICKNESS", 0.03684066),
+                ("TIP_ANGLE", 0.5),
+            ]
+            .iter()
+            .map(|(n, v)| (n.to_string(), *v))
+            .collect(),
+            toggles: vec![],
+        };
+        let r = evaluate("controlsurface_1v_procedural_light", &s, false).unwrap();
+        assert!(
+            (r.moving_lift_coeff - 0.25691).abs() < 0.01,
+            "{}",
+            r.moving_lift_coeff
+        );
+        assert!(
+            (r.fixed_lift_coeff - 0.02310).abs() < 0.01,
+            "{}",
+            r.fixed_lift_coeff
+        );
     }
 
     /// The Jumping Flea's fins at their default shape weigh 0.0028657 t in the original's flight scene.
