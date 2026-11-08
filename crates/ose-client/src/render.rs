@@ -240,7 +240,18 @@ fn fs_mesh(in: VsOut) -> @location(0) vec4<f32> {
         let vary = clamp(1.0 + (l - 1.0) * 1.8, 0.6, 1.5) * mix(1.0, f, 0.3);
         base = vec4<f32>(m * vary * object.surface2.xyz * object.color.rgb, 1.0);
     }
-    if object.surface.x > 2.5 {
+    if object.surface.x > 3.5 {
+        // KSP2's tileable runway: the slab map (uv) blended half and half (the mask's red) with a concrete detail
+        // map tiled by position every `surface.y` metres, darkened where the mask's green marks tar patches.
+        let sd = 1.0 / object.surface.y;
+        let det = textureSampleGrad(em_tex, samp, p_local * sd, dp_x * sd, dp_y * sd).rgb;
+        let tar = mix(1.0, object.surface.z, clamp(pm.g, 0.0, 1.0));
+        // The slab map's own contrast (its joints and slab-to-slab shading) carried over the blend, so the
+        // concrete keeps its slab grid as in KSP2.
+        let slab_avg = textureSampleLevel(tex, samp, vec2<f32>(0.5), 16.0).rgb * object.color.rgb;
+        let blended = mix(base.rgb, det, clamp(pm.r, 0.0, 1.0));
+        base = vec4<f32>(max(blended + (base.rgb - slab_avg) * 1.2, vec3<f32>(0.0)) * tar, base.a);
+    } else if object.surface.x > 2.5 {
         // KSP2's campus ground (ksc_campus_vertexPaint): the large grassland map's patches everywhere, the
         // medium map's detail over them up close (relative to its average, its smallest mip), faded out
         // between 250 m and 1.3 km as KSP2's _MediumTextureFade; graded by _GlobalColorize.
@@ -2812,6 +2823,11 @@ fn parse_glb(bytes: &[u8]) -> Result<CpuModel, String> {
         let metal = m["pbrMetallicRoughness"]["metallicFactor"]
             .as_f64()
             .unwrap_or(1.0) as f32;
+        // KSP2's tileable runway: a tiled detail map (emissive slot) blended by a mask (paint slot): mode 4.
+        let dt = nums(&m["extras"]["ose_detail"]);
+        if dt.len() >= 2 {
+            return [4.0, dt[0], dt[1], 0.0, 0.0, 0.0, 0.0, metal];
+        }
         // Ground with KSP2's large grassland map in the emissive slot: mode 3.
         let gl = nums(&m["extras"]["ose_ground_large"]);
         if gl.len() >= 6 {
