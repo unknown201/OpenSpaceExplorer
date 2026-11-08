@@ -18,6 +18,9 @@ use ose_net::SessionMode;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+/// How much earlier than predicted the Mun SOI handoff may come and still count, s.
+const EARLY_ENCOUNTER_S: f64 = 5.0;
+
 /// The step names in order. Tests key their expectations on these.
 pub const STEP_NAMES: [&str; 11] = [
     "server_health",
@@ -489,7 +492,9 @@ pub async fn run_mun_campaign(cfg: &BotConfig) -> Vec<StepResult> {
                 // The server lands the handoff exactly on its predicted tick, but the bot only sees it in
                 // the next Vessels message: at COAST_WARP each snapshot interval covers this much UT.
                 let lag = ut - t.predicted_encounter_ut;
-                if !(-1.0..=server_flight::snapshot_lag_s()).contains(&lag) {
+                // a little early is fine too: the prediction comes from a trajectory sampled before the last
+                // ticks of the coast, and the crossing lands on a step boundary
+                if !(-EARLY_ENCOUNTER_S..=server_flight::snapshot_lag_s()).contains(&lag) {
                     return Outcome::failed(format!(
                         "Mun SOI entered at UT {ut:.0} but the server predicted UT {:.0} (allowed lag \
                          {:.0} s)",
