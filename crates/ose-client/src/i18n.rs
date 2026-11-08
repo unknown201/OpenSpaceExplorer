@@ -48,6 +48,26 @@ pub fn merge(
     en
 }
 
+type Table = std::rc::Rc<std::collections::HashMap<String, String>>;
+
+thread_local! {
+    /// The table in use outside English, for text the HUD's free functions write (`t`); `None` in English.
+    static ACTIVE: std::cell::RefCell<Option<Table>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Make `table` the one `t` reads, or none for English.
+pub fn set_active(table: Option<Table>) {
+    ACTIVE.with(|a| *a.borrow_mut() = table);
+}
+
+/// Text OSE writes itself, in the player's language: the game's `term`, or OSE's own English (`own`).
+pub fn t(term: &str, own: &str) -> String {
+    ACTIVE.with(|a| match a.borrow().as_ref() {
+        Some(loc) => pick_text(loc, term, own, false).to_string(),
+        None => own.to_string(),
+    })
+}
+
 /// Where a term goes: `data-loc` fills the text, `data-loc-title` the tooltip and `data-loc-cap` the `data-cap`
 /// attribute that a CSS caption shows (`content: attr(data-cap)`).
 pub const SLOTS: [(&str, Option<&str>); 3] = [
@@ -161,5 +181,16 @@ mod tests {
             "Rechtläufig"
         );
         assert_eq!(pick_text(&loc, "HUD/Missing", own, false), own);
+    }
+
+    #[test]
+    fn hud_text_follows_the_active_table() {
+        assert_eq!(t("Flight/ResourceManager/Out", "Out"), "Out");
+        let de: std::collections::HashMap<String, String> =
+            [("Flight/ResourceManager/Out".to_string(), "Aus".to_string())].into();
+        set_active(Some(std::rc::Rc::new(de)));
+        assert_eq!(t("Flight/ResourceManager/Out", "Out"), "Aus");
+        set_active(None);
+        assert_eq!(t("Flight/ResourceManager/Out", "Out"), "Out");
     }
 }

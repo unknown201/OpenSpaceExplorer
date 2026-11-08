@@ -1495,7 +1495,8 @@ pub fn stage_resources_html(list: &[(String, f64, f64)]) -> String {
     html
 }
 
-/// Readable name of a resource id (`MonoPropellant` -> `Mono Propellant`).
+/// Readable name of a resource id (`MonoPropellant` -> `Mono Propellant`), in the player's language: the
+/// game's `Resource/DisplayName/*` keys some names by id and others spaced.
 pub fn resource_name(id: &str) -> String {
     let mut out = String::new();
     for (i, c) in id.chars().enumerate() {
@@ -1504,7 +1505,11 @@ pub fn resource_name(id: &str) -> String {
         }
         out.push(c);
     }
-    out
+    let by_id = crate::i18n::t(&format!("Resource/DisplayName/{id}"), &out);
+    if by_id != out {
+        return by_id;
+    }
+    crate::i18n::t(&format!("Resource/DisplayName/{out}"), &out)
 }
 
 /// Resource units with the precision small tanks need.
@@ -1540,10 +1545,16 @@ pub fn resources_html(stage: &[(String, f64, f64)], vessel: &[(String, f64, f64)
     let (s, v) = (rows(stage), rows(vessel));
     let mut html = String::new();
     if !s.is_empty() {
-        html.push_str("<div class=\"rs-head\">STAGE</div>");
+        html.push_str(&format!(
+            "<div class=\"rs-head\">{}</div>",
+            crate::esc(&crate::i18n::t("VAB/DeltaVTool/Stage", "STAGE"))
+        ));
         html.push_str(&s);
     }
-    html.push_str("<div class=\"rs-head\">VESSEL</div>");
+    html.push_str(&format!(
+        "<div class=\"rs-head\">{}</div>",
+        crate::esc(&crate::i18n::t("Menu/TrackingStation/Vessel", "VESSEL"))
+    ));
     if v.is_empty() {
         html.push_str("<div class=\"rs-row\"><span>nothing aboard</span></div>");
     } else {
@@ -1563,14 +1574,21 @@ pub fn transfers_html(
     pick: &(String, Vec<u16>, Vec<u16>),
     running: Option<&(String, Vec<u16>, Vec<u16>)>,
 ) -> String {
-    let mut html = String::from("<div class=\"rs-head\">TRANSFER</div>");
+    let mut html = format!(
+        "<div class=\"rs-head\">{}</div>",
+        crate::esc(&crate::i18n::t(
+            "Flight/ResourceManager/Transfer",
+            "TRANSFER"
+        ))
+    );
     if let Some((res, from, to)) = running {
         html.push_str(&format!(
-            "<div class=\"rs-xfer-run\">Moving {} from {} to {} tank{}<button data-xfer-stop=\"1\" data-ose=\"xfer-stop\">Stop</button></div>",
+            "<div class=\"rs-xfer-run\">Moving {} from {} to {} tank{}<button data-xfer-stop=\"1\" data-ose=\"xfer-stop\">{}</button></div>",
             crate::esc(&resource_name(res)),
             from.len(),
             to.len(),
-            if to.len() == 1 { "" } else { "s" }
+            if to.len() == 1 { "" } else { "s" },
+            crate::esc(&crate::i18n::t("Flight/ResourceManager/Stop", "Stop"))
         ));
     }
     let mut resources: Vec<&str> = Vec::new();
@@ -1596,10 +1614,12 @@ pub fn transfers_html(
             let into = picked && pick.2.contains(part);
             html.push_str(&format!(
                 "<div class=\"rs-row rs-tank\"><span>{title}</span><span>{s} / {c}</span>\
-                 <span class=\"rs-xfer-btns\"><button class=\"{o}\" data-xfer-out=\"{part}\" data-xfer-res=\"{r}\">Out</button>\
-                 <button class=\"{i}\" data-xfer-in=\"{part}\" data-xfer-res=\"{r}\">In</button></span>\
+                 <span class=\"rs-xfer-btns\"><button class=\"{o}\" data-xfer-out=\"{part}\" data-xfer-res=\"{r}\">{out_t}</button>\
+                 <button class=\"{i}\" data-xfer-in=\"{part}\" data-xfer-res=\"{r}\">{in_t}</button></span>\
                  <div class=\"rs-bar\"><i style=\"width:{pct:.1}%\"></i></div></div>",
                 title = crate::esc(title),
+                out_t = crate::esc(&crate::i18n::t("Flight/ResourceManager/Out", "Out")),
+                in_t = crate::esc(&crate::i18n::t("Flight/ResourceManager/In", "In")),
                 s = units(*stored),
                 c = units(*cap),
                 o = if out { "on" } else { "" },
