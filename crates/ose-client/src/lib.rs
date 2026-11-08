@@ -4904,7 +4904,7 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                         input::eva_key(f.situation, f.crew.len(), f.eva, ev.ctrl_key())
                     });
                 let handled = match code.as_str() {
-                    // out of the hatch: E on the ground or afloat, Ctrl+E anywhere (`input::eva_key`)
+                    // out of the hatch: Ctrl+E (`input::eva_key`); plain E rolls, as the original's
                     "KeyE" if !ev.repeat() && !ev.alt_key() && eva_key => {
                         ev.prevent_default();
                         app.crew_eva(None);
