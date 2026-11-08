@@ -833,6 +833,49 @@ impl Universe {
         Ok(())
     }
 
+    /// Change a parachute's deploy mode, opening pressure and full-deploy height in flight; the rest of its
+    /// symmetry set follows (`KSPState(CopyToSymmetrySet)`), and the settings go with the craft.
+    pub fn set_chute_settings(
+        &mut self,
+        e: Entity,
+        part: usize,
+        settings: ose_data::craft::ChuteSettings,
+    ) -> Result<(), &'static str> {
+        let settings = settings.stepped();
+        // The part and the rest of its symmetry set, from the craft as flown.
+        let parts: Vec<usize> = match self.world.get::<docking::CraftDoc>(e) {
+            Some(d) => match d.0.parts.get(part).map(|p| p.symmetry).filter(|s| *s != 0) {
+                Some(s) => (0..d.0.parts.len())
+                    .filter(|&k| d.0.parts[k].symmetry == s)
+                    .collect(),
+                None => vec![part],
+            },
+            None => vec![part],
+        };
+        let mut st = self
+            .world
+            .get_mut::<structure::Structure>(e)
+            .ok_or("vessel has no parts")?;
+        if st.chute_defs.get(part).is_none_or(|c| c.is_none()) || !st.rigid.present[part] {
+            return Err("that part is not a parachute");
+        }
+        for &k in &parts {
+            if let Some(Some(c)) = st.chute_defs.get_mut(k) {
+                c.min_pressure_atm = settings.min_pressure_atm as f64;
+                c.deploy_altitude_m = settings.deploy_altitude_m as f64;
+                st.chute_modes[k] = settings.mode;
+            }
+        }
+        if let Some(mut doc) = self.world.get_mut::<docking::CraftDoc>(e) {
+            for &k in &parts {
+                if let Some(p) = doc.0.parts.get_mut(k) {
+                    p.chute = Some(settings);
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Run one part's action now (its right-click menu); false when it does not apply to that part.
     pub fn part_action(&mut self, e: Entity, part: usize, action: &str, on: bool) -> bool {
         self.world

@@ -44,6 +44,15 @@ pub struct PartSpec {
     /// Engine modes (thrust and specific impulse), for the part tooltip.
     #[serde(default)]
     pub engines: Vec<EngineSpec>,
+    /// A parachute's defaults (opening pressure, full-deploy height), for its part window.
+    #[serde(default)]
+    pub parachute: Option<ChuteSpec>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, serde::Deserialize)]
+pub struct ChuteSpec {
+    pub min_pressure_atm: f64,
+    pub deploy_altitude_m: f64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Deserialize)]
@@ -262,6 +271,7 @@ impl Editor {
         };
         if self.craft.parts.is_empty() {
             self.craft.parts.push(CraftPart {
+                chute: None,
                 symmetry: 0,
                 actions: Vec::new(),
                 flight: None,
@@ -355,6 +365,7 @@ impl Editor {
         let idx = self.craft.parts.len();
         let guid = self.next_guid();
         self.craft.parts.push(CraftPart {
+            chute: None,
             symmetry: 0,
             actions: Vec::new(),
             flight: None,
@@ -855,6 +866,7 @@ impl Editor {
             0
         };
         let mut p = CraftPart {
+            chute: None,
             symmetry: 0,
             actions: Vec::new(),
             flight: None,
@@ -1124,6 +1136,7 @@ impl Editor {
                 p.fuel_crossfeed = src.fuel_crossfeed;
                 p.actions = src.actions.clone();
                 p.colors = src.colors;
+                p.chute = src.chute;
             }
         }
     }
@@ -1746,6 +1759,7 @@ impl Editor {
             let mirrored = mirrored_pair && out.len() == 1;
             out.push(self.craft.parts.len());
             self.craft.parts.push(CraftPart {
+                chute: None,
                 symmetry: 0,
                 actions: Vec::new(),
                 flight: mirrored.then(|| ose_data::flight_geometry::PartFlight {
@@ -1982,12 +1996,83 @@ pub fn pam_html(craft: &Craft, i: usize, catalog: &Catalog) -> String {
             if p.fuel_crossfeed { " checked" } else { "" }
         )
     };
+    let chute = chute_settings_of(p, spec)
+        .map(|s| chute_settings_html(s, true, true))
+        .unwrap_or_default();
     format!(
         "<div class=\"pam-head\"><b>{title}</b><button id=\"pam-close\" title=\"Close (Esc)\">&#10005;</button></div>{stage}\
-         {crossfeed}{rows}{groups}",
+         {crossfeed}{rows}{chute}{groups}",
         title = esc(title),
         groups = action_groups_html(&p.actions, &kinds),
     )
+}
+
+/// A parachute part's deploy settings: the craft's own, else the part's defaults in SAFE mode; `None` for
+/// any other part.
+pub fn chute_settings_of(
+    p: &ose_data::craft::CraftPart,
+    spec: Option<&PartSpec>,
+) -> Option<ose_data::craft::ChuteSettings> {
+    let d = spec?.parachute.as_ref()?;
+    Some(p.chute.unwrap_or(ose_data::craft::ChuteSettings {
+        mode: ose_data::craft::ChuteMode::Safe,
+        min_pressure_atm: d.min_pressure_atm as f32,
+        deploy_altitude_m: d.deploy_altitude_m as f32,
+    }))
+}
+
+/// The original's parachute deploy settings in a part window (`Data_Parachute`, "Deploy Settings"): the deploy
+/// mode (SAFE opens only when it will not burn, RISKY also when it may, IMMEDIATE at once), the air pressure
+/// it opens partly in and the height it opens fully at. `data-chute-mode` and `data-chute` name the controls.
+/// As the original, the settings fold away behind their heading (`IsDeploySettingsShown`, toggled by
+/// `data-chute-toggle`; `open` shows them) and the mode goes once the canopy is fully open (`show_mode`).
+pub fn chute_settings_html(
+    set: ose_data::craft::ChuteSettings,
+    show_mode: bool,
+    open: bool,
+) -> String {
+    use ose_data::craft::ChuteMode as M;
+    let chip = |m: M, label: &str, tip: &str| {
+        format!(
+            "<button class=\"ag-chip{on}\" data-chute-mode=\"{m:?}\" title=\"{tip}\">{label}</button>",
+            on = if set.mode == m { " on" } else { "" },
+        )
+    };
+    let head = format!(
+        "<button class=\"pam-sub ag-title pam-fold\" data-chute-toggle=\"1\" title=\"show or hide the deploy settings\">{} Deploy settings</button>",
+        if open { "&#9662;" } else { "&#9656;" }
+    );
+    if !open {
+        return head;
+    }
+    let mode = if show_mode {
+        format!(
+            "<div class=\"ag-row\"><span>Deploy mode</span><div class=\"ag-chips\">{}{}{}</div></div>",
+            chip(M::Safe, "Safe", "opens only when it will not overheat"),
+            chip(M::Risky, "Risky", "also opens when it may overheat within two seconds"),
+            chip(M::Immediate, "Immediate", "opens as soon as it is armed, whatever the air and speed"),
+        )
+    } else {
+        String::new()
+    };
+    format!(
+        "{head}{mode}\
+         <label class=\"pam-row\"><span>Min pressure</span><input type=\"range\" data-chute=\"pressure\" min=\"0.01\" max=\"0.75\" step=\"0.01\" value=\"{p:.2}\" /><b>{p:.2} atm</b></label>\
+         <label class=\"pam-row\"><span>Deploy altitude</span><input type=\"range\" data-chute=\"altitude\" min=\"50\" max=\"5000\" step=\"50\" value=\"{a:.0}\" /><b>{a:.0} m</b></label>",
+        p = set.min_pressure_atm,
+        a = set.deploy_altitude_m,
+    )
+}
+
+/// Parse a `data-chute-mode` value.
+pub fn chute_mode(name: &str) -> Option<ose_data::craft::ChuteMode> {
+    use ose_data::craft::ChuteMode as M;
+    match name {
+        "Safe" => Some(M::Safe),
+        "Risky" => Some(M::Risky),
+        "Immediate" => Some(M::Immediate),
+        _ => None,
+    }
 }
 
 /// Action groups a part action can be bound to (`KSPActionGroup` bits, protocol 57), as the original's
@@ -3018,6 +3103,7 @@ mod tests {
                     .iter()
                     .zip(&before)
                     .map(|(&i, q)| CraftPart {
+                        chute: None,
                         local_rotation: *q,
                         ..e.craft.parts[i].clone()
                     })

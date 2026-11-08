@@ -151,6 +151,10 @@ struct App {
     nodes: Vec<Node>,
     /// Action-group bindings set in flight, by (vessel, part as launched), until the craft catches up.
     flight_actions: std::collections::HashMap<(u64, u16), Vec<(String, u32)>>,
+    /// Parachute settings set in flight, by (vessel, part as launched), until the craft catches up.
+    flight_chutes: std::collections::HashMap<(u64, u16), ose_data::craft::ChuteSettings>,
+    /// The flight part window shows a parachute's deploy settings (`IsDeploySettingsShown`).
+    flight_chute_open: bool,
     player_name: String,
     /// True once the server confirmed us as a campaign member (the map is "in session").
     in_session: bool,
@@ -703,6 +707,8 @@ pub fn start() -> Result<(), JsValue> {
         node_el: None,
         nodes: Vec::new(),
         flight_actions: Default::default(),
+        flight_chutes: Default::default(),
+        flight_chute_open: false,
         player_name: String::new(),
         in_session: false,
         campaign: None,
@@ -2885,8 +2891,20 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                     e.get_attribute("data-agbit")?.parse::<u32>().ok()?,
                 ))
             });
+            let mode = t
+                .as_ref()
+                .and_then(|e| e.get_attribute("data-chute-mode"))
+                .and_then(|m| vab::chute_mode(&m));
             if close {
                 app.flight_open_pam(None, 0.0, 0.0);
+            } else if let Some(mode) = mode {
+                app.flight_chute_changed(|s| s.mode = mode);
+            } else if t
+                .as_ref()
+                .is_some_and(|e| e.closest("[data-chute-toggle]").ok().flatten().is_some())
+            {
+                app.flight_chute_open = !app.flight_chute_open;
+                app.flight_pam_refresh();
             } else if let Some((kind, bit)) = chip {
                 app.flight_toggle_action(&kind, bit);
             } else if let Some(act) = act {
@@ -2915,7 +2933,35 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                 );
                 return;
             }
+            // A chute slider's label follows it while dragged; the setting goes on release.
+            if let (Some(which), "input") =
+                (target.get_attribute("data-chute"), ev.type_().as_str())
+            {
+                let v = target
+                    .dyn_ref::<web_sys::HtmlInputElement>()
+                    .map(|i| i.value_as_number())
+                    .unwrap_or(0.0);
+                if let Some(b) = target.next_element_sibling() {
+                    b.set_text_content(Some(&if which == "pressure" {
+                        format!("{v:.2} atm")
+                    } else {
+                        format!("{v:.0} m")
+                    }));
+                }
+                return;
+            }
             if ev.type_() != "change" {
+                return;
+            }
+            if let Some(which) = target.get_attribute("data-chute") {
+                let v = target
+                    .dyn_ref::<web_sys::HtmlInputElement>()
+                    .map(|i| i.value_as_number() as f32)
+                    .unwrap_or(0.0);
+                app.flight_chute_changed(|s| match which.as_str() {
+                    "pressure" => s.min_pressure_atm = v,
+                    _ => s.deploy_altitude_m = v,
+                });
                 return;
             }
             let Some(key) = target.get_attribute("data-part-control") else {
@@ -3000,6 +3046,7 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         });
         pam.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
         pam.add_event_listener_with_callback("change", cb.as_ref().unchecked_ref())?;
+        pam.add_event_listener_with_callback("input", cb.as_ref().unchecked_ref())?;
         cb.forget();
     }
     // The signal indicator: with no signal and antennas folded, a click extends them.
@@ -3081,7 +3128,13 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                 return;
             };
             let mut app = a.borrow_mut();
-            if input.id() == "pam-crossfeed" {
+            if let Some(which) = input.get_attribute("data-chute") {
+                let v = input.value_as_number() as f32;
+                app.vab_chute_changed(|s| match which.as_str() {
+                    "pressure" => s.min_pressure_atm = v,
+                    _ => s.deploy_altitude_m = v,
+                });
+            } else if input.id() == "pam-crossfeed" {
                 app.vab_pam_changed(None, 0.0, Some(input.checked()));
             } else if let Some(k) = input.get_attribute("data-res").and_then(|v| v.parse().ok()) {
                 app.vab_pam_changed(Some(k), input.value_as_number(), None);
@@ -3102,6 +3155,17 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                     .and_then(|v| v.parse::<usize>().ok())
             };
             let mut app = a.borrow_mut();
+            if let Some(mode) = t
+                .as_ref()
+                .and_then(|e| e.get_attribute("data-chute-mode"))
+                .and_then(|m| vab::chute_mode(&m))
+            {
+                app.vab_chute_changed(|s| s.mode = mode);
+                if let (Some(el), Some(i)) = (app.doc.get_element_by_id("vab-pam"), app.vab_pam) {
+                    el.set_inner_html(&vab::pam_html(&app.editor.craft, i, &app.catalog));
+                }
+                return;
+            }
             let chip = t.as_ref().and_then(|e| {
                 Some((
                     e.get_attribute("data-agkind")?,
@@ -7709,7 +7773,7 @@ impl App {
         if self
             .doc
             .active_element()
-            .is_some_and(|e| e.has_attribute("data-part-control"))
+            .is_some_and(|e| e.has_attribute("data-part-control") || e.has_attribute("data-chute"))
         {
             return;
         }
@@ -7764,6 +7828,19 @@ impl App {
                 }
             ));
         }
+        // Protocol 63: a parachute's deploy settings, folded behind their heading until opened, the mode
+        // gone once the canopy is fully open and everything gone once it is cut (`UpdatePAMControlVisibility`).
+        let state = f.parachutes.iter().find(|c| c.0 == i as u16).map(|c| c.1);
+        if let Some(set) = self
+            .flight_chute_settings(i)
+            .filter(|_| state != Some(ose_net::ChuteState::Cut))
+        {
+            html.push_str(&vab::chute_settings_html(
+                set,
+                state != Some(ose_net::ChuteState::Deployed),
+                self.flight_chute_open,
+            ));
+        }
         if let Some(s) = spec {
             html.push_str(&vab::action_groups_html(
                 &self.flight_part_actions(i),
@@ -7774,6 +7851,80 @@ impl App {
         if el.get_attribute("data-ose-key").as_deref() != Some(key.as_str()) {
             el.set_inner_html(&html);
             el.set_attribute("data-ose-key", &key).ok();
+        }
+    }
+
+    /// Part `i`'s parachute settings in flight: what this client last set, else the vessel's craft, else the
+    /// part's defaults; `None` for a part that is not a parachute.
+    fn flight_chute_settings(&self, i: usize) -> Option<ose_data::craft::ChuteSettings> {
+        let vessel = self.flying?;
+        let part = self.flight_craft.as_ref()?.parts.get(i)?;
+        let spec = self.catalog.get(&part.part_id);
+        spec?.parachute.as_ref()?;
+        if let Some(s) = self.flight_chutes.get(&(vessel, i as u16)) {
+            return Some(*s);
+        }
+        let now = self
+            .vessel_crafts
+            .get(&vessel)
+            .and_then(|k| k.1.as_ref())
+            .zip(self.flight_cur_part(i))
+            .and_then(|(c, k)| c.parts.get(k));
+        vab::chute_settings_of(now.unwrap_or(part), spec)
+    }
+
+    /// Change part `flight_pam`'s parachute settings in flight (`SetChuteSettings`); the server copies them
+    /// to the rest of its symmetry set.
+    fn flight_chute_changed(&mut self, f: impl FnOnce(&mut ose_data::craft::ChuteSettings)) {
+        let (Some(vessel), Some(i)) = (self.flying, self.flight_pam) else {
+            return;
+        };
+        let Some(mut set) = self.flight_chute_settings(i) else {
+            return;
+        };
+        f(&mut set);
+        let set = set.stepped();
+        self.flight_chutes.insert((vessel, i as u16), set);
+        if let Some(ws) = &self.ws {
+            send(
+                ws,
+                &ClientMessage::SetChuteSettings {
+                    vessel,
+                    part: i as u16,
+                    settings: set,
+                },
+            );
+        }
+        self.flight_pam_refresh();
+    }
+
+    /// Change the VAB part window's parachute settings (undoable; the symmetry set follows).
+    fn vab_chute_changed(&mut self, f: impl FnOnce(&mut ose_data::craft::ChuteSettings)) {
+        let Some(i) = self.vab_pam else { return };
+        let Some(p) = self.editor.craft.parts.get(i) else {
+            return;
+        };
+        let Some(mut set) = vab::chute_settings_of(p, self.catalog.get(&p.part_id)) else {
+            return;
+        };
+        f(&mut set);
+        let set = set.stepped();
+        if !self.vab_pam_recorded {
+            self.vab_pam_recorded = true;
+            self.vab_record();
+        }
+        self.editor.craft.parts[i].chute = Some(set);
+        self.editor.sync_symmetry(i);
+        for (which, text) in [
+            ("pressure", format!("{:.2} atm", set.min_pressure_atm)),
+            ("altitude", format!("{:.0} m", set.deploy_altitude_m)),
+        ] {
+            if let Ok(Some(b)) = self
+                .doc
+                .query_selector(&format!("#vab-pam input[data-chute=\"{which}\"] + b"))
+            {
+                b.set_text_content(Some(&text));
+            }
         }
     }
 

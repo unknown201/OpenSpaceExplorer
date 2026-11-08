@@ -1493,6 +1493,7 @@ mod tests {
         y: f64,
     ) -> CraftPart {
         CraftPart {
+            chute: None,
             symmetry: 0,
             actions: Vec::new(),
             flight: None,
