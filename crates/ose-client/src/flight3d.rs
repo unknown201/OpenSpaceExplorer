@@ -1368,6 +1368,8 @@ impl FlightView {
             sun,
         );
         let mut items: Vec<DrawItem> = Vec::new();
+        // Fuel lines and struts: the span between each pair of anchors.
+        let mut link_lines: Vec<crate::render::LineItem> = Vec::new();
         let context = (inp.vessel.id, inp.body_id.to_string());
         if self.fx_context.as_ref() != Some(&context) {
             self.fx_context = Some(context);
@@ -2395,6 +2397,34 @@ impl FlightView {
                 DVec3::splat(f64::NEG_INFINITY),
                 0usize,
             );
+            for (model, meshes) in crate::vab::LINKER_MESHES {
+                gpu.hide_meshes(&format!("part:{model}"), meshes);
+            }
+            for (f, _, _) in crate::vab::link_spans(craft) {
+                let at = |k: usize| {
+                    parts
+                        .iter()
+                        .find(|(i, ..)| *i == k)
+                        .map(|(_, _, lp, _, _)| pos + vessel_rot * (*lp + origin) - cam)
+                };
+                let (Some(a), Some(b)) = (at(f), craft.parts[f].fuel_line_target.and_then(at))
+                else {
+                    continue;
+                };
+                let d = b - a;
+                let strut = craft.parts[f].part_id.starts_with("strut");
+                link_lines.push(crate::render::LineItem::new(
+                    format!("flight-link:{:.2},{:.2},{:.2}", d.x, d.y, d.z),
+                    vec![DVec3::ZERO, d],
+                    a,
+                    if strut {
+                        [0.62, 0.64, 0.66, 1.0]
+                    } else {
+                        [0.18, 0.19, 0.2, 1.0]
+                    },
+                    5.0,
+                ));
+            }
             for (i, name, lp, lq, animation) in parts {
                 if !gpu.has_model(&name) {
                     continue;
@@ -3167,7 +3197,7 @@ impl FlightView {
         gpu.frame_with_effects(
             "assets/parts/",
             &items,
-            &[],
+            &link_lines,
             clear,
             crate::render::FrameEffects {
                 camera: cam,

@@ -47,6 +47,9 @@ pub struct PartSpec {
     /// A parachute's defaults (opening pressure, full-deploy height), for its part window.
     #[serde(default)]
     pub parachute: Option<ChuteSpec>,
+    /// A two-anchor part: "fuel_line" or "strut" (placed on one part, then run to another); empty otherwise.
+    #[serde(default)]
+    pub compound: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Deserialize)]
@@ -108,6 +111,10 @@ impl PartSpec {
     /// Parts that take part in staging (engines, decouplers, parachutes).
     pub fn is_stageable(&self) -> bool {
         !(self.stage_type.is_empty() || self.stage_type == "None")
+    }
+    /// A fuel line or strut: placed on one part, then its far end on another.
+    pub fn is_compound(&self) -> bool {
+        !self.compound.is_empty()
     }
     pub fn display_title(&self) -> &str {
         if self.title.is_empty() || self.title.starts_with('#') {
@@ -413,6 +420,7 @@ impl Editor {
                 doomed[k] |= d;
             }
         }
+        let doomed = self.with_partners(&doomed);
         let parent = self.craft.parts[sel].parent;
         let removed = doomed.iter().filter(|d| **d).count();
         let remap = self.remove_mask(&doomed);
@@ -733,6 +741,19 @@ impl Editor {
             self.remove_mask(&doomed);
             self.craft.parts.iter().position(|p| p.guid == guid)?
         };
+        // A fuel line or strut from what is lifted to what stays comes off (both its anchors), as nothing can
+        // reach between the craft and the part in hand.
+        let i = {
+            let inside = self.subtree(i);
+            let cut: Vec<bool> = self.links_across(&inside);
+            if cut.iter().any(|c| *c) {
+                let guid = self.craft.parts[i].guid.clone();
+                self.remove_mask(&cut);
+                self.craft.parts.iter().position(|p| p.guid == guid)?
+            } else {
+                i
+            }
+        };
         let inside = self.subtree(i);
         let origin = self.craft.parts[i].local_position;
         // Fragment order: the grabbed part first, then the rest in craft order.
@@ -976,8 +997,10 @@ impl Editor {
             .collect()
     }
 
-    /// Drop the parts marked in `doomed`; returns where each old index went.
+    /// Drop the parts marked in `doomed`, and the other anchor of any fuel line or strut losing one; returns
+    /// where each old index went.
     fn remove_mask(&mut self, doomed: &[bool]) -> Vec<Option<usize>> {
+        let doomed = self.with_partners(doomed);
         let mut remap: Vec<Option<usize>> = Vec::with_capacity(self.craft.parts.len());
         let mut kept = Vec::new();
         for (i, p) in self.craft.parts.iter().enumerate() {
@@ -1868,6 +1891,186 @@ impl Editor {
         self.rebuild_stages(catalog);
         Ok(root)
     }
+}
+
+/// Fuel lines and struts: two-anchor parts, as the original's `ObjectAssemblyCompoundPartTool`. The first
+/// anchor goes on like any surface part; the next click puts the far anchor (the same part) on another part,
+/// and `CraftPart::fuel_line_target` on the first names it.
+impl Editor {
+    /// Fuel line or strut anchors whose far end is still to be placed: first anchors naming nothing that no
+    /// other anchor names either.
+    pub fn unlinked(&self, catalog: &Catalog) -> Vec<usize> {
+        (0..self.craft.parts.len())
+            .filter(|&i| {
+                let p = &self.craft.parts[i];
+                p.fuel_line_target.is_none()
+                    && catalog.get(&p.part_id).is_some_and(|s| s.is_compound())
+                    && !self
+                        .craft
+                        .parts
+                        .iter()
+                        .any(|q| q.fuel_line_target == Some(i))
+            })
+            .collect()
+    }
+
+    /// `doomed` plus the other anchor of every fuel line or strut with one anchor in it.
+    fn with_partners(&self, doomed: &[bool]) -> Vec<bool> {
+        let mut out = doomed.to_vec();
+        loop {
+            let mut changed = false;
+            for (i, p) in self.craft.parts.iter().enumerate() {
+                let Some(t) = p.fuel_line_target.filter(|t| *t < out.len()) else {
+                    continue;
+                };
+                if out[i] != out[t] {
+                    out[i] = true;
+                    out[t] = true;
+                    changed = true;
+                }
+            }
+            if !changed {
+                return out;
+            }
+        }
+    }
+
+    /// Fuel lines and struts with one anchor in `inside` and the other outside: both anchors marked.
+    fn links_across(&self, inside: &[bool]) -> Vec<bool> {
+        let mut cut = vec![false; self.craft.parts.len()];
+        for (i, p) in self.craft.parts.iter().enumerate() {
+            if let Some(t) = p.fuel_line_target.filter(|t| *t < cut.len()) {
+                if inside[i] != inside[t] {
+                    cut[i] = true;
+                    cut[t] = true;
+                }
+            }
+        }
+        cut
+    }
+
+    /// Run the fuel line or strut whose first anchor is `first` to part `target`: its far anchor goes on
+    /// `target` at craft-frame point `hit`, on the face with outward `normal` when known. The rest of the
+    /// anchor's symmetry set runs to the matching parts (the same part when `target` is in no set, as
+    /// asparagus lines all run to one core). Returns the far anchors.
+    pub fn link(
+        &mut self,
+        first: usize,
+        target: usize,
+        hit: DVec3,
+        normal: Option<DVec3>,
+        catalog: &Catalog,
+    ) -> Result<Vec<usize>, String> {
+        let p = self.craft.parts.get(first).ok_or("no such part")?;
+        let spec = catalog
+            .get(&p.part_id)
+            .filter(|s| s.is_compound())
+            .ok_or("only a fuel line or strut runs to another part")?;
+        if p.fuel_line_target.is_some() {
+            return Err("that one already runs to a part".into());
+        }
+        let what = if spec.compound == "strut" {
+            "strut"
+        } else {
+            "fuel line"
+        };
+        let bad_target = |e: &Editor, f: usize, t: usize| {
+            t >= e.craft.parts.len()
+                || t == f
+                || Some(t) == e.craft.parts[f].parent
+                || catalog
+                    .get(&e.craft.parts[t].part_id)
+                    .is_some_and(|s| s.is_compound())
+        };
+        if bad_target(self, first, target) {
+            return Err(format!("run the {what} to another part"));
+        }
+        // The same run for each anchor of the set, carried over by the set's own symmetry.
+        let mut jobs = vec![(first, target, hit, normal)];
+        let targets_set: Vec<usize> = std::iter::once(target)
+            .chain(self.counterparts(target))
+            .collect();
+        for (c, map) in self.symmetry_maps(first) {
+            let h = map.pose(hit, IDENTITY, DVec3::new(0.0, 0.0, 1.0)).0;
+            let want = map
+                .pose(
+                    self.craft.parts[target].local_position,
+                    IDENTITY,
+                    DVec3::new(0.0, 0.0, 1.0),
+                )
+                .0;
+            let t = targets_set
+                .iter()
+                .copied()
+                .min_by(|a, b| {
+                    let da = (self.craft.parts[*a].local_position - want).length();
+                    let db = (self.craft.parts[*b].local_position - want).length();
+                    da.total_cmp(&db)
+                })
+                .unwrap_or(target);
+            if self.craft.parts[c].fuel_line_target.is_none() && !bad_target(self, c, t) {
+                jobs.push((c, t, h, normal.map(|n| map.dir(n))));
+            }
+        }
+        let mut ends = Vec::new();
+        for (f, t, h, n) in jobs {
+            let spot = self
+                .surface_spot_on(t, h, n, catalog, None)
+                .ok_or_else(|| format!("the {what} cannot reach there"))?;
+            let e = *self
+                .place_surface(spec, catalog, spot, 1, false)?
+                .first()
+                .ok_or("nothing placed")?;
+            self.craft.parts[e].stage_index = self.craft.parts[f].stage_index;
+            self.craft.parts[f].fuel_line_target = Some(e);
+            ends.push(e);
+        }
+        if ends.len() > 1 {
+            let s = self.fresh_symmetry();
+            for &e in &ends {
+                self.craft.parts[e].symmetry = s;
+            }
+        }
+        self.selected = Some(first);
+        self.rebuild_stages(catalog);
+        Ok(ends)
+    }
+
+    /// Where each placed fuel line or strut runs, craft frame: from its first anchor to its far anchor.
+    pub fn links(&self) -> Vec<(usize, DVec3, DVec3)> {
+        link_spans(&self.craft)
+    }
+}
+
+/// The stretchy middle of the two-anchor parts' models (the original stacks its linker pieces between the
+/// anchors, `StackObjectsBetweenTwoPoints`): left out of the anchor drawn at each end, the span drawn on its own.
+pub const LINKER_MESHES: [(&str, &[&str]); 2] = [
+    (
+        "fuelline_0v_external",
+        &[
+            "FTX_2_External_Fuel_Duct_obj_line_pivot",
+            "FTX_2_External_Fuel_Duct_obj_line_pivot_end",
+            "FTX_2_External_Fuel_Duct_obj_line_pivot_medium",
+            "FTX_2_External_Fuel_Duct_obj_line_pivot_small",
+        ],
+    ),
+    (
+        "strut_1v_extensible",
+        &["EAS-4 Strut Connector_obj_strut_pivot"],
+    ),
+];
+
+/// Fuel lines and struts of `craft` as (first anchor, from, to): their two anchors' origins, craft frame.
+pub fn link_spans(craft: &Craft) -> Vec<(usize, DVec3, DVec3)> {
+    craft
+        .parts
+        .iter()
+        .enumerate()
+        .filter_map(|(i, p)| {
+            let far = craft.parts.get(p.fuel_line_target?)?;
+            Some((i, p.local_position, far.local_position))
+        })
+        .collect()
 }
 
 /// One finding of the engineer's report (`ObjectAssemblyEngineerReport`): severity 2 stops a launch going
@@ -2834,6 +3037,157 @@ mod tests {
             },
         );
         c
+    }
+
+    /// The test catalog plus a fuel line and a strut (surface parts that run to a second part).
+    fn linked_catalog() -> Catalog {
+        let mut c = catalog();
+        for (id, kind) in [("fuelline", "fuel_line"), ("strut", "strut")] {
+            c.insert(
+                id.into(),
+                PartSpec {
+                    id: id.into(),
+                    mass_t: 0.05,
+                    compound: kind.into(),
+                    size_m: Some(DVec3::new(0.1, 0.1, 0.1)),
+                    attach_nodes: vec![NodeSpec {
+                        id: "srfAttach".into(),
+                        node_type: "Surface".into(),
+                        orientation: DVec3::new(1.0, 0.0, 0.0),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+            );
+        }
+        let mut booster = c["tank"].clone();
+        booster.id = "booster".into();
+        booster.attach_nodes.push(NodeSpec {
+            id: "srfAttach".into(),
+            node_type: "Surface".into(),
+            position: DVec3::new(0.625, 0.0, 0.0),
+            orientation: DVec3::new(1.0, 0.0, 0.0),
+            ..Default::default()
+        });
+        c.insert("booster".into(), booster);
+        c
+    }
+
+    /// Pod, tank, decoupler, lower tank; returns the editor and the two tanks.
+    fn two_tanks(cat: &Catalog) -> (Editor, usize, usize) {
+        let mut e = Editor::new("lined");
+        e.add_part(&cat["pod"], cat).unwrap();
+        let upper = e.add_part(&cat["tank"], cat).unwrap();
+        e.add_part(&cat["decoupler"], cat).unwrap();
+        let lower = e.add_part(&cat["tank"], cat).unwrap();
+        (e, upper, lower)
+    }
+
+    fn side_of(e: &Editor, i: usize) -> SurfaceSpot {
+        let at = e.craft.parts[i].local_position + DVec3::new(0.625, 0.0, 0.0);
+        e.surface_spot_on(
+            i,
+            at,
+            Some(DVec3::new(1.0, 0.0, 0.0)),
+            &linked_catalog(),
+            None,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_fuel_line_runs_from_one_tank_to_another_and_is_saved_with_the_craft() {
+        let cat = linked_catalog();
+        let (mut e, upper, lower) = two_tanks(&cat);
+        let spot = side_of(&e, upper);
+        let first = e.add_surface(&cat["fuelline"], &cat, spot, 1).unwrap()[0];
+        assert_eq!(e.unlinked(&cat), vec![first]);
+        // a fuel line cannot run to the tank it hangs on, or to itself
+        let at = e.craft.parts[upper].local_position;
+        assert!(e.link(first, upper, at, None, &cat).is_err());
+        assert!(e.link(first, first, at, None, &cat).is_err());
+        let hit = e.craft.parts[lower].local_position + DVec3::new(0.625, 0.5, 0.0);
+        let ends = e
+            .link(first, lower, hit, Some(DVec3::new(1.0, 0.0, 0.0)), &cat)
+            .unwrap();
+        assert_eq!(ends.len(), 1);
+        let far = ends[0];
+        assert_eq!(e.craft.parts[far].part_id, "fuelline");
+        assert_eq!(e.craft.parts[far].parent, Some(lower));
+        assert_eq!(e.craft.parts[first].fuel_line_target, Some(far));
+        assert_eq!(e.craft.compound_ends(first), Some((upper, lower)));
+        assert!(e.unlinked(&cat).is_empty());
+        assert!(e.craft.is_tree());
+        // the far anchor sits where the cursor met the lower tank
+        assert!((e.craft.parts[far].local_position.y - hit.y).abs() < 1e-6);
+        assert_eq!(
+            e.links(),
+            vec![(
+                first,
+                e.craft.parts[first].local_position,
+                e.craft.parts[far].local_position
+            )]
+        );
+        // saved: the craft's JSON carries the link
+        let json = serde_json::to_string(&e.craft).unwrap();
+        let back: Craft = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.compound_ends(first), Some((upper, lower)));
+    }
+
+    #[test]
+    fn removing_either_end_of_a_strut_takes_both_anchors() {
+        let cat = linked_catalog();
+        let (mut e, upper, lower) = two_tanks(&cat);
+        let first = e
+            .add_surface(&cat["strut"], &cat, side_of(&e, upper), 1)
+            .unwrap()[0];
+        let hit = e.craft.parts[lower].local_position + DVec3::new(0.625, 0.0, 0.0);
+        e.link(first, lower, hit, None, &cat).unwrap();
+        assert_eq!(e.craft.parts.len(), 6);
+        // the lower tank goes, and the strut's far anchor with it, so the first anchor goes too
+        e.selected = Some(lower);
+        assert_eq!(e.remove_selected(&cat), Some(3));
+        assert_eq!(e.craft.parts.len(), 3);
+        assert!(e.craft.parts.iter().all(|p| p.part_id != "strut"));
+        // lifting a part a strut reaches takes the strut off too
+        let (mut e, upper, lower) = two_tanks(&cat);
+        let first = e
+            .add_surface(&cat["strut"], &cat, side_of(&e, upper), 1)
+            .unwrap()[0];
+        let hit = e.craft.parts[lower].local_position + DVec3::new(0.625, 0.0, 0.0);
+        e.link(first, lower, hit, None, &cat).unwrap();
+        let frag = e.detach(lower, &cat).unwrap();
+        assert_eq!(frag.parts.len(), 1);
+        assert!(e.craft.parts.iter().all(|p| p.part_id != "strut"));
+        assert!(e.craft.is_tree());
+    }
+
+    #[test]
+    fn symmetric_fuel_lines_all_run_to_the_core() {
+        let cat = linked_catalog();
+        let mut e = Editor::new("asparagus");
+        let core = e.add_part(&cat["tank"], &cat).unwrap();
+        // three boosters round the core, on their own decouplers' stand-in: tanks on the side
+        let spot = side_of(&e, core);
+        let boosters = e.add_surface(&cat["booster"], &cat, spot, 3).unwrap();
+        assert_eq!(boosters.len(), 3);
+        let b = boosters[0];
+        let on = e.craft.parts[b].local_position + DVec3::new(0.0, 0.0, 0.0);
+        let s = e
+            .surface_spot_on(b, on + DVec3::new(-0.625, 0.0, 0.0), None, &cat, None)
+            .unwrap();
+        let firsts = e.add_surface(&cat["fuelline"], &cat, s, 1).unwrap();
+        assert_eq!(firsts.len(), 3, "one line per booster");
+        let hit = e.craft.parts[core].local_position + DVec3::new(0.625, 0.3, 0.0);
+        let ends = e.link(firsts[0], core, hit, None, &cat).unwrap();
+        assert_eq!(ends.len(), 3);
+        for &f in &firsts {
+            let (from, to) = e.craft.compound_ends(f).unwrap();
+            assert!(boosters.contains(&from));
+            assert_eq!(to, core);
+        }
+        let s = e.craft.parts[ends[0]].symmetry;
+        assert!(s != 0 && ends.iter().all(|&k| e.craft.parts[k].symmetry == s));
     }
 
     #[test]
