@@ -1,6 +1,6 @@
-//! Several campaigns on one server: one is live (its universe runs), the others wait on the shelf as save
-//! files. Creating a campaign or picking another from the list puts the live one on the shelf and brings
-//! the chosen one in, as long as nobody else is playing the live one.
+//! Several campaigns on one server: the live ones run in rooms (`rooms.rs`), the others wait on the shelf as
+//! save files. Creating a campaign or picking another from the list in a room nobody else is playing puts
+//! that room's campaign on the shelf and brings the chosen one in; `rooms::enter` picks that room.
 
 use ose_net::{ServerMessage, SessionMode};
 use ose_sim::Universe;
@@ -85,9 +85,10 @@ pub enum Target {
     New(NewCampaign),
 }
 
-/// Put the live campaign on the shelf and make `target` live. Refused while
-/// another player is playing the live campaign.
+/// Put room `s`'s campaign on the shelf and make `target` live in it. Refused while another player is
+/// playing it (`rooms::enter` picks a room where nobody else is).
 pub fn switch(s: &Shared, player_id: u64, target: Target) -> Result<(), String> {
+    let taken = crate::rooms::live_ids(s);
     {
         let playing = s.playing.lock().expect("playing lock");
         if playing.iter().any(|&p| p != player_id) {
@@ -104,8 +105,9 @@ pub fn switch(s: &Shared, player_id: u64, target: Target) -> Result<(), String> 
             return Err(format!("no campaign {id}"));
         }
     }
-    // the live campaign goes on the shelf, even one nobody has joined yet (it stays listed)
-    {
+    // the live campaign goes on the shelf, even one nobody has joined yet (it stays listed); a new room's
+    // placeholder has no id and is not kept
+    if !c.id.is_empty() {
         let id = c.id.clone();
         let file = save::capture(&u, &v, &c, &[]);
         shelf.retain(|x| x.id != id);
@@ -128,7 +130,7 @@ pub fn switch(s: &Shared, player_id: u64, target: Target) -> Result<(), String> 
             *u = nu;
             v.clear();
             let mut id = format!("c{}", crate::now_unix());
-            while shelf.iter().any(|x| x.id == id) || id == c.id {
+            while shelf.iter().any(|x| x.id == id) || id == c.id || taken.contains(&id) {
                 id.push('x');
             }
             *c = save::Campaign {
@@ -209,12 +211,9 @@ pub fn allowed(s: &Shared, id: &str) -> bool {
     )
 }
 
-/// Every campaign: the live one first, then the shelf, most recently played first.
+/// Every campaign: the live ones first (the primary room's, then the others), then the shelf, most
+/// recently played first.
 pub fn list(s: &Shared) -> ServerMessage {
-    let ut_s = s.universe.lock().expect("sim lock").ut();
-    let c = s.campaign.lock().expect("campaign lock");
-    let shelf = s.shelf.lock().expect("shelf lock");
-    let playing = s.playing.lock().expect("playing lock");
     let owner_name = |campaign: &save::Campaign| {
         campaign.owner.map(|id| {
             campaign
@@ -225,18 +224,29 @@ pub fn list(s: &Shared) -> ServerMessage {
                 .unwrap_or_else(|| crate::display_name_for(s, id))
         })
     };
-    let mut sessions = vec![ose_net::SessionInfo {
-        id: c.id.clone(),
-        name: c.name.clone(),
-        mode: c.mode,
-        ut_s,
-        last_played_unix: c.last_played_unix,
-        players: playing.len() as u32,
-        owner: c.owner,
-        owner_name: owner_name(&c),
-    }];
+    let mut sessions = Vec::new();
+    for room in s.rooms.all() {
+        let ut_s = room.universe.lock().expect("sim lock").ut();
+        let c = room.campaign.lock().expect("campaign lock");
+        if c.id.is_empty() {
+            continue;
+        }
+        let players = room.playing.lock().expect("playing lock").len() as u32;
+        sessions.push(ose_net::SessionInfo {
+            id: c.id.clone(),
+            name: c.name.clone(),
+            mode: c.mode,
+            ut_s,
+            last_played_unix: c.last_played_unix,
+            players,
+            owner: c.owner,
+            owner_name: owner_name(&c),
+        });
+    }
+    let shelf = s.shelf.lock().expect("shelf lock");
     let mut rest: Vec<ose_net::SessionInfo> = shelf
         .iter()
+        .filter(|x| !sessions.iter().any(|l| l.id == x.id))
         .map(|x| ose_net::SessionInfo {
             id: x.id.clone(),
             name: x.save.campaign.name.clone(),
@@ -255,6 +265,29 @@ pub fn list(s: &Shared) -> ServerMessage {
 
 /// Ownership is checked on the server, including for shelved campaigns.
 pub fn manage(s: &Shared, player: u64, id: &str, delete: bool) -> Result<(), String> {
+    match crate::rooms::live(s, id) {
+        Some(room) => manage_in(&room, player, id, delete),
+        None => manage_in(&s.rooms.primary(), player, id, delete),
+    }
+}
+
+/// `manage` on room `s` (the one playing campaign `id`, or the primary room for a shelved campaign).
+fn manage_in(s: &crate::AppState, player: u64, id: &str, delete: bool) -> Result<(), String> {
+    if delete && s.campaign.lock().expect("campaign lock").id == id {
+        let owner = s.campaign.lock().expect("campaign lock").owner;
+        if owner != Some(player) {
+            return Err("only the session owner can delete it".into());
+        }
+        if !s.playing.lock().expect("playing lock").is_empty() {
+            return Err(
+                "leave the session before deleting it; all players must leave first".into(),
+            );
+        }
+        // a room other than the primary one just closes
+        if crate::rooms::delete(s, s) {
+            return Ok(());
+        }
+    }
     let mut u = s.universe.lock().expect("sim lock");
     let mut v = s.vessels.lock().expect("vessels lock");
     let mut c = s.campaign.lock().expect("campaign lock");
