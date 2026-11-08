@@ -1477,7 +1477,12 @@ fn fs_clouds(in: VOut) -> @location(0) vec4<f32> {
     let pf = up * (frame.solar.w / 1500.0);
     let nf = vnoise(pf, 1048576) * 0.6 + vnoise(pf * 2.0, 1048576) * 0.4;
     let kf = 1.0 - smoothstep(300.0, 1200.0, dist * 0.0012);
-    let far_cover = smoothstep(0.12, 0.6, base + (nf - 0.5) * 0.7 * kf);
+    // Seen from above the layer on the climb (KSP2's run13 at 45 km over the KSC: a few small cumulus over clear
+    // land, where ours drew broad white sheets over about a third of it) only the thick cores show; from orbit
+    // (Josh's 89 km shot) and from under the layer the fields keep their full cover.
+    let cam_km = length(frame.cam_km.xyz) - frame.solar.w * 0.001;
+    let above = smoothstep(9.0, 20.0, cam_km) * (1.0 - smoothstep(55.0, 85.0, cam_km));
+    let far_cover = smoothstep(mix(0.12, 0.36, above), mix(0.6, 0.85, above), base + (nf - 0.5) * 0.7 * kf);
     let cover = clamp(mix(far_cover, smoothstep(0.35, 0.75, base + (n - 0.5) * 0.9), near), 0.0, 1.0);
     let p_km = frame.cam_km.xyz + in.rel * 0.001;
     let sun = frame.sun.xyz;
