@@ -25,6 +25,7 @@ pub mod authored_trails;
 pub mod engine_fx;
 #[cfg(target_arch = "wasm32")]
 mod engine_fx_gpu;
+pub mod fairing_mesh;
 #[cfg(target_arch = "wasm32")]
 pub mod flight3d;
 pub mod ftue;
@@ -37,6 +38,7 @@ pub mod hud;
 pub mod i18n;
 pub mod input;
 pub mod interaction;
+pub mod kerbal_anim;
 pub mod kerbin_time;
 #[cfg(target_arch = "wasm32")]
 pub mod ksc3d;
@@ -77,6 +79,7 @@ pub mod vab;
 #[cfg(target_arch = "wasm32")]
 pub mod vab3d;
 pub mod vapor;
+pub mod wing_mesh;
 
 use scene::{Camera, Scene, TimeSync};
 use std::cell::RefCell;
@@ -297,7 +300,7 @@ struct App {
     /// The tech tree, the original's English text (loaded from assets/loc/en.json), the researched nodes
     /// and the node shown in the R&D info panel.
     tech: Vec<rnd::TechNode>,
-    loc: std::collections::HashMap<String, String>,
+    loc: std::rc::Rc<std::collections::HashMap<String, String>>,
     /// The language the game's text is shown in (`i18n::LANGUAGES` code), and the catalog's own part names.
     lang: String,
     part_titles: std::collections::HashMap<String, String>,
@@ -485,6 +488,8 @@ struct App {
     /// and the handle being dragged (index, press x, y, the node's delta-v components at the press).
     mnv_dirs: [(f64, f64); 6],
     mnv_drag: Option<(usize, f64, f64, [f64; 3])>,
+    /// How far (CSS px) the held maneuver handle is out along its direction from where the drag started.
+    mnv_along: f64,
     mnv_sent_ms: f64,
     gpu_canvas: HtmlCanvasElement,
     /// 3D orbit camera: yaw and pitch (radians) around the focus, distance in kilometres.
@@ -954,7 +959,7 @@ pub fn start() -> Result<(), JsValue> {
         pending_launch: None,
         body_spins: Vec::new(),
         tech: rnd::tree(),
-        loc: std::collections::HashMap::new(),
+        loc: Default::default(),
         lang: i18n::pick(
             stored("ose.lang").as_deref(),
             web_sys::window()
@@ -1069,6 +1074,7 @@ pub fn start() -> Result<(), JsValue> {
         map_cursor: None,
         mnv_dirs: [(0.0, 0.0); 6],
         mnv_drag: None,
+        mnv_along: 0.0,
         mnv_sent_ms: 0.0,
         gpu_canvas: get("gpu")?.dyn_into()?,
         orbit_yaw: 0.6,
@@ -2018,10 +2024,11 @@ fn load_localization(app: Shared) {
             // the player picked another language meanwhile; its own load shows it
             return;
         }
-        a.loc = i18n::merge(en, table);
+        a.loc = std::rc::Rc::new(i18n::merge(en, table));
+        i18n::set_active((lang != "en").then(|| a.loc.clone()));
         a.localize_parts();
         #[cfg(target_arch = "wasm32")]
-        i18n::apply(&a.doc, &a.loc);
+        i18n::apply(&a.doc, &a.loc, lang == "en");
         if let Some(root) = a.doc.document_element() {
             root.set_attribute("lang", &lang).ok();
         }
@@ -3313,6 +3320,16 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                 });
             } else if input.id() == "pam-crossfeed" {
                 app.vab_pam_changed(None, 0.0, Some(input.checked()));
+            } else if input.id() == "pam-wing-ctrl" {
+                app.vab_wing_changed(None, input.checked() as u8 as f64);
+            } else if let Some(name) = input.get_attribute("data-wing") {
+                app.vab_wing_changed(Some(&name), input.value_as_number());
+            } else if input.id() == "pam-fair-cap" {
+                app.vab_fairing_changed(&format!("cap:{}", input.checked() as u8));
+            } else if input.id() == "pam-fair-eject" {
+                app.vab_fairing_changed(&format!("eject:{}", input.value_as_number()));
+            } else if let Some(k) = input.get_attribute("data-fair") {
+                app.vab_fairing_changed(&format!("{k}:{}", input.value_as_number()));
             } else if let Some(k) = input.get_attribute("data-res").and_then(|v| v.parse().ok()) {
                 app.vab_pam_changed(Some(k), input.value_as_number(), None);
             }
@@ -3349,6 +3366,17 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                     e.get_attribute("data-agbit")?.parse::<u32>().ok()?,
                 ))
             });
+            if let Some(act) = t
+                .as_ref()
+                .and_then(|e| e.closest("[data-fair-act]").ok().flatten())
+                .and_then(|e| e.get_attribute("data-fair-act"))
+            {
+                app.vab_fairing_changed(&act);
+                if let (Some(i), Some(el)) = (app.vab_pam, app.doc.get_element_by_id("vab-pam")) {
+                    el.set_inner_html(&vab::pam_html(&app.editor.craft, i, &app.catalog));
+                }
+                return;
+            }
             if let (Some((kind, bit)), Some(i)) = (chip, app.vab_pam) {
                 app.vab_record();
                 if let Some(p) = app.editor.craft.parts.get_mut(i) {
@@ -4441,7 +4469,7 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
             );
         }
         if app.mnv_drag.is_some() {
-            app.mnv_drag_to(ev.client_x() as f64, ev.client_y() as f64, ev.shift_key());
+            app.mnv_drag_to(ev.client_x() as f64, ev.client_y() as f64);
             return;
         }
         #[cfg(target_arch = "wasm32")]
@@ -8088,9 +8116,9 @@ impl App {
             html.push_str(&format!(
                 "<div class=\"pam-acts\"><button data-act=\"fh-act-engine\">{}</button></div>",
                 if off {
-                    "Activate engine"
+                    self.tr("PartModules/Engine/ActivateEngine", "Activate engine")
                 } else {
-                    "Shut down engine"
+                    self.tr("PartModules/Engine/DisableEngine", "Shut down engine")
                 }
             ));
         }
@@ -8464,6 +8492,126 @@ impl App {
         }
         self.editor.sync_symmetry(i);
         // Ask for a fresh staging readout (delta-v follows the fill) without redrawing the window.
+        self.vab_report_due = Some(now_ms() + 300.0);
+    }
+
+    /// A procedural wing's slider (`name`) or, without one, its control surface switch: reshape the part and
+    /// its symmetry set, refresh the readouts beside the sliders and the drawn mesh.
+    fn vab_wing_changed(&mut self, name: Option<&str>, value: f64) {
+        let Some(i) = self.vab_pam else { return };
+        let Some(p) = self.editor.craft.parts.get(i) else {
+            return;
+        };
+        let Some(rig) = ose_data::procedural::rig(&p.part_id) else {
+            return;
+        };
+        if !self.vab_pam_recorded {
+            self.vab_pam_recorded = true;
+            self.vab_record();
+        }
+        let p = &mut self.editor.craft.parts[i];
+        let mut shape = p.shape.clone().unwrap_or(ose_data::procedural::WingShape {
+            option: rig.options.len().saturating_sub(1) as u32,
+            ..Default::default()
+        });
+        match name {
+            Some(n) => shape.set_slider(n, value),
+            None => {
+                let want = if value > 0.5 { "1" } else { "0" };
+                if let Some(k) = rig.options.iter().position(|o| {
+                    o.attributes.get("ControlSurface").map(String::as_str) == Some(want)
+                }) {
+                    shape.option = k as u32;
+                }
+            }
+        }
+        p.shape = Some(shape);
+        self.editor.sync_symmetry(i);
+        // Rewrite the window's readouts (a switch changes the slider list too).
+        if let Some(el) = self.doc.get_element_by_id("vab-pam") {
+            if name.is_some() {
+                let html = crate::vab::wing_shape_html(&self.editor.craft.parts[i]);
+                if let Ok(Some(stats)) = self.doc.query_selector("#pam-wing-stats") {
+                    let fresh = html
+                        .split("id=\"pam-wing-stats\">")
+                        .nth(1)
+                        .and_then(|t| t.split("</div>").next())
+                        .unwrap_or("");
+                    stats.set_inner_html(fresh);
+                }
+                for part in html.split("<label class=\"pam-row\">").skip(1) {
+                    let (Some(n), Some(b)) = (
+                        part.split("data-wing=\"")
+                            .nth(1)
+                            .and_then(|t| t.split('"').next()),
+                        part.split("<b>")
+                            .nth(1)
+                            .and_then(|t| t.split("</b>").next()),
+                    ) else {
+                        continue;
+                    };
+                    if let Ok(Some(e)) = self
+                        .doc
+                        .query_selector(&format!("#vab-pam input[data-wing=\"{n}\"] + b"))
+                    {
+                        e.set_text_content(Some(b));
+                    }
+                }
+            } else {
+                el.set_inner_html(&crate::vab::pam_html(&self.editor.craft, i, &self.catalog));
+            }
+        }
+        self.render_vab_view();
+        self.vab_report_due = Some(now_ms() + 300.0);
+    }
+
+    /// A fairing wall edit from the part manager (`vab::edit_fairing`): reshape the part and its set, refresh
+    /// the readouts.
+    fn vab_fairing_changed(&mut self, action: &str) {
+        let Some(i) = self.vab_pam else { return };
+        if i >= self.editor.craft.parts.len() {
+            return;
+        }
+        if !self.vab_pam_recorded {
+            self.vab_pam_recorded = true;
+            self.vab_record();
+        }
+        if !vab::edit_fairing(&mut self.editor.craft.parts[i], action) {
+            return;
+        }
+        self.editor.sync_symmetry(i);
+        // Slider drags update their readouts in place; the window is rebuilt for button actions.
+        let html = vab::fairing_html(&self.editor.craft.parts[i]);
+        for part in html.split("<label class=\"pam-row\">").skip(1) {
+            let key = part
+                .split("data-fair=\"")
+                .nth(1)
+                .map(|t| format!("input[data-fair=\"{}\"]", t.split('"').next().unwrap_or("")))
+                .or_else(|| {
+                    part.contains("id=\"pam-fair-eject\"")
+                        .then(|| "#pam-fair-eject".to_string())
+                });
+            let (Some(key), Some(b)) = (
+                key,
+                part.split("<b>")
+                    .nth(1)
+                    .and_then(|t| t.split("</b>").next()),
+            ) else {
+                continue;
+            };
+            if let Ok(Some(e)) = self.doc.query_selector(&format!("#vab-pam {key} + b")) {
+                e.set_text_content(Some(b));
+            }
+        }
+        if let Ok(Some(stats)) = self.doc.query_selector("#pam-fair-stats") {
+            let fresh = html
+                .split("id=\"pam-fair-stats\">")
+                .nth(1)
+                .and_then(|t| t.split("</div>").next())
+                .unwrap_or("");
+            stats.set_inner_html(fresh);
+        }
+        self.render_vab_view();
         self.vab_report_due = Some(now_ms() + 300.0);
     }
 
@@ -10120,7 +10268,11 @@ impl App {
                 self.board_target.set(Some(target));
                 ClientMessage::Board { vessel, target }
             }
-            "fh-flag" => ClientMessage::PlantFlag { vessel },
+            "fh-flag" => {
+                #[cfg(target_arch = "wasm32")]
+                self.flight3d.plant_flag(now_ms());
+                ClientMessage::PlantFlag { vessel }
+            }
             _ => ClientMessage::Undock { vessel, port: None },
         };
         self.crew_pending.set(Some(match id {
@@ -10158,9 +10310,11 @@ impl App {
             .map(|(id, _)| id)
     }
 
-    /// Show the crew buttons that apply: EVA with crew aboard, Board and Plant Flag for a Kerbal (the flag on
-    /// the ground), Undock while docked.
-    /// Parts the catalog has no title for take theirs from the localization table (`Parts/Title/<id>`).
+    /// A label OSE writes itself, in the player's language: the game's `term`, or OSE's own English (`own`).
+    fn tr(&self, term: &str, own: &str) -> String {
+        i18n::pick_text(&self.loc, term, own, self.lang == "en").to_string()
+    }
+
     /// Part names in the chosen language (the game's `Parts/Title/<id>`); in English only parts the catalog
     /// left untitled change, and switching back puts the catalog's own names back.
     fn localize_parts(&mut self) {
@@ -11593,6 +11747,11 @@ impl App {
                 f,
                 attitude: &self.attitude,
                 orbit_speed: self.speed_orbit,
+                speed_label: &if self.speed_orbit {
+                    self.tr("HUD/Orbit", "ORBIT")
+                } else {
+                    self.tr("HUD/Surface", "SURFACE")
+                },
                 orbital_speed_mps: (v.velocity_mps - body_vel).length(),
                 apsides,
                 brakes_latched: self.brakes_latched,
@@ -11606,7 +11765,11 @@ impl App {
             &self.doc,
             "fh-met",
             &if launch_ut > 0.0 {
-                format!("MET {}", hud::fmt_met(ut - launch_ut))
+                format!(
+                    "{} {}",
+                    self.tr("HUD/MET", "MET"),
+                    hud::fmt_met(ut - launch_ut)
+                )
             } else {
                 String::new()
             },
@@ -11715,10 +11878,18 @@ impl App {
         }
         match (self.alt_terrain, agl) {
             (true, Some(h)) => {
-                set_text(&self.doc, "fh-alt-mode", "TERRAIN");
+                set_text(
+                    &self.doc,
+                    "fh-alt-mode",
+                    &self.tr("HUD/Ground Level", "TERRAIN"),
+                );
                 set_text(&self.doc, "fh-altitude", &hud::fmt_dist(h.max(0.0)));
             }
-            _ => set_text(&self.doc, "fh-alt-mode", "SEA LEVEL"),
+            _ => set_text(
+                &self.doc,
+                "fh-alt-mode",
+                &self.tr("HUD/Sea Level", "SEA LEVEL"),
+            ),
         }
         // Target: distance and closing speed, the TARGET speed mode, and the SAS target buttons.
         let tgt = match self.target {
@@ -11773,10 +11944,14 @@ impl App {
         if self.speed_target {
             match &rel {
                 Some((_, _, speed)) => {
-                    set_text(&self.doc, "fh-speed-mode", "TARGET");
+                    set_text(&self.doc, "fh-speed-mode", &self.tr("HUD/Target", "TARGET"));
                     set_text(&self.doc, "fh-speed", &format!("{speed:.1} m/s"));
                 }
-                None => set_text(&self.doc, "fh-speed-mode", "SURFACE"),
+                None => set_text(
+                    &self.doc,
+                    "fh-speed-mode",
+                    &self.tr("HUD/Surface", "SURFACE"),
+                ),
             }
         }
         for id in ["fh-sas-target", "fh-sas-antitarget"] {
@@ -12408,9 +12583,15 @@ impl App {
             &self.doc,
             "fh-stage",
             &format!(
-                "stage {} of {} \u{b7} \u{394}v {:.0} m/s",
-                (f.stage + 1).min(f.stages.max(1)),
-                f.stages.max(1),
+                "{} \u{b7} \u{394}v {:.0} m/s",
+                {
+                    let (now, of) = ((f.stage + 1).min(f.stages.max(1)), f.stages.max(1));
+                    if self.lang == "en" {
+                        format!("stage {now} of {of}")
+                    } else {
+                        format!("{} {now}/{of}", self.tr("VAB/DeltaVTool/Stage", "stage"))
+                    }
+                },
                 f.delta_v_now_mps.max(0.0) + 0.0
             ),
         );
@@ -12994,6 +13175,7 @@ impl App {
                 .unwrap_or(false)
         });
         let Some(k) = hit else { return false };
+        self.mnv_along = 0.0;
         self.mnv_drag = Some((
             k,
             x,
@@ -13004,8 +13186,9 @@ impl App {
     }
 
     /// Dragging a handle outward adds delta-v along it: 1 m/s per pixel, 0.1 with Shift.
-    fn mnv_drag_to(&mut self, x: f64, y: f64, fine: bool) {
-        let Some((k, x0, y0, start)) = self.mnv_drag else {
+    /// A handle dragged: how far it is held out along its own direction (the slide handle moves the node).
+    fn mnv_drag_to(&mut self, x: f64, y: f64) {
+        let Some((k, x0, y0, _)) = self.mnv_drag else {
             return;
         };
         if k == 6 {
@@ -13013,13 +13196,25 @@ impl App {
             return;
         }
         let (ux, uy) = self.mnv_dirs[k];
-        let along = (x - x0) * ux + (y - y0) * uy;
-        let dv = interaction::maneuver_delta_mps(along, fine);
+        self.mnv_along = (x - x0) * ux + (y - y0) * uy;
+    }
+
+    /// Each frame a handle is held out, KSP2 adds (pixels / DPI)^2 m/s along it (`MapManeuverGizmo`): a rate
+    /// control, so holding it further out burns faster, and holding still keeps adding.
+    fn mnv_hold_tick(&mut self) {
+        let Some((k, ..)) = self.mnv_drag.filter(|d| d.0 < 6) else {
+            return;
+        };
+        let dv = interaction::maneuver_frame_mps(self.mnv_along, interaction::MANEUVER_DPI, 1.0);
+        if dv == 0.0 {
+            return;
+        }
         let (axis, sign) = (k / 2, if k % 2 == 0 { 1.0 } else { -1.0 });
         let Some(node) = self.node.as_mut() else {
             return;
         };
-        let value = (start[axis] + sign * dv).clamp(-5000.0, 5000.0);
+        let now_value = [node.prograde_mps, node.normal_mps, node.radial_mps][axis];
+        let value = (now_value + sign * dv).clamp(-5000.0, 5000.0);
         match axis {
             0 => node.prograde_mps = value,
             1 => node.normal_mps = value,
@@ -13403,6 +13598,7 @@ impl App {
     }
 
     fn frame(&mut self) {
+        self.mnv_hold_tick();
         let t = now_ms();
         if self.frame_at_ms > 0.0 {
             self.frame_dt_s = ((t - self.frame_at_ms) / 1000.0).clamp(0.001, 0.1);
@@ -14119,6 +14315,7 @@ impl App {
                 let light = if b.is_star { GV::Y } else { star_km - pos_km };
                 items.push(render::DrawItem {
                     animation: None,
+                    blend: Vec::new(),
                     node_turns: Vec::new(),
                     node_rotations: Vec::new(),
                     model: name.clone(),

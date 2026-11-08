@@ -55,21 +55,25 @@ pub fn vab_zoom(distance: f64, axis: f64, fast: bool, fine: bool) -> f64 {
     distance - axis * if fine { 0.3 } else { 3.0 } * if fast { 2.0 } else { 1.0 }
 }
 
-/// Held-part rotation keys (OSE today; KSP2's 90 degrees with snap on or off is T33).
-pub fn rotation_step_degrees(snap: bool, fine: bool) -> f64 {
+/// Held-part rotation keys: 90 degrees a press with snap on or off, 5 with Shift (snap only steps the
+/// gizmo, not the keys).
+pub fn rotation_step_degrees(_snap: bool, fine: bool) -> f64 {
     if fine {
         5.0
-    } else if snap {
-        90.0
     } else {
-        15.0
+        90.0
     }
 }
 
-/// Maneuver handle (OSE today: an absolute 1 m/s per pixel from the drag's start, 0.1 with Shift; KSP2's
-/// held-rate control is T34).
-pub fn maneuver_delta_mps(projected_pixels: f64, fine: bool) -> f64 {
-    projected_pixels * if fine { 0.1 } else { 1.0 }
+/// The CSS pixels to an inch KSP2's handle divides by (Unity's `Screen.dpi` at 100% scaling): DOM pixels
+/// already include the display scale.
+pub const MANEUVER_DPI: f64 = 96.0;
+
+/// Maneuver handle: while held, each frame adds (projected pixels / (strength x DPI))^2 m/s, signed with the
+/// displacement from where the drag started; strength 1, and no precision modifier.
+pub fn maneuver_frame_mps(projected_pixels: f64, dpi: f64, strength: f64) -> f64 {
+    let x = projected_pixels / (strength * dpi).max(1e-9);
+    x * x * projected_pixels.signum()
 }
 
 pub fn throttle_step(current: f64, axis: f64, dt: f64) -> f64 {

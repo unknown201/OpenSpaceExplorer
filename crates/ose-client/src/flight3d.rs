@@ -176,6 +176,15 @@ pub fn fairing_shells(bottom: f64, top: f64, radius: f64) -> Vec<(&'static str, 
 /// The pose of an animated Kerbal model playing one of its clips (idle, walk, run, air), or of a planted flag
 /// in the wind, looping in page
 /// time; `None` for any other model.
+/// The clip a Kerbal model exported before the full EVA set plays in place of a missing one.
+fn kerbal_anim_fallback(clip: &str) -> &'static str {
+    match clip {
+        "walk_l" | "walk_r" => "walk",
+        "jump_start" => "air",
+        _ => "idle",
+    }
+}
+
 fn kerbal_sample(
     gpu: &Renderer,
     model: &str,
@@ -351,13 +360,13 @@ impl Stand {
             let anim: ModelRef = if round {
                 (
                     "kerbal:anim_f",
-                    "assets/kerbal/kerbal_f.glb?clips=ladder",
+                    "assets/kerbal/kerbal_f.glb?clips=eva2",
                     1.0,
                 )
             } else {
                 (
                     "kerbal:anim_m",
-                    "assets/kerbal/kerbal_m.glb?clips=ladder",
+                    "assets/kerbal/kerbal_m.glb?clips=eva2",
                     1.0,
                 )
             };
@@ -712,6 +721,11 @@ pub struct FlightView {
     /// A Kerbal's smoothed speed along its up (m/s, + climbing): picks the ladder clip.
     climb_speed: f64,
     walk_phase: f64,
+    /// The flown Kerbal's animator (KSP2's EVA states and cross-fades), whether it stood on something last
+    /// frame, and when a flag plant was asked for (ms).
+    kerbal_anim: Option<crate::kerbal_anim::Machine>,
+    kerbal_was_landed: bool,
+    flag_planted_ms: std::cell::Cell<Option<f64>>,
     /// How far the flown vessel's wheels have rolled (m, signed by the drive direction) and when last updated.
     wheel_travel: f64,
     wheel_last_ms: f64,
@@ -749,6 +763,8 @@ pub struct FlightView {
     pub aero_segments: Vec<([f64; 2], [f64; 2], bool)>,
     crash_fx: crate::particles::CrashFx,
     effect_edges: crate::particles::EffectEdges,
+    /// When each shaped fairing's panels came off (part index -> ms), to send them away.
+    fairing_off_ms: HashMap<usize, f64>,
     bursts: crate::particles::Bursts,
     last_surface_speed: f64,
     last_footstep: f64,
@@ -806,6 +822,11 @@ fn quat_from_basis(x: DVec3, y: DVec3, z: DVec3) -> DQuat {
 }
 
 impl FlightView {
+    /// The flown Kerbal plants a flag (KSP2's tPlantFlag): its animator plays the plant.
+    pub fn plant_flag(&self, now_ms: f64) {
+        self.flag_planted_ms.set(Some(now_ms));
+    }
+
     /// The planet renderer (made on first use), shared with the map view so the focused body looks the same
     /// there as in flight.
     pub fn planet_renderer(&mut self, gpu: &Renderer) -> &mut crate::planet::PlanetRenderer {
@@ -835,6 +856,9 @@ impl FlightView {
             walk_speed: 0.0,
             climb_speed: 0.0,
             walk_phase: 0.0,
+            kerbal_anim: None,
+            kerbal_was_landed: true,
+            flag_planted_ms: std::cell::Cell::new(None),
             wheel_travel: 0.0,
             wheel_last_ms: 0.0,
             deployments: HashMap::new(),
@@ -856,6 +880,7 @@ impl FlightView {
             launch_origin: None,
             crash_fx: Default::default(),
             effect_edges: Default::default(),
+            fairing_off_ms: HashMap::new(),
             bursts: Default::default(),
             last_surface_speed: 0.0,
             last_footstep: 0.0,
@@ -1584,12 +1609,12 @@ impl FlightView {
                 .unwrap_or(DVec3::ZERO);
             let mut gimbal_rotations = HashMap::new();
             let mut parts = Vec::new();
+            let mut shaped = std::collections::HashSet::new();
             for (i, (p, (pp, q))) in craft.parts.iter().zip(poses.iter()).enumerate() {
                 if gone.get(i).copied().unwrap_or(false) {
                     continue;
                 }
-                let name = format!("part:{}", p.part_id);
-                gpu.request_model(&name, &format!("assets/parts/{}.glb", p.part_id));
+                let name = crate::wing_mesh::model_for(gpu, p, &mut shaped);
                 let mut lp = DVec3::new(-pp.x, pp.y, pp.z);
                 let mut lq = DQuat::from_xyzw(q.x, -q.y, -q.z, q.w).normalize();
                 // Wobble: rotate about the part's own origin, then shift, both given in the craft's Unity
@@ -2220,13 +2245,53 @@ impl FlightView {
                         .collect()
                 })
                 .unwrap_or_default();
-            for (fi, fname, flp, _, _) in &parts {
+            for (fi, fname, flp, flq, _) in &parts {
                 if !craft.parts[*fi].part_id.starts_with("fairing_") {
                     continue;
                 }
                 let jettisoned = readout
                     .and_then(|f| f.fairings.iter().find(|x| x.0 as usize == *fi))
                     .is_some_and(|x| x.1);
+                // A wall of its own: its panels at the part's pose; once jettisoned they leave at the ejection
+                // speed (one physics step of `EjectionForce`), clamshells outward, a shroud along the axis,
+                // tumbling, for a few seconds.
+                if let Some(shape) = craft.parts[*fi].fairing.as_ref() {
+                    if !jettisoned {
+                        self.fairing_off_ms.remove(fi);
+                    }
+                    let since = if jettisoned {
+                        let t0 = *self.fairing_off_ms.entry(*fi).or_insert(inp.now_ms);
+                        (inp.now_ms - t0) / 1000.0
+                    } else {
+                        0.0
+                    };
+                    if since > 4.0 {
+                        continue;
+                    }
+                    let Some(names) = crate::fairing_mesh::models_for(gpu, &craft.parts[*fi])
+                    else {
+                        continue;
+                    };
+                    let speed = shape.ejection_speed_mps().max(0.5);
+                    for (k, name) in names.into_iter().enumerate() {
+                        let dir = crate::fairing_mesh::piece_direction(shape, k).as_dvec3();
+                        let local_dir = *flq * dir;
+                        let drift = local_dir * (speed * since);
+                        let tumble = DQuat::from_axis_angle(
+                            DVec3::Y.cross(dir).try_normalize().unwrap_or(DVec3::X),
+                            (since * 0.6).min(1.2),
+                        );
+                        let wpos = pos + vessel_rot * (*flp + drift + origin);
+                        let mut it =
+                            DrawItem::lit(name, wpos - cam, vessel_rot * *flq * tumble, 1.0, sun);
+                        it.ambient = part_ambient;
+                        it.fill_dir = up;
+                        it.fill = 0.25;
+                        it.sun = sun_share;
+                        items.push(it);
+                    }
+                    continue;
+                }
                 let Some(base) = gpu.model(fname) else {
                     continue;
                 };
@@ -2406,7 +2471,24 @@ impl FlightView {
                 if let Some(d) =
                     readout.and_then(|f| f.control_surfaces.iter().find(|c| c.0 as usize == i))
                 {
-                    if let Some((node, axis)) = control_hinge(pid) {
+                    let shaped_flap = it
+                        .model
+                        .starts_with("wing:")
+                        .then(|| {
+                            let part = &craft.parts[i];
+                            let shape = crate::wing_mesh::shape_of(part)?;
+                            let mirrored = part.flight.as_ref().is_some_and(|f| f.mirrored);
+                            ose_data::procedural::evaluate_cached(pid, &shape, mirrored)
+                        })
+                        .flatten();
+                    if let Some(r) = shaped_flap {
+                        // A shaped wing's flap turns about its hinge bone's X (`CtrlTransformRotAxis`).
+                        it.node_turns.push((
+                            crate::wing_mesh::FLAP_NODE,
+                            glam::Quat::from_axis_angle(crate::wing_mesh::hinge_axis(&r), d.1),
+                            glam::Vec3::ZERO,
+                        ));
+                    } else if let Some((node, axis)) = control_hinge(pid) {
                         it.node_turns
                             .push((node, hinge_turn(axis, d.1), glam::Vec3::ZERO));
                     } else if let Some((mesh, pivot)) = flap_hinge(pid) {
@@ -2616,6 +2698,7 @@ impl FlightView {
             // rigid model moves as a whole).
             let (mut at, mut rot) = (pos, rot);
             let mut kerbal_clip: Option<&str> = None;
+            let mut kerbal_blend: Vec<(&'static str, f32, bool, f32)> = Vec::new();
             if matches!(inp.stand, Stand::Kerbal { .. }) {
                 let landed = inp
                     .vessel
@@ -2634,26 +2717,63 @@ impl FlightView {
                 let flight = inp.vessel.flight.as_ref();
                 let on_ladder = flight.is_some_and(|f| f.on_ladder.is_some());
                 let boarding = flight.is_some_and(|f| f.boarding);
-                kerbal_clip = Some(if boarding {
-                    // Climbing in through the hatch.
-                    "ladder_up"
-                } else if on_ladder {
-                    if self.climb_speed > 0.15 {
-                        "ladder_up"
-                    } else if self.climb_speed < -0.15 {
-                        "ladder_down"
+                // KSP2's EVA animator (animtree_kerbal_eva): the states and cross-fades of `kerbal_anim`
+                let falling = !landed && !on_ladder && !boarding;
+                let now_s = inp.now_ms / 1000.0;
+                let fb = if self.walk_speed > 0.2 { 1.0 } else { 0.0 };
+                let anim_in = crate::kerbal_anim::Inputs {
+                    move_fb: fb,
+                    move_lr: 0.0,
+                    // the walk at 0.65 m/s to the run at 2.05 m/s (KSP2 run 14)
+                    sprint: ((self.walk_speed - 0.65) / (2.05 - 0.65)).clamp(0.0, 1.0) as f32,
+                    climb: if boarding {
+                        1.0
                     } else {
-                        "ladder_idle"
-                    }
-                } else if !landed {
-                    "air"
-                } else if self.walk_speed > 1.6 {
-                    "run"
-                } else if self.walk_speed > 0.2 {
-                    "walk"
-                } else {
-                    "idle"
-                });
+                        (self.climb_speed / 0.3).clamp(-1.0, 1.0) as f32
+                    },
+                    on_ladder: on_ladder || boarding,
+                    falling,
+                    // leaving the ground going up is a jump; otherwise it walked or let go off something
+                    jump: falling && self.kerbal_was_landed && self.climb_speed > 0.8,
+                    plant_flag: self
+                        .flag_planted_ms
+                        .get()
+                        .is_some_and(|t| inp.now_ms - t < 500.0),
+                };
+                self.kerbal_was_landed = landed;
+                let machine = self
+                    .kerbal_anim
+                    .get_or_insert_with(|| crate::kerbal_anim::Machine::new(now_s));
+                let lengths: Vec<(String, f32)> = {
+                    let name = inp
+                        .stand
+                        .models(gpu)
+                        .iter()
+                        .map(|(n, _, _)| n.to_string())
+                        .find(|n| n.starts_with("kerbal:anim"));
+                    name.and_then(|n| gpu.model(&n))
+                        .map(|m| {
+                            m.rig
+                                .clips
+                                .iter()
+                                .map(|c| (c.name.clone(), c.duration))
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                };
+                let dur = |clip: &str| -> f32 {
+                    lengths
+                        .iter()
+                        .find(|(n, _)| n == clip)
+                        .map(|c| c.1)
+                        .unwrap_or(1.0)
+                };
+                machine.update(now_s, &anim_in, &dur);
+                kerbal_blend = machine.clips(now_s, &anim_in, &dur);
+                kerbal_clip = kerbal_blend
+                    .iter()
+                    .max_by(|a, b| a.3.total_cmp(&b.3))
+                    .map(|c| c.0);
                 // The rigid stand-in bobs with its stride; the animated Kerbal walks.
                 let animated = gpu.has_model("kerbal:anim_m") || gpu.has_model("kerbal:anim_f");
                 if landed && self.walk_speed > 0.2 && !animated {
@@ -2710,6 +2830,28 @@ impl FlightView {
                 it.sun = sun_share;
                 it.animation = kerbal_sample(gpu, name, kerbal_clip.unwrap_or("idle"), inp.now_ms);
                 if name.starts_with("kerbal:anim") {
+                    if let Some(model) = gpu.model(name) {
+                        it.blend = kerbal_blend
+                            .iter()
+                            .filter_map(|&(clip, time, looping, w)| {
+                                let find =
+                                    |n: &str| model.rig.clips.iter().position(|c| c.name == n);
+                                // a model exported before the clip was: the nearest one it has
+                                let (i, looping) = match find(clip) {
+                                    Some(i) => (i, looping),
+                                    None => (find(kerbal_anim_fallback(clip))?, true),
+                                };
+                                Some((
+                                    crate::animation::ClipSample {
+                                        clip: i,
+                                        time,
+                                        looping,
+                                    },
+                                    w,
+                                ))
+                            })
+                            .collect();
+                    }
                     it.node_rotations.extend(foot_ik.iter().copied());
                 }
                 if let Some(c) = inp.stand.tint(name) {
@@ -2806,8 +2948,11 @@ impl FlightView {
                 let mut lo_all = DVec3::splat(f64::INFINITY);
                 let mut hi_all = DVec3::splat(f64::NEG_INFINITY);
                 for (p_part, (pp, q)) in craft.parts.iter().zip(poses.iter()) {
-                    let name = format!("part:{}", p_part.part_id);
-                    gpu.request_model(&name, &format!("assets/parts/{}.glb", p_part.part_id));
+                    let name = crate::wing_mesh::model_for(
+                        gpu,
+                        p_part,
+                        &mut std::collections::HashSet::new(),
+                    );
                     let lp = DVec3::new(-pp.x, pp.y, pp.z);
                     let lq = DQuat::from_xyzw(q.x, -q.y, -q.z, q.w).normalize();
                     if let Some(m) = gpu.model(&name) {

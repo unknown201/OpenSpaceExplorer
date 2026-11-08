@@ -36,6 +36,13 @@ CLIPS = {
     "ladder_up": ["kerbal_ladder_up"],
     "ladder_down": ["kerbal_ladder_down"],
     "ladder_idle": ["kerbal_ladder_idle"],
+    # The rest of the EVA animator's states (animtree_kerbal_eva): sidesteps, a standing jump's take-off and
+    # landing, planting a flag.
+    "walk_l": ["kerbal_jp_walk_l", "kerbal_walk_l"],
+    "walk_r": ["kerbal_jp_walk_r", "kerbal_walk_r"],
+    "jump_start": ["kerbal_jp_jump_still_start", "kerbal_jump_still_start"],
+    "jump_end": ["kerbal_jp_jump_still_end", "kerbal_jump_still_end"],
+    "flag_plant": ["kerbal_flag_plant"],
 }
 VARIANTS = {"m": ("head_m_01", "eyes_m_01"), "f": ("head_f_01", "eyes_f_01")}
 

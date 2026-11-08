@@ -218,6 +218,14 @@ pub struct Structure {
     pub max_temp_k: Vec<f64>,
     pub thermal_mass: Vec<f64>,
     pub reentry_flux_kw: Vec<f64>,
+    /// Heat each part takes from engine exhaust blasting it (`exhaust`), kW, as of the last step.
+    pub exhaust_flux_kw: Vec<f64>,
+    /// Heat each part takes from other craft's exhaust (`Universe::exhaust_on_other_vessels`), kW.
+    pub outside_exhaust_flux_kw: Vec<f64>,
+    /// The exhaust sweeps of this craft's engines as of the last step, vessel frame.
+    pub(crate) jets: Vec<crate::exhaust::Jet>,
+    exhaust_defs: Vec<Option<ose_data::ExhaustDamage>>,
+    exhaust_diameter_m: Vec<f64>,
     /// Heat shields on the parts, and whether each is ablating.
     pub heatshields: Vec<Option<ose_data::Heatshield>>,
     pub ablating: Vec<bool>,
@@ -242,6 +250,14 @@ pub struct Structure {
     /// reach (no drag, no re-entry heat).
     pub fairing_payload: Vec<Option<Vec<usize>>>,
     pub fairing_deployed: Vec<bool>,
+    /// A shaped fairing's wall and base definition (`CraftPart::fairing`), and its panels' mass, t.
+    pub fairing_shape: Vec<
+        Option<(
+            ose_data::fairing::FairingShape,
+            ose_data::fairing::FairingDef,
+        )>,
+    >,
+    pub fairing_panel_t: Vec<f64>,
     pub cargo_bay: Vec<bool>,
     pub bay_open: Vec<bool>,
     pub shielded: Vec<bool>,
@@ -525,6 +541,10 @@ impl Structure {
             self.gear_out[j] = old.gear_out[i];
             self.converter_on[j] = old.converter_on[i];
             self.fairing_deployed[j] = old.fairing_deployed[i];
+            if old.fairing_deployed[i] {
+                // panels already gone: so is their mass
+                self.shed_fairing_panels(j);
+            }
             self.bay_open[j] = old.bay_open[i];
             self.engine_shutdown[j] = old.engine_shutdown[i];
         }
@@ -886,6 +906,19 @@ impl Structure {
                 .collect(),
             thermal_mass,
             reentry_flux_kw: vec![0.0; n],
+            exhaust_flux_kw: vec![0.0; n],
+            outside_exhaust_flux_kw: vec![0.0; n],
+            jets: Vec::new(),
+            exhaust_defs: (0..n)
+                .map(|i| def_of(i).and_then(|d| d.exhaust_damage))
+                .collect(),
+            exhaust_diameter_m: (0..n)
+                .map(|i| {
+                    def_of(i)
+                        .map(|d| crate::exhaust::size_diameter_m(&d.size_category))
+                        .unwrap_or(0.0)
+                })
+                .collect(),
             heatshields: (0..n)
                 .map(|i| def_of(i).and_then(|d| d.heatshield.clone()))
                 .collect(),
@@ -1043,6 +1076,23 @@ impl Structure {
                 })
                 .collect(),
             fairing_deployed: vec![false; n],
+            fairing_shape: craft
+                .parts
+                .iter()
+                .map(|p| {
+                    let f = p.fairing.as_ref().filter(|f| f.valid_for(&p.part_id))?;
+                    Some((f.clone(), ose_data::fairing::def(&p.part_id)?.clone()))
+                })
+                .collect(),
+            fairing_panel_t: craft
+                .parts
+                .iter()
+                .map(|p| {
+                    let f = p.fairing.as_ref().filter(|f| f.valid_for(&p.part_id))?;
+                    Some(f.panel_mass_t(ose_data::fairing::def(&p.part_id)?))
+                })
+                .map(|m| m.unwrap_or(0.0))
+                .collect(),
             cargo_bay: (0..n)
                 .map(|i| def_of(i).is_some_and(|d| d.cargo_bay))
                 .collect(),
@@ -1072,7 +1122,29 @@ impl Structure {
             staged_to: 0,
         };
         s.trim_to(0);
+        s.enclose_shaped_fairings();
         s
+    }
+
+    /// A shaped fairing covers what fits inside its wall (`Module_Fairing.FindEnclosedParts`), not the stack
+    /// on its top node; the wall stands along the vessel's long axis from the fairing node.
+    fn enclose_shaped_fairings(&mut self) {
+        for f in 0..self.rigid.len() {
+            let Some((shape, def)) = self.fairing_shape[f].clone() else {
+                continue;
+            };
+            let base = self.rigid.rest_position(f);
+            let payload = (0..self.rigid.len())
+                .filter(|&j| j != f && self.rigid.present[j])
+                .filter(|&j| {
+                    let (c, h) = self.part_box(j);
+                    let d = c - base;
+                    shape.encloses(&def, [d.x, d.y, d.z], [h.x, h.y, h.z])
+                })
+                .collect();
+            self.fairing_payload[f] = Some(payload);
+        }
+        self.update_shielding();
     }
 
     /// Drop the parts that are not attached in flight stage `stage` (they were staged away).
@@ -3430,7 +3502,7 @@ impl Structure {
                 wetted,
                 ambient_k,
                 conductivity,
-                flux,
+                flux + self.exhaust_flux_kw[i] + self.outside_exhaust_flux_kw[i],
                 settings.scale,
                 dt,
             );
@@ -3442,6 +3514,105 @@ impl Structure {
             }
         }
         burned
+    }
+
+    /// An inertial offset in the vessel frame (the inverse of `offset_inertial`).
+    pub fn inertial_to_vessel(&self, facing: DVec3, v: DVec3) -> DVec3 {
+        let (bx, by, bz) = self.frame(facing);
+        DVec3::new(v.dot(bx), v.dot(by), v.dot(bz))
+    }
+
+    /// Whether any attached engine's exhaust can blast parts (`exhaust_damage`).
+    pub fn has_exhaust_engines(&self) -> bool {
+        (0..self.rigid.len()).any(|i| self.rigid.present[i] && self.exhaust_defs[i].is_some())
+    }
+
+    /// Out of the air, where nothing else heats or cools a part here: exhaust blasting parts heats them, and
+    /// returns those past their maximum temperature.
+    pub fn apply_exhaust_heat(&mut self, settings: &thermal::HeatSettings, dt: f64) -> Vec<usize> {
+        let mut burned = Vec::new();
+        for i in (0..self.rigid.len()).filter(|&i| self.rigid.present[i]) {
+            let flux = (self.exhaust_flux_kw[i] + self.outside_exhaust_flux_kw[i]) * settings.scale;
+            if flux <= 0.0 {
+                continue;
+            }
+            self.temperature_k[i] +=
+                flux * thermal::POSITIVE_RATE_SCALE / self.thermal_mass[i] * dt;
+            if settings.part_destruction
+                && self.max_temp_k[i] > 0.0
+                && self.temperature_k[i] > self.max_temp_k[i]
+            {
+                burned.push(i);
+            }
+        }
+        burned
+    }
+
+    /// Engine exhaust meeting the craft's own parts this step (see `exhaust`), from the thrust each nozzle
+    /// delivered: sets each part's `exhaust_flux_kw` and returns the pushes on the parts hit (vessel frame,
+    /// offsets from their rest positions).
+    pub fn exhaust_blast(&mut self, throttle: f64) -> Vec<PartForce> {
+        self.exhaust_flux_kw.fill(0.0);
+        self.jets.clear();
+        let mut pushes = Vec::new();
+        let boxes: Vec<(usize, DVec3, DVec3)> = (0..self.rigid.len())
+            .filter(|&i| self.rigid.present[i])
+            .map(|i| {
+                let (c, h) = self.part_box(i);
+                (i, c, h)
+            })
+            .collect();
+        for i in 0..self.rigid.len() {
+            let Some(def) = self.exhaust_defs[i].filter(|_| self.rigid.present[i]) else {
+                continue;
+            };
+            let radius = self.exhaust_diameter_m[i] * 0.5 * def.radius_multiplier;
+            let range = def.max_range_m - 2.0 * radius;
+            for nozzle in self
+                .resolved_nozzle_forces
+                .iter()
+                .filter(|f| f.part == i && f.force_kn.length_squared() > 0.0)
+            {
+                let thrust = nozzle.force_kn.length();
+                let dir = nozzle.force_kn * (-1.0 / thrust);
+                let exit = self.rigid.rest_position(i) + nozzle.offset_m;
+                let origin = exit + dir * (def.distance_offset_m + radius);
+                self.jets.push(crate::exhaust::Jet {
+                    part: i,
+                    exit,
+                    origin,
+                    dir,
+                    radius,
+                    range,
+                    thrust_kn: thrust,
+                    damage_kw: def.damage_kw * throttle,
+                    falloff_power: def.falloff_power,
+                    max_multiplier: def.max_multiplier,
+                });
+                let hits: Vec<(usize, f64)> = boxes
+                    .iter()
+                    .filter(|&&(j, _, _)| j != i)
+                    .filter_map(|&(j, c, h)| {
+                        crate::exhaust::sweep_box(origin, dir, radius, c, h)
+                            .filter(|&d| d <= range)
+                            .map(|d| (j, d))
+                    })
+                    .collect();
+                let shared = 1.0 / hits.len().max(1) as f64;
+                for (j, d) in hits {
+                    let scale =
+                        crate::exhaust::damage_scale(d, def.falloff_power, def.max_multiplier);
+                    self.exhaust_flux_kw[j] += def.damage_kw * throttle * scale;
+                    let at = if d <= 0.0 { exit } else { origin + dir * d };
+                    pushes.push(PartForce {
+                        part: j,
+                        force_kn: dir * (thrust * scale * shared),
+                        offset_m: at - self.rigid.rest_position(j),
+                    });
+                }
+            }
+        }
+        pushes
     }
 
     /// How full a part's own tanks of `resource` are, 0..1.
@@ -3670,11 +3841,24 @@ impl Structure {
             .unwrap_or_default();
         for i in parts {
             self.arm_chute(i);
-            if self.fairing_payload[i].is_some() && self.rigid.present[i] {
+            if self.fairing_payload[i].is_some()
+                && self.rigid.present[i]
+                && !self.fairing_deployed[i]
+            {
                 self.fairing_deployed[i] = true;
+                self.shed_fairing_panels(i);
             }
         }
         self.update_shielding();
+    }
+
+    /// The panels' mass leaves with them (`Data_Fairing.MassModifierAmount`).
+    fn shed_fairing_panels(&mut self, i: usize) {
+        let panels = std::mem::take(&mut self.fairing_panel_t[i]);
+        if panels > 0.0 {
+            self.net.dry_t[i] = (self.net.dry_t[i] - panels).max(0.001);
+            self.sync_structural_mass();
+        }
     }
 
     /// Jettison every fairing; returns how many.
@@ -3686,6 +3870,7 @@ impl Structure {
                 && !self.fairing_deployed[i]
             {
                 self.fairing_deployed[i] = true;
+                self.shed_fairing_panels(i);
                 n += 1;
             }
         }
@@ -3711,7 +3896,11 @@ impl Structure {
         let n = self.rigid.len();
         let mut shielded = vec![false; n];
         for f in 0..n {
-            if let Some(payload) = &self.fairing_payload[f] {
+            // `ShieldEnclosedParts(IsCapped)`: an open-topped wall leaves its contents in the airflow.
+            let open_top = self.fairing_shape[f]
+                .as_ref()
+                .is_some_and(|(sh, _)| !sh.capped);
+            if let Some(payload) = self.fairing_payload[f].as_ref().filter(|_| !open_top) {
                 if self.rigid.present[f] && !self.fairing_deployed[f] {
                     for &j in payload {
                         shielded[j] = true;
@@ -3741,7 +3930,14 @@ impl Structure {
         (0..self.rigid.len())
             .filter_map(|f| {
                 let payload = self.fairing_payload[f].as_ref()?;
-                if !self.rigid.present[f] || self.fairing_deployed[f] || payload.is_empty() {
+                if !self.rigid.present[f] || self.fairing_deployed[f] {
+                    return None;
+                }
+                if let Some((shape, _)) = &self.fairing_shape[f] {
+                    let (front, side) = shape.drag_areas_m2();
+                    return Some((f, front, side));
+                }
+                if payload.is_empty() {
                     return None;
                 }
                 let (fc, _) = self.part_box(f);
@@ -6061,6 +6257,67 @@ mod tests {
         assert!(!s.shielded[pod]);
         s.aero(0, basis(facing), sideways, 1.0, 0.6);
         assert!(s.part_cda_m2[pod] > 0.0);
+    }
+
+    /// A shaped fairing (`Data_Fairing.CrossSections`) covers what fits inside its wall, shields it only once
+    /// capped, weighs its panels and loses them when jettisoned.
+    #[test]
+    fn a_shaped_fairing_encloses_by_its_wall_and_sheds_its_panels() {
+        let (crafts, defs, res) = assets();
+        let mut c = crafts
+            .iter()
+            .find(|c| c.name == "Stock12_StartRocket")
+            .unwrap()
+            .clone();
+        let pod = 0;
+        let fairing = c.parts.len();
+        let mut f = c.parts[1].clone();
+        f.guid = "fairing".into();
+        f.part_id = "fairing_1v_procedural".into();
+        c.parts.push(f);
+        c.parts[fairing].parent = Some(1);
+        c.parts[fairing].own_node = Some("bottom".into());
+        c.parts[fairing].parent_node = Some("top".into());
+        c.parts[1].parent = None;
+        c.parts[pod].parent = Some(fairing);
+        c.parts[pod].own_node = Some("bottom".into());
+        c.parts[pod].parent_node = Some("top".into());
+        c.stages.push(vec![fairing]);
+        let fd = ose_data::fairing::def("fairing_1v_procedural").unwrap();
+        // too narrow for the 1.25 m pod: it is not inside
+        let mut narrow = ose_data::fairing::FairingShape::cylinder(fd, 3.0);
+        for sec in &mut narrow.sections {
+            sec.1 = sec.1.min(0.3);
+        }
+        c.parts[fairing].fairing = Some(narrow);
+        let s = Structure::build(&c, &defs, &res);
+        assert!(!s.fairing_payload[fairing].as_ref().unwrap().contains(&pod));
+        // wide and tall enough, but open at the top: enclosed, still in the airflow
+        let mut open = ose_data::fairing::FairingShape::cylinder(fd, 4.0);
+        for sec in &mut open.sections {
+            sec.1 = 0.9;
+        }
+        open.capped = false;
+        c.parts[fairing].fairing = Some(open.clone());
+        let s = Structure::build(&c, &defs, &res);
+        assert!(s.fairing_payload[fairing].as_ref().unwrap().contains(&pod));
+        assert!(!s.shielded[pod], "an open wall shields nothing");
+        // capped: shielded, and the panels weigh in until they go
+        open.capped = true;
+        c.parts[fairing].fairing = Some(open.clone());
+        c.apply_shapes(&defs);
+        let mut s = Structure::build(&c, &defs, &res);
+        assert!(s.shielded[pod]);
+        let before = s.mass_properties().mass_t;
+        let panels = open.panel_mass_t(fd);
+        assert!(panels > 0.1, "{panels}");
+        assert_eq!(s.deploy_fairings(), 1);
+        assert!(!s.shielded[pod]);
+        let after = s.mass_properties().mass_t;
+        assert!(
+            (before - after - panels).abs() < 1e-6,
+            "{before} -> {after}, panels {panels}"
+        );
     }
 
     #[test]

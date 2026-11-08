@@ -470,6 +470,7 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
     let mut wheel_dynamics = ose_data::WheelDynamics::default();
     let mut converter: Option<ose_data::Converter> = None;
     let mut ejection_force = 0.0;
+    let mut exhaust_damage = None;
     let mut fairing = false;
     let mut cargo_bay = false;
     let mut rcs: Option<ose_data::Rcs> = None;
@@ -714,6 +715,16 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
             match name.as_str() {
                 "PartComponentModule_Engine" => {
                     if let Some(modes) = data["engineModes"].as_array() {
+                        if let Some(em) = modes.first().filter(|em| b(em, "exhaustDamage")) {
+                            exhaust_damage = Some(ose_data::ExhaustDamage {
+                                radius_multiplier: f(em, "exhaustDamageRadiusMultiplier"),
+                                damage_kw: f(em, "ExhaustDamageValue"),
+                                falloff_power: f(em, "exhaustDamageFalloffPower"),
+                                distance_offset_m: f(em, "exhaustDamageDistanceOffset"),
+                                max_range_m: f(em, "exhaustDamageMaxRange"),
+                                max_multiplier: f(em, "exhaustDamageMaxMutliplier"),
+                            });
+                        }
                         for em in modes {
                             engines.push(EngineMode {
                                 thrust_transforms: Vec::new(),
@@ -910,6 +921,7 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
             _ => 1.0,
         },
         buoyancy: d["buoyancy"].as_f64().unwrap_or(1.0),
+        exhaust_damage,
         heatshield,
         landing_gear,
         converter,

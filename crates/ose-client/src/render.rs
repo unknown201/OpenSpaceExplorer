@@ -648,6 +648,8 @@ struct CpuModel {
 
 pub struct DrawItem {
     pub animation: Option<crate::animation::ClipSample>,
+    /// Clips blended by weight in place of `animation` when not empty (a Kerbal's animator cross-fades).
+    pub blend: Vec<(crate::animation::ClipSample, f32)>,
     /// Extra turns on named nodes after the animation pose, about a point in the node's own frame (a control
     /// surface on its hinge bone, a wing's flap about its leading edge).
     pub node_turns: Vec<(&'static str, glam::Quat, glam::Vec3)>,
@@ -706,6 +708,7 @@ impl DrawItem {
     ) -> DrawItem {
         DrawItem {
             animation: None,
+            blend: Vec::new(),
             node_turns: Vec::new(),
             node_rotations: Vec::new(),
             model,
@@ -1637,6 +1640,38 @@ impl Renderer {
         });
     }
 
+    /// Start building a model under `name` from the GLB at `base_url` passed through `build` (a shaped
+    /// procedural wing borrows its part's materials this way). No-op if loaded or in flight.
+    pub fn request_built_model(
+        &mut self,
+        name: &str,
+        base_url: &str,
+        build: impl FnOnce(&[u8]) -> Result<Vec<u8>, String> + 'static,
+    ) {
+        if self.models.contains_key(name) || self.pending.contains_key(name) {
+            return;
+        }
+        self.pending.insert(name.to_string(), ());
+        let inbox = self.inbox.clone();
+        let name = name.to_string();
+        let url = base_url.to_string();
+        wasm_bindgen_futures::spawn_local(async move {
+            match fetch_bytes(&url).await {
+                Ok(bytes) => match build(&bytes).and_then(|glb| parse_glb(&glb)) {
+                    Ok(model) => inbox.borrow_mut().push((name, model)),
+                    Err(e) => log(&format!("built glb {name} from {url}: {e}")),
+                },
+                Err(e) => log(&format!("fetch {url}: {e}")),
+            }
+        });
+    }
+
+    /// Forget loaded models whose name starts with `prefix` and is not in `keep` (shapes edited away).
+    pub fn retain_models(&mut self, prefix: &str, keep: &std::collections::HashSet<String>) {
+        self.models
+            .retain(|name, _| !name.starts_with(prefix) || keep.contains(name));
+    }
+
     /// Upload models and textures that finished loading since the last frame.
     fn drain_inbox(&mut self, asset_base: &str) {
         let ready: Vec<(String, CpuModel)> = self.inbox.borrow_mut().drain(..).collect();
@@ -2202,9 +2237,13 @@ impl Renderer {
                 item.rotation,
                 item.rel_pos_km,
             );
-            let mut pose = model
-                .rig
-                .pose(item.animation.or_else(|| model.rig.default_sample()));
+            let mut pose = if item.blend.is_empty() {
+                model
+                    .rig
+                    .pose(item.animation.or_else(|| model.rig.default_sample()))
+            } else {
+                model.rig.blended_pose(&item.blend)
+            };
             for (node, turn, pivot) in &item.node_turns {
                 if let Some(i) = model.rig.nodes.iter().position(|n| n.name == *node) {
                     // L' = L * T(p) * turn * T(-p), for the node's (uniform) scale s.

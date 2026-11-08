@@ -6,8 +6,10 @@
 #![forbid(unsafe_code)]
 
 pub mod craft;
+pub mod fairing;
 pub mod flight_geometry;
 pub mod missions;
+pub mod procedural;
 pub mod science;
 pub mod staging;
 pub mod terrain;
@@ -276,6 +278,10 @@ pub struct PartDef {
     /// adapters that do not float).
     #[serde(default = "one")]
     pub buoyancy: f64,
+    /// The blast of the part's engine exhaust on parts in its path (its first engine mode's
+    /// `exhaustDamage` settings); `None` for parts whose exhaust harms nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exhaust_damage: Option<ExhaustDamage>,
     /// A heat shield (`Data_Heatshield`).
     #[serde(default)]
     pub heatshield: Option<Heatshield>,
@@ -361,6 +367,20 @@ pub struct Electric {
 
 fn one() -> f64 {
     1.0
+}
+
+/// An engine's exhaust blast (`Data_Engine` mode `exhaustDamage*` settings): a sphere of the part's size
+/// diameter x `radius_multiplier` / 2 swept down each nozzle from `distance_offset_m` out to `max_range_m`
+/// heats the first parts it meets by `damage_kw` x throttle x min(1 / distance^`falloff_power`,
+/// `max_multiplier`) and pushes them with the engine's thrust x the same factor.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ExhaustDamage {
+    pub radius_multiplier: f64,
+    pub damage_kw: f64,
+    pub falloff_power: f64,
+    pub distance_offset_m: f64,
+    pub max_range_m: f64,
+    pub max_multiplier: f64,
 }
 
 /// A resource converter as the original defines it (`Data_ResourceConverter`, its selected formula): while
