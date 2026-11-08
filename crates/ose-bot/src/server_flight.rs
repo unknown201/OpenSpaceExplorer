@@ -366,7 +366,7 @@ pub fn orbit_summary(mu: f64, radius_m: f64, v: &VesselState) -> (f64, f64, f64)
     )
 }
 
-/// The patch that starts at the capture burn, if the server predicts the vessel stays bound to the Mun.
+/// The patch that starts after the capture burn, if the server predicts the vessel stays bound to the Mun.
 pub fn capture_predicted<'a>(
     patches: &'a [TrajectoryPatch],
     b: &Bodies,
@@ -374,7 +374,8 @@ pub fn capture_predicted<'a>(
 ) -> Result<&'a TrajectoryPatch> {
     patches
         .iter()
-        .find(|p| p.body == b.mun && (p.start_ut - burn_ut).abs() < 1.0)
+        // the server predicts the burn as a finite one from the node: the patch after it starts where it ends
+        .find(|p| p.body == b.mun && p.start_ut > burn_ut - 1.0 && p.start_ut < burn_ut + 600.0)
         .ok_or_else(|| {
             anyhow!(
                 "no post-burn patch around the Mun at UT {burn_ut:.0}; patches: {:?}",
