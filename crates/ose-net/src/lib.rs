@@ -225,8 +225,9 @@ pub enum ClientMessage {
         to_part: u16,
     },
     /// Start moving `resource` from the `from` tanks into the `to` tanks (craft part indices, as
-    /// `FlightReadout::part_resources` counts): the receiving tanks fill with what the giving ones hold,
-    /// then it stops by itself. Empty lists stop it. Answers `FlightAck`; `FlightReadout::transfer` shows it.
+    /// `FlightReadout::part_resources` counts), split as the original's Resource Manager splits it; a part in
+    /// both lists is balanced with the others in both. Each tank's share moves in about a second, then it
+    /// stops by itself. Empty lists stop it. Answers `FlightAck`; `FlightReadout::transfer` shows it.
     TransferResource {
         vessel: u64,
         resource: String,

@@ -24,7 +24,8 @@ namespace OpenSpaceExplorer.Validation
     [DefaultExecutionOrder(-32000)]
     public sealed class InputHolder : MonoBehaviour
     {
-        public static float? Pitch, Yaw, Roll, X, Y, Z, WheelThrottle, WheelSteer, EvaFrontBack, EvaLeftRight;
+        public static float? Pitch, Yaw, Roll, X, Y, Z, WheelThrottle, WheelSteer, EvaFrontBack, EvaLeftRight, EvaUpDown;
+        public static Vector3? KerbalMove;
         public static bool? EvaJump, EvaRun;
         static readonly System.Reflection.BindingFlags Priv = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
         static void SetEva(string field, object value)
@@ -44,6 +45,17 @@ namespace OpenSpaceExplorer.Validation
             if (Z.HasValue) FlightInputHandler.OverrideInputTranslateZ(Z.Value);
             if (EvaFrontBack.HasValue) SetEva("_moveFrontBack", EvaFrontBack.Value);
             if (EvaLeftRight.HasValue) SetEva("_moveLeftRight", EvaLeftRight.Value);
+            if (EvaUpDown.HasValue) SetEva("_moveUpDown", EvaUpDown.Value);
+            if (KerbalMove.HasValue)
+            {
+                var v = GameManager.Instance?.Game?.ViewController?.GetActiveSimVessel();
+                if (v != null && v.IsKerbalEVA)
+                {
+                    var st = v.flightCtrlState;
+                    st.X = KerbalMove.Value.x; st.Y = KerbalMove.Value.y; st.Z = KerbalMove.Value.z;
+                    v.SetFlightControlState(st);
+                }
+            }
             if (EvaJump.HasValue) SetEva("_jump", EvaJump.Value);
             if (EvaRun.HasValue) SetEva("_run", EvaRun.Value);
             if (WheelThrottle.HasValue || WheelSteer.HasValue)
@@ -53,7 +65,7 @@ namespace OpenSpaceExplorer.Validation
                 FlightCtrlStateInputOverride.InputWheelSteeringOverride = WheelSteer ?? 0f;
             }
         }
-        public static void Clear() { Pitch = Yaw = Roll = X = Y = Z = WheelThrottle = WheelSteer = EvaFrontBack = EvaLeftRight = null; EvaJump = EvaRun = null; }
+        public static void Clear() { Pitch = Yaw = Roll = X = Y = Z = WheelThrottle = WheelSteer = EvaFrontBack = EvaLeftRight = EvaUpDown = null; KerbalMove = null; EvaJump = EvaRun = null; }
     }
 
     [BepInPlugin("org.openspaceexplorer.paritypilot", "OSE Parity Pilot", "0.1.0")]
@@ -199,7 +211,7 @@ namespace OpenSpaceExplorer.Validation
                 yield return Shot("v1-ksc-night-before-vab");
             }
             bool orbital = scenario == "rotation" || scenario == "rcs" || scenario == "docking" || scenario == "thrustwarp" || scenario == "warp" || scenario == "burn" || scenario == "jetpack";
-            var snapshot = IOProvider.FromJsonFile<OABHistoricalSnapshot>(Path.Combine(dir, scenario == "rcs" ? "craft-rcs.json" : scenario == "jet" ? "craft-jet.json" : scenario == "rover" ? "craft-rover.json" : scenario == "legs" ? "craft-legs.json" : scenario == "fuelline" ? "craft-fuelline.json" : scenario == "crossfeed" ? "craft-crossfeed.json" : (scenario == "stack" || scenario == "thrustwarp") ? "craft-stack.json" : scenario == "reentry" ? "craft-reentry.json" : scenario == "docking" ? "craft-docking.json" : scenario.StartsWith("drop ") ? "craft-drop-" + scenario.Split(' ')[1] + ".json" : orbital ? "craft-rotation.json" : (scenario == "k1" || scenario == "partdump") ? "craft-k1.json" : "craft.json"));
+            var snapshot = IOProvider.FromJsonFile<OABHistoricalSnapshot>(Path.Combine(dir, scenario == "rcs" ? "craft-rcs.json" : scenario == "jet" ? "craft-jet.json" : scenario == "rover" ? "craft-rover.json" : scenario == "legs" ? "craft-legs.json" : scenario == "fuelline" ? "craft-fuelline.json" : scenario == "crossfeed" ? "craft-crossfeed.json" : scenario == "transfer" ? "craft-crossfeed.json" : (scenario == "stack" || scenario == "thrustwarp") ? "craft-stack.json" : scenario == "reentry" ? "craft-reentry.json" : scenario == "docking" ? "craft-docking.json" : scenario.StartsWith("drop ") ? "craft-drop-" + scenario.Split(' ')[1] + ".json" : orbital ? "craft-rotation.json" : (scenario == "k1" || scenario == "partdump") ? "craft-k1.json" : "craft.json"));
             var config = orbital
                 ? new OABConfig(OABVariant.VAB, OABEnvironmentType.Orbital, OABConstructionType.User, null)
                 : new OABConfig(OABVariant.VAB, OABEnvironmentType.Terrestrial, OABConstructionType.User, "Kerbin");
@@ -247,6 +259,7 @@ namespace OpenSpaceExplorer.Validation
             if (scenario == "legs") { yield return Legs(vessel); yield break; }
             if (scenario == "stack") { yield return Stack(vessel); yield break; }
             if (scenario == "fuelline" || scenario == "crossfeed") { yield return FuelLine(vessel); yield break; }
+            if (scenario == "transfer") { yield return Transfer(vessel); yield break; }
             if (scenario == "reentry") { yield return Reentry(vessel); yield break; }
             if (scenario.StartsWith("drop ")) { yield return Drop(vessel, double.Parse(scenario.Split(' ')[2], CultureInfo.InvariantCulture)); yield break; }
             if (scenario == "visuals")
@@ -662,8 +675,8 @@ namespace OpenSpaceExplorer.Validation
                 float t = 0; int last = -1;
                 while (t < 12)
                 {
-                    t += Time.fixedDeltaTime;
                     yield return new WaitForFixedUpdate();
+                    t = (float)(G.UniverseModel.UniverseTime - start); // game time since Begin: WaitForFixedUpdate resumes once a frame, not once a tick
                     var v = G.ViewController.GetActiveSimVessel();
                     if (v == null) { log.WriteLine(t.ToString("F2", CultureInfo.InvariantCulture) + ",0,"); Mark("vessel gone at " + t.ToString("F2", CultureInfo.InvariantCulture)); break; }
                     var names = new System.Collections.Generic.List<string>();
@@ -735,7 +748,7 @@ namespace OpenSpaceExplorer.Validation
                 while (t < 11.5f)
                 {
                     yield return new WaitForFixedUpdate();
-                    t += Time.fixedDeltaTime;
+                    t = (float)(G.UniverseModel.UniverseTime - start); // game time since Begin: WaitForFixedUpdate resumes once a frame, not once a tick
                     if (phase == "thrust" && t >= 5f) { phase = "roll"; InputHolder.Roll = 1f; Mark("roll"); }
                     if (phase == "roll" && t >= 8f) { phase = "free"; InputHolder.Roll = 0f; Mark("roll off"); }
                     var v = G.ViewController.GetActiveSimVessel();
@@ -814,6 +827,87 @@ namespace OpenSpaceExplorer.Validation
             }
             yield return Shot("18-fuelline");
             Stop();
+            File.WriteAllText(Path.Combine(dir, "out", "done.txt"), "ok");
+            yield return new WaitForSeconds(2f);
+            Application.Quit();
+        }
+
+        // G06 Resource Manager: on the pad, the crossfeed craft's two tanks (A above the decoupler, B below).
+        // Phase "inout": A set to a quarter, B full; B Out, A In. Phase "balance": A a tenth, B nine tenths;
+        // both Balance. Each phase issues the requests KSP2's ResourceManagerUI.StartResourceTransfer makes
+        // (its split for two tanks, NO_FLOW per part, FlowUnits = TargetUnits) through each part's own
+        // ResourceFlowRequestBroker, and logs both tanks' stored units every physics tick for 4 s.
+        IEnumerator Transfer(VesselComponent vessel)
+        {
+            yield return new WaitForSeconds(2f);
+            var inv = CultureInfo.InvariantCulture;
+            var db = G.ResourceDefinitionDatabase;
+            var tanks = new System.Collections.Generic.List<PartComponent>();
+            foreach (var part in vessel.SimulationObject.PartOwner.Parts)
+                if (part.Name.StartsWith("fueltank_")) tanks.Add(part);
+            if (tanks.Count != 2) { Mark("expected 2 tanks, found " + tanks.Count); Application.Quit(); yield break; }
+            var a = tanks[0]; var b = tanks[1];
+            var resources = new System.Collections.Generic.List<KSP.Sim.ResourceSystem.ResourceDefinitionID>();
+            foreach (var r in a.PartResourceContainer.GetAllResourcesContainedData()) resources.Add(r.ResourceID);
+            using (var w = new StreamWriter(Path.Combine(dir, "out", "transfer-tanks.csv"), false))
+            {
+                w.WriteLine("phase,t,tank,resource,stored_units,capacity_units");
+                foreach (var phase in new[] { "inout", "balance" })
+                {
+                    double fa = phase == "inout" ? 0.25 : 0.1, fb = phase == "inout" ? 1.0 : 0.9;
+                    foreach (var id in resources)
+                    {
+                        a.PartResourceContainer.SetResourceStoredUnits(id, a.PartResourceContainer.GetResourceCapacityUnits(id) * fa);
+                        b.PartResourceContainer.SetResourceStoredUnits(id, b.PartResourceContainer.GetResourceCapacityUnits(id) * fb);
+                    }
+                    yield return new WaitForFixedUpdate();
+                    var cmdsA = new System.Collections.Generic.List<KSP.Sim.ResourceSystem.ResourceFlowRequestCommandConfig>();
+                    var cmdsB = new System.Collections.Generic.List<KSP.Sim.ResourceSystem.ResourceFlowRequestCommandConfig>();
+                    foreach (var id in resources)
+                    {
+                        double sa = a.PartResourceContainer.GetResourceStoredUnits(id), ca = a.PartResourceContainer.GetResourceCapacityUnits(id);
+                        double sb = b.PartResourceContainer.GetResourceStoredUnits(id);
+                        double moveA, moveB; // + in, - out
+                        if (phase == "inout") { double room = ca - sa; double m = Math.Min(room, sb); moveA = m; moveB = -m; }
+                        else { double avg = (sa + sb) / 2; moveA = avg - sa; moveB = avg - sb; }
+                        foreach (var (list, mv) in new[] { (cmdsA, moveA), (cmdsB, moveB) })
+                            if (Math.Abs(mv) > 0)
+                                list.Add(new KSP.Sim.ResourceSystem.ResourceFlowRequestCommandConfig
+                                {
+                                    FlowResource = id,
+                                    FlowDirection = mv > 0 ? KSP.Sim.ResourceSystem.FlowDirection.FLOW_INBOUND : KSP.Sim.ResourceSystem.FlowDirection.FLOW_OUTBOUND,
+                                    FlowUnits = Math.Abs(mv),
+                                    TargetUnits = Math.Abs(mv),
+                                    FlowModeOverride = KSP.Sim.ResourceSystem.ResourceFlowMode.NO_FLOW
+                                });
+                    }
+                    var handles = new System.Collections.Generic.List<(KSP.Sim.ResourceSystem.ResourceFlowRequestBroker, KSP.Sim.ResourceSystem.ResourceFlowRequestHandle)>();
+                    foreach (var (part, cmds) in new[] { (a, cmdsA), (b, cmdsB) })
+                    {
+                        if (cmds.Count == 0) continue;
+                        var broker = part.PartResourceFlowRequestBroker;
+                        var h = broker.AllocateOrGetRequest();
+                        broker.SetCommands(h, 1.0, cmds.ToArray());
+                        broker.SetRequestActive(h);
+                        handles.Add((broker, h));
+                    }
+                    Mark("transfer " + phase + " started, " + (cmdsA.Count + cmdsB.Count) + " commands");
+                    float t = 0;
+                    while (t < 4f)
+                    {
+                        foreach (var (name, part) in new[] { ("A", a), ("B", b) })
+                            foreach (var id in resources)
+                                w.WriteLine(phase + "," + t.ToString("F2", inv) + "," + name + "," + db.GetResourceNameFromID(id) + ","
+                                    + part.PartResourceContainer.GetResourceStoredUnits(id).ToString("R", inv) + ","
+                                    + part.PartResourceContainer.GetResourceCapacityUnits(id).ToString("R", inv));
+                        yield return new WaitForFixedUpdate();
+                        t += Time.fixedDeltaTime;
+                    }
+                    foreach (var (broker, h) in handles) broker.SetRequestInactive(h);
+                    Mark("transfer " + phase + " stopped");
+                }
+            }
+            yield return Shot("19-transfer");
             File.WriteAllText(Path.Combine(dir, "out", "done.txt"), "ok");
             yield return new WaitForSeconds(2f);
             Application.Quit();
@@ -911,7 +1005,7 @@ namespace OpenSpaceExplorer.Validation
                 while (t < 360)
                 {
                     yield return new WaitForFixedUpdate();
-                    t += Time.fixedDeltaTime;
+                    t = (float)(G.UniverseModel.UniverseTime - start); // game time since Begin: WaitForFixedUpdate resumes once a frame, not once a tick
                     var v = G.ViewController.GetActiveSimVessel();
                     if (v == null || v.GlobalId.ToString() != vesselId) { Mark("vessel gone at " + t.ToString("F2", inv)); break; }
                     foreach (var part in v.SimulationObject.PartOwner.Parts)

@@ -89,17 +89,20 @@ namespace OpenSpaceExplorer.Validation
             using (var w = new StreamWriter(Path.Combine(dir, "out", "burn-trace.csv"), false) { AutoFlush = true })
             {
                 w.WriteLine(Header);
+                // t is game time since this point (UT), not counted frames: the coroutine resumes once per rendered frame,
+                // so a fixed-step counter falls behind when the frame rate drops
+                double utStart = G.UniverseModel.UniverseTime;
                 float t = 0;
-                for (int i = 0; i < 5; i++) { yield return new WaitForFixedUpdate(); t += Time.fixedDeltaTime; w.WriteLine(Row(vessel, t, "before")); }
+                for (int i = 0; i < 5; i++) { yield return new WaitForFixedUpdate(); t = (float)(G.UniverseModel.UniverseTime - utStart); w.WriteLine(Row(vessel, t, "before")); }
                 double v0 = vessel.OrbitalSpeed, m0 = vessel.totalMass, ut0 = G.UniverseModel.UniverseTime;
                 mark("burn start UT " + ut0.ToString("R", Inv) + " speed " + v0.ToString("R", Inv) + " mass " + m0.ToString("R", Inv));
                 G.ViewController.flightInputHandler.OverrideInputMaxThrottle(true);
                 vessel.ActivateNextStage();
-                while (vessel.OrbitalSpeed < v0 + 100 && t < 120) { yield return new WaitForFixedUpdate(); t += Time.fixedDeltaTime; w.WriteLine(Row(vessel, t, "burn")); }
+                while (vessel.OrbitalSpeed < v0 + 100 && t < 120) { yield return new WaitForFixedUpdate(); t = (float)(G.UniverseModel.UniverseTime - utStart); w.WriteLine(Row(vessel, t, "burn")); }
                 G.ViewController.flightInputHandler.OverrideInputThrottleCutoff(true);
                 mark("burn end UT " + G.UniverseModel.UniverseTime.ToString("R", Inv) + " speed " + vessel.OrbitalSpeed.ToString("R", Inv) + " mass " + vessel.totalMass.ToString("R", Inv)
                     + " fuel used t " + (m0 - vessel.totalMass).ToString("R", Inv));
-                for (int i = 0; i < 300; i++) { yield return new WaitForFixedUpdate(); t += Time.fixedDeltaTime; if (i % 10 == 0) w.WriteLine(Row(vessel, t, "after")); }
+                for (int i = 0; i < 300; i++) { yield return new WaitForFixedUpdate(); t = (float)(G.UniverseModel.UniverseTime - utStart); if (i % 10 == 0) w.WriteLine(Row(vessel, t, "after")); }
                 mark("after: ap " + vessel.Orbit.ApoapsisArl.ToString("R", Inv) + " pe " + vessel.Orbit.PeriapsisArl.ToString("R", Inv));
             }
         }
@@ -120,18 +123,43 @@ namespace OpenSpaceExplorer.Validation
             mark("kerbal " + (kerbal != null && kerbal.IsKerbalEVA) + " mass " + kerbal?.totalMass.ToString("R", Inv));
             InputHolder.EvaJump = true; yield return new WaitForSeconds(0.3f); InputHolder.EvaJump = false; // let go if holding the ladder
             yield return new WaitForSeconds(3f);
+            // KSP2's jetpack is in use only while the Kerbal's RCS is on (KerbalBehavior.OnToggleJetpack copies
+            // IsRCSEnabled), the R key in game
+            kerbal = G.ViewController.GetActiveSimVessel();
+            kerbal.IsRCSEnabled = true;
+            if (G.ViewController.TryGetActiveVehicle(out var vehicle)) vehicle.ControllableActionGroups?.SetGroup(KSPActionGroup.RCS, true);
+            var behaviour = G.ViewController.GetBehaviorIfLoaded(kerbal.SimulationObject.Kerbal);
+            behaviour?.OnToggleJetpack();
+            yield return new WaitForSeconds(2.5f);
+            mark("jetpack in use " + (behaviour != null && behaviour.CharacterState.IsJetpackInUse) + " rcs " + kerbal.IsRCSEnabled);
+            // KSP2's IsOnGround zeroes the jetpack's x/z while the Kerbal stands on the pod: move it 50 m ahead along the
+            // same orbit first, and keep it from turning toward the camera (that alone burns ~175 g in 0.3 s)
+            if (behaviour != null) behaviour.Model.KerbalData.JetpackAlignToCameraEnabled = false;
+            KeplerOrbitState.FromOrbitComponent(kerbal.Orbit, out var clear);
+            clear.meanAnomalyAtEpoch += 50.0 / kerbal.Orbit.semiMajorAxis;
+            G.SpaceSimulation.TeleportSimObjectToOrbit(kerbal.SimulationObject, clear, true);
+            mark("kerbal moved 50 m ahead along its orbit");
+            yield return new WaitForSeconds(6f);
+            kerbal = G.ViewController.GetActiveSimVessel();
+            behaviour = G.ViewController.GetBehaviorIfLoaded(kerbal.SimulationObject.Kerbal);
+            if (behaviour != null) { behaviour.Model.KerbalData.JetpackAlignToCameraEnabled = false; if (!behaviour.CharacterState.IsJetpackInUse) { kerbal.IsRCSEnabled = true; behaviour.OnToggleJetpack(); } }
+            yield return new WaitForSeconds(3f);
+            mark("free: jetpack in use " + (behaviour != null && behaviour.CharacterState.IsJetpackInUse) + " on ground " + (behaviour != null && behaviour.IsOnGround()));
             begin(kerbal, "jetpack-trace.csv");
             yield return new WaitForSeconds(1f);
-            var h = G.ViewController.evaInputHandler;
-            var upDown = typeof(EVAInputHandler).GetField("_moveUpDown", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            float held = 0;
+            // JetpackKerbalCharacterStateHandler reads the Kerbal vessel's flightCtrlState X/Y/Z: hold them every
+            // physics tick (InputHolder.KerbalMove), as well as the EVA handler's own fields
             mark("jetpack up 2 s");
-            while (held < 2f) { upDown?.SetValue(h, 1f); held += Time.deltaTime; yield return null; }
-            upDown?.SetValue(h, 0f);
+            InputHolder.KerbalMove = new Vector3(0, 1, 0); InputHolder.EvaUpDown = 1f;
+            yield return new WaitForSeconds(2f);
+            InputHolder.KerbalMove = Vector3.zero; InputHolder.EvaUpDown = 0f;
             yield return new WaitForSeconds(2f);
             mark("jetpack forward 2 s");
-            InputHolder.EvaFrontBack = 1f; yield return new WaitForSeconds(2f); InputHolder.EvaFrontBack = 0f;
+            InputHolder.KerbalMove = new Vector3(0, 0, 1); InputHolder.EvaFrontBack = 1f;
             yield return new WaitForSeconds(2f);
+            InputHolder.KerbalMove = Vector3.zero; InputHolder.EvaFrontBack = 0f;
+            yield return new WaitForSeconds(2f);
+            InputHolder.KerbalMove = null; InputHolder.EvaUpDown = null; InputHolder.EvaFrontBack = null;
             stop();
             mark("kerbal mass after " + G.ViewController.GetActiveSimVessel()?.totalMass.ToString("R", Inv));
         }
