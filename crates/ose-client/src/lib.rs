@@ -11974,6 +11974,17 @@ impl App {
                 f.delta_v_now_mps.max(0.0) + 0.0
             ),
         );
+        // The GO button carries the stages left to fire and the delta-v, as the original's.
+        set_text(
+            &self.doc,
+            "fh-go-n",
+            &f.stages.saturating_sub(f.stage).to_string(),
+        );
+        set_text(
+            &self.doc,
+            "fh-go-dv",
+            &format!("\u{394}v {:.0} m/s", f.delta_v_now_mps.max(0.0) + 0.0),
+        );
         set_text(
             &self.doc,
             "fh-twr",
