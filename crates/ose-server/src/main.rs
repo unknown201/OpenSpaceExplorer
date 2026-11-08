@@ -1519,6 +1519,12 @@ const KSC_SPAWNS: [(&str, &str, bool, [f64; 3]); 5] = [
         [-4_989.899_017, -125.833_997, 2.0],
     ),
 ];
+/// The first `KSC_PADS` of `KSC_AREAS` are the launch pads' decks. KSP2's pad does not end in a drop: a rover
+/// driven 170 m off pad 1 descends about a metre (reference/ksp2-run8-rover), where ours fell 9 m off the
+/// deck's edge at 100 m. Each deck slopes down to the campus ground over this apron instead.
+const KSC_PADS: usize = 4;
+const KSC_PAD_APRON_M: f64 = 160.0;
+const KSC_GROUND_Y: f64 = -126.5;
 /// Facility footprints (min x, max x, min z, max z) and the surface a craft stands on there: the pads'
 /// decks, the runways, then the campus ground.
 const KSC_AREAS: [(f64, f64, f64, f64, f64); 8] = [
@@ -1544,13 +1550,15 @@ fn ksc_site() -> ose_sim::campus::Site {
         anchor: ose_math::DVec3::new(s[0], s[1], s[2]),
         areas: KSC_AREAS
             .iter()
-            .map(|&(min_x, max_x, min_z, max_z, y)| ose_sim::campus::Area {
-                min_x,
-                max_x,
-                min_z,
-                max_z,
-                y,
-            })
+            .enumerate()
+            .map(
+                |(i, &(min_x, max_x, min_z, max_z, y))| ose_sim::campus::Area {
+                    // the launch pads' decks slope down to the campus ground round them
+                    apron_m: if i < KSC_PADS { KSC_PAD_APRON_M } else { 0.0 },
+                    apron_y: if i < KSC_PADS { KSC_GROUND_Y } else { y },
+                    ..ose_sim::campus::Area::flat(min_x, max_x, min_z, max_z, y)
+                },
+            )
             .collect(),
     }
 }
@@ -4691,6 +4699,31 @@ mod tests {
                 s.lat_deg,
                 s.lon_deg
             );
+        }
+    }
+
+    #[test]
+    fn a_rover_driving_off_launch_pad_1_rolls_down_its_apron_without_a_drop() {
+        // KSP2: 170 m off pad 1 a rover is about a metre lower (reference/ksp2-run8-rover); ours fell 9 m at the
+        // deck's edge
+        let site = super::ksc_site();
+        let s = super::KSC_SPAWNS[0].3;
+        for (dx, dz) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
+            let mut prev = None;
+            for k in 0..=150 {
+                let d = k as f64 * 2.0;
+                let p = ose_math::DVec3::new(s[0] + dx * d, s[1], s[2] + dz * d);
+                let (lat, lon, _) = site.place(600_000.0, p);
+                let g = site
+                    .ground_radius(600_000.0, ose_sim::campus::direction(lat, lon))
+                    .unwrap()
+                    - 600_000.0;
+                if let Some(q) = prev {
+                    let step: f64 = q - g;
+                    assert!(step < 0.4, "({dx}, {dz}) {d} m: {step:.2} m step");
+                }
+                prev = Some(g);
+            }
         }
     }
 

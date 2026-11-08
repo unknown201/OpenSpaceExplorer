@@ -2299,13 +2299,9 @@ mod tests {
             alt_m: 0.0,
             yaw_rad: 0.0,
             anchor: DVec3::ZERO,
-            areas: vec![crate::campus::Area {
-                min_x: -width,
-                max_x: width,
-                min_z: -width,
-                max_z: width,
-                y: height,
-            }],
+            areas: vec![crate::campus::Area::flat(
+                -width, width, -width, width, height,
+            )],
         }));
     }
 
