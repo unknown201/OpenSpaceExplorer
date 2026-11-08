@@ -95,7 +95,7 @@ pub fn joint_limits(
 }
 
 impl JointSettings {
-    fn limits(
+    pub(crate) fn limits(
         &self,
         node_size: i32,
         stack: bool,
@@ -531,6 +531,7 @@ impl RigidVessel {
                 anchor_rest: anchor,
             });
         }
+        crate::struts::brace(&mut links, craft, &by_id);
         let params = IntegrationParameters::default();
         let n = masses_t.len();
         let rest_pos = craft

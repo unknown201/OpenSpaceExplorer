@@ -24,6 +24,7 @@ pub mod rigid;
 pub mod sas;
 pub mod science;
 pub mod structure;
+pub mod struts;
 pub mod surface;
 pub mod thermal;
 pub mod trajectory;

@@ -199,7 +199,7 @@ namespace OpenSpaceExplorer.Validation
                 yield return Shot("v1-ksc-night-before-vab");
             }
             bool orbital = scenario == "rotation" || scenario == "rcs" || scenario == "docking" || scenario == "thrustwarp";
-            var snapshot = IOProvider.FromJsonFile<OABHistoricalSnapshot>(Path.Combine(dir, scenario == "rcs" ? "craft-rcs.json" : scenario == "rover" ? "craft-rover.json" : scenario == "legs" ? "craft-legs.json" : (scenario == "stack" || scenario == "thrustwarp") ? "craft-stack.json" : scenario == "reentry" ? "craft-reentry.json" : scenario == "docking" ? "craft-docking.json" : scenario.StartsWith("drop ") ? "craft-drop-" + scenario.Split(' ')[1] + ".json" : orbital ? "craft-rotation.json" : (scenario == "k1" || scenario == "partdump") ? "craft-k1.json" : "craft.json"));
+            var snapshot = IOProvider.FromJsonFile<OABHistoricalSnapshot>(Path.Combine(dir, scenario == "rcs" ? "craft-rcs.json" : scenario == "rover" ? "craft-rover.json" : scenario == "legs" ? "craft-legs.json" : scenario == "fuelline" ? "craft-fuelline.json" : (scenario == "stack" || scenario == "thrustwarp") ? "craft-stack.json" : scenario == "reentry" ? "craft-reentry.json" : scenario == "docking" ? "craft-docking.json" : scenario.StartsWith("drop ") ? "craft-drop-" + scenario.Split(' ')[1] + ".json" : orbital ? "craft-rotation.json" : (scenario == "k1" || scenario == "partdump") ? "craft-k1.json" : "craft.json"));
             var config = orbital
                 ? new OABConfig(OABVariant.VAB, OABEnvironmentType.Orbital, OABConstructionType.User, null)
                 : new OABConfig(OABVariant.VAB, OABEnvironmentType.Terrestrial, OABConstructionType.User, "Kerbin");
@@ -227,6 +227,7 @@ namespace OpenSpaceExplorer.Validation
             if (scenario == "partdump") { yield return PartDump(vessel); yield break; }
             if (scenario == "legs") { yield return Legs(vessel); yield break; }
             if (scenario == "stack") { yield return Stack(vessel); yield break; }
+            if (scenario == "fuelline") { yield return FuelLine(vessel); yield break; }
             if (scenario == "reentry") { yield return Reentry(vessel); yield break; }
             if (scenario.StartsWith("drop ")) { yield return Drop(vessel, double.Parse(scenario.Split(' ')[2], CultureInfo.InvariantCulture)); yield break; }
             if (scenario == "visuals")
@@ -747,6 +748,55 @@ namespace OpenSpaceExplorer.Validation
             Mark("finished " + name);
             File.WriteAllText(Path.Combine(dir, "out", "done.txt"), "ok");
             yield return new WaitForSeconds(3f);
+            Application.Quit();
+        }
+
+        // T39 fuel lines: pod, tank A, inline decoupler (crossfeed off), tank B, Swivel, and a fuel line from A
+        // to B (craft-fuelline.json). SAS on, full throttle, engine staged; every physics tick logs each part's
+        // stored units per resource, until the engine has had nothing to burn for 3 s or 240 s pass.
+        IEnumerator FuelLine(VesselComponent vessel)
+        {
+            vessel.SetAutopilotEnableDisable(true);
+            G.ViewController.flightInputHandler.OverrideInputMaxThrottle(true);
+            yield return new WaitForSeconds(0.5f);
+            Begin(vessel, "fuelline-trace.csv");
+            var inv = CultureInfo.InvariantCulture;
+            var db = G.ResourceDefinitionDatabase;
+            using (var w = new StreamWriter(Path.Combine(dir, "out", "fuelline-tanks.csv"), false))
+            {
+                w.WriteLine("t,index,name,resource,stored_units,capacity_units,resource_mass_t");
+                vessel.ActivateNextStage();
+                Mark("staged");
+                float t = 0, idle = 0; double lastTotal = double.NaN;
+                while (t < 240f && idle < 3f)
+                {
+                    yield return new WaitForFixedUpdate();
+                    t += Time.fixedDeltaTime;
+                    var v = G.ViewController.GetActiveSimVessel();
+                    if (v == null) { Mark("vessel gone"); break; }
+                    int i = 0; double total = 0;
+                    foreach (var part in v.SimulationObject.PartOwner.Parts)
+                    {
+                        var c = part.PartResourceContainer;
+                        if (c != null)
+                            foreach (var r in c.GetAllResourcesContainedData())
+                            {
+                                if (r.CapacityUnits <= 0) continue;
+                                w.WriteLine(t.ToString("F2", inv) + "," + i + "," + part.Name + "," + db.GetResourceNameFromID(r.ResourceID) + ","
+                                    + r.StoredUnits.ToString("R", inv) + "," + r.CapacityUnits.ToString("R", inv) + "," + part.ResourceMass.ToString("R", inv));
+                                if (part.Name.StartsWith("fueltank_")) total += r.StoredUnits;
+                            }
+                        i++;
+                    }
+                    idle = !double.IsNaN(lastTotal) && Math.Abs(total - lastTotal) < 1e-9 ? idle + Time.fixedDeltaTime : 0f;
+                    lastTotal = total;
+                }
+                Mark("fuel run ended at t " + t.ToString("F1", inv));
+            }
+            yield return Shot("18-fuelline");
+            Stop();
+            File.WriteAllText(Path.Combine(dir, "out", "done.txt"), "ok");
+            yield return new WaitForSeconds(2f);
             Application.Quit();
         }
 
