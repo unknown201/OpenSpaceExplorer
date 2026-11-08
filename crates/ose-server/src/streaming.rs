@@ -80,6 +80,10 @@ pub fn start(s: super::AppState) {
         snapshots.set_missed_tick_behavior(MissedTickBehavior::Skip);
         predictions.set_missed_tick_behavior(MissedTickBehavior::Skip);
         loop {
+            // a room put away stops publishing (`rooms.rs`)
+            if s.closed.load(Ordering::SeqCst) {
+                break;
+            }
             tokio::select! {
                 _ = snapshots.tick() => {
                     if s.streams.snapshots.receiver_count() > 0 {
