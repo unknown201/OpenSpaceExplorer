@@ -136,6 +136,16 @@ def main() -> None:
     (HERE / "craft-fuelline.json").write_text(json.dumps(craft, indent=1), encoding="utf-8")
     print("wrote craft-fuelline.json:", [p["partName"] for p in new])
 
+    # the "crossfeed" scenario: no fuel line, the decoupler's crossfeed switched on instead
+    cf = copy.deepcopy(craft)
+    cparts = cf["Assemblies"][0]["Assembly"]["parts"]
+    cparts[:] = [p for p in cparts if p["partName"] != "fuelline_0v_external"]
+    next(p for p in cparts if p["partName"] == "decoupler_1v_inline")["partState"]["FuelCrossfeed"] = True
+    cf["Metadata"]["Name"] = cf["Metadata"]["VehicleName"] = "Crossfeed"
+    cf["Metadata"]["Parts"] = len(cparts)
+    (HERE / "craft-crossfeed.json").write_text(json.dumps(cf, indent=1), encoding="utf-8")
+    print("wrote craft-crossfeed.json:", [p["partName"] for p in cparts])
+
 
 if __name__ == "__main__":
     main()
