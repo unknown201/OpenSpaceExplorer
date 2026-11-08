@@ -1209,6 +1209,26 @@
     body.webgpu #vab-header > .vh-group:first-of-type { left: calc(574 * var(--u)); }
     body.webgpu #vab-header > .vh-group:last-of-type { top: auto; bottom: calc(16 * var(--u)); right: calc(262 * var(--u)); }
     body.webgpu #vab-header > .vh-group:last-of-type .vh-pop { top: auto; bottom: calc(100% + 6px); }
+
+    /* The original's VAB tool bar (run 18 shot): separate panels: build orientation; the CoM / CoT / CoL markers;
+       symmetry and angle snap; the tools (translate-rotate, frame of reference). */
+    body.webgpu #vab-header > .vh-group:first-of-type { background: transparent; border: 0; padding: 0; gap: 0; align-items: stretch; }
+    body.webgpu #vab-header > .vh-group:first-of-type > :is(#vab-orient, #vab-com, #vab-cot, #vab-col, #vab-sym, #vab-snap, #vab-offset, #vab-frame) { margin: 0; height: calc(44 * var(--u)); min-width: calc(44 * var(--u)); padding: 0 calc(8 * var(--u)) !important; background: #10141bf0; border: 1px solid #ffffff22; border-left-width: 0; border-right-width: 0; border-radius: 0; }
+    body.webgpu #vab-header > .vh-group:first-of-type > #vab-orient { order: 1; }
+    body.webgpu #vab-header > .vh-group:first-of-type > #vab-com { order: 2; }
+    body.webgpu #vab-header > .vh-group:first-of-type > #vab-cot { order: 3; }
+    body.webgpu #vab-header > .vh-group:first-of-type > #vab-col { order: 4; }
+    body.webgpu #vab-header > .vh-group:first-of-type > #vab-sym { order: 5; }
+    body.webgpu #vab-header > .vh-group:first-of-type > #vab-snap { order: 6; }
+    body.webgpu #vab-header > .vh-group:first-of-type > #vab-offset { order: 7; }
+    body.webgpu #vab-header > .vh-group:first-of-type > #vab-frame { order: 8; }
+    body.webgpu #vab-header > .vh-group:first-of-type > :is(#vab-orient, #vab-com, #vab-sym, #vab-offset) { border-left-width: 1px; border-top-left-radius: calc(6 * var(--u)); border-bottom-left-radius: calc(6 * var(--u)); }
+    body.webgpu #vab-header > .vh-group:first-of-type > :is(#vab-orient, #vab-col, #vab-snap, #vab-frame) { border-right-width: 1px; border-top-right-radius: calc(6 * var(--u)); border-bottom-right-radius: calc(6 * var(--u)); }
+    body.webgpu #vab-header > .vh-group:first-of-type > :is(#vab-com, #vab-sym, #vab-offset) { margin-left: calc(12 * var(--u)); }
+    body.webgpu #vab-header > .vh-group:first-of-type > #vab-offset { font-size: 0 !important; --tool: url(assets/ui/hud/ToolsBar-ICO-TransformRotateTool-onRest.png); }
+    body.webgpu #vab-header > .vh-group:first-of-type > #vab-offset::before { content: ""; display: inline-block; width: 22px; height: 22px; vertical-align: middle; background: currentColor; -webkit-mask: var(--tool) center / contain no-repeat; mask: var(--tool) center / contain no-repeat; }
+    body.webgpu #vab-header > .vh-group:first-of-type > #vab-frame { font-size: calc(11 * var(--u)) !important; letter-spacing: 0.06em; }
+    body.webgpu #vab-header > .vh-group:first-of-type > :is(.on, [data-on="1"]) { background: #2a2f64f0; }
     body.webgpu #vab-site { background: transparent !important; border: 1px solid #d6dbe6 !important; border-top-color: transparent !important; border-bottom-color: transparent !important; border-radius: 0 !important; color: #e6ecf7 !important; font: calc(13 * var(--u)) var(--hud-font) !important; height: calc(24 * var(--u)); padding: 0 calc(8 * var(--u)) !important; }
     /* Action group bindings in the part windows (protocol 57). */
     .pam-sub.ag-title { margin-top: 8px; color: #ffd25a; letter-spacing: 0.06em; text-transform: uppercase; font-size: 11px; }
