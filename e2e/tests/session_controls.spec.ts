@@ -10,7 +10,7 @@ test("warp requests pass 4x and VAB icons accept clicks", async ({ page, baseURL
   await expect(page.locator('[data-ose="ksc-vab"]').first()).toBeVisible({ timeout: 30_000 }); // the boot loading screen can hold the hub for a while on slow runners
   const warp = page.locator('[data-ose="warp"]');
   // Wait for each server echo before advancing; an effective cap must not reset the ladder.
-  for (const factor of [2, 3, 4, 5, 10]) {
+  for (const factor of [2, 4, 10, 50, 100]) {
     await warp.click();
     await expect(warp).toHaveAttribute("data-ose-requested-warp", String(factor));
     await page.waitForTimeout(150);

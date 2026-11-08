@@ -46,8 +46,9 @@ pub fn format_ut_clock(ut: f64) -> String {
     )
 }
 
-/// Warp factors the UI steps through; the same ladder as the original's rails warp.
-pub const WARP_LADDER: [u32; 11] = [1, 2, 3, 4, 5, 10, 50, 100, 1_000, 10_000, 100_000];
+/// Warp factors the UI steps through: the original's `TimeWarp` ladder (the first three are physics warp,
+/// which the sim caps at 4x while a vessel is under power or in the air).
+pub const WARP_LADDER: [u32; 10] = [1, 2, 4, 10, 50, 100, 1_000, 10_000, 100_000, 1_000_000];
 
 pub fn next_warp(current: u32) -> u32 {
     WARP_LADDER
@@ -57,18 +58,19 @@ pub fn next_warp(current: u32) -> u32 {
         .unwrap_or(WARP_LADDER[WARP_LADDER.len() - 1])
 }
 
-/// The warp to ask for with `remaining_s` of game time left before a warp-to point: the fastest rate that
-/// still leaves about four seconds of real time, down to 1x for the last ten seconds.
+/// The warp to ask for with `remaining_s` of game time left before a warp-to point: as the original, the
+/// slowest rate that gets there within ten real seconds.
 pub fn warp_toward(remaining_s: f64) -> u32 {
-    if remaining_s <= 10.0 {
-        return 1;
-    }
     WARP_LADDER
         .iter()
-        .rev()
         .copied()
-        .find(|&w| w as f64 * 4.0 <= remaining_s - 5.0)
-        .unwrap_or(1)
+        .find(|&w| remaining_s / w as f64 <= 10.0)
+        .unwrap_or(WARP_LADDER[WARP_LADDER.len() - 1])
+}
+
+/// The original's automatic drop to 1x: at rate `w`, once the point is (w + 1) / 2 game seconds away.
+pub fn warp_drop(rate: u32, remaining_s: f64) -> bool {
+    remaining_s <= (rate as f64 + 1.0) / 2.0
 }
 
 pub fn prev_warp(current: u32) -> u32 {
@@ -96,9 +98,10 @@ mod tests {
     #[test]
     fn warp_steps_down_toward_the_point() {
         assert_eq!(warp_toward(5.0), 1);
-        assert_eq!(warp_toward(30.0), 5);
-        assert_eq!(warp_toward(500.0), 100);
-        assert_eq!(warp_toward(1.0e7), 100_000);
+        assert_eq!(warp_toward(30.0), 4);
+        assert_eq!(warp_toward(500.0), 50);
+        assert_eq!(warp_toward(1.0e7), 1_000_000);
+        assert!(warp_drop(50, 25.5) && !warp_drop(50, 25.501));
     }
 
     #[test]
@@ -112,9 +115,11 @@ mod tests {
     #[test]
     fn warp_ladder_steps() {
         assert_eq!(next_warp(1), 2);
-        assert_eq!(next_warp(5), 10);
-        assert_eq!(next_warp(100_000), 100_000);
-        assert_eq!(prev_warp(10), 5);
+        assert_eq!(next_warp(2), 4);
+        assert_eq!(next_warp(4), 10);
+        assert_eq!(next_warp(100_000), 1_000_000);
+        assert_eq!(next_warp(1_000_000), 1_000_000);
+        assert_eq!(prev_warp(10), 4);
         assert_eq!(prev_warp(1), 1);
         assert_eq!(next_warp(7), 10);
     }
