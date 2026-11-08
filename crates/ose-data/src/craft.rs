@@ -58,7 +58,10 @@ pub struct CraftPart {
     pub fuel_crossfeed: bool,
     /// Stored resource units by resource id.
     pub resources: Vec<StoredResource>,
-    /// A fuel line (compound part) hanging on its parent tank feeds this part (index in `Craft::parts`).
+    /// On the first anchor of a two-anchor (compound) part, a fuel line or a strut: its far anchor, the same
+    /// part hung on the part at the other end (index in `Craft::parts`), as the original's
+    /// `Data_CompoundPart.OtherEndAnchor` on its `IsFirstAnchor` half. A fuel line lets the far part draw
+    /// from the part the first anchor hangs on; a strut braces the two (`Craft::compound_ends`).
     // (no skip_serializing_if: crafts also travel in postcard, which needs every field)
     #[serde(default)]
     pub fuel_line_target: Option<usize>,
@@ -123,12 +126,22 @@ impl ChuteSettings {
 /// The part actions a group can run: on with the group on, off with it off.
 /// `engine`: the engine runs or is shut down; `deploy`: panels, antennas, gear and bays extend or retract;
 /// `chute`: parachutes arm (on only); `converter`: converters run or stop; `fairing`: the fairing comes
-/// off (on only).
-pub const ACTIONS: [&str; 5] = ["engine", "deploy", "chute", "converter", "fairing"];
+/// off (on only); `mode`: a multi-mode engine switches to its second mode (on) or back to its first (off).
+pub const ACTIONS: [&str; 6] = ["engine", "deploy", "chute", "converter", "fairing", "mode"];
 
 /// The `KSPActionGroup` bit of custom group `n` (1..10).
 pub fn custom_group_bit(n: u8) -> u32 {
     0x10000u32 << (n.clamp(1, 10) - 1)
+}
+
+impl Craft {
+    /// The two parts a fuel line or strut joins, when part `i` is its linked first anchor: the part it hangs
+    /// on and the part its far anchor hangs on.
+    pub fn compound_ends(&self, i: usize) -> Option<(usize, usize)> {
+        let p = self.parts.get(i)?;
+        let far = self.parts.get(p.fuel_line_target?)?;
+        Some((p.parent?, far.parent?))
+    }
 }
 
 impl CraftPart {

@@ -156,6 +156,9 @@ pub struct VabView {
     /// Surface attachment previews (craft frame poses, one per symmetry copy) for the held part, set by the
     /// screen each frame; drawn when no stack node is in reach.
     pub ghosts: Vec<(ose_math::DVec3, ose_data::craft::Quat)>,
+    /// A fuel line or strut waiting for its far end: from its first anchor (craft frame) to the point on a
+    /// part under the cursor, when there is one.
+    pub link_preview: Option<(ose_math::DVec3, Option<ose_math::DVec3>)>,
     /// The held part's turn (W/A/S/D/Q/E) for the floating preview, and its yaw alone for a stack snap.
     /// Centre of mass and centre/direction of thrust (craft frame) from the server's StageReport, drawn
     /// when their toolbar toggles are on (the original's CoM and CoT markers).
@@ -211,6 +214,7 @@ impl VabView {
             cursor: (0.0, 0.0),
             snap: None,
             ghosts: Vec::new(),
+            link_preview: None,
             loose: Vec::new(),
             loose_boxes: Vec::new(),
             held_at: None,
@@ -1026,6 +1030,33 @@ impl VabView {
                 };
                 items.push(ghost);
             }
+        }
+        // Fuel lines and struts: the span between each pair of anchors, and the one being run.
+        for (model, meshes) in crate::vab::LINKER_MESHES {
+            gpu.hide_meshes(&format!("part:{model}"), meshes);
+        }
+        let span = |key: &str, a: ose_math::DVec3, b: ose_math::DVec3, color: [f32; 4]| {
+            let (wa, wb) = (centre + to_gltf(a), centre + to_gltf(b));
+            let d = wb - wa;
+            crate::render::LineItem::new(
+                format!("{key}:{:.3},{:.3},{:.3}", d.x, d.y, d.z),
+                vec![DVec3::ZERO, d],
+                wa - cam_pos,
+                color,
+                6.0,
+            )
+        };
+        for (i, a, b) in crate::vab::link_spans(craft) {
+            let strut = craft.parts[i].part_id.starts_with("strut");
+            let color = if strut {
+                [0.62, 0.64, 0.66, 1.0]
+            } else {
+                [0.18, 0.19, 0.2, 1.0]
+            };
+            lines.push(span("vab-link", a, b, color));
+        }
+        if let Some((a, Some(b))) = self.link_preview {
+            lines.push(span("vab-link-preview", a, b, [0.55, 1.0, 0.6, 1.0]));
         }
         if self.icon_mode {
             lines.clear();

@@ -128,9 +128,9 @@ impl FlowNet {
                 edges[i].push(edge_from(i, parent));
                 edges[parent].push(edge_from(parent, i));
             }
-            // a fuel line lets the part it feeds draw from the tank it hangs on (one way)
+            // a fuel line lets the part it feeds draw from the tank it hangs on (one way); a strut carries none
             if let (Some(target), Some(source)) = (p.fuel_line_target, p.parent) {
-                if target < n {
+                if target < n && def_of(i).is_none_or(|d| d.is_fuel_line()) {
                     edges[target].push(Edge {
                         to: source,
                         crossfeed: true,

@@ -196,6 +196,8 @@ struct PartInfo {
     /// A parachute's default opening pressure (atm) and full-deploy height (m), for its part window.
     #[serde(skip_serializing_if = "Option::is_none")]
     parachute: Option<ChuteInfo>,
+    /// A two-anchor part the VAB runs from one part to another: "fuel_line", "strut", or empty.
+    compound: &'static str,
 }
 
 #[derive(serde::Serialize)]
@@ -307,6 +309,13 @@ fn part_infos(parts: &[ose_data::PartDef]) -> Vec<PartInfo> {
                     min_pressure_atm: c.min_pressure_atm,
                     deploy_altitude_m: c.deploy_altitude_m,
                 }),
+                compound: if p.is_fuel_line() {
+                    "fuel_line"
+                } else if p.is_strut() {
+                    "strut"
+                } else {
+                    ""
+                },
             }
         })
         .collect()
@@ -1008,10 +1017,16 @@ fn flight_readout(
     let engine_demands = u
         .structure(e)
         .map(|st| st.engine_demands(p.stage, p.throttle, env));
+    // part-backed vessels report what their engines delivered (spooling jets, starved engines), not the
+    // throttle's request
     let thrust = if p.ignited && !p.crashed {
-        engine_demands
-            .as_ref()
-            .map(|engines| engines.iter().map(|e| e.thrust_kn).sum())
+        u.structure(e)
+            .map(|st| st.delivered_thrust_kn())
+            .or_else(|| {
+                engine_demands
+                    .as_ref()
+                    .map(|engines| engines.iter().map(|e| e.thrust_kn).sum())
+            })
             .unwrap_or_else(|| p.thrust_kn(pressure_kpa / 101.325))
     } else {
         0.0

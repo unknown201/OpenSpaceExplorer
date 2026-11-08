@@ -131,6 +131,28 @@ fn compound_other_end(v: &Value) -> Option<String> {
     }
 }
 
+/// Whether a two-anchor part is the first of its pair (`Data_CompoundPart.IsFirstAnchor`): the half that
+/// names the far anchor. Saves without the flag count as first anchors.
+fn compound_first_anchor(v: &Value) -> bool {
+    fn find(v: &Value) -> Option<bool> {
+        match v {
+            Value::Object(m) => {
+                if m.get("Name").and_then(|n| n.as_str()) == Some("Data_CompoundPart") {
+                    return Some(
+                        m.get("DataObject")?["IsFirstAnchor"]
+                            .as_bool()
+                            .unwrap_or(true),
+                    );
+                }
+                m.values().find_map(find)
+            }
+            Value::Array(a) => a.iter().find_map(find),
+            _ => None,
+        }
+    }
+    find(v).unwrap_or(true)
+}
+
 pub fn craft_from_value(v: &Value) -> anyhow::Result<Craft> {
     let meta = &v["Metadata"];
     let name = meta["VehicleName"]
@@ -255,8 +277,9 @@ pub fn craft_from_value(v: &Value) -> anyhow::Result<Craft> {
             stage_index: ps["StageIndex"].as_i64().unwrap_or(-1) as i32,
             fuel_crossfeed: ps["FuelCrossfeed"].as_bool().unwrap_or(true),
             resources,
-            // a fuel line (not a strut) feeds the part at its other end
-            fuel_line_target: if s(p, "partName").starts_with("fuelline") {
+            // a fuel line or strut: its first anchor names the far anchor (the flow graph and the joint
+            // solver tell the two kinds apart by the part's modules)
+            fuel_line_target: if compound_first_anchor(p) {
                 compound_other_end(p).and_then(|g| index.get(g.as_str()).copied())
             } else {
                 None
@@ -400,11 +423,11 @@ mod tests {
     }
 
     #[test]
-    fn a_fuel_line_points_at_the_part_it_feeds_and_a_strut_does_not() {
+    fn a_compound_parts_first_anchor_points_at_its_far_anchor() {
         let at = |id: &str, to: &str, node: &str, other: &str| json!({"nodeId": node, "AttachedPartGuid": {"Guid": to}, "attachedPartNodeID": other, "_": id});
-        let compound = |to: &str| {
+        let compound = |to: &str, first: bool| {
             json!([{"ModuleData": [{"Name": "Data_CompoundPart",
-                "DataObject": {"OtherEndAnchor": {"Guid": to, "DebugName": "x"}}}]}])
+                "DataObject": {"OtherEndAnchor": {"Guid": to, "DebugName": "x"}, "IsFirstAnchor": first}}]}])
         };
         let part = |name: &str,
                     g: &str,
@@ -420,15 +443,24 @@ mod tests {
             "Assemblies": [{"Assembly": {"parts": [
                 part("tank", "a", vec![at("a", "b", "bottom", "top"), at("a", "c", "srfAttach", "srfAttach"),
                     at("a", "d", "srfAttach2", "srfAttach")], json!(null)),
-                part("tank", "b", vec![at("b", "a", "top", "bottom")], json!(null)),
-                part("fuelline_0v_external", "c", vec![at("c", "a", "srfAttach", "srfAttach")], compound("b")),
-                part("strut_1v_extensible", "d", vec![at("d", "a", "srfAttach", "srfAttach2")], compound("b")),
+                part("tank", "b", vec![at("b", "a", "top", "bottom"), at("b", "e", "srfAttach", "srfAttach"),
+                    at("b", "f", "srfAttach2", "srfAttach")], json!(null)),
+                // KSP2 saves each fuel line and strut as two parts, one anchor on each end
+                part("fuelline_0v_external", "c", vec![at("c", "a", "srfAttach", "srfAttach")], compound("e", true)),
+                part("strut_1v_extensible", "d", vec![at("d", "a", "srfAttach", "srfAttach2")], compound("f", true)),
+                part("fuelline_0v_external", "e", vec![at("e", "b", "srfAttach", "srfAttach")], compound("c", false)),
+                part("strut_1v_extensible", "f", vec![at("f", "b", "srfAttach", "srfAttach2")], compound("d", false)),
             ]}}]
         });
         let c = craft_from_value(&v).unwrap();
         assert!(c.is_tree());
         assert_eq!(c.parts[2].parent, Some(0));
-        assert_eq!(c.parts[2].fuel_line_target, Some(1));
-        assert_eq!(c.parts[3].fuel_line_target, None);
+        assert_eq!(c.parts[2].fuel_line_target, Some(4));
+        assert_eq!(c.parts[3].fuel_line_target, Some(5));
+        // the far anchors name nothing, so the line feeds one way
+        assert_eq!(c.parts[4].fuel_line_target, None);
+        assert_eq!(c.parts[5].fuel_line_target, None);
+        assert_eq!(c.compound_ends(2), Some((0, 1)));
+        assert_eq!(c.compound_ends(3), Some((0, 1)));
     }
 }
