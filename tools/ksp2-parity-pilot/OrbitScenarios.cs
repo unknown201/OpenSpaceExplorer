@@ -120,6 +120,15 @@ namespace OpenSpaceExplorer.Validation
             mark("kerbal " + (kerbal != null && kerbal.IsKerbalEVA) + " mass " + kerbal?.totalMass.ToString("R", Inv));
             InputHolder.EvaJump = true; yield return new WaitForSeconds(0.3f); InputHolder.EvaJump = false; // let go if holding the ladder
             yield return new WaitForSeconds(3f);
+            // KSP2's jetpack is in use only while the Kerbal's RCS is on (KerbalBehavior.OnToggleJetpack copies
+            // IsRCSEnabled), the R key in game
+            kerbal = G.ViewController.GetActiveSimVessel();
+            kerbal.IsRCSEnabled = true;
+            if (G.ViewController.TryGetActiveVehicle(out var vehicle)) vehicle.ControllableActionGroups?.SetGroup(KSPActionGroup.RCS, true);
+            var behaviour = G.ViewController.GetBehaviorIfLoaded(kerbal.SimulationObject.Kerbal);
+            behaviour?.OnToggleJetpack();
+            yield return new WaitForSeconds(2.5f);
+            mark("jetpack in use " + (behaviour != null && behaviour.CharacterState.IsJetpackInUse) + " rcs " + kerbal.IsRCSEnabled);
             begin(kerbal, "jetpack-trace.csv");
             yield return new WaitForSeconds(1f);
             var h = G.ViewController.evaInputHandler;
