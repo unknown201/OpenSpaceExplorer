@@ -5,7 +5,9 @@
 
 use ose_math::DVec3;
 
-/// One flat area of the site, in scene coordinates (x, z ranges, surface height y).
+/// One flat area of the site, in scene coordinates (x, z ranges, surface height y), with an optional apron:
+/// `apron_m` beyond its edges the surface slopes on down to `apron_y` (a launch pad's raised deck meets the
+/// campus ground that way, as KSP2's does, instead of ending in a drop).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Area {
     pub min_x: f64,
@@ -13,6 +15,39 @@ pub struct Area {
     pub min_z: f64,
     pub max_z: f64,
     pub y: f64,
+    pub apron_m: f64,
+    pub apron_y: f64,
+}
+
+impl Area {
+    /// A flat area without an apron.
+    pub fn flat(min_x: f64, max_x: f64, min_z: f64, max_z: f64, y: f64) -> Area {
+        Area {
+            min_x,
+            max_x,
+            min_z,
+            max_z,
+            y,
+            apron_m: 0.0,
+            apron_y: y,
+        }
+    }
+
+    /// The surface height at scene (x, z), or `None` off the area and its apron.
+    pub fn height(&self, x: f64, z: f64) -> Option<f64> {
+        let dx = (self.min_x - x).max(x - self.max_x).max(0.0);
+        let dz = (self.min_z - z).max(z - self.max_z).max(0.0);
+        let d = dx.max(dz);
+        if d <= 0.0 {
+            return Some(self.y);
+        }
+        if d > self.apron_m {
+            return None;
+        }
+        // a smooth shoulder at the deck and the foot, so wheels roll over both
+        let t = d / self.apron_m;
+        Some(self.y + (self.apron_y - self.y) * t * t * (3.0 - 2.0 * t))
+    }
 }
 
 /// A site placed on a body: scene point `anchor` sits at (`lat_deg`, `lon_deg`, `alt_m`), the scene's +X
@@ -71,13 +106,23 @@ impl Site {
             return None;
         }
         for a in &self.areas {
-            // where `u` meets the plane at scene height `a.y`
-            let r = (o.dot(up) + (a.y - self.anchor.y)) / cos;
-            let d = u * r - o;
-            let x = self.anchor.x + d.dot(ex);
-            let z = self.anchor.z - d.dot(en);
-            if x >= a.min_x && x <= a.max_x && z >= a.min_z && z <= a.max_z {
-                return Some(r);
+            // where `u` meets the plane at scene height `y`: the area's, then on an apron the slope's there
+            let at = |y: f64| {
+                let r = (o.dot(up) + (y - self.anchor.y)) / cos;
+                let d = u * r - o;
+                (r, self.anchor.x + d.dot(ex), self.anchor.z - d.dot(en))
+            };
+            let (r, x, z) = at(a.y);
+            match a.height(x, z) {
+                Some(h) if h == a.y => return Some(r),
+                Some(h) => {
+                    let (r2, x2, z2) = at(h);
+                    if let Some(h2) = a.height(x2, z2) {
+                        return Some(at(h2).0);
+                    }
+                    return Some(r2);
+                }
+                None => {}
             }
         }
         None
@@ -114,19 +159,11 @@ mod tests {
             anchor: DVec3::ZERO,
             areas: vec![
                 Area {
-                    min_x: -10.0,
-                    max_x: 10.0,
-                    min_z: -10.0,
-                    max_z: 10.0,
-                    y: 5.0,
+                    apron_m: 40.0,
+                    apron_y: 0.0,
+                    ..Area::flat(-10.0, 10.0, -10.0, 10.0, 5.0)
                 },
-                Area {
-                    min_x: -1000.0,
-                    max_x: 1000.0,
-                    min_z: -1000.0,
-                    max_z: 1000.0,
-                    y: 0.0,
-                },
+                Area::flat(-1000.0, 1000.0, -1000.0, 1000.0, 0.0),
             ],
         };
         let r = 600_000.0;
@@ -142,6 +179,20 @@ mod tests {
         // sphere with distance (a flat site on a round world)
         let on_pad = site.ground_radius(r, direction(0.0, 0.0)).unwrap();
         assert!((on_pad - (r + 105.0)).abs() < 1e-6);
+        // off the pad's edge the apron slopes down to the ground, without a step
+        let mut prev = on_pad;
+        for x in (0..=21).map(|k| 10.5 + k as f64 * 2.0) {
+            let (la, lo, _) = site.place(r, DVec3::new(x, 0.0, 0.0));
+            let g = site.ground_radius(r, direction(la, lo)).unwrap();
+            assert!(
+                g <= prev + 0.01 && prev - g < 0.5,
+                "{x}: {} after {}",
+                g - r,
+                prev - r
+            );
+            prev = g;
+        }
+        assert!((prev - (r + 100.0)).abs() < 0.01, "{}", prev - r);
         let (la, lo, _) = site.place(r, DVec3::new(900.0, 0.0, 0.0));
         let far = site.ground_radius(r, direction(la, lo)).unwrap();
         assert!(far > r + 100.0 && far < r + 101.0, "{}", far - r);
