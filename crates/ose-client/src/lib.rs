@@ -4695,7 +4695,8 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
             let (nx, ny) = (ev.client_x() as f64, ev.client_y() as f64);
             if app.is_3d() {
                 let (pitch, fine) = (app.orbit_pitch.to_degrees(), ev.alt_key());
-                let (yaw0, pitch0, clear) = (app.orbit_yaw, app.orbit_pitch, app.map_camera_clear());
+                let (yaw0, pitch0, clear) =
+                    (app.orbit_yaw, app.orbit_pitch, app.map_camera_clear());
                 app.orbit_yaw -= interaction::map_orbit_degrees(nx - x, pitch, fine).to_radians();
                 app.orbit_pitch = (app.orbit_pitch
                     - interaction::map_orbit_degrees(ny - y, pitch, fine).to_radians())
