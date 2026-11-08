@@ -396,6 +396,27 @@ impl Rig {
         pose
     }
 
+    /// Clips blended by weight (normalized here): each pose mixed into the running blend by its share of the
+    /// weight so far, as an animator mixes a cross-fade or a blend tree.
+    pub fn blended_pose(&self, samples: &[(ClipSample, f32)]) -> Vec<Transform> {
+        let mut out: Option<Vec<Transform>> = None;
+        let mut total = 0.0f32;
+        for &(sample, w) in samples.iter().filter(|s| s.1 > 0.0 && s.1.is_finite()) {
+            let pose = self.pose(Some(sample));
+            total += w;
+            match out.as_mut() {
+                None => out = Some(pose),
+                Some(base) => {
+                    let share = w / total;
+                    for (b, p) in base.iter_mut().zip(pose) {
+                        *b = b.blend(p, share);
+                    }
+                }
+            }
+        }
+        out.unwrap_or_else(|| self.pose(None))
+    }
+
     pub fn world_matrices(&self, pose: &[Transform]) -> Vec<Mat4> {
         let mut world = vec![Mat4::IDENTITY; self.nodes.len()];
         for &i in &self.order {
