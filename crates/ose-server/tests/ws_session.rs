@@ -1377,11 +1377,15 @@ async fn a_pad_launch_lights_while_a_teammate_is_connected() {
         // keep the teammate's socket drained
         while let Ok(Some(_)) = tokio::time::timeout(Duration::from_millis(1), mate.next()).await {}
         if let ServerMessage::Vessels { vessels, .. } = recv(&mut ws).await {
-            let f = vessels
+            // a snapshot sent before the launch landed, or one without the craft's flight readout yet
+            // (the stream is a broadcast, not a reply), says nothing: wait for the next
+            let Some(f) = vessels
                 .iter()
                 .find(|v| v.id == vessel)
                 .and_then(|v| v.flight.clone())
-                .expect("flight readout");
+            else {
+                continue;
+            };
             assert_eq!(f.stage, 0, "the press must not drop the engine stage");
             eprintln!(
                 "TT {:?} alt {:.1} thr {} thrust {:.1} prop {:.2} ctl {}",
