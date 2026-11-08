@@ -343,6 +343,20 @@ pub fn navball_bezel_svg(throttle: f64, vspeed: f64, heading: Option<f64>) -> St
     s
 }
 
+/// A whole number with the original's thousands commas (`3,751`).
+pub fn thousands(x: f64) -> String {
+    let n = x.round().max(0.0) as u64;
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
 pub fn fmt_dist(m: f64) -> String {
     if !m.is_finite() {
         "--".into()
@@ -845,16 +859,17 @@ pub fn tracker_html(
     html
 }
 
-/// The burn timer (`BurnTimerInstrument`): time to the node, its delta-v and the burn's length at full
-/// throttle, starting half the burn before the node as the original's countdown does. `full_thrust_kn` 0
-/// leaves the length unknown.
+/// The burn timer (`BurnTimerInstrument`): time to the burn, its delta-v and the burn's length at full
+/// throttle. The burn starts at the node, as the original's countdown does (`ManeuverProvider.
+/// GetStartBurnTime` counts down to the node's time and the burn then runs for `BurnDuration`).
+/// `full_thrust_kn` 0 leaves the length unknown.
 pub fn burn_text(to_node_s: f64, dv_mps: f64, mass_t: f64, full_thrust_kn: f64) -> String {
     let burn = if full_thrust_kn > 0.0 {
         Some(dv_mps * mass_t / full_thrust_kn)
     } else {
         None
     };
-    let start = to_node_s - burn.unwrap_or(0.0) * 0.5;
+    let start = to_node_s;
     match burn {
         Some(b) => format!(
             "Burn {} \u{b7} \u{394}v {:.0} m/s \u{b7} {:.0} s at full throttle",
@@ -2003,6 +2018,14 @@ pub fn players_html(
 mod tests {
     use super::*;
 
+    #[test]
+    fn delta_v_reads_with_thousands_commas() {
+        assert_eq!(thousands(3751.4), "3,751");
+        assert_eq!(thousands(980.0), "980");
+        assert_eq!(thousands(1_234_567.0), "1,234,567");
+        assert_eq!(thousands(-5.0), "0");
+    }
+
     /// The bezel's scales: vertical speed on the original's log arc, throttle lit by twentieths.
     #[test]
     fn navball_bezel_scales() {
@@ -2099,10 +2122,10 @@ mod tests {
     }
 
     #[test]
-    fn burn_starts_half_a_burn_early() {
-        // 100 m/s on 10 t with 50 kN: 20 s burn, starting 10 s before the node.
+    fn burn_starts_at_the_node() {
+        // 100 m/s on 10 t with 50 kN: a 20 s burn, starting at the node 70 s on (KSP2's countdown)
         let t = burn_text(70.0, 100.0, 10.0, 50.0);
-        assert!(t.starts_with("Burn T-1:00"), "{t}");
+        assert!(t.starts_with("Burn T-1:10"), "{t}");
         assert!(t.contains("20 s"));
         assert!(burn_text(70.0, 100.0, 10.0, 0.0).starts_with("Node T-1:10"));
     }

@@ -118,7 +118,7 @@ pub fn delta_v_by_stage(
     let mut lines: Vec<Vec<(usize, usize)>> = vec![Vec::new(); n];
     for (i, p) in craft.parts.iter().enumerate() {
         if let (Some(target), Some(source)) = (p.fuel_line_target, p.parent) {
-            if target < n {
+            if target < n && def_of(i).is_none_or(|d| d.is_fuel_line()) {
                 lines[target].push((source, i));
             }
         }
@@ -497,7 +497,7 @@ mod tests {
 
     #[test]
     fn a_fuel_line_feeds_the_lower_engine_from_the_upper_tank() {
-        let parts = vec![
+        let mut parts = vec![
             part("pod", 1.0, true, "None", None),
             part("tank", 0.5, true, "None", None),
             part(
@@ -509,7 +509,10 @@ mod tests {
             ),
             part("dec", 0.1, false, "DecouplerVertical", None),
             part("line", 0.05, true, "None", None),
+            part("strut", 0.05, true, "None", None),
         ];
+        parts[4].module_names = vec!["PartComponentModule_FuelLine".into()];
+        parts[5].module_names = vec!["PartComponentModule_Strut".into()];
         let resources = vec![ResourceDef {
             id: "Fuel".into(),
             display_name_key: String::new(),
@@ -548,6 +551,10 @@ mod tests {
         craft.parts[6].fuel_line_target = Some(4);
         let fed = lower(&craft);
         assert!((fed - 3.15).abs() < 1e-9, "burns all 6 t: {fed}");
+        // a strut in the same place carries no fuel
+        craft.parts[6].part_id = "strut".into();
+        let braced = lower(&craft);
+        assert!((braced - alone).abs() < 1e-9, "{braced}");
     }
 
     #[test]

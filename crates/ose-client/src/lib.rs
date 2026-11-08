@@ -255,6 +255,8 @@ struct App {
     /// Ctrl+C clipboard, and whether the fragment in hand is a paste (dropped nowhere it just goes away).
     vab_clipboard: Option<vab::Fragment>,
     vab_pasting: bool,
+    /// A fuel line or strut just put on: its first anchor, waiting for a click on the part it runs to.
+    vab_linking: Option<usize>,
     /// The part in hand came from a picker click (not a paste).
     vab_from_picker: bool,
     /// A gizmo drag: the handle, the part, where the cursor started (device px) and the craft before it.
@@ -920,6 +922,7 @@ pub fn start() -> Result<(), JsValue> {
         vab_focused: None,
         vab_clipboard: None,
         vab_pasting: false,
+        vab_linking: None,
         vab_from_picker: false,
         vab_gizmo: None,
         vab_turn: vab::NO_TURN,
@@ -4454,6 +4457,12 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                     let rect = app.gpu_canvas.get_bounding_client_rect();
                     let (x, y) = (ev.client_x() as f64, ev.client_y() as f64);
                     let (px, py) = ((x - rect.left()) * app.dpr, (y - rect.top()) * app.dpr);
+                    if app.vab_linking.is_some() {
+                        // a click picks where the fuel line or strut runs to; a drag still turns the view
+                        app.drag = Some((x, y));
+                        app.press = Some((x, y));
+                        return;
+                    }
                     if let Some(i) = app.gpu.as_ref().and_then(|g| app.vab3d.pick(g, px, py)) {
                         app.vab_grab = Some((i, x, y));
                         app.press = Some((x, y));
@@ -4866,6 +4875,7 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                     if from_picker {
                         app.lesson_part(frag.root_id(), true);
                     }
+                    app.vab_start_link();
                 }
                 app.press = None;
                 app.render_vab();
@@ -4923,7 +4933,10 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                     };
                     app.catalog = cat;
                     match result {
-                        Ok(()) => app.lesson_part(&id, true),
+                        Ok(()) => {
+                            app.lesson_part(&id, true);
+                            app.vab_start_link();
+                        }
                         Err(e) => set_text(&app.doc, "vab-report", &e),
                     }
                     app.render_vab();
@@ -4980,12 +4993,16 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
             {
                 let rect = app.gpu_canvas.get_bounding_client_rect();
                 let (px, py) = ((nx - rect.left()) * app.dpr, (ny - rect.top()) * app.dpr);
-                let hit = app.gpu.as_ref().and_then(|g| app.vab3d.pick(g, px, py));
-                if let Some(i) = hit {
-                    app.editor.selected = Some(i);
-                    app.render_vab();
+                if app.vab_linking.is_some() {
+                    app.vab_finish_link(px, py);
+                } else {
+                    let hit = app.gpu.as_ref().and_then(|g| app.vab3d.pick(g, px, py));
+                    if let Some(i) = hit {
+                        app.editor.selected = Some(i);
+                        app.render_vab();
+                    }
+                    app.vab_open_pam(None, 0.0, 0.0);
                 }
-                app.vab_open_pam(None, 0.0, 0.0);
             } else if ev.button() == 2
                 && (nx - x).abs() < 4.0
                 && (ny - y).abs() < 4.0
@@ -5157,6 +5174,10 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                     }
                     "Escape" if app.vab_pasting => {
                         app.vab_cancel_paste();
+                        true
+                    }
+                    "Escape" if app.vab_linking.is_some() => {
+                        app.vab_cancel_link();
                         true
                     }
                     "KeyX" if !ctrl => {
@@ -7829,6 +7850,90 @@ impl App {
 
     fn vab_record(&mut self) {
         self.vab_history.record(&self.editor);
+    }
+
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    /// After a part goes on: a fuel line or strut still needs its far end, so the next click in the hall
+    /// picks the part it runs to (the original's compound part tool).
+    fn vab_start_link(&mut self) {
+        self.vab_linking = self.editor.unlinked(&self.catalog).into_iter().next();
+        if let Some(f) = self.vab_linking {
+            let strut = self
+                .catalog
+                .get(&self.editor.craft.parts[f].part_id)
+                .is_some_and(|s| s.compound == "strut");
+            let what = if strut { "strut" } else { "fuel line" };
+            set_text(
+                &self.doc,
+                "vab-report",
+                &format!("Click the part the {what} runs to (Esc takes it off)"),
+            );
+            if let Some(b) = self.doc.body() {
+                b.class_list().add_1("vab-linking").ok();
+            }
+        }
+    }
+
+    /// The click that finishes a fuel line or strut: its far end goes where the cursor meets a part.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables, dead_code))]
+    fn vab_finish_link(&mut self, px: f64, py: f64) {
+        let Some(first) = self.vab_linking else {
+            return;
+        };
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.vab3d.cursor = (px, py);
+            let Some((target, hit, normal)) =
+                self.gpu.as_ref().and_then(|g| self.vab3d.surface_hit(g))
+            else {
+                set_text(
+                    &self.doc,
+                    "vab-report",
+                    "Click a part to run it to (Esc takes it off)",
+                );
+                return;
+            };
+            self.vab_record();
+            let cat = std::mem::take(&mut self.catalog);
+            let result = self.editor.link(first, target, hit, normal, &cat);
+            self.catalog = cat;
+            match result {
+                Ok(_) => {
+                    self.vab_linking = None;
+                    if let Some(b) = self.doc.body() {
+                        b.class_list().remove_1("vab-linking").ok();
+                    }
+                    set_text(&self.doc, "vab-report", "");
+                }
+                Err(e) => {
+                    // nothing changed: drop the undo step just recorded
+                    let mut history = std::mem::take(&mut self.vab_history);
+                    history.undo(&mut self.editor);
+                    self.vab_history = history;
+                    set_text(&self.doc, "vab-report", &e);
+                }
+            }
+            self.render_vab();
+        }
+    }
+
+    /// Esc while a fuel line or strut waits for its far end: it comes off again (Ctrl+Z puts it back).
+    fn vab_cancel_link(&mut self) {
+        let Some(first) = self.vab_linking.take() else {
+            return;
+        };
+        if let Some(b) = self.doc.body() {
+            b.class_list().remove_1("vab-linking").ok();
+        }
+        if self.editor.unlinked(&self.catalog).contains(&first) {
+            self.vab_record();
+            self.editor.selected = Some(first);
+            let cat = std::mem::take(&mut self.catalog);
+            self.editor.remove_selected(&cat);
+            self.catalog = cat;
+        }
+        set_text(&self.doc, "vab-report", "");
+        self.render_vab();
     }
 
     /// The flight report window for the flight's records, how it ended and the science recovered.
@@ -10748,8 +10853,33 @@ impl App {
         send(ws, &msg);
     }
 
+    /// Whether the flown vessel's current stage has fired: before the first Space nothing burns and stage 0
+    /// goes next; after it, `stage` is the stage burning now.
+    fn stage_lit(&self, id: u64, f: &ose_net::FlightReadout) -> bool {
+        self.staged.contains(&id)
+            || f.stage > 0
+            || f.thrust_kn > 0.1
+            || f.situation != ose_net::FlightSituation::Landed
+    }
+
+    /// Stages still to fire on the flown vessel (the original's staging stack below the active stage).
+    fn stages_left(&self) -> Option<u32> {
+        let id = self.flying?;
+        let v = self.scene.as_ref()?.vessel(id)?;
+        let f = v.flight.as_ref()?;
+        Some(
+            f.stages
+                .saturating_sub(f.stage + u32::from(self.stage_lit(id, f))),
+        )
+    }
+
     fn flight_stage(&mut self) {
         let Some(vessel) = self.flying else { return };
+        // As the original's: with no stages left Space does nothing (the server would end the last stage's
+        // burn and drop its propellant).
+        if self.stages_left() == Some(0) {
+            return;
+        }
         self.lesson_event("StageActivatedMessage");
         self.staged.insert(vessel);
         if let Some(ws) = &self.ws {
@@ -11655,10 +11785,7 @@ impl App {
             (&self.flight_craft, self.doc.get_element_by_id("fh-stages"))
         {
             // `stage` is the stage burning now; before the first Space nothing burns and stage 0 goes next.
-            let lit = self.staged.contains(&id)
-                || f.stage > 0
-                || f.thrust_kn > 0.1
-                || f.situation != ose_net::FlightSituation::Landed;
+            let lit = self.stage_lit(id, f);
             let next = f.stage as usize + usize::from(lit);
             // The server's craft drops a stage once all its parts are gone (the boosters a fired stage
             // dropped), but `stage` counts the original's: take each fired stage that went off the count, or
@@ -12590,27 +12717,34 @@ impl App {
             el.set_attribute("data-ose-running", &self.running.len().to_string())
                 .ok();
         }
-        set_text(
-            &self.doc,
-            "fh-stage",
-            &format!(
-                "{} \u{b7} \u{394}v {:.0} m/s",
-                {
-                    let (now, of) = ((f.stage + 1).min(f.stages.max(1)), f.stages.max(1));
-                    if self.lang == "en" {
-                        format!("stage {now} of {of}")
-                    } else {
-                        format!("{} {now}/{of}", self.tr("VAB/DeltaVTool/Stage", "stage"))
-                    }
-                },
-                f.delta_v_now_mps.max(0.0) + 0.0
-            ),
-        );
-        // The GO button carries the stages left to fire and the delta-v, as the original's.
+        // The original's active stage card header: the stage's delta-v left and its number (01, 02...).
+        let (now, of) = ((f.stage + 1).min(f.stages.max(1)), f.stages.max(1));
+        if let Some(el) = self.doc.get_element_by_id("fh-stage") {
+            let html = format!(
+                "<span class=\"sdv\">\u{394}v</span><b>{}</b><i>{now:02}</i>",
+                hud::thousands(f.delta_v_now_mps.max(0.0))
+            );
+            if el.get_attribute("data-ose-key").as_deref() != Some(html.as_str()) {
+                el.set_inner_html(&html);
+                el.set_attribute("data-ose-key", &html).ok();
+                el.set_attribute("title", &format!("stage {now} of {of}: delta-v left in it"))
+                    .ok();
+            }
+        }
+        // The GO button carries the stages left to fire and the delta-v, as the original's; with none left it
+        // reads NO STAGES over the active stage's number (`HUD/NoStages`).
+        let left = self.stages_left().unwrap_or(0);
+        if let Some(b) = self.doc.get_element_by_id("fh-stage-btn") {
+            b.class_list().toggle_with_force("none", left == 0).ok();
+        }
         set_text(
             &self.doc,
             "fh-go-n",
-            &f.stages.saturating_sub(f.stage).to_string(),
+            &if left == 0 {
+                f.stages.min(f.stage + 1).max(1).to_string()
+            } else {
+                left.to_string()
+            },
         );
         set_text(
             &self.doc,
@@ -13787,6 +13921,24 @@ impl App {
                 .hovered
                 .map(|i| self.editor.counterparts(i))
                 .unwrap_or_default();
+            // A fuel line or strut waiting for its far end: a line from it to the part under the cursor.
+            if self
+                .vab_linking
+                .is_some_and(|f| !self.editor.unlinked(&self.catalog).contains(&f))
+            {
+                // undone or removed meanwhile
+                self.vab_linking = None;
+            }
+            self.vab3d.link_preview = self.vab_linking.and_then(|f| {
+                let from = self.editor.craft.parts.get(f)?.local_position;
+                let to = self
+                    .gpu
+                    .as_ref()
+                    .and_then(|g| self.vab3d.surface_hit(g))
+                    .filter(|(t, _, _)| *t != f)
+                    .map(|(_, h, _)| h);
+                Some((from, to))
+            });
             let held = self.vab3d.held.as_ref().map(|(id, _)| id.clone());
             let free = self.snap_nodes(held.as_deref());
             // The builder's agency colours paint parts without colours of their own.

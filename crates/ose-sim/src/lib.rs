@@ -24,6 +24,7 @@ pub mod rigid;
 pub mod sas;
 pub mod science;
 pub mod structure;
+pub mod struts;
 pub mod surface;
 pub mod thermal;
 pub mod trajectory;
@@ -151,6 +152,10 @@ fn connected_groups(craft: &ose_data::craft::Craft, parts: &[usize]) -> Vec<Vec<
     }
     groups
 }
+
+/// Steps since the universe started, for the CommNet rebuild timer.
+#[derive(Resource, Clone, Copy, Debug, Default)]
+struct CommNetSteps(u64);
 
 impl Universe {
     pub fn new() -> Self {
@@ -1681,27 +1686,11 @@ impl Universe {
         self.world.insert_resource(vessels::FreeBurns(on));
     }
 
-    /// When the vessel's scheduled burn starts: half its burn time before the node, at the thrust it has.
+    /// When the vessel's scheduled burn starts: at the node, as KSP2's burn timer counts down to it
+    /// (`ManeuverProvider.GetStartBurnTime`: the burn starts at the node's time and runs for its
+    /// `BurnDuration`) and as its maneuver prediction burns (`ManeuverPlanSolver`).
     pub fn burn_start(&self, e: Entity) -> Option<f64> {
-        let b = self.scheduled_burn(e)?;
-        let Some(p) = self
-            .world
-            .get::<flight::Powered>(e)
-            .or_else(|| self.world.get::<flight::Dormant>(e).map(|d| &d.0))
-        else {
-            return Some(b.ut);
-        };
-        let thrust = p
-            .current_stage()
-            .map(|s| s.thrust_vac_kn.max(s.thrust_asl_kn))
-            .unwrap_or(0.0);
-        let dv = (b.prograde_mps.powi(2) + b.normal_mps.powi(2) + b.radial_mps.powi(2)).sqrt();
-        let half = if thrust > 0.0 && p.mass_t > 0.0 {
-            0.5 * dv * p.mass_t / thrust
-        } else {
-            0.0
-        };
-        Some(b.ut - half.min(3_600.0))
+        self.scheduled_burn(e).map(|b| b.ut)
     }
 
     /// The planned burn the vessel is flying: what is left of it, m/s, inertial.
@@ -2454,8 +2443,17 @@ impl Universe {
             vessels::refresh_next_transition(&mut self.world, &index, e, ut, &self.params);
         }
         self.advance_experiments(ticks.max(1) as f64 * dt);
-        // the network once a simulated second
-        if now / TICKS_PER_SECOND != (now + ticks.max(1)) / TICKS_PER_SECOND {
+        // the network every 3 s of real time, as the original rebuilds its graph (one step is a fiftieth of a
+        // second of real time at any warp)
+        let rebuild_every = (commnet::REBUILD_S * TICKS_PER_SECOND as f64) as u64;
+        let calls = {
+            let mut c = self
+                .world
+                .get_resource_or_insert_with(CommNetSteps::default);
+            c.0 += 1;
+            c.0
+        };
+        if calls % rebuild_every == 1 || rebuild_every <= 1 {
             self.update_commnet();
         }
         self.charge_on_rails(ticks.max(1) as f64 * dt, ut);
@@ -5237,7 +5235,17 @@ mod tests {
         };
         assert!(u.schedule_burn(v, burn));
         let start = u.burn_start(v).unwrap();
-        assert!(start < burn.ut, "it starts before the node");
+        assert_eq!(
+            start, burn.ut,
+            "it starts at the node, as KSP2's burn timer says"
+        );
+        // KSP2's prediction of the orbit after it (a finite burn from the node)
+        let predicted = u
+            .predict(v)
+            .into_iter()
+            .find(|p| p.start == trajectory::Transition::Maneuver)
+            .expect("a patch after the burn")
+            .orbit;
         // passing the node time changes nothing by itself: the engines fly it
         u.set_warp(4);
         for _ in 0..(400 * TICKS_PER_SECOND / 4) {
@@ -5269,6 +5277,19 @@ mod tests {
             orbit.apoapsis() > ap0 + 100_000.0,
             "raised: {ap0} -> {}",
             orbit.apoapsis()
+        );
+        // T9: flown from the node as KSP2's timer says, it ends on the orbit predicted for it within 1%
+        assert!(
+            (orbit.apoapsis() - predicted.apoapsis()).abs() < 0.01 * predicted.apoapsis(),
+            "apoapsis {:.0} m, predicted {:.0} m",
+            orbit.apoapsis(),
+            predicted.apoapsis()
+        );
+        assert!(
+            (orbit.periapsis() - predicted.periapsis()).abs() < 0.01 * predicted.periapsis(),
+            "periapsis {:.0} m, predicted {:.0} m",
+            orbit.periapsis(),
+            predicted.periapsis()
         );
         // a vessel with no engines does not move for its node
         let probe = u.spawn_vessel_in_circular_orbit("probe", body, 120_000.0);
@@ -5313,7 +5334,8 @@ mod tests {
         let fly_it = |u: &mut Universe| {
             let ut = u.ut() + 5.0;
             assert!(u.schedule_burn(v, vessels::ScheduledBurn { ut, ..burn }));
-            for _ in 0..(2 * TICKS_PER_SECOND) {
+            // the burn starts at the node, 5 s on
+            for _ in 0..(6 * TICKS_PER_SECOND) {
                 u.step();
             }
             assert!(u.burn_left(v).is_some(), "the burn is under way");

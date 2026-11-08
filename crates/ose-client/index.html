@@ -1070,6 +1070,21 @@
     #flight-hud #fh-stage-btn { box-sizing: border-box; width: 100%; height: calc(70 * var(--u)); display: grid; grid-template-columns: 1fr auto; grid-template-rows: 1fr auto; align-items: center; padding: calc(4 * var(--u)) calc(10 * var(--u)); text-align: left; }
     #flight-hud #fh-stage-btn .go { grid-row: 1 / 3; font: 400 calc(34 * var(--u)) var(--hud-font); letter-spacing: 0.06em; }
     #flight-hud #fh-stage-btn #fh-go-n { justify-self: end; min-width: calc(30 * var(--u)); padding: 0 calc(6 * var(--u)); background: #0b1a0b; color: #3fe05a; border-radius: calc(3 * var(--u)); text-align: center; font: 700 calc(20 * var(--u)) var(--hud-font); }
+    /* No stages left: the original's hatched grey NO STAGES box (run 18 shot), not a button that does anything. */
+    #flight-hud #fh-stage-btn .nostage { display: none; grid-row: 1 / 3; font: 400 calc(26 * var(--u)) var(--hud-font); letter-spacing: 0.04em; text-transform: uppercase; white-space: nowrap; }
+    #flight-hud #fh-stage-btn.none .go { display: none; }
+    #flight-hud #fh-stage-btn.none .nostage { display: block; }
+    #flight-hud #fh-stage-btn.none .nostage { grid-row: 1; align-self: center; font-size: calc(24 * var(--u)); }
+    #flight-hud #fh-stage-btn.none #fh-go-dv { grid-column: 1 / -1; grid-row: 2; }
+    /* The original's active stage card header: delta-v left (thousands commas) and the stage number on the right. */
+    #flight-hud #fh-stage { display: flex; align-items: baseline; gap: calc(6 * var(--u)); font: calc(18 * var(--u)) var(--hud-font); color: #e8c440; }
+    #flight-hud #fh-stage .sdv { font-size: calc(13 * var(--u)); color: #e6ecf7; }
+    #flight-hud #fh-stage b { margin-left: auto; font-weight: 400; }
+    #flight-hud #fh-stage i { font-style: normal; color: #e6ecf7; min-width: calc(28 * var(--u)); text-align: right; }
+    #flight-hud #fh-stage-btn.none { cursor: default; color: #8a929c; background: repeating-linear-gradient(135deg, #3a3f47 0 4px, #2e3239 4px 8px); border-color: #6a717c; }
+    #flight-hud #fh-stage-btn.none:hover { background: repeating-linear-gradient(135deg, #3a3f47 0 4px, #2e3239 4px 8px); }
+    #flight-hud #fh-stage-btn.none #fh-go-n { background: #23262c; color: #9aa2ad; }
+    #flight-hud #fh-stage-btn.none #fh-go-dv { color: #9aa2ad; }
     #flight-hud #fh-stage-btn #fh-go-dv { justify-self: end; font: 700 calc(12 * var(--u)) var(--hud-font); color: #0b1a0b; }
     #flight-hud .fh-actions { right: auto; bottom: auto; left: calc(8 * var(--u)); top: calc(76 * var(--u)); flex-direction: column; }
     #flight-hud .fh-appbar { top: auto; bottom: calc(22 * var(--u)); right: calc(260 * var(--u)); flex-direction: row; background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(8 * var(--u)); padding: calc(4 * var(--u)); }
@@ -1171,6 +1186,65 @@
     body.webgpu #vab-header #vab-sym[data-sym="8"] { --tool: url(assets/ui/hud/ToolsBar-ICO-SymEight-onRest.png); }
     body.webgpu #vab-header #vab-sym[data-sym="mirror"] { --tool: url(assets/ui/hud/ToolsBar-ICO-SymMirror-onRest.png); }
     body.webgpu #vab-header #vab-redo i { --ico: url(assets/ui/hud/ToolsBar-ICO-Redo-onRest.png) !important; transform: none; }
+
+    /* The original's VAB top bar (run 18 shot): the menu and the breadcrumb Kerbol \ Kerbin \ KSC \ Vehicle
+       Assembly Building on the left; VEHICLE, the name and New / Save / Load (blue) on the right. Undo and redo float
+       at the top left of the hall, BACK is a tile at its bottom left, the engineer's report and colours sit in an app
+       bar beside the launch box, whose site reads [ Launchpad 1 ]. */
+    #vab-topbar, #vab-name-label { display: none; }
+    body.webgpu #screen-vab.open #vab-topbar { display: flex; position: fixed; z-index: 14; top: 0; left: 0; right: 0; height: calc(30 * var(--u)); align-items: center; gap: calc(6 * var(--u)); padding: 0 calc(8 * var(--u)); background: #0b0e14eb; pointer-events: auto; font: calc(13 * var(--u)) var(--hud-font); letter-spacing: 0.08em; color: #d6dbe6; }
+    body.webgpu #vab-topbar #vab-menu { width: calc(30 * var(--u)); height: calc(24 * var(--u)); margin: 0 calc(10 * var(--u)) 0 0; padding: 0; border: 0; background: #d6dbe6; -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linejoin='round'%3E%3Cpath d='M3 6h18M3 10h18M3 14h18M3 18h18' stroke-width='1.6' stroke-dasharray='2 1'/%3E%3C/svg%3E") center / contain no-repeat; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linejoin='round'%3E%3Cpath d='M3 6h18M3 10h18M3 14h18M3 18h18' stroke-width='1.6' stroke-dasharray='2 1'/%3E%3C/svg%3E") center / contain no-repeat; }
+    body.webgpu #vab-topbar .crumb { display: inline-flex; flex: none; width: auto; min-width: 0; align-items: center; gap: calc(6 * var(--u)); margin: 0; padding: 0 calc(4 * var(--u)); border: 0; background: none; color: inherit; font: inherit; white-space: nowrap; }
+    body.webgpu #vab-topbar .crumb:not(.crumb-vab)::after { content: "\\"; color: #8e96a8; margin-left: calc(2 * var(--u)); }
+    body.webgpu #vab-topbar .crumb::before { content: ""; width: calc(16 * var(--u)); height: calc(16 * var(--u)); background: currentColor; -webkit-mask: var(--crumb) center / contain no-repeat; mask: var(--crumb) center / contain no-repeat; }
+    body.webgpu #vab-topbar .kerbol { --crumb: url(assets/ui/hud/ICO-Map-Planet-16x16.png); }
+    body.webgpu #vab-topbar .kerbin { --crumb: url(assets/ui/hud/ICO-Map-Planet-16x16.png); }
+    body.webgpu #vab-topbar .ksc, body.webgpu #vab-topbar .crumb-vab { --crumb: url(assets/ui/ICO-Map-KSC-16x16.png); }
+    body.webgpu #vab-topbar button.crumb { cursor: pointer; }
+    body.webgpu #vab-topbar button.crumb:hover { color: #fff; text-decoration: underline; }
+    body.webgpu #screen-vab #vab { margin-top: calc(24 * var(--u)); height: calc(100vh - 56 * var(--u)); }
+    body.webgpu #vab-header #vab-name-label { display: flex; position: fixed; z-index: 17; top: 0; right: calc(462 * var(--u)); height: calc(30 * var(--u)); align-items: center; gap: calc(6 * var(--u)); padding: 0 calc(10 * var(--u)); font: calc(14 * var(--u)) var(--hud-font); letter-spacing: 0.08em; color: #d6dbe6; }
+    body.webgpu #vab-header #vab-name-label::before { content: ""; width: calc(16 * var(--u)); height: calc(18 * var(--u)); background: #aab3c5; -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 32'%3E%3Cpath d='M12 1c3 3 4 7 4 11v9h-8v-9c0-4 1-8 4-11z'/%3E%3Cpath d='M8 15l-4 6v4l4-2zM16 15l4 6v4l-4-2z'/%3E%3Cpath d='M9 23h6l1 5H8z'/%3E%3C/svg%3E") center / contain no-repeat; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 32'%3E%3Cpath d='M12 1c3 3 4 7 4 11v9h-8v-9c0-4 1-8 4-11z'/%3E%3Cpath d='M8 15l-4 6v4l4-2zM16 15l4 6v4l-4-2z'/%3E%3Cpath d='M9 23h6l1 5H8z'/%3E%3C/svg%3E") center / contain no-repeat; }
+    body.webgpu #vab-header #vab-name { top: calc(3 * var(--u)); left: auto; right: calc(126 * var(--u)); width: calc(336 * var(--u)); height: calc(24 * var(--u)); z-index: 17; padding: 0 calc(10 * var(--u)); background: #161a23; border: 0; border-radius: calc(3 * var(--u)); color: #e6ecf7; font: calc(14 * var(--u)) var(--hud-font); text-align: left; }
+    body.webgpu #vab-header #vab-desc-pop { top: calc(34 * var(--u)); left: auto; right: calc(126 * var(--u)); z-index: 18; }
+    body.webgpu #vab-header :is(#vab-clear, #vab-save, #vab-load) { position: fixed; z-index: 17; top: 0; width: calc(40 * var(--u)); height: calc(30 * var(--u)); margin: 0; padding: 0; font-size: 0 !important; border: 0; border-radius: 0; background: #4b4dd6; }
+    body.webgpu #vab-header :is(#vab-clear, #vab-save, #vab-load):hover { background: #6264ee; }
+    body.webgpu #vab-header :is(#vab-clear, #vab-save, #vab-load)::before { content: ""; display: block; width: calc(24 * var(--u)); height: calc(24 * var(--u)); margin: auto; background: #e6ecf7; -webkit-mask: var(--io) center / contain no-repeat; mask: var(--io) center / contain no-repeat; }
+    body.webgpu #vab-header #vab-clear { right: calc(80 * var(--u)); --io: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linejoin='round'%3E%3Cpath d='M6 2h8l5 5v15H6z'/%3E%3Cpath d='M14 2v5h5'/%3E%3C/svg%3E"); }
+    body.webgpu #vab-header #vab-save { right: calc(40 * var(--u)); --io: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linejoin='round'%3E%3Cpath d='M4 3h13l3 3v15H4z'/%3E%3Cpath d='M8 3v6h8V3M8 21v-7h8v7'/%3E%3C/svg%3E"); }
+    body.webgpu #vab-header #vab-load { right: 0; --io: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linejoin='round'%3E%3Cpath d='M2 6h7l2 2h9v3'/%3E%3Cpath d='M2 6v14h16l4-9H7l-5 9'/%3E%3C/svg%3E"); }
+    body.webgpu #vab-header #vab-load-pop { position: fixed; top: calc(34 * var(--u)); right: calc(4 * var(--u)); bottom: auto; left: auto; z-index: 18; }
+    body.webgpu #vab-header :is(#vab-undo, #vab-redo) { position: fixed; z-index: 15; top: calc(46 * var(--u)); width: calc(38 * var(--u)); height: calc(34 * var(--u)); margin: 0; background: #10141bf0; border: 1px solid #ffffff22; border-radius: calc(5 * var(--u)); }
+    body.webgpu #vab-header #vab-undo { left: calc(484 * var(--u)); }
+    body.webgpu #vab-header #vab-redo { left: calc(526 * var(--u)); }
+    body.webgpu #vab-header #vab-back { position: fixed; z-index: 15; left: calc(484 * var(--u)); bottom: calc(16 * var(--u)); width: calc(74 * var(--u)); height: calc(74 * var(--u)); margin: 0; padding: 0; background: #2c3a6acc; border: 2px solid #d6dbe6; border-radius: 0; }
+    body.webgpu #vab-header #vab-back::before { content: "BACK"; position: absolute; left: calc(5 * var(--u)); top: calc(2 * var(--u)); font: 700 calc(14 * var(--u)) var(--hud-font); color: #fff; letter-spacing: 0.04em; }
+    body.webgpu #vab-header #vab-back i { position: absolute; left: 50%; bottom: calc(6 * var(--u)); width: calc(34 * var(--u)); height: calc(44 * var(--u)); transform: translateX(-50%); --ico: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 32'%3E%3Cpath d='M12 1c3 3 4 7 4 11v9h-8v-9c0-4 1-8 4-11z'/%3E%3Cpath d='M8 15l-4 6v4l4-2zM16 15l4 6v4l-4-2z'/%3E%3Cpath d='M9 23h6l1 5H8z'/%3E%3C/svg%3E") !important; background: #fff; }
+    body.webgpu #vab-header #vab-back:hover { background: #4b4dd6cc; }
+    body.webgpu #vab-header > .vh-group:first-of-type { left: calc(574 * var(--u)); }
+    body.webgpu #vab-header > .vh-group:last-of-type { top: auto; bottom: calc(16 * var(--u)); right: calc(262 * var(--u)); }
+    body.webgpu #vab-header > .vh-group:last-of-type .vh-pop { top: auto; bottom: calc(100% + 6px); }
+
+    /* The original's VAB tool bar (run 18 shot): separate panels: build orientation; the CoM / CoT / CoL markers;
+       symmetry and angle snap; the tools (translate-rotate, frame of reference). */
+    body.webgpu #vab-header > .vh-group:first-of-type { background: transparent; border: 0; padding: 0; gap: 0; align-items: stretch; }
+    body.webgpu #vab-header > .vh-group:first-of-type > :is(#vab-orient, #vab-com, #vab-cot, #vab-col, #vab-sym, #vab-snap, #vab-offset, #vab-frame) { margin: 0; height: calc(44 * var(--u)); min-width: calc(44 * var(--u)); padding: 0 calc(8 * var(--u)) !important; background: #10141bf0; border: 1px solid #ffffff22; border-left-width: 0; border-right-width: 0; border-radius: 0; }
+    body.webgpu #vab-header > .vh-group:first-of-type > #vab-orient { order: 1; }
+    body.webgpu #vab-header > .vh-group:first-of-type > #vab-com { order: 2; }
+    body.webgpu #vab-header > .vh-group:first-of-type > #vab-cot { order: 3; }
+    body.webgpu #vab-header > .vh-group:first-of-type > #vab-col { order: 4; }
+    body.webgpu #vab-header > .vh-group:first-of-type > #vab-sym { order: 5; }
+    body.webgpu #vab-header > .vh-group:first-of-type > #vab-snap { order: 6; }
+    body.webgpu #vab-header > .vh-group:first-of-type > #vab-offset { order: 7; }
+    body.webgpu #vab-header > .vh-group:first-of-type > #vab-frame { order: 8; }
+    body.webgpu #vab-header > .vh-group:first-of-type > :is(#vab-orient, #vab-com, #vab-sym, #vab-offset) { border-left-width: 1px; border-top-left-radius: calc(6 * var(--u)); border-bottom-left-radius: calc(6 * var(--u)); }
+    body.webgpu #vab-header > .vh-group:first-of-type > :is(#vab-orient, #vab-col, #vab-snap, #vab-frame) { border-right-width: 1px; border-top-right-radius: calc(6 * var(--u)); border-bottom-right-radius: calc(6 * var(--u)); }
+    body.webgpu #vab-header > .vh-group:first-of-type > :is(#vab-com, #vab-sym, #vab-offset) { margin-left: calc(12 * var(--u)); }
+    body.webgpu #vab-header > .vh-group:first-of-type > #vab-offset { font-size: 0 !important; --tool: url(assets/ui/hud/ToolsBar-ICO-TransformRotateTool-onRest.png); }
+    body.webgpu #vab-header > .vh-group:first-of-type > #vab-offset::before { content: ""; display: inline-block; width: 22px; height: 22px; vertical-align: middle; background: currentColor; -webkit-mask: var(--tool) center / contain no-repeat; mask: var(--tool) center / contain no-repeat; }
+    body.webgpu #vab-header > .vh-group:first-of-type > #vab-frame { font-size: calc(11 * var(--u)) !important; letter-spacing: 0.06em; }
+    body.webgpu #vab-header > .vh-group:first-of-type > :is(.on, [data-on="1"]) { background: #2a2f64f0; }
+    body.webgpu #vab-site { background: transparent !important; border: 1px solid #d6dbe6 !important; border-top-color: transparent !important; border-bottom-color: transparent !important; border-radius: 0 !important; color: #e6ecf7 !important; font: calc(13 * var(--u)) var(--hud-font) !important; height: calc(24 * var(--u)); padding: 0 calc(8 * var(--u)) !important; }
     /* Action group bindings in the part windows (protocol 57). */
     .pam-sub.ag-title { margin-top: 8px; color: #ffd25a; letter-spacing: 0.06em; text-transform: uppercase; font-size: 11px; }
     .ag-row { margin: 4px 0; font-size: 11px; color: #cfd6e6; }
@@ -1381,6 +1455,7 @@
       </div>
       <div class="screen" id="screen-vab" data-ose="vab">
         <label>Vehicle Assembly Building</label>
+        <div id="vab-topbar" data-ose="vab-topbar"><button id="vab-menu" data-ose="vab-menu" title="Menu (Esc)" onclick="document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',code:'Escape',bubbles:true}))"></button><span class="crumb kerbol">Kerbol</span><span class="crumb kerbin">Kerbin</span><button class="crumb ksc" data-ose="vab-crumb-ksc" title="Back to the Kerbal Space Center" onclick="document.getElementById('vab-back').click()">KSC</button><span class="crumb crumb-vab">Vehicle Assembly Building</span></div>
         <div id="vab-header" data-ose="vab-header">
           <div class="vh-group">
             <button id="vab-clear" class="secondary" data-ose="vab-clear" title="New vehicle: clear the workspace (Ctrl+N)">New</button>
@@ -1397,6 +1472,7 @@
             <button id="vab-col" class="secondary" data-ose="vab-col" title="Centre of lift marker (blue), from wings and control surfaces">CoL</button>
             <button id="vab-cot" class="secondary" data-ose="vab-cot" title="Centre of thrust marker (magenta) of the first stage's engines, with the thrust line">CoT</button>
           </div>
+          <span id="vab-name-label">VEHICLE</span>
           <input id="vab-name" data-ose="vab-name" type="text" maxlength="48" value="Untitled craft" title="Vehicle name (click for its description)" />
           <div id="vab-desc-pop" class="vh-pop"><div class="vh-pop-title">Vehicle description</div><textarea id="vab-desc" data-ose="vab-desc" maxlength="400" rows="4" placeholder="What this vehicle is for, how to fly it"></textarea></div>
           <div class="vh-group">
@@ -1581,7 +1657,7 @@
       <div class="fh-small" title="worst joint load against its break limit">STRESS</div>
       <div class="fh-stress" data-ose="flight-stress"><div id="fh-stress-fill"></div></div>
       </div>
-      <button id="fh-stage-btn" data-ose="flight-stage" title="Stage (Space)"><span class="go" data-loc="HUD/GO">GO</span><b id="fh-go-n" title="stages left"></b><small id="fh-go-dv"></small></button>
+      <button id="fh-stage-btn" data-ose="flight-stage" title="Stage (Space)"><span class="go" data-loc="HUD/GO">GO</span><span class="nostage" data-loc="HUD/NoStages">NO STAGES</span><b id="fh-go-n" title="stages left"></b><small id="fh-go-dv"></small></button>
     </div>
     <div class="fh-actions" id="fh-actions" data-ose="flight-actions"></div>
     <div class="fh-crewbox" id="fh-crewbox" data-ose="flight-crew"></div>

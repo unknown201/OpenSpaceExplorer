@@ -196,6 +196,8 @@ struct PartInfo {
     /// A parachute's default opening pressure (atm) and full-deploy height (m), for its part window.
     #[serde(skip_serializing_if = "Option::is_none")]
     parachute: Option<ChuteInfo>,
+    /// A two-anchor part the VAB runs from one part to another: "fuel_line", "strut", or empty.
+    compound: &'static str,
 }
 
 #[derive(serde::Serialize)]
@@ -307,6 +309,13 @@ fn part_infos(parts: &[ose_data::PartDef]) -> Vec<PartInfo> {
                     min_pressure_atm: c.min_pressure_atm,
                     deploy_altitude_m: c.deploy_altitude_m,
                 }),
+                compound: if p.is_fuel_line() {
+                    "fuel_line"
+                } else if p.is_strut() {
+                    "strut"
+                } else {
+                    ""
+                },
             }
         })
         .collect()
