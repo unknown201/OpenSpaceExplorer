@@ -1221,7 +1221,12 @@ fn fs_terrain(in: VOut) -> @location(0) vec4<f32> {
                     let mean = max(slot_mean(s), vec3<f32>(0.02));
                     let c0 = mix(near.rgb, mid.rgb, smoothstep(30.0, 400.0, dist));
                     let c1 = mix(c0, far.rgb, smoothstep(400.0, 4000.0, dist));
-                    ratio = ratio + w * c1 / mean;
+                    // On airless bodies part of the detail slices' own hue shows through (KSP2's Mun from 2 km reads a
+                    // warm grey, 168, 167, 150, reference/ksp2-run19-bodies; the ratio to each channel's mean left ours
+                    // a neutral 162 grey)
+                    let lum_mean = max(dot(mean, vec3<f32>(0.2126, 0.7152, 0.0722)), 0.02);
+                    let hue_k = select(0.0, 0.6, frame.rayleigh.w < 0.5);
+                    ratio = ratio + w * mix(c1 / mean, c1 / lum_mean, hue_k);
                     // normals resampled with distance like the albedo (8 m near, 64 m beyond ~30 m), so the
                     // 8 m pattern does not repeat in rows across the ground
                     if dist < 2000.0 {
