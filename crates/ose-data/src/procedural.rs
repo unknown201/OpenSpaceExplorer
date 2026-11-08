@@ -1258,6 +1258,39 @@ mod tests {
         assert!((r.mass_t - 0.18388).abs() < 0.002, "{}", r.mass_t);
     }
 
+    /// The Kerbal K1's all-moving control surfaces (stock file, current KSP2 values): CtrlSurfaceArea 0.25691,
+    /// LiftingCtrlSurfaceArea 0.02310 (below 0.1, so the fixed part does not lift).
+    #[test]
+    fn k1_control_surfaces_move_whole_as_the_originals() {
+        let s = WingShape {
+            option: 0,
+            sliders: [
+                ("WING_SPAN", 0.0541097),
+                ("ROOT_LENGTH", 0.05),
+                ("TIP_LENGTH", 0.04),
+                ("WING_ANGLE", 0.4011904),
+                ("ROOT_THICKNESS", 0.111),
+                ("TIP_THICKNESS", 0.03684066),
+                ("TIP_ANGLE", 0.5),
+            ]
+            .iter()
+            .map(|(n, v)| (n.to_string(), *v))
+            .collect(),
+            toggles: vec![],
+        };
+        let r = evaluate("controlsurface_1v_procedural_light", &s, false).unwrap();
+        assert!(
+            (r.moving_lift_coeff - 0.25691).abs() < 0.01,
+            "{}",
+            r.moving_lift_coeff
+        );
+        assert!(
+            (r.fixed_lift_coeff - 0.02310).abs() < 0.01,
+            "{}",
+            r.fixed_lift_coeff
+        );
+    }
+
     /// The Jumping Flea's fins at their default shape weigh 0.0028657 t in the original's flight scene.
     #[test]
     fn default_fin_mass_matches_the_original() {
