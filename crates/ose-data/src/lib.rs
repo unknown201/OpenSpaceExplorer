@@ -326,6 +326,21 @@ pub struct PartDef {
     pub raw_modules: BTreeMap<String, serde_json::Value>,
 }
 
+impl PartDef {
+    /// A fuel line: a two-anchor part that feeds the part at its far end from the tank it hangs on.
+    pub fn is_fuel_line(&self) -> bool {
+        self.module_names
+            .iter()
+            .any(|m| m == "PartComponentModule_FuelLine")
+    }
+    /// A strut: a two-anchor part that braces the part it hangs on to the part at its far end.
+    pub fn is_strut(&self) -> bool {
+        self.module_names
+            .iter()
+            .any(|m| m == "PartComponentModule_Strut")
+    }
+}
+
 /// Electric charge (units per second) used and made by a part's modules, from their `RequiredResources` /
 /// `ResourceSettings` in the part data.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
