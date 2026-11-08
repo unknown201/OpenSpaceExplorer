@@ -201,6 +201,10 @@ pub struct Powered {
     pub throttle: f64,
     pub attitude: Attitude,
     pub landed: bool,
+    /// Standing on its landing legs or gear this step (their feet press the ground): the original reports
+    /// that as Landed although the craft is held up by the suspension, not resting on the surface.
+    #[serde(default)]
+    pub ground_contact: bool,
     pub crashed: bool,
     /// In the water (`Splashed`): some part is under the sea surface and it is not standing on the ground.
     #[serde(default)]
@@ -835,6 +839,7 @@ impl Powered {
             throttle: 0.0,
             attitude: Attitude::Up,
             landed,
+            ground_contact: false,
             crashed: false,
             splashed: false,
             coasting_since: None,
@@ -1760,7 +1765,7 @@ pub fn integrate_with_propulsion(
     let resolved_force = propulsion
         .as_ref()
         .map(|e| bx * e.force_kn.x + by * e.force_kn.y + bz * e.force_kn.z);
-    if p.landed {
+    if p.landed || p.ground_contact {
         if let Some(allocation) = propulsion
             .as_ref()
             .and_then(|e| e.control_allocation.as_ref())
@@ -1942,7 +1947,7 @@ pub fn integrate_with_propulsion(
         }
     }
 
-    if p.landed {
+    if p.landed || p.ground_contact {
         // sitting on the surface: co-rotate; lift off only when thrust beats gravity
         let g = body.mu / (r_mag * r_mag);
         let (up, _, _) = surface_frame(p.r);
@@ -2202,7 +2207,7 @@ pub fn situation(p: &Powered, body: &Body, atmo: Option<&Atmo>) -> Situation {
     if p.crashed {
         return Situation::Crashed;
     }
-    if p.landed {
+    if p.landed || p.ground_contact {
         return Situation::Landed;
     }
     if p.splashed {

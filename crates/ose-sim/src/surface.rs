@@ -154,6 +154,10 @@ pub fn inverse_effective_mass(
 }
 
 /// Implicit spring/damper force. Travel and supported mass set a provisional 2g-at-full-travel spring.
+/// Landing legs' VehiclePhysics friction (landingleg_*v): `FrictionLimit` and `FrictionAdherent`.
+pub const LEG_FRICTION_LIMIT: f64 = 1.0;
+pub const LEG_FRICTION_ADHERENT_MPS: f64 = 0.1;
+
 pub fn suspension_force(
     compression: f64,
     speed: f64,
@@ -187,6 +191,7 @@ impl Structure {
         self.suspension_compression_m.fill(0.0);
         propulsion.per_part_contacts = true;
         p.splashed = false;
+        p.ground_contact = false;
         if p.crashed {
             return;
         }
@@ -284,6 +289,26 @@ impl Structure {
                         gravity,
                         dt,
                     );
+                    // the foot grips the ground: friction against its sliding, up to `FrictionLimit` times
+                    // the load, rising from nothing over the first `FrictionAdherent` m/s of slide
+                    // (VehiclePhysics' friction curve on the original's legs), never more than stops
+                    // the foot's share of the craft this tick
+                    let load = force.length();
+                    let foot_v = p.v + omega.cross(arm) - spin(body).cross(foot);
+                    let slide = foot_v - n * foot_v.dot(n);
+                    let slide_mps = slide.length();
+                    let grip = if load > 0.0 && slide_mps > 1e-9 {
+                        let share = mass.mass_t / gear_count as f64;
+                        let mu =
+                            LEG_FRICTION_LIMIT * (slide_mps / LEG_FRICTION_ADHERENT_MPS).min(1.0);
+                        slide * (-(mu * load).min(share * slide_mps / dt) / slide_mps)
+                    } else {
+                        DVec3::ZERO
+                    };
+                    if compression > 0.0 {
+                        p.ground_contact = true;
+                    }
+                    let force = force + grip;
                     propulsion.environment_force_kn = propulsion.environment_force_kn + force;
                     propulsion.environment_torque_knm =
                         propulsion.environment_torque_knm + arm.cross(force);
