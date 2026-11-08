@@ -67,6 +67,30 @@ struct LastDockTick(u64);
 /// How far apart two vessels' port faces can be for the docking step to look at them, m.
 const PORT_LOOK_M: f64 = 10.0;
 
+/// Two docking ports joined face to face in the VAB, one of them `port`: (the parent port, the child port).
+pub fn vab_joint(craft: &Craft, port: usize, defs: &[PartDef]) -> Option<(usize, usize)> {
+    let dock_node = |i: usize| {
+        defs.iter()
+            .find(|d| d.id == craft.parts[i].part_id)
+            .and_then(|d| d.docking.as_ref())
+            .map(|k| k.node.clone())
+    };
+    let joined = |child: usize| {
+        let c = &craft.parts[child];
+        let parent = c.parent?;
+        (dock_node(child).is_some()
+            && c.own_node == dock_node(child)
+            && dock_node(parent).is_some()
+            && c.parent_node == dock_node(parent))
+        .then_some((parent, child))
+    };
+    joined(port).or_else(|| {
+        (0..craft.parts.len())
+            .filter(|&c| craft.parts[c].parent == Some(port))
+            .find_map(joined)
+    })
+}
+
 /// A free docking port of a craft, in the craft frame (Unity Y-up).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Port {
@@ -863,6 +887,21 @@ impl Universe {
         Some(subset(&craft, &keep).0)
     }
 
+    /// Every joint `undock` can part: the docked links, then ports joined face to face in the VAB.
+    pub fn undockable_joints(&self, e: Entity, defs: &[PartDef]) -> Vec<(usize, usize)> {
+        let mut out = self.docked_links(e);
+        if let Some(c) = self.current_craft(e) {
+            for i in 0..c.parts.len() {
+                if let Some(j) = vab_joint(&c, i, defs).filter(|j| j.1 == i) {
+                    if !out.contains(&j) {
+                        out.push(j);
+                    }
+                }
+            }
+        }
+        out
+    }
+
     pub fn docked_links(&self, e: Entity) -> Vec<(usize, usize)> {
         self.world
             .get::<Docked>(e)
@@ -1385,13 +1424,20 @@ impl Universe {
         spec_for: &dyn Fn(&Craft) -> flight::FlightSpec,
     ) -> Result<Entity, String> {
         let links = self.docked_links(e);
+        let craft = self.current_craft(e).ok_or("vessel has no craft")?;
         let link = match port {
             Some(p) => links.iter().position(|&(a, b)| a == p || b == p),
             None => (!links.is_empty()).then(|| links.len() - 1),
-        }
-        .ok_or("not docked there")?;
-        let (pa, pb) = links[link];
-        let craft = self.current_craft(e).ok_or("vessel has no craft")?;
+        };
+        // two ports joined face to face in the VAB undock too (KSP2 decouples them with the port's
+        // ejection force, `PartAttachedFromVAB`)
+        let (pa, pb) = match (link, port) {
+            (Some(l), _) => links[l],
+            (None, Some(p)) => vab_joint(&craft, p, defs).ok_or("not docked there")?,
+            (None, None) => (0..craft.parts.len())
+                .find_map(|i| vab_joint(&craft, i, defs))
+                .ok_or("not docked there")?,
+        };
         let p = self.powered(e).cloned().ok_or("vessel is not in flight")?;
         let ((stay, map_stay), (go, map_go)) = split(&craft, pb);
         let pick = |m: &Vec<Option<usize>>, i: usize| m.get(i).copied().flatten();
@@ -1405,7 +1451,7 @@ impl Universe {
             links
                 .iter()
                 .enumerate()
-                .filter(|&(i, _)| i != link)
+                .filter(|&(i, _)| Some(i) != link)
                 .filter_map(|(_, &(a, b))| Some((pick(m, a)?, pick(m, b)?)))
                 .collect()
         };
@@ -1595,6 +1641,131 @@ mod tests {
     fn faces(u: &Universe, a: Entity, b: Entity) -> (DVec3, DVec3, f64) {
         let ((fa, xa), (fb, _)) = (port_of(u, a), port_of(u, b));
         (fa, fb, (fb - fa).dot(xa))
+    }
+
+    #[test]
+    fn ports_joined_in_the_vab_undock_and_push_apart_with_their_ejection_force() {
+        // KSP2 trace run 18 (T18): two Clamp-O-Trons joined face to face in the VAB undock as a decoupler
+        // does, with the port's 0.4 kN ejection as an impulse on each half: a 7.69 t and a 5.31 t half part
+        // at 0.134 m/s there, 0.4/7.69 + 0.4/5.31 = 0.127 m/s by this formula.
+        let d = defs();
+        let res = resources();
+        let mut b_port = part(
+            "dockingport_1v_inline",
+            Some(1),
+            Some("top"),
+            Some("top"),
+            0.6,
+        );
+        b_port.local_rotation = Quat {
+            x: 1.0,
+            y: 0.0,
+            z: 0.0,
+            w: 0.0,
+        };
+        let craft = Craft {
+            colors: None,
+            loose: Vec::new(),
+            name: "pair".into(),
+            description: String::new(),
+            parts: vec![
+                part("probe_1v_disk_electricity", None, None, None, 0.0),
+                part(
+                    "dockingport_1v_inline",
+                    Some(0),
+                    Some("bottom"),
+                    Some("top"),
+                    0.3,
+                ),
+                b_port,
+                part(
+                    "probe_1v_disk_electricity",
+                    Some(2),
+                    Some("top"),
+                    Some("bottom"),
+                    0.9,
+                ),
+            ],
+            stages: vec![],
+        };
+        assert_eq!(vab_joint(&craft, 1, &d), Some((1, 2)));
+        assert_eq!(vab_joint(&craft, 2, &d), Some((1, 2)));
+        assert_eq!(vab_joint(&craft, 0, &d), None);
+        let bodies: Vec<ose_data::CelestialBody> =
+            serde_json::from_str(include_str!("../../../assets/own/kerbol-system.json")).unwrap();
+        let mut kerbin = bodies.into_iter().find(|b| b.id == "Kerbin").unwrap();
+        kerbin.parent = None;
+        kerbin.orbit = None;
+        kerbin.soi_radius_m = None;
+        let mut u = Universe::with_bodies(&[kerbin]);
+        let body = u.body_entity("Kerbin").unwrap();
+        let mu = u.world.get::<bodies::Body>(body).unwrap().mu;
+        let r0 = DVec3::new(700_000.0, 0.0, 0.0);
+        let v0 = DVec3::new(0.0, (mu / 700_000.0).sqrt(), 0.0);
+        let e = u.spawn_vessel("pair", body, r0, v0);
+        u.rebuild_vessel(
+            e,
+            &craft,
+            r0,
+            v0,
+            DVec3::new(0.0, 1.0, 0.0),
+            vec![],
+            &d,
+            &res,
+            &spec,
+        );
+        assert_eq!(u.undockable_joints(e, &d), vec![(1, 2)]);
+        // no flight docking: the VAB joint is the one undocked (the flight HUD names no port)
+        let n = u.undock(e, None, &d, &res, &spec).unwrap();
+        let (stay, go) = (u.current_craft(e).unwrap(), u.current_craft(n).unwrap());
+        assert_eq!(stay.parts.len(), 2);
+        assert_eq!(go.parts.len(), 2);
+        assert_eq!(stay.parts[0].part_id, "probe_1v_disk_electricity");
+        let (m_stay, m_go) = (stay.mass(&d, &res).wet_t(), go.mass(&d, &res).wet_t());
+        let sep = u.powered(n).unwrap().v - u.powered(e).unwrap().v;
+        let want = 0.4 / m_stay + 0.4 / m_go;
+        assert!(
+            (sep.length() - want).abs() < 1e-6,
+            "apart at {:.4} m/s, want {want:.4}",
+            sep.length()
+        );
+        // along the ports' axis, the far half away from the root's
+        assert!(
+            sep.normalized().dot(DVec3::new(0.0, 1.0, 0.0)) > 0.999,
+            "{sep:?}"
+        );
+        // and the ports are free again
+        assert_eq!(free_ports(&stay, &d).len(), 1);
+        assert_eq!(free_ports(&go, &d).len(), 1);
+        assert!(u.undockable_joints(e, &d).is_empty());
+    }
+
+    #[test]
+    fn ports_at_rest_latch_at_once_inside_their_acquire_range_and_not_outside_it() {
+        // KSP2 trace run 18 (T18): Clamp-O-Trons placed 1.31 m apart at rest stay Ready for 8 s; placed 0.91 m
+        // apart, 5 degrees off facing, they latch on the next tick and the docker is set onto the dockee's
+        // face (no pull-in first). The Clamp-O-Tron's acquire range is 1.0 m.
+        let d = defs();
+        let res = resources();
+        let skew = DVec3::new(0.087, -1.0, 0.0).normalized();
+        let (mut u, _, b) = pair(1.31, 0.0, skew);
+        for _ in 0..(8 * crate::TICKS_PER_SECOND) {
+            u.step();
+            assert!(
+                u.dock_latched(&d, &res, &spec).is_empty(),
+                "latched from 1.31 m"
+            );
+        }
+        assert!(u.vessel(b).is_some());
+        let (mut u, a2, b2) = pair(0.91, 0.0, skew);
+        assert_eq!(
+            u.dock_latched(&d, &res, &spec),
+            vec![(a2, b2)],
+            "latches at 0.91 m"
+        );
+        assert!(u.vessel(b2).is_none());
+        // set face to face: the merged craft has no free ports left
+        assert!(free_ports(&u.current_craft(a2).unwrap(), &d).is_empty());
     }
 
     #[test]
