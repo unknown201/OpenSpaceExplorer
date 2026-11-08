@@ -31,13 +31,33 @@ fn floats<'a>(v: impl Iterator<Item = &'a f32>) -> Vec<u8> {
     v.flat_map(|f| f.to_le_bytes()).collect()
 }
 
-fn read_json(glb: &[u8]) -> Result<Value, String> {
+pub(crate) fn read_json(glb: &[u8]) -> Result<Value, String> {
     if glb.len() < 20 || &glb[0..4] != b"glTF" {
         return Err("not a GLB".into());
     }
     let len = u32::from_le_bytes(glb[12..16].try_into().map_err(|_| "header")?) as usize;
     serde_json::from_slice(glb.get(20..20 + len).ok_or("truncated GLB JSON")?)
         .map_err(|e| e.to_string())
+}
+
+/// A GLB of `doc` (its buffer 0 being `bin`).
+pub(crate) fn glb_bytes(doc: &Value, bin: &[u8]) -> Vec<u8> {
+    let mut text = serde_json::to_vec(doc).unwrap_or_default();
+    while !text.len().is_multiple_of(4) {
+        text.push(b' ');
+    }
+    let total = 12 + 8 + text.len() + 8 + bin.len();
+    let mut out = Vec::with_capacity(total);
+    out.extend_from_slice(b"glTF");
+    out.extend_from_slice(&2u32.to_le_bytes());
+    out.extend_from_slice(&(total as u32).to_le_bytes());
+    out.extend_from_slice(&(text.len() as u32).to_le_bytes());
+    out.extend_from_slice(b"JSON");
+    out.extend_from_slice(&text);
+    out.extend_from_slice(&(bin.len() as u32).to_le_bytes());
+    out.extend_from_slice(b"BIN\0");
+    out.extend_from_slice(bin);
+    out
 }
 
 /// Build the GLB of a shaped wing from the part's exported GLB `base` (for its materials).

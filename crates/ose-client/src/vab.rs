@@ -1155,6 +1155,7 @@ impl Editor {
                 p.colors = src.colors;
                 p.chute = src.chute;
                 p.shape = src.shape.clone();
+                p.fairing = src.fairing.clone();
             }
         }
     }
@@ -2027,9 +2028,10 @@ pub fn pam_html(craft: &Craft, i: usize, catalog: &Catalog) -> String {
         .unwrap_or_default();
     format!(
         "<div class=\"pam-head\"><b>{title}</b><button id=\"pam-close\" title=\"Close (Esc)\">&#10005;</button></div>{stage}\
-         {wing}{crossfeed}{rows}{chute}{groups}",
+         {wing}{fairing}{crossfeed}{rows}{chute}{groups}",
         title = esc(title),
         wing = wing_shape_html(p),
+        fairing = fairing_html(p),
         groups = action_groups_html(&p.actions, &kinds),
     )
 }
@@ -2171,6 +2173,133 @@ pub fn wing_shape_html(p: &CraftPart) -> String {
         ));
     }
     html
+}
+
+/// A procedural fairing's wall editor (`ProceduralFairingEditUI`): how it comes apart and how hard, whether it
+/// is capped, and each wall section's rise and radius above the base, with the panels' mass. Without a wall of
+/// its own the fairing wraps whatever stands on it.
+pub fn fairing_html(p: &CraftPart) -> String {
+    let Some(def) = ose_data::fairing::def(&p.part_id) else {
+        return String::new();
+    };
+    let mut html = String::from("<div class=\"pam-sub pam-wing-head\">Fairing</div>");
+    let Some(f) = p.fairing.as_ref() else {
+        html.push_str(
+            "<div class=\"pam-row\"><span>Wall</span><span>automatic</span>\
+             <button data-fair-act=\"make\">Shape</button></div>",
+        );
+        return html;
+    };
+    let kinds = [(2u8, "2"), (3, "3"), (4, "4"), (0, "Shroud")];
+    let buttons: String = kinds
+        .iter()
+        .map(|(n, label)| {
+            format!(
+                "<button data-fair-act=\"pieces:{n}\"{}>{label}</button>",
+                if f.pieces == *n { " class=\"on\"" } else { "" }
+            )
+        })
+        .collect();
+    html.push_str(&format!(
+        "<div class=\"pam-row\"><span>Deploy</span><span class=\"pam-fair-kinds\">{buttons}</span><b></b></div>"
+    ));
+    html.push_str(&format!(
+        "<label class=\"pam-row\"><span>Ejection force</span><input type=\"range\" id=\"pam-fair-eject\" min=\"0\" max=\"1000\" step=\"10\" value=\"{v}\" /><b>{v:.0}</b></label>",
+        v = f.ejection_force
+    ));
+    html.push_str(&format!(
+        "<label class=\"pam-row\"><span>Capped</span><input type=\"checkbox\" id=\"pam-fair-cap\"{} /></label>",
+        if f.capped { " checked" } else { "" }
+    ));
+    for k in 0..f.sections.len() {
+        let (h, r) = f.sections[k];
+        if k > 0 {
+            let rise = h - f.sections[k - 1].0;
+            html.push_str(&format!(
+                "<label class=\"pam-row\"><span>Section {k} rise</span><input type=\"range\" data-fair=\"h{k}\" min=\"{lo}\" max=\"{hi}\" step=\"{st}\" value=\"{rise}\" /><b>{rise:.2} m</b></label>",
+                lo = def.height_min,
+                hi = def.height_max,
+                st = def.length_snap,
+            ));
+        }
+        html.push_str(&format!(
+            "<label class=\"pam-row\"><span>{label} radius</span><input type=\"range\" data-fair=\"r{k}\" min=\"0\" max=\"{max}\" step=\"{st}\" value=\"{r}\" /><b>{r:.2} m</b></label>",
+            label = if k == 0 { "Base".to_string() } else { format!("Section {k}") },
+            max = def.max_radius,
+            st = def.radius_snap,
+        ));
+    }
+    html.push_str(&format!(
+        "<div class=\"pam-row\"><span></span><span><button data-fair-act=\"add\">Add section</button> \
+         <button data-fair-act=\"remove\">Remove top</button> <button data-fair-act=\"auto\">Automatic</button></span><b></b></div>\
+         <div class=\"pam-sub\" id=\"pam-fair-stats\">panels {:.3} t \u{b7} {:.1} m\u{b2} \u{b7} {:.1} m/s off</div>",
+        f.panel_mass_t(def),
+        f.area_m2(),
+        f.ejection_speed_mps(),
+    ));
+    html
+}
+
+/// One fairing editor action on part `p` (see `fairing_html`): `make`, `auto`, `add`, `remove`,
+/// `pieces:<n>`, `cap:<0|1>`, `eject:<kN>`, `h<k>:<rise>`, `r<k>:<radius>`. Returns whether the wall changed.
+pub fn edit_fairing(p: &mut CraftPart, action: &str) -> bool {
+    let Some(def) = ose_data::fairing::def(&p.part_id) else {
+        return false;
+    };
+    let before = p.fairing.clone();
+    let (key, value) = action.split_once(':').unwrap_or((action, ""));
+    let num = value.parse::<f64>().ok();
+    match key {
+        "make" => p.fairing = Some(ose_data::fairing::FairingShape::cylinder(def, 2.0)),
+        "auto" => p.fairing = None,
+        _ => {}
+    }
+    let Some(f) = p.fairing.as_mut() else {
+        return before != p.fairing;
+    };
+    match (key, num) {
+        ("add", _) if f.sections.len() < 32 => {
+            let (h, r) = *f.sections.last().expect("sections");
+            f.sections.push((
+                h + def
+                    .height_min
+                    .max(def.length_snap)
+                    .max(0.5)
+                    .min(def.height_max),
+                r,
+            ));
+        }
+        ("remove", _) if f.sections.len() > 2 => {
+            f.sections.pop();
+        }
+        ("pieces", Some(n)) if matches!(n as u8, 0 | 2 | 3 | 4) => f.pieces = n as u8,
+        ("cap", Some(v)) => f.capped = v > 0.5,
+        ("eject", Some(v)) => f.ejection_force = v.clamp(0.0, 1000.0),
+        (k, Some(v)) if k.starts_with('h') => {
+            if let Some(i) = k[1..]
+                .parse::<usize>()
+                .ok()
+                .filter(|i| *i >= 1 && *i < f.sections.len())
+            {
+                let rise = v.clamp(def.height_min, def.height_max);
+                let shift = f.sections[i - 1].0 + rise - f.sections[i].0;
+                for s in &mut f.sections[i..] {
+                    s.0 += shift;
+                }
+            }
+        }
+        (k, Some(v)) if k.starts_with('r') => {
+            if let Some(i) = k[1..]
+                .parse::<usize>()
+                .ok()
+                .filter(|i| *i < f.sections.len())
+            {
+                f.sections[i].1 = v.clamp(0.0, def.max_radius);
+            }
+        }
+        _ => {}
+    }
+    before != p.fairing
 }
 
 /// Action groups a part action can be bound to (`KSPActionGroup` bits, protocol 57), as the original's

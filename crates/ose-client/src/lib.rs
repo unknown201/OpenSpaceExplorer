@@ -25,6 +25,7 @@ pub mod authored_trails;
 pub mod engine_fx;
 #[cfg(target_arch = "wasm32")]
 mod engine_fx_gpu;
+pub mod fairing_mesh;
 #[cfg(target_arch = "wasm32")]
 pub mod flight3d;
 pub mod ftue;
@@ -3213,6 +3214,12 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                 app.vab_wing_changed(None, input.checked() as u8 as f64);
             } else if let Some(name) = input.get_attribute("data-wing") {
                 app.vab_wing_changed(Some(&name), input.value_as_number());
+            } else if input.id() == "pam-fair-cap" {
+                app.vab_fairing_changed(&format!("cap:{}", input.checked() as u8));
+            } else if input.id() == "pam-fair-eject" {
+                app.vab_fairing_changed(&format!("eject:{}", input.value_as_number()));
+            } else if let Some(k) = input.get_attribute("data-fair") {
+                app.vab_fairing_changed(&format!("{k}:{}", input.value_as_number()));
             } else if let Some(k) = input.get_attribute("data-res").and_then(|v| v.parse().ok()) {
                 app.vab_pam_changed(Some(k), input.value_as_number(), None);
             }
@@ -3249,6 +3256,17 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                     e.get_attribute("data-agbit")?.parse::<u32>().ok()?,
                 ))
             });
+            if let Some(act) = t
+                .as_ref()
+                .and_then(|e| e.closest("[data-fair-act]").ok().flatten())
+                .and_then(|e| e.get_attribute("data-fair-act"))
+            {
+                app.vab_fairing_changed(&act);
+                if let (Some(i), Some(el)) = (app.vab_pam, app.doc.get_element_by_id("vab-pam")) {
+                    el.set_inner_html(&vab::pam_html(&app.editor.craft, i, &app.catalog));
+                }
+                return;
+            }
             if let (Some((kind, bit)), Some(i)) = (chip, app.vab_pam) {
                 app.vab_record();
                 if let Some(p) = app.editor.craft.parts.get_mut(i) {
@@ -8362,6 +8380,56 @@ impl App {
             } else {
                 el.set_inner_html(&crate::vab::pam_html(&self.editor.craft, i, &self.catalog));
             }
+        }
+        self.render_vab_view();
+        self.vab_report_due = Some(now_ms() + 300.0);
+    }
+
+    /// A fairing wall edit from the part manager (`vab::edit_fairing`): reshape the part and its set, refresh
+    /// the readouts.
+    fn vab_fairing_changed(&mut self, action: &str) {
+        let Some(i) = self.vab_pam else { return };
+        if i >= self.editor.craft.parts.len() {
+            return;
+        }
+        if !self.vab_pam_recorded {
+            self.vab_pam_recorded = true;
+            self.vab_record();
+        }
+        if !vab::edit_fairing(&mut self.editor.craft.parts[i], action) {
+            return;
+        }
+        self.editor.sync_symmetry(i);
+        // Slider drags update their readouts in place; the window is rebuilt for button actions.
+        let html = vab::fairing_html(&self.editor.craft.parts[i]);
+        for part in html.split("<label class=\"pam-row\">").skip(1) {
+            let key = part
+                .split("data-fair=\"")
+                .nth(1)
+                .map(|t| format!("input[data-fair=\"{}\"]", t.split('"').next().unwrap_or("")))
+                .or_else(|| {
+                    part.contains("id=\"pam-fair-eject\"")
+                        .then(|| "#pam-fair-eject".to_string())
+                });
+            let (Some(key), Some(b)) = (
+                key,
+                part.split("<b>")
+                    .nth(1)
+                    .and_then(|t| t.split("</b>").next()),
+            ) else {
+                continue;
+            };
+            if let Ok(Some(e)) = self.doc.query_selector(&format!("#vab-pam {key} + b")) {
+                e.set_text_content(Some(b));
+            }
+        }
+        if let Ok(Some(stats)) = self.doc.query_selector("#pam-fair-stats") {
+            let fresh = html
+                .split("id=\"pam-fair-stats\">")
+                .nth(1)
+                .and_then(|t| t.split("</div>").next())
+                .unwrap_or("");
+            stats.set_inner_html(fresh);
         }
         self.render_vab_view();
         self.vab_report_due = Some(now_ms() + 300.0);

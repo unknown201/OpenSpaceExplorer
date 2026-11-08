@@ -749,6 +749,8 @@ pub struct FlightView {
     pub aero_segments: Vec<([f64; 2], [f64; 2], bool)>,
     crash_fx: crate::particles::CrashFx,
     effect_edges: crate::particles::EffectEdges,
+    /// When each shaped fairing's panels came off (part index -> ms), to send them away.
+    fairing_off_ms: HashMap<usize, f64>,
     bursts: crate::particles::Bursts,
     last_surface_speed: f64,
     last_footstep: f64,
@@ -856,6 +858,7 @@ impl FlightView {
             launch_origin: None,
             crash_fx: Default::default(),
             effect_edges: Default::default(),
+            fairing_off_ms: HashMap::new(),
             bursts: Default::default(),
             last_surface_speed: 0.0,
             last_footstep: 0.0,
@@ -2220,13 +2223,53 @@ impl FlightView {
                         .collect()
                 })
                 .unwrap_or_default();
-            for (fi, fname, flp, _, _) in &parts {
+            for (fi, fname, flp, flq, _) in &parts {
                 if !craft.parts[*fi].part_id.starts_with("fairing_") {
                     continue;
                 }
                 let jettisoned = readout
                     .and_then(|f| f.fairings.iter().find(|x| x.0 as usize == *fi))
                     .is_some_and(|x| x.1);
+                // A wall of its own: its panels at the part's pose; once jettisoned they leave at the ejection
+                // speed (one physics step of `EjectionForce`), clamshells outward, a shroud along the axis,
+                // tumbling, for a few seconds.
+                if let Some(shape) = craft.parts[*fi].fairing.as_ref() {
+                    if !jettisoned {
+                        self.fairing_off_ms.remove(fi);
+                    }
+                    let since = if jettisoned {
+                        let t0 = *self.fairing_off_ms.entry(*fi).or_insert(inp.now_ms);
+                        (inp.now_ms - t0) / 1000.0
+                    } else {
+                        0.0
+                    };
+                    if since > 4.0 {
+                        continue;
+                    }
+                    let Some(names) = crate::fairing_mesh::models_for(gpu, &craft.parts[*fi])
+                    else {
+                        continue;
+                    };
+                    let speed = shape.ejection_speed_mps().max(0.5);
+                    for (k, name) in names.into_iter().enumerate() {
+                        let dir = crate::fairing_mesh::piece_direction(shape, k).as_dvec3();
+                        let local_dir = *flq * dir;
+                        let drift = local_dir * (speed * since);
+                        let tumble = DQuat::from_axis_angle(
+                            DVec3::Y.cross(dir).try_normalize().unwrap_or(DVec3::X),
+                            (since * 0.6).min(1.2),
+                        );
+                        let wpos = pos + vessel_rot * (*flp + drift + origin);
+                        let mut it =
+                            DrawItem::lit(name, wpos - cam, vessel_rot * *flq * tumble, 1.0, sun);
+                        it.ambient = part_ambient;
+                        it.fill_dir = up;
+                        it.fill = 0.25;
+                        it.sun = sun_share;
+                        items.push(it);
+                    }
+                    continue;
+                }
                 let Some(base) = gpu.model(fname) else {
                     continue;
                 };

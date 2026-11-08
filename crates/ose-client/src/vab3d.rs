@@ -634,12 +634,25 @@ impl VabView {
             gpu.request_model("fx:fairing_ring", "assets/fx/fairing_ring.glb");
             gpu.request_model("fx:fairing_nose", "assets/fx/fairing_nose.glb");
         }
-        for (fi, fname, fpos, _) in placed.iter().filter(|p| p.1.starts_with("part:fairing_")) {
-            if self.icon_mode
-                || !gpu.has_model("fx:fairing_ring")
-                || !gpu.has_model("fx:fairing_nose")
-            {
+        for (fi, fname, fpos, frot) in placed.iter().filter(|p| p.1.starts_with("part:fairing_")) {
+            if self.icon_mode {
                 break;
+            }
+            // A wall of its own: its panels, at the part's pose.
+            if craft.parts[*fi].fairing.is_some() {
+                if let Some(names) = crate::fairing_mesh::models_for(gpu, &craft.parts[*fi]) {
+                    for name in names {
+                        let mut it = DrawItem::lit(name, *fpos - cam_pos, *frot, 1.0, light);
+                        it.ambient = 0.45;
+                        it.fill_dir = -forward;
+                        it.fill = 0.35;
+                        items.push(it);
+                    }
+                }
+                continue;
+            }
+            if !gpu.has_model("fx:fairing_ring") || !gpu.has_model("fx:fairing_nose") {
+                continue;
             }
             let Some(base) = gpu.model(fname) else {
                 continue;
