@@ -129,18 +129,34 @@ namespace OpenSpaceExplorer.Validation
             behaviour?.OnToggleJetpack();
             yield return new WaitForSeconds(2.5f);
             mark("jetpack in use " + (behaviour != null && behaviour.CharacterState.IsJetpackInUse) + " rcs " + kerbal.IsRCSEnabled);
+            // KSP2's IsOnGround zeroes the jetpack's x/z while the Kerbal stands on the pod: move it 50 m ahead along the
+            // same orbit first, and keep it from turning toward the camera (that alone burns ~175 g in 0.3 s)
+            if (behaviour != null) behaviour.Model.KerbalData.JetpackAlignToCameraEnabled = false;
+            KeplerOrbitState.FromOrbitComponent(kerbal.Orbit, out var clear);
+            clear.meanAnomalyAtEpoch += 50.0 / kerbal.Orbit.semiMajorAxis;
+            G.SpaceSimulation.TeleportSimObjectToOrbit(kerbal.SimulationObject, clear, true);
+            mark("kerbal moved 50 m ahead along its orbit");
+            yield return new WaitForSeconds(6f);
+            kerbal = G.ViewController.GetActiveSimVessel();
+            behaviour = G.ViewController.GetBehaviorIfLoaded(kerbal.SimulationObject.Kerbal);
+            if (behaviour != null) { behaviour.Model.KerbalData.JetpackAlignToCameraEnabled = false; if (!behaviour.CharacterState.IsJetpackInUse) { kerbal.IsRCSEnabled = true; behaviour.OnToggleJetpack(); } }
+            yield return new WaitForSeconds(3f);
+            mark("free: jetpack in use " + (behaviour != null && behaviour.CharacterState.IsJetpackInUse) + " on ground " + (behaviour != null && behaviour.IsOnGround()));
             begin(kerbal, "jetpack-trace.csv");
             yield return new WaitForSeconds(1f);
-            var h = G.ViewController.evaInputHandler;
-            var upDown = typeof(EVAInputHandler).GetField("_moveUpDown", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            float held = 0;
+            // JetpackKerbalCharacterStateHandler reads the Kerbal vessel's flightCtrlState X/Y/Z: hold them every
+            // physics tick (InputHolder.KerbalMove), as well as the EVA handler's own fields
             mark("jetpack up 2 s");
-            while (held < 2f) { upDown?.SetValue(h, 1f); held += Time.deltaTime; yield return null; }
-            upDown?.SetValue(h, 0f);
+            InputHolder.KerbalMove = new Vector3(0, 1, 0); InputHolder.EvaUpDown = 1f;
+            yield return new WaitForSeconds(2f);
+            InputHolder.KerbalMove = Vector3.zero; InputHolder.EvaUpDown = 0f;
             yield return new WaitForSeconds(2f);
             mark("jetpack forward 2 s");
-            InputHolder.EvaFrontBack = 1f; yield return new WaitForSeconds(2f); InputHolder.EvaFrontBack = 0f;
+            InputHolder.KerbalMove = new Vector3(0, 0, 1); InputHolder.EvaFrontBack = 1f;
             yield return new WaitForSeconds(2f);
+            InputHolder.KerbalMove = Vector3.zero; InputHolder.EvaFrontBack = 0f;
+            yield return new WaitForSeconds(2f);
+            InputHolder.KerbalMove = null; InputHolder.EvaUpDown = null; InputHolder.EvaFrontBack = null;
             stop();
             mark("kerbal mass after " + G.ViewController.GetActiveSimVessel()?.totalMass.ToString("R", Inv));
         }
