@@ -1539,6 +1539,7 @@ mod tests {
         y: f64,
     ) -> CraftPart {
         CraftPart {
+            shape: None,
             chute: None,
             symmetry: 0,
             actions: Vec::new(),

@@ -1870,6 +1870,8 @@ fn launch_on_pad_now(
     // loose assemblies stay in the editor
     filled.loose.clear();
     fill_default_resources(s, &mut filled);
+    // procedural wings: mass and lift come from the shape, never from the client
+    filled.apply_shapes(&s.parts);
     stage_stageless(&mut filled);
     // a craft built nose-forward (a plane) is turned to point along +Y and lies level
     let level = ose_sim::structure::level_layout(&filled);
@@ -3878,6 +3880,7 @@ fn handle_decoded(
             craft.dedupe_guids();
             let mut filled = craft;
             fill_default_resources(s, &mut filled);
+            filled.apply_shapes(&s.parts);
             let report = ose_data::staging::delta_v_by_stage(&filled, &s.parts, &s.resources);
             let (com_m, cot_m, thrust_dir) = balance(s, &filled, &report);
             let col_m = centre_of_lift(s, &filled);

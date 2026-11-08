@@ -1584,12 +1584,12 @@ impl FlightView {
                 .unwrap_or(DVec3::ZERO);
             let mut gimbal_rotations = HashMap::new();
             let mut parts = Vec::new();
+            let mut shaped = std::collections::HashSet::new();
             for (i, (p, (pp, q))) in craft.parts.iter().zip(poses.iter()).enumerate() {
                 if gone.get(i).copied().unwrap_or(false) {
                     continue;
                 }
-                let name = format!("part:{}", p.part_id);
-                gpu.request_model(&name, &format!("assets/parts/{}.glb", p.part_id));
+                let name = crate::wing_mesh::model_for(gpu, p, &mut shaped);
                 let mut lp = DVec3::new(-pp.x, pp.y, pp.z);
                 let mut lq = DQuat::from_xyzw(q.x, -q.y, -q.z, q.w).normalize();
                 // Wobble: rotate about the part's own origin, then shift, both given in the craft's Unity
@@ -2406,7 +2406,24 @@ impl FlightView {
                 if let Some(d) =
                     readout.and_then(|f| f.control_surfaces.iter().find(|c| c.0 as usize == i))
                 {
-                    if let Some((node, axis)) = control_hinge(pid) {
+                    let shaped_flap = it
+                        .model
+                        .starts_with("wing:")
+                        .then(|| {
+                            let part = &craft.parts[i];
+                            let shape = crate::wing_mesh::shape_of(part)?;
+                            let mirrored = part.flight.as_ref().is_some_and(|f| f.mirrored);
+                            ose_data::procedural::evaluate_cached(pid, &shape, mirrored)
+                        })
+                        .flatten();
+                    if let Some(r) = shaped_flap {
+                        // A shaped wing's flap turns about its hinge bone's X (`CtrlTransformRotAxis`).
+                        it.node_turns.push((
+                            crate::wing_mesh::FLAP_NODE,
+                            glam::Quat::from_axis_angle(crate::wing_mesh::hinge_axis(&r), d.1),
+                            glam::Vec3::ZERO,
+                        ));
+                    } else if let Some((node, axis)) = control_hinge(pid) {
                         it.node_turns
                             .push((node, hinge_turn(axis, d.1), glam::Vec3::ZERO));
                     } else if let Some((mesh, pivot)) = flap_hinge(pid) {
@@ -2806,8 +2823,11 @@ impl FlightView {
                 let mut lo_all = DVec3::splat(f64::INFINITY);
                 let mut hi_all = DVec3::splat(f64::NEG_INFINITY);
                 for (p_part, (pp, q)) in craft.parts.iter().zip(poses.iter()) {
-                    let name = format!("part:{}", p_part.part_id);
-                    gpu.request_model(&name, &format!("assets/parts/{}.glb", p_part.part_id));
+                    let name = crate::wing_mesh::model_for(
+                        gpu,
+                        p_part,
+                        &mut std::collections::HashSet::new(),
+                    );
                     let lp = DVec3::new(-pp.x, pp.y, pp.z);
                     let lq = DQuat::from_xyzw(q.x, -q.y, -q.z, q.w).normalize();
                     if let Some(m) = gpu.model(&name) {

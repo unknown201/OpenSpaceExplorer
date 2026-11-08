@@ -410,6 +410,7 @@ async fn hello_catalog_and_snapshots() {
         description: String::new(),
         parts: vec![
             ose_data::craft::CraftPart {
+                shape: None,
                 chute: None,
                 symmetry: 0,
                 actions: Vec::new(),
@@ -433,6 +434,7 @@ async fn hello_catalog_and_snapshots() {
                 fuel_line_target: None,
             },
             ose_data::craft::CraftPart {
+                shape: None,
                 chute: None,
                 symmetry: 0,
                 actions: Vec::new(),
@@ -935,6 +937,7 @@ fn starter_craft() -> ose_data::craft::Craft {
                 other: Option<&str>,
                 y: f64| {
         ose_data::craft::CraftPart {
+            shape: None,
             chute: None,
             symmetry: 0,
             actions: Vec::new(),

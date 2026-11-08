@@ -272,6 +272,7 @@ impl Editor {
         if self.craft.parts.is_empty() {
             self.craft.parts.push(CraftPart {
                 chute: None,
+                shape: None,
                 symmetry: 0,
                 actions: Vec::new(),
                 flight: None,
@@ -366,6 +367,7 @@ impl Editor {
         let guid = self.next_guid();
         self.craft.parts.push(CraftPart {
             chute: None,
+            shape: None,
             symmetry: 0,
             actions: Vec::new(),
             flight: None,
@@ -536,7 +538,18 @@ impl Editor {
         self.craft
             .parts
             .iter()
-            .map(|p| catalog.get(&p.part_id).map(|s| s.mass_t).unwrap_or(0.0))
+            .map(|p| {
+                // A shaped procedural wing weighs what its shape does.
+                p.shape
+                    .as_ref()
+                    .filter(|_| ose_data::procedural::is_procedural_wing(&p.part_id))
+                    .and_then(|sh| {
+                        ose_data::procedural::evaluate_cached(&p.part_id, sh, false)
+                            .map(|r| r.mass_t)
+                    })
+                    .or_else(|| catalog.get(&p.part_id).map(|s| s.mass_t))
+                    .unwrap_or(0.0)
+            })
             .sum()
     }
 }
@@ -867,6 +880,7 @@ impl Editor {
         };
         let mut p = CraftPart {
             chute: None,
+            shape: None,
             symmetry: 0,
             actions: Vec::new(),
             flight: None,
@@ -1137,6 +1151,7 @@ impl Editor {
                 p.actions = src.actions.clone();
                 p.colors = src.colors;
                 p.chute = src.chute;
+                p.shape = src.shape.clone();
             }
         }
     }
@@ -1766,6 +1781,7 @@ impl Editor {
             out.push(self.craft.parts.len());
             self.craft.parts.push(CraftPart {
                 chute: None,
+                shape: None,
                 symmetry: 0,
                 actions: Vec::new(),
                 flight: mirrored.then(|| ose_data::flight_geometry::PartFlight {
@@ -2007,8 +2023,9 @@ pub fn pam_html(craft: &Craft, i: usize, catalog: &Catalog) -> String {
         .unwrap_or_default();
     format!(
         "<div class=\"pam-head\"><b>{title}</b><button id=\"pam-close\" title=\"Close (Esc)\">&#10005;</button></div>{stage}\
-         {crossfeed}{rows}{chute}{groups}",
+         {wing}{crossfeed}{rows}{chute}{groups}",
         title = esc(title),
+        wing = wing_shape_html(p),
         groups = action_groups_html(&p.actions, &kinds),
     )
 }
@@ -2079,6 +2096,66 @@ pub fn chute_mode(name: &str) -> Option<ose_data::craft::ChuteMode> {
         "Immediate" => Some(M::Immediate),
         _ => None,
     }
+}
+
+/// A procedural wing's shape controls (`ProceduralPartUI`): the control surface switch where the part has a
+/// mesh option without one, then each slider under its group (Wing, Wing Root, Wing Tip, Control Surface)
+/// with what it measures, and the mass and lift that follow.
+pub fn wing_shape_html(p: &CraftPart) -> String {
+    use ose_data::procedural as pw;
+    let Some(rig) = pw::rig(&p.part_id) else {
+        return String::new();
+    };
+    let shape = p.shape.clone().unwrap_or(pw::WingShape {
+        option: rig.options.len().saturating_sub(1) as u32,
+        ..Default::default()
+    });
+    let Some(option) = rig.options.get(shape.option as usize) else {
+        return String::new();
+    };
+    let mirrored = p.flight.as_ref().is_some_and(|f| f.mirrored);
+    let result = pw::evaluate_cached(&p.part_id, &shape, mirrored);
+    let mut html = String::from("<div class=\"pam-sub pam-wing-head\">Wing Shape</div>");
+    // The options differ by their `ControlSurface` attribute (`_0e` none, `_1e` one).
+    if rig.options.len() > 1 {
+        let has = option
+            .attributes
+            .get("ControlSurface")
+            .is_some_and(|v| v != "0");
+        html.push_str(&format!(
+            "<label class=\"pam-row\"><span>Control Surface</span><input type=\"checkbox\" id=\"pam-wing-ctrl\"{} /></label>",
+            if has { " checked" } else { "" }
+        ));
+    }
+    let mut group = String::new();
+    for s in &option.sliders {
+        if s.group != group {
+            group.clone_from(&s.group);
+            html.push_str(&format!(
+                "<div class=\"pam-sub\">{}</div>",
+                pw::label(&s.group)
+            ));
+        }
+        let v = shape.slider(&s.name).unwrap_or(s.start);
+        let shown = result
+            .as_ref()
+            .and_then(|r| r.measurements.iter().find(|(n, _)| *n == s.name))
+            .map(|(_, m)| *m)
+            .filter(|m| *m > 0.0)
+            .map_or_else(|| format!("{:.0}%", v * 100.0), |m| format!("{m:.2} m"));
+        html.push_str(&format!(
+            "<label class=\"pam-row\"><span>{label}</span><input type=\"range\" data-wing=\"{name}\" min=\"0\" max=\"1\" step=\"0.005\" value=\"{v}\" /><b>{shown}</b></label>",
+            label = pw::label(&s.label),
+            name = s.name,
+        ));
+    }
+    if let Some(r) = &result {
+        html.push_str(&format!(
+            "<div class=\"pam-sub\" id=\"pam-wing-stats\">{:.3} t \u{b7} lift {:.2} \u{b7} control {:.2}</div>",
+            r.mass_t, r.fixed_lift_coeff, r.moving_lift_coeff
+        ));
+    }
+    html
 }
 
 /// Action groups a part action can be bound to (`KSPActionGroup` bits, protocol 57), as the original's

@@ -548,11 +548,13 @@ impl VabView {
         let mut lo_all = DVec3::splat(f64::INFINITY);
         let mut hi_all = DVec3::splat(f64::NEG_INFINITY);
         let mut placed: Vec<(usize, String, DVec3, DQuat)> = Vec::new();
+        let mut shaped = std::collections::HashSet::new();
         for (i, (p, (pos, q))) in craft.parts.iter().zip(poses.iter()).enumerate() {
-            let name = format!("part:{}", p.part_id);
-            gpu.request_model(&name, &format!("assets/parts/{}.glb", p.part_id));
+            // Procedural wings draw their own shape once it is built.
+            let name = crate::wing_mesh::model_for(gpu, p, &mut shaped);
             placed.push((i, name, centre + to_gltf(*pos), quat_to_gltf(*q)));
         }
+        gpu.retain_models("wing:", &shaped);
         self.poses.clone_from(&placed);
         for (i, name, wpos, wrot) in &placed {
             let (lo, hi) = match gpu.model(name) {

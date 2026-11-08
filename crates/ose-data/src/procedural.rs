@@ -867,7 +867,7 @@ pub fn evaluate(part_id: &str, shape: &WingShape, mirrored: bool) -> Option<Wing
         let positions: Vec<[f64; 3]> = option_points.iter().map(|v| flip(to_part(*v))).collect();
         let mut triangles = m.triangles.clone();
         if mirrored {
-            for t in triangles.chunks_exact_mut(3) {
+            for t in triangles.as_chunks_mut::<3>().0 {
                 t.swap(1, 2);
             }
         }
@@ -875,7 +875,9 @@ pub fn evaluate(part_id: &str, shape: &WingShape, mirrored: bool) -> Option<Wing
         all_points.extend_from_slice(&positions);
         all_tris.extend(
             triangles
-                .chunks_exact(3)
+                .as_chunks::<3>()
+                .0
+                .iter()
                 .map(|t| [t[0] + base, t[1] + base, t[2] + base]),
         );
         if m.group == "CONTROLSURFACE" {
@@ -886,14 +888,18 @@ pub fn evaluate(part_id: &str, shape: &WingShape, mirrored: bool) -> Option<Wing
                 ctrl_points.extend(option_points.iter().map(|v| mat_vec(&rt, sub(*v, origin))));
                 ctrl_tris.extend(
                     m.triangles
-                        .chunks_exact(3)
+                        .as_chunks::<3>()
+                        .0
+                        .iter()
                         .map(|t| [t[0] + base, t[1] + base, t[2] + base]),
                 );
             }
         }
         let uvs = m
             .uvs
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| [c[0], c[1]])
             .collect::<Vec<_>>();
         meshes.push(PosedMesh {
@@ -965,11 +971,60 @@ fn measure(m: &Measure, w: &[Aff]) -> f64 {
     }
 }
 
+/// `evaluate`, remembered for the last few shapes asked for (the editor asks on every redraw).
+pub fn evaluate_cached(
+    part_id: &str,
+    shape: &WingShape,
+    mirrored: bool,
+) -> Option<std::sync::Arc<WingResult>> {
+    use std::sync::{Arc, Mutex};
+    type Cache = Vec<((String, WingShape, bool), Arc<WingResult>)>;
+    static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(Vec::new()));
+    let key = (part_id.to_string(), shape.clone(), mirrored);
+    if let Ok(c) = cache.lock() {
+        if let Some((_, r)) = c.iter().find(|(k, _)| *k == key) {
+            return Some(r.clone());
+        }
+    }
+    let r = Arc::new(evaluate(part_id, shape, mirrored)?);
+    if let Ok(mut c) = cache.lock() {
+        if c.len() >= 32 {
+            c.remove(0);
+        }
+        c.push((key, r.clone()));
+    }
+    Some(r)
+}
+
+/// The English names the editor shows (`PartModules/Procedural/Wings/*` in the original's table).
+pub fn label(key: &str) -> String {
+    let last = key.rsplit('/').next().unwrap_or(key);
+    match last {
+        "ControlLength" => "Length".into(),
+        "ControlPosition" => "Position".into(),
+        "ControlSpan" => "Span".into(),
+        "ControlSurface" => "Control Surface".into(),
+        "Root" => "Wing Root".into(),
+        "Tip" => "Wing Tip".into(),
+        _ => {
+            let mut out = String::new();
+            for (i, c) in last.chars().enumerate() {
+                if i > 0 && c.is_uppercase() {
+                    out.push(' ');
+                }
+                out.push(c);
+            }
+            out
+        }
+    }
+}
+
 /// The flight numbers of a shaped part, ready for `CraftPart::flight`: mass, centre of mass (the original
 /// moves a control surface's centre of mass to its lift centre), inertia, lift coefficients and the moving
 /// surface's pivot.
 pub fn flight(part_id: &str, shape: &WingShape, mirrored: bool) -> Option<PartFlight> {
-    let r = evaluate(part_id, shape, mirrored)?;
+    let r = evaluate_cached(part_id, shape, mirrored)?;
     let v = |a: [f64; 3]| DVec3::new(a[0], a[1], a[2]);
     let t = r.inertia_per_t;
     Some(PartFlight {
@@ -979,7 +1034,12 @@ pub fn flight(part_id: &str, shape: &WingShape, mirrored: bool) -> Option<PartFl
         mass_offset_m: Some(v(r.cube.center)),
         inertia_per_t: Some([v(t[0]), v(t[1]), v(t[2])]),
         surface: Some(SurfaceFlight {
-            fixed_lift_coeff: r.fixed_lift_coeff.max(0.0),
+            // `Module_ControlSurface.OnModuleFixedUpdate`: the fixed part lifts only above 0.1.
+            fixed_lift_coeff: if r.fixed_lift_coeff > 0.1 {
+                r.fixed_lift_coeff
+            } else {
+                0.0
+            },
             moving_lift_coeff: r.moving_lift_coeff.max(0.0),
             pivot_m: v(r.ctrl_pivot_m),
             pressure_offset_m: v(r.ctrl_center_m),
