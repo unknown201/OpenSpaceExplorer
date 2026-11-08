@@ -2,17 +2,21 @@
 //! antenna is a node with the range of its best antenna, the KSC is the source with
 //! `KSC_COMM_NET_RANGE_METERS` (8e11 m), and two nodes link when each is within the other's range (bodies do
 //! not block the line). A vessel is connected when a chain of links reaches the KSC; every vessel relays.
+//! The route is the original's: Dijkstra from the KSC with each link costing its squared length, so a chain
+//! of short links wins over one long one. The graph is rebuilt every `REBUILD_S` of real time
+//! (`CommNetManager.REBUILD_GRAPH_TIMER_SECONDS`), so a link is lost or found up to 3 s late.
 //! Without a connection probe cores that need one cannot be flown (with the `CommNetRequired` difficulty
 //! option) and reports cannot be transmitted.
 
 use bevy_ecs::prelude::*;
 use ose_math::DVec3;
-use std::collections::VecDeque;
 
 use crate::{bodies, crew, flight, structure, Universe};
 
 /// `PhysicsSettings._kscCommNetRangeMeters`.
 pub const KSC_RANGE_M: f64 = 8.0e11;
+/// `CommNetManager.REBUILD_GRAPH_TIMER_SECONDS`: how often the graph is rebuilt, s of real time.
+pub const REBUILD_S: f64 = 3.0;
 
 /// The ground station: a body-fixed site and its range.
 #[derive(Resource, Clone, Debug, PartialEq)]
@@ -98,22 +102,7 @@ impl Universe {
             }
         }
         // breadth first from the KSC: a link needs each end within the other's range
-        let n = nodes.len();
-        let mut hops = vec![u32::MAX; n];
-        hops[0] = 0;
-        let mut q = VecDeque::from([0usize]);
-        while let Some(i) = q.pop_front() {
-            for j in 0..n {
-                if hops[j] != u32::MAX {
-                    continue;
-                }
-                let d2 = (nodes[i].1 - nodes[j].1).length_squared();
-                if d2 < nodes[i].2 * nodes[i].2 && d2 < nodes[j].2 * nodes[j].2 {
-                    hops[j] = hops[i] + 1;
-                    q.push_back(j);
-                }
-            }
-        }
+        let hops = route_hops(&nodes.iter().map(|n| (n.1, n.2)).collect::<Vec<_>>());
         for &e in &vessels {
             let link = match nodes.iter().position(|nd| nd.0 == Some(e)) {
                 Some(k) => CommLink {
@@ -145,9 +134,117 @@ impl Universe {
     }
 }
 
+/// `GetConnectedNodesJob`: Dijkstra from node 0 (the KSC) where two nodes link when each is within the
+/// other's range and a link costs its squared length; the hops along each node's cheapest route
+/// (`u32::MAX` when it has none).
+pub fn route_hops(nodes: &[(DVec3, f64)]) -> Vec<u32> {
+    let n = nodes.len();
+    let mut cost = vec![f64::MAX; n];
+    let mut hops = vec![u32::MAX; n];
+    let mut done = vec![false; n];
+    if n == 0 {
+        return hops;
+    }
+    cost[0] = 0.0;
+    hops[0] = 0;
+    let mut open: Vec<usize> = (0..n).collect();
+    while !open.is_empty() {
+        let (k, &i) = open
+            .iter()
+            .enumerate()
+            .min_by(|a, b| cost[*a.1].total_cmp(&cost[*b.1]))
+            .expect("open");
+        open.swap_remove(k);
+        done[i] = true;
+        if cost[i] == f64::MAX {
+            continue;
+        }
+        let reach = nodes[i].1 * nodes[i].1;
+        for j in 0..n {
+            if j == i || done[j] {
+                continue;
+            }
+            let d2 = (nodes[i].0 - nodes[j].0).length_squared();
+            if d2 < reach && d2 < nodes[j].1 * nodes[j].1 && cost[i] + d2 < cost[j] {
+                cost[j] = cost[i] + d2;
+                hops[j] = hops[i] + 1;
+            }
+        }
+    }
+    hops
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_route_is_the_cheapest_chain_of_squared_lengths_not_the_fewest_hops() {
+        // KSP2's GetConnectedNodesJob: B can hear the KSC directly (1,900 m, cost 3.61e6 m^2), but through A
+        // (1,000 m then 900 m, cost 1.81e6 m^2) is cheaper, so its route has two hops
+        let nodes = [
+            (DVec3::ZERO, KSC_RANGE_M),
+            (DVec3::new(1000.0, 0.0, 0.0), 1500.0),
+            (DVec3::new(1900.0, 0.0, 0.0), 2000.0),
+            (DVec3::new(9000.0, 0.0, 0.0), 2000.0),
+        ];
+        assert_eq!(route_hops(&nodes), vec![0, 1, 2, u32::MAX]);
+        // a link needs each end within the other's range
+        let one_way = [(DVec3::ZERO, 10.0), (DVec3::new(50.0, 0.0, 0.0), 100.0)];
+        assert_eq!(route_hops(&one_way), vec![0, u32::MAX]);
+    }
+
+    #[test]
+    fn a_lost_link_shows_at_the_next_rebuild_three_seconds_on() {
+        let bodies: Vec<ose_data::CelestialBody> =
+            serde_json::from_str(include_str!("../../../assets/own/kerbol-system.json")).unwrap();
+        let mut kerbin = bodies.into_iter().find(|b| b.id == "Kerbin").unwrap();
+        kerbin.parent = None;
+        kerbin.orbit = None;
+        kerbin.soi_radius_m = None;
+        let crafts: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let defs: Vec<ose_data::PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let res: Vec<ose_data::ResourceDef> =
+            serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
+        let drone = crafts.iter().find(|c| c.name == "Stock03_Drone").unwrap();
+        let mut u = Universe::with_bodies(&[kerbin]);
+        let body = u.body_entity("Kerbin").unwrap();
+        u.set_ground_station(GroundStation {
+            body,
+            lat_deg: -0.6274,
+            lon_deg: -74.8305,
+            altitude_m: 221.7,
+            range_m: KSC_RANGE_M,
+        });
+        let probe = u.spawn_vessel_in_circular_orbit("probe", body, 100_000.0);
+        u.set_structure(probe, structure::Structure::build(drone, &defs, &res));
+        u.step();
+        assert!(u.comm_link(probe).connected);
+        // carried far beyond its antenna's range: the link holds until the graph is rebuilt
+        let mu = u.world.get::<bodies::Body>(body).unwrap().mu;
+        let r = 4.0e8;
+        let far = ose_math::Orbit::from_state_vectors(
+            mu,
+            DVec3::new(r, 0.0, 0.0),
+            DVec3::new(0.0, (mu / r).sqrt(), 0.0),
+            u.ut(),
+        );
+        u.world.entity_mut(probe).insert(bodies::OnRails(far));
+        let mut lost_after = None;
+        for i in 1..=(4 * crate::TICKS_PER_SECOND) {
+            u.step();
+            if lost_after.is_none() && !u.comm_link(probe).connected {
+                lost_after = Some(i as f64 / crate::TICKS_PER_SECOND as f64);
+            }
+        }
+        let t = lost_after.expect("the link is lost");
+        assert!(
+            t > 2.5 && t <= 3.0 + 1e-9,
+            "lost after {t} s (KSP2 rebuilds every 3 s)"
+        );
+    }
 
     #[test]
     fn a_probe_near_kerbin_hears_the_ksc_and_one_far_away_does_not() {
