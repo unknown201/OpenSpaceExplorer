@@ -414,6 +414,13 @@ mod tests {
                         vel_curve: None,
                         atm_curve: None,
                         response: None,
+                        intake_air_per_unit: 0.0,
+                        flameout_bar: 0.0,
+                        ignition_threshold: 0.1,
+                        mode_exit_s: 0.0,
+                        mode_exit_running_s: 0.0,
+                        mode_enter_s: 0.0,
+                        mode_enter_running_s: 0.0,
                     }]
                 })
                 .unwrap_or_default(),
@@ -441,6 +448,7 @@ mod tests {
             ctrl_area: 0.0,
             ctrl_pressure_offset_m: DVec3::ZERO,
             intake_area_m2: 0.0,
+            intake: None,
             module_names: vec![],
             raw_modules: Default::default(),
         }

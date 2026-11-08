@@ -320,6 +320,9 @@ pub struct PartDef {
     /// An air intake's area, m^2 (`Data_ResourceIntake.area`; jets with their own intake have it too).
     #[serde(default)]
     pub intake_area_m2: f64,
+    /// The intake itself (`Data_ResourceIntake`): how much IntakeAir it gathers from the airflow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intake: Option<Intake>,
     /// Names of every module on the part, in order, so the sim knows what else to implement.
     pub module_names: Vec<String>,
     /// Module data not yet mapped into typed fields, keyed by module name.
@@ -950,6 +953,59 @@ pub struct EngineMode {
     /// How fast the engine follows the throttle (`useEngineResponseTime`); `None` follows it at once.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response: Option<EngineResponse>,
+    /// IntakeAir units the engine takes with each unit of its mixture (the mixture's `IntakeAir`
+    /// ingredient, e.g. 150 for the Wheesley); 0 for engines that carry all their propellant.
+    #[serde(default)]
+    pub intake_air_per_unit: f64,
+    /// `flameoutBar`: the engine flames out when its flow multiplier (the jet curves) falls below it.
+    #[serde(default)]
+    pub flameout_bar: f64,
+    /// `ignitionThreshold`: the engine is starved, and flames out, when it receives less than this share
+    /// of the propellant it asks for.
+    #[serde(default = "ignition_default")]
+    pub ignition_threshold: f64,
+    /// Waits when the engine switches away from this mode (`ModeExitWaitTime`, or
+    /// `ModeExitRunningWaitTime` while running) and into it (`ModeEnterWaitTime`,
+    /// `ModeEnterRunningWaitTime`), s.
+    #[serde(default)]
+    pub mode_exit_s: f64,
+    #[serde(default)]
+    pub mode_exit_running_s: f64,
+    #[serde(default)]
+    pub mode_enter_s: f64,
+    #[serde(default)]
+    pub mode_enter_running_s: f64,
+}
+
+/// An air intake, as Module_ResourceIntake gathers IntakeAir each physics tick: while open, in air with oxygen
+/// at or above `kpa_threshold` and not occluded, it takes
+/// `(clamp01(v_surface . forward) * speed + intake_speed) * unit_scalar * area * mach_curve(Mach) * density`
+/// units per second (IntakeAir has one tonne per unit and one m^3 per unit, so its density factor is 1).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Intake {
+    pub area_m2: f64,
+    /// `intakeSpeed`, m/s: the air the intake draws at a standstill.
+    pub intake_speed_mps: f64,
+    pub unit_scalar: f64,
+    /// `machCurve`; `None` is 1 at every Mach.
+    #[serde(default)]
+    pub mach_curve: Option<Curve>,
+    /// `kPaThreshold`: no air below this static pressure.
+    pub kpa_threshold: f64,
+    /// `occludeNode`: the attach node whose occupant closes the intake (the Goliath's own top node).
+    #[serde(default)]
+    pub occlude_node: String,
+    /// `checkForOxygen`.
+    #[serde(default = "yes")]
+    pub check_oxygen: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+fn ignition_default() -> f64 {
+    0.1
 }
 
 /// An engine that lags its throttle, as Module_Engine does with `useEngineResponseTime`: each tick the

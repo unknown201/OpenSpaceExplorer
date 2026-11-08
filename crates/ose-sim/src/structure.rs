@@ -25,6 +25,8 @@ pub struct EngineDemand {
     pub part: usize,
     pub thrust_kn: f64,
     pub mass_flow_tps: f64,
+    /// IntakeAir the engine asks for with that flow, units/s (0 for engines that carry their oxidiser).
+    pub air_units_per_s: f64,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -141,6 +143,25 @@ pub struct Structure {
     engine_response: Vec<Option<ose_data::EngineResponse>>,
     engine_now: Vec<f64>,
     engine_spool: Vec<f64>,
+    /// Every mode of each engine (`Data_Engine.engineModes`), the one it runs in, and a switch under way:
+    /// the mode it is changing to and the seconds left (Module_Engine.SwitchingEngineMode's waits).
+    engine_modes: Vec<Vec<ose_data::EngineMode>>,
+    pub engine_mode: Vec<usize>,
+    engine_switch: Vec<Option<(usize, f64)>>,
+    /// Engines flamed out (Module_Engine `Flameout`): a jet starved of intake air or below its
+    /// `flameoutBar`. A flamed-out engine has no throttle and no spool until it can breathe again.
+    pub engine_flameout: Vec<bool>,
+    /// Each engine's thrust last tick, kN: while it changes mode an engine keeps it (the original holds
+    /// FinalThrustValue on the stale propellant state and freezes the spool).
+    engine_thrust_last: Vec<f64>,
+    /// Air intakes (`Data_ResourceIntake`), the IntakeAir each part holds room for, and what the vessel
+    /// holds now, units.
+    intakes: Vec<Option<ose_data::Intake>>,
+    intake_air_capacity: Vec<f64>,
+    intake_air: f64,
+    /// IntakeAir the intakes gathered per second at the last step, and the share of the jets' need met.
+    pub intake_air_rate: f64,
+    pub intake_air_fraction: f64,
     /// Physicsless parts (`PhysicsMode` None, other than the root, which the original promotes): they have
     /// no rigidbody, so PartComponent.UpdateMass gives them no physics mass and the vessel's TotalMass
     /// leaves them out, resources and all.
@@ -848,6 +869,32 @@ impl Structure {
                 .collect(),
             engine_now: vec![0.0; n],
             engine_spool: vec![0.0; n],
+            engine_modes: (0..n)
+                .map(|i| def_of(i).map(|d| d.engines.clone()).unwrap_or_default())
+                .collect(),
+            engine_mode: vec![0; n],
+            engine_switch: vec![None; n],
+            engine_flameout: vec![false; n],
+            engine_thrust_last: vec![0.0; n],
+            intakes: (0..n)
+                .map(|i| def_of(i).and_then(|d| d.intake.clone()))
+                .collect(),
+            intake_air_capacity: (0..n)
+                .map(|i| {
+                    def_of(i)
+                        .map(|d| {
+                            d.resource_containers
+                                .iter()
+                                .filter(|c| c.resource == "IntakeAir")
+                                .map(|c| c.capacity_units)
+                                .sum()
+                        })
+                        .unwrap_or(0.0)
+                })
+                .collect(),
+            intake_air: 0.0,
+            intake_air_rate: 0.0,
+            intake_air_fraction: 1.0,
             massless: (0..n)
                 .map(|i| i != root && def_of(i).is_some_and(|d| d.physics_mode == "None"))
                 .collect(),
@@ -1210,6 +1257,12 @@ impl Structure {
                 self.engine_shutdown[i] = !on;
                 true
             }
+            // Module_Engine's SetEngineModeTwo (on) / SetEngineModeOne (off)
+            "mode" if self.engine_modes[i].len() > 1 => {
+                let running = self.engine_thrust_last[i] > 0.0;
+                self.change_engine_mode(i, usize::from(on), running);
+                true
+            }
             "deploy" => {
                 let panel =
                     self.electric[i].solar_deployable && self.electric[i].solar_output > 0.0;
@@ -1322,9 +1375,14 @@ impl Structure {
                 if vacuum_isp <= 0.0 {
                     return None;
                 }
+                if lagged && (self.engine_flameout[part] || self.engine_switch[part].is_some()) {
+                    return None;
+                }
+                // stepped: the flow multiplier alone (the intakes' air limits the burn after it);
+                // readouts and planning: nothing without an intake on the vessel
                 let air = self.engine_jet[part]
                     .as_ref()
-                    .map(|jet| jet.factor(env.mach, env.density, env.oxygen, intakes))
+                    .map(|jet| jet.factor(env.mach, env.density, env.oxygen, lagged || intakes))
                     .unwrap_or(1.0);
                 // a lagging engine burns at its own throttle and pushes with that throttle's thrust
                 // times its spool (PartComponentModule_Engine: FinalThrustValue = thrust * EngineSpool)
@@ -1336,9 +1394,20 @@ impl Structure {
                     * duty
                     * self.controls[part].thrust_limiter
                     * air;
+                let air_per_unit = self.engine_modes[part]
+                    .get(self.engine_mode[part])
+                    .map_or(0.0, |m| m.intake_air_per_unit);
+                let unit_mass = self.engine_mixture[part]
+                    .as_ref()
+                    .map_or(0.0, |mix| self.net.mixture_unit_mass_t(mix));
                 (mass_flow_tps > 0.0).then(|| EngineDemand {
                     part,
                     mass_flow_tps,
+                    air_units_per_s: if unit_mass > 0.0 {
+                        mass_flow_tps / unit_mass * air_per_unit
+                    } else {
+                        0.0
+                    },
                     thrust_kn: mass_flow_tps
                         * curve.evaluate(env.pressure_atm.max(0.0)).max(0.0)
                         * ose_data::G0
@@ -1392,7 +1461,12 @@ impl Structure {
     }
 
     fn engine_forces(&self, i: usize, thrust: f64) -> Vec<PartForce> {
-        let Some(jets) = self.geometry[i].engines.first().filter(|j| !j.is_empty()) else {
+        let mode = &self.geometry[i].engines;
+        let Some(jets) = mode
+            .get(self.engine_mode[i])
+            .or(mode.first())
+            .filter(|j| !j.is_empty())
+        else {
             if self.engine_nozzles[i].is_empty() {
                 return vec![PartForce {
                     part: i,
@@ -1551,7 +1625,7 @@ impl Structure {
             let Some(r) = self.engine_response[part] else {
                 continue;
             };
-            if !running.contains(&part) {
+            if !running.contains(&part) || self.engine_flameout[part] {
                 self.engine_now[part] = 0.0;
                 self.engine_spool[part] = 0.0;
                 continue;
@@ -1565,8 +1639,127 @@ impl Structure {
             } else {
                 lerp(now, want, r.deceleration_per_s * dt)
             };
+            if self.engine_switch[part].is_some() {
+                continue;
+            }
             let target = r.spool_idle.max(self.engine_now[part]);
             self.engine_spool[part] = lerp(self.engine_spool[part], target, r.spool_per_s * dt);
+        }
+    }
+
+    /// Thrust the attached engines delivered at the last propulsion step, kN: after spool, intake air,
+    /// fuel and flameouts (the original's summed `FinalThrustValue`).
+    pub fn delivered_thrust_kn(&self) -> f64 {
+        (0..self.engine_thrust_last.len())
+            .filter(|&i| self.rigid.present[i])
+            .map(|i| self.engine_thrust_last[i])
+            .sum()
+    }
+
+    /// Switch engine `i` to `mode` (Module_Engine.ChangeEngineMode): the engine stops drawing propellant,
+    /// keeps its last thrust, and runs in the new mode after the old mode's exit wait and the new mode's
+    /// enter wait (the "running" waits only for an engine without a response time that is running, the
+    /// original's `EngineStatePriorChangeMode == Running`). Asking again mid-switch restarts the waits.
+    /// Whether the engine has that mode to change to.
+    pub fn change_engine_mode(&mut self, i: usize, mode: usize, running: bool) -> bool {
+        let Some(modes) = self.engine_modes.get(i) else {
+            return false;
+        };
+        if modes.len() <= 1
+            || mode >= modes.len()
+            || (self.engine_switch[i].is_none() && mode == self.engine_mode[i])
+        {
+            return false;
+        }
+        let (from, to) = (&modes[self.engine_mode[i]], &modes[mode]);
+        let steady = running && from.response.is_none();
+        let wait = if steady {
+            from.mode_exit_running_s + to.mode_enter_running_s
+        } else {
+            from.mode_exit_s + to.mode_enter_s
+        };
+        self.engine_switch[i] = Some((mode, wait));
+        true
+    }
+
+    /// Engine `i` takes up `mode`'s rated thrust, Isp, mixture, response, jet curves and nozzles.
+    fn take_engine_mode(&mut self, i: usize, mode: usize) {
+        let Some(m) = self.engine_modes[i].get(mode).cloned() else {
+            return;
+        };
+        self.engine_mode[i] = mode;
+        self.engine_thrust_kn[i] = m.max_thrust_kn;
+        self.engine_isp[i] = Some(m.isp_curve.clone());
+        self.engine_throttle_locked[i] = m.throttle_locked;
+        self.engine_response[i] = m.response;
+        self.engine_mixture[i] = Some(m.propellant_mixture.clone());
+        self.engine_nozzles[i] = m.thrust_transforms.clone();
+        self.engine_jet[i] = m.air_breathing.then(|| crate::flight::Jet {
+            vel_curve: m.vel_curve.clone(),
+            atm_curve: m.atm_curve.clone(),
+        });
+    }
+
+    /// Mode switches under way count down; a finished one takes up its mode.
+    fn advance_mode_switches(&mut self, dt: f64) {
+        for i in 0..self.engine_switch.len() {
+            let Some((mode, left)) = self.engine_switch[i] else {
+                continue;
+            };
+            if left - dt > 1e-9 {
+                self.engine_switch[i] = Some((mode, left - dt));
+            } else {
+                self.engine_switch[i] = None;
+                self.take_engine_mode(i, mode);
+            }
+        }
+    }
+
+    /// IntakeAir the open intakes gather per second (Module_ResourceIntake.OnModuleFixedUpdate): in air
+    /// with oxygen at or above each intake's pressure threshold, unshielded,
+    /// `(clamp01(v . forward) * speed + intakeSpeed) * unitScalar * area * machCurve(Mach) * density`.
+    /// The intake faces along its part's axis.
+    fn intake_supply(&self, p: &Powered, env: &crate::flight::EngineEnvironment) -> f64 {
+        let (bx, by, bz) = crate::flight::vessel_basis(p);
+        let speed = env.airspeed.length();
+        let kpa = env.pressure_atm * 101.325;
+        (0..self.intakes.len())
+            .filter(|&i| self.rigid.present[i] && !self.shielded[i])
+            .filter_map(|i| self.intakes[i].as_ref().map(|k| (i, k)))
+            .filter(|(_, k)| (env.oxygen || !k.check_oxygen) && kpa >= k.kpa_threshold)
+            .map(|(i, k)| {
+                let a = self.part_axes(i)[1];
+                let forward = bx * a.x + by * a.y + bz * a.z;
+                let ram = env.airspeed.dot(forward).clamp(0.0, 1.0) * speed;
+                let mach = k.mach_curve.as_ref().map_or(1.0, |c| c.evaluate(env.mach));
+                ((ram + k.intake_speed_mps) * k.unit_scalar * k.area_m2 * mach * env.density)
+                    .max(0.0)
+            })
+            .sum()
+    }
+
+    /// An engine that flames out with more than one mode switches, as Module_Engine.AutoSwitchModes does,
+    /// to a mode burning another mixture whose every ingredient it can reach (intake air included).
+    fn auto_switch_mode(&mut self, i: usize, running: bool) {
+        if self.engine_modes[i].len() <= 1 || self.engine_switch[i].is_some() {
+            return;
+        }
+        let current = self.engine_modes[i][self.engine_mode[i]]
+            .propellant_mixture
+            .clone();
+        let target = (0..self.engine_modes[i].len()).find(|&m| {
+            let mode = &self.engine_modes[i][m];
+            m != self.engine_mode[i]
+                && mode.propellant_mixture != current
+                && (mode.intake_air_per_unit <= 0.0 || self.intake_air > 0.0)
+                && self
+                    .net
+                    .ingredients(&mode.propellant_mixture)
+                    .iter()
+                    .all(|&(r, _)| self.net.available(i, r) > 0.0)
+        });
+        if let Some(m) = target {
+            self.change_engine_mode(i, m, running);
         }
     }
 
@@ -1586,9 +1779,72 @@ impl Structure {
             mass: self.mass_properties(),
             ..Default::default()
         };
+        self.advance_mode_switches(dt);
+        let fed = if p.ignited && !p.crashed {
+            self.fed_engines(p.stage)
+        } else {
+            Vec::new()
+        };
+        // intake air: what the intakes gather this tick on top of what they hold
+        let supply = self.intake_supply(p, &env);
+        self.intake_air_rate = supply;
+        let mut air = self.intake_air + supply * dt.max(0.0);
+        let capacity: f64 = (0..self.intake_air_capacity.len())
+            .filter(|&i| self.rigid.present[i])
+            .map(|i| self.intake_air_capacity[i])
+            .sum();
+        // a running jet whose flow multiplier falls below its flameoutBar flames out
+        // (PartComponentModule_Engine.CalculatePropellantReqs); a flamed-out one lights again once the
+        // multiplier clears the bar and air comes in
+        let mut starved = Vec::new();
+        for &i in &fed {
+            let Some(jet) = &self.engine_jet[i] else {
+                continue;
+            };
+            if self.engine_switch[i].is_some() {
+                continue;
+            }
+            let mode = &self.engine_modes[i][self.engine_mode[i]];
+            let flow = jet.factor(env.mach, env.density, env.oxygen, true);
+            if !self.engine_flameout[i] && flow < mode.flameout_bar {
+                starved.push(i);
+                self.engine_flameout[i] = true;
+            } else if self.engine_flameout[i]
+                && flow >= mode.flameout_bar
+                && (mode.intake_air_per_unit <= 0.0 || supply > 0.0)
+            {
+                self.engine_flameout[i] = false;
+            }
+        }
+        for i in 0..self.engine_flameout.len() {
+            if !fed.contains(&i) {
+                self.engine_flameout[i] = false;
+            }
+        }
         self.respond_engines(p, dt);
+        let mut held = vec![0.0; self.rigid.len()];
         if p.ignited && !p.crashed && dt > 0.0 {
-            let demands = self.engine_demands_at(p.stage, p.throttle, env, true);
+            // an engine changing mode keeps its last thrust and draws nothing
+            for &i in &fed {
+                if self.engine_switch[i].is_some() {
+                    held[i] = self.engine_thrust_last[i];
+                }
+            }
+            let mut demands = self.engine_demands_at(p.stage, p.throttle, env, true);
+            // the jets share the intake air: each gets the same share of what it asks for
+            let need: f64 = demands.iter().map(|d| d.air_units_per_s * dt).sum();
+            let air_share = if need > 0.0 {
+                (air / need).clamp(0.0, 1.0)
+            } else {
+                1.0
+            };
+            self.intake_air_fraction = air_share;
+            for d in &mut demands {
+                if d.air_units_per_s > 0.0 {
+                    d.mass_flow_tps *= air_share;
+                    d.thrust_kn *= air_share;
+                }
+            }
             let mut active = Vec::new();
             let mut requests = Vec::new();
             for demand in demands {
@@ -1617,12 +1873,38 @@ impl Structure {
             let before = self.net.mass_t();
             let fractions = self.net.process(&requests, dt);
             out.burned_t = (before - self.net.mass_t()).max(0.0);
-            let bent = self.rigid.bend_mapper();
+            let mut pushes: Vec<(usize, f64)> = Vec::new();
             for (demand, fraction) in active.iter().zip(fractions) {
-                let thrust = demand.thrust_kn * fraction;
-                delivered[demand.part] = thrust;
+                let fraction = fraction.clamp(0.0, 1.0);
+                if demand.air_units_per_s > 0.0 {
+                    air -= demand.air_units_per_s * dt * air_share * fraction;
+                    // starved: less than its ignition threshold of the mixture it asked for arrives
+                    // (intake air and fuel together), PartComponentModule_Engine.CheckDeprived
+                    let mode = &self.engine_modes[demand.part][self.engine_mode[demand.part]];
+                    if air_share * fraction < mode.ignition_threshold {
+                        starved.push(demand.part);
+                        continue;
+                    }
+                }
+                pushes.push((demand.part, demand.thrust_kn * fraction));
+            }
+            for (i, &h) in held.iter().enumerate() {
+                if h > 0.0 {
+                    pushes.push((i, h));
+                }
+            }
+            let running = p.throttle > 0.0;
+            for i in starved {
+                self.engine_flameout[i] = true;
+                self.engine_now[i] = 0.0;
+                self.engine_spool[i] = 0.0;
+                self.auto_switch_mode(i, running);
+            }
+            let bent = self.rigid.bend_mapper();
+            for (part, thrust) in pushes {
+                delivered[part] = thrust;
                 out.thrust_kn += thrust;
-                for mut force in self.engine_forces(demand.part, thrust) {
+                for mut force in self.engine_forces(part, thrust) {
                     // A bent joint turns the engine, and its thrust with it.
                     if let Some(bend) = &bent {
                         (force.force_kn, force.offset_m) =
@@ -1637,6 +1919,8 @@ impl Structure {
                 }
             }
         }
+        self.intake_air = air.clamp(0.0, capacity);
+        self.engine_thrust_last.clone_from(&delivered);
         self.resolved_engine_thrust = Some(delivered);
         out
     }
@@ -6288,6 +6572,157 @@ mod tests {
             "methane reaches the jet: {} t",
             p.propellant_t
         );
+    }
+
+    /// Stock04_Jet's Wheesley on the runway, sea level: Module_Engine's spool and Module_ResourceIntake's air.
+    fn jet_on_the_runway() -> (Structure, Powered, usize, DVec3) {
+        let (crafts, defs, res) = assets();
+        let c = crafts.iter().find(|c| c.name == "Stock04_Jet").unwrap();
+        let mut s = Structure::build(c, &defs, &res);
+        let engine = (0..s.rigid.len())
+            .find(|&i| s.engine_modes[i].len() == 2)
+            .expect("the Wheesley has Cruise and Reverse");
+        let facing = DVec3::new(0.0, 1.0, 0.0);
+        let mut p = flying(facing);
+        p.throttle = 1.0;
+        p.ignited = true;
+        s.sync(&mut p);
+        let (_, _, bz) = basis(facing);
+        (s, p, engine, -bz)
+    }
+
+    fn runway_air(airspeed: DVec3) -> crate::flight::EngineEnvironment {
+        crate::flight::EngineEnvironment {
+            pressure_atm: 1.0,
+            density: 1.225,
+            mach: airspeed.length() / 340.0,
+            oxygen: true,
+            airspeed,
+        }
+    }
+
+    #[test]
+    fn a_jet_spools_up_and_its_intake_air_limits_it_at_a_standstill() {
+        let (mut s, p, engine, nose) = jet_on_the_runway();
+        let dt = 0.02;
+        let mut trace = Vec::new();
+        for _ in 0..(30.0 / dt) as usize {
+            trace.push(s.propulsion(&p, runway_air(DVec3::ZERO), dt).thrust_kn);
+        }
+        // the radial intake gathers (0 + 15 m/s) * 0.00496 * 0.3 m^2 * 1.225 kg/m^3 = 0.0273 IntakeAir/s
+        let supply = 15.0 * 0.00496 * 0.3 * 1.225;
+        assert!(
+            (s.intake_air_rate - supply).abs() < 1e-9,
+            "{}",
+            s.intake_air_rate
+        );
+        // the Wheesley asks 150 units of air per unit of methane: 0.175 units/s at full flow, so it gets
+        // 15.6% of its air and pushes 15.6% of 120 kN once spooled
+        let full_air = 120.0 / (10500.0 * ose_data::G0) * 150.0;
+        let capped = 120.0 * supply / full_air;
+        let last = *trace.last().unwrap();
+        assert!((last - capped).abs() < 0.05 * capped, "{last} vs {capped}");
+        assert!(!s.engine_flameout[engine]);
+        // spooling: thrust builds over seconds, not at once (engineAccelerationSpeed 0.12)
+        assert!(
+            trace[(1.0 / dt) as usize] < 0.5 * last,
+            "{:?}",
+            &trace[..60]
+        );
+        // rolling at 100 m/s along the nose, ram air feeds it fully
+        let mut moving = 0.0;
+        for _ in 0..(10.0 / dt) as usize {
+            moving = s.propulsion(&p, runway_air(nose * 100.0), dt).thrust_kn;
+        }
+        assert!(
+            (s.intake_air_fraction - 1.0).abs() < 1e-12,
+            "{}",
+            s.intake_air_fraction
+        );
+        assert!(moving > 100.0, "{moving}");
+    }
+
+    #[test]
+    fn a_jet_switches_to_reverse_after_its_mode_wait_and_flames_out_in_vacuum() {
+        let (mut s, p, engine, nose) = jet_on_the_runway();
+        let dt = 0.02;
+        let air = runway_air(nose * 100.0);
+        let mut last = crate::flight::Propulsion::default();
+        for _ in 0..(20.0 / dt) as usize {
+            last = s.propulsion(&p, air, dt);
+        }
+        assert!(
+            last.force_kn.length() > 80.0,
+            "{:?} {}",
+            last.force_kn,
+            last.thrust_kn
+        );
+        let forward = last.force_kn.normalized();
+        assert!(s.part_action(engine, "mode", true));
+        // the Wheesley waits ModeEnterWaitTime (3 s) and keeps its last thrust meanwhile
+        for _ in 0..(2.9 / dt) as usize {
+            let now = s.propulsion(&p, air, dt);
+            assert!((now.thrust_kn - last.thrust_kn).abs() < 1e-9);
+            assert_eq!(s.engine_mode[engine], 0);
+        }
+        for _ in 0..(10.0 / dt) as usize {
+            last = s.propulsion(&p, air, dt);
+        }
+        assert_eq!(s.engine_mode[engine], 1);
+        assert!(
+            last.force_kn.dot(forward) < -50.0,
+            "reverse thrust {:?}",
+            last.force_kn
+        );
+        // back to Cruise, then into vacuum: the flow multiplier drops below flameoutBar
+        assert!(s.part_action(engine, "mode", false));
+        for _ in 0..(4.0 / dt) as usize {
+            s.propulsion(&p, air, dt);
+        }
+        assert_eq!(s.engine_mode[engine], 0);
+        let space = s.propulsion(&p, Default::default(), dt);
+        assert!(s.engine_flameout[engine]);
+        assert_eq!(space.thrust_kn, 0.0);
+        // air again: it relights from zero spool
+        let relit = s.propulsion(&p, air, dt);
+        assert!(!s.engine_flameout[engine]);
+        assert!(relit.thrust_kn < 0.1 * last.force_kn.length());
+    }
+
+    #[test]
+    fn a_rapier_switches_to_closed_cycle_when_its_air_runs_out() {
+        let (mut s, p, engine, nose) = jet_on_the_runway();
+        let (_, defs, _) = assets();
+        let rapier = defs
+            .iter()
+            .find(|d| d.id == "engine_1v_methane-methalox_rapier")
+            .unwrap();
+        // the Wheesley's mount carries a RAPIER: Air Breathing, then Closed Cycle on methalox
+        s.engine_modes[engine] = rapier.engines.clone();
+        s.take_engine_mode(engine, 0);
+        let dt = 0.02;
+        for _ in 0..(5.0 / dt) as usize {
+            s.propulsion(&p, runway_air(nose * 100.0), dt);
+        }
+        // airless and nothing to burn in Closed Cycle (no oxidizer aboard): it stays flamed out
+        s.propulsion(&p, Default::default(), dt);
+        assert!(s.engine_flameout[engine]);
+        assert!(s.engine_switch[engine].is_none() && s.engine_mode[engine] == 0);
+        // with oxidizer within reach, the flameout switches it (no mode waits on the RAPIER)
+        s.engine_flameout[engine] = false;
+        let ox = s.net.resource("Oxidizer").unwrap();
+        s.net.tanks.push(crate::resources::Tank {
+            part: engine,
+            resource: ox,
+            stored: 100.0,
+            capacity: 100.0,
+        });
+        s.propulsion(&p, Default::default(), dt);
+        s.propulsion(&p, Default::default(), dt);
+        assert_eq!(s.engine_mode[engine], 1, "Closed Cycle");
+        assert_eq!(s.engine_thrust_kn[engine], 180.0);
+        assert_eq!(s.engine_mixture[engine].as_deref(), Some("Methalox"));
+        assert!(s.engine_jet[engine].is_none() && s.engine_response[engine].is_none());
     }
 
     #[test]

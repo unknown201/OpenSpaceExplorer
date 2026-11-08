@@ -367,7 +367,11 @@ pub struct Powered {
     pub level: bool,
 }
 
-/// How a jet's thrust follows the flight: against Mach and against air density (kg/m^3).
+/// `atmCurve` takes air density relative to Kerbin's sea level: PartComponentModule_Engine.ModifyFlow
+/// evaluates it at `atmDensity * 0.8163265306122448` (1 / 1.225 kg/m^3).
+pub const JET_DENSITY_SCALE: f64 = 0.816_326_530_612_244_8;
+
+/// How a jet's thrust follows the flight: against Mach and against air density.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Jet {
     pub vel_curve: Option<Curve>,
@@ -375,7 +379,8 @@ pub struct Jet {
 }
 
 impl Jet {
-    /// Share of rated thrust at `mach` in air of `density`; nothing without oxygen or intakes.
+    /// Share of rated thrust at `mach` in air of `density` (kg/m^3), the original's `FlowMultiplier`;
+    /// nothing without oxygen or intakes.
     pub fn factor(&self, mach: f64, density: f64, oxygen: bool, intakes: bool) -> f64 {
         if !oxygen || !intakes || density <= 0.0 {
             return 0.0;
@@ -388,7 +393,7 @@ impl Jet {
         let a = self
             .atm_curve
             .as_ref()
-            .map(|c| c.evaluate(density))
+            .map(|c| c.evaluate(density * JET_DENSITY_SCALE))
             .unwrap_or(1.0);
         (v * a).max(0.0)
     }
@@ -1661,6 +1666,8 @@ pub struct EngineEnvironment {
     pub density: f64,
     pub mach: f64,
     pub oxygen: bool,
+    /// Velocity through the air (relative to the rotating atmosphere), inertial m/s: intakes scoop with it.
+    pub airspeed: DVec3,
 }
 
 impl EngineEnvironment {
@@ -1674,13 +1681,15 @@ impl EngineEnvironment {
         } else {
             0.0
         };
-        let speed = (p.v - DVec3::new(0.0, 0.0, omega).cross(p.r)).length();
+        let airspeed = p.v - DVec3::new(0.0, 0.0, omega).cross(p.r);
+        let speed = airspeed.length();
         let sound = a.speed_of_sound(alt);
         Self {
             pressure_atm: a.pressure_kpa(alt) / 101.325,
             density: a.density(alt),
             mach: if sound > 0.0 { speed / sound } else { 0.0 },
             oxygen: a.oxygen,
+            airspeed,
         }
     }
 }

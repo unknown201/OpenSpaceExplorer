@@ -126,13 +126,15 @@ impl ChuteSettings {
 /// The part actions a group can run: on with the group on, off with it off.
 /// `engine`: the engine runs or is shut down; `deploy`: panels, antennas, gear and bays extend or retract;
 /// `chute`: parachutes arm (on only); `converter`: converters run or stop; `fairing`: the fairing comes
-/// off (on only).
-pub const ACTIONS: [&str; 6] = [
+/// off (on only); `mode`: a multi-mode engine switches to its second mode (on) or back to its first (off);
+/// `crossfeed`: a decoupler's, separator's or docking port's crossfeed switches on or off.
+pub const ACTIONS: [&str; 7] = [
     "engine",
     "deploy",
     "chute",
     "converter",
     "fairing",
+    "mode",
     "crossfeed",
 ];
 
