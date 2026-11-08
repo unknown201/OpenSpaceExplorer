@@ -109,7 +109,7 @@ namespace OpenSpaceExplorer.Validation
         //   bank      roll right +1 for 1 s, then released 8 s
         // Every physics tick: speed, vertical speed, altitude, pitch/roll/heading against the horizon, the
         // control inputs, thrust and situation.
-        public static IEnumerator Fly(MonoBehaviour host, VesselComponent vessel, string dir, Action<string> mark)
+        public static IEnumerator Fly(MonoBehaviour host, VesselComponent vessel, string dir, Action<string> mark, bool aero = false)
         {
             var input = G.ViewController.flightInputHandler;
             string phase = "roll";
@@ -144,6 +144,7 @@ namespace OpenSpaceExplorer.Validation
             vessel.SetAutopilotEnableDisable(true);
             SetGroup(KSPActionGroup.Brakes, false);
             var logger = host.StartCoroutine(Log());
+            var aeroLogger = aero ? host.StartCoroutine(AeroLog(dir, () => logging, () => phase)) : null;
             input.OverrideInputMaxThrottle(true);
             vessel.ActivateNextStage();
             Phase("roll");
@@ -171,6 +172,73 @@ namespace OpenSpaceExplorer.Validation
             yield return new WaitForFixedUpdate();
             yield return new WaitForFixedUpdate();
             host.StopCoroutine(logger);
+            if (aeroLogger != null) host.StopCoroutine(aeroLogger);
+        }
+
+        static readonly System.Reflection.FieldInfo DeflectionField =
+            typeof(Module_ControlSurface).GetField("_deflection", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        static readonly System.Reflection.FieldInfo CtrlLiftField =
+            typeof(Module_ControlSurface).GetField("_ctrlSurfaceLiftForce", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+
+        // Every physics tick: the vessel's centre of mass and principal moments of inertia, its angular
+        // velocity, and per lifting part its fixed and moving lift (world kN), where they act (relative to
+        // the centre of mass) and the pitching moment they give about the control frame's right axis, plus
+        // the control surface deflection. Columns are in the control frame: x right, y nose, z belly-ward
+        // (Unity's forward of the control transform).
+        static IEnumerator AeroLog(string dir, Func<bool> running, Func<string> phase)
+        {
+            using (var w = new StreamWriter(Path.Combine(dir, "out", "jetaero-trace.csv"), false))
+            {
+                w.WriteLine("t,phase,part,name,kind,fx,fy,fz,rx,ry,rz,pitch_moment,deflection,moi_x,moi_y,moi_z,wx,wy,wz,ut");
+                double start = G.UniverseModel.UniverseTime, last = double.NegativeInfinity;
+                while (running())
+                {
+                    yield return new WaitForFixedUpdate();
+                    var v = G.ViewController.GetActiveSimVessel();
+                    if (v == null) continue;
+                    double ut = G.UniverseModel.UniverseTime;
+                    if (ut <= last) continue;
+                    last = ut;
+                    if (!G.ViewController.TryGetActiveVehicle(out var vehicle)) continue;
+                    var ctrl = v.ControlTransform;
+                    var space = G.SpaceSimulation;
+                    Vector3 com = space.UniverseView.PhysicsSpace.PositionToPhysics(v.CenterOfMass);
+                    var vb = (vehicle as KSP.Sim.impl.VesselBehavior);
+                    Transform ct = vb != null ? vb.transform : null;
+                    // the control frame in Unity world axes
+                    var rot = space.UniverseView.PhysicsSpace.RotationToPhysics(ctrl.Rotation);
+                    Vector3 right = rot * Vector3.right, nose = rot * Vector3.up, fwd = rot * Vector3.forward;
+                    var moi = v.MOI.vector;
+                    var wv = space.UniverseView.PhysicsSpace.AngularVelocityToPhysics(v.AngularVelocityMassAvg);
+                    string F(double x) => x.ToString("R", Inv);
+                    string head = F(ut - start) + "," + phase();
+                    int index = 0;
+                    foreach (var part in v.SimulationObject.PartOwner.Parts)
+                    {
+                        int i = index++;
+                        if (!space.TryGetViewObject(part.SimulationObject, out var view)) continue;
+                        var behavior = view.GetComponent<PartBehavior>();
+                        if (behavior == null) continue;
+                        var lift = behavior.GetModule<Module_LiftingSurface>();
+                        if (lift == null) continue;
+                        var tf = behavior.transform;
+                        void Row(string kind, Data_LiftingSurface.LiftForce lf, float deflection)
+                        {
+                            if (lf == null) return;
+                            Vector3 f = tf.TransformDirection((Vector3)lf.RelativeForce);
+                            Vector3 r = tf.TransformPoint((Vector3)lf.RelativePosition) - com;
+                            float m = Vector3.Dot(Vector3.Cross(r, f), right);
+                            w.WriteLine(string.Join(",", new[] { head, i.ToString(Inv), part.Name, kind,
+                                F(Vector3.Dot(f, right)), F(Vector3.Dot(f, nose)), F(Vector3.Dot(f, fwd)),
+                                F(Vector3.Dot(r, right)), F(Vector3.Dot(r, nose)), F(Vector3.Dot(r, fwd)), F(m), F(deflection),
+                                F(moi.x), F(moi.y), F(moi.z), F(Vector3.Dot(wv, right)), F(Vector3.Dot(wv, nose)), F(Vector3.Dot(wv, fwd)), F(ut) }));
+                        }
+                        Row("fixed", lift.LiftForce, 0f);
+                        if (lift is Module_ControlSurface cs)
+                            Row("moving", (Data_LiftingSurface.LiftForce)CtrlLiftField?.GetValue(cs), DeflectionField != null ? (float)DeflectionField.GetValue(cs) : 0f);
+                    }
+                }
+            }
         }
 
         static Module_Engine EngineModule(VesselComponent v)
