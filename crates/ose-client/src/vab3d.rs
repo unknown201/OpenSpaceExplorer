@@ -258,9 +258,10 @@ impl VabView {
         });
     }
 
-    pub fn orbit(&mut self, dx_px: f64, dy_px: f64) {
-        self.yaw -= dx_px * 0.005;
-        self.pitch = (self.pitch + dy_px * 0.005).clamp(-1.2, 1.4);
+    /// Turn the camera by `dyaw` and `dpitch` radians (`interaction::vab_orbit_radians`).
+    pub fn orbit(&mut self, dyaw: f64, dpitch: f64) {
+        self.yaw -= dyaw;
+        self.pitch = (self.pitch + dpitch).clamp(-1.2, 1.4);
     }
 
     /// Move the camera up (positive) or down along the craft, in screen pixels of a drag.
@@ -296,8 +297,11 @@ impl VabView {
         self.target_set = false;
     }
 
-    pub fn zoom(&mut self, factor: f64) {
-        self.distance = (self.distance * factor).clamp(2.0, 250.0);
+    /// Zoom by `notches` of the wheel (positive in), KSP2's additive pivot distance (`interaction::vab_zoom`).
+    pub fn zoom(&mut self, notches: f64, fast: bool, fine: bool) {
+        let axis = notches * crate::interaction::VAB_ZOOM_PER_NOTCH;
+        self.distance =
+            crate::interaction::vab_zoom(self.distance, axis, fast, fine).clamp(2.0, 250.0);
     }
 
     /// A hall point (glTF frame) in the craft's frame, and back: for loose assemblies saved in the craft.
