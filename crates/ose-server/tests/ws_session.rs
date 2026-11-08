@@ -1419,6 +1419,60 @@ async fn crafts_with_nothing_staged_launch() {
 }
 
 #[tokio::test]
+async fn a_craft_launched_into_orbit_lights_nothing_until_staged() {
+    let (_server, addr) = spawn_server().await;
+    let mut ws = connect_ws(&addr).await;
+    hello(&mut ws, None, "driver").await;
+    let crafts: Vec<ose_data::craft::Craft> =
+        serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+    // the Kerbal K2's first stage is four Thumper solid boosters, which cannot be throttled down
+    let craft = crafts
+        .iter()
+        .find(|c| c.name == "Kerbal K2")
+        .unwrap()
+        .clone();
+    send_msg(
+        &mut ws,
+        &ClientMessage::LaunchCraft {
+            craft,
+            altitude_m: 200_000.0,
+        },
+    )
+    .await;
+    let vessel = wait_for(&mut ws, |m| match m {
+        ServerMessage::CraftLaunched { vessel, reason, .. } => {
+            assert!(reason.is_none(), "{reason:?}");
+            vessel
+        }
+        _ => None,
+    })
+    .await;
+    let mut masses = Vec::new();
+    for _ in response_window() {
+        if let ServerMessage::Vessels { vessels, .. } = recv(&mut ws).await {
+            let Some(f) = vessels
+                .iter()
+                .find(|v| v.id == vessel)
+                .and_then(|v| v.flight.as_ref())
+            else {
+                continue;
+            };
+            assert_eq!(f.thrust_kn, 0.0, "nothing burns before the first stage");
+            assert!(f.firing_engines.is_empty(), "{:?}", f.firing_engines);
+            masses.push(f.mass_t);
+            if masses.len() >= 5 {
+                break;
+            }
+        }
+    }
+    assert!(masses.len() >= 5);
+    assert!(
+        masses.iter().all(|m| (m - masses[0]).abs() < 1e-9),
+        "{masses:?}"
+    );
+}
+
+#[tokio::test]
 async fn a_vab_built_rocket_sits_still_on_the_pad_and_lifts_off() {
     let (_server, addr) = spawn_server_with(&["--db", ":memory:", "--save", "none"], None).await;
     let mut ws = connect_ws(&addr).await;
