@@ -63,6 +63,9 @@ pub struct Boarding {
 pub const CLIMB_SPEED_MPS: f64 = 0.8;
 pub const GRAB_RANGE_M: f64 = 1.5;
 pub const LADDER_STANDOFF_M: f64 = 0.4;
+/// How far up a crewed part's ladder a Kerbal steps out of its hatch (share of the ladder): KSP2 trace run 14
+/// hangs the Kerbal 0.43 m above the Mk1 pod's origin, three quarters of the way up its hull.
+pub const HATCH_ALONG: f64 = 0.75;
 pub const BOARDING_S: f64 = 1.0;
 
 /// A resource transfer running on a vessel (the Resource Manager): from these tanks into those.
@@ -435,7 +438,7 @@ impl Universe {
             self.world.entity_mut(kerbal).insert(OnLadder {
                 vessel: e,
                 part: seat,
-                along_m: (top - foot).length() * 0.5,
+                along_m: (top - foot).length() * HATCH_ALONG,
                 climb: 0.0,
             });
             self.run_ladders(0.0);
@@ -555,9 +558,15 @@ impl Universe {
                         st.offset_inertial(p.facing, DVec3::new(0.0, 0.0, 1.0))
                             .normalized()
                     };
-                    let across = (half.x * (1.0 - a.x.abs()))
-                        .max(half.y * (1.0 - a.y.abs()))
-                        .max(half.z * (1.0 - a.z.abs()));
+                    // beside the hull itself at that height (a Mk1 pod narrows to its top), else its box
+                    let across = st
+                        .hull_taper(i)
+                        .map(|t| t.radius_at((centre - st.rigid.rest_position(i)).dot(t.axis)))
+                        .unwrap_or(
+                            (half.x * (1.0 - a.x.abs()))
+                                .max(half.y * (1.0 - a.y.abs()))
+                                .max(half.z * (1.0 - a.z.abs())),
+                        );
                     mid = mid + out * across;
                 }
                 (i, mid - axis * reach, mid + axis * reach)
@@ -839,6 +848,10 @@ mod tests {
     use super::*;
 
     fn k1_on_pad() -> (Universe, Entity) {
+        craft_on_pad("Kerbal K1")
+    }
+
+    fn craft_on_pad(name: &str) -> (Universe, Entity) {
         let bodies: Vec<ose_data::CelestialBody> =
             serde_json::from_str(include_str!("../../../assets/own/kerbol-system.json")).unwrap();
         let mut kerbin = bodies.into_iter().find(|b| b.id == "Kerbin").unwrap();
@@ -851,7 +864,7 @@ mod tests {
             serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
         let res: Vec<ose_data::ResourceDef> =
             serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
-        let k1 = crafts.iter().find(|c| c.name == "Kerbal K1").unwrap();
+        let k1 = crafts.iter().find(|c| c.name == name).unwrap();
         let report = ose_data::staging::delta_v_by_stage(k1, &defs, &res);
         let spec = flight::FlightSpec::from_report(&report, &[], &[], 1.5);
         let mut u = Universe::with_bodies(&[kerbin]);
@@ -862,25 +875,153 @@ mod tests {
         let kerbal = defs.iter().find(|d| d.id == "eva_kerbal").unwrap();
         u.set_kerbal_part(kerbal.experiments.clone());
         let body = u.body_entity("Kerbin").unwrap();
-        let v = u.spawn_powered_on_surface("K1", body, spec, -0.6836, -74.8198);
+        let v = u.spawn_powered_on_surface(name, body, spec, -0.6836, -74.8198);
         u.set_structure(v, structure::Structure::build(k1, &defs, &res));
         (u, v)
     }
 
-    /// Let go of the ladder the Kerbal stepped out onto, and wait until they are on the ground.
+    /// Let go of the ladder the Kerbal stepped out onto, and wait until they are on the ground: they land on
+    /// the pod below the hatch, so they walk off it, away from the craft, and fall to the ground.
     fn let_go_and_land(u: &mut Universe, jeb: Entity) {
+        let craft = u.on_ladder(jeb).expect("on a ladder").0;
         assert_eq!(
             u.grab_ladder(jeb),
             Ok(false),
             "stepped out holding the ladder"
         );
         for _ in 0..(20 * crate::TICKS_PER_SECOND) {
-            if u.powered(jeb).unwrap().landed {
+            let p = u.powered(jeb).unwrap();
+            if p.landed && p.deck.is_none() {
+                u.set_controls(jeb, 0.0, flight::Attitude::Free);
                 return;
+            }
+            if p.landed {
+                // on the craft: walk out from its axis
+                let c = u.powered(craft).unwrap().r;
+                let up = c.normalized();
+                let d = p.r - c;
+                let out = (d - up * d.dot(up)).normalized();
+                u.set_controls(jeb, 1.0, flight::Attitude::Fixed(out));
+            } else {
+                u.set_controls(jeb, 0.0, flight::Attitude::Free);
             }
             u.step();
         }
         panic!("never reached the ground");
+    }
+
+    /// Height of a Kerbal's centre above the ground under it, m.
+    fn height(u: &Universe, k: Entity) -> f64 {
+        let body = u.body_entity("Kerbin").unwrap();
+        let b = u.world.get::<bodies::Body>(body).unwrap();
+        let r = u.powered(k).unwrap().r;
+        r.length() - flight::ground_radius(b, None, r, u.ut())
+    }
+
+    #[test]
+    fn letting_go_of_the_pod_ladder_lands_on_the_pod_and_walking_off_its_edge_falls_to_the_pad() {
+        // KSP2 trace run 14 (reference/ksp2-run14-eva/eva-trace.csv): Valentina lets go of the Mk1 pod's
+        // ladder at 112.32 m, drops 0.31 m onto the pod and stands there Landed at 0 m/s for 5 s; walking on,
+        // she goes off its edge and falls 3.7 m to the pad. The same pod on a tank and a Terrier here.
+        let (mut u, v) = craft_on_pad("Lesson 3.2 rocket");
+        let jeb = u.go_eva(v, None).unwrap();
+        u.step();
+        let hang = height(&u, jeb);
+        assert_eq!(u.grab_ladder(jeb), Ok(false));
+        for _ in 0..(2 * crate::TICKS_PER_SECOND) {
+            u.step();
+        }
+        let p = u.powered(jeb).unwrap().clone();
+        assert!(p.landed && !p.crashed, "came to rest");
+        assert!(p.deck.is_some(), "on the craft");
+        let on_pod = height(&u, jeb);
+        let drop = hang - on_pod;
+        assert!(
+            (0.15..0.5).contains(&drop),
+            "dropped {drop:.2} m onto the pod (KSP2: 0.31 m)"
+        );
+        // the pod stands on a 1.9 m tank and a 0.76 m engine: well above the pad
+        assert!(on_pod > 2.5, "{on_pod:.2} m up: on the pad, not the pod");
+        // standing still on it for 5 s, with the craft
+        let rel = |u: &Universe| u.powered(jeb).unwrap().r - u.powered(v).unwrap().r;
+        let r0 = rel(&u);
+        for _ in 0..(5 * crate::TICKS_PER_SECOND) {
+            u.step();
+            assert!(u.powered(jeb).unwrap().landed, "stays standing");
+        }
+        let moved = (rel(&u) - r0).length();
+        assert!(moved < 0.02, "slid {moved:.3} m on the pod");
+        let pk = u.powered(jeb).unwrap();
+        let pc = u.powered(v).unwrap();
+        assert!((pk.v - pc.v).length() < 0.01, "moves with the craft");
+        // walk out from the craft's axis until the pod is no longer under her
+        let mut walked_off = false;
+        for _ in 0..(5 * crate::TICKS_PER_SECOND) {
+            let c = u.powered(v).unwrap().r;
+            let up = c.normalized();
+            let d = rel(&u);
+            let out = (d - up * d.dot(up)).normalized();
+            u.set_controls(jeb, 1.0, flight::Attitude::Fixed(out));
+            u.step();
+            if !u.powered(jeb).unwrap().landed {
+                walked_off = true;
+                break;
+            }
+        }
+        assert!(walked_off, "walked off the pod's edge");
+        u.set_controls(jeb, 0.0, flight::Attitude::Free);
+        let mut fell = 0.0_f64;
+        let top = height(&u, jeb);
+        for _ in 0..(5 * crate::TICKS_PER_SECOND) {
+            u.step();
+            fell = fell.max(top - height(&u, jeb));
+            if u.powered(jeb).unwrap().landed {
+                break;
+            }
+        }
+        let p = u.powered(jeb).unwrap();
+        assert!(p.landed && !p.crashed, "landed on the pad");
+        assert!(p.deck.is_none(), "on the ground, not the craft");
+        assert!(fell > 2.0, "fell {fell:.2} m to the pad (KSP2: 3.7 m)");
+        let on_pad = height(&u, jeb);
+        assert!(
+            (on_pad - 0.55).abs() < 0.01,
+            "standing on the pad: {on_pad:.2} m"
+        );
+    }
+
+    #[test]
+    fn a_kerbal_standing_on_a_craft_rides_along_with_it() {
+        let (mut u, v) = craft_on_pad("Lesson 3.2 rocket");
+        let jeb = u.go_eva(v, None).unwrap();
+        u.grab_ladder(jeb).unwrap();
+        for _ in 0..(2 * crate::TICKS_PER_SECOND) {
+            u.step();
+        }
+        assert!(u.powered(jeb).unwrap().deck.is_some());
+        // the deck moves at 2 m/s across the ground (as a rolling craft's hull would): she goes with it
+        let mut p = u.powered(jeb).unwrap().clone();
+        let up = p.r.normalized();
+        let east = DVec3::new(0.0, 0.0, 1.0).cross(up).normalized();
+        let deck = p.deck.unwrap();
+        let start = p.r;
+        let mut k = p.clone();
+        for i in 0..crate::TICKS_PER_SECOND {
+            k.deck = Some(flight::Deck {
+                radius_m: deck.radius_m,
+                v: deck.v + east * 2.0,
+            });
+            let b = u
+                .world
+                .get::<bodies::Body>(u.body_entity("Kerbin").unwrap())
+                .unwrap();
+            flight::integrate(&mut k, b, None, None, u.ut() + i as f64 / 50.0, 1.0 / 50.0);
+        }
+        p = k;
+        assert!(p.landed);
+        // the body turns under her too: compare with the ground's own turn
+        let along = (p.r - start).dot(east) - deck.v.dot(east);
+        assert!((along - 2.0).abs() < 0.05, "carried {along:.2} m");
     }
 
     #[test]

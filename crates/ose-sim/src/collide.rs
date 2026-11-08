@@ -374,6 +374,250 @@ impl Universe {
 const KERBAL_RADIUS_M: f64 = 0.25;
 const KERBAL_POINTS_M: [f64; 2] = [-0.25, 0.3];
 
+/// A part's hull as a Kerbal meets it, inertial offsets from its craft's position: the part's box, or for a
+/// stack part the frustum between its stack nodes (a Mk1 pod's cone, a tank's cylinder).
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Hull {
+    Box {
+        centre: DVec3,
+        axes: [DVec3; 3],
+        half: DVec3,
+    },
+    Frustum {
+        origin: DVec3,
+        axis: DVec3,
+        lo: f64,
+        hi: f64,
+        taper: structure::Taper,
+    },
+}
+
+impl Hull {
+    /// Signed distance from `x` to the hull's surface, m (negative inside).
+    pub(crate) fn distance(&self, x: DVec3) -> f64 {
+        match *self {
+            Hull::Box { centre, axes, half } => {
+                let d = x - centre;
+                let q = DVec3::new(
+                    d.dot(axes[0]).abs() - half.x,
+                    d.dot(axes[1]).abs() - half.y,
+                    d.dot(axes[2]).abs() - half.z,
+                );
+                let outside = DVec3::new(q.x.max(0.0), q.y.max(0.0), q.z.max(0.0)).length();
+                outside + q.x.max(q.y).max(q.z).min(0.0)
+            }
+            Hull::Frustum {
+                origin,
+                axis,
+                lo,
+                hi,
+                taper,
+            } => {
+                // in the plane through the axis: a trapezoid from the axis out to the hull
+                let v = x - origin;
+                let h = v.dot(axis);
+                let d = (v - axis * h).length();
+                let (rl, rh) = (taper.radius_at(lo), taper.radius_at(hi));
+                let edge = |a: (f64, f64), b: (f64, f64)| {
+                    let (ex, ey) = (b.0 - a.0, b.1 - a.1);
+                    let t = (((d - a.0) * ex + (h - a.1) * ey) / (ex * ex + ey * ey).max(1e-12))
+                        .clamp(0.0, 1.0);
+                    ((d - a.0 - ex * t).powi(2) + (h - a.1 - ey * t).powi(2)).sqrt()
+                };
+                let gap = edge((0.0, lo), (rl, lo))
+                    .min(edge((rl, lo), (rh, hi)))
+                    .min(edge((rh, hi), (0.0, hi)));
+                if (lo..=hi).contains(&h) && d <= taper.radius_at(h) {
+                    -gap
+                } else {
+                    gap
+                }
+            }
+        }
+    }
+
+    /// The way out of the hull at `x` (its surface normal there).
+    pub(crate) fn normal(&self, x: DVec3) -> DVec3 {
+        let e = 1e-4;
+        let g = |a: DVec3| self.distance(x + a * e) - self.distance(x - a * e);
+        let n = DVec3::new(
+            g(DVec3::new(1.0, 0.0, 0.0)),
+            g(DVec3::new(0.0, 1.0, 0.0)),
+            g(DVec3::new(0.0, 0.0, 1.0)),
+        );
+        if n.length() > 1e-12 {
+            n.normalized()
+        } else {
+            DVec3::ZERO
+        }
+    }
+}
+
+/// A craft's parts as hulls (inertial offsets from its position).
+pub(crate) fn hulls(st: &structure::Structure, facing: DVec3) -> Vec<Hull> {
+    let c = st.rigid.rest_centre();
+    let (bx, by, bz) = st.frame(facing);
+    let to = |v: DVec3| bx * v.x + by * v.y + bz * v.z;
+    (0..st.rigid.len())
+        .filter(|&i| st.rigid.present[i])
+        .map(|i| {
+            let (centre, half) = st.part_box(i);
+            match st.hull_taper(i) {
+                Some(taper) => {
+                    let origin = st.rigid.rest_position(i);
+                    let a = taper.axis;
+                    let mid = (centre - origin).dot(a);
+                    let reach = half.x * a.x.abs() + half.y * a.y.abs() + half.z * a.z.abs();
+                    Hull::Frustum {
+                        origin: to(origin - c),
+                        axis: to(a),
+                        lo: mid - reach,
+                        hi: mid + reach,
+                        taper,
+                    }
+                }
+                None => Hull::Box {
+                    centre: to(centre - c),
+                    axes: [bx, by, bz],
+                    half,
+                },
+            }
+        })
+        .collect()
+}
+
+/// The steepest hull a Kerbal stands on (the up share of its surface normal): KSP2 trace run 14 lets go of
+/// the Mk1 pod's ladder and stands on its cone, which leans some 70 degrees.
+const DECK_MIN_UP: f64 = 0.2;
+/// How far up a standing Kerbal steps onto a hull, and how far down it follows one before it falls, m (our
+/// own figures).
+pub const DECK_STEP_UP_M: f64 = 0.3;
+
+/// The highest radius from the body centre the Kerbal's centre can come down to between `hi` and `lo` before
+/// its feet (a sphere at the bottom of its body) rest on one of a craft's hulls facing up enough to stand on.
+fn deck_on(hulls: &[Hull], k: &flight::Powered, craft_r: DVec3, hi: f64, lo: f64) -> Option<f64> {
+    let up = k.r.normalized();
+    let drop = k.ground_clearance_m - KERBAL_RADIUS_M;
+    let foot = |z: f64| up * (z - drop) - craft_r;
+    let mut best: Option<f64> = None;
+    for h in hulls {
+        let gap = |z: f64| h.distance(foot(z)) - KERBAL_RADIUS_M;
+        // already in it at the top of the window: a wall, which `hull_push` keeps it out of
+        if gap(hi) <= 0.0 {
+            continue;
+        }
+        let mut z = hi;
+        let mut bracket = None;
+        while z > lo {
+            let next = (z - 0.05).max(lo);
+            if gap(next) <= 0.0 {
+                bracket = Some((next, z));
+                break;
+            }
+            z = next;
+        }
+        let Some((mut a, mut b)) = bracket else {
+            continue;
+        };
+        for _ in 0..30 {
+            let m = 0.5 * (a + b);
+            if gap(m) <= 0.0 {
+                a = m;
+            } else {
+                b = m;
+            }
+        }
+        if h.normal(foot(b)).dot(up) < DECK_MIN_UP {
+            continue;
+        }
+        best = Some(best.map_or(b, |x: f64| x.max(b)));
+    }
+    best
+}
+
+impl Universe {
+    /// What each Kerbal on EVA stands on besides the ground: the top of a nearby craft's hull under its feet,
+    /// within a step up of where it is and the fall it can make this step. It lands on that, stands on it and
+    /// rides along (KSP2 `KerbalBehavior.SetContactObjectRelativeVelocity`), and falls once it walks off.
+    pub(crate) fn kerbals_find_decks(&mut self, dt: f64) {
+        let walkers: Vec<(Entity, Entity)> = {
+            let mut q = self.world.query::<(
+                Entity,
+                &flight::Powered,
+                &bodies::ReferenceBody,
+                Has<crate::crew::OnLadder>,
+                Has<crate::crew::Boarding>,
+            )>();
+            q.iter(&self.world)
+                .filter(|(_, p, _, ladder, boarding)| p.walker && !ladder && !boarding)
+                .map(|(e, _, b, _, _)| (e, b.0))
+                .collect()
+        };
+        if walkers.is_empty() {
+            return;
+        }
+        let crafts: Vec<(Entity, Entity)> = {
+            let mut q = self.world.query_filtered::<(
+                Entity,
+                &flight::Powered,
+                &bodies::ReferenceBody,
+            ), With<structure::Structure>>();
+            q.iter(&self.world)
+                .filter(|(_, p, _)| !p.walker && !p.crashed)
+                .map(|(e, _, b)| (e, b.0))
+                .collect()
+        };
+        for (k, body) in walkers {
+            let Some(pk) = self.world.get::<flight::Powered>(k) else {
+                continue;
+            };
+            let deck = if pk.crashed {
+                None
+            } else {
+                let r = pk.r.length();
+                let (hi, lo) = if pk.landed {
+                    (r + DECK_STEP_UP_M, r - flight::WALK_OFF_M)
+                } else {
+                    (r + 0.05, r - (pk.v.length() * dt + 0.5))
+                };
+                let mut best: Option<flight::Deck> = None;
+                for &(c, craft_body) in &crafts {
+                    if craft_body != body || c == k {
+                        continue;
+                    }
+                    let (Some(pc), Some(st)) = (
+                        self.world.get::<flight::Powered>(c),
+                        self.world.get::<structure::Structure>(c),
+                    ) else {
+                        continue;
+                    };
+                    let reach = part_spheres(st, pc.facing)
+                        .iter()
+                        .map(|(_, o, r)| o.length() + r)
+                        .fold(0.0, f64::max);
+                    if (pk.r - pc.r).length() > reach + 2.0 {
+                        continue;
+                    }
+                    let Some(z) = deck_on(&hulls(st, pc.facing), pk, pc.r, hi, lo) else {
+                        continue;
+                    };
+                    if best.is_none_or(|d| z > d.radius_m) {
+                        let spin = pc.angvel + pc.facing * pc.roll_rate;
+                        best = Some(flight::Deck {
+                            radius_m: z,
+                            v: pc.v + spin.cross(pk.r - pc.r),
+                        });
+                    }
+                }
+                best
+            };
+            if let Some(mut p) = self.world.get_mut::<flight::Powered>(k) {
+                p.deck = deck;
+            }
+        }
+    }
+}
+
 impl Universe {
     /// A Kerbal on EVA does not pass through a craft: it is pushed out of the parts' boxes, sideways (a hull
     /// is a wall to it, not a floor: it does not come to rest on a fin), and stops going into them. Kerbals
@@ -440,12 +684,33 @@ fn hull_push(
     let c = st.rigid.rest_centre();
     let up = pk.r.normalized();
     let mut total = DVec3::ZERO;
+    let shapes = hulls(st, pc.facing);
     for along in KERBAL_POINTS_M {
         let d = pk.r + up * along + total - pc.r;
         // the point in craft coordinates
         let local = DVec3::new(d.dot(bx), d.dot(by), d.dot(bz)) + c;
         let mut deepest: Option<DVec3> = None;
-        for i in (0..st.rigid.len()).filter(|&i| st.rigid.present[i]) {
+        for (n, i) in (0..st.rigid.len())
+            .filter(|&i| st.rigid.present[i])
+            .enumerate()
+        {
+            if let Hull::Frustum { .. } = shapes[n] {
+                // a stack part's own shape: pushed out of it along its surface, sideways
+                let gap = shapes[n].distance(d);
+                if gap >= KERBAL_RADIUS_M {
+                    continue;
+                }
+                let world = shapes[n].normal(d) * (KERBAL_RADIUS_M - gap);
+                let world = world - up * world.dot(up);
+                if world.length() < 1e-9 {
+                    continue;
+                }
+                let push = DVec3::new(world.dot(bx), world.dot(by), world.dot(bz));
+                if deepest.is_none_or(|x| push.length() > x.length()) {
+                    deepest = Some(push);
+                }
+                continue;
+            }
             let (centre, half) = st.part_box(i);
             let rel = local - centre;
             let q = DVec3::new(

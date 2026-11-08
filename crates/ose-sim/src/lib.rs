@@ -1723,6 +1723,8 @@ impl Universe {
         let index = self.world.resource::<bodies::BodyIndex>().clone();
         // powered flight: integrate every tick of this step
         let dt = 1.0 / TICKS_PER_SECOND as f64;
+        // what Kerbals on EVA stand on (a craft's hull) before they move
+        self.kerbals_find_decks(ticks.max(1) as f64 * dt);
         let start_ut = now as f64 * dt;
         let mut powered_vessels: Vec<Entity> = {
             let mut q = self.world.query_filtered::<Entity, With<flight::Powered>>();

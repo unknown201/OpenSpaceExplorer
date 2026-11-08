@@ -170,6 +170,18 @@ impl Attitude {
     }
 }
 
+/// A craft's hull under a Kerbal's feet: the radius from the body centre the Kerbal's centre stands at on
+/// it, m, and the hull's velocity there, inertial m/s.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Deck {
+    pub radius_m: f64,
+    pub v: DVec3,
+}
+
+/// A Kerbal standing on something that drops away more than this under it in one tick walked off an edge
+/// and falls, m (our own figure; slopes it walks down drop far less).
+pub const WALK_OFF_M: f64 = 0.5;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Situation {
     Landed,
@@ -251,6 +263,9 @@ pub struct Powered {
     /// A Kerbal on EVA: on the ground, the throttle with a level attitude walks instead of firing the pack.
     #[serde(default)]
     pub walker: bool,
+    /// What a Kerbal stands on besides the ground (a craft's hull under its feet), found before each step.
+    #[serde(skip)]
+    pub deck: Option<Deck>,
     /// Authored EVA settings, preserved in saves; old EVA saves are migrated on restore.
     #[serde(default)]
     pub jetpack: Option<ose_data::Jetpack>,
@@ -873,6 +888,7 @@ impl Powered {
             crash_tolerance_mps: 0.0,
             tipped: false,
             walker: false,
+            deck: None,
             jetpack: None,
             drive: Drive::default(),
             roll_rad: 0.0,
@@ -2055,7 +2071,23 @@ pub fn integrate_with_propulsion(
                 rolling.z,
             );
             // standing on its lowest point (or its side once tipped over)
-            let ground = ground_radius(body, terrain, p.r, ut + dt) + stand_height(p);
+            let mut ground = ground_radius(body, terrain, p.r, ut + dt) + stand_height(p);
+            if p.walker {
+                if let Some(deck) = p.deck {
+                    // standing on a craft: carried along with it, as KSP2 gives a Kerbal its contact's
+                    // velocity (`KerbalBehavior.SetContactObjectRelativeVelocity`)
+                    let carry = deck.v - omega_v.cross(p.r);
+                    p.r = p.r + carry * dt;
+                    rolling = rolling + carry;
+                    ground = ground.max(deck.radius_m);
+                }
+                // walked off an edge: it falls from there
+                if p.r.length() - ground > WALK_OFF_M {
+                    p.landed = false;
+                    p.v = omega_v.cross(p.r) + rolling;
+                    return out;
+                }
+            }
             p.r = p.r.normalized() * ground;
             p.v = omega_v.cross(p.r) + rolling;
             return out;
@@ -2196,6 +2228,37 @@ pub fn integrate_with_propulsion(
             p.crashed = true;
             p.throttle = 0.0;
             out.crashed = true;
+        }
+    }
+
+    // a Kerbal coming down onto a craft's hull lands on it
+    if let Some(deck) = p.deck.filter(|_| p.walker && !p.landed) {
+        if p.r.length() <= deck.radius_m {
+            let up = p.r.normalized();
+            let v_rel = p.v - deck.v;
+            p.r = up * deck.radius_m;
+            p.v = deck.v;
+            p.facing = up;
+            p.landed = true;
+            p.own_top = DVec3::ZERO;
+            p.eva_hop = false;
+            p.eva_push_s = 0.0;
+            p.angvel = DVec3::ZERO;
+            p.roll_rate = 0.0;
+            out.touched_down = true;
+            out.impact_velocity = v_rel;
+            out.impact_mps = v_rel.length();
+            out.normal_impact_mps = (-v_rel.dot(up)).max(0.0);
+            let tolerance = if p.crash_tolerance_mps > 0.0 {
+                p.crash_tolerance_mps
+            } else {
+                CRASH_SPEED_MPS
+            };
+            if out.impact_mps > tolerance {
+                p.crashed = true;
+                p.throttle = 0.0;
+                out.crashed = true;
+            }
         }
     }
 
