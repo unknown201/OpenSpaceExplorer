@@ -232,6 +232,16 @@ P2 completeness.
 | T34 | Maneuver handle drag | P1 | KSP2 adds (displacement / (strength x DPI))^2 m/s every frame while held | m/s per pixel per frame | **failing**: OSE sets an absolute 1 m/s per pixel (0.1 with Shift); KSP2 is a held-rate control with no Shift factor |
 | T35 | Throttle keys | P0 | KSP2 Shift/Ctrl change the throttle 1.0 per real second; Z full, X cut | ramp rate, presets | **verified** (same equation and presets in `input.rs`) |
 | T36 | Key press to control response | P0 | KSP2 applies keyboard input in the next frame's FixedUpdate; the craft starts turning about 0.12 s after the control state changes (run 7) | key to send, send to motion | **verified**: OSE sends 1-2 ms after keydown (local build, 10 presses, 60 fps), and the server starts the turn 0.1-0.18 s after the input (stream at 10 Hz) |
+| T37 | Content counts | P0 | KSP2 data files | parts, tech nodes, missions, bodies | **verified**: 400/400 parts (none missing), 87/87 tech nodes, 57/57 missions (32 exploration + 25 mission control), 17/17 placed bodies (KSP2's five asteroid definitions are not in its galaxy) |
+| T38 | Procedural wings and fairing shaping | P0 | KSP2 VAB wing and fairing editors | shape handles, persisted shape, lift/mass from shape | **missing** (feature analysis G04): no wing tool; fairings are generated over the payload with no shaping |
+| T39 | Fuel line and strut placement | P1 | KSP2 two-anchor tool | place, save, flow, structural link | **partial** (G06): imported lines work and the flow graph honours them; no VAB tool, and struts carry no structural link |
+| T40 | Physics warp above 4x and finite-burn prediction | P1 | KSP2 physics warp, long-burn node prediction | warp steps under thrust, predicted vs flown orbit | **missing** (P31, P32) |
+| T41 | Engine modes, spool-up and jet intakes | P1 | KSP2 multi-mode engines, spool curves, intake air | thrust vs time on throttle steps, mode switch | **missing** (P05, P06) |
+| T42 | Parachute RISKY/IMMEDIATE modes, extra heat sources | P2 | KSP2 chute safety modes, engine/part heating | deploy rules, temperatures | **missing** (P17, P15) |
+| T43 | Water: flooding, waves, impact damage | P2 | KSP2 splashdown | sink/float, damage on water impact | **missing** (P28) |
+| T44 | Kerbal character animation | P2 | KSP2 state machine, expressions | clip per state | **partial** (G13) |
+| T45 | Localization | P2 | KSP2 12 languages | locale switch, coverage | **missing** (G15): English only |
+| T46 | Stock craft launch from the pad list | P0 | Stock Kerbal K1 rolled out | parts drawn and staged | **verified** on a local build of main: all 38 parts drawn, 6 stages listed (the pod-only report came from the VAB Load path, not rechecked here) |
 
 Controls rows T27-T34 come from the KSP2 source and configuration (camera rigs, `TimeWarp`, OAB, maneuver gizmo);
 T35-T36 add live timing. Source: an interaction-parity recording from 2026-10-29 (`docs/reference-notes/interaction-parity.md`,
