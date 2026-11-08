@@ -248,8 +248,9 @@ pub async fn warp_until_flown(
 
 /// After the transfer burn is flown (its finite burn lands a little off the impulsive plan), aim the Mun
 /// periapsis back into `[alt_min_m, alt_max_m]` with a small prograde correction half an hour on, as a
-/// player would: sample -20..+20 m/s in 0.5 m/s steps against the server's prediction and keep the one
-/// nearest the middle of the band (none when the trajectory already is in it).
+/// player would: sample -40..+40 m/s in 2 m/s steps against the server's prediction, then 0.25 m/s steps
+/// round the best of those, and keep the one nearest the middle of the band (none when the trajectory
+/// already is in it). The wide first pass covers a transfer burn that landed further off than usual.
 pub async fn correct_course(
     c: &mut Client,
     b: &Bodies,
@@ -265,21 +266,29 @@ pub async fn correct_course(
     let mut burn_ut = c.latest.ut() + 1_800.0;
     'search: for _ in 0..3 {
         let mut best: Option<(f64, f64, f64, f64)> = None; // (|alt - mid|, dv, alt, encounter)
-        for k in -40..=40 {
-            if c.latest.ut() + 300.0 > burn_ut {
-                burn_ut = c.latest.ut() + 1_800.0;
-                continue 'search;
-            }
-            let dv = k as f64 * 0.5;
-            let (hit, _) = eval(c, b, vessel, burn_ut, dv, &mut attempts).await?;
-            let Some((alt, enc)) = hit else { continue };
-            let score = (alt - mid).abs();
-            if best.is_none_or(|(s, ..)| score < s) {
-                best = Some((score, dv, alt, enc));
+        let coarse: Vec<f64> = (-20..=20).map(|k| k as f64 * 2.0).collect();
+        for pass in 0..2 {
+            let samples: Vec<f64> = if pass == 0 {
+                coarse.clone()
+            } else {
+                let Some((_, centre, ..)) = best else { break };
+                (-8..=8).map(|k| centre + k as f64 * 0.25).collect()
+            };
+            for dv in samples {
+                if c.latest.ut() + 300.0 > burn_ut {
+                    burn_ut = c.latest.ut() + 1_800.0;
+                    continue 'search;
+                }
+                let (hit, _) = eval(c, b, vessel, burn_ut, dv, &mut attempts).await?;
+                let Some((alt, enc)) = hit else { continue };
+                let score = (alt - mid).abs();
+                if best.is_none_or(|(s, ..)| score < s) {
+                    best = Some((score, dv, alt, enc));
+                }
             }
         }
         let Some((_, dv, alt, _)) = best else {
-            bail!("no correction within 20 m/s keeps a Mun encounter");
+            bail!("no correction within 40 m/s keeps a Mun encounter");
         };
         if alt < alt_min_m || alt > alt_max_m {
             bail!(
