@@ -70,7 +70,7 @@ pub const BOARDING_S: f64 = 1.0;
 
 /// A resource transfer running on a vessel (the Resource Manager): the tanks it was started with, and how
 /// many units each still has to give (positive) or take (negative).
-#[derive(Component, Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Transfer {
     pub resource: String,
     /// The parts asked to give, and to take; a part in both is balanced with the others in both.
@@ -79,6 +79,11 @@ pub struct Transfer {
     /// (part, units still to move out (+) or in (-), units a second: out (+) or in (-)).
     pub moves: Vec<(usize, f64, f64)>,
 }
+
+/// The vessel's running transfers, one per resource: the original's Start moves every resource that has tanks
+/// set to give and take (or balance) at once, methane and oxidizer together.
+#[derive(Component, Clone, Debug, Default, PartialEq)]
+pub struct Transfers(pub Vec<Transfer>);
 
 /// How long each tank's share of a transfer takes, s: the original's Resource Manager asks every tank for its
 /// whole share as a per-second flow (`ResourceFlowRequestCommandConfig.FlowUnits = TargetUnits`, the default
@@ -193,7 +198,7 @@ impl Universe {
         to: &[usize],
     ) -> Result<(), &'static str> {
         if from.is_empty() && to.is_empty() {
-            self.world.entity_mut(e).remove::<Transfer>();
+            self.world.entity_mut(e).remove::<Transfers>();
             return Ok(());
         }
         let st = self
@@ -230,18 +235,31 @@ impl Universe {
             return Err("nothing to move");
         }
         let resource = st.net.resources[ri].clone();
-        self.world.entity_mut(e).insert(Transfer {
+        let t = Transfer {
             resource,
             from: from.to_vec(),
             to: to.to_vec(),
             moves,
-        });
+        };
+        // alongside the vessel's other resources' transfers; a new one for the same resource replaces it
+        let mut all = self.world.get::<Transfers>(e).cloned().unwrap_or_default();
+        all.0.retain(|x| x.resource != t.resource);
+        all.0.push(t);
+        self.world.entity_mut(e).insert(all);
         Ok(())
     }
 
-    /// The vessel's running transfer, if any.
+    /// The vessel's first running transfer, if any.
     pub fn transfer(&self, e: Entity) -> Option<&Transfer> {
-        self.world.get::<Transfer>(e)
+        self.world.get::<Transfers>(e).and_then(|t| t.0.first())
+    }
+
+    /// Every transfer running on the vessel, one per resource.
+    pub fn transfers(&self, e: Entity) -> &[Transfer] {
+        self.world
+            .get::<Transfers>(e)
+            .map(|t| t.0.as_slice())
+            .unwrap_or(&[])
     }
 
     /// Run the vessels' transfers for `dt` seconds: each tank moves its share at its rate, never past empty
@@ -250,10 +268,14 @@ impl Universe {
     pub(crate) fn run_transfers(&mut self, dt: f64) {
         let running: Vec<(Entity, Transfer)> = self
             .world
-            .query::<(Entity, &Transfer)>()
+            .query::<(Entity, &Transfers)>()
             .iter(&self.world)
-            .map(|(e, t)| (e, t.clone()))
+            .flat_map(|(e, t)| t.0.iter().map(move |x| (e, x.clone())))
             .collect();
+        let mut kept: std::collections::HashMap<Entity, Vec<Transfer>> = Default::default();
+        for (e, _) in &running {
+            kept.entry(*e).or_default();
+        }
         for (e, mut t) in running {
             let done = match self.world.get_mut::<structure::Structure>(e) {
                 None => true,
@@ -329,10 +351,15 @@ impl Universe {
                     }
                 }
             };
-            if done {
-                self.world.entity_mut(e).remove::<Transfer>();
+            if !done {
+                kept.entry(e).or_default().push(t);
+            }
+        }
+        for (e, list) in kept {
+            if list.is_empty() {
+                self.world.entity_mut(e).remove::<Transfers>();
             } else {
-                self.world.entity_mut(e).insert(t);
+                self.world.entity_mut(e).insert(Transfers(list));
             }
         }
     }

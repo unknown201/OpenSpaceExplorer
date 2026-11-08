@@ -3549,31 +3549,32 @@ mod tests {
                 .collect();
         let mut checked = 0;
         for (phase, fa, fb) in [("inout", 0.25, 1.0), ("balance", 0.1, 0.9)] {
-            // KSP2 moves both resources at once; OSE runs one transfer per vessel, so each in turn
+            // both resources at once, as KSP2's Start moves them
+            set(&mut u, fa, fb);
             for r in ["Methane", "Oxidizer"] {
-                set(&mut u, fa, fb);
                 let ok = if phase == "inout" {
                     u.transfer_resource(e, r, &[b], &[a])
                 } else {
                     u.transfer_resource(e, r, &[a, b], &[a, b])
                 };
                 assert!(ok.is_ok(), "{phase} {r}: {ok:?}");
-                let mut tick = 0u64;
-                for (_, t, tank, _, units) in want.iter().filter(|w| w.0 == phase && w.3 == r) {
-                    while (tick as f64) < t * TICKS_PER_SECOND as f64 - 1e-9 {
-                        u.step();
-                        tick += 1;
-                    }
-                    let part = if tank == "A" { a } else { b };
-                    let (got, cap) = stored(&u, part, r);
-                    assert!(
-                        (got - units).abs() < 0.005 * cap,
-                        "{phase} t {t} {tank} {r}: OSE {got:.5} vs KSP2 {units:.5}"
-                    );
-                    checked += 1;
-                }
-                assert!(u.transfer(e).is_none(), "{phase} {r} done");
             }
+            assert_eq!(u.transfers(e).len(), 2);
+            let mut tick = 0u64;
+            for (_, t, tank, r, units) in want.iter().filter(|w| w.0 == phase) {
+                while (tick as f64) < t * TICKS_PER_SECOND as f64 - 1e-9 {
+                    u.step();
+                    tick += 1;
+                }
+                let part = if tank == "A" { a } else { b };
+                let (got, cap) = stored(&u, part, r);
+                assert!(
+                    (got - units).abs() < 0.005 * cap,
+                    "{phase} t {t} {tank} {r}: OSE {got:.5} vs KSP2 {units:.5}"
+                );
+                checked += 1;
+            }
+            assert!(u.transfers(e).is_empty(), "{phase} done");
         }
         assert!(checked > 150);
     }
