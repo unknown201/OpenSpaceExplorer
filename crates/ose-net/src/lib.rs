@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 62;
+pub const PROTOCOL_VERSION: u16 = 63;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -239,6 +239,13 @@ pub enum ClientMessage {
         vessel: u64,
         part: u16,
         actions: Vec<(String, u32)>,
+    },
+    /// Change a parachute's deploy mode, opening pressure and full-deploy height in flight (its part window);
+    /// the rest of its symmetry set follows. Answers `FlightAck`.
+    SetChuteSettings {
+        vessel: u64,
+        part: u16,
+        settings: ose_data::craft::ChuteSettings,
     },
     /// Run one part's action now (its part menu: shut an engine down, extend one panel, ...). Answers
     /// `FlightAck`.
