@@ -213,14 +213,54 @@ namespace OpenSpaceExplorer.Validation
                 mark("after approach at " + speed.ToString("F1", Inv) + ": port A " + State(a) + ", active mass " + act.totalMass.ToString("R", Inv) + " (parts " + m.ToString("R", Inv) + ")");
             }
 
+            // RCS translation burns monopropellant here without moving the half (run 2), so the halves are set
+            // apart with KSP2's own rendezvous teleport instead: A placed on the line the ports parted along,
+            // `target` metres off, at B's velocity
+            IEnumerator Place(float target, string name)
+            {
+                var va = VesselOf(a); var vb = VesselOf(b);
+                if (va == null || vb == null || !G.SpaceSimulation.TryGetViewObject(va.SimulationObject, out var viewA) || !G.SpaceSimulation.TryGetViewObject(vb.SimulationObject, out var viewB)) { mark("place: no views"); yield break; }
+                var rel = b.Face.position - a.Face.position;
+                var along = rel.normalized;
+                var moveA = along * (rel.magnitude - target);
+                var offset = Quaternion.Inverse(viewB.transform.rotation) * (viewA.transform.position + moveA - viewB.transform.position);
+                mark(name + ": teleport A from gap " + rel.magnitude.ToString("F3", Inv) + " to " + target.ToString("F2", Inv) + ", offset " + offset.ToString("F4"));
+                phase = name;
+                G.SpaceSimulation.TeleportSimObjectToRendezvous(va.SimulationObject, vb.SimulationObject, new Vector3d(offset.x, offset.y, offset.z), QuaternionD.identity);
+                float wait = 0;
+                var busy = typeof(SpaceSimulation).GetField("_isTeleporting", Priv); yield return null; while (busy != null && (bool)busy.GetValue(G.SpaceSimulation) && wait < 30f) { wait += Time.unscaledDeltaTime; yield return null; }
+                haveLast = false;
+                yield return Tick();
+                mark(name + ": placed, gap " + gap.ToString("F4", Inv) + " lateral, port A " + State(a) + ", port B " + State(b));
+                string sa = State(a);
+                float end = t + 8f;
+                while (t < end)
+                {
+                    yield return Tick();
+                    var st = State(a);
+                    if (st != sa) { mark(name + ": port A " + sa + " -> " + st + " at gap " + gap.ToString("F4", Inv) + " closing " + closing.ToString("F4", Inv)); sa = st; }
+                }
+                var act = G.ViewController.GetActiveSimVessel();
+                CentreOfMass(act, out var m);
+                var com = a.Face.InverseTransformPoint(CentreOfMass(act, out m));
+                mark(name + ": port A " + State(a) + ", active mass " + act.totalMass.ToString("R", Inv) + ", CoM in port A frame " + com.ToString("F4"));
+            }
+
             yield return Hold(1f);
             yield return Undock("undock-vab");
-            yield return Calibrate();
-            yield return Approach(0.2f);
+            // past the 1.5 m re-engage distance before the ports are Ready again
+            phase = "drift";
+            while (gap < 2.2f && t < 60f) yield return Tick();
+            mark("drifted to " + gap.ToString("F3", Inv) + " m: port A " + State(a) + ", port B " + State(b));
+            yield return Place(1.3f, "at-1.3m");
+            if (State(a) != "Docked") yield return Place(0.9f, "at-0.9m");
             if (State(a) == "Docked")
             {
                 yield return Undock("undock-dock");
-                yield return Approach(0.6f);
+                phase = "drift2";
+                float end2 = t + 4f;
+                while (t < end2) yield return Tick();
+                mark("after flight undock: gap " + gap.ToString("F4", Inv) + " opening " + (-closing).ToString("F4", Inv));
             }
             InputHolder.Clear();
             w.Close();

@@ -1282,8 +1282,9 @@ fn flight_readout(
                     .collect()
             })
             .unwrap_or_default(),
+        // what the HUD's Undock parts: flight-docked joints and ports joined in the VAB
         docked: u
-            .docked_links(e)
+            .undockable_joints(e, defs)
             .into_iter()
             .map(|(a, b)| (a as u16, b as u16))
             .collect(),
