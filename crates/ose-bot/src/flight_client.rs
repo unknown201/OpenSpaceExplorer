@@ -111,6 +111,20 @@ impl Client {
         .await?
     }
 
+    /// Put a listed craft at a launch site from `LaunchSites` (`None`: launch pad 1).
+    pub async fn launch_saved_at(&mut self, id: u64, site: Option<String>) -> Result<Launched> {
+        self.send(&ClientMessage::LaunchSavedAt {
+            id,
+            site,
+            crew: None,
+        })
+        .await?;
+        self.wait_for(Duration::from_secs(20), "CraftLaunched", |_, m| {
+            launched_of(m)
+        })
+        .await?
+    }
+
     /// Put a listed craft straight into a circular orbit (the fallback when the ascent fails).
     pub async fn launch_saved_to_orbit(&mut self, id: u64, altitude_m: f64) -> Result<Launched> {
         self.send(&ClientMessage::LaunchSavedCraft { id, altitude_m })
