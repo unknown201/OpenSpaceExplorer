@@ -4536,6 +4536,66 @@ mod tests {
         assert!(slowest > 0.85, "rolls at {slowest:.2} of its push");
     }
 
+    /// KSP2 run 21 (T10): Stock04_Jet on the runway, SAS holding, full pitch up at 60 m/s: the nose comes
+    /// up about 13 degrees in 0.95 s and it flies at 68 m/s. Pitch up must turn the nose toward the
+    /// cockpit's canopy (the plane's control frame is its root part's, turned by its level layout).
+    #[test]
+    fn a_jet_rotates_on_the_stick_and_lifts_off_as_ksp2s() {
+        let (mut u, body, _, _) = k1_on_real_kerbin();
+        let crafts: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let defs: Vec<ose_data::PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let res: Vec<ose_data::ResourceDef> =
+            serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
+        let c = crafts.iter().find(|c| c.name == "Stock04_Jet").unwrap();
+        let c = structure::level_layout(c).unwrap();
+        let report = ose_data::staging::delta_v_by_stage(&c, &defs, &res);
+        let spec = flight::FlightSpec::from_report(&report, &[], &[], 1.5);
+        let v = u.spawn_powered_on_surface("Jet", body, spec, 0.0, 0.0);
+        u.set_structure(v, structure::Structure::build(&c, &defs, &res));
+        assert!(u.set_level(v, 90.0));
+        u.step();
+        let p = u.powered(v).unwrap().clone();
+        let up = p.r.normalized();
+        let (_, _, top) = flight::control_basis(&p);
+        assert!(
+            top.dot(up) > 0.99,
+            "the cockpit's top faces the sky: {:?}",
+            top
+        );
+        let facing = p.facing;
+        u.stage(v);
+        u.set_controls(v, 1.0, flight::Attitude::Fixed(facing));
+        let mut rotating = None;
+        let mut lifted = None;
+        for i in 0..(80 * TICKS_PER_SECOND) {
+            u.step();
+            let (speed, landed) = {
+                let p = u.powered(v).unwrap();
+                (p.drive.speed_mps, p.landed)
+            };
+            if rotating.is_none() && speed >= 60.0 {
+                rotating = Some(i);
+                u.set_rotation(v, 1.0, 0.0, 0.0);
+            }
+            if rotating.is_some() && !landed {
+                lifted = Some((i, speed));
+                break;
+            }
+        }
+        let (start, (end, speed)) = (
+            rotating.expect("reaches 60 m/s"),
+            lifted.expect("lifts off"),
+        );
+        let after = (end - start) as f64 / TICKS_PER_SECOND as f64;
+        assert!(
+            after > 0.4 && after < 1.5,
+            "lifted off {after:.2} s after the stick (KSP2 0.96 s)"
+        );
+        assert!((speed - 68.0).abs() < 5.0, "at {speed:.1} m/s (KSP2 68.2)");
+    }
+
     #[test]
     fn a_truck_on_the_runway_stands_on_its_wheels() {
         let (mut u, body, _, _) = k1_on_real_kerbin();

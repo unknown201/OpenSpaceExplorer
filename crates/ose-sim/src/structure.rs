@@ -2524,12 +2524,14 @@ impl Structure {
                 }
             })
             .collect();
-        // turning about the vertical: a standing craft's Y, a level craft's Z
+        // turning about the vertical: a standing craft's Y, a level craft's Z; a level craft pitches about
+        // its X (the wing span)
         p.drive.yaw_inertia_tm2 = if level {
             mass.inertia.z.z
         } else {
             mass.inertia.y.y
         };
+        p.drive.pitch_inertia_tm2 = mass.inertia.x.x;
         // the centre of mass over the contact patches: along a level craft's Z (its belly), a standing
         // craft's Y, plus the wheels' radius
         let heights: Vec<f64> = wheels
@@ -2688,8 +2690,12 @@ impl Structure {
             .is_some_and(|i| !self.can_control_from(i as usize))
         {
             p.control_point = None;
-            p.control_rotation = [0.0, 0.0, 0.0, 1.0];
             p.sas.reset();
+        }
+        // with no part chosen to control from, the vessel is flown from its root part's control frame
+        // (KSP2's default control transform); a plane laid level has its cockpit turned in the craft
+        if p.control_point.is_none() && self.root < self.part_rot.len() {
+            p.control_rotation = self.control_rotation(self.root);
         }
         self.sync_structural_mass();
         p.mass_t = self.mass_properties().mass_t.max(0.001);
@@ -4127,11 +4133,11 @@ impl Structure {
             broken.extend(feet);
             if !lost {
                 pieces.extend(self.split_off(bx, by, bz));
-                speed = (speed * speed - tolerance * tolerance).max(0.0).sqrt();
-            } else {
-                // once it is coming apart each crushed layer slows what is behind it more (our own figure:
-                // twice its tolerance), so the far end of a fast crash comes through
-                speed = (speed - 2.0 * tolerance).max(0.0);
+            }
+            // a layer broken well over its tolerance does not slow what is behind it, which strikes in
+            // turn; one broken barely over it stops the craft (KSP2 crash drops)
+            if speed - tolerance <= crate::flight::CRASH_PASS_THROUGH_MPS {
+                speed = 0.0;
             }
         }
         if lost {

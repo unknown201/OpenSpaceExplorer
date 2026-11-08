@@ -226,6 +226,8 @@ def main() -> int:
             "type": pp["ProceduralPartTypeName"],
             "mesh_area_lift_multiplier": cs.get("MeshAreaLiftMultiplier", 0.25),
             "ctrl_pivot": cs.get("CtrlSurfacePivotTransformName", ""),
+            "ctrl_rot_axis": cs.get("CtrlTransformRotAxis", "X"),
+            "ctrl_dir": cs.get("CtrlTransformDir", "Z"),
             "options": [],
         }
         for opt in options:
