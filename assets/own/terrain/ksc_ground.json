@@ -17,5 +17,6 @@
   "alt_m": 110.0,
   "yaw_deg": 0.041
  },
- "sand": "ksc_ground_sand.bin: uint8 vertex paint alpha (the sand rim), same grid"
+ "sand": "ksc_ground_sand.bin: uint8 vertex paint alpha (the sand rim), same grid",
+ "drawn": "ksc_ground_drawn.bin: the meshes KSP2 draws (DRAWN), same grid and units"
 }
