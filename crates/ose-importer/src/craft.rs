@@ -154,6 +154,7 @@ pub fn craft_from_value(v: &Value) -> anyhow::Result<Craft> {
             None => (None, None, None),
         };
         parts.push(CraftPart {
+            chute: None,
             symmetry: 0,
             actions: Vec::new(),
             flight: ps["isMirrored"].as_bool().unwrap_or(false).then(|| {

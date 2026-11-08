@@ -97,3 +97,43 @@ fn camera_orbit_and_zoom_match_recorded_ksp2_equations() {
     }
     assert!(checked >= 40, "camera coverage was removed ({checked})");
 }
+
+/// T32: the warp ladder, warp-to's choice of rate and the automatic drop to 1x follow KSP2's `TimeWarp`.
+#[test]
+fn warp_ladder_warp_to_and_drop_match_recorded_ksp2_equations() {
+    use ose_client::kerbin_time;
+    let fixture = reference();
+    let mut checked = 0;
+    for case in fixture["cases"].as_array().unwrap() {
+        let input = &case["input"];
+        let ok = match case["op"].as_str().unwrap() {
+            "ladder" => {
+                let want: Vec<u64> = case["expected"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.as_u64().unwrap())
+                    .collect();
+                kerbin_time::WARP_LADDER
+                    .iter()
+                    .map(|&w| w as u64)
+                    .collect::<Vec<_>>()
+                    == want
+            }
+            "warp_to" => {
+                kerbin_time::warp_toward(input["remaining"].as_f64().unwrap()) as u64
+                    == case["expected"].as_u64().unwrap()
+            }
+            "drop" => {
+                kerbin_time::warp_drop(
+                    input["rate"].as_f64().unwrap() as u32,
+                    input["remaining"].as_f64().unwrap(),
+                ) == case["expected"].as_bool().unwrap()
+            }
+            _ => continue,
+        };
+        assert!(ok, "{}", case["id"]);
+        checked += 1;
+    }
+    assert!(checked >= 30, "warp coverage was removed ({checked})");
+}

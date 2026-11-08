@@ -76,6 +76,42 @@ pub struct CraftPart {
     /// symmetry share one nonzero id, and the editor keeps them alike; 0 for none.
     #[serde(default)]
     pub symmetry: u32,
+    /// A parachute's deploy settings when changed from the part's own (`Data_Parachute` `DeploymentMode`,
+    /// `minAirPressureToOpen`, `deployAltitude`); `None` keeps the part's defaults.
+    #[serde(default)]
+    pub chute: Option<ChuteSettings>,
+}
+
+/// When an armed parachute may open (`Data_Parachute.DeployMode`): only when opening is predicted to keep the
+/// canopy below its maximum temperature (`Safe`, every chute's default), also when it may overheat within
+/// `SecondsForRisky` (`Risky`), or at once whatever the air and speed (`Immediate`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ChuteMode {
+    #[default]
+    Safe,
+    Risky,
+    Immediate,
+}
+
+/// A parachute's settings in its part window: the deploy mode, the air pressure it opens partly in (atm,
+/// 0.01..0.75 in steps of 0.01) and the height above the ground it opens fully at (m, 50..5000 in steps of
+/// 50); copied across the part's symmetry set.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChuteSettings {
+    pub mode: ChuteMode,
+    pub min_pressure_atm: f32,
+    pub deploy_altitude_m: f32,
+}
+
+impl ChuteSettings {
+    /// Clamped and stepped as the original's `SteppedRange`s.
+    pub fn stepped(self) -> ChuteSettings {
+        ChuteSettings {
+            mode: self.mode,
+            min_pressure_atm: ((self.min_pressure_atm.clamp(0.01, 0.75) * 100.0).round() / 100.0),
+            deploy_altitude_m: (self.deploy_altitude_m.clamp(50.0, 5000.0) / 50.0).round() * 50.0,
+        }
+    }
 }
 
 /// The part actions a group can run: on with the group on, off with it off.
