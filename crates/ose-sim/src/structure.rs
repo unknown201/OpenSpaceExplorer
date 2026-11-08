@@ -229,7 +229,7 @@ pub struct Structure {
     /// A chute part's packed drag cube (its stowed shape), blended with the open ones by weight.
     chute_packed: Vec<Option<ose_data::DragCube>>,
     /// The attach nodes covering each part's faces (`SetExposedArea`), reapplied to a re-weighted shape.
-    face_covers: Vec<Vec<(DVec3, i32, usize)>>,
+    face_covers: Vec<Vec<(DVec3, f64, usize)>>,
     /// Each part's own faces before any attach node covers them.
     base_faces: Vec<Option<Faces>>,
     /// How many parts were attached when the covered faces were last worked out.
@@ -484,6 +484,16 @@ fn part_taper(q: ose_data::craft::Quat, def: &PartDef, half: DVec3) -> Option<Ta
     })
 }
 
+/// `Module_Drag.FaceDirections` in the cube order `+X, -X, +Y, -Y, +Z, -Z`.
+const NODE_FACE_DIRS: [DVec3; 6] = [
+    DVec3::new(1.0, 0.0, 0.0),
+    DVec3::new(-1.0, 0.0, 0.0),
+    DVec3::new(0.0, 1.0, 0.0),
+    DVec3::new(0.0, -1.0, 0.0),
+    DVec3::new(0.0, 0.0, 1.0),
+    DVec3::new(0.0, 0.0, -1.0),
+];
+
 /// `Data_Gimbal.minRollOffset`: a gimbal this far off the control axis rolls the craft, m.
 const MIN_ROLL_OFFSET_M: f64 = 0.1;
 
@@ -679,31 +689,85 @@ impl Structure {
             })
             .collect();
         let base_faces = faces.clone();
-        // (node direction, node size, the part on the other side)
-        let mut face_covers: Vec<Vec<(DVec3, i32, usize)>> = vec![Vec::new(); craft.parts.len()];
-        // a stack connection covers the faces on both sides of it
-        for (i, p) in craft.parts.iter().enumerate() {
-            let Some(parent) = p.parent else { continue };
-            for (part, node, other) in [
-                (i, p.own_node.as_deref(), parent),
-                (parent, p.parent_node.as_deref(), i),
-            ] {
-                let Some(n) = node.and_then(|n| {
-                    def_of(part).and_then(|d| d.attach_nodes.iter().find(|a| a.id == n))
-                }) else {
-                    continue;
-                };
-                if !n.node_type.eq_ignore_ascii_case("stack") {
+        // `Module_Drag.SetExposedArea`: each stack node takes the cross-section of the part on it (its full
+        // drag-cube area facing back along the node) off the face the node points through; a part on it
+        // thinner than 1 m along the node also lets the part beyond it cover that face.
+        // (node direction in this part's frame, area covered, the part that covers it)
+        let mut face_covers: Vec<Vec<(DVec3, f64, usize)>> = vec![Vec::new(); craft.parts.len()];
+        let stack_links: Vec<Vec<(DVec3, usize)>> = {
+            let mut links: Vec<Vec<(DVec3, usize)>> = vec![Vec::new(); craft.parts.len()];
+            for (i, p) in craft.parts.iter().enumerate() {
+                let Some(parent) = p.parent else { continue };
+                for (part, node, other) in [
+                    (i, p.own_node.as_deref(), parent),
+                    (parent, p.parent_node.as_deref(), i),
+                ] {
+                    let Some(n) = node.and_then(|n| {
+                        def_of(part).and_then(|d| d.attach_nodes.iter().find(|a| a.id == n))
+                    }) else {
+                        continue;
+                    };
+                    if !n.node_type.eq_ignore_ascii_case("stack") {
+                        continue;
+                    }
+                    let dir = if n.orientation.length_squared() > 1e-9 {
+                        n.orientation
+                    } else {
+                        n.position
+                    };
+                    links[part].push((dir, other));
+                }
+            }
+            links
+        };
+        let rot = |k: usize| {
+            let q = craft.parts[k].local_rotation.normalized();
+            [q.x, q.y, q.z, q.w]
+        };
+        // a direction in part `from`'s frame, in part `to`'s
+        let carry = |d: DVec3, from: usize, to: usize| {
+            aero::rotate_inverse(rot(to), aero::rotate(rot(from), d)).normalized()
+        };
+        let cube = |k: usize| def_of(k).and_then(|d| d.drag_cubes.first());
+        let cross_section = |k: usize, d: DVec3| {
+            cube(k).map_or(0.0, |c| {
+                NODE_FACE_DIRS
+                    .iter()
+                    .zip(c.area)
+                    .map(|(f, a)| f.dot(d).max(0.0) * a)
+                    .sum()
+            })
+        };
+        let depth = |k: usize, d: DVec3| {
+            cube(k).map_or(f64::INFINITY, |c| {
+                NODE_FACE_DIRS
+                    .iter()
+                    .zip(c.depth)
+                    .map(|(f, x)| f.dot(d).abs() * x)
+                    .sum()
+            })
+        };
+        for (i, links) in stack_links.iter().enumerate() {
+            for &(dir, other) in links {
+                let d = carry(dir, i, other);
+                face_covers[i].push((dir, cross_section(other, d), other));
+                if depth(other, d) >= 1.0 {
                     continue;
                 }
-                let dir = if n.orientation.length_squared() > 1e-9 {
-                    n.orientation
-                } else {
-                    n.position
-                };
-                if let Some(f) = faces[part].as_mut() {
-                    f.occlude(dir, n.size);
-                    face_covers[part].push((dir, n.size, other));
+                // the part beyond a thin one, on its node that points the same way (KSP2 compares the two
+                // nodes' own orientation vectors)
+                for &(dir2, beyond) in &stack_links[other] {
+                    if beyond != i && (dir2 - dir).length() < 1e-6 {
+                        let d2 = carry(dir2, other, beyond);
+                        face_covers[i].push((dir, cross_section(beyond, d2), beyond));
+                    }
+                }
+            }
+        }
+        for (i, f) in faces.iter_mut().enumerate() {
+            if let Some(f) = f.as_mut() {
+                for &(dir, area, _) in &face_covers[i] {
+                    f.cover(dir, area);
                 }
             }
         }
@@ -2660,9 +2724,9 @@ impl Structure {
             let Some(mut f) = self.base_faces[i] else {
                 continue;
             };
-            for &(dir, size, other) in &self.face_covers[i] {
+            for &(dir, area, other) in &self.face_covers[i] {
                 if self.rigid.present[other] {
-                    f.occlude(dir, size);
+                    f.cover(dir, area);
                 }
             }
             self.faces[i] = Some(f);
@@ -4436,9 +4500,9 @@ impl Structure {
             }
             _ => Some(Faces::from_cube(packed)),
         }?;
-        for &(dir, size, other) in &self.face_covers[i] {
+        for &(dir, area, other) in &self.face_covers[i] {
             if self.rigid.present[other] {
-                faces.occlude(dir, size);
+                faces.cover(dir, area);
             }
         }
         Some(faces)
@@ -9994,8 +10058,8 @@ mod tests {
         let mut plain = open_cube.clone();
         plain.drag_multiplier = [1.0; 6];
         let mut expected = Faces::from_cube(&plain);
-        for &(dir, size, _) in &s.face_covers[chute] {
-            expected.occlude(dir, size);
+        for &(dir, area, _) in &s.face_covers[chute] {
+            expected.cover(dir, area);
         }
         let ratio = full.area_drag(&curves, down, 0.03) / expected.area_drag(&curves, down, 0.03);
         assert!((ratio - 2.0).abs() < 1e-9, "{ratio}");
