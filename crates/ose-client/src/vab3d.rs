@@ -258,9 +258,10 @@ impl VabView {
         });
     }
 
-    pub fn orbit(&mut self, dx_px: f64, dy_px: f64) {
-        self.yaw -= dx_px * 0.005;
-        self.pitch = (self.pitch + dy_px * 0.005).clamp(-1.2, 1.4);
+    /// Turn the camera by `dyaw` and `dpitch` radians (`interaction::vab_orbit_radians`).
+    pub fn orbit(&mut self, dyaw: f64, dpitch: f64) {
+        self.yaw -= dyaw;
+        self.pitch = (self.pitch + dpitch).clamp(-1.2, 1.4);
     }
 
     /// Move the camera up (positive) or down along the craft, in screen pixels of a drag.
@@ -296,8 +297,11 @@ impl VabView {
         self.target_set = false;
     }
 
-    pub fn zoom(&mut self, factor: f64) {
-        self.distance = (self.distance * factor).clamp(2.0, 250.0);
+    /// Zoom by `notches` of the wheel (positive in), KSP2's additive pivot distance (`interaction::vab_zoom`).
+    pub fn zoom(&mut self, notches: f64, fast: bool, fine: bool) {
+        let axis = notches * crate::interaction::VAB_ZOOM_PER_NOTCH;
+        self.distance =
+            crate::interaction::vab_zoom(self.distance, axis, fast, fine).clamp(2.0, 250.0);
     }
 
     /// A hall point (glTF frame) in the craft's frame, and back: for loose assemblies saved in the craft.
@@ -615,9 +619,13 @@ impl VabView {
 
         gpu.request_model("vab", &format!("assets/{}", scene.file));
         if gpu.has_model("vab") && !self.icon_mode {
+            // KSP2's hall is dim and contrasty: its girders and wall panels fall into shadow away from the
+            // work lights, the floor and the craft lit.
             let mut hall = DrawItem::lit("vab".into(), -cam_pos, DQuat::IDENTITY, 1.0, light);
-            hall.ambient = 0.55;
+            hall.ambient = 0.15;
+            hall.color = [0.56, 0.56, 0.56, 1.0];
             items.push(hall);
+            gpu.set_ao(0.8);
         }
         // Fairings stand as built over what sits on them, as in the original's VAB.
         if !self.icon_mode {

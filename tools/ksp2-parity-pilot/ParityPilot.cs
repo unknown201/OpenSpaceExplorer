@@ -24,7 +24,14 @@ namespace OpenSpaceExplorer.Validation
     [DefaultExecutionOrder(-32000)]
     public sealed class InputHolder : MonoBehaviour
     {
-        public static float? Pitch, Yaw, Roll, X, Y, Z, WheelThrottle, WheelSteer;
+        public static float? Pitch, Yaw, Roll, X, Y, Z, WheelThrottle, WheelSteer, EvaFrontBack, EvaLeftRight;
+        public static bool? EvaJump, EvaRun;
+        static readonly System.Reflection.BindingFlags Priv = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+        static void SetEva(string field, object value)
+        {
+            var h = GameManager.Instance?.Game?.ViewController?.evaInputHandler;
+            if (h != null) typeof(EVAInputHandler).GetField(field, Priv)?.SetValue(h, value);
+        }
         void FixedUpdate() { Apply(); }
         void Update() { Apply(); }
         static void Apply()
@@ -35,6 +42,10 @@ namespace OpenSpaceExplorer.Validation
             if (X.HasValue) FlightInputHandler.OverrideInputTranslateX(X.Value);
             if (Y.HasValue) FlightInputHandler.OverrideInputTranslateY(Y.Value);
             if (Z.HasValue) FlightInputHandler.OverrideInputTranslateZ(Z.Value);
+            if (EvaFrontBack.HasValue) SetEva("_moveFrontBack", EvaFrontBack.Value);
+            if (EvaLeftRight.HasValue) SetEva("_moveLeftRight", EvaLeftRight.Value);
+            if (EvaJump.HasValue) SetEva("_jump", EvaJump.Value);
+            if (EvaRun.HasValue) SetEva("_run", EvaRun.Value);
             if (WheelThrottle.HasValue || WheelSteer.HasValue)
             {
                 FlightInputHandler.OverrideInputTranslateX(X ?? 0f);
@@ -42,7 +53,7 @@ namespace OpenSpaceExplorer.Validation
                 FlightCtrlStateInputOverride.InputWheelSteeringOverride = WheelSteer ?? 0f;
             }
         }
-        public static void Clear() { Pitch = Yaw = Roll = X = Y = Z = WheelThrottle = WheelSteer = null; }
+        public static void Clear() { Pitch = Yaw = Roll = X = Y = Z = WheelThrottle = WheelSteer = EvaFrontBack = EvaLeftRight = null; EvaJump = EvaRun = null; }
     }
 
     [BepInPlugin("org.openspaceexplorer.paritypilot", "OSE Parity Pilot", "0.1.0")]
@@ -162,14 +173,11 @@ namespace OpenSpaceExplorer.Validation
             {
                 // KSC every 45 game minutes across one 6 h Kerbin day; remember the darkest and brightest moments
                 float darkest = float.MaxValue, brightest = -1f;
-                for (int sweep = 0; sweep < 8; sweep++)
+                for (int sweep = 0; sweep < 8; sweep++) // 8 x 45 min = one 6 h Kerbin day
                 {
                     if (sweep > 0)
                     {
-                        double target = G.UniverseModel.UniverseTime + 2700;
-                        G.ViewController.TimeWarp.WarpTo(target, 1f, 1000f);
-                        float w = 0;
-                        while (G.UniverseModel.UniverseTime < target - 1 && w < 120) { w += Time.unscaledDeltaTime; yield return null; }
+                        yield return WarpUntil(G.UniverseModel.UniverseTime + 2700);
                         yield return new WaitForSecondsRealtime(4f);
                     }
                     double ut = G.UniverseModel.UniverseTime;
@@ -186,13 +194,12 @@ namespace OpenSpaceExplorer.Validation
                 }
                 // go on to the next darkest moment for the night pad shot
                 double night = darkUT; while (night < G.UniverseModel.UniverseTime + 60) night += 21600;
-                G.ViewController.TimeWarp.WarpTo(night, 1f, 1000f);
-                float w2 = 0; while (G.UniverseModel.UniverseTime < night - 1 && w2 < 180) { w2 += Time.unscaledDeltaTime; yield return null; }
+                yield return WarpUntil(night);
                 yield return new WaitForSecondsRealtime(4f);
                 yield return Shot("v1-ksc-night-before-vab");
             }
             bool orbital = scenario == "rotation" || scenario == "rcs";
-            var snapshot = IOProvider.FromJsonFile<OABHistoricalSnapshot>(Path.Combine(dir, scenario == "rcs" ? "craft-rcs.json" : scenario == "rover" ? "craft-rover.json" : scenario == "legs" ? "craft-legs.json" : orbital ? "craft-rotation.json" : (scenario == "k1" || scenario == "partdump") ? "craft-k1.json" : "craft.json"));
+            var snapshot = IOProvider.FromJsonFile<OABHistoricalSnapshot>(Path.Combine(dir, scenario == "rcs" ? "craft-rcs.json" : scenario == "rover" ? "craft-rover.json" : scenario == "legs" ? "craft-legs.json" : scenario == "stack" ? "craft-stack.json" : scenario.StartsWith("drop ") ? "craft-drop-" + scenario.Split(' ')[1] + ".json" : orbital ? "craft-rotation.json" : (scenario == "k1" || scenario == "partdump") ? "craft-k1.json" : "craft.json"));
             var config = orbital
                 ? new OABConfig(OABVariant.VAB, OABEnvironmentType.Orbital, OABConstructionType.User, null)
                 : new OABConfig(OABVariant.VAB, OABEnvironmentType.Terrestrial, OABConstructionType.User, "Kerbin");
@@ -217,15 +224,16 @@ namespace OpenSpaceExplorer.Validation
             if (scenario == "eva") { yield return Eva(vessel); yield break; }
             if (scenario == "partdump") { yield return PartDump(vessel); yield break; }
             if (scenario == "legs") { yield return Legs(vessel); yield break; }
+            if (scenario == "stack") { yield return Stack(vessel); yield break; }
+            if (scenario.StartsWith("drop ")) { yield return Drop(vessel, double.Parse(scenario.Split(' ')[2], CultureInfo.InvariantCulture)); yield break; }
             if (scenario == "visuals")
             {
-                vessel.SetActionGroup(KSPActionGroup.Lights, true);
+                SetGroup(KSPActionGroup.Lights, true);
                 yield return new WaitForSecondsRealtime(3f);
                 yield return Shot("v3-pad-night-lights");
                 // morning for the flight
                 double day = brightUT; while (day < G.UniverseModel.UniverseTime + 60) day += 21600;
-                G.ViewController.TimeWarp.WarpTo(day, 1f, 1000f);
-                float w3 = 0; while (G.UniverseModel.UniverseTime < day - 1 && w3 < 180) { w3 += Time.unscaledDeltaTime; yield return null; }
+                yield return WarpUntil(day);
                 yield return new WaitForSecondsRealtime(4f);
                 yield return Shot("v3-pad-day");
             }
@@ -241,7 +249,7 @@ namespace OpenSpaceExplorer.Validation
 
             double[] marks = scenario == "visuals" ? new double[] { 15000, 45000 } : new double[] { 150, 1500, 8000, 25000 };
             string[] names = scenario == "visuals" ? new[] { "v4-flight-15km", "v4-flight-45km" } : new[] { "05-liftoff", "06-ascent-1km", "07-ascent-8km", "08-ascent-25km" };
-            bool re40 = false, re25 = false;
+            bool re40 = false, re25 = false, dumped10 = false;
             int k = 0;
             bool mapped = false, apo = false;
             double top = 0;
@@ -255,6 +263,7 @@ namespace OpenSpaceExplorer.Validation
                 top = Math.Max(top, alt);
                 if (k < marks.Length && alt >= marks[k]) { yield return Shot(names[k]); k++; }
                 if (!apo && vessel.VerticalSrfSpeed < 0 && alt > 1000) { apo = true; Mark("apoapsis " + top.ToString("F1", CultureInfo.InvariantCulture)); }
+                if (apo && !dumped10 && alt < 10000) { dumped10 = true; DumpParts(vessel, "parts-descent-10km.csv"); DumpForces(vessel, "forces-descent-10km.csv"); Mark("parts dumped at " + alt.ToString("F0", CultureInfo.InvariantCulture)); }
                 if (scenario == "visuals" && apo && !re40 && alt < 40000) { re40 = true; yield return Shot("v5-reentry-40km"); }
                 if (scenario == "visuals" && apo && !re25 && alt < 25000) { re25 = true; yield return Shot("v5-reentry-25km"); }
                 if (scenario != "visuals" && apo && !mapped && alt < 30000 && top > 31000)
@@ -375,7 +384,7 @@ namespace OpenSpaceExplorer.Validation
         IEnumerator Rcs(VesselComponent vessel)
         {
             vessel.SetAutopilotEnableDisable(false);
-            vessel.SetActionGroup(KSPActionGroup.RCS, true);
+            SetGroup(KSPActionGroup.RCS, true);
             vessel.IsRCSEnabled = true;
             yield return new WaitForSeconds(2f);
             Mark("rcs group " + vessel.GetActionGroupState(KSPActionGroup.RCS) + " IsRCSEnabled " + vessel.IsRCSEnabled + " mass " + vessel.totalMass);
@@ -408,9 +417,9 @@ namespace OpenSpaceExplorer.Validation
             Mark("coast");
             yield return Drive(3f, 0f, 0f);
             Mark("brakes");
-            vessel.SetActionGroup(KSPActionGroup.Brakes, true);
+            SetGroup(KSPActionGroup.Brakes, true);
             yield return Drive(8f, 0f, 0f);
-            vessel.SetActionGroup(KSPActionGroup.Brakes, false);
+            SetGroup(KSPActionGroup.Brakes, false);
             Mark("turn");
             yield return Drive(10f, 0.5f, 1f);
             yield return Drive(3f, 0f, 0f);
@@ -442,14 +451,19 @@ namespace OpenSpaceExplorer.Validation
             yield return Shot("13-eva");
             Begin(kerbal, "eva-trace.csv");
             yield return new WaitForSeconds(1f);
-            Mark("walk forward"); InputHolder.Z = -1f; yield return new WaitForSeconds(6f);
-            InputHolder.Z = 0f; Mark("stand"); yield return new WaitForSeconds(3f);
-            Mark("jump");
-            FlightInputHandler.OverrideInputStage(true); yield return null; yield return new WaitForFixedUpdate();
-            FlightInputHandler.OverrideInputStage(false);
+            Mark("let go of the ladder");
+            InputHolder.EvaJump = true; yield return new WaitForSeconds(0.3f); InputHolder.EvaJump = false;
             yield return new WaitForSeconds(4f);
-            Mark("walk back"); InputHolder.Z = 1f; yield return new WaitForSeconds(4f);
-            InputHolder.Z = 0f; yield return new WaitForSeconds(2f);
+            yield return Shot("13b-eva-on-ground");
+            Mark("walk forward"); InputHolder.EvaFrontBack = 1f; yield return new WaitForSeconds(6f);
+            InputHolder.EvaFrontBack = 0f; Mark("stand"); yield return new WaitForSeconds(3f);
+            Mark("run forward"); InputHolder.EvaRun = true; InputHolder.EvaFrontBack = 1f; yield return new WaitForSeconds(6f);
+            InputHolder.EvaFrontBack = 0f; InputHolder.EvaRun = false; Mark("stand"); yield return new WaitForSeconds(3f);
+            Mark("jump"); InputHolder.EvaJump = true; yield return new WaitForSeconds(0.2f); InputHolder.EvaJump = false;
+            yield return new WaitForSeconds(4f);
+            yield return Shot("13c-eva-close");
+            Mark("walk back"); InputHolder.EvaFrontBack = -1f; yield return new WaitForSeconds(4f);
+            InputHolder.EvaFrontBack = 0f; yield return new WaitForSeconds(2f);
             yield return Shot("14-eva-end");
             Stop();
             Mark("finished eva");
@@ -459,16 +473,64 @@ namespace OpenSpaceExplorer.Validation
         }
 
         // Per-part mass and drag of the craft standing on the pad, for comparing KSP2's mass model with OSE's.
-        IEnumerator PartDump(VesselComponent vessel)
+        // Time warp by rate index (WarpTo crawls when no vessel is flying): fast until close, then 10x, then stop.
+        IEnumerator WarpUntil(double target)
         {
-            yield return new WaitForSeconds(5f);
-            using (var w = new StreamWriter(Path.Combine(dir, "out", "parts.csv"), false))
+            var tw = G.ViewController.TimeWarp;
+            float w = 0;
+            while (G.UniverseModel.UniverseTime < target && w < 300)
             {
-                w.WriteLine("index,name,physics_mode,dry_t,resource_t,green_t,total_t,physics_mass_t,drag_area_xp,drag_area_xn,drag_area_yp,drag_area_yn,drag_area_zp,drag_area_zn,drag_cd_xp,drag_cd_xn,drag_cd_yp,drag_cd_yn,drag_cd_zp,drag_cd_zn,drag_enabled");
+                double left = target - G.UniverseModel.UniverseTime;
+                tw.SetRateIndex(left > 3000 ? 7 : left > 300 ? 5 : left > 20 ? 3 : 1, true);
+                w += Time.unscaledDeltaTime;
+                yield return null;
+            }
+            tw.StopTimeWarp(true);
+            Mark("warped to " + G.UniverseModel.UniverseTime.ToString("F0", CultureInfo.InvariantCulture) + " (target " + target.ToString("F0", CultureInfo.InvariantCulture) + ")");
+        }
+
+        // Every force on every part at this tick: the rigidbody's persistent and single-frame IForce lists, plus
+        // Module_Drag's scalar and the global drag multipliers it uses.
+        void DumpForces(VesselComponent vessel, string file)
+        {
+            var inv = CultureInfo.InvariantCulture;
+            using (var w = new StreamWriter(Path.Combine(dir, "out", file), false))
+            {
+                double rho = vessel.AtmDensity, v = vessel.SrfSpeedMagnitude;
+                w.WriteLine("# mach " + vessel.MachNumber.ToString("R", inv) + " q_kpa " + vessel.DynamicPressure_kPa.ToString("R", inv) + " alt " + vessel.AltitudeFromSeaLevel.ToString("R", inv)
+                    + " density " + rho.ToString("R", inv) + " speed " + v.ToString("R", inv) + " mass_t " + vessel.totalMass.ToString("R", inv)
+                    + " DragMultiplier " + PhysicsSettings.DragMultiplier.ToString("R", inv) + " DragCubeMultiplier " + PhysicsSettings.DragCubeMultiplier.ToString("R", inv)
+                    + " LiftDragMultiplier " + PhysicsSettings.LiftDragMultiplier.ToString("R", inv) + " PseudoReynolds(rho*v) " + PhysicsSettings.DragCurvePseudoReynolds.Evaluate((float)(rho * v)).ToString("R", inv));
+                w.WriteLine("part,list,force_type,mode,fx,fy,fz,|f|_kN,px,py,pz,drag_scalar");
+                foreach (var part in vessel.SimulationObject.PartOwner.Parts)
+                {
+                    if (!G.SpaceSimulation.TryGetViewObject(part.SimulationObject, out var view)) continue;
+                    var pb = view.GetComponent<PartBehavior>();
+                    var md = view.GetComponent<KSP.Modules.Module_Drag>();
+                    string ds = md != null ? md.dragScalar.ToString("R", inv) : "";
+                    var rb = pb?.Rigidbody?.Model;
+                    if (rb == null) { w.WriteLine(part.Name + ",none,,,,,,,,,," + ds); continue; }
+                    foreach (var (list, name) in new[] { (rb.Forces, "persistent"), (rb.SingleFrameForces, "single") })
+                        foreach (var f in list)
+                        {
+                            var F = f.RelativeForce; var P = f.RelativePosition;
+                            w.WriteLine(part.Name + "," + name + "," + f.GetType().FullName + "," + f.ForceMode + "," + F.x.ToString("R", inv) + "," + F.y.ToString("R", inv) + "," + F.z.ToString("R", inv) + ","
+                                + F.magnitude.ToString("R", inv) + "," + P.x.ToString("R", inv) + "," + P.y.ToString("R", inv) + "," + P.z.ToString("R", inv) + "," + ds);
+                        }
+                }
+            }
+        }
+
+        void DumpParts(VesselComponent vessel, string file)
+        {
+            var flow = vessel.SurfaceVelocity.vector;
+            using (var w = new StreamWriter(Path.Combine(dir, "out", file), false))
+            {
+                w.WriteLine("index,name,physics_mode,dry_t,resource_t,green_t,total_t,physics_mass_t,drag_area_xp,drag_area_xn,drag_area_yp,drag_area_yn,drag_area_zp,drag_area_zn,drag_cd_xp,drag_cd_xn,drag_cd_yp,drag_cd_yn,drag_cd_zp,drag_cd_zn,drag_enabled,exposed_xp,exposed_xn,exposed_yp,exposed_yn,exposed_zp,exposed_zn,drag_mult_yp,drag_mult_yn,mach,q_kpa,alt_m");
                 int i = 0;
                 foreach (var part in vessel.SimulationObject.PartOwner.Parts)
                 {
-                    string drag = string.Join(",", new string[13]);
+                    string drag = string.Join(",", new string[24]);
                     if (G.SpaceSimulation.TryGetViewObject(part.SimulationObject, out var view))
                     {
                         var m = view.GetComponent<KSP.Modules.Module_Drag>();
@@ -479,6 +541,12 @@ namespace OpenSpaceExplorer.Validation
                             foreach (var a in d.weightedArea) vals.Add(a.ToString("R", CultureInfo.InvariantCulture));
                             foreach (var c in d.weightedDrag) vals.Add(c.ToString("R", CultureInfo.InvariantCulture));
                             vals.Add(d.DragEnabled ? "1" : "0");
+                            foreach (var e in d.weightedExposedArea) vals.Add(e.ToString("R", CultureInfo.InvariantCulture));
+                            vals.Add(d.weightedDragMultiplier[2].ToString("R", CultureInfo.InvariantCulture));
+                            vals.Add(d.weightedDragMultiplier[3].ToString("R", CultureInfo.InvariantCulture));
+                            vals.Add(vessel.MachNumber.ToString("R", CultureInfo.InvariantCulture));
+                            vals.Add(vessel.DynamicPressure_kPa.ToString("R", CultureInfo.InvariantCulture));
+                            vals.Add(vessel.AltitudeFromSeaLevel.ToString("R", CultureInfo.InvariantCulture));
                             drag = string.Join(",", vals);
                         }
                     }
@@ -486,6 +554,12 @@ namespace OpenSpaceExplorer.Validation
                     w.WriteLine(i++ + "," + part.Name + "," + part.PhysicsMode + "," + string.Join(",", Array.ConvertAll(mass, x => x.ToString("R", CultureInfo.InvariantCulture))) + "," + drag);
                 }
             }
+        }
+
+        IEnumerator PartDump(VesselComponent vessel)
+        {
+            yield return new WaitForSeconds(5f);
+            DumpParts(vessel, "parts.csv");
             Mark("parts dumped, vessel mass " + vessel.totalMass.ToString("R", CultureInfo.InvariantCulture));
             File.WriteAllText(Path.Combine(dir, "out", "done.txt"), "ok");
             yield return new WaitForSeconds(2f);
@@ -499,10 +573,12 @@ namespace OpenSpaceExplorer.Validation
             var names = new System.Collections.Generic.List<string>();
             foreach (var part in vessel.SimulationObject.PartOwner.Parts) names.Add(part.Name);
             Mark("parts " + string.Join(" ", names));
-            vessel.SetActionGroup(KSPActionGroup.Gear, true);
+            SetGroup(KSPActionGroup.Gear, true);
             vessel.SetAutopilotEnableDisable(true);
             Begin(vessel, "legs-trace.csv");
-            yield return new WaitForSeconds(10f);
+            yield return new WaitForSeconds(8f);
+            yield return Shot("15-legs-deployed");
+            yield return new WaitForSeconds(2f);
             Mark("hop");
             G.ViewController.flightInputHandler.OverrideInputMaxThrottle(true);
             vessel.ActivateNextStage();
@@ -536,6 +612,90 @@ namespace OpenSpaceExplorer.Validation
             InputHolder.WheelThrottle = throttle;
             InputHolder.WheelSteer = steer;
             yield return new WaitForSeconds(seconds);
+        }
+
+        // Action groups through the active vehicle's controllable groups, as the flight keys do
+        // (VesselComponent.SetActionGroup does not reach them for a freshly launched craft).
+        // T14 crash tolerance: put the craft 0.5 m above where it rests, upright, falling at `speed`, and log
+        // the parts aboard every tick until 8 s after the drop.
+        IEnumerator Drop(VesselComponent vessel, double speed)
+        {
+            var before = new System.Collections.Generic.List<string>();
+            foreach (var part in vessel.SimulationObject.PartOwner.Parts) before.Add(part.Name);
+            Mark("parts before " + string.Join(" ", before));
+            var state = new KSP.Sim.State.SurfaceTeleportState { ReferenceBodyGuid = vessel.mainBody.Name, Altitude = 1.0 /* above the terrain, not sea level */, Latitude = vessel.Latitude, Longitude = vessel.Longitude, VerticalSpeed = -speed };
+            Begin(vessel, "drop-trace.csv");
+            using (var log = new StreamWriter(Path.Combine(dir, "out", "drop-parts.csv"), false))
+            {
+                log.WriteLine("t,parts,names");
+                G.SpaceSimulation.TeleportSimObjectToSurface(vessel.SimulationObject, state);
+                Mark("teleported, falling at " + speed.ToString(CultureInfo.InvariantCulture));
+                float t = 0; int last = -1;
+                while (t < 12)
+                {
+                    t += Time.fixedDeltaTime;
+                    yield return new WaitForFixedUpdate();
+                    var v = G.ViewController.GetActiveSimVessel();
+                    if (v == null) { log.WriteLine(t.ToString("F2", CultureInfo.InvariantCulture) + ",0,"); Mark("vessel gone at " + t.ToString("F2", CultureInfo.InvariantCulture)); break; }
+                    var names = new System.Collections.Generic.List<string>();
+                    foreach (var part in v.SimulationObject.PartOwner.Parts) names.Add(part.Name);
+                    if (names.Count != last) { log.WriteLine(t.ToString("F2", CultureInfo.InvariantCulture) + "," + names.Count + "," + string.Join(" ", names)); last = names.Count; }
+                }
+            }
+            yield return Shot("16-after-drop");
+            Stop();
+            Mark("finished drop");
+            File.WriteAllText(Path.Combine(dir, "out", "done.txt"), "ok");
+            yield return new WaitForSeconds(2f);
+            Application.Quit();
+        }
+
+        // T13 joints: pod + six 1x4 tanks + Swivel; SAS on, full throttle 5 s, then full roll 3 s, then 3 s free.
+        // Logs, every physics tick, each part's position in the pod's frame (pod = root) and the part count.
+        IEnumerator Stack(VesselComponent vessel)
+        {
+            vessel.SetAutopilotEnableDisable(true);
+            G.ViewController.flightInputHandler.OverrideInputMaxThrottle(true);
+            yield return new WaitForSeconds(0.5f);
+            Begin(vessel, "stack-trace.csv");
+            var inv = CultureInfo.InvariantCulture;
+            using (var w = new StreamWriter(Path.Combine(dir, "out", "stack-parts.csv"), false))
+            {
+                w.WriteLine("t,phase,parts,index,name,x,y,z");
+                vessel.ActivateNextStage();
+                Mark("staged");
+                float t = 0; string phase = "thrust";
+                while (t < 11.5f)
+                {
+                    yield return new WaitForFixedUpdate();
+                    t += Time.fixedDeltaTime;
+                    if (phase == "thrust" && t >= 5f) { phase = "roll"; InputHolder.Roll = 1f; Mark("roll"); }
+                    if (phase == "roll" && t >= 8f) { phase = "free"; InputHolder.Roll = 0f; Mark("roll off"); }
+                    var v = G.ViewController.GetActiveSimVessel();
+                    if (v == null) { Mark("vessel gone"); break; }
+                    Transform root = null; var views = new System.Collections.Generic.List<(string, Transform)>();
+                    foreach (var part in v.SimulationObject.PartOwner.Parts)
+                        if (G.SpaceSimulation.TryGetViewObject(part.SimulationObject, out var view)) { views.Add((part.Name, view.transform)); if (root == null) root = view.transform; }
+                    if (root == null) continue;
+                    for (int i = 0; i < views.Count; i++)
+                    {
+                        var rel = Quaternion.Inverse(root.rotation) * (views[i].Item2.position - root.position);
+                        w.WriteLine(t.ToString("F2", inv) + "," + phase + "," + views.Count + "," + i + "," + views[i].Item1 + "," + rel.x.ToString("R", inv) + "," + rel.y.ToString("R", inv) + "," + rel.z.ToString("R", inv));
+                    }
+                }
+            }
+            InputHolder.Roll = 0f;
+            yield return Shot("17-stack");
+            Stop();
+            Mark("finished stack");
+            File.WriteAllText(Path.Combine(dir, "out", "done.txt"), "ok");
+            yield return new WaitForSeconds(2f);
+            Application.Quit();
+        }
+
+        static void SetGroup(KSPActionGroup group, bool on)
+        {
+            if (G.ViewController.TryGetActiveVehicle(out var v)) v.ControllableActionGroups?.SetGroup(group, on);
         }
 
         static void Set(string axis, float v)

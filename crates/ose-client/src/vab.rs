@@ -1400,6 +1400,12 @@ impl Editor {
 /// Symmetry counts the original offers (`BuilderSymmetryMode` X1..X8), in X-key order.
 pub const SYMMETRY: [u32; 6] = [1, 2, 3, 4, 6, 8];
 
+/// The angle between neighbouring parts of a radial set of `count`, times `k` (KSP2's
+/// `SymmetrySetPositionerRadial`).
+pub fn radial_angle_radians(k: u32, count: u32) -> f64 {
+    std::f64::consts::TAU * k as f64 / count.max(1) as f64
+}
+
 /// The part's surface attach node, if it can go on another part's side.
 pub fn surface_node(spec: &PartSpec) -> Option<&NodeSpec> {
     spec.attach_nodes

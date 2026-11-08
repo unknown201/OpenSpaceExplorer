@@ -905,9 +905,10 @@ impl FlightView {
         out
     }
 
-    pub fn orbit(&mut self, dx: f64, dy: f64) {
-        self.yaw -= dx * 0.005;
-        self.pitch = (self.pitch + dy * 0.005).clamp(-1.45, 1.45);
+    /// Turn the camera round the vessel by `dyaw` and `dpitch` radians (`interaction::flight_orbit_degrees`).
+    pub fn orbit(&mut self, dyaw: f64, dpitch: f64) {
+        self.yaw -= dyaw;
+        self.pitch = (self.pitch + dpitch).clamp(-1.45, 1.45);
     }
 
     /// The craft part under a pixel of the last frame (nearest box along the camera ray).
@@ -1025,6 +1026,39 @@ impl FlightView {
     /// The campus in the model frame for the planet renderer: the footprint (all facility boxes, 300 m wider),
     /// which sinks the terrain under the campus model and keeps grass, trees and rocks off it, then each
     /// facility 100 m wider.
+    /// Launch pad 1's floodlights for the frame: four lamps high on the pad's corners aimed at the craft's
+    /// stand, `night` (0..1) bright, relative to the camera. The campus is at `kpos` turned by `krot`.
+    fn pad_floods(
+        &self,
+        kpos: DVec3,
+        krot: DQuat,
+        cam: DVec3,
+        night: f32,
+    ) -> Vec<crate::render::LocalLight> {
+        let scene = self.ksc_scene.borrow();
+        let Some(stand) = scene
+            .as_ref()
+            .and_then(|s| s.spawns.get("LaunchPad_spawn_01"))
+            .map(|p| DVec3::new(p[0], p[1], p[2]))
+        else {
+            return Vec::new();
+        };
+        let aim = stand + DVec3::new(0.0, 4.0, 0.0);
+        [(-30.0, -30.0), (30.0, -30.0), (-30.0, 30.0), (30.0, 30.0)]
+            .iter()
+            .map(|&(x, z)| {
+                let at = stand + DVec3::new(x, 24.0, z);
+                crate::render::LocalLight {
+                    pos: kpos + krot * at - cam,
+                    range: 120.0,
+                    dir: krot * (aim - at).normalize(),
+                    cone_cos: 0.55,
+                    color: [0.75 * night, 0.73 * night, 0.66 * night],
+                }
+            })
+            .collect()
+    }
+
     fn ksc_exclusions(&self, pos: DVec3, rot: DQuat) -> Vec<crate::planet_scatter::Exclusion> {
         let Some(foot) = self.ksc_exclusion(pos, rot) else {
             return Vec::new();
@@ -1453,6 +1487,8 @@ impl FlightView {
         }
         // The KSC campus on Kerbin while low enough to matter.
         self.ksc_distance = f64::INFINITY;
+        // The pad's floodlights at night (lit into the local lamps with the craft's own).
+        let mut pad_floods: Vec<crate::render::LocalLight> = Vec::new();
         // It stays drawn for as long as the terrain is sunk under it (up to 30 km on the way up): between the two
         // the sunken footprint showed as a pale hole where the campus had been.
         let sunk = self.planet.as_ref().is_some_and(|p| p.has_exclusions());
@@ -1477,6 +1513,14 @@ impl FlightView {
                     let mut it = DrawItem::lit("ksc".into(), kpos - cam, krot, 1.0, sun);
                     it.ambient = 0.38;
                     it.sun = SUN_GAIN;
+                    // At night the campus's windows and lamps come on as on the KSC screen, and the pad's
+                    // floodlights light the pad and the craft standing on it, as KSP2's do.
+                    let elev = sun.normalize_or_zero().dot(kpos.normalize_or_zero());
+                    let night = ((0.05 - elev) / 0.15).clamp(0.0, 1.0);
+                    it.glow = night as f32;
+                    if night > 0.0 && (kpos - pos).length() < 20_000.0 {
+                        pad_floods = self.pad_floods(kpos, krot, cam, night as f32);
+                    }
                     items.push(it);
                 }
             }
@@ -2244,35 +2288,39 @@ impl FlightView {
                 }
             }
             // Lamps on the craft light what is near them while the Lights group is on.
+            let mut lamps: Vec<crate::render::LocalLight> = std::mem::take(&mut pad_floods);
             if readout.is_some_and(|f| f.lights) {
-                let mut lamps: Vec<crate::render::LocalLight> = parts
-                    .iter()
-                    .filter(|(i, ..)| craft.parts[*i].part_id.starts_with("light_"))
-                    .map(|(i, _, lp, lq, _)| {
-                        let pid = craft.parts[*i].part_id.as_str();
-                        let spot = pid.contains("spot") || pid.contains("broad");
-                        // Where the part's Light sits and which way it shines (its +Z), from the models.
-                        let (off, axis) = lamp_frame(pid);
-                        let at = pos + vessel_rot * (*lp + origin + *lq * off);
-                        crate::render::LocalLight {
-                            pos: at - cam,
-                            range: if spot { 60.0 } else { 18.0 },
-                            dir: vessel_rot * (*lq * axis),
-                            cone_cos: if pid.contains("narrow") {
-                                0.94
-                            } else if spot {
-                                0.8
-                            } else {
-                                -1.0
-                            },
-                            color: if pid.contains("navigation") {
-                                [0.1, 0.6, 0.15]
-                            } else {
-                                [1.4, 1.25, 1.0]
-                            },
-                        }
-                    })
-                    .collect();
+                lamps.extend(
+                    parts
+                        .iter()
+                        .filter(|(i, ..)| craft.parts[*i].part_id.starts_with("light_"))
+                        .map(|(i, _, lp, lq, _)| {
+                            let pid = craft.parts[*i].part_id.as_str();
+                            let spot = pid.contains("spot") || pid.contains("broad");
+                            // Where the part's Light sits and which way it shines (its +Z), from the models.
+                            let (off, axis) = lamp_frame(pid);
+                            let at = pos + vessel_rot * (*lp + origin + *lq * off);
+                            crate::render::LocalLight {
+                                pos: at - cam,
+                                range: if spot { 60.0 } else { 18.0 },
+                                dir: vessel_rot * (*lq * axis),
+                                cone_cos: if pid.contains("narrow") {
+                                    0.94
+                                } else if spot {
+                                    0.8
+                                } else {
+                                    -1.0
+                                },
+                                color: if pid.contains("navigation") {
+                                    [0.1, 0.6, 0.15]
+                                } else {
+                                    [1.4, 1.25, 1.0]
+                                },
+                            }
+                        }),
+                );
+            }
+            if !lamps.is_empty() {
                 lamps.sort_by(|a, b| a.pos.length().total_cmp(&b.pos.length()));
                 gpu.set_lights(&lamps);
             }

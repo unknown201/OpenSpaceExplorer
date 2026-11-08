@@ -353,13 +353,13 @@ impl KscView {
             // At night the moonlight is a small share of the sun's and the sky fill nearly gone: the original's
             // night campus is about an eighth as bright as its day, lit mostly by its own windows and floods.
             item.ambient = (0.03 + 0.35 * day) as f32;
-            item.sun = crate::flight3d::SUN_GAIN * (0.06 + 0.94 * day) as f32;
+            item.sun = crate::flight3d::SUN_GAIN * (0.03 + 0.97 * day) as f32;
             item.exposure = crate::flight3d::OUTDOOR_EXPOSURE;
             item.true_metal = true;
             // The campus lights (windows, floodlights: the original's emissive maps) come on at dusk.
             item.glow = (1.0 - day) as f32;
             if day < 1.0 {
-                let k = (0.15 + 0.85 * day) as f32;
+                let k = (0.1 + 0.9 * day) as f32;
                 item.color = [k * 0.85, k * 0.9, k, 1.0];
             }
             // The Tracking Station's big dish sweeps slowly back and forth in azimuth, about its own vertical.

@@ -18,9 +18,11 @@ test("a lost vessel's report offers the reverts and Revert to Launch flies again
   await page.locator('[data-ose="create"]').click();
   await page.locator('[data-ose="ksc-vab"]').click();
   await page.locator('[data-ose="vab-clear"]').click();
-  for (const part of ["Tin Can", "FL-T400", "LV-T45"]) {
+  for (const [n, part] of ["Tin Can", "FL-T400", "LV-T45"].entries()) {
     await page.locator('[data-ose="vab-search"]').fill(part);
     await page.locator('[data-ose="vab-part"]').first().dblclick();
+    // Each part on before the next: a hop without its tank never leaves the pad.
+    await expect(page.locator('[data-ose="vab-canvas"]')).toHaveAttribute("data-ose-vab-parts", String(n + 1));
   }
   await page.locator('[data-ose="vab-name"]').fill("crash hop");
   await page.locator('[data-ose="vab-launch"]').click();
