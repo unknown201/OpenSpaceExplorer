@@ -20,6 +20,12 @@ pub const IDEAL_GAS_CONSTANT: f64 = 8.31447;
 pub const CRASH_SPEED_MPS: f64 = 12.0;
 /// Highest warp allowed while any vessel is under powered flight (the original's physics warp).
 pub const MAX_PHYSICS_WARP: u32 = 4;
+/// Time warp a craft burning its engines in orbit allows (KSP2 keeps warping under thrust above the atmosphere
+/// and the terrain, `VesselComponent.HandleOrbitalPhysicsUnderThrustStart`; our cap: its 10x, 50x and 100x
+/// rates, the burn integrated in 0.1 s steps).
+pub const MAX_THRUST_WARP: u32 = 100;
+/// The longest integration step of a craft burning under time warp, s.
+pub const THRUST_WARP_STEP_S: f64 = 0.1;
 /// Drag coefficient for the single reference area of a craft (tuned later against drag cubes).
 pub const DEFAULT_CD: f64 = 0.35;
 

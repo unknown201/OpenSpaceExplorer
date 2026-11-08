@@ -575,6 +575,121 @@ fn path_state(
     Some((body, r, vel))
 }
 
+/// The map camera's vertical field of view (as `frame_3d` sets it).
+const MAP_FOV_DEG: f64 = 50.0;
+/// Where the original's map camera opens when nothing better is known: 20 units from the pivot
+/// (`MapMagicValues.MapCameraPivotDistance`) at a map scale of 1:100000 (`MapCamera.AssignSpaceProvider`),
+/// so 2000 km from the active vessel.
+const MAP_OPEN_DIST_KM: f64 = 2000.0;
+/// How far the opening view leans from the trajectory's normal back along the track: the path is seen at a
+/// slant (a circular orbit as a wide ellipse), with the body beside the vessel rather than under it.
+const MAP_OPEN_TILT_RAD: f64 = 0.95;
+
+/// Points (from the reference body's centre, metres) along the vessel's predicted path from `ut` while it
+/// stays round `body`: the server's trajectory patches, or the vessel's own conic when none has arrived.
+fn flight_map_path(
+    scene: &Scene,
+    v: &ose_net::VesselState,
+    body: usize,
+    ut: f64,
+) -> Vec<ose_math::DVec3> {
+    let Some(b) = scene.bodies.get(body) else {
+        return Vec::new();
+    };
+    let soi = b.soi_radius_m.unwrap_or(f64::INFINITY);
+    let own = [ose_net::TrajectoryPatch {
+        body: body as u16,
+        orbit: v.orbit,
+        start_ut: ut,
+        end_ut: f64::INFINITY,
+        end: PatchEnd::Final,
+    }];
+    let patches = scene
+        .trajectories
+        .get(&v.id)
+        .filter(|ps| ps.iter().any(|p| p.end_ut >= ut && p.body as usize == body))
+        .map(|ps| ps.as_slice())
+        .unwrap_or(&own);
+    let mut pts = Vec::new();
+    for p in patches.iter().filter(|p| p.end_ut >= ut) {
+        if p.body as usize != body {
+            break;
+        }
+        let orbit = scene::orbit_from(b.mu, &p.orbit);
+        let start = p.start_ut.max(ut);
+        let end = if p.end_ut.is_finite() {
+            p.end_ut
+        } else if orbit.period.is_finite() {
+            start + orbit.period
+        } else {
+            start + 6.0 * 3600.0
+        };
+        let n = 120;
+        for s in 0..=n {
+            let rel = orbit.position_at(start + (end - start) * s as f64 / n as f64);
+            if rel.length() > soi * 1.02 {
+                break;
+            }
+            pts.push(rel);
+        }
+    }
+    pts
+}
+
+/// The flight map's opening view of the active vessel, as the original opens it: centred on the vessel,
+/// which sits at its body's limb with the body beside it and the predicted path from now (`path`, from the
+/// body's centre) seen at a slant, the camera just far enough back for the whole path to fit on a screen
+/// `aspect` (width / height) wide, and never so close that the body stops reading as a planet. `r` and
+/// `vel` are the vessel's state relative to its body (Z up). Returns the camera distance (km), yaw and
+/// pitch for `frame_3d`'s Y-up orbit camera (whose screen up is the body's north).
+fn flight_map_view(
+    radius_m: f64,
+    r: ose_math::DVec3,
+    vel: ose_math::DVec3,
+    path: &[ose_math::DVec3],
+    aspect: f64,
+) -> (f64, f64, f64) {
+    use ose_math::DVec3;
+    // Look along the path's normal (from the north side), leaning back along the track: the vessel stays at
+    // the limb, the path ahead runs away across the screen.
+    let up = r.normalized();
+    let mut normal = r.cross(vel).normalized();
+    if normal.length() < 0.5 || normal.cross(up).length() < 0.2 {
+        // A vertical climb has no plane yet: look from the body's north instead.
+        normal = DVec3::new(0.0, 0.0, 1.0);
+    }
+    if normal.z < 0.0 {
+        normal = -normal;
+    }
+    let track = normal.cross(up).normalized();
+    let dir = (normal * MAP_OPEN_TILT_RAD.cos() - track * MAP_OPEN_TILT_RAD.sin()).normalized();
+    // The screen's axes from there: up is north (`frame_3d` passes Y up, the body's Z).
+    let north = DVec3::new(0.0, 0.0, 1.0);
+    let screen_up = (north - dir * north.dot(dir)).normalized();
+    let screen_right = dir.cross(screen_up);
+    let tan_v = (MAP_FOV_DEG * 0.5).to_radians().tan();
+    let tan_h = tan_v * aspect.max(0.5);
+    let fit = path
+        .iter()
+        .map(|p| {
+            let d = *p - r;
+            let toward = d.dot(dir);
+            (toward + d.dot(screen_up).abs() / tan_v)
+                .max(toward + d.dot(screen_right).abs() / tan_h)
+        })
+        .fold(0.0, f64::max);
+    let dist_m = if fit > 0.0 {
+        (fit * 1.08).max(radius_m * 0.35)
+    } else {
+        MAP_OPEN_DIST_KM * 1000.0
+    };
+    // Z-up -> Y-up, as `frame_3d`'s `to_km`.
+    let (x, y, z) = (dir.x, dir.z, -dir.y);
+    let pitch = y.clamp(-1.0, 1.0).asin().clamp(-1.5, 1.5);
+    let yaw = x.atan2(z);
+    (dist_m / 1000.0, yaw, pitch)
+}
+
 fn local_storage() -> Option<web_sys::Storage> {
     web_sys::window()?.local_storage().ok()?
 }
@@ -2130,17 +2245,7 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
     wire("fh-stage-btn", Box::new(|a| a.borrow_mut().flight_stage()))?;
     wire("fh-full", Box::new(|a| a.borrow_mut().set_throttle(1.0)))?;
     wire("fh-cut", Box::new(|a| a.borrow_mut().set_throttle(0.0)))?;
-    wire(
-        "fh-map",
-        Box::new(|a| {
-            let mut app = a.borrow_mut();
-            app.map_mode = !app.map_mode;
-            if app.map_mode {
-                app.ftue("FTUE_Map");
-                app.lesson_event("MapViewEnteredMessage");
-            }
-        }),
-    )?;
+    wire("fh-map", Box::new(|a| a.borrow_mut().toggle_flight_map()))?;
     wire(
         "fh-ksc",
         Box::new(|a| {
@@ -4266,7 +4371,11 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
             if app.is_3d() {
                 // The map: one exponential step a notch, by its sign (a trackpad's fractions scale it).
                 let f = interaction::map_zoom(1.0, notches.signum()).powf(notches.abs().max(0.0));
+                let (dist, clear) = (app.orbit_dist_km, app.map_camera_clear());
                 app.orbit_dist_km = (app.orbit_dist_km * f).clamp(1.0e-2, 1.0e10);
+                if clear && !app.map_camera_clear() {
+                    app.orbit_dist_km = dist;
+                }
             } else {
                 app.camera
                     .zoom_at(factor, ev.offset_x() as f64, ev.offset_y() as f64);
@@ -4586,10 +4695,15 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
             let (nx, ny) = (ev.client_x() as f64, ev.client_y() as f64);
             if app.is_3d() {
                 let (pitch, fine) = (app.orbit_pitch.to_degrees(), ev.alt_key());
+                let (yaw0, pitch0, clear) =
+                    (app.orbit_yaw, app.orbit_pitch, app.map_camera_clear());
                 app.orbit_yaw -= interaction::map_orbit_degrees(nx - x, pitch, fine).to_radians();
                 app.orbit_pitch = (app.orbit_pitch
                     - interaction::map_orbit_degrees(ny - y, pitch, fine).to_radians())
                 .clamp(-1.5, 1.5);
+                if clear && !app.map_camera_clear() {
+                    (app.orbit_yaw, app.orbit_pitch) = (yaw0, pitch0);
+                }
             } else {
                 app.camera.pan_px(nx - x, ny - y);
             }
@@ -5197,11 +5311,7 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                         true
                     }
                     "KeyM" => {
-                        app.map_mode = !app.map_mode;
-                        if app.map_mode {
-                            app.ftue("FTUE_Map");
-                            app.lesson_event("MapViewEnteredMessage");
-                        }
+                        app.toggle_flight_map();
                         true
                     }
                     "BracketRight" | "BracketLeft" if !app.map_mode => {
@@ -6760,6 +6870,72 @@ impl App {
                     .set_text_content(Some(&format!("following: {}", v.name)));
             }
         }
+    }
+
+    /// M or the map button in flight: open the map on the vessel flown (as the original, which focuses the
+    /// active vessel each time the map opens from flight), or go back to the flight view.
+    fn toggle_flight_map(&mut self) {
+        self.map_mode = !self.map_mode;
+        if self.map_mode {
+            self.frame_flight_map();
+            self.ftue("FTUE_Map");
+            self.lesson_event("MapViewEnteredMessage");
+        }
+    }
+
+    /// Frame the flight map on the vessel flown and its predicted path (see `flight_map_view`); the
+    /// whole focused system when no vessel is flown.
+    fn frame_flight_map(&mut self) {
+        let ut = self.time.ut_at(now_ms());
+        let view = self.flying.and_then(|id| {
+            let scene = self.scene.as_ref()?;
+            let v = scene.vessel(id)?;
+            let body = v.reference_body as usize;
+            let b = scene.bodies.get(body)?;
+            let r = scene.vessel_position(v, ut) - scene.position(body, ut);
+            let (_, vel) = scene::orbit_from(b.mu, &v.orbit).state_at(ut);
+            let path = flight_map_path(scene, v, body, ut);
+            let aspect = self.camera.width / self.camera.height.max(1.0);
+            Some((id, body, flight_map_view(b.radius_m, r, vel, &path, aspect)))
+        });
+        let Some((id, body, (dist_km, yaw, pitch))) = view else {
+            self.frame_focus();
+            return;
+        };
+        self.follow = Some(id);
+        self.camera.focus = body;
+        (self.orbit_dist_km, self.orbit_yaw, self.orbit_pitch) = (dist_km, yaw, pitch);
+        // The 2D fallback: the same half height of view round the vessel.
+        self.camera
+            .frame(dist_km * 1000.0 * (MAP_FOV_DEG * 0.5).to_radians().tan());
+    }
+
+    /// Whether the 3D map camera is outside the focused body (with a margin for its clouds): rotating or
+    /// zooming round a vessel close to the ground must not take the camera under the surface, as in the
+    /// original, where the map camera never enters a planet.
+    fn map_camera_clear(&self) -> bool {
+        let Some(scene) = &self.scene else {
+            return true;
+        };
+        let Some(body) = scene.bodies.get(self.camera.focus) else {
+            return true;
+        };
+        let ut = self.time.ut_at(now_ms());
+        let body_pos = scene.position(self.camera.focus, ut);
+        let centre = self
+            .follow
+            .and_then(|id| scene.vessel(id))
+            .map(|v| scene.vessel_position(v, ut))
+            .unwrap_or(body_pos);
+        // `frame_3d`'s Y-up direction back in Z up: (X, Y, Z) = (x, z, -y).
+        let (yaw, pitch) = (self.orbit_yaw, self.orbit_pitch);
+        let dir = ose_math::DVec3::new(
+            pitch.cos() * yaw.sin(),
+            -pitch.cos() * yaw.cos(),
+            pitch.sin(),
+        );
+        let cam = centre + dir * (self.orbit_dist_km * 1000.0);
+        (cam - body_pos).length() > body.radius_m * 1.01 + 5_000.0
     }
 
     /// The menu screen showing, if the menu is open.
@@ -11841,6 +12017,10 @@ impl App {
                 return;
             }
         }
+        if self.map_mode && self.flying.is_some() {
+            self.frame_flight_map();
+            return;
+        }
         self.frame_focus();
     }
 
@@ -14992,6 +15172,97 @@ fn vab_nodes(catalog: &vab::Catalog, id: &str) -> Vec<(glam::DVec3, glam::DVec3)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Whether every path point is on a 16:9 screen from where `flight_map_view` puts the camera (Z up,
+    /// metres from the body's centre), looking at the vessel with north up.
+    fn path_on_screen(r: ose_math::DVec3, view: (f64, f64, f64), path: &[ose_math::DVec3]) -> bool {
+        use ose_math::DVec3;
+        let (dist_km, yaw, pitch) = view;
+        // Y-up (X, Y, Z) = Z-up (x, z, -y)
+        let (dx, dy, dz) = (
+            pitch.cos() * yaw.sin(),
+            pitch.sin(),
+            pitch.cos() * yaw.cos(),
+        );
+        let dir = DVec3::new(dx, -dz, dy);
+        let cam = r + dir * (dist_km * 1000.0);
+        let north = DVec3::new(0.0, 0.0, 1.0);
+        let up = (north - dir * north.dot(dir)).normalized();
+        let right = dir.cross(up);
+        let tan_v = (MAP_FOV_DEG * 0.5).to_radians().tan();
+        path.iter().all(|p| {
+            let d = *p - cam;
+            let depth = -d.dot(dir);
+            depth > 0.0
+                && d.dot(up).abs() <= depth * tan_v
+                && d.dot(right).abs() <= depth * tan_v * 16.0 / 9.0
+        })
+    }
+
+    fn circle(radius: f64, n: usize) -> Vec<ose_math::DVec3> {
+        (0..n)
+            .map(|i| {
+                let a = std::f64::consts::TAU * i as f64 / n as f64;
+                ose_math::DVec3::new(radius * a.cos(), radius * a.sin(), 0.0)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn flight_map_opens_on_a_100km_orbit_with_the_whole_orbit_in_view() {
+        let (kerbin, a) = (600e3, 700e3);
+        let r = ose_math::DVec3::new(a, 0.0, 0.0);
+        let vel = ose_math::DVec3::new(0.0, 2246.0, 0.0);
+        let path = circle(a, 120);
+        let view = flight_map_view(kerbin, r, vel, &path, 16.0 / 9.0);
+        // a few thousand km, not the whole Kerbin system (Minmus orbits at 47 000 km)
+        assert!(view.0 > 1500.0 && view.0 < 4000.0, "{view:?}");
+        assert!(path_on_screen(r, view, &path), "{view:?}");
+        // seen from above the equatorial orbit's plane, at a slant
+        assert!(view.2 > 0.4 && view.2 < 1.2, "{view:?}");
+    }
+
+    #[test]
+    fn flight_map_opens_close_on_a_suborbital_hop() {
+        let kerbin = 600e3;
+        let r = ose_math::DVec3::new(kerbin + 31e3, 0.0, 0.0);
+        let vel = ose_math::DVec3::new(380.0, 600.0, 0.0);
+        // the arc from here over a 40 km apoapsis down to the ground some 150 km east
+        let path: Vec<_> = (0..=40)
+            .map(|i| {
+                let t = i as f64 / 40.0;
+                let h = 31e3 + 9e3 * (std::f64::consts::PI * t * 0.8).sin() - 31e3 * t * t;
+                let ang = 0.25 * t;
+                ose_math::DVec3::new((kerbin + h) * ang.cos(), (kerbin + h) * ang.sin(), 0.0)
+            })
+            .collect();
+        let view = flight_map_view(kerbin, r, vel, &path, 16.0 / 9.0);
+        assert!(
+            view.0 >= kerbin * 0.35 / 1000.0 && view.0 < 800.0,
+            "{view:?}"
+        );
+        assert!(path_on_screen(r, view, &path), "{view:?}");
+    }
+
+    #[test]
+    fn flight_map_opens_on_a_mun_orbit_at_mun_scale() {
+        let (mun, a) = (200e3, 230e3);
+        let r = ose_math::DVec3::new(0.0, a, 0.0);
+        let vel = ose_math::DVec3::new(-540.0, 0.0, 0.0);
+        let path = circle(a, 120);
+        let view = flight_map_view(mun, r, vel, &path, 16.0 / 9.0);
+        assert!(view.0 > 400.0 && view.0 < 1500.0, "{view:?}");
+        assert!(path_on_screen(r, view, &path), "{view:?}");
+    }
+
+    #[test]
+    fn flight_map_without_a_path_opens_at_the_originals_distance() {
+        let r = ose_math::DVec3::new(610e3, 0.0, 0.0);
+        // straight up: no orbit plane, so the view comes from the north
+        let view = flight_map_view(600e3, r, r * 0.001, &[], 16.0 / 9.0);
+        assert_eq!(view.0, MAP_OPEN_DIST_KM);
+        assert!(view.2 > 0.4 && view.2.is_finite(), "{view:?}");
+    }
 
     #[test]
     fn esc_never_hides_the_menu_over_nothing() {
