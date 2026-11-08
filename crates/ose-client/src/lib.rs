@@ -2734,7 +2734,7 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         cb.forget();
     }
     wire("fh-science", Box::new(|a| a.borrow().flight_science(0)))?;
-    for id in ["fh-eva", "fh-board", "fh-flag", "fh-undock"] {
+    for id in ["fh-eva", "fh-board", "fh-flag", "fh-takeflag", "fh-undock"] {
         wire(id, Box::new(move |a| a.borrow().crew_action(id)))?;
     }
     // A crew portrait's EVA button sends that Kerbal out.
@@ -6211,6 +6211,9 @@ impl App {
                         (Some("fh-flag"), _) => {
                             set_text(&self.doc, "fh-note", "flag planted");
                             self.audio.play("flag_plant");
+                        }
+                        (Some("fh-takeflag"), _) => {
+                            set_text(&self.doc, "fh-note", "flag taken down");
                         }
                         // Boarded: fly the craft the Kerbal climbed into.
                         (Some("fh-board"), _) if self.flying == Some(vessel) => {
@@ -10428,12 +10431,20 @@ impl App {
                 self.flight3d.plant_flag(now_ms());
                 ClientMessage::PlantFlag { vessel }
             }
+            "fh-takeflag" => {
+                let Some(flag) = self.flag_candidate() else {
+                    set_text(&self.doc, "fh-note", "no flag within reach");
+                    return;
+                };
+                ClientMessage::TakeFlag { vessel, flag }
+            }
             _ => ClientMessage::Undock { vessel, port: None },
         };
         self.crew_pending.set(Some(match id {
             "fh-eva" => "fh-eva",
             "fh-board" => "fh-board",
             "fh-flag" => "fh-flag",
+            "fh-takeflag" => "fh-takeflag",
             _ => "fh-undock",
         }));
         send(ws, &msg);
@@ -10461,6 +10472,24 @@ impl App {
             .filter(|v| !v.flight.as_ref().is_some_and(|f| f.eva) && !v.name.ends_with(" flag"))
             .map(|v| (v.id, (scene.vessel_position(v, ut) - here).length()))
             .filter(|(_, d)| *d < 10.0)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(id, _)| id)
+    }
+
+    /// The nearest planted flag within a Kerbal's reach (`ose_sim::crew::FLAG_REACH_M`, 6 m) of the flown
+    /// Kerbal, to take down.
+    fn flag_candidate(&self) -> Option<u64> {
+        let scene = self.scene.as_ref()?;
+        let me = scene.vessel(self.flying?)?;
+        let ut = self.time.ut_at(now_ms());
+        let here = scene.vessel_position(me, ut);
+        scene
+            .vessels
+            .iter()
+            .filter(|v| v.id != me.id && v.reference_body == me.reference_body)
+            .filter(|v| v.name.ends_with(" flag"))
+            .map(|v| (v.id, (scene.vessel_position(v, ut) - here).length()))
+            .filter(|(_, d)| *d < 6.0)
             .min_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(id, _)| id)
     }
@@ -10871,6 +10900,10 @@ impl App {
             ("fh-eva", !f.eva && !f.crew.is_empty()),
             ("fh-board", f.eva),
             ("fh-flag", f.eva && landed),
+            (
+                "fh-takeflag",
+                f.eva && landed && self.flag_candidate().is_some(),
+            ),
             ("fh-undock", !f.docked.is_empty()),
         ] {
             if let Some(el) = self.doc.get_element_by_id(id) {

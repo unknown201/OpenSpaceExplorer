@@ -2133,6 +2133,30 @@ fn crew_request(s: &Shared, player_id: u64, msg: ClientMessage) -> ServerMessage
                 r.map(|f| Some(crew_docking::register(s, f, Some(player_id)))),
             )
         }
+        ClientMessage::TakeFlag { vessel, flag } => {
+            let Some(e) = owned_vessel(s, vessel, player_id) else {
+                return ack(vessel, Err("not your Kerbal".into()));
+            };
+            // any flag, whoever planted it (KSP2 lets any Kerbal take one down)
+            let f = s
+                .vessels
+                .lock()
+                .expect("vessels lock")
+                .iter()
+                .find(|&&(_, vid, _)| vid == flag)
+                .map(|&(e, _, _)| e);
+            let Some(f) = f else {
+                return ack(vessel, Err("no such flag".into()));
+            };
+            let r = s.universe.lock().expect("sim lock").take_flag(e, f);
+            if r.is_ok() {
+                s.vessels
+                    .lock()
+                    .expect("vessels lock")
+                    .retain(|&(v, _, _)| v != f);
+            }
+            ack(vessel, r.map(|_| None))
+        }
         ClientMessage::Undock { vessel, port } => {
             let Some(e) = owned_vessel(s, vessel, player_id) else {
                 return ServerMessage::Undocked {
@@ -4483,6 +4507,7 @@ fn handle_decoded(
             msg @ (ClientMessage::GoEva { .. }
             | ClientMessage::Board { .. }
             | ClientMessage::PlantFlag { .. }
+            | ClientMessage::TakeFlag { .. }
             | ClientMessage::Undock { .. }),
         ) => {
             let reply = crew_request(s, player_id, msg);

@@ -33,7 +33,19 @@ pub struct Crew {
 pub struct EvaKerbal {
     pub name: String,
     pub experiments: Vec<PartExperiment>,
+    /// `KerbalComponent.IsCarryingFlag`: every Kerbal steps out with one flag, plants it, and gets it back by
+    /// taking a planted flag down.
+    #[serde(default = "carrying_by_default")]
+    pub carrying_flag: bool,
 }
+
+fn carrying_by_default() -> bool {
+    true
+}
+
+/// How close a Kerbal must be to a planted flag to take it down. KSP2's `InteractSystem.PlayerInteractRange`
+/// is set in a prefab that is not in the extracted data, so this is the boarding range.
+pub const FLAG_REACH_M: f64 = BOARD_RANGE_M;
 
 /// A planted flag (a landed vessel that does nothing).
 #[derive(Component, Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -533,6 +545,7 @@ impl Universe {
         self.world.entity_mut(kerbal).insert(EvaKerbal {
             name: kname,
             experiments,
+            carrying_flag: true,
         });
         // As in the original, a Kerbal steps out holding the hatch's ladder rather than dropping off it.
         if self.world.get::<flight::Powered>(e).is_none() {
@@ -824,19 +837,38 @@ impl Universe {
         }
     }
 
-    /// A Kerbal standing on the ground plants a flag beside them.
+    /// A Kerbal standing on the ground plants their flag where they stand (`KerbalBehavior.TryPlantFlag`).
+    /// As in `IsPlantFlagAllowed`: only while carrying one (one per Kerbal until a planted flag is taken
+    /// down), not while running an experiment, and not while falling, jumping, climbing or swimming. The
+    /// flag goes in at the Kerbal's own spot (`Data_Kerbal.FlagLocalPositionOffset` is 0.45 m straight down,
+    /// to the ground under their feet).
     pub fn plant_flag(&mut self, kerbal: Entity, label: &str) -> Result<Entity, String> {
-        let name = self
+        let k = self
             .world
             .get::<EvaKerbal>(kerbal)
-            .ok_or("only a Kerbal on EVA can plant a flag")?
-            .name
-            .clone();
+            .ok_or("only a Kerbal on EVA can plant a flag")?;
+        if !k.carrying_flag {
+            return Err(
+                "already planted this Kerbal's flag; take one down to plant it again".into(),
+            );
+        }
+        let name = k.name.clone();
+        if self.world.get::<OnLadder>(kerbal).is_some()
+            || self.world.get::<Boarding>(kerbal).is_some()
+        {
+            return Err("let go of the ladder first".into());
+        }
+        if !self.running_experiments(kerbal).is_empty() {
+            return Err("wait for the experiment to finish".into());
+        }
         let p = self
             .world
             .get::<flight::Powered>(kerbal)
             .ok_or("no flight state")?
             .clone();
+        if p.splashed {
+            return Err("cannot plant a flag while swimming".into());
+        }
         if !p.landed || p.crashed {
             return Err("land first".into());
         }
@@ -859,16 +891,40 @@ impl Universe {
             drag_area_m2: 0.1,
             drag_cd: flight::DEFAULT_CD,
         };
-        let dlon = 1.5 / (b.radius_m * lat.to_radians().cos().max(0.01)) * 57.29578;
-        let flag = self.spawn_powered_on_surface(label, body, spec, lat, lon + dlon);
+        let flag = self.spawn_powered_on_surface(label, body, spec, lat, lon);
         self.world
             .entity_mut(flag)
             .insert(Flag { planted_by: name });
+        if let Some(mut k) = self.world.get_mut::<EvaKerbal>(kerbal) {
+            k.carrying_flag = false;
+        }
         let tick = self.tick().0;
         if let Some(mut log) = self.log_mut(kerbal) {
             log.event(tick, ose_data::missions::MissionEvent::FlagPlanted);
         }
         Ok(flag)
+    }
+
+    /// A Kerbal on EVA takes a planted flag down (`KerbalBehavior.OnFlagRemovalUsed`): the flag is gone and
+    /// the Kerbal carries a flag again. Any flag within reach, whoever planted it.
+    pub fn take_flag(&mut self, kerbal: Entity, flag: Entity) -> Result<(), String> {
+        if self.world.get::<EvaKerbal>(kerbal).is_none() {
+            return Err("only a Kerbal on EVA can take a flag down".into());
+        }
+        if !self.is_flag(flag) {
+            return Err("that is not a flag".into());
+        }
+        let d = self
+            .distance_between(kerbal, flag)
+            .ok_or("not near each other")?;
+        if d > FLAG_REACH_M {
+            return Err(format!("{d:.0} m away; get within {FLAG_REACH_M:.0} m"));
+        }
+        self.despawn_vessel(flag);
+        if let Some(mut k) = self.world.get_mut::<EvaKerbal>(kerbal) {
+            k.carrying_flag = true;
+        }
+        Ok(())
     }
 
     pub fn flag_planter(&self, e: Entity) -> Option<String> {
@@ -907,6 +963,7 @@ impl Universe {
         self.world.entity_mut(e).insert(EvaKerbal {
             name: name.to_string(),
             experiments,
+            carrying_flag: true,
         });
     }
 
@@ -1267,6 +1324,45 @@ mod tests {
         p.r = (r + side * 100.0).normalized() * r.length();
         u.set_powered(v, p);
         assert!(u.landed_craft_near(jeb, 50.0).is_empty());
+    }
+
+    #[test]
+    fn a_kerbal_plants_one_flag_where_they_stand_and_gets_it_back_by_taking_one_down() {
+        // KSP2 T25: `IsCarryingFlag` starts true, planting clears it, `OnFlagRemovalUsed` sets it again; the
+        // flag goes in at the Kerbal's feet (`FlagLocalPositionOffset` 0.45 m straight down)
+        let (mut u, v) = k1_on_pad();
+        let jeb = u.go_eva(v, None).unwrap();
+        assert!(u.eva_kerbal(jeb).unwrap().carrying_flag);
+        assert!(
+            u.plant_flag(jeb, "flag").is_err(),
+            "not while holding the ladder"
+        );
+        let_go_and_land(&mut u, jeb);
+        let flag = u.plant_flag(jeb, "flag").unwrap();
+        let d = u.distance_between(jeb, flag).unwrap();
+        assert!(d < 1.0, "planted where the Kerbal stands ({d:.2} m)");
+        assert!(!u.eva_kerbal(jeb).unwrap().carrying_flag);
+        let again = u.plant_flag(jeb, "flag");
+        assert!(again.is_err(), "one flag per Kerbal: {again:?}");
+        u.take_flag(jeb, flag).unwrap();
+        assert!(u.vessel(flag).is_none(), "the flag is gone");
+        assert!(u.eva_kerbal(jeb).unwrap().carrying_flag);
+        let flag = u.plant_flag(jeb, "flag").unwrap();
+        assert!(u.is_flag(flag), "planted again with the flag taken down");
+        // the flag at their feet does not shove the Kerbal or itself about
+        let at = u.distance_between(jeb, v).unwrap();
+        for _ in 0..(2 * crate::TICKS_PER_SECOND) {
+            u.step();
+        }
+        let now = u.distance_between(jeb, v).unwrap();
+        assert!(
+            (now - at).abs() < 0.05,
+            "{at:.3} -> {now:.3} m from the craft"
+        );
+        assert!(u.distance_between(jeb, flag).unwrap() < 1.0);
+        assert!(u.powered(flag).is_some_and(|p| p.landed && !p.crashed));
+        // taking a craft down is not a thing
+        assert!(u.take_flag(jeb, v).is_err());
     }
 
     #[test]
