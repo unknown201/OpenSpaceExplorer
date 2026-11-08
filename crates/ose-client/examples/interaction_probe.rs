@@ -78,7 +78,10 @@ fn main() {
                 )),
                 "ladder" => json!(kerbin_time::WARP_LADDER),
                 "warp_to" => json!(kerbin_time::warp_toward(number(input, "remaining"))),
-                "drop" => json!(kerbin_time::warp_toward(number(input, "remaining")) == 1),
+                "drop" => json!(kerbin_time::warp_drop(
+                    number(input, "rate") as u32,
+                    number(input, "remaining")
+                )),
                 "symmetry_counts" => json!(vab::SYMMETRY),
                 "symmetry_angles" => json!(vab::SYMMETRY
                     .iter()
