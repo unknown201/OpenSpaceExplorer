@@ -220,6 +220,10 @@ pub struct Structure {
     pub reentry_flux_kw: Vec<f64>,
     /// Heat each part takes from engine exhaust blasting it (`exhaust`), kW, as of the last step.
     pub exhaust_flux_kw: Vec<f64>,
+    /// Heat each part takes from other craft's exhaust (`Universe::exhaust_on_other_vessels`), kW.
+    pub outside_exhaust_flux_kw: Vec<f64>,
+    /// The exhaust sweeps of this craft's engines as of the last step, vessel frame.
+    pub(crate) jets: Vec<crate::exhaust::Jet>,
     exhaust_defs: Vec<Option<ose_data::ExhaustDamage>>,
     exhaust_diameter_m: Vec<f64>,
     /// Heat shields on the parts, and whether each is ablating.
@@ -891,6 +895,8 @@ impl Structure {
             thermal_mass,
             reentry_flux_kw: vec![0.0; n],
             exhaust_flux_kw: vec![0.0; n],
+            outside_exhaust_flux_kw: vec![0.0; n],
+            jets: Vec::new(),
             exhaust_defs: (0..n)
                 .map(|i| def_of(i).and_then(|d| d.exhaust_damage))
                 .collect(),
@@ -3445,7 +3451,7 @@ impl Structure {
                 wetted,
                 ambient_k,
                 conductivity,
-                flux + self.exhaust_flux_kw[i],
+                flux + self.exhaust_flux_kw[i] + self.outside_exhaust_flux_kw[i],
                 settings.scale,
                 dt,
             );
@@ -3459,12 +3465,23 @@ impl Structure {
         burned
     }
 
+    /// An inertial offset in the vessel frame (the inverse of `offset_inertial`).
+    pub fn inertial_to_vessel(&self, facing: DVec3, v: DVec3) -> DVec3 {
+        let (bx, by, bz) = self.frame(facing);
+        DVec3::new(v.dot(bx), v.dot(by), v.dot(bz))
+    }
+
+    /// Whether any attached engine's exhaust can blast parts (`exhaust_damage`).
+    pub fn has_exhaust_engines(&self) -> bool {
+        (0..self.rigid.len()).any(|i| self.rigid.present[i] && self.exhaust_defs[i].is_some())
+    }
+
     /// Out of the air, where nothing else heats or cools a part here: exhaust blasting parts heats them, and
     /// returns those past their maximum temperature.
     pub fn apply_exhaust_heat(&mut self, settings: &thermal::HeatSettings, dt: f64) -> Vec<usize> {
         let mut burned = Vec::new();
         for i in (0..self.rigid.len()).filter(|&i| self.rigid.present[i]) {
-            let flux = self.exhaust_flux_kw[i] * settings.scale;
+            let flux = (self.exhaust_flux_kw[i] + self.outside_exhaust_flux_kw[i]) * settings.scale;
             if flux <= 0.0 {
                 continue;
             }
@@ -3485,6 +3502,7 @@ impl Structure {
     /// offsets from their rest positions).
     pub fn exhaust_blast(&mut self, throttle: f64) -> Vec<PartForce> {
         self.exhaust_flux_kw.fill(0.0);
+        self.jets.clear();
         let mut pushes = Vec::new();
         let boxes: Vec<(usize, DVec3, DVec3)> = (0..self.rigid.len())
             .filter(|&i| self.rigid.present[i])
@@ -3508,6 +3526,18 @@ impl Structure {
                 let dir = nozzle.force_kn * (-1.0 / thrust);
                 let exit = self.rigid.rest_position(i) + nozzle.offset_m;
                 let origin = exit + dir * (def.distance_offset_m + radius);
+                self.jets.push(crate::exhaust::Jet {
+                    part: i,
+                    exit,
+                    origin,
+                    dir,
+                    radius,
+                    range,
+                    thrust_kn: thrust,
+                    damage_kw: def.damage_kw * throttle,
+                    falloff_power: def.falloff_power,
+                    max_multiplier: def.max_multiplier,
+                });
                 let hits: Vec<(usize, f64)> = boxes
                     .iter()
                     .filter(|&&(j, _, _)| j != i)

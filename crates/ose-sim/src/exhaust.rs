@@ -9,7 +9,151 @@
 //!
 //! The original adds a part's flux once for every hit the sweep reports after it, in PhysX's order; here each
 //! part in the path takes it once per nozzle.
+use bevy_ecs::prelude::*;
 use ose_math::DVec3;
+
+use crate::{bodies, flight, structure::Structure, Universe};
+
+/// One nozzle's exhaust sweep as of the last step (vessel frame): the sphere's start and direction, its
+/// radius and reach, and the blast at full strength (heat already at this step's throttle).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Jet {
+    pub part: usize,
+    pub exit: DVec3,
+    pub origin: DVec3,
+    pub dir: DVec3,
+    pub radius: f64,
+    pub range: f64,
+    pub thrust_kn: f64,
+    pub damage_kw: f64,
+    pub falloff_power: f64,
+    pub max_multiplier: f64,
+}
+
+/// The parts of a craft a jet meets (`Some` distances within its reach), with the jet given in that craft's
+/// vessel frame.
+fn hits(
+    st: &Structure,
+    origin: DVec3,
+    dir: DVec3,
+    jet: &Jet,
+    skip: Option<usize>,
+) -> Vec<(usize, f64)> {
+    (0..st.rigid.len())
+        .filter(|&j| st.rigid.present[j] && Some(j) != skip)
+        .filter_map(|j| {
+            let (c, h) = st.part_box(j);
+            sweep_box(origin, dir, jet.radius, c, h)
+                .filter(|&d| d <= jet.range)
+                .map(|d| (j, d))
+        })
+        .collect()
+}
+
+impl Universe {
+    /// Engine exhaust reaching other craft (`Module_Engine.EngineExhaustDamage` meets every part in the
+    /// sweep, whatever craft it is on): the parts it meets heat up (`Structure::outside_exhaust_flux_kw`, taken
+    /// up by their next heat step) and their craft is pushed along the exhaust for the `dt` seconds this
+    /// covers. Landed craft hold their ground.
+    pub(crate) fn exhaust_on_other_vessels(&mut self, dt: f64) {
+        let mut q = self.world.query::<&mut Structure>();
+        for mut st in q.iter_mut(&mut self.world) {
+            if st.outside_exhaust_flux_kw.iter().any(|&f| f != 0.0) {
+                st.outside_exhaust_flux_kw.fill(0.0);
+            }
+        }
+        type Craft = (Entity, Entity, DVec3, DVec3, DVec3, f64, bool);
+        let crafts: Vec<(Craft, Vec<Jet>)> = {
+            let mut q = self
+                .world
+                .query::<(Entity, &flight::Powered, &bodies::ReferenceBody, &Structure)>();
+            q.iter(&self.world)
+                .filter(|(_, p, _, _)| !p.crashed)
+                .map(|(e, p, b, st)| {
+                    let c = st.rigid.rest_centre();
+                    let reach = (0..st.rigid.len())
+                        .filter(|&i| st.rigid.present[i])
+                        .map(|i| {
+                            let (centre, half) = st.part_box(i);
+                            (centre - c).length() + half.length()
+                        })
+                        .fold(0.0, f64::max);
+                    // jets in inertial terms, from the vessel's position
+                    let jets = st
+                        .jets
+                        .iter()
+                        .map(|j| Jet {
+                            origin: st.offset_inertial(p.facing, j.origin - c),
+                            exit: st.offset_inertial(p.facing, j.exit - c),
+                            dir: st.offset_inertial(p.facing, j.dir),
+                            ..*j
+                        })
+                        .collect();
+                    ((e, b.0, p.r, p.v, p.facing, reach, p.landed), jets)
+                })
+                .collect()
+        };
+        if crafts.len() < 2 || crafts.iter().all(|(_, jets)| jets.is_empty()) {
+            return;
+        }
+        // (craft, part, heat kW, push kN inertial, where relative to the craft's position)
+        let mut blasts: Vec<(Entity, usize, f64, DVec3, DVec3)> = Vec::new();
+        for ((a, body_a, ra, _, _, _, _), jets) in &crafts {
+            for jet in jets {
+                for ((b, body_b, rb, _, facing_b, reach_b, _), _) in &crafts {
+                    if a == b || body_a != body_b {
+                        continue;
+                    }
+                    let origin = *ra + jet.origin - *rb;
+                    if origin.length() > reach_b + jet.range + jet.radius {
+                        continue;
+                    }
+                    let Some(st) = self.world.get::<Structure>(*b) else {
+                        continue;
+                    };
+                    let c = st.rigid.rest_centre();
+                    let o = st.inertial_to_vessel(*facing_b, origin) + c;
+                    let d = st.inertial_to_vessel(*facing_b, jet.dir);
+                    let found = hits(st, o, d, jet, None);
+                    let shared = 1.0 / found.len().max(1) as f64;
+                    for (j, dist) in found {
+                        let scale = damage_scale(dist, jet.falloff_power, jet.max_multiplier);
+                        let at = if dist <= 0.0 {
+                            *ra + jet.exit - *rb
+                        } else {
+                            origin + jet.dir * dist
+                        };
+                        blasts.push((
+                            *b,
+                            j,
+                            jet.damage_kw * scale,
+                            jet.dir * (jet.thrust_kn * scale * shared),
+                            at,
+                        ));
+                    }
+                }
+            }
+        }
+        for (e, part, heat, push, at) in blasts {
+            if let Some(mut st) = self.world.get_mut::<Structure>(e) {
+                st.outside_exhaust_flux_kw[part] += heat;
+            }
+            let inertia = self.blow_inertia(e);
+            if let Some(mut p) = self.world.get_mut::<flight::Powered>(e) {
+                if p.landed || p.mass_t <= 0.0 {
+                    continue;
+                }
+                p.v = p.v + push * (dt / p.mass_t);
+                if let Some(i) = inertia.filter(|&i| i > 0.0) {
+                    let dw = at.cross(push) * (dt / i);
+                    let axial = dw.dot(p.facing);
+                    p.roll_rate += axial;
+                    p.angvel = p.angvel + (dw - p.facing * axial);
+                }
+            }
+        }
+    }
+}
 
 /// `PartComponent.AssemblySizeTypeDiameters` by `sizeCategory` (`MetaAssemblySizeFilterType`: Auto, XS, S, ...).
 pub fn size_diameter_m(size_category: &str) -> f64 {

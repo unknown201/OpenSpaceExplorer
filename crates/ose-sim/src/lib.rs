@@ -1435,11 +1435,20 @@ impl Universe {
             .get::<flight::Powered>(parent)
             .is_some_and(|p| p.splashed)
             || parent_wet.iter().any(|w| w.0);
+        // a stage dropped from under engines at throttle may be in their exhaust: it is built to take the blast
+        let blasted = self
+            .world
+            .get::<flight::Powered>(parent)
+            .is_some_and(|p| p.throttle > 0.0 && !p.crashed)
+            && self
+                .world
+                .get::<structure::Structure>(parent)
+                .is_some_and(|st| st.has_exhaust_engines());
         let lit = |map: &[Option<usize>]| {
             fire.is_some_and(|f| f.burning.iter().any(|&i| map[i].is_some()))
         };
         let burning = match (&subset, self.world.get_resource::<PartCatalog>()) {
-            (Some((craft, map)), Some(catalog)) if afloat || lit(map) => {
+            (Some((craft, map)), Some(catalog)) if afloat || blasted || lit(map) => {
                 let mut st = structure::Structure::build(craft, &catalog.defs, &catalog.resources);
                 if let Some(tanks) = fire.map(|f| &f.tanks).or(parent_tanks.as_ref()) {
                     st.carry_tanks_from(tanks, map);
@@ -2321,6 +2330,7 @@ impl Universe {
         }
         self.charge_on_rails(ticks.max(1) as f64 * dt, ut);
         self.collide_vessels();
+        self.exhaust_on_other_vessels(ticks.max(1) as f64 * dt);
         self.kerbals_meet_hulls();
         self.run_transfers(ticks.max(1) as f64 * dt);
         self.run_transmissions(ticks.max(1) as f64 * dt);

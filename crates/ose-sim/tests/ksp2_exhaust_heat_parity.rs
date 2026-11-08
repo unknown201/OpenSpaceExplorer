@@ -78,6 +78,8 @@ fn on_pad(c: &ose_data::craft::Craft) -> (Universe, Entity) {
     let spec = flight::FlightSpec::from_report(&report, &[], &[], 1.5);
     let v = u.spawn_powered_on_surface(&c.name, body, spec, 0.0, 0.0);
     u.set_structure(v, Structure::build(c, &defs, &res));
+    // as the server launches it: the craft rides along, so pieces that come off are built from it
+    u.set_craft(v, c.clone());
     (u, v)
 }
 
@@ -148,4 +150,96 @@ fn ksp2_an_engine_firing_into_open_air_heats_nothing_on_its_own_craft() {
         u.powered(v).unwrap().r.length() > 600_000.0 + 10.0,
         "it flies"
     );
+}
+
+/// The stack with a decoupler and a 1x2 tank under the Swivel, the decoupler staged after the engine.
+fn stack_over_dropped_tank() -> (ose_data::craft::Craft, usize, usize) {
+    let mut c = stack();
+    let defs = defs();
+    let engine = c
+        .parts
+        .iter()
+        .position(|p| p.part_id == "engine_1v_methalox_swivel")
+        .unwrap();
+    let cube = |id: &str| {
+        defs.iter()
+            .find(|d| d.id == id)
+            .unwrap()
+            .drag_cubes
+            .first()
+            .cloned()
+            .unwrap()
+    };
+    let below = |above: &ose_data::DragCube, y: f64, part: &ose_data::DragCube| {
+        y + above.center.y - above.size.y / 2.0 - (part.center.y + part.size.y / 2.0)
+    };
+    let (e, dc, t) = (
+        cube("engine_1v_methalox_swivel"),
+        cube("decoupler_1v_inline"),
+        cube("fueltank_1v_inline_methalox_1x2"),
+    );
+    let mut decoupler = c.parts[1].clone();
+    decoupler.part_id = "decoupler_1v_inline".into();
+    decoupler.guid = "drop".into();
+    decoupler.parent = Some(engine);
+    decoupler.own_node = Some("top".into());
+    decoupler.parent_node = Some("bottom".into());
+    decoupler.resources.clear();
+    decoupler.local_position.y = below(&e, c.parts[engine].local_position.y, &dc);
+    let mut tank = decoupler.clone();
+    tank.part_id = "fueltank_1v_inline_methalox_1x2".into();
+    tank.guid = "dropped-tank".into();
+    tank.parent = Some(c.parts.len());
+    tank.local_position.y = below(&dc, decoupler.local_position.y, &t);
+    c.parts.push(decoupler);
+    c.parts.push(tank);
+    let (d, t) = (c.parts.len() - 2, c.parts.len() - 1);
+    // the decoupler fires on the press after the engine's (the last stage listed fires first)
+    c.stages.insert(0, vec![d]);
+    (c, d, t)
+}
+
+#[test]
+fn ksp2_a_stage_dropped_under_a_lit_engine_is_scorched_and_blown_away() {
+    let (c, _, _) = stack_over_dropped_tank();
+    let (mut u, v) = on_pad(&c);
+    // coasting in vacuum, 100 km up
+    let mut p = u.powered(v).unwrap().clone();
+    let up = p.r.normalized();
+    p.r = up * 700_000.0;
+    let east = ose_math::DVec3::new(0.0, 0.0, 1.0).cross(up).normalized();
+    p.v = east * (3.5316e12_f64 / 700_000.0).sqrt();
+    p.landed = false;
+    u.set_powered(v, p);
+    // light the engine at zero throttle, then open it up and drop the tank on the same tick
+    let facing = u.powered(v).unwrap().facing;
+    assert!(u.set_controls(v, 0.0, flight::Attitude::Fixed(facing)));
+    assert!(u.stage(v).fired);
+    assert!(u.set_controls(v, 1.0, flight::Attitude::Fixed(facing)));
+    let fired = u.stage(v);
+    assert!(fired.fired);
+    let debris = fired.debris.expect("the tank drops away");
+    assert!(
+        u.structure(debris).is_some(),
+        "a stage dropped under engines at throttle is built to take the blast"
+    );
+    let mut hottest = 0.0f64;
+    for _ in 0..(TICKS_PER_SECOND / 2) {
+        u.step();
+        if let Some(st) = u.structure(debris) {
+            hottest = hottest.max(
+                (0..st.rigid.len())
+                    .filter(|&i| st.rigid.present[i])
+                    .map(|i| st.temperature_k[i])
+                    .fold(0.0, f64::max),
+            );
+        }
+    }
+    let (pv, pd) = (u.powered(v).unwrap(), u.powered(debris).unwrap());
+    let apart = (pv.v - pd.v).dot(pv.facing);
+    println!("dropped stage: hottest {hottest:.0} K, {apart:.1} m/s apart after 0.5 s");
+    // the blast heats the dropped tank hard in the moment it is close...
+    assert!(hottest > 600.0, "hottest {hottest:.0} K");
+    // ...and throws the light empty tank away far faster than the upper stage's own 13 m/s^2 would part them
+    assert!(apart > 20.0, "{apart:.1} m/s apart");
 }

@@ -188,6 +188,7 @@ impl Structure {
     ) {
         self.surface_loads.clear();
         self.water_strikes.clear();
+        self.jets.clear();
         self.suspension_compression_m.fill(0.0);
         propulsion.per_part_contacts = true;
         p.splashed = false;
