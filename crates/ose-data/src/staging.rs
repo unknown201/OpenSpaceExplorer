@@ -413,6 +413,7 @@ mod tests {
                         air_breathing: false,
                         vel_curve: None,
                         atm_curve: None,
+                        response: None,
                     }]
                 })
                 .unwrap_or_default(),

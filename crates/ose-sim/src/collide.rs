@@ -547,26 +547,39 @@ mod tests {
         let mom =
             |u: &Universe| u.powered(a).unwrap().v * m(u, a) + u.powered(b).unwrap().v * m(u, b);
         // the contact itself conserves momentum exactly; the run around it adds gravity only
+        let separating = |u: &Universe| {
+            let pa = u.powered(a).unwrap();
+            let pb = u.powered(b).unwrap();
+            (pa.v - pb.v).dot((pa.r - pb.r).normalized())
+        };
+        let gap = |u: &Universe| (u.powered(a).unwrap().r - u.powered(b).unwrap().r).length();
         let mut touched = false;
         let mut step_change = DVec3::ZERO;
+        let mut sep = f64::NAN;
+        let mut closest = f64::MAX;
         for _ in 0..(10 * TICKS_PER_SECOND) {
             u.step();
+            closest = closest.min(gap(&u));
             if !touched {
                 let before = mom(&u);
                 u.collide_vessels();
                 if !u.take_contacts().is_empty() {
                     touched = true;
                     step_change = mom(&u) - before;
+                    sep = separating(&u);
                 }
             }
         }
         assert!(touched, "they met");
-        let pa = u.powered(a).unwrap();
-        let pb = u.powered(b).unwrap();
-        // now moving apart across the orbit
-        let sep = (pa.v - pb.v).dot((pa.r - pb.r).normalized());
+        // the blow turns them apart across the orbit (an off-centre blow also sets them turning, so they
+        // may lean on each other afterwards, but never pass through)
         assert!(sep > 0.0, "moving apart at {sep} m/s");
         assert!(sep < 2.0, "and slower than they came: {sep}");
+        assert!(
+            closest > 4.0,
+            "the two K1s came within {closest} m of each other's centre"
+        );
+        let (pa, pb) = (u.powered(a).unwrap(), u.powered(b).unwrap());
         let g_step = 8.2 * (m(&u, a) + m(&u, b)) / TICKS_PER_SECOND as f64;
         assert!(
             step_change.length() < 1.5 * g_step,
