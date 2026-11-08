@@ -199,28 +199,35 @@ namespace OpenSpaceExplorer.Validation
                     double ut = G.UniverseModel.UniverseTime;
                     if (ut <= last) continue;
                     last = ut;
-                    if (!G.ViewController.TryGetActiveVehicle(out var vehicle)) continue;
+                    try { Tick(w, v, ut, start, phase()); }
+                    catch (Exception e) { w.WriteLine("error," + e.GetType().Name + "," + e.Message.Replace(',', ';')); }
+                }
+            }
+        }
+
+        static void Tick(StreamWriter w, VesselComponent v, double ut, double start, string phaseName)
+        {
                     var ctrl = v.ControlTransform;
                     var space = G.SpaceSimulation;
                     Vector3 com = space.UniverseView.PhysicsSpace.PositionToPhysics(v.CenterOfMass);
-                    var vb = (vehicle as KSP.Sim.impl.VesselBehavior);
-                    Transform ct = vb != null ? vb.transform : null;
                     // the control frame in Unity world axes
                     var rot = space.UniverseView.PhysicsSpace.RotationToPhysics(ctrl.Rotation);
                     Vector3 right = rot * Vector3.right, nose = rot * Vector3.up, fwd = rot * Vector3.forward;
                     var moi = v.MOI.vector;
                     var wv = space.UniverseView.PhysicsSpace.AngularVelocityToPhysics(v.AngularVelocityMassAvg);
                     string F(double x) => x.ToString("R", Inv);
-                    string head = F(ut - start) + "," + phase();
-                    int index = 0;
+                    string head = F(ut - start) + "," + phaseName;
+                    int index = 0, surfaces = 0;
                     foreach (var part in v.SimulationObject.PartOwner.Parts)
                     {
                         int i = index++;
                         if (!space.TryGetViewObject(part.SimulationObject, out var view)) continue;
                         var behavior = view.GetComponent<PartBehavior>();
                         if (behavior == null) continue;
-                        var lift = behavior.GetModule<Module_LiftingSurface>();
+                        // Unity's GetComponent finds derived modules too (Module_ControlSurface on wings)
+                        var lift = behavior.GetComponent<Module_LiftingSurface>() ?? behavior.GetComponentInChildren<Module_LiftingSurface>();
                         if (lift == null) continue;
+                        surfaces++;
                         var tf = behavior.transform;
                         void Row(string kind, Data_LiftingSurface.LiftForce lf, float deflection)
                         {
@@ -237,8 +244,8 @@ namespace OpenSpaceExplorer.Validation
                         if (lift is Module_ControlSurface cs)
                             Row("moving", (Data_LiftingSurface.LiftForce)CtrlLiftField?.GetValue(cs), DeflectionField != null ? (float)DeflectionField.GetValue(cs) : 0f);
                     }
-                }
-            }
+                    if (surfaces == 0)
+                        w.WriteLine(head + ",-1,none,none,0,0,0,0,0,0,0,0," + F(moi.x) + "," + F(moi.y) + "," + F(moi.z) + ",0,0,0," + F(ut));
         }
 
         static Module_Engine EngineModule(VesselComponent v)
