@@ -297,7 +297,7 @@ struct App {
     /// The tech tree, the original's English text (loaded from assets/loc/en.json), the researched nodes
     /// and the node shown in the R&D info panel.
     tech: Vec<rnd::TechNode>,
-    loc: std::collections::HashMap<String, String>,
+    loc: std::rc::Rc<std::collections::HashMap<String, String>>,
     /// The language the game's text is shown in (`i18n::LANGUAGES` code), and the catalog's own part names.
     lang: String,
     part_titles: std::collections::HashMap<String, String>,
@@ -839,7 +839,7 @@ pub fn start() -> Result<(), JsValue> {
         pending_launch: None,
         body_spins: Vec::new(),
         tech: rnd::tree(),
-        loc: std::collections::HashMap::new(),
+        loc: Default::default(),
         lang: i18n::pick(
             stored("ose.lang").as_deref(),
             web_sys::window()
@@ -1903,7 +1903,8 @@ fn load_localization(app: Shared) {
             // the player picked another language meanwhile; its own load shows it
             return;
         }
-        a.loc = i18n::merge(en, table);
+        a.loc = std::rc::Rc::new(i18n::merge(en, table));
+        i18n::set_active((lang != "en").then(|| a.loc.clone()));
         a.localize_parts();
         #[cfg(target_arch = "wasm32")]
         i18n::apply(&a.doc, &a.loc, lang == "en");
@@ -12252,9 +12253,15 @@ impl App {
             &self.doc,
             "fh-stage",
             &format!(
-                "stage {} of {} \u{b7} \u{394}v {:.0} m/s",
-                (f.stage + 1).min(f.stages.max(1)),
-                f.stages.max(1),
+                "{} \u{b7} \u{394}v {:.0} m/s",
+                {
+                    let (now, of) = ((f.stage + 1).min(f.stages.max(1)), f.stages.max(1));
+                    if self.lang == "en" {
+                        format!("stage {now} of {of}")
+                    } else {
+                        format!("{} {now}/{of}", self.tr("VAB/DeltaVTool/Stage", "stage"))
+                    }
+                },
                 f.delta_v_now_mps.max(0.0) + 0.0
             ),
         );
