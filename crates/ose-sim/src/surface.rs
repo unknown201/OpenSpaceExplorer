@@ -840,6 +840,7 @@ mod tests {
             motor: None,
             brake_torque_knm: 0.0,
             steerable: false,
+            dynamics: Default::default(),
         });
         st.gear_out[0] = true;
         p.r.y = body.radius_m + 1.2;

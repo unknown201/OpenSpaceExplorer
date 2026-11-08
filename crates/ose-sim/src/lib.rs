@@ -27,6 +27,7 @@ pub mod surface;
 pub mod thermal;
 pub mod trajectory;
 pub mod vessels;
+pub mod wheels;
 
 use bevy_ecs::prelude::*;
 use ose_math::{DVec3, Orbit};
@@ -2206,8 +2207,17 @@ impl Universe {
                 // a spinning craft stays under power until it is still, SAS holding or not: going on rails
                 // would freeze its spin (KSP2 keeps the active craft in physics while SAS damps it)
                 && {
-                    let still = if p.attitude == flight::Attitude::Free { 1e-5 } else { 1e-4 };
-                    p.angvel.length() < still && p.roll_rate.abs() < still
+                    // a hold that follows the orbit (prograde, radial, up...) turns the craft once an
+                    // orbit, and SAS chasing it jitters by a few mrad/s about that turn: still means not
+                    // turning against that frame by more than the chase does (0.3 deg/s, nothing to see)
+                    let (still, frame) = if p.attitude == flight::Attitude::Free {
+                        (1e-5, DVec3::ZERO)
+                    } else if p.attitude.follows_the_orbit() {
+                        (5e-3, p.r.cross(p.v) * (1.0 / p.r.length_squared().max(1.0)))
+                    } else {
+                        (1e-4, DVec3::ZERO)
+                    };
+                    (p.angvel - frame).length() < still && p.roll_rate.abs() < still
                 };
             self.world
                 .entity_mut(e)
@@ -3453,6 +3463,113 @@ mod tests {
         );
     }
 
+    /// Stock Inquisitive Rover on level Kerbin ground driven with the KSP2 parity schedule (T16): full wheel
+    /// throttle from 1 s for 15 s, coast 3 s, brakes 8 s, half throttle and full right steering 10 s, then
+    /// nothing. Samples every tick: (t, ground speed, yaw rate).
+    fn rover_parity_run() -> Vec<(f64, f64, f64)> {
+        let (mut u, body, _, _) = k1_on_real_kerbin();
+        let crafts: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let defs: Vec<ose_data::PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let res: Vec<ose_data::ResourceDef> =
+            serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
+        let c = crafts
+            .iter()
+            .find(|c| c.name == "Inquisitive Rover")
+            .unwrap();
+        let report = ose_data::staging::delta_v_by_stage(c, &defs, &res);
+        let spec = flight::FlightSpec::from_report(&report, &[], &[], 1.5);
+        let v = u.spawn_powered_on_surface("Rover", body, spec, 0.0, 0.0);
+        u.set_structure(v, structure::Structure::build(c, &defs, &res));
+        u.step();
+        let schedule = [
+            (1.0, 1.0, 0.0, false),
+            (16.0, 0.0, 0.0, false),
+            (19.0, 0.0, 0.0, true),
+            (27.0, 0.5, 1.0, false),
+            (37.0, 0.0, 0.0, false),
+        ];
+        let mut out = Vec::new();
+        let mut next = 0;
+        let mut heading = u.powered(v).unwrap().drive.heading_rad;
+        for tick in 0..(41 * TICKS_PER_SECOND) {
+            let t = tick as f64 / TICKS_PER_SECOND as f64;
+            while next < schedule.len() && t >= schedule[next].0 {
+                let (_, throttle, steer, brakes) = schedule[next];
+                u.set_drive(v, throttle, steer, brakes);
+                next += 1;
+            }
+            u.step();
+            let p = u.powered(v).unwrap();
+            assert!(
+                p.landed && !p.tipped && !p.crashed,
+                "on its wheels at {t} s"
+            );
+            let turn = (p.drive.heading_rad - heading + std::f64::consts::PI)
+                .rem_euclid(std::f64::consts::TAU)
+                - std::f64::consts::PI;
+            heading = p.drive.heading_rad;
+            out.push((
+                t + 1.0 / TICKS_PER_SECOND as f64,
+                p.drive.speed_mps.hypot(p.drive.lateral_mps),
+                turn * TICKS_PER_SECOND as f64,
+            ));
+        }
+        if std::env::var_os("OSE_ROVER_TRACE").is_some() {
+            for (t, speed, yaw) in &out {
+                println!("rover,{t:.2},{speed:.4},{yaw:.4}");
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn a_rover_accelerates_brakes_and_turns_like_ksp2s_inquisitive_rover() {
+        let run = rover_parity_run();
+        let at = |t: f64| {
+            *run.iter()
+                .min_by(|a, b| (a.0 - t).abs().total_cmp(&(b.0 - t).abs()))
+                .unwrap()
+        };
+        // KSP2 v0.2.2, same craft and schedule (reference/ksp2-run8-rover): its light wheels spin up slowly
+        // (the 0.01 t·m² least wheel inertia) and the motor torque curve, rounded to 0.01 kN·m, runs out
+        // near 10 m/s
+        for (t, ksp2) in [
+            (2.0, 1.78),
+            (3.0, 3.32),
+            (5.0, 5.89),
+            (8.0, 7.79),
+            (16.0, 9.83),
+        ] {
+            let speed = at(t).1;
+            assert!(
+                (speed - ksp2).abs() < 0.1 * ksp2,
+                "{speed:.2} m/s at {t} s, KSP2 {ksp2}"
+            );
+        }
+        // the brakes come on over a second, then hold the wheels and stop it
+        assert!(at(20.0).1 > 7.0, "{:?}", at(20.0));
+        assert!(at(21.5).1 < 0.3, "{:?}", at(21.5));
+        // half throttle with full steering: a tight, slow turn (KSP2 1.20/1.62/2.24 m/s turning at
+        // 0.70/1.05/1.41 rad/s). The turn builds up against the craft's yaw inertia, which here still
+        // includes the physicsless parts' own inertia, so it comes out somewhat slower than KSP2's.
+        for (t, ksp2, yaw) in [(30.0, 1.20, 0.70), (33.0, 1.62, 1.05), (37.0, 2.24, 1.41)] {
+            let (_, speed, rate) = at(t);
+            assert!(
+                speed > 0.6 * ksp2 && speed < 1.15 * ksp2,
+                "{speed:.2} m/s at {t} s, KSP2 {ksp2}"
+            );
+            assert!(
+                rate > 0.55 * yaw && rate < 1.2 * yaw,
+                "{rate:.2} rad/s at {t} s, KSP2 {yaw}"
+            );
+        }
+        // let go: the wheels straighten and the turn dies away
+        assert!(at(38.0).2 < at(37.0).2, "{:?} {:?}", at(37.0), at(38.0));
+        assert!(at(41.0).2 < 0.6, "{:?}", at(41.0));
+    }
+
     #[test]
     fn maneuver_hold_points_at_the_burn_roll_turns_and_abort_cuts_and_arms() {
         let (mut u, body, spec, st) = k1_on_real_kerbin();
@@ -4077,6 +4194,32 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_craft_holding_prograde_in_orbit_goes_back_on_rails() {
+        // holding prograde turns the craft once an orbit (3e-3 rad/s at 100 km); that is not a spin
+        let (mut u, body, spec, st) = k1_on_real_kerbin();
+        let v = u.spawn_vessel_in_circular_orbit("K1", body, 100_000.0);
+        let (r, vel) = u.vessel(v).unwrap().2.state_at(u.ut());
+        let mut p = flight::Powered::new(spec, r, vel, false);
+        p.facing = vel.normalized();
+        p.attitude = flight::Attitude::OrbitPrograde;
+        p.angvel = r.cross(vel) * (1.0 / r.length_squared());
+        u.set_powered(v, p);
+        u.set_structure(v, st);
+        for _ in 0..(60 * TICKS_PER_SECOND) {
+            u.step();
+            if u.powered(v).is_none() {
+                return;
+            }
+        }
+        let p = u.powered(v).unwrap();
+        panic!(
+            "still under power after 60 s: |w| {:.2e}, coasting since {:?}",
+            p.angvel.length(),
+            p.coasting_since
+        );
     }
 
     #[test]

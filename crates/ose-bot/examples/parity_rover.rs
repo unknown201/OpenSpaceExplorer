@@ -11,7 +11,9 @@
 //! on for 12 s, the same schedule `tools/ksp2-parity-pilot` flies in KSP2. Logs facing and roll reference
 //! of every streamed state; angular rates come from their change between states.
 //!
-//! cargo run -p ose-bot --example parity_rover -- craft.json ose-rotation.csv
+//! `OSE_PARITY_SITE=Runway_1` starts it on the runway instead of the pad. The heading turns with `roll_ref` (the craft's +Z laid on the ground).
+//!
+//! cargo run -p ose-bot --example parity_rover -- craft.json ose-rover.csv
 
 use anyhow::{bail, Context, Result};
 use ose_bot::client::Client;
@@ -46,7 +48,12 @@ async fn main() -> Result<()> {
     let Some(id) = saved.0 else {
         bail!("craft not saved: {:?}", saved.1)
     };
-    let l = c.launch_saved_on_pad(id).await?;
+    // OSE's launch pad is smaller than KSP2's: the rover runs off its edge before the brakes, so
+    // OSE_PARITY_SITE (a site id such as Runway_1) can start it somewhere longer and flat
+    let l = match std::env::var("OSE_PARITY_SITE") {
+        Ok(site) => c.launch_saved_at(id, Some(site)).await?,
+        Err(_) => c.launch_saved_on_pad(id).await?,
+    };
     println!("on the pad: vessel {} wet {:.3} t", l.vessel, l.wet_mass_t);
     c.stage(l.vessel).await?;
     let settle = Instant::now();
@@ -56,7 +63,7 @@ async fn main() -> Result<()> {
     let mut f = std::fs::File::create(&out)?;
     writeln!(
         f,
-        "t,throttle,steer,brakes,srf_speed,alt_m,fx,fy,fz,situation,ut"
+        "t,throttle,steer,brakes,srf_speed,alt_m,fx,fy,fz,rx,ry,rz,situation,ut"
     )?;
     // (seconds, throttle, steer, brakes)
     let schedule: [(f64, f32, f32, bool); 6] = [
@@ -90,7 +97,7 @@ async fn main() -> Result<()> {
         let Some(r) = v.flight.as_ref() else { continue };
         writeln!(
             f,
-            "{t},{},{},{},{},{},{},{},{},{:?},{ut}",
+            "{t},{},{},{},{},{},{},{},{},{},{},{},{:?},{ut}",
             cmd.0,
             cmd.1,
             cmd.2,
@@ -99,6 +106,9 @@ async fn main() -> Result<()> {
             r.facing.x,
             r.facing.y,
             r.facing.z,
+            r.roll_ref.x,
+            r.roll_ref.y,
+            r.roll_ref.z,
             r.situation
         )?;
         if t > 41.0 {

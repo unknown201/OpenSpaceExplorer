@@ -154,6 +154,27 @@ def main() -> int:
                         if shader_name == "KSP2_ksc_grass":
                             tint = [tint[0] * 0.97, tint[1] * 1.06, tint[2] * 0.97]
                         surface_extras = {"ose_ground_large": [189.0, 2700.0, 4.0, *tint]}
+        elif shader_name == "KSP2/Parts/Standard Tileable (Vertex Color)" and m.m_Name == "ksc_campus_road_runway":
+            # The runway: KSP2 blends its stretched 1x4 slab map with a tiled concrete detail map by the red channel of
+            # _ColorMask (about half everywhere) and darkens tar patches by the green one (_TintGreen). The detail map
+            # rides in the emissive slot, the mask in the paint-mask slot (ose_detail: detail tile in metres, green
+            # tint).
+            def tex_of(slot):
+                te = tex_envs.get(slot)
+                try:
+                    return te.m_Texture.read() if te and te.m_Texture and te.m_Texture.path_id else None
+                except Exception:  # noqa: BLE001
+                    return None
+
+            det, mask = tex_of("_MainRed"), tex_of("_ColorMask")
+            uri_d = ex.export_texture_object(det) if det is not None else None
+            uri_m = ex.export_texture_object(mask) if mask is not None else None
+            if uri_d and uri_m:
+                textures["emissive"] = glb.image_uri("../" + uri_d, Path(uri_d).stem)
+                textures["paintMask"] = glb.image_uri("../" + uri_m, Path(uri_m).stem)
+                texture_count += 2
+                tg = dict(m.m_SavedProperties.m_Colors).get("_TintGreen")
+                surface_extras = {"ose_detail": [20.0, float(tg.r) if tg is not None else 1.0]}
         elif shader_name == "KSP2/Environment/LandBasedWater":
             cols = dict(m.m_SavedProperties.m_Colors)
             floats = dict(m.m_SavedProperties.m_Floats)

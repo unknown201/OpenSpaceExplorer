@@ -100,6 +100,8 @@ pub struct Overlay {
     pub data: Vec<i16>,
     /// `data` max-filtered over squares of 2^(k+1) - 1 cells either side, k = 0, 1, ... (`sample_max`)
     pub max_levels: Vec<Vec<i16>>,
+    /// The ground's sand paint on the same grid, 0..255 (`sample_sand`); empty without one.
+    pub sand: Vec<u8>,
 }
 
 /// Levels of `Overlay::max_levels` (the last reaches 63 cells, about 5 km on the KSC campus's).
@@ -138,6 +140,14 @@ impl Overlay {
                 height: meta.height,
                 data,
                 max_levels: Vec::new(),
+                sand: {
+                    let s = include_bytes!("../../../assets/own/terrain/ksc_ground_sand.bin");
+                    if s.len() == meta.width * meta.height {
+                        s.to_vec()
+                    } else {
+                        Vec::new()
+                    }
+                },
             };
             o.build_max_levels();
             o
@@ -210,6 +220,33 @@ impl Overlay {
         )
     }
 
+    /// The site's sand paint (KSP2 paints its campus ground's shores and banks as beach), 0..1, bilinear; 0
+    /// outside the grid.
+    pub fn sample_sand(&self, lat_deg: f64, lon_deg: f64) -> f64 {
+        let [la0, la1] = self.lat_deg;
+        let [lo0, lo1] = self.lon_deg;
+        if self.sand.len() != self.width * self.height
+            || lat_deg < la0
+            || lat_deg > la1
+            || lon_deg < lo0
+            || lon_deg > lo1
+        {
+            return 0.0;
+        }
+        let fx = (lon_deg - lo0) / (lo1 - lo0) * self.width as f64 - 0.5;
+        let fy = (la1 - lat_deg) / (la1 - la0) * self.height as f64 - 0.5;
+        let (x0, y0) = (fx.floor(), fy.floor());
+        let (tx, ty) = (fx - x0, fy - y0);
+        let at = |dx: i64, dy: i64| {
+            let x = (x0 as i64 + dx).clamp(0, self.width as i64 - 1) as usize;
+            let y = (y0 as i64 + dy).clamp(0, self.height as i64 - 1) as usize;
+            self.sand[y * self.width + x] as f64 / 255.0
+        };
+        let top = at(0, 0) + (at(1, 0) - at(0, 0)) * tx;
+        let bottom = at(0, 1) + (at(1, 1) - at(0, 1)) * tx;
+        top + (bottom - top) * ty
+    }
+
     fn bilinear(data: &[i16], w: usize, h: usize, fx: f64, fy: f64) -> Option<f64> {
         let (x0, y0) = (fx.floor(), fy.floor());
         let (tx, ty) = (fx - x0, fy - y0);
@@ -256,9 +293,14 @@ impl Overlay {
     }
 }
 
-/// Flatten a disc around each launch pad, held at the pad's altitude. Other sites (base anchors such as
-/// `kerbin_KSC_Object` at 221.7 m) are reference points, not ground: a disc there stood 100 m above the KSC
-/// campus, so they get none. The ground around them comes from the map and, with a pack, the decals.
+/// How far below its LocalSimObjectsData site KSP2 actually stands a launch pad: a Mk1 pod, FL-T200 and LV-T45
+/// on pad 1 reads 111.9 m in KSP2 (reference/ksp2-run3, PreLaunch) and 117.1 m here with the site's 115.2 m.
+pub const KSP2_PAD_DROP_M: f64 = 5.2;
+
+/// Flatten a disc around each launch pad, held at the pad's altitude (its site's, less `KSP2_PAD_DROP_M`).
+/// Other sites (base anchors such as `kerbin_KSC_Object` at 221.7 m) are reference points, not ground: a disc
+/// there stood 100 m above the KSC campus, so they get none. The ground around them comes from the map and,
+/// with a pack, the decals.
 pub(crate) fn flats_for(sites: &[Site]) -> Vec<Flat> {
     sites
         .iter()
@@ -268,7 +310,7 @@ pub(crate) fn flats_for(sites: &[Site]) -> Vec<Flat> {
             lon_deg: s.lon_deg,
             radius_m: 250.0,
             falloff_m: 800.0,
-            altitude_m: s.altitude_m,
+            altitude_m: s.altitude_m - KSP2_PAD_DROP_M,
         })
         .collect()
 }
@@ -483,12 +525,13 @@ mod tests {
             altitude_m: 120.0,
         };
         let m = map(64, 32, |_, _| 0, vec![pad], false);
-        assert!((m.height_m(0.0, 0.0) - 120.0).abs() < 1e-9);
+        // (KSP2 stands craft KSP2_PAD_DROP_M below a pad's site)
+        assert!((m.height_m(0.0, 0.0) - (120.0 - KSP2_PAD_DROP_M)).abs() < 1e-9);
         // 2 km away (beyond 250 + 800 m) the map is back
         let deg = 2_000.0 / (std::f64::consts::PI / 180.0 * 100_000.0);
         let far = m.height_m(0.0, deg);
         assert!((far + 500.0).abs() < 1e-6, "far {far}");
-        assert!(m.max_m >= 120.0);
+        assert!(m.max_m >= 120.0 - KSP2_PAD_DROP_M);
     }
 
     #[test]
@@ -497,7 +540,7 @@ mod tests {
         assert!(Overlay::for_body("Mun").is_none());
         // the plateau between the launch pad and the VAB is the campus height
         let pad = o.sample(-0.66, -74.80).unwrap();
-        assert!((pad - 107.0).abs() < 5.0, "{pad}");
+        assert!((pad - 101.8).abs() < 5.0, "{pad}");
         // nothing far from the KSC
         assert!(o.sample(10.0, 10.0).is_none());
         // the ground is the higher of the two
@@ -519,6 +562,18 @@ mod tests {
         // what the renderer drapes over it
         assert!((m.height_m(-0.66, -74.80) - (pad + OVERLAY_DRAPE_M)).abs() < 1e-9);
         assert!(m.max_m >= pad);
+    }
+
+    #[test]
+    fn the_campus_ground_carries_ksp2s_sand_rim() {
+        let o = Overlay::for_body("Kerbin").expect("embedded KSC ground");
+        assert_eq!(o.sand.len(), o.width * o.height);
+        // a third of the grid is beach, none of it far away
+        let sandy = o.sand.iter().filter(|&&v| v > 128).count() as f64 / o.sand.len() as f64;
+        assert!(sandy > 0.15 && sandy < 0.6, "{sandy}");
+        assert_eq!(o.sample_sand(10.0, 10.0), 0.0);
+        // the launch pad's plateau is grass, not sand
+        assert!(o.sample_sand(-0.6836, -74.8198) < 0.3);
     }
 
     #[test]
