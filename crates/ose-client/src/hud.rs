@@ -611,25 +611,26 @@ pub fn stage_cards_html(
                 let spec = catalog.get(id);
                 let icon = (o.icon)(members[0], spec);
                 let list: Vec<String> = members.iter().map(|i| i.to_string()).collect();
+                let name = spec
+                    .map(|s| esc(s.display_title()))
+                    .unwrap_or_else(|| esc(id));
                 let hooks = if editable {
                     format!(
-                        " data-ose-group=\"{}\" title=\"click to select, drag to another stage or between stages\"",
+                        " data-ose-group=\"{}\" title=\"{name}: click to select, drag to another stage or between stages\"",
                         list.join(",")
                     )
                 } else {
-                    String::new()
+                    format!(" title=\"{name}\"")
                 };
+                // The name stays in its own span: the VAB's compact stack shows the icons alone, as the original.
                 format!(
-                    "<span class=\"p{sel}\" data-ose-index=\"{first}\"{hooks}><i style=\"--ico:url(assets/ui/hud/{icon}.png)\"></i>{name}{count}</span>",
+                    "<span class=\"p{sel}\" data-ose-index=\"{first}\"{hooks}><i style=\"--ico:url(assets/ui/hud/{icon}.png)\"></i><span class=\"nm\">{name}</span>{count}</span>",
                     sel = if o.selected.is_some_and(|s| members.contains(&s)) {
                         " sel"
                     } else {
                         ""
                     },
                     first = members[0],
-                    name = spec
-                        .map(|s| esc(s.display_title()))
-                        .unwrap_or_else(|| esc(id)),
                     count = if members.len() > 1 {
                         format!("<b class=\"pc\">\u{d7}{}</b>", members.len())
                     } else {
@@ -653,7 +654,7 @@ pub fn stage_cards_html(
             (String::new(), String::new())
         };
         html.push_str(&format!(
-            "<li{class}{card}><span class=\"st\"{head}>STAGE {}</span>{}{}</li>",
+            "<li{class}{card}><span class=\"st\"{head}><span class=\"sl\">STAGE </span>{:02}</span>{}{}</li>",
             count - n,
             (o.stats)(n),
             parts.join(""),
