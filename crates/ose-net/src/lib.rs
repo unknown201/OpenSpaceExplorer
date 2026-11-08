@@ -627,6 +627,11 @@ pub enum AttitudeMode {
     AntiNormal,
     RadialOut,
     RadialIn,
+    /// The SAS buttons with the navball on surface speed, as KSP2: horizon north / south, straight up / down.
+    SurfaceNormal,
+    SurfaceAntiNormal,
+    SurfaceRadialOut,
+    SurfaceRadialIn,
     /// Pitch above the horizon and compass heading (90 = east), degrees.
     PitchHeading {
         pitch_deg: f64,

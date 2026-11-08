@@ -938,6 +938,10 @@ fn to_net_attitude(a: Attitude) -> ose_net::AttitudeMode {
         Attitude::AntiNormal => M::AntiNormal,
         Attitude::RadialOut => M::RadialOut,
         Attitude::RadialIn => M::RadialIn,
+        Attitude::SurfaceNormal => M::SurfaceNormal,
+        Attitude::SurfaceAntiNormal => M::SurfaceAntiNormal,
+        Attitude::SurfaceRadialOut => M::SurfaceRadialOut,
+        Attitude::SurfaceRadialIn => M::SurfaceRadialIn,
         Attitude::PitchHeading {
             pitch_deg,
             heading_deg,
@@ -987,6 +991,10 @@ fn from_net_attitude(a: ose_net::AttitudeMode) -> Attitude {
         M::AntiNormal => Attitude::AntiNormal,
         M::RadialOut => Attitude::RadialOut,
         M::RadialIn => Attitude::RadialIn,
+        M::SurfaceNormal => Attitude::SurfaceNormal,
+        M::SurfaceAntiNormal => Attitude::SurfaceAntiNormal,
+        M::SurfaceRadialOut => Attitude::SurfaceRadialOut,
+        M::SurfaceRadialIn => Attitude::SurfaceRadialIn,
         M::PitchHeading {
             pitch_deg,
             heading_deg,

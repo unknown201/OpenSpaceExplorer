@@ -149,6 +149,12 @@ pub enum Attitude {
     AntiNormal,
     RadialOut,
     RadialIn,
+    /// KSP2's SAS buttons with the navball on surface speed (`VesselAutopilot.SetAutopilotSurface`): normal and
+    /// anti-normal hold the horizon's north and south, radial out and in hold straight up and down.
+    SurfaceNormal,
+    SurfaceAntiNormal,
+    SurfaceRadialOut,
+    SurfaceRadialIn,
     /// Pitch above the horizon (degrees) and compass heading (degrees, 90 = east), surface frame.
     PitchHeading {
         pitch_deg: f64,
@@ -177,6 +183,10 @@ impl Attitude {
                 | Attitude::OrbitRetrograde
                 | Attitude::RadialOut
                 | Attitude::RadialIn
+                | Attitude::SurfaceNormal
+                | Attitude::SurfaceAntiNormal
+                | Attitude::SurfaceRadialOut
+                | Attitude::SurfaceRadialIn
         )
     }
 }
@@ -1094,8 +1104,26 @@ pub fn attitude_direction(att: Attitude, r: DVec3, v: DVec3, omega: f64) -> DVec
         }
         Attitude::Normal => normal,
         Attitude::AntiNormal => -normal,
-        Attitude::RadialOut => up,
-        Attitude::RadialIn => -up,
+        // KSP2's orbit-movement frame (`TelemetryComponent.UpdateOrbitMovementTelemetry`): forward is the
+        // velocity, up the orbit normal, and radial out its right: square to the velocity in the orbit plane,
+        // so it leans off the local vertical by the flight-path angle on an eccentric orbit
+        Attitude::RadialOut | Attitude::RadialIn => {
+            let out = v.cross(normal);
+            let out = if out.length_squared() > 1e-18 && h.length_squared() > 0.0 {
+                out.normalized()
+            } else {
+                up
+            };
+            if att == Attitude::RadialOut {
+                out
+            } else {
+                -out
+            }
+        }
+        Attitude::SurfaceNormal => north,
+        Attitude::SurfaceAntiNormal => -north,
+        Attitude::SurfaceRadialOut => up,
+        Attitude::SurfaceRadialIn => -up,
         Attitude::PitchHeading {
             pitch_deg,
             heading_deg,

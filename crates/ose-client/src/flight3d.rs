@@ -588,8 +588,20 @@ pub fn attitude_dir(att: &AttitudeMode, r: DVec3, v_rel: DVec3, spin: Spin) -> D
         AttitudeMode::OrbitRetrograde => or_up(-v_rel),
         AttitudeMode::Normal => or_up(r.cross(v_rel)),
         AttitudeMode::AntiNormal => or_up(-r.cross(v_rel)),
-        AttitudeMode::RadialOut => up,
-        AttitudeMode::RadialIn => -up,
+        // square to the velocity in the orbit plane (KSP2's orbit-movement frame)
+        AttitudeMode::RadialOut => or_up(v_rel.cross(r.cross(v_rel))),
+        AttitudeMode::RadialIn => or_up(-v_rel.cross(r.cross(v_rel))),
+        AttitudeMode::SurfaceNormal | AttitudeMode::SurfaceAntiNormal => {
+            let east = DVec3::Z.cross(up).normalize_or_zero();
+            let north = up.cross(east);
+            if matches!(att, AttitudeMode::SurfaceNormal) {
+                north
+            } else {
+                -north
+            }
+        }
+        AttitudeMode::SurfaceRadialOut => up,
+        AttitudeMode::SurfaceRadialIn => -up,
         AttitudeMode::PitchHeading {
             pitch_deg,
             heading_deg,
