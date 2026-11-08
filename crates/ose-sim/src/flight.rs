@@ -1765,7 +1765,7 @@ pub fn integrate_with_propulsion(
     let resolved_force = propulsion
         .as_ref()
         .map(|e| bx * e.force_kn.x + by * e.force_kn.y + bz * e.force_kn.z);
-    if p.landed || p.ground_contact {
+    if p.landed {
         if let Some(allocation) = propulsion
             .as_ref()
             .and_then(|e| e.control_allocation.as_ref())
@@ -1947,7 +1947,7 @@ pub fn integrate_with_propulsion(
         }
     }
 
-    if p.landed || p.ground_contact {
+    if p.landed {
         // sitting on the surface: co-rotate; lift off only when thrust beats gravity
         let g = body.mu / (r_mag * r_mag);
         let (up, _, _) = surface_frame(p.r);

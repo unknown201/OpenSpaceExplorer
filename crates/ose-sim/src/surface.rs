@@ -153,11 +153,11 @@ pub fn inverse_effective_mass(
     1.0 / mass.mass_t + direction.dot(mass.inertia.solve(r.cross(direction)).cross(r))
 }
 
-/// Implicit spring/damper force. Travel and supported mass set a provisional 2g-at-full-travel spring.
 /// Landing legs' VehiclePhysics friction (landingleg_*v): `FrictionLimit` and `FrictionAdherent`.
 pub const LEG_FRICTION_LIMIT: f64 = 1.0;
 pub const LEG_FRICTION_ADHERENT_MPS: f64 = 0.1;
 
+/// Implicit spring/damper force. Travel and supported mass set a provisional 2g-at-full-travel spring.
 pub fn suspension_force(
     compression: f64,
     speed: f64,
@@ -298,10 +298,12 @@ impl Structure {
                     let slide = foot_v - n * foot_v.dot(n);
                     let slide_mps = slide.length();
                     let grip = if load > 0.0 && slide_mps > 1e-9 {
-                        let share = mass.mass_t / gear_count as f64;
+                        let along = local(frame, slide * (1.0 / slide_mps));
+                        let inverse = inverse_effective_mass(mass, local(frame, arm), along);
+                        let stop = slide_mps / (dt * inverse * gear_count as f64);
                         let mu =
                             LEG_FRICTION_LIMIT * (slide_mps / LEG_FRICTION_ADHERENT_MPS).min(1.0);
-                        slide * (-(mu * load).min(share * slide_mps / dt) / slide_mps)
+                        slide * (-(mu * load).min(stop) / slide_mps)
                     } else {
                         DVec3::ZERO
                     };
