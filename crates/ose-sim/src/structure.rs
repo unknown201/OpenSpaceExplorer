@@ -267,6 +267,9 @@ pub struct Structure {
     /// The direction to the sun in the craft's axes, while the vessel is flown (`None` on rails: there the
     /// original credits panels their full rating in sunlight, `PartComponentModule_SolarPanel`).
     pub sun_local: Option<DVec3>,
+    /// Each tracking panel's turn about its pivot from rest, degrees, and each panel's sun dot this step.
+    pub solar_angle_deg: Vec<f64>,
+    solar_dot: Vec<Option<f64>>,
     /// Each part's lift and drag at the last `aero_torque` call, kN, inertial (the aero overlay).
     pub part_aero_kn: Vec<(DVec3, DVec3)>,
     /// RCS thrusters on the parts.
@@ -532,6 +535,7 @@ impl Structure {
             self.wheel_queued_torque[j] = old.wheel_queued_torque[i];
             self.wheel_accepted_power[j] = old.wheel_accepted_power[i];
             self.in_water[j] = old.in_water[i];
+            self.solar_angle_deg[j] = old.solar_angle_deg[i];
             self.water_drag[j] = old.water_drag[i];
             self.rcs_retained_delivery[j] = old.rcs_retained_delivery[i];
             self.rcs_queued_inputs[j] = old.rcs_queued_inputs[i].clone();
@@ -566,7 +570,11 @@ impl Structure {
     /// How squarely a fixed panel faces the sun, 0..1: its `PanelIncidenceDirection` (the part's +X, as the
     /// stock panels' `raycastTransform` lies) against the sun (`Module_SolarPanel`). Tracking panels turn
     /// to it; on rails every panel counts in full.
-    fn solar_incidence(&self, i: usize) -> f64 {
+    /// A solar panel's sun dot as of the last `update_solar` (1 with no sun direction or panel data).
+    pub fn solar_incidence(&self, i: usize) -> f64 {
+        if let Some(dot) = self.solar_dot[i] {
+            return dot;
+        }
         match self.sun_local {
             Some(sun) if !self.electric[i].solar_tracking => {
                 aero::rotate(self.part_rot[i], DVec3::new(1.0, 0.0, 0.0))
@@ -1103,6 +1111,8 @@ impl Structure {
             shielded: vec![false; n],
             frame_top: DVec3::ZERO,
             sun_local: None,
+            solar_angle_deg: vec![0.0; n],
+            solar_dot: vec![None; n],
             part_aero_kn: vec![(DVec3::ZERO, DVec3::ZERO); n],
             ejection_force: (0..n)
                 .map(|i| def_of(i).map(|d| d.ejection_force).unwrap_or(0.0))
@@ -2417,7 +2427,81 @@ impl Structure {
     }
 
     /// Independent producers run before propulsion. Engine alternators require resolved thrust instead.
+    /// Turn the tracking panels toward the sun and take each panel's sun dot, as `Module_Deployable.
+    /// CalculateTracking` and `Module_SolarPanel` do: a tracking panel turns about its pivot's own Y, closing
+    /// `trackingSpeed` of the gap each second, until the sun sits `TrackingAlignmentOffset` round from the
+    /// pivot's +Z (out of that plane it loses the cosine of the angle); a panel whose ray toward the sun meets
+    /// another part of the craft is shaded (and does not turn); a fixed panel's face is its own.
+    pub fn update_solar(&mut self, sun: f64, dt: f64) {
+        self.solar_dot.fill(None);
+        let Some(sun_dir) = self.sun_local.filter(|s| s.length_squared() > 1e-12) else {
+            return;
+        };
+        let sun_dir = sun_dir.normalized();
+        let boxes: Vec<(usize, DVec3, DVec3)> = (0..self.rigid.len())
+            .filter(|&j| self.rigid.present[j])
+            .map(|j| {
+                let (c, h) = self.part_box(j);
+                (j, c, h)
+            })
+            .collect();
+        // Unity's Euler turn about Y: +Z toward +X
+        let yaw = |v: DVec3, deg: f64| {
+            let (s, c) = deg.to_radians().sin_cos();
+            DVec3::new(v.x * c + v.z * s, v.y, -v.x * s + v.z * c)
+        };
+        for i in 0..self.rigid.len() {
+            if !self.rigid.present[i] || self.electric[i].solar_output <= 0.0 {
+                continue;
+            }
+            let Some(g) = self.geometry[i].solar.clone() else {
+                continue;
+            };
+            let s_part = aero::rotate_inverse(self.part_rot[i], sun_dir);
+            let pivot = g.pivot_rotation.filter(|_| g.tracking);
+            let (face_part, origin_part, s_rest) = match pivot {
+                Some(q) => {
+                    let s_rest = aero::rotate_inverse(q, s_part);
+                    let angle = self.solar_angle_deg[i];
+                    (
+                        aero::rotate(q, yaw(g.incidence, angle)),
+                        g.pivot_m + aero::rotate(q, yaw(g.raycast_m, angle)),
+                        Some(s_rest),
+                    )
+                }
+                None => (g.incidence, g.raycast_m, None),
+            };
+            let mut dot = face_part.dot(s_part).clamp(0.0, 1.0);
+            // the ray toward the sun from the raycast origin, past the panel's own part
+            let mut clear = sun > 0.0;
+            if clear && face_part.dot(s_part) > 0.0 {
+                let to_vessel = crate::rigid::to_vessel;
+                let dir = to_vessel(sun_dir);
+                let origin = self.rigid.rest_position(i)
+                    + to_vessel(aero::rotate(self.part_rot[i], origin_part))
+                    + dir * g.raycast_offset_m;
+                if boxes.iter().any(|&(j, c, h)| {
+                    j != i && crate::exhaust::sweep_box(origin, dir, 0.0, c, h).is_some()
+                }) {
+                    clear = false;
+                    dot = 0.0;
+                }
+            }
+            let extended = !self.electric[i].solar_deployable || self.deployed[i];
+            if let (Some(s_rest), true, true) = (s_rest, clear, extended) {
+                // `num`: how far the pivot still has to turn, degrees
+                let phi = s_rest.x.atan2(s_rest.z).to_degrees() - self.solar_angle_deg[i];
+                let num = (g.alignment_offset_deg + phi + 540.0).rem_euclid(360.0) - 180.0;
+                let step = (g.tracking_speed * dt).clamp(0.0, 1.0);
+                self.solar_angle_deg[i] =
+                    (self.solar_angle_deg[i] + num * step + 540.0).rem_euclid(360.0) - 180.0;
+            }
+            self.solar_dot[i] = Some(dot);
+        }
+    }
+
     fn electric_producers(&mut self, sun: f64, dt: f64) {
+        self.update_solar(sun, dt);
         let Some(ec) = self.net.resource("ElectricCharge") else {
             return;
         };
