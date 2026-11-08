@@ -74,7 +74,7 @@ async fn main() -> Result<()> {
     let mut f = std::fs::File::create(&out)?;
     writeln!(
         f,
-        "t,phase,throttle,brakes,thrust_kn,srf_speed,alt_m,firing,situation,ut"
+        "t,phase,throttle,brakes,thrust_kn,srf_speed,alt_m,firing,situation,ut,brakes_on,drive_speed,lift_kn,tipped"
     )?;
     // (seconds after staging, phase, step)
     let schedule: Vec<(f64, &str, Step)> = vec![
@@ -128,13 +128,17 @@ async fn main() -> Result<()> {
         }
         writeln!(
             f,
-            "{t},{phase},{throttle},{},{},{},{},{},{:?},{ut}",
+            "{t},{phase},{throttle},{},{},{},{},{},{:?},{ut},{},{},{},{}",
             u8::from(brakes),
             r.thrust_kn,
             r.surface_speed_mps,
             r.altitude_m,
             r.firing_engines.len(),
-            r.situation
+            r.situation,
+            u8::from(r.brakes),
+            r.drive_speed_mps,
+            r.lift_kn,
+            u8::from(r.tipped)
         )?;
         if t > 84.0 {
             break;

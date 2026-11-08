@@ -280,6 +280,8 @@ pub struct Structure {
     >,
     pub fairing_panel_t: Vec<f64>,
     pub cargo_bay: Vec<bool>,
+    /// Parts whose crossfeed the pilot can switch (`PartDef::crossfeed_toggle`).
+    pub crossfeed_toggle: Vec<bool>,
     pub bay_open: Vec<bool>,
     pub shielded: Vec<bool>,
     /// The craft's +Z in flight (`flight::vessel_top`), inertial, kept current by the universe: with the
@@ -1151,6 +1153,14 @@ impl Structure {
                 })
                 .map(|m| m.unwrap_or(0.0))
                 .collect(),
+            crossfeed_toggle: craft
+                .parts
+                .iter()
+                .map(|p| {
+                    defs.iter()
+                        .any(|d| d.id == p.part_id && d.crossfeed_toggle())
+                })
+                .collect(),
             cargo_bay: (0..n)
                 .map(|i| def_of(i).is_some_and(|d| d.cargo_bay))
                 .collect(),
@@ -1278,6 +1288,10 @@ impl Structure {
             }
             "converter" if self.converter_defs[i].is_some() => {
                 self.converter_on[i] = on;
+                true
+            }
+            "crossfeed" if self.crossfeed_toggle.get(i).copied().unwrap_or(false) => {
+                self.net.set_crossfeed(i, on);
                 true
             }
             "fairing" if on && self.fairing_payload[i].is_some() => {
@@ -2515,6 +2529,21 @@ impl Structure {
             mass.inertia.z.z
         } else {
             mass.inertia.y.y
+        };
+        // the centre of mass over the contact patches: along a level craft's Z (its belly), a standing
+        // craft's Y, plus the wheels' radius
+        let heights: Vec<f64> = wheels
+            .iter()
+            .map(|&i| {
+                let r = self.rigid.rest_position(i) - mass.centre_m;
+                let below = if level { r.z } else { r.y };
+                below.abs() + self.gear_defs[i].as_ref().map_or(0.0, |g| g.radius_m)
+            })
+            .collect();
+        p.drive.cg_height_m = if heights.is_empty() {
+            0.0
+        } else {
+            heights.iter().sum::<f64>() / heights.len() as f64
         };
         let along: Vec<f64> = p.drive.wheels.iter().map(|w| w.at_m[0]).collect();
         let spread = along.iter().cloned().fold(f64::MIN, f64::max)
@@ -3943,6 +3972,13 @@ impl Structure {
             let Some(def) = self.exhaust_defs[i].filter(|_| self.rigid.present[i]) else {
                 continue;
             };
+            // Module_Engine.EngineExhaustDamage returns at once for a mode without `exhaustDamage`
+            if self.engine_modes[i]
+                .get(self.engine_mode[i])
+                .is_some_and(|m| !m.exhaust_damage)
+            {
+                continue;
+            }
             let radius = self.exhaust_diameter_m[i] * 0.5 * def.radius_multiplier;
             let range = def.max_range_m - 2.0 * radius;
             for nozzle in self

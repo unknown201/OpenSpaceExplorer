@@ -104,7 +104,7 @@ pub fn delta_v_by_stage(
     let def_of = |i: usize| cat.parts.get(craft.parts[i].part_id.as_str()).copied();
     let dry_mass = |i: usize| def_of(i).map(|d| craft.parts[i].dry_mass(d)).unwrap_or(0.0);
     let crossfeed_ok =
-        |i: usize| craft.parts[i].fuel_crossfeed && def_of(i).is_some_and(|d| d.fuel_cross_feed);
+        |i: usize| def_of(i).is_some() && crate::craft::crossfeed_on(&craft.parts[i], def_of(i));
 
     // undirected adjacency from the tree
     let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
@@ -421,6 +421,7 @@ mod tests {
                         mode_exit_running_s: 0.0,
                         mode_enter_s: 0.0,
                         mode_enter_running_s: 0.0,
+                        exhaust_damage: true,
                     }]
                 })
                 .unwrap_or_default(),

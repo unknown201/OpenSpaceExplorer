@@ -901,9 +901,19 @@ impl Universe {
 
     /// Run one part's action now (its right-click menu); false when it does not apply to that part.
     pub fn part_action(&mut self, e: Entity, part: usize, action: &str, on: bool) -> bool {
-        self.world
+        let done = self
+            .world
             .get_mut::<structure::Structure>(e)
-            .is_some_and(|mut st| st.part_action(part, action, on))
+            .is_some_and(|mut st| st.part_action(part, action, on));
+        // crossfeed is part of the craft as saved (the original's `PartState.FuelCrossfeed`)
+        if done && action == "crossfeed" {
+            if let Some(mut doc) = self.world.get_mut::<docking::CraftDoc>(e) {
+                if let Some(p) = doc.0.parts.get_mut(part) {
+                    p.fuel_crossfeed = on;
+                }
+            }
+        }
+        done
     }
 
     /// Jettison a vessel's fairings; how many, `None` without a structure.
@@ -3776,7 +3786,8 @@ mod tests {
     fn ksp2_rover_turn_at_half_throttle_and_full_steer_matches_run_8() {
         // KSP2 trace run 8 (reference/ksp2-run8-rover): the stock Inquisitive Rover from rest at half wheel
         // throttle and full steer reaches 0.95 / 1.38 / 1.87 / 2.25 m/s after 2 / 4 / 8 / 10 s, turning at
-        // 0.51 / 0.86 / 1.20 / 1.41 rad/s
+        // 0.51 / 0.86 / 1.20 / 1.41 rad/s. OSE (single-precision wheels, weight shifted onto the outer
+        // wheels): 0.93 / 1.44 / 2.07 / 2.35 m/s at 0.43 / 0.84 / 1.30 / 1.52 rad/s
         let (mut u, body, _, _) = k1_on_real_kerbin();
         let crafts: Vec<ose_data::craft::Craft> =
             serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
@@ -3987,7 +3998,8 @@ mod tests {
         assert!(at(21.5).1 < 0.3, "{:?}", at(21.5));
         // half throttle with full steering: a tight, slow turn (KSP2 1.20/1.62/2.24 m/s turning at
         // 0.70/1.05/1.41 rad/s). The turn builds up against the craft's yaw inertia, which here still
-        // includes the physicsless parts' own inertia, so it comes out somewhat slower than KSP2's.
+        // includes the physicsless parts' own inertia (OSE 1.24/1.79/2.40 m/s at 0.66/1.09/1.52 rad/s,
+        // with the weight shifted onto the outer wheels as KSP2's suspension does).
         for (t, ksp2, yaw) in [(30.0, 1.20, 0.70), (33.0, 1.62, 1.05), (37.0, 2.24, 1.41)] {
             let (_, speed, rate) = at(t);
             assert!(
@@ -4266,6 +4278,57 @@ mod tests {
                 "dip {dip} sink {sink}"
             );
         }
+    }
+
+    /// KSP2 run 20 (T41): a plane on free-rolling gear, pushed from rest, accelerates at its push less the
+    /// wheels' own spin-up; it must not stick at a crawl.
+    #[test]
+    fn a_plane_on_free_wheels_rolls_away_from_rest() {
+        let (mut u, body, _, _) = k1_on_real_kerbin();
+        let crafts: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let defs: Vec<ose_data::PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let res: Vec<ose_data::ResourceDef> =
+            serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
+        let c = crafts.iter().find(|c| c.name == "Stock04_Jet").unwrap();
+        let c = structure::level_layout(c).unwrap();
+        let report = ose_data::staging::delta_v_by_stage(&c, &defs, &res);
+        let spec = flight::FlightSpec::from_report(&report, &[], &[], 1.5);
+        let v = u.spawn_powered_on_surface("Craft", body, spec, 0.0, 0.0);
+        u.set_structure(v, structure::Structure::build(&c, &defs, &res));
+        assert!(u.set_level(v, 90.0));
+        u.step();
+        let mut p = u.powered(v).unwrap().clone();
+        assert_eq!(p.drive.wheels.len(), 3);
+        // held on its brakes against 15 kN first, as on the runway before the roll
+        p.drive.brakes = true;
+        for _ in 0..100 {
+            p.drive.step(
+                p.mass_t,
+                9.81,
+                1.0,
+                [0.0, 0.0],
+                [15.0 / p.mass_t, 0.0],
+                0.02,
+            );
+        }
+        assert!(p.drive.speed_mps.abs() < 0.2, "{}", p.drive.speed_mps);
+        p.drive.brakes = false;
+        // 5 kN of thrust, as the Wheesley gives 2.5 s into its spool-up; the tyres' smoothed brake load
+        // lets go over the first quarter second, as KSP2's `tireForceSharpness` does
+        let push = 5.0 / p.mass_t;
+        let mut at_1s = 0.0;
+        for k in 1..=200 {
+            p.drive
+                .step(p.mass_t, 9.81, 1.0, [0.0, 0.0], [push, 0.0], 0.02);
+            if k == 50 {
+                at_1s = p.drive.speed_mps;
+            }
+        }
+        let slowest = (p.drive.speed_mps - at_1s) / (push * 3.0);
+        // KSP2 loses about 0.2 kN to the wheels here; the spin-up of three gear wheels is about 0.5 kN
+        assert!(slowest > 0.85, "rolls at {slowest:.2} of its push");
     }
 
     #[test]

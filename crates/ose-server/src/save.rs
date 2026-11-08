@@ -10,7 +10,7 @@ use ose_sim::Universe;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-pub const SAVE_VERSION: u32 = 1;
+pub const SAVE_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SavedVessel {
@@ -306,23 +306,111 @@ pub fn write(path: &Path, save: &SaveFile) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn read(path: &Path) -> anyhow::Result<Option<SaveFile>> {
+pub fn read(path: &Path, defs: &[ose_data::PartDef]) -> anyhow::Result<Option<SaveFile>> {
     if !path.exists() {
         return Ok(None);
     }
     let text = std::fs::read_to_string(path)?;
-    let save: SaveFile = serde_json::from_str(&text)?;
+    let mut save: SaveFile = serde_json::from_str(&text)?;
     anyhow::ensure!(
-        save.version == SAVE_VERSION,
+        (1..=SAVE_VERSION).contains(&save.version),
         "save version {} not supported (server writes {SAVE_VERSION})",
         save.version
     );
+    migrate(&mut save, defs);
     Ok(Some(save))
+}
+
+/// Bring an older save up to `SAVE_VERSION`.
+///
+/// Version 2: a decoupler's, separator's or docking port's own crossfeed flag decides whether fuel crosses it
+/// (the original's crossfeed toggle). Before, the definition always blocked it and the VAB saved every part
+/// with crossfeed on, so those parts are switched off as they behaved.
+pub fn migrate(save: &mut SaveFile, defs: &[ose_data::PartDef]) {
+    if save.version < 2 {
+        let off = |c: &mut ose_data::craft::Craft| {
+            for p in &mut c.parts {
+                if defs
+                    .iter()
+                    .any(|d| d.id == p.part_id && d.crossfeed_toggle() && !d.fuel_cross_feed)
+                {
+                    p.fuel_crossfeed = false;
+                }
+            }
+        };
+        for c in &mut save.crafts {
+            off(&mut c.craft);
+        }
+        for v in &mut save.vessels {
+            if let Some(c) = v.craft.as_mut() {
+                off(c);
+            }
+        }
+    }
+    save.version = SAVE_VERSION;
+    for shelved in &mut save.shelf {
+        migrate(&mut shelved.save, defs);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn version_1_saves_get_decoupler_crossfeed_off_as_it_behaved() {
+        let defs: Vec<ose_data::PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let mut stock: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let k = stock
+            .iter()
+            .position(|c| c.parts.iter().any(|p| p.part_id.starts_with("decoupler")))
+            .unwrap();
+        let mut craft = stock.remove(k);
+        let dec = craft
+            .parts
+            .iter()
+            .position(|p| p.part_id.starts_with("decoupler"));
+        let Some(dec) = dec else { unreachable!() };
+        // the VAB used to save every part with crossfeed on
+        for p in &mut craft.parts {
+            p.fuel_crossfeed = true;
+        }
+        let mut save = SaveFile {
+            version: 1,
+            crafts: vec![SavedCraft {
+                id: 1,
+                owner: 1,
+                craft: craft.clone(),
+            }],
+            tick: Default::default(),
+            warp: 0,
+            vessels: Vec::new(),
+            campaign: Campaign::default(),
+            shelf: Vec::new(),
+        };
+        save.shelf.push(ShelvedCampaign {
+            id: "old".into(),
+            save: save.clone(),
+        });
+        migrate(&mut save, &defs);
+        assert_eq!(save.version, SAVE_VERSION);
+        assert!(!save.crafts[0].craft.parts[dec].fuel_crossfeed);
+        assert!(!save.shelf[0].save.crafts[0].craft.parts[dec].fuel_crossfeed);
+        assert_eq!(save.shelf[0].save.version, SAVE_VERSION);
+        // tanks keep theirs
+        let tank = craft
+            .parts
+            .iter()
+            .position(|p| p.part_id.starts_with("fueltank"))
+            .unwrap();
+        assert!(save.crafts[0].craft.parts[tank].fuel_crossfeed);
+        // a version 2 save is left as the player set it
+        save.crafts[0].craft.parts[dec].fuel_crossfeed = true;
+        migrate(&mut save, &defs);
+        assert!(save.crafts[0].craft.parts[dec].fuel_crossfeed);
+    }
 
     #[test]
     fn legacy_stock_geometry_and_occupied_mass_are_restored_together() {
