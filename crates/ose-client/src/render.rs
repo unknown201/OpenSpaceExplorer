@@ -324,7 +324,8 @@ fn fs_mesh(in: VsOut) -> @location(0) vec4<f32> {
         let nw = normalize(n0 + (ta * ripple.x + tb * ripple.y) * 0.16);
         let cos_v = max(dot(nw, view), 0.0);
         let fres = 0.02 + 0.98 * pow(1.0 - cos_v, object.surface.y);
-        let day = clamp(ambient * 2.6, 0.08, 1.0);
+        // The sky it reflects dims with the light reaching it (night at the KSC, eclipses).
+        let day = clamp(ambient * 2.6, 0.08, 1.0) * clamp(object.light_dir.w, 0.05, 1.0);
         // KSP2's lakes read teal from above (its body colour under a soft sky sheen), the sky's blue at grazing.
         let body = base.rgb * (ambient * skyc + (1.0 - ambient) * diffuse * sunc) * 0.6;
         let refl = object.surface2.xyz * skyc * day * mix(0.03, 0.4, fres);
@@ -421,6 +422,8 @@ struct LineOut {
     // Distance from the centre line and the half width there, pixels.
     @location(0) across: f32,
     @location(1) half: f32,
+    // Distance along the segment from its end, pixels (dots only).
+    @location(2) along: f32,
 };
 
 @vertex
@@ -428,6 +431,11 @@ fn vs_line(in: SegIn, @builtin(vertex_index) vi: u32) -> LineOut {
     var out: LineOut;
     var ca = camera.view_proj * (object.model * vec4<f32>(in.a, 1.0));
     var cb = camera.view_proj * (object.model * vec4<f32>(in.b, 1.0));
+    // Dots (`params.z`): each segment is a square about its first point.
+    let dots = object.params.z > 0.5;
+    if dots {
+        cb = ca;
+    }
     // Clip the segment at a plane just in front of the eye, so a strip passing behind the camera keeps the
     // part in view instead of flipping across the screen.
     let near = 1e-6;
@@ -457,18 +465,26 @@ fn vs_line(in: SegIn, @builtin(vertex_index) vi: u32) -> LineOut {
     }
     // One pixel more for the soft edge; plain segments run on by half their width so a bend has no notch.
     let edge = half + 1.0;
-    let run = select((end * 2.0 - 1.0) * half, 0.0, taper);
+    let run = select(select((end * 2.0 - 1.0) * half, (end * 2.0 - 1.0) * edge, dots), 0.0, taper);
     let c = mix(ca, cb, end);
     let off = (nrm * side * edge + dir * run) / half_vp;
     out.clip = c + vec4<f32>(off * c.w, 0.0, 0.0);
     out.across = side * edge;
     out.half = half;
+    out.along = (end * 2.0 - 1.0) * edge;
     return out;
 }
 
 @fragment
 fn fs_line(in: LineOut) -> @location(0) vec4<f32> {
     let h = max(in.half, 0.5);
+    if object.params.z > 0.5 {
+        // A lamp: a hot core with a soft halo round it.
+        let r = length(vec2<f32>(in.across, in.along)) / h;
+        let a = clamp(1.0 - r, 0.0, 1.0);
+        let core = smoothstep(0.55, 0.85, a);
+        return vec4<f32>(object.color.rgb * (0.6 + 1.4 * core) + vec3<f32>(core * 0.5), object.color.a * a * a);
+    }
     let coverage = clamp(h + 0.5 - abs(in.across), 0.0, 1.0);
     let t = clamp(abs(in.across) / h, 0.0, 1.0);
     // Rounded across its width: darker at the rim, a bright core, as a lit tube.
@@ -728,6 +744,8 @@ pub struct LineItem {
     pub width_px: f32,
     /// Narrow to a point at the strip's end (an arrowhead, `LineItem::arrowhead`).
     pub taper: bool,
+    /// Draw each point as a round glowing dot `width_px` across instead of joining them (`LineItem::dots`).
+    pub dots: bool,
 }
 
 impl LineItem {
@@ -746,6 +764,30 @@ impl LineItem {
             color,
             width_px,
             taper: false,
+            dots: false,
+        }
+    }
+
+    /// Lamps: each point a round glowing dot `width_px` across, all in one draw.
+    pub fn dots(
+        key: String,
+        mut points_km: Vec<DVec3>,
+        rel_origin_km: DVec3,
+        color: [f32; 4],
+        width_px: f32,
+    ) -> LineItem {
+        // One segment per point (each draws its first end): repeat the last so every point has one.
+        if let Some(&last) = points_km.last() {
+            points_km.push(last);
+        }
+        LineItem {
+            key,
+            points_km,
+            rel_origin_km,
+            color,
+            width_px,
+            taper: false,
+            dots: true,
         }
     }
 
@@ -765,6 +807,7 @@ impl LineItem {
             color,
             width_px,
             taper: true,
+            dots: false,
         }
     }
 }
@@ -2292,7 +2335,7 @@ impl Renderer {
                 params: [
                     l.width_px * self.dpr,
                     if l.taper { 1.0 } else { 0.0 },
-                    0.0,
+                    if l.dots { 1.0 } else { 0.0 },
                     0.0,
                 ],
                 extra: [self.width as f32, self.height as f32, 0.0, 0.0],
