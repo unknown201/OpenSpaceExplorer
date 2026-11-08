@@ -37,6 +37,7 @@ pub mod hud;
 pub mod i18n;
 pub mod input;
 pub mod interaction;
+pub mod kerbal_anim;
 pub mod kerbin_time;
 #[cfg(target_arch = "wasm32")]
 pub mod ksc3d;
@@ -485,6 +486,8 @@ struct App {
     /// and the handle being dragged (index, press x, y, the node's delta-v components at the press).
     mnv_dirs: [(f64, f64); 6],
     mnv_drag: Option<(usize, f64, f64, [f64; 3])>,
+    /// How far (CSS px) the held maneuver handle is out along its direction from where the drag started.
+    mnv_along: f64,
     mnv_sent_ms: f64,
     gpu_canvas: HtmlCanvasElement,
     /// 3D orbit camera: yaw and pitch (radians) around the focus, distance in kilometres.
@@ -954,6 +957,7 @@ pub fn start() -> Result<(), JsValue> {
         map_cursor: None,
         mnv_dirs: [(0.0, 0.0); 6],
         mnv_drag: None,
+        mnv_along: 0.0,
         mnv_sent_ms: 0.0,
         gpu_canvas: get("gpu")?.dyn_into()?,
         orbit_yaw: 0.6,
@@ -4333,7 +4337,7 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
             );
         }
         if app.mnv_drag.is_some() {
-            app.mnv_drag_to(ev.client_x() as f64, ev.client_y() as f64, ev.shift_key());
+            app.mnv_drag_to(ev.client_x() as f64, ev.client_y() as f64);
             return;
         }
         #[cfg(target_arch = "wasm32")]
@@ -9946,7 +9950,11 @@ impl App {
                 self.board_target.set(Some(target));
                 ClientMessage::Board { vessel, target }
             }
-            "fh-flag" => ClientMessage::PlantFlag { vessel },
+            "fh-flag" => {
+                #[cfg(target_arch = "wasm32")]
+                self.flight3d.plant_flag(now_ms());
+                ClientMessage::PlantFlag { vessel }
+            }
             _ => ClientMessage::Undock { vessel, port: None },
         };
         self.crew_pending.set(Some(match id {
@@ -12845,6 +12853,7 @@ impl App {
                 .unwrap_or(false)
         });
         let Some(k) = hit else { return false };
+        self.mnv_along = 0.0;
         self.mnv_drag = Some((
             k,
             x,
@@ -12855,8 +12864,9 @@ impl App {
     }
 
     /// Dragging a handle outward adds delta-v along it: 1 m/s per pixel, 0.1 with Shift.
-    fn mnv_drag_to(&mut self, x: f64, y: f64, fine: bool) {
-        let Some((k, x0, y0, start)) = self.mnv_drag else {
+    /// A handle dragged: how far it is held out along its own direction (the slide handle moves the node).
+    fn mnv_drag_to(&mut self, x: f64, y: f64) {
+        let Some((k, x0, y0, _)) = self.mnv_drag else {
             return;
         };
         if k == 6 {
@@ -12864,13 +12874,25 @@ impl App {
             return;
         }
         let (ux, uy) = self.mnv_dirs[k];
-        let along = (x - x0) * ux + (y - y0) * uy;
-        let dv = interaction::maneuver_delta_mps(along, fine);
+        self.mnv_along = (x - x0) * ux + (y - y0) * uy;
+    }
+
+    /// Each frame a handle is held out, KSP2 adds (pixels / DPI)^2 m/s along it (`MapManeuverGizmo`): a rate
+    /// control, so holding it further out burns faster, and holding still keeps adding.
+    fn mnv_hold_tick(&mut self) {
+        let Some((k, ..)) = self.mnv_drag.filter(|d| d.0 < 6) else {
+            return;
+        };
+        let dv = interaction::maneuver_frame_mps(self.mnv_along, interaction::MANEUVER_DPI, 1.0);
+        if dv == 0.0 {
+            return;
+        }
         let (axis, sign) = (k / 2, if k % 2 == 0 { 1.0 } else { -1.0 });
         let Some(node) = self.node.as_mut() else {
             return;
         };
-        let value = (start[axis] + sign * dv).clamp(-5000.0, 5000.0);
+        let now_value = [node.prograde_mps, node.normal_mps, node.radial_mps][axis];
+        let value = (now_value + sign * dv).clamp(-5000.0, 5000.0);
         match axis {
             0 => node.prograde_mps = value,
             1 => node.normal_mps = value,
@@ -13254,6 +13276,7 @@ impl App {
     }
 
     fn frame(&mut self) {
+        self.mnv_hold_tick();
         let t = now_ms();
         if self.frame_at_ms > 0.0 {
             self.frame_dt_s = ((t - self.frame_at_ms) / 1000.0).clamp(0.001, 0.1);
@@ -13970,6 +13993,7 @@ impl App {
                 let light = if b.is_star { GV::Y } else { star_km - pos_km };
                 items.push(render::DrawItem {
                     animation: None,
+                    blend: Vec::new(),
                     node_turns: Vec::new(),
                     node_rotations: Vec::new(),
                     model: name.clone(),

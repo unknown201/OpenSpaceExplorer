@@ -72,10 +72,14 @@ fn main() {
                         other => panic!("unknown zoom context {other}"),
                     })
                 }
-                "maneuver" => json!(interaction::maneuver_delta_mps(
-                    number(input, "pixels"),
-                    fine
-                )),
+                "maneuver" => json!(
+                    number(input, "frames")
+                        * interaction::maneuver_frame_mps(
+                            number(input, "pixels"),
+                            number(input, "dpi"),
+                            number(input, "strength")
+                        )
+                ),
                 "ladder" => json!(kerbin_time::WARP_LADDER),
                 "warp_to" => json!(kerbin_time::warp_toward(number(input, "remaining"))),
                 "drop" => json!(kerbin_time::warp_drop(
