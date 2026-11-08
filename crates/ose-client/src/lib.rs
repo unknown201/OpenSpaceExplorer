@@ -175,6 +175,9 @@ struct App {
     vab_category: String,
     /// Picker sort (0 default, 1 name, 2 mass), size filter, and favourite parts (middle click; kept per browser).
     vab_sort: u8,
+    /// The picker's order arrow: the groups and the parts in them back to front (the original's
+    /// `isSortOrderAscending` off).
+    vab_sort_desc: bool,
     vab_size: Option<String>,
     vab_favs: std::collections::HashSet<String>,
     /// Boxes of the last editor draw in canvas pixels, for click selection.
@@ -733,6 +736,7 @@ pub fn start() -> Result<(), JsValue> {
         editor: vab::Editor::default(),
         vab_category: "Pods".into(),
         vab_sort: 0,
+        vab_sort_desc: false,
         vab_size: None,
         vab_favs: stored("ose.vab.favs")
             .map(|s| {
@@ -3705,6 +3709,29 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
             app.render_vab_picker();
         });
         sel.add_event_listener_with_callback("change", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
+    if let Some(btn) = doc.get_element_by_id("vab-sort-dir") {
+        let a = app.clone();
+        let b2 = btn.clone();
+        let cb = Closure::<dyn FnMut()>::new(move || {
+            let mut app = a.borrow_mut();
+            app.vab_sort_desc = !app.vab_sort_desc;
+            b2.class_list()
+                .toggle_with_force("desc", app.vab_sort_desc)
+                .ok();
+            b2.set_attribute(
+                "title",
+                if app.vab_sort_desc {
+                    "Descending: click for ascending"
+                } else {
+                    "Ascending: click for descending"
+                },
+            )
+            .ok();
+            app.render_vab_picker();
+        });
+        btn.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
         cb.forget();
     }
     if let Some(chips) = doc.get_element_by_id("vab-sizes") {
@@ -7091,7 +7118,7 @@ impl App {
             .unwrap_or_default()
             .to_lowercase();
         let locked = self.locked_parts();
-        let mut parts: Vec<&vab::PartSpec> = self
+        let parts: Vec<&vab::PartSpec> = self
             .catalog
             .values()
             .filter(|p| {
@@ -7110,27 +7137,6 @@ impl App {
             // As the original, a campaign's VAB offers only the parts it has researched.
             .filter(|p| !locked.contains(&p.id))
             .collect();
-        let size_rank = |s: &str| {
-            ["XS", "S", "M", "L", "XL", "XXL"]
-                .iter()
-                .position(|x| *x == s)
-                .unwrap_or(9)
-        };
-        // The default order groups by the original's families (Group By: Type), each under a heading.
-        let grouped = self.vab_sort == 0;
-        match self.vab_sort {
-            1 => parts.sort_by(|a, b| a.display_title().cmp(b.display_title())),
-            2 => parts.sort_by(|a, b| a.mass_t.total_cmp(&b.mass_t)),
-            _ => parts.sort_by(|a, b| {
-                vab::part_group(&a.family)
-                    .1
-                    .cmp(&vab::part_group(&b.family).1)
-                    .then_with(|| a.family.cmp(&b.family))
-                    .then(size_rank(&a.size_category).cmp(&size_rank(&b.size_category)))
-                    .then(a.mass_t.total_cmp(&b.mass_t))
-                    .then_with(|| a.display_title().cmp(b.display_title()))
-            }),
-        }
         if let Some(chips) = self.doc.get_element_by_id("vab-sizes") {
             let mut h = String::new();
             for s in ["All", "XS", "S", "M", "L", "XL"] {
@@ -7151,14 +7157,18 @@ impl App {
             set_html_changed(&chips, &h);
         }
         let mut html = String::new();
-        let mut group = String::new();
-        for p in parts {
-            if grouped && p.family != group {
-                group = p.family.clone();
+        let mut group = None;
+        // The original hides the size badges when the groups already are sizes.
+        list.class_list()
+            .toggle_with_force("by-size", self.vab_sort == 1)
+            .ok();
+        for (heading, p) in vab::picker_order(&parts, self.vab_sort, self.vab_sort_desc) {
+            if group.as_ref() != Some(&heading) {
                 html.push_str(&format!(
                     "<li class=\"pg-head\" data-ose=\"vab-part-group\">{}</li>",
-                    esc(&vab::part_group(&group).0)
+                    esc(&heading)
                 ));
+                group = Some(heading);
             }
             html.push_str(&format!(
                 "<li data-ose=\"vab-part\" data-ose-part=\"{id}\"><img class=\"pi\" src=\"assets/ui/parts/{id}.png\" alt=\"\" loading=\"lazy\" draggable=\"false\" onerror=\"this.parentNode.classList.add('noicon');this.remove()\" /><span class=\"pb\" title=\"size {size}\">{badge}</span><span class=\"pstar{faved}\" title=\"favourite: middle click\">\u{2605}</span><span class=\"pt\">{fav}{title}</span><small>{cat} \u{b7} size {size} \u{b7} {mass:.2} t{extra}</small></li>",

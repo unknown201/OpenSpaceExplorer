@@ -2351,6 +2351,95 @@ pub fn part_action_kinds(spec: &PartSpec) -> Vec<&'static str> {
     kinds
 }
 
+/// The original's part picker Group By options (`AssemblyPartFilterType`: Type, Size, Mass), as the sort select's values.
+pub const GROUP_BY: [&str; 3] = ["Type", "Size", "Mass"];
+
+/// Size order, smallest first (`AssemblySizeFilterType`); an unknown size goes last.
+pub fn size_rank(size: &str) -> usize {
+    ["XS", "S", "M", "L", "XL", "XXL"]
+        .iter()
+        .position(|x| *x == size)
+        .unwrap_or(9)
+}
+
+/// A Group By: Size heading, as the original's `VAB/Size/*` (XSMALL, SMALL, ...).
+pub fn size_heading(size: &str) -> String {
+    match size {
+        "XS" => "XSMALL".into(),
+        "S" => "SMALL".into(),
+        "M" => "MEDIUM".into(),
+        "L" => "LARGE".into(),
+        "XL" => "XLARGE".into(),
+        "XXL" => "2XLARGE".into(),
+        other => other.to_uppercase(),
+    }
+}
+
+/// The original's mass bands for Group By: Mass (`AssemblyMassFilterType`): a part goes in the first band whose
+/// upper bound (tonnes) it is under.
+pub const MASS_BANDS: [(f64, &str); 8] = [
+    (0.1, "0 - 0.1"),
+    (0.5, "0.1 - 0.5"),
+    (1.0, "0.5 - 1"),
+    (5.0, "1 - 5"),
+    (10.0, "5 - 10"),
+    (50.0, "10 - 50"),
+    (100.0, "50 - 100"),
+    (f64::INFINITY, "100+"),
+];
+
+pub fn mass_band(mass_t: f64) -> usize {
+    MASS_BANDS
+        .iter()
+        .position(|(top, _)| mass_t < *top)
+        .unwrap_or(MASS_BANDS.len() - 1)
+}
+
+/// The picker's order: grouped as `group_by` asks (0 Type, 1 Size, 2 Mass), each group under its heading. The
+/// original's arrow turns the whole order round (`_isSortOrderAscending`: the groups and the parts in each).
+/// Returns (heading, part) pairs in display order.
+pub fn picker_order<'a>(
+    parts: &[&'a PartSpec],
+    group_by: u8,
+    descending: bool,
+) -> Vec<(String, &'a PartSpec)> {
+    let key = |p: &PartSpec| -> (usize, String) {
+        match group_by {
+            1 => (size_rank(&p.size_category), String::new()),
+            2 => (mass_band(p.mass_t), String::new()),
+            _ => (part_group(&p.family).1 as usize, p.family.clone()),
+        }
+    };
+    let mut v: Vec<&PartSpec> = parts.to_vec();
+    v.sort_by(|a, b| {
+        key(a)
+            .cmp(&key(b))
+            .then_with(|| match group_by {
+                2 => std::cmp::Ordering::Equal,
+                _ => part_group(&a.family)
+                    .1
+                    .cmp(&part_group(&b.family).1)
+                    .then_with(|| a.family.cmp(&b.family)),
+            })
+            .then(size_rank(&a.size_category).cmp(&size_rank(&b.size_category)))
+            .then(a.mass_t.total_cmp(&b.mass_t))
+            .then_with(|| a.display_title().cmp(b.display_title()))
+    });
+    if descending {
+        v.reverse();
+    }
+    v.into_iter()
+        .map(|p| {
+            let heading = match group_by {
+                1 => size_heading(&p.size_category),
+                2 => MASS_BANDS[mass_band(p.mass_t)].1.to_string(),
+                _ => part_group(&p.family).0,
+            };
+            (heading, p)
+        })
+        .collect()
+}
+
 /// What each part action does, for the group rows, in the player's language (the game's PAM action names).
 pub fn action_label(kind: &str) -> String {
     let (term, own) = match kind {
@@ -2575,6 +2664,46 @@ pub fn stage_in_situation(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn picker_groups_by_type_size_and_mass_and_the_arrow_turns_it_round() {
+        use super::*;
+        let part = |id: &str, family: &str, size: &str, mass_t: f64| PartSpec {
+            id: id.into(),
+            title: id.into(),
+            family: family.into(),
+            size_category: size.into(),
+            mass_t,
+            ..Default::default()
+        };
+        let pod = part("pod", "0000-Pod", "S", 0.8);
+        let tank = part("tank", "0040-Methalox", "M", 2.25);
+        let probe = part("probe", "0010-Probe", "XS", 0.05);
+        let all = [&tank, &pod, &probe];
+        let ids = |v: &[(String, &PartSpec)]| {
+            v.iter()
+                .map(|(h, p)| format!("{h}:{}", p.id))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            ids(&picker_order(&all, 0, false)),
+            ["Pod:pod", "Probe:probe", "Methalox:tank"]
+        );
+        assert_eq!(
+            ids(&picker_order(&all, 1, false)),
+            ["XSMALL:probe", "SMALL:pod", "MEDIUM:tank"]
+        );
+        assert_eq!(
+            ids(&picker_order(&all, 2, false)),
+            ["0 - 0.1:probe", "0.5 - 1:pod", "1 - 5:tank"]
+        );
+        assert_eq!(
+            ids(&picker_order(&all, 2, true)),
+            ["1 - 5:tank", "0.5 - 1:pod", "0 - 0.1:probe"]
+        );
+        assert_eq!(mass_band(0.1), 1);
+        assert_eq!(mass_band(250.0), 7);
+    }
+
     #[test]
     fn action_bindings_toggle_per_group() {
         let mut a = Vec::new();

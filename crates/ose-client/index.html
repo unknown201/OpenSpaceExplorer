@@ -334,12 +334,12 @@
     body.webgpu #menu-card.vab:has(#screen-vab.open) { position: fixed; inset: 0; width: auto; max-height: none; padding: calc(16 * var(--u)); background: none; border: 0; border-radius: 0; pointer-events: none; }
     body.webgpu #menu-card.vab > h1, body.webgpu #menu-card.vab > .sub, body.webgpu #menu-card.vab > .info, body.webgpu #screen-vab > label { display: none; }
     body.webgpu #menu-card.vab > .note { position: fixed; left: 50%; bottom: calc(24 * var(--u)); transform: translateX(-50%); pointer-events: none; }
-    body.webgpu #screen-vab #vab { height: calc(100vh - 32 * var(--u)); margin: 0; grid-template-columns: calc(340 * var(--u)) 1fr calc(320 * var(--u)); }
+    body.webgpu #screen-vab #vab { height: calc(100vh - 32 * var(--u)); margin: 0; grid-template-columns: calc(450 * var(--u)) 1fr calc(320 * var(--u)); }
     body.webgpu #vab-picker, body.webgpu #vab-side { pointer-events: auto; background: #10141bf0; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)); padding: calc(12 * var(--u)); overflow: auto; }
     body.webgpu #vab-parts { max-height: calc(100vh - 230 * var(--u) - 64px); }
     /* The original's staging stack: small, in the bottom-right corner over the hall; Details opens the stages'
        delta-v, TWR and burn time and the rest of the craft panel. */
-    body.webgpu #screen-vab #vab { grid-template-columns: calc(340 * var(--u)) 1fr; }
+    body.webgpu #screen-vab #vab { grid-template-columns: calc(450 * var(--u)) 1fr; }
     body.webgpu #vab-side { position: fixed; right: calc(16 * var(--u)); bottom: calc(16 * var(--u)); width: calc(220 * var(--u)); max-height: 55vh; padding: calc(8 * var(--u)); z-index: 5; }
     body.webgpu.vab-stack-open #vab-side { width: calc(320 * var(--u)); max-height: calc(100vh - 140 * var(--u)); padding: calc(12 * var(--u)); }
     body.webgpu:not(.vab-stack-open) #vab-side :is(.vs-more, #vab-twr-body, #vab-stages li .sv) { display: none; }
@@ -367,6 +367,38 @@
     body.webgpu.vab-stack-open #vab-stack-more { background: #1f3d6b !important; color: #fff !important; }
     body.webgpu #vab-canvas { visibility: hidden; pointer-events: none; }
     body.webgpu #vab-parts li { cursor: grab; user-select: none; }
+
+    /* The original's part picker (OAB): PART-PICKER over a rule, the search with a lens, Group By and the order
+       arrow, the category icons in a column beside the parts, pictures without names (hover for the name). */
+    body.webgpu #vab-picker { display: grid; grid-template-columns: calc(44 * var(--u)) 1fr; grid-template-rows: auto auto auto auto 1fr auto; column-gap: 0; row-gap: calc(8 * var(--u)); align-content: start; overflow: hidden; }
+    body.webgpu #vab-picker::before { content: "PART-PICKER"; grid-column: 1 / -1; display: flex; align-items: center; gap: 6px; color: #8e96a8; font: 400 calc(11 * var(--u)) var(--hud-font); letter-spacing: 0.16em; background: repeating-linear-gradient(90deg, #565e70 0 calc(6 * var(--u)), transparent 0 calc(9 * var(--u))) right center / calc(100% - 104 * var(--u)) 1px no-repeat; }
+    body.webgpu #vab-search { grid-column: 1 / -1; height: calc(40 * var(--u)); padding: 0 calc(12 * var(--u)) 0 calc(38 * var(--u)); font: calc(15 * var(--u)) var(--hud-font); letter-spacing: 0.06em; background: #1b202b url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='10' cy='10' r='6' fill='none' stroke='%23aab3c5' stroke-width='3'/%3E%3Cpath d='M15 15l6 6' stroke='%23aab3c5' stroke-width='3.4' stroke-linecap='round'/%3E%3C/svg%3E") calc(12 * var(--u)) center / calc(17 * var(--u)) no-repeat; border: 1px solid #3a4152; border-radius: calc(6 * var(--u)); color: #e6ecf7; }
+    body.webgpu #vab-search::placeholder { color: #8e96a8; }
+    body.webgpu #vab-filter { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr calc(36 * var(--u)); grid-template-rows: auto auto; gap: calc(6 * var(--u)); margin: 0; }
+    body.webgpu #vab-groupby { grid-column: 1; grid-row: 1; display: flex; align-items: center; gap: 4px; height: calc(32 * var(--u)); padding: 0 calc(10 * var(--u)); background: #1b202b; border: 1px solid #3a4152; border-radius: calc(5 * var(--u)); font: calc(15 * var(--u)) var(--hud-font); letter-spacing: 0.06em; }
+    body.webgpu #vab-groupby span { color: #7b7dff; white-space: nowrap; }
+    body.webgpu #vab-groupby select { flex: 1; min-width: 0; margin: 0; padding: 0; height: 100%; border: 0; background: transparent; color: #c8cede; font: inherit; }
+    body.webgpu #vab-groupby select option { background: #1b202b; }
+    body.webgpu #vab-sort-dir { grid-column: 2; grid-row: 1; width: 100%; height: calc(32 * var(--u)); margin: 0; padding: 0; background: #1b202b url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 4v16M5 11l7-7 7 7' fill='none' stroke='%23aab3c5' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 60% no-repeat; border: 1px solid #3a4152; border-radius: calc(5 * var(--u)); transition: transform 0.12s; }
+    body.webgpu #vab-sort-dir.desc { transform: scaleY(-1); }
+    body.webgpu #vab-sort-dir:hover { border-color: #7b7dff; }
+    body.webgpu #vab-sizes { grid-column: 1 / -1; grid-row: 2; display: flex; gap: 3px; }
+    body.webgpu #vab-cats { grid-column: 1; grid-row: 4 / 6; display: flex; flex-direction: column; gap: 0; margin: 0; background: #1b202b; border: 1px solid #3a4152; border-right: 0; border-radius: calc(5 * var(--u)) 0 0 calc(5 * var(--u)); overflow-y: auto; scrollbar-width: none; }
+    body.webgpu #vab-cats button { flex: none; width: 100%; height: calc(42 * var(--u)); padding: 0; justify-content: center; background: transparent; border: 0; border-bottom: 1px solid #2a3040; border-radius: 0; color: #d6dbe6; }
+    body.webgpu #vab-cats button i { width: calc(24 * var(--u)); height: calc(24 * var(--u)); }
+    body.webgpu #vab-cats button span { display: none; }
+    body.webgpu #vab-cats button:hover { background: #262c3a; }
+    body.webgpu #vab-cats button.on { background: #4b4dd6; color: #fff; }
+    body.webgpu #vab-parts { grid-column: 2; grid-row: 4 / 6; max-height: none; min-height: 0; margin: 0; padding: calc(4 * var(--u)) calc(6 * var(--u)); background: #141821; border: 1px solid #3a4152; border-radius: 0 calc(5 * var(--u)) calc(5 * var(--u)) 0; gap: calc(5 * var(--u)); grid-auto-rows: max-content; }
+    body.webgpu #vab-parts li .pstar:not(.on) { display: none; }
+    body.webgpu #vab-parts li:hover .pstar { display: block; }
+    body.webgpu #vab-parts li:not(.pg-head):not(.noicon) { padding: calc(6 * var(--u)); background: #232836; border: 0; border-radius: calc(5 * var(--u)); }
+    body.webgpu #vab-parts li:not(.pg-head):not(.noicon):hover { background: #2d3344; }
+    body.webgpu #vab-parts li:not(.noicon) .pt { display: none; }
+    body.webgpu #vab-parts li .pb { top: calc(5 * var(--u)); left: calc(5 * var(--u)); font-size: calc(11 * var(--u)); line-height: calc(15 * var(--u)); }
+    body.webgpu #vab-parts.by-size li .pb { display: none; }
+    body.webgpu #vab-parts li.pg-head { margin: calc(10 * var(--u)) 0 calc(4 * var(--u)); font: 400 calc(17 * var(--u)) var(--hud-font); letter-spacing: 0.3em; }
+    body.webgpu #vab-trash { grid-column: 1 / -1; grid-row: 6; margin: 0; }
     body.vab-holding, body.vab-holding * { cursor: grabbing !important; }
     body:has(#menu:not(.hidden) #screen-vab.open) #hud { opacity: 0; pointer-events: none; }
     body:has(#menu:not(.hidden) #screen-vab.open) #crumbs, body:has(#menu:not(.hidden) #screen-vab.open) #help, body:has(#menu:not(.hidden) #screen-vab.open) #labels { display: none; }
@@ -640,10 +672,10 @@
     body.webgpu #vab-header { position: static; background: none; border: 0; padding: 0; margin: 0; height: 0; font-family: var(--hud-font); }
     body.webgpu #screen-vab #vab { height: calc(100vh - 32 * var(--u)) !important; }
     body.webgpu #vab-header > .vh-group { position: fixed; z-index: 15; bottom: calc(16 * var(--u)); gap: calc(4 * var(--u)); background: #10141bf0; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)); padding: calc(5 * var(--u)) calc(6 * var(--u)); }
-    body.webgpu #vab-header > .vh-group:first-of-type { left: calc(366 * var(--u)); }
+    body.webgpu #vab-header > .vh-group:first-of-type { left: calc(476 * var(--u)); }
     body.webgpu #vab-header > .vh-group:last-of-type { right: calc(352 * var(--u)); top: calc(16 * var(--u)); bottom: auto; }
-    body.webgpu #vab-header #vab-name { position: fixed; z-index: 15; top: calc(16 * var(--u)); left: calc(366 * var(--u)); width: calc(340 * var(--u)); min-width: 0; flex: none; font-family: var(--hud-font); }
-    body.webgpu #vab-header #vab-desc-pop { position: fixed; top: calc(64 * var(--u)); left: calc(366 * var(--u)); right: auto; transform: none; }
+    body.webgpu #vab-header #vab-name { position: fixed; z-index: 15; top: calc(16 * var(--u)); left: calc(476 * var(--u)); width: calc(340 * var(--u)); min-width: 0; flex: none; font-family: var(--hud-font); }
+    body.webgpu #vab-header #vab-desc-pop { position: fixed; top: calc(64 * var(--u)); left: calc(476 * var(--u)); right: auto; transform: none; }
     body.webgpu #vab-header > .vh-group:first-of-type .vh-pop { top: auto; bottom: calc(100% + 6px); }
     body.webgpu #vab-header #vab-launch { font: 700 calc(22 * var(--u)) var(--hud-font); letter-spacing: 0.08em; padding: calc(8 * var(--u)) calc(22 * var(--u)) !important; color: #0b1a0b; background: #3fe05a; border-color: #8fff9f; }
     body.webgpu #vab-header #vab-launch i { background: #0b1a0b; }
@@ -1384,9 +1416,9 @@
         <div id="vab">
           <div id="vab-picker">
             <div id="vab-cats" data-ose="vab-categories"></div>
-            <input id="vab-search" data-ose="vab-search" type="search" placeholder="search parts (Ctrl+F)" />
+            <input id="vab-search" data-ose="vab-search" type="search" placeholder="Search &quot;landing gear&quot;" title="Search parts by name (Ctrl+F)" />
             <div id="vab-filter"><span id="vab-sizes" data-ose="vab-sizes"></span>
-              <select id="vab-sort" data-ose="vab-sort" title="Group or sort the parts"><option value="0">Group by type</option><option value="1" data-loc="Menu/SaveLoad/Name">Name</option><option value="2" data-loc="Menu/Launchpad/Mass">Mass</option></select></div>
+              <label id="vab-groupby" title="Group the parts by type, size or mass"><span>Group By:</span><select id="vab-sort" data-ose="vab-sort"><option value="0">Type</option><option value="1">Size</option><option value="2">Mass</option></select></label><button id="vab-sort-dir" data-ose="vab-sort-dir" title="Ascending: click for descending"></button></div>
             <ul id="vab-parts" data-ose="vab-parts"></ul>
             <div id="vab-trash" data-ose="vab-trash" title="Drop a part here to delete it (and what hangs on it)"><i></i></div>
           </div>
