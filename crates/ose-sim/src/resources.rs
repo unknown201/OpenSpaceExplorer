@@ -117,8 +117,7 @@ impl FlowNet {
         // not) and the craft has not switched it off: the same rule as the staging report.
         let edge_from = |from: usize, to: usize| Edge {
             to,
-            crossfeed: craft.parts[from].fuel_crossfeed
-                && def_of(from).is_none_or(|d| d.fuel_cross_feed),
+            crossfeed: ose_data::craft::crossfeed_on(&craft.parts[from], def_of(from)),
             boundary: decoupler(from),
             fuel_line: false,
         };
@@ -151,6 +150,16 @@ impl FlowNet {
             present: vec![true; n],
             edges,
             recipes,
+        }
+    }
+
+    /// Switch fuel flow out of `part` across its attachments (the crossfeed toggle in flight); fuel lines
+    /// are untouched.
+    pub fn set_crossfeed(&mut self, part: usize, on: bool) {
+        if let Some(out) = self.edges.get_mut(part) {
+            for e in out.iter_mut().filter(|e| !e.fuel_line) {
+                e.crossfeed = on;
+            }
         }
     }
 
@@ -453,27 +462,31 @@ mod tests {
     }
 
     #[test]
-    fn decouplers_block_crossfeed_even_when_the_craft_leaves_every_part_switched_on() {
-        // A VAB craft stores crossfeed on for every part; the decoupler's definition still blocks it, so
-        // stacks joined only through decouplers each feed their own engine.
+    fn a_decouplers_own_crossfeed_switch_decides_whether_fuel_crosses_it() {
+        // The original's ToggleCrossfeed: a decoupler's crossfeed is off as built and blocks the stack;
+        // switched on, the core engine reaches the upper stage's tank across it.
         let (crafts, defs, res) = assets();
         let mut c = crafts.into_iter().find(|c| c.name == "Kerbal K1").unwrap();
-        for p in &mut c.parts {
-            p.fuel_crossfeed = true;
-        }
-        let net = FlowNet::build(&c, &defs, &res);
-        let ox = net.resource("Oxidizer").unwrap();
-        let parts: Vec<usize> = net
-            .groups(36, ox)
-            .concat()
-            .iter()
-            .map(|&t| net.tanks[t].part)
-            .collect();
+        let reach = |c: &Craft| -> Vec<usize> {
+            let net = FlowNet::build(c, &defs, &res);
+            let ox = net.resource("Oxidizer").unwrap();
+            net.groups(36, ox)
+                .concat()
+                .iter()
+                .map(|&t| net.tanks[t].part)
+                .collect()
+        };
+        let parts = reach(&c);
         assert!(parts.contains(&18), "{parts:?}");
         assert!(
             !parts.contains(&7),
             "the core cannot reach the upper stage: {parts:?}"
         );
+        for p in &mut c.parts {
+            p.fuel_crossfeed = true;
+        }
+        let parts = reach(&c);
+        assert!(parts.contains(&7), "switched on, it passes fuel: {parts:?}");
     }
 
     #[test]

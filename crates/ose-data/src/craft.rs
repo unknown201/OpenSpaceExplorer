@@ -127,11 +127,30 @@ impl ChuteSettings {
 /// `engine`: the engine runs or is shut down; `deploy`: panels, antennas, gear and bays extend or retract;
 /// `chute`: parachutes arm (on only); `converter`: converters run or stop; `fairing`: the fairing comes
 /// off (on only).
-pub const ACTIONS: [&str; 5] = ["engine", "deploy", "chute", "converter", "fairing"];
+pub const ACTIONS: [&str; 6] = [
+    "engine",
+    "deploy",
+    "chute",
+    "converter",
+    "fairing",
+    "crossfeed",
+];
 
 /// The `KSPActionGroup` bit of custom group `n` (1..10).
 pub fn custom_group_bit(n: u8) -> u32 {
     0x10000u32 << (n.clamp(1, 10) - 1)
+}
+
+/// Whether fuel flows out of `part` to the parts attached to it. The original keeps one `FuelCrossfeed` per
+/// part, starting from the definition's `fuelCrossFeed`, and its crossfeed toggle
+/// (`Module_ToggleCrossfeed`) sets it: on a part with the toggle (decouplers, separators, docking ports) the
+/// craft's value decides; elsewhere both the craft and the definition must allow it.
+pub fn crossfeed_on(part: &CraftPart, def: Option<&PartDef>) -> bool {
+    match def {
+        Some(d) if d.crossfeed_toggle() => part.fuel_crossfeed,
+        Some(d) => part.fuel_crossfeed && d.fuel_cross_feed,
+        None => part.fuel_crossfeed,
+    }
 }
 
 impl Craft {

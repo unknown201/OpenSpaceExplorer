@@ -901,9 +901,19 @@ impl Universe {
 
     /// Run one part's action now (its right-click menu); false when it does not apply to that part.
     pub fn part_action(&mut self, e: Entity, part: usize, action: &str, on: bool) -> bool {
-        self.world
+        let done = self
+            .world
             .get_mut::<structure::Structure>(e)
-            .is_some_and(|mut st| st.part_action(part, action, on))
+            .is_some_and(|mut st| st.part_action(part, action, on));
+        // crossfeed is part of the craft as saved (the original's `PartState.FuelCrossfeed`)
+        if done && action == "crossfeed" {
+            if let Some(mut doc) = self.world.get_mut::<docking::CraftDoc>(e) {
+                if let Some(p) = doc.0.parts.get_mut(part) {
+                    p.fuel_crossfeed = on;
+                }
+            }
+        }
+        done
     }
 
     /// Jettison a vessel's fairings; how many, `None` without a structure.

@@ -8226,6 +8226,20 @@ impl App {
                 stage,
             },
         );
+        // A decoupler, separator or docking port: switch its crossfeed (the original's ToggleCrossfeed in
+        // flight; PartAction "crossfeed").
+        if spec.is_some_and(|s| s.crossfeed_toggle) {
+            html.push_str(&format!(
+                "<div class=\"pam-acts\"><span>{}: <b>{}</b></span><button data-act=\"fh-act-crossfeed\">{}</button></div>",
+                self.tr("PartModules/Resources/CrossFeedStatus", "Crossfeed"),
+                if part.fuel_crossfeed { "on" } else { "off" },
+                if part.fuel_crossfeed {
+                    self.tr("PartModules/Resources/DisableCrossFeed", "Disable crossfeed")
+                } else {
+                    self.tr("PartModules/Resources/EnableCrossFeed", "Enable crossfeed")
+                }
+            ));
+        }
         // Protocol 57: shut an engine down or start it again, and the part's action-group bindings.
         if spec.is_some_and(|s| s.has_engine) {
             let off = f.engines_off.contains(&(i as u16));
@@ -11674,6 +11688,20 @@ impl App {
                     part: i as u16,
                     action: "engine".into(),
                     on: off,
+                }
+            }
+            "fh-act-crossfeed" => {
+                let Some(i) = self.flight_pam else { return };
+                let Some(p) = self.flight_craft.as_mut().and_then(|c| c.parts.get_mut(i)) else {
+                    return;
+                };
+                // the readout carries no crossfeed state: the craft copy here follows the switch
+                p.fuel_crossfeed = !p.fuel_crossfeed;
+                ClientMessage::PartAction {
+                    vessel,
+                    part: i as u16,
+                    action: "crossfeed".into(),
+                    on: p.fuel_crossfeed,
                 }
             }
             "fh-act-antenna" => ClientMessage::DeployAntennas {
