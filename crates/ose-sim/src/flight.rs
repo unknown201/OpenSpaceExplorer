@@ -170,6 +170,18 @@ impl Attitude {
     }
 }
 
+/// A craft's hull under a Kerbal's feet: the radius from the body centre the Kerbal's centre stands at on
+/// it, m, and the hull's velocity there, inertial m/s.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Deck {
+    pub radius_m: f64,
+    pub v: DVec3,
+}
+
+/// A Kerbal standing on something that drops away more than this under it in one tick walked off an edge
+/// and falls, m (our own figure; slopes it walks down drop far less).
+pub const WALK_OFF_M: f64 = 0.5;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Situation {
     Landed,
@@ -255,6 +267,9 @@ pub struct Powered {
     /// A Kerbal on EVA: on the ground, the throttle with a level attitude walks instead of firing the pack.
     #[serde(default)]
     pub walker: bool,
+    /// What a Kerbal stands on besides the ground (a craft's hull under its feet), found before each step.
+    #[serde(skip)]
+    pub deck: Option<Deck>,
     /// Authored EVA settings, preserved in saves; old EVA saves are migrated on restore.
     #[serde(default)]
     pub jetpack: Option<ose_data::Jetpack>,
@@ -316,6 +331,12 @@ pub struct Powered {
     /// In the air from a jump (the throttle still walks, it does not fire the pack).
     #[serde(default)]
     pub eva_hop: bool,
+    /// How far the pace has moved from the walk (0) to the run (1).
+    #[serde(default)]
+    pub eva_sprint: f64,
+    /// What is left of a jump's push, s.
+    #[serde(default)]
+    pub eva_push_s: f64,
     /// Body lift and wings/surfaces this step (including surface drag), kN, inertial, and the
     /// airflow's torque about the centre of mass, kN·m, inertial.
     #[serde(default)]
@@ -597,8 +618,19 @@ pub const WALK_SPEED_MPS: f64 = 0.8;
 /// Running (Shift) and the jump: the original's `RunMoveSpeed`; the jump's push up is our own (the original
 /// pushes for `JumpInitialForceDuration`), forward it carries the run times `JumpRunMoveForceMagnitudeMultiplier`.
 pub const RUN_SPEED_MPS: f64 = 2.2;
-pub const JUMP_SPEED_MPS: f64 = 2.5;
 pub const JUMP_RUN_MULTIPLIER: f64 = 1.2;
+/// `NormalToSprintLerpSpeed`: the pace moves from the walk to the run (and back) at this share per second.
+pub const SPRINT_LERP_PER_S: f64 = 4.0;
+/// The jump is a push, not a launch speed (JumpKerbalCharacterStateHandler): `JumpForceMagnitudeCurve`
+/// (1.36 kN at every gravity) straight up from the animation's jump impulse, for `JumpInitialForceDuration`
+/// (0.25 s) and `JumpExtendForceDuration` (0.06 s) more while the key is held, its timers running from the
+/// press. KSP2 trace run 14 pushes for 0.286 s (4.33 m/s^2 net, up to 1.239 m/s) and rises 0.277 m.
+pub const JUMP_FORCE_KN: f64 = 1.36;
+pub const JUMP_PUSH_S: f64 = 0.286;
+/// KSP2 sets a walking Kerbal's velocity to its pace every tick and the physics step's ground friction then
+/// takes some back before it moves: KSP2 trace run 14 (walk set to 0.8 m/s, run to 2.2) moves at 0.65 and
+/// 2.05 m/s, the same 0.15 m/s a 0.02 s tick, which is this friction coefficient times gravity times the tick.
+pub const KERBAL_GROUND_FRICTION: f64 = 0.765;
 
 fn yes() -> bool {
     true
@@ -861,6 +893,7 @@ impl Powered {
             crash_tolerance_mps: 0.0,
             tipped: false,
             walker: false,
+            deck: None,
             jetpack: None,
             drive: Drive::default(),
             roll_rad: 0.0,
@@ -882,6 +915,8 @@ impl Powered {
             eva_run: false,
             eva_jump: false,
             eva_hop: false,
+            eva_sprint: 0.0,
+            eva_push_s: 0.0,
             rcs: RcsState::default(),
             lift_kn: DVec3::ZERO,
             aero_torque_knm: DVec3::ZERO,
@@ -1961,14 +1996,20 @@ pub fn integrate_with_propulsion(
         if support_acc.dot(normal) > 0.0 {
             p.landed = false;
         } else {
-            let pace = if p.eva_run {
-                RUN_SPEED_MPS
+            // the pace eases between the walk and the run, a share of the way each second
+            let sprint_to = if p.eva_run { 1.0 } else { 0.0 };
+            let step = SPRINT_LERP_PER_S * dt;
+            p.eva_sprint = if (sprint_to - p.eva_sprint).abs() <= step {
+                sprint_to
             } else {
-                WALK_SPEED_MPS
+                p.eva_sprint + step.copysign(sprint_to - p.eva_sprint)
             };
+            let pace = WALK_SPEED_MPS + (RUN_SPEED_MPS - WALK_SPEED_MPS) * p.eva_sprint;
             // walking: moved along the ground, and that is its velocity too (the client carries it between
-            // snapshots)
-            let walked = walk_dir.map(|dir| dir * (pace * p.throttle.min(1.0)));
+            // snapshots); the ground's friction takes its share of every tick's pace
+            let walked = walk_dir.map(|dir| {
+                dir * (pace * p.throttle.min(1.0) - KERBAL_GROUND_FRICTION * g * dt).max(0.0)
+            });
             if let Some(w) = walked {
                 p.r = p.r + w * dt;
             }
@@ -1979,7 +2020,8 @@ pub fn integrate_with_propulsion(
                 let ahead =
                     walk_dir.map(|d| d * (pace * p.throttle.min(1.0) * JUMP_RUN_MULTIPLIER));
                 p.landed = false;
-                p.v = omega_v.cross(p.r) + up * JUMP_SPEED_MPS + ahead.unwrap_or(DVec3::ZERO);
+                p.eva_push_s = JUMP_PUSH_S;
+                p.v = omega_v.cross(p.r) + ahead.unwrap_or(DVec3::ZERO);
                 p.r = p.r + up * 0.01;
                 return out;
             }
@@ -2034,7 +2076,23 @@ pub fn integrate_with_propulsion(
                 rolling.z,
             );
             // standing on its lowest point (or its side once tipped over)
-            let ground = ground_radius(body, terrain, p.r, ut + dt) + stand_height(p);
+            let mut ground = ground_radius(body, terrain, p.r, ut + dt) + stand_height(p);
+            if p.walker {
+                if let Some(deck) = p.deck {
+                    // standing on a craft: carried along with it, as KSP2 gives a Kerbal its contact's
+                    // velocity (`KerbalBehavior.SetContactObjectRelativeVelocity`)
+                    let carry = deck.v - omega_v.cross(p.r);
+                    p.r = p.r + carry * dt;
+                    rolling = rolling + carry;
+                    ground = ground.max(deck.radius_m);
+                }
+                // walked off an edge: it falls from there
+                if p.r.length() - ground > WALK_OFF_M {
+                    p.landed = false;
+                    p.v = omega_v.cross(p.r) + rolling;
+                    return out;
+                }
+            }
             p.r = p.r.normalized() * ground;
             p.v = omega_v.cross(p.r) + rolling;
             return out;
@@ -2062,8 +2120,16 @@ pub fn integrate_with_propulsion(
         DVec3::ZERO
     };
     out.drag_kn = drag_acc * p.mass_t + p.lift_kn;
-    let acc = g_acc + thrust_acc + drag_acc + lift_acc;
-    p.accel_ng_mps2 = thrust_acc + drag_acc + lift_acc;
+    // a jump pushes straight up for its first moments in the air
+    let push_acc = if p.eva_push_s > 0.0 && p.mass_t > 0.0 {
+        let share = (p.eva_push_s / dt).min(1.0);
+        p.eva_push_s = (p.eva_push_s - dt).max(0.0);
+        p.r.normalized() * (JUMP_FORCE_KN / p.mass_t * share)
+    } else {
+        DVec3::ZERO
+    };
+    let acc = g_acc + thrust_acc + drag_acc + lift_acc + push_acc;
+    p.accel_ng_mps2 = thrust_acc + drag_acc + lift_acc + push_acc;
     p.v = p.v + acc * dt;
     let top = vessel_top(p);
     let previous_r = p.r;
@@ -2151,6 +2217,7 @@ pub fn integrate_with_propulsion(
         p.landed = true;
         p.own_top = DVec3::ZERO;
         p.eva_hop = false;
+        p.eva_push_s = 0.0;
         p.angvel = DVec3::ZERO;
         p.roll_rate = 0.0;
         out.touched_down = true;
@@ -2166,6 +2233,37 @@ pub fn integrate_with_propulsion(
             p.crashed = true;
             p.throttle = 0.0;
             out.crashed = true;
+        }
+    }
+
+    // a Kerbal coming down onto a craft's hull lands on it
+    if let Some(deck) = p.deck.filter(|_| p.walker && !p.landed) {
+        if p.r.length() <= deck.radius_m {
+            let up = p.r.normalized();
+            let v_rel = p.v - deck.v;
+            p.r = up * deck.radius_m;
+            p.v = deck.v;
+            p.facing = up;
+            p.landed = true;
+            p.own_top = DVec3::ZERO;
+            p.eva_hop = false;
+            p.eva_push_s = 0.0;
+            p.angvel = DVec3::ZERO;
+            p.roll_rate = 0.0;
+            out.touched_down = true;
+            out.impact_velocity = v_rel;
+            out.impact_mps = v_rel.length();
+            out.normal_impact_mps = (-v_rel.dot(up)).max(0.0);
+            let tolerance = if p.crash_tolerance_mps > 0.0 {
+                p.crash_tolerance_mps
+            } else {
+                CRASH_SPEED_MPS
+            };
+            if out.impact_mps > tolerance {
+                p.crashed = true;
+                p.throttle = 0.0;
+                out.crashed = true;
+            }
         }
     }
 

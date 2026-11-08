@@ -2703,6 +2703,28 @@ impl PlanetRenderer {
         // props are lit by the renderer's own shader: dim them by hand during an eclipse
         let vis = eclipse_visible(view.cam, view.sun, view.occluders, view.sun_radius_rad) as f32;
         let dim = 0.15 + 0.85 * vis;
+        // and their ambient and sunlight follow the sun as the ground's do (the impostors' fs_far): by night the
+        // terrain's night light, not the day's 0.3, so trees go dark with the land round them
+        let day = {
+            let s = view
+                .sun
+                .normalize_or_zero()
+                .dot(view.cam.normalize_or_zero());
+            let t = ((s + 0.2) / 0.3).clamp(0.0, 1.0);
+            (t * t * (3.0 - 2.0 * t)) as f32
+        };
+        // (0.4 of the ground's night light: a crown shades most of itself from the night sky, as fs_far)
+        let night = self.night_light * 0.4;
+        let ambient = night + (0.3 - night) * day;
+        // no sunlight once the sun is under the horizon (crowns' side normals caught it from below)
+        let up_sun = {
+            let s = view
+                .sun
+                .normalize_or_zero()
+                .dot(view.cam.normalize_or_zero());
+            let t = ((s + 0.03) / 0.08).clamp(0.0, 1.0);
+            (t * t * (3.0 - 2.0 * t)) as f32
+        };
         let mut out = Vec::with_capacity(b.placed.len());
         for inst in &b.placed {
             let path = models[inst.model];
@@ -2731,8 +2753,8 @@ impl PlanetRenderer {
                 inst.scale * fade,
                 view.sun,
             );
-            it.ambient = 0.3;
-            it.sun = self.prop_sun;
+            it.ambient = ambient;
+            it.sun = self.prop_sun * up_sun;
             it.color = [dim, dim, dim, 1.0];
             out.push(it);
         }
