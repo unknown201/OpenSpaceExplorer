@@ -4127,11 +4127,11 @@ impl Structure {
             broken.extend(feet);
             if !lost {
                 pieces.extend(self.split_off(bx, by, bz));
-                speed = (speed * speed - tolerance * tolerance).max(0.0).sqrt();
-            } else {
-                // once it is coming apart each crushed layer slows what is behind it more (our own figure:
-                // twice its tolerance), so the far end of a fast crash comes through
-                speed = (speed - 2.0 * tolerance).max(0.0);
+            }
+            // a layer broken well over its tolerance does not slow what is behind it, which strikes in
+            // turn; one broken barely over it stops the craft (KSP2 crash drops)
+            if speed - tolerance <= crate::flight::CRASH_PASS_THROUGH_MPS {
+                speed = 0.0;
             }
         }
         if lost {

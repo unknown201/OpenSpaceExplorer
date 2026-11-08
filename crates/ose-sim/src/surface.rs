@@ -549,15 +549,16 @@ impl Structure {
                     out.contact_damage.push(i);
                 }
             }
-            // A broken foot absorbs only its tolerance's share of normal impact energy;
-            // it cannot stop the surviving hull before the next layer strikes the ground.
-            targets.push(if speed > tolerance {
-                -((v.dot(n).min(0.0)).powi(2) - tolerance * tolerance)
-                    .max(0.0)
-                    .sqrt()
-            } else {
-                0.0
-            });
+            // A part struck well over its tolerance breaks without slowing the rest of the craft, which
+            // strikes with its next layer as it reaches the ground; one struck barely over it breaks and
+            // the craft stops on it (KSP2 crash drops, `flight::CRASH_PASS_THROUGH_MPS`).
+            targets.push(
+                if speed > tolerance && speed - tolerance > flight::CRASH_PASS_THROUGH_MPS {
+                    v.dot(n).min(0.0)
+                } else {
+                    0.0
+                },
+            );
             if speed <= tolerance {
                 deepest = deepest
                     .max(solid_radius(body, terrain, at, ut + hit * dt) - at.length() - travel);
