@@ -61,6 +61,84 @@ fn path(links: &[Link], a: usize, b: usize) -> Vec<usize> {
         .collect()
 }
 
+/// KSP2's reinforced connection joint (`Module_ReinforcedConnection`): stack type, node size 2, not rigid,
+/// unbreakable.
+fn enhanced_joint_stiffness() -> f64 {
+    joint_settings()
+        .limits(
+            2,
+            true,
+            false,
+            false,
+            (f64::INFINITY, f64::INFINITY),
+            (f64::INFINITY, f64::INFINITY),
+        )
+        .stiffness
+}
+
+/// Put one extra joint of stiffness `k` in parallel with the tree path between parts `a` and `b` (see the
+/// module notes). False when there is no path.
+fn add_parallel(links: &mut [Link], a: usize, b: usize, k: f64) -> bool {
+    let on = path(links, a, b);
+    let compliance: f64 = on
+        .iter()
+        .map(|&j| 1.0 / links[j].limits.stiffness.max(1e-9))
+        .sum();
+    if on.is_empty() || compliance <= 0.0 || !k.is_finite() || k <= 0.0 {
+        return false;
+    }
+    let k_chain = 1.0 / compliance;
+    let scale = (k_chain + k) / k_chain;
+    for j in on {
+        let l = &mut links[j].limits;
+        l.stiffness *= scale;
+        l.damping *= scale;
+        l.break_force_kn *= scale;
+        l.break_torque_knm *= scale;
+    }
+    true
+}
+
+/// KSP2's Enhanced Joints (`PartOwnerComponent.InitializeExtraJoints`, on by default, mode Heaviest): every
+/// physical part except decouplers and launch clamps gets a reinforced joint to the craft's heaviest part
+/// (`Module_ReinforcedConnection.GetHeaviestPart`, launch clamps left out; the heaviest part itself gets
+/// none). That is why a radial booster on its decoupler is as stiff in KSP2 as a stack, though the surface
+/// joint between them is a soft one. Here each joins the chain to the heaviest part in parallel, as a strut
+/// does. `masses_t` is each part's mass with its contents. Returns how many parts it reinforced.
+pub(crate) fn enhance(
+    links: &mut [Link],
+    craft: &Craft,
+    by_id: &HashMap<&str, &PartDef>,
+    masses_t: &[f64],
+) -> usize {
+    let has = |i: usize, module: &str| {
+        by_id
+            .get(craft.parts[i].part_id.as_str())
+            .is_some_and(|d| d.module_names.iter().any(|m| m == module))
+    };
+    let physical = |i: usize| {
+        by_id
+            .get(craft.parts[i].part_id.as_str())
+            .is_none_or(|d| d.physics_mode != "None")
+    };
+    let Some(heaviest) = (0..craft.parts.len().min(masses_t.len()))
+        .filter(|&i| !has(i, "PartComponentModule_GroundLaunchClamp"))
+        .max_by(|&a, &b| masses_t[a].total_cmp(&masses_t[b]))
+    else {
+        return 0;
+    };
+    let k = enhanced_joint_stiffness();
+    (0..craft.parts.len().min(masses_t.len()))
+        .filter(|&i| {
+            i != heaviest
+                && physical(i)
+                && !has(i, "PartComponentModule_Decouple")
+                && !has(i, "PartComponentModule_GroundLaunchClamp")
+        })
+        .filter(|&i| add_parallel(links, i, heaviest, k))
+        .count()
+}
+
 /// Strengthen the links each strut of `craft` spans (see the module notes). Returns how many struts braced.
 pub(crate) fn brace(links: &mut [Link], craft: &Craft, by_id: &HashMap<&str, &PartDef>) -> usize {
     let k_strut = strut_stiffness();

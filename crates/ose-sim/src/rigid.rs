@@ -913,6 +913,13 @@ impl RigidVessel {
         }
     }
 
+    /// Add KSP2's Enhanced Joints to the craft this was built from (`struts::enhance`): a flown craft has them,
+    /// as KSP2's default settings do. Returns how many parts it reinforced.
+    pub fn enhance_joints(&mut self, craft: &Craft, defs: &[PartDef]) -> usize {
+        let by_id: HashMap<&str, &PartDef> = defs.iter().map(|p| (p.id.as_str(), p)).collect();
+        crate::struts::enhance(&mut self.links, craft, &by_id, &self.masses_t)
+    }
+
     /// Rest position of a part (vessel frame) and the attached parts' centre of mass at rest.
     pub fn rest_position(&self, part: usize) -> DVec3 {
         self.rest_pos[part]

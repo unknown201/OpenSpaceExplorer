@@ -618,8 +618,22 @@ impl Structure {
         (y.cross(z), y, z)
     }
 
+    /// The structure of a craft as it flies, with KSP2's Enhanced Joints (its default setting).
     pub fn build(craft: &Craft, defs: &[PartDef], resources: &[ResourceDef]) -> Structure {
-        let rigid = RigidVessel::build(craft, defs, resources);
+        Self::build_with(craft, defs, resources, true)
+    }
+
+    /// `build`, choosing KSP2's Enhanced Joints setting: off, parts hang on their own attachment joints only.
+    pub fn build_with(
+        craft: &Craft,
+        defs: &[PartDef],
+        resources: &[ResourceDef],
+        enhanced_joints: bool,
+    ) -> Structure {
+        let mut rigid = RigidVessel::build(craft, defs, resources);
+        if enhanced_joints {
+            rigid.enhance_joints(craft, defs);
+        }
         let report = ose_data::staging::delta_v_by_stage(craft, defs, resources);
         let mut stage_parts = Vec::new();
         let mut stage_engines = Vec::new();
@@ -9634,10 +9648,37 @@ mod tests {
     }
 
     #[test]
+    fn with_enhanced_joints_the_boosters_hold_like_a_stack_as_in_ksp2() {
+        let (crafts, defs, res) = assets();
+        let k1 = crafts.iter().find(|c| c.name == "Kerbal K1").unwrap();
+        let bend = |enhanced: bool| {
+            let mut s = Structure::build_with(k1, &defs, &res, enhanced);
+            let p = flying(DVec3::new(1.0, 0.0, 0.0));
+            let out = StepOutcome {
+                drag_kn: DVec3::new(0.0, 0.0, -2_000.0),
+                ..Default::default()
+            };
+            for _ in 0..100 {
+                s.apply(&p, &out, 0.02);
+            }
+            s.rigid
+                .links
+                .iter()
+                .find(|l| l.child == 21)
+                .map(|l| l.bend.length())
+                .unwrap()
+        };
+        let (on, off) = (bend(true), bend(false));
+        // KSP2's reinforced joint to the heaviest part takes almost all of the load off the soft radial joint
+        assert!(on < 0.02 * off, "booster bend {on} with, {off} without");
+    }
+
+    #[test]
     fn a_gust_bends_the_boosters_and_they_ring_down() {
         let (crafts, defs, res) = assets();
         let k1 = crafts.iter().find(|c| c.name == "Kerbal K1").unwrap();
-        let mut s = Structure::build(k1, &defs, &res);
+        // with KSP2's Enhanced Joints off: the parts hang on their own joints, which bend
+        let mut s = Structure::build_with(k1, &defs, &res, false);
         let p = flying(DVec3::new(1.0, 0.0, 0.0));
         // a sudden gust across the stack (engine thrust ramps in, so it would not ring the joints)
         let out = StepOutcome {
@@ -9817,7 +9858,8 @@ mod tests {
     fn turning_hard_bends_the_stack() {
         let (crafts, defs, res) = assets();
         let k1 = crafts.iter().find(|c| c.name == "Kerbal K1").unwrap();
-        let mut s = Structure::build(k1, &defs, &res);
+        // with KSP2's Enhanced Joints off: the parts hang on their own joints, which bend
+        let mut s = Structure::build_with(k1, &defs, &res, false);
         let p = flying(DVec3::new(1.0, 0.0, 0.0));
         // a hard pitch: 0.5 rad/s^2 across the vessel axis, from the wheels alone
         let out = StepOutcome {

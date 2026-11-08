@@ -5401,7 +5401,17 @@ mod tests {
         p.attitude = flight::Attitude::Fixed(DVec3::new(1.0, 0.0, 0.0));
         p.facing = DVec3::new(1.0, 0.0, 0.0);
         u.set_powered(v, p);
-        u.set_structure(v, st);
+        // with KSP2's Enhanced Joints off (with them on, each booster's reinforced joint to the heaviest
+        // part never breaks, so the stack holds)
+        let _ = st;
+        let crafts: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let defs: Vec<ose_data::PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let res: Vec<ose_data::ResourceDef> =
+            serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
+        let k1 = crafts.iter().find(|c| c.name == "Kerbal K1").unwrap();
+        u.set_structure(v, structure::Structure::build_with(k1, &defs, &res, false));
         let before = u.powered(v).unwrap().mass_t;
         let mut broken = Vec::new();
         for _ in 0..(3 * TICKS_PER_SECOND) {
