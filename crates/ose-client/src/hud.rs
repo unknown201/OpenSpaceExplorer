@@ -859,16 +859,17 @@ pub fn tracker_html(
     html
 }
 
-/// The burn timer (`BurnTimerInstrument`): time to the node, its delta-v and the burn's length at full
-/// throttle, starting half the burn before the node as the original's countdown does. `full_thrust_kn` 0
-/// leaves the length unknown.
+/// The burn timer (`BurnTimerInstrument`): time to the burn, its delta-v and the burn's length at full
+/// throttle. The burn starts at the node, as the original's countdown does (`ManeuverProvider.
+/// GetStartBurnTime` counts down to the node's time and the burn then runs for `BurnDuration`).
+/// `full_thrust_kn` 0 leaves the length unknown.
 pub fn burn_text(to_node_s: f64, dv_mps: f64, mass_t: f64, full_thrust_kn: f64) -> String {
     let burn = if full_thrust_kn > 0.0 {
         Some(dv_mps * mass_t / full_thrust_kn)
     } else {
         None
     };
-    let start = to_node_s - burn.unwrap_or(0.0) * 0.5;
+    let start = to_node_s;
     match burn {
         Some(b) => format!(
             "Burn {} \u{b7} \u{394}v {:.0} m/s \u{b7} {:.0} s at full throttle",
@@ -2121,10 +2122,10 @@ mod tests {
     }
 
     #[test]
-    fn burn_starts_half_a_burn_early() {
-        // 100 m/s on 10 t with 50 kN: 20 s burn, starting 10 s before the node.
+    fn burn_starts_at_the_node() {
+        // 100 m/s on 10 t with 50 kN: a 20 s burn, starting at the node 70 s on (KSP2's countdown)
         let t = burn_text(70.0, 100.0, 10.0, 50.0);
-        assert!(t.starts_with("Burn T-1:00"), "{t}");
+        assert!(t.starts_with("Burn T-1:10"), "{t}");
         assert!(t.contains("20 s"));
         assert!(burn_text(70.0, 100.0, 10.0, 0.0).starts_with("Node T-1:10"));
     }
