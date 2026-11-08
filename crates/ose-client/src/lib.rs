@@ -7171,7 +7171,7 @@ impl App {
                 group = Some(heading);
             }
             html.push_str(&format!(
-                "<li data-ose=\"vab-part\" data-ose-part=\"{id}\"><img class=\"pi\" src=\"assets/ui/parts/{id}.png\" alt=\"\" loading=\"lazy\" draggable=\"false\" onerror=\"this.parentNode.classList.add('noicon');this.remove()\" /><span class=\"pb\" title=\"size {size}\">{badge}</span><span class=\"pstar{faved}\" title=\"favourite: middle click\">\u{2605}</span><span class=\"pt\">{fav}{title}</span><small>{cat} \u{b7} size {size} \u{b7} {mass:.2} t{extra}</small></li>",
+                "<li data-ose=\"vab-part\" data-ose-part=\"{id}\"><img class=\"pi\" src=\"assets/ui/parts/{id}.png\" alt=\"\" loading=\"lazy\" draggable=\"false\" onerror=\"this.parentNode.classList.add('noicon');this.remove()\" /><span class=\"pb s-{size}\" title=\"size {size}\">{badge}</span><span class=\"pstar{faved}\" title=\"favourite: middle click\">\u{2605}</span><span class=\"pt\">{fav}{title}</span><small>{cat} \u{b7} size {size} \u{b7} {mass:.2} t{extra}</small></li>",
                 id = esc(&p.id),
                 title = esc(p.display_title()),
                 fav = if self.vab_favs.contains(&p.id) {

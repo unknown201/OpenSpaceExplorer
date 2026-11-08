@@ -397,6 +397,8 @@
     body.webgpu #vab-parts li:not(.noicon) .pt { display: none; }
     body.webgpu #vab-parts li .pb { top: calc(5 * var(--u)); left: calc(5 * var(--u)); font-size: calc(11 * var(--u)); line-height: calc(15 * var(--u)); }
     body.webgpu #vab-parts.by-size li .pb { display: none; }
+    /* the original's size badge colours: XS red, SM orange, MD green, LG blue (sampled from the run 18 shot) */
+    #vab-parts li .pb.s-XS { background: #e04949; } #vab-parts li .pb.s-S { background: #e0a400; } #vab-parts li .pb.s-M { background: #93e000; } #vab-parts li .pb.s-L { background: #49abe0; } #vab-parts li .pb.s-XL { background: #b46ae0; }
     body.webgpu #vab-parts li.pg-head { margin: calc(10 * var(--u)) 0 calc(4 * var(--u)); font: 400 calc(17 * var(--u)) var(--hud-font); letter-spacing: 0.3em; }
     body.webgpu #vab-trash { grid-column: 1 / -1; grid-row: 6; margin: 0; }
     body.vab-holding, body.vab-holding * { cursor: grabbing !important; }
