@@ -213,6 +213,10 @@ pub struct Powered {
     pub throttle: f64,
     pub attitude: Attitude,
     pub landed: bool,
+    /// Standing on its landing legs or gear this step (their feet press the ground): the original reports
+    /// that as Landed although the craft is held up by the suspension, not resting on the surface.
+    #[serde(default)]
+    pub ground_contact: bool,
     pub crashed: bool,
     /// In the water (`Splashed`): some part is under the sea surface and it is not standing on the ground.
     #[serde(default)]
@@ -867,6 +871,7 @@ impl Powered {
             throttle: 0.0,
             attitude: Attitude::Up,
             landed,
+            ground_contact: false,
             crashed: false,
             splashed: false,
             coasting_since: None,
@@ -2300,7 +2305,7 @@ pub fn situation(p: &Powered, body: &Body, atmo: Option<&Atmo>) -> Situation {
     if p.crashed {
         return Situation::Crashed;
     }
-    if p.landed {
+    if p.landed || p.ground_contact {
         return Situation::Landed;
     }
     if p.splashed {
