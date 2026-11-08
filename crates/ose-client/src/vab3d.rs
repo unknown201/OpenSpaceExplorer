@@ -619,9 +619,13 @@ impl VabView {
 
         gpu.request_model("vab", &format!("assets/{}", scene.file));
         if gpu.has_model("vab") && !self.icon_mode {
+            // KSP2's hall is dim and contrasty: its girders and wall panels fall into shadow away from the
+            // work lights, the floor and the craft lit.
             let mut hall = DrawItem::lit("vab".into(), -cam_pos, DQuat::IDENTITY, 1.0, light);
-            hall.ambient = 0.55;
+            hall.ambient = 0.15;
+            hall.color = [0.56, 0.56, 0.56, 1.0];
             items.push(hall);
+            gpu.set_ao(0.8);
         }
         // Fairings stand as built over what sits on them, as in the original's VAB.
         if !self.icon_mode {

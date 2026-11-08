@@ -651,6 +651,16 @@ fn rgb_css(c: [u8; 3]) -> String {
     format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2])
 }
 
+/// Replace `el`'s children with `html` only when it differs from what was last put there: a list rebuilt with
+/// the same content would swap the element under a click in progress (Firefox then drops the click).
+fn set_html_changed(el: &Element, html: &str) {
+    let key = hud::fnv(html).to_string();
+    if el.get_attribute("data-ose-html").as_deref() != Some(key.as_str()) {
+        el.set_inner_html(html);
+        el.set_attribute("data-ose-html", &key).ok();
+    }
+}
+
 fn set_text(doc: &Document, id: &str, text: &str) {
     if let Some(el) = doc.get_element_by_id(id) {
         el.set_text_content(Some(text));
@@ -6916,7 +6926,7 @@ impl App {
                 icon = esc(icon),
             ));
         }
-        cats.set_inner_html(&html);
+        set_html_changed(&cats, &html);
         let Some(list) = self.doc.get_element_by_id("vab-parts") else {
             return;
         };
@@ -6981,7 +6991,7 @@ impl App {
                     }
                 ));
             }
-            chips.set_inner_html(&h);
+            set_html_changed(&chips, &h);
         }
         let mut html = String::new();
         let mut group = String::new();
@@ -7035,7 +7045,7 @@ impl App {
                 "<li>no parts match</li>".into()
             };
         }
-        list.set_inner_html(&html);
+        set_html_changed(&list, &html);
     }
 
     fn vab_add(&mut self, part_id: &str) {
@@ -7352,7 +7362,7 @@ impl App {
             .and_then(|(_, m)| m.iter().find(|m| Some(m.player_id) == self.player_id))
             .and_then(|m| m.agency.as_ref())
             .map(|a| (a.primary_rgb, a.secondary_rgb))
-            .unwrap_or(([0xf2, 0xf2, 0xf2], [0x2a, 0x2c, 0x30]))
+            .unwrap_or(([0xa7, 0xaa, 0xaf], [0x69, 0x71, 0x84]))
     }
 
     /// The colours in effect for what the Colors tool paints now: the selected part's, else the vehicle's.
@@ -12376,9 +12386,9 @@ impl App {
             .map(|f| f.trim().to_string())
             .filter(|f| !f.is_empty())
             .unwrap_or_else(|| "default".into());
-        let primary = input_string(&self.doc, "agency-primary").unwrap_or_else(|| "#4aa3ff".into());
+        let primary = input_string(&self.doc, "agency-primary").unwrap_or_else(|| "#a7aaaf".into());
         let secondary =
-            input_string(&self.doc, "agency-secondary").unwrap_or_else(|| "#ffd87a".into());
+            input_string(&self.doc, "agency-secondary").unwrap_or_else(|| "#697184".into());
         store("ose.flag", &flag_id);
         store("ose.primary", &primary);
         store("ose.secondary", &secondary);
