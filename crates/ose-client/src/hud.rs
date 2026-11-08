@@ -343,6 +343,20 @@ pub fn navball_bezel_svg(throttle: f64, vspeed: f64, heading: Option<f64>) -> St
     s
 }
 
+/// A whole number with the original's thousands commas (`3,751`).
+pub fn thousands(x: f64) -> String {
+    let n = x.round().max(0.0) as u64;
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
 pub fn fmt_dist(m: f64) -> String {
     if !m.is_finite() {
         "--".into()
@@ -2002,6 +2016,14 @@ pub fn players_html(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn delta_v_reads_with_thousands_commas() {
+        assert_eq!(thousands(3751.4), "3,751");
+        assert_eq!(thousands(980.0), "980");
+        assert_eq!(thousands(1_234_567.0), "1,234,567");
+        assert_eq!(thousands(-5.0), "0");
+    }
 
     /// The bezel's scales: vertical speed on the original's log arc, throttle lit by twentieths.
     #[test]

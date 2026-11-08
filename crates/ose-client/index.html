@@ -1070,6 +1070,21 @@
     #flight-hud #fh-stage-btn { box-sizing: border-box; width: 100%; height: calc(70 * var(--u)); display: grid; grid-template-columns: 1fr auto; grid-template-rows: 1fr auto; align-items: center; padding: calc(4 * var(--u)) calc(10 * var(--u)); text-align: left; }
     #flight-hud #fh-stage-btn .go { grid-row: 1 / 3; font: 400 calc(34 * var(--u)) var(--hud-font); letter-spacing: 0.06em; }
     #flight-hud #fh-stage-btn #fh-go-n { justify-self: end; min-width: calc(30 * var(--u)); padding: 0 calc(6 * var(--u)); background: #0b1a0b; color: #3fe05a; border-radius: calc(3 * var(--u)); text-align: center; font: 700 calc(20 * var(--u)) var(--hud-font); }
+    /* No stages left: the original's hatched grey NO STAGES box (run 18 shot), not a button that does anything. */
+    #flight-hud #fh-stage-btn .nostage { display: none; grid-row: 1 / 3; font: 400 calc(26 * var(--u)) var(--hud-font); letter-spacing: 0.04em; text-transform: uppercase; white-space: nowrap; }
+    #flight-hud #fh-stage-btn.none .go { display: none; }
+    #flight-hud #fh-stage-btn.none .nostage { display: block; }
+    #flight-hud #fh-stage-btn.none .nostage { grid-row: 1; align-self: center; font-size: calc(24 * var(--u)); }
+    #flight-hud #fh-stage-btn.none #fh-go-dv { grid-column: 1 / -1; grid-row: 2; }
+    /* The original's active stage card header: delta-v left (thousands commas) and the stage number on the right. */
+    #flight-hud #fh-stage { display: flex; align-items: baseline; gap: calc(6 * var(--u)); font: calc(18 * var(--u)) var(--hud-font); color: #e8c440; }
+    #flight-hud #fh-stage .sdv { font-size: calc(13 * var(--u)); color: #e6ecf7; }
+    #flight-hud #fh-stage b { margin-left: auto; font-weight: 400; }
+    #flight-hud #fh-stage i { font-style: normal; color: #e6ecf7; min-width: calc(28 * var(--u)); text-align: right; }
+    #flight-hud #fh-stage-btn.none { cursor: default; color: #8a929c; background: repeating-linear-gradient(135deg, #3a3f47 0 4px, #2e3239 4px 8px); border-color: #6a717c; }
+    #flight-hud #fh-stage-btn.none:hover { background: repeating-linear-gradient(135deg, #3a3f47 0 4px, #2e3239 4px 8px); }
+    #flight-hud #fh-stage-btn.none #fh-go-n { background: #23262c; color: #9aa2ad; }
+    #flight-hud #fh-stage-btn.none #fh-go-dv { color: #9aa2ad; }
     #flight-hud #fh-stage-btn #fh-go-dv { justify-self: end; font: 700 calc(12 * var(--u)) var(--hud-font); color: #0b1a0b; }
     #flight-hud .fh-actions { right: auto; bottom: auto; left: calc(8 * var(--u)); top: calc(76 * var(--u)); flex-direction: column; }
     #flight-hud .fh-appbar { top: auto; bottom: calc(22 * var(--u)); right: calc(260 * var(--u)); flex-direction: row; background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(8 * var(--u)); padding: calc(4 * var(--u)); }
@@ -1581,7 +1596,7 @@
       <div class="fh-small" title="worst joint load against its break limit">STRESS</div>
       <div class="fh-stress" data-ose="flight-stress"><div id="fh-stress-fill"></div></div>
       </div>
-      <button id="fh-stage-btn" data-ose="flight-stage" title="Stage (Space)"><span class="go" data-loc="HUD/GO">GO</span><b id="fh-go-n" title="stages left"></b><small id="fh-go-dv"></small></button>
+      <button id="fh-stage-btn" data-ose="flight-stage" title="Stage (Space)"><span class="go" data-loc="HUD/GO">GO</span><span class="nostage" data-loc="HUD/NoStages">NO STAGES</span><b id="fh-go-n" title="stages left"></b><small id="fh-go-dv"></small></button>
     </div>
     <div class="fh-actions" id="fh-actions" data-ose="flight-actions"></div>
     <div class="fh-crewbox" id="fh-crewbox" data-ose="flight-crew"></div>
