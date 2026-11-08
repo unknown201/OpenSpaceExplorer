@@ -217,7 +217,7 @@ P2 completeness.
 | T19 | EVA exit, ladders | P1 | First Kerbal exits the run-1 pod on the pad and lets go of the ladder (run 14) | exit position, fall | **failing**: KSP2's Kerbal drops about 0.3 m onto the craft and stands on it (Landed) until it walks off the edge; OSE's falls 3.6 m straight to the pad because a Kerbal cannot stand on its own craft's parts. With the sim thread |
 | T20 | EVA walk, run, jump | P1 | Walk 6 s, run 6 s, jump (run 14) | ground speed, jump height | **failing**: walk 0.80 vs KSP2 0.65 m/s (+23%), run 2.20 vs 2.05 m/s (+7%), OSE starts and stops instantly; jump about 0.28 m in KSP2. With the sim thread |
 | T21 | EVA jetpack | P1 | 2 s up, 2 s forward in orbit | delta-v and fuel per second | not traced |
-| T22 | Electric charge and solar | P2 | Probe with panels in sun, wheel on | EC rate in/out | not traced |
+| T22 | Electric charge and solar | P2 | Probe with panels in sun, wheel on | EC rate in/out | **solar matches KSP2's code** (`ose-sim` test `ksp2_solar_parity`): panels make their rating x luminosity / (4 pi d^2) / 1,360 W/m^2 (96.8% at Kerbin, was 100%), and only the body the craft is at shades it (Kerbin no longer darkens a craft at the Mun). Single-axis tracking geometry and part shading of panels remain; not traced in KSP2 |
 | T23 | Comms (CommNet) | P2 | Probe behind Kerbin from KSC | link loss timing | not traced |
 | T24 | Science collection and transmit | P2 | Crew report on the pad, transmit | science value, transmit time and EC | not traced |
 | T25 | Flags | P2 | Plant a flag next to the pad | placement, collision | not traced |

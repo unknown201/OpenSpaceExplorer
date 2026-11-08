@@ -55,6 +55,14 @@ pub struct UniverseTime(pub Tick);
 #[derive(Resource, Clone, Copy, Debug, PartialEq)]
 pub struct HomeDistance(pub f64);
 
+/// The star's luminosity, W (`CelestialBodyComponent.StarLuminosity`): solar panels make their rating where
+/// it gives `SOLAR_INSOLATION_AT_HOME` W/m^2.
+#[derive(Resource, Clone, Copy, Debug, PartialEq)]
+pub struct StarLuminosity(pub f64);
+
+/// `PhysicsSettings.SolarInsolationAtHome`, W/m^2: the starlight a solar panel's rating is for.
+pub const SOLAR_INSOLATION_AT_HOME: f64 = 1360.0;
+
 /// Time warp factor granted by the server (1 = real time).
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WarpFactor(pub u32);
@@ -169,11 +177,22 @@ impl Universe {
         {
             u.world.insert_resource(HomeDistance(a));
         }
+        if let Some(l) = defs
+            .iter()
+            .find(|d| d.parent.is_none())
+            .and_then(|d| d.star_luminosity)
+            .filter(|&l| l > 0.0)
+        {
+            u.world.insert_resource(StarLuminosity(l));
+        }
         u
     }
 
-    /// Starlight at a point `r` from `body` (body-centred inertial) relative to the home world's: inverse
-    /// square from the star, 0 when `body` (or the planet it orbits) is in the way.
+    /// Starlight on a solar panel at a point `r` from `body` (body-centred inertial), as a share of a panel's
+    /// rating (`PartComponentModule_SolarPanel.CalculateVesselSolarLOS`): the star's flux there,
+    /// luminosity / (4 pi d^2), over `SolarInsolationAtHome` (about 0.97 at Kerbin), and 0 when `body` itself
+    /// is in the way (`CalculateOcclusionPerStar` tests only the body the craft is at: a moon's planet casts no
+    /// shadow on it).
     pub fn sunlight(&self, body: Entity, r: DVec3, ut: f64) -> f64 {
         let Some(root) = self.world.resource::<bodies::BodyIndex>().root else {
             return 1.0;
@@ -183,22 +202,20 @@ impl Universe {
         if d <= 0.0 || body == root && r.length() <= 0.0 {
             return 0.0;
         }
-        let mut blockers = vec![body];
-        if let Some(parent) = self.world.get::<bodies::ReferenceBody>(body).map(|b| b.0) {
-            if parent != root {
-                blockers.push(parent);
+        if body != root {
+            if let Some(radius) = self.world.get::<bodies::Body>(body).map(|x| x.radius_m) {
+                // v: body to star, w: craft to body
+                let v = bodies::star_space_state(&self.world, body, ut).0 * -1.0;
+                let w = r * -1.0;
+                let near = w.length_squared() - radius * radius;
+                let vw = v.dot(w);
+                if vw > near && vw * vw / v.length_squared() > near {
+                    return 0.0;
+                }
             }
         }
-        for b in blockers.into_iter().filter(|&b| b != root) {
-            let Some(radius) = self.world.get::<bodies::Body>(b).map(|x| x.radius_m) else {
-                continue;
-            };
-            let c = bodies::star_space_state(&self.world, b, ut).0;
-            // closest point of the segment from the vessel to the star (at the origin)
-            let s = (c.dot(p) / (d * d)).clamp(0.0, 1.0);
-            if s < 1.0 && (c - p * s).length() < radius {
-                return 0.0;
-            }
+        if let Some(l) = self.world.get_resource::<StarLuminosity>() {
+            return l.0 / (4.0 * std::f64::consts::PI * d * d) / SOLAR_INSOLATION_AT_HOME;
         }
         match self.world.get_resource::<HomeDistance>() {
             Some(h) => (h.0 / d).powi(2),
