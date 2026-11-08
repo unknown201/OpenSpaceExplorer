@@ -10748,8 +10748,33 @@ impl App {
         send(ws, &msg);
     }
 
+    /// Whether the flown vessel's current stage has fired: before the first Space nothing burns and stage 0
+    /// goes next; after it, `stage` is the stage burning now.
+    fn stage_lit(&self, id: u64, f: &ose_net::FlightReadout) -> bool {
+        self.staged.contains(&id)
+            || f.stage > 0
+            || f.thrust_kn > 0.1
+            || f.situation != ose_net::FlightSituation::Landed
+    }
+
+    /// Stages still to fire on the flown vessel (the original's staging stack below the active stage).
+    fn stages_left(&self) -> Option<u32> {
+        let id = self.flying?;
+        let v = self.scene.as_ref()?.vessel(id)?;
+        let f = v.flight.as_ref()?;
+        Some(
+            f.stages
+                .saturating_sub(f.stage + u32::from(self.stage_lit(id, f))),
+        )
+    }
+
     fn flight_stage(&mut self) {
         let Some(vessel) = self.flying else { return };
+        // As the original's: with no stages left Space does nothing (the server would end the last stage's
+        // burn and drop its propellant).
+        if self.stages_left() == Some(0) {
+            return;
+        }
         self.lesson_event("StageActivatedMessage");
         self.staged.insert(vessel);
         if let Some(ws) = &self.ws {
@@ -11655,10 +11680,7 @@ impl App {
             (&self.flight_craft, self.doc.get_element_by_id("fh-stages"))
         {
             // `stage` is the stage burning now; before the first Space nothing burns and stage 0 goes next.
-            let lit = self.staged.contains(&id)
-                || f.stage > 0
-                || f.thrust_kn > 0.1
-                || f.situation != ose_net::FlightSituation::Landed;
+            let lit = self.stage_lit(id, f);
             let next = f.stage as usize + usize::from(lit);
             // The server's craft drops a stage once all its parts are gone (the boosters a fired stage
             // dropped), but `stage` counts the original's: take each fired stage that went off the count, or
@@ -12590,27 +12612,34 @@ impl App {
             el.set_attribute("data-ose-running", &self.running.len().to_string())
                 .ok();
         }
-        set_text(
-            &self.doc,
-            "fh-stage",
-            &format!(
-                "{} \u{b7} \u{394}v {:.0} m/s",
-                {
-                    let (now, of) = ((f.stage + 1).min(f.stages.max(1)), f.stages.max(1));
-                    if self.lang == "en" {
-                        format!("stage {now} of {of}")
-                    } else {
-                        format!("{} {now}/{of}", self.tr("VAB/DeltaVTool/Stage", "stage"))
-                    }
-                },
-                f.delta_v_now_mps.max(0.0) + 0.0
-            ),
-        );
-        // The GO button carries the stages left to fire and the delta-v, as the original's.
+        // The original's active stage card header: the stage's delta-v left and its number (01, 02...).
+        let (now, of) = ((f.stage + 1).min(f.stages.max(1)), f.stages.max(1));
+        if let Some(el) = self.doc.get_element_by_id("fh-stage") {
+            let html = format!(
+                "<span class=\"sdv\">\u{394}v</span><b>{}</b><i>{now:02}</i>",
+                hud::thousands(f.delta_v_now_mps.max(0.0))
+            );
+            if el.get_attribute("data-ose-key").as_deref() != Some(html.as_str()) {
+                el.set_inner_html(&html);
+                el.set_attribute("data-ose-key", &html).ok();
+                el.set_attribute("title", &format!("stage {now} of {of}: delta-v left in it"))
+                    .ok();
+            }
+        }
+        // The GO button carries the stages left to fire and the delta-v, as the original's; with none left it
+        // reads NO STAGES over the active stage's number (`HUD/NoStages`).
+        let left = self.stages_left().unwrap_or(0);
+        if let Some(b) = self.doc.get_element_by_id("fh-stage-btn") {
+            b.class_list().toggle_with_force("none", left == 0).ok();
+        }
         set_text(
             &self.doc,
             "fh-go-n",
-            &f.stages.saturating_sub(f.stage).to_string(),
+            &if left == 0 {
+                f.stages.min(f.stage + 1).max(1).to_string()
+            } else {
+                left.to_string()
+            },
         );
         set_text(
             &self.doc,
