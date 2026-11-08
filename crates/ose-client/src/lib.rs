@@ -298,7 +298,7 @@ struct App {
     /// The tech tree, the original's English text (loaded from assets/loc/en.json), the researched nodes
     /// and the node shown in the R&D info panel.
     tech: Vec<rnd::TechNode>,
-    loc: std::collections::HashMap<String, String>,
+    loc: std::rc::Rc<std::collections::HashMap<String, String>>,
     /// The language the game's text is shown in (`i18n::LANGUAGES` code), and the catalog's own part names.
     lang: String,
     part_titles: std::collections::HashMap<String, String>,
@@ -842,7 +842,7 @@ pub fn start() -> Result<(), JsValue> {
         pending_launch: None,
         body_spins: Vec::new(),
         tech: rnd::tree(),
-        loc: std::collections::HashMap::new(),
+        loc: Default::default(),
         lang: i18n::pick(
             stored("ose.lang").as_deref(),
             web_sys::window()
@@ -1907,10 +1907,11 @@ fn load_localization(app: Shared) {
             // the player picked another language meanwhile; its own load shows it
             return;
         }
-        a.loc = i18n::merge(en, table);
+        a.loc = std::rc::Rc::new(i18n::merge(en, table));
+        i18n::set_active((lang != "en").then(|| a.loc.clone()));
         a.localize_parts();
         #[cfg(target_arch = "wasm32")]
-        i18n::apply(&a.doc, &a.loc);
+        i18n::apply(&a.doc, &a.loc, lang == "en");
         if let Some(root) = a.doc.document_element() {
             root.set_attribute("lang", &lang).ok();
         }
@@ -7917,9 +7918,9 @@ impl App {
             html.push_str(&format!(
                 "<div class=\"pam-acts\"><button data-act=\"fh-act-engine\">{}</button></div>",
                 if off {
-                    "Activate engine"
+                    self.tr("PartModules/Engine/ActivateEngine", "Activate engine")
                 } else {
-                    "Shut down engine"
+                    self.tr("PartModules/Engine/DisableEngine", "Shut down engine")
                 }
             ));
         }
@@ -9991,9 +9992,11 @@ impl App {
             .map(|(id, _)| id)
     }
 
-    /// Show the crew buttons that apply: EVA with crew aboard, Board and Plant Flag for a Kerbal (the flag on
-    /// the ground), Undock while docked.
-    /// Parts the catalog has no title for take theirs from the localization table (`Parts/Title/<id>`).
+    /// A label OSE writes itself, in the player's language: the game's `term`, or OSE's own English (`own`).
+    fn tr(&self, term: &str, own: &str) -> String {
+        i18n::pick_text(&self.loc, term, own, self.lang == "en").to_string()
+    }
+
     /// Part names in the chosen language (the game's `Parts/Title/<id>`); in English only parts the catalog
     /// left untitled change, and switching back puts the catalog's own names back.
     fn localize_parts(&mut self) {
@@ -11426,6 +11429,11 @@ impl App {
                 f,
                 attitude: &self.attitude,
                 orbit_speed: self.speed_orbit,
+                speed_label: &if self.speed_orbit {
+                    self.tr("HUD/Orbit", "ORBIT")
+                } else {
+                    self.tr("HUD/Surface", "SURFACE")
+                },
                 orbital_speed_mps: (v.velocity_mps - body_vel).length(),
                 apsides,
                 brakes_latched: self.brakes_latched,
@@ -11439,7 +11447,11 @@ impl App {
             &self.doc,
             "fh-met",
             &if launch_ut > 0.0 {
-                format!("MET {}", hud::fmt_met(ut - launch_ut))
+                format!(
+                    "{} {}",
+                    self.tr("HUD/MET", "MET"),
+                    hud::fmt_met(ut - launch_ut)
+                )
             } else {
                 String::new()
             },
@@ -11548,10 +11560,18 @@ impl App {
         }
         match (self.alt_terrain, agl) {
             (true, Some(h)) => {
-                set_text(&self.doc, "fh-alt-mode", "TERRAIN");
+                set_text(
+                    &self.doc,
+                    "fh-alt-mode",
+                    &self.tr("HUD/Ground Level", "TERRAIN"),
+                );
                 set_text(&self.doc, "fh-altitude", &hud::fmt_dist(h.max(0.0)));
             }
-            _ => set_text(&self.doc, "fh-alt-mode", "SEA LEVEL"),
+            _ => set_text(
+                &self.doc,
+                "fh-alt-mode",
+                &self.tr("HUD/Sea Level", "SEA LEVEL"),
+            ),
         }
         // Target: distance and closing speed, the TARGET speed mode, and the SAS target buttons.
         let tgt = match self.target {
@@ -11606,10 +11626,14 @@ impl App {
         if self.speed_target {
             match &rel {
                 Some((_, _, speed)) => {
-                    set_text(&self.doc, "fh-speed-mode", "TARGET");
+                    set_text(&self.doc, "fh-speed-mode", &self.tr("HUD/Target", "TARGET"));
                     set_text(&self.doc, "fh-speed", &format!("{speed:.1} m/s"));
                 }
-                None => set_text(&self.doc, "fh-speed-mode", "SURFACE"),
+                None => set_text(
+                    &self.doc,
+                    "fh-speed-mode",
+                    &self.tr("HUD/Surface", "SURFACE"),
+                ),
             }
         }
         for id in ["fh-sas-target", "fh-sas-antitarget"] {
@@ -12237,9 +12261,15 @@ impl App {
             &self.doc,
             "fh-stage",
             &format!(
-                "stage {} of {} \u{b7} \u{394}v {:.0} m/s",
-                (f.stage + 1).min(f.stages.max(1)),
-                f.stages.max(1),
+                "{} \u{b7} \u{394}v {:.0} m/s",
+                {
+                    let (now, of) = ((f.stage + 1).min(f.stages.max(1)), f.stages.max(1));
+                    if self.lang == "en" {
+                        format!("stage {now} of {of}")
+                    } else {
+                        format!("{} {now}/{of}", self.tr("VAB/DeltaVTool/Stage", "stage"))
+                    }
+                },
                 f.delta_v_now_mps.max(0.0) + 0.0
             ),
         );
