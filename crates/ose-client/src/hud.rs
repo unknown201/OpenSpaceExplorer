@@ -62,6 +62,23 @@ pub const SAS_BUTTONS: &[(&str, &str, &str)] = &[
     ),
 ];
 
+/// The game's name for a SAS mode button (`HUD/Tooltips/*`), its tooltip outside English.
+pub fn sas_term(id: &str) -> Option<&'static str> {
+    Some(match id {
+        "fh-sas-stability" => "HUD/Tooltips/StabilityAssistSystem",
+        "fh-sas-prograde" => "HUD/Tooltips/Prograde",
+        "fh-sas-retrograde" => "HUD/Tooltips/Retrograde",
+        "fh-sas-normal" => "HUD/Tooltips/Normal",
+        "fh-sas-antinormal" => "HUD/Tooltips/AntiNormal",
+        "fh-sas-radialin" => "HUD/Tooltips/RadialIn",
+        "fh-sas-radialout" => "HUD/Tooltips/RadialOut",
+        "fh-sas-target" => "HUD/Tooltips/Target",
+        "fh-sas-antitarget" => "HUD/Tooltips/AntiTarget",
+        "fh-sas-maneuver" => "HUD/Tooltips/Maneuver",
+        _ => return None,
+    })
+}
+
 /// The attitude a SAS button asks for; `None` for stability assist (the caller holds the current facing) and
 /// the disabled modes.
 pub fn sas_mode(id: &str, orbit_speed: bool) -> Option<AttitudeMode> {
@@ -366,6 +383,9 @@ pub fn install(doc: &Document) {
         };
         let mut html = String::new();
         for (id, icon, tip, enabled) in items {
+            let term = sas_term(id)
+                .map(|t| format!(" data-loc-title=\"{t}\""))
+                .unwrap_or_default();
             if id == "fh-sas-toggle" {
                 html.push_str(&format!(
                     "<button id=\"{id}\" data-ose=\"{id}\" title=\"{tip}\">SAS</button>"
@@ -373,7 +393,7 @@ pub fn install(doc: &Document) {
                 continue;
             }
             html.push_str(&format!(
-                "<button id=\"{id}\" data-ose=\"{id}\" title=\"{tip}\"{}><i style=\"--ico:url(assets/ui/hud/{icon}.png)\"></i></button>",
+                "<button id=\"{id}\" data-ose=\"{id}\" title=\"{tip}\"{term}{}><i style=\"--ico:url(assets/ui/hud/{icon}.png)\"></i></button>",
                 if enabled { "" } else { " disabled" }
             ));
         }
@@ -418,6 +438,8 @@ pub struct HudState<'a> {
     pub f: &'a FlightReadout,
     pub attitude: &'a AttitudeMode,
     pub orbit_speed: bool,
+    /// The speed mode's label in the player's language (ORBIT or SURFACE).
+    pub speed_label: &'a str,
     pub orbital_speed_mps: f64,
     pub apsides: (Option<(f64, f64)>, (f64, f64)),
     pub brakes_latched: bool,
@@ -425,11 +447,7 @@ pub struct HudState<'a> {
 
 pub fn update(doc: &Document, s: &HudState) {
     let f = s.f;
-    set(
-        doc,
-        "fh-speed-mode",
-        if s.orbit_speed { "ORBIT" } else { "SURFACE" },
-    );
+    set(doc, "fh-speed-mode", s.speed_label);
     if s.orbit_speed {
         set(doc, "fh-speed", &format!("{:.1} m/s", s.orbital_speed_mps));
     }
