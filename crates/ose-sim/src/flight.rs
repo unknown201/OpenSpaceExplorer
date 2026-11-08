@@ -312,6 +312,12 @@ pub struct Powered {
     /// In the air from a jump (the throttle still walks, it does not fire the pack).
     #[serde(default)]
     pub eva_hop: bool,
+    /// How far the pace has moved from the walk (0) to the run (1).
+    #[serde(default)]
+    pub eva_sprint: f64,
+    /// What is left of a jump's push, s.
+    #[serde(default)]
+    pub eva_push_s: f64,
     /// Body lift and wings/surfaces this step (including surface drag), kN, inertial, and the
     /// airflow's torque about the centre of mass, kN·m, inertial.
     #[serde(default)]
@@ -593,8 +599,19 @@ pub const WALK_SPEED_MPS: f64 = 0.8;
 /// Running (Shift) and the jump: the original's `RunMoveSpeed`; the jump's push up is our own (the original
 /// pushes for `JumpInitialForceDuration`), forward it carries the run times `JumpRunMoveForceMagnitudeMultiplier`.
 pub const RUN_SPEED_MPS: f64 = 2.2;
-pub const JUMP_SPEED_MPS: f64 = 2.5;
 pub const JUMP_RUN_MULTIPLIER: f64 = 1.2;
+/// `NormalToSprintLerpSpeed`: the pace moves from the walk to the run (and back) at this share per second.
+pub const SPRINT_LERP_PER_S: f64 = 4.0;
+/// The jump is a push, not a launch speed (JumpKerbalCharacterStateHandler): `JumpForceMagnitudeCurve`
+/// (1.36 kN at every gravity) straight up from the animation's jump impulse, for `JumpInitialForceDuration`
+/// (0.25 s) and `JumpExtendForceDuration` (0.06 s) more while the key is held, its timers running from the
+/// press. KSP2 trace run 14 pushes for 0.286 s (4.33 m/s^2 net, up to 1.239 m/s) and rises 0.277 m.
+pub const JUMP_FORCE_KN: f64 = 1.36;
+pub const JUMP_PUSH_S: f64 = 0.286;
+/// KSP2 sets a walking Kerbal's velocity to its pace every tick and the physics step's ground friction then
+/// takes some back before it moves: KSP2 trace run 14 (walk set to 0.8 m/s, run to 2.2) moves at 0.65 and
+/// 2.05 m/s, the same 0.15 m/s a 0.02 s tick, which is this friction coefficient times gravity times the tick.
+pub const KERBAL_GROUND_FRICTION: f64 = 0.765;
 
 fn yes() -> bool {
     true
@@ -877,6 +894,8 @@ impl Powered {
             eva_run: false,
             eva_jump: false,
             eva_hop: false,
+            eva_sprint: 0.0,
+            eva_push_s: 0.0,
             rcs: RcsState::default(),
             lift_kn: DVec3::ZERO,
             aero_torque_knm: DVec3::ZERO,
@@ -1956,14 +1975,20 @@ pub fn integrate_with_propulsion(
         if support_acc.dot(normal) > 0.0 {
             p.landed = false;
         } else {
-            let pace = if p.eva_run {
-                RUN_SPEED_MPS
+            // the pace eases between the walk and the run, a share of the way each second
+            let sprint_to = if p.eva_run { 1.0 } else { 0.0 };
+            let step = SPRINT_LERP_PER_S * dt;
+            p.eva_sprint = if (sprint_to - p.eva_sprint).abs() <= step {
+                sprint_to
             } else {
-                WALK_SPEED_MPS
+                p.eva_sprint + step.copysign(sprint_to - p.eva_sprint)
             };
+            let pace = WALK_SPEED_MPS + (RUN_SPEED_MPS - WALK_SPEED_MPS) * p.eva_sprint;
             // walking: moved along the ground, and that is its velocity too (the client carries it between
-            // snapshots)
-            let walked = walk_dir.map(|dir| dir * (pace * p.throttle.min(1.0)));
+            // snapshots); the ground's friction takes its share of every tick's pace
+            let walked = walk_dir.map(|dir| {
+                dir * (pace * p.throttle.min(1.0) - KERBAL_GROUND_FRICTION * g * dt).max(0.0)
+            });
             if let Some(w) = walked {
                 p.r = p.r + w * dt;
             }
@@ -1974,7 +1999,8 @@ pub fn integrate_with_propulsion(
                 let ahead =
                     walk_dir.map(|d| d * (pace * p.throttle.min(1.0) * JUMP_RUN_MULTIPLIER));
                 p.landed = false;
-                p.v = omega_v.cross(p.r) + up * JUMP_SPEED_MPS + ahead.unwrap_or(DVec3::ZERO);
+                p.eva_push_s = JUMP_PUSH_S;
+                p.v = omega_v.cross(p.r) + ahead.unwrap_or(DVec3::ZERO);
                 p.r = p.r + up * 0.01;
                 return out;
             }
@@ -2057,8 +2083,16 @@ pub fn integrate_with_propulsion(
         DVec3::ZERO
     };
     out.drag_kn = drag_acc * p.mass_t + p.lift_kn;
-    let acc = g_acc + thrust_acc + drag_acc + lift_acc;
-    p.accel_ng_mps2 = thrust_acc + drag_acc + lift_acc;
+    // a jump pushes straight up for its first moments in the air
+    let push_acc = if p.eva_push_s > 0.0 && p.mass_t > 0.0 {
+        let share = (p.eva_push_s / dt).min(1.0);
+        p.eva_push_s = (p.eva_push_s - dt).max(0.0);
+        p.r.normalized() * (JUMP_FORCE_KN / p.mass_t * share)
+    } else {
+        DVec3::ZERO
+    };
+    let acc = g_acc + thrust_acc + drag_acc + lift_acc + push_acc;
+    p.accel_ng_mps2 = thrust_acc + drag_acc + lift_acc + push_acc;
     p.v = p.v + acc * dt;
     let top = vessel_top(p);
     let previous_r = p.r;
@@ -2146,6 +2180,7 @@ pub fn integrate_with_propulsion(
         p.landed = true;
         p.own_top = DVec3::ZERO;
         p.eva_hop = false;
+        p.eva_push_s = 0.0;
         p.angvel = DVec3::ZERO;
         p.roll_rate = 0.0;
         out.touched_down = true;

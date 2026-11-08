@@ -1139,34 +1139,40 @@ mod tests {
         let p = u.powered(jeb).unwrap();
         assert!(p.landed);
         assert_eq!(p.propellant_t, fuel, "walking uses no propellant");
-        // across the surface (the body turns under it too): 0.8 m/s, about 3.2 m north
+        // across the surface (the body turns under it too): KSP2 trace run 14 walks at 0.65 m/s (its 0.8 m/s
+        // pace less the ground's friction each tick), about 2.6 m north
         let end = here(&u);
         let north_m = (end.0 - start.0).to_radians() * b.radius_m;
         let east_m = (end.1 - start.1).to_radians() * b.radius_m;
-        assert!((2.8..3.6).contains(&north_m), "walked {north_m} m north");
+        assert!((2.4..2.8).contains(&north_m), "walked {north_m} m north");
         assert!(east_m.abs() < 1.0, "{east_m} m east");
         // and its velocity says so, for the client to carry it between snapshots
         let omega = std::f64::consts::TAU / b.rotation_period_s;
         let over_ground = p.v - DVec3::new(0.0, 0.0, omega).cross(p.r);
         assert!(
-            (over_ground.length() - flight::WALK_SPEED_MPS).abs() < 0.05,
+            (over_ground.length() - 0.65).abs() < 0.02,
             "{over_ground:?}"
         );
-        // running: 2.2 m/s
+        // running: 2.05 m/s in the trace once it has eased up from the walk over a quarter second
         assert!(u.set_eva(jeb, true, false));
         for _ in 0..(4 * crate::TICKS_PER_SECOND) {
             u.step();
         }
         let ran = (here(&u).0 - end.0).to_radians() * b.radius_m;
-        assert!((8.0..9.6).contains(&ran), "ran {ran} m");
-        // a jump leaves the ground, carries on forward and comes back down
+        assert!((7.6..8.4).contains(&ran), "ran {ran} m");
+        // a jump leaves the ground, carries on forward and comes back down: KSP2's push of 1.36 kN lifts a
+        // Kerbal 0.277 m in trace run 14
+        let ground = u.powered(jeb).unwrap().r.length();
         assert!(u.set_eva(jeb, true, true));
         u.step();
         u.step();
         assert!(!u.powered(jeb).unwrap().landed, "in the air");
+        let mut top: f64 = 0.0;
         for _ in 0..(3 * crate::TICKS_PER_SECOND) {
             u.step();
+            top = top.max(u.powered(jeb).unwrap().r.length() - ground);
         }
+        assert!((0.26..0.30).contains(&top), "jumped {top} m");
         let p = u.powered(jeb).unwrap();
         assert!(p.landed && !p.crashed);
         assert_eq!(p.propellant_t, fuel, "walking and jumping burn nothing");
