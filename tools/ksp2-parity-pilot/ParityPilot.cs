@@ -662,8 +662,8 @@ namespace OpenSpaceExplorer.Validation
                 float t = 0; int last = -1;
                 while (t < 12)
                 {
-                    t += Time.fixedDeltaTime;
                     yield return new WaitForFixedUpdate();
+                    t = (float)(G.UniverseModel.UniverseTime - start); // game time since Begin: WaitForFixedUpdate resumes once a frame, not once a tick
                     var v = G.ViewController.GetActiveSimVessel();
                     if (v == null) { log.WriteLine(t.ToString("F2", CultureInfo.InvariantCulture) + ",0,"); Mark("vessel gone at " + t.ToString("F2", CultureInfo.InvariantCulture)); break; }
                     var names = new System.Collections.Generic.List<string>();
@@ -735,7 +735,7 @@ namespace OpenSpaceExplorer.Validation
                 while (t < 11.5f)
                 {
                     yield return new WaitForFixedUpdate();
-                    t += Time.fixedDeltaTime;
+                    t = (float)(G.UniverseModel.UniverseTime - start); // game time since Begin: WaitForFixedUpdate resumes once a frame, not once a tick
                     if (phase == "thrust" && t >= 5f) { phase = "roll"; InputHolder.Roll = 1f; Mark("roll"); }
                     if (phase == "roll" && t >= 8f) { phase = "free"; InputHolder.Roll = 0f; Mark("roll off"); }
                     var v = G.ViewController.GetActiveSimVessel();
@@ -911,7 +911,7 @@ namespace OpenSpaceExplorer.Validation
                 while (t < 360)
                 {
                     yield return new WaitForFixedUpdate();
-                    t += Time.fixedDeltaTime;
+                    t = (float)(G.UniverseModel.UniverseTime - start); // game time since Begin: WaitForFixedUpdate resumes once a frame, not once a tick
                     var v = G.ViewController.GetActiveSimVessel();
                     if (v == null || v.GlobalId.ToString() != vesselId) { Mark("vessel gone at " + t.ToString("F2", inv)); break; }
                     foreach (var part in v.SimulationObject.PartOwner.Parts)
