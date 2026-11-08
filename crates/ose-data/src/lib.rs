@@ -901,6 +901,25 @@ pub struct EngineMode {
     pub vel_curve: Option<Curve>,
     #[serde(default)]
     pub atm_curve: Option<Curve>,
+    /// How fast the engine follows the throttle (`useEngineResponseTime`); `None` follows it at once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response: Option<EngineResponse>,
+}
+
+/// An engine that lags its throttle, as Module_Engine does with `useEngineResponseTime`: each tick the
+/// engine's own throttle moves toward the requested one by `Lerp(.., rate * dt)` (fuel flow follows it),
+/// and the spool moves toward `max(spool_idle, throttle)` by `Lerp(.., spool_per_s * dt)`; the thrust
+/// is the throttle's thrust times the spool, so a starting booster burns fuel before its thrust builds.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct EngineResponse {
+    /// `engineAccelerationSpeed`, per second.
+    pub acceleration_per_s: f64,
+    /// `engineDecelerationSpeed`, per second.
+    pub deceleration_per_s: f64,
+    /// `engineSpoolTime`, the spool's Lerp rate per second.
+    pub spool_per_s: f64,
+    /// `engineSpoolIdle`.
+    pub spool_idle: f64,
 }
 
 /// Drag cube in the original six-face form: +X, -X, +Y, -Y, +Z, -Z.

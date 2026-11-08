@@ -38,8 +38,9 @@ listed here only so it is not lost.
 
 | ID | Gap | KSP2 | OSE (measured) | Evidence | Owner |
 |---|---|---|---|---|---|
-| SBS-P1 | **Unverified.** Drag on a coasting/falling craft looks low | Not yet flown in KSP2. Trace to capture: same craft straight up at full throttle, record apoapsis and speed passing 4 km on the way down | Burnout at 7.6 km and 760 m/s, apoapsis 39.6 km at T+104 s (close to the no-drag ballistic value of about 39 km). Still doing about 790 m/s at 4 km on the way down. The server/sim thread checked the code: it follows KSP2's Module_Drag/Data_Drag with KSP2's exported curves, and the low supersonic drag comes from KSP's Mach-power model (sea-level terminal speed for this craft is about 470 m/s) | `reference/ose-shots/log.txt` (ascent trace), `10-ascent-25km.png` | needs a KSP2 trace (this thread), then server/sim |
+| SBS-P1 | **Closed: matches KSP2.** Drag on a coasting/falling craft looked low | KSP2 run 3 of the identical craft: apoapsis 127,114 m, 1,323 m/s falling through 8.5 km | OSE: apoapsis 126,723 m (-0.3%), 1,350 m/s at 8.5 km (+2.0%). See T1/T2 below | `reference/ksp2-run3/`, `reference/ksp2-run1/ose-trace.csv` | none |
 | SBS-P2 | No KSP2 trace exists for any flight, so ascent, SAS, wheel and gimbal feel are unproven | `tools/ksp2-control-capture` records time, inputs, attitude, rates, mass | `tools/compare_control_traces.py` is ready but has nothing to compare | `tools/ksp2-control-capture/README.md` | this thread, **blocked on Josh** (BepInEx install approval) |
+| SBS-P3 | Pad 01 stands 6 m higher | Craft sits at 111.9 m above sea level | 118.1 m | ascent traces | planets/terrain thread |
 
 ### Visual fidelity
 
@@ -47,8 +48,8 @@ listed here only so it is not lost.
 |---|---|---|---|---|---|
 | SBS-V1 | KSC campus has no trees or shrubs | Dense tree lines along the rivers and around the pad ring | Bare, evenly lit green ground | `side-by-side/ksc.jpg` | planets/trees thread |
 | SBS-V2 | KSC geography differs: no ocean behind the campus, mountains where KSP2 has the coast | The campus sits on a peninsula with open ocean behind the VAB | Inland lakes and a mountain range on the horizon | `side-by-side/ksc.jpg` | planets/trees + 3D campus threads |
-| SBS-V3 | A bright yellow rectangle floats on the river while the KSC camera moves | Water shows sun glints, no hard-edged quad | Sharp-edged yellow streak on the river, visible in the moving-camera frame | `ose-shots/02b-ksc-camera-moving.png` (left of centre, on the river) | planets thread (water) |
-| SBS-V4 | KSC ground is flat-lit with no ambient occlusion or contact shadows | Buildings and trees cast soft shadows, ground has colour variation | Uniform albedo, buildings float visually | `side-by-side/ksc.jpg` | 3D campus thread |
+| SBS-V3 | A bright yellow rectangle floats on the river while the KSC camera moves | Water shows sun glints, no hard-edged quad | Sharp-edged yellow streak on the river, visible in the moving-camera frame | `ose-shots/02b-ksc-camera-moving.png` (left of centre, on the river) | 3D world thread: **done** in PR 34 |
+| SBS-V4 | KSC ground is flat-lit with no ambient occlusion or contact shadows | Buildings and trees cast soft shadows, ground has colour variation | Uniform albedo, buildings float visually | `side-by-side/ksc.jpg` | 3D world thread: **done** in PR 34 (ambient occlusion) |
 | SBS-V5 | Exhaust plume and launch smoke | Volumetric smoke, bright plume | Present and comparable at liftoff; particles not audited here | `ose-shots/07-liftoff.png` | **Report for Josh** (GPT agent owns particles/effects) |
 
 ### Camera, input and controls
@@ -73,9 +74,184 @@ HUD layout and widgets (navball, altimeter, staging stack, app bar, resources, K
 and info card, pad 01 geometry, clouds and terrain colour from 1 km to 25 km, PAIGE hints on first visits, and the
 main menu replica. These were checked frame by frame in `reference/side-by-side/`.
 
+## KSP2 trace runs
+
+`tools/ksp2-parity-pilot` is a BepInEx plugin that flies scripted scenarios inside the installed KSP2 through the
+game's own hooks (`OAB.ShowOAB` + `OnLaunch` to roll a craft out, `FlightInputHandler` overrides for inputs,
+`VesselComponent` telemetry every physics tick) and saves screenshots. It runs only when
+`BepInEx/ose-parity/run.txt` exists, and it plays in a copy of a campaign (`OSE Parity`) so Josh's saves are not
+touched. Outputs go to `reference/ksp2-run*/` (git-ignored).
+
+**Run 1 and run 3 (2026-11-07), vertical ascent.** Craft: Mk16 + Tin Can + 2x FL-T200 + LV-T45 (Josh's `First.json`
+workspace, 4.74 t), SAS on, full throttle, first stage only, no parachute. KSP2 results: burnout at T+30 s, 17.6 km,
+1,312 m/s; apoapsis 127.1 km; falling through 8.5 km at 1,323 m/s (Mach 4.5, q = 336 kPa). So KSP2's own drag on
+this craft at high Mach is also very low, which supports the sim thread's reading of SBS-P1. Run 3 repeats run 1
+after the pilot learned to wait for the loading curtain, so its screenshots (`reference/ksp2-run3/`) are gameplay.
+
+The OSE side runs headless: `cargo run -p ose-bot --example parity_ascent -- craft.json out.csv` imports the same
+workspace through `ose-importer`, saves it, rolls it out to the pad and flies the same schedule against a local
+server; `--example parity_rotation` does the orbital rotation schedule below.
+
+**Ascent delta (T1/T2), KSP2 run 3 vs OSE.** OSE time zero is the first streamed state after staging, about 0.2 s
+later than KSP2's, which accounts for most of the early lead.
+
+| Channel | KSP2 | OSE | Delta |
+|---|---|---|---|
+| Mass on the pad | 4.742 t | 4.737 t | -0.1% |
+| Mass after burnout | 2.742 t | 2.743 t | 0.0% |
+| Burn time | 29.3 s | about 29.2 s | -0.3% |
+| Altitude / speed at T+10 s | 1,659 m / 324.0 m/s | 1,753 m / 334.2 m/s | +5.7% / +3.1% (time offset) |
+| Altitude / speed at T+20 s | 6,979 m / 763.2 m/s | 7,177 m / 775.9 m/s | +2.8% / +1.7% |
+| Peak speed | 1,312.8 m/s | 1,310.6 m/s | -0.2% |
+| Apoapsis | 127,114 m | 126,723 m | -0.3% |
+| Speed falling through 30 km | 1,219.5 m/s | 1,219.0 m/s | 0.0% |
+| Speed falling through 8.5 km | 1,323.0 m/s | 1,349.8 m/s | +2.0% |
+| Pad altitude (sea level) | 111.9 m | 118.1 m | +6.2 m (SBS-P3) |
+
+**Rotation delta (T5/T7), run 7.** Same craft in a 200 km orbit, SAS off, full input for 1 s on pitch, then yaw,
+then roll (4 s apart), then SAS on in stability mode. Run 2 is void: KSP2's input handler consumes an override once
+per frame while a frame holds two or three physics ticks, so the held input reached only 64% of the ticks. The pilot
+now re-applies held inputs before the handler on every physics tick (`InputHolder`).
+
+| Channel | KSP2 | OSE | Delta |
+|---|---|---|---|
+| Pitch rate after 1 s of full pitch | 0.469 rad/s | 0.479 rad/s | +2.1% |
+| Yaw added by 1 s of full yaw | about 0.47 rad/s | about 0.49 rad/s | about +5% |
+| Roll after 1 s of full roll (total rate) | 1.66 rad/s | about 1.74 rad/s | about +5% |
+| SAS (stability) stopping a 1.66 rad/s tumble | 0.38 rad/s after 1 s, 0.09 after 2 s, then a 0.03-0.07 rad/s wobble for 10+ s | 0 within 0.5 s | **SAS stops instantly** |
+
+**RCS delta (T17), run 6.** Stock KSS Hub in a 200 km orbit, SAS off, RCS on, translate forward 2 s, right 2 s,
+then pitch 1 s (inputs held every tick).
+
+| Channel | KSP2 | OSE | Delta |
+|---|---|---|---|
+| Craft mass | 28.545 t | 29.505 t | **+0.96 t (+3.4%)** |
+| Monopropellant, 2 s forward | 13.73 kg | 13.60 kg | -0.9% |
+| Monopropellant, 2 s right | 8.29 kg | 8.12 kg | -2.0% |
+| Monopropellant, 1 s RCS pitch | 4.47 kg | 4.40 kg | -1.6% |
+| Yaw induced by the right translation | 0.0812 rad/s | 0.0739 rad/s | -9% (heavier craft) |
+| Pitch rate after 1 s (RCS + wheels) | 0.273 rad/s | 0.273 rad/s | 0.0% |
+
+**Hop and parachute delta (T2 subsonic, T12), run 4.** Same craft as run 1: 8 s at full throttle, cut, parachute
+staged below 2.5 km.
+
+| Channel | KSP2 | OSE | Delta |
+|---|---|---|---|
+| Apoapsis | 4,217 m | 4,420 m | +4.8% (OSE cut about 0.2 s later, pad 6 m higher) |
+| Fastest fall before the canopy | 228.2 m/s at 1,051 m | 230.0 m/s at 1,095 m | +0.8% |
+| Canopy slows the craft below 100 m/s at | 680 m | 703 m | +3.4% |
+| Descent under the canopy, 100 m / 5 m above ground | 10.16 / 10.10 m/s | 10.10 / 10.04 m/s | -0.6% |
+| Air density at the ground | 1.2090 kg/m3 | 1.2072 kg/m3 | -0.15% |
+
+**Staging delta (T4), run 5.** Stock Kerbal K1 straight up, SAS on, full throttle, next stage each time the mass has
+stopped falling for 1 s.
+
+| Channel | KSP2 | OSE | Delta |
+|---|---|---|---|
+| Mass on the pad | 27.112 t | 27.344 t | **+232 kg** |
+| Mass at stage-1 burnout | 9.872 t | 10.148 t | **+276 kg** (gone after the decouplers drop: 4.108 vs 4.123 t) |
+| Speed at T+5 s / T+40 s | 120.6 / 890.5 m/s | 141.8 / 858.2 m/s | **+17% / -3.7%** (solid booster thrust curve) |
+| Stage-1 burnout altitude | 75.9 km | 73.7 km | -2.9% |
+| Speed at T+150 s | 1,916 m/s | 1,878 m/s | -2.0% |
+
+**Driving delta (T16), run 8.** Stock Inquisitive Rover on the pad; KSP2 trace `reference/ksp2-run8-rover/`.
+
+| Channel | KSP2 | OSE | Delta |
+|---|---|---|---|
+| Speed at +1 / +2 / +4 / +7 s of full throttle | 1.8 / 3.3 / 5.9 / 7.8 m/s | 4.1 / 6.7 / 9.0 / 10.0 m/s | **about 2x** |
+| Speed after 15 s | 9.8 m/s | 11.9-12.7 m/s (ripples) | **+21-29%** |
+| Brakes from about 10 m/s to a stop | about 1.5 s | about 1 s | close |
+| Half throttle, full steer, 10 s | 1.2 to 2.5 m/s, yaw up to 1.33 rad/s | 5.4 to 9.0 m/s, heading turns up to 3.2 rad/s | **too fast** |
+| Yaw after the steering is released | decays over about 3 s | stops at once | **instant** |
+
+**Heating delta (T11), run 11.** Run 1 craft, straight up to 127 km and back down; hottest part temperature.
+
+| Altitude on the way down | KSP2 speed / hottest part | OSE speed / hottest part |
+|---|---|---|
+| 30 km | 1,220 m/s / 183 K | 1,219 m/s / 194 K |
+| 10 km | 1,324 m/s / 269 K | 1,345 m/s / 273 K |
+| 2 km | 1,286 m/s / 359 K | 1,354 m/s / 361 K |
+| 0.5 km | 1,269 m/s / 377 K | 1,349 m/s / 379 K |
+| Peak during the ascent | 392 K | 389 K |
+
+Holding `Up` the run showed a 6% dense-air drag gap; it was the attitude, not the drag model (run 15 force dump: total
+part drag 26.8 kN at Mach 4.8, with KSP2's craft 4.3 degrees off its velocity). `parity_ascent` now holds the pad
+attitude fixed in inertial space like KSP2's stability SAS: falling through 10 / 5 / 2 / 0.5 km, KSP2 1,324 / 1,311 /
+1,286 / 1,269 m/s, OSE 1,323 / 1,309 / 1,284 / 1,264 m/s.
+
+**K1 per-part mass and drag (run 10).** `reference/ksp2-run10-k1-parts/parts.csv` lists every part's dry, resource
+and physics mass, PhysicsMode and per-face drag area and Cd. KSP2's vessel mass (27.112 t) leaves out the 12
+PhysicsMode None parts (28 kg); the rest of OSE's +232 kg is in other parts. Handed to the sim thread.
+
+Other findings from these runs: OSE ignites a craft's solid boosters by themselves when it is launched straight into
+orbit (stock K2 via `LaunchSavedCraft` burns its four SRBs at stage 0 with the throttle at 0). These rows are with
+the sim thread.
+
+## Parity checklist (trace-verified)
+
+Status: **verified** = a KSP2 trace and an OSE trace of the same scenario agree within the stated tolerance;
+**failing** = they differ beyond it (row links the fix); **not traced** = no KSP2 trace yet. Nothing is verified
+until a delta table is attached here. Priority: P0 changes how every flight feels; P1 blocks a whole activity;
+P2 completeness.
+
+| # | System | Pri | KSP2 scenario to trace | Compared channels and tolerance | Status |
+|---|---|---|---|---|---|
+| T1 | Thrust, Isp vs pressure, fuel burn | P0 | Run 1 craft, full throttle from the pad | mass(t), thrust, burn time; burnout altitude/speed within 2% | **verified** (mass flow and burn time within 0.3%, peak speed -0.2%) |
+| T2 | Drag and Mach model (surface area, drag cubes) | P0 | Run 1 coast and fall; run 4 hop | speed vs altitude on descent within 5% | **verified** (apoapsis -0.3%, 8.5 km fall +2.0%, subsonic fall +0.8%, air density -0.15%); the dense-air gap in run 11 was the test: OSE held `Up` while KSP2's SAS held an inertial attitude 4.3 degrees off the flow; with the same hold OSE matches within 0.4% at 10, 5, 2 and 0.5 km |
+| T3 | Mass and CoM shift as fuel drains | P0 | Run 1 with CoM logged | CoM along the stack vs fuel fraction within 2 cm | not traced |
+| T4 | Crossfeed and fuel-flow order, staging, decouplers | P0 | Stock Kerbal K1 (boosters, decouplers, 5 stages) | mass and speed vs time per stage | **failing**: +232 kg in the lower stages, solid booster thrust curve (+17% early, -3.7% late); with the sim thread |
+| T5 | SAS hold, reaction wheels, torque | P0 | Pod with wheel: step pitch input 1 s, release, SAS on | attitude and angular rate vs time within 5% | **verified**: wheel torque +2% pitch, about +5% yaw/roll; SAS damping matches after PR 41 (sim thread replay within 1% at +1, +2, +8 s; rerun here shows the 2 s stop and wobble) |
+| T6 | Gimbal response | P0 | Engine gimbal step under SAS | gimbal angle and body rate vs time | not traced |
+| T7 | Input response and precision mode | P0 | Keyboard pitch hold, CapsLock precision, trim | rate build-up and latency per tick | full-input step **verified** with T5, latency in T36; precision and trim not traced |
+| T8 | Orbits, SOI changes, time warp (rails and physics) | P0 | 100 km orbit, warp x100, Mun encounter | apsides after warp, SOI exit time within 1 s | not traced |
+| T9 | Maneuver node execution | P1 | Prograde 100 m/s node, burn by node timer | resulting apsides within 1% | not traced |
+| T10 | Control surfaces and lift | P1 | Stock jet takeoff roll and pitch-up | lift vs AoA and speed, rotation speed | not traced |
+| T11 | Heating and reentry | P1 | Run 1 craft falling from 127 km at Mach 4.5 (run 11) | hottest part temperature vs altitude | **verified**: peak 392 vs 389 K, 10 km 269 vs 273 K, ground 377 vs 379 K (within 2%; +11 K at 30 km). Ablator not traced |
+| T12 | Parachutes | P1 | Mk16 staged below 2.5 km after a hop | deploy timing, descent speed at sea level within 3% | **verified** (canopy descent -0.6%, deploy altitude +3.4%) |
+| T13 | Joints, flex, wobble, struts | P1 | Pod + six 1x4 tanks + Swivel on the pad: full throttle 5 s, full roll 3 s (run 18, `craft-stack.json`) | engine position in the pod's frame per tick, breaks | KSP2 traced: the stack is rigid (0.8 mm axial, under 0.3 mm lateral, no breaks); OSE side with the T13/T14 thread |
+| T14 | Collisions, crash tolerance, part breakage | P1 | Upright drops onto the pad by surface teleport (run 17, `craft-drop-*.json`) | survive/destroy per part, tick | KSP2 traced: Mk1 pod survives 6.8 and 11.0 m/s, destroyed at about 16 m/s; pod over a 1x2 tank survives 6.8, 11.0 and 15.8 m/s (rebound +2.9 / +2.2 / +9.4 m/s); OSE side with the T13/T14 thread |
+| T15 | Landing legs and ground contact (fix: PR 63) | P1 | Run 1 craft with three landingleg_1v placed by hand (`craft-legs.json`), legs deployed, 0.3 s hop (run 16) | touchdown rebound, settle, situation | PR 63: Landed on its legs, rebound +0.56 vs KSP2 +0.49 m/s, no slide (0.02 vs 2.4 m/s before), settles in about 1.5 s vs 1 s |
+| T16 | Wheels and driving (fix: PR 45) | P1 | Stock Inquisitive Rover: full wheel throttle 15 s, coast 3 s, brakes 8 s, half throttle full steer 10 s | speed vs time, stopping, yaw rate | **failing**: about 2x acceleration, top speed 12.7 vs 9.8 m/s, turn 5.4-9.0 vs 1.2-2.5 m/s and up to 3.2 vs 1.33 rad/s, yaw stops instantly on release; brakes match. Rover mass 0.977 vs 0.924 t |
+| T17 | RCS translation and rotation | P1 | Stock KSS Hub: 2 s forward, 2 s right, 1 s pitch | monoprop use, rate | **verified** (fuel within 2%, pitch rate 0%); craft mass +3.4% is with the sim thread |
+| T18 | Docking | P1 | Two Clamp-O-Tron ports closing at 0.3 m/s and faster | capture distance, relative speed, merged mass and CoM | with the "Let Kerbals stand on craft parts" thread |
+| T19 | EVA exit, ladders | P1 | First Kerbal exits the run-1 pod on the pad and lets go of the ladder (run 14) | exit position, fall | **failing**: KSP2's Kerbal drops about 0.3 m onto the craft and stands on it (Landed) until it walks off the edge; OSE's falls 3.6 m straight to the pad because a Kerbal cannot stand on its own craft's parts. With the sim thread |
+| T20 | EVA walk, run, jump | P1 | Walk 6 s, run 6 s, jump (run 14) | ground speed, jump height | **failing**: walk 0.80 vs KSP2 0.65 m/s (+23%), run 2.20 vs 2.05 m/s (+7%), OSE starts and stops instantly; jump about 0.28 m in KSP2. With the sim thread |
+| T21 | EVA jetpack | P1 | 2 s up, 2 s forward in orbit | delta-v and fuel per second | not traced |
+| T22 | Electric charge and solar | P2 | Probe with panels in sun, wheel on | EC rate in/out | not traced |
+| T23 | Comms (CommNet) | P2 | Probe behind Kerbin from KSC | link loss timing | not traced |
+| T24 | Science collection and transmit | P2 | Crew report on the pad, transmit | science value, transmit time and EC | not traced |
+| T25 | Flags | P2 | Plant a flag next to the pad | placement, collision | not traced |
+| T26 | Camera modes and input bindings | P2 | Cycle V modes, default binding table | mode list, key map identical | not traced |
+| T27 | Flight camera orbit (mouse drag) | P0 | KSP2 `ground/orbital basic rig`: heading degrees = mouse pixels x 4.5 x frame seconds (0.075 deg/px at 60 Hz; fine x 0.3) | degrees per pixel | **failing**: OSE turns 0.286 deg per CSS pixel, about 3.8x KSP2 at 60 Hz, and is frame-rate independent where KSP2 is not |
+| T28 | Flight camera zoom (wheel) | P1 | KSP2 distance x exp(-zoomAxis), fine x exp(-0.3 zoomAxis) | distance factor per wheel notch | **likely failing**: OSE x0.8 in / x1.25 out per wheel event; KSP2's factor per notch depends on the Unity wheel axis value, which needs a live capture |
+| T29 | Map camera orbit | P1 | KSP2 2 x max(0.001, 0.05 x (85 - abs(pitch))/85) deg/px, Alt x 0.1 | degrees per pixel vs pitch | **failing**: OSE 0.286 deg/px at every pitch, about 2.9x KSP2 at the horizon and far more near the poles; no Alt fine mode |
+| T30 | Map zoom | P2 | KSP2 inverse scale x exp(-0.3) in / exp(0.3) out | factor per step | close: OSE x0.8 / x1.25 vs KSP2 x0.741 / x1.350 |
+| T31 | VAB camera orbit and zoom | P1 | KSP2 0.004 rad/px (precise 0.001); zoom moves the pivot by zoomAxis x 3 m (Shift x2, precise 0.3) | per pixel, per notch | **failing**: OSE 0.005 rad/px (+25%), no precise mode; zoom is multiplicative x0.8 instead of KSP2's additive metres |
+| T32 | Time warp ladder | P0 | KSP2 1, 2, 4, 10, 50, 100, 1,000, 10,000, 100,000, 1,000,000; physics warp capped at 4x in atmosphere | ladder steps | **failing**: OSE 1, 2, 3, 4, 5, 10, 50, 100, 1,000, 10,000, 100,000 (extra 3x and 5x, no 1,000,000x) |
+| T33 | VAB held-part rotation keys | P2 | KSP2 90 deg per press with snap on or off; Shift 5 deg | degrees per press | **failing**: OSE 15 deg with snap off |
+| T34 | Maneuver handle drag | P1 | KSP2 adds (displacement / (strength x DPI))^2 m/s every frame while held | m/s per pixel per frame | **failing**: OSE sets an absolute 1 m/s per pixel (0.1 with Shift); KSP2 is a held-rate control with no Shift factor |
+| T35 | Throttle keys | P0 | KSP2 Shift/Ctrl change the throttle 1.0 per real second; Z full, X cut | ramp rate, presets | **verified** (same equation and presets in `input.rs`) |
+| T36 | Key press to control response | P0 | KSP2 applies keyboard input in the next frame's FixedUpdate; the craft starts turning about 0.12 s after the control state changes (run 7) | key to send, send to motion | **verified**: OSE sends 1-2 ms after keydown (local build, 10 presses, 60 fps), and the server starts the turn 0.1-0.18 s after the input (stream at 10 Hz) |
+| T37 | Content counts | P0 | KSP2 data files | parts, tech nodes, missions, bodies | **verified**: 400/400 parts (none missing), 87/87 tech nodes, 57/57 missions (32 exploration + 25 mission control), 17/17 placed bodies (KSP2's five asteroid definitions are not in its galaxy) |
+| T38 | Procedural wings and fairing shaping | P0 | KSP2 VAB wing and fairing editors | shape handles, persisted shape, lift/mass from shape | **missing** (feature analysis G04): no wing tool; fairings are generated over the payload with no shaping |
+| T39 | Fuel line and strut placement | P1 | KSP2 two-anchor tool | place, save, flow, structural link | **partial** (G06): imported lines work and the flow graph honours them; no VAB tool, and struts carry no structural link |
+| T40 | Physics warp above 4x and finite-burn prediction | P1 | KSP2 physics warp, long-burn node prediction | warp steps under thrust, predicted vs flown orbit | **missing** (P31, P32) |
+| T41 | Engine modes, spool-up and jet intakes | P1 | KSP2 multi-mode engines, spool curves, intake air | thrust vs time on throttle steps, mode switch | **missing** (P05, P06) |
+| T42 | Parachute RISKY/IMMEDIATE modes, extra heat sources | P2 | KSP2 chute safety modes, engine/part heating | deploy rules, temperatures | **missing** (P17, P15) |
+| T43 | Water: flooding, waves, impact damage | P2 | KSP2 splashdown | sink/float, damage on water impact | **missing** (P28) |
+| T44 | Kerbal character animation | P2 | KSP2 state machine, expressions | clip per state | **partial** (G13) |
+| T45 | Localization | P2 | KSP2 12 languages | locale switch, coverage | **missing** (G15): English only |
+| T46 | Stock craft launch from the pad list | P0 | Stock Kerbal K1 rolled out | parts drawn and staged | **verified** on a local build of main: all 38 parts drawn, 6 stages listed (the pod-only report came from the VAB Load path, not rechecked here) |
+
+Controls rows T27-T34 come from the KSP2 source and configuration (camera rigs, `TimeWarp`, OAB, maneuver gizmo);
+T35-T36 add live timing. Source: an interaction-parity recording from 2026-10-29 (`docs/reference-notes/interaction-parity.md`,
+not yet committed) and `reference/controls/ose-key-latency.json`.
+
 ## Next steps
 
-1. Josh: approve the BepInEx install so the trace recorder can run (SBS-P2, SBS-C4), and either allow computer-use on
-   KSP2 or take F12 shots of the same five scenes at noon on a fresh save.
-2. Fix agents: SBS-C1, SBS-C2, SBS-F1/F2 (this thread), each with before/after captures from the same script.
-3. Hand SBS-P1 to server/sim, SBS-V1..V4 to planets/campus, SBS-C3 to UI/VAB, SBS-V5 to Josh.
+1. Build the OSE side of the trace runner: an `ose-bot` example that imports the same workspace JSON, flies the same
+   scenario steps and writes the same CSV columns; a comparer that prints the delta table above.
+2. Add scenarios T1-T8 to the KSP2 pilot first (P0), then P1, closing failing rows with fix PRs that attach
+   before/after deltas.
+3. Earlier items: SBS-C1, SBS-C2, SBS-F1/F2 fix PRs are in progress; SBS-V1..V4 are with planets/campus; SBS-V5 is
+   for Josh.

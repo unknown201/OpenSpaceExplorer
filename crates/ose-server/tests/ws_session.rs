@@ -1419,6 +1419,60 @@ async fn crafts_with_nothing_staged_launch() {
 }
 
 #[tokio::test]
+async fn a_craft_launched_into_orbit_lights_nothing_until_staged() {
+    let (_server, addr) = spawn_server().await;
+    let mut ws = connect_ws(&addr).await;
+    hello(&mut ws, None, "driver").await;
+    let crafts: Vec<ose_data::craft::Craft> =
+        serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+    // the Kerbal K2's first stage is four Thumper solid boosters, which cannot be throttled down
+    let craft = crafts
+        .iter()
+        .find(|c| c.name == "Kerbal K2")
+        .unwrap()
+        .clone();
+    send_msg(
+        &mut ws,
+        &ClientMessage::LaunchCraft {
+            craft,
+            altitude_m: 200_000.0,
+        },
+    )
+    .await;
+    let vessel = wait_for(&mut ws, |m| match m {
+        ServerMessage::CraftLaunched { vessel, reason, .. } => {
+            assert!(reason.is_none(), "{reason:?}");
+            vessel
+        }
+        _ => None,
+    })
+    .await;
+    let mut masses = Vec::new();
+    for _ in response_window() {
+        if let ServerMessage::Vessels { vessels, .. } = recv(&mut ws).await {
+            let Some(f) = vessels
+                .iter()
+                .find(|v| v.id == vessel)
+                .and_then(|v| v.flight.as_ref())
+            else {
+                continue;
+            };
+            assert_eq!(f.thrust_kn, 0.0, "nothing burns before the first stage");
+            assert!(f.firing_engines.is_empty(), "{:?}", f.firing_engines);
+            masses.push(f.mass_t);
+            if masses.len() >= 5 {
+                break;
+            }
+        }
+    }
+    assert!(masses.len() >= 5);
+    assert!(
+        masses.iter().all(|m| (m - masses[0]).abs() < 1e-9),
+        "{masses:?}"
+    );
+}
+
+#[tokio::test]
 async fn a_vab_built_rocket_sits_still_on_the_pad_and_lifts_off() {
     let (_server, addr) = spawn_server_with(&["--db", ":memory:", "--save", "none"], None).await;
     let mut ws = connect_ws(&addr).await;
@@ -2252,7 +2306,7 @@ async fn campaigns_can_be_left_resumed_and_started_again() {
     })
     .await;
     drop(late);
-    // a teammate playing it keeps another campaign from being started under them
+    // starting another campaign while a teammate plays this one opens a second room: both run at once
     let mut mate = connect_ws(&addr).await;
     hello(&mut mate, None, "val").await;
     send_msg(&mut mate, &ClientMessage::JoinCampaign).await;
@@ -2261,13 +2315,85 @@ async fn campaigns_can_be_left_resumed_and_started_again() {
     })
     .await;
     send_msg(&mut ws, &create("Gamma")).await;
-    let reason = wait_for(&mut ws, |m| match m {
-        ServerMessage::Rejected { reason } => Some(reason),
+    // (skipping the Alpha state pushed when val joined)
+    let (gamma, name, created, member) = wait_for(&mut ws, |m| state(m).filter(|s| s.2)).await;
+    assert!(created && member && name == "Gamma" && gamma != alpha);
+    send_msg(&mut mate, &ClientMessage::ListSessions).await;
+    let list = wait_for(&mut mate, listed).await;
+    let players = |id: &str| list.iter().find(|x| x.id == id).map(|x| x.players);
+    assert_eq!(players(&alpha), Some(1), "val still plays Alpha: {list:?}");
+    assert_eq!(players(&gamma), Some(1), "josh plays Gamma: {list:?}");
+    // val's campaign is untouched
+    send_msg(&mut mate, &ClientMessage::CampaignInfo).await;
+    let (id, _, _, member) = wait_for(&mut mate, state).await;
+    assert_eq!(id, alpha);
+    assert!(member);
+    let _ = me;
+}
+
+#[tokio::test]
+async fn two_players_play_two_campaigns_at_once() {
+    let (_server, addr) = spawn_server().await;
+    let state = |m: ServerMessage| match m {
+        ServerMessage::CampaignState { id, name, .. } => Some((id, name)),
+        ServerMessage::Rejected { reason } => panic!("rejected: {reason}"),
+        _ => None,
+    };
+    let create = |name: &str| ClientMessage::CreateSession {
+        name: name.into(),
+        mode: ose_net::SessionMode::Sandbox,
+        difficulty: Vec::new(),
+    };
+    // a bot plays the server's campaign
+    let mut bot = connect_ws(&addr).await;
+    let (bot_id, _) = hello(&mut bot, None, "bot").await;
+    send_msg(&mut bot, &ClientMessage::JoinCampaign).await;
+    let (shared, _) = wait_for(&mut bot, state).await;
+    // josh starts his own while the bot plays
+    let mut josh = connect_ws(&addr).await;
+    let (josh_id, _) = hello(&mut josh, None, "josh").await;
+    send_msg(&mut josh, &create("Josh's")).await;
+    let (mine, name) = wait_for(&mut josh, state).await;
+    assert_eq!(name, "Josh's");
+    assert_ne!(mine, shared);
+    // each flies in their own universe: neither sees the other's craft
+    let josh_vessel = launch_to_orbit(&mut josh, 100_000.0).await;
+    let bot_vessel = launch_to_orbit(&mut bot, 120_000.0).await;
+    for (ws, own, other) in [(&mut josh, josh_id, bot_id), (&mut bot, bot_id, josh_id)] {
+        let owners = wait_for(ws, |m| match m {
+            ServerMessage::Vessels { vessels, .. }
+                if vessels.iter().any(|v| v.owner == Some(own)) =>
+            {
+                Some(vessels.iter().map(|v| v.owner).collect::<Vec<_>>())
+            }
+            _ => None,
+        })
+        .await;
+        assert!(!owners.contains(&Some(other)), "{owners:?}");
+    }
+    let _ = (josh_vessel, bot_vessel);
+    // the bot can come over to josh's campaign
+    send_msg(&mut bot, &ClientMessage::SelectSession { id: mine.clone() }).await;
+    let (id, _) = wait_for(&mut bot, state).await;
+    assert_eq!(id, mine);
+    wait_for(&mut bot, |m| match m {
+        ServerMessage::Vessels { vessels, .. } => vessels
+            .iter()
+            .any(|v| v.owner == Some(josh_id))
+            .then_some(()),
         _ => None,
     })
     .await;
-    assert!(reason.contains("another player"), "{reason}");
-    let _ = me;
+    // and the campaign it left goes back on the shelf, still listed
+    send_msg(&mut josh, &ClientMessage::ListSessions).await;
+    let list = wait_for(&mut josh, |m| match m {
+        ServerMessage::SessionList { sessions } => Some(sessions),
+        _ => None,
+    })
+    .await;
+    let players = |id: &str| list.iter().find(|x| x.id == id).map(|x| x.players);
+    assert_eq!(players(&mine), Some(2), "{list:?}");
+    assert!(players(&shared).is_some(), "{list:?}");
 }
 
 async fn hello(ws: &mut Ws, token: Option<String>, name: &str) -> (u64, String) {

@@ -260,6 +260,9 @@ def main() -> int:
     instance_verts = 0
     camera_origin = camera_lookat = None
     spawns: dict = {}
+    # The skipped light props' lamps (runway edge and centre lights, street lights, aviation beacons): a point
+    # and colour each, drawn as glowing dots at night instead of thousands of tiny meshes.
+    lamps: dict[tuple[int, int, int], list[float]] = {}
     buildings: dict[str, dict] = {}
     building_nodes: list[tuple[str, object]] = []
     mesh_material: dict[tuple[int, int], int] = {}  # (mesh index, material index) -> glTF mesh with material
@@ -280,6 +283,34 @@ def main() -> int:
         glb.meshes.append({"name": base["name"], "primitives": [prim]})
         mesh_material[key] = len(glb.meshes) - 1
         return mesh_material[key]
+
+    def lamp_of(n, mfr, mr) -> list[float] | None:
+        """A light prop's lamp: the top centre of its mesh's box in the world (glTF frame) and the colour its
+        emissive material glows in (KSP2's HDR _EmissionColor, scaled to a peak of 1), or None if nothing on it
+        glows."""
+        best = None
+        for mp in mr.read().m_Materials or []:
+            try:
+                mat = mp.read()
+            except Exception:  # noqa: BLE001
+                continue
+            ec = dict(mat.m_SavedProperties.m_Colors).get("_EmissionColor")
+            if ec is None:
+                continue
+            peak = max(ec.r, ec.g, ec.b)
+            if peak > 0.5 and (best is None or peak > best[3]):
+                best = (ec.r / peak, ec.g / peak, ec.b / peak, peak)
+        if best is None:
+            return None
+        try:
+            box = mfr.m_Mesh.read().m_LocalAABB
+            c, e = box.m_Center, box.m_Extent
+            local = (c.x, c.y + e.y, c.z)
+        except Exception:  # noqa: BLE001
+            local = (0.0, 0.0, 0.0)
+        w = n.world
+        p = [sum(w[i][k] * local[k] for k in range(3)) + w[i][3] for i in range(3)]
+        return [*to_gltf_pos(p), best[0], best[1], best[2]]
 
     stack = [(ksc, True)]
     while stack:
@@ -321,6 +352,9 @@ def main() -> int:
             continue
         if not a.keep_lights and any(s in mesh_name for s in SKIP_MESH_SUBSTRINGS):
             skipped_prop += 1
+            lamp = lamp_of(n, mfr, mr)
+            if lamp is not None:
+                lamps.setdefault(tuple(round(v * 2) for v in lamp[:3]), lamp)
             continue
         if any(s in mesh_name or s in n.name for s in SKIP_TREE_SUBSTRINGS):
             skipped_prop += 1
@@ -429,6 +463,7 @@ def main() -> int:
     # Vessel spawn points (where the original puts a craft on each pad and runway), world positions.
     scene["spawns"] = {k: list(to_gltf_pos(decompose(w)[0])) for k, w in sorted(spawns.items())}
     scene["ground_y"] = ground_y
+    scene["lamps"] = [[round(v, 2) for v in lamp] for lamp in lamps.values()]
     (out / "ksc" / "scene.json").write_text(json.dumps(scene, indent=1), encoding="utf-8")
     print("camera", scene.get("camera"))
     for b in scene["buildings"]:
