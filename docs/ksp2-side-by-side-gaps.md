@@ -214,7 +214,7 @@ P2 completeness.
 | T16 | Wheels and driving (fix: PR 45) | P1 | Stock Inquisitive Rover: full wheel throttle 15 s, coast 3 s, brakes 8 s, half throttle full steer 10 s | speed vs time, stopping, yaw rate | **failing**: about 2x acceleration, top speed 12.7 vs 9.8 m/s, turn 5.4-9.0 vs 1.2-2.5 m/s and up to 3.2 vs 1.33 rad/s, yaw stops instantly on release; brakes match. Rover mass 0.977 vs 0.924 t |
 | T17 | RCS translation and rotation | P1 | Stock KSS Hub: 2 s forward, 2 s right, 1 s pitch | monoprop use, rate | **verified** (fuel within 2%, pitch rate 0%); craft mass +3.4% is with the sim thread |
 | T18 | Docking | P1 | Two ports approaching at 0.3 m/s | capture distance, merged mass and CoM | not traced |
-| T19 | EVA exit, ladders | P1 | First Kerbal exits the run-1 pod on the pad and lets go of the ladder (run 14) | exit position, fall | **verified**: both start on the pod's ladder and drop about 3.6-3.7 m on let-go |
+| T19 | EVA exit, ladders | P1 | First Kerbal exits the run-1 pod on the pad and lets go of the ladder (run 14) | exit position, fall | **failing**: KSP2's Kerbal drops about 0.3 m onto the craft and stands on it (Landed) until it walks off the edge; OSE's falls 3.6 m straight to the pad because a Kerbal cannot stand on its own craft's parts. With the sim thread |
 | T20 | EVA walk, run, jump | P1 | Walk 6 s, run 6 s, jump (run 14) | ground speed, jump height | **failing**: walk 0.80 vs KSP2 0.65 m/s (+23%), run 2.20 vs 2.05 m/s (+7%), OSE starts and stops instantly; jump about 0.28 m in KSP2. With the sim thread |
 | T21 | EVA jetpack | P1 | 2 s up, 2 s forward in orbit | delta-v and fuel per second | not traced |
 | T22 | Electric charge and solar | P2 | Probe with panels in sun, wheel on | EC rate in/out | not traced |
