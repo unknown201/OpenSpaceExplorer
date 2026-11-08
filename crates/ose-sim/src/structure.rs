@@ -279,6 +279,8 @@ pub struct Structure {
         )>,
     >,
     pub fairing_panel_t: Vec<f64>,
+    /// A shaped fairing's procedural drag cube (`Module_Fairing.GenerateDragCubes`).
+    fairing_cube: Vec<Option<ose_data::DragCube>>,
     pub cargo_bay: Vec<bool>,
     /// Parts whose crossfeed the pilot can switch (`PartDef::crossfeed_toggle`).
     pub crossfeed_toggle: Vec<bool>,
@@ -1142,6 +1144,14 @@ impl Structure {
                 .map(|p| {
                     let f = p.fairing.as_ref().filter(|f| f.valid_for(&p.part_id))?;
                     Some((f.clone(), ose_data::fairing::def(&p.part_id)?.clone()))
+                })
+                .collect(),
+            fairing_cube: craft
+                .parts
+                .iter()
+                .map(|p| {
+                    let f = p.fairing.as_ref().filter(|f| f.valid_for(&p.part_id))?;
+                    Some(f.drag_cube(ose_data::fairing::def(&p.part_id)?))
                 })
                 .collect(),
             fairing_panel_t: craft
@@ -4346,9 +4356,9 @@ impl Structure {
                 if !self.rigid.present[f] || self.fairing_deployed[f] {
                     return None;
                 }
-                if let Some((shape, _)) = &self.fairing_shape[f] {
-                    let (front, side) = shape.drag_areas_m2();
-                    return Some((f, front, side));
+                // a shaped wall drags through its own cube (`fairing_faces`)
+                if self.fairing_shape[f].is_some() {
+                    return None;
                 }
                 if payload.is_empty() {
                     return None;
@@ -4446,7 +4456,26 @@ impl Structure {
 
     /// The faces the airflow meets on part `i`: a parachute's current shape, otherwise its own.
     fn drag_faces(&self, i: usize) -> Option<Faces> {
-        self.chute_faces(i).or(self.faces[i])
+        self.chute_faces(i)
+            .or_else(|| self.fairing_faces(i))
+            .or(self.faces[i])
+    }
+
+    /// A shaped fairing's faces while its panels are on: the shell's own cube (`SetDragCubes(jettisoned:
+    /// false)` weights the procedural cube 1 and the base's 0), covered by its attach nodes as the base's.
+    /// After jettison the base's own faces again.
+    fn fairing_faces(&self, i: usize) -> Option<Faces> {
+        if self.fairing_deployed.get(i).copied().unwrap_or(true) {
+            return None;
+        }
+        let cube = self.fairing_cube.get(i)?.as_ref()?;
+        let mut faces = Faces::from_cube(cube);
+        for &(dir, size, other) in &self.face_covers[i] {
+            if self.rigid.present[other] {
+                faces.occlude(dir, size);
+            }
+        }
+        Some(faces)
     }
 
     /// A part's drag-cube `AreaDrag` for travel along `d` (unit, vessel frame) at `mach`.
@@ -6872,6 +6901,13 @@ mod tests {
         c.apply_shapes(&defs);
         let mut s = Structure::build(&c, &defs, &res);
         assert!(s.shielded[pod]);
+        // the shell's own drag cube while it is on, the base's after jettison
+        let mut p = flying(DVec3::new(1.0, 0.0, 0.0));
+        s.sync(&mut p);
+        let facing = DVec3::new(1.0, 0.0, 0.0);
+        let sideways = DVec3::new(0.0, 200.0, 0.0);
+        s.aero(0, basis(facing), sideways, 1.0, 0.6);
+        let shell_cda = s.part_cda_m2[fairing];
         let before = s.mass_properties().mass_t;
         let panels = open.panel_mass_t(fd);
         assert!(panels > 0.1, "{panels}");
@@ -6881,6 +6917,12 @@ mod tests {
         assert!(
             (before - after - panels).abs() < 1e-6,
             "{before} -> {after}, panels {panels}"
+        );
+        s.aero(0, basis(facing), sideways, 1.0, 0.6);
+        let base_cda = s.part_cda_m2[fairing];
+        assert!(
+            shell_cda > 3.0 * base_cda.max(0.01),
+            "shell {shell_cda} vs base {base_cda}"
         );
     }
 

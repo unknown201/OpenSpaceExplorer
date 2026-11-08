@@ -159,6 +159,44 @@ impl FairingShape {
         (std::f64::consts::PI * r * r, side)
     }
 
+    /// The fairing's drag cube while its panels are on (`Module_Fairing.GenerateDragCubes`, the procedural
+    /// cube weighted 1 until jettison): the wall as a lathe of `side_count` sides over the base ring, part
+    /// frame (wall axis +Y from the fairing node).
+    pub fn drag_cube(&self, def: &FairingDef) -> crate::DragCube {
+        let sides = (def.side_count as usize).max(12);
+        let mut points: Vec<[f64; 3]> = Vec::new();
+        let mut tris: Vec<[u32; 3]> = Vec::new();
+        for (h, r) in &self.sections {
+            for k in 0..sides {
+                let a = k as f64 / sides as f64 * std::f64::consts::TAU;
+                points.push([r * a.cos(), def.base_height + h, r * a.sin()]);
+            }
+        }
+        let w = sides as u32;
+        for row in 0..self.sections.len().saturating_sub(1) as u32 {
+            for k in 0..w {
+                let (a, b) = (row * w + k, row * w + (k + 1) % w);
+                tris.push([a, b + w, b]);
+                tris.push([a, a + w, b + w]);
+            }
+        }
+        // the base plate under the wall, and the closed top of a capped wall
+        let mut cap = |row: u32, y: f64| {
+            let centre = points.len() as u32;
+            points.push([0.0, y, 0.0]);
+            for k in 0..w {
+                tris.push([centre, row * w + k, row * w + (k + 1) % w]);
+            }
+        };
+        cap(0, def.base_height);
+        if self.capped {
+            if let Some((h, _)) = self.sections.last() {
+                cap(self.sections.len() as u32 - 1, def.base_height + h);
+            }
+        }
+        crate::procedural::render_drag_cube("FairingProcedural", &points, &tris)
+    }
+
     /// How fast each panel leaves, m/s: one physics step of `EjectionForce` per tonne.
     pub fn ejection_speed_mps(&self) -> f64 {
         self.ejection_force * PHYSICS_STEP_S
@@ -199,6 +237,31 @@ mod tests {
             !s.encloses(d, [0.0, y + 5.0, 0.0], [0.5, 0.5, 0.5]),
             "above the cap"
         );
+    }
+
+    /// A straight wall seen side on is a rectangle; end on, a disc; a cylinder's side meets the air at the mean
+    /// cosine pi/4.
+    #[test]
+    fn a_cylinder_walls_drag_cube_is_its_silhouettes() {
+        let d = def("fairing_2v_procedural").unwrap();
+        let s = FairingShape {
+            sections: vec![(0.0, 1.25), (4.0, 1.25)],
+            capped: true,
+            pieces: 4,
+            ejection_force: 100.0,
+        };
+        let c = s.drag_cube(d);
+        let side = 2.5 * 4.0;
+        let end = std::f64::consts::PI * 1.25 * 1.25;
+        assert!((c.area[0] - side).abs() / side < 0.02, "{:?}", c.area);
+        assert!((c.area[2] - end).abs() / end < 0.02, "{:?}", c.area);
+        assert!(
+            (c.drag[0] - std::f64::consts::FRAC_PI_4).abs() < 0.03,
+            "{:?}",
+            c.drag
+        );
+        assert!((c.drag[2] - 1.0).abs() < 0.01, "{:?}", c.drag);
+        assert!((c.size.y - 4.0).abs() < 1e-6);
     }
 
     #[test]
