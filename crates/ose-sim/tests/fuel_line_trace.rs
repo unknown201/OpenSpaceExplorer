@@ -12,11 +12,13 @@ use ose_sim::resources::{Instruction, Request};
 use ose_sim::structure::Structure;
 
 fn craft() -> (Craft, Vec<PartDef>, Vec<ResourceDef>) {
-    let v: serde_json::Value = serde_json::from_str(
-        include_str!("../../../tools/ksp2-parity-pilot/craft-fuelline.json")
-            .trim_start_matches('\u{feff}'),
-    )
-    .unwrap();
+    craft_from(include_str!(
+        "../../../tools/ksp2-parity-pilot/craft-fuelline.json"
+    ))
+}
+
+fn craft_from(json: &str) -> (Craft, Vec<PartDef>, Vec<ResourceDef>) {
+    let v: serde_json::Value = serde_json::from_str(json.trim_start_matches('\u{feff}')).unwrap();
     let craft = ose_importer::craft::craft_from_value(&v).unwrap();
     let defs: Vec<PartDef> =
         serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
@@ -259,4 +261,29 @@ fn draining_across_a_switched_on_decoupler_matches_the_ksp2_trace() {
         checked += 1;
     }
     assert!(checked > 100);
+}
+
+/// Print OSE's per-tank trace of the asparagus craft (exploration; `--ignored --nocapture`).
+#[test]
+#[ignore]
+fn asparagus_trace_print() {
+    let (craft, defs, res) = craft_from(include_str!(
+        "../../../tools/ksp2-parity-pilot/craft-asparagus.json"
+    ));
+    for (i, p) in craft.parts.iter().enumerate() {
+        println!(
+            "{i} {} parent {:?} target {:?}",
+            p.part_id, p.parent, p.fuel_line_target
+        );
+    }
+    let trace = burn(&craft, &defs, &res, 400.0);
+    let end = trace.last().unwrap().0;
+    for t in [0.02, 5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 40.0, 50.0, end] {
+        let row: Vec<String> = trace
+            .iter()
+            .filter(|x| (x.0 - t).abs() < 0.011 && x.2 == "Oxidizer")
+            .map(|x| format!("{}:{:.3}", x.1, x.3))
+            .collect();
+        println!("t {t:.2}: {}", row.join(" "));
+    }
 }
