@@ -68,7 +68,7 @@ async fn main() -> Result<()> {
         }
     }
     let hold = AttitudeMode::Fixed(facing.context("no flight readout")?);
-    c.set_controls(l.vessel, 0.0, hold.clone()).await?;
+    c.set_controls(l.vessel, 0.0, hold).await?;
     c.stage(l.vessel).await?;
 
     let mut f = std::fs::File::create(&out)?;
@@ -107,7 +107,7 @@ async fn main() -> Result<()> {
             match step {
                 Step::Throttle(x) => {
                     throttle = x;
-                    c.set_controls(l.vessel, x, hold.clone()).await?;
+                    c.set_controls(l.vessel, x, hold).await?;
                 }
                 Step::Brakes(on) => {
                     brakes = on;
