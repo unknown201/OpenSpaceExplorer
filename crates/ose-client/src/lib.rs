@@ -7914,9 +7914,9 @@ impl App {
             html.push_str(&format!(
                 "<div class=\"pam-acts\"><button data-act=\"fh-act-engine\">{}</button></div>",
                 if off {
-                    "Activate engine"
+                    self.tr("PartModules/Engine/ActivateEngine", "Activate engine")
                 } else {
-                    "Shut down engine"
+                    self.tr("PartModules/Engine/DisableEngine", "Shut down engine")
                 }
             ));
         }
