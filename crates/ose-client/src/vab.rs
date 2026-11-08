@@ -2039,16 +2039,34 @@ pub fn part_action_kinds(spec: &PartSpec) -> Vec<&'static str> {
     kinds
 }
 
-/// What each part action does, for the group rows.
-pub fn action_label(kind: &str) -> &'static str {
-    match kind {
-        "engine" => "Engine on / off",
-        "deploy" => "Extend / retract",
-        "chute" => "Arm parachute",
-        "converter" => "Converter on / off",
-        "fairing" => "Deploy fairing",
-        _ => "Action",
-    }
+/// What each part action does, for the group rows, in the player's language (the game's PAM action names).
+pub fn action_label(kind: &str) -> String {
+    let (term, own) = match kind {
+        "engine" => ("PartModules/Engine/ToggleEngine", "Engine on / off"),
+        "deploy" => (
+            "PartModules/Deployable/ToggleExtended/Toggle",
+            "Extend / retract",
+        ),
+        "chute" => ("PartModules/Parachute/Armed/Enable", "Arm parachute"),
+        "converter" => (
+            "PartModules/ResourceConverter/ToggleConverter",
+            "Converter on / off",
+        ),
+        "fairing" => ("", "Deploy fairing"),
+        _ => ("", "Action"),
+    };
+    crate::i18n::t(term, own)
+}
+
+/// An action group's name on its chip, in the player's language (`ActionGroups/GroupNames/*`).
+pub fn group_label(name: &str) -> String {
+    let term = match name {
+        "Gear" | "Lights" | "Brakes" | "Abort" => format!("ActionGroups/GroupNames/{name}"),
+        "Solar" => "ActionGroups/GroupNames/SolarPanels".into(),
+        "Radiators" => "ActionGroups/GroupNames/RadiatorPanels".into(),
+        _ => return name.to_string(),
+    };
+    crate::i18n::t(&term, name)
 }
 
 /// The part's action-group bindings: one row per action with a chip per group, lit when bound; a click
@@ -2068,6 +2086,7 @@ pub fn action_groups_html(actions: &[(String, u32)], kinds: &[&str]) -> String {
             action_label(kind)
         ));
         for (bit, name) in ACTION_GROUPS {
+            let name = group_label(name);
             html.push_str(&format!(
                 "<button class=\"ag-chip{on}\" data-agkind=\"{kind}\" data-agbit=\"{bit}\" title=\"bind to {name}\">{name}</button>",
                 on = if bits & bit != 0 { " on" } else { "" },
