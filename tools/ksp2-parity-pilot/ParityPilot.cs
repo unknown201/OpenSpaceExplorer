@@ -198,8 +198,8 @@ namespace OpenSpaceExplorer.Validation
                 yield return new WaitForSecondsRealtime(4f);
                 yield return Shot("v1-ksc-night-before-vab");
             }
-            bool orbital = scenario == "rotation" || scenario == "rcs" || scenario == "docking";
-            var snapshot = IOProvider.FromJsonFile<OABHistoricalSnapshot>(Path.Combine(dir, scenario == "rcs" ? "craft-rcs.json" : scenario == "rover" ? "craft-rover.json" : scenario == "legs" ? "craft-legs.json" : scenario == "stack" ? "craft-stack.json" : scenario == "reentry" ? "craft-reentry.json" : scenario == "docking" ? "craft-docking.json" : scenario.StartsWith("drop ") ? "craft-drop-" + scenario.Split(' ')[1] + ".json" : orbital ? "craft-rotation.json" : (scenario == "k1" || scenario == "partdump") ? "craft-k1.json" : "craft.json"));
+            bool orbital = scenario == "rotation" || scenario == "rcs" || scenario == "docking" || scenario == "thrustwarp";
+            var snapshot = IOProvider.FromJsonFile<OABHistoricalSnapshot>(Path.Combine(dir, scenario == "rcs" ? "craft-rcs.json" : scenario == "rover" ? "craft-rover.json" : scenario == "legs" ? "craft-legs.json" : (scenario == "stack" || scenario == "thrustwarp") ? "craft-stack.json" : scenario == "reentry" ? "craft-reentry.json" : scenario == "docking" ? "craft-docking.json" : scenario.StartsWith("drop ") ? "craft-drop-" + scenario.Split(' ')[1] + ".json" : orbital ? "craft-rotation.json" : (scenario == "k1" || scenario == "partdump") ? "craft-k1.json" : "craft.json"));
             var config = orbital
                 ? new OABConfig(OABVariant.VAB, OABEnvironmentType.Orbital, OABConstructionType.User, null)
                 : new OABConfig(OABVariant.VAB, OABEnvironmentType.Terrestrial, OABConstructionType.User, "Kerbin");
@@ -220,6 +220,7 @@ namespace OpenSpaceExplorer.Validation
             yield return Shot(orbital ? "04-orbit" : "04-pad");
             if (scenario == "rcs") { yield return Rcs(vessel); yield break; }
             if (scenario == "docking") { yield return DockingScenario.Run(vessel, dir, Mark); yield return Finish("docking"); yield break; }
+            if (scenario == "thrustwarp") { yield return ThrustWarp(vessel); yield break; }
             if (orbital) { yield return Rotation(vessel); yield break; }
             if (scenario == "rover") { yield return Rover(vessel); yield break; }
             if (scenario == "eva") { yield return Eva(vessel); yield break; }
@@ -660,6 +661,44 @@ namespace OpenSpaceExplorer.Validation
 
         // T13 joints: pod + six 1x4 tanks + Swivel; SAS on, full throttle 5 s, then full roll 3 s, then 3 s free.
         // Logs, every physics tick, each part's position in the pod's frame (pod = root) and the part count.
+        // T40 warp under thrust: the stack craft (pod, six 1x4 tanks, Swivel) in orbit, SAS on, full throttle;
+        // 10 s at 1x, then 30 game seconds at 10x and 100 at 100x, then 1x for 5 s, throttle off. Logs every tick.
+        IEnumerator ThrustWarp(VesselComponent vessel)
+        {
+            var inv = CultureInfo.InvariantCulture;
+            vessel.SetAutopilotEnableDisable(true);
+            G.ViewController.flightInputHandler.OverrideInputMaxThrottle(true);
+            yield return new WaitForSeconds(1f);
+            Begin(vessel, "thrustwarp-trace.csv");
+            vessel.ActivateNextStage();
+            Mark("staged, mass " + vessel.totalMass.ToString("R", inv) + " speed " + vessel.OrbitalSpeed.ToString("R", inv));
+            var tw = G.ViewController.TimeWarp;
+            double t0 = G.UniverseModel.UniverseTime;
+            float w = 0;
+            while (G.UniverseModel.UniverseTime < t0 + 10 && w < 30) { w += Time.unscaledDeltaTime; yield return null; }
+            foreach (var step in new[] { (3, 30.0), (5, 100.0) })
+            {
+                double s = G.UniverseModel.UniverseTime;
+                tw.SetRateIndex(step.Item1, true);
+                w = 0;
+                bool told = false;
+                while (G.UniverseModel.UniverseTime < s + step.Item2 && w < 120)
+                {
+                    w += Time.unscaledDeltaTime;
+                    if (!told && w > 2) { told = true; Mark("rate index " + tw.CurrentRateIndex + " rate " + tw.CurrentRate.ToString("R", inv) + " physics warp " + tw.IsPhysicsTimeWarp + " under-thrust orbital " + vessel.IsOrbitalPhysicsUnderThrustActive); }
+                    yield return null;
+                }
+                Mark("after rate index " + step.Item1 + ": ut " + (G.UniverseModel.UniverseTime - t0).ToString("F2", inv) + " mass " + vessel.totalMass.ToString("R", inv) + " speed " + vessel.OrbitalSpeed.ToString("R", inv) + " rate " + tw.CurrentRate.ToString("R", inv));
+            }
+            tw.StopTimeWarp(true);
+            yield return new WaitForSeconds(5f);
+            G.ViewController.flightInputHandler.OverrideInputThrottleCutoff(true);
+            yield return new WaitForSeconds(2f);
+            Mark("end: mass " + vessel.totalMass.ToString("R", inv) + " speed " + vessel.OrbitalSpeed.ToString("R", inv));
+            Stop();
+            yield return Finish("thrustwarp");
+        }
+
         IEnumerator Stack(VesselComponent vessel)
         {
             vessel.SetAutopilotEnableDisable(true);
