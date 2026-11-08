@@ -272,6 +272,8 @@ impl Editor {
         if self.craft.parts.is_empty() {
             self.craft.parts.push(CraftPart {
                 chute: None,
+                shape: None,
+                fairing: None,
                 symmetry: 0,
                 actions: Vec::new(),
                 flight: None,
@@ -366,6 +368,8 @@ impl Editor {
         let guid = self.next_guid();
         self.craft.parts.push(CraftPart {
             chute: None,
+            shape: None,
+            fairing: None,
             symmetry: 0,
             actions: Vec::new(),
             flight: None,
@@ -536,7 +540,18 @@ impl Editor {
         self.craft
             .parts
             .iter()
-            .map(|p| catalog.get(&p.part_id).map(|s| s.mass_t).unwrap_or(0.0))
+            .map(|p| {
+                // A shaped procedural wing weighs what its shape does.
+                p.shape
+                    .as_ref()
+                    .filter(|_| ose_data::procedural::is_procedural_wing(&p.part_id))
+                    .and_then(|sh| {
+                        ose_data::procedural::evaluate_cached(&p.part_id, sh, false)
+                            .map(|r| r.mass_t)
+                    })
+                    .or_else(|| catalog.get(&p.part_id).map(|s| s.mass_t))
+                    .unwrap_or(0.0)
+            })
             .sum()
     }
 }
@@ -867,6 +882,8 @@ impl Editor {
         };
         let mut p = CraftPart {
             chute: None,
+            shape: None,
+            fairing: None,
             symmetry: 0,
             actions: Vec::new(),
             flight: None,
@@ -1137,6 +1154,8 @@ impl Editor {
                 p.actions = src.actions.clone();
                 p.colors = src.colors;
                 p.chute = src.chute;
+                p.shape = src.shape.clone();
+                p.fairing = src.fairing.clone();
             }
         }
     }
@@ -1766,6 +1785,8 @@ impl Editor {
             out.push(self.craft.parts.len());
             self.craft.parts.push(CraftPart {
                 chute: None,
+                shape: None,
+                fairing: None,
                 symmetry: 0,
                 actions: Vec::new(),
                 flight: mirrored.then(|| ose_data::flight_geometry::PartFlight {
@@ -2007,8 +2028,10 @@ pub fn pam_html(craft: &Craft, i: usize, catalog: &Catalog) -> String {
         .unwrap_or_default();
     format!(
         "<div class=\"pam-head\"><b>{title}</b><button id=\"pam-close\" title=\"Close (Esc)\">&#10005;</button></div>{stage}\
-         {crossfeed}{rows}{chute}{groups}",
+         {wing}{fairing}{crossfeed}{rows}{chute}{groups}",
         title = esc(title),
+        wing = wing_shape_html(p),
+        fairing = fairing_html(p),
         groups = action_groups_html(&p.actions, &kinds),
     )
 }
@@ -2079,6 +2102,204 @@ pub fn chute_mode(name: &str) -> Option<ose_data::craft::ChuteMode> {
         "Immediate" => Some(M::Immediate),
         _ => None,
     }
+}
+
+/// A procedural wing's shape controls (`ProceduralPartUI`): the control surface switch where the part has a
+/// mesh option without one, then each slider under its group (Wing, Wing Root, Wing Tip, Control Surface)
+/// with what it measures, and the mass and lift that follow.
+pub fn wing_shape_html(p: &CraftPart) -> String {
+    use ose_data::procedural as pw;
+    let Some(rig) = pw::rig(&p.part_id) else {
+        return String::new();
+    };
+    let shape = p.shape.clone().unwrap_or(pw::WingShape {
+        option: rig.options.len().saturating_sub(1) as u32,
+        ..Default::default()
+    });
+    let Some(option) = rig.options.get(shape.option as usize) else {
+        return String::new();
+    };
+    let mirrored = p.flight.as_ref().is_some_and(|f| f.mirrored);
+    let result = pw::evaluate_cached(&p.part_id, &shape, mirrored);
+    let mut html = String::from("<div class=\"pam-sub pam-wing-head\">Wing Shape</div>");
+    // The options differ by their `ControlSurface` attribute (`_0e` none, `_1e` one).
+    if rig.options.len() > 1 {
+        let has = option
+            .attributes
+            .get("ControlSurface")
+            .is_some_and(|v| v != "0");
+        html.push_str(&format!(
+            "<label class=\"pam-row\"><span>Control Surface</span><input type=\"checkbox\" id=\"pam-wing-ctrl\"{} /></label>",
+            if has { " checked" } else { "" }
+        ));
+    }
+    // Grouped as the original's panel lists them: each group once, in order of first appearance.
+    let mut groups: Vec<&str> = Vec::new();
+    for s in &option.sliders {
+        if !groups.contains(&s.group.as_str()) {
+            groups.push(&s.group);
+        }
+    }
+    let mut ordered: Vec<&pw::Slider> = Vec::new();
+    for g in &groups {
+        ordered.extend(option.sliders.iter().filter(|s| s.group == *g));
+    }
+    let mut group = String::new();
+    for s in ordered {
+        if s.group != group {
+            group.clone_from(&s.group);
+            html.push_str(&format!(
+                "<div class=\"pam-sub\">{}</div>",
+                pw::label(&s.group)
+            ));
+        }
+        let v = shape.slider(&s.name).unwrap_or(s.start);
+        let shown = result
+            .as_ref()
+            .and_then(|r| r.measurements.iter().find(|(n, _)| *n == s.name))
+            .map(|(_, m)| *m)
+            .filter(|m| *m > 0.0)
+            .map_or_else(|| format!("{:.0}%", v * 100.0), |m| format!("{m:.2} m"));
+        html.push_str(&format!(
+            "<label class=\"pam-row\"><span>{label}</span><input type=\"range\" data-wing=\"{name}\" min=\"0\" max=\"1\" step=\"0.005\" value=\"{v}\" /><b>{shown}</b></label>",
+            label = pw::label(&s.label),
+            name = s.name,
+        ));
+    }
+    if let Some(r) = &result {
+        html.push_str(&format!(
+            "<div class=\"pam-sub\" id=\"pam-wing-stats\">{:.3} t \u{b7} lift {:.2} \u{b7} control {:.2}</div>",
+            r.mass_t, r.fixed_lift_coeff, r.moving_lift_coeff
+        ));
+    }
+    html
+}
+
+/// A procedural fairing's wall editor (`ProceduralFairingEditUI`): how it comes apart and how hard, whether it
+/// is capped, and each wall section's rise and radius above the base, with the panels' mass. Without a wall of
+/// its own the fairing wraps whatever stands on it.
+pub fn fairing_html(p: &CraftPart) -> String {
+    let Some(def) = ose_data::fairing::def(&p.part_id) else {
+        return String::new();
+    };
+    let mut html = String::from("<div class=\"pam-sub pam-wing-head\">Fairing</div>");
+    let Some(f) = p.fairing.as_ref() else {
+        html.push_str(
+            "<div class=\"pam-row\"><span>Wall</span><span>automatic</span>\
+             <button data-fair-act=\"make\">Shape</button></div>",
+        );
+        return html;
+    };
+    let kinds = [(2u8, "2"), (3, "3"), (4, "4"), (0, "Shroud")];
+    let buttons: String = kinds
+        .iter()
+        .map(|(n, label)| {
+            format!(
+                "<button data-fair-act=\"pieces:{n}\"{}>{label}</button>",
+                if f.pieces == *n { " class=\"on\"" } else { "" }
+            )
+        })
+        .collect();
+    html.push_str(&format!(
+        "<div class=\"pam-row\"><span>Deploy</span><span class=\"pam-fair-kinds\">{buttons}</span><b></b></div>"
+    ));
+    html.push_str(&format!(
+        "<label class=\"pam-row\"><span>Ejection force</span><input type=\"range\" id=\"pam-fair-eject\" min=\"0\" max=\"1000\" step=\"10\" value=\"{v}\" /><b>{v:.0}</b></label>",
+        v = f.ejection_force
+    ));
+    html.push_str(&format!(
+        "<label class=\"pam-row\"><span>Capped</span><input type=\"checkbox\" id=\"pam-fair-cap\"{} /></label>",
+        if f.capped { " checked" } else { "" }
+    ));
+    for k in 0..f.sections.len() {
+        let (h, r) = f.sections[k];
+        if k > 0 {
+            let rise = h - f.sections[k - 1].0;
+            html.push_str(&format!(
+                "<label class=\"pam-row\"><span>Section {k} rise</span><input type=\"range\" data-fair=\"h{k}\" min=\"{lo}\" max=\"{hi}\" step=\"{st}\" value=\"{rise}\" /><b>{rise:.2} m</b></label>",
+                lo = def.height_min,
+                hi = def.height_max,
+                st = def.length_snap,
+            ));
+        }
+        html.push_str(&format!(
+            "<label class=\"pam-row\"><span>{label} radius</span><input type=\"range\" data-fair=\"r{k}\" min=\"0\" max=\"{max}\" step=\"{st}\" value=\"{r}\" /><b>{r:.2} m</b></label>",
+            label = if k == 0 { "Base".to_string() } else { format!("Section {k}") },
+            max = def.max_radius,
+            st = def.radius_snap,
+        ));
+    }
+    html.push_str(&format!(
+        "<div class=\"pam-row\"><span></span><span><button data-fair-act=\"add\">Add section</button> \
+         <button data-fair-act=\"remove\">Remove top</button> <button data-fair-act=\"auto\">Automatic</button></span><b></b></div>\
+         <div class=\"pam-sub\" id=\"pam-fair-stats\">panels {:.3} t \u{b7} {:.1} m\u{b2} \u{b7} {:.1} m/s off</div>",
+        f.panel_mass_t(def),
+        f.area_m2(),
+        f.ejection_speed_mps(),
+    ));
+    html
+}
+
+/// One fairing editor action on part `p` (see `fairing_html`): `make`, `auto`, `add`, `remove`,
+/// `pieces:<n>`, `cap:<0|1>`, `eject:<kN>`, `h<k>:<rise>`, `r<k>:<radius>`. Returns whether the wall changed.
+pub fn edit_fairing(p: &mut CraftPart, action: &str) -> bool {
+    let Some(def) = ose_data::fairing::def(&p.part_id) else {
+        return false;
+    };
+    let before = p.fairing.clone();
+    let (key, value) = action.split_once(':').unwrap_or((action, ""));
+    let num = value.parse::<f64>().ok();
+    match key {
+        "make" => p.fairing = Some(ose_data::fairing::FairingShape::cylinder(def, 2.0)),
+        "auto" => p.fairing = None,
+        _ => {}
+    }
+    let Some(f) = p.fairing.as_mut() else {
+        return before != p.fairing;
+    };
+    match (key, num) {
+        ("add", _) if f.sections.len() < 32 => {
+            let (h, r) = *f.sections.last().expect("sections");
+            f.sections.push((
+                h + def
+                    .height_min
+                    .max(def.length_snap)
+                    .max(0.5)
+                    .min(def.height_max),
+                r,
+            ));
+        }
+        ("remove", _) if f.sections.len() > 2 => {
+            f.sections.pop();
+        }
+        ("pieces", Some(n)) if matches!(n as u8, 0 | 2 | 3 | 4) => f.pieces = n as u8,
+        ("cap", Some(v)) => f.capped = v > 0.5,
+        ("eject", Some(v)) => f.ejection_force = v.clamp(0.0, 1000.0),
+        (k, Some(v)) if k.starts_with('h') => {
+            if let Some(i) = k[1..]
+                .parse::<usize>()
+                .ok()
+                .filter(|i| *i >= 1 && *i < f.sections.len())
+            {
+                let rise = v.clamp(def.height_min, def.height_max);
+                let shift = f.sections[i - 1].0 + rise - f.sections[i].0;
+                for s in &mut f.sections[i..] {
+                    s.0 += shift;
+                }
+            }
+        }
+        (k, Some(v)) if k.starts_with('r') => {
+            if let Some(i) = k[1..]
+                .parse::<usize>()
+                .ok()
+                .filter(|i| *i < f.sections.len())
+            {
+                f.sections[i].1 = v.clamp(0.0, def.max_radius);
+            }
+        }
+        _ => {}
+    }
+    before != p.fairing
 }
 
 /// Action groups a part action can be bound to (`KSPActionGroup` bits, protocol 57), as the original's

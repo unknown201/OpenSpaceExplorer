@@ -548,11 +548,13 @@ impl VabView {
         let mut lo_all = DVec3::splat(f64::INFINITY);
         let mut hi_all = DVec3::splat(f64::NEG_INFINITY);
         let mut placed: Vec<(usize, String, DVec3, DQuat)> = Vec::new();
+        let mut shaped = std::collections::HashSet::new();
         for (i, (p, (pos, q))) in craft.parts.iter().zip(poses.iter()).enumerate() {
-            let name = format!("part:{}", p.part_id);
-            gpu.request_model(&name, &format!("assets/parts/{}.glb", p.part_id));
+            // Procedural wings draw their own shape once it is built.
+            let name = crate::wing_mesh::model_for(gpu, p, &mut shaped);
             placed.push((i, name, centre + to_gltf(*pos), quat_to_gltf(*q)));
         }
+        gpu.retain_models("wing:", &shaped);
         self.poses.clone_from(&placed);
         for (i, name, wpos, wrot) in &placed {
             let (lo, hi) = match gpu.model(name) {
@@ -632,12 +634,25 @@ impl VabView {
             gpu.request_model("fx:fairing_ring", "assets/fx/fairing_ring.glb");
             gpu.request_model("fx:fairing_nose", "assets/fx/fairing_nose.glb");
         }
-        for (fi, fname, fpos, _) in placed.iter().filter(|p| p.1.starts_with("part:fairing_")) {
-            if self.icon_mode
-                || !gpu.has_model("fx:fairing_ring")
-                || !gpu.has_model("fx:fairing_nose")
-            {
+        for (fi, fname, fpos, frot) in placed.iter().filter(|p| p.1.starts_with("part:fairing_")) {
+            if self.icon_mode {
                 break;
+            }
+            // A wall of its own: its panels, at the part's pose.
+            if craft.parts[*fi].fairing.is_some() {
+                if let Some(names) = crate::fairing_mesh::models_for(gpu, &craft.parts[*fi]) {
+                    for name in names {
+                        let mut it = DrawItem::lit(name, *fpos - cam_pos, *frot, 1.0, light);
+                        it.ambient = 0.45;
+                        it.fill_dir = -forward;
+                        it.fill = 0.35;
+                        items.push(it);
+                    }
+                }
+                continue;
+            }
+            if !gpu.has_model("fx:fairing_ring") || !gpu.has_model("fx:fairing_nose") {
+                continue;
             }
             let Some(base) = gpu.model(fname) else {
                 continue;

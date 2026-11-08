@@ -76,6 +76,12 @@ pub struct CraftPart {
     /// symmetry share one nonzero id, and the editor keeps them alike; 0 for none.
     #[serde(default)]
     pub symmetry: u32,
+    /// A procedural wing's shape (`Data_ProceduralPart`); `None` keeps the authored start shape.
+    #[serde(default)]
+    pub shape: Option<crate::procedural::WingShape>,
+    /// A procedural fairing's wall (`Data_Fairing.CrossSections`); `None` wraps whatever stands on the base.
+    #[serde(default)]
+    pub fairing: Option<crate::fairing::FairingShape>,
     /// A parachute's deploy settings when changed from the part's own (`Data_Parachute` `DeploymentMode`,
     /// `minAirPressureToOpen`, `deployAltitude`); `None` keeps the part's defaults.
     #[serde(default)]
@@ -126,6 +132,49 @@ pub fn custom_group_bit(n: u8) -> u32 {
 }
 
 impl CraftPart {
+    /// Derive a procedural wing's mass, lift and control surface from its shape (`ose_data::procedural`),
+    /// replacing whatever `flight` held. Run wherever a craft is accepted (the server on launch, the editor on
+    /// every change) so a client cannot claim its own numbers. Other parts are left alone.
+    pub fn apply_shape(&mut self, def: &PartDef) {
+        // A shaped fairing weighs its base and its panels (`Data_Fairing.MassModifierAmount`).
+        match (crate::fairing::def(&def.id), self.fairing.take()) {
+            (Some(fd), Some(f)) if f.valid_for(&def.id) => {
+                let flight =
+                    self.flight
+                        .get_or_insert_with(|| crate::flight_geometry::PartFlight {
+                            part_id: def.id.clone(),
+                            ..Default::default()
+                        });
+                flight.part_id = def.id.clone();
+                flight.dry_mass_t = Some(def.mass_t + f.panel_mass_t(fd));
+                self.fairing = Some(f);
+            }
+            _ => {}
+        }
+        if !crate::procedural::is_procedural_wing(&def.id) {
+            self.shape = None;
+            return;
+        }
+        let rig = crate::procedural::rig(&def.id).expect("procedural rig");
+        let shape = self
+            .shape
+            .take()
+            .filter(|s| s.valid_for(&def.id))
+            .unwrap_or_else(|| crate::procedural::WingShape {
+                option: rig.options.len().saturating_sub(1) as u32,
+                ..Default::default()
+            });
+        let mirrored = self.flight.as_ref().is_some_and(|f| f.mirrored);
+        if let Some(mut f) = crate::procedural::flight(&def.id, &shape, mirrored) {
+            if let (Some(s), Some(authored)) = (&mut f.surface, &def.flight_geometry.surface) {
+                s.range_deg = def.ctrl_range_deg;
+                s.speed = authored.speed;
+            }
+            self.flight = Some(f);
+        }
+        self.shape = Some(shape);
+    }
+
     pub fn dry_mass(&self, def: &PartDef) -> f64 {
         self.flight
             .as_ref()
@@ -292,6 +341,15 @@ pub fn delta_v_vacuum_mps(craft: &Craft, parts: &[PartDef], resources: &[Resourc
 }
 
 impl Craft {
+    /// `CraftPart::apply_shape` on every part whose definition is known.
+    pub fn apply_shapes(&mut self, parts: &[PartDef]) {
+        for p in &mut self.parts {
+            if let Some(def) = parts.iter().find(|d| d.id == p.part_id) {
+                p.apply_shape(def);
+            }
+        }
+    }
+
     /// Give every part its own guid: a repeat keeps the first part's and the later ones get new `p<n>` past the
     /// highest in use. Parts are matched by guid between a craft and its flight (what is still attached, which
     /// stage holds what), and an editor that once numbered new parts by count left repeats after deletions.

@@ -1,0 +1,8 @@
+# <part name> KEY=value ... (sliders 0..1; OPTION=n picks the mesh option). Applied in order to the first
+# non-mirrored part of that name in craft.json, each followed by a dump.
+wing_1v_procedural_light WING_SPAN=0.6
+wing_1v_procedural_light WING_SPAN=0.2 ROOT_LENGTH=0.6 TIP_LENGTH=0.2 WING_ANGLE=0.7
+wing_1v_procedural_light ROOT_LENGTH=0.33 TIP_LENGTH=0.03 WING_ANGLE=0.36 ROOT_THICKNESS=0.5 TIP_THICKNESS=0.3
+wing_1v_procedural_light ROOT_THICKNESS=0.1 TIP_THICKNESS=0.04 CONTROL_SPAN=0.5 CONTROL_LENGTH=0.8 CONTROL_POSITION=0.3
+wing_1v_procedural_light OPTION=0
+stabilizer_1v_procedural_light WING_SPAN=0.5 ROOT_LENGTH=0.4

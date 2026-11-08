@@ -25,6 +25,7 @@ pub mod authored_trails;
 pub mod engine_fx;
 #[cfg(target_arch = "wasm32")]
 mod engine_fx_gpu;
+pub mod fairing_mesh;
 #[cfg(target_arch = "wasm32")]
 pub mod flight3d;
 pub mod ftue;
@@ -78,6 +79,7 @@ pub mod vab;
 #[cfg(target_arch = "wasm32")]
 pub mod vab3d;
 pub mod vapor;
+pub mod wing_mesh;
 
 use scene::{Camera, Scene, TimeSync};
 use std::cell::RefCell;
@@ -3213,6 +3215,16 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                 });
             } else if input.id() == "pam-crossfeed" {
                 app.vab_pam_changed(None, 0.0, Some(input.checked()));
+            } else if input.id() == "pam-wing-ctrl" {
+                app.vab_wing_changed(None, input.checked() as u8 as f64);
+            } else if let Some(name) = input.get_attribute("data-wing") {
+                app.vab_wing_changed(Some(&name), input.value_as_number());
+            } else if input.id() == "pam-fair-cap" {
+                app.vab_fairing_changed(&format!("cap:{}", input.checked() as u8));
+            } else if input.id() == "pam-fair-eject" {
+                app.vab_fairing_changed(&format!("eject:{}", input.value_as_number()));
+            } else if let Some(k) = input.get_attribute("data-fair") {
+                app.vab_fairing_changed(&format!("{k}:{}", input.value_as_number()));
             } else if let Some(k) = input.get_attribute("data-res").and_then(|v| v.parse().ok()) {
                 app.vab_pam_changed(Some(k), input.value_as_number(), None);
             }
@@ -3249,6 +3261,17 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                     e.get_attribute("data-agbit")?.parse::<u32>().ok()?,
                 ))
             });
+            if let Some(act) = t
+                .as_ref()
+                .and_then(|e| e.closest("[data-fair-act]").ok().flatten())
+                .and_then(|e| e.get_attribute("data-fair-act"))
+            {
+                app.vab_fairing_changed(&act);
+                if let (Some(i), Some(el)) = (app.vab_pam, app.doc.get_element_by_id("vab-pam")) {
+                    el.set_inner_html(&vab::pam_html(&app.editor.craft, i, &app.catalog));
+                }
+                return;
+            }
             if let (Some((kind, bit)), Some(i)) = (chip, app.vab_pam) {
                 app.vab_record();
                 if let Some(p) = app.editor.craft.parts.get_mut(i) {
@@ -8294,6 +8317,126 @@ impl App {
         }
         self.editor.sync_symmetry(i);
         // Ask for a fresh staging readout (delta-v follows the fill) without redrawing the window.
+        self.vab_report_due = Some(now_ms() + 300.0);
+    }
+
+    /// A procedural wing's slider (`name`) or, without one, its control surface switch: reshape the part and
+    /// its symmetry set, refresh the readouts beside the sliders and the drawn mesh.
+    fn vab_wing_changed(&mut self, name: Option<&str>, value: f64) {
+        let Some(i) = self.vab_pam else { return };
+        let Some(p) = self.editor.craft.parts.get(i) else {
+            return;
+        };
+        let Some(rig) = ose_data::procedural::rig(&p.part_id) else {
+            return;
+        };
+        if !self.vab_pam_recorded {
+            self.vab_pam_recorded = true;
+            self.vab_record();
+        }
+        let p = &mut self.editor.craft.parts[i];
+        let mut shape = p.shape.clone().unwrap_or(ose_data::procedural::WingShape {
+            option: rig.options.len().saturating_sub(1) as u32,
+            ..Default::default()
+        });
+        match name {
+            Some(n) => shape.set_slider(n, value),
+            None => {
+                let want = if value > 0.5 { "1" } else { "0" };
+                if let Some(k) = rig.options.iter().position(|o| {
+                    o.attributes.get("ControlSurface").map(String::as_str) == Some(want)
+                }) {
+                    shape.option = k as u32;
+                }
+            }
+        }
+        p.shape = Some(shape);
+        self.editor.sync_symmetry(i);
+        // Rewrite the window's readouts (a switch changes the slider list too).
+        if let Some(el) = self.doc.get_element_by_id("vab-pam") {
+            if name.is_some() {
+                let html = crate::vab::wing_shape_html(&self.editor.craft.parts[i]);
+                if let Ok(Some(stats)) = self.doc.query_selector("#pam-wing-stats") {
+                    let fresh = html
+                        .split("id=\"pam-wing-stats\">")
+                        .nth(1)
+                        .and_then(|t| t.split("</div>").next())
+                        .unwrap_or("");
+                    stats.set_inner_html(fresh);
+                }
+                for part in html.split("<label class=\"pam-row\">").skip(1) {
+                    let (Some(n), Some(b)) = (
+                        part.split("data-wing=\"")
+                            .nth(1)
+                            .and_then(|t| t.split('"').next()),
+                        part.split("<b>")
+                            .nth(1)
+                            .and_then(|t| t.split("</b>").next()),
+                    ) else {
+                        continue;
+                    };
+                    if let Ok(Some(e)) = self
+                        .doc
+                        .query_selector(&format!("#vab-pam input[data-wing=\"{n}\"] + b"))
+                    {
+                        e.set_text_content(Some(b));
+                    }
+                }
+            } else {
+                el.set_inner_html(&crate::vab::pam_html(&self.editor.craft, i, &self.catalog));
+            }
+        }
+        self.render_vab_view();
+        self.vab_report_due = Some(now_ms() + 300.0);
+    }
+
+    /// A fairing wall edit from the part manager (`vab::edit_fairing`): reshape the part and its set, refresh
+    /// the readouts.
+    fn vab_fairing_changed(&mut self, action: &str) {
+        let Some(i) = self.vab_pam else { return };
+        if i >= self.editor.craft.parts.len() {
+            return;
+        }
+        if !self.vab_pam_recorded {
+            self.vab_pam_recorded = true;
+            self.vab_record();
+        }
+        if !vab::edit_fairing(&mut self.editor.craft.parts[i], action) {
+            return;
+        }
+        self.editor.sync_symmetry(i);
+        // Slider drags update their readouts in place; the window is rebuilt for button actions.
+        let html = vab::fairing_html(&self.editor.craft.parts[i]);
+        for part in html.split("<label class=\"pam-row\">").skip(1) {
+            let key = part
+                .split("data-fair=\"")
+                .nth(1)
+                .map(|t| format!("input[data-fair=\"{}\"]", t.split('"').next().unwrap_or("")))
+                .or_else(|| {
+                    part.contains("id=\"pam-fair-eject\"")
+                        .then(|| "#pam-fair-eject".to_string())
+                });
+            let (Some(key), Some(b)) = (
+                key,
+                part.split("<b>")
+                    .nth(1)
+                    .and_then(|t| t.split("</b>").next()),
+            ) else {
+                continue;
+            };
+            if let Ok(Some(e)) = self.doc.query_selector(&format!("#vab-pam {key} + b")) {
+                e.set_text_content(Some(b));
+            }
+        }
+        if let Ok(Some(stats)) = self.doc.query_selector("#pam-fair-stats") {
+            let fresh = html
+                .split("id=\"pam-fair-stats\">")
+                .nth(1)
+                .and_then(|t| t.split("</div>").next())
+                .unwrap_or("");
+            stats.set_inner_html(fresh);
+        }
+        self.render_vab_view();
         self.vab_report_due = Some(now_ms() + 300.0);
     }
 
