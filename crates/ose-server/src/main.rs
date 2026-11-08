@@ -15,6 +15,7 @@ mod crew_docking;
 mod packages;
 mod previews;
 mod replay;
+mod rooms;
 mod save;
 mod science;
 mod streaming;
@@ -192,6 +193,15 @@ struct PartInfo {
     is_decoupler: bool,
     /// Fuel flows through the part (decouplers and separators: never).
     fuel_cross_feed: bool,
+    /// A parachute's default opening pressure (atm) and full-deploy height (m), for its part window.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parachute: Option<ChuteInfo>,
+}
+
+#[derive(serde::Serialize)]
+struct ChuteInfo {
+    min_pressure_atm: f64,
+    deploy_altitude_m: f64,
 }
 
 #[derive(serde::Serialize)]
@@ -293,6 +303,10 @@ fn part_infos(parts: &[ose_data::PartDef]) -> Vec<PartInfo> {
                     "DecouplerHorizontal" | "DecouplerVertical"
                 ) || p.category == "Coupling",
                 fuel_cross_feed: p.fuel_cross_feed,
+                parachute: p.parachute.as_ref().map(|c| ChuteInfo {
+                    min_pressure_atm: c.min_pressure_atm,
+                    deploy_altitude_m: c.deploy_altitude_m,
+                }),
             }
         })
         .collect()
@@ -308,38 +322,42 @@ async fn json_route(body: Arc<String>) -> impl IntoResponse {
     )
 }
 
+/// One live campaign (a "room"): its universe runs on its own clock and streams to the players in it.
+/// Several rooms run side by side, so two players can each play their own campaign (`rooms.rs`). What
+/// every room shares (accounts, saved crafts, the shelf of campaigns waiting to be resumed, the catalogs)
+/// sits behind `Arc`s handed to each room.
 struct Shared {
     universe: Mutex<Universe>,
     streams: streaming::Streams,
     /// Messages for one player's connections (finished experiments), picked up by their stream.
     pending: Mutex<Vec<(u64, ServerMessage)>>,
-    science: science::ScienceData,
-    catalog: Vec<BodyInfo>,
+    science: Arc<science::ScienceData>,
+    catalog: Arc<Vec<BodyInfo>>,
     /// Body rotation, index-aligned with `catalog`.
-    spins: Vec<ose_net::BodySpin>,
-    parts: Vec<ose_data::PartDef>,
-    resources: Vec<ose_data::ResourceDef>,
-    accounts: Mutex<accounts::Accounts>,
+    spins: Arc<Vec<ose_net::BodySpin>>,
+    parts: Arc<Vec<ose_data::PartDef>>,
+    resources: Arc<Vec<ose_data::ResourceDef>>,
+    accounts: Arc<Mutex<accounts::Accounts>>,
     /// Vessel entity -> (vessel id, owner player id).
     vessels: Mutex<Vec<(bevy_ecs::entity::Entity, u64, Option<u64>)>>,
     campaign: Mutex<save::Campaign>,
     difficulty: ServerMessage,
-    stock_crafts: Vec<ose_data::craft::Craft>,
-    crafts: Mutex<Vec<save::SavedCraft>>,
+    stock_crafts: Arc<Vec<ose_data::craft::Craft>>,
+    crafts: Arc<Mutex<Vec<save::SavedCraft>>>,
     /// Display names by player id for this process lifetime.
-    names: Mutex<std::collections::HashMap<u64, String>>,
+    names: Arc<Mutex<std::collections::HashMap<u64, String>>>,
     /// Warp each connected player is willing to run at; the universe runs at the minimum (lowest wins).
     warp_requests: Mutex<std::collections::HashMap<u64, u32>>,
-    connections: Mutex<std::collections::HashMap<u64, usize>>,
-    /// What a new campaign's universe is built from, the campaigns waiting to be resumed, and the players
-    /// playing the live one (joined and not left).
-    setup: campaigns::WorldSetup,
-    shelf: Mutex<Vec<save::ShelvedCampaign>>,
+    connections: Arc<Mutex<std::collections::HashMap<u64, usize>>>,
+    /// What a new campaign's universe is built from, the campaigns waiting to be resumed (shared by every
+    /// room), and the players playing this room's campaign (joined and not left).
+    setup: Arc<campaigns::WorldSetup>,
+    shelf: Arc<Mutex<Vec<save::ShelvedCampaign>>>,
     playing: Mutex<std::collections::HashSet<u64>>,
     /// The last pad launch, for revert.
     revert: Mutex<Option<campaigns::RevertPoint>>,
     /// The original's Kerbals (veterans first), and the roster last pushed to the players.
-    kerbals: Vec<ose_data::KerbalDef>,
+    kerbals: Arc<Vec<ose_data::KerbalDef>>,
     last_roster: Mutex<Option<ServerMessage>>,
     /// The vessel each player last commanded (`CampaignMember::flying`).
     flying: Mutex<std::collections::HashMap<u64, u64>>,
@@ -349,6 +367,10 @@ struct Shared {
     steps: std::sync::atomic::AtomicU64,
     /// The rolling recording a bug report files (`replay.rs`).
     recorder: Mutex<replay::Recorder>,
+    /// Every live room on this server, and which room each player is in.
+    rooms: Arc<rooms::Rooms>,
+    /// Set when the room is put away (its campaign shelved): its clock and streams stop.
+    closed: std::sync::atomic::AtomicBool,
 }
 
 /// Apply lowest-wins warp arbitration. Returns (effective warp, the player holding it down, if any).
@@ -539,15 +561,15 @@ async fn main() -> anyhow::Result<()> {
         universe: Mutex::new(universe),
         streams: streaming::Streams::default(),
         pending: Mutex::new(Vec::new()),
-        science: science::ScienceData {
+        science: Arc::new(science::ScienceData {
             tech: serde_json::from_str(EMBEDDED_TECH_TREE)?,
             missions: serde_json::from_str(EMBEDDED_MISSIONS)?,
-        },
-        catalog,
-        spins,
-        parts: serde_json::from_str(EMBEDDED_PARTS)?,
-        resources: serde_json::from_str(EMBEDDED_RESOURCES)?,
-        accounts: Mutex::new({
+        }),
+        catalog: Arc::new(catalog),
+        spins: Arc::new(spins),
+        parts: Arc::new(serde_json::from_str(EMBEDDED_PARTS)?),
+        resources: Arc::new(serde_json::from_str(EMBEDDED_RESOURCES)?),
+        accounts: Arc::new(Mutex::new({
             let db = if replaying.is_some() {
                 PathBuf::from(":memory:")
             } else {
@@ -556,26 +578,29 @@ async fn main() -> anyhow::Result<()> {
             let acc = accounts::Accounts::open(&db)?;
             tracing::info!(db = %args.db.display(), players = acc.count()?, "accounts opened");
             acc
-        }),
+        })),
         vessels: Mutex::new(registry),
         campaign: Mutex::new(campaign),
         difficulty: difficulty_message()?,
-        stock_crafts: serde_json::from_str(EMBEDDED_STOCK_CRAFT)?,
-        crafts: Mutex::new(crafts),
-        names: Mutex::new(std::collections::HashMap::new()),
+        stock_crafts: Arc::new(serde_json::from_str(EMBEDDED_STOCK_CRAFT)?),
+        crafts: Arc::new(Mutex::new(crafts)),
+        names: Arc::default(),
         warp_requests: Mutex::new(std::collections::HashMap::new()),
-        connections: Mutex::new(std::collections::HashMap::new()),
-        setup,
-        shelf: Mutex::new(shelf),
+        connections: Arc::default(),
+        setup: Arc::new(setup),
+        shelf: Arc::new(Mutex::new(shelf)),
         playing: Mutex::new(std::collections::HashSet::new()),
         revert: Mutex::new(None),
-        kerbals: serde_json::from_str(EMBEDDED_KERBALS)?,
+        kerbals: Arc::new(serde_json::from_str(EMBEDDED_KERBALS)?),
         last_roster: Mutex::new(None),
         flying: Mutex::new(std::collections::HashMap::new()),
         test_probe: args.test_probe,
         steps: std::sync::atomic::AtomicU64::new(0),
         recorder: Mutex::new(replay::Recorder::default()),
+        rooms: Arc::default(),
+        closed: std::sync::atomic::AtomicBool::new(false),
     });
+    shared.rooms.set_primary(shared.clone());
 
     if let Some(rep) = &replaying {
         let radius = defs
@@ -591,39 +616,7 @@ async fn main() -> anyhow::Result<()> {
         }
         return Ok(());
     }
-    replay::begin(&shared);
-
-    streaming::start(shared.clone());
-    let sim = shared.clone();
-    tokio::spawn(async move {
-        let period = std::time::Duration::from_micros(1_000_000 / ose_sim::TICKS_PER_SECOND);
-        let mut interval = tokio::time::interval(period);
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        // Steps are owed by the wall clock, not by timer wakes: a late wake (the timer's granularity is
-        // 16 ms on Windows; a slow step anywhere) is followed by the steps it missed, so universal time
-        // keeps pace with real time. A backlog beyond `MAX_CATCH_UP` steps is dropped instead: the
-        // simulation cannot keep up, and time runs slow rather than spiralling. Only at warp 1: a step
-        // under warp covers that many ticks, so a burst of them would jump universal time by seconds
-        // and overshoot what a player (or the bot) is coasting toward.
-        const MAX_CATCH_UP: u32 = 5;
-        let mut due = tokio::time::Instant::now();
-        loop {
-            interval.tick().await;
-            let now = tokio::time::Instant::now();
-            let warped = sim.universe.lock().expect("sim lock").warp() > 1;
-            if warped || due + period * MAX_CATCH_UP < now {
-                due = now;
-            }
-            let mut owed = 0;
-            while due <= now && owed < MAX_CATCH_UP {
-                due += period;
-                owed += 1;
-            }
-            for _ in 0..owed {
-                step_once(&sim);
-            }
-        }
-    });
+    start_room(shared.clone());
 
     if let Some(p) = save_path.clone() {
         let saver = shared.clone();
@@ -633,15 +626,7 @@ async fn main() -> anyhow::Result<()> {
             interval.tick().await;
             loop {
                 interval.tick().await;
-                let file = {
-                    let u = saver.universe.lock().expect("sim lock");
-                    let v = saver.vessels.lock().expect("vessels lock");
-                    let c = saver.campaign.lock().expect("campaign lock");
-                    let k = saver.crafts.lock().expect("crafts lock");
-                    let mut file = save::capture(&u, &v, &c, &k);
-                    file.shelf = saver.shelf.lock().expect("shelf lock").clone();
-                    file
-                };
+                let file = rooms::save_file(&saver);
                 match save::write(&p, &file) {
                     Ok(()) => {
                         tracing::debug!(tick = file.tick.0, vessels = file.vessels.len(), "saved")
@@ -689,7 +674,7 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/resources.json",
             get({
-                let body = Arc::new(serde_json::to_string(&shared.resources)?);
+                let body = Arc::new(serde_json::to_string(&*shared.resources)?);
                 move || json_route(body.clone())
             }),
         )
@@ -722,6 +707,45 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(listen = %args.listen, "server listening");
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+/// Run a room: its clock, its streams and its replay recorder, until the room is put away.
+fn start_room(room: AppState) {
+    replay::begin(&room);
+    streaming::start(room.clone());
+    tokio::spawn(async move {
+        let sim = room;
+        let period = std::time::Duration::from_micros(1_000_000 / ose_sim::TICKS_PER_SECOND);
+        let mut interval = tokio::time::interval(period);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // Steps are owed by the wall clock, not by timer wakes: a late wake (the timer's granularity is
+        // 16 ms on Windows; a slow step anywhere) is followed by the steps it missed, so universal time
+        // keeps pace with real time. A backlog beyond `MAX_CATCH_UP` steps is dropped instead: the
+        // simulation cannot keep up, and time runs slow rather than spiralling. Only at warp 1: a step
+        // under warp covers that many ticks, so a burst of them would jump universal time by seconds
+        // and overshoot what a player (or the bot) is coasting toward.
+        const MAX_CATCH_UP: u32 = 5;
+        let mut due = tokio::time::Instant::now();
+        loop {
+            interval.tick().await;
+            if sim.closed.load(std::sync::atomic::Ordering::SeqCst) {
+                break;
+            }
+            let now = tokio::time::Instant::now();
+            let warped = sim.universe.lock().expect("sim lock").warp() > 1;
+            if warped || due + period * MAX_CATCH_UP < now {
+                due = now;
+            }
+            let mut owed = 0;
+            while due <= now && owed < MAX_CATCH_UP {
+                due += period;
+                owed += 1;
+            }
+            for _ in 0..owed {
+                step_once(&sim);
+            }
+        }
+    });
 }
 
 /// One simulation step and what runs with it (docking latches; once a second missions, the roster, science
@@ -1271,8 +1295,9 @@ fn flight_readout(
                     .collect()
             })
             .unwrap_or_default(),
+        // what the HUD's Undock parts: flight-docked joints and ports joined in the VAB
         docked: u
-            .docked_links(e)
+            .undockable_joints(e, defs)
             .into_iter()
             .map(|(a, b)| (a as u16, b as u16))
             .collect(),
@@ -1473,7 +1498,8 @@ fn terrain_index() -> ose_data::terrain::TerrainIndex {
 /// scene's launch pad 1 spawn on the pad site, turned by the yaw that lines pads 2 to 4 up with their
 /// offsets in the campus model (pad 1's install site is some 850 m off the layout, so it does not set the
 /// yaw), rigid and unscaled. Its spawn points and flat areas (scene coordinates, glTF axes) follow.
-const KSC_ANCHOR: (f64, f64, f64) = (-0.6836, -74.8198, 115.2);
+/// (pad 1's site stands at 115.2 m in KSP2's data, but KSP2 stands craft `KSP2_PAD_DROP_M` lower: 110.0 m)
+const KSC_ANCHOR: (f64, f64, f64) = (-0.6836, -74.8198, 110.0);
 const KSC_YAW_DEG: f64 = 0.0410;
 const KSC_SPAWNS: [(&str, &str, bool, [f64; 3]); 5] = [
     (
@@ -1507,6 +1533,12 @@ const KSC_SPAWNS: [(&str, &str, bool, [f64; 3]); 5] = [
         [-4_989.899_017, -125.833_997, 2.0],
     ),
 ];
+/// The first `KSC_PADS` of `KSC_AREAS` are the launch pads' decks. KSP2's pad does not end in a drop: a rover
+/// driven 170 m off pad 1 descends about a metre (reference/ksp2-run8-rover), where ours fell 9 m off the
+/// deck's edge at 100 m. Each deck slopes down to the campus ground over this apron instead.
+const KSC_PADS: usize = 4;
+const KSC_PAD_APRON_M: f64 = 160.0;
+const KSC_GROUND_Y: f64 = -126.5;
 /// Facility footprints (min x, max x, min z, max z) and the surface a craft stands on there: the pads'
 /// decks, the runways, then the campus ground.
 const KSC_AREAS: [(f64, f64, f64, f64, f64); 8] = [
@@ -1532,13 +1564,15 @@ fn ksc_site() -> ose_sim::campus::Site {
         anchor: ose_math::DVec3::new(s[0], s[1], s[2]),
         areas: KSC_AREAS
             .iter()
-            .map(|&(min_x, max_x, min_z, max_z, y)| ose_sim::campus::Area {
-                min_x,
-                max_x,
-                min_z,
-                max_z,
-                y,
-            })
+            .enumerate()
+            .map(
+                |(i, &(min_x, max_x, min_z, max_z, y))| ose_sim::campus::Area {
+                    // the launch pads' decks slope down to the campus ground round them
+                    apron_m: if i < KSC_PADS { KSC_PAD_APRON_M } else { 0.0 },
+                    apron_y: if i < KSC_PADS { KSC_GROUND_Y } else { y },
+                    ..ose_sim::campus::Area::flat(min_x, max_x, min_z, max_z, y)
+                },
+            )
             .collect(),
     }
 }
@@ -2320,28 +2354,33 @@ fn owned_vessel(s: &Shared, id: u64, player: u64) -> Option<bevy_ecs::entity::En
 /// Remove players who never joined the campaign and have been away for `ttl_s`, with their vessels and
 /// saved crafts. Connected players are always kept.
 fn sweep_guests(s: &Shared, ttl_s: u64) {
-    let mut members: Vec<u64> = s
-        .campaign
-        .lock()
-        .expect("campaign lock")
-        .members
-        .iter()
-        .map(|m| m.player_id)
-        .collect();
-    for shelved in s.shelf.lock().expect("shelf lock").iter() {
-        members.extend(shelved.save.campaign.members.iter().map(|m| m.player_id));
-        members.extend(shelved.save.campaign.owner);
+    let rooms = s.rooms.all();
+    let mut keep: Vec<u64> = Vec::new();
+    for room in &rooms {
+        let c = room.campaign.lock().expect("campaign lock");
+        keep.extend(c.members.iter().map(|m| m.player_id));
+        keep.extend(c.owner);
+        drop(c);
+        // connected players
+        keep.extend(
+            room.warp_requests
+                .lock()
+                .expect("warp lock")
+                .keys()
+                .copied(),
+        );
     }
-    members.extend(s.campaign.lock().expect("campaign lock").owner);
-    let connected: Vec<u64> = s
-        .warp_requests
-        .lock()
-        .expect("warp lock")
-        .keys()
-        .copied()
-        .collect();
-    let mut keep = members;
-    keep.extend(connected);
+    for shelved in s.shelf.lock().expect("shelf lock").iter() {
+        keep.extend(shelved.save.campaign.members.iter().map(|m| m.player_id));
+        keep.extend(shelved.save.campaign.owner);
+    }
+    keep.extend(
+        s.connections
+            .lock()
+            .expect("connections lock")
+            .keys()
+            .copied(),
+    );
     let stale = s
         .accounts
         .lock()
@@ -2350,19 +2389,19 @@ fn sweep_guests(s: &Shared, ttl_s: u64) {
     if stale.is_empty() {
         return;
     }
-    let mut u = s.universe.lock().expect("sim lock");
-    let mut vessels = s.vessels.lock().expect("vessels lock");
     let mut removed_vessels = 0;
-    vessels.retain(|&(e, _, owner)| {
-        let gone = owner.is_some_and(|o| stale.contains(&o));
-        if gone {
-            u.despawn_vessel(e);
-            removed_vessels += 1;
-        }
-        !gone
-    });
-    drop(vessels);
-    drop(u);
+    for room in &rooms {
+        let mut u = room.universe.lock().expect("sim lock");
+        let mut vessels = room.vessels.lock().expect("vessels lock");
+        vessels.retain(|&(e, _, owner)| {
+            let gone = owner.is_some_and(|o| stale.contains(&o));
+            if gone {
+                u.despawn_vessel(e);
+                removed_vessels += 1;
+            }
+            !gone
+        });
+    }
     s.crafts
         .lock()
         .expect("crafts lock")
@@ -3174,7 +3213,11 @@ fn launch_craft(
     if !spec.stages.is_empty() {
         if let Some((_, _, orbit)) = u.vessel(e) {
             let (r, v) = orbit.state_at(u.ut());
-            u.set_dormant(e, ose_sim::flight::Powered::new(spec, r, v, false));
+            let mut p = ose_sim::flight::Powered::new(spec, r, v, false);
+            // nothing is active until the first stage press, in orbit as on the pad: otherwise the
+            // first stage's solid boosters would light the moment the craft appears
+            p.ignited = false;
+            u.set_dormant(e, p);
             u.set_craft(e, craft.clone());
             u.set_structure(
                 e,
@@ -3328,19 +3371,14 @@ fn handle_decoded(
             out.push((reply).clone());
         }
         Ok(ClientMessage::SelectSession { id }) => {
-            let live = s.campaign.lock().expect("campaign lock").id.clone();
-            let switched = if id == live {
-                Ok(())
-            } else {
-                campaigns::switch(s, player_id, campaigns::Target::Shelved(id.clone()))
-            };
-            let reply = match switched {
-                Ok(()) => {
-                    let name = display_name_for(s, player_id);
-                    if s.test_probe && !has_vessel(s, player_id) {
-                        spawn_test_probe(s, player_id, &name);
+            // the session loop follows the player into the room (`rooms::room_of`)
+            let reply = match rooms::enter(s, player_id, campaigns::Target::Shelved(id.clone())) {
+                Ok(room) => {
+                    let name = display_name_for(&room, player_id);
+                    if room.test_probe && !has_vessel(&room, player_id) {
+                        spawn_test_probe(&room, player_id, &name);
                     }
-                    campaign_state(s, player_id, Some(&name))
+                    campaign_state(&room, player_id, Some(&name))
                 }
                 Err(reason) => ServerMessage::Rejected { reason },
             };
@@ -3361,13 +3399,13 @@ fn handle_decoded(
                 mode,
                 difficulty,
             };
-            let reply = match campaigns::switch(s, player_id, campaigns::Target::New(new)) {
-                Ok(()) => {
-                    let pname = display_name_for(s, player_id);
-                    if s.test_probe && !has_vessel(s, player_id) {
-                        spawn_test_probe(s, player_id, &pname);
+            let reply = match rooms::enter(s, player_id, campaigns::Target::New(new)) {
+                Ok(room) => {
+                    let pname = display_name_for(&room, player_id);
+                    if room.test_probe && !has_vessel(&room, player_id) {
+                        spawn_test_probe(&room, player_id, &pname);
                     }
-                    let mut reply = campaign_state(s, player_id, Some(&pname));
+                    let mut reply = campaign_state(&room, player_id, Some(&pname));
                     if let ServerMessage::CampaignState { created: c, .. } = &mut reply {
                         *c = true;
                     }
@@ -3382,6 +3420,7 @@ fn handle_decoded(
                 push_campaign(s, player_id);
             }
             apply_warp(s);
+            rooms::left_campaign(s, player_id);
             let reply = session_list(s);
             out.push((reply).clone());
         }
@@ -4282,6 +4321,32 @@ fn handle_decoded(
             };
             out.push((reply).clone());
         }
+        Ok(ClientMessage::SetChuteSettings {
+            vessel,
+            part,
+            settings,
+        }) => {
+            let reply = match owned_vessel(s, vessel, player_id) {
+                Some(e) => {
+                    let r = s.universe.lock().expect("sim lock").set_chute_settings(
+                        e,
+                        part as usize,
+                        settings,
+                    );
+                    ServerMessage::FlightAck {
+                        vessel,
+                        accepted: r.is_ok(),
+                        reason: r.err().map(String::from),
+                    }
+                }
+                None => ServerMessage::FlightAck {
+                    vessel,
+                    accepted: false,
+                    reason: Some("not your vessel".into()),
+                },
+            };
+            out.push((reply).clone());
+        }
         Ok(ClientMessage::PartAction {
             vessel,
             part,
@@ -4390,6 +4455,8 @@ fn handle_decoded(
 }
 
 async fn session(mut socket: WebSocket, s: AppState) {
+    // the room this connection sees and plays in; it follows the player between rooms
+    let mut s = s;
     // Handshake.
     let player_id = loop {
         match socket.recv().await {
@@ -4439,7 +4506,7 @@ async fn session(mut socket: WebSocket, s: AppState) {
                         if !send(
                             &mut socket,
                             &ServerMessage::BodyCatalog {
-                                bodies: s.catalog.clone(),
+                                bodies: (*s.catalog).clone(),
                             },
                         )
                         .await
@@ -4449,7 +4516,7 @@ async fn session(mut socket: WebSocket, s: AppState) {
                         if !send(
                             &mut socket,
                             &ServerMessage::BodyRotation {
-                                bodies: s.spins.clone(),
+                                bodies: (*s.spins).clone(),
                             },
                         )
                         .await
@@ -4470,6 +4537,8 @@ async fn session(mut socket: WebSocket, s: AppState) {
                         {
                             return;
                         }
+                        // a player reconnecting goes back to the room they were in
+                        s = rooms::room_of(&s, id);
                         replay::record_event(
                             &s,
                             id,
@@ -4511,7 +4580,7 @@ async fn session(mut socket: WebSocket, s: AppState) {
     // replaying a cached snapshot from before their probe was created or a campaign was loaded.
     let mut snapshots = s.streams.snapshots.subscribe();
     let mut predictions = s.streams.trajectories.subscribe();
-    let subscribed_at = streaming::mark();
+    let mut subscribed_at = streaming::mark();
     let mut science_rev = s.campaign.lock().expect("campaign lock").science.rev;
     let mut presence_tick = tokio::time::interval(std::time::Duration::from_secs(1));
     let mut last_presence = None;
@@ -4586,6 +4655,16 @@ async fn session(mut socket: WebSocket, s: AppState) {
                 }
             }
         }
+        // the player moved to another room (picked or started a campaign, or theirs closed): stream that
+        // one from its next fresh state on
+        let room = rooms::room_of(&s, player_id);
+        if !Arc::ptr_eq(&room, &s) {
+            s = room;
+            snapshots = s.streams.snapshots.subscribe();
+            predictions = s.streams.trajectories.subscribe();
+            subscribed_at = streaming::mark();
+            science_rev = s.campaign.lock().expect("campaign lock").science.rev;
+        }
     }
     replay::record_event(&s, player_id, replay::Event::Left);
     player_left(&s, player_id);
@@ -4629,11 +4708,15 @@ fn player_left(s: &Shared, player_id: u64) {
             left_session = s.playing.lock().expect("playing lock").remove(&player_id);
         }
     }
+    let gone = !connections.contains_key(&player_id);
     drop(connections);
     if left_session {
         push_campaign(s, player_id);
     }
     apply_warp(s);
+    if gone {
+        rooms::disconnected(s, player_id);
+    }
 }
 
 #[cfg(test)]
@@ -4656,6 +4739,31 @@ mod tests {
                 s.lat_deg,
                 s.lon_deg
             );
+        }
+    }
+
+    #[test]
+    fn a_rover_driving_off_launch_pad_1_rolls_down_its_apron_without_a_drop() {
+        // KSP2: 170 m off pad 1 a rover is about a metre lower (reference/ksp2-run8-rover); ours fell 9 m at the
+        // deck's edge
+        let site = super::ksc_site();
+        let s = super::KSC_SPAWNS[0].3;
+        for (dx, dz) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
+            let mut prev = None;
+            for k in 0..=150 {
+                let d = k as f64 * 2.0;
+                let p = ose_math::DVec3::new(s[0] + dx * d, s[1], s[2] + dz * d);
+                let (lat, lon, _) = site.place(600_000.0, p);
+                let g = site
+                    .ground_radius(600_000.0, ose_sim::campus::direction(lat, lon))
+                    .unwrap()
+                    - 600_000.0;
+                if let Some(q) = prev {
+                    let step: f64 = q - g;
+                    assert!(step < 0.4, "({dx}, {dz}) {d} m: {step:.2} m step");
+                }
+                prev = Some(g);
+            }
         }
     }
 

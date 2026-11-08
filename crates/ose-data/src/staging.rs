@@ -413,6 +413,7 @@ mod tests {
                         air_breathing: false,
                         vel_curve: None,
                         atm_curve: None,
+                        response: None,
                     }]
                 })
                 .unwrap_or_default(),
@@ -425,6 +426,7 @@ mod tests {
             docking: None,
             parachute: None,
             thermal_mass_modifier: 1.0,
+            buoyancy: 1.0,
             heatshield: None,
             landing_gear: None,
             converter: None,
@@ -451,6 +453,7 @@ mod tests {
         res: &[(&str, f64)],
     ) -> CraftPart {
         CraftPart {
+            chute: None,
             symmetry: 0,
             actions: Vec::new(),
             flight: None,

@@ -27,6 +27,8 @@ pub mod surface;
 pub mod thermal;
 pub mod trajectory;
 pub mod vessels;
+pub mod water;
+pub mod wheels;
 
 use bevy_ecs::prelude::*;
 use ose_math::{DVec3, Orbit};
@@ -832,6 +834,49 @@ impl Universe {
         Ok(())
     }
 
+    /// Change a parachute's deploy mode, opening pressure and full-deploy height in flight; the rest of its
+    /// symmetry set follows (`KSPState(CopyToSymmetrySet)`), and the settings go with the craft.
+    pub fn set_chute_settings(
+        &mut self,
+        e: Entity,
+        part: usize,
+        settings: ose_data::craft::ChuteSettings,
+    ) -> Result<(), &'static str> {
+        let settings = settings.stepped();
+        // The part and the rest of its symmetry set, from the craft as flown.
+        let parts: Vec<usize> = match self.world.get::<docking::CraftDoc>(e) {
+            Some(d) => match d.0.parts.get(part).map(|p| p.symmetry).filter(|s| *s != 0) {
+                Some(s) => (0..d.0.parts.len())
+                    .filter(|&k| d.0.parts[k].symmetry == s)
+                    .collect(),
+                None => vec![part],
+            },
+            None => vec![part],
+        };
+        let mut st = self
+            .world
+            .get_mut::<structure::Structure>(e)
+            .ok_or("vessel has no parts")?;
+        if st.chute_defs.get(part).is_none_or(|c| c.is_none()) || !st.rigid.present[part] {
+            return Err("that part is not a parachute");
+        }
+        for &k in &parts {
+            if let Some(Some(c)) = st.chute_defs.get_mut(k) {
+                c.min_pressure_atm = settings.min_pressure_atm as f64;
+                c.deploy_altitude_m = settings.deploy_altitude_m as f64;
+                st.chute_modes[k] = settings.mode;
+            }
+        }
+        if let Some(mut doc) = self.world.get_mut::<docking::CraftDoc>(e) {
+            for &k in &parts {
+                if let Some(p) = doc.0.parts.get_mut(k) {
+                    p.chute = Some(settings);
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Run one part's action now (its right-click menu); false when it does not apply to that part.
     pub fn part_action(&mut self, e: Entity, part: usize, action: &str, on: bool) -> bool {
         self.world
@@ -1371,7 +1416,16 @@ impl Universe {
         let (parent_tanks, parent_wet) = self
             .world
             .get::<structure::Structure>(parent)
-            .map(|st| (Some(st.net.tanks.clone()), st.in_water.clone()))
+            .map(|st| {
+                (
+                    Some(st.net.tanks.clone()),
+                    st.in_water
+                        .iter()
+                        .copied()
+                        .zip(st.water_drag.iter().copied())
+                        .collect::<Vec<_>>(),
+                )
+            })
             .unwrap_or_default();
         // Only pieces that need it are built: one still burning, or one in the sea (where it must float);
         // a spent stage or a wreck on land stays a cheap single body.
@@ -1379,7 +1433,7 @@ impl Universe {
             .world
             .get::<flight::Powered>(parent)
             .is_some_and(|p| p.splashed)
-            || parent_wet.iter().any(|w| *w);
+            || parent_wet.iter().any(|w| w.0);
         let lit = |map: &[Option<usize>]| {
             fire.is_some_and(|f| f.burning.iter().any(|&i| map[i].is_some()))
         };
@@ -1390,9 +1444,10 @@ impl Universe {
                     st.carry_tanks_from(tanks, map);
                 }
                 // parts already in the sea do not strike it again
-                for (i, wet) in parent_wet.iter().enumerate() {
+                for (i, &(wet, drag)) in parent_wet.iter().enumerate() {
                     if let Some(j) = map.get(i).copied().flatten() {
-                        st.in_water[j] = *wet;
+                        st.in_water[j] = wet;
+                        st.water_drag[j] = drag;
                     }
                 }
                 let engines: Vec<usize> = fire
@@ -1722,6 +1777,8 @@ impl Universe {
         let index = self.world.resource::<bodies::BodyIndex>().clone();
         // powered flight: integrate every tick of this step
         let dt = 1.0 / TICKS_PER_SECOND as f64;
+        // what Kerbals on EVA stand on (a craft's hull) before they move
+        self.kerbals_find_decks(ticks.max(1) as f64 * dt);
         let start_ut = now as f64 * dt;
         let mut powered_vessels: Vec<Entity> = {
             let mut q = self.world.query_filtered::<Entity, With<flight::Powered>>();
@@ -2206,8 +2263,17 @@ impl Universe {
                 // a spinning craft stays under power until it is still, SAS holding or not: going on rails
                 // would freeze its spin (KSP2 keeps the active craft in physics while SAS damps it)
                 && {
-                    let still = if p.attitude == flight::Attitude::Free { 1e-5 } else { 1e-4 };
-                    p.angvel.length() < still && p.roll_rate.abs() < still
+                    // a hold that follows the orbit (prograde, radial, up...) turns the craft once an
+                    // orbit, and SAS chasing it jitters by a few mrad/s about that turn: still means not
+                    // turning against that frame by more than the chase does (0.3 deg/s, nothing to see)
+                    let (still, frame) = if p.attitude == flight::Attitude::Free {
+                        (1e-5, DVec3::ZERO)
+                    } else if p.attitude.follows_the_orbit() {
+                        (5e-3, p.r.cross(p.v) * (1.0 / p.r.length_squared().max(1.0)))
+                    } else {
+                        (1e-4, DVec3::ZERO)
+                    };
+                    (p.angvel - frame).length() < still && p.roll_rate.abs() < still
                 };
             self.world
                 .entity_mut(e)
@@ -2965,12 +3031,15 @@ mod tests {
         let v = u.spawn_powered_on_surface("K1", body, spec, 0.0, 0.0);
         u.set_structure(v, st);
         let m0 = u.powered(v).unwrap().mass_t;
+        // the staging report counts every part; in flight the K1's physicsless parts (8 flat solar panels
+        // at 0.8 kg and 4 radial batteries at 5 kg) weigh nothing, as the original's vessel TotalMass
+        let physicsless = 8.0 * 0.0008 + 4.0 * 0.005;
         assert!(
-            (m0 - spec_mass
+            (m0 - spec_mass + physicsless
                 - u.crew(v).len() as f64 * (crew::KERBAL_MASS_T + crew::JETPACK_PROPELLANT_T))
                 .abs()
                 < 1e-6,
-            "tank and occupied-seat mass {m0} matches the staging report {spec_mass} plus crew"
+            "tank and occupied-seat mass {m0} matches the staging report {spec_mass} plus crew,              less the physicsless parts"
         );
         let sf = |u: &Universe| {
             let s = u.structure(v).unwrap();
@@ -3451,6 +3520,113 @@ mod tests {
             0.0,
             "braked to a stop"
         );
+    }
+
+    /// Stock Inquisitive Rover on level Kerbin ground driven with the KSP2 parity schedule (T16): full wheel
+    /// throttle from 1 s for 15 s, coast 3 s, brakes 8 s, half throttle and full right steering 10 s, then
+    /// nothing. Samples every tick: (t, ground speed, yaw rate).
+    fn rover_parity_run() -> Vec<(f64, f64, f64)> {
+        let (mut u, body, _, _) = k1_on_real_kerbin();
+        let crafts: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let defs: Vec<ose_data::PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let res: Vec<ose_data::ResourceDef> =
+            serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
+        let c = crafts
+            .iter()
+            .find(|c| c.name == "Inquisitive Rover")
+            .unwrap();
+        let report = ose_data::staging::delta_v_by_stage(c, &defs, &res);
+        let spec = flight::FlightSpec::from_report(&report, &[], &[], 1.5);
+        let v = u.spawn_powered_on_surface("Rover", body, spec, 0.0, 0.0);
+        u.set_structure(v, structure::Structure::build(c, &defs, &res));
+        u.step();
+        let schedule = [
+            (1.0, 1.0, 0.0, false),
+            (16.0, 0.0, 0.0, false),
+            (19.0, 0.0, 0.0, true),
+            (27.0, 0.5, 1.0, false),
+            (37.0, 0.0, 0.0, false),
+        ];
+        let mut out = Vec::new();
+        let mut next = 0;
+        let mut heading = u.powered(v).unwrap().drive.heading_rad;
+        for tick in 0..(41 * TICKS_PER_SECOND) {
+            let t = tick as f64 / TICKS_PER_SECOND as f64;
+            while next < schedule.len() && t >= schedule[next].0 {
+                let (_, throttle, steer, brakes) = schedule[next];
+                u.set_drive(v, throttle, steer, brakes);
+                next += 1;
+            }
+            u.step();
+            let p = u.powered(v).unwrap();
+            assert!(
+                p.landed && !p.tipped && !p.crashed,
+                "on its wheels at {t} s"
+            );
+            let turn = (p.drive.heading_rad - heading + std::f64::consts::PI)
+                .rem_euclid(std::f64::consts::TAU)
+                - std::f64::consts::PI;
+            heading = p.drive.heading_rad;
+            out.push((
+                t + 1.0 / TICKS_PER_SECOND as f64,
+                p.drive.speed_mps.hypot(p.drive.lateral_mps),
+                turn * TICKS_PER_SECOND as f64,
+            ));
+        }
+        if std::env::var_os("OSE_ROVER_TRACE").is_some() {
+            for (t, speed, yaw) in &out {
+                println!("rover,{t:.2},{speed:.4},{yaw:.4}");
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn a_rover_accelerates_brakes_and_turns_like_ksp2s_inquisitive_rover() {
+        let run = rover_parity_run();
+        let at = |t: f64| {
+            *run.iter()
+                .min_by(|a, b| (a.0 - t).abs().total_cmp(&(b.0 - t).abs()))
+                .unwrap()
+        };
+        // KSP2 v0.2.2, same craft and schedule (reference/ksp2-run8-rover): its light wheels spin up slowly
+        // (the 0.01 t·m² least wheel inertia) and the motor torque curve, rounded to 0.01 kN·m, runs out
+        // near 10 m/s
+        for (t, ksp2) in [
+            (2.0, 1.78),
+            (3.0, 3.32),
+            (5.0, 5.89),
+            (8.0, 7.79),
+            (16.0, 9.83),
+        ] {
+            let speed = at(t).1;
+            assert!(
+                (speed - ksp2).abs() < 0.1 * ksp2,
+                "{speed:.2} m/s at {t} s, KSP2 {ksp2}"
+            );
+        }
+        // the brakes come on over a second, then hold the wheels and stop it
+        assert!(at(20.0).1 > 7.0, "{:?}", at(20.0));
+        assert!(at(21.5).1 < 0.3, "{:?}", at(21.5));
+        // half throttle with full steering: a tight, slow turn (KSP2 1.20/1.62/2.24 m/s turning at
+        // 0.70/1.05/1.41 rad/s). The turn builds up against the craft's yaw inertia, which here still
+        // includes the physicsless parts' own inertia, so it comes out somewhat slower than KSP2's.
+        for (t, ksp2, yaw) in [(30.0, 1.20, 0.70), (33.0, 1.62, 1.05), (37.0, 2.24, 1.41)] {
+            let (_, speed, rate) = at(t);
+            assert!(
+                speed > 0.6 * ksp2 && speed < 1.15 * ksp2,
+                "{speed:.2} m/s at {t} s, KSP2 {ksp2}"
+            );
+            assert!(
+                rate > 0.55 * yaw && rate < 1.2 * yaw,
+                "{rate:.2} rad/s at {t} s, KSP2 {yaw}"
+            );
+        }
+        // let go: the wheels straighten and the turn dies away
+        assert!(at(38.0).2 < at(37.0).2, "{:?} {:?}", at(37.0), at(38.0));
+        assert!(at(41.0).2 < 0.6, "{:?}", at(41.0));
     }
 
     #[test]
@@ -4077,6 +4253,32 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_craft_holding_prograde_in_orbit_goes_back_on_rails() {
+        // holding prograde turns the craft once an orbit (3e-3 rad/s at 100 km); that is not a spin
+        let (mut u, body, spec, st) = k1_on_real_kerbin();
+        let v = u.spawn_vessel_in_circular_orbit("K1", body, 100_000.0);
+        let (r, vel) = u.vessel(v).unwrap().2.state_at(u.ut());
+        let mut p = flight::Powered::new(spec, r, vel, false);
+        p.facing = vel.normalized();
+        p.attitude = flight::Attitude::OrbitPrograde;
+        p.angvel = r.cross(vel) * (1.0 / r.length_squared());
+        u.set_powered(v, p);
+        u.set_structure(v, st);
+        for _ in 0..(60 * TICKS_PER_SECOND) {
+            u.step();
+            if u.powered(v).is_none() {
+                return;
+            }
+        }
+        let p = u.powered(v).unwrap();
+        panic!(
+            "still under power after 60 s: |w| {:.2e}, coasting since {:?}",
+            p.angvel.length(),
+            p.coasting_since
+        );
     }
 
     #[test]

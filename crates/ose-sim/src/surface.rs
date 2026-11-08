@@ -153,6 +153,10 @@ pub fn inverse_effective_mass(
     1.0 / mass.mass_t + direction.dot(mass.inertia.solve(r.cross(direction)).cross(r))
 }
 
+/// Landing legs' VehiclePhysics friction (landingleg_*v): `FrictionLimit` and `FrictionAdherent`.
+pub const LEG_FRICTION_LIMIT: f64 = 1.0;
+pub const LEG_FRICTION_ADHERENT_MPS: f64 = 0.1;
+
 /// Implicit spring/damper force. Travel and supported mass set a provisional 2g-at-full-travel spring.
 pub fn suspension_force(
     compression: f64,
@@ -187,6 +191,7 @@ impl Structure {
         self.suspension_compression_m.fill(0.0);
         propulsion.per_part_contacts = true;
         p.splashed = false;
+        p.ground_contact = false;
         if p.crashed {
             return;
         }
@@ -214,48 +219,114 @@ impl Structure {
                 let water = body.radius_m;
                 // Land and built facilities displace the water, too.
                 if solid_radius(body, terrain, at, ut) < water - 1e-5 {
-                    let (volume, centroid) =
-                        submerged_box(half, local(frame, up), water - at.length());
-                    if volume > 0.0 {
+                    // how deep each corner of the part's bounds is (`CollectPartBoundsAndDepths`)
+                    let depths =
+                        corners(half).map(|c| water - (p.r + world(frame, offset + c)).length());
+                    let min_depth = depths.iter().copied().fold(f64::INFINITY, f64::min);
+                    let max_depth = depths.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                    if max_depth > 0.0 {
                         p.landed = false;
                         p.splashed = true;
                         self.in_water[i] = true;
-                        let r = offset + centroid;
-                        let arm = world(frame, r);
-                        let v = p.v + omega.cross(arm) - spin(body).cross(p.r + arm);
-                        // Striking the water is an impact like striking the ground: a part entering it
-                        // faster than its crash tolerance breaks.
+                        let ws = crate::water::settings();
+                        // the vessel's own surface motion, as the original takes it for every part
+                        let v_srf = p.v - spin(body).cross(p.r);
+                        let speed = v_srf.length();
+                        let down = if speed > 0.0 {
+                            v_srf.dot(-up) / speed
+                        } else {
+                            1.0
+                        };
+                        let dot_abs = if speed > 0.0 { down.abs() } else { 1.0 };
+                        // Striking the water: the part breaks if the vessel comes down (or a tenth of its
+                        // speed) faster than 1.2 times the part's crash tolerance.
                         let tolerance = if self.crash_tolerance[i] > 0.0 {
                             self.crash_tolerance[i]
                         } else {
                             flight::CRASH_SPEED_MPS
                         };
-                        if !was_wet && v.length() > tolerance {
-                            self.water_strikes.push((i, v.length()));
+                        if !was_wet && crate::water::breaks_on_entry(speed, down * speed, tolerance)
+                        {
+                            self.water_strikes
+                                .push((i, (ws.min_crash_mult * speed).max(down * speed)));
                         }
                         let density = ocean.density.max(0.0);
-                        let buoyancy = up * (density * volume * gravity);
-                        // Share an implicit generalized-mass drag cap across the parts. This bounds
-                        // both translation and spin damping when the water centroid is off-centre.
-                        let area = volume.powf(2.0 / 3.0);
-                        let rate = 0.5 * density * area * v.length();
+                        let submerged = crate::water::submerged_share(min_depth, max_depth);
+                        let displaced_t = self.displacement_m3[i]
+                            * density
+                            * ws.buoyancy_scalar
+                            * self.buoyancy[i]
+                            * submerged;
+                        let buoyancy = up * (displaced_t * gravity);
+                        // where it pushes (`CalculateBuoyantLocalForcePosition`): the part's origin once
+                        // under, the wet corners while it is partly out
+                        let origin = self.rigid.rest_position(i);
+                        let mut at_part = DVec3::ZERO;
+                        if min_depth < 0.0 && min_depth < max_depth {
+                            let (mut sum, mut weight) = (DVec3::ZERO, 0.0);
+                            for (c, d) in corners(half).iter().zip(depths) {
+                                if d > 0.0 {
+                                    sum = sum + (centre + *c - origin) * d;
+                                    weight += d;
+                                }
+                            }
+                            at_part = sum * ((1.0 - submerged) / weight);
+                        }
+                        let r = origin + at_part - mass.centre_m;
+                        let arm = world(frame, r);
+                        // the water slows each part as a damping of its own motion
                         let part_mass = self.net.mass_of(&[i]).max(1e-6);
-                        let damping_inverse = if v.length_squared() > 1e-16 {
-                            inverse_effective_mass(mass, r, local(frame, v).normalized())
-                                * mass.mass_t
-                                / part_mass
+                        let horizontal = (v_srf - up * v_srf.dot(up)).length();
+                        let steering = p.rotation_input.length_squared();
+                        let entering = !was_wet;
+                        let dir = if speed > 0.0 {
+                            local(frame, v_srf) * (1.0 / speed)
                         } else {
-                            0.0
+                            DVec3::ZERO
                         };
-                        let drag = v * (-rate / (1.0 + rate * dt * damping_inverse));
+                        let mach = speed / 340.0;
+                        let damping = {
+                            let me = &*self;
+                            let mut state = me.water_drag[i];
+                            let damping = state.step(
+                                speed,
+                                horizontal,
+                                dot_abs,
+                                entering,
+                                steering,
+                                || me.area_drag_along(i, dir, mach),
+                                submerged,
+                                part_mass,
+                                density,
+                                dt,
+                            );
+                            self.water_drag[i] = state;
+                            damping
+                        };
+                        let part_arm = world(frame, centre - mass.centre_m);
+                        let v_part = v_srf + omega.cross(part_arm);
+                        let c = damping.linear;
+                        let drag = v_part * (-part_mass * c / (1.0 + c * dt));
+                        let mut torque = arm.cross(buoyancy) + part_arm.cross(drag);
+                        if let Some(ca) = damping.angular {
+                            // PhysX damps the part's own spin
+                            let s = self.rigid.sizes_m[i];
+                            let own = part_mass * (s.x * s.x + s.y * s.y + s.z * s.z) / 18.0;
+                            torque = torque + omega * (-own * ca / (1.0 + ca * dt));
+                        }
                         let force = buoyancy + drag;
                         propulsion.environment_force_kn = propulsion.environment_force_kn + force;
                         propulsion.environment_torque_knm =
-                            propulsion.environment_torque_knm + arm.cross(force);
+                            propulsion.environment_torque_knm + torque;
                         self.surface_loads.push(PartForce {
                             part: i,
-                            force_kn: force,
-                            offset_m: centre + centroid - self.rigid.rest_position(i),
+                            force_kn: buoyancy,
+                            offset_m: at_part,
+                        });
+                        self.surface_loads.push(PartForce {
+                            part: i,
+                            force_kn: drag,
+                            offset_m: centre - origin,
                         });
                     }
                 }
@@ -264,11 +335,15 @@ impl Structure {
                 if let Some(gear) = &self.gear_defs[i] {
                     let n = normal(body, terrain, at, ut);
                     let nl = local(frame, n);
+                    // the lowest point of the gear's box along the ground normal; an axis lying flat to the
+                    // ground keeps the foot centred on it (`signum` of 0.0 is 1.0, which put a level leg's
+                    // foot on a corner, off the craft's axis, and let foot friction rock it)
+                    let lowest = |n: f64| if n.abs() < 1e-6 { 0.0 } else { n.signum() };
                     let bottom = centre
                         + DVec3::new(
-                            -half.x * nl.x.signum(),
-                            -half.y * nl.y.signum(),
-                            -half.z * nl.z.signum(),
+                            -half.x * lowest(nl.x),
+                            -half.y * lowest(nl.y),
+                            -half.z * lowest(nl.z),
                         );
                     let arm = world(frame, bottom - mass.centre_m);
                     let foot = p.r + arm;
@@ -284,6 +359,28 @@ impl Structure {
                         gravity,
                         dt,
                     );
+                    // the foot grips the ground: friction against its sliding, up to `FrictionLimit` times
+                    // the load, rising from nothing over the first `FrictionAdherent` m/s of slide
+                    // (VehiclePhysics' friction curve on the original's legs), never more than stops
+                    // the foot's share of the craft this tick
+                    let load = force.length();
+                    let foot_v = p.v + omega.cross(arm) - spin(body).cross(foot);
+                    let slide = foot_v - n * foot_v.dot(n);
+                    let slide_mps = slide.length();
+                    let grip = if load > 0.0 && slide_mps > 1e-9 {
+                        let along = local(frame, slide * (1.0 / slide_mps));
+                        let inverse = inverse_effective_mass(mass, local(frame, arm), along);
+                        let stop = slide_mps / (dt * inverse * gear_count as f64);
+                        let mu =
+                            LEG_FRICTION_LIMIT * (slide_mps / LEG_FRICTION_ADHERENT_MPS).min(1.0);
+                        slide * (-(mu * load).min(stop) / slide_mps)
+                    } else {
+                        DVec3::ZERO
+                    };
+                    if compression > 0.0 {
+                        p.ground_contact = true;
+                    }
+                    let force = force + grip;
                     propulsion.environment_force_kn = propulsion.environment_force_kn + force;
                     propulsion.environment_torque_knm =
                         propulsion.environment_torque_knm + arm.cross(force);
@@ -595,6 +692,9 @@ mod tests {
         });
         def.drag_cubes[0].size = DVec3::new(2.0, 2.0, 2.0);
         def.drag_cubes[0].center = DVec3::ZERO;
+        // a solid box: it displaces its whole 8 m^3
+        def.drag_cubes[0].area = [4.0; 6];
+        def.buoyancy = 1.0;
         if two_parts {
             let mut child = craft.parts[0].clone();
             child.parent = Some(0);
@@ -805,16 +905,21 @@ mod tests {
             detail: None,
             overlay: None,
         };
-        // A 2t, 8m³ hull displaces 2m³ at its analytical quarter-submerged equilibrium.
-        p.r.y = body.radius_m + 0.5;
+        // A 2 t hull of 8 m^3, 2 m tall, half under: KSP2's buoyancy is 8 m^3 x 1.2 x the wet half of its
+        // height, 4.8 t of water: 48 kN. It floats with 2 / 4.8 of a metre under.
+        p.r.y = body.radius_m;
         let mut engine = st.propulsion(&p, Default::default(), 0.02);
         st.configure_surface(&mut p, &body, Some(&terrain), 0.0, 0.02, &mut engine);
-        assert!((engine.environment_force_kn.y - 20.0).abs() < 0.001);
+        assert!(
+            (engine.environment_force_kn.y - 48.0).abs() < 0.001,
+            "{engine:?}"
+        );
         assert!(engine.environment_torque_knm.length() < 1e-8);
         for _ in 0..1500 {
             step(&mut st, &mut p, &body, Some(&terrain), 0.02);
         }
-        assert!((p.r.y - body.radius_m - 0.5).abs() < 0.02, "{p:?}");
+        let float = 1.0 - 2.0 / 4.8;
+        assert!((p.r.y - body.radius_m - float).abs() < 0.02, "{p:?}");
         assert!(!p.landed && !p.crashed, "water is not solid ground");
         body.ocean.as_mut().unwrap().density = 0.1;
         for _ in 0..250 {
@@ -840,6 +945,7 @@ mod tests {
             motor: None,
             brake_torque_knm: 0.0,
             steerable: false,
+            dynamics: Default::default(),
         });
         st.gear_out[0] = true;
         p.r.y = body.radius_m + 1.2;

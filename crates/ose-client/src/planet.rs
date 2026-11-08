@@ -2065,43 +2065,64 @@ impl PlanetRenderer {
                 // drape takes the campus ground's highest point within it, so the mesh between vertices stays
                 // over that ground too (from a few km up its skirts poked through the coarse quads in patches).
                 let reach = 4.0 * key.angular_radius() * radius / (planet_lod::GRID - 1) as f64;
-                planet_lod::build_quad(&key, radius, has_ocean, &|d| {
-                    let h = planet_lod::map_height(map, d);
-                    // A site model's own ground (the KSC campus: a 19 km plateau whose skirts slope below the
-                    // sea) and the terrain are drawn together and the higher shows, as in the original. Where
-                    // the two are at nearly the same height they fought for the pixels and their outlines
-                    // flickered as the camera moved, so out of the facilities the terrain is draped 4 m over
-                    // that ground (one textured surface, the ground craft stand on). Under the facilities it
-                    // drops 20 m below it so the campus model's own lawns and roads show.
-                    // The lift is held to a slope from the ground here.
-                    let campus = map.and_then(|m| {
-                        let (lat, lon) = planet_lod::lat_lon(d);
-                        let o = m.overlay.as_ref()?;
-                        let here = o.sample(lat, lon);
-                        // Where the terrain is under the sea it follows the campus ground as it is (its skirts
-                        // run on under the water, so the coast is that ground's own, smooth line; a lift there
-                        // stood the coast in steps along the vertex grid), without the reach.
-                        if h < 0.0 {
-                            return here;
+                // the site's sand shows only where its ground is the surface (the terrain no higher)
+                let sand = |d: [f64; 3]| -> f32 {
+                    let (Some(m), (lat, lon)) = (map, planet_lod::lat_lon(d)) else {
+                        return 0.0;
+                    };
+                    let Some(o) = m.overlay.as_ref() else {
+                        return 0.0;
+                    };
+                    match o.sample(lat, lon) {
+                        Some(c) if c >= planet_lod::map_height(map, d) - 1.0 => {
+                            o.sample_sand(lat, lon) as f32
                         }
-                        let base = here.unwrap_or(h).max(h);
-                        o.sample_max(lat, lon, reach, radius)
-                            .map(|c| c.min(base + 0.3 * reach))
-                    });
-                    let p = planet_lod::scale(d, radius + h);
-                    let sink = ex
-                        .iter()
-                        .filter(|e| !e.props)
-                        .map(|e| e.inner_weight(p, 300.0, 150.0))
-                        .fold(0.0, f64::max);
-                    match campus {
-                        Some(c) => {
-                            h.max(c + ose_data::terrain::OVERLAY_DRAPE_M) * (1.0 - sink)
-                                + (h.min(c) - 20.0) * sink
-                        }
-                        None => h - 20.0 * sink,
+                        _ => 0.0,
                     }
-                })
+                };
+                planet_lod::build_quad_painted(
+                    &key,
+                    radius,
+                    has_ocean,
+                    &|d| {
+                        let h = planet_lod::map_height(map, d);
+                        // A site model's own ground (the KSC campus: a 19 km plateau whose skirts slope below the
+                        // sea) and the terrain are drawn together and the higher shows, as in the original. Where
+                        // the two are at nearly the same height they fought for the pixels and their outlines
+                        // flickered as the camera moved, so out of the facilities the terrain is draped 4 m over
+                        // that ground (one textured surface, the ground craft stand on). Under the facilities it
+                        // drops 20 m below it so the campus model's own lawns and roads show.
+                        // The lift is held to a slope from the ground here.
+                        let campus = map.and_then(|m| {
+                            let (lat, lon) = planet_lod::lat_lon(d);
+                            let o = m.overlay.as_ref()?;
+                            let here = o.sample(lat, lon);
+                            // Where the terrain is under the sea it follows the campus ground as it is (its skirts
+                            // run on under the water, so the coast is that ground's own, smooth line; a lift there
+                            // stood the coast in steps along the vertex grid), without the reach.
+                            if h < 0.0 {
+                                return here;
+                            }
+                            let base = here.unwrap_or(h).max(h);
+                            o.sample_max(lat, lon, reach, radius)
+                                .map(|c| c.min(base + 0.3 * reach))
+                        });
+                        let p = planet_lod::scale(d, radius + h);
+                        let sink = ex
+                            .iter()
+                            .filter(|e| !e.props)
+                            .map(|e| e.inner_weight(p, 300.0, 150.0))
+                            .fold(0.0, f64::max);
+                        match campus {
+                            Some(c) => {
+                                h.max(c + ose_data::terrain::OVERLAY_DRAPE_M) * (1.0 - sink)
+                                    + (h.min(c) - 20.0) * sink
+                            }
+                            None => h - 20.0 * sink,
+                        }
+                    },
+                    &sand,
+                )
             };
             let mut q = self.upload_quad(&mesh);
             let b = self.bodies.get_mut(&id).unwrap();
@@ -2682,6 +2703,28 @@ impl PlanetRenderer {
         // props are lit by the renderer's own shader: dim them by hand during an eclipse
         let vis = eclipse_visible(view.cam, view.sun, view.occluders, view.sun_radius_rad) as f32;
         let dim = 0.15 + 0.85 * vis;
+        // and their ambient and sunlight follow the sun as the ground's do (the impostors' fs_far): by night the
+        // terrain's night light, not the day's 0.3, so trees go dark with the land round them
+        let day = {
+            let s = view
+                .sun
+                .normalize_or_zero()
+                .dot(view.cam.normalize_or_zero());
+            let t = ((s + 0.2) / 0.3).clamp(0.0, 1.0);
+            (t * t * (3.0 - 2.0 * t)) as f32
+        };
+        // (0.4 of the ground's night light: a crown shades most of itself from the night sky, as fs_far)
+        let night = self.night_light * 0.4;
+        let ambient = night + (0.3 - night) * day;
+        // no sunlight once the sun is under the horizon (crowns' side normals caught it from below)
+        let up_sun = {
+            let s = view
+                .sun
+                .normalize_or_zero()
+                .dot(view.cam.normalize_or_zero());
+            let t = ((s + 0.03) / 0.08).clamp(0.0, 1.0);
+            (t * t * (3.0 - 2.0 * t)) as f32
+        };
         let mut out = Vec::with_capacity(b.placed.len());
         for inst in &b.placed {
             let path = models[inst.model];
@@ -2710,8 +2753,8 @@ impl PlanetRenderer {
                 inst.scale * fade,
                 view.sun,
             );
-            it.ambient = 0.3;
-            it.sun = self.prop_sun;
+            it.ambient = ambient;
+            it.sun = self.prop_sun * up_sun;
             it.color = [dim, dim, dim, 1.0];
             out.push(it);
         }
@@ -3284,7 +3327,8 @@ impl ExtraPass for PlanetRenderer {
 }
 
 /// Mipmap generation by repeated half-size blits (WebGPU has no built-in).
-struct Mipmapper {
+/// Fills a texture's mip chain from its level 0 by successive linear downsampling (also used by render.rs).
+pub(crate) struct Mipmapper {
     shader: wgpu::ShaderModule,
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
@@ -3306,7 +3350,7 @@ struct O { @builtin(position) p: vec4<f32>, @location(0) uv: vec2<f32> };
 "#;
 
 impl Mipmapper {
-    fn new(device: &wgpu::Device) -> Mipmapper {
+    pub(crate) fn new(device: &wgpu::Device) -> Mipmapper {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("mip"),
             source: wgpu::ShaderSource::Wgsl(MIP_SHADER.into()),
@@ -3346,7 +3390,7 @@ impl Mipmapper {
         }
     }
 
-    fn generate(
+    pub(crate) fn generate(
         &self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,

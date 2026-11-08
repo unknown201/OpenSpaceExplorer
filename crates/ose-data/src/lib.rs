@@ -272,6 +272,10 @@ pub struct PartDef {
     /// Scales the part's thermal mass (`thermalMassModifier`).
     #[serde(default = "one")]
     pub thermal_mass_modifier: f64,
+    /// Scales the water the part displaces (`PartData.buoyancy`: 3 for the Mk1 pod, 0.3 for tanks, 0 for
+    /// adapters that do not float).
+    #[serde(default = "one")]
+    pub buoyancy: f64,
     /// A heat shield (`Data_Heatshield`).
     #[serde(default)]
     pub heatshield: Option<Heatshield>,
@@ -623,6 +627,60 @@ pub struct LandingGear {
     pub brake_torque_knm: f64,
     #[serde(default)]
     pub steerable: bool,
+    /// How the wheel grips and how its drive, brakes and steering respond.
+    #[serde(default)]
+    pub dynamics: WheelDynamics,
+}
+
+/// A wheel's tyre and response settings as the original defines them: `Data_WheelBase` (wheel mass,
+/// friction curve), `Data_WheelMotor.driveResponse`/`tractionControlScale`, `Data_WheelBrakes.BrakeResponse`
+/// and `Data_WheelSteering` (response and the steering curves). Defaults are the original's class defaults.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WheelDynamics {
+    /// Wheel mass, t (`Mass`); its spin inertia is `mass * r^2 / 2`, at least 0.01 t·m².
+    pub mass_t: f64,
+    /// Friction coefficients and slip speeds, m/s (`FrictionAdherent`, `PeakStart`/`FrictionPeak`,
+    /// `LimitStart`/`FrictionLimit`), scaled with gravity by `GeeBias`.
+    pub friction_adherent: f64,
+    pub peak_slip_mps: f64,
+    pub friction_peak: f64,
+    pub limit_slip_mps: f64,
+    pub friction_limit: f64,
+    pub gee_bias: f64,
+    /// Least tyre load, kN (`MinimumDownforce`).
+    pub min_downforce_kn: f64,
+    /// Drive input slew, 1/s (`driveResponse`), and traction control (`tractionControlScale`).
+    pub drive_response: f64,
+    pub traction_control: f64,
+    /// Brake input slew, 1/s (`BrakeResponse`).
+    pub brake_response: f64,
+    /// Steering slew, 1/s (`SteeringResponse`); steering range, degrees, against wheel speed
+    /// (`SteeringCurve`), and the share of it allowed against wheel speed (`SteeringMaxAngleCurve`).
+    pub steering_response: f64,
+    pub steering_curve: Curve,
+    pub steering_max_angle_curve: Curve,
+}
+
+impl Default for WheelDynamics {
+    fn default() -> Self {
+        WheelDynamics {
+            mass_t: 0.0,
+            friction_adherent: 0.25,
+            peak_slip_mps: 4.0,
+            friction_peak: 1.45,
+            limit_slip_mps: 7.0,
+            friction_limit: 1.1,
+            gee_bias: 1.6,
+            min_downforce_kn: 0.5,
+            drive_response: 3.0,
+            traction_control: 1.0,
+            brake_response: 1.0,
+            steering_response: 8.0,
+            steering_curve: Curve::default(),
+            steering_max_angle_curve: Curve::default(),
+        }
+    }
 }
 
 /// A wheel's drive motor as the original defines it (`Data_WheelMotor`).
@@ -847,6 +905,25 @@ pub struct EngineMode {
     pub vel_curve: Option<Curve>,
     #[serde(default)]
     pub atm_curve: Option<Curve>,
+    /// How fast the engine follows the throttle (`useEngineResponseTime`); `None` follows it at once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response: Option<EngineResponse>,
+}
+
+/// An engine that lags its throttle, as Module_Engine does with `useEngineResponseTime`: each tick the
+/// engine's own throttle moves toward the requested one by `Lerp(.., rate * dt)` (fuel flow follows it),
+/// and the spool moves toward `max(spool_idle, throttle)` by `Lerp(.., spool_per_s * dt)`; the thrust
+/// is the throttle's thrust times the spool, so a starting booster burns fuel before its thrust builds.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct EngineResponse {
+    /// `engineAccelerationSpeed`, per second.
+    pub acceleration_per_s: f64,
+    /// `engineDecelerationSpeed`, per second.
+    pub deceleration_per_s: f64,
+    /// `engineSpoolTime`, the spool's Lerp rate per second.
+    pub spool_per_s: f64,
+    /// `engineSpoolIdle`.
+    pub spool_idle: f64,
 }
 
 /// Drag cube in the original six-face form: +X, -X, +Y, -Y, +Z, -Z.

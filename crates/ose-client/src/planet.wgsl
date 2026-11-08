@@ -275,7 +275,19 @@ fn combined_scattering(r: f32, mu: f32, mu_s: f32, nu: f32, hits_ground: bool) -
 
 // The Rayleigh in-scatter a little bluer than the LUT gives: Kerbin's sky and haze in Josh's KSP2 screenshots
 // measure about 20 to 30 % more blue than ours at the same view (sky 104, 147, 204 against 101, 135, 172 at the pad).
-const RAYLEIGH_TINT: vec3<f32> = vec3<f32>(1.0, 1.05, 1.3);
+// Not on bodies whose air scatters red (Rayleigh blue over red: Kerbin 5.7, Laythe 3.1, Eve 3.2, Duna 0.2): on Duna
+// it turned KSP2's warm orange horizon (241, 204, 153 at 3 km, reference/ksp2-run19-bodies) a pale grey-blue.
+fn rayleigh_tint() -> vec3<f32> {
+    // (and on red-sky bodies a stronger Rayleigh glow instead: Duna's sky in KSP2 measures about 1.4 times ours at
+    // the same view, 158, 92, 55 against 106, 66, 42 halfway up from 3 km, while its sunlit ground matches)
+    let red = red_sky();
+    return mix(vec3<f32>(1.0, 1.05, 1.3), vec3<f32>(1.4), red);
+}
+
+// 1 on bodies whose air scatters red more than blue (Duna 0.2), 0 from blue over red 1 up (Eve, Laythe, Kerbin).
+fn red_sky() -> f32 {
+    return 1.0 - smoothstep(0.5, 1.0, frame.rayleigh.z / max(frame.rayleigh.x, 1e-6));
+}
 
 fn rayleigh_phase(nu: f32) -> f32 { return 3.0 / (16.0 * PI) * (1.0 + nu * nu); }
 
@@ -313,7 +325,7 @@ fn sky_radiance(camera_in: vec3<f32>, view: vec3<f32>, sun: vec3<f32>) -> Sky {
         out.transmittance = transmittance_to_top(r, mu);
     }
     let s = combined_scattering(r, mu, mu_s, nu, hits);
-    out.radiance = s.rayleigh * RAYLEIGH_TINT * rayleigh_phase(nu) + s.mie * mie_phase(frame.atmo.w, nu);
+    out.radiance = s.rayleigh * rayleigh_tint() * rayleigh_phase(nu) + s.mie * mie_phase(frame.atmo.w, nu);
     return out;
 }
 
@@ -384,7 +396,7 @@ fn in_scatter_share(r: f32, mu: f32, mu_s: f32, nu: f32, d: f32) -> Sky {
     }
     let share = (vec3<f32>(1.0) - out.transmittance) / max(vec3<f32>(1.0) - full_t, vec3<f32>(1e-4));
     let mie = s0.mie * smoothstep(0.0, 0.01, mu_s);
-    out.radiance = (s0.rayleigh * RAYLEIGH_TINT * rayleigh_phase(nu) + mie * mie_phase(frame.atmo.w, nu))
+    out.radiance = (s0.rayleigh * rayleigh_tint() * rayleigh_phase(nu) + mie * mie_phase(frame.atmo.w, nu))
         * clamp(share, vec3<f32>(0.0), vec3<f32>(1.0));
     return out;
 }
@@ -402,7 +414,7 @@ fn in_scatter(r: f32, mu: f32, mu_s: f32, nu: f32, d: f32) -> Sky {
     let ray = max(s0.rayleigh - out.transmittance * s1.rayleigh, vec3<f32>(0.0));
     var mie = max(s0.mie - out.transmittance * s1.mie, vec3<f32>(0.0));
     mie = mie * smoothstep(0.0, 0.01, mu_s);
-    out.radiance = ray * RAYLEIGH_TINT * rayleigh_phase(nu) + mie * mie_phase(frame.atmo.w, nu);
+    out.radiance = ray * rayleigh_tint() * rayleigh_phase(nu) + mie * mie_phase(frame.atmo.w, nu);
     return out;
 }
 
@@ -454,7 +466,9 @@ fn sun_and_sky(p: vec3<f32>, n: vec3<f32>, sun: vec3<f32>) -> Light {
     let r = clamp(length(p), bottom_r() + 0.001, top_r());
     let mu_s = dot(p, sun) / length(p);
     out.sky = irradiance(r, mu_s) * (1.0 + dot(n, p) / length(p)) * 0.5;
-    out.sun = frame.solar.xyz * transmittance_to_sun(r, mu_s) * ndl;
+    // the ground hides the sun once it is under the horizon (slopes facing it caught it from below and lit the
+    // land yellow-green at night)
+    out.sun = frame.solar.xyz * transmittance_to_sun(r, mu_s) * ndl * smoothstep(-0.03, 0.05, mu_s);
     return out;
 }
 
@@ -543,9 +557,19 @@ fn air_to(p: vec3<f32>) -> Sky {
     // camera climbs from 10 to 40 km.
     let alt_km = length(frame.cam_km.xyz) - bottom_r();
     let blue = clamp((frame.rayleigh.z / max(frame.rayleigh.x, 1e-6) - 1.0) / 4.0, 0.0, 1.0);
-    let haze = 1.0 + (mix(0.4, 1.3, blue) - 1.0) * smoothstep(10.0, 40.0, alt_km);
+    // On red-sky bodies at every height (KSP2's Duna from 3 km shows its canyons and ridges clearly to the horizon,
+    // reference/ksp2-run19-bodies; the full LUT in-scatter washed ours into a pale featureless haze).
+    let haze = 1.0 + (mix(0.4, 1.3, blue) - 1.0) * mix(smoothstep(10.0, 40.0, alt_km), 1.0, red_sky());
     // an eclipse dims the sunlit air too
-    s.radiance = s.radiance * haze * eclipse(frame.cam_km.xyz, frame.sun.xyz);
+    // From a few hundred metres to a few tens of km up, KSP2's haze over Kerbin's land reads bluer than the LUT's
+    // (reference/ksp2-run3 at 1.5 and 8.5 km: land 120, 156, 157 and 150, 172, 186 against ours 126, 147, 135
+    // and 130, 156, 152): tinted towards blue there, on bodies whose air scatters blue.
+    // (and on up through the climb: KSP2's run13 at 15 and 45 km shows the haze under the horizon a saturated sky
+    // blue, 130, 189, 238 and 191, 218, 245, against ours 123, 164, 210 and 152, 191, 225; gone by 75 km, where
+    // the orbit view is matched to Josh's 89 km shot)
+    let low = smoothstep(0.3, 3.0, alt_km) * (1.0 - smoothstep(45.0, 75.0, alt_km)) * blue;
+    let tint = mix(vec3<f32>(1.0), vec3<f32>(0.84, 1.0, 1.3), low);
+    s.radiance = s.radiance * tint * haze * eclipse(frame.cam_km.xyz, frame.sun.xyz);
     return s;
 }
 
@@ -1197,7 +1221,12 @@ fn fs_terrain(in: VOut) -> @location(0) vec4<f32> {
                     let mean = max(slot_mean(s), vec3<f32>(0.02));
                     let c0 = mix(near.rgb, mid.rgb, smoothstep(30.0, 400.0, dist));
                     let c1 = mix(c0, far.rgb, smoothstep(400.0, 4000.0, dist));
-                    ratio = ratio + w * c1 / mean;
+                    // On airless bodies part of the detail slices' own hue shows through (KSP2's Mun from 2 km reads a
+                    // warm grey, 168, 167, 150, reference/ksp2-run19-bodies; the ratio to each channel's mean left ours
+                    // a neutral 162 grey)
+                    let lum_mean = max(dot(mean, vec3<f32>(0.2126, 0.7152, 0.0722)), 0.02);
+                    let hue_k = select(0.0, 0.6, frame.rayleigh.w < 0.5);
+                    ratio = ratio + w * mix(c1 / mean, c1 / lum_mean, hue_k);
                     // normals resampled with distance like the albedo (8 m near, 64 m beyond ~30 m), so the
                     // 8 m pattern does not repeat in rows across the ground
                     if dist < 2000.0 {
@@ -1222,6 +1251,26 @@ fn fs_terrain(in: VOut) -> @location(0) vec4<f32> {
                 }
             }
         }
+    }
+    // A site model's sand paint (the KSC campus ground's beaches along its shores and banks, its vertex paint
+    // alpha, planet_lod::build_quad_painted): the terrain draped over that ground shows it above the water,
+    // keeping the detail's light and shade.
+    // Beaches elsewhere: KSP2's coasts show a band of sand from the waterline a few metres up (seen from 1 to
+    // 8 km); land within that height of the sea on ocean worlds, on gentle slopes, takes it too.
+    if frame.water.y > 0.5 && in.height > 0.0 && in.height < 14.0 {
+        let flat = smoothstep(0.93, 0.985, dot(normalize(in.normal), up));
+        let beach = (1.0 - smoothstep(4.0, 14.0, in.height)) * flat;
+        let w = max(smoothstep(0.45, 0.85, in.extra), beach) * smoothstep(0.0, 1.0, in.height);
+        if w > 0.0 {
+            let shade = select(1.0, dot(dbg * 2.0, vec3<f32>(0.3, 0.5, 0.2)), dot(dbg, dbg) > 0.0);
+            let sand = vec3<f32>(0.50, 0.44, 0.33) * mix(1.0, clamp(shade, 0.6, 1.4), 0.6);
+            albedo = mix(albedo, sand, w);
+        }
+    } else if in.extra > 0.01 && in.height > 0.0 {
+        let w = smoothstep(0.45, 0.85, in.extra);
+        let shade = select(1.0, dot(dbg * 2.0, vec3<f32>(0.3, 0.5, 0.2)), dot(dbg, dbg) > 0.0);
+        let sand = vec3<f32>(0.50, 0.44, 0.33) * mix(1.0, clamp(shade, 0.6, 1.4), 0.6);
+        albedo = mix(albedo, sand, w);
     }
 
     if surface.flags.z > 1.5 && surface.flags.z < 2.5 {
@@ -1386,7 +1435,9 @@ fn fs_ocean(in: VOut) -> @location(0) vec4<f32> {
     // Lagoons: in clear seas the sandy floor lights the shallows a bright turquoise around coasts and islands,
     // the rings the original shows even from orbit (not in murky seas such as Eve's).
     let clear = smoothstep(1.0, 10.0, surface.foam.w);
-    let lagoon = exp(-max(depth, 0.0) / clamp(2.0 * surface.deep.w, 2.0, 8.0)) * clear * (1.0 - fres * 0.6);
+    // (KSP2's turquoise reaches a few hundred metres off its beaches, out to some 20 m of water: 8 m showed only
+    // a line at the shore)
+    let lagoon = exp(-max(depth, 0.0) / clamp(2.0 * surface.deep.w, 6.0, 22.0)) * clear * (1.0 - fres * 0.6);
     let turquoise = min(surface.shallow.rgb * 2.8, vec3<f32>(0.95));
     radiance = mix(radiance, turquoise / PI * (light.sun + light.sky) * 0.9, lagoon * 0.85);
     radiance = through_air(radiance, p_km);
@@ -1445,7 +1496,12 @@ fn fs_clouds(in: VOut) -> @location(0) vec4<f32> {
     let pf = up * (frame.solar.w / 1500.0);
     let nf = vnoise(pf, 1048576) * 0.6 + vnoise(pf * 2.0, 1048576) * 0.4;
     let kf = 1.0 - smoothstep(300.0, 1200.0, dist * 0.0012);
-    let far_cover = smoothstep(0.12, 0.6, base + (nf - 0.5) * 0.7 * kf);
+    // Seen from above the layer on the climb (KSP2's run13 at 45 km over the KSC: a few small cumulus over clear
+    // land, where ours drew broad white sheets over about a third of it) only the thick cores show; from orbit
+    // (Josh's 89 km shot) and from under the layer the fields keep their full cover.
+    let cam_km = length(frame.cam_km.xyz) - frame.solar.w * 0.001;
+    let above = smoothstep(9.0, 20.0, cam_km) * (1.0 - smoothstep(55.0, 85.0, cam_km));
+    let far_cover = smoothstep(mix(0.12, 0.36, above), mix(0.6, 0.85, above), base + (nf - 0.5) * 0.7 * kf);
     let cover = clamp(mix(far_cover, smoothstep(0.35, 0.75, base + (n - 0.5) * 0.9), near), 0.0, 1.0);
     let p_km = frame.cam_km.xyz + in.rel * 0.001;
     let sun = frame.sun.xyz;
@@ -1670,7 +1726,7 @@ fn fs_far(in: FOut) -> @location(0) vec4<f32> {
     // fade in as the meshes shrink away (from 85 % of their range) and out at the far edge (dithered)
     let dither = fract(sin(dot(in.clip.xy, vec2<f32>(12.9898, 78.233))) * 43758.547);
     let fade_in = smoothstep(in.near * 0.85, in.near, dist);
-    if dither > fade_in * (1.0 - smoothstep(2000.0, 2500.0, dist)) {
+    if dither > fade_in * (1.0 - smoothstep(4000.0, 5000.0, dist)) {
         discard;
     }
     // the atlas's object-space normal (Unity: x east, y up, z north), stored in an sRGB array: back to its
@@ -1691,8 +1747,18 @@ fn fs_far(in: FOut) -> @location(0) vec4<f32> {
     // Lit as the renderer lights the props' meshes (ambient 0.3, the rest by the sun, no exposure), so a prop
     // keeps its brightness when it turns into its impostor; on a dark body the planet's exposure would blow
     // bright rocks out to white. That colour is taken back through the tone map so the air can veil it.
-    let diffuse = max(dot(n, sun), 0.0) * eclipse(p_km, sun) * shade;
-    let lit = min(albedo * (0.3 + 0.7 * diffuse * frame.quality.w), vec3<f32>(0.95));
+    // The ambient follows the sun as the ground's does (planet.wgsl `ambient`): the meshes' 0.3 by day, the
+    // body's night ambient through the exposure after dusk (at 0.3 the trees glowed yellow-green under a black
+    // sky; KSP2's are near black at night).
+    // (through dusk too: the sky still lights the ground there)
+    let day = smoothstep(-0.2, 0.1, dot(normalize(p_km), sun));
+    // (a crown shades most of itself from the night sky: 0.4 of the ground's, so trees read darker than the
+    // lawn round them as KSP2's do, not twice as bright)
+    let amb = mix(surface.ambient_night.rgb * (2.0 / PI) * frame.sun.w * 0.4, vec3<f32>(0.3), day);
+    // (no sunlight once the sun is under the horizon: a crown's side normals caught it from below)
+    let up_sun = smoothstep(-0.03, 0.05, dot(normalize(p_km), sun));
+    let diffuse = max(dot(n, sun), 0.0) * eclipse(p_km, sun) * shade * up_sun;
+    let lit = min(albedo * (amb + 0.7 * diffuse * frame.quality.w), vec3<f32>(0.95));
     var radiance = -log(vec3<f32>(1.0) - lit) / max(frame.sun.w, 0.1);
     radiance = through_air(radiance, p_km);
     return vec4<f32>(tonemap(radiance), 1.0);

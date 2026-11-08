@@ -1840,6 +1840,7 @@ dependencies = [
  "bevy_ecs",
  "glam 0.34.1",
  "ose-data",
+ "ose-importer",
  "ose-math",
  "rapier3d-f64",
  "serde",

@@ -22,6 +22,33 @@ pub struct KscScene {
     /// The original's vessel spawn points (`LaunchPad_spawn_01`..., `Runway_spawn_01`...), world positions.
     #[serde(default)]
     pub spawns: std::collections::HashMap<String, [f64; 3]>,
+    /// The original's lamps (runway, street and aviation lights): position and glow colour, `[x, y, z, r, g, b]`.
+    #[serde(default)]
+    pub lamps: Vec<[f64; 6]>,
+}
+
+/// The lamps grouped by colour (white, warm white, amber, red, green, blue), one draw each: the colour and the points.
+fn lamp_groups(lamps: &[[f64; 6]]) -> Vec<([f32; 3], Vec<DVec3>)> {
+    const COLOURS: [[f32; 3]; 6] = [
+        [1.0, 0.95, 0.8],
+        [1.0, 0.9, 0.45],
+        [1.0, 0.62, 0.18],
+        [1.0, 0.12, 0.08],
+        [0.25, 1.0, 0.35],
+        [0.25, 0.5, 1.0],
+    ];
+    let mut groups: Vec<([f32; 3], Vec<DVec3>)> =
+        COLOURS.iter().map(|c| (*c, Vec::new())).collect();
+    for l in lamps {
+        let c = [l[3] as f32, l[4] as f32, l[5] as f32];
+        let d = |q: &[f32; 3]| (0..3).map(|i| (q[i] - c[i]).powi(2)).sum::<f32>();
+        let k = (0..COLOURS.len())
+            .min_by(|&a, &b| d(&COLOURS[a]).total_cmp(&d(&COLOURS[b])))
+            .unwrap_or(0);
+        groups[k].1.push(DVec3::new(l[0], l[1], l[2]));
+    }
+    groups.retain(|g| !g.1.is_empty());
+    groups
 }
 
 fn default_ground() -> f64 {
@@ -323,14 +350,16 @@ impl KscView {
         let mut items = Vec::new();
         if gpu.has_model("ksc") {
             let mut item = DrawItem::lit("ksc".into(), rot * -pos, rot, 1.0, rot * light);
-            item.ambient = (0.12 + 0.26 * day) as f32;
-            item.sun = crate::flight3d::SUN_GAIN;
+            // At night the moonlight is a small share of the sun's and the sky fill nearly gone: the original's
+            // night campus is about an eighth as bright as its day, lit mostly by its own windows and floods.
+            item.ambient = (0.03 + 0.35 * day) as f32;
+            item.sun = crate::flight3d::SUN_GAIN * (0.03 + 0.97 * day) as f32;
             item.exposure = crate::flight3d::OUTDOOR_EXPOSURE;
             item.true_metal = true;
             // The campus lights (windows, floodlights: the original's emissive maps) come on at dusk.
             item.glow = (1.0 - day) as f32;
             if day < 1.0 {
-                let k = (0.35 + 0.65 * day) as f32;
+                let k = (0.1 + 0.9 * day) as f32;
                 item.color = [k * 0.85, k * 0.9, k, 1.0];
             }
             // The Tracking Station's big dish sweeps slowly back and forth in azimuth, about its own vertical.
@@ -398,12 +427,31 @@ impl KscView {
                 }
             }
         }
+        // The lamps light up as the campus's windows do, at dusk.
+        let night = (1.0 - day) as f32;
+        if night > 0.02 {
+            for (k, (c, pts)) in lamp_groups(&scene.lamps).into_iter().enumerate() {
+                lines.push(LineItem::dots(
+                    format!("ksc-lamps:{k}:{}", u8::from(planet.is_some())),
+                    pts.into_iter().map(|p| rot * p).collect(),
+                    rot * -pos,
+                    [c[0], c[1], c[2], night * 0.85],
+                    3.5,
+                ));
+            }
+        }
         match planet {
             Some((_, scatter, pass)) => {
                 // Kerbin's terrain replaces the campus's flat ground plane and far stand-in, and its sky the
                 // plain backdrop.
                 gpu.hide_meshes("ksc", &["ground", "KSCmain_LOD"]);
-                items.extend(scatter);
+                // The trees and rocks keep a fixed sky fill; at night it fades with the campus's own, so they do
+                // not glow in the dark round an unlit campus.
+                let fill = (0.1 + 0.9 * day) as f32;
+                items.extend(scatter.into_iter().map(|mut it| {
+                    it.ambient *= fill;
+                    it
+                }));
                 gpu.frame_with_effects(
                     "assets/ksc/",
                     &items,

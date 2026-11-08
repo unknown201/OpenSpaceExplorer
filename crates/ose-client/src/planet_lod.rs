@@ -318,6 +318,18 @@ fn skirt_order(e: usize, k: usize) -> (usize, usize) {
 
 /// Build a quad's mesh. `height(dir)` is the terrain height above `radius` for a unit model-frame direction.
 pub fn build_quad(q: &QuadKey, radius: f64, ocean: bool, height: &dyn Fn(V3) -> f64) -> QuadMesh {
+    build_quad_painted(q, radius, ocean, height, &|_| 0.0)
+}
+
+/// `build_quad` with a paint weight per terrain vertex (0..1, in `TerrainVertex::extra`): the sand a site model
+/// paints on its ground (the KSC campus's beaches), which the terrain draped over that ground shows.
+pub fn build_quad_painted(
+    q: &QuadKey,
+    radius: f64,
+    ocean: bool,
+    height: &dyn Fn(V3) -> f64,
+    paint: &dyn Fn(V3) -> f32,
+) -> QuadMesh {
     let g = GRID;
     let n = g + 2; // one ring of extra samples for normals across edges
     let step = 1.0 / (g - 1) as f64;
@@ -361,7 +373,7 @@ pub fn build_quad(q: &QuadKey, radius: f64, ocean: bool, height: &dyn Fn(V3) -> 
                 pos: [rel[0] as f32, rel[1] as f32, rel[2] as f32],
                 normal: nf,
                 height: h as f32,
-                extra: 0.0,
+                extra: paint(dirs[j * n + i]),
                 morph: [m[0] as f32, m[1] as f32, m[2] as f32],
             });
         }
@@ -380,7 +392,7 @@ pub fn build_quad(q: &QuadKey, radius: f64, ocean: bool, height: &dyn Fn(V3) -> 
                 pos: [rel[0] as f32, rel[1] as f32, rel[2] as f32],
                 normal: v.normal,
                 height: v.height - skirt as f32,
-                extra: 0.0,
+                extra: v.extra,
                 morph: v.morph,
             });
         }

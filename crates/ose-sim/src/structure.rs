@@ -136,6 +136,15 @@ pub struct Structure {
     pub suspension_compression_m: Vec<f64>,
     engine_isp: Vec<Option<ose_data::Curve>>,
     engine_throttle_locked: Vec<bool>,
+    /// Engines that lag their throttle (Module_Engine `useEngineResponseTime`), with each engine's own
+    /// throttle (`currentThrottle`, which sets its fuel flow) and spool (`EngineSpool`, which scales its thrust).
+    engine_response: Vec<Option<ose_data::EngineResponse>>,
+    engine_now: Vec<f64>,
+    engine_spool: Vec<f64>,
+    /// Physicsless parts (`PhysicsMode` None, other than the root, which the original promotes): they have
+    /// no rigidbody, so PartComponent.UpdateMass gives them no physics mass and the vessel's TotalMass
+    /// leaves them out, resources and all.
+    massless: Vec<bool>,
     /// Each part's drag faces after occlusion by stack neighbours (`None` without a drag cube), and its
     /// authored rotation (Unity quaternion x, y, z, w) to bring the airflow into part space.
     pub faces: Vec<Option<Faces>>,
@@ -165,6 +174,11 @@ pub struct Structure {
     /// step faster than they can take: (part, speed m/s).
     pub(crate) in_water: Vec<bool>,
     pub(crate) water_strikes: Vec<(usize, f64)>,
+    /// Each part's `buoyancy` scale and the water it displaces fully under, m^3 (`water::displacement_m3`).
+    pub buoyancy: Vec<f64>,
+    pub displacement_m3: Vec<f64>,
+    /// Each part's water drag state.
+    pub(crate) water_drag: Vec<crate::water::WaterDrag>,
     /// Deployable solar panels (and antennas) folded out.
     pub deployed: Vec<bool>,
     /// Antennas that extend and retract (`Data_Deployable` beside `Data_Transmitter`); they start retracted.
@@ -186,6 +200,8 @@ pub struct Structure {
     pub stage_activations: Vec<Vec<usize>>,
     /// Parachutes: definition, state and how far open (0..1).
     pub chute_defs: Vec<Option<ose_data::Parachute>>,
+    /// Each chute's deploy mode (`DeploymentMode`); its opening pressure and height are in `chute_defs`.
+    pub chute_modes: Vec<ose_data::craft::ChuteMode>,
     pub chutes: Vec<Chute>,
     pub chute_open: Vec<f64>,
     pub chute_heat: Vec<ChuteHeat>,
@@ -208,6 +224,9 @@ pub struct Structure {
     /// Each part's bounds as a box (centre relative to the part origin, half size), vessel frame; landing
     /// gear also folded out.
     stowed_box: Vec<(DVec3, DVec3)>,
+    /// Each stack part's hull as the frustum between its bottom and top stack nodes (`None` for any other
+    /// part, which keeps its box): a Mk1 pod narrows from 1.25 m at its base to 0.625 m at its top.
+    hull_taper: Vec<Option<Taper>>,
     extended_box: Vec<Option<(DVec3, DVec3)>>,
     /// Landing gear: definition and whether it is out.
     pub gear_defs: Vec<Option<ose_data::LandingGear>>,
@@ -280,6 +299,17 @@ pub enum DeploySafety {
     Risky,
     Unsafe,
     None,
+}
+
+/// Whether a deploy mode lets an armed chute open at a safety (`ShouldDeployWhenArmed`): SAFE only when safe,
+/// RISKY when safe or risky, IMMEDIATE always.
+pub fn mode_allows(mode: ose_data::craft::ChuteMode, safety: DeploySafety) -> bool {
+    use ose_data::craft::ChuteMode as M;
+    match mode {
+        M::Safe => safety == DeploySafety::Safe,
+        M::Risky => matches!(safety, DeploySafety::Safe | DeploySafety::Risky),
+        M::Immediate => true,
+    }
 }
 
 /// A canopy's heat (`Module_Parachute.CalculateThermalProperties` / `UpdateCut`): its temperature, the
@@ -358,6 +388,60 @@ pub struct Piece {
 
 /// A part's bounds (part space, Unity axes) as a box in the vessel frame: centre relative to the part
 /// origin and half size of the rotated box.
+/// A stack part's hull between its stack nodes, vessel frame: the part's axis, and the distance along it
+/// from the part origin and the hull radius at its bottom and top nodes, m.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Taper {
+    pub axis: DVec3,
+    pub bottom: (f64, f64),
+    pub top: (f64, f64),
+}
+
+impl Taper {
+    /// Hull radius this far along the axis from the part origin (straight between the nodes, on past them).
+    pub fn radius_at(&self, along: f64) -> f64 {
+        let (y0, r0) = self.bottom;
+        let (y1, r1) = self.top;
+        if (y1 - y0).abs() < 1e-6 {
+            return r0.max(r1);
+        }
+        (r0 + (r1 - r0) * (along - y0) / (y1 - y0)).max(0.05)
+    }
+}
+
+/// Diameter of a stack node size, m (the original's 0.625 / 1.25 / 2.5 / 3.75 / 5 m sizes).
+fn node_diameter_m(size: i32) -> Option<f64> {
+    [0.625, 1.25, 2.5, 3.75, 5.0]
+        .get(usize::try_from(size).ok()?)
+        .copied()
+}
+
+fn part_taper(q: ose_data::craft::Quat, def: &PartDef, half: DVec3) -> Option<Taper> {
+    let node = |id: &str| {
+        def.attach_nodes
+            .iter()
+            .find(|n| n.id == id && n.node_type == "Stack")
+            .and_then(|n| Some((n.position.y, node_diameter_m(n.size)? * 0.5)))
+    };
+    let (bottom, top) = (node("bottom")?, node("top")?);
+    if top.0 <= bottom.0 {
+        return None;
+    }
+    let q = q.normalized();
+    let u = aero::rotate([q.x, q.y, q.z, q.w], DVec3::new(0.0, 1.0, 0.0));
+    let axis = DVec3::new(u.x, u.y, -u.z).normalized();
+    // no wider than the part's own box across its axis
+    let across = (half.x * (1.0 - axis.x.abs()))
+        .max(half.y * (1.0 - axis.y.abs()))
+        .max(half.z * (1.0 - axis.z.abs()));
+    let fit = |(y, r): (f64, f64)| (y, r.min(across.max(0.05)));
+    Some(Taper {
+        axis,
+        bottom: fit(bottom),
+        top: fit(top),
+    })
+}
+
 fn vessel_box(q: ose_data::craft::Quat, b: ose_data::PartBounds) -> (DVec3, DVec3) {
     let q = q.normalized();
     let q = [q.x, q.y, q.z, q.w];
@@ -429,6 +513,7 @@ impl Structure {
             self.wheel_queued_torque[j] = old.wheel_queued_torque[i];
             self.wheel_accepted_power[j] = old.wheel_accepted_power[i];
             self.in_water[j] = old.in_water[i];
+            self.water_drag[j] = old.water_drag[i];
             self.rcs_retained_delivery[j] = old.rcs_retained_delivery[i];
             self.rcs_queued_inputs[j] = old.rcs_queued_inputs[i].clone();
             self.gimbal_angles[j] = old.gimbal_angles[i].clone();
@@ -695,6 +780,17 @@ impl Structure {
             surface_loads: Vec::new(),
             in_water: vec![false; n],
             water_strikes: Vec::new(),
+            buoyancy: (0..n)
+                .map(|i| def_of(i).map(|d| d.buoyancy).unwrap_or(1.0))
+                .collect(),
+            displacement_m3: (0..n)
+                .map(|i| {
+                    def_of(i)
+                        .map(crate::water::displacement_m3)
+                        .unwrap_or(crate::water::settings().default_volume_m3)
+                })
+                .collect(),
+            water_drag: vec![Default::default(); n],
             suspension_compression_m: vec![0.0; n],
             engine_isp: (0..n)
                 .map(|i| {
@@ -709,6 +805,18 @@ impl Structure {
                         .and_then(|d| d.engines.first())
                         .is_some_and(|e| e.throttle_locked)
                 })
+                .collect(),
+            engine_response: (0..n)
+                .map(|i| {
+                    def_of(i)
+                        .and_then(|d| d.engines.first())
+                        .and_then(|e| e.response)
+                })
+                .collect(),
+            engine_now: vec![0.0; n],
+            engine_spool: vec![0.0; n],
+            massless: (0..n)
+                .map(|i| i != root && def_of(i).is_some_and(|d| d.physics_mode == "None"))
                 .collect(),
             faces,
             part_rot,
@@ -743,7 +851,19 @@ impl Structure {
                 .collect(),
             stage_activations,
             chute_defs: (0..n)
-                .map(|i| def_of(i).and_then(|d| d.parachute.clone()))
+                .map(|i| {
+                    let mut c = def_of(i).and_then(|d| d.parachute.clone())?;
+                    if let Some(set) = craft.parts[i].chute {
+                        c.min_pressure_atm = set.min_pressure_atm as f64;
+                        c.deploy_altitude_m = set.deploy_altitude_m as f64;
+                    }
+                    Some(c)
+                })
+                .collect(),
+            chute_modes: craft
+                .parts
+                .iter()
+                .map(|p| p.chute.map(|c| c.mode).unwrap_or_default())
                 .collect(),
             chutes: vec![Chute::Stowed; n],
             chute_open: vec![0.0; n],
@@ -778,6 +898,14 @@ impl Structure {
                         Some(b) => vessel_box(q, b),
                         None => (DVec3::ZERO, sizes[i] * 0.5),
                     }
+                })
+                .collect(),
+            hull_taper: (0..n)
+                .map(|i| {
+                    let q = craft.parts[i].local_rotation;
+                    let def = def_of(i)?;
+                    let half = def.bounds.map(|b| vessel_box(q, b).1)?;
+                    part_taper(q, def, half)
                 })
                 .collect(),
             extended_box: (0..n)
@@ -1073,6 +1201,18 @@ impl Structure {
         throttle: f64,
         env: crate::flight::EngineEnvironment,
     ) -> Vec<EngineDemand> {
+        self.engine_demands_at(stage, throttle, env, false)
+    }
+
+    /// `lagged`: engines that lag their throttle burn and push as they have spooled so far (the step's
+    /// propulsion); otherwise every engine is taken at the requested throttle (readouts, planning).
+    fn engine_demands_at(
+        &self,
+        stage: usize,
+        throttle: f64,
+        env: crate::flight::EngineEnvironment,
+        lagged: bool,
+    ) -> Vec<EngineDemand> {
         let intakes =
             (0..self.rigid.len()).any(|i| self.rigid.present[i] && self.intake_area_m2[i] > 0.0);
         self.fed_engines(stage)
@@ -1087,8 +1227,14 @@ impl Structure {
                     .as_ref()
                     .map(|jet| jet.factor(env.mach, env.density, env.oxygen, intakes))
                     .unwrap_or(1.0);
+                // a lagging engine burns at its own throttle and pushes with that throttle's thrust
+                // times its spool (PartComponentModule_Engine: FinalThrustValue = thrust * EngineSpool)
+                let (duty, spool) = match self.engine_response[part] {
+                    Some(_) if lagged => (self.engine_now[part], self.engine_spool[part]),
+                    _ => (self.engine_duty(part, throttle), 1.0),
+                };
                 let mass_flow_tps = self.engine_thrust_kn[part] / (vacuum_isp * ose_data::G0)
-                    * self.engine_duty(part, throttle)
+                    * duty
                     * self.controls[part].thrust_limiter
                     * air;
                 (mass_flow_tps > 0.0).then(|| EngineDemand {
@@ -1096,7 +1242,8 @@ impl Structure {
                     mass_flow_tps,
                     thrust_kn: mass_flow_tps
                         * curve.evaluate(env.pressure_atm.max(0.0)).max(0.0)
-                        * ose_data::G0,
+                        * ose_data::G0
+                        * spool,
                 })
             })
             .collect()
@@ -1243,6 +1390,17 @@ impl Structure {
         out
     }
 
+    /// The vessel's mass in flight: every part's dry, stored and occupied-seat mass, physicsless parts
+    /// left out (the resource network's own total still counts them).
+    pub fn flight_mass_t(&self) -> f64 {
+        self.part_masses()
+            .iter()
+            .zip(&self.rigid.present)
+            .filter(|(_, present)| **present)
+            .map(|(m, _)| m)
+            .sum()
+    }
+
     fn part_masses(&self) -> Vec<f64> {
         let mut masses = self.net.dry_t.clone();
         for (mass, crew) in masses.iter_mut().zip(&self.occupied_mass_t) {
@@ -1250,6 +1408,11 @@ impl Structure {
         }
         for tank in &self.net.tanks {
             masses[tank.part] += tank.stored * self.net.unit_mass_t[tank.resource];
+        }
+        for (mass, massless) in masses.iter_mut().zip(&self.massless) {
+            if *massless {
+                *mass = 0.0;
+            }
         }
         masses
     }
@@ -1271,6 +1434,43 @@ impl Structure {
         self.rigid.set_part_masses(&self.part_masses());
     }
 
+    /// Module_Engine's response for lagging engines, once per tick before their demand: the engine's
+    /// throttle moves toward the requested one at `engineAccelerationSpeed` (or the deceleration speed),
+    /// snapping within 1e-4, and the spool toward `max(engineSpoolIdle, throttle)` at `engineSpoolTime`;
+    /// an engine that is not running (unfed, unignited, detached) has no spool.
+    fn respond_engines(&mut self, p: &Powered, dt: f64) {
+        if dt <= 0.0 || self.engine_response.iter().all(Option::is_none) {
+            return;
+        }
+        let running: Vec<usize> = if p.ignited && !p.crashed {
+            self.fed_engines(p.stage)
+        } else {
+            Vec::new()
+        };
+        let lerp = |from: f64, to: f64, k: f64| from + (to - from) * k.clamp(0.0, 1.0);
+        for part in 0..self.engine_response.len() {
+            let Some(r) = self.engine_response[part] else {
+                continue;
+            };
+            if !running.contains(&part) {
+                self.engine_now[part] = 0.0;
+                self.engine_spool[part] = 0.0;
+                continue;
+            }
+            let want = self.engine_duty(part, p.throttle);
+            let now = self.engine_now[part];
+            self.engine_now[part] = if (now - want).abs() <= 1e-4 {
+                want
+            } else if now < want {
+                lerp(now, want, r.acceleration_per_s * dt)
+            } else {
+                lerp(now, want, r.deceleration_per_s * dt)
+            };
+            let target = r.spool_idle.max(self.engine_now[part]);
+            self.engine_spool[part] = lerp(self.engine_spool[part], target, r.spool_per_s * dt);
+        }
+    }
+
     /// Resolve fuel before integrating motion so a starved engine cannot provide a free step of thrust.
     pub fn propulsion(
         &mut self,
@@ -1287,8 +1487,9 @@ impl Structure {
             mass: self.mass_properties(),
             ..Default::default()
         };
+        self.respond_engines(p, dt);
         if p.ignited && !p.crashed && dt > 0.0 {
-            let demands = self.engine_demands(p.stage, p.throttle, env);
+            let demands = self.engine_demands_at(p.stage, p.throttle, env, true);
             let mut active = Vec::new();
             let mut requests = Vec::new();
             for demand in demands {
@@ -1733,6 +1934,11 @@ impl Structure {
         (self.rigid.rest_position(i) + offset, half)
     }
 
+    /// A stack part's hull between its stack nodes (`None`: the part is its box).
+    pub fn hull_taper(&self, i: usize) -> Option<Taper> {
+        self.hull_taper[i]
+    }
+
     /// The RCS thrusters still attached: thrust, turning torque (each thruster at its distance from the
     /// centre of mass) and Isp.
     fn sync_rcs(&self, p: &mut Powered) {
@@ -1891,19 +2097,6 @@ impl Structure {
                         .is_some_and(|g| !g.leg && g.radius_m > 0.0)
             })
             .collect();
-        p.drive.wheels = wheels
-            .iter()
-            .map(|&i| {
-                let g = self.gear_defs[i].as_ref().expect("gear");
-                crate::flight::DriveWheel {
-                    radius_m: g.radius_m,
-                    torque_knm: g.motor.as_ref().map(|m| m.torque_curve.clone()),
-                    ec_per_s: g.motor.as_ref().map(|m| m.ec_per_s).unwrap_or(0.0),
-                    brake_knm: g.brake_torque_knm,
-                    steers: g.steerable,
-                }
-            })
-            .collect();
         // the root part points the way it drives (a probe core's up), laid flat; craft +Z otherwise
         let up = aero::rotate(root_rotation, DVec3::new(0.0, 1.0, 0.0));
         let flat = (up.x * up.x + up.z * up.z).sqrt();
@@ -1912,19 +2105,49 @@ impl Structure {
         } else {
             [0.0, 1.0]
         };
-        // wheel spread along that direction (positions in craft axes: vessel z is craft -Z); a level craft
-        // drives along its nose
-        let along: Vec<f64> = wheels
+        let mass = self.mass_properties();
+        // wheel places from the centre of mass, along that direction and to its right (positions in
+        // craft axes: vessel z is craft -Z; craft +X lies to the left of the drive direction on the
+        // ground); a level craft drives along its nose with its belly down
+        let [f0, f1] = p.drive.forward;
+        let level = self.level;
+        let place = |r: DVec3| -> [f64; 2] {
+            if level {
+                [r.y, r.x]
+            } else {
+                [r.x * f0 - r.z * f1, -(r.x * f1 + r.z * f0)]
+            }
+        };
+        let previous = std::mem::take(&mut p.drive.wheels);
+        let carry = previous.len() == wheels.len();
+        p.drive.wheels = wheels
             .iter()
-            .map(|&i| {
-                let r = self.rigid.rest_position(i);
-                if self.level {
-                    r.y
-                } else {
-                    r.x * p.drive.forward[0] - r.z * p.drive.forward[1]
+            .enumerate()
+            .map(|(k, &i)| {
+                let g = self.gear_defs[i].as_ref().expect("gear");
+                crate::flight::DriveWheel {
+                    radius_m: g.radius_m,
+                    torque_knm: g.motor.as_ref().map(|m| m.torque_curve.clone()),
+                    ec_per_s: g.motor.as_ref().map(|m| m.ec_per_s).unwrap_or(0.0),
+                    brake_knm: g.brake_torque_knm,
+                    steers: g.steerable,
+                    at_m: place(self.rigid.rest_position(i) - mass.centre_m),
+                    dynamics: g.dynamics.clone(),
+                    state: if carry {
+                        previous[k].state.clone()
+                    } else {
+                        Default::default()
+                    },
                 }
             })
             .collect();
+        // turning about the vertical: a standing craft's Y, a level craft's Z
+        p.drive.yaw_inertia_tm2 = if level {
+            mass.inertia.z.z
+        } else {
+            mass.inertia.y.y
+        };
+        let along: Vec<f64> = p.drive.wheels.iter().map(|w| w.at_m[0]).collect();
         let spread = along.iter().cloned().fold(f64::MIN, f64::max)
             - along.iter().cloned().fold(f64::MAX, f64::min);
         p.drive.wheelbase_m = if spread.is_finite() {
@@ -3617,6 +3840,15 @@ impl Structure {
         self.chute_faces(i).or(self.faces[i])
     }
 
+    /// A part's drag-cube `AreaDrag` for travel along `d` (unit, vessel frame) at `mach`.
+    pub(crate) fn area_drag_along(&self, i: usize, d: DVec3, mach: f64) -> f64 {
+        let du = DVec3::new(d.x, d.y, -d.z);
+        let local = aero::rotate_inverse(self.part_rot[i], du);
+        self.drag_faces(i)
+            .map(|f| f.area_drag(&self.curves, local, mach))
+            .unwrap_or(0.0)
+    }
+
     /// Advance the parachutes one physics step as `Module_Parachute.OnModuleFixedUpdate` does: an armed chute
     /// opens partly once moving, below its deploy altitude or in air thicker than its minimum pressure, and
     /// (in its default SAFE mode) only while opening is safe for the canopy; it opens fully below its deploy
@@ -3705,15 +3937,17 @@ impl Structure {
             }
             match self.chutes[i] {
                 Chute::Armed => {
-                    // `ShouldDeployWhenArmed` (the SAFE deploy mode every stock chute starts in)
-                    let open = if heat.now {
+                    // `ShouldDeployWhenArmed`: IMMEDIATE (or Deploy) opens at once; otherwise the chute needs
+                    // speed and the air (thick enough, or low enough), and a safety its mode accepts.
+                    let mode = self.chute_modes.get(i).copied().unwrap_or_default();
+                    let open = if heat.now || mode == ose_data::craft::ChuteMode::Immediate {
                         heat.now = false;
                         true
                     } else {
                         speed * speed >= c.min_speed_to_deploy
                             && (air.height_m <= c.deploy_altitude_m
                                 || air.pressure_atm >= c.min_pressure_atm)
-                            && heat.safety == DeploySafety::Safe
+                            && mode_allows(mode, heat.safety)
                     };
                     if open {
                         self.chutes[i] = Chute::SemiDeployed;
@@ -5965,6 +6199,63 @@ mod tests {
     }
 
     #[test]
+    fn a_lander_standing_on_its_legs_reads_landed_and_its_feet_grip() {
+        // KSP2 trace T15 (run 16): a craft on its deployed legs reads Landed, and after touching down with
+        // some slide it settles in about a second; the legs grip with VehiclePhysics friction
+        let (c, defs, res) = lander();
+        let bodies: Vec<ose_data::CelestialBody> =
+            serde_json::from_str(include_str!("../../../assets/own/kerbol-system.json")).unwrap();
+        let mut kerbin = bodies.into_iter().find(|b| b.id == "Kerbin").unwrap();
+        kerbin.parent = None;
+        kerbin.orbit = None;
+        kerbin.soi_radius_m = None;
+        let mut u = crate::Universe::with_bodies(&[kerbin]);
+        let body = u.body_entity("Kerbin").unwrap();
+        let report = ose_data::staging::delta_v_by_stage(&c, &defs, &res);
+        let spec = crate::flight::FlightSpec::from_report(&report, &[], &[], 1.5);
+        let v = u.spawn_powered_on_surface("lander", body, spec, 0.0, 0.0);
+        let mut st = Structure::build(&c, &defs, &res);
+        assert_eq!(st.deploy_gear(true), 3);
+        u.set_structure(v, st);
+        // dropped from just above the ground onto its legs
+        let mut p = u.powered(v).unwrap().clone();
+        let up = p.r.normalized();
+        p.landed = false;
+        p.r = p.r + up * 1.5;
+        u.set_powered(v, p);
+        for _ in 0..(3 * crate::TICKS_PER_SECOND) {
+            u.step();
+        }
+        let p = u.powered(v).unwrap();
+        assert!(!p.crashed, "it lands on its legs");
+        assert_eq!(
+            u.situation(v),
+            Some(crate::flight::Situation::Landed),
+            "standing on its legs"
+        );
+        // sliding sideways at 2 m/s, its feet stop it within a second
+        let spin =
+            |p: &Powered| DVec3::new(0.0, 0.0, std::f64::consts::TAU / 21_549.425).cross(p.r);
+        let mut p = p.clone();
+        let east = DVec3::new(0.0, 0.0, 1.0)
+            .cross(p.r.normalized())
+            .normalized();
+        p.v = p.v + east * 2.0;
+        u.set_powered(v, p);
+        for _ in 0..crate::TICKS_PER_SECOND {
+            u.step();
+        }
+        let p = u.powered(v).unwrap();
+        let slide = p.v - spin(p);
+        let sideways = slide - p.r.normalized() * slide.dot(p.r.normalized());
+        assert!(
+            sideways.length() < 0.2,
+            "still sliding at {} m/s",
+            sideways.length()
+        );
+    }
+
+    #[test]
     fn landing_legs_fold_out_below_the_engine_widen_the_stance_and_take_a_hard_landing() {
         let (c, defs, res) = lander();
         let mut s = Structure::build(&c, &defs, &res);
@@ -6151,6 +6442,8 @@ mod tests {
                 }],
             });
             s.engine_throttle_locked[part] = false;
+            // analytical engines answer the throttle at once
+            s.engine_response[part] = None;
         }
         let mut p = flying(DVec3::new(1.0, 0.0, 0.0));
         p.throttle = 1.0;
@@ -6740,7 +7033,7 @@ mod tests {
                 (p.v - v - expected).length() < 1e-8,
                 "fraction={fraction}, out={out:?}"
             );
-            assert!((p.mass_t - s.net.mass_t()).abs() < 1e-9);
+            assert!((p.mass_t - s.flight_mass_t()).abs() < 1e-9);
             let (x, y, z) = crate::flight::vessel_basis(&p);
             let w = p.angvel + y * p.roll_rate;
             let momentum = inertia.apply(DVec3::new(w.dot(x), w.dot(y), w.dot(z)));
@@ -6850,7 +7143,7 @@ mod tests {
         );
         assert!((after.mass_t - mass + fuel).abs() < 1e-9);
         let s = u.structure(vessel).unwrap();
-        assert!((after.mass_t - s.net.mass_t()).abs() < 1e-9);
+        assert!((after.mass_t - s.flight_mass_t()).abs() < 1e-9);
         assert!(
             s.rigid.links.iter().any(|l| l.force_kn > 1e-4),
             "translation reaches joint solver even without net angular acceleration"
@@ -7770,18 +8063,18 @@ mod tests {
         s.sync(&mut p);
         for i in 0..s.rigid.len() {
             if s.rigid.present[i] {
-                assert!((s.rigid.masses_t[i] - s.net.mass_of(&[i]).max(0.001)).abs() < 1e-9);
+                assert!((s.rigid.masses_t[i] - s.part_masses()[i].max(0.001)).abs() < 1e-9);
             }
         }
         // This synthetic fixture includes massless parts, for which Rapier retains a 1 kg floor.
         let rigid_total: f64 = (0..s.rigid.len())
             .filter(|&i| s.rigid.present[i])
-            .map(|i| s.net.mass_of(&[i]).max(0.001))
+            .map(|i| s.part_masses()[i].max(0.001))
             .sum();
         let rigid_centre = (0..s.rigid.len())
             .filter(|&i| s.rigid.present[i])
             .fold(DVec3::ZERO, |c, i| {
-                c + s.rigid.rest_mass_position(i) * s.net.mass_of(&[i]).max(0.001)
+                c + s.rigid.rest_mass_position(i) * s.part_masses()[i].max(0.001)
             })
             * (1.0 / rigid_total);
         assert!((s.rigid.rest_centre() - rigid_centre).length() < 1e-9);
@@ -8122,7 +8415,7 @@ mod tests {
             after.v.x
         );
         assert!((after.mass_t - (mass - fuel)).abs() < 1e-9);
-        assert!((after.mass_t - u.structure(vessel).unwrap().net.mass_t()).abs() < 1e-9);
+        assert!((after.mass_t - u.structure(vessel).unwrap().flight_mass_t()).abs() < 1e-9);
         u.step();
         assert!((u.powered(vessel).unwrap().mass_t - (mass - fuel)).abs() < 1e-9);
     }
@@ -8273,7 +8566,7 @@ mod tests {
             let expected_v = fuel * 100.0 * ose_data::G0 / mass - mu / radius.powi(2) * dt;
             assert!((p.v.x - expected_v).abs() < 1e-8);
             assert!((p.mass_t - (mass - fuel)).abs() < 1e-9);
-            assert!((p.mass_t - u.structure(e).unwrap().net.mass_t()).abs() < 1e-9);
+            assert!((p.mass_t - u.structure(e).unwrap().flight_mass_t()).abs() < 1e-9);
             assert!((ec_stored(u.structure(e).unwrap()) - 12.0 * dt * fraction).abs() < 1e-9);
             u.step();
             assert!((ec_stored(u.structure(e).unwrap()) - 12.0 * dt * fraction).abs() < 1e-9);
@@ -8442,14 +8735,15 @@ mod tests {
         s.converter_on[engine] = true;
         s.crew.fill(0);
         s.electric[s.root].command_use = 0.5;
-        let mass = s.net.mass_t();
+        let mass = s.flight_mass_t();
+        let net_mass = s.net.mass_t();
         let out = s.powered_services(&mut p, 0.0, Default::default(), 0.1);
         assert!(p.controlled);
         // The converter uses 0.05 t and makes 0.1 EC; the final 0.025 t burn makes 0.3 EC.
         assert!((s.converter_running[engine] - 1.0).abs() < 1e-9);
         assert!((out.burned_t - 0.025).abs() < 1e-9);
         assert!((out.mass.mass_t - (mass - 0.05)).abs() < 1e-9);
-        assert!((s.net.mass_t() - (mass - 0.075)).abs() < 1e-9);
+        assert!((s.net.mass_t() - (net_mass - 0.075)).abs() < 1e-9);
         assert!((ec_stored(&s) - 0.35).abs() < 1e-9); // One 0.05 EC core request.
         let coast = s.powered_services(&mut p, 0.0, Default::default(), 0.1);
         assert_no_engine_impulse(coast);
@@ -8564,6 +8858,99 @@ mod tests {
     }
 
     #[test]
+    fn physicsless_parts_weigh_nothing_in_flight_but_the_root_keeps_its_mass() {
+        let (crafts, defs, res) = assets();
+        let k1 = crafts.iter().find(|c| c.name == "Kerbal K1").unwrap();
+        let s = Structure::build(k1, &defs, &res);
+        // PartOwnerComponent.CalculatePhysicsStats leaves PhysicsMode None parts out of TotalMass: the
+        // K1's 8 flat solar panels (0.8 kg) and 4 radial batteries (5 kg, holding only massless charge)
+        let gone = 8.0 * 0.0008 + 4.0 * 0.005;
+        assert!((s.net.mass_t() - s.flight_mass_t() - gone).abs() < 1e-9);
+        assert!((s.mass_properties().mass_t - s.flight_mass_t()).abs() < 1e-9);
+        // a physicsless part as the root is promoted to a physical one (PartOwnerBehavior)
+        let mut lone = k1.clone();
+        let panel = lone
+            .parts
+            .iter()
+            .position(|p| p.part_id == "solararray_0v_flat")
+            .unwrap();
+        lone.parts = vec![lone.parts[panel].clone()];
+        lone.parts[0].parent = None;
+        lone.stages.clear();
+        lone.loose.clear();
+        let s = Structure::build(&lone, &defs, &res);
+        assert!((s.flight_mass_t() - 0.0008).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_solid_booster_burns_at_once_but_its_thrust_spools_up() {
+        let (crafts, defs, res) = assets();
+        let k1 = crafts.iter().find(|c| c.name == "Kerbal K1").unwrap();
+        let mut s = Structure::build(k1, &defs, &res);
+        let mut p = flying(DVec3::new(1.0, 0.0, 0.0));
+        p.ignited = true;
+        p.throttle = 1.0;
+        let hammers: Vec<usize> = s
+            .fed_engines(p.stage)
+            .into_iter()
+            .filter(|&e| s.engine_mixture[e].as_deref() == Some("SolidFuel"))
+            .collect();
+        assert_eq!(hammers.len(), 4);
+        // Hammer: engineAccelerationSpeed 10, engineSpoolTime 2, engineSpoolIdle 0.05
+        let r = s.engine_response[hammers[0]].expect("the Hammer lags its throttle");
+        assert_eq!(
+            (r.acceleration_per_s, r.spool_per_s, r.spool_idle),
+            (10.0, 2.0, 0.05)
+        );
+        let env = crate::flight::EngineEnvironment::default();
+        let full: f64 = s
+            .engine_demands(p.stage, 1.0, env)
+            .iter()
+            .filter(|d| hammers.contains(&d.part))
+            .map(|d| d.thrust_kn)
+            .sum();
+        let full_flow: f64 = s
+            .engine_demands(p.stage, 1.0, env)
+            .iter()
+            .filter(|d| hammers.contains(&d.part))
+            .map(|d| d.mass_flow_tps)
+            .sum();
+        let dt = 0.02;
+        // the reference recurrence: the engine's throttle Lerps by 0.2 a tick, the spool by 0.04 toward it
+        let (mut now, mut spool) = (0.0_f64, 0.0_f64);
+        for tick in 1..=250 {
+            // Module_Engine snaps when the old value is within 1e-4, else Lerps
+            if (1.0 - now).abs() <= 1e-4 {
+                now = 1.0;
+            } else {
+                now += (1.0 - now) * 10.0 * dt;
+            }
+            spool += (now.max(0.05) - spool) * 2.0 * dt;
+            s.propulsion(&p, env, dt);
+            let thrust: f64 = hammers
+                .iter()
+                .map(|&e| s.resolved_engine_thrust.as_ref().unwrap()[e])
+                .sum();
+            assert!(
+                (thrust - full * now * spool).abs() < 1e-6 * full,
+                "tick {tick}: {thrust} vs {}",
+                full * now * spool
+            );
+            for &e in &hammers {
+                assert!((s.engine_now[e] * full_flow / 4.0 - full_flow / 4.0 * now).abs() < 1e-9);
+            }
+            match tick {
+                // the first tick burns a fifth of full flow for under 1% of full thrust
+                1 => assert!(thrust < 0.01 * full),
+                // after a second the fuel flows in full while the thrust is still building
+                50 => assert!(now == 1.0 && spool > 0.8 && spool < 0.9, "{spool}"),
+                250 => assert!(spool > 0.9999),
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
     fn a_bent_engine_pushes_the_way_it_points() {
         let (crafts, defs, res) = assets();
         let k1 = crafts.iter().find(|c| c.name == "Kerbal K1").unwrap();
@@ -8581,6 +8968,8 @@ mod tests {
             })
             .expect("an engine on a joint");
         p.stage = stage;
+        // every engine at full spool, so both pushes are equal
+        s.engine_response.fill(None);
         let env = crate::flight::EngineEnvironment::default();
         let straight = s.propulsion(&p, env, 0.02);
         let thrust = s.resolved_engine_thrust.as_ref().unwrap()[engine];
@@ -8877,6 +9266,62 @@ mod tests {
         assert!(!s.chute_heat[chute].destroyed);
         let temp = s.chute_heat[chute].temp_k;
         assert!(temp > 200.0 && temp <= 288.0, "{temp}");
+    }
+
+    /// T42: the deploy modes (`ShouldDeployWhenArmed`) and the part window's settings, from the craft.
+    #[test]
+    fn chute_deploy_modes_and_settings_follow_the_original() {
+        use ose_data::craft::{ChuteMode, ChuteSettings};
+        // SAFE opens only when safe; RISKY also when risky; IMMEDIATE always.
+        assert!(mode_allows(ChuteMode::Safe, DeploySafety::Safe));
+        assert!(!mode_allows(ChuteMode::Safe, DeploySafety::Risky));
+        assert!(mode_allows(ChuteMode::Risky, DeploySafety::Risky));
+        assert!(!mode_allows(ChuteMode::Risky, DeploySafety::Unsafe));
+        assert!(mode_allows(ChuteMode::Immediate, DeploySafety::Unsafe));
+        let facing = DVec3::new(1.0, 0.0, 0.0);
+        let fast = Airflow::uniform(basis(facing), DVec3::new(-850.0, 0.0, 0.0), 1.0, 2.5);
+        // RISKY still waits while opening would be unsafe (Mach 2.5 in thick air)
+        let (mut s, chute) = starter_chute();
+        s.chute_modes[chute] = ChuteMode::Risky;
+        s.arm_all_chutes();
+        for _ in 0..50 {
+            s.update_chutes(fast, chute_air(0.9, 1_000.0, false), 0.02);
+        }
+        assert_eq!(s.chute_heat[chute].safety, DeploySafety::Unsafe);
+        assert_eq!(s.chutes[chute], Chute::Armed, "RISKY waits while unsafe");
+        // IMMEDIATE opens at once, even high in thin air
+        let (mut s, chute) = starter_chute();
+        s.chute_modes[chute] = ChuteMode::Immediate;
+        s.arm_all_chutes();
+        s.update_chutes(fast, chute_air(0.001, 20_000.0, false), 0.02);
+        assert_eq!(
+            s.chutes[chute],
+            Chute::SemiDeployed,
+            "IMMEDIATE ignores air and safety"
+        );
+        // the craft's settings replace the part's defaults: a 0.5 atm chute stays packed at 0.3 atm, 5 km up
+        let (crafts, defs, res) = assets();
+        let mut c = crafts
+            .iter()
+            .find(|c| c.name == "Stock12_StartRocket")
+            .unwrap()
+            .clone();
+        c.parts[chute].chute = Some(ChuteSettings {
+            mode: ChuteMode::Safe,
+            min_pressure_atm: 0.5,
+            deploy_altitude_m: 300.0,
+        });
+        let mut s = Structure::build(&c, &defs, &res);
+        let slow = Airflow::uniform(basis(facing), DVec3::new(-100.0, 0.0, 0.0), 1.0, 0.3);
+        s.arm_all_chutes();
+        s.update_chutes(slow, chute_air(0.3, 5_000.0, false), 0.02);
+        assert_eq!(s.chutes[chute], Chute::Armed, "waits for 0.5 atm");
+        s.update_chutes(slow, chute_air(0.55, 4_000.0, false), 0.02);
+        assert_eq!(s.chutes[chute], Chute::SemiDeployed);
+        assert_eq!(
+            s.chute_defs[chute].as_ref().unwrap().deploy_altitude_m,
+            300.0
+        );
     }
 
     #[test]

@@ -177,6 +177,13 @@ ground plane (`ksc.glb` mesh `ground`) is hidden in flight once the terrain draw
 
 ## 7. Scatter (Vegetation Studio Pro)
 
+KSC (2026-11-07, side-by-side gap SBS-V1): KSP2's KSC screen shows dense tree lines along the rivers and round the
+pad ring. The campus model's own `SM_FLTree` meshes are only 17 poplars, so those lines are this scatter. Rocks
+keep off the whole campus footprint; trees keep off the facilities (+100 m), the pad islands' lawns, and the
+footprint's level lawns except where a 220 m grove noise is above 0.62. Impostors reach 5 km (100 000 at most),
+and their near cut counts the camera's height, so from the KSC overview camera (about 300 m up) the ground below
+is not left bare.
+
 Rocks, boulders, plants and trees come from `VegetationPackagePro` assets in each body's simulation bundle, one per
 biome mask channel (`VegetationSystemPro.BiomeTextureMask<C>ChannelType` names the package's `BiomeType`). Each
 `VegetationInfo` has a prefab, `SampleDistance` (grid spacing), `Density`, a scale range, `UseHeightRule`
