@@ -905,9 +905,10 @@ impl FlightView {
         out
     }
 
-    pub fn orbit(&mut self, dx: f64, dy: f64) {
-        self.yaw -= dx * 0.005;
-        self.pitch = (self.pitch + dy * 0.005).clamp(-1.45, 1.45);
+    /// Turn the camera round the vessel by `dyaw` and `dpitch` radians (`interaction::flight_orbit_degrees`).
+    pub fn orbit(&mut self, dyaw: f64, dpitch: f64) {
+        self.yaw -= dyaw;
+        self.pitch = (self.pitch + dpitch).clamp(-1.45, 1.45);
     }
 
     /// The craft part under a pixel of the last frame (nearest box along the camera ray).

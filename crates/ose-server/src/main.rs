@@ -193,6 +193,15 @@ struct PartInfo {
     is_decoupler: bool,
     /// Fuel flows through the part (decouplers and separators: never).
     fuel_cross_feed: bool,
+    /// A parachute's default opening pressure (atm) and full-deploy height (m), for its part window.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parachute: Option<ChuteInfo>,
+}
+
+#[derive(serde::Serialize)]
+struct ChuteInfo {
+    min_pressure_atm: f64,
+    deploy_altitude_m: f64,
 }
 
 #[derive(serde::Serialize)]
@@ -294,6 +303,10 @@ fn part_infos(parts: &[ose_data::PartDef]) -> Vec<PartInfo> {
                     "DecouplerHorizontal" | "DecouplerVertical"
                 ) || p.category == "Coupling",
                 fuel_cross_feed: p.fuel_cross_feed,
+                parachute: p.parachute.as_ref().map(|c| ChuteInfo {
+                    min_pressure_atm: c.min_pressure_atm,
+                    deploy_altitude_m: c.deploy_altitude_m,
+                }),
             }
         })
         .collect()
@@ -1282,8 +1295,9 @@ fn flight_readout(
                     .collect()
             })
             .unwrap_or_default(),
+        // what the HUD's Undock parts: flight-docked joints and ports joined in the VAB
         docked: u
-            .docked_links(e)
+            .undockable_joints(e, defs)
             .into_iter()
             .map(|(a, b)| (a as u16, b as u16))
             .collect(),
@@ -4292,6 +4306,32 @@ fn handle_decoded(
                         e,
                         part as usize,
                         actions,
+                    );
+                    ServerMessage::FlightAck {
+                        vessel,
+                        accepted: r.is_ok(),
+                        reason: r.err().map(String::from),
+                    }
+                }
+                None => ServerMessage::FlightAck {
+                    vessel,
+                    accepted: false,
+                    reason: Some("not your vessel".into()),
+                },
+            };
+            out.push((reply).clone());
+        }
+        Ok(ClientMessage::SetChuteSettings {
+            vessel,
+            part,
+            settings,
+        }) => {
+            let reply = match owned_vessel(s, vessel, player_id) {
+                Some(e) => {
+                    let r = s.universe.lock().expect("sim lock").set_chute_settings(
+                        e,
+                        part as usize,
+                        settings,
                     );
                     ServerMessage::FlightAck {
                         vessel,

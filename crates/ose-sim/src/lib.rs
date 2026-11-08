@@ -27,6 +27,7 @@ pub mod surface;
 pub mod thermal;
 pub mod trajectory;
 pub mod vessels;
+pub mod water;
 pub mod wheels;
 
 use bevy_ecs::prelude::*;
@@ -833,6 +834,49 @@ impl Universe {
         Ok(())
     }
 
+    /// Change a parachute's deploy mode, opening pressure and full-deploy height in flight; the rest of its
+    /// symmetry set follows (`KSPState(CopyToSymmetrySet)`), and the settings go with the craft.
+    pub fn set_chute_settings(
+        &mut self,
+        e: Entity,
+        part: usize,
+        settings: ose_data::craft::ChuteSettings,
+    ) -> Result<(), &'static str> {
+        let settings = settings.stepped();
+        // The part and the rest of its symmetry set, from the craft as flown.
+        let parts: Vec<usize> = match self.world.get::<docking::CraftDoc>(e) {
+            Some(d) => match d.0.parts.get(part).map(|p| p.symmetry).filter(|s| *s != 0) {
+                Some(s) => (0..d.0.parts.len())
+                    .filter(|&k| d.0.parts[k].symmetry == s)
+                    .collect(),
+                None => vec![part],
+            },
+            None => vec![part],
+        };
+        let mut st = self
+            .world
+            .get_mut::<structure::Structure>(e)
+            .ok_or("vessel has no parts")?;
+        if st.chute_defs.get(part).is_none_or(|c| c.is_none()) || !st.rigid.present[part] {
+            return Err("that part is not a parachute");
+        }
+        for &k in &parts {
+            if let Some(Some(c)) = st.chute_defs.get_mut(k) {
+                c.min_pressure_atm = settings.min_pressure_atm as f64;
+                c.deploy_altitude_m = settings.deploy_altitude_m as f64;
+                st.chute_modes[k] = settings.mode;
+            }
+        }
+        if let Some(mut doc) = self.world.get_mut::<docking::CraftDoc>(e) {
+            for &k in &parts {
+                if let Some(p) = doc.0.parts.get_mut(k) {
+                    p.chute = Some(settings);
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Run one part's action now (its right-click menu); false when it does not apply to that part.
     pub fn part_action(&mut self, e: Entity, part: usize, action: &str, on: bool) -> bool {
         self.world
@@ -1372,7 +1416,16 @@ impl Universe {
         let (parent_tanks, parent_wet) = self
             .world
             .get::<structure::Structure>(parent)
-            .map(|st| (Some(st.net.tanks.clone()), st.in_water.clone()))
+            .map(|st| {
+                (
+                    Some(st.net.tanks.clone()),
+                    st.in_water
+                        .iter()
+                        .copied()
+                        .zip(st.water_drag.iter().copied())
+                        .collect::<Vec<_>>(),
+                )
+            })
             .unwrap_or_default();
         // Only pieces that need it are built: one still burning, or one in the sea (where it must float);
         // a spent stage or a wreck on land stays a cheap single body.
@@ -1380,7 +1433,7 @@ impl Universe {
             .world
             .get::<flight::Powered>(parent)
             .is_some_and(|p| p.splashed)
-            || parent_wet.iter().any(|w| *w);
+            || parent_wet.iter().any(|w| w.0);
         let lit = |map: &[Option<usize>]| {
             fire.is_some_and(|f| f.burning.iter().any(|&i| map[i].is_some()))
         };
@@ -1391,9 +1444,10 @@ impl Universe {
                     st.carry_tanks_from(tanks, map);
                 }
                 // parts already in the sea do not strike it again
-                for (i, wet) in parent_wet.iter().enumerate() {
+                for (i, &(wet, drag)) in parent_wet.iter().enumerate() {
                     if let Some(j) = map.get(i).copied().flatten() {
-                        st.in_water[j] = *wet;
+                        st.in_water[j] = wet;
+                        st.water_drag[j] = drag;
                     }
                 }
                 let engines: Vec<usize> = fire

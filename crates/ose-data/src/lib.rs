@@ -272,6 +272,10 @@ pub struct PartDef {
     /// Scales the part's thermal mass (`thermalMassModifier`).
     #[serde(default = "one")]
     pub thermal_mass_modifier: f64,
+    /// Scales the water the part displaces (`PartData.buoyancy`: 3 for the Mk1 pod, 0.3 for tanks, 0 for
+    /// adapters that do not float).
+    #[serde(default = "one")]
+    pub buoyancy: f64,
     /// A heat shield (`Data_Heatshield`).
     #[serde(default)]
     pub heatshield: Option<Heatshield>,

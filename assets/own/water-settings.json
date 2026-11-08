@@ -1,0 +1,22 @@
+{
+  "version": "0.1.16",
+  "source_sha256": "cc318b2d68cd524530bb9096bebea7ff4bcd9e3e94cb58ed7b5b5485c1508cf0",
+  "buoyancy_scalar": 1.2,
+  "scale_above_depth_m": 0.2,
+  "default_volume_m3": 1.0,
+  "min_crash_mult": 0.1,
+  "crash_tolerance_mult": 1.2,
+  "drag_scalar": 4.5,
+  "drag_scalar_end": 0.15,
+  "drag_scalar_lerp": 0.25,
+  "drag_scalar_lerp_dot_mult_base": 2.0,
+  "drag_scalar_lerp_dot_mult": 1.25,
+  "drag_min_vel": 0.4,
+  "drag_min_vel_mult": 4.0,
+  "drag_part_vel_greater_vessel_mult": 1.5,
+  "drag_timer_s": 3.0,
+  "drag_mult_min_for_min_dot": 0.05,
+  "angular_drag_min_control_sqr_mag": 0.03125,
+  "angular_drag_slow": 4.0,
+  "drag_slow": 2.0
+}
