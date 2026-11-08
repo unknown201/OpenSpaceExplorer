@@ -174,6 +174,11 @@ pub struct Structure {
     /// step faster than they can take: (part, speed m/s).
     pub(crate) in_water: Vec<bool>,
     pub(crate) water_strikes: Vec<(usize, f64)>,
+    /// Each part's `buoyancy` scale and the water it displaces fully under, m^3 (`water::displacement_m3`).
+    pub buoyancy: Vec<f64>,
+    pub displacement_m3: Vec<f64>,
+    /// Each part's water drag state.
+    pub(crate) water_drag: Vec<crate::water::WaterDrag>,
     /// Deployable solar panels (and antennas) folded out.
     pub deployed: Vec<bool>,
     /// Antennas that extend and retract (`Data_Deployable` beside `Data_Transmitter`); they start retracted.
@@ -508,6 +513,7 @@ impl Structure {
             self.wheel_queued_torque[j] = old.wheel_queued_torque[i];
             self.wheel_accepted_power[j] = old.wheel_accepted_power[i];
             self.in_water[j] = old.in_water[i];
+            self.water_drag[j] = old.water_drag[i];
             self.rcs_retained_delivery[j] = old.rcs_retained_delivery[i];
             self.rcs_queued_inputs[j] = old.rcs_queued_inputs[i].clone();
             self.gimbal_angles[j] = old.gimbal_angles[i].clone();
@@ -774,6 +780,17 @@ impl Structure {
             surface_loads: Vec::new(),
             in_water: vec![false; n],
             water_strikes: Vec::new(),
+            buoyancy: (0..n)
+                .map(|i| def_of(i).map(|d| d.buoyancy).unwrap_or(1.0))
+                .collect(),
+            displacement_m3: (0..n)
+                .map(|i| {
+                    def_of(i)
+                        .map(crate::water::displacement_m3)
+                        .unwrap_or(crate::water::settings().default_volume_m3)
+                })
+                .collect(),
+            water_drag: vec![Default::default(); n],
             suspension_compression_m: vec![0.0; n],
             engine_isp: (0..n)
                 .map(|i| {
@@ -3821,6 +3838,15 @@ impl Structure {
     /// The faces the airflow meets on part `i`: a parachute's current shape, otherwise its own.
     fn drag_faces(&self, i: usize) -> Option<Faces> {
         self.chute_faces(i).or(self.faces[i])
+    }
+
+    /// A part's drag-cube `AreaDrag` for travel along `d` (unit, vessel frame) at `mach`.
+    pub(crate) fn area_drag_along(&self, i: usize, d: DVec3, mach: f64) -> f64 {
+        let du = DVec3::new(d.x, d.y, -d.z);
+        let local = aero::rotate_inverse(self.part_rot[i], du);
+        self.drag_faces(i)
+            .map(|f| f.area_drag(&self.curves, local, mach))
+            .unwrap_or(0.0)
     }
 
     /// Advance the parachutes one physics step as `Module_Parachute.OnModuleFixedUpdate` does: an armed chute

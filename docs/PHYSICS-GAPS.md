@@ -52,7 +52,7 @@ The structured-vessel per-engine fuel path, same-tick wheel electricity, authore
 | P25 | Open | Wheel collider transforms, spring/damper ratios, targets and supported-mass distribution are not imported. Current extended-gear springs and damping are provisional. | Individual suspension travel/load/compression follows authored parameters through asymmetric drops, slopes, retract/deploy and changing vessel mass. |
 | P26 | Open | Load-dependent tyre grip, slip, rolling resistance, drive/brake torque and suspension animation remain simplified. | Acceleration, braking, steering, wheel unloading and skids behave consistently on flat/uneven ground and across step sizes. |
 | P27 | Open | Buoyancy uses clipped boxes that can overlap or overestimate hollow/rotated displacement; authored displacement multipliers are missing. | Compound/hollow hulls have the correct displaced volume, centroid, equilibrium depth and righting moment with no double counting. |
-| P28 | Open | Flooding, waves, planing and water-impact damage are missing; water density/drag tuning is provisional. | Float/sink, asymmetric flooding, splashdown damage and high-speed surface motion match controlled material and reference fixtures. |
+| P28 | Done (KSP2 model) | Water-impact damage, buoyancy and water drag follow KSP2's `PartBehavior` and PhysicsSettings (`ose-sim` `water.rs`); KSP2 itself has no flooding or waves. A recorded KSP2 splashdown trace is still to come. | Float/sink, asymmetric flooding, splashdown damage and high-speed surface motion match controlled material and reference fixtures. |
 
 ## Docking, EVA, orbital integration and continuity
 
