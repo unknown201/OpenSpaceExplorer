@@ -46,10 +46,22 @@ async fn main() -> Result<()> {
     );
     // let it settle on the pad as the KSP2 run does
     let settle = Instant::now();
+    let mut facing = ose_math::DVec3::new(0.0, 0.0, 1.0);
     while settle.elapsed() < Duration::from_secs(5) {
-        c.vessel_state(l.vessel, Duration::from_secs(10)).await?;
+        let v = c.vessel_state(l.vessel, Duration::from_secs(10)).await?;
+        if let Some(r) = v.flight.as_ref() {
+            facing = r.facing;
+        }
     }
-    c.set_controls(l.vessel, 1.0, AttitudeMode::Up).await?;
+    // KSP2's run holds SAS stability: the attitude the craft had on the pad, fixed in inertial space, so it
+    // drifts a few degrees off the surface velocity as Kerbin turns (4.3 degrees at 10 km on the way down).
+    // `Up` would follow the local vertical instead.
+    let hold = if std::env::var("OSE_PARITY_HOLD_UP").is_ok() {
+        AttitudeMode::Up
+    } else {
+        AttitudeMode::Fixed(facing)
+    };
+    c.set_controls(l.vessel, 1.0, hold).await?;
     c.stage(l.vessel).await?;
 
     let mut f = std::fs::File::create(&out)?;
