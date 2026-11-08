@@ -176,6 +176,15 @@ pub fn fairing_shells(bottom: f64, top: f64, radius: f64) -> Vec<(&'static str, 
 /// The pose of an animated Kerbal model playing one of its clips (idle, walk, run, air), or of a planted flag
 /// in the wind, looping in page
 /// time; `None` for any other model.
+/// The clip a Kerbal model exported before the full EVA set plays in place of a missing one.
+fn kerbal_anim_fallback(clip: &str) -> &'static str {
+    match clip {
+        "walk_l" | "walk_r" => "walk",
+        "jump_start" => "air",
+        _ => "idle",
+    }
+}
+
 fn kerbal_sample(
     gpu: &Renderer,
     model: &str,
@@ -351,13 +360,13 @@ impl Stand {
             let anim: ModelRef = if round {
                 (
                     "kerbal:anim_f",
-                    "assets/kerbal/kerbal_f.glb?clips=ladder",
+                    "assets/kerbal/kerbal_f.glb?clips=eva2",
                     1.0,
                 )
             } else {
                 (
                     "kerbal:anim_m",
-                    "assets/kerbal/kerbal_m.glb?clips=ladder",
+                    "assets/kerbal/kerbal_m.glb?clips=eva2",
                     1.0,
                 )
             };
@@ -712,6 +721,11 @@ pub struct FlightView {
     /// A Kerbal's smoothed speed along its up (m/s, + climbing): picks the ladder clip.
     climb_speed: f64,
     walk_phase: f64,
+    /// The flown Kerbal's animator (KSP2's EVA states and cross-fades), whether it stood on something last
+    /// frame, and when a flag plant was asked for (ms).
+    kerbal_anim: Option<crate::kerbal_anim::Machine>,
+    kerbal_was_landed: bool,
+    flag_planted_ms: std::cell::Cell<Option<f64>>,
     /// How far the flown vessel's wheels have rolled (m, signed by the drive direction) and when last updated.
     wheel_travel: f64,
     wheel_last_ms: f64,
@@ -806,6 +820,11 @@ fn quat_from_basis(x: DVec3, y: DVec3, z: DVec3) -> DQuat {
 }
 
 impl FlightView {
+    /// The flown Kerbal plants a flag (KSP2's tPlantFlag): its animator plays the plant.
+    pub fn plant_flag(&self, now_ms: f64) {
+        self.flag_planted_ms.set(Some(now_ms));
+    }
+
     /// The planet renderer (made on first use), shared with the map view so the focused body looks the same
     /// there as in flight.
     pub fn planet_renderer(&mut self, gpu: &Renderer) -> &mut crate::planet::PlanetRenderer {
@@ -835,6 +854,9 @@ impl FlightView {
             walk_speed: 0.0,
             climb_speed: 0.0,
             walk_phase: 0.0,
+            kerbal_anim: None,
+            kerbal_was_landed: true,
+            flag_planted_ms: std::cell::Cell::new(None),
             wheel_travel: 0.0,
             wheel_last_ms: 0.0,
             deployments: HashMap::new(),
@@ -2616,6 +2638,7 @@ impl FlightView {
             // rigid model moves as a whole).
             let (mut at, mut rot) = (pos, rot);
             let mut kerbal_clip: Option<&str> = None;
+            let mut kerbal_blend: Vec<(&'static str, f32, bool, f32)> = Vec::new();
             if matches!(inp.stand, Stand::Kerbal { .. }) {
                 let landed = inp
                     .vessel
@@ -2634,26 +2657,63 @@ impl FlightView {
                 let flight = inp.vessel.flight.as_ref();
                 let on_ladder = flight.is_some_and(|f| f.on_ladder.is_some());
                 let boarding = flight.is_some_and(|f| f.boarding);
-                kerbal_clip = Some(if boarding {
-                    // Climbing in through the hatch.
-                    "ladder_up"
-                } else if on_ladder {
-                    if self.climb_speed > 0.15 {
-                        "ladder_up"
-                    } else if self.climb_speed < -0.15 {
-                        "ladder_down"
+                // KSP2's EVA animator (animtree_kerbal_eva): the states and cross-fades of `kerbal_anim`
+                let falling = !landed && !on_ladder && !boarding;
+                let now_s = inp.now_ms / 1000.0;
+                let fb = if self.walk_speed > 0.2 { 1.0 } else { 0.0 };
+                let anim_in = crate::kerbal_anim::Inputs {
+                    move_fb: fb,
+                    move_lr: 0.0,
+                    // the walk at 0.65 m/s to the run at 2.05 m/s (KSP2 run 14)
+                    sprint: ((self.walk_speed - 0.65) / (2.05 - 0.65)).clamp(0.0, 1.0) as f32,
+                    climb: if boarding {
+                        1.0
                     } else {
-                        "ladder_idle"
-                    }
-                } else if !landed {
-                    "air"
-                } else if self.walk_speed > 1.6 {
-                    "run"
-                } else if self.walk_speed > 0.2 {
-                    "walk"
-                } else {
-                    "idle"
-                });
+                        (self.climb_speed / 0.3).clamp(-1.0, 1.0) as f32
+                    },
+                    on_ladder: on_ladder || boarding,
+                    falling,
+                    // leaving the ground going up is a jump; otherwise it walked or let go off something
+                    jump: falling && self.kerbal_was_landed && self.climb_speed > 0.8,
+                    plant_flag: self
+                        .flag_planted_ms
+                        .get()
+                        .is_some_and(|t| inp.now_ms - t < 500.0),
+                };
+                self.kerbal_was_landed = landed;
+                let machine = self
+                    .kerbal_anim
+                    .get_or_insert_with(|| crate::kerbal_anim::Machine::new(now_s));
+                let lengths: Vec<(String, f32)> = {
+                    let name = inp
+                        .stand
+                        .models(gpu)
+                        .iter()
+                        .map(|(n, _, _)| n.to_string())
+                        .find(|n| n.starts_with("kerbal:anim"));
+                    name.and_then(|n| gpu.model(&n))
+                        .map(|m| {
+                            m.rig
+                                .clips
+                                .iter()
+                                .map(|c| (c.name.clone(), c.duration))
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                };
+                let dur = |clip: &str| -> f32 {
+                    lengths
+                        .iter()
+                        .find(|(n, _)| n == clip)
+                        .map(|c| c.1)
+                        .unwrap_or(1.0)
+                };
+                machine.update(now_s, &anim_in, &dur);
+                kerbal_blend = machine.clips(now_s, &anim_in, &dur);
+                kerbal_clip = kerbal_blend
+                    .iter()
+                    .max_by(|a, b| a.3.total_cmp(&b.3))
+                    .map(|c| c.0);
                 // The rigid stand-in bobs with its stride; the animated Kerbal walks.
                 let animated = gpu.has_model("kerbal:anim_m") || gpu.has_model("kerbal:anim_f");
                 if landed && self.walk_speed > 0.2 && !animated {
@@ -2710,6 +2770,28 @@ impl FlightView {
                 it.sun = sun_share;
                 it.animation = kerbal_sample(gpu, name, kerbal_clip.unwrap_or("idle"), inp.now_ms);
                 if name.starts_with("kerbal:anim") {
+                    if let Some(model) = gpu.model(name) {
+                        it.blend = kerbal_blend
+                            .iter()
+                            .filter_map(|&(clip, time, looping, w)| {
+                                let find =
+                                    |n: &str| model.rig.clips.iter().position(|c| c.name == n);
+                                // a model exported before the clip was: the nearest one it has
+                                let (i, looping) = match find(clip) {
+                                    Some(i) => (i, looping),
+                                    None => (find(kerbal_anim_fallback(clip))?, true),
+                                };
+                                Some((
+                                    crate::animation::ClipSample {
+                                        clip: i,
+                                        time,
+                                        looping,
+                                    },
+                                    w,
+                                ))
+                            })
+                            .collect();
+                    }
                     it.node_rotations.extend(foot_ik.iter().copied());
                 }
                 if let Some(c) = inp.stand.tint(name) {

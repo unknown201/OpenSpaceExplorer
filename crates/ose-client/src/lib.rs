@@ -37,6 +37,7 @@ pub mod hud;
 pub mod i18n;
 pub mod input;
 pub mod interaction;
+pub mod kerbal_anim;
 pub mod kerbin_time;
 #[cfg(target_arch = "wasm32")]
 pub mod ksc3d;
@@ -9948,7 +9949,11 @@ impl App {
                 self.board_target.set(Some(target));
                 ClientMessage::Board { vessel, target }
             }
-            "fh-flag" => ClientMessage::PlantFlag { vessel },
+            "fh-flag" => {
+                #[cfg(target_arch = "wasm32")]
+                self.flight3d.plant_flag(now_ms());
+                ClientMessage::PlantFlag { vessel }
+            }
             _ => ClientMessage::Undock { vessel, port: None },
         };
         self.crew_pending.set(Some(match id {
@@ -13958,6 +13963,7 @@ impl App {
                 let light = if b.is_star { GV::Y } else { star_km - pos_km };
                 items.push(render::DrawItem {
                     animation: None,
+                    blend: Vec::new(),
                     node_turns: Vec::new(),
                     node_rotations: Vec::new(),
                     model: name.clone(),
