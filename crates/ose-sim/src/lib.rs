@@ -68,6 +68,27 @@ pub const SOLAR_INSOLATION_AT_HOME: f64 = 1360.0;
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WarpFactor(pub u32);
 
+/// The vessels whose height limits time warp: the ones players fly (KSP2 checks only the active vessel,
+/// `TimeWarp.GetMaxRateIndexInternal`). Empty means no height limit.
+#[derive(Resource, Clone, Debug, Default)]
+pub struct WarpFocus(pub Vec<Entity>);
+
+/// KSP2's `TimeWarpLevels` (PhysicsSettings.json): each rate and the extra height it needs above the top of the
+/// atmosphere, or above the highest terrain on an airless body (plus the body's `TimeWarpAltitudeOffset`, 0 on
+/// every stock body). Rates up to 100x need nothing beyond leaving the air.
+pub const WARP_ALTITUDE_LEVELS: [(u32, f64); 10] = [
+    (1, 0.0),
+    (2, 0.0),
+    (4, 0.0),
+    (10, 0.0),
+    (50, 0.0),
+    (100, 0.0),
+    (1_000, 50_000.0),
+    (10_000, 150_000.0),
+    (100_000, 500_000.0),
+    (1_000_000, 4_000_000.0),
+];
+
 impl Default for WarpFactor {
     fn default() -> Self {
         WarpFactor(1)
@@ -1104,9 +1125,77 @@ impl Universe {
             && p.r.length() > self.rails_clear_radius(body)
     }
 
+    /// Choose the vessels whose height limits time warp (`WarpFocus`): the server passes the ones players fly.
+    pub fn set_warp_focus(&mut self, vessels: Vec<Entity>) {
+        self.world.insert_resource(WarpFocus(vessels));
+    }
+
+    /// The fastest time warp allowed: the lower of the physics cap (`physics_warp_cap`) and the height cap of
+    /// the focused vessels (`altitude_warp_cap`).
+    pub fn warp_cap(&mut self) -> Option<u32> {
+        match (self.physics_warp_cap(), self.altitude_warp_cap()) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
+    }
+
+    /// KSP2's height limit on time warp (`TimeWarp.GetMaxRateIndexInternal`) for the focused vessels: physics
+    /// speeds inside the atmosphere or below the highest terrain, and each rate above 100x only once the craft
+    /// is `WARP_ALTITUDE_LEVELS` higher than the air (or the terrain, without air). A craft at rest on the
+    /// ground does not limit warp. KSP2 checks the height every tick and drops its rate for good; OSE re-applies
+    /// the players' requests each tick, so the rate comes back up when the craft climbs again.
+    pub fn altitude_warp_cap(&self) -> Option<u32> {
+        let focus = self.world.get_resource::<WarpFocus>()?;
+        let ut = self.ut();
+        focus
+            .0
+            .iter()
+            .filter_map(|&e| self.altitude_warp_cap_of(e, ut))
+            .min()
+    }
+
+    fn altitude_warp_cap_of(&self, e: Entity, ut: f64) -> Option<u32> {
+        let body = self.body_of(e)?;
+        let r = if let Some(p) = self.world.get::<flight::Powered>(e) {
+            if p.crashed || flight::resting(p) {
+                return None;
+            }
+            p.r
+        } else {
+            if self
+                .world
+                .get::<flight::Dormant>(e)
+                .is_some_and(|d| d.0.landed || d.0.splashed || d.0.crashed)
+            {
+                return None;
+            }
+            self.vessel(e)?.2.position_at(ut)
+        };
+        let b = self.world.get::<bodies::Body>(body)?;
+        let altitude = r.length() - b.radius_m;
+        let terrain = self
+            .world
+            .get::<flight::Terrain>(body)
+            .map(|t| t.0.max_m.max(0.0))
+            .unwrap_or(0.0);
+        let floor = match self.atmosphere(body) {
+            Some(a) if altitude <= a.depth_m => return Some(flight::MAX_PHYSICS_WARP),
+            Some(a) => a.depth_m,
+            None => terrain,
+        };
+        if altitude < terrain {
+            return Some(flight::MAX_PHYSICS_WARP);
+        }
+        WARP_ALTITUDE_LEVELS
+            .windows(2)
+            .skip(2)
+            .find(|w| altitude < floor + w[1].1)
+            .map(|w| w[0].0)
+    }
+
     /// The fastest time warp the vessels in physics allow: physics speeds while one is flying, up to
     /// `MAX_THRUST_WARP` while the only ones flying burn in orbit, no limit when none is.
-    pub fn warp_cap(&mut self) -> Option<u32> {
+    pub fn physics_warp_cap(&mut self) -> Option<u32> {
         let flying: Vec<Entity> = {
             let mut q = self.world.query::<(Entity, &flight::Powered)>();
             q.iter(&self.world)

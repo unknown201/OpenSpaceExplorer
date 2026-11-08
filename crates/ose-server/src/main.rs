@@ -405,7 +405,25 @@ fn apply_warp(s: &Shared) -> (u32, Option<u64>) {
         .unwrap_or(1);
     drop(reqs);
     let requested = warp;
+    // the vessels players are flying set KSP2's height limit on warp (the active vessel there)
+    let flown: Vec<u64> = s
+        .flying
+        .lock()
+        .expect("flying lock")
+        .iter()
+        .filter(|(p, _)| playing.contains(p))
+        .map(|(_, &id)| id)
+        .collect();
+    let focus: Vec<bevy_ecs::entity::Entity> = s
+        .vessels
+        .lock()
+        .expect("vessels lock")
+        .iter()
+        .filter(|(_, id, _)| flown.contains(id))
+        .map(|&(e, _, _)| e)
+        .collect();
     let mut u = s.universe.lock().expect("sim lock");
+    u.set_warp_focus(focus);
     u.set_warp(warp);
     let warp = u.warp();
     // only another player's lower request counts as "holding warp down"; the physics cap does not
