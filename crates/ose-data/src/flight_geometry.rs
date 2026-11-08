@@ -22,6 +22,35 @@ pub struct FlightGeometry {
     pub engines: Vec<Vec<Nozzle>>,
     pub rcs: Vec<Nozzle>,
     pub gimbals: Vec<Gimbal>,
+    /// A solar panel's facing, tracking pivot and raycast origin (`tools/export_solar_geometry.py`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solar: Option<SolarGeometry>,
+}
+
+/// A solar panel as `Module_Deployable` turns it and `Module_SolarPanel` reads it, at rest, Unity axes.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SolarGeometry {
+    /// Turns toward the sun about its pivot's own Y (`isTracking` with a `pivotName` transform).
+    pub tracking: bool,
+    /// `RaycastOffset`: the shading ray starts this far toward the sun from the raycast origin, m.
+    pub raycast_offset_m: f64,
+    /// The pivot in part space (tracking panels).
+    #[serde(default)]
+    pub pivot_m: DVec3,
+    /// The pivot's rotation in part space (x, y, z, w; tracking panels).
+    #[serde(default)]
+    pub pivot_rotation: Option<[f64; 4]>,
+    /// `TrackingAlignmentOffset`, degrees: the pivot settles with the sun this far round from its +Z.
+    #[serde(default)]
+    pub alignment_offset_deg: f64,
+    /// `trackingSpeed`: the pivot closes this share of the gap each second.
+    #[serde(default)]
+    pub tracking_speed: f64,
+    /// The face the sun's dot is taken on (`PanelIncidenceDirection` on its transform): pivot space for
+    /// tracking panels, part space for fixed ones.
+    pub incidence: DVec3,
+    /// The shading ray's origin (`raycastTransform`): pivot space for tracking panels, part space otherwise.
+    pub raycast_m: DVec3,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
