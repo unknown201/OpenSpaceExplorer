@@ -174,8 +174,10 @@ stopped falling for 1 s.
 | 0.5 km | 1,269 m/s / 377 K | 1,349 m/s / 379 K |
 | Peak during the ascent | 392 K | 389 K |
 
-The same run shows a small drag gap in dense air at high Mach: below 10 km KSP2 slows from 1,324 to 1,269 m/s, OSE
-holds about 1,350 m/s (+6% at 0.5 km). Added to T2.
+Holding `Up` the run showed a 6% dense-air drag gap; it was the attitude, not the drag model (run 15 force dump: total
+part drag 26.8 kN at Mach 4.8, with KSP2's craft 4.3 degrees off its velocity). `parity_ascent` now holds the pad
+attitude fixed in inertial space like KSP2's stability SAS: falling through 10 / 5 / 2 / 0.5 km, KSP2 1,324 / 1,311 /
+1,286 / 1,269 m/s, OSE 1,323 / 1,309 / 1,284 / 1,264 m/s.
 
 **K1 per-part mass and drag (run 10).** `reference/ksp2-run10-k1-parts/parts.csv` lists every part's dry, resource
 and physics mass, PhysicsMode and per-face drag area and Cd. KSP2's vessel mass (27.112 t) leaves out the 12
@@ -195,7 +197,7 @@ P2 completeness.
 | # | System | Pri | KSP2 scenario to trace | Compared channels and tolerance | Status |
 |---|---|---|---|---|---|
 | T1 | Thrust, Isp vs pressure, fuel burn | P0 | Run 1 craft, full throttle from the pad | mass(t), thrust, burn time; burnout altitude/speed within 2% | **verified** (mass flow and burn time within 0.3%, peak speed -0.2%) |
-| T2 | Drag and Mach model (surface area, drag cubes) | P0 | Run 1 coast and fall; run 4 hop | speed vs altitude on descent within 5% | **verified** (apoapsis -0.3%, 8.5 km fall +2.0%, subsonic fall +0.8%, air density -0.15%); dense air at Mach 4 below 2 km is 5-6% too fast in OSE (run 11) |
+| T2 | Drag and Mach model (surface area, drag cubes) | P0 | Run 1 coast and fall; run 4 hop | speed vs altitude on descent within 5% | **verified** (apoapsis -0.3%, 8.5 km fall +2.0%, subsonic fall +0.8%, air density -0.15%); the dense-air gap in run 11 was the test: OSE held `Up` while KSP2's SAS held an inertial attitude 4.3 degrees off the flow; with the same hold OSE matches within 0.4% at 10, 5, 2 and 0.5 km |
 | T3 | Mass and CoM shift as fuel drains | P0 | Run 1 with CoM logged | CoM along the stack vs fuel fraction within 2 cm | not traced |
 | T4 | Crossfeed and fuel-flow order, staging, decouplers | P0 | Stock Kerbal K1 (boosters, decouplers, 5 stages) | mass and speed vs time per stage | **failing**: +232 kg in the lower stages, solid booster thrust curve (+17% early, -3.7% late); with the sim thread |
 | T5 | SAS hold, reaction wheels, torque | P0 | Pod with wheel: step pitch input 1 s, release, SAS on | attitude and angular rate vs time within 5% | **verified**: wheel torque +2% pitch, about +5% yaw/roll; SAS damping matches after PR 41 (sim thread replay within 1% at +1, +2, +8 s; rerun here shows the 2 s stop and wobble) |
@@ -212,8 +214,8 @@ P2 completeness.
 | T16 | Wheels and driving (fix: PR 45) | P1 | Stock Inquisitive Rover: full wheel throttle 15 s, coast 3 s, brakes 8 s, half throttle full steer 10 s | speed vs time, stopping, yaw rate | **failing**: about 2x acceleration, top speed 12.7 vs 9.8 m/s, turn 5.4-9.0 vs 1.2-2.5 m/s and up to 3.2 vs 1.33 rad/s, yaw stops instantly on release; brakes match. Rover mass 0.977 vs 0.924 t |
 | T17 | RCS translation and rotation | P1 | Stock KSS Hub: 2 s forward, 2 s right, 1 s pitch | monoprop use, rate | **verified** (fuel within 2%, pitch rate 0%); craft mass +3.4% is with the sim thread |
 | T18 | Docking | P1 | Two ports approaching at 0.3 m/s | capture distance, merged mass and CoM | not traced |
-| T19 | EVA exit, ladders | P1 | Kerbal exits Tin Can on the pad, climbs ladder | exit position, climb speed | not traced |
-| T20 | EVA walk, run, jump | P1 | Walk 10 s, run 10 s, jump | speeds (0.8 / 2.2 m/s documented), jump height | not traced |
+| T19 | EVA exit, ladders | P1 | First Kerbal exits the run-1 pod on the pad and lets go of the ladder (run 14) | exit position, fall | **verified**: both start on the pod's ladder and drop about 3.6-3.7 m on let-go |
+| T20 | EVA walk, run, jump | P1 | Walk 6 s, run 6 s, jump (run 14) | ground speed, jump height | **failing**: walk 0.80 vs KSP2 0.65 m/s (+23%), run 2.20 vs 2.05 m/s (+7%), OSE starts and stops instantly; jump about 0.28 m in KSP2. With the sim thread |
 | T21 | EVA jetpack | P1 | 2 s up, 2 s forward in orbit | delta-v and fuel per second | not traced |
 | T22 | Electric charge and solar | P2 | Probe with panels in sun, wheel on | EC rate in/out | not traced |
 | T23 | Comms (CommNet) | P2 | Probe behind Kerbin from KSC | link loss timing | not traced |
