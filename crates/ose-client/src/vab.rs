@@ -2127,8 +2127,19 @@ pub fn wing_shape_html(p: &CraftPart) -> String {
             if has { " checked" } else { "" }
         ));
     }
-    let mut group = String::new();
+    // Grouped as the original's panel lists them: each group once, in order of first appearance.
+    let mut groups: Vec<&str> = Vec::new();
     for s in &option.sliders {
+        if !groups.contains(&s.group.as_str()) {
+            groups.push(&s.group);
+        }
+    }
+    let mut ordered: Vec<&pw::Slider> = Vec::new();
+    for g in &groups {
+        ordered.extend(option.sliders.iter().filter(|s| s.group == *g));
+    }
+    let mut group = String::new();
+    for s in ordered {
         if s.group != group {
             group.clone_from(&s.group);
             html.push_str(&format!(

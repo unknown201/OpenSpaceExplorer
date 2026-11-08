@@ -941,7 +941,7 @@ pub fn evaluate(part_id: &str, shape: &WingShape, mirrored: bool) -> Option<Wing
     let measurements = option
         .sliders
         .iter()
-        .map(|s| (s.name.clone(), measure(&s.measure, &w)))
+        .map(|s| (s.name.clone(), measure(&s.measure, option, &w)))
         .collect();
     Some(WingResult {
         meshes,
@@ -960,13 +960,21 @@ pub fn evaluate(part_id: &str, shape: &WingShape, mirrored: bool) -> Option<Wing
 
 /// `SliderMeasurement.UpdateMeasurement` for the distance modes; the angle modes read the sweep of the
 /// measured bone from the span axis (the original turns a helper bone with a LookAt constraint).
-fn measure(m: &Measure, w: &[Aff]) -> f64 {
-    let bone = |i: i32| usize::try_from(i).ok().and_then(|i| w.get(i));
-    match (m.mode.as_str(), bone(m.from), bone(m.to)) {
-        ("distance", Some(a), Some(b)) => len(sub(a.t, b.t)),
-        ("dist_x", Some(a), Some(b)) => (a.t[0] - b.t[0]).abs(),
-        ("dist_y", Some(a), Some(b)) => (a.t[1] - b.t[1]).abs(),
-        ("dist_z", Some(a), Some(b)) => (a.t[2] - b.t[2]).abs(),
+fn measure(m: &Measure, option: &OptionRig, w: &[Aff]) -> f64 {
+    let index = |i: i32| usize::try_from(i).ok().filter(|i| *i < w.len());
+    let world = |i: usize| w[i].t;
+    // The axis modes compare `localPosition`s (both bones hang from the same parent bone).
+    let local = |i: usize| {
+        usize::try_from(option.bones[i].parent)
+            .ok()
+            .filter(|p| *p < w.len())
+            .map_or(w[i].t, |p| w[p].inverse().apply(w[i].t))
+    };
+    match (m.mode.as_str(), index(m.from), index(m.to)) {
+        ("distance", Some(a), Some(b)) => len(sub(world(a), world(b))),
+        ("dist_x", Some(a), Some(b)) => (local(a)[0] - local(b)[0]).abs(),
+        ("dist_y", Some(a), Some(b)) => (local(a)[1] - local(b)[1]).abs(),
+        ("dist_z", Some(a), Some(b)) => (local(a)[2] - local(b)[2]).abs(),
         _ => 0.0,
     }
 }
@@ -1161,6 +1169,28 @@ mod tests {
         assert!((mirrored.mass_t - big.mass_t).abs() < 1e-9);
         assert!((mirrored.fixed_lift_coeff - big.fixed_lift_coeff).abs() < 1e-9);
         assert!((mirrored.cube.center[0] + big.cube.center[0]).abs() < 1e-9);
+    }
+
+    /// The editor's readouts (`SliderValueMeasurementStorage`): the span runs root to tip.
+    #[test]
+    fn span_measurement_is_the_wing_span() {
+        let r = evaluate(
+            "wing_1v_procedural_light",
+            &shape(&[("WING_SPAN", 0.2)]),
+            false,
+        )
+        .unwrap();
+        let span = r
+            .measurements
+            .iter()
+            .find(|(n, _)| n == "WING_SPAN")
+            .unwrap()
+            .1;
+        assert!(
+            (span - r.cube.size[2]).abs() < 0.3,
+            "{span} vs {:?}",
+            r.cube.size
+        );
     }
 
     #[test]
