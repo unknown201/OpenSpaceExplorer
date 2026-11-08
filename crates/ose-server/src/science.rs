@@ -512,6 +512,7 @@ mod tests {
             name: "x".into(),
             description: String::new(),
             parts: vec![ose_data::craft::CraftPart {
+                chute: None,
                 symmetry: 0,
                 actions: Vec::new(),
                 flight: None,

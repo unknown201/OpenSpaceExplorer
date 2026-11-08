@@ -275,7 +275,19 @@ fn combined_scattering(r: f32, mu: f32, mu_s: f32, nu: f32, hits_ground: bool) -
 
 // The Rayleigh in-scatter a little bluer than the LUT gives: Kerbin's sky and haze in Josh's KSP2 screenshots
 // measure about 20 to 30 % more blue than ours at the same view (sky 104, 147, 204 against 101, 135, 172 at the pad).
-const RAYLEIGH_TINT: vec3<f32> = vec3<f32>(1.0, 1.05, 1.3);
+// Not on bodies whose air scatters red (Rayleigh blue over red: Kerbin 5.7, Laythe 3.1, Eve 3.2, Duna 0.2): on Duna
+// it turned KSP2's warm orange horizon (241, 204, 153 at 3 km, reference/ksp2-run19-bodies) a pale grey-blue.
+fn rayleigh_tint() -> vec3<f32> {
+    // (and on red-sky bodies a stronger Rayleigh glow instead: Duna's sky in KSP2 measures about 1.4 times ours at
+    // the same view, 158, 92, 55 against 106, 66, 42 halfway up from 3 km, while its sunlit ground matches)
+    let red = red_sky();
+    return mix(vec3<f32>(1.0, 1.05, 1.3), vec3<f32>(1.4), red);
+}
+
+// 1 on bodies whose air scatters red more than blue (Duna 0.2), 0 from blue over red 1 up (Eve, Laythe, Kerbin).
+fn red_sky() -> f32 {
+    return 1.0 - smoothstep(0.5, 1.0, frame.rayleigh.z / max(frame.rayleigh.x, 1e-6));
+}
 
 fn rayleigh_phase(nu: f32) -> f32 { return 3.0 / (16.0 * PI) * (1.0 + nu * nu); }
 
@@ -313,7 +325,7 @@ fn sky_radiance(camera_in: vec3<f32>, view: vec3<f32>, sun: vec3<f32>) -> Sky {
         out.transmittance = transmittance_to_top(r, mu);
     }
     let s = combined_scattering(r, mu, mu_s, nu, hits);
-    out.radiance = s.rayleigh * RAYLEIGH_TINT * rayleigh_phase(nu) + s.mie * mie_phase(frame.atmo.w, nu);
+    out.radiance = s.rayleigh * rayleigh_tint() * rayleigh_phase(nu) + s.mie * mie_phase(frame.atmo.w, nu);
     return out;
 }
 
@@ -384,7 +396,7 @@ fn in_scatter_share(r: f32, mu: f32, mu_s: f32, nu: f32, d: f32) -> Sky {
     }
     let share = (vec3<f32>(1.0) - out.transmittance) / max(vec3<f32>(1.0) - full_t, vec3<f32>(1e-4));
     let mie = s0.mie * smoothstep(0.0, 0.01, mu_s);
-    out.radiance = (s0.rayleigh * RAYLEIGH_TINT * rayleigh_phase(nu) + mie * mie_phase(frame.atmo.w, nu))
+    out.radiance = (s0.rayleigh * rayleigh_tint() * rayleigh_phase(nu) + mie * mie_phase(frame.atmo.w, nu))
         * clamp(share, vec3<f32>(0.0), vec3<f32>(1.0));
     return out;
 }
@@ -402,7 +414,7 @@ fn in_scatter(r: f32, mu: f32, mu_s: f32, nu: f32, d: f32) -> Sky {
     let ray = max(s0.rayleigh - out.transmittance * s1.rayleigh, vec3<f32>(0.0));
     var mie = max(s0.mie - out.transmittance * s1.mie, vec3<f32>(0.0));
     mie = mie * smoothstep(0.0, 0.01, mu_s);
-    out.radiance = ray * RAYLEIGH_TINT * rayleigh_phase(nu) + mie * mie_phase(frame.atmo.w, nu);
+    out.radiance = ray * rayleigh_tint() * rayleigh_phase(nu) + mie * mie_phase(frame.atmo.w, nu);
     return out;
 }
 
@@ -545,7 +557,9 @@ fn air_to(p: vec3<f32>) -> Sky {
     // camera climbs from 10 to 40 km.
     let alt_km = length(frame.cam_km.xyz) - bottom_r();
     let blue = clamp((frame.rayleigh.z / max(frame.rayleigh.x, 1e-6) - 1.0) / 4.0, 0.0, 1.0);
-    let haze = 1.0 + (mix(0.4, 1.3, blue) - 1.0) * smoothstep(10.0, 40.0, alt_km);
+    // On red-sky bodies at every height (KSP2's Duna from 3 km shows its canyons and ridges clearly to the horizon,
+    // reference/ksp2-run19-bodies; the full LUT in-scatter washed ours into a pale featureless haze).
+    let haze = 1.0 + (mix(0.4, 1.3, blue) - 1.0) * mix(smoothstep(10.0, 40.0, alt_km), 1.0, red_sky());
     // an eclipse dims the sunlit air too
     // From a few hundred metres to a few tens of km up, KSP2's haze over Kerbin's land reads bluer than the LUT's
     // (reference/ksp2-run3 at 1.5 and 8.5 km: land 120, 156, 157 and 150, 172, 186 against ours 126, 147, 135
@@ -1477,7 +1491,12 @@ fn fs_clouds(in: VOut) -> @location(0) vec4<f32> {
     let pf = up * (frame.solar.w / 1500.0);
     let nf = vnoise(pf, 1048576) * 0.6 + vnoise(pf * 2.0, 1048576) * 0.4;
     let kf = 1.0 - smoothstep(300.0, 1200.0, dist * 0.0012);
-    let far_cover = smoothstep(0.12, 0.6, base + (nf - 0.5) * 0.7 * kf);
+    // Seen from above the layer on the climb (KSP2's run13 at 45 km over the KSC: a few small cumulus over clear
+    // land, where ours drew broad white sheets over about a third of it) only the thick cores show; from orbit
+    // (Josh's 89 km shot) and from under the layer the fields keep their full cover.
+    let cam_km = length(frame.cam_km.xyz) - frame.solar.w * 0.001;
+    let above = smoothstep(9.0, 20.0, cam_km) * (1.0 - smoothstep(55.0, 85.0, cam_km));
+    let far_cover = smoothstep(mix(0.12, 0.36, above), mix(0.6, 0.85, above), base + (nf - 0.5) * 0.7 * kf);
     let cover = clamp(mix(far_cover, smoothstep(0.35, 0.75, base + (n - 0.5) * 0.9), near), 0.0, 1.0);
     let p_km = frame.cam_km.xyz + in.rel * 0.001;
     let sun = frame.sun.xyz;

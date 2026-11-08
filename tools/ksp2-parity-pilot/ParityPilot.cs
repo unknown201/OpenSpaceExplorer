@@ -198,8 +198,8 @@ namespace OpenSpaceExplorer.Validation
                 yield return new WaitForSecondsRealtime(4f);
                 yield return Shot("v1-ksc-night-before-vab");
             }
-            bool orbital = scenario == "rotation" || scenario == "rcs";
-            var snapshot = IOProvider.FromJsonFile<OABHistoricalSnapshot>(Path.Combine(dir, scenario == "rcs" ? "craft-rcs.json" : scenario == "rover" ? "craft-rover.json" : scenario == "legs" ? "craft-legs.json" : scenario == "stack" ? "craft-stack.json" : scenario.StartsWith("drop ") ? "craft-drop-" + scenario.Split(' ')[1] + ".json" : orbital ? "craft-rotation.json" : (scenario == "k1" || scenario == "partdump") ? "craft-k1.json" : "craft.json"));
+            bool orbital = scenario == "rotation" || scenario == "rcs" || scenario == "docking";
+            var snapshot = IOProvider.FromJsonFile<OABHistoricalSnapshot>(Path.Combine(dir, scenario == "rcs" ? "craft-rcs.json" : scenario == "rover" ? "craft-rover.json" : scenario == "legs" ? "craft-legs.json" : scenario == "stack" ? "craft-stack.json" : scenario == "docking" ? "craft-docking.json" : scenario.StartsWith("drop ") ? "craft-drop-" + scenario.Split(' ')[1] + ".json" : orbital ? "craft-rotation.json" : (scenario == "k1" || scenario == "partdump") ? "craft-k1.json" : "craft.json"));
             var config = orbital
                 ? new OABConfig(OABVariant.VAB, OABEnvironmentType.Orbital, OABConstructionType.User, null)
                 : new OABConfig(OABVariant.VAB, OABEnvironmentType.Terrestrial, OABConstructionType.User, "Kerbin");
@@ -219,6 +219,7 @@ namespace OpenSpaceExplorer.Validation
             Mark("in flight, situation " + vessel.Situation + ", mass " + vessel.totalMass + ", alt " + vessel.AltitudeFromSeaLevel);
             yield return Shot(orbital ? "04-orbit" : "04-pad");
             if (scenario == "rcs") { yield return Rcs(vessel); yield break; }
+            if (scenario == "docking") { yield return DockingScenario.Run(vessel, dir, Mark); yield return Finish("docking"); yield break; }
             if (orbital) { yield return Rotation(vessel); yield break; }
             if (scenario == "rover") { yield return Rover(vessel); yield break; }
             if (scenario == "eva") { yield return Eva(vessel); yield break; }
@@ -690,6 +691,16 @@ namespace OpenSpaceExplorer.Validation
             Mark("finished stack");
             File.WriteAllText(Path.Combine(dir, "out", "done.txt"), "ok");
             yield return new WaitForSeconds(2f);
+            Application.Quit();
+        }
+
+        // the end of a scenario: a last screenshot, the done marker, quit
+        IEnumerator Finish(string name)
+        {
+            yield return Shot("99-" + name + "-end");
+            Mark("finished " + name);
+            File.WriteAllText(Path.Combine(dir, "out", "done.txt"), "ok");
+            yield return new WaitForSeconds(3f);
             Application.Quit();
         }
 

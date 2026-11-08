@@ -174,6 +174,11 @@ pub struct Structure {
     /// step faster than they can take: (part, speed m/s).
     pub(crate) in_water: Vec<bool>,
     pub(crate) water_strikes: Vec<(usize, f64)>,
+    /// Each part's `buoyancy` scale and the water it displaces fully under, m^3 (`water::displacement_m3`).
+    pub buoyancy: Vec<f64>,
+    pub displacement_m3: Vec<f64>,
+    /// Each part's water drag state.
+    pub(crate) water_drag: Vec<crate::water::WaterDrag>,
     /// Deployable solar panels (and antennas) folded out.
     pub deployed: Vec<bool>,
     /// Antennas that extend and retract (`Data_Deployable` beside `Data_Transmitter`); they start retracted.
@@ -195,6 +200,8 @@ pub struct Structure {
     pub stage_activations: Vec<Vec<usize>>,
     /// Parachutes: definition, state and how far open (0..1).
     pub chute_defs: Vec<Option<ose_data::Parachute>>,
+    /// Each chute's deploy mode (`DeploymentMode`); its opening pressure and height are in `chute_defs`.
+    pub chute_modes: Vec<ose_data::craft::ChuteMode>,
     pub chutes: Vec<Chute>,
     pub chute_open: Vec<f64>,
     pub chute_heat: Vec<ChuteHeat>,
@@ -292,6 +299,17 @@ pub enum DeploySafety {
     Risky,
     Unsafe,
     None,
+}
+
+/// Whether a deploy mode lets an armed chute open at a safety (`ShouldDeployWhenArmed`): SAFE only when safe,
+/// RISKY when safe or risky, IMMEDIATE always.
+pub fn mode_allows(mode: ose_data::craft::ChuteMode, safety: DeploySafety) -> bool {
+    use ose_data::craft::ChuteMode as M;
+    match mode {
+        M::Safe => safety == DeploySafety::Safe,
+        M::Risky => matches!(safety, DeploySafety::Safe | DeploySafety::Risky),
+        M::Immediate => true,
+    }
 }
 
 /// A canopy's heat (`Module_Parachute.CalculateThermalProperties` / `UpdateCut`): its temperature, the
@@ -495,6 +513,7 @@ impl Structure {
             self.wheel_queued_torque[j] = old.wheel_queued_torque[i];
             self.wheel_accepted_power[j] = old.wheel_accepted_power[i];
             self.in_water[j] = old.in_water[i];
+            self.water_drag[j] = old.water_drag[i];
             self.rcs_retained_delivery[j] = old.rcs_retained_delivery[i];
             self.rcs_queued_inputs[j] = old.rcs_queued_inputs[i].clone();
             self.gimbal_angles[j] = old.gimbal_angles[i].clone();
@@ -761,6 +780,17 @@ impl Structure {
             surface_loads: Vec::new(),
             in_water: vec![false; n],
             water_strikes: Vec::new(),
+            buoyancy: (0..n)
+                .map(|i| def_of(i).map(|d| d.buoyancy).unwrap_or(1.0))
+                .collect(),
+            displacement_m3: (0..n)
+                .map(|i| {
+                    def_of(i)
+                        .map(crate::water::displacement_m3)
+                        .unwrap_or(crate::water::settings().default_volume_m3)
+                })
+                .collect(),
+            water_drag: vec![Default::default(); n],
             suspension_compression_m: vec![0.0; n],
             engine_isp: (0..n)
                 .map(|i| {
@@ -821,7 +851,19 @@ impl Structure {
                 .collect(),
             stage_activations,
             chute_defs: (0..n)
-                .map(|i| def_of(i).and_then(|d| d.parachute.clone()))
+                .map(|i| {
+                    let mut c = def_of(i).and_then(|d| d.parachute.clone())?;
+                    if let Some(set) = craft.parts[i].chute {
+                        c.min_pressure_atm = set.min_pressure_atm as f64;
+                        c.deploy_altitude_m = set.deploy_altitude_m as f64;
+                    }
+                    Some(c)
+                })
+                .collect(),
+            chute_modes: craft
+                .parts
+                .iter()
+                .map(|p| p.chute.map(|c| c.mode).unwrap_or_default())
                 .collect(),
             chutes: vec![Chute::Stowed; n],
             chute_open: vec![0.0; n],
@@ -3798,6 +3840,15 @@ impl Structure {
         self.chute_faces(i).or(self.faces[i])
     }
 
+    /// A part's drag-cube `AreaDrag` for travel along `d` (unit, vessel frame) at `mach`.
+    pub(crate) fn area_drag_along(&self, i: usize, d: DVec3, mach: f64) -> f64 {
+        let du = DVec3::new(d.x, d.y, -d.z);
+        let local = aero::rotate_inverse(self.part_rot[i], du);
+        self.drag_faces(i)
+            .map(|f| f.area_drag(&self.curves, local, mach))
+            .unwrap_or(0.0)
+    }
+
     /// Advance the parachutes one physics step as `Module_Parachute.OnModuleFixedUpdate` does: an armed chute
     /// opens partly once moving, below its deploy altitude or in air thicker than its minimum pressure, and
     /// (in its default SAFE mode) only while opening is safe for the canopy; it opens fully below its deploy
@@ -3886,15 +3937,17 @@ impl Structure {
             }
             match self.chutes[i] {
                 Chute::Armed => {
-                    // `ShouldDeployWhenArmed` (the SAFE deploy mode every stock chute starts in)
-                    let open = if heat.now {
+                    // `ShouldDeployWhenArmed`: IMMEDIATE (or Deploy) opens at once; otherwise the chute needs
+                    // speed and the air (thick enough, or low enough), and a safety its mode accepts.
+                    let mode = self.chute_modes.get(i).copied().unwrap_or_default();
+                    let open = if heat.now || mode == ose_data::craft::ChuteMode::Immediate {
                         heat.now = false;
                         true
                     } else {
                         speed * speed >= c.min_speed_to_deploy
                             && (air.height_m <= c.deploy_altitude_m
                                 || air.pressure_atm >= c.min_pressure_atm)
-                            && heat.safety == DeploySafety::Safe
+                            && mode_allows(mode, heat.safety)
                     };
                     if open {
                         self.chutes[i] = Chute::SemiDeployed;
@@ -9213,6 +9266,62 @@ mod tests {
         assert!(!s.chute_heat[chute].destroyed);
         let temp = s.chute_heat[chute].temp_k;
         assert!(temp > 200.0 && temp <= 288.0, "{temp}");
+    }
+
+    /// T42: the deploy modes (`ShouldDeployWhenArmed`) and the part window's settings, from the craft.
+    #[test]
+    fn chute_deploy_modes_and_settings_follow_the_original() {
+        use ose_data::craft::{ChuteMode, ChuteSettings};
+        // SAFE opens only when safe; RISKY also when risky; IMMEDIATE always.
+        assert!(mode_allows(ChuteMode::Safe, DeploySafety::Safe));
+        assert!(!mode_allows(ChuteMode::Safe, DeploySafety::Risky));
+        assert!(mode_allows(ChuteMode::Risky, DeploySafety::Risky));
+        assert!(!mode_allows(ChuteMode::Risky, DeploySafety::Unsafe));
+        assert!(mode_allows(ChuteMode::Immediate, DeploySafety::Unsafe));
+        let facing = DVec3::new(1.0, 0.0, 0.0);
+        let fast = Airflow::uniform(basis(facing), DVec3::new(-850.0, 0.0, 0.0), 1.0, 2.5);
+        // RISKY still waits while opening would be unsafe (Mach 2.5 in thick air)
+        let (mut s, chute) = starter_chute();
+        s.chute_modes[chute] = ChuteMode::Risky;
+        s.arm_all_chutes();
+        for _ in 0..50 {
+            s.update_chutes(fast, chute_air(0.9, 1_000.0, false), 0.02);
+        }
+        assert_eq!(s.chute_heat[chute].safety, DeploySafety::Unsafe);
+        assert_eq!(s.chutes[chute], Chute::Armed, "RISKY waits while unsafe");
+        // IMMEDIATE opens at once, even high in thin air
+        let (mut s, chute) = starter_chute();
+        s.chute_modes[chute] = ChuteMode::Immediate;
+        s.arm_all_chutes();
+        s.update_chutes(fast, chute_air(0.001, 20_000.0, false), 0.02);
+        assert_eq!(
+            s.chutes[chute],
+            Chute::SemiDeployed,
+            "IMMEDIATE ignores air and safety"
+        );
+        // the craft's settings replace the part's defaults: a 0.5 atm chute stays packed at 0.3 atm, 5 km up
+        let (crafts, defs, res) = assets();
+        let mut c = crafts
+            .iter()
+            .find(|c| c.name == "Stock12_StartRocket")
+            .unwrap()
+            .clone();
+        c.parts[chute].chute = Some(ChuteSettings {
+            mode: ChuteMode::Safe,
+            min_pressure_atm: 0.5,
+            deploy_altitude_m: 300.0,
+        });
+        let mut s = Structure::build(&c, &defs, &res);
+        let slow = Airflow::uniform(basis(facing), DVec3::new(-100.0, 0.0, 0.0), 1.0, 0.3);
+        s.arm_all_chutes();
+        s.update_chutes(slow, chute_air(0.3, 5_000.0, false), 0.02);
+        assert_eq!(s.chutes[chute], Chute::Armed, "waits for 0.5 atm");
+        s.update_chutes(slow, chute_air(0.55, 4_000.0, false), 0.02);
+        assert_eq!(s.chutes[chute], Chute::SemiDeployed);
+        assert_eq!(
+            s.chute_defs[chute].as_ref().unwrap().deploy_altitude_m,
+            300.0
+        );
     }
 
     #[test]
