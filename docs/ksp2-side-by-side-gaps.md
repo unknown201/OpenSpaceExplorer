@@ -202,7 +202,7 @@ P2 completeness.
 | T4 | Crossfeed and fuel-flow order, staging, decouplers | P0 | Stock Kerbal K1 (boosters, decouplers, 5 stages) | mass and speed vs time per stage | **failing**: +232 kg in the lower stages, solid booster thrust curve (+17% early, -3.7% late); with the sim thread |
 | T5 | SAS hold, reaction wheels, torque | P0 | Pod with wheel: step pitch input 1 s, release, SAS on | attitude and angular rate vs time within 5% | **verified**: wheel torque +2% pitch, about +5% yaw/roll; SAS damping matches after PR 41 (sim thread replay within 1% at +1, +2, +8 s; rerun here shows the 2 s stop and wobble) |
 | T6 | Gimbal response | P0 | Engine gimbal step under SAS | gimbal angle and body rate vs time | not traced |
-| T7 | Input response and precision mode | P0 | Keyboard pitch hold, CapsLock precision, trim | rate build-up and latency per tick | full-input step **verified** with T5; precision and trim not traced |
+| T7 | Input response and precision mode | P0 | Keyboard pitch hold, CapsLock precision, trim | rate build-up and latency per tick | full-input step **verified** with T5, latency in T36; precision and trim not traced |
 | T8 | Orbits, SOI changes, time warp (rails and physics) | P0 | 100 km orbit, warp x100, Mun encounter | apsides after warp, SOI exit time within 1 s | not traced |
 | T9 | Maneuver node execution | P1 | Prograde 100 m/s node, burn by node timer | resulting apsides within 1% | not traced |
 | T10 | Control surfaces and lift | P1 | Stock jet takeoff roll and pitch-up | lift vs AoA and speed, rotation speed | not traced |
@@ -222,6 +222,20 @@ P2 completeness.
 | T24 | Science collection and transmit | P2 | Crew report on the pad, transmit | science value, transmit time and EC | not traced |
 | T25 | Flags | P2 | Plant a flag next to the pad | placement, collision | not traced |
 | T26 | Camera modes and input bindings | P2 | Cycle V modes, default binding table | mode list, key map identical | not traced |
+| T27 | Flight camera orbit (mouse drag) | P0 | KSP2 `ground/orbital basic rig`: heading degrees = mouse pixels x 4.5 x frame seconds (0.075 deg/px at 60 Hz; fine x 0.3) | degrees per pixel | **failing**: OSE turns 0.286 deg per CSS pixel, about 3.8x KSP2 at 60 Hz, and is frame-rate independent where KSP2 is not |
+| T28 | Flight camera zoom (wheel) | P1 | KSP2 distance x exp(-zoomAxis), fine x exp(-0.3 zoomAxis) | distance factor per wheel notch | **likely failing**: OSE x0.8 in / x1.25 out per wheel event; KSP2's factor per notch depends on the Unity wheel axis value, which needs a live capture |
+| T29 | Map camera orbit | P1 | KSP2 2 x max(0.001, 0.05 x (85 - abs(pitch))/85) deg/px, Alt x 0.1 | degrees per pixel vs pitch | **failing**: OSE 0.286 deg/px at every pitch, about 2.9x KSP2 at the horizon and far more near the poles; no Alt fine mode |
+| T30 | Map zoom | P2 | KSP2 inverse scale x exp(-0.3) in / exp(0.3) out | factor per step | close: OSE x0.8 / x1.25 vs KSP2 x0.741 / x1.350 |
+| T31 | VAB camera orbit and zoom | P1 | KSP2 0.004 rad/px (precise 0.001); zoom moves the pivot by zoomAxis x 3 m (Shift x2, precise 0.3) | per pixel, per notch | **failing**: OSE 0.005 rad/px (+25%), no precise mode; zoom is multiplicative x0.8 instead of KSP2's additive metres |
+| T32 | Time warp ladder | P0 | KSP2 1, 2, 4, 10, 50, 100, 1,000, 10,000, 100,000, 1,000,000; physics warp capped at 4x in atmosphere | ladder steps | **failing**: OSE 1, 2, 3, 4, 5, 10, 50, 100, 1,000, 10,000, 100,000 (extra 3x and 5x, no 1,000,000x) |
+| T33 | VAB held-part rotation keys | P2 | KSP2 90 deg per press with snap on or off; Shift 5 deg | degrees per press | **failing**: OSE 15 deg with snap off |
+| T34 | Maneuver handle drag | P1 | KSP2 adds (displacement / (strength x DPI))^2 m/s every frame while held | m/s per pixel per frame | **failing**: OSE sets an absolute 1 m/s per pixel (0.1 with Shift); KSP2 is a held-rate control with no Shift factor |
+| T35 | Throttle keys | P0 | KSP2 Shift/Ctrl change the throttle 1.0 per real second; Z full, X cut | ramp rate, presets | **verified** (same equation and presets in `input.rs`) |
+| T36 | Key press to control response | P0 | KSP2 applies keyboard input in the next frame's FixedUpdate; the craft starts turning about 0.12 s after the control state changes (run 7) | key to send, send to motion | **verified**: OSE sends 1-2 ms after keydown (local build, 10 presses, 60 fps), and the server starts the turn 0.1-0.18 s after the input (stream at 10 Hz) |
+
+Controls rows T27-T34 come from the KSP2 source and configuration (camera rigs, `TimeWarp`, OAB, maneuver gizmo);
+T35-T36 add live timing. Source: an interaction-parity recording from 2026-10-29 (`docs/reference-notes/interaction-parity.md`,
+not yet committed) and `reference/controls/ose-key-latency.json`.
 
 ## Next steps
 
