@@ -269,11 +269,15 @@ impl Structure {
                 if let Some(gear) = &self.gear_defs[i] {
                     let n = normal(body, terrain, at, ut);
                     let nl = local(frame, n);
+                    // the lowest point of the gear's box along the ground normal; an axis lying flat to the
+                    // ground keeps the foot centred on it (`signum` of 0.0 is 1.0, which put a level leg's
+                    // foot on a corner, off the craft's axis, and let foot friction rock it)
+                    let lowest = |n: f64| if n.abs() < 1e-6 { 0.0 } else { n.signum() };
                     let bottom = centre
                         + DVec3::new(
-                            -half.x * nl.x.signum(),
-                            -half.y * nl.y.signum(),
-                            -half.z * nl.z.signum(),
+                            -half.x * lowest(nl.x),
+                            -half.y * lowest(nl.y),
+                            -half.z * lowest(nl.z),
                         );
                     let arm = world(frame, bottom - mass.centre_m);
                     let foot = p.r + arm;
