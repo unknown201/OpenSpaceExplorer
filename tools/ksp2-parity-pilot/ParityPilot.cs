@@ -353,6 +353,8 @@ namespace OpenSpaceExplorer.Validation
             Mark("stage 1");
             int stages = 1;
             double lastMass = vessel.totalMass, steadyFor = 0;
+            double[] k1Machs = { 0.8, 1.15, 1.4, 2.0, 2.8 };
+            bool[] k1Dumped = new bool[k1Machs.Length];
             float t = 0;
             while (!done && t < 600)
             {
@@ -369,6 +371,18 @@ namespace OpenSpaceExplorer.Validation
                     lastMass = vessel.totalMass;
                     Mark("stage " + stages + " at alt " + vessel.AltitudeFromSeaLevel.ToString("F0", CultureInfo.InvariantCulture) + " mass " + vessel.totalMass.ToString("F3", CultureInfo.InvariantCulture));
                     yield return Shot("k1-stage" + stages);
+                }
+                // T4 drag: every part's forces and exposed drag areas once through each of these Mach numbers
+                for (int d = 0; d < k1Machs.Length; d++)
+                {
+                    if (!k1Dumped[d] && vessel.MachNumber >= k1Machs[d])
+                    {
+                        k1Dumped[d] = true;
+                        string tag = k1Machs[d].ToString("F2", CultureInfo.InvariantCulture);
+                        DumpParts(vessel, "parts-k1-mach" + tag + ".csv");
+                        DumpForces(vessel, "forces-k1-mach" + tag + ".csv");
+                        Mark("dumped at mach " + vessel.MachNumber.ToString("F3", CultureInfo.InvariantCulture) + " alt " + vessel.AltitudeFromSeaLevel.ToString("F0", CultureInfo.InvariantCulture));
+                    }
                 }
                 if (vessel.VerticalSrfSpeed < 0 && vessel.AltitudeFromSeaLevel > 1000) { Mark("apoapsis " + vessel.AltitudeFromSeaLevel.ToString("F0", CultureInfo.InvariantCulture)); break; }
                 yield return null;
