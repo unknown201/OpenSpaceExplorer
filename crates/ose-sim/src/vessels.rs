@@ -354,6 +354,95 @@ pub fn orbit_after_burn(orbit: &Orbit, burn: &ScheduledBurn) -> Orbit {
     Orbit::from_state_vectors(orbit.mu, r, v + burn_delta_v(orbit, burn), burn.ut)
 }
 
+/// A craft burning under time warp holds its thrust along this inertial direction (KSP2 fixes the exhaust
+/// direction for the whole warped burn, `ResetExhaustVelocityDirection`).
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct WarpBurnHold(pub DVec3);
+
+/// One stage a finite burn can draw on: vacuum thrust, kN, vacuum Isp, s, the craft's mass when the stage
+/// starts burning, t, and the propellant it has, t.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BurnStage {
+    pub thrust_kn: f64,
+    pub isp_s: f64,
+    pub mass_t: f64,
+    pub propellant_t: f64,
+}
+
+/// The longest integration step of a finite burn, s.
+const FINITE_BURN_STEP_S: f64 = 0.5;
+
+/// A planned burn flown as a finite burn, as KSP2 predicts it (`ManeuverPlanSolver.CalculateOdeManeuverNodes`):
+/// it starts at the node, holds the node's delta-v direction fixed in inertial space, and burns stage after
+/// stage at full vacuum thrust, each stage for the time the rocket equation gives for what is left of the
+/// delta-v (or until it is dry). Returns the state and time where it ends; `None` with no thrust to burn.
+pub fn finite_burn(
+    orbit: &Orbit,
+    burn: &ScheduledBurn,
+    stages: &[BurnStage],
+) -> Option<(DVec3, DVec3, f64)> {
+    let dv = burn_delta_v(orbit, burn);
+    let want = dv.length();
+    let dir = (want > 0.0).then(|| dv * (1.0 / want))?;
+    let (mut r, mut v) = orbit.state_at(burn.ut);
+    let mut ut = burn.ut;
+    let mut left = want;
+    let mu = orbit.mu;
+    let mut burned_any = false;
+    for st in stages
+        .iter()
+        .filter(|s| s.thrust_kn > 0.0 && s.isp_s > 0.0 && s.propellant_t > 0.0)
+    {
+        if left <= 1e-9 {
+            break;
+        }
+        let ve = st.isp_s * ose_data::G0;
+        let mdot = st.thrust_kn / ve;
+        let stage_dv = ve * (st.mass_t / (st.mass_t - st.propellant_t).max(1e-9)).ln();
+        let use_dv = left.min(stage_dv);
+        let t_burn = st.mass_t * (1.0 - (-use_dv / ve).exp()) / mdot;
+        left -= use_dv;
+        burned_any = true;
+        // RK4 on gravity plus the thrust along `dir` as the mass falls
+        let acc = |r: DVec3, t: f64| {
+            let d = r.length();
+            r * (-mu / (d * d * d)) + dir * (st.thrust_kn / (st.mass_t - mdot * t).max(1e-9))
+        };
+        let n = (t_burn / FINITE_BURN_STEP_S).ceil().max(1.0) as usize;
+        let h = t_burn / n as f64;
+        for i in 0..n {
+            let t = i as f64 * h;
+            let (k1r, k1v) = (v, acc(r, t));
+            let (k2r, k2v) = (v + k1v * (h / 2.0), acc(r + k1r * (h / 2.0), t + h / 2.0));
+            let (k3r, k3v) = (v + k2v * (h / 2.0), acc(r + k2r * (h / 2.0), t + h / 2.0));
+            let (k4r, k4v) = (v + k3v * h, acc(r + k3r * h, t + h));
+            r = r + (k1r + k2r * 2.0 + k3r * 2.0 + k4r) * (h / 6.0);
+            v = v + (k1v + k2v * 2.0 + k3v * 2.0 + k4v) * (h / 6.0);
+        }
+        ut += t_burn;
+    }
+    burned_any.then_some((r, v, ut))
+}
+
+/// The stages a vessel's flight state can still burn, from the current one on.
+pub fn burn_stages(p: &crate::flight::Powered) -> Vec<BurnStage> {
+    let mut out = Vec::new();
+    for (i, s) in p.spec.stages.iter().enumerate().skip(p.stage) {
+        let (mass_t, propellant_t) = if i == p.stage {
+            (p.mass_t, p.propellant_t)
+        } else {
+            (s.start_mass_t, s.propellant_t)
+        };
+        out.push(BurnStage {
+            thrust_kn: s.thrust_vac_kn,
+            isp_s: s.isp_vac_s,
+            mass_t,
+            propellant_t,
+        });
+    }
+    out
+}
+
 /// Apply a due burn to `vessel` (its orbit is replaced, the burn removed). Returns true if applied.
 pub fn apply_due_burn(world: &mut World, vessel: Entity, ut: f64) -> bool {
     let Some(burn) = world.get::<ScheduledBurn>(vessel).copied() else {
