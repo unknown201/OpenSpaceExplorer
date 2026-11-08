@@ -550,8 +550,11 @@ fn air_to(p: vec3<f32>) -> Sky {
     // From a few hundred metres to a few tens of km up, KSP2's haze over Kerbin's land reads bluer than the LUT's
     // (reference/ksp2-run3 at 1.5 and 8.5 km: land 120, 156, 157 and 150, 172, 186 against ours 126, 147, 135
     // and 130, 156, 152): tinted towards blue there, on bodies whose air scatters blue.
-    let low = smoothstep(0.3, 3.0, alt_km) * (1.0 - smoothstep(25.0, 45.0, alt_km)) * blue;
-    let tint = mix(vec3<f32>(1.0), vec3<f32>(0.88, 1.0, 1.22), low);
+    // (and on up through the climb: KSP2's run13 at 15 and 45 km shows the haze under the horizon a saturated sky
+    // blue, 130, 189, 238 and 191, 218, 245, against ours 123, 164, 210 and 152, 191, 225; gone by 75 km, where
+    // the orbit view is matched to Josh's 89 km shot)
+    let low = smoothstep(0.3, 3.0, alt_km) * (1.0 - smoothstep(45.0, 75.0, alt_km)) * blue;
+    let tint = mix(vec3<f32>(1.0), vec3<f32>(0.84, 1.0, 1.3), low);
     s.radiance = s.radiance * tint * haze * eclipse(frame.cam_km.xyz, frame.sun.xyz);
     return s;
 }
