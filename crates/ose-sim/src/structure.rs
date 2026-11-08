@@ -1633,6 +1633,15 @@ impl Structure {
         }
     }
 
+    /// Thrust the attached engines delivered at the last propulsion step, kN: after spool, intake air,
+    /// fuel and flameouts (the original's summed `FinalThrustValue`).
+    pub fn delivered_thrust_kn(&self) -> f64 {
+        (0..self.engine_thrust_last.len())
+            .filter(|&i| self.rigid.present[i])
+            .map(|i| self.engine_thrust_last[i])
+            .sum()
+    }
+
     /// Switch engine `i` to `mode` (Module_Engine.ChangeEngineMode): the engine stops drawing propellant,
     /// keeps its last thrust, and runs in the new mode after the old mode's exit wait and the new mode's
     /// enter wait (the "running" waits only for an engine without a response time that is running, the

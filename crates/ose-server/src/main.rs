@@ -1008,10 +1008,16 @@ fn flight_readout(
     let engine_demands = u
         .structure(e)
         .map(|st| st.engine_demands(p.stage, p.throttle, env));
+    // part-backed vessels report what their engines delivered (spooling jets, starved engines), not the
+    // throttle's request
     let thrust = if p.ignited && !p.crashed {
-        engine_demands
-            .as_ref()
-            .map(|engines| engines.iter().map(|e| e.thrust_kn).sum())
+        u.structure(e)
+            .map(|st| st.delivered_thrust_kn())
+            .or_else(|| {
+                engine_demands
+                    .as_ref()
+                    .map(|engines| engines.iter().map(|e| e.thrust_kn).sum())
+            })
             .unwrap_or_else(|| p.thrust_kn(pressure_kpa / 101.325))
     } else {
         0.0
