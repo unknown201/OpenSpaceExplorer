@@ -47,7 +47,10 @@ pub fn resolve(
     let mut rotation_effort = 0.0;
     let mut target_rate = current_rate;
     let mut steering = DVec3::ZERO;
-    if enabled && !p.landed {
+    // KSP2 turns the pack only while it is not moving (`ProcessJetpackForces`: the torques, and the spin
+    // reset, are worked out only when there is no move input), so translating and turning never share fuel
+    let moving = movement.length_squared() > 1e-12;
+    if enabled && !p.landed && !moving {
         let raw = p.rotation_input + p.trim;
         let input = clamp(DVec3::new(-raw.x, raw.z + p.roll_input, raw.y));
         let base_rate = settings.rotate_torque_knm * pressure_scale / p.mass_t.max(0.001);
@@ -187,16 +190,29 @@ mod tests {
     #[test]
     fn full_pressure_curve_changes_move_and_rotation_without_changing_mass_flow() {
         for (pressure, isp) in [(0.0, 240.0), (1.0, 100.0), (2.5, 27.50059375), (4.0, 0.001)] {
+            // moving: the move flow only, and no turn though the pitch key is held (KSP2 turns only when still)
             let mut p = fixture();
             p.throttle = 1.0;
             p.rcs.translate = DVec3::new(1.0, 0.0, 0.0);
             p.rotation_input = DVec3::new(0.0, 1.0, 0.0);
             let before = p.mass_t;
-            let (x, y, z) = flight::vessel_basis(&p);
-            let burn = (0.25 * 2.0_f64.sqrt() + 0.125 / 0.25) / (240.0 * ose_data::G0) * 0.1;
+            let (x, y, _) = flight::vessel_basis(&p);
+            let burn = 0.25 * 2.0_f64.sqrt() / (240.0 * ose_data::G0) * 0.1;
             let step = resolve(&mut p, pressure, true, 0.0, 0.1);
             assert!((before - p.mass_t - burn).abs() < 1e-12);
             assert!((step.force_kn - (x + y) * (0.25 * isp / 240.0)).length() < 1e-12);
+            let mut out = StepOutcome::default();
+            step.turn(&mut p, 0.1, &mut out);
+            assert!(out.angvel.length() < 1e-12, "no turn while moving");
+            // still: the rotate flow only
+            let mut p = fixture();
+            p.rotation_input = DVec3::new(0.0, 1.0, 0.0);
+            let before = p.mass_t;
+            let (_, _, z) = flight::vessel_basis(&p);
+            let burn = 0.125 / 0.25 / (240.0 * ose_data::G0) * 0.1;
+            let step = resolve(&mut p, pressure, true, 0.0, 0.1);
+            assert!((before - p.mass_t - burn).abs() < 1e-12);
+            assert!(step.force_kn.length() < 1e-12);
             let mut out = StepOutcome::default();
             step.turn(&mut p, 0.1, &mut out);
             let expected_rate = 0.125 * isp / 240.0 / before;
@@ -204,34 +220,48 @@ mod tests {
         }
     }
     #[test]
-    fn final_partial_move_and_rotation_share_the_pack_and_the_empty_tick_is_free_of_actuation() {
+    fn final_partial_move_and_turn_each_take_what_is_left_and_the_empty_tick_is_free_of_actuation()
+    {
         let dt = 0.02;
-        let requested = (0.25 + 0.125 / 0.25) / (240.0 * ose_data::G0) * dt;
-        for fraction in [0.0, 0.25, 1.0] {
-            let mut p = fixture();
-            p.throttle = 1.0;
-            p.rotation_input = DVec3::new(0.0, 1.0, 0.0);
-            p.propellant_t = requested * fraction;
-            p.mass_t = 0.07 + p.propellant_t;
-            let mass_before = p.mass_t;
-            let v = p.v;
-            let (x, y, z) = flight::vessel_basis(&p);
-            let out = flight::integrate(&mut p, &body(), None, None, 0.0, dt);
-            assert!((p.mass_t - 0.07).abs() < 1e-12 && p.propellant_t < 1e-12);
-            assert!((out.thrust_kn - 0.25 * fraction).abs() < 1e-12);
-            assert!((p.v - v - y * (0.25 * fraction / 0.07 * dt)).length() < 1e-10);
-            let rate = (0.125 * fraction / mass_before).min(280.0_f64.to_radians());
-            assert!(
-                (out.angvel - z * rate).length() < 1e-10,
-                "{fraction}: {:?}",
-                out.angvel
-            );
-            let v = p.v;
-            let angular = p.angvel + p.facing * p.roll_rate;
-            flight::integrate(&mut p, &body(), None, None, dt, dt);
-            assert!((p.v - v).length() < 1e-10);
-            assert!((p.angvel + p.facing * p.roll_rate - angular).length() < 1e-10);
-            assert!(x.dot(y).abs() < 1e-12);
+        for (moving, requested) in [
+            (true, 0.25 / (240.0 * ose_data::G0) * dt),
+            (false, 0.125 / 0.25 / (240.0 * ose_data::G0) * dt),
+        ] {
+            for fraction in [0.0, 0.25, 1.0] {
+                let mut p = fixture();
+                if moving {
+                    p.throttle = 1.0;
+                } else {
+                    p.ignited = false;
+                    p.rotation_input = DVec3::new(0.0, 1.0, 0.0);
+                }
+                p.propellant_t = requested * fraction;
+                p.mass_t = 0.07 + p.propellant_t;
+                let mass_before = p.mass_t;
+                let v = p.v;
+                let (x, y, z) = flight::vessel_basis(&p);
+                let out = flight::integrate(&mut p, &body(), None, None, 0.0, dt);
+                assert!((p.mass_t - 0.07).abs() < 1e-12 && p.propellant_t < 1e-12);
+                let push = if moving { 0.25 * fraction } else { 0.0 };
+                assert!((out.thrust_kn - push).abs() < 1e-12);
+                assert!((p.v - v - y * (push / 0.07 * dt)).length() < 1e-10);
+                let rate = if moving {
+                    0.0
+                } else {
+                    (0.125 * fraction / mass_before).min(280.0_f64.to_radians())
+                };
+                assert!(
+                    (out.angvel - z * rate).length() < 1e-10,
+                    "{moving} {fraction}: {:?}",
+                    out.angvel
+                );
+                let v = p.v;
+                let angular = p.angvel + p.facing * p.roll_rate;
+                flight::integrate(&mut p, &body(), None, None, dt, dt);
+                assert!((p.v - v).length() < 1e-10);
+                assert!((p.angvel + p.facing * p.roll_rate - angular).length() < 1e-10);
+                assert!(x.dot(y).abs() < 1e-12);
+            }
         }
     }
     #[test]
