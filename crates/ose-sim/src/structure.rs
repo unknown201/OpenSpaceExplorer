@@ -458,6 +458,9 @@ fn part_taper(q: ose_data::craft::Quat, def: &PartDef, half: DVec3) -> Option<Ta
     })
 }
 
+/// `Data_Gimbal.minRollOffset`: a gimbal this far off the control axis rolls the craft, m.
+const MIN_ROLL_OFFSET_M: f64 = 0.1;
+
 fn vessel_box(q: ose_data::craft::Quat, b: ose_data::PartBounds) -> (DVec3, DVec3) {
     let q = q.normalized();
     let q = [q.x, q.y, q.z, q.w];
@@ -2864,11 +2867,17 @@ impl Structure {
                 let sign = if lever.y > 0.0 { -1.0 } else { 1.0 };
                 input.x *= sign;
                 input.z *= sign;
-                if lever.x.abs() > 0.1 {
-                    input.x += input.y * lever.x.signum();
+                // roll: by where the gimbal sits off the control transform's axis, not the centre of mass
+                // (`Module_Gimbal.GetLocalActuation`, `minRollOffset` 0.1 m)
+                let control = self
+                    .rigid
+                    .rest_position(p.control_point.map(|c| c as usize).unwrap_or(self.root));
+                let off_axis = aero::rotate_inverse(p.control_rotation, at - control);
+                if off_axis.x.abs() > MIN_ROLL_OFFSET_M {
+                    input.x += input.y * off_axis.x.signum();
                 }
-                if lever.z.abs() > 0.1 {
-                    input.z -= input.y * lever.z.signum();
+                if off_axis.z.abs() > MIN_ROLL_OFFSET_M {
+                    input.z -= input.y * off_axis.z.signum();
                 }
                 let body = aero::rotate(p.control_rotation, DVec3::new(input.x, input.y, -input.z));
                 input = glam::DVec3::new(body.x, body.y, -body.z);
@@ -9685,6 +9694,54 @@ mod tests {
         s.sync(&mut p);
         assert_eq!(p.control_point, None);
         assert_eq!(p.control_rotation, [0., 0., 0., 1.]);
+    }
+
+    #[test]
+    fn a_gimbal_on_the_control_axis_does_not_roll_however_far_the_centre_of_mass_is() {
+        // KSP2's Module_Gimbal rolls with a gimbal by its offset from the control transform, not from the
+        // centre of mass: an engine under the pod stays still on roll input even with the mass off to a side
+        use ose_data::flight_geometry::{Gimbal, Nozzle};
+        let (mut s, mut p, pair) = propulsion_fixture();
+        let i = pair[0];
+        s.part_rot[i] = [0., 0., 0., 1.];
+        s.geometry[i].engines = vec![vec![Nozzle {
+            position_m: DVec3::new(0., -1., 0.),
+            direction: DVec3::new(0., 1., 0.),
+            weight: 1.,
+            gimbal: Some(0),
+        }]];
+        s.geometry[i].gimbals = vec![Gimbal {
+            position_m: DVec3::ZERO,
+            rotation: [0., 0., 0., 1.],
+            limits_rad: [0.1; 4],
+            response_speed: None,
+            axis_mult: [1., 1.],
+        }];
+        s.gimbal_angles[i] = vec![[0., 0.]];
+        // controlled from the gimbal's own part: it sits on the control axis
+        s.control_sources[i] = true;
+        p.control_point = Some(i as u16);
+        p.control_axes = DVec3::new(0., 1., 0.);
+        let mut thrust = vec![0.; s.rigid.len()];
+        thrust[i] = 100.;
+        s.resolved_engine_thrust = Some(thrust);
+        s.resolved_nozzle_forces = s.engine_forces(i, 100.);
+        let prop = |off: f64| crate::flight::Propulsion {
+            mass: crate::dynamics::MassProperties {
+                centre_m: s.rigid.rest_position(i) + DVec3::new(off, 2., 0.),
+                ..Default::default()
+            },
+            actuators: Some(vec![]),
+            ..Default::default()
+        };
+        let far = prop(0.5);
+        s.resolve_authored_gimbals(&p, &far, &mut Default::default(), 0.02);
+        // the nozzle turns about its own thrust axis (KSP2 passes the roll through as well) but does not
+        // swing sideways to roll the craft
+        assert_eq!(
+            s.gimbal_angles[i][0][0], 0.,
+            "no sideways swing with the mass 0.5 m off"
+        );
     }
 
     #[test]
