@@ -24,7 +24,8 @@ namespace OpenSpaceExplorer.Validation
     [DefaultExecutionOrder(-32000)]
     public sealed class InputHolder : MonoBehaviour
     {
-        public static float? Pitch, Yaw, Roll, X, Y, Z, WheelThrottle, WheelSteer, EvaFrontBack, EvaLeftRight;
+        public static float? Pitch, Yaw, Roll, X, Y, Z, WheelThrottle, WheelSteer, EvaFrontBack, EvaLeftRight, EvaUpDown;
+        public static Vector3? KerbalMove;
         public static bool? EvaJump, EvaRun;
         static readonly System.Reflection.BindingFlags Priv = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
         static void SetEva(string field, object value)
@@ -44,6 +45,17 @@ namespace OpenSpaceExplorer.Validation
             if (Z.HasValue) FlightInputHandler.OverrideInputTranslateZ(Z.Value);
             if (EvaFrontBack.HasValue) SetEva("_moveFrontBack", EvaFrontBack.Value);
             if (EvaLeftRight.HasValue) SetEva("_moveLeftRight", EvaLeftRight.Value);
+            if (EvaUpDown.HasValue) SetEva("_moveUpDown", EvaUpDown.Value);
+            if (KerbalMove.HasValue)
+            {
+                var v = GameManager.Instance?.Game?.ViewController?.GetActiveSimVessel();
+                if (v != null && v.IsKerbalEVA)
+                {
+                    var st = v.flightCtrlState;
+                    st.X = KerbalMove.Value.x; st.Y = KerbalMove.Value.y; st.Z = KerbalMove.Value.z;
+                    v.SetFlightControlState(st);
+                }
+            }
             if (EvaJump.HasValue) SetEva("_jump", EvaJump.Value);
             if (EvaRun.HasValue) SetEva("_run", EvaRun.Value);
             if (WheelThrottle.HasValue || WheelSteer.HasValue)
@@ -53,7 +65,7 @@ namespace OpenSpaceExplorer.Validation
                 FlightCtrlStateInputOverride.InputWheelSteeringOverride = WheelSteer ?? 0f;
             }
         }
-        public static void Clear() { Pitch = Yaw = Roll = X = Y = Z = WheelThrottle = WheelSteer = EvaFrontBack = EvaLeftRight = null; EvaJump = EvaRun = null; }
+        public static void Clear() { Pitch = Yaw = Roll = X = Y = Z = WheelThrottle = WheelSteer = EvaFrontBack = EvaLeftRight = EvaUpDown = null; KerbalMove = null; EvaJump = EvaRun = null; }
     }
 
     [BepInPlugin("org.openspaceexplorer.paritypilot", "OSE Parity Pilot", "0.1.0")]
