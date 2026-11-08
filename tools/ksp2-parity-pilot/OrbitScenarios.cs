@@ -89,17 +89,20 @@ namespace OpenSpaceExplorer.Validation
             using (var w = new StreamWriter(Path.Combine(dir, "out", "burn-trace.csv"), false) { AutoFlush = true })
             {
                 w.WriteLine(Header);
+                // t is game time since this point (UT), not counted frames: the coroutine resumes once per rendered frame,
+                // so a fixed-step counter falls behind when the frame rate drops
+                double utStart = G.UniverseModel.UniverseTime;
                 float t = 0;
-                for (int i = 0; i < 5; i++) { yield return new WaitForFixedUpdate(); t += Time.fixedDeltaTime; w.WriteLine(Row(vessel, t, "before")); }
+                for (int i = 0; i < 5; i++) { yield return new WaitForFixedUpdate(); t = (float)(G.UniverseModel.UniverseTime - utStart); w.WriteLine(Row(vessel, t, "before")); }
                 double v0 = vessel.OrbitalSpeed, m0 = vessel.totalMass, ut0 = G.UniverseModel.UniverseTime;
                 mark("burn start UT " + ut0.ToString("R", Inv) + " speed " + v0.ToString("R", Inv) + " mass " + m0.ToString("R", Inv));
                 G.ViewController.flightInputHandler.OverrideInputMaxThrottle(true);
                 vessel.ActivateNextStage();
-                while (vessel.OrbitalSpeed < v0 + 100 && t < 120) { yield return new WaitForFixedUpdate(); t += Time.fixedDeltaTime; w.WriteLine(Row(vessel, t, "burn")); }
+                while (vessel.OrbitalSpeed < v0 + 100 && t < 120) { yield return new WaitForFixedUpdate(); t = (float)(G.UniverseModel.UniverseTime - utStart); w.WriteLine(Row(vessel, t, "burn")); }
                 G.ViewController.flightInputHandler.OverrideInputThrottleCutoff(true);
                 mark("burn end UT " + G.UniverseModel.UniverseTime.ToString("R", Inv) + " speed " + vessel.OrbitalSpeed.ToString("R", Inv) + " mass " + vessel.totalMass.ToString("R", Inv)
                     + " fuel used t " + (m0 - vessel.totalMass).ToString("R", Inv));
-                for (int i = 0; i < 300; i++) { yield return new WaitForFixedUpdate(); t += Time.fixedDeltaTime; if (i % 10 == 0) w.WriteLine(Row(vessel, t, "after")); }
+                for (int i = 0; i < 300; i++) { yield return new WaitForFixedUpdate(); t = (float)(G.UniverseModel.UniverseTime - utStart); if (i % 10 == 0) w.WriteLine(Row(vessel, t, "after")); }
                 mark("after: ap " + vessel.Orbit.ApoapsisArl.ToString("R", Inv) + " pe " + vessel.Orbit.PeriapsisArl.ToString("R", Inv));
             }
         }
