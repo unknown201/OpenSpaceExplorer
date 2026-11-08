@@ -2417,7 +2417,27 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
             let attr = |k: &str| t.get_attribute(k);
             let mut app = a.borrow_mut();
             let Some(vessel) = app.flying else { return };
-            let msg = if let (Some(part), Some(res)) = (
+            let msg = if let (Some(part), Some(res)) =
+                (attr("data-xfer-bal"), attr("data-xfer-res"))
+            {
+                // Balance: the part in both lists; again takes it out of both
+                let Ok(part) = part.parse::<u16>() else {
+                    return;
+                };
+                let pick = &mut app.xfer_pick;
+                if pick.0 != res {
+                    *pick = (res, Vec::new(), Vec::new());
+                }
+                let was = pick.1.contains(&part) && pick.2.contains(&part);
+                pick.1.retain(|p| *p != part);
+                pick.2.retain(|p| *p != part);
+                if !was {
+                    pick.1.push(part);
+                    pick.2.push(part);
+                }
+                app.render_resource_manager();
+                return;
+            } else if let (Some(part), Some(res)) = (
                 attr("data-xfer-out").or_else(|| attr("data-xfer-in")),
                 attr("data-xfer-res"),
             ) {
@@ -2428,6 +2448,11 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                 let pick = &mut app.xfer_pick;
                 if pick.0 != res {
                     *pick = (res, Vec::new(), Vec::new());
+                }
+                // In or Out replaces a Balance
+                if pick.1.contains(&part) && pick.2.contains(&part) {
+                    pick.1.retain(|p| *p != part);
+                    pick.2.retain(|p| *p != part);
                 }
                 let (mine, other) = if out {
                     (&mut pick.1, &mut pick.2)

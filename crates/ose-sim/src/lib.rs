@@ -3489,6 +3489,95 @@ mod tests {
         assert!(r.fired && r.debris.is_some());
     }
 
+    /// Against KSP2's Resource Manager on the pilot's two-tank craft (run 2026-11-08,
+    /// `tests/data/ksp2-transfer-tanks.csv`): B Out into A In from a quarter-full A, then Balance from a tenth
+    /// and nine tenths. KSP2 moves each share linearly over exactly one second; every 0.1 s both tanks within
+    /// 0.5% of capacity.
+    #[test]
+    fn transfers_match_the_ksp2_resource_manager_trace() {
+        let (mut u, body, spec, _) = k1_on_real_kerbin();
+        let v: serde_json::Value = serde_json::from_str(
+            include_str!("../../../tools/ksp2-parity-pilot/craft-crossfeed.json")
+                .trim_start_matches('\u{feff}'),
+        )
+        .unwrap();
+        let craft = ose_importer::craft::craft_from_value(&v).unwrap();
+        let defs: Vec<ose_data::PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let res: Vec<ose_data::ResourceDef> =
+            serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
+        let tanks: Vec<usize> = (0..craft.parts.len())
+            .filter(|&i| craft.parts[i].part_id.starts_with("fueltank"))
+            .collect();
+        let (a, b) = (tanks[0], tanks[1]);
+        let e = u.spawn_powered_on_surface("transfer", body, spec, 0.0, 0.0);
+        u.set_structure(e, structure::Structure::build(&craft, &defs, &res));
+        u.step();
+        let set = |u: &mut Universe, fa: f64, fb: f64| {
+            let mut st = u.world.get_mut::<structure::Structure>(e).unwrap();
+            for t in st.net.tanks.iter_mut() {
+                if t.part == a {
+                    t.stored = t.capacity * fa;
+                } else if t.part == b {
+                    t.stored = t.capacity * fb;
+                }
+            }
+        };
+        let stored = |u: &Universe, part: usize, r: &str| -> (f64, f64) {
+            let st = u.structure(e).unwrap();
+            st.net
+                .tanks
+                .iter()
+                .find(|t| t.part == part && st.net.resources[t.resource] == r)
+                .map(|t| (t.stored, t.capacity))
+                .unwrap()
+        };
+        let want: Vec<(String, f64, String, String, f64)> =
+            include_str!("../tests/data/ksp2-transfer-tanks.csv")
+                .lines()
+                .filter(|l| !l.starts_with('#') && !l.starts_with("phase,"))
+                .map(|l| {
+                    let f: Vec<&str> = l.split(',').collect();
+                    (
+                        f[0].to_string(),
+                        f[1].parse().unwrap(),
+                        f[2].to_string(),
+                        f[3].to_string(),
+                        f[4].parse().unwrap(),
+                    )
+                })
+                .collect();
+        let mut checked = 0;
+        for (phase, fa, fb) in [("inout", 0.25, 1.0), ("balance", 0.1, 0.9)] {
+            // KSP2 moves both resources at once; OSE runs one transfer per vessel, so each in turn
+            for r in ["Methane", "Oxidizer"] {
+                set(&mut u, fa, fb);
+                let ok = if phase == "inout" {
+                    u.transfer_resource(e, r, &[b], &[a])
+                } else {
+                    u.transfer_resource(e, r, &[a, b], &[a, b])
+                };
+                assert!(ok.is_ok(), "{phase} {r}: {ok:?}");
+                let mut tick = 0u64;
+                for (_, t, tank, _, units) in want.iter().filter(|w| w.0 == phase && w.3 == r) {
+                    while (tick as f64) < t * TICKS_PER_SECOND as f64 - 1e-9 {
+                        u.step();
+                        tick += 1;
+                    }
+                    let part = if tank == "A" { a } else { b };
+                    let (got, cap) = stored(&u, part, r);
+                    assert!(
+                        (got - units).abs() < 0.005 * cap,
+                        "{phase} t {t} {tank} {r}: OSE {got:.5} vs KSP2 {units:.5}"
+                    );
+                    checked += 1;
+                }
+                assert!(u.transfer(e).is_none(), "{phase} {r} done");
+            }
+        }
+        assert!(checked > 150);
+    }
+
     #[test]
     fn crew_move_between_seats_and_fuel_moves_between_tanks() {
         let (mut u, body, spec, st) = k1_on_real_kerbin();
@@ -3535,7 +3624,12 @@ mod tests {
             .transfer_resource(v, &methalox, &[lower], &[upper])
             .is_ok());
         assert!(u.transfer(v).is_some());
-        for _ in 0..(12 * TICKS_PER_SECOND) {
+        // the original moves each tank's share as a per-second flow: done in about a second
+        for _ in 0..(TICKS_PER_SECOND / 2) {
+            u.step();
+        }
+        assert!(u.transfer(v).is_some(), "still moving at half a second");
+        for _ in 0..(TICKS_PER_SECOND / 2 + 2) {
             u.step();
         }
         assert!(u.transfer(v).is_none(), "done by itself");
@@ -3554,6 +3648,27 @@ mod tests {
                 .is_err(),
             "nothing to move"
         );
+        // Balance (a tank in both lists): the two end with equal units, and nothing is made
+        {
+            let mut st = u.world.get_mut::<structure::Structure>(v).unwrap();
+            for t in st.net.tanks.iter_mut().filter(|t| t.part == upper) {
+                t.stored *= 0.25;
+            }
+        }
+        let (u0, l0) = (stored(&u, upper).0, stored(&u, lower).0);
+        let r = u.transfer_resource(v, &methalox, &[lower, upper], &[lower, upper]);
+        assert!(r.is_ok(), "{r:?}: upper {u0}, lower {l0}");
+        for _ in 0..(TICKS_PER_SECOND + 2) {
+            u.step();
+        }
+        assert!(u.transfer(v).is_none());
+        let (u1, l1) = (stored(&u, upper).0, stored(&u, lower).0);
+        assert!((u1 - l1).abs() < 1e-6, "balanced: {u1} vs {l1}");
+        assert!(((u1 + l1) - (u0 + l0)).abs() < 1e-6, "nothing made");
+        // one tank alone has nothing to balance with
+        assert!(u
+            .transfer_resource(v, &methalox, &[upper], &[upper])
+            .is_err());
     }
 
     #[test]
