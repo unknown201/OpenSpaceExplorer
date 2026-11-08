@@ -85,8 +85,7 @@ fn burn(
 fn stored(trace: &[(f64, usize, String, f64)], t: f64, part: usize, r: &str) -> f64 {
     trace
         .iter()
-        .filter(|x| x.1 == part && x.2 == r && x.0 <= t + 1e-9)
-        .next_back()
+        .rfind(|x| x.1 == part && x.2 == r && x.0 <= t + 1e-9)
         .map(|x| x.3)
         .unwrap()
 }
