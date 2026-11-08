@@ -467,6 +467,7 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
     let mut motor: Option<ose_data::WheelMotor> = None;
     let mut brake_torque = 0.0;
     let mut steerable = false;
+    let mut wheel_dynamics = ose_data::WheelDynamics::default();
     let mut converter: Option<ose_data::Converter> = None;
     let mut ejection_force = 0.0;
     let mut fairing = false;
@@ -611,15 +612,32 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
                             torque_curve: curve(&o["torqueCurve"]),
                             ec_per_s: f(&o["requiredResource"], "Rate"),
                         });
+                        let d = &mut wheel_dynamics;
+                        d.drive_response = f(o, "driveResponse");
+                        d.traction_control = f(&o["tractionControlScale"], "storedValue");
                     }
                     if entry["Name"] == "Data_WheelBrakes" {
                         brake_torque = f(o, "MaxBrakeTorque");
+                        wheel_dynamics.brake_response = f(o, "BrakeResponse");
                     }
                     if entry["Name"] == "Data_WheelSteering" {
                         steerable = true;
+                        let d = &mut wheel_dynamics;
+                        d.steering_response = f(o, "SteeringResponse");
+                        d.steering_curve = curve(&o["SteeringCurve"]);
+                        d.steering_max_angle_curve = curve(&o["SteeringMaxAngleCurve"]);
                     }
                     if entry["Name"] == "Data_WheelBase" {
                         wheel_radius = f(o, "Radius");
+                        let d = &mut wheel_dynamics;
+                        d.mass_t = f(o, "Mass");
+                        d.friction_adherent = f(o, "FrictionAdherent");
+                        d.peak_slip_mps = f(o, "PeakStart");
+                        d.friction_peak = f(o, "FrictionPeak");
+                        d.limit_slip_mps = f(o, "LimitStart");
+                        d.friction_limit = f(o, "FrictionLimit");
+                        d.gee_bias = f(o, "GeeBias");
+                        d.min_downforce_kn = f(o, "MinimumDownforce");
                         let leg = o["WheelType"] == "LEG";
                         wheel = Some((leg, wheel.map(|w| w.1).unwrap_or(0.0)));
                     }
@@ -714,6 +732,14 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
                                     .is_some_and(|a| a.iter().any(|i| i["name"] == "IntakeAir")),
                                 vel_curve: b(em, "useVelCurve").then(|| curve(&em["velCurve"])),
                                 atm_curve: b(em, "useAtmCurve").then(|| curve(&em["atmCurve"])),
+                                response: b(em, "useEngineResponseTime").then(|| {
+                                    ose_data::EngineResponse {
+                                        acceleration_per_s: f(em, "engineAccelerationSpeed"),
+                                        deceleration_per_s: f(em, "engineDecelerationSpeed"),
+                                        spool_per_s: f(em, "engineSpoolTime"),
+                                        spool_idle: f(em, "engineSpoolIdle"),
+                                    }
+                                }),
                             });
                         }
                     }
@@ -831,6 +857,7 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
             motor: motor.clone(),
             brake_torque_knm: brake_torque,
             steerable,
+            dynamics: wheel_dynamics.clone(),
         }
     });
     let bounds = part_bounds(&drag_cubes, &attach_nodes);

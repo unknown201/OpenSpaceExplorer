@@ -45,15 +45,47 @@ fn blur(uv:vec2<f32>,axis:vec2<f32>)->vec4<f32> {
 }
 @fragment fn blur_h(in:Out)->@location(0) vec4<f32>{return blur(in.uv,vec2(1.0,0.0));}
 @fragment fn blur_v(in:Out)->@location(0) vec4<f32>{return blur(in.uv,vec2(0.0,1.0));}
+// Perceptual luma of a linear colour (edges are judged as the eye sees them, after the sRGB curve).
+fn luma(c:vec3<f32>)->f32 { return sqrt(dot(clamp(c,vec3(0.0),vec3(1.0)),vec3(0.299,0.587,0.114))); }
+// Edge antialiasing over the finished frame (no multisampled targets anywhere, so geometry edges stair-step and
+// crawl as the camera moves): where the local contrast is high, blend along the edge's direction, sampled with
+// the bilinear filter between neighbouring pixels.
+fn antialiased(uv:vec2<f32>)->vec3<f32> {
+ let px=1.0/vec2<f32>(textureDimensions(image));
+ let c=textureSampleLevel(image,samp,uv,0.0).rgb;
+ let lm=luma(c);
+ let ln=luma(textureSampleLevel(image,samp,uv+vec2(0.0,-px.y),0.0).rgb);
+ let ls=luma(textureSampleLevel(image,samp,uv+vec2(0.0,px.y),0.0).rgb);
+ let le=luma(textureSampleLevel(image,samp,uv+vec2(px.x,0.0),0.0).rgb);
+ let lw=luma(textureSampleLevel(image,samp,uv+vec2(-px.x,0.0),0.0).rgb);
+ let lnw=luma(textureSampleLevel(image,samp,uv+vec2(-px.x,-px.y),0.0).rgb);
+ let lne=luma(textureSampleLevel(image,samp,uv+vec2(px.x,-px.y),0.0).rgb);
+ let lsw=luma(textureSampleLevel(image,samp,uv+vec2(-px.x,px.y),0.0).rgb);
+ let lse=luma(textureSampleLevel(image,samp,uv+vec2(px.x,px.y),0.0).rgb);
+ let lmin=min(lm,min(min(ln,ls),min(le,lw)));
+ let lmax=max(lm,max(max(ln,ls),max(le,lw)));
+ let range=lmax-lmin;
+ if range<max(0.0625,lmax*0.166) { return c; }
+ // The edge runs across the larger luma gradient.
+ var dir=vec2<f32>(-((lnw+lne)-(lsw+lse)),(lnw+lsw)-(lne+lse));
+ let reduce=max((lnw+lne+lsw+lse)*0.25*0.125,1.0/128.0);
+ let rcp=1.0/(min(abs(dir.x),abs(dir.y))+reduce);
+ dir=clamp(dir*rcp,vec2(-8.0),vec2(8.0))*px;
+ let a=0.5*(textureSampleLevel(image,samp,uv+dir*(1.0/3.0-0.5),0.0).rgb+textureSampleLevel(image,samp,uv+dir*(2.0/3.0-0.5),0.0).rgb);
+ let b=a*0.5+0.25*(textureSampleLevel(image,samp,uv-dir*0.5,0.0).rgb+textureSampleLevel(image,samp,uv+dir*0.5,0.0).rgb);
+ let lb=luma(b);
+ if lb<lmin||lb>lmax { return a; }
+ return b;
+}
 @fragment fn compose(in:Out)->@location(0) vec4<f32> {
- let c=textureSampleLevel(image,samp,in.uv,0.0).rgb;
+ let c=antialiased(in.uv);
  let glow=textureSampleLevel(bloom,samp,in.uv,0.0).rgb*0.16;
  return vec4(c+glow,1.0);
 }
 // The same onto a canvas without an sRGB format (every WebGPU canvas): the scene is linear light, so encode it
 // with the sRGB transfer curve here or the whole frame comes out too dark and contrasty.
 @fragment fn compose_encode(in:Out)->@location(0) vec4<f32> {
- let c=textureSampleLevel(image,samp,in.uv,0.0).rgb;
+ let c=antialiased(in.uv);
  let glow=textureSampleLevel(bloom,samp,in.uv,0.0).rgb*0.16;
  let l=clamp(c+glow,vec3(0.0),vec3(1.0));
  return vec4(select(1.055*pow(l,vec3(1.0/2.4))-0.055,l*12.92,l<=vec3(0.0031308)),1.0);
