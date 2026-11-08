@@ -3758,6 +3758,56 @@ mod tests {
     }
 
     #[test]
+    fn ksp2_rover_turn_at_half_throttle_and_full_steer_matches_run_8() {
+        // KSP2 trace run 8 (reference/ksp2-run8-rover): the stock Inquisitive Rover from rest at half wheel
+        // throttle and full steer reaches 0.95 / 1.38 / 1.87 / 2.25 m/s after 2 / 4 / 8 / 10 s, turning at
+        // 0.51 / 0.86 / 1.20 / 1.41 rad/s
+        let (mut u, body, _, _) = k1_on_real_kerbin();
+        let crafts: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let defs: Vec<ose_data::PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let res: Vec<ose_data::ResourceDef> =
+            serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
+        let c = crafts
+            .iter()
+            .find(|c| c.name == "Inquisitive Rover")
+            .unwrap();
+        let report = ose_data::staging::delta_v_by_stage(c, &defs, &res);
+        let spec = flight::FlightSpec::from_report(&report, &[], &[], 1.5);
+        let v = u.spawn_powered_on_surface("Rover", body, spec, 0.0, 0.0);
+        u.set_structure(v, structure::Structure::build(c, &defs, &res));
+        u.step();
+        assert!(u.set_drive(v, 0.5, 1.0, false));
+        let ksp2 = [
+            (2, 0.95, 0.51),
+            (4, 1.38, 0.86),
+            (8, 1.87, 1.20),
+            (10, 2.25, 1.41),
+        ];
+        let mut next = 0;
+        for t in 1..=(10 * TICKS_PER_SECOND) {
+            u.step();
+            if next < ksp2.len() && t == ksp2[next].0 * TICKS_PER_SECOND {
+                let (s, speed, yaw) = ksp2[next];
+                let d = &u.powered(v).unwrap().drive;
+                assert!(
+                    (d.speed_mps - speed).abs() < 0.25 * speed,
+                    "{s} s: {:.2} m/s, KSP2 {speed}",
+                    d.speed_mps
+                );
+                assert!(
+                    (d.yaw_rate_rad_s.abs() - yaw).abs() < 0.25 * yaw,
+                    "{s} s: yaw {:.2} rad/s, KSP2 {yaw}",
+                    d.yaw_rate_rad_s
+                );
+                next += 1;
+            }
+        }
+        assert_eq!(next, ksp2.len());
+    }
+
+    #[test]
     fn a_rover_drives_steers_and_brakes_on_its_wheels() {
         let (mut u, body, _, _) = k1_on_real_kerbin();
         let crafts: Vec<ose_data::craft::Craft> =
