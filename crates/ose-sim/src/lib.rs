@@ -241,10 +241,9 @@ impl Universe {
                 vessels::refresh_next_transition(&mut self.world, &index, e, ut, &self.params);
             }
         }
-        let factor = if self.has_powered() {
-            factor.min(flight::MAX_PHYSICS_WARP)
-        } else {
-            factor
+        let factor = match self.warp_cap() {
+            Some(cap) => factor.min(cap),
+            None => factor,
         };
         self.world.resource_mut::<WarpFactor>().0 = factor.max(1);
     }
@@ -1052,6 +1051,71 @@ impl Universe {
             .collect()
     }
 
+    /// Burning its engines in orbit, clear of air and terrain, and flown by nothing else (no rotation, RCS or
+    /// planned burn): KSP2 lets such a craft keep burning under time warp, its thrust held in one inertial
+    /// direction (`HandleOrbitalPhysicsUnderThrustStart`).
+    pub fn burning_in_orbit(&self, e: Entity) -> bool {
+        let (Some(p), Some(body)) = (self.world.get::<flight::Powered>(e), self.body_of(e)) else {
+            return false;
+        };
+        !p.crashed
+            && !p.landed
+            && !p.splashed
+            && p.throttle > 0.0
+            && p.propellant_t > 1e-6
+            && p.current_stage().is_some_and(|s| s.thrust_vac_kn > 0.0)
+            && p.rotation_input.length_squared() == 0.0
+            && p.roll_input == 0.0
+            && p.rcs.translate.length_squared() == 0.0
+            && !p.manual_steering
+            && self.world.get::<vessels::ExecutingBurn>(e).is_none()
+            && p.r.length() > self.rails_clear_radius(body)
+    }
+
+    /// The fastest time warp the vessels in physics allow: physics speeds while one is flying, up to
+    /// `MAX_THRUST_WARP` while the only ones flying burn in orbit, no limit when none is.
+    pub fn warp_cap(&mut self) -> Option<u32> {
+        let flying: Vec<Entity> = {
+            let mut q = self.world.query::<(Entity, &flight::Powered)>();
+            q.iter(&self.world)
+                .filter(|(_, p)| !p.crashed && !flight::resting(p))
+                .map(|(e, _)| e)
+                .collect()
+        };
+        if flying.is_empty() {
+            None
+        } else if flying.iter().all(|&e| self.burning_in_orbit(e)) {
+            // KSP2 drops a warped burn to 1x when its engines will run dry within the time it takes to slow
+            // down from that rate plus 10 s (`ClampRateToOrbitTransitions`: (1 + rate) / 2 + 10 s)
+            let dry_in = flying
+                .iter()
+                .filter_map(|&e| self.world.get::<flight::Powered>(e))
+                .map(|p| {
+                    let s = p.current_stage();
+                    let flow = s
+                        .filter(|s| s.isp_vac_s > 0.0)
+                        .map(|s| s.thrust_vac_kn * p.throttle / (s.isp_vac_s * ose_data::G0))
+                        .unwrap_or(0.0);
+                    if flow > 0.0 {
+                        p.propellant_t / flow
+                    } else {
+                        f64::INFINITY
+                    }
+                })
+                .fold(f64::INFINITY, f64::min);
+            Some(
+                [100, 50, 10, 4, 2]
+                    .into_iter()
+                    .find(|&r| {
+                        r <= flight::MAX_THRUST_WARP && dry_in > (1.0 + r as f64) / 2.0 + 10.0
+                    })
+                    .unwrap_or(1),
+            )
+        } else {
+            Some(flight::MAX_PHYSICS_WARP)
+        }
+    }
+
     /// A vessel in physics that holds time warp to physics speeds: not a wreck, and not at rest on the
     /// ground or the sea (`flight::resting`).
     pub fn has_powered(&mut self) -> bool {
@@ -1706,6 +1770,12 @@ impl Universe {
         }
         let index = self.world.resource::<bodies::BodyIndex>();
         let mut burns = self.scheduled_burns(e).into_iter();
+        let stages = self
+            .world
+            .get::<flight::Powered>(e)
+            .or_else(|| self.world.get::<flight::Dormant>(e).map(|d| &d.0))
+            .map(vessels::burn_stages)
+            .unwrap_or_default();
         let mut kept = Vec::new();
         let (mut body, mut orbit, mut from_ut, mut after_burn) = (body, orbit, self.ut(), false);
         loop {
@@ -1741,8 +1811,17 @@ impl Universe {
                 // the burn lies beyond the predicted horizon (e.g. after an impact); nothing to add
                 return kept;
             }
-            orbit = vessels::orbit_after_burn(&orbit, &burn);
-            from_ut = burn.ut;
+            // flown as KSP2 predicts it: a finite burn from the node, stage after stage
+            match vessels::finite_burn(&orbit, &burn, &stages) {
+                Some((r, v, end)) => {
+                    orbit = Orbit::from_state_vectors(orbit.mu, r, v, end);
+                    from_ut = end;
+                }
+                None => {
+                    orbit = vessels::orbit_after_burn(&orbit, &burn);
+                    from_ut = burn.ut;
+                }
+            }
             after_burn = true;
         }
     }
@@ -1757,8 +1836,8 @@ impl Universe {
             }
         }
         let mut warp = self.warp() as u64;
-        if self.has_powered() {
-            warp = warp.min(flight::MAX_PHYSICS_WARP as u64);
+        if let Some(cap) = self.warp_cap() {
+            warp = warp.min(cap as u64);
         }
         let now = self.tick().0;
         let mut ticks = warp;
@@ -1917,8 +1996,32 @@ impl Universe {
                 && p.drive.throttle == 0.0
                 && p.drive.speed_mps == 0.0
                 && flight::resting_on_ground(&p, &body, terrain.as_deref(), start_ut);
+            // burning under time warp: longer steps, the thrust held in one inertial direction
+            let warp_burn = warp > flight::MAX_PHYSICS_WARP as u64 && self.burning_in_orbit(e);
+            let hold = if warp_burn {
+                Some(
+                    self.world
+                        .get::<vessels::WarpBurnHold>(e)
+                        .map(|h| h.0)
+                        .unwrap_or(p.facing),
+                )
+            } else {
+                None
+            };
+            match hold {
+                Some(dir) => {
+                    self.world.entity_mut(e).insert(vessels::WarpBurnHold(dir));
+                }
+                None => {
+                    self.world.entity_mut(e).remove::<vessels::WarpBurnHold>();
+                }
+            }
             let (steps, step_dt) = if parked {
                 (1, dt * ticks.max(1) as f64)
+            } else if warp_burn {
+                let span = dt * ticks.max(1) as f64;
+                let n = (span / flight::THRUST_WARP_STEP_S).ceil().max(1.0);
+                (n as u64, span / n)
             } else {
                 (ticks.max(1), dt)
             };
@@ -2049,6 +2152,11 @@ impl Universe {
                     st.resolve_wheel_power(&mut p, &body, &mut propulsion, step_dt);
                     propulsion
                 });
+                if let Some(dir) = hold {
+                    p.facing = dir;
+                    p.angvel = DVec3::ZERO;
+                    p.roll_rate = 0.0;
+                }
                 let before = p.clone();
                 let mut out = flight::integrate_with_propulsion(
                     &mut p,
@@ -2059,6 +2167,11 @@ impl Universe {
                     step_dt,
                     propulsion,
                 );
+                if let Some(dir) = hold {
+                    p.facing = dir;
+                    p.angvel = DVec3::ZERO;
+                    p.roll_rate = 0.0;
+                }
                 if let Some(st) = &mut structure {
                     st.resolve_surface(
                         &before,
@@ -2658,6 +2771,188 @@ mod tests {
         let u = Universe::with_bodies(&[kerbin]);
         let body = u.body_entity("Kerbin").unwrap();
         (u, body, spec, st)
+    }
+
+    /// The starter rocket (Mk1 pod, 1x2 tank, Swivel) lit in a circular 700 km orbit round Kerbin, its nose
+    /// held prograde.
+    fn starter_in_orbit() -> (Universe, Entity) {
+        craft_in_orbit("Stock12_StartRocket")
+    }
+
+    /// A stock craft lit in a circular 700 km orbit round Kerbin, its nose prograde.
+    fn craft_in_orbit(name: &str) -> (Universe, Entity) {
+        let (mut u, body, _, _) = k1_on_real_kerbin();
+        let crafts: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let defs: Vec<ose_data::PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let res: Vec<ose_data::ResourceDef> =
+            serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
+        let c = crafts.iter().find(|c| c.name == name).unwrap();
+        let report = ose_data::staging::delta_v_by_stage(c, &defs, &res);
+        let spec = flight::FlightSpec::from_report(&report, &[], &[], 1.5);
+        let v = u.spawn_powered_on_surface("Start", body, spec, 0.0, 0.0);
+        u.set_structure(v, structure::Structure::build(c, &defs, &res));
+        let mu = u.world.get::<bodies::Body>(body).unwrap().mu;
+        let mut p = u.powered(v).unwrap().clone();
+        p.r = DVec3::new(700_000.0, 0.0, 0.0);
+        p.v = DVec3::new(0.0, (mu / 700_000.0_f64).sqrt(), 0.0);
+        p.landed = false;
+        p.facing = DVec3::new(0.0, 1.0, 0.0);
+        u.set_powered(v, p);
+        u.stage(v);
+        u.step();
+        (u, v)
+    }
+
+    #[test]
+    fn a_craft_burning_in_orbit_keeps_burning_under_time_warp_and_ends_where_a_real_time_burn_does()
+    {
+        // KSP2 keeps a craft burning under time warp above the air and terrain (orbital physics under thrust),
+        // its thrust held in one inertial direction; we allow up to 100x, the burn integrated in 0.1 s steps.
+        let prograde = flight::Attitude::Fixed(DVec3::new(0.0, 1.0, 0.0));
+        // a long burn: the pod on two 1x8 tanks and a Swivel
+        let run = |warp: u32| {
+            let (mut u, v) = craft_in_orbit("Lesson Animation rocket");
+            assert!(u.set_controls(v, 1.0, prograde));
+            u.step();
+            u.set_warp(warp);
+            assert_eq!(u.warp(), warp, "warp {warp} allowed while burning in orbit");
+            let end = u.ut() + 20.0;
+            while u.ut() < end - 1e-9 {
+                // the last step no longer than what is left
+                let left = ((end - u.ut()) * TICKS_PER_SECOND as f64).round() as u32;
+                if left < u.warp() {
+                    u.set_warp(left);
+                }
+                u.step();
+            }
+            assert!((u.ut() - end).abs() < 1e-6, "{} vs {end}", u.ut());
+            let p = u.powered(v).unwrap().clone();
+            (p.r, p.v, p.mass_t, p.facing)
+        };
+        let (r1, v1, m1, f1) = run(1);
+        let (r100, v100, m100, f100) = run(100);
+        assert!(
+            (m1 - m100).abs() < 0.002 * m1,
+            "propellant burned alike: {m1} vs {m100} t"
+        );
+        // within 0.15 % of the 1000 m/s it gained, 50 m after 20 s (the longer steps lag the falling mass)
+        assert!((v1 - v100).length() < 1.5, "velocity {v1:?} vs {v100:?}");
+        assert!(
+            (r1 - r100).length() < 50.0,
+            "position {:.2} m apart",
+            (r1 - r100).length()
+        );
+        assert!(
+            f100.dot(DVec3::new(0.0, 1.0, 0.0)) > 0.9999,
+            "thrust held: {f100:?} ({f1:?})"
+        );
+    }
+
+    #[test]
+    fn a_warped_burn_drops_to_1x_when_its_engines_are_about_to_run_dry() {
+        // KSP2 run 19 (T40): a burn warped at 100x fell back to 1x at once with tanks about to run dry;
+        // `ClampRateToOrbitTransitions` holds 1x within (1 + rate) / 2 + 10 s of running out
+        let (mut u, v) = craft_in_orbit("Lesson Animation rocket");
+        assert!(u.set_controls(v, 1.0, flight::Attitude::Fixed(DVec3::new(0.0, 1.0, 0.0))));
+        u.step();
+        u.set_warp(100);
+        assert_eq!(u.warp(), 100);
+        let p = u.powered(v).unwrap().clone();
+        let s = p.current_stage().unwrap();
+        let flow = s.thrust_vac_kn / (s.isp_vac_s * ose_data::G0);
+        // 40 s of propellant left: (1 + 50) / 2 + 10 = 35.5 s fits 50x, 100x does not
+        let mut q = p.clone();
+        q.propellant_t = 40.0 * flow;
+        u.set_powered(v, q);
+        u.set_warp(100);
+        assert_eq!(u.warp(), 50);
+        let mut q = p.clone();
+        q.propellant_t = 5.0 * flow;
+        u.set_powered(v, q);
+        u.set_warp(100);
+        assert_eq!(u.warp(), 1);
+    }
+
+    #[test]
+    fn time_warp_stays_at_physics_speeds_for_a_burn_low_down_or_with_the_controls_held() {
+        let (mut u, v) = starter_in_orbit();
+        // down at 50 km, in the air
+        let mut p = u.powered(v).unwrap().clone();
+        p.r = DVec3::new(650_000.0, 0.0, 0.0);
+        u.set_powered(v, p);
+        assert!(u.set_controls(v, 1.0, flight::Attitude::Free));
+        u.set_warp(100);
+        assert_eq!(u.warp(), flight::MAX_PHYSICS_WARP);
+        // up high but turning
+        let (mut u, v) = starter_in_orbit();
+        assert!(u.set_controls(v, 1.0, flight::Attitude::Free));
+        u.set_rotation(v, 1.0, 0.0, 0.0);
+        u.set_warp(100);
+        assert_eq!(u.warp(), flight::MAX_PHYSICS_WARP);
+    }
+
+    #[test]
+    fn a_planned_burn_is_predicted_as_a_finite_burn_from_the_node() {
+        // KSP2's maneuver prediction (`ManeuverPlanSolver.CalculateOdeManeuverNodes`): the burn starts at the
+        // node and holds the node's direction at full thrust for the rocket equation's time; flying exactly
+        // that ends on the predicted orbit.
+        let (mut u, v) = starter_in_orbit();
+        let burn = vessels::ScheduledBurn {
+            ut: u.ut() + 30.0,
+            prograde_mps: 600.0,
+            normal_mps: 0.0,
+            radial_mps: 0.0,
+        };
+        assert!(u.schedule_burn(v, burn));
+        let after = u
+            .predict(v)
+            .into_iter()
+            .find(|p| p.start == trajectory::Transition::Maneuver)
+            .expect("a patch after the burn");
+        let impulsive = vessels::orbit_after_burn(&u.vessel(v).unwrap().2, &burn);
+        // fly it: wait for the node, then full thrust along the node's direction for the burn time
+        let o = u.vessel(v).unwrap().2;
+        let dv = vessels::burn_delta_v(&o, &burn);
+        let stages = vessels::burn_stages(u.powered(v).unwrap());
+        let (_, _, end) = vessels::finite_burn(&o, &burn, &stages).unwrap();
+        assert!(
+            after.start_ut > burn.ut + 1.0,
+            "the patch starts where the burn ends"
+        );
+        assert!((after.start_ut - end).abs() < 1e-9);
+        u.schedule_burns(v, vec![]);
+        let hold = flight::Attitude::Fixed(dv.normalized());
+        assert!(u.set_controls(v, 0.0, hold));
+        while u.ut() < burn.ut - 1e-9 {
+            u.step();
+        }
+        assert!(u.set_controls(v, 1.0, hold));
+        while u.ut() < end - 1e-9 {
+            u.step();
+        }
+        assert!(u.set_controls(v, 0.0, hold));
+        let p = u.powered(v).unwrap();
+        let mu = u
+            .world
+            .get::<bodies::Body>(u.body_of(v).unwrap())
+            .unwrap()
+            .mu;
+        let flown = Orbit::from_state_vectors(mu, p.r, p.v, u.ut());
+        let err = |o: &Orbit| (o.apoapsis() - flown.apoapsis()).abs();
+        assert!(
+            err(&after.orbit) < 0.005 * flown.apoapsis(),
+            "predicted apoapsis {:.0} m, flown {:.0} m",
+            after.orbit.apoapsis(),
+            flown.apoapsis()
+        );
+        assert!(
+            err(&after.orbit) < err(&impulsive),
+            "finite {:.0} m off, impulsive {:.0} m off",
+            err(&after.orbit),
+            err(&impulsive)
+        );
     }
 
     #[test]
