@@ -426,6 +426,7 @@ mod tests {
             docking: None,
             parachute: None,
             thermal_mass_modifier: 1.0,
+            buoyancy: 1.0,
             heatshield: None,
             landing_gear: None,
             converter: None,

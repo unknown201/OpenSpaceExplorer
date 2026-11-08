@@ -27,6 +27,7 @@ pub mod surface;
 pub mod thermal;
 pub mod trajectory;
 pub mod vessels;
+pub mod water;
 pub mod wheels;
 
 use bevy_ecs::prelude::*;
@@ -1372,7 +1373,16 @@ impl Universe {
         let (parent_tanks, parent_wet) = self
             .world
             .get::<structure::Structure>(parent)
-            .map(|st| (Some(st.net.tanks.clone()), st.in_water.clone()))
+            .map(|st| {
+                (
+                    Some(st.net.tanks.clone()),
+                    st.in_water
+                        .iter()
+                        .copied()
+                        .zip(st.water_drag.iter().copied())
+                        .collect::<Vec<_>>(),
+                )
+            })
             .unwrap_or_default();
         // Only pieces that need it are built: one still burning, or one in the sea (where it must float);
         // a spent stage or a wreck on land stays a cheap single body.
@@ -1380,7 +1390,7 @@ impl Universe {
             .world
             .get::<flight::Powered>(parent)
             .is_some_and(|p| p.splashed)
-            || parent_wet.iter().any(|w| *w);
+            || parent_wet.iter().any(|w| w.0);
         let lit = |map: &[Option<usize>]| {
             fire.is_some_and(|f| f.burning.iter().any(|&i| map[i].is_some()))
         };
@@ -1391,9 +1401,10 @@ impl Universe {
                     st.carry_tanks_from(tanks, map);
                 }
                 // parts already in the sea do not strike it again
-                for (i, wet) in parent_wet.iter().enumerate() {
+                for (i, &(wet, drag)) in parent_wet.iter().enumerate() {
                     if let Some(j) = map.get(i).copied().flatten() {
-                        st.in_water[j] = *wet;
+                        st.in_water[j] = wet;
+                        st.water_drag[j] = drag;
                     }
                 }
                 let engines: Vec<usize> = fire
