@@ -10800,7 +10800,8 @@ impl App {
         };
         let ut = self.time.ut_at(now);
         let remaining = at - ut;
-        if remaining <= 2.0 {
+        // The original drops to 1x (w + 1) / 2 game seconds out, so a fast warp does not overshoot.
+        if remaining <= 2.0 || kerbin_time::warp_drop(self.time.warp, remaining) {
             self.warp_to = None;
             if self.time.warp != 1 {
                 self.request_warp(1);
