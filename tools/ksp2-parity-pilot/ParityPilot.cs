@@ -211,7 +211,7 @@ namespace OpenSpaceExplorer.Validation
                 yield return Shot("v1-ksc-night-before-vab");
             }
             bool orbital = scenario == "rotation" || scenario == "rcs" || scenario == "docking" || scenario == "thrustwarp" || scenario == "warp" || scenario == "burn" || scenario == "jetpack";
-            var snapshot = IOProvider.FromJsonFile<OABHistoricalSnapshot>(Path.Combine(dir, scenario == "rcs" ? "craft-rcs.json" : (scenario == "jet" || scenario == "jetfly") ? "craft-jet.json" : scenario == "rover" ? "craft-rover.json" : scenario == "legs" ? "craft-legs.json" : scenario == "fuelline" ? "craft-fuelline.json" : scenario == "crossfeed" ? "craft-crossfeed.json" : scenario == "asparagus" ? "craft-asparagus.json" : scenario == "struts" ? "craft-struts.json" : scenario == "transfer" ? "craft-crossfeed.json" : (scenario == "stack" || scenario == "thrustwarp") ? "craft-stack.json" : scenario == "reentry" ? "craft-reentry.json" : scenario == "docking" ? "craft-docking.json" : scenario.StartsWith("drop ") ? "craft-drop-" + scenario.Split(' ')[1] + ".json" : scenario.StartsWith("sepland ") ? "craft-sepland.json" : orbital ? "craft-rotation.json" : (scenario == "k1" || scenario == "partdump") ? "craft-k1.json" : "craft.json"));
+            var snapshot = IOProvider.FromJsonFile<OABHistoricalSnapshot>(Path.Combine(dir, scenario == "rcs" ? "craft-rcs.json" : (scenario == "jet" || scenario == "jetfly") ? "craft-jet.json" : scenario == "rover" ? "craft-rover.json" : (scenario == "legs" || scenario == "legsrunway") ? "craft-legs.json" : scenario == "fuelline" ? "craft-fuelline.json" : scenario == "crossfeed" ? "craft-crossfeed.json" : scenario == "asparagus" ? "craft-asparagus.json" : scenario == "struts" ? "craft-struts.json" : scenario == "transfer" ? "craft-crossfeed.json" : (scenario == "stack" || scenario == "thrustwarp") ? "craft-stack.json" : scenario == "reentry" ? "craft-reentry.json" : scenario == "docking" ? "craft-docking.json" : scenario.StartsWith("drop ") ? "craft-drop-" + scenario.Split(' ')[1] + ".json" : scenario.StartsWith("sepland ") ? "craft-sepland.json" : orbital ? "craft-rotation.json" : (scenario == "k1" || scenario == "partdump") ? "craft-k1.json" : "craft.json"));
             var config = orbital
                 ? new OABConfig(OABVariant.VAB, OABEnvironmentType.Orbital, OABConstructionType.User, null)
                 : new OABConfig(OABVariant.VAB, OABEnvironmentType.Terrestrial, OABConstructionType.User, "Kerbin");
@@ -229,6 +229,8 @@ namespace OpenSpaceExplorer.Validation
                 G.OAB.SetLaunchSite(OABProvider.LaunchLocationNameToEnum("Runway_1"));
                 yield return new WaitForSeconds(2f);
             }
+            // T15 rerun: the pad's flame trench tipped run 16's lander, so this one rolls out on the flat runway
+            if (scenario == "legsrunway") { G.OAB.SetLaunchSite(KSP.Game.OABProvider.LaunchLocation.Runway_1); Mark("launch site Runway_1"); }
             G.OAB.Current.eventsUI.OnLaunch?.Invoke();
             yield return WaitState(GameState.FlightView, 600);
             VesselComponent vessel = null;
@@ -265,7 +267,7 @@ namespace OpenSpaceExplorer.Validation
             if (scenario == "rover") { yield return Rover(vessel); yield break; }
             if (scenario == "eva") { yield return Eva(vessel); yield break; }
             if (scenario == "partdump") { yield return PartDump(vessel); yield break; }
-            if (scenario == "legs") { yield return Legs(vessel); yield break; }
+            if (scenario == "legs" || scenario == "legsrunway") { yield return Legs(vessel); yield break; }
             if (scenario == "stack" || scenario == "struts") { yield return Stack(vessel); yield break; }
             if (scenario == "fuelline" || scenario == "crossfeed" || scenario == "asparagus") { yield return FuelLine(vessel); yield break; }
             if (scenario == "transfer") { yield return Transfer(vessel); yield break; }
