@@ -1,4 +1,8 @@
-"""Build craft-asparagus.json for the KSP2 parity pilot's "asparagus" scenario (T39).
+"""Build craft-asparagus.json and craft-struts.json for the KSP2 parity pilot's "asparagus" and "struts"
+scenarios (T39).
+
+craft-struts.json is the same core and boosters with no fuel lines and one strut, from the +X booster's top to
+the core; the -X booster has none, so one run shows a braced and an unbraced booster side by side.
 
 Pod, 1x4 core tank C, Swivel under it; two radial decouplers on C (+X and -X), each holding a 1x4 booster tank
 with its own Swivel; a fuel line from each booster to the core (first anchor on the booster, far anchor on C).
@@ -68,7 +72,7 @@ def fuel_line_from(strut: dict) -> dict:
     return p
 
 
-def main() -> None:
+def build(kind: str) -> None:
     src = Path(sys.argv[1])
     stack = load(HERE / "craft-stack.json")
     k1 = load(src / "craft-k1.json")["Assemblies"][0]["Assembly"]
@@ -78,7 +82,8 @@ def main() -> None:
     asm = craft["Assemblies"][0]["Assembly"]
     pod, tank, engine = asm["parts"][0], asm["parts"][1], asm["parts"][-1]
     radial = next(p for p in k1["parts"] if p["partName"] == "decoupler_1v_radial")
-    line = fuel_line_from(next(p for p in rover["parts"] if p["partName"] == "strut_1v_extensible"))
+    strut = next(p for p in rover["parts"] if p["partName"] == "strut_1v_extensible")
+    line = fuel_line_from(strut) if kind == "asparagus" else copy.deepcopy(strut)
 
     keys = ["pod", "c", "eng_c", "dec_p", "dec_n", "b_p", "b_n", "eng_p", "eng_n", "lf_p", "le_p", "lf_n", "le_n"]
     ids = {k: str(uuid.UUID(int=0x05E1_0000_0000_0000_0000_0000_0000_0000 + n)) for n, k in enumerate(keys, 1)}
@@ -110,9 +115,12 @@ def main() -> None:
         new.append(part(tank, f"b_{side}", (sign * xb, yc, 0.0), rot,
                         [node("srfAttach", ids[f"dec_{side}"], ""), node("bottom", ids[f"eng_{side}"], "top")]))
         new.append(part(engine, f"eng_{side}", (sign * xb, yeng, 0.0), rot, [node("top", ids[f"b_{side}"], "bottom")]))
-        # the fuel line: first anchor on the booster's inner face near its top, far anchor on the core facing it
-        first = (sign * (xb - 0.625), yc + 0.7, 0.0)
-        far = (sign * 0.625, yc + 0.5, 0.0)
+        if kind == "struts" and side == "n":
+            continue
+        # the fuel line: first anchor on the booster's inner face near its top, far anchor on the core facing it;
+        # the strut: both anchors near the tanks' tops, where it best holds the booster against swinging
+        first = (sign * (xb - 0.625), yc + (0.7 if kind == "asparagus" else 0.85), 0.0)
+        far = (sign * 0.625, yc + (0.5 if kind == "asparagus" else 0.85), 0.0)
         # each anchor's node faces into the part it hangs on: the booster's inner face points at the core
         first_rot, far_rot = (NONE, HALF_Y) if sign > 0 else (HALF_Y, NONE)
 
@@ -127,7 +135,7 @@ def main() -> None:
             (f"le_{side}", far, far_rot, "c", f"lf_{side}", False, tuple(first[i] - far[i] for i in range(3))),
         ):
             p = part(line, key, pos, rot, [node("srfAttach", ids[parent], "")])
-            p["partState"]["FuelCrossfeed"] = True
+            p["partState"]["FuelCrossfeed"] = kind == "asparagus"
             for m in p["PartModulesState"]:
                 for md in m["ModuleData"]:
                     if md["Name"] == "Data_CompoundPart":
@@ -148,11 +156,16 @@ def main() -> None:
     asm["AssemblyOABConfig"]["StagingState"]["availableStages"] = copy.deepcopy(stages)
     asm["AssemblyOABConfig"]["RootGuid"] = guid(ids["pod"])
     meta = craft["Metadata"]
-    meta["Name"] = meta["VehicleName"] = asm["AssemblyDefinition"]["assemblyName"] = "Asparagus"
+    meta["Name"] = meta["VehicleName"] = asm["AssemblyDefinition"]["assemblyName"] = kind.capitalize()
     meta["Parts"] = len(new)
     meta["Stages"] = 2
-    (HERE / "craft-asparagus.json").write_text(json.dumps(craft, indent=1), encoding="utf-8")
-    print("wrote craft-asparagus.json:", [p["partName"] for p in new])
+    (HERE / f"craft-{kind}.json").write_text(json.dumps(craft, indent=1), encoding="utf-8")
+    print(f"wrote craft-{kind}.json:", [p["partName"] for p in new])
+
+
+def main() -> None:
+    build("asparagus")
+    build("struts")
 
 
 if __name__ == "__main__":
