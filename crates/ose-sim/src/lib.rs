@@ -755,8 +755,7 @@ impl Universe {
     /// A Kerbal on EVA runs (held) and jumps (once, from the ground); false for anything else.
     pub fn set_eva(&mut self, e: Entity, run: bool, jump: bool) -> bool {
         // Space lets go of a ladder
-        if jump && self.world.get::<crew::OnLadder>(e).is_some() {
-            self.world.entity_mut(e).remove::<crew::OnLadder>();
+        if jump && self.release_ladder(e) {
             return true;
         }
         match self.world.get_mut::<flight::Powered>(e) {
@@ -1985,6 +1984,9 @@ impl Universe {
             .copied()
             .unwrap_or_default();
         for e in powered_vessels.drain(..) {
+            if self.on_ladder(e).is_some() {
+                continue;
+            }
             let Some(body_e) = self.world.get::<bodies::ReferenceBody>(e).map(|r| r.0) else {
                 continue;
             };
