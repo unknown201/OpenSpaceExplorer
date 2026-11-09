@@ -66,12 +66,10 @@ test("each flight key turns the craft the original's way", async ({ page, baseUR
   await page.locator('[data-ose="craft"]').filter({ hasText: "Stock12_StartRocket" }).click();
   await page.locator('[data-ose="lp-orbit"]').click();
   await expect(page.locator("#status")).toContainText("launched Stock12_StartRocket");
-  await page.locator('[data-ose="ksc-button"]').click();
-  const hints = page.getByRole("button", { name: "No more hints" });
+  // Orbit launches enter flight directly; wait for the same flight readout used by the instruments.
+  await expect(page.locator('[data-ose="flight"].open')).toBeVisible();
+  const hints = page.getByRole('button', { name: 'No more hints' });
   if (await hints.isVisible()) await hints.click();
-  await page.locator('[data-ose="ksc-tracking"]').click();
-  await page.locator('[data-ose="ts-vessel"].mine').filter({ hasText: "Stock12_StartRocket" }).last().click();
-  await page.locator('[data-ose="ts-fly"]').click();
   await expect(page.locator('[data-ose="flight-navball"]')).toHaveAttribute("data-ose-navball", "drawn");
   // [nose toward top, nose toward right, top toward right]
   const [wTop] = await effect(page, "w");

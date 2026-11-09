@@ -54,6 +54,11 @@ fn kerbal_clear_of_the_pod() -> (Universe, Entity, f64) {
     u.set_powered(v, p);
     let jeb = u.go_eva(v, None).unwrap();
     assert_eq!(u.grab_ladder(jeb), Ok(false), "lets go of the ladder");
+    // Match the reference capture: enable the pack explicitly after leaving the hatch.
+    assert_eq!(
+        u.action_group(jeb, ose_sim::ActionGroup::Rcs, Some(true)),
+        Some(true)
+    );
     // 50 m ahead along the same orbit, as the pilot puts it, with its pack still and its attitude free
     let ahead = 50.0 / r;
     let mut k = u.powered(jeb).unwrap().clone();

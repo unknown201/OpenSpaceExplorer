@@ -566,7 +566,7 @@ impl Universe {
             // a jetpack fires on the throttle without staging; on the ground the Kerbal walks
             p.ignited = true;
             p.walker = true;
-            // the jetpack also translates (Space/Shift up, Ctrl down, sideways) like RCS, always on
+            // In space the pack starts off; R enables body-relative translation after release.
             p.rcs.thrust_kn = jetpack.move_force_kn;
             p.rcs.isp_vac_s = isp_vac;
             p.rcs.isp_asl_s = isp_asl;
