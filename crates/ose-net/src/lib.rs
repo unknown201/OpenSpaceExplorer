@@ -185,9 +185,16 @@ pub enum ClientMessage {
         vessel: u64,
         target: u64,
     },
-    /// A Kerbal on EVA standing on the ground plants the agency flag; answers `CrewAck` with the flag.
+    /// A Kerbal on EVA standing on the ground plants the agency flag (one per Kerbal, as KSP2's); answers
+    /// `CrewAck` with the flag.
     PlantFlag {
         vessel: u64,
+    },
+    /// A Kerbal on EVA (`vessel`) takes down a planted flag within reach and carries a flag again; answers
+    /// `CrewAck`.
+    TakeFlag {
+        vessel: u64,
+        flag: u64,
     },
     /// Undock at a docked joint (the docking port part on either side; the last joint when `None`); answers
     /// `Undocked`.
