@@ -8401,6 +8401,11 @@ impl App {
 
     /// Refresh the flight HUD from the vessel's readout.
     fn update_flight_hud(&self) {
+        hud::update_thermal(
+            &self.doc,
+            self.flying
+                .and_then(|id| self.scene.as_ref()?.vessel(id)?.flight.as_ref()),
+        );
         let Some(id) = self.flying else { return };
         if let Some(el) = self.doc.get_element_by_id("flight-hud") {
             el.class_list().toggle_with_force("map", self.map_mode).ok();

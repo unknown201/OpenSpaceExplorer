@@ -5,6 +5,40 @@ use ose_net::{AttitudeMode, ChuteState, FlightReadout, OrbitElements};
 use std::f64::consts::{PI, TAU};
 use web_sys::Document;
 
+/// Persistent heat feedback, driven by authoritative part temperatures, including during cooling
+/// in vacuum. Plasma itself is driven independently by airspeed/density in the 3D renderer.
+pub fn update_thermal(doc: &Document, flight: Option<&FlightReadout>) {
+    let Some(el) = doc.get_element_by_id("fh-thermal") else {
+        return;
+    };
+    let flight = flight.filter(|f| f.situation != ose_net::FlightSituation::Crashed);
+    let fraction = flight
+        .map(|f| crate::reentry::heat_fraction(&f.heat))
+        .unwrap_or(0.0);
+    let heating = flight.is_some_and(|f| {
+        f.atmosphere_density > 0.0
+            && f.mach_number > 1.0
+            && f.heat.iter().any(|h| h.3.is_finite() && h.3 >= 1.0)
+    });
+    let level = crate::reentry::thermal_level(fraction, heating);
+    el.set_attribute("data-level", level).ok();
+    el.set_attribute("data-ose-heat-fraction", &format!("{fraction:.3}"))
+        .ok();
+    let label = match level {
+        "critical" => format!("OVERHEATING · {:.0}% OF LIMIT", fraction * 100.0),
+        "hot" => format!("HIGH TEMPERATURE · {:.0}% OF LIMIT", fraction * 100.0),
+        "heating" => "ATMOSPHERIC HEATING".to_string(),
+        _ => String::new(),
+    };
+    if let Some(text) = doc.get_element_by_id("fh-thermal-text") {
+        text.set_text_content(Some(&label));
+    }
+    if let Some(fill) = doc.get_element_by_id("fh-thermal-fill") {
+        fill.set_attribute("style", &format!("width:{:.1}%", fraction * 100.0))
+            .ok();
+    }
+}
+
 /// SAS buttons in the original's order (`NavballInstrument`), with the mode each selects. Prograde and
 /// retrograde follow the speed mode (surface or orbit) as the original's navball does. Target, anti-target
 /// and maneuver modes have no server counterpart yet and stay disabled.
