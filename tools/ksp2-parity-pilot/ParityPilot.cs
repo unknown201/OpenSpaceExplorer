@@ -211,7 +211,7 @@ namespace OpenSpaceExplorer.Validation
                 yield return Shot("v1-ksc-night-before-vab");
             }
             bool orbital = scenario == "rotation" || scenario == "rcs" || scenario == "docking" || scenario == "thrustwarp" || scenario == "warp" || scenario == "burn" || scenario == "jetpack";
-            var snapshot = IOProvider.FromJsonFile<OABHistoricalSnapshot>(Path.Combine(dir, scenario == "rcs" ? "craft-rcs.json" : (scenario == "jet" || scenario == "jetfly") ? "craft-jet.json" : scenario == "rover" ? "craft-rover.json" : scenario == "legs" ? "craft-legs.json" : scenario == "fuelline" ? "craft-fuelline.json" : scenario == "crossfeed" ? "craft-crossfeed.json" : scenario == "asparagus" ? "craft-asparagus.json" : scenario == "transfer" ? "craft-crossfeed.json" : (scenario == "stack" || scenario == "thrustwarp") ? "craft-stack.json" : scenario == "reentry" ? "craft-reentry.json" : scenario == "docking" ? "craft-docking.json" : scenario.StartsWith("drop ") ? "craft-drop-" + scenario.Split(' ')[1] + ".json" : orbital ? "craft-rotation.json" : (scenario == "k1" || scenario == "partdump") ? "craft-k1.json" : "craft.json"));
+            var snapshot = IOProvider.FromJsonFile<OABHistoricalSnapshot>(Path.Combine(dir, scenario == "rcs" ? "craft-rcs.json" : (scenario == "jet" || scenario == "jetfly") ? "craft-jet.json" : scenario == "rover" ? "craft-rover.json" : scenario == "legs" ? "craft-legs.json" : scenario == "fuelline" ? "craft-fuelline.json" : scenario == "crossfeed" ? "craft-crossfeed.json" : scenario == "asparagus" ? "craft-asparagus.json" : scenario == "transfer" ? "craft-crossfeed.json" : (scenario == "stack" || scenario == "thrustwarp") ? "craft-stack.json" : scenario == "reentry" ? "craft-reentry.json" : scenario == "docking" ? "craft-docking.json" : scenario.StartsWith("drop ") ? "craft-drop-" + scenario.Split(' ')[1] + ".json" : scenario.StartsWith("sepland ") ? "craft-sepland.json" : orbital ? "craft-rotation.json" : (scenario == "k1" || scenario == "partdump") ? "craft-k1.json" : "craft.json"));
             var config = orbital
                 ? new OABConfig(OABVariant.VAB, OABEnvironmentType.Orbital, OABConstructionType.User, null)
                 : new OABConfig(OABVariant.VAB, OABEnvironmentType.Terrestrial, OABConstructionType.User, "Kerbin");
@@ -271,6 +271,7 @@ namespace OpenSpaceExplorer.Validation
             if (scenario == "transfer") { yield return Transfer(vessel); yield break; }
             if (scenario == "reentry") { yield return Reentry(vessel); yield break; }
             if (scenario.StartsWith("drop ")) { yield return Drop(vessel, double.Parse(scenario.Split(' ')[2], CultureInfo.InvariantCulture)); yield break; }
+            if (scenario.StartsWith("sepland ")) { yield return SepLand(vessel, double.Parse(scenario.Split(' ')[1], CultureInfo.InvariantCulture)); yield break; }
             if (scenario == "visuals")
             {
                 SetGroup(KSPActionGroup.Lights, true);
@@ -780,6 +781,48 @@ namespace OpenSpaceExplorer.Validation
             File.WriteAllText(Path.Combine(dir, "out", "done.txt"), "ok");
             yield return new WaitForSeconds(2f);
             Application.Quit();
+        }
+
+        // Craft-on-craft contact: the pod over a decoupler over a 1x2 tank, put about 1 m above the pad falling at
+        // `speed`, decoupled at once; the tank lands and the pod comes down on it. Every tick, every vessel within
+        // 50 m: its parts, height, vertical and horizontal speed and situation (sepland-vessels.csv), for 10 s.
+        IEnumerator SepLand(VesselComponent vessel, double speed)
+        {
+            var inv = CultureInfo.InvariantCulture;
+            var state = new KSP.Sim.State.SurfaceTeleportState { ReferenceBodyGuid = vessel.mainBody.Name, Altitude = 1.0, Latitude = vessel.Latitude, Longitude = vessel.Longitude, VerticalSpeed = -speed };
+            Begin(vessel, "drop-trace.csv");
+            using (var w = new StreamWriter(Path.Combine(dir, "out", "sepland-vessels.csv"), false))
+            {
+                w.WriteLine("t,vessel,parts,names,alt_m,vspeed,hspeed,situation,ut");
+                G.SpaceSimulation.TeleportSimObjectToSurface(vessel.SimulationObject, state);
+                Mark("teleported, falling at " + speed.ToString(inv));
+                bool staged = false;
+                float t = 0;
+                while (t < 10f)
+                {
+                    yield return new WaitForFixedUpdate();
+                    t = (float)(G.UniverseModel.UniverseTime - start);
+                    var active = G.ViewController.GetActiveSimVessel();
+                    if (!staged && active != null && active.Situation == VesselSituations.Flying && active.VerticalSrfSpeed < -0.5)
+                    {
+                        active.ActivateNextStage();
+                        staged = true;
+                        Mark("decoupled at " + t.ToString("F2", inv));
+                    }
+                    var here = active != null ? active.SimulationObject.Position : vessel.SimulationObject.Position;
+                    foreach (var v in G.UniverseModel.GetAllVesselsInRange(here, 50.0))
+                    {
+                        var names = new System.Collections.Generic.List<string>();
+                        foreach (var part in v.SimulationObject.PartOwner.Parts) names.Add(part.Name);
+                        w.WriteLine(t.ToString("F3", inv) + "," + v.GlobalId.ToString().Substring(0, 8) + "," + names.Count + "," + string.Join(" ", names) + ","
+                            + v.AltitudeFromSeaLevel.ToString("R", inv) + "," + v.VerticalSrfSpeed.ToString("R", inv) + "," + v.HorizontalSrfSpeed.ToString("R", inv) + "," + v.Situation + ","
+                            + G.UniverseModel.UniverseTime.ToString("R", inv));
+                    }
+                }
+            }
+            yield return Shot("20-sepland");
+            Stop();
+            yield return Finish("sepland");
         }
 
         // the end of a scenario: a last screenshot, the done marker, quit
