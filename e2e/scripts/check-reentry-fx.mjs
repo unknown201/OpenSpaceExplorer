@@ -4,7 +4,7 @@ import fs from 'node:fs';import path from 'node:path';import assert from 'node:a
 import {fileURLToPath} from 'node:url';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../..');
 const out=path.join(root,'.cache/vfx-fix/reentry');fs.mkdirSync(out,{recursive:true});
-const browser=await chromium.launch({executablePath:process.env.OSE_CHROMIUM_EXECUTABLE,args:['--enable-unsafe-webgpu','--ignore-gpu-blocklist']});
+const browser=await chromium.launch({channel:'chromium',executablePath:process.env.OSE_CHROMIUM_EXECUTABLE,args:['--enable-unsafe-webgpu','--ignore-gpu-blocklist',...(process.platform==='win32'?['--disable-dawn-features=use_dxc']:[])]});
 try {
  const page=await browser.newPage({viewport:{width:650,height:650}}),errors=[];
  page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});
@@ -14,9 +14,9 @@ try {
  let animated=0;
  for(const part of ['pod_1v_conical_crew','engine_1v_methalox_swivel','fueltank_1v_inline_methalox_1x4']) {
   await page.waitForFunction(part=>{window.fx.fx_fixture_reentry(part,0,1,0);return window.fx.fx_fixture_ready('reentry:'+part);},part,{timeout:30000});
-  for(const [name,speed,density] of [['cold',40,1],['vacuum',3000,0],['hot',3000,0.05]]) {
+  for(const [name,speed,density] of [['cold',40,1],['vacuum',3000,0],['hot',3000,0.05],['thin-air',3000,0.0005],['cooled',40,1],['exited',3000,0]]) {
    const count=await page.evaluate(({part,speed,density})=>window.fx.fx_fixture_reentry(part,speed,density,0.2),{part,speed,density});
-   assert.ok(name==='hot'?count>0:count===0,`${part}: ${name} produced ${count} layers`);
+   assert.ok(['hot','thin-air'].includes(name)?count>0:count===0,`${part}: ${name} produced ${count} layers`);
    await page.locator('#fx-fixture').screenshot({path:path.join(out,`${part}-${name}.png`)});
   }
   const frames=[];
@@ -33,7 +33,7 @@ try {
    frames.push(await page.locator('#fx-fixture').screenshot({path:path.join(out,`${part}-animated-${time}.png`)}));
   }
   if(!frames[0].equals(frames[1])) animated++;
-  console.log(`${part}: cold/vacuum off, hot shockwave active; original records and occlusion captured`);
+  console.log(`${part}: hot/thin-air active, cold/vacuum and cooled/exited off; original records and occlusion captured`);
  }
  assert.deepEqual(errors,[]);
  assert.ok(animated>0,'original noise animation did not change any shape');

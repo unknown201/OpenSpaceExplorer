@@ -1904,7 +1904,9 @@ impl FlightView {
                             vessel_rot * *lq,
                             pos - cam + vessel_rot * (*lp + origin),
                         ),
-                        throttle: if f.situation == ose_net::FlightSituation::Crashed {
+                        throttle: if f.situation == ose_net::FlightSituation::Crashed
+                            || f.shielded.contains(&(*pi as u16))
+                        {
                             0.0
                         } else {
                             1.0

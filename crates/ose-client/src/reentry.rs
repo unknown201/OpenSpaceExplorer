@@ -13,8 +13,15 @@ pub struct State {
     pub gradient: u8,
 }
 pub fn intensity(settings: &Value, state: State) -> f64 {
-    if state.density < number(settings, "ReentryMinAtmosphereActivationThreshold", 0.001)
+    // The contextual manager gates on the calculated intensity, not a fixed air-density
+    // threshold. Thin upper atmosphere can still produce plasma at orbital speeds.
+    if !state.density.is_finite()
+        || !state.speed.is_finite()
+        || !state.mach.is_finite()
+        || !state.altitude.is_finite()
+        || state.density <= 0.0
         || state.speed <= 0.0
+        || state.mach <= 1.0
     {
         return 0.0;
     }
@@ -29,10 +36,36 @@ pub fn intensity(settings: &Value, state: State) -> f64 {
     let intensity = curve(&settings["AltitudeCurve"], state.altitude)
         * curve(&settings["VelocityCurve"], state.speed)
         * (low + (high - low) * blend);
-    if intensity < number(settings, "ReentryMinimumIntensity", 0.05) {
+    let minimum = number(settings, "ReentryMinimumIntensity", 0.05).clamp(0.0, 0.999);
+    if intensity <= minimum {
         0.0
     } else {
-        intensity.clamp(0.0, 1.0)
+        // FXReentryContextualManager.Update remaps the activation threshold to zero.
+        ((intensity - minimum) / (1.0 - minimum)).clamp(0.0, 1.0)
+    }
+}
+
+/// Hottest surviving part as a fraction of its destruction temperature. Remains meaningful
+/// after leaving the atmosphere: stopping the incoming heat does not instantly cool the craft.
+pub fn heat_fraction(heat: &[(u16, f32, f32, f32)]) -> f32 {
+    heat.iter()
+        .filter(|(_, temperature, limit, _)| {
+            temperature.is_finite() && limit.is_finite() && *limit > 0.0
+        })
+        .map(|(_, temperature, limit, _)| (temperature / limit).clamp(0.0, 1.0))
+        .fold(0.0, f32::max)
+}
+
+/// OSE warning thresholds; these are presentation tuning, not simulation damage limits.
+pub fn thermal_level(fraction: f32, heating: bool) -> &'static str {
+    if fraction >= 0.85 {
+        "critical"
+    } else if fraction >= 0.65 {
+        "hot"
+    } else if heating {
+        "heating"
+    } else {
+        "off"
     }
 }
 pub fn vessel_data(settings: &Value, state: State, intensity: f64) -> [f32; 40] {
@@ -90,6 +123,87 @@ pub fn vessel_data(settings: &Value, state: State, intensity: f64) -> [f32; 40] 
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn activation_settings() -> Value {
+        // Constant flux curves isolate the velocity/density activation path from the shader.
+        serde_json::json!({
+            "ReentryMinAtmosphereActivationThreshold": 0.001,
+            "ReentryMinimumIntensity": 0.05,
+            "LowDensityFluxCurve": {"m_Curve":[{"time":0,"value":1}]},
+            "HighDensityFluxCurve": {"m_Curve":[{"time":0,"value":1}]},
+            "AltitudeCurve": {"m_Curve":[{"time":0,"value":1}]},
+            "VelocityCurve": {"m_Curve":[{"time":0,"value":0},{"time":3000,"value":1}]}
+        })
+    }
+    #[test]
+    fn orbital_speed_in_thin_air_still_produces_plasma() {
+        let settings = activation_settings();
+        let mut state = State {
+            density: 0.0005,
+            speed: 3000.0,
+            mach: 10.0,
+            altitude: 50000.0,
+            ..Default::default()
+        };
+        assert_eq!(intensity(&settings, state), 1.0);
+        state.density = 0.0;
+        assert_eq!(intensity(&settings, state), 0.0);
+        state.density = 1.0;
+        state.speed = 40.0;
+        state.mach = 0.12;
+        assert_eq!(intensity(&settings, state), 0.0);
+    }
+    #[test]
+    fn onset_is_remapped_and_bad_telemetry_cannot_reach_the_gpu() {
+        let mut settings = activation_settings();
+        settings["VelocityCurve"] = serde_json::json!({"m_Curve":[{"time":0,"value":0.525}]});
+        let state = State {
+            density: 0.01,
+            speed: 2000.0,
+            mach: 7.0,
+            altitude: 30000.0,
+            ..Default::default()
+        };
+        assert!((intensity(&settings, state) - 0.5).abs() < 1e-9);
+        assert_eq!(
+            intensity(
+                &settings,
+                State {
+                    density: f64::NAN,
+                    ..state
+                }
+            ),
+            0.0
+        );
+        assert_eq!(
+            intensity(
+                &settings,
+                State {
+                    mach: f64::INFINITY,
+                    ..state
+                }
+            ),
+            0.0
+        );
+        settings["VelocityCurve"] = serde_json::json!({"m_Curve":[{"time":0,"value":0.05}]});
+        assert_eq!(intensity(&settings, state), 0.0);
+    }
+    #[test]
+    fn heat_feedback_tracks_the_hottest_part_even_without_incoming_flux() {
+        assert_eq!(heat_fraction(&[]), 0.0);
+        assert_eq!(
+            heat_fraction(&[
+                (0, 900.0, 1000.0, 0.0),
+                (1, 400.0, 2000.0, 50.0),
+                (2, 500.0, 0.0, 0.0)
+            ]),
+            0.9
+        );
+        assert_eq!(heat_fraction(&[(0, f32::NAN, 1000.0, 0.0)]), 0.0);
+        assert_eq!(thermal_level(0.9, false), "critical");
+        assert_eq!(thermal_level(0.7, false), "hot");
+        assert_eq!(thermal_level(0.4, true), "heating");
+        assert_eq!(thermal_level(0.4, false), "off");
+    }
     #[test]
     fn empty_air_and_slow_unpowered_flight_do_not_create_plasma() {
         let settings = serde_json::json!({"ReentryMinAtmosphereActivationThreshold":0.001});
