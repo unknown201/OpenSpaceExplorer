@@ -278,6 +278,10 @@ pub struct PartDef {
     /// adapters that do not float).
     #[serde(default = "one")]
     pub buoyancy: f64,
+    /// `PartData.angularDrag` (2 on most stock parts, 1 by default): KSP2 damps the part's own spin by
+    /// `angularDrag x dynamic pressure (atm) x AngularDragMultiplier` per second (`RigidbodyBehavior`).
+    #[serde(default = "one")]
+    pub angular_drag: f64,
     /// The blast of the part's engine exhaust on parts in its path (its first engine mode's
     /// `exhaustDamage` settings); `None` for parts whose exhaust harms nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]

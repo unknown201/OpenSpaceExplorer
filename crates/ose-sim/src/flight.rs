@@ -1725,7 +1725,8 @@ fn turn_with_parts(
             for _ in 0..4 {
                 let midpoint = (w1 + next) * 0.5;
                 let w = DVec3::new(midpoint.dot(x), midpoint.dot(facing), midpoint.dot(top));
-                let a = inertia.solve(t - w.cross(lever.apply(w)));
+                let a =
+                    inertia.solve(t - w.cross(lever.apply(w)) - engine.angular_damping.apply(w));
                 next = w1 + (x * a.x + facing * a.y + top * a.z) * h;
             }
             facing = rotate(facing, next, h);
@@ -1740,7 +1741,12 @@ fn turn_with_parts(
             let y = rotate(facing, midpoint_w, h * 0.5);
             let z = rotate(top, midpoint_w, h * 0.5);
             let x = y.cross(z);
-            let t = x * torque_body.x + y * torque_body.y + z * torque_body.z + external;
+            let w_local = DVec3::new(midpoint_w.dot(x), midpoint_w.dot(y), midpoint_w.dot(z));
+            let damping = engine.angular_damping.apply(w_local);
+            let t = x * (torque_body.x - damping.x)
+                + y * (torque_body.y - damping.y)
+                + z * (torque_body.z - damping.z)
+                + external;
             next_momentum = momentum + t * h;
             let mid = (momentum + next_momentum) * 0.5;
             let local_w = inertia.solve(DVec3::new(mid.dot(x), mid.dot(y), mid.dot(z)));
@@ -1850,6 +1856,9 @@ pub struct Propulsion {
     pub control_allocation: Option<crate::actuators::Allocation>,
     /// PhysX 4.1 omits each rigid body's own gyroscopic term; joint lever masses still contribute.
     pub gyroscopic_compensation: crate::dynamics::Inertia,
+    /// Air damping of the craft's spin, kN*m per rad/s about each control axis: the sum over parts of their
+    /// own inertia times KSP2's angular drag rate (`Structure::configure_actuators`).
+    pub angular_damping: crate::dynamics::Inertia,
     /// PartOwnerComponent reports origin-translated MOI to SAS, separately from physical COM inertia.
     pub controller_inertia: Option<crate::dynamics::Inertia>,
     /// Source ITorqueProvider potential in control axes, distinct from actual actuator limits.

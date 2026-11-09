@@ -98,6 +98,9 @@ impl Airflow {
     }
 }
 
+/// KSP2's `PhysicsSettings.AngularDragMultiplier`.
+pub const ANGULAR_DRAG_MULTIPLIER: f64 = 2.0;
+
 #[derive(Component)]
 pub struct Structure {
     pub rigid: RigidVessel,
@@ -197,6 +200,8 @@ pub struct Structure {
     pub(crate) water_strikes: Vec<(usize, f64)>,
     /// Each part's `buoyancy` scale and the water it displaces fully under, m^3 (`water::displacement_m3`).
     pub buoyancy: Vec<f64>,
+    /// Each part's `angularDrag` (`PartData`), which damps its own spin in air.
+    pub angular_drag: Vec<f64>,
     pub displacement_m3: Vec<f64>,
     /// Each part's water drag state.
     pub(crate) water_drag: Vec<crate::water::WaterDrag>,
@@ -902,6 +907,9 @@ impl Structure {
             water_strikes: Vec::new(),
             buoyancy: (0..n)
                 .map(|i| def_of(i).map(|d| d.buoyancy).unwrap_or(1.0))
+                .collect(),
+            angular_drag: (0..n)
+                .map(|i| def_of(i).map(|d| d.angular_drag).unwrap_or(1.0))
                 .collect(),
             displacement_m3: (0..n)
                 .map(|i| {
@@ -2011,6 +2019,38 @@ impl Structure {
         use crate::actuators::Actuator;
         let mut channels = Vec::new();
         let centre = propulsion.mass.centre_m;
+        // KSP2 sets each part's PhysX angular drag to angularDrag x dynamic pressure (atm) x
+        // AngularDragMultiplier (`RigidbodyBehavior`); PhysX damps each body's own spin by it, so the craft
+        // loses angular momentum at that rate times each part's own inertia, not its lever about the centre
+        let q_atm = 0.5 * env.density * env.airspeed.length_squared() / 101_325.0;
+        let mut damped = crate::dynamics::Inertia::default();
+        if q_atm > 0.0 {
+            for (i, mass) in self.part_masses().into_iter().enumerate() {
+                if !self.rigid.present[i] || !self.net.present[i] || self.angular_drag[i] <= 0.0 {
+                    continue;
+                }
+                let axes = self.part_axes(i);
+                let tensor = self.geometry[i].inertia_per_t.unwrap_or_else(|| {
+                    let size = self.rigid.sizes_m[i];
+                    [
+                        DVec3::new((size.y * size.y + size.z * size.z) / 12., 0., 0.),
+                        DVec3::new(0., (size.x * size.x + size.z * size.z) / 12., 0.),
+                        DVec3::new(0., 0., (size.x * size.x + size.y * size.y) / 12.),
+                    ]
+                });
+                let factor =
+                    self.rigid
+                        .inertia_factor(i, self.geometry[i].inertia_mode, mass.max(0.001));
+                let rate = self.angular_drag[i] * q_atm * ANGULAR_DRAG_MULTIPLIER;
+                damped.add_tensor(
+                    mass * rate,
+                    tensor.map(|v| v * factor),
+                    [axes[0], axes[1], -axes[2]],
+                    DVec3::ZERO,
+                );
+            }
+        }
+        propulsion.angular_damping = damped;
         if self.geometry.iter().any(|g| g.inertia_mode == 2) {
             let mut own = crate::dynamics::Inertia::default();
             let mut controller = crate::dynamics::Inertia::default();
