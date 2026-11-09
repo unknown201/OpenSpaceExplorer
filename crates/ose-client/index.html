@@ -415,6 +415,11 @@
     .fh-small { font-size: calc(13 * var(--u)); color: #cfd6e6; }
     .fh-top { position: absolute; top: calc(12 * var(--u)); left: 50%; transform: translateX(-50%); text-align: center; background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)); padding: calc(6 * var(--u)) calc(24 * var(--u)); }
     #fh-altitude { font: 700 calc(30 * var(--u)) var(--ui-font); font-variant-numeric: tabular-nums; color: #fff; }
+    #fh-thermal { display: none; margin-top: calc(8 * var(--u)); color: #ffcf83; font-size: calc(12 * var(--u)); font-weight: 700; letter-spacing: 0.04em; }
+    #fh-thermal:not([data-level="off"]) { display: block; }
+    #fh-thermal[data-level="critical"] { color: #ff7668; }
+    .fh-thermal-track { height: calc(4 * var(--u)); margin-top: calc(5 * var(--u)); background: #ffffff22; border-radius: calc(2 * var(--u)); overflow: hidden; }
+    #fh-thermal-fill { height: 100%; background: currentColor; transition: width 0.2s linear; }
     .fh-bottom { position: absolute; bottom: calc(16 * var(--u)); left: 50%; transform: translateX(-50%); display: flex; gap: calc(12 * var(--u)); align-items: stretch; }
     .fh-core { background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(8 * var(--u)); padding: calc(10 * var(--u)) calc(16 * var(--u)); display: flex; flex-direction: column; gap: calc(8 * var(--u)); min-width: calc(420 * var(--u)); }
     .fh-row { display: flex; gap: calc(10 * var(--u)); align-items: center; justify-content: center; }
@@ -1628,7 +1633,7 @@
     <button id="ts-back" data-ose="ts-back" data-loc="HUD/VesselStatus/BackToKSC">Back to KSC</button>
   </div>
   <div id="flight-hud" data-ose="flight">
-    <div class="fh-top"><div id="fh-recoverable" data-ose="flight-recoverable" title="Landed on Kerbin: Recover brings the crew, parts and science home">// <span data-loc="HUD/VesselStatus/Recoverable">RECOVERABLE</span> //</div><div id="fh-situation" class="fh-small">--</div><div id="fh-met" class="fh-small" data-ose="flight-met" title="Mission elapsed time" data-loc-title="HUD/Tooltips/MissionElapsedTime"></div><div id="fh-note" class="fh-small" style="color:#f0a070"></div><div id="fh-running" class="fh-small" data-ose="flight-running" style="color:#8fd08f"></div><div id="fh-control" data-ose="flight-control" style="color:#ff6a5a;font-weight:700"></div></div>
+    <div class="fh-top"><div id="fh-recoverable" data-ose="flight-recoverable" title="Landed on Kerbin: Recover brings the crew, parts and science home">// <span data-loc="HUD/VesselStatus/Recoverable">RECOVERABLE</span> //</div><div id="fh-situation" class="fh-small">--</div><div id="fh-met" class="fh-small" data-ose="flight-met" title="Mission elapsed time" data-loc-title="HUD/Tooltips/MissionElapsedTime"></div><div id="fh-note" class="fh-small" style="color:#f0a070"></div><div id="fh-running" class="fh-small" data-ose="flight-running" style="color:#8fd08f"></div><div id="fh-control" data-ose="flight-control" style="color:#ff6a5a;font-weight:700"></div><div id="fh-thermal" data-ose="flight-thermal" data-level="off" title="Hottest part as a fraction of its maximum temperature"><span id="fh-thermal-text"></span><div class="fh-thermal-track"><div id="fh-thermal-fill"></div></div></div></div>
     <div class="fh-bottom">
       <div class="fh-thr-col"><button id="fh-full" class="fh-thr-btn" data-ose="flight-throttle-full" title="Full throttle (Z)">&#9650;</button><div class="fh-throttle" title="Throttle: hold Shift / Ctrl, Z full, X cut"><div id="fh-throttle-fill"></div><span>THR</span><span id="fh-throttle-pct">0%</span></div><button id="fh-cut" class="fh-thr-btn" data-ose="flight-throttle-cut" title="Cut the throttle (X)">&#9660;</button></div>
       <div class="fh-ball">
