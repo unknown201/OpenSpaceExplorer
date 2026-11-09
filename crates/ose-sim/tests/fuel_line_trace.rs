@@ -12,11 +12,13 @@ use ose_sim::resources::{Instruction, Request};
 use ose_sim::structure::Structure;
 
 fn craft() -> (Craft, Vec<PartDef>, Vec<ResourceDef>) {
-    let v: serde_json::Value = serde_json::from_str(
-        include_str!("../../../tools/ksp2-parity-pilot/craft-fuelline.json")
-            .trim_start_matches('\u{feff}'),
-    )
-    .unwrap();
+    craft_from(include_str!(
+        "../../../tools/ksp2-parity-pilot/craft-fuelline.json"
+    ))
+}
+
+fn craft_from(json: &str) -> (Craft, Vec<PartDef>, Vec<ResourceDef>) {
+    let v: serde_json::Value = serde_json::from_str(json.trim_start_matches('\u{feff}')).unwrap();
     let craft = ose_importer::craft::craft_from_value(&v).unwrap();
     let defs: Vec<PartDef> =
         serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
@@ -259,4 +261,48 @@ fn draining_across_a_switched_on_decoupler_matches_the_ksp2_trace() {
         checked += 1;
     }
     assert!(checked > 100);
+}
+
+/// Asparagus against KSP2 (pilot scenario `asparagus`, run 2026-11-08, `tests/data/ksp2-asparagus-tanks.csv`):
+/// a core tank and two radial boosters, each with a Swivel, and a fuel line from each booster into the core.
+/// The core engine draws the boosters over the lines, so they empty first (19.6 s in KSP2) while the core
+/// stays full, then the core alone (empty at 48.7 s). Every second, each tank within 1% of its capacity.
+#[test]
+fn asparagus_drain_order_matches_the_ksp2_trace() {
+    let (craft, defs, res) = craft_from(include_str!(
+        "../../../tools/ksp2-parity-pilot/craft-asparagus.json"
+    ));
+    let tanks: Vec<usize> = (0..craft.parts.len())
+        .filter(|&i| craft.parts[i].part_id.starts_with("fueltank"))
+        .collect();
+    // core first, then the +X and -X boosters, as the craft lists them
+    let (core, plus, minus) = (tanks[0], tanks[1], tanks[2]);
+    let trace = burn(&craft, &defs, &res, 400.0);
+    let mut checked = 0;
+    for line in include_str!("data/ksp2-asparagus-tanks.csv")
+        .lines()
+        .filter(|l| !l.starts_with('#') && !l.starts_with("t,"))
+    {
+        let f: Vec<&str> = line.split(',').collect();
+        let t: f64 = f[0].parse().unwrap();
+        let part = match f[1] {
+            "C" => core,
+            "P" => plus,
+            _ => minus,
+        };
+        let want: f64 = f[3].parse().unwrap();
+        let got = stored(
+            &trace,
+            t.clamp(0.02, trace.last().unwrap().0),
+            part,
+            "Oxidizer",
+        );
+        assert!(
+            (got - want).abs() < 0.016,
+            "t {t} s tank {}: OSE {got:.4} vs KSP2 {want:.4}",
+            f[1]
+        );
+        checked += 1;
+    }
+    assert!(checked > 140);
 }
