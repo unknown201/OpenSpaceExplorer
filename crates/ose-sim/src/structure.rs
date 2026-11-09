@@ -4580,9 +4580,9 @@ impl Structure {
         }
         let cube = self.fairing_cube.get(i)?.as_ref()?;
         let mut faces = Faces::from_cube(cube);
-        for &(dir, size, other) in &self.face_covers[i] {
+        for &(dir, area, other) in &self.face_covers[i] {
             if self.rigid.present[other] {
-                faces.occlude(dir, size);
+                faces.cover(dir, area);
             }
         }
         Some(faces)
