@@ -3070,6 +3070,65 @@ mod tests {
     }
 
     #[test]
+    fn ksp2_k1_part_drag_matches_run_20() {
+        // KSP2 trace run 20 (reference/ksp2-run20-k1-drag): every part's DragForce on the stock Kerbal K1
+        // climbing through Mach 1.152 (air 0.915 kg/m3, 378.8 m/s) and Mach 2.001 (0.599 kg/m3, 626.1 m/s), kN.
+        // Stack faces are covered as `Module_Drag.SetExposedArea` covers them: by the cross-section of the
+        // part on the node, and of the part beyond a thin one (the reaction wheel under the decoupler and the
+        // pod gets no end-on drag, the boosters keep a sliver of their tops).
+        let (_u, _body, _spec, mut st) = k1_on_real_kerbin();
+        let basis = structure::basis(DVec3::new(0.0, 0.0, 1.0));
+        // (Mach, air density kg/m3, speed m/s, KSP2's drag per part kN)
+        type Case<'a> = (f64, f64, f64, [(&'a str, f64); 8]);
+        let cases: [Case; 2] = [
+            (
+                1.152,
+                0.915365,
+                378.834,
+                [
+                    ("booster_1v_solid_hammer", 30.92),
+                    ("decoupler_1v_radial", 31.79),
+                    ("nosecone_1v_hemisphere", 44.79),
+                    ("storage_0v_battery_electricity_radial", 28.84),
+                    ("pod_1v_conical_crew", 2.38),
+                    ("parachute_0v", 2.18),
+                    ("solararray_0v_flat", 3.26),
+                    ("stabilizer_1v_reactionwheel", 0.02),
+                ],
+            ),
+            (
+                2.001,
+                0.599004,
+                626.12,
+                [
+                    ("booster_1v_solid_hammer", 32.42),
+                    ("decoupler_1v_radial", 35.07),
+                    ("nosecone_1v_hemisphere", 41.46),
+                    ("storage_0v_battery_electricity_radial", 30.89),
+                    ("pod_1v_conical_crew", 1.99),
+                    ("parachute_0v", 2.0),
+                    ("solararray_0v_flat", 3.3),
+                    ("stabilizer_1v_reactionwheel", 0.02),
+                ],
+            ),
+        ];
+        for (mach, rho, speed, parts) in cases {
+            st.aero(0, basis, basis.1 * speed, rho, mach);
+            let q = 0.5 * rho * speed * speed / 1000.0;
+            for (id, ksp2) in parts {
+                let ose: f64 = (0..st.rigid.len())
+                    .filter(|&i| st.part_ids[i] == id)
+                    .map(|i| st.part_cda_m2[i] * q)
+                    .sum();
+                assert!(
+                    (ose - ksp2).abs() < 0.05 * ksp2 + 0.1,
+                    "Mach {mach} {id}: {ose:.2} kN, KSP2 {ksp2} kN"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn sunlight_falls_off_with_distance_and_planets_cast_shadows() {
         let bodies: Vec<ose_data::CelestialBody> =
             serde_json::from_str(include_str!("../../../assets/own/kerbol-system.json")).unwrap();

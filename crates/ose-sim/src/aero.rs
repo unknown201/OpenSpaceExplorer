@@ -104,6 +104,28 @@ impl Default for DragCurves {
     }
 }
 
+/// The cube face a direction points through (cube order `+X, -X, +Y, -Y, +Z, -Z`).
+fn face_of(d: DVec3) -> usize {
+    let (ax, ay, az) = (d.x.abs(), d.y.abs(), d.z.abs());
+    if ay >= ax && ay >= az {
+        if d.y >= 0.0 {
+            2
+        } else {
+            3
+        }
+    } else if ax >= az {
+        if d.x >= 0.0 {
+            0
+        } else {
+            1
+        }
+    } else if d.z >= 0.0 {
+        4
+    } else {
+        5
+    }
+}
+
 /// Face normals in the cube order `+X, -X, +Y, -Y, +Z, -Z` (part space, Unity axes).
 const NORMALS: [(f64, f64, f64); 6] = [
     (1.0, 0.0, 0.0),
@@ -170,31 +192,20 @@ impl Faces {
     }
 
     /// Cover the face an attach node sits on by the node's cross-section (`SetExposedArea`).
+    /// `Module_Drag.SetExposedArea`: take `area` off the face a stack node points through (`node_dir`, part
+    /// frame), never below zero.
+    pub fn cover(&mut self, node_dir: DVec3, area: f64) {
+        let face = face_of(node_dir);
+        self.area[face] = (self.area[face] - area).max(0.0);
+    }
+
     pub fn occlude(&mut self, node_dir: DVec3, node_size: i32) {
         let diameter = match node_size {
             s if s <= 0 => 0.625,
             s => 1.25 * s as f64,
         };
         let covered = std::f64::consts::FRAC_PI_4 * diameter * diameter;
-        let (ax, ay, az) = (node_dir.x.abs(), node_dir.y.abs(), node_dir.z.abs());
-        let face = if ay >= ax && ay >= az {
-            if node_dir.y >= 0.0 {
-                2
-            } else {
-                3
-            }
-        } else if ax >= az {
-            if node_dir.x >= 0.0 {
-                0
-            } else {
-                1
-            }
-        } else if node_dir.z >= 0.0 {
-            4
-        } else {
-            5
-        };
-        self.area[face] = (self.area[face] - covered).max(0.0);
+        self.cover(node_dir, covered);
     }
 
     /// `Data_Drag.GetAeroDataForDirection` lift contribution of the exposed faces, part-local.
