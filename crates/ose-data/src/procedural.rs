@@ -596,6 +596,109 @@ pub fn drag_cube(points: &[[f64; 3]], tris: &[[u32; 3]]) -> Cube {
     Cube { area, center, size }
 }
 
+/// The whole drag cube the original renders (`DragCubeGenerator.RenderDragCubes` +
+/// `DragRenderer.CalculateAerodynamics`) for a part's own mesh: per face, the silhouette area as `drag_cube`,
+/// the mean drag of the surface the camera sees first (the drag shader's red channel, taken as the cosine
+/// between that surface and the view; `DRAG_CURVE` is the identity) and the depth of the farthest such
+/// surface from the camera plane (`AERO_CAMERA_OFFSET` 0.1 m outside the bounds).
+pub fn render_drag_cube(name: &str, points: &[[f64; 3]], tris: &[[u32; 3]]) -> crate::DragCube {
+    let base = drag_cube(points, tris);
+    let mut drag = [0.0; 6];
+    let mut depth = [0.0; 6];
+    let n = DRAG_RESOLUTION;
+    let (lo, hi) = (
+        sub(base.center, scale3(base.size, 0.5)),
+        add(base.center, scale3(base.size, 0.5)),
+    );
+    for axis in 0..3 {
+        let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
+        let side = base.size[u].max(base.size[v]);
+        if side <= 0.0 {
+            continue;
+        }
+        let px = side / n as f64;
+        // nearest surface seen from + (largest coordinate) and from - (smallest): (coordinate, drag)
+        let mut plus = vec![(f64::NEG_INFINITY, 0.0); n * n];
+        let mut minus = vec![(f64::INFINITY, 0.0); n * n];
+        for t in tris {
+            let (Some(a), Some(b), Some(c)) = (
+                points.get(t[0] as usize),
+                points.get(t[1] as usize),
+                points.get(t[2] as usize),
+            ) else {
+                continue;
+            };
+            let normal = cross(sub(*b, *a), sub(*c, *a));
+            let nl = len(normal);
+            if nl < 1e-12 {
+                continue;
+            }
+            let cos = (normal[axis] / nl).abs();
+            let to_px = |p: &[f64; 3]| {
+                (
+                    (p[u] - base.center[u]) / px + n as f64 / 2.0,
+                    (p[v] - base.center[v]) / px + n as f64 / 2.0,
+                    p[axis],
+                )
+            };
+            let (a, b, c) = (to_px(a), to_px(b), to_px(c));
+            let area2 = (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0);
+            if area2.abs() < 1e-12 {
+                continue;
+            }
+            let x0 = (a.0.min(b.0).min(c.0).floor().max(0.0)) as usize;
+            let x1 = (a.0.max(b.0).max(c.0).ceil().min(n as f64)) as usize;
+            let y0 = (a.1.min(b.1).min(c.1).floor().max(0.0)) as usize;
+            let y1 = (a.1.max(b.1).max(c.1).ceil().min(n as f64)) as usize;
+            for ix in x0..x1 {
+                let x = ix as f64 + 0.5;
+                for iy in y0..y1 {
+                    let y = iy as f64 + 0.5;
+                    let w0 = ((b.0 - x) * (c.1 - y) - (b.1 - y) * (c.0 - x)) / area2;
+                    let w1 = ((c.0 - x) * (a.1 - y) - (c.1 - y) * (a.0 - x)) / area2;
+                    let w2 = 1.0 - w0 - w1;
+                    if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
+                        continue;
+                    }
+                    let d = w0 * a.2 + w1 * b.2 + w2 * c.2;
+                    let k = ix * n + iy;
+                    if d > plus[k].0 {
+                        plus[k] = (d, cos);
+                    }
+                    if d < minus[k].0 {
+                        minus[k] = (d, cos);
+                    }
+                }
+            }
+        }
+        let offset = 0.1;
+        for (face, seen, far) in [(2 * axis, &plus, true), (2 * axis + 1, &minus, false)] {
+            let (mut sum, mut count, mut deepest) = (0.0, 0usize, 0.0_f64);
+            for (d, c) in seen.iter().filter(|(d, _)| d.is_finite()) {
+                sum += c;
+                count += 1;
+                let from_camera = if far {
+                    hi[axis] + offset - d
+                } else {
+                    d - (lo[axis] - offset)
+                };
+                deepest = deepest.max(from_camera);
+            }
+            drag[face] = if count > 0 { sum / count as f64 } else { 0.0 };
+            depth[face] = deepest;
+        }
+    }
+    crate::DragCube {
+        name: name.to_string(),
+        area: base.area,
+        drag,
+        depth,
+        drag_multiplier: [1.0; 6],
+        center: DVec3::new(base.center[0], base.center[1], base.center[2]),
+        size: DVec3::new(base.size[0], base.size[1], base.size[2]),
+    }
+}
+
 /// A shape evaluated: the baked meshes and the numbers the original derives from them.
 #[derive(Clone, Debug, PartialEq)]
 pub struct WingResult {
