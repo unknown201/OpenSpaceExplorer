@@ -2711,6 +2711,7 @@ impl FlightView {
             // keeps the vessel's attitude.
             let rot = match inp.stand {
                 Stand::Craft => vessel_rot,
+                Stand::Kerbal { .. } if !landed => vessel_rot,
                 Stand::Kerbal { .. } => {
                     // Standing, the server's facing is straight up: the Kerbal faces the way it walks (its
                     // held heading, as the original turns it at 800 degrees a second), and on a ladder the

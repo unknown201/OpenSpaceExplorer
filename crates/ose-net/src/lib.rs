@@ -293,7 +293,7 @@ pub enum ClientMessage {
         roll: f32,
     },
     /// A Kerbal on EVA: `run` (Shift) held until changed, `jump` (Space) once from the ground (on a ladder
-    /// it lets go). Its jetpack translates with `Translate` (always on for a Kerbal: y up along the Kerbal,
+    /// it lets go). Its jetpack translates with `Translate` when RCS is enabled (R; y up along the Kerbal,
     /// Ctrl down). `grab` (F, once) takes hold of the nearest ladder within reach (ladder parts and crewed
     /// parts' built-in ladders) or lets go of the one held; `climb` (W/S, -1..1, held) climbs it at the
     /// original's 0.8 m/s. Answers `FlightAck` (refused for a grab with no ladder near).

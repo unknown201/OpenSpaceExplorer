@@ -49,6 +49,9 @@ pub struct SavedVessel {
     /// A Kerbal on EVA (their name) or a planted flag (who planted it).
     #[serde(default)]
     pub eva: Option<String>,
+    /// Supporting vessel registry id, original part index, and distance along its ladder.
+    #[serde(default)]
+    pub eva_ladder: Option<(u64, usize, f64)>,
     #[serde(default)]
     pub flag: Option<String>,
 }
@@ -179,6 +182,10 @@ pub fn capture(
                 crew: u.crew(e),
                 docked: u.docked_links(e),
                 eva: u.eva_kerbal(e).map(|k| k.name.clone()),
+                eva_ladder: u.saved_ladder(e).and_then(|(target, part, along)| {
+                    let id = vessels.iter().find(|v| v.0 == target)?.1;
+                    Some((id, part, along))
+                }),
                 flag: u.flag_planter(e),
                 later_burns: u
                     .scheduled_burns(e)
@@ -296,6 +303,15 @@ pub fn restore(
         }
         registry.push((e, v.id, v.owner));
     }
+    for v in &save.vessels {
+        if let Some((target, part, along)) = v.eva_ladder {
+            let kerbal = registry.iter().find(|r| r.1 == v.id).map(|r| r.0);
+            let parent = registry.iter().find(|r| r.1 == target).map(|r| r.0);
+            if let (Some(kerbal), Some(parent)) = (kerbal, parent) {
+                u.restore_ladder(kerbal, parent, part, along);
+            }
+        }
+    }
     registry
 }
 
@@ -356,6 +372,70 @@ pub fn migrate(save: &mut SaveFile, defs: &[ose_data::PartDef]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_eva_handhold_survives_save_restore_with_new_entity_ids() {
+        let bodies = serde_json::from_str::<Vec<ose_data::CelestialBody>>(include_str!(
+            "../../../assets/own/kerbol-system.json"
+        ))
+        .unwrap();
+        let defs = serde_json::from_str::<Vec<ose_data::PartDef>>(include_str!(
+            "../../../assets/own/parts-catalog.json"
+        ))
+        .unwrap();
+        let res = serde_json::from_str::<Vec<ose_data::ResourceDef>>(include_str!(
+            "../../../assets/own/resources.json"
+        ))
+        .unwrap();
+        let crafts = serde_json::from_str::<Vec<ose_data::craft::Craft>>(include_str!(
+            "../../../assets/own/stock-craft.json"
+        ))
+        .unwrap();
+        let craft = crafts.iter().find(|c| c.name == "Kerbal K1").unwrap();
+        let mut u = Universe::with_bodies(&bodies);
+        let e = u.spawn_vessel_in_circular_orbit(
+            "EVA pod",
+            u.body_entity("Kerbin").unwrap(),
+            100_000.0,
+        );
+        let (r, v) = u.vessel(e).unwrap().2.state_at(u.ut());
+        let report = ose_data::staging::delta_v_by_stage(craft, &defs, &res);
+        u.set_powered(
+            e,
+            ose_sim::flight::Powered::new(
+                ose_sim::flight::FlightSpec::from_report(&report, &[], &[], 1.0),
+                r,
+                v,
+                false,
+            ),
+        );
+        u.set_craft(e, craft.clone());
+        u.set_structure(e, ose_sim::structure::Structure::build(craft, &defs, &res));
+        let jeb = u.go_eva(e, None).unwrap();
+        // Put the Kerbal first so restoration must resolve a forward vessel reference.
+        let saved = capture(
+            &u,
+            &[(jeb, 71, Some(1)), (e, 42, Some(1))],
+            &Campaign::default(),
+            &[],
+        );
+        let saved: SaveFile =
+            serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+        assert_eq!(
+            saved.vessels[0].eva_ladder.map(|(id, part, _)| (id, part)),
+            Some((42, 0))
+        );
+        let mut restored = Universe::with_bodies(&bodies);
+        let entries = restore(&mut restored, &saved, &defs, &res);
+        let jeb = entries.iter().find(|v| v.1 == 71).unwrap().0;
+        let pod = entries.iter().find(|v| v.1 == 42).unwrap().0;
+        assert_eq!(restored.on_ladder(jeb).unwrap().0, pod);
+        for _ in 0..100 {
+            restored.step();
+        }
+        assert!(restored.on_ladder(jeb).is_some());
+        restored.board(jeb, pod).unwrap();
+    }
 
     #[test]
     fn version_1_saves_get_decoupler_crossfeed_off_as_it_behaved() {

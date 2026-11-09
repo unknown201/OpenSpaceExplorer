@@ -475,7 +475,6 @@ struct App {
     /// EVA ladders (protocol 45): F asked to grab (a refusal then boards instead), the climb sent last,
     /// and whether the Kerbal was on a ladder last frame.
     eva_grab: bool,
-    eva_grab_pending: bool,
     eva_climb_sent: f32,
     eva_on_ladder: bool,
     /// The Kerbal's heading when the walk keys went down, walked relative to while no camera has drawn (the
@@ -1071,7 +1070,6 @@ pub fn start() -> Result<(), JsValue> {
         translate_sent: (0.0, 0.0, 0.0),
         eva_run_sent: false,
         eva_grab: false,
-        eva_grab_pending: false,
         eva_climb_sent: 0.0,
         eva_on_ladder: false,
         eva_walk_base: None,
@@ -2739,7 +2737,14 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         cb.forget();
     }
     wire("fh-science", Box::new(|a| a.borrow().flight_science(0)))?;
-    for id in ["fh-eva", "fh-board", "fh-flag", "fh-takeflag", "fh-undock"] {
+    for id in [
+        "fh-eva",
+        "fh-board",
+        "fh-flag",
+        "fh-takeflag",
+        "fh-undock",
+        "fh-grab",
+    ] {
         wire(id, Box::new(move |a| a.borrow().crew_action(id)))?;
     }
     // A crew portrait's EVA button sends that Kerbal out.
@@ -5409,7 +5414,10 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                     // ladder there, board the craft within reach.
                     "KeyF" if !ev.repeat() && app.flying_eva() => {
                         app.eva_grab = true;
-                        app.eva_grab_pending = true;
+                        true
+                    }
+                    "KeyB" if !ev.repeat() && app.flying_eva() => {
+                        app.crew_action("fh-board");
                         true
                     }
                     "KeyU" | "KeyR" if !ev.repeat() => {
@@ -5982,14 +5990,6 @@ impl App {
             ServerMessage::FlightAck {
                 accepted, reason, ..
             } => {
-                // F found no ladder: it boards instead (the original's one interact key).
-                if self.eva_grab_pending {
-                    self.eva_grab_pending = false;
-                    if !accepted && reason.as_deref().is_some_and(|r| r.contains("ladder")) {
-                        self.crew_action("fh-board");
-                        return;
-                    }
-                }
                 set_text(
                     &self.doc,
                     "fh-note",
@@ -6212,6 +6212,10 @@ impl App {
                             set_text(&self.doc, "fh-note", "");
                             self.audio.play("eva_exit");
                             self.start_flight(nv, None);
+                            #[cfg(target_arch = "wasm32")]
+                            {
+                                self.flight3d.distance = 6.0;
+                            }
                         }
                         (Some("fh-flag"), _) => {
                             set_text(&self.doc, "fh-note", "flag planted");
@@ -10260,7 +10264,7 @@ impl App {
     fn launch_craft_to_orbit(&mut self, id: u64) {
         let altitude_m = input_value(&self.doc, "launch-altitude").unwrap_or(100.0) * 1000.0;
         set_text(&self.doc, "menu-note", "launching to orbit...");
-        self.pending_launch = None;
+        self.pending_launch = Some(id);
         if let Some(ws) = &self.ws {
             send(ws, &ClientMessage::LaunchSavedCraft { id, altitude_m });
         }
@@ -10419,6 +10423,19 @@ impl App {
         let Some(vessel) = self.flying else { return };
         let Some(ws) = &self.ws else { return };
         let msg = match id {
+            "fh-grab" => {
+                send(
+                    ws,
+                    &ClientMessage::EvaControls {
+                        vessel,
+                        run: false,
+                        jump: false,
+                        grab: true,
+                        climb: 0.0,
+                    },
+                );
+                return;
+            }
             "fh-eva" => {
                 self.crew_eva(None);
                 return;
@@ -10468,6 +10485,9 @@ impl App {
     fn board_candidate(&self) -> Option<u64> {
         let scene = self.scene.as_ref()?;
         let me = scene.vessel(self.flying?)?;
+        if let Some((parent, _)) = me.flight.as_ref().and_then(|f| f.on_ladder) {
+            return Some(parent);
+        }
         let ut = self.time.ut_at(now_ms());
         let here = scene.vessel_position(me, ut);
         scene
@@ -10887,6 +10907,26 @@ impl App {
         self.render_resource_manager();
         self.render_action_groups();
         let landed = matches!(f.situation, ose_net::FlightSituation::Landed);
+        set_text(
+            &self.doc,
+            "fh-grab",
+            if f.on_ladder.is_some() {
+                "Let go (F)"
+            } else {
+                "Grab (F)"
+            },
+        );
+        if let Some(el) = self.doc.get_element_by_id("flight-hud") {
+            el.set_attribute(
+                "data-ose-eva-attached",
+                if f.on_ladder.is_some() {
+                    "true"
+                } else {
+                    "false"
+                },
+            )
+            .ok();
+        }
         if let Some(el) = self.doc.get_element_by_id("fh-crewbox") {
             let face = |name: &str| {
                 self.roster
@@ -10904,6 +10944,7 @@ impl App {
         for (id, show) in [
             ("fh-eva", !f.eva && !f.crew.is_empty()),
             ("fh-board", f.eva),
+            ("fh-grab", f.eva),
             ("fh-flag", f.eva && landed),
             (
                 "fh-takeflag",
@@ -11162,7 +11203,7 @@ impl App {
         let side = (strafe + turn).clamp(-1.0, 1.0);
         let shift = k.is("ShiftLeft") || k.is("ShiftRight");
         let ctrl = k.is("ControlLeft") || k.is("ControlRight");
-        let space = k.is("Space");
+
         let Some(vessel) = self.flying else { return };
         let landed = self
             .scene
@@ -11200,7 +11241,7 @@ impl App {
         // Run and jump: run held while Shift is down on the ground, a jump on each new Space press there.
         let run = landed && shift;
         // A press is caught on key down, so a tap shorter than a frame still jumps.
-        let jump = (landed || on_ladder) && std::mem::take(&mut self.eva_jump);
+        let jump = std::mem::take(&mut self.eva_jump) && (landed || on_ladder);
         let grab = std::mem::take(&mut self.eva_grab);
         let climb = if on_ladder { walk as f32 } else { 0.0 };
         if run != self.eva_run_sent || jump || grab || climb != self.eva_climb_sent {
@@ -11222,11 +11263,56 @@ impl App {
         if on_ladder {
             return;
         }
+        if !landed {
+            let translate = (
+                strafe as f32,
+                f32::from(shift) - f32::from(ctrl),
+                walk as f32,
+            );
+            if translate != self.translate_sent {
+                self.translate_sent = translate;
+                if let Some(ws) = &self.ws {
+                    send(
+                        ws,
+                        &ClientMessage::Translate {
+                            vessel,
+                            x: translate.0,
+                            y: translate.1,
+                            z: translate.2,
+                        },
+                    );
+                }
+            }
+            self.attitude = ose_net::AttitudeMode::Free;
+            self.throttle = 0.0;
+            if self.control_cadence.due(now, true, [walk, turn, strafe]) {
+                if let Some(ws) = &self.ws {
+                    send(
+                        ws,
+                        &ClientMessage::SetControls {
+                            vessel,
+                            throttle: 0.0,
+                            attitude: ose_net::AttitudeMode::Free,
+                        },
+                    );
+                    send(
+                        ws,
+                        &ClientMessage::SetRotation {
+                            vessel,
+                            pitch: 0.0,
+                            yaw: turn as f32,
+                            roll: 0.0,
+                        },
+                    );
+                }
+            }
+            return;
+        }
         // The jetpack in the air.
         let translate = if landed {
             (0.0, 0.0, 0.0)
         } else {
-            let up = f32::from(shift || space) - f32::from(ctrl);
+            let up = f32::from(shift) - f32::from(ctrl);
             (strafe as f32, up, walk as f32)
         };
         if translate != self.translate_sent {

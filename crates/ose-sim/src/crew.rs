@@ -22,6 +22,22 @@ pub const JETPACK_PROPELLANT_T: f64 = 0.025;
 /// How close a Kerbal has to be to board, m.
 pub const BOARD_RANGE_M: f64 = 6.0;
 
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HatchFrame {
+    pub position: DVec3,
+    pub up: DVec3,
+    pub forward: DVec3,
+}
+
+pub(crate) fn hatch_frames() -> &'static std::collections::HashMap<String, HatchFrame> {
+    static FRAMES: std::sync::LazyLock<std::collections::HashMap<String, HatchFrame>> =
+        std::sync::LazyLock::new(|| {
+            serde_json::from_str(include_str!("../../../assets/own/eva-hatches.json"))
+                .expect("EVA hatch frames")
+        });
+    &FRAMES
+}
+
 /// The crew aboard a vessel: (part index, name) per seat taken.
 #[derive(Component, Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Crew {
@@ -550,12 +566,12 @@ impl Universe {
             // a jetpack fires on the throttle without staging; on the ground the Kerbal walks
             p.ignited = true;
             p.walker = true;
-            // the jetpack also translates (Space/Shift up, Ctrl down, sideways) like RCS, always on
+            // In space the pack starts off; R enables body-relative translation after release.
             p.rcs.thrust_kn = jetpack.move_force_kn;
             p.rcs.isp_vac_s = isp_vac;
             p.rcs.isp_asl_s = isp_asl;
             p.jetpack = Some(jetpack);
-            p.groups.rcs = true;
+            p.groups.rcs = landed;
             // a Kerbal has no SAS: it keeps the attitude it stepped out in rather than turning to a mode
             p.attitude = flight::Attitude::Free;
             p.angvel = DVec3::ZERO;
@@ -667,9 +683,28 @@ impl Universe {
         self.world.get::<Boarding>(kerbal).map(|b| b.vessel)
     }
 
-    /// The ladders of a vessel: (part, foot, top), inertial offsets from the vessel's position, m. Ladder
-    /// parts run along their own axis, and so does the built-in ladder of a crewed part (a pod's hatch
-    /// side is not in the data: the whole height of the part counts).
+    /// Authored orbital hatch frame as an inertial offset from the vessel's mass centre.
+    /// Surface interactions retain the existing hull/deck behavior.
+    fn hatch_frame(&self, e: Entity, part: usize) -> Option<HatchFrame> {
+        let st = self.structure(e)?;
+        if !st.rigid.present.get(part).copied().unwrap_or(false) {
+            return None;
+        }
+        let h = st.eva_hatches.get(part).copied().flatten()?;
+        let p = self.powered(e)?;
+        if p.crashed || p.landed {
+            return None;
+        }
+        let (x, y, z) = flight::vessel_basis(p);
+        let world = |v: DVec3| x * v.x + y * v.y + z * v.z;
+        Some(HatchFrame {
+            position: world(h.position - st.rigid.rest_centre()),
+            up: world(h.up),
+            forward: world(h.forward),
+        })
+    }
+
+    /// Climb segments; built-in space hatches use authored frames and other ladders keep their existing span.
     fn ladders(&self, e: Entity) -> Vec<(usize, DVec3, DVec3)> {
         let (Some(st), Some(p)) = (
             self.world.get::<structure::Structure>(e),
@@ -682,6 +717,13 @@ impl Universe {
             .filter(|&i| st.rigid.present[i])
             .filter(|&i| st.part_ids[i].starts_with("ladder_") || st.crew[i] > 0)
             .map(|i| {
+                if let Some(h) = self.hatch_frame(e, i) {
+                    // Keep the existing climb span, centered on the authored exit at HATCH_ALONG.
+                    let (_, half) = st.part_box(i);
+                    let len = (half.y * 2.0).max(0.6);
+                    let foot = h.position - h.up * (len * HATCH_ALONG);
+                    return (i, foot, foot + h.up * len);
+                }
                 let (centre, half) = st.part_box(i);
                 let axis = st.axis_inertial(
                     p.facing,
@@ -723,8 +765,7 @@ impl Universe {
         if self.world.get::<EvaKerbal>(kerbal).is_none() {
             return Err("not a Kerbal on EVA");
         }
-        if self.world.get::<OnLadder>(kerbal).is_some() {
-            self.world.entity_mut(kerbal).remove::<OnLadder>();
+        if self.release_ladder(kerbal) {
             return Ok(false);
         }
         let me = self.position_of(kerbal).ok_or("not a Kerbal on EVA")?;
@@ -760,6 +801,46 @@ impl Universe {
                 Ok(true)
             }
             _ => Err("no ladder within reach"),
+        }
+    }
+
+    /// Let go without manufacturing velocity; retain the supporting part's point velocity.
+    pub fn release_ladder(&mut self, kerbal: Entity) -> bool {
+        let Some(l) = self.world.get::<OnLadder>(kerbal).copied() else {
+            return false;
+        };
+        let forward = self.hatch_frame(l.vessel, l.part).map(|h| h.forward);
+        self.world.entity_mut(kerbal).remove::<OnLadder>();
+        if let Some(mut p) = self.world.get_mut::<flight::Powered>(kerbal) {
+            if let Some(forward) = forward {
+                p.r = p.r - forward * 0.2;
+            }
+            p.rcs.translate = DVec3::ZERO;
+            p.throttle = 0.0;
+            p.attitude = flight::Attitude::Free;
+        }
+        true
+    }
+
+    pub fn saved_ladder(&self, kerbal: Entity) -> Option<(Entity, usize, f64)> {
+        self.world
+            .get::<OnLadder>(kerbal)
+            .map(|l| (l.vessel, l.part, l.along_m))
+    }
+
+    pub fn restore_ladder(&mut self, kerbal: Entity, vessel: Entity, part: usize, along_m: f64) {
+        if self.eva_kerbal(kerbal).is_none() || !along_m.is_finite() {
+            return;
+        }
+        self.wake(vessel);
+        if self.ladders(vessel).iter().any(|l| l.0 == part) {
+            self.world.entity_mut(kerbal).insert(OnLadder {
+                vessel,
+                part,
+                along_m,
+                climb: 0.0,
+            });
+            self.run_ladders(0.0);
         }
     }
 
@@ -827,12 +908,24 @@ impl Universe {
             } else {
                 crate::structure::basis(facing).0
             };
+            let hatch = self.hatch_frame(l.vessel, l.part);
+            let offset = if hatch.is_some() {
+                point
+            } else {
+                point + out * LADDER_STANDOFF_M
+            };
+            let parent = self.powered(l.vessel).unwrap();
+            let velocity = v + (parent.angvel + parent.facing * parent.roll_rate).cross(offset);
             if let Some(mut p) = self.world.get_mut::<flight::Powered>(k) {
-                p.r = r + point + out * LADDER_STANDOFF_M;
-                p.v = v;
+                p.r = r + offset;
+                p.v = velocity;
                 p.facing = up;
                 p.landed = false;
+                p.own_top = hatch.map(|h| h.forward).unwrap_or(-out);
                 p.angvel = DVec3::ZERO;
+                p.roll_rate = 0.0;
+                p.throttle = 0.0;
+                p.rcs.usage = 0.0;
             }
             if let Some(mut h) = self.world.get_mut::<OnLadder>(k) {
                 h.along_m = l.along_m;
@@ -1104,6 +1197,66 @@ mod tests {
         let b = u.world.get::<bodies::Body>(body).unwrap();
         let r = u.powered(k).unwrap().r;
         r.length() - flight::ground_radius(b, None, r, u.ut())
+    }
+
+    fn orbital_eva_fixture() -> (Universe, Entity, Entity) {
+        let (mut u, pod) = k1_on_pad();
+        let body = u.body_entity("Kerbin").unwrap();
+        let mu = u.world.get::<bodies::Body>(body).unwrap().mu;
+        let mut p = u.powered(pod).unwrap().clone();
+        p.r = DVec3::new(700_000.0, 0.0, 0.0);
+        p.v = DVec3::new(0.0, (mu / 700_000.0).sqrt(), 0.0);
+        p.landed = false;
+        p.attitude = flight::Attitude::Free;
+        p.facing = DVec3::new(0.0, 0.0, 1.0);
+        p.angvel = DVec3::new(0.1, 0.2, 0.0);
+        p.roll_rate = 0.05;
+        u.set_powered(pod, p);
+        let jeb = u.go_eva(pod, None).unwrap();
+        (u, pod, jeb)
+    }
+
+    #[test]
+    fn authored_orbital_hatch_holds_pose_and_inherits_point_velocity() {
+        let (mut u, pod, jeb) = orbital_eva_fixture();
+        let h = u.hatch_frame(pod, 0).unwrap();
+        let parent = u.powered(pod).unwrap();
+        let velocity =
+            parent.v + (parent.angvel + parent.facing * parent.roll_rate).cross(h.position);
+        let p = u.powered(jeb).unwrap();
+        assert!((p.r - parent.r - h.position).length() < 1e-8);
+        assert!((p.v - velocity).length() < 1e-8);
+        assert!(p.facing.dot(h.up) > 0.999999);
+        assert!(flight::vessel_top(p).dot(h.forward) > 0.999999);
+        assert!(!p.groups.rcs);
+        let fuel = p.propellant_t;
+        u.action_group(jeb, crate::ActionGroup::Rcs, Some(true));
+        u.set_translate(jeb, DVec3::new(1.0, 1.0, 1.0));
+        for _ in 0..100 {
+            u.step();
+        }
+        assert_eq!(
+            u.powered(jeb).unwrap().propellant_t,
+            fuel,
+            "holding burns no fuel"
+        );
+        let velocity = u.powered(jeb).unwrap().v;
+        assert!(u.release_ladder(jeb));
+        assert_eq!(u.powered(jeb).unwrap().v, velocity, "no release impulse");
+        assert_eq!(u.grab_ladder(jeb), Ok(true));
+        assert!(u.crew(pod).is_empty(), "grabbing does not board");
+    }
+
+    #[test]
+    fn space_releases_authored_hatch_and_can_board_again() {
+        let (mut u, pod, jeb) = orbital_eva_fixture();
+        assert!(u.set_eva(jeb, false, true));
+        assert!(u.on_ladder(jeb).is_none());
+        u.board(jeb, pod).unwrap();
+        assert!(u
+            .crew(pod)
+            .iter()
+            .any(|(_, name)| name == "Jebediah Kerman"));
     }
 
     #[test]
@@ -1567,6 +1720,7 @@ mod tests {
         carrier.facing = DVec3::new(1.0, 0.0, 0.0);
         u.set_powered(vessel, carrier);
         let eva = u.go_eva(vessel, Some("Jebediah Kerman")).unwrap();
+        u.action_group(eva, crate::ActionGroup::Rcs, Some(true));
         u.grab_ladder(eva).unwrap();
         let mut p = u.powered(eva).unwrap().clone();
         let dt = 1.0 / crate::TICKS_PER_SECOND as f64;
@@ -1617,6 +1771,7 @@ mod tests {
         p.landed = false;
         u.set_powered(v, p);
         let jeb = u.go_eva(v, Some("Jebediah Kerman")).unwrap();
+        u.action_group(jeb, crate::ActionGroup::Rcs, Some(true));
         assert_eq!(u.grab_ladder(jeb), Ok(false), "lets go of the ladder");
         let v0 = u.powered(jeb).unwrap().v;
         u.set_controls(jeb, 1.0, flight::Attitude::OrbitPrograde);
