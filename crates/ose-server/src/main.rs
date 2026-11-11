@@ -1946,6 +1946,9 @@ fn launch_on_pad_now(
     if craft.parts.is_empty() || !craft.is_tree() {
         return fail("craft must be a non-empty single tree".into());
     }
+    if let Some(reason) = craft.strut_error(&s.parts) {
+        return fail(reason);
+    }
     let locked = {
         let c = s.campaign.lock().expect("campaign lock");
         // the tech tree binds the campaign's members; guests and visitors fly anything
@@ -3197,6 +3200,13 @@ fn save_craft(s: &Shared, player_id: u64, mut craft: ose_data::craft::Craft) -> 
             reason: Some("craft must be a non-empty single tree".into()),
         };
     }
+    if let Some(reason) = craft.strut_error(&s.parts) {
+        return ServerMessage::CraftSaved {
+            id: None,
+            summary: None,
+            reason: Some(reason),
+        };
+    }
     let m = craft.mass(&s.parts, &s.resources);
     if !m.unknown_parts.is_empty() {
         return ServerMessage::CraftSaved {
@@ -3262,6 +3272,9 @@ fn launch_craft(
     }
     if !craft.is_tree() {
         return fail("craft parts do not form a single tree".into());
+    }
+    if let Some(reason) = craft.strut_error(&s.parts) {
+        return fail(reason);
     }
 
     if !m.unknown_parts.is_empty() {

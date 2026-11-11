@@ -4710,6 +4710,12 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                     None
                 };
                 app.vab3d.hovered = hit;
+                app.gpu_canvas
+                    .set_attribute(
+                        "data-ose-vab-hovered",
+                        &hit.map(|i| i.to_string()).unwrap_or_default(),
+                    )
+                    .ok();
                 // A gizmo handle under the pointer lights up.
                 app.vab3d.cursor = (px, py);
                 let hot = if over_hall {
@@ -7508,7 +7514,10 @@ impl App {
         };
         self.catalog = cat;
         match result {
-            Ok(()) => self.lesson_part(part_id, true),
+            Ok(()) => {
+                self.lesson_part(part_id, true);
+                self.vab_start_link();
+            }
             Err(e) => set_text(&self.doc, "vab-report", &e),
         }
         self.render_vab();
@@ -8984,6 +8993,16 @@ impl App {
 
     /// Draw the craft and the side panel without asking for a new staging readout.
     fn render_vab_view(&mut self) {
+        self.gpu_canvas
+            .set_attribute(
+                "data-ose-vab-struts",
+                &crate::vab::link_spans(&self.editor.craft)
+                    .iter()
+                    .filter(|(i, _, _)| self.editor.craft.parts[*i].part_id.starts_with("strut_"))
+                    .count()
+                    .to_string(),
+            )
+            .ok();
         set_text(&self.doc, "vab-selected", "");
         let (parts_n, dry) = (
             self.editor.craft.parts.len(),

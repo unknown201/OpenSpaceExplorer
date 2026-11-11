@@ -18,6 +18,9 @@
 //!
 //! The vessel frame is the craft frame made right-handed: Unity Y-up with Z negated, so engines push along +Y.
 
+mod support;
+pub use support::Brace;
+
 use std::collections::HashMap;
 
 use ose_data::craft::{Craft, Quat};
@@ -299,6 +302,8 @@ pub struct RigidVessel {
     /// Parts still simulated (removed ones were staged away or broke off).
     pub present: Vec<bool>,
     pub links: Vec<Link>,
+    pub braces: Vec<Brace>,
+    pub launch_clamps: Vec<usize>,
     /// Part origins at rest, vessel frame.
     rest_pos: Vec<DVec3>,
     /// Authored centre in each body's local axes and at rest in the craft frame.
@@ -478,7 +483,22 @@ impl RigidVessel {
         for (i, p) in craft.parts.iter().enumerate() {
             let Some(parent) = p.parent else { continue };
             let def = by_id.get(p.part_id.as_str()).copied();
-            let pdef = by_id.get(craft.parts[parent].part_id.as_str()).copied();
+            let mut physical_parent = parent;
+            for _ in 0..craft.parts.len() {
+                if !by_id
+                    .get(craft.parts[physical_parent].part_id.as_str())
+                    .is_some_and(|d| d.physics_mode == "None")
+                {
+                    break;
+                }
+                let Some(next) = craft.parts[physical_parent].parent else {
+                    break;
+                };
+                physical_parent = next;
+            }
+            let pdef = by_id
+                .get(craft.parts[physical_parent].part_id.as_str())
+                .copied();
             let own = def.and_then(|d| {
                 p.own_node
                     .as_deref()
@@ -495,7 +515,7 @@ impl RigidVessel {
             let rigid = own.is_some_and(|n| n.is_rigid) || other.is_some_and(|n| n.is_rigid);
             let bf = |d: Option<&PartDef>| d.map(|d| d.breaking_force).unwrap_or(0.0);
             let bt = |d: Option<&PartDef>| d.map(|d| d.breaking_torque).unwrap_or(0.0);
-            let limits = joint_settings().limits(
+            let mut limits = joint_settings().limits(
                 size,
                 stack,
                 rigid,
@@ -503,6 +523,17 @@ impl RigidVessel {
                 (bf(def), bf(pdef)),
                 (bt(def), bt(pdef)),
             );
+            if def.is_some_and(|d| d.physics_mode == "None")
+                || [def, pdef].into_iter().flatten().any(|d| {
+                    d.module_names
+                        .iter()
+                        .any(|m| m.ends_with("Module_GroundLaunchClamp"))
+                })
+            {
+                limits.rigid = true;
+                limits.break_force_kn = f64::INFINITY;
+                limits.break_torque_knm = f64::INFINITY;
+            }
             // anchor at the child's attach node, else midway between the parts
             let cpos = to_vessel(p.local_position);
             let ppos = to_vessel(craft.parts[parent].local_position);
@@ -531,7 +562,7 @@ impl RigidVessel {
                 anchor_rest: anchor,
             });
         }
-        crate::struts::brace(&mut links, craft, &by_id);
+
         let params = IntegrationParameters::default();
         let n = masses_t.len();
         let rest_pos = craft
@@ -550,6 +581,44 @@ impl RigidVessel {
             unit_mass_properties,
             present: vec![true; n],
             links,
+            braces: craft
+                .parts
+                .iter()
+                .enumerate()
+                .filter_map(|(i, p)| {
+                    if !by_id.get(p.part_id.as_str()).is_some_and(|d| d.is_strut()) {
+                        return None;
+                    }
+                    let (source, target) = craft.compound_ends(i)?;
+                    let far_part = p.fuel_line_target?;
+                    if source == target {
+                        return None;
+                    }
+                    Some(Brace {
+                        part: i,
+                        far_part,
+                        source,
+                        target,
+                        anchor: to_vessel(craft.parts[far_part].local_position),
+                        active: true,
+                    })
+                })
+                .collect(),
+            launch_clamps: craft
+                .parts
+                .iter()
+                .enumerate()
+                .filter_map(|(i, p)| {
+                    by_id
+                        .get(p.part_id.as_str())
+                        .is_some_and(|d| {
+                            d.module_names
+                                .iter()
+                                .any(|m| m.ends_with("Module_GroundLaunchClamp"))
+                        })
+                        .then_some(i)
+                })
+                .collect(),
             rest_pos,
             local_com_m,
             rest_com_offset_m,
@@ -827,11 +896,23 @@ impl RigidVessel {
         }
         let settling = self.settle > 0;
         self.settle = self.settle.saturating_sub(1);
-        let mut broken = Vec::new();
-        for l in &mut self.links {
-            let Some(h) = l.handle else { continue };
+        let braced_links = self.braced_links();
+        let braced = braced_links.iter().any(|&b| b);
+        let mut inertias = Vec::with_capacity(self.links.len());
+        let mut carried = Vec::with_capacity(self.links.len());
+        for (index, l) in self.links.iter_mut().enumerate() {
+            let c = l.child;
+            inertias.push(
+                (smr2[c] - 2.0 * l.anchor_rest.dot(smr[c])
+                    + sm[c] * l.anchor_rest.length_squared())
+                .max(1e-6),
+            );
+            carried.push(q_rotate(q_conj(frame), sum_f[c]));
+            let Some(_) = l.handle else { continue };
             let body = &self.bodies[self.bodies_of[l.child]];
             let anchor = d(body.position().transform_point(l.anchor_child));
+            inertias[index] =
+                (smr2[c] - 2.0 * anchor.dot(smr[c]) + sm[c] * anchor.length_squared()).max(1e-6);
             l.force_kn = sum_f[l.child].length();
             let tau_world = sum_m[l.child] - anchor.cross(sum_f[l.child]);
             // bends live in the vessel frame
@@ -848,7 +929,11 @@ impl RigidVessel {
                 let (k, damp) = (l.limits.stiffness, l.limits.damping);
                 let h = dt / WOBBLE_SUBSTEPS as f64;
                 // while the solver settles after a split its loads are not to be trusted
-                let substeps = if settling { 0 } else { WOBBLE_SUBSTEPS };
+                let substeps = if settling || braced_links[index] {
+                    0
+                } else {
+                    WOBBLE_SUBSTEPS
+                };
                 for _ in 0..substeps {
                     let accel = (tau * -1.0 - l.bend * k) * (1.0 / inertia);
                     l.bend_rate = (l.bend_rate + accel * h)
@@ -857,6 +942,13 @@ impl RigidVessel {
                 }
                 k * l.bend.length()
             };
+        }
+        if braced && !settling {
+            self.solve_braces(dt, &inertias, &carried);
+        }
+        let mut broken = Vec::new();
+        for l in &mut self.links {
+            let Some(h) = l.handle else { continue };
             if !settling
                 && (l.force_kn > l.limits.break_force_kn
                     || l.torque_knm > l.limits.break_torque_knm)
@@ -872,6 +964,7 @@ impl RigidVessel {
             }
         }
         if !broken.is_empty() {
+            self.brace_rows();
             self.settle = SETTLE_STEPS;
         }
         broken
@@ -893,10 +986,23 @@ impl RigidVessel {
             let s = self.sizes_m[i];
             inertia[i] = self.masses_t[i] * (s.x * s.x + s.y * s.y + s.z * s.z) / 24.0;
         }
-        for l in self
+        if self.braces.iter().any(|b| b.active) {
+            let moments: Vec<_> = self
+                .links
+                .iter()
+                .map(|l| (inertia[l.child] + self.masses_t[l.child]).max(1e-6))
+                .collect();
+            for l in &mut self.links {
+                l.torque_vec_knm = DVec3::ZERO;
+            }
+            self.solve_braces(dt, &moments, &vec![DVec3::ZERO; self.links.len()]);
+        }
+        let braced_links = self.braced_links();
+        for (_, l) in self
             .links
             .iter_mut()
-            .filter(|l| l.intact() && !l.limits.rigid)
+            .enumerate()
+            .filter(|(i, l)| l.intact() && !l.limits.rigid && !braced_links[*i])
         {
             // a rough subtree inertia is enough to ring down
             let i = (inertia[l.child] + self.masses_t[l.child]).max(1e-6);
@@ -1072,6 +1178,7 @@ impl RigidVessel {
             self.present[i] = false;
             self.settle = SETTLE_STEPS;
         }
+        self.brace_rows();
     }
 
     /// Connected groups of parts over the intact joints, each sorted, the group holding part 0 first.

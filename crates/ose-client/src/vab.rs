@@ -2020,6 +2020,26 @@ impl Editor {
                 jobs.push((c, t, h, normal.map(|n| map.dir(n))));
             }
         }
+        // Validate the whole symmetry set before placing any second anchors.
+        if spec.compound == "strut" {
+            for &(f, t, h, n) in &jobs {
+                let spot = self
+                    .surface_spot_on(t, h, n, catalog, None)
+                    .ok_or("the strut cannot reach there")?;
+                let end = self
+                    .surface_poses(spec, catalog, spot, 1)
+                    .first()
+                    .ok_or("the strut cannot reach there")?
+                    .0;
+                let length = (end - self.craft.parts[f].local_position).length();
+                if !length.is_finite()
+                    || !(ose_data::craft::STRUT_MIN_LENGTH_M..=ose_data::craft::STRUT_MAX_LENGTH_M)
+                        .contains(&length)
+                {
+                    return Err("struts must be between 0.01 and 10 metres long".into());
+                }
+            }
+        }
         let mut ends = Vec::new();
         for (f, t, h, n) in jobs {
             let spot = self
@@ -3108,6 +3128,30 @@ mod tests {
             None,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn strut_extent_is_checked_before_creating_any_far_anchor() {
+        let cat = linked_catalog();
+        let (mut e, upper, lower) = two_tanks(&cat);
+        let first = e
+            .add_surface(&cat["strut"], &cat, side_of(&e, upper), 1)
+            .unwrap()[0];
+        e.craft.parts[lower].local_position.x = 30.0;
+        let hit = e.craft.parts[lower].local_position + DVec3::new(0.625, 0.0, 0.0);
+        let before = e.craft.clone();
+        assert!(e
+            .link(first, lower, hit, Some(DVec3::new(1.0, 0.0, 0.0)), &cat)
+            .is_err());
+        assert_eq!(e.craft, before, "failed placement is atomic");
+        e.craft.parts[lower].local_position.x = 0.0;
+        let hit = e.craft.parts[lower].local_position + DVec3::new(0.625, 0.0, 0.0);
+        assert_eq!(
+            e.link(first, lower, hit, Some(DVec3::new(1.0, 0.0, 0.0)), &cat)
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[test]

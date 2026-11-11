@@ -108,6 +108,121 @@ async fn connect_ws(addr: &str) -> Ws {
 type Ws =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
+#[tokio::test]
+async fn building_supports_persist_and_clamps_release_in_authoritative_snapshots() {
+    let (_server, addr) = spawn_server().await;
+    let mut ws = connect_ws(&addr).await;
+    hello(&mut ws, None, "support pilot").await;
+    let mut craft = starter_craft();
+    let mut strut = craft.parts[2].clone();
+    strut.guid = "brace".into();
+    strut.part_id = "strut_1v_extensible".into();
+    strut.parent = Some(2);
+    strut.own_node = Some("srfAttach".into());
+    strut.parent_node = None;
+    strut.fuel_line_target = Some(4);
+    strut.resources.clear();
+    craft.parts.push(strut);
+    let mut far = craft.parts[3].clone();
+    far.guid = "brace-far".into();
+    far.parent = Some(0);
+    far.fuel_line_target = None;
+    far.local_position = ose_math::DVec3::ZERO;
+    craft.parts.push(far);
+    let mut clamp = craft.parts[3].clone();
+    clamp.guid = "clamp".into();
+    clamp.part_id = "launchclamp_3v_ground".into();
+    clamp.parent = Some(0);
+    clamp.fuel_line_target = None;
+    craft.parts.push(clamp);
+    craft.stages = vec![vec![5], vec![2]];
+    send_msg(
+        &mut ws,
+        &ClientMessage::SaveCraft {
+            craft: craft.clone(),
+        },
+    )
+    .await;
+    let id = wait_for(&mut ws, |m| match m {
+        ServerMessage::CraftSaved { id, reason, .. } => {
+            assert!(reason.is_none(), "{reason:?}");
+            id
+        }
+        _ => None,
+    })
+    .await;
+    send_msg(&mut ws, &ClientMessage::GetCraft { id }).await;
+    let saved = wait_for(&mut ws, |m| match m {
+        ServerMessage::CraftDocument { craft, .. } => craft,
+        _ => None,
+    })
+    .await;
+    assert_eq!(
+        saved.parts[3].fuel_line_target,
+        craft.parts[3].fuel_line_target
+    );
+    send_msg(&mut ws, &ClientMessage::LaunchSavedOnPad { id }).await;
+    let vessel = wait_for(&mut ws, |m| match m {
+        ServerMessage::CraftLaunched { vessel, reason, .. } => {
+            assert!(reason.is_none(), "{reason:?}");
+            vessel
+        }
+        _ => None,
+    })
+    .await;
+    send_msg(
+        &mut ws,
+        &ClientMessage::SetControls {
+            vessel,
+            throttle: 1.0,
+            attitude: ose_net::AttitudeMode::Up,
+        },
+    )
+    .await;
+    send_msg(&mut ws, &ClientMessage::Stage { vessel }).await;
+    let held = wait_for(&mut ws, |m| match m {
+        ServerMessage::Vessels { vessels, .. } => vessels
+            .into_iter()
+            .find(|v| v.id == vessel)
+            .and_then(|v| v.flight)
+            .filter(|f| f.thrust_kn > 0.0 && f.situation == ose_net::FlightSituation::Landed),
+        _ => None,
+    })
+    .await;
+    assert!(held.thrust_kn > 0.0);
+    send_msg(&mut ws, &ClientMessage::GetVesselCraft { vessel }).await;
+    let held_craft = wait_for(&mut ws, |m| match m {
+        ServerMessage::VesselCraft { craft, .. } => craft,
+        _ => None,
+    })
+    .await;
+    assert!(held_craft.parts.iter().any(|p| p.guid == "clamp"));
+    assert_eq!(
+        held_craft
+            .parts
+            .iter()
+            .filter(|p| p.part_id.starts_with("strut"))
+            .count(),
+        2
+    );
+    send_msg(&mut ws, &ClientMessage::Stage { vessel }).await;
+    send_msg(&mut ws, &ClientMessage::GetVesselCraft { vessel }).await;
+    let released = wait_for(&mut ws, |m| match m {
+        ServerMessage::VesselCraft { craft, .. } => craft,
+        _ => None,
+    })
+    .await;
+    assert!(!released.parts.iter().any(|p| p.guid == "clamp"));
+    assert_eq!(
+        released
+            .parts
+            .iter()
+            .filter(|p| p.part_id.starts_with("strut"))
+            .count(),
+        2
+    );
+}
+
 async fn recv(ws: &mut Ws) -> ServerMessage {
     loop {
         match tokio::time::timeout(Duration::from_secs(5), ws.next())

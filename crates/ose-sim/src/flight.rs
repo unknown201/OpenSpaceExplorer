@@ -234,6 +234,9 @@ pub struct Powered {
     pub throttle: f64,
     pub attitude: Attitude,
     pub landed: bool,
+    /// Held by a live ground launch clamp.
+    #[serde(default)]
+    pub ground_anchored: bool,
     /// Standing on its landing legs or gear this step (their feet press the ground): the original reports
     /// that as Landed although the craft is held up by the suspension, not resting on the surface.
     #[serde(default)]
@@ -981,6 +984,7 @@ impl Powered {
             throttle: 0.0,
             attitude: Attitude::Up,
             landed,
+            ground_anchored: false,
             ground_contact: false,
             crashed: false,
             splashed: false,
@@ -2138,6 +2142,19 @@ pub fn integrate_with_propulsion(
             thrust_acc = thrust_acc + dir * (thrust / p.mass_t);
             p.rcs.usage += amount;
         }
+    }
+
+    if p.landed && p.ground_anchored {
+        p.ground_contact = true;
+        let (s, c) = (omega * dt).sin_cos();
+        p.r = DVec3::new(p.r.x * c - p.r.y * s, p.r.x * s + p.r.y * c, p.r.z);
+        p.facing = DVec3::new(
+            p.facing.x * c - p.facing.y * s,
+            p.facing.x * s + p.facing.y * c,
+            p.facing.z,
+        );
+        p.v = omega_v.cross(p.r);
+        return out;
     }
 
     if p.landed {

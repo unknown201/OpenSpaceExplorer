@@ -193,7 +193,7 @@ impl Structure {
         propulsion.per_part_contacts = true;
         p.splashed = false;
         p.ground_contact = false;
-        if p.crashed {
+        if p.crashed || p.ground_anchored {
             return;
         }
         let mass = propulsion.mass;
@@ -421,7 +421,7 @@ impl Structure {
         dt: f64,
         out: &mut StepOutcome,
     ) {
-        if p.crashed || dt <= 0.0 {
+        if p.crashed || p.ground_anchored || dt <= 0.0 {
             return;
         }
         for (i, speed) in std::mem::take(&mut self.water_strikes) {

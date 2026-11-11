@@ -1258,6 +1258,7 @@ impl Universe {
 
     /// Give a vessel a part structure so flight loads its joints and pieces can break off.
     pub fn set_structure(&mut self, e: Entity, mut s: structure::Structure) {
+        let already_anchored = self.powered(e).is_some_and(|p| p.ground_anchored);
         if let Some(mut p) = self.world.get_mut::<flight::Powered>(e) {
             s.level = p.level;
             s.sync(&mut p);
@@ -1266,7 +1267,9 @@ impl Universe {
             s.sync(&mut d.0);
         }
         self.world.entity_mut(e).insert(s);
-        self.stand_on_ground(e);
+        if !already_anchored {
+            self.stand_on_ground(e);
+        }
         // crewed parts get their Kerbals (the server's roster replaces these)
         if self.world.get::<crew::Crew>(e).is_none() {
             let roster: Vec<String> = crew::VETERANS.iter().map(|n| n.to_string()).collect();

@@ -1324,7 +1324,11 @@ impl Structure {
             return;
         };
         let gone: Vec<usize> = (0..self.rigid.len())
-            .filter(|i| self.rigid.present[*i] && !alive.contains(i))
+            .filter(|i| {
+                self.rigid.present[*i]
+                    && !alive.contains(i)
+                    && !self.rigid.launch_clamps.contains(i)
+            })
             .collect();
         self.rigid.remove_parts(&gone);
         self.net.remove_parts(&gone);
@@ -2829,6 +2833,7 @@ impl Structure {
         if p.control_point.is_none() && self.root < self.part_rot.len() {
             p.control_rotation = self.control_rotation(self.root);
         }
+        p.ground_anchored = p.landed && self.rigid.has_launch_clamps();
         self.sync_structural_mass();
         p.mass_t = self.mass_properties().mass_t.max(0.001);
         self.update_exposed_faces();
@@ -4391,6 +4396,10 @@ impl Structure {
             .cloned()
             .unwrap_or_default();
         for i in parts {
+            if self.rigid.launch_clamps.contains(&i) {
+                self.rigid.remove_parts(&[i]);
+                self.net.remove_parts(&[i]);
+            }
             self.arm_chute(i);
             if self.fairing_payload[i].is_some()
                 && self.rigid.present[i]
@@ -5666,6 +5675,26 @@ impl Structure {
                     } else {
                         t.torques.push((a.part, a.torque_knm * *input));
                     }
+                }
+            }
+        }
+        if p.ground_anchored {
+            let clamps: Vec<_> = self
+                .rigid
+                .launch_clamps
+                .iter()
+                .copied()
+                .filter(|&i| self.rigid.present[i])
+                .collect();
+            if !clamps.is_empty() {
+                let reaction = forces.iter().fold(DVec3::ZERO, |sum, f| sum + f.force_kn)
+                    * (-1.0 / clamps.len() as f64);
+                for part in clamps {
+                    forces.push(PartForce {
+                        part,
+                        force_kn: reaction,
+                        offset_m: DVec3::ZERO,
+                    });
                 }
             }
         }
