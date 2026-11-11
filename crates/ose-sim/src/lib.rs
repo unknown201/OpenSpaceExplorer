@@ -254,6 +254,13 @@ impl Universe {
     }
 
     pub fn set_warp(&mut self, factor: u32) {
+        // A pilot explicitly targeting a nearby station needs continuous port contacts. Never pack
+        // either half of that approach merely because its engines have been idle for ten seconds.
+        let factor = if self.docking_neighbours().is_empty() {
+            factor
+        } else {
+            factor.min(flight::MAX_PHYSICS_WARP)
+        };
         if factor > flight::MAX_PHYSICS_WARP {
             let ut = self.ut();
             for e in self.vessels() {
@@ -1132,9 +1139,14 @@ impl Universe {
     /// The fastest time warp allowed: the lower of the physics cap (`physics_warp_cap`) and the height cap of
     /// the focused vessels (`altitude_warp_cap`).
     pub fn warp_cap(&mut self) -> Option<u32> {
-        match (self.physics_warp_cap(), self.altitude_warp_cap()) {
+        let cap = match (self.physics_warp_cap(), self.altitude_warp_cap()) {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
+        };
+        if self.docking_neighbours().is_empty() {
+            cap
+        } else {
+            Some(cap.unwrap_or(u32::MAX).min(flight::MAX_PHYSICS_WARP))
         }
     }
 
@@ -1934,6 +1946,10 @@ impl Universe {
     /// vessel skips over its next SOI transition (the original's timescale override at SOI crossings); the
     /// crossing then lands on the step boundary and the handoff happens exactly there.
     pub fn step(&mut self) {
+        let docking_neighbours = self.docking_neighbours();
+        for &e in &docking_neighbours {
+            self.wake(e);
+        }
         for e in self.vessels() {
             if self.rails_reentry(e).is_some_and(|t| t <= self.ut()) {
                 self.wake(e);
@@ -2485,6 +2501,7 @@ impl Universe {
                 q.iter(&self.world).any(|l| l.vessel == e)
             };
             let hand_off = p.coasting_since.is_some_and(|t| ut - t >= 10.0)
+                && !docking_neighbours.contains(&e)
                 && !flying_burn
                 && !held
                 && !p.landed
@@ -2558,6 +2575,12 @@ impl Universe {
             self.update_commnet();
         }
         self.charge_on_rails(ticks.max(1) as f64 * dt, ut);
+        if !docking_neighbours.is_empty() {
+            if let Some(catalog) = self.world.remove_resource::<PartCatalog>() {
+                self.prepare_docking_contacts(&catalog.defs);
+                self.world.insert_resource(catalog);
+            }
+        }
         self.collide_vessels();
         self.exhaust_on_other_vessels(ticks.max(1) as f64 * dt);
         self.kerbals_meet_hulls();

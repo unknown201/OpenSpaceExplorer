@@ -4,6 +4,8 @@ Updated 2026-10-28.
 
 ## What works
 
+- Optional station rendezvous guidance now provides launch-plane opportunities, fuel-budgeted intercept/phasing advice, burn aiming/timing, explicit attitude-only holds, port-relative approach instruments and staging markers. Docking retains nearby target physics, part identities and deployed hardware. A 179-part, ten-module stock-part ISS replica validates nine independent delivery launches and captures. See [implementation, evidence and limits](reference-notes/station-rendezvous-guidance.md).
+
 - Static lifting-surface model frames now export and import named child transforms with module-owner fallback. Pressure points include hierarchy scale while lift directions use rotation only, then share mounted/rolled flight and joint-load geometry. Cube drag/body-lift offsets remain part-local. The 13 shipped surfaces resolve to identity root frames; animated/procedural frame updates remain open.
 
 - Lifting surfaces now honor authored named-node occupancy: parent-side or child-side connections suppress module lift/internal drag and control/wing readouts until all occupants detach. Independent drag cubes remain active. Missing/disabled rules preserve lift. Two simulation regressions and an importer regression cover the behavior and legacy defaults; the 13 stock surface gates remain authored disabled.

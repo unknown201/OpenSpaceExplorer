@@ -35,6 +35,8 @@ pub struct NavFrame {
     pub maneuver: Option<DVec3>,
     /// Direction to the target vessel, if one is set.
     pub target: Option<DVec3>,
+    /// Advisory attitude cue, distinct from scheduled maneuver execution.
+    pub guidance: Option<DVec3>,
 }
 
 impl NavFrame {
@@ -70,6 +72,7 @@ impl NavFrame {
             radial: (radial.length() > 1.0 && moving).then(|| radial.normalize_or_zero()),
             maneuver: None,
             target: None,
+            guidance: None,
         }
     }
 }
@@ -315,6 +318,36 @@ impl Navball {
             put("ICO-Navball-AntiTarget", -t);
         }
         // The craft's own marker: a fixed chevron at the centre.
+        if let Some(d) = nav.guidance {
+            let front = d.dot(nav.forward) > 0.0;
+            let (x, y) = if front {
+                (d.dot(nav.right), d.dot(nav.top))
+            } else {
+                let x = d.dot(nav.right);
+                let y = d.dot(nav.top);
+                let n = x.hypot(y).max(1e-6);
+                (x / n * 0.85, y / n * 0.85)
+            };
+            let (cx, cy) = (half + x * half, half - y * half);
+            let s = icon * 0.38;
+            ctx.set_stroke_style_str("#d0a6ff");
+            ctx.set_line_width((size as f64 / 90.0).max(2.0));
+            ctx.stroke_rect(cx - s, cy - s, s * 2.0, s * 2.0);
+            ctx.begin_path();
+            ctx.move_to(cx - s * 1.5, cy);
+            ctx.line_to(cx - s * 0.6, cy);
+            ctx.move_to(cx + s * 0.6, cy);
+            ctx.line_to(cx + s * 1.5, cy);
+            ctx.stroke();
+            canvas
+                .set_attribute(
+                    "data-ose-guidance",
+                    if front { "forward" } else { "behind" },
+                )
+                .ok();
+        } else {
+            canvas.remove_attribute("data-ose-guidance").ok();
+        }
         ctx.set_stroke_style_str("#ffcc33");
         ctx.set_line_width((size as f64 / 60.0).max(2.0));
         ctx.begin_path();

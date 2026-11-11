@@ -200,6 +200,8 @@ struct PartInfo {
     parachute: Option<ChuteInfo>,
     /// A two-anchor part the VAB runs from one part to another: "fuel_line", "strut", or empty.
     compound: &'static str,
+    docking: Option<ose_data::DockingPort>,
+    rcs_thrust_kn: f64,
 }
 
 #[derive(serde::Serialize)]
@@ -319,6 +321,8 @@ fn part_infos(parts: &[ose_data::PartDef]) -> Vec<PartInfo> {
                 } else {
                     ""
                 },
+                docking: p.docking.clone(),
+                rcs_thrust_kn: p.rcs.as_ref().map(|r| r.thrust_kn).unwrap_or(0.0),
             }
         })
         .collect()

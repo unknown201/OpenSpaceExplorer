@@ -87,6 +87,46 @@ pub const SEPARATION_GRACE_S: f64 = 2.0;
 /// A vessel's parts as spheres: (part, inertial offset from the vessel, radius).
 type Spheres = Vec<(usize, DVec3, f64)>;
 
+struct HullBox {
+    centre: DVec3,
+    half: DVec3,
+    axes: [DVec3; 3],
+}
+
+fn hull_box(st: &structure::Structure, facing: DVec3, origin: DVec3, part: usize) -> HullBox {
+    let (centre, half) = st.part_box(part);
+    let (x, y, z) = st.frame(facing);
+    HullBox {
+        centre: origin + st.offset_inertial(facing, centre - st.rigid.rest_centre()),
+        half,
+        axes: [x, y, z],
+    }
+}
+
+/// Sphere padding around a flat Sr docking port or probe can overlap metres before their hulls.
+/// For an aligned docking pair, reject those ghost contacts with the authored part bounds.
+/// These boxes remain proxies, not a claim of parity with the original game's mesh colliders.
+fn boxes_overlap(a: &HullBox, b: &HullBox) -> bool {
+    let delta = b.centre - a.centre;
+    let axes: [DVec3; 15] = std::array::from_fn(|i| {
+        if i < 3 {
+            a.axes[i]
+        } else if i < 6 {
+            b.axes[i - 3]
+        } else {
+            a.axes[(i - 6) / 3].cross(b.axes[(i - 6) % 3])
+        }
+    });
+    let radius = |shape: &HullBox, n: DVec3| {
+        shape.axes[0].dot(n).abs() * shape.half.x
+            + shape.axes[1].dot(n).abs() * shape.half.y
+            + shape.axes[2].dot(n).abs() * shape.half.z
+    };
+    axes.iter()
+        .filter(|n| n.length_squared() > 1e-12)
+        .all(|n| delta.dot(*n).abs() <= radius(a, *n) + radius(b, *n))
+}
+
 /// What a contact did: the vessels, the parts that touched, and how hard (m/s along the normal).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Contact {
@@ -168,12 +208,34 @@ impl Universe {
                     continue;
                 }
                 // the deepest overlap between their parts
+                let aligned = self
+                    .world
+                    .get_resource::<crate::docking::AlignedPorts>()
+                    .cloned()
+                    .unwrap_or_default();
+                let docking_pair = aligned
+                    .0
+                    .iter()
+                    .any(|&(x, _, y, _)| (x == a && y == b) || (x == b && y == a));
                 let mut best: Option<(f64, usize, usize, DVec3, DVec3)> = None;
                 for &(ia, oa, ra) in sa {
                     for &(ib, ob, rb) in sb {
+                        if aligned.contains(a, ia, b, ib) {
+                            continue;
+                        }
                         let d = (pa.r + oa) - (pb.r + ob);
                         let depth = ra + rb - d.length();
                         if depth > 0.0 && best.is_none_or(|x| depth > x.0) {
+                            if docking_pair {
+                                let sta = self.world.get::<structure::Structure>(a).unwrap();
+                                let stb = self.world.get::<structure::Structure>(b).unwrap();
+                                if !boxes_overlap(
+                                    &hull_box(sta, pa.facing, pa.r, ia),
+                                    &hull_box(stb, pb.facing, pb.r, ib),
+                                ) {
+                                    continue;
+                                }
+                            }
                             best = Some((depth, ia, ib, oa, ob));
                         }
                     }
@@ -779,6 +841,40 @@ fn hull_push(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn aligned_docking_does_not_collide_with_the_empty_padding_of_flat_port_bounds() {
+        let axes = [
+            DVec3::new(1.0, 0.0, 0.0),
+            DVec3::new(0.0, 1.0, 0.0),
+            DVec3::new(0.0, 0.0, 1.0),
+        ];
+        let a = super::HullBox {
+            centre: DVec3::ZERO,
+            half: DVec3::new(1.25, 0.2, 1.25),
+            axes,
+        };
+        let b = super::HullBox {
+            centre: DVec3::new(0.0, 1.0, 0.0),
+            half: a.half,
+            axes,
+        };
+        assert!(
+            a.half.length() * super::SPHERE_SHARE + b.half.length() * super::SPHERE_SHARE > 1.0,
+            "old sphere proxy overlaps"
+        );
+        assert!(
+            !super::boxes_overlap(&a, &b),
+            "the actual bounds still have clear space"
+        );
+        let b = super::HullBox {
+            centre: DVec3::new(0.0, 0.3, 0.0),
+            ..b
+        };
+        assert!(
+            super::boxes_overlap(&a, &b),
+            "real hull overlap remains a collision"
+        );
+    }
     use super::*;
     use crate::TICKS_PER_SECOND;
 

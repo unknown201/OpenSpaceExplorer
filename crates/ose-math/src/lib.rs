@@ -4,6 +4,7 @@
 
 pub mod kepler;
 pub mod orbit;
+pub mod rendezvous;
 pub mod vec3;
 
 pub use vec3::DVec3;

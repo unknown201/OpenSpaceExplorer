@@ -764,6 +764,8 @@ pub struct FlightView {
     /// The vessel's centre and a point 5 m along its nose on screen (device pixels), last frame: lets a test
     /// see which way a key turns the craft as the player sees it.
     pub nose_screen: Option<((f64, f64), (f64, f64))>,
+    pub guidance_screen: Option<(f64, f64)>,
+    pub port_screen: Option<(f64, f64)>,
     /// Terrain, ocean, sky and clouds of the body (planet.rs), created with the first frame.
     planet: Option<crate::planet::PlanetRenderer>,
     fx_nozzles: std::rc::Rc<std::cell::RefCell<HashMap<String, Vec<Nozzle>>>>,
@@ -818,6 +820,9 @@ pub struct FlightInput<'a> {
     pub maneuver: Option<(f64, f64, f64)>,
     /// Direction to the target vessel in the body's inertial frame, for the navball's target markers.
     pub target: Option<DVec3>,
+    /// Advisory star-space staging / encounter point and selected port, independent of maneuvers.
+    pub guidance_point: Option<DVec3>,
+    pub port_point: Option<DVec3>,
     /// Body spin from the server's `BodyRotation` (protocol 9); the embedded system file otherwise.
     pub spin: Option<Spin>,
     /// Wall clock, ms (flex interpolation).
@@ -884,6 +889,8 @@ impl FlightView {
             selected: None,
             pick_cam: (DVec3::NEG_Z, DVec3::Y),
             nose_screen: None,
+            guidance_screen: None,
+            port_screen: None,
             planet: None,
             fx_nozzles: Default::default(),
             fx_requested: false,
@@ -1361,6 +1368,12 @@ impl FlightView {
         self.nose_screen = gpu
             .project(pos - cam)
             .zip(gpu.project(pos - cam + dir * 5.0));
+        self.guidance_screen = inp
+            .guidance_point
+            .and_then(|p| gpu.project(to_model(p - inp.body_pos, spin, inp.ut) - cam));
+        self.port_screen = inp
+            .port_point
+            .and_then(|p| gpu.project(to_model(p - inp.body_pos, spin, inp.ut) - cam));
         self.pick_boxes.clear();
         self.pick_poses.clear();
 
@@ -1646,7 +1659,9 @@ impl FlightView {
                         // Legs, wheels and panels have a commanded rest pose; antennas unfold from
                         // the readout's extended state (protocol 41).
                         model.rig.default_sample().is_some()
-                            || readout.is_some_and(|f| f.antennas.iter().any(|a| a.0 as usize == i))
+                            // Older local exports omit controller metadata. The authoritative
+                            // part list still identifies panels/gear without animating engine rigs.
+                            || readout.is_some_and(|f| f.antennas.iter().chain(&f.panels).chain(&f.gear).any(|a| a.0 as usize == i))
                     }) {
                         let deployed = inp
                             .vessel

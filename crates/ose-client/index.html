@@ -197,6 +197,34 @@
     #status { margin-left: auto; color: #6f7f9c; font-size: 12px; }
     #help { position: fixed; bottom: 8px; left: 12px; color: #4e5c78; font-size: 11px; pointer-events: none; }
 
+    /* Optional rendezvous director: left of the view, above staging; crew and app controls stay right. */
+    #rdv-panel { pointer-events:auto; position:absolute; left:calc(64 * var(--u)); top:calc(100 * var(--u)); width:calc(330 * var(--u)); max-width:calc(100vw - 64px); background:#10141bf5; border:1px solid #46536c; border-radius:calc(6 * var(--u)); color:#e6ecf7; font-size:calc(14 * var(--u)); }
+    #rdv-panel summary { cursor:pointer; padding:calc(10 * var(--u)); color:#c9adff; }
+    #rdv-summary { color:#a7b7d0; font-size:calc(11 * var(--u)); margin-left:calc(8 * var(--u)); }
+    .rdv-content { padding:0 calc(12 * var(--u)) calc(12 * var(--u)); display:grid; gap:calc(8 * var(--u)); }
+    .rdv-content label { display:grid; gap:calc(3 * var(--u)); font-size:calc(12 * var(--u)); color:#b7c7de; }
+    .rdv-content select { width:100%; min-width:0; background:#1b2230; color:#e6ecf7; border:1px solid #53617a; padding:calc(5 * var(--u)); border-radius:calc(3 * var(--u)); font:inherit; }
+    .rdv-selection { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:calc(8 * var(--u)); }
+    #rdv-instruction { font-size:calc(17 * var(--u)); font-weight:600; }
+    #rdv-help { color:#b4c2d7; margin:0; font-size:calc(12 * var(--u)); }
+    #rdv-values { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:calc(5 * var(--u)); margin:0; font-variant-numeric:tabular-nums; }
+    #rdv-values dt { color:#b4c2d7; font-size:calc(12 * var(--u)); } #rdv-values dd { margin:0; text-align:right; }
+    #rdv-note { color:#ffd08b; font-size:calc(12 * var(--u)); } #rdv-note:empty { display:none; }
+    .rdv-buttons { display:flex; gap:calc(5 * var(--u)); flex-wrap:wrap; } #flight-hud .rdv-buttons button { font-size:calc(12 * var(--u)); }
+    #rdv-hold[aria-pressed=true] { background:#17321c; color:#8fff9c; border-color:#8fff9c; }
+    .rdv-manual { font-size:calc(10 * var(--u)); color:#b7c7de; }
+    #rdv-panel[data-level=minimal] #rdv-help { display:none; }
+    #rdv-panel[data-level=off] #rdv-values, #rdv-panel[data-level=off] #rdv-help { display:none; }
+    #rdv-alignment { position:relative; width:calc(92 * var(--u)); height:calc(92 * var(--u)); margin:auto; border:1px solid #53617a; border-radius:50%; color:#d0b1ff; }
+    #rdv-alignment[hidden], .rdv-world[hidden] { display:none; }
+    .rdv-cross { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); color:#b7c7de; font-size:calc(28 * var(--u)); }
+    #rdv-dot { position:absolute; transform:translate(-50%,-50%); font-size:calc(24 * var(--u)); }
+    .rdv-world { position:absolute; transform:translate(-50%,-50%); pointer-events:none; color:#d0b1ff; text-align:center; text-shadow:0 1px 3px #000; }
+    .rdv-world span { display:block; font-size:calc(36 * var(--u)); line-height:1; } .rdv-world b { display:block; font-size:calc(12 * var(--u)); font-weight:500; white-space:nowrap; background:#10141bd9; padding:calc(3 * var(--u)); }
+    .rdv-world.rdv-port { color:#8fff9c; } .rdv-world.rdv-port span { font-size:calc(24 * var(--u)); }
+    .lp-rdv { display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center; padding:12px; background:#e3e9f4; color:#142138; font-size:13px; }
+    .lp-rdv label { display:flex; gap:6px; align-items:center; } .lp-rdv span { width:100%; font-size:12px; } .lp-rdv select { max-width:280px; background:#fff; color:#142138; }
+    @media(max-width:700px) { #rdv-panel { top:70px; left:8px; width:280px; font-size:13px; } .rdv-content { padding:0 10px 10px; gap:6px; } #rdv-help,.rdv-content label,#rdv-values dt,#flight-hud .rdv-buttons button { font-size:12px; } #rdv-instruction {font-size:15px;} #rdv-panel summary {padding:8px;} }
   </style>
   <style>
     /* Main menu after the original (MainMenu.prefab, 1920x1080 reference): logo top-left, a column of items
@@ -1456,6 +1484,7 @@
             <span>Orbit altitude</span><input id="launch-altitude" data-ose="launch-altitude" type="number" min="70" max="100000" step="10" value="100" /><span>km</span>
             <button id="launchpad-refresh" class="secondary" data-ose="craft-refresh">Refresh</button>
           </div>
+          <div class="lp-rdv"><label>Rendezvous destination <select id="lp-rdv-destination" data-ose="launch-rendezvous-destination"><option value="">None · manual launch</option></select></label><label><input id="lp-rdv-enable" type="checkbox" /> Enable rendezvous guidance</label><span>Fly the core manually, then select it for later deliveries. Ascent and docking remain manual.</span></div>
         </div>
       </div>
       <div class="screen" id="screen-vab" data-ose="vab">
@@ -1608,6 +1637,9 @@
           <label class="set-row"><span data-loc="Menu/Settings/Language">Language</span><select id="settings-lang" data-ose="settings-lang"></select></label>
           <label class="set-row"><span>Interface scale</span><input id="settings-scale" data-ose="settings-scale" type="range" min="50" max="150" step="5" value="100" /><b id="settings-scale-text">100%</b></label>
           <label class="set-row"><span>First-time hints (PAIGE)</span><input id="settings-ftue" data-ose="settings-ftue" type="checkbox" checked /></label>
+          <label class="set-row"><span>Rendezvous guidance</span><select id="settings-rdv-level"><option value="off">Off</option><option value="minimal">Minimal</option><option value="guided">Guided</option></select></label>
+          <label class="set-row"><span>Rendezvous world markers</span><input id="settings-rdv-world" type="checkbox" checked /></label>
+          <label class="set-row"><span>Rendezvous timing sounds</span><input id="settings-rdv-audio" type="checkbox" /></label>
           <label class="set-row"><span>Show key hints on screen</span><input id="settings-hints" data-ose="settings-hints" type="checkbox" checked /></label>
         </section>
         <section data-tab="graphics">
@@ -1633,6 +1665,17 @@
     <button id="ts-back" data-ose="ts-back" data-loc="HUD/VesselStatus/BackToKSC">Back to KSC</button>
   </div>
   <div id="flight-hud" data-ose="flight">
+    <details id="rdv-panel" data-ose="rendezvous"><summary>Rendezvous <span id="rdv-summary">optional guidance</span></summary>
+      <div class="rdv-content"><div class="rdv-selection"><label>Destination <select id="rdv-destination" data-ose="rendezvous-destination"><option value="">Choose an orbiting vessel</option></select></label>
+      <label>Guidance <select id="rdv-level" data-ose="rendezvous-level"><option value="off">Off</option><option value="minimal">Minimal</option><option value="guided">Guided</option></select></label></div>
+      <label>Your port <select id="rdv-own-port" data-ose="rendezvous-own-port"></select></label><label>Station port <select id="rdv-target-port" data-ose="rendezvous-target-port"></select></label>
+      <div id="rdv-phase" class="fh-label">Prepare</div><strong id="rdv-instruction">Select a destination for this delivery</strong><p id="rdv-help">Guidance supplies timing and direction. You control throttle, staging, and RCS.</p>
+      <dl id="rdv-values"></dl><div id="rdv-alignment" hidden><span class="rdv-cross">+</span><span id="rdv-dot">○</span></div>
+      <div id="rdv-note" role="status" aria-live="polite"></div><div class="rdv-buttons"><button id="rdv-plan" data-ose="rendezvous-plan">Plan rendezvous</button><button id="rdv-hold" data-ose="rendezvous-hold" disabled title="SAS controls attitude only. You control throttle and RCS.">Hold direction</button><button id="rdv-warp" data-ose="rendezvous-warp" disabled>Warp to opportunity</button><button id="rdv-cancel">End guidance</button></div>
+      <span class="rdv-manual">MANUAL FLIGHT · attitude holds never apply thrust</span></div>
+    </details>
+    <div id="rdv-world" class="rdv-world" hidden><span>⊕</span><b id="rdv-world-label">Port staging point</b></div>
+    <div id="rdv-axis" class="rdv-world rdv-port" hidden><span>□</span><b>Selected docking port</b></div>
     <div class="fh-top"><div id="fh-recoverable" data-ose="flight-recoverable" title="Landed on Kerbin: Recover brings the crew, parts and science home">// <span data-loc="HUD/VesselStatus/Recoverable">RECOVERABLE</span> //</div><div id="fh-situation" class="fh-small">--</div><div id="fh-met" class="fh-small" data-ose="flight-met" title="Mission elapsed time" data-loc-title="HUD/Tooltips/MissionElapsedTime"></div><div id="fh-note" class="fh-small" style="color:#f0a070"></div><div id="fh-running" class="fh-small" data-ose="flight-running" style="color:#8fd08f"></div><div id="fh-control" data-ose="flight-control" style="color:#ff6a5a;font-weight:700"></div><div id="fh-thermal" data-ose="flight-thermal" data-level="off" title="Hottest part as a fraction of its maximum temperature"><span id="fh-thermal-text"></span><div class="fh-thermal-track"><div id="fh-thermal-fill"></div></div></div></div>
     <div class="fh-bottom">
       <div class="fh-thr-col"><button id="fh-full" class="fh-thr-btn" data-ose="flight-throttle-full" title="Full throttle (Z)">&#9650;</button><div class="fh-throttle" title="Throttle: hold Shift / Ctrl, Z full, X cut"><div id="fh-throttle-fill"></div><span>THR</span><span id="fh-throttle-pct">0%</span></div><button id="fh-cut" class="fh-thr-btn" data-ose="flight-throttle-cut" title="Cut the throttle (X)">&#9660;</button></div>

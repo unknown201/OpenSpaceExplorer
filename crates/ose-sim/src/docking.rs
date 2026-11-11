@@ -249,14 +249,18 @@ pub fn merge(a: &Craft, pa: &Port, b: &Craft, pb: &Port) -> Craft {
             .iter()
             .map(|s| s.iter().map(|i| i + off).collect::<Vec<usize>>()),
     );
-    Craft {
+    let mut merged = Craft {
         colors: a.colors,
         loose: Vec::new(),
         name: a.name.clone(),
         description: a.description.clone(),
         parts,
         stages,
-    }
+    };
+    // Reusing a saved module must not introduce duplicate part IDs into a station. Existing station
+    // IDs win, so pilots targeting its other ports keep pointing at the same physical part.
+    merged.dedupe_guids();
+    merged
 }
 
 /// Keep only the parts in `keep` (each keeps its parent if that is kept too), with stages re-indexed and
@@ -474,6 +478,61 @@ pub struct CraftRev(pub u32);
 pub struct ControlPart(pub String);
 
 impl Universe {
+    /// Keep an explicitly targeted orbital docking pair in local physics. Debris and unrelated ships
+    /// do not prevent normal high warp, and the bubble disappears when the target is cleared.
+    pub(crate) fn docking_neighbours(&mut self) -> std::collections::HashSet<Entity> {
+        let mut local = std::collections::HashSet::new();
+        for e in self.vessels() {
+            let Some(t) = self.target(e) else { continue };
+            if self.world.get::<CraftDoc>(e).is_none()
+                || self.world.get::<CraftDoc>(t).is_none()
+                || self.world.get::<crate::vessels::Debris>(e).is_some()
+                || self.world.get::<crate::vessels::Debris>(t).is_some()
+                || self.body_of(e) != self.body_of(t)
+            {
+                continue;
+            }
+            let flying = |e| {
+                self.powered(e)
+                    .or_else(|| self.dormant(e))
+                    .is_some_and(|p| !p.landed && !p.crashed)
+            };
+            if flying(e)
+                && flying(t)
+                && self
+                    .position_of(e)
+                    .zip(self.position_of(t))
+                    .is_some_and(|(a, b)| (a - b).length() < 500.0)
+            {
+                local.insert(e);
+                local.insert(t);
+            }
+        }
+        local
+    }
+
+    /// Refresh the aligned-port exemption before hull contacts, not after a sphere has bounced two
+    /// correctly aligned ports apart. Capture and acquire forces still run in the normal docking step.
+    pub(crate) fn prepare_docking_contacts(&mut self, defs: &[PartDef]) {
+        let pairs = self.port_pairs(defs);
+        self.refresh_aligned_ports(&pairs);
+    }
+    fn refresh_aligned_ports(&mut self, pairs: &[Latch]) {
+        let aligned = pairs
+            .iter()
+            .filter(|l| l.aligned())
+            .map(|l| {
+                (
+                    l.a,
+                    self.structure_index(l.a, l.port_a.part),
+                    l.b,
+                    self.structure_index(l.b, l.port_b.part),
+                )
+            })
+            .collect();
+        self.world.insert_resource(AlignedPorts(aligned));
+    }
+
     pub fn set_craft(&mut self, e: Entity, mut craft: Craft) {
         // a vessel flies its craft, not the editor's loose assemblies
         craft.loose.clear();
@@ -587,6 +646,34 @@ impl Universe {
         if saved.debris {
             self.world.entity_mut(e).insert(crate::vessels::Debris);
         }
+    }
+
+    /// Retain persistent per-part state across a docking topology change. The old-to-new map is
+    /// explicit because incoming GUIDs may need deduplication and missing parts have been removed.
+    fn carry_docked_state(&mut self, e: Entity, old: &SavedParts, map: &[Option<usize>]) {
+        let Some(mut st) = self.world.get_mut::<structure::Structure>(e) else {
+            return;
+        };
+        for (i, j) in map.iter().enumerate() {
+            let Some(j) = *j else { continue };
+            macro_rules! copy {
+                ($field:ident) => {
+                    if let (Some(value), Some(slot)) = (old.$field.get(i), st.$field.get_mut(j)) {
+                        *slot = *value;
+                    }
+                };
+            }
+            copy!(deployed);
+            copy!(chutes);
+            copy!(chute_open);
+            copy!(temperature_k);
+            copy!(gear_out);
+            copy!(converter_on);
+            copy!(fairing_deployed);
+            copy!(bay_open);
+            copy!(engine_shutdown);
+        }
+        st.update_shielding();
     }
 
     /// The part (index into `current_craft`) the vessel is controlled from, when it is not the root.
@@ -949,15 +1036,23 @@ impl Universe {
     /// Every pair of fitting free ports on vessels under power whose faces are within `PORT_LOOK_M`, apart
     /// from pairs kept apart after undocking.
     fn port_pairs(&mut self, defs: &[PartDef]) -> Vec<Latch> {
-        let vessels: Vec<Entity> = {
+        let mut vessels: Vec<Entity> = {
             let mut q = self
                 .world
                 .query_filtered::<Entity, (With<CraftDoc>, With<flight::Powered>)>();
             q.iter(&self.world).collect()
         };
+        vessels.sort_by_key(|e| e.to_bits());
         let mut out = Vec::new();
         for (i, &a) in vessels.iter().enumerate() {
             for &b in &vessels[i + 1..] {
+                // Preserve the selected destination, independently of archetype/query order.
+                // With mutual/no targets the older stable entity is the deterministic survivor.
+                let (a, b) = if self.target(a) == Some(b) && self.target(b) != Some(a) {
+                    (b, a)
+                } else {
+                    (a, b)
+                };
                 let Some(d) = self.distance_between(a, b) else {
                     continue;
                 };
@@ -1149,19 +1244,7 @@ impl Universe {
         self.refresh_undock_blocks(defs);
         let mut pairs = self.port_pairs(defs);
         pairs.sort_by(|x, y| x.distance_m.total_cmp(&y.distance_m));
-        let aligned: Vec<(Entity, usize, Entity, usize)> = pairs
-            .iter()
-            .filter(|l| l.aligned())
-            .map(|l| {
-                (
-                    l.a,
-                    self.structure_index(l.a, l.port_a.part),
-                    l.b,
-                    self.structure_index(l.b, l.port_b.part),
-                )
-            })
-            .collect();
-        self.world.insert_resource(AlignedPorts(aligned));
+        self.refresh_aligned_ports(&pairs);
         for l in pairs.iter().filter(|l| l.aligned()) {
             self.port_faces_meet(l);
         }
@@ -1367,9 +1450,17 @@ impl Universe {
         let mut science = self.science_carried(l.a);
         science.extend(self.science_carried(l.b));
         let frame_a = self.frame_of(l.a);
+        let states = (self.saved_parts(l.a), self.saved_parts(l.b));
         self.rebuild_vessel(
             l.a, &merged, pa.r, v, pa.facing, crew, defs, resources, spec_for,
         );
+        if let Some(state) = &states.0 {
+            self.carry_docked_state(l.a, state, &map_a);
+        }
+        if let Some(state) = &states.1 {
+            let map: Vec<_> = map_b.iter().map(|i| i.map(|i| i + off)).collect();
+            self.carry_docked_state(l.a, state, &map);
+        }
         self.keep_attitude(l.a, &pa, frame_a.as_ref());
         // the joined centre where `a`'s parts still are
         if let (Some(old), Some(new)) = (&frame_a, self.world.get::<structure::Structure>(l.a)) {
@@ -1381,6 +1472,15 @@ impl Universe {
         }
         self.set_docked(l.a, links);
         self.set_science_carried(l.a, science);
+        let observers: Vec<_> = self
+            .world
+            .query::<(Entity, &crate::vessels::Target)>()
+            .iter(&self.world)
+            .filter_map(|(e, t)| (t.0 == l.b).then_some(e))
+            .collect();
+        for e in observers {
+            self.set_target(e, if e == l.a { None } else { Some(l.a) });
+        }
         self.despawn_vessel(l.b);
         true
     }
@@ -1447,6 +1547,10 @@ impl Universe {
                 .ok_or("not docked there")?,
         };
         let p = self.powered(e).cloned().ok_or("vessel is not in flight")?;
+        let state = self.saved_parts(e);
+        let present = state
+            .as_ref()
+            .map(|s| self.present_map(e, s.craft.parts.len()));
         let ((stay, map_stay), (go, map_go)) = split(&craft, pb);
         let pick = |m: &Vec<Option<usize>>, i: usize| m.get(i).copied().flatten();
         let crew = self.crew(e);
@@ -1523,6 +1627,15 @@ impl Universe {
             spec_for,
         );
         self.keep_attitude(ne, &p, frame.as_ref());
+        if let (Some(state), Some(present)) = (&state, &present) {
+            for (dest, map) in [(e, &map_stay), (ne, &map_go)] {
+                let map: Vec<_> = present
+                    .iter()
+                    .map(|i| i.and_then(|i| map.get(i).copied().flatten()))
+                    .collect();
+                self.carry_docked_state(dest, state, &map);
+            }
+        }
         self.set_docked(ne, links_of(&map_go));
         if let (Some(sa), Some(sb)) = (pick(&map_stay, pa), pick(&map_go, pb)) {
             self.block_relatch(e, sa, ne, sb, reengage);
@@ -1652,6 +1765,89 @@ mod tests {
     fn faces(u: &Universe, a: Entity, b: Entity) -> (DVec3, DVec3, f64) {
         let ((fa, xa), (fb, _)) = (port_of(u, a), port_of(u, b));
         (fa, fb, (fb - fa).dot(xa))
+    }
+
+    #[test]
+    fn targeted_station_wakes_and_stays_in_physics_until_the_approach_is_cleared() {
+        let (mut u, a, b) = pair(40.0, 0.0, DVec3::new(0.0, -1.0, 0.0));
+        u.set_part_catalog(defs(), resources());
+        for e in [a, b] {
+            let mut p = u.powered(e).unwrap().clone();
+            p.attitude = flight::Attitude::Fixed(p.facing);
+            p.coasting_since = Some(-20.0);
+            u.set_powered(e, p);
+        }
+        let p = u.powered(a).unwrap().clone();
+        u.world.entity_mut(a).remove::<flight::Powered>();
+        u.set_dormant(a, p);
+        assert!(u.set_target(b, Some(a)));
+        u.set_warp(1000);
+        assert!(u.warp() <= flight::MAX_PHYSICS_WARP);
+        u.set_warp(1);
+        for _ in 0..(12 * crate::TICKS_PER_SECOND) {
+            u.step();
+        }
+        assert!(
+            u.powered(a).is_some(),
+            "quiet station remains physical while targeted nearby"
+        );
+        assert!(u.powered(b).is_some(), "quiet delivery remains physical");
+        u.set_target(b, None);
+        u.set_warp(1000);
+        assert!(
+            u.dormant(a).is_some(),
+            "clearing the target restores ordinary packed coasting"
+        );
+    }
+
+    #[test]
+    fn merge_preserves_existing_part_ids_and_redirects_observers_of_the_absorbed_vessel() {
+        let (mut u, a, b) = pair(0.3, 0.0, DVec3::new(0.0, -1.0, 0.0));
+        for e in [a, b] {
+            let mut st = u.world.get_mut::<structure::Structure>(e).unwrap();
+            st.deployed[0] = true;
+            st.temperature_k[0] = 350.0;
+        }
+        let body = u.body_entity("Kerbin").unwrap();
+        let observer = u.spawn_vessel_in_circular_orbit("next delivery", body, 100_000.0);
+        u.set_target(observer, Some(b));
+        u.set_target(b, Some(a));
+        let before = u.current_craft(a).unwrap();
+        assert_eq!(u.dock_latched(&defs(), &resources(), &spec), vec![(a, b)]);
+        assert_eq!(u.target(observer), Some(a));
+        assert_eq!(u.target(a), None);
+        let merged = u.current_craft(a).unwrap();
+        let off = before.parts.len();
+        let st = u.world.get::<structure::Structure>(a).unwrap();
+        for i in [0, off] {
+            assert!(
+                st.deployed[i],
+                "docking preserves deployed panel state on both craft"
+            );
+            assert_eq!(st.temperature_k[i], 350.0);
+        }
+        assert!(before
+            .parts
+            .iter()
+            .zip(&merged.parts)
+            .all(|(a, b)| a.guid == b.guid));
+        assert_eq!(
+            merged
+                .parts
+                .iter()
+                .map(|p| &p.guid)
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            merged.parts.len()
+        );
+        let new = u.undock(a, None, &defs(), &resources(), &spec).unwrap();
+        for e in [a, new] {
+            let st = u.world.get::<structure::Structure>(e).unwrap();
+            assert!(
+                st.deployed.iter().any(|d| *d),
+                "undocking retains deployment state"
+            );
+        }
     }
 
     #[test]
