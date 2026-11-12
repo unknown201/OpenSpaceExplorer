@@ -92,6 +92,8 @@ available. Label any prediction limits rather than inventing precision.
 
 Make the action phase-specific: **Hold burn direction**, **Hold braking direction**, or
 **Hold port alignment**. Tooltip: “SAS controls attitude. You control throttle and RCS.”
+The existing **Maneuver** SAS radial selects the same active rendezvous cue. When no
+rendezvous aiming cue is active, it follows the ordinary planned maneuver.
 Use the existing attitude-hold interaction vocabulary rather than an ambiguous generic
 “Lock” action that could imply automatic rendezvous.
 

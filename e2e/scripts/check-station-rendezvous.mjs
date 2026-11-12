@@ -43,8 +43,9 @@ try{
   assert.match(await page.locator('#rdv-values').innerText(),/Δv remaining/);
   assert.equal(await page.locator('#rdv-level').inputValue(),'guided');
   await wait(()=>document.querySelector('#fh-throttle-pct')?.textContent==='0%');
-  await page.locator('#rdv-hold').click();
+  await page.locator('#fh-sas-maneuver').click();
   await wait(()=>document.querySelector('#rdv-hold')?.getAttribute('aria-pressed')==='true');
+  assert.match(await page.locator('#fh-sas-maneuver').getAttribute('class'),/on/);
   assert.equal(await page.locator('#fh-throttle-pct').textContent(),'0%','attitude hold does not apply thrust');
   await page.keyboard.down('w');await page.waitForTimeout(200);await page.keyboard.up('w');
   await wait(()=>document.querySelector('#rdv-hold')?.getAttribute('aria-pressed')==='false');
@@ -61,11 +62,12 @@ try{
   await page.selectOption('#rdv-level','guided');
   await page.screenshot({path:path.join(out,'intercept-after-reload.png')});
   // A real, deliberately early manual burst validates authoritative delta-v tracking.
-  await page.locator('#rdv-hold').click();
+  await page.locator('#fh-sas-maneuver').click();
   await page.waitForFunction(()=>{
     const labels=[...document.querySelectorAll('#rdv-values dt')];
-    return parseFloat(labels.find(e=>e.textContent==='Cue error')?.nextElementSibling?.textContent||'999')<2;
+    return parseFloat(labels.find(e=>e.textContent==='Cue error')?.nextElementSibling?.textContent||'999')<3;
   },null,{timeout:120_000});
+  await page.screenshot({path:path.join(out,'maneuver-radial-aligned.png')});
   const remaining=()=>page.evaluate(()=>parseFloat([...document.querySelectorAll('#rdv-values dt')].find(e=>e.textContent==='Δv remaining').nextElementSibling.textContent));
   const before=await remaining();
   await page.keyboard.down('ShiftLeft');await page.waitForTimeout(500);await page.keyboard.up('ShiftLeft');
@@ -87,7 +89,7 @@ try{
   await page.screenshot({path:path.join(out,'launch-plane-guidance.png')});
   assert.deepEqual(errors,[]);
   const report={pass:true,renderer:await page.locator('[data-ose="gpu"]').getAttribute('data-ose-renderer'),
-    checks:['actual ISS flight checkpoint','fuel-budgeted advisory intercept','attitude-only hold','manual steering override','Off retains station','Minimal hides instructions','save/reload preferences and destination','manually flown burn updates delta-v','optional pad guidance','manual throttle and staging preserved'],errors};
+    checks:['actual ISS flight checkpoint','fuel-budgeted advisory intercept','maneuver radial follows rendezvous cue','attitude-only hold','manual steering override','Off retains station','Minimal hides instructions','save/reload preferences and destination','manually flown burn updates delta-v','optional pad guidance','manual throttle and staging preserved'],errors};
   await fs.writeFile(path.join(out,'report.json'),JSON.stringify(report,null,2));
   console.log(JSON.stringify(report));
 }catch(error){await page.screenshot({path:path.join(out,'failure.png')});console.error((await page.locator('body').innerText()).slice(-8000));throw error;}

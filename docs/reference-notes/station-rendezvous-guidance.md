@@ -9,6 +9,17 @@ navball can be held with an explicit attitude-only action. Off, Minimal and Guid
 are available in flight and settings. World markers and audible burn prompts are separate options.
 There is no automatically scheduled burn, throttle, staging or translation command in the director.
 
+The maneuver SAS radial also selects the active rendezvous box and stays lit while following it,
+sharing the dedicated hold's phase updates and manual override. With guidance off or no active
+aiming cue, it retains the ordinary maneuver-node mode. Previously the radial always requested
+the server's scheduled-maneuver mode, so it could stay motionless despite a visible rendezvous
+box. The browser regression now clicks the radial, verifies actual alignment within three degrees,
+zero throttle, correct selection lights, manual override, and ordinary-mode fallback when off.
+The regression failed against the previous client bundle and passed with the fix in Chromium
+and Firefox. The real ISS delivery check also passed through the maneuver radial, including
+alignment and manually flown burn feedback; the local capture is
+`.cache/rdv-radial/iss-browser/maneuver-radial-aligned.png` in the original workspace.
+
 This is an OSE feature design, not a reproduction of an existing KSP2 rendezvous assistant.
 The installed KSP2 game was not run for this investigation. Local decompiled reference files
 `reference/ksp2/Assembly-CSharp/KSP.Modules/Module_DockingNode.cs` (particularly

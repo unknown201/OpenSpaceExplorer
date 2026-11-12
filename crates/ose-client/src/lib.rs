@@ -11145,9 +11145,7 @@ impl App {
                     pro * n.prograde_mps + normal * n.normal_mps + normal.cross(pro) * n.radial_mps;
                 (d.length() > 0.01).then(|| d.normalize_or_zero())
             });
-        if self.rendezvous.enabled && self.rendezvous.level != rendezvous::Level::Off {
-            nav.guidance = self.rendezvous.cue.map(g);
-        }
+        nav.guidance = self.rendezvous.active_cue().map(g);
         if self.speed_target {
             nav.prograde = v.target.as_ref().and_then(|t| {
                 let relative = -g(t.relative_velocity_mps);
@@ -11874,6 +11872,9 @@ impl App {
             self.sas_hold();
             return;
         }
+        if id == "fh-sas-maneuver" && self.rdv_hold() {
+            return;
+        }
         if id == "fh-sas-target" || id == "fh-sas-antitarget" {
             if self.target.is_some() {
                 self.set_attitude(if id == "fh-sas-target" {
@@ -12151,6 +12152,7 @@ impl App {
             &hud::HudState {
                 f,
                 attitude: &self.attitude,
+                rendezvous_hold: self.rendezvous.hold,
                 orbit_speed: self.speed_orbit,
                 speed_label: &if self.speed_orbit {
                     self.tr("HUD/Orbit", "ORBIT")
@@ -13062,6 +13064,9 @@ impl App {
                 pitch_deg,
                 heading_deg,
             } => format!("pitch {pitch_deg:.0}\u{b0} hdg {heading_deg:.0}\u{b0}"),
+            ose_net::AttitudeMode::Fixed(_) if self.rendezvous.hold => {
+                "Holding rendezvous cue".to_string()
+            }
             ose_net::AttitudeMode::Fixed(_) => "Holding a direction".to_string(),
             ose_net::AttitudeMode::SurfacePrograde => "Prograde (surface)".to_string(),
             ose_net::AttitudeMode::SurfaceRetrograde => "Retrograde (surface)".to_string(),

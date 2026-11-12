@@ -116,6 +116,18 @@ impl Default for Director {
     }
 }
 impl Director {
+    /// The visible aiming cue, shared by the navball and both attitude-hold entry points.
+    pub fn active_cue(&self) -> Option<DVec3> {
+        if self.enabled
+            && self.level != Level::Off
+            && matches!(self.phase, Phase::Intercept | Phase::Approach | Phase::Dock)
+        {
+            self.cue
+        } else {
+            None
+        }
+    }
+
     pub fn invalidate(&mut self) {
         self.transfer = None;
         self.correction_arrival = None;
@@ -324,6 +336,37 @@ pub fn alignment_hold(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_active_aiming_phases_expose_a_hold_cue() {
+        let cue = DVec3::new(1.0, 0.0, 0.0);
+        let mut director = Director {
+            enabled: true,
+            level: Level::Guided,
+            cue: Some(cue),
+            ..Default::default()
+        };
+        for phase in [Phase::Intercept, Phase::Approach, Phase::Dock] {
+            director.phase = phase;
+            assert_eq!(director.active_cue(), Some(cue));
+        }
+        for phase in [
+            Phase::Prepare,
+            Phase::Launch,
+            Phase::Coast,
+            Phase::Unavailable,
+            Phase::Complete,
+        ] {
+            director.phase = phase;
+            assert_eq!(director.active_cue(), None, "stale cue in {phase:?}");
+        }
+        director.phase = Phase::Intercept;
+        director.level = Level::Off;
+        assert_eq!(director.active_cue(), None);
+        director.level = Level::Minimal;
+        assert_eq!(director.active_cue(), Some(cue));
+        director.enabled = false;
+        assert_eq!(director.active_cue(), None);
+    }
     #[test]
     fn reflected_port_pose_and_rotating_port_velocity_follow_physics() {
         let x = DVec3::new(1.0, 0.0, 0.0);

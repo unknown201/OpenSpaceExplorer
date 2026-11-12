@@ -31,14 +31,32 @@ test('optional rendezvous plans preserve manual flight and release the hold on s
   await expect(page.locator('#rdv-panel')).toHaveAttribute('data-phase','Intercept burn');
   await expect(page.locator('#rdv-values')).toContainText('Δv remaining');
   await expect(page.locator('#fh-throttle-pct')).toHaveText('0%');
-  await page.locator('#rdv-hold').click();
+  // The maneuver radial should follow the same box as the dedicated guidance hold.
+  await page.locator('#fh-sas-maneuver').click();
   await expect(page.locator('#rdv-hold')).toHaveAttribute('aria-pressed','true');
+  await expect(page.locator('#fh-sas-maneuver')).toHaveClass(/on/);
+  await expect(page.locator('#fh-sas-stability')).not.toHaveClass(/on/);
+  await expect(page.locator('#fh-attitude')).toHaveText('Holding rendezvous cue');
   await expect(page.locator('#fh-throttle-pct')).toHaveText('0%');
+  await expect.poll(()=>page.evaluate(()=>{
+    const label=[...document.querySelectorAll('#rdv-values dt')].find(e=>e.textContent==='Cue error');
+    return parseFloat(label?.nextElementSibling?.textContent||'Infinity');
+  }),{timeout:45_000}).toBeLessThan(3);
   await page.keyboard.down('w');await page.waitForTimeout(200);await page.keyboard.up('w');
   await expect(page.locator('#rdv-hold')).toHaveAttribute('aria-pressed','false');
+  await expect(page.locator('#fh-sas-maneuver')).not.toHaveClass(/on/);
+  await page.locator('#rdv-hold').click();
+  await expect(page.locator('#fh-sas-maneuver')).toHaveClass(/on/);
+  await page.locator('#fh-sas-prograde').click();
+  await expect(page.locator('#rdv-hold')).toHaveAttribute('aria-pressed','false');
+  await expect(page.locator('#fh-sas-prograde')).toHaveClass(/on/);
   await page.selectOption('#rdv-level','minimal');await expect(page.locator('#rdv-help')).toBeHidden();
   await page.selectOption('#rdv-level','off');
   await expect(page.locator('#rdv-destination')).toHaveValue(core);
   await expect(page.locator('#rdv-world')).toBeHidden();
+  await page.locator('#fh-sas-maneuver').click();
+  // Without a scheduled node, the existing maneuver mode holds the current direction.
+  await expect(page.locator('#fh-attitude')).toHaveText('Holding a direction');
+  await expect(page.locator('#rdv-hold')).toHaveAttribute('aria-pressed','false');
   await expect(page.locator('#fh-throttle-pct')).toHaveText('0%');
 });

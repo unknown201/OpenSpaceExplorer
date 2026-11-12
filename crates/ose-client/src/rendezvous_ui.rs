@@ -186,11 +186,8 @@ pub fn install(app: &Shared) -> Result<(), JsValue> {
                 "rdv-hold" => {
                     if a.rendezvous.hold {
                         a.rdv_release();
-                    } else if let Some(cue) = a.rendezvous.cue {
-                        a.rendezvous.hold = true;
-                        a.rendezvous.hold_sent_ms = 0.0;
-                        a.attitude = ose_net::AttitudeMode::Fixed(cue);
-                        a.send_controls();
+                    } else {
+                        a.rdv_hold();
                     }
                 }
                 "rdv-warp" => {
@@ -301,6 +298,17 @@ impl App {
         }
         self.rendezvous.last_render_ms = 0.0;
     }
+    pub(super) fn rdv_hold(&mut self) -> bool {
+        let Some(cue) = self.rendezvous.active_cue() else {
+            return false;
+        };
+        self.rendezvous.hold = true;
+        self.rendezvous.hold_sent_ms = 0.0;
+        self.attitude = ose_net::AttitudeMode::Fixed(cue);
+        self.send_controls();
+        true
+    }
+
     pub(super) fn rdv_release(&mut self) {
         if self.rendezvous.hold {
             self.rendezvous.hold = false;
@@ -992,7 +1000,11 @@ impl App {
                 hold_name
             },
         );
-        disabled(&self.doc, "rdv-hold", self.rendezvous.cue.is_none());
+        disabled(
+            &self.doc,
+            "rdv-hold",
+            self.rendezvous.active_cue().is_none(),
+        );
         if let Some(e) = self.doc.get_element_by_id("rdv-hold") {
             e.set_attribute(
                 "aria-pressed",
@@ -1005,7 +1017,7 @@ impl App {
             .ok();
         }
         if self.rendezvous.hold && now_ms - self.rendezvous.hold_sent_ms > 300.0 {
-            if let Some(cue) = self.rendezvous.cue {
+            if let Some(cue) = self.rendezvous.active_cue() {
                 self.attitude = ose_net::AttitudeMode::Fixed(cue);
                 self.send_controls();
                 self.rendezvous.hold_sent_ms = now_ms;
