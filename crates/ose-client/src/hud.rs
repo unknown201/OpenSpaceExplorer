@@ -40,8 +40,8 @@ pub fn update_thermal(doc: &Document, flight: Option<&FlightReadout>) {
 }
 
 /// SAS buttons in the original's order (`NavballInstrument`), with the mode each selects. Prograde and
-/// retrograde follow the speed mode (surface or orbit) as the original's navball does. Target, anti-target
-/// and maneuver modes have no server counterpart yet and stay disabled.
+/// retrograde follow the speed mode (surface or orbit) as the original's navball does. The maneuver
+/// button follows the active rendezvous cue or the scheduled burn.
 pub const SAS_BUTTONS: &[(&str, &str, &str)] = &[
     (
         "fh-sas-toggle",
@@ -92,7 +92,7 @@ pub const SAS_BUTTONS: &[(&str, &str, &str)] = &[
     (
         "fh-sas-maneuver",
         "Flight-ICO-Maneuver",
-        "Maneuver: point along the planned burn",
+        "Maneuver: follow the rendezvous cue or planned burn",
     ),
 ];
 
@@ -113,8 +113,7 @@ pub fn sas_term(id: &str) -> Option<&'static str> {
     })
 }
 
-/// The attitude a SAS button asks for; `None` for stability assist (the caller holds the current facing) and
-/// the disabled modes.
+/// The attitude a SAS button asks for; `None` for stability assist and buttons handled by the caller.
 pub fn sas_mode(id: &str, orbit_speed: bool) -> Option<AttitudeMode> {
     Some(match (id, orbit_speed) {
         ("fh-sas-prograde", false) => AttitudeMode::SurfacePrograde,
@@ -490,6 +489,8 @@ fn lit(doc: &Document, id: &str, on: bool) {
 pub struct HudState<'a> {
     pub f: &'a FlightReadout,
     pub attitude: &'a AttitudeMode,
+    /// Rendezvous uses a Fixed wire attitude while the logical maneuver radial remains selected.
+    pub rendezvous_hold: bool,
     pub orbit_speed: bool,
     /// The speed mode's label in the player's language (ORBIT or SURFACE).
     pub speed_label: &'a str,
@@ -533,7 +534,11 @@ pub fn update(doc: &Document, s: &HudState) {
     }
     set(doc, "fh-pe", &fmt_dist(pe_alt));
     set(doc, "fh-pe-t", &fmt_dt(pe_t));
-    let current = sas_lit(s.attitude);
+    let current = if s.rendezvous_hold {
+        "fh-sas-maneuver"
+    } else {
+        sas_lit(s.attitude)
+    };
     for (id, _, _) in SAS_BUTTONS {
         lit(
             doc,
