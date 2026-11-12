@@ -66,6 +66,7 @@ mod reentry_gpu;
 #[cfg(target_arch = "wasm32")]
 pub mod render;
 pub mod rendezvous;
+pub mod rendezvous_plan;
 mod rendezvous_ui;
 pub mod rnd;
 pub mod scene;
@@ -6261,7 +6262,7 @@ impl App {
                 if self.rendezvous.destination == Some(absorbed) {
                     self.rendezvous.destination = Some(vessel);
                     self.target = Some(ose_net::TargetId::Vessel(vessel));
-                    self.rendezvous.transfer = None;
+                    self.rendezvous.route = None;
                     self.rendezvous.signature = None;
                 }
                 if self.flying == Some(absorbed) {
@@ -14895,6 +14896,28 @@ impl App {
             }
         }
         lines.extend(traj);
+        let rdv_route = self.rendezvous.active_route();
+        let rdv_origin = self
+            .flying
+            .and_then(|id| scene.vessel(id))
+            .map(|v| positions[v.reference_body as usize])
+            .unwrap_or_default();
+        if let Some(route) = rdv_route {
+            for (k, (orbit, start, end)) in route.segments(ut).iter().enumerate() {
+                let points = (0..=512)
+                    .map(|i| to_km(orbit.position_at(start + (end - start) * i as f64 / 512.0)))
+                    .collect();
+                let line = render::LineItem::new(
+                    format!("rdv-path-{k}"),
+                    points,
+                    to_km(rdv_origin) - cam_km,
+                    [0.80, 0.63, 1.0, 1.0],
+                    3.5,
+                );
+                gpu.update_line(&line);
+                lines.push(line);
+            }
+        }
         let extra: Option<&dyn render::ExtraPass> = if planet_ready {
             Some(self.flight3d.planet_renderer(gpu) as &dyn render::ExtraPass)
         } else {
@@ -14912,6 +14935,9 @@ impl App {
         let (w, h) = (self.camera.width, self.camera.height);
         let dpr = self.dpr;
         let project = |p: GV| gpu.project(p - cam_km).map(|(x, y)| (x / dpr, y / dpr));
+        rendezvous_ui::map_nodes(&self.doc, &self.labels, rdv_route, |p| {
+            project(to_km(rdv_origin + p))
+        });
         for (i, b) in scene.bodies.iter().enumerate() {
             let Some(el) = self.label_els.get(i) else {
                 continue;
@@ -15399,6 +15425,33 @@ impl App {
         };
         let cam = self.camera;
         let ctx = &self.ctx;
+        let rdv_route = self.rendezvous.active_route();
+        let rdv_origin = self
+            .flying
+            .and_then(|id| scene.vessel(id))
+            .map(|v| positions[v.reference_body as usize])
+            .unwrap_or_default();
+        if let Some(route) = rdv_route {
+            ctx.set_line_width(2.5);
+            ctx.set_stroke_style_str("#cca1ff");
+            for (orbit, start, end) in route.segments(ut) {
+                ctx.begin_path();
+                for i in 0..=512 {
+                    let p =
+                        rdv_origin + orbit.position_at(start + (end - start) * i as f64 / 512.0);
+                    let (x, y) = cam.to_screen(p, centre);
+                    if i == 0 {
+                        ctx.move_to(x, y);
+                    } else {
+                        ctx.line_to(x, y);
+                    }
+                }
+                ctx.stroke();
+            }
+        }
+        rendezvous_ui::map_nodes(&self.doc, &self.labels, rdv_route, |p| {
+            Some(cam.to_screen(rdv_origin + p, centre))
+        });
         for v in &scene.vessels {
             let mine = v.owner.is_some() && v.owner == self.player_id;
             if let Some(patches) = scene.trajectories.get(&v.id) {

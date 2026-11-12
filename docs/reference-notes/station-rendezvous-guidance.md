@@ -20,6 +20,23 @@ and Firefox. The real ISS delivery check also passed through the maneuver radial
 alignment and manually flown burn feedback; the local capture is
 `.cache/rdv-radial/iss-browser/maneuver-radial-aligned.png` in the original workspace.
 
+The rolling plan adds a transfer node and an arrival velocity-match node, with a purple
+predicted map path and a numbered burn sequence. This fixes the next workflow gap: the old
+director only retained one transfer and required the pilot to press Replan after a bad burn.
+After authoritative thrust ends for 0.75 simulation seconds, the new planner reconstructs
+the remaining route from actual motion. A good coast retains only arrival braking; a missed
+encounter inserts a course correction, retaining the old ETA when feasible. Missing a node
+without thrust records a missed burn and replans; it never counts time crossing as completion.
+While firing, advice retains the active burn intent and subtracts measured delta-v with
+gravity removed. Long snapshot gaps are not integrated as large fictitious impulses.
+
+The orbital destination is phased ahead of the station by a clearance based on both craft's
+bounds plus 500 m. The phase uses the target's slowest orbital speed, and accepted coast error
+is limited to 200 m inside that margin. This is separate from the final authored-port staging
+point. These are client-only advisory nodes: ordinary executable maneuver nodes and their
+server scheduling remain separate. Replanning releases the old hold and cancels an obsolete
+explicit warp target. Invalid data hides the route and requires explicit replanning.
+
 This is an OSE feature design, not a reproduction of an existing KSP2 rendezvous assistant.
 The installed KSP2 game was not run for this investigation. Local decompiled reference files
 `reference/ksp2/Assembly-CSharp/KSP.Modules/Module_DockingNode.cs` (particularly
@@ -40,9 +57,10 @@ Its central truss support is raised to keep service engines and solar wings clea
 | Player action or condition | Reference / design | OSE before | Implemented behavior |
 |---|---|---|---|
 | Launch a delivery | Optional advice; player flies | No rendezvous launch advice | Destination picker, optional orbital-plane countdown and heading; manual launch |
+| Plan the remaining flight | Player-requested multi-burn route | One transfer cue; no future burn markers | Numbered transfer/arrival nodes, map path, next-burn warp and radial aiming |
 | Plan an intercept | Player flies burns | Ordinary target and automatically executed scheduled maneuvers only | Advisory Lambert transfer checks atmosphere clearance, propagation accuracy and departure plus braking fuel |
 | Aim / burn | Explicit optional attitude assistance | Ordinary target/SAS directions | Separate navball square, aim error, finite-burn countdown, measured delta-v remaining; throttle stays manual |
-| Imperfect finite burn | Make correction visible | No assembly director | Predicted pass distance and explicit Replan correction instruction |
+| Imperfect finite burn | Player-requested rolling plan; no matched original runtime observation | One transfer cue, manual Replan required | Numbered path nodes; after cutoff, measure the actual orbit and update arrival or insert a correction automatically |
 | Approach a rotating station | Use authored port frame | No chosen-port guidance | Port-face range, closing speed, total relative speed, lateral drift, angular error and outside-bounds staging marker |
 | Aligned Sr ports close | Existing acquire/capture semantics | Flat port/probe bounding spheres could bounce metres too early | Aligned port contacts excluded; other sphere candidates require overlapping authored boxes for that docking pair |
 | Dock to a dormant station | Keep close target physical | Station could return to rails before capture | Targeted same-body docking neighbours stay physical within 500 m; existing physics warp cap applies |
@@ -138,6 +156,24 @@ panels. The review asset overlay at `.cache/iss-release/assets` combines these c
 models with the shared exports. Neither decompiled game sources nor generated game assets
 are committed. Captures establish OSE presentation only; no matched original-game capture
 or visual parity claim is made.
+
+## Rolling-plan verification (2026-11-12)
+
+- Eight pure planner regressions cover chained transfer/braking orbits, gate clearance on
+  an eccentric station orbit, measured completion, partial-burn corrections retaining ETA,
+  missed-burn recovery, coast/gravity rejection, unrelated early thrust, and an independently
+  integrated finite-burn flight reaching the port-approach handoff.
+- Chromium and Firefox passed both rendezvous and existing flight-attitude tests. The sequence
+  shows two future burns, View path renders both numbered markers, the maneuver radial aligns
+  within three degrees without throttle, steering overrides the hold, and Off removes advice.
+- The real ISS intercept checkpoint passed with WebGPU and no page errors. A deliberately
+  early manual burst decreased measured delta-v while firing. After cutoff, the plan revision
+  advanced and showed a partial transfer, a new correction, and a recomputed arrival burn;
+  the old attitude hold released. Preferences, reload, and optional pad guidance also passed.
+- Captures/report: `D:/Projects/OpenSpaceExplorer/.cache/rdv-nodes/iss-browser/`, including
+  `multi-node-path.png`, `automatic-correction.png`, and `report.json`. This validates the
+  updated planner/UI against a flight from the earlier 179-part assembly test; it is not a
+  claim that all nine deliveries were repeated with the new rolling director.
 
 ## Limits
 

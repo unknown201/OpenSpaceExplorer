@@ -1,10 +1,10 @@
 # Station rendezvous guidance
 
-Status: implemented first version on `codex/station-rendezvous-feature`. See
+Status: implemented with rolling multi-burn path guidance. See
 [implementation and verification](reference-notes/station-rendezvous-guidance.md).
 Launch advice currently predicts orbital-plane opportunities; learned ascent profiles and
 launch-to-intercept forecasts remain future work. The intercept planner uses two-body
-estimates, with explicit correction replanning after finite burns.
+estimates, with automatic correction replanning after manually flown burns.
 
 ## Intent
 
@@ -77,6 +77,29 @@ The intercept phase can contain several maneuvers. A missed launch window can co
 extra orbit without becoming a failed mission. Do not imply that one perfect launch or
 one burn is always required or sufficient.
 
+### Rolling flight plan
+
+**Plan rendezvous** creates a numbered sequence: a transfer burn and a velocity-match
+burn at the encounter. **View path** opens the map with a purple predicted path and the
+same numbered nodes. The panel shows each future burn's delta-v, countdown and UT;
+the next burn is highlighted. The maneuver radial aims at that burn's cue, including
+the upcoming braking burn while coasting. These advisory nodes do not schedule thrust.
+
+Keep the active burn vector steady and subtract measured thrust from its remaining
+delta-v. After the player cuts thrust and the engine tail settles, recalculate from
+the authoritative orbit. Retain the encounter time where feasible, update the arrival
+burn, and insert a course-correction node if the actual coast would miss the approach
+gate. Show completed/partial burns in the sequence. Passing an unflown node marks it
+missed and rebuilds the future path; time crossing alone never completes a burn.
+
+An orbital encounter targets a gate at least 500 m ahead of the station, enlarged by
+both craft's catalog bounds. After matching velocity nearby, switch to the selected
+port's staging-point guidance. Finite burns can require several corrections. Release
+the old hold when the path changes so the pilot explicitly engages the next direction.
+**Warp to next burn** follows the current node with a braking/aiming lead-in; replanning
+cancels an obsolete warp destination. Off removes the sequence and path; re-enabling
+or reloading reconstructs future advice from the current flight state.
+
 **Warp to window** and **Warp to burn** are explicit player actions, with a lead-in and
 automatic return to real time. Respect the game's existing powered-flight and shared
 time limits. If another player prevents the requested warp, explain it in place and keep
@@ -131,7 +154,7 @@ Use the existing attitude-hold interaction vocabulary rather than an ambiguous g
 | Condition | Interface response |
 | --- | --- |
 | Launch window missed | “Next window in …” plus **Find next window**; permit manual launch and later replanning |
-| Intercept burn missed or materially off course | “Encounter needs a correction” plus **Replan intercept**; retain the target |
+| Intercept burn missed or materially off course | Mark missed/partial, automatically update future nodes, retain the target; **Replan rendezvous** remains available |
 | No feasible prediction or insufficient known delta-v | Explain the limiting condition; show no fabricated burn cue or precise arrival estimate |
 | Closing too fast | Prioritize “Brake now” and the relative-motion braking cue; remove encouragement to close |
 | No RCS or exhausted propellant | Explain the unavailable capability and keep relevant target data visible |

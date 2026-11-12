@@ -1,6 +1,7 @@
 //! Browser wiring for the advisory director. No ScheduleBurn, Stage, Translate or throttle intents.
 use super::*;
 use crate::rendezvous::{self as rdv, Level, Phase};
+use crate::rendezvous_plan::{Kind, Route, State as PlanState};
 use ose_math::{rendezvous as mechanics, DVec3};
 use web_sys::{HtmlInputElement, HtmlSelectElement};
 
@@ -45,6 +46,43 @@ fn options(doc: &Document, id: &str, html: &str, selected: &str) {
         }
     }
     value(doc, id, selected);
+}
+
+pub(super) fn map_nodes(
+    doc: &Document,
+    labels: &Element,
+    route: Option<&Route>,
+    project: impl Fn(DVec3) -> Option<(f64, f64)>,
+) {
+    for k in 0..3 {
+        let id = format!("rdv-map-node-{k}");
+        let Some(e) = doc.get_element_by_id(&id).or_else(|| {
+            let e = doc.create_element("div").ok()?;
+            e.set_id(&id);
+            e.set_class_name("rdv-map-node");
+            e.set_attribute("data-ose", "rendezvous-path-node").ok();
+            labels.append_child(&e).ok()?;
+            Some(e)
+        }) else {
+            continue;
+        };
+        let Some(el) = e.dyn_ref::<HtmlElement>() else {
+            continue;
+        };
+        let node = route.and_then(|r| r.nodes.get(k));
+        if let Some((n, (x, y))) =
+            node.and_then(|n| project(n.before.state_at(n.ut).0).map(|xy| (n, xy)))
+        {
+            el.set_text_content(Some(&format!("{} · {}", n.number, n.kind.label())));
+            el.set_attribute("data-next", if k == 0 { "true" } else { "false" })
+                .ok();
+            el.style().set_property("left", &format!("{x:.1}px")).ok();
+            el.style().set_property("top", &format!("{y:.1}px")).ok();
+            el.style().set_property("visibility", "visible").ok();
+        } else {
+            el.style().set_property("visibility", "hidden").ok();
+        }
+    }
 }
 
 pub fn install(app: &Shared) -> Result<(), JsValue> {
@@ -92,9 +130,8 @@ pub fn install(app: &Shared) -> Result<(), JsValue> {
                         value(&a.doc, key, level.key());
                     }
                     if level == Level::Off {
-                        a.rendezvous.cue = None;
-                        a.rendezvous.point = None;
-                        a.rendezvous.axis_point = None;
+                        a.rendezvous.invalidate();
+                        a.rendezvous.phase = Phase::Prepare;
                     }
                 }
                 "rdv-destination" => {
@@ -150,7 +187,7 @@ pub fn install(app: &Shared) -> Result<(), JsValue> {
         el.add_event_listener_with_callback("change", cb.as_ref().unchecked_ref())?;
         cb.forget();
     }
-    for id in ["rdv-plan", "rdv-hold", "rdv-warp", "rdv-cancel"] {
+    for id in ["rdv-plan", "rdv-hold", "rdv-warp", "rdv-view", "rdv-cancel"] {
         let Some(el) = doc.get_element_by_id(id) else {
             continue;
         };
@@ -160,9 +197,7 @@ pub fn install(app: &Shared) -> Result<(), JsValue> {
             match id {
                 "rdv-plan" => {
                     a.rdv_release();
-                    let arrival = a.rendezvous.transfer.map(|p| p.arrival_ut);
                     a.rendezvous.invalidate();
-                    a.rendezvous.correction_arrival = arrival;
                     if a.rendezvous.destination.is_none() {
                         if let Some(ose_net::TargetId::Vessel(id)) = a.target {
                             a.rendezvous.destination = Some(id);
@@ -195,22 +230,16 @@ pub fn install(app: &Shared) -> Result<(), JsValue> {
                     let at = if a.rendezvous.phase == Phase::Launch {
                         a.rdv_plane().map(|p| now + p.wait_s - 20.0)
                     } else {
-                        a.rendezvous.transfer.map(|p| {
-                            if a.rendezvous.phase == Phase::Coast {
-                                p.arrival_ut
-                                    - (p.arrival_delta_v.length()
-                                        / a.rendezvous.acceleration.max(0.01)
-                                        * 0.5
-                                        + 120.0)
-                                        .max(180.0)
-                            } else {
-                                p.departure_ut
-                                    - a.rendezvous.remaining.length()
-                                        / a.rendezvous.acceleration.max(0.01)
-                                        * 0.5
+                        a.rendezvous
+                            .route
+                            .as_ref()
+                            .and_then(|p| p.nodes.first())
+                            .map(|n| {
+                                n.ut - a.rendezvous.remaining.length()
+                                    / a.rendezvous.acceleration.max(0.01)
+                                    * 0.5
                                     - 120.0
-                            }
-                        })
+                            })
                     };
                     if let Some(at) = at {
                         a.start_warp_to(at, "rendezvous opportunity");
@@ -224,6 +253,12 @@ pub fn install(app: &Shared) -> Result<(), JsValue> {
                     a.rendezvous.note = "Guidance ended. Station target retained.".into();
                     a.rdv_save();
                 }
+                "rdv-view" => {
+                    if !a.map_mode {
+                        a.toggle_flight_map();
+                    }
+                    a.rdv_frame_path();
+                }
                 _ => {}
             }
             a.rendezvous.last_render_ms = 0.0;
@@ -235,6 +270,34 @@ pub fn install(app: &Shared) -> Result<(), JsValue> {
 }
 
 impl App {
+    fn rdv_frame_path(&mut self) {
+        let Some(route) = self.rendezvous.active_route() else {
+            return;
+        };
+        let Some((scene, vessel)) = self.scene.as_ref().zip(self.flying) else {
+            return;
+        };
+        let Some(v) = scene.vessel(vessel) else {
+            return;
+        };
+        let body = v.reference_body as usize;
+        let now = self.time.ut_at(now_ms());
+        let extent = route
+            .segments(now)
+            .iter()
+            .flat_map(|(o, start, end)| {
+                (0..=128).map(move |i| {
+                    o.position_at(start + (end - start) * i as f64 / 128.0)
+                        .length()
+                })
+            })
+            .fold(scene.bodies[body].radius_m * 1.2, f64::max);
+        self.follow = None;
+        self.camera.focus = body;
+        let half_height = extent * 1.25;
+        self.orbit_dist_km = half_height / (MAP_FOV_DEG * 0.5).to_radians().tan() / 1000.0;
+        self.camera.frame(half_height);
+    }
     pub(super) fn rdv_target_changed(&mut self) {
         self.rdv_release();
         self.rendezvous.invalidate();
@@ -322,6 +385,17 @@ impl App {
         if self.rendezvous.phase != phase {
             self.rdv_release();
             self.rendezvous.phase = phase;
+        }
+        if phase == Phase::Unavailable {
+            self.rendezvous.cue = None;
+            self.rendezvous.point = None;
+            self.rendezvous.axis_point = None;
+            for id in ["rdv-world", "rdv-axis", "rdv-alignment"] {
+                hidden(&self.doc, id, true);
+            }
+            for id in ["rdv-hold", "rdv-warp", "rdv-view"] {
+                disabled(&self.doc, id, true);
+            }
         }
     }
     fn rdv_plane(&self) -> Option<mechanics::PlaneWindow> {
@@ -461,6 +535,7 @@ impl App {
         }
         disabled(&self.doc, "rdv-hold", true);
         disabled(&self.doc, "rdv-warp", true);
+        disabled(&self.doc, "rdv-view", true);
         hidden(&self.doc, "rdv-alignment", true);
         hidden(&self.doc, "rdv-world", true);
         hidden(&self.doc, "rdv-axis", true);
@@ -480,6 +555,7 @@ impl App {
                 "Select a destination for this delivery",
             );
             set_text(&self.doc, "rdv-values", "");
+            set_text(&self.doc, "rdv-route", "");
             set_text(&self.doc, "rdv-note", &self.rendezvous.note);
             return;
         };
@@ -640,7 +716,7 @@ impl App {
         let signature = (id, me.reference_body, me.craft_rev, target.craft_rev);
         if self.rendezvous.signature.is_some_and(|s| s != signature) {
             self.rdv_phase(Phase::Unavailable);
-            self.rendezvous.transfer = None;
+            self.rendezvous.route = None;
             self.rdv_render(
                 "Craft changed · replan rendezvous",
                 vec![],
@@ -649,166 +725,128 @@ impl App {
             return;
         }
         self.rendezvous.signature = Some(signature);
-        let arrival_braking = old_phase == Phase::Coast
-            && self.rendezvous.transfer.is_some_and(|p| {
-                p.arrival_ut - ut
-                    <= (p.arrival_delta_v.length() / acceleration.max(0.01) * 0.5 + 120.0)
-                        .max(180.0)
-                    || relative
-                        .stopping_distance_m
-                        .is_some_and(|d| relative.distance_m < d + 8_000.0)
-            });
-        let near = relative.distance_m < 8_000.0
-            || arrival_braking
-            || matches!(old_phase, Phase::Approach | Phase::Dock);
-        if !near && self.rendezvous.transfer.is_none() && old_phase != Phase::Unavailable {
-            let correction = self
-                .rendezvous
-                .correction_arrival
-                .take()
-                .and_then(|arrival| {
-                    mechanics::correction(
-                        me_orbit,
-                        target_orbit,
-                        ut + 180.0,
-                        arrival,
-                        minimum_radius,
-                        budget,
-                    )
-                });
-            self.rendezvous.transfer = correction.or_else(|| {
-                mechanics::plan(
-                    me_orbit,
-                    target_orbit,
-                    ut + (budget / (2.0 * acceleration.max(0.01))).min(120.0),
-                    minimum_radius,
-                    budget,
-                )
-            });
-            if let Some(p) = self.rendezvous.transfer {
-                self.rendezvous.remaining = p.delta_v;
+        if old_phase == Phase::Unavailable {
+            return;
+        }
+        // Measure at authoritative snapshot time, never an extrapolated render time.
+        let sample_ut = scene.vessels_ut;
+        let sample_r = me.position_m - scene.position(me.reference_body as usize, sample_ut);
+        let sample_v = me.velocity_mps - scene.body_velocity(me.reference_body as usize, sample_ut);
+        let actual = ose_math::Orbit::from_state_vectors(mu, sample_r, sample_v, sample_ut);
+        let plan_state = PlanState {
+            chaser: actual,
+            target: target_orbit,
+            now: sample_ut,
+            minimum_radius,
+            budget,
+            acceleration,
+        };
+        let already_approaching = matches!(old_phase, Phase::Approach | Phase::Dock)
+            && self.rendezvous.route.as_ref().is_none_or(|p| p.handoff);
+        if self.rendezvous.route.is_none()
+            && !already_approaching
+            && old_phase != Phase::Unavailable
+        {
+            let clearance =
+                rdv::radius(
+                    station.as_ref().unwrap(),
+                    &self.catalog,
+                    tf.centre_of_mass_m,
+                ) + rdv::radius(own.as_ref().unwrap(), &self.catalog, f.centre_of_mass_m)
+                    + 500.0;
+            self.rendezvous.route = Some(Route::new(plan_state, clearance));
+        }
+        let updated = self.rendezvous.route.as_mut().is_some_and(|p| {
+            p.observe(
+                plan_state,
+                f.thrust_kn > 0.0 || f.rcs_translate.length() > 0.001,
+                f.throttle < 0.001 && self.translate_sent == (0.0, 0.0, 0.0),
+            )
+        });
+        if updated {
+            self.rdv_release();
+            self.rendezvous.last_prompt = None;
+            self.rendezvous.note = if self.rendezvous.route.as_ref().is_some_and(|p| p.handoff) {
+                "Velocity matched nearby. Continue with the port approach.".into()
+            } else {
+                "Path updated from your actual orbit. Align with the next burn cue.".into()
+            };
+            if self.warp_to.take().is_some() {
+                self.request_warp(1);
             }
         }
+        let near = already_approaching || self.rendezvous.route.as_ref().is_some_and(|p| p.handoff);
         if !near {
-            let Some(plan) = self.rendezvous.transfer else {
+            let Some(route) = self
+                .rendezvous
+                .route
+                .as_ref()
+                .filter(|p| !p.nodes.is_empty())
+            else {
                 self.rdv_phase(Phase::Unavailable);
-                self.rdv_render("No feasible rendezvous plan",vec![("Available Δv",format!("{budget:.0} m/s"))],"No safe two-body transfer fits the current fuel budget. Improve the orbit or fuel supply, then replan.");
+                self.rdv_render("No feasible rendezvous plan", vec![("Available Δv", format!("{budget:.0} m/s"))],
+                    "No safe transfer fits the current fuel budget. Improve the orbit or fuel supply, then replan.");
                 return;
             };
-            let sample_ut = scene.vessels_ut;
-            let sample_r = me.position_m - scene.position(me.reference_body as usize, sample_ut);
-            let sample_v =
-                me.velocity_mps - scene.body_velocity(me.reference_body as usize, sample_ut);
-            let firing = f.thrust_kn > 0.0;
-            if let Some((at, r0, v0, was_firing)) = self.rendezvous.burn_sample {
-                if sample_ut > at && (firing || was_firing) {
-                    self.rendezvous.remaining = self.rendezvous.remaining
-                        - mechanics::delivered_delta_v(
-                            mu,
-                            r0,
-                            v0,
-                            sample_r,
-                            sample_v,
-                            sample_ut - at,
-                        );
-                }
-            }
-            if self.rendezvous.burn_sample.is_none_or(|s| sample_ut > s.0) {
-                self.rendezvous.burn_sample = Some((sample_ut, sample_r, sample_v, firing));
-            }
-            let left = self.rendezvous.remaining.length();
-            let burn_seconds = left / acceleration.max(1e-8);
-            let starts_in = plan.departure_ut - ut - burn_seconds * 0.5;
-            if left < 0.25 && f.throttle < 0.001 {
-                self.rdv_phase(Phase::Coast);
-            } else if old_phase != Phase::Coast {
-                self.rdv_phase(Phase::Intercept);
-            }
-            let coasting = self.rendezvous.phase == Phase::Coast;
-            if !coasting && ut > plan.departure_ut + 120.0 && f.throttle < 0.001 && left > 1.0 {
-                self.rdv_phase(Phase::Unavailable);
-                self.rdv_render(
-                    "Burn missed · replan intercept",
-                    vec![],
-                    "The destination is retained. Recalculate from your current orbit.",
-                );
-                return;
-            }
-            self.rendezvous.cue = if coasting {
-                None
+            let node = route.nodes[0].clone();
+            let left = route.remaining.length();
+            self.rendezvous.remaining = route.remaining;
+            let starts_in = node.ut - ut - left / acceleration.max(0.01) * 0.5;
+            let coasting = node.kind == Kind::MatchVelocity && starts_in > 120.0;
+            self.rdv_phase(if coasting {
+                Phase::Coast
             } else {
-                Some(self.rendezvous.remaining.normalized())
-            };
-            self.rendezvous.point = Some(bp + target_orbit.state_at(plan.arrival_ut).0);
-            let mut rows = vec![(
-                "Encounter in",
-                tracking::duration((plan.arrival_ut - ut).max(0.0)),
-            )];
-            let instruction = if coasting {
-                let miss = (me_orbit.state_at(plan.arrival_ut).0
-                    - target_orbit.state_at(plan.arrival_ut).0)
-                    .length();
-                rows.push(("Predicted pass", format!("{miss:.0} m")));
-                if miss > 1_500.0 {
-                    "Encounter needs a correction · replan"
-                } else {
-                    "Coast · prepare to match velocity"
-                }
-            } else {
-                rows.push((
+                Phase::Intercept
+            });
+            self.rendezvous.cue = (left > 0.01).then(|| self.rendezvous.remaining.normalized());
+            self.rendezvous.point = Some(bp + node.before.state_at(node.ut).0);
+            let mut rows = vec![
+                (
+                    "Next burn",
+                    format!("{} · {}", node.number, node.kind.label()),
+                ),
+                (
                     "Start burn in",
                     if starts_in > 0.0 {
                         tracking::duration(starts_in)
                     } else {
                         "NOW".into()
                     },
-                ));
-                rows.push(("Δv remaining", format!("{left:.2} m/s")));
-                let forward = self
-                    .current_nav()
-                    .map(|n| DVec3::new(n.forward.x, n.forward.y, n.forward.z))
-                    .unwrap_or(f.facing);
-                let angle = forward
-                    .dot(self.rendezvous.remaining.normalized())
-                    .clamp(-1.0, 1.0)
-                    .acos()
-                    .to_degrees();
-                rows.push(("Cue error", format!("{angle:.1}°")));
-                rows.push((
-                    "Arrival braking Δv",
-                    format!("{:.1} m/s", plan.arrival_delta_v.length()),
-                ));
-                if left < 0.25 {
-                    "Cut throttle · burn complete"
-                } else if f.throttle > 0.001 {
-                    "Fly the burn · watch Δv remaining"
-                } else if starts_in <= 0.0 {
-                    "Begin your burn toward the cue"
-                } else {
-                    "Align with the burn cue"
-                }
+                ),
+                ("Δv remaining", format!("{left:.2} m/s")),
+            ];
+            let forward = self
+                .current_nav()
+                .map(|n| DVec3::new(n.forward.x, n.forward.y, n.forward.z))
+                .unwrap_or(f.facing);
+            let angle = forward
+                .dot(self.rendezvous.remaining.normalized())
+                .clamp(-1.0, 1.0)
+                .acos()
+                .to_degrees();
+            rows.push(("Cue error", format!("{angle:.1}°")));
+            if let Some(arrival) = self.rendezvous.route.as_ref().and_then(|p| p.arrival) {
+                rows.push(("Encounter in", tracking::duration((arrival - ut).max(0.0))));
+            }
+            let instruction = if left < 0.25 && f.throttle > 0.001 {
+                "Cut throttle · checking the achieved orbit"
+            } else if f.throttle > 0.001 || f.rcs_translate.length() > 0.001 {
+                "Fly the burn · watch Δv remaining"
+            } else if starts_in <= 0.0 {
+                "Begin your burn toward the cue"
+            } else if coasting {
+                "Coast · next cue is the velocity-match burn"
+            } else {
+                "Align with the next burn cue"
             };
             disabled(
                 &self.doc,
                 "rdv-warp",
-                (if coasting {
-                    plan.arrival_ut - ut
-                        < (plan.arrival_delta_v.length() / acceleration.max(0.01) * 0.5 + 130.0)
-                            .max(190.0)
-                } else {
-                    starts_in < 130.0
-                }) || f.throttle > 0.001,
+                starts_in < 130.0 || f.throttle > 0.001 || f.rcs_translate.length() > 0.001,
             );
-            set_text(
-                &self.doc,
-                "rdv-warp",
-                if coasting {
-                    "Warp to encounter"
-                } else {
-                    "Warp to burn"
-                },
-            );
-            self.rdv_render(instruction,rows,"Two-body estimate. You start and stop every burn. Replan after a significant burn error; no maneuver is scheduled.");
+            set_text(&self.doc, "rdv-warp", "Warp to next burn");
+            self.rdv_render(instruction, rows,
+                "Fly each numbered burn manually. After thrust stops, the remaining path updates from your actual orbit; missed burns are replanned too.");
         } else {
             let Some((own_craft, target_craft, op, tp)) =
                 own.as_ref().zip(station.as_ref()).and_then(|(oc, tc)| {
@@ -1026,8 +1064,8 @@ impl App {
             }
         }
         if self.rendezvous.audible && self.rendezvous.phase == Phase::Intercept {
-            if let Some(p) = self.rendezvous.transfer {
-                let countdown = (p.departure_ut
+            if let Some(p) = self.rendezvous.route.as_ref().and_then(|p| p.nodes.first()) {
+                let countdown = (p.ut
                     - ut
                     - self.rendezvous.remaining.length() / self.rendezvous.acceleration.max(0.01)
                         * 0.5)
@@ -1054,6 +1092,39 @@ impl App {
     }
 
     fn rdv_render(&self, instruction: &str, rows: Vec<(&str, String)>, help: &str) {
+        if let Some(e) = self.doc.get_element_by_id("rdv-route") {
+            let mut html = String::new();
+            if self.rendezvous.enabled && self.rendezvous.level != Level::Off {
+                if let Some(route) = self.rendezvous.active_route() {
+                    e.set_attribute("data-revision", &route.revision.to_string())
+                        .ok();
+                    for n in route.history.iter().rev().take(2).rev() {
+                        html.push_str(&format!("<li class=\"rdv-past\" data-status=\"{:?}\"><b>{} · {}</b><span>{}</span></li>", n.outcome, n.number, n.kind.label(), n.outcome.label()));
+                    }
+                    let ut = self.time.ut_at(now_ms());
+                    for (i, n) in route.nodes.iter().enumerate() {
+                        let delta_v = if i == 0 {
+                            route.remaining.length()
+                        } else {
+                            n.delta_v.length()
+                        };
+                        html.push_str(&format!("<li data-status=\"{}\"><b>{} · {}</b><span>{:.1} m/s · {} · UT {:.0}</span></li>", if i == 0 { "next" } else { "planned" }, n.number, n.kind.label(), delta_v, if n.ut > ut { tracking::duration(n.ut - ut) } else { "NOW".into() }, n.ut));
+                    }
+                    if route.handoff {
+                        html.push_str("<li data-status=\"next\"><b>Port approach</b><span>Use RCS to reach the staging point</span></li>");
+                    }
+                }
+            }
+            e.set_inner_html(&html);
+        }
+        disabled(
+            &self.doc,
+            "rdv-view",
+            self.rendezvous
+                .active_route()
+                .is_none_or(|p| p.nodes.is_empty())
+                || !self.rendezvous.enabled,
+        );
         set_text(&self.doc, "rdv-phase", self.rendezvous.phase.label());
         set_text(
             &self.doc,

@@ -41,6 +41,12 @@ try{
   await page.locator('#rdv-plan').click();
   await wait(()=>document.querySelector('#rdv-panel')?.getAttribute('data-phase')==='Intercept burn');
   assert.match(await page.locator('#rdv-values').innerText(),/Δv remaining/);
+  assert.equal(await page.locator('#rdv-route li').count(),2,'departure and arrival braking are both planned');
+  await page.locator('#rdv-view').click();
+  await wait(()=>[...document.querySelectorAll('[data-ose="rendezvous-path-node"]')].filter(e=>getComputedStyle(e).visibility==='visible').length===2);
+  assert.equal(await page.locator('[data-ose="rendezvous-path-node"]:visible').count(),2);
+  await page.screenshot({path:path.join(out,'multi-node-path.png')});
+  await page.locator('#fh-map').click();
   assert.equal(await page.locator('#rdv-level').inputValue(),'guided');
   await wait(()=>document.querySelector('#fh-throttle-pct')?.textContent==='0%');
   await page.locator('#fh-sas-maneuver').click();
@@ -70,12 +76,18 @@ try{
   await page.screenshot({path:path.join(out,'maneuver-radial-aligned.png')});
   const remaining=()=>page.evaluate(()=>parseFloat([...document.querySelectorAll('#rdv-values dt')].find(e=>e.textContent==='Δv remaining').nextElementSibling.textContent));
   const before=await remaining();
+  const revision=Number(await page.locator('#rdv-route').getAttribute('data-revision'));
   await page.keyboard.down('ShiftLeft');await page.waitForTimeout(500);await page.keyboard.up('ShiftLeft');
   await page.waitForTimeout(2000);
+  assert.ok(await remaining()<before-0.3,'a manually flown burn reduces remaining delta-v while firing');
   await page.keyboard.down('ControlLeft');await page.waitForTimeout(1000);await page.keyboard.up('ControlLeft');
   await wait(()=>document.querySelector('#fh-throttle-pct')?.textContent==='0%');
-  await page.waitForTimeout(500);
-  assert.ok(await remaining()<before-0.3,'a manually flown burn reduces remaining delta-v');
+  await page.waitForFunction(r=>Number(document.querySelector('#rdv-route')?.getAttribute('data-revision'))>r,revision);
+  assert.match(await page.locator('#rdv-route').innerText(),/Partial burn.*path updated/s);
+  assert.match(await page.locator('#rdv-route li[data-status="next"]').innerText(),/Course correction/);
+  assert.match(await page.locator('#rdv-route li[data-status="planned"]').innerText(),/Match velocity/);
+  assert.equal(await page.locator('#rdv-hold').getAttribute('aria-pressed'),'false','old hold released after replanning');
+  await page.screenshot({path:path.join(out,'automatic-correction.png')});
   // Launch preparation is optional; the normal launch action still places the selected vehicle on pad.
   await page.locator('#fh-ksc').click();
   await page.locator('[data-ose="ksc-launchpad"]').click();
@@ -89,7 +101,7 @@ try{
   await page.screenshot({path:path.join(out,'launch-plane-guidance.png')});
   assert.deepEqual(errors,[]);
   const report={pass:true,renderer:await page.locator('[data-ose="gpu"]').getAttribute('data-ose-renderer'),
-    checks:['actual ISS flight checkpoint','fuel-budgeted advisory intercept','maneuver radial follows rendezvous cue','attitude-only hold','manual steering override','Off retains station','Minimal hides instructions','save/reload preferences and destination','manually flown burn updates delta-v','optional pad guidance','manual throttle and staging preserved'],errors};
+    checks:['actual ISS flight checkpoint','two-node path with transfer and arrival braking','maneuver radial follows rendezvous cue','attitude-only hold','manual steering override','Off retains station','Minimal hides instructions','save/reload preferences and destination','manual burn tracked and cutoff automatically replans correction and arrival','old hold released on route update','optional pad guidance','manual throttle and staging preserved'],errors};
   await fs.writeFile(path.join(out,'report.json'),JSON.stringify(report,null,2));
   console.log(JSON.stringify(report));
 }catch(error){await page.screenshot({path:path.join(out,'failure.png')});console.error((await page.locator('body').innerText()).slice(-8000));throw error;}
