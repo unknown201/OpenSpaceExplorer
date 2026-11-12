@@ -4,7 +4,7 @@ Updated 2026-10-28.
 
 ## What works
 
-- Optional station rendezvous guidance now provides launch-plane opportunities, fuel-budgeted intercept/phasing advice, burn aiming/timing, explicit attitude-only holds, port-relative approach instruments and staging markers. Docking retains nearby target physics, part identities and deployed hardware. A 179-part, ten-module stock-part ISS replica validates nine independent delivery launches and captures. See [implementation, evidence and limits](reference-notes/station-rendezvous-guidance.md).
+- Optional station rendezvous guidance provides launch-plane opportunities, a numbered multi-burn map path, automatic correction/arrival replanning after manual thrust cutoff, burn aiming/timing, attitude-only holds, and port-relative staging/approach instruments. Missed burns rebuild the path; the maneuver radial aims at the next burn. Docking retains nearby target physics, part identities and deployed hardware. A 179-part, ten-module stock-part ISS replica validates nine independent delivery launches and captures. See [implementation, evidence and limits](reference-notes/station-rendezvous-guidance.md).
 
 - Static lifting-surface model frames now export and import named child transforms with module-owner fallback. Pressure points include hierarchy scale while lift directions use rotation only, then share mounted/rolled flight and joint-load geometry. Cube drag/body-lift offsets remain part-local. The 13 shipped surfaces resolve to identity root frames; animated/procedural frame updates remain open.
 

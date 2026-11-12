@@ -202,6 +202,16 @@
     #rdv-panel summary { cursor:pointer; padding:calc(10 * var(--u)); color:#c9adff; }
     #rdv-summary { color:#a7b7d0; font-size:calc(11 * var(--u)); margin-left:calc(8 * var(--u)); }
     .rdv-content { padding:0 calc(12 * var(--u)) calc(12 * var(--u)); display:grid; gap:calc(8 * var(--u)); }
+    .rdv-content { max-height:calc(100vh - 410 * var(--u)); overflow-y:auto; }
+    #rdv-route { margin:0; padding:0; list-style:none; display:grid; gap:calc(4 * var(--u)); }
+    #rdv-route:empty { display:none; }
+    #rdv-route li { border-left:2px solid #637088; padding:calc(5 * var(--u)) calc(8 * var(--u)); background:#1b2230; }
+    #rdv-route li[data-status=next] { border-color:#d0b1ff; background:#30273f; }
+    #rdv-route b { display:block; font-size:calc(12 * var(--u)); color:#e2ceff; }
+    #rdv-route span { display:block; font-size:calc(11 * var(--u)); color:#b7c7de; margin-top:calc(3 * var(--u)); }
+    #rdv-route .rdv-past { opacity:.7; }
+    #labels .rdv-map-node { position:absolute; transform:translate(-50%,-50%); color:#e2ceff; background:#181323e8; border:2px solid #a285d2; border-radius:5px; padding:4px 7px; font-size:12px; white-space:nowrap; pointer-events:none; }
+    #labels .rdv-map-node[data-next=true] { border-color:#e2ceff; box-shadow:0 0 8px #b88cffa0; }
     .rdv-content label { display:grid; gap:calc(3 * var(--u)); font-size:calc(12 * var(--u)); color:#b7c7de; }
     .rdv-content select { width:100%; min-width:0; background:#1b2230; color:#e6ecf7; border:1px solid #53617a; padding:calc(5 * var(--u)); border-radius:calc(3 * var(--u)); font:inherit; }
     .rdv-selection { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:calc(8 * var(--u)); }
@@ -1670,8 +1680,8 @@
       <label>Guidance <select id="rdv-level" data-ose="rendezvous-level"><option value="off">Off</option><option value="minimal">Minimal</option><option value="guided">Guided</option></select></label></div>
       <label>Your port <select id="rdv-own-port" data-ose="rendezvous-own-port"></select></label><label>Station port <select id="rdv-target-port" data-ose="rendezvous-target-port"></select></label>
       <div id="rdv-phase" class="fh-label">Prepare</div><strong id="rdv-instruction">Select a destination for this delivery</strong><p id="rdv-help">Guidance supplies timing and direction. You control throttle, staging, and RCS.</p>
-      <dl id="rdv-values"></dl><div id="rdv-alignment" hidden><span class="rdv-cross">+</span><span id="rdv-dot">○</span></div>
-      <div id="rdv-note" role="status" aria-live="polite"></div><div class="rdv-buttons"><button id="rdv-plan" data-ose="rendezvous-plan">Plan rendezvous</button><button id="rdv-hold" data-ose="rendezvous-hold" disabled title="SAS controls attitude only. You control throttle and RCS.">Hold direction</button><button id="rdv-warp" data-ose="rendezvous-warp" disabled>Warp to opportunity</button><button id="rdv-cancel">End guidance</button></div>
+      <ol id="rdv-route" aria-label="Rendezvous burn sequence"></ol><dl id="rdv-values"></dl><div id="rdv-alignment" hidden><span class="rdv-cross">+</span><span id="rdv-dot">○</span></div>
+      <div id="rdv-note" role="status" aria-live="polite"></div><div class="rdv-buttons"><button id="rdv-plan" data-ose="rendezvous-plan">Plan rendezvous</button><button id="rdv-hold" data-ose="rendezvous-hold" disabled title="SAS controls attitude only. You control throttle and RCS.">Hold direction</button><button id="rdv-warp" data-ose="rendezvous-warp" disabled>Warp to opportunity</button><button id="rdv-view" disabled>View path</button><button id="rdv-cancel">End guidance</button></div>
       <span class="rdv-manual">MANUAL FLIGHT · attitude holds never apply thrust</span></div>
     </details>
     <div id="rdv-world" class="rdv-world" hidden><span>⊕</span><b id="rdv-world-label">Port staging point</b></div>

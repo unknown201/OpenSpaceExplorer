@@ -3,7 +3,7 @@
 
 use crate::vab::Catalog;
 use ose_data::craft::Craft;
-use ose_math::{rendezvous::Transfer, DVec3};
+use ose_math::DVec3;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Level {
@@ -62,12 +62,10 @@ pub struct Director {
     pub target_port: Option<String>,
     pub enabled: bool,
     pub phase: Phase,
-    pub transfer: Option<Transfer>,
-    pub correction_arrival: Option<f64>,
+    pub route: Option<crate::rendezvous_plan::Route>,
     pub remaining: DVec3,
     pub hold: bool,
     pub hold_sent_ms: f64,
-    pub burn_sample: Option<(f64, DVec3, DVec3, bool)>,
     pub acceleration: f64,
     pub snapshot_ms: f64,
     pub last_render_ms: f64,
@@ -92,12 +90,10 @@ impl Default for Director {
             target_port: None,
             enabled: false,
             phase: Phase::Prepare,
-            transfer: None,
-            correction_arrival: None,
+            route: None,
             remaining: DVec3::ZERO,
             hold: false,
             hold_sent_ms: 0.0,
-            burn_sample: None,
             acceleration: 0.0,
             snapshot_ms: 0.0,
             last_render_ms: 0.0,
@@ -116,11 +112,24 @@ impl Default for Director {
     }
 }
 impl Director {
+    pub fn active_route(&self) -> Option<&crate::rendezvous_plan::Route> {
+        (self.enabled
+            && self.level != Level::Off
+            && !matches!(
+                self.phase,
+                Phase::Prepare | Phase::Launch | Phase::Unavailable | Phase::Complete
+            ))
+        .then_some(self.route.as_ref())
+        .flatten()
+    }
     /// The visible aiming cue, shared by the navball and both attitude-hold entry points.
     pub fn active_cue(&self) -> Option<DVec3> {
         if self.enabled
             && self.level != Level::Off
-            && matches!(self.phase, Phase::Intercept | Phase::Approach | Phase::Dock)
+            && matches!(
+                self.phase,
+                Phase::Intercept | Phase::Coast | Phase::Approach | Phase::Dock
+            )
         {
             self.cue
         } else {
@@ -129,13 +138,11 @@ impl Director {
     }
 
     pub fn invalidate(&mut self) {
-        self.transfer = None;
-        self.correction_arrival = None;
+        self.route = None;
         self.cue = None;
         self.point = None;
         self.axis_point = None;
         self.remaining = DVec3::ZERO;
-        self.burn_sample = None;
         self.signature = None;
         self.dock_latched = false;
     }
@@ -345,14 +352,13 @@ mod tests {
             cue: Some(cue),
             ..Default::default()
         };
-        for phase in [Phase::Intercept, Phase::Approach, Phase::Dock] {
+        for phase in [Phase::Intercept, Phase::Coast, Phase::Approach, Phase::Dock] {
             director.phase = phase;
             assert_eq!(director.active_cue(), Some(cue));
         }
         for phase in [
             Phase::Prepare,
             Phase::Launch,
-            Phase::Coast,
             Phase::Unavailable,
             Phase::Complete,
         ] {

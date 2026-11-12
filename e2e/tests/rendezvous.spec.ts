@@ -30,6 +30,12 @@ test('optional rendezvous plans preserve manual flight and release the hold on s
   await page.locator('#rdv-plan').click();
   await expect(page.locator('#rdv-panel')).toHaveAttribute('data-phase','Intercept burn');
   await expect(page.locator('#rdv-values')).toContainText('Δv remaining');
+  await expect(page.locator('#rdv-route li[data-status="next"]')).toContainText('Transfer');
+  await expect(page.locator('#rdv-route li[data-status="planned"]')).toContainText('Match velocity');
+  await page.locator('#rdv-view').click();
+  await expect(page.locator('body')).toHaveClass(/map-view/);
+  await expect(page.locator('[data-ose="rendezvous-path-node"]:visible')).toHaveCount(2);
+  await page.locator('#fh-map').click();
   await expect(page.locator('#fh-throttle-pct')).toHaveText('0%');
   // The maneuver radial should follow the same box as the dedicated guidance hold.
   await page.locator('#fh-sas-maneuver').click();
@@ -54,6 +60,7 @@ test('optional rendezvous plans preserve manual flight and release the hold on s
   await page.selectOption('#rdv-level','off');
   await expect(page.locator('#rdv-destination')).toHaveValue(core);
   await expect(page.locator('#rdv-world')).toBeHidden();
+  await expect(page.locator('#rdv-route li')).toHaveCount(0);
   await page.locator('#fh-sas-maneuver').click();
   // Without a scheduled node, the existing maneuver mode holds the current direction.
   await expect(page.locator('#fh-attitude')).toHaveText('Holding a direction');
