@@ -7404,6 +7404,9 @@ mod tests {
         // Analytical fixtures explicitly define their force points, bounds and inertia.
         for def in &mut data.1 {
             def.flight_geometry = Default::default();
+            def.reinforced_connection = None;
+            def.module_names
+                .retain(|m| m != "PartComponentModule_ReinforcedConnection");
         }
         data
     }
@@ -9837,6 +9840,7 @@ mod tests {
         let (crafts, defs, res) = assets();
         let k1 = crafts.iter().find(|c| c.name == "Kerbal K1").unwrap();
         let mut s = Structure::build(k1, &defs, &res);
+        s.rigid.set_enhanced_joints(false);
         let p = flying(DVec3::new(1.0, 0.0, 0.0));
         // a sudden gust across the stack (engine thrust ramps in, so it would not ring the joints)
         let out = StepOutcome {
@@ -9868,7 +9872,12 @@ mod tests {
             flex.iter().any(|f| f.part == 21),
             "the booster is reported as flexed"
         );
-        assert!(s.rigid.max_stress() > 0.0 && s.rigid.max_stress() < 1.0);
+        assert!(s.rigid.links.iter().any(|l| l.force_kn > 0.0));
+        assert_eq!(
+            s.rigid.max_stress(),
+            0.0,
+            "spring drives do not load the hard limits"
+        );
         // thrust off: it rings down to nothing
         let quiet = StepOutcome::default();
         for _ in 0..500 {
@@ -10017,6 +10026,8 @@ mod tests {
         let (crafts, defs, res) = assets();
         let k1 = crafts.iter().find(|c| c.name == "Kerbal K1").unwrap();
         let mut s = Structure::build(k1, &defs, &res);
+        // Isolate the original angular springs from enhanced support constraints.
+        s.rigid.set_enhanced_joints(false);
         let p = flying(DVec3::new(1.0, 0.0, 0.0));
         // a hard pitch: 0.5 rad/s^2 across the vessel axis, from the wheels alone
         let out = StepOutcome {
@@ -10379,10 +10390,14 @@ mod tests {
     }
 
     #[test]
-    fn broadside_drag_tears_off_the_boosters_and_they_leave_with_their_mass() {
+    fn rigid_mounts_break_under_broadside_drag_and_pieces_keep_their_mass() {
         let (crafts, defs, res) = assets();
         let k1 = crafts.iter().find(|c| c.name == "Kerbal K1").unwrap();
         let mut s = Structure::build(k1, &defs, &res);
+        // Locked mounts carry a breakable hard-constraint force, unlike flexible drives.
+        for link in &mut s.rigid.links {
+            link.limits.rigid = true;
+        }
         let p = flying(DVec3::new(1.0, 0.0, 0.0));
         // flying sideways through dense air: the drag is across the stack
         let out = StepOutcome {

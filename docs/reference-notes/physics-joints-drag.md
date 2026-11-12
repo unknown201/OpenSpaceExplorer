@@ -1,5 +1,9 @@
 # Reference notes: physics bubble, part joints, aerodynamics, engines
 
+Runtime joint validation and the premature-break fix are documented in
+[joint-stress-validation.md](joint-stress-validation.md). Drive actuation is
+excluded from breakage; authored and enhanced support connections are included.
+
 From reading `KSP.Sim.impl` (`RigidbodyBehavior`, `PartOwnerBehavior`, `PartComponent`, `CelestialBodyComponent`,
 `PartComponentModule_Engine`), `KSP.Modules` (`Module_Drag`, `Data_Drag`, `Data_Engine`), `PhysicsSettings` and
 `AeroUtilities`. Numbers quoted are the C# defaults in `PhysicsSettings`; the shipped settings asset can override
@@ -76,7 +80,11 @@ springs sagged there). Rapier's multibody motors for three free rotations track 
 true relative rotation, and wandered, so the angular spring is our own layer: each joint's bend obeys
 `I theta'' = -tau - k theta - c theta'` with `tau` from Newton-Euler over the joint's subtree, `I` the subtree's
 moment of inertia about the anchor and `k`, `c` from the table above, integrated semi-implicitly in 8 substeps.
-Breaks are checked against `joint_limits` on the joint force and the spring torque `k |theta|`.
+Full transmitted force and spring torque remain available as load readouts, but
+breaks use hard-constraint reactions, excluding spring drives as PhysX does.
+Flexible links carry an angular reaction at their 177 degree stop; rigid links
+carry the complete reaction. Coupled support rows model authored reinforcement
+targets and default enhanced connections to the heaviest physical part.
 
 ## Atmosphere properties used by flight (`CelestialBodyComponent`, `PartComponent`)
 
