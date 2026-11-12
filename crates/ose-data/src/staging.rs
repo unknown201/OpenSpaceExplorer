@@ -452,6 +452,7 @@ mod tests {
             intake_area_m2: 0.0,
             intake: None,
             module_names: vec![],
+            reinforced_connection: None,
             raw_modules: Default::default(),
         }
     }

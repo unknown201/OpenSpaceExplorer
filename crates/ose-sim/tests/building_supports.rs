@@ -49,6 +49,12 @@ fn strut_braces_the_loaded_path_and_releases_after_separation() {
     let mut braced = RigidVessel::build(&c, &defs, &res);
     c.parts[i].fuel_line_target = None;
     let mut bare = RigidVessel::build(&c, &defs, &res);
+    // Isolate the authored strut from the reference's separate enhanced-joint system.
+    braced.set_enhanced_joints(false);
+    bare.set_enhanced_joints(false);
+    // Also remove built-in wing/gear supports to measure this single authored strut.
+    braced.reinforcements.clear();
+    bare.reinforcements.clear();
     let turning = Turning {
         torques: vec![
             (21, DVec3::new(100.0, 0.0, 0.0)),

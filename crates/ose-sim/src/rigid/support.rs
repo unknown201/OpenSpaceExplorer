@@ -1,5 +1,5 @@
 //! Linearized two-anchor joints for the existing angular-flex model.
-//! The parent tree remains the connectivity graph: a brace releases when that tree splits.
+//! The parent tree remains the connectivity graph: an extra connection releases when that tree splits.
 use super::*;
 
 #[derive(Clone, Debug)]
@@ -20,6 +20,69 @@ pub(super) struct Row {
 }
 
 impl RigidVessel {
+    /// Reference default: each eligible physical part is reinforced to the first
+    /// heaviest physical part. Decouplers/clamps never receive an enhanced joint.
+    /// This adds coupled constraints; it does not mark the parent links rigid.
+    pub fn set_enhanced_joints(&mut self, enabled: bool) {
+        self.enhanced_joints = enabled;
+        self.rebuild_reinforcements();
+    }
+
+    pub(super) fn rebuild_reinforcements(&mut self) {
+        self.reinforcements.clear();
+        let mut heaviest = None;
+        for i in 0..self.len() {
+            if self.present[i]
+                && self.reinforcement_targets[i]
+                && heaviest.is_none_or(|j| self.masses_t[i] > self.masses_t[j])
+            {
+                heaviest = Some(i);
+            }
+        }
+        let Some(target) = heaviest else { return };
+        for source in 0..self.len() {
+            use ose_data::ReinforcementTarget::*;
+            if !self.present[source] || !self.reinforcement_targets[source] {
+                continue;
+            }
+            let mode = match self.authored_reinforcement[source] {
+                Some(mode) => mode,
+                None if self.enhanced_joints && self.reinforcement_eligible[source] => Heaviest,
+                None => continue,
+            };
+            let parent = |i| {
+                self.links
+                    .iter()
+                    .find(|l| l.child == i && l.intact())
+                    .map(|l| l.parent)
+                    .filter(|p| !self.launch_clamps.contains(p))
+            };
+            let target = match mode {
+                Heaviest => target,
+                GrandParent => parent(source)
+                    .map(|p| parent(p).unwrap_or(p))
+                    .unwrap_or(source),
+                Root => {
+                    if !self.launch_clamps.contains(&self.root) {
+                        self.root
+                    } else {
+                        parent(source).unwrap_or(source)
+                    }
+                }
+            };
+            if source != target {
+                self.reinforcements.push(Brace {
+                    part: source,
+                    far_part: target,
+                    source,
+                    target,
+                    anchor: self.rest_pos[source],
+                    active: true,
+                });
+            }
+        }
+    }
+
     /// Whether any ground launch clamps are still attached.
     pub fn has_launch_clamps(&self) -> bool {
         self.launch_clamps.iter().any(|&i| self.present[i])
@@ -32,7 +95,28 @@ impl RigidVessel {
         for (i, l) in self.links.iter().enumerate().filter(|(_, l)| l.intact()) {
             parent[l.child] = Some(i);
         }
-        for brace in &mut self.braces {
+        let angular_stiffness = |size| {
+            joint_settings()
+                .limits(
+                    size,
+                    true,
+                    false,
+                    false,
+                    (f64::INFINITY, f64::INFINITY),
+                    (f64::INFINITY, f64::INFINITY),
+                )
+                .stiffness
+        };
+        for (brace, angular_stiffness) in self
+            .braces
+            .iter_mut()
+            .map(|b| (b, angular_stiffness(0)))
+            .chain(
+                self.reinforcements
+                    .iter_mut()
+                    .map(|b| (b, angular_stiffness(2))),
+            )
+        {
             if !brace.active {
                 continue;
             }
@@ -86,20 +170,7 @@ impl RigidVessel {
                             .collect(),
                         axis,
                         // Finite translation penalty replaces PhysX's near-infinite linear drive.
-                        stiffness: if linear {
-                            1e8
-                        } else {
-                            joint_settings()
-                                .limits(
-                                    0,
-                                    true,
-                                    false,
-                                    false,
-                                    (f64::INFINITY, f64::INFINITY),
-                                    (f64::INFINITY, f64::INFINITY),
-                                )
-                                .stiffness
-                        },
+                        stiffness: if linear { 1e8 } else { angular_stiffness },
                         linear,
                     });
                 }

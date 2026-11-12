@@ -100,16 +100,13 @@ fn booster_flex(c: &ose_data::craft::Craft, seconds: f64) -> ((f64, f64), (f64, 
 
 /// KSP2 (pilot scenario `struts`, run 2026-11-08): the booster engines move 0.046 mm (braced) and 0.042 mm
 /// (unbraced) from rest relative to the pod under thrust, about 2 mm through the roll and after, and the strut
-/// makes no visible difference: KSP2's radial attachment is as rigid as its stacks. OSE's braced booster
-/// matches under thrust; its unbraced one flexes about 2 mm under thrust, 40 times KSP2's (the surface joint's
-/// spring), and through the roll OSE's craft rolls nearly twice as fast and starts tumbling after it, which
-/// whips the boosters by tens of centimetres. Both are joint and attitude-control gaps outside the strut model,
-/// reported for their threads (`OSE_FLEX_PRINT=1` prints the run).
+/// makes no visible difference: enhanced connections support both radial boosters. These tests bound
+/// excessive deformation; they do not establish exact displacement or attitude-controller parity.
 const KSP2_THRUST_FLEX_M: (f64, f64) = (0.000046, 0.000042);
 const KSP2_RUN_FLEX_M: (f64, f64) = (0.001925, 0.002073);
 
 #[test]
-fn a_strut_holds_its_booster_stiffer_than_the_unbraced_one() {
+fn both_boosters_stay_within_ksp2_thrust_flex_bounds() {
     let c = craft();
     assert_eq!(
         c.parts
@@ -129,14 +126,14 @@ fn a_strut_holds_its_booster_stiffer_than_the_unbraced_one() {
     );
     // the braced booster holds as KSP2's does under thrust
     assert!(braced < 2.0 * KSP2_THRUST_FLEX_M.0, "braced {braced}");
-    assert!(braced < loose, "the strut stiffens its booster");
+    // The measured reference holds both boosters almost equally still because
+    // enhanced connections support the otherwise unstrutted side as well.
+    assert!(loose < 2.0 * KSP2_THRUST_FLEX_M.1, "unbraced {loose}");
 }
 
-/// The rest of the KSP2 comparison: the unbraced booster under thrust and both through the roll. Fails today
-/// (see the notes above); for the joint and attitude-control work to turn on.
+/// Both boosters must remain within the measured flex bounds through thrust, roll and release.
 #[test]
-#[ignore]
-fn unbraced_boosters_and_the_roll_match_ksp2() {
+fn unbraced_boosters_and_roll_stay_within_ksp2_flex_bounds() {
     let ((_, loose), (bp, lp)) = booster_flex(&craft(), 11.0);
     assert!(
         loose < 2.0 * KSP2_THRUST_FLEX_M.1,

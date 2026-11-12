@@ -1,0 +1,28 @@
+[package]
+name = "ose-joint-replay"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[features]
+default = ["constraint-reactions"]
+constraint-reactions = []
+
+[dependencies]
+ose-data = { path = "../../../crates/ose-data" }
+ose-importer = { path = "../../../crates/ose-importer" }
+ose-math = { path = "../../../crates/ose-math" }
+ose-sim = { path = "../../../crates/ose-sim" }
+serde_json = "1"
+
+[profile.dev.package.rapier3d-f64]
+opt-level = 3
+[profile.dev.package.parry3d-f64]
+opt-level = 3
+[profile.dev.package.nalgebra]
+opt-level = 3
+
+[profile.dev.package.ose-sim]
+opt-level = 2

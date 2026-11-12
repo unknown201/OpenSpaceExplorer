@@ -452,6 +452,7 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
     let mut drag_cubes = Vec::new();
     let mut drag_properties = ose_data::DragProperties::default();
     let mut module_names = Vec::new();
+    let mut reinforced_connection = None;
     let mut raw_modules = BTreeMap::new();
     let mut gimbal_range = None;
     let mut wheel_torque: f64 = 0.0;
@@ -485,6 +486,16 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
             if let Some(entries) = m["ModuleData"].as_array() {
                 for entry in entries.iter() {
                     let o = &entry["DataObject"];
+                    if entry["Name"] == "Data_ReinforcedConnection" {
+                        use ose_data::ReinforcementTarget::*;
+                        reinforced_connection = Some(match &o["ConnectionTarget"] {
+                            Value::String(s) if s == "Root" => Root,
+                            Value::String(s) if s == "Heaviest" => Heaviest,
+                            Value::Number(n) if n.as_u64() == Some(1) => Root,
+                            Value::Number(n) if n.as_u64() == Some(2) => Heaviest,
+                            _ => GrandParent,
+                        });
+                    }
                     if entry["Name"] == "Data_Drag" {
                         drag_properties = ose_data::DragProperties {
                             drag_enabled: o["DragEnabled"].as_bool().unwrap_or(true),
@@ -967,6 +978,7 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
         intake,
         drag_cubes,
         module_names,
+        reinforced_connection,
         raw_modules,
     }
 }
@@ -1283,6 +1295,36 @@ fn chute_safety(o: &serde_json::Value) -> ose_data::ChuteSafety {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn authored_reinforcement_target_survives_slim_catalog_serialization() {
+        use ose_data::ReinforcementTarget::*;
+        for (target, expected) in [
+            (serde_json::json!("GrandParent"), GrandParent),
+            (serde_json::json!("Root"), Root),
+            (serde_json::json!("Heaviest"), Heaviest),
+            (serde_json::json!(1), Root),
+            (serde_json::json!(2), Heaviest),
+        ] {
+            let value = serde_json::json!({"data":{"partName":"support","mass":1.0,
+                "serializedPartModules":[{"Name":"PartComponentModule_ReinforcedConnection",
+                "ModuleData":[{"Name":"Data_ReinforcedConnection","DataObject":{"ConnectionTarget":target}}]}]}});
+            let mut imported = part(&value, &mut Coverage::default());
+            imported.raw_modules.clear();
+            let decoded: PartDef =
+                serde_json::from_str(&serde_json::to_string(&imported).unwrap()).unwrap();
+            assert_eq!(decoded.reinforced_target(), Some(expected));
+        }
+        let mut legacy = part(
+            &serde_json::json!({"data":{"partName":"legacy","mass":1.0}}),
+            &mut Coverage::default(),
+        );
+        assert_eq!(legacy.reinforced_target(), None);
+        legacy
+            .module_names
+            .push("PartComponentModule_ReinforcedConnection".into());
+        assert_eq!(legacy.reinforced_target(), Some(GrandParent));
+    }
     use serde_json::json;
 
     #[test]

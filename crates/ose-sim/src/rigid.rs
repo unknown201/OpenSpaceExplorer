@@ -11,8 +11,9 @@
 //! `stiffness * JointDampingFactor`) and the subtree's moment of inertia about the anchor:
 //! `I theta'' = -tau - k theta - c theta'`, integrated semi-implicitly in substeps so it stays stable at any
 //! stiffness. Statically a joint bends by `tau / k`, so a tall stack under thrust or a booster on a radial
-//! decoupler visibly flexes, and a sudden load rings. A joint breaks when its force, or its spring torque
-//! `k |theta|` (the load itself for rigid joints), exceeds the original's limits; the craft then splits into
+//! decoupler visibly flexes, and a sudden load rings. Only hard-constraint reactions can break joints:
+//! spring-drive forces are excluded from PhysX breakage. Rigid links carry the full reaction; flexible
+//! links carry a breakable angular reaction only at their hard stop. The craft then splits into
 //! the connected groups that remain. (Rapier's own multibody motors for three free rotations track integrated
 //! angular velocity rather than the true rotation, and wander, so the spring is ours.)
 //!
@@ -65,6 +66,8 @@ const WOBBLE_SUBSTEPS: usize = 32;
 const HOLD_TIME_S: f64 = 0.5;
 /// Steps without breaking after the structure changes.
 const SETTLE_STEPS: u32 = 3;
+/// Unity clamps KSP2's authored 180 degree angular limits to 177 degrees at runtime.
+const ANGULAR_LIMIT_RAD: f64 = 177.0 * std::f64::consts::PI / 180.0;
 
 /// Spring and break limits of one part joint.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -189,9 +192,12 @@ pub struct Link {
     pub child: usize,
     pub parent: usize,
     pub limits: JointLimits,
-    /// Last step's load, for readouts and break checks.
+    /// Full transmitted loads, including spring drives; useful for physical load readouts.
     pub force_kn: f64,
     pub torque_knm: f64,
+    /// Hard-constraint reactions used for breakage, excluding spring-drive actuation.
+    pub constraint_force_kn: f64,
+    pub constraint_torque_knm: f64,
     /// Torque the joint carries (vessel frame), kN*m.
     pub torque_vec_knm: DVec3,
     /// Bend of the child away from the parent (rotation vector, vessel frame, about the anchor), rad, and
@@ -303,6 +309,12 @@ pub struct RigidVessel {
     pub present: Vec<bool>,
     pub links: Vec<Link>,
     pub braces: Vec<Brace>,
+    /// Authored supports and the default enhanced connections to the heaviest physical part.
+    pub reinforcements: Vec<Brace>,
+    enhanced_joints: bool,
+    reinforcement_eligible: Vec<bool>,
+    reinforcement_targets: Vec<bool>,
+    authored_reinforcement: Vec<Option<ose_data::ReinforcementTarget>>,
     pub launch_clamps: Vec<usize>,
     /// Part origins at rest, vessel frame.
     rest_pos: Vec<DVec3>,
@@ -346,6 +358,21 @@ fn part_mass_t(
     (dry + wet).max(0.001)
 }
 
+/// Impulse needed to stop outward angular motion, separate from the angular spring.
+/// The reduced-coordinate flex layer uses a spherical 177 degree stop; it does not
+/// approximate the reference solver's instability at enormous translational loads.
+fn angular_stop(link: &mut Link, inertia: f64, dt: f64) -> f64 {
+    let angle = link.bend.length();
+    if angle <= ANGULAR_LIMIT_RAD {
+        return 0.0;
+    }
+    let normal = link.bend * (1.0 / angle);
+    let outward = link.bend_rate.dot(normal).max(0.0);
+    link.bend = normal * ANGULAR_LIMIT_RAD;
+    link.bend_rate = link.bend_rate - normal * outward;
+    inertia * outward / dt
+}
+
 impl RigidVessel {
     /// Update existing bodies in place. Fuel leaving at the part's velocity carries away
     /// its share of momentum; changing mass must not rescale velocities or rebuild joints.
@@ -374,6 +401,9 @@ impl RigidVessel {
             body.set_additional_mass_properties(properties, true);
             body.recompute_mass_properties_from_colliders(&self.colliders);
             self.masses_t[i] = mass;
+        }
+        if !self.reference_frozen {
+            self.rebuild_reinforcements();
         }
     }
 
@@ -554,6 +584,8 @@ impl RigidVessel {
                 limits,
                 force_kn: 0.0,
                 torque_knm: 0.0,
+                constraint_force_kn: 0.0,
+                constraint_torque_knm: 0.0,
                 torque_vec_knm: DVec3::ZERO,
                 bend: DVec3::ZERO,
                 bend_rate: DVec3::ZERO,
@@ -570,7 +602,7 @@ impl RigidVessel {
             .iter()
             .map(|p| to_vessel(p.local_position))
             .collect();
-        RigidVessel {
+        let mut vessel = RigidVessel {
             reference_masses_t: masses_t.clone(),
             inertia_modes,
             inertia_factors,
@@ -581,6 +613,43 @@ impl RigidVessel {
             unit_mass_properties,
             present: vec![true; n],
             links,
+            reinforcements: Vec::new(),
+            authored_reinforcement: craft
+                .parts
+                .iter()
+                .map(|p| {
+                    by_id
+                        .get(p.part_id.as_str())
+                        .and_then(|d| d.reinforced_target())
+                })
+                .collect(),
+            enhanced_joints: true,
+            reinforcement_eligible: craft
+                .parts
+                .iter()
+                .map(|p| {
+                    by_id.get(p.part_id.as_str()).is_some_and(|d| {
+                        (d.physics_mode != "None" || p.parent.is_none())
+                            && !d.module_names.iter().any(|m| {
+                                m.ends_with("Module_Decouple")
+                                    || m.ends_with("Module_GroundLaunchClamp")
+                            })
+                    })
+                })
+                .collect(),
+            reinforcement_targets: craft
+                .parts
+                .iter()
+                .map(|p| {
+                    by_id.get(p.part_id.as_str()).is_some_and(|d| {
+                        (d.physics_mode != "None" || p.parent.is_none())
+                            && !d
+                                .module_names
+                                .iter()
+                                .any(|m| m.ends_with("Module_GroundLaunchClamp"))
+                    })
+                })
+                .collect(),
             braces: craft
                 .parts
                 .iter()
@@ -650,7 +719,9 @@ impl RigidVessel {
             ccd: CCDSolver::new(),
             pipeline: PhysicsPipeline::new(),
             params,
-        }
+        };
+        vessel.rebuild_reinforcements();
+        vessel
     }
 
     /// How far the structure has turned since it was built (rotation from the vessel frame to the solver's
@@ -947,19 +1018,29 @@ impl RigidVessel {
             self.solve_braces(dt, &inertias, &carried);
         }
         let mut broken = Vec::new();
-        for l in &mut self.links {
+        for (index, l) in self.links.iter_mut().enumerate() {
             let Some(h) = l.handle else { continue };
+            if l.limits.rigid {
+                l.constraint_force_kn = l.force_kn;
+                l.constraint_torque_knm = l.torque_knm;
+            } else {
+                // Translation is held exactly by the reduced-coordinate tree, modelling the
+                // reference's near-infinite translation drive. Its drive load is not a hard
+                // limit reaction. In particular, neither F nor k*theta is a breakage signal.
+                l.constraint_force_kn = 0.0;
+                l.constraint_torque_knm = angular_stop(l, inertias[index], dt);
+            }
             if !settling
-                && (l.force_kn > l.limits.break_force_kn
-                    || l.torque_knm > l.limits.break_torque_knm)
+                && (l.constraint_force_kn > l.limits.break_force_kn
+                    || l.constraint_torque_knm > l.limits.break_torque_knm)
             {
                 self.joints.remove(h, true);
                 l.handle = None;
                 broken.push(Broken {
                     child: l.child,
                     parent: l.parent,
-                    force_kn: l.force_kn,
-                    torque_knm: l.torque_knm,
+                    force_kn: l.constraint_force_kn,
+                    torque_knm: l.constraint_torque_knm,
                 });
             }
         }
@@ -972,6 +1053,10 @@ impl RigidVessel {
 
     /// Let the joints ring down with no load (a coast: nothing pushes the structure).
     pub fn relax(&mut self, dt: f64) {
+        for l in &mut self.links {
+            l.constraint_force_kn = 0.0;
+            l.constraint_torque_knm = 0.0;
+        }
         let n = self.len();
         let present: Vec<usize> = (0..n).filter(|&i| self.present[i]).collect();
         if self
@@ -986,7 +1071,12 @@ impl RigidVessel {
             let s = self.sizes_m[i];
             inertia[i] = self.masses_t[i] * (s.x * s.x + s.y * s.y + s.z * s.z) / 24.0;
         }
-        if self.braces.iter().any(|b| b.active) {
+        if self
+            .braces
+            .iter()
+            .chain(&self.reinforcements)
+            .any(|b| b.active)
+        {
             let moments: Vec<_> = self
                 .links
                 .iter()
@@ -1052,19 +1142,19 @@ impl RigidVessel {
         t
     }
 
-    /// Worst joint load as a fraction of its break limit (force or torque), 0 when unloaded.
+    /// Worst hard-constraint reaction as a fraction of its break limit, excluding spring drives.
     pub fn max_stress(&self) -> f64 {
         self.links
             .iter()
             .filter(|l| l.intact())
             .map(|l| {
                 let f = if l.limits.break_force_kn.is_finite() {
-                    l.force_kn / l.limits.break_force_kn
+                    l.constraint_force_kn / l.limits.break_force_kn
                 } else {
                     0.0
                 };
                 let t = if l.limits.break_torque_knm.is_finite() {
-                    l.torque_knm / l.limits.break_torque_knm
+                    l.constraint_torque_knm / l.limits.break_torque_knm
                 } else {
                     0.0
                 };
@@ -1179,6 +1269,7 @@ impl RigidVessel {
             self.settle = SETTLE_STEPS;
         }
         self.brace_rows();
+        self.rebuild_reinforcements();
     }
 
     /// Connected groups of parts over the intact joints, each sorted, the group holding part 0 first.
@@ -1228,6 +1319,9 @@ mod tests {
         // Analytical fixtures explicitly define their force points, bounds and inertia.
         for def in &mut data.1 {
             def.flight_geometry = Default::default();
+            def.reinforced_connection = None;
+            def.module_names
+                .retain(|m| m != "PartComponentModule_ReinforcedConnection");
         }
         data
     }
@@ -1586,6 +1680,8 @@ mod tests {
         let (crafts, defs, res) = assets();
         let craft = crafts.iter().find(|c| c.name == "Kerbal K1").unwrap();
         let mut rv = RigidVessel::build(craft, &defs, &res);
+        // Measure the unreinforced spring, rather than the default coupled supports.
+        rv.set_enhanced_joints(false);
         // pluck the booster on its radial decoupler (child 21) and let go
         let l = rv.links.iter_mut().find(|l| l.child == 21).unwrap();
         l.bend = DVec3::new(0.02, 0.0, 0.0);
@@ -1601,6 +1697,205 @@ mod tests {
         }
         assert!(crossed, "it swings through rest");
         assert!(last.abs() < 0.002, "and dies away ({last})");
+    }
+
+    fn two_part_joint() -> RigidVessel {
+        let (crafts, mut defs, res) = assets();
+        let mut craft = crafts[0].clone();
+        let mut root = craft.parts[0].clone();
+        root.guid = "root".into();
+        root.part_id = "pod_1v_conical_crew".into();
+        root.parent = None;
+        root.resources.clear();
+        root.local_position = DVec3::ZERO;
+        root.local_rotation = Quat {
+            w: 1.0,
+            ..Default::default()
+        };
+        let mut child = root.clone();
+        child.guid = "child".into();
+        child.part_id = "fueltank_1v_inline_methalox_1x4".into();
+        child.parent = Some(0);
+        child.local_position = DVec3::new(0.0, -2.0, 0.0);
+        child.own_node = Some("top".into());
+        child.parent_node = Some("bottom".into());
+        craft.parts = vec![root, child];
+        craft.stages.clear();
+        for def in &mut defs {
+            def.mass_t = 1.0;
+            def.breaking_force = 0.01;
+            def.breaking_torque = 0.01;
+        }
+        RigidVessel::build(&craft, &defs, &res)
+    }
+
+    #[test]
+    fn spring_drive_loads_above_rated_break_force_and_torque_do_not_break() {
+        let mut rv = two_part_joint();
+        rv.set_enhanced_joints(false);
+        let forces: Vec<_> = [0, 1]
+            .into_iter()
+            .flat_map(|part| {
+                [1.0, -1.0].map(move |side| PartForce {
+                    part,
+                    force_kn: DVec3::new(
+                        0.0,
+                        0.0,
+                        500.0 * side * if part == 0 { 1.0 } else { -1.0 },
+                    ),
+                    offset_m: DVec3::new(0.5 * side, 0.0, 0.0),
+                })
+            })
+            .collect();
+        for _ in 0..100 {
+            assert!(rv.step(0.02, DVec3::ZERO, &forces).is_empty());
+        }
+        let link = &rv.links[0];
+        assert!(link.torque_knm > link.limits.break_torque_knm);
+        assert_eq!(link.constraint_torque_knm, 0.0);
+        assert_eq!(rv.max_stress(), 0.0);
+        let axial = [
+            PartForce {
+                part: 0,
+                force_kn: DVec3::new(0.0, 500.0, 0.0),
+                offset_m: DVec3::ZERO,
+            },
+            PartForce {
+                part: 1,
+                force_kn: DVec3::new(0.0, -500.0, 0.0),
+                offset_m: DVec3::ZERO,
+            },
+        ];
+        for _ in 0..100 {
+            assert!(rv.step(0.02, DVec3::ZERO, &axial).is_empty());
+        }
+        assert!(rv.links[0].force_kn > rv.links[0].limits.break_force_kn);
+        assert_eq!(rv.links[0].constraint_force_kn, 0.0);
+    }
+
+    #[test]
+    fn rigid_constraints_still_break_on_reaction_force() {
+        let mut rv = two_part_joint();
+        rv.set_enhanced_joints(false);
+        rv.links[0].limits.rigid = true;
+        let broken = rv.step(
+            0.02,
+            DVec3::ZERO,
+            &[
+                PartForce {
+                    part: 0,
+                    force_kn: DVec3::new(0.0, 500.0, 0.0),
+                    offset_m: DVec3::ZERO,
+                },
+                PartForce {
+                    part: 1,
+                    force_kn: DVec3::new(0.0, -500.0, 0.0),
+                    offset_m: DVec3::ZERO,
+                },
+            ],
+        );
+        assert_eq!(broken.len(), 1);
+        assert!(broken[0].force_kn > 400.0);
+        assert_eq!(rv.groups().len(), 2);
+    }
+
+    #[test]
+    fn angular_limit_reaction_obeys_impulse_and_preserves_inward_motion() {
+        let mut rv = two_part_joint();
+        let link = &mut rv.links[0];
+        link.bend = DVec3::new(ANGULAR_LIMIT_RAD + 0.1, 0.0, 0.0);
+        link.bend_rate = DVec3::new(10.0, 2.0, 0.0);
+        assert!((angular_stop(link, 2.0, 0.02) - 1000.0).abs() < 1e-9);
+        assert!((link.bend.length() - ANGULAR_LIMIT_RAD).abs() < 1e-12);
+        assert!((link.bend_rate - DVec3::new(0.0, 2.0, 0.0)).length() < 1e-12);
+        link.bend = DVec3::new(ANGULAR_LIMIT_RAD + 0.1, 0.0, 0.0);
+        link.bend_rate = DVec3::new(-1.0, 0.0, 0.0);
+        assert_eq!(angular_stop(link, 2.0, 0.02), 0.0);
+        assert_eq!(link.bend_rate.x, -1.0);
+    }
+
+    #[test]
+    fn enhanced_connections_retarget_initial_wet_mass_without_locking_links() {
+        let mut rv = two_part_joint();
+        assert_eq!(rv.reinforcements.len(), 1);
+        assert_eq!(
+            (rv.reinforcements[0].source, rv.reinforcements[0].target),
+            (1, 0)
+        );
+        rv.set_part_masses(&[1.0, 2.0]);
+        assert_eq!(
+            (rv.reinforcements[0].source, rv.reinforcements[0].target),
+            (0, 1)
+        );
+        assert!(!rv.links[0].limits.rigid);
+        rv.set_enhanced_joints(false);
+        assert!(rv.reinforcements.is_empty());
+        rv.set_enhanced_joints(true);
+        rv.remove_parts(&[1]);
+        assert!(rv.reinforcements.is_empty());
+    }
+
+    #[test]
+    fn enhanced_connections_add_parallel_stiffness_instead_of_freezing_the_parts() {
+        let mut free = two_part_joint();
+        free.set_enhanced_joints(false);
+        let mut supported = two_part_joint();
+        let forces: Vec<_> = [0, 1]
+            .into_iter()
+            .flat_map(|part| {
+                [1.0, -1.0].map(move |side| PartForce {
+                    part,
+                    force_kn: DVec3::new(
+                        0.0,
+                        0.0,
+                        500.0 * side * if part == 0 { 1.0 } else { -1.0 },
+                    ),
+                    offset_m: DVec3::new(0.5 * side, 0.0, 0.0),
+                })
+            })
+            .collect();
+        for _ in 0..200 {
+            assert!(free.step(0.02, DVec3::ZERO, &forces).is_empty());
+            assert!(supported.step(0.02, DVec3::ZERO, &forces).is_empty());
+        }
+        let ratio = supported.links[0].bend.length() / free.links[0].bend.length();
+        // A size-1 spring in parallel with the size-2 reinforced spring: 1.5 / 3.75.
+        assert!(
+            (ratio - 0.4).abs() < 0.02,
+            "finite, coupled support ratio {ratio}"
+        );
+        assert!(supported.links[0].bend.length() > 0.0);
+    }
+
+    #[test]
+    fn authored_support_targets_override_enhanced_mode_and_survive_its_toggle() {
+        use ose_data::ReinforcementTarget::*;
+        let mut rv = two_part_joint();
+        rv.set_part_masses(&[1.0, 2.0]);
+        // The heaviest child has an authored grandparent support; with no grandparent
+        // the reference falls back to its parent, rather than suppressing the support.
+        rv.authored_reinforcement[1] = Some(GrandParent);
+        rv.set_enhanced_joints(false);
+        assert_eq!(rv.reinforcements.len(), 1);
+        assert_eq!(
+            (rv.reinforcements[0].source, rv.reinforcements[0].target),
+            (1, 0)
+        );
+        rv.set_enhanced_joints(true);
+        assert_eq!(rv.reinforcements.len(), 2);
+        rv.authored_reinforcement[1] = Some(Root);
+        rv.rebuild_reinforcements();
+        assert!(rv
+            .reinforcements
+            .iter()
+            .any(|b| b.source == 1 && b.target == 0));
+        rv.authored_reinforcement[1] = Some(Heaviest);
+        rv.rebuild_reinforcements();
+        assert_eq!(
+            rv.reinforcements.len(),
+            1,
+            "the heaviest part does not reinforce itself"
+        );
     }
 
     #[test]

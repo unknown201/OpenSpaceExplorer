@@ -329,11 +329,23 @@ pub struct PartDef {
     pub intake: Option<Intake>,
     /// Names of every module on the part, in order, so the sim knows what else to implement.
     pub module_names: Vec<String>,
+    /// An authored reinforced-connection target. Older slim catalogs retain the module
+    /// name only; all shipped authored connections use GrandParent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reinforced_connection: Option<ReinforcementTarget>,
     /// Module data not yet mapped into typed fields, keyed by module name.
     pub raw_modules: BTreeMap<String, serde_json::Value>,
 }
 
 impl PartDef {
+    pub fn reinforced_target(&self) -> Option<ReinforcementTarget> {
+        self.reinforced_connection.or_else(|| {
+            self.module_names
+                .iter()
+                .any(|m| m == "PartComponentModule_ReinforcedConnection")
+                .then_some(ReinforcementTarget::GrandParent)
+        })
+    }
     /// A fuel line: a two-anchor part that feeds the part at its far end from the tank it hangs on.
     pub fn is_fuel_line(&self) -> bool {
         self.module_names
@@ -353,6 +365,14 @@ impl PartDef {
             .iter()
             .any(|m| m == "PartComponentModule_Strut")
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ReinforcementTarget {
+    #[default]
+    GrandParent,
+    Root,
+    Heaviest,
 }
 
 /// Electric charge (units per second) used and made by a part's modules, from their `RequiredResources` /
