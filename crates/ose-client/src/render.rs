@@ -2090,6 +2090,23 @@ impl Renderer {
     }
 
     /// Draw one frame. `asset_base` is the URL prefix for relative texture URIs (e.g. `assets/parts/`).
+    /// Refresh a cached strip when its endpoints move (for example, a flexing structural brace).
+    pub fn update_line(&mut self, line: &LineItem) {
+        if let Some((buffer, count)) = self.lines.get(&line.key) {
+            if *count as usize == line.points_km.len() {
+                let data: Vec<[f32; 3]> = line
+                    .points_km
+                    .iter()
+                    .map(|p| [p.x as f32, p.y as f32, p.z as f32])
+                    .collect();
+                self.queue
+                    .write_buffer(buffer, 0, bytemuck::cast_slice(&data));
+            } else {
+                self.lines.remove(&line.key);
+            }
+        }
+    }
+
     pub fn frame(
         &mut self,
         asset_base: &str,

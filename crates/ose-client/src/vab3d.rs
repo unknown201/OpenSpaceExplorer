@@ -1039,7 +1039,7 @@ impl VabView {
             let (wa, wb) = (centre + to_gltf(a), centre + to_gltf(b));
             let d = wb - wa;
             crate::render::LineItem::new(
-                format!("{key}:{:.3},{:.3},{:.3}", d.x, d.y, d.z),
+                key.to_string(),
                 vec![DVec3::ZERO, d],
                 wa - cam_pos,
                 color,
@@ -1053,7 +1053,7 @@ impl VabView {
             } else {
                 [0.18, 0.19, 0.2, 1.0]
             };
-            lines.push(span("vab-link", a, b, color));
+            lines.push(span(&format!("vab-link:{i}"), a, b, color));
         }
         if let Some((a, Some(b))) = self.link_preview {
             lines.push(span("vab-link-preview", a, b, [0.55, 1.0, 0.6, 1.0]));
@@ -1066,6 +1066,9 @@ impl VabView {
         } else {
             [0.12, 0.13, 0.15]
         };
+        for line in lines.iter().filter(|l| l.key.starts_with("vab-link")) {
+            gpu.update_line(line);
+        }
         gpu.frame("assets/vab/", &items, &lines, clear);
         true
     }

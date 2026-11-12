@@ -8,6 +8,10 @@ use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Shipped EAS-4 extension limits override the C# class-default maximum of 100 m.
+pub const STRUT_MIN_LENGTH_M: f64 = 0.01;
+pub const STRUT_MAX_LENGTH_M: f64 = 10.0;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Quat {
     pub x: f64,
@@ -156,6 +160,29 @@ pub fn crossfeed_on(part: &CraftPart, def: Option<&PartDef>) -> bool {
 }
 
 impl Craft {
+    /// Validate linked struts against the shipped part's extent and anchor relationship.
+    pub fn strut_error(&self, defs: &[PartDef]) -> Option<String> {
+        for (i, p) in self.parts.iter().enumerate() {
+            if p.fuel_line_target.is_none()
+                || !defs.iter().any(|d| d.id == p.part_id && d.is_strut())
+            {
+                continue;
+            }
+            let Some((source, target)) = self.compound_ends(i) else {
+                return Some(format!("strut {i} has a missing anchor parent"));
+            };
+            if source == target || source >= self.parts.len() || target >= self.parts.len() {
+                return Some(format!("strut {i} must join different parent parts"));
+            }
+            let far = &self.parts[p.fuel_line_target.unwrap()];
+            let length = (far.local_position - p.local_position).length();
+            if !length.is_finite() || !(STRUT_MIN_LENGTH_M..=STRUT_MAX_LENGTH_M).contains(&length) {
+                return Some(format!("strut {i} must be between 0.01 and 10 metres long"));
+            }
+        }
+        None
+    }
+
     /// The two parts a fuel line or strut joins, when part `i` is its linked first anchor: the part it hangs
     /// on and the part its far anchor hangs on.
     pub fn compound_ends(&self, i: usize) -> Option<(usize, usize)> {

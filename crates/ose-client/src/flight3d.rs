@@ -2443,7 +2443,7 @@ impl FlightView {
                 let d = b - a;
                 let strut = craft.parts[f].part_id.starts_with("strut");
                 link_lines.push(crate::render::LineItem::new(
-                    format!("flight-link:{:.2},{:.2},{:.2}", d.x, d.y, d.z),
+                    format!("flight-link:{}:{f}", inp.vessel.id),
                     vec![DVec3::ZERO, d],
                     a,
                     if strut {
@@ -3228,6 +3228,9 @@ impl FlightView {
             .as_ref()
             .filter(|_| planet_ready)
             .map(|p| p as &dyn crate::render::ExtraPass);
+        for line in &link_lines {
+            gpu.update_line(line);
+        }
         gpu.frame_with_effects(
             "assets/parts/",
             &items,
