@@ -1,6 +1,10 @@
 # Station rendezvous guidance
 
-Status: proposed experience and interface; no gameplay implementation in this change.
+Status: implemented first version on `codex/station-rendezvous-feature`. See
+[implementation and verification](reference-notes/station-rendezvous-guidance.md).
+Launch advice currently predicts orbital-plane opportunities; learned ascent profiles and
+launch-to-intercept forecasts remain future work. The intercept planner uses two-body
+estimates, with explicit correction replanning after finite burns.
 
 ## Intent
 
@@ -157,7 +161,7 @@ delivery route scheduling are outside this proposal's initial scope.
 
 ## Fit with the current code
 
-Inspected sources, not a claim that the proposed planner already exists:
+Existing integration points:
 
 - `crates/ose-client/src/navball.rs`: existing maneuver, target, and anti-target vectors.
 - `crates/ose-client/src/hud.rs`: existing target/anti-target and other SAS mode buttons.

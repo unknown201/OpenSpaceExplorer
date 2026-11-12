@@ -53,6 +53,11 @@ pub struct PartSpec {
     /// A two-anchor part: "fuel_line" or "strut" (placed on one part, then run to another); empty otherwise.
     #[serde(default)]
     pub compound: String,
+    /// Authored port geometry and capture limits; shared with the simulation through /parts.json.
+    #[serde(default)]
+    pub docking: Option<ose_data::DockingPort>,
+    #[serde(default)]
+    pub rcs_thrust_kn: f64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Deserialize)]

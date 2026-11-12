@@ -65,6 +65,8 @@ pub mod reentry;
 mod reentry_gpu;
 #[cfg(target_arch = "wasm32")]
 pub mod render;
+pub mod rendezvous;
+mod rendezvous_ui;
 pub mod rnd;
 pub mod scene;
 pub mod settings;
@@ -452,6 +454,7 @@ struct App {
     /// the rev last asked for each.
     vessel_crafts: std::collections::HashMap<u64, (u32, Option<ose_data::craft::Craft>)>,
     vessel_craft_asked: std::collections::HashMap<u64, u32>,
+    rendezvous: rendezvous::Director,
     /// The loading screen: the place it last saw (None on the main menu) and when it went up.
     loading_place: Option<&'static str>,
     loading_since: Option<f64>,
@@ -1040,6 +1043,12 @@ pub fn start() -> Result<(), JsValue> {
         loading_place: None,
         vessel_crafts: Default::default(),
         vessel_craft_asked: Default::default(),
+        rendezvous: rendezvous::Director {
+            level: rendezvous::Level::parse(stored("ose.rdv.level").as_deref().unwrap_or("off")),
+            world_cues: stored("ose.rdv.world").as_deref() != Some("off"),
+            audible: stored("ose.rdv.audio").as_deref() == Some("on"),
+            ..Default::default()
+        },
         roster: Vec::new(),
         tc_selected: None,
         tc_lessons: false,
@@ -1093,6 +1102,7 @@ pub fn start() -> Result<(), JsValue> {
 
     app.borrow_mut().resize();
     install_input(&app)?;
+    rendezvous_ui::install(&app)?;
     install_label_clicks(&app)?;
     install_menu(&app)?;
     // Establish the transport while the pilot chooses a name and the menu scenery downloads.
@@ -6239,6 +6249,15 @@ impl App {
                 }
             }
             ServerMessage::Docked { vessel, absorbed } => {
+                let guided_delivery = self.rendezvous.enabled
+                    && [Some(vessel), Some(absorbed)].contains(&self.rendezvous.destination)
+                    && [Some(vessel), Some(absorbed)].contains(&self.flying);
+                if self.rendezvous.destination == Some(absorbed) {
+                    self.rendezvous.destination = Some(vessel);
+                    self.target = Some(ose_net::TargetId::Vessel(vessel));
+                    self.rendezvous.transfer = None;
+                    self.rendezvous.signature = None;
+                }
                 if self.flying == Some(absorbed) {
                     let craft =
                         stored(&self.craft_link_key(vessel)).and_then(|s| s.parse::<u64>().ok());
@@ -6247,6 +6266,16 @@ impl App {
                 if self.flying == Some(vessel) {
                     set_text(&self.doc, "fh-note", "docked");
                     self.audio.play("decouple");
+                }
+                if guided_delivery {
+                    self.rendezvous.enabled = false;
+                    self.rendezvous.hold = false;
+                    self.rendezvous.invalidate();
+                    self.rendezvous.phase = rendezvous::Phase::Complete;
+                    self.rendezvous.note =
+                        "Delivery attached. Station identity and unused ports are retained.".into();
+                    self.sas_hold();
+                    hud::push(&self.doc, "Module attached to station", "triumph");
                 }
             }
             ServerMessage::Undocked {
@@ -6421,6 +6450,27 @@ impl App {
                 }
             }
             ServerMessage::Vessels { vessels, tick } => {
+                self.rendezvous.snapshot_ms = now_ms();
+                if let (Some(own), Some(old)) = (self.flying, self.rendezvous.destination) {
+                    if !vessels.iter().any(|v| v.id == old) {
+                        let remapped = vessels
+                            .iter()
+                            .find(|v| v.id == own)
+                            .and_then(|v| v.target.as_ref())
+                            .map(|t| t.target);
+                        if let Some(ose_net::TargetId::Vessel(new)) = remapped {
+                            if new != own && vessels.iter().any(|v| v.id == new) {
+                                self.rdv_release();
+                                self.rendezvous.invalidate();
+                                self.rendezvous.destination = Some(new);
+                                self.rendezvous.phase = rendezvous::Phase::Unavailable;
+                                self.rendezvous.note = "Destination joined another vessel. Confirm its port and replan.".into();
+                                self.target = Some(ose_net::TargetId::Vessel(new));
+                                self.rdv_save();
+                            }
+                        }
+                    }
+                }
                 let ids: Vec<u64> = vessels.iter().map(|v| v.id).collect();
                 let known: Vec<u64> = self.vessel_els.iter().map(|(id, _)| *id).collect();
                 let changed = ids != known;
@@ -10310,11 +10360,13 @@ impl App {
     }
 
     fn start_flight(&mut self, vessel: u64, craft_id: Option<u64>) {
+        self.rdv_release();
         self.ftue("FTUE_Flight");
         self.carried.clear();
         self.lesson_event("VesselCreatedMessage");
         self.lesson_event("LaunchSequenceInitiatedMessage");
         self.flying = Some(vessel);
+        self.rdv_start(vessel);
         // The server keeps a target per vessel; the one picked carries over to the vessel flown now.
         if self.target == Some(ose_net::TargetId::Vessel(vessel)) {
             self.target = None;
@@ -10345,6 +10397,7 @@ impl App {
     }
 
     fn end_flight(&mut self) {
+        self.rdv_release();
         self.flying = None;
         self.crash_report_due.set(None);
         self.flight_craft = None;
@@ -11012,6 +11065,7 @@ impl App {
     }
 
     fn set_attitude(&mut self, a: ose_net::AttitudeMode) {
+        self.rendezvous.hold = false;
         self.attitude = a;
         self.control_cadence.sent(now_ms());
         self.send_controls();
@@ -11072,6 +11126,15 @@ impl App {
                     pro * n.prograde_mps + normal * n.normal_mps + normal.cross(pro) * n.radial_mps;
                 (d.length() > 0.01).then(|| d.normalize_or_zero())
             });
+        if self.rendezvous.enabled && self.rendezvous.level != rendezvous::Level::Off {
+            nav.guidance = self.rendezvous.cue.map(g);
+        }
+        if self.speed_target {
+            nav.prograde = v.target.as_ref().and_then(|t| {
+                let relative = -g(t.relative_velocity_mps);
+                (relative.length() > 0.01).then(|| relative.normalize_or_zero())
+            });
+        }
         Some(nav)
     }
 
@@ -11465,6 +11528,13 @@ impl App {
             ose_math::DVec3::new(axes[0], axes[1], axes[2])
         };
         let (raw_rotation, flight_rotation) = self.keys.flight_axes(dt, additional);
+        if self.rendezvous.hold
+            && ((!self.lin_mode && raw_rotation.x.hypot(raw_rotation.y) > 1e-6)
+                || raw_rotation.z.abs() > 1e-6)
+        {
+            self.rendezvous.hold = false;
+            self.sas_hold();
+        }
         let raw = [
             if self.lin_mode {
                 0.
@@ -11736,6 +11806,7 @@ impl App {
             hud::push(&self.doc, &format!("Target: {name}"), "passive");
         }
         self.send_target();
+        self.rdv_target_changed();
         for (vid, el) in &self.vessel_els {
             el.class_list()
                 .toggle_with_force(
@@ -13993,6 +14064,7 @@ impl App {
             self.update_hud(ut);
         }
         self.update_flight_hud();
+        self.rendezvous_tick(now);
         self.update_mission_tracker();
         self.update_flight_instruments();
         self.toasts.watch(&self.doc, "fh-note", "alert");
@@ -14546,6 +14618,8 @@ impl App {
                 .filter(|n| n.vessel == id)
                 .map(|n| (n.prograde_mps, n.normal_mps, n.radial_mps)),
             target: target_dir,
+            guidance_point: self.rendezvous.point.map(g),
+            port_point: self.rendezvous.axis_point.map(g),
             now_ms: now_ms(),
             others: &others,
             star_radius,
