@@ -1190,7 +1190,7 @@ impl App {
                 match self.rendezvous.phase {
                     Phase::Dock => "Docking port axis",
                     Phase::Approach => "Port staging point",
-                    _ => "Planned meeting point",
+                    _ => "Next burn point",
                 },
             );
         }
