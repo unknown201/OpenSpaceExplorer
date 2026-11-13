@@ -1,59 +1,105 @@
 # Live splashdown comparison
 
-This benchmark launches a fresh real Mk1 pod for each of eight controlled cases:
-gentle splashdown, a zero-speed release, a 25° bank, a 5 m/s horizontal release,
-and vertical/horizontal impacts on both sides of the native destruction threshold.
-The 45-second cases measure equilibrium, bobbing and righting. OSE imports the
-identical local OAB craft and calls production propulsion, aerodynamic, surface
-and flight APIs at 50 Hz. No native force or output trajectory is injected into OSE.
+Eight controlled real Mk1 pod releases measure splashdown, equilibrium, bobbing,
+righting, lateral drag and impact destruction. OSE imports the identical local
+craft and uses production APIs at 50 Hz. Native forces are never injected into OSE.
+See [measured results and scope](../../docs/reference-notes/water-live-parity.md).
 
-The native recorder uses real KSP2 `PartBehavior`, water detection, buoyancy,
-drag and destruction callbacks. It teleports above the ocean, then sets only the
-initial rigidbody pose and velocity. It records UT, survival, origin/CoM altitude,
-surface velocity, attitude, buoyancy fraction/force and rigidbody damping.
-Screenshots accompany each completed case. Setup differences and measurement
-results must be reported; a passing unit test does not establish live parity.
+## Native capture
 
-## Run
-
-Use the installed game executable and its existing BepInEx loader. `run.ps1`
-temporarily moves other plugin DLLs into the run's backup directory, installs
-only this recorder, and restores the original DLLs after the process exits.
-It uses a dedicated empty **OSE Water Validation** sandbox seed. Other campaigns
-and recorder markers are preserved. Do not run another reference capture during
-this benchmark. Game-derived fixtures, binaries and captures stay ignored.
+Use installed KSP2 0.2.2 and its existing BepInEx loader. Required local inputs
+are an empty sandbox seed and `BepInEx/ose-parity/craft-stack.json` containing a
+Mk1 pod. The preparer extracts a clean single-pod fixture and creates a dedicated
+**OSE Water Validation** seed, refusing to overwrite a changed seed. Game-derived
+fixtures, captures and binaries remain ignored. Do not run another capture at once.
 
 ```powershell
-./tools/water-parity/run.ps1
+./tools/water-parity/run.ps1 -RunDir D:/scratch/water-run `
+  -Seed 'C:/path/to/empty-sandbox/seed.json'
 ```
 
-Pass `-GameDir`, `-SaveDir`, `-Seed` and `-RunDir` for other local
-paths. The seed must be an empty sandbox JSON. Existing or changed captures/seeds
-are refused rather than overwritten. Activate the game window if startup pauses.
-The recorder corrects invalid tiny window dimensions, waits for the actual game
-states, uses universe time for holds, and quits after completion or setup failure.
-Expect several minutes. Require `out/done.txt` and absence of `out/failed.txt`.
+Optional `-GameDir` and `-SaveDir` override installed paths. The default seed
+is the existing OSE Water Validation seed. Use a fresh RunDir for every attempt.
+The driver temporarily preserves other top-level plugin DLLs, installs the
+recorder and restores the plugins in `finally`. It starts a **fresh installed-game
+process for every case**; reloading flight in one process is excluded because
+reference module initialization can fail. Expect several minutes.
 
-The driver copies `BepInEx/ose-water-validation/out` to the run's `native/`
-directory after exit. It also copies the exact native `craft.json` to the run
-root. Preserve unsuccessful attempts separately; never merge different attempts.
+The recorder sets background execution each Update; no network-prompt action is
+needed. It stages at 10,000 m relative to seabed, waits for actual game states,
+primes motion caches for 0.2 s above water, then resets exact release pose and
+velocity. Real part modules, water detection and destruction stay active. Samples
+are taken after PhysX, using freshly read surface-frame rigidbody velocity.
+Metadata records release UT, mass/crew, CoB, inertia and physics settings.
+
+Each process writes a unique `out-<UTC timestamp>` directory and
+`last-run-path.txt`. The driver preserves it under `native-cases/<case>` with
+game/loader logs. `assemble_native.py` accepts exactly one completed release/end
+per case, rejects failed or contaminated attempts, then creates `native/` with
+combined traces, screenshots, a case hash manifest and `done.txt`. It also copies
+the exact craft into the run root. Never mix partial attempts into accepted data.
+
+| Case ID | Height | Vertical / lateral velocity | Bank | Duration |
+|---|---:|---:|---:|---:|
+| drop | 3 m | -5 / 0 m/s | 0° | 45 s |
+| bob | 0 m | 0 / 0 m/s | 0° | 45 s |
+| bank | 0 m | 0 / 0 m/s | 25° | 45 s |
+| drag | 0 m | 0 / 5 m/s | 0° | 20 s |
+| vertical_safe | 1 m | -16 / 0 m/s | 0° | 6 s |
+| vertical_destroy | 1 m | -22 / 0 m/s | 0° | 3 s |
+| horizontal_safe | 0 m | 0 / 100 m/s | 0° | 3 s |
+| horizontal_destroy | 0 m | 0 / 220 m/s | 0° | 3 s |
+
+All cases use latitude 0°, longitude -60°, SAS off. The last four IDs are legacy
+identifiers, not expected survival: native 22 m/s down survives and 100 m/s lateral
+destroys at the measured UT because native entry/drag projects onto an orbital
+reference axis rather than local vertical. Destruction may end a trace early.
+
+## OSE and comparison
+
+Run from the repo root after native capture is complete. Use an isolated build
+target to avoid stale cross-worktree catalog/source artifacts.
 
 ```powershell
-cargo run --offline -p ose-sim --example water_probe -- .cache/water-parity
+$env:CARGO_TARGET_DIR = 'D:/scratch/water-target'
+cargo run --offline -p ose-sim --example water_probe -- D:/scratch/water-run
 python -B -m unittest discover -s tools/tests -p test_water_parity.py
-python tools/water-parity/analyze.py .cache/water-parity
-python tools/water-parity/provenance.py .cache/water-parity `
+python tools/water-parity/analyze.py D:/scratch/water-run
+python tools/water-parity/provenance.py D:/scratch/water-run `
   --game 'C:/Program Files (x86)/Steam/steamapps/common/Kerbal Space Program 2'
 ```
 
-`comparison.html` contains standalone trajectory plots and every comparison check.
-`comparison.json` is machine-readable. Exit **0** means all fixed fixture checks
-pass, **1** means measured gaps, and **2** means incomplete/unmatched evidence.
-The analyzer rejects missing cases, water entries, completion, trace tails, sample
-gaps, nonfinite data, and mismatched part mass/displacement. It does not align or
-fit time, height or attitude. Limits are declared in `analyze.py` before capture.
+The probe requires complete native release events, uses their absolute UT and
+normal crew APIs, and writes OSE samples/events. `comparison.html` contains
+standalone trajectory plots and every check; `comparison.json` is machine-readable.
+Exit 0 means all fixture checks pass, 1 means measured gaps, 2 means incomplete or
+unmatched evidence. No fitted offsets or time shifts are allowed. Input guards,
+full-trace and first-ten-second RMSE, peak immersion, equilibrium, observable bob
+period, survival and destruction time are checked. Numeric limits are in
+`analyze.py`. A passing capsule comparison does not establish arbitrary hull or
+other-location compatibility.
 
-The benchmark does not establish arbitrary compound-hull behavior,
-planing fidelity, animated drag-cube weighting, Kerbal swimming,
-save/load continuity of drag history, multiplayer presentation or splash effects.
-Passing capsule fixtures cannot establish universal water-physics equivalence.
+## Pinned before/after comparison
+
+Create a detached worktree at the full pre-fix commit (`git rev-parse 520d0b8`).
+The adapter removes only probe accesses to APIs absent at that base; production
+physics remains untouched. It refuses a mismatched revision or tracked output.
+
+```powershell
+$base = git rev-parse 520d0b8
+git worktree add --detach D:/scratch/water-before $base
+python tools/water-parity/prepare_baseline.py --worktree D:/scratch/water-before --base $base
+New-Item -ItemType Directory -Path D:/scratch/water-before-run
+Copy-Item D:/scratch/water-run/craft.json D:/scratch/water-before-run/craft.json
+Copy-Item D:/scratch/water-run/native D:/scratch/water-before-run/native -Recurse
+$env:CARGO_TARGET_DIR = 'D:/scratch/water-target-before'
+cargo run --offline --manifest-path D:/scratch/water-before/Cargo.toml `
+  -p ose-sim --example water_probe -- D:/scratch/water-before-run
+python tools/water-parity/analyze.py D:/scratch/water-before-run
+python tools/water-parity/provenance.py D:/scratch/water-run `
+  --game 'C:/Program Files (x86)/Steam/steamapps/common/Kerbal Space Program 2' `
+  --baseline-worktree D:/scratch/water-before --baseline-run D:/scratch/water-before-run
+```
+
+The benchmark excludes compound/hollow hulls, planing, animated cube weighting,
+Kerbal swimming, saved drag history, multiplayer and splash presentation.

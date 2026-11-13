@@ -225,6 +225,7 @@ impl Structure {
             let (centre, half) = self.part_box(i);
             let offset = centre - mass.centre_m;
             let at = p.r + world(frame, offset);
+            let applied_water = std::mem::take(&mut self.water_pending[i]);
             let was_wet = std::mem::replace(&mut self.in_water[i], false);
             if let Some(ocean) = &body.ocean {
                 let water = body.radius_m;
@@ -247,8 +248,12 @@ impl Structure {
                         // the vessel's own surface motion, as the original takes it for every part
                         let v_srf = p.v - spin(body).cross(p.r);
                         let speed = v_srf.length();
+                        let crash_axis = propulsion
+                            .water_reference
+                            .map(|f| f.axis(self.buoyancy_center_m[i]))
+                            .unwrap_or(up);
                         let down = if speed > 0.0 {
-                            v_srf.dot(-up) / speed
+                            v_srf.dot(-crash_axis) / speed
                         } else {
                             1.0
                         };
@@ -278,10 +283,8 @@ impl Structure {
                             depths,
                             rotate(self.buoyancy_center_m[i]),
                         );
-                        let r = origin + at_part - mass.centre_m;
-                        let arm = world(frame, r);
                         // the water slows each part as a damping of its own motion
-                        let part_mass = self.net.mass_of(&[i]).max(1e-6);
+                        let part_mass = self.rigid.masses_t[i].max(1e-6);
                         let horizontal = (v_srf - up * v_srf.dot(up)).length();
                         let steering = p.rotation_input.length_squared();
                         let entering = !was_wet;
@@ -309,34 +312,51 @@ impl Structure {
                             self.water_drag[i] = state;
                             damping
                         };
-                        let part_centre = self.rigid.rest_mass_position(i);
-                        let part_arm = world(frame, part_centre - mass.centre_m);
-                        let v_part = v_srf + omega.cross(part_arm);
-                        let c = damping.linear;
-                        let drag = v_part * (-part_mass * c / (1.0 + c * dt));
-                        let mut torque = arm.cross(buoyancy) + part_arm.cross(drag);
-                        if let Some(ca) = damping.angular {
-                            // PhysX damps the part's own spin
-                            let s = self.rigid.sizes_m[i];
-                            let own = part_mass * (s.x * s.x + s.y * s.y + s.z * s.z) / 18.0;
-                            torque = torque + omega * (-own * ca / (1.0 + ca * dt));
-                        }
-                        let force = buoyancy + drag;
-                        propulsion.environment_force_kn = propulsion.environment_force_kn + force;
-                        propulsion.environment_torque_knm =
-                            propulsion.environment_torque_knm + torque;
-                        self.surface_loads.push(PartForce {
-                            part: i,
-                            force_kn: buoyancy,
-                            offset_m: at_part,
-                        });
-                        self.surface_loads.push(PartForce {
-                            part: i,
-                            force_kn: drag,
-                            offset_m: part_centre - origin,
-                        });
+                        self.water_pending[i] = crate::water::PendingWater {
+                            force_local: local(frame, buoyancy),
+                            point: at_part,
+                            damping,
+                        };
                     }
                 }
+            }
+            let buoyancy = world(frame, applied_water.force_local);
+            let origin = self.rigid.rest_position(i);
+            let arm = world(frame, origin + applied_water.point - mass.centre_m);
+            let part_centre = self.rigid.rest_mass_position(i);
+            let part_arm = world(frame, part_centre - mass.centre_m);
+            let v_part = p.v + omega.cross(part_arm) - spin(body).cross(p.r + part_arm);
+            let part_mass = self.rigid.masses_t[i].max(1e-6);
+            let c = applied_water.damping.linear;
+            let drag = crate::water::damping_force(
+                v_part,
+                buoyancy - up * (part_mass * gravity),
+                part_mass,
+                c,
+                dt,
+            );
+            let mut torque = arm.cross(buoyancy) + part_arm.cross(drag);
+            if let Some(ca) = applied_water.damping.angular {
+                let own = self.part_own_inertia(i);
+                torque = torque
+                    + world(frame, own.apply(local(frame, omega - spin(body))))
+                        * (-ca / (1. + ca * dt));
+            }
+            propulsion.environment_force_kn = propulsion.environment_force_kn + buoyancy + drag;
+            propulsion.environment_torque_knm = propulsion.environment_torque_knm + torque;
+            if buoyancy.length_squared() > 0. {
+                self.surface_loads.push(PartForce {
+                    part: i,
+                    force_kn: buoyancy,
+                    offset_m: applied_water.point,
+                });
+            }
+            if drag.length_squared() > 0. {
+                self.surface_loads.push(PartForce {
+                    part: i,
+                    force_kn: drag,
+                    offset_m: part_centre - origin,
+                });
             }
             if self.gear_out[i] {
                 if let Some(gear) = &self.gear_defs[i] {
@@ -932,6 +952,13 @@ mod tests {
         p.v = DVec3::new(5., 0., 0.);
         let mut engine = st.propulsion(&p, Default::default(), 0.02);
         st.configure_surface(&mut p, &body, Some(&terrain), 0., 0.02, &mut engine);
+        assert_eq!(
+            engine.environment_force_kn,
+            DVec3::ZERO,
+            "water is prepared after the rigidbody update"
+        );
+        let mut engine = st.propulsion(&p, Default::default(), 0.02);
+        st.configure_surface(&mut p, &body, Some(&terrain), 0.02, 0.02, &mut engine);
         assert!(
             engine.environment_force_kn.x < 0.,
             "water must slow the capsule"
@@ -972,9 +999,20 @@ mod tests {
         p.r.y = body.radius_m;
         let mut engine = st.propulsion(&p, Default::default(), 0.02);
         st.configure_surface(&mut p, &body, Some(&terrain), 0.0, 0.02, &mut engine);
+        assert_eq!(
+            engine.environment_force_kn,
+            DVec3::ZERO,
+            "first water update prepares the next rigidbody step"
+        );
+        let mut engine = st.propulsion(&p, Default::default(), 0.02);
+        st.configure_surface(&mut p, &body, Some(&terrain), 0.02, 0.02, &mut engine);
         assert!(
-            (engine.environment_force_kn.y - 48.0).abs() < 0.001,
+            (engine.environment_force_kn.y - 46.88).abs() < 0.001,
             "{engine:?}"
+        );
+        assert!(
+            (st.water_pending[0].force_local.y - 48.).abs() < 0.001,
+            "raw buoyancy is 48 kN; force-updated damping reduces the net environmental force"
         );
         assert!(engine.environment_torque_knm.length() < 1e-8);
         for _ in 0..1500 {

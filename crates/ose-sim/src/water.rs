@@ -1,11 +1,40 @@
 //! Water as the original has it (`PartBehavior.BuoyancyUpdate`, `CalculateDisplacement`, `CalculateLiquidDrag`):
 //! each part displaces a volume taken from its drag cube, scaled by its own `buoyancy` and the
 //! `BuoyancyScalar`, in proportion to how far its bounds are under the surface; a part breaks on entering the
-//! water when the vessel's downward speed (or a tenth of its speed) is over 1.2 times its crash tolerance; and
+//! water when its reference-axis speed (or a tenth of total speed) exceeds 1.2 times crash tolerance; and
 //! the water slows each part as a PhysX linear damping whose strength eases from 4.5 down to 0.15 times the
 //! part's drag-cube drag over the first seconds afloat. The original has no flooding and no waves.
 use ose_data::PartDef;
 use ose_math::DVec3;
+
+/// KSP2 0.2.2 asks GetUpAxis for `coBuoyancy` in the body's orbital parent frame,
+/// then dots the resulting celestial components with body-frame surface velocity.
+/// Preserve this frame quirk for crash speed and drag easing; buoyancy still follows gravity.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ReferenceFrame {
+    pub body_position_parent_m: DVec3,
+    pub rotation_rad: f64,
+}
+
+impl ReferenceFrame {
+    pub fn at(body: &crate::bodies::Body, body_position_parent_m: DVec3, ut: f64) -> Self {
+        Self {
+            body_position_parent_m,
+            rotation_rad: body.initial_rotation_deg.to_radians()
+                + if body.rotation_period_s > 0. {
+                    std::f64::consts::TAU * ut / body.rotation_period_s
+                } else {
+                    0.
+                },
+        }
+    }
+    pub fn axis(self, cob_unity: DVec3) -> DVec3 {
+        let raw = (DVec3::new(cob_unity.x, cob_unity.z, cob_unity.y) - self.body_position_parent_m)
+            .normalized();
+        let (s, c) = self.rotation_rad.sin_cos();
+        DVec3::new(c * raw.x - s * raw.y, s * raw.x + c * raw.y, raw.z)
+    }
+}
 
 /// Part-local bounds corners. Rotate these with the part before testing depths; a craft AABB
 /// changes both immersion and righting moment when the part is mounted at an angle.
@@ -155,10 +184,34 @@ impl Default for WaterDrag {
 
 /// How the water slows a part this step: a linear damping rate, 1/s, on its velocity, and an angular one
 /// on its spin when the original overrides it (`None`: the part's usual angular drag).
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Damping {
     pub linear: f64,
     pub angular: Option<f64>,
+}
+
+/// RigidbodyBehavior runs at priority 4, before PartBehavior's priority 40 water update.
+/// Its next physics step therefore consumes the previously prepared force and damping.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct PendingWater {
+    pub force_local: DVec3,
+    pub point: DVec3,
+    pub damping: Damping,
+}
+
+/// PhysX applies linear damping after accumulating forces: v'=(v+F*dt/m)*max(0,1-c*dt).
+/// Return its equivalent average force, including the gravity/buoyancy velocity increment.
+pub fn damping_force(
+    velocity: DVec3,
+    force_before_damping: DVec3,
+    mass_t: f64,
+    rate: f64,
+    dt: f64,
+) -> DVec3 {
+    if mass_t <= 0. || dt <= 0. {
+        return DVec3::ZERO;
+    }
+    (velocity + force_before_damping * (dt / mass_t)) * (-mass_t * rate.clamp(0., 1. / dt))
 }
 
 impl WaterDrag {
@@ -238,6 +291,34 @@ mod tests {
 
     fn catalog() -> Vec<PartDef> {
         serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap()
+    }
+
+    #[test]
+    fn reference_frame_explains_the_live_vertical_survivor_and_lateral_failure() {
+        let frame = ReferenceFrame {
+            body_position_parent_m: DVec3::new(-1e9, 0., 0.),
+            rotation_rad: 0.,
+        };
+        let axis = frame.axis(DVec3::new(0., 0.5, 0.));
+        let local_up = DVec3::new(0.5, -3_f64.sqrt() / 2., 0.);
+        let right = DVec3::new(-3_f64.sqrt() / 2., -0.5, 0.);
+        assert!(!breaks_on_entry(22., (-local_up * 22.).dot(-axis), 15.));
+        assert!(breaks_on_entry(100., (right * 100.).dot(-axis), 15.));
+        assert!(
+            breaks_on_entry(19., 19., 15.),
+            "at an aligned longitude the vertical threshold remains 18 m/s"
+        );
+    }
+
+    #[test]
+    fn physx_damping_follows_force_accumulation_and_cannot_reverse_velocity() {
+        let v = DVec3::new(0., -10., 0.);
+        let f = DVec3::new(0., 5., 0.);
+        let drag = damping_force(v, f, 1., 2., 0.02);
+        let after = v + (f + drag) * 0.02;
+        assert!((after.y + 9.504).abs() < 1e-12);
+        let stop = damping_force(v, f, 1., 100., 0.02);
+        assert!((v + (f + stop) * 0.02).length() < 1e-12);
     }
 
     #[test]

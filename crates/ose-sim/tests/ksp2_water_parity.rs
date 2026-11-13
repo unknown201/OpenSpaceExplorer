@@ -1,6 +1,8 @@
 //! KSP2 parity for water (gap T43): splashdown breakage, floating and settling, from the original's own model
 //! (`PartBehavior.BuoyancyUpdate` / `CalculateLiquidDrag` with the loaded PhysicsSettings) on the KSP2 parity
 //! pilot's craft (`tools/ksp2-parity-pilot/craft-drop-*.json`). The original has no flooding and no waves.
+//! These formula fixtures remove Kerbin's orbital parent and use a synthetic radial reference axis.
+//! The live geographic/frame comparison is documented in docs/reference-notes/water-live-parity.md.
 use std::f64::consts::TAU;
 
 use bevy_ecs::entity::Entity;
@@ -181,6 +183,7 @@ fn ksp2_pods_float_at_the_draft_their_buoyancy_gives_and_settle() {
     assert!(s.lost_tick.is_none() && s.splashed);
     assert!((s.draft_m - 0.395).abs() < 0.03, "draft {:.3} m", s.draft_m);
     assert!(s.vspeed.abs() < 0.05);
-    // damped at 2/s while it bobs up and down: still within a few seconds
-    assert!(s.settled_s < 6.0, "still bobbing at {:.1} s", s.settled_s);
+    // The measured 3 m / 5 m/s native drop remains above 0.05 m/s until 7.52 s.
+    // The previous six-second bound was an unmeasured inference from the damping constant.
+    assert!(s.settled_s < 8.0, "still bobbing at {:.1} s", s.settled_s);
 }

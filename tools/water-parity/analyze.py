@@ -12,6 +12,9 @@ CASES = {'drop':45., 'bob':45., 'bank':45., 'drag':20., 'vertical_safe':6.,
          'vertical_destroy':3., 'horizontal_safe':3., 'horizontal_destroy':3.}
 # Fixed before the accepted native run. Numerical/physical tolerances, not exact engine equivalence.
 LIMITS = {'origin_alt_m':0.15, 'vertical_mps':0.6, 'horizontal_mps':0.5, 'bank_deg':3.0}
+LABELS={'drop':'Gentle drop','bob':'Bobbing','bank':'25 degree righting','drag':'5 m/s lateral drag',
+        'vertical_safe':'16 m/s downward','vertical_destroy':'22 m/s downward',
+        'horizontal_safe':'100 m/s lateral','horizontal_destroy':'220 m/s lateral'}
 
 def objects(path):
     text = Path(path).read_text(encoding='utf-8-sig')
@@ -35,7 +38,7 @@ def group(rows):
 def validate(rows, label):
     for name, duration in CASES.items():
         trace = rows.get(name, [])
-        if not trace or trace[0]['t'] > .1 or (trace[-1]['alive'] and trace[-1]['t'] < duration-.1):
+        if not trace or not trace[0]['alive'] or trace[0]['t'] > .1 or (trace[-1]['alive'] and trace[-1]['t'] < duration-.1):
             raise ValueError(f'{label}: incomplete {name}')
         previous = -math.inf
         dead_seen = False
@@ -105,6 +108,13 @@ def compare(native, ose):
             if errors:
                 rmse = math.sqrt(statistics.mean(x*x for x in errors))
                 checks.append({'metric':key+'_rmse','pass':rmse<=limit,'rmse':rmse,'limit':limit})
+                transient=[r[key]-interpolate(oa,r['t'],key) for r in na if oa and oa[0]['t']<=r['t']<=min(10.,oa[-1]['t'])]
+                if transient:
+                    error=math.sqrt(statistics.mean(x*x for x in transient))
+                    checks.append({'metric':key+'_first_10s_rmse','pass':error<=limit,'rmse':error,'limit':limit})
+        if nm['survived'] and om['survived']:
+            error=abs(nm['minimum_origin_alt_m']-om['minimum_origin_alt_m'])
+            checks.append({'metric':'peak_immersion_m','pass':error<=LIMITS['origin_alt_m'],'absolute_error':error,'limit':LIMITS['origin_alt_m']})
         if nm['survived'] and om['survived'] and CASES[name]>=45:
             error=abs(nm['equilibrium_origin_alt_m']-om['equilibrium_origin_alt_m'])
             checks.append({'metric':'equilibrium_origin_alt_m','pass':error<=.05,'absolute_error':error,'limit':.05})
@@ -122,7 +132,7 @@ def render(root, result, native, ose):
            '<h1>Live KSP2 / OSE water comparison</h1><p>Blue: live KSP2. Orange: production OSE. Same inputs; no fitted time or height shift. Limits fixed before capture. A pass applies only to these fixtures.</p>']
     for case in result:
         name=case['scenario'];status='pass' if case['pass'] else 'fail'
-        parts.append(f'<h2 class="{status}">{html.escape(name)} — {status.upper()}</h2><table><tr><th>Check</th><th>Error / RMSE</th><th>Limit</th><th>Result</th></tr>')
+        parts.append(f'<h2 class="{status}">{html.escape(LABELS[name])} — {status.upper()}</h2><table><tr><th>Check</th><th>Error / RMSE</th><th>Limit</th><th>Result</th></tr>')
         for c in case['checks']:
             error=c.get('rmse',c.get('absolute_error','—'))
             if isinstance(error,float):error=f'{error:.5g}'
@@ -152,6 +162,10 @@ def main():
             raise ValueError('native run missing releases/completion')
         ose_events={e['scenario']:e for e in json.loads((root/'ose-events.json').read_text())}
         for name,r in releases.items():
+            if r['sample_phase']!='post_physics':
+                raise ValueError(f'unmatched physics sample phase in {name}')
+            if r['crew_count']!=ose_events[name]['crew_count']:
+                raise ValueError(f'unmatched crew in {name}')
             if r['part']!='pod_1v_conical_crew' or abs(r['mass_t']-ose_events[name]['mass_t'])>.001:
                 raise ValueError(f'unmatched native/OSE fixture mass or part in {name}')
             if abs(r['displacement']-ose_events[name]['volume_m3'])>.001:
@@ -163,6 +177,8 @@ def main():
                 raise ValueError(f'native release velocity was not applied in {name}')
             if abs(r['sample']['origin_alt_m']-r['input']['height'])>.01:
                 raise ValueError(f'native release height was not applied in {name}')
+            if abs(r['sample']['bank_deg']-r['input']['bank'])>.05:
+                raise ValueError(f'native release bank was not applied in {name}')
         native=group(objects(root/'native/samples.jsonl'));ose=group(objects(root/'ose-samples.jsonl'))
         results=compare(native,ose)
         result={'status':'compatible' if all(c['pass'] for c in results) else 'measured_gaps', 'cases':results,'limits':LIMITS}

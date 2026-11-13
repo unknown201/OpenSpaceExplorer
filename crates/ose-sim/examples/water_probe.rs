@@ -16,6 +16,13 @@ fn main() {
     let craft_value: Value =
         serde_json::from_slice(&std::fs::read(format!("{root}/craft.json")).unwrap()).unwrap();
     let craft = ose_importer::craft::craft_from_value(&craft_value).unwrap();
+    let native_events: Vec<Value> = serde_json::Deserializer::from_slice(
+        &std::fs::read(format!("{root}/native/events.jsonl"))
+            .expect("complete native capture required"),
+    )
+    .into_iter::<Value>()
+    .collect::<Result<_, _>>()
+    .unwrap();
     assert_eq!(craft.parts.len(), 1);
     let defs: Vec<PartDef> =
         serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
@@ -72,7 +79,20 @@ fn main() {
         ("horizontal_safe", 0., 0., 100., 0., 3.),
         ("horizontal_destroy", 0., 0., 220., 0., 3.),
     ] {
-        let mut s = Structure::build(&craft, &defs, &resources);
+        let start_ut = native_events
+            .iter()
+            .find(|e| e["action"] == "release" && e["scenario"] == name)
+            .and_then(|e| e["ut"].as_f64())
+            .expect("matched native release time");
+        // The OAB automatically seats one Kerbal in the native pod. Use the normal crew API,
+        // including its suit/jetpack mass, rather than injecting a measured total mass.
+        let mut u = ose_sim::Universe::with_bodies(&bodies);
+        let home = u.body_entity("Kerbin").unwrap();
+        let body_orbit = u.world.get::<ose_sim::bodies::OnRails>(home).unwrap().0;
+        let e = u.spawn_vessel_in_circular_orbit("water fixture", home, 100000.);
+        u.set_structure(e, Structure::build(&craft, &defs, &resources));
+        u.set_crew(e, vec![(0, "water-test-kerbal".into())]);
+        let mut s = u.world.entity_mut(e).take::<Structure>().unwrap();
         let mass = s.mass_properties();
         let mut p = Powered::new(
             FlightSpec {
@@ -80,20 +100,26 @@ fn main() {
                 drag_area_m2: 0.,
                 drag_cd: 0.,
             },
-            DVec3::new(0., body.radius_m + height, 0.),
+            flight::surface_state_at(&body, 0., -60., height, start_ut).0,
             DVec3::ZERO,
             false,
         );
         let bank: f64 = bank;
-        p.facing = DVec3::new(-bank.to_radians().sin(), bank.to_radians().cos(), 0.);
+        let (up, east, _north) = flight::surface_frame(p.r);
+        let right = -east; // the native surface teleporter's root +X
+        p.facing = right * (-bank.to_radians().sin()) + up * bank.to_radians().cos();
         p.attitude = flight::Attitude::Free;
         p.controlled = false;
         s.sync(&mut p);
         let (x, y, z) = flight::vessel_basis(&p);
         p.r = p.r + x * mass.centre_m.x + y * mass.centre_m.y + z * mass.centre_m.z;
-        p.v = spin.cross(p.r) + DVec3::new(vx, vy, 0.);
+        p.v = spin.cross(p.r) + right * vx + up * vy;
         p.angvel = spin;
-        events.push(json!({"scenario":name,"action":"release","input":{"height":height,"vy":vy,"vx":vx,"bank":bank,"duration":duration},"mass_t":mass.mass_t,"com":mass.centre_m,"volume_m3":s.displacement_m3[0],"buoyancy":s.buoyancy[0]}));
+        let definition = defs
+            .iter()
+            .find(|d| d.id == craft.parts[0].part_id)
+            .unwrap();
+        events.push(json!({"scenario":name,"action":"release","ut":start_ut,"latitude_deg":0.,"longitude_deg":-60.,"crew_count":1,"input":{"height":height,"vy":vy,"vx":vx,"bank":bank,"duration":duration},"mass_t":mass.mass_t,"com":mass.centre_m,"volume_m3":s.displacement_m3[0],"buoyancy":s.buoyancy[0],"buoyancy_center_m":definition.buoyancy_center_m}));
         for tick in 0..=(duration / 0.02) as usize {
             let t = tick as f64 * 0.02;
             let up = p.r.normalized();
@@ -106,6 +132,11 @@ fn main() {
             }
             let env = EngineEnvironment::at(&p, &body, Some(&atmo));
             let mut engine = s.propulsion(&p, env, 0.02);
+            engine.water_reference = Some(ose_sim::water::ReferenceFrame::at(
+                &body,
+                body_orbit.position_at(start_ut + t),
+                start_ut + t,
+            ));
             let flow = Airflow::at(&p, &body, Some(&atmo));
             let aero = s.aerodynamics_local(p.stage, flow);
             p.lift_kn = aero.lift_kn;

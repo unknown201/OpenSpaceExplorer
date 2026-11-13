@@ -208,6 +208,7 @@ pub struct Structure {
     pub displacement_m3: Vec<f64>,
     /// Each part's water drag state.
     pub(crate) water_drag: Vec<crate::water::WaterDrag>,
+    pub(crate) water_pending: Vec<crate::water::PendingWater>,
     /// Deployable solar panels (and antennas) folded out.
     pub deployed: Vec<bool>,
     /// Antennas that extend and retract (`Data_Deployable` beside `Data_Transmitter`); they start retracted.
@@ -930,6 +931,7 @@ impl Structure {
             surface_loads: Vec::new(),
             in_water: vec![false; n],
             water_strikes: Vec::new(),
+            water_pending: vec![crate::water::PendingWater::default(); n],
             buoyancy: (0..n)
                 .map(|i| def_of(i).map(|d| d.buoyancy).unwrap_or(1.0))
                 .collect(),
@@ -1689,6 +1691,26 @@ impl Structure {
             }
         }
         out
+    }
+
+    pub(crate) fn part_own_inertia(&self, i: usize) -> crate::dynamics::Inertia {
+        let mass = self.rigid.masses_t[i];
+        let axes = self.part_axes(i);
+        let mut own = crate::dynamics::Inertia::default();
+        if let Some(tensor) = self.geometry[i].inertia_per_t {
+            let factor =
+                self.rigid
+                    .inertia_factor(i, self.geometry[i].inertia_mode, mass.max(0.001));
+            own.add_tensor(
+                mass,
+                tensor.map(|v| v * factor),
+                [axes[0], axes[1], -axes[2]],
+                DVec3::ZERO,
+            );
+        } else {
+            own.add_box(mass, self.rigid.sizes_m[i], axes, DVec3::ZERO);
+        }
+        own
     }
 
     /// The vessel's mass in flight: every part's dry, stored and occupied-seat mass, physicsless parts
