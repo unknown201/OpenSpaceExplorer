@@ -260,6 +260,27 @@ pub fn rig_fixture_draw(part: String, fraction: f32) -> Result<bool, JsValue> {
 
 #[wasm_bindgen]
 pub fn rig_fixture_instances(part: String, fraction: f32, instances: u8) -> Result<bool, JsValue> {
+    rig_fixture_render(part, fraction, instances, None)
+}
+
+/// Production solar pose helper, with independent snapshots for two instances sharing one GLB.
+#[wasm_bindgen]
+pub fn rig_fixture_solar(
+    part: String,
+    pivot: String,
+    left: f32,
+    right: f32,
+    instances: u8,
+) -> Result<bool, JsValue> {
+    rig_fixture_render(part, 1.0, instances, Some((pivot, left, right)))
+}
+
+fn rig_fixture_render(
+    part: String,
+    fraction: f32,
+    instances: u8,
+    solar: Option<(String, f32, f32)>,
+) -> Result<bool, JsValue> {
     FIXTURE.with(|f| {
         let mut state = f.borrow_mut();
         let gpu = state
@@ -295,7 +316,17 @@ pub fn rig_fixture_instances(part: String, fraction: f32, instances: u8) -> Resu
                     1.0,
                     DVec3::new(1.0, 2.0, 2.0),
                 );
-                item.animation = model.rig.deployment_sample(t);
+                item.animation = model
+                    .rig
+                    .deployment_sample(if solar.is_some() { 1.0 } else { t });
+                if let Some((pivot, left, right)) = &solar {
+                    if let Some(turn) = model
+                        .rig
+                        .solar_turn(pivot, if i == 0 { *left } else { *right })
+                    {
+                        item.node_rotations.push(turn);
+                    }
+                }
                 if model.rig.gimbal.is_some() {
                     item.node_rotations = model.rig.gimbal_turns(DQuat::from_rotation_z(
                         (t as f64 * 2.0 - 1.0) * 5f64.to_radians(),

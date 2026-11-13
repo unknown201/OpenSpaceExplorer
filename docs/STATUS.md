@@ -4,6 +4,8 @@ Updated 2026-10-28.
 
 ## What works
 
+- Live service alignment (protocol v65): interrupted science transmissions retain reports and require an explicit retry; active progress and pending deliveries survive save/recovery. Solar snapshots carry authored tracking pivots and authoritative poses, applied per rendered instance; rails refresh the sun direction. Flag inventory and the measured 0.45 m placement survive save/reconnect. Packet EC, graph timing, eclipse, WebSocket lifecycle and WebGPU instance checks are covered by [measurements, regressions and limits](reference-notes/live-services-alignment.md).
+
 - Optional station rendezvous guidance provides launch-plane opportunities, a numbered multi-burn map path, automatic correction/arrival replanning after manual thrust cutoff, burn aiming/timing, attitude-only holds, and port-relative staging/approach instruments. Missed burns rebuild the path; the maneuver radial aims at the next burn. Docking retains nearby target physics, part identities and deployed hardware. A 179-part, ten-module stock-part ISS replica validates nine independent delivery launches and captures. See [implementation, evidence and limits](reference-notes/station-rendezvous-guidance.md).
 
 - Static lifting-surface model frames now export and import named child transforms with module-owner fallback. Pressure points include hierarchy scale while lift directions use rotation only, then share mounted/rolled flight and joint-load geometry. Cube drag/body-lift offsets remain part-local. The 13 shipped surfaces resolve to identity root frames; animated/procedural frame updates remain open.

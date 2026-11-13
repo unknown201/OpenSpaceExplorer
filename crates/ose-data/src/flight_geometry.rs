@@ -32,6 +32,9 @@ pub struct FlightGeometry {
 pub struct SolarGeometry {
     /// Turns toward the sun about its pivot's own Y (`isTracking` with a `pivotName` transform).
     pub tracking: bool,
+    /// Authored transform driven by the authoritative tracking angle, after deployment animation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pivot_node: Option<String>,
     /// `RaycastOffset`: the shading ray starts this far toward the sun from the raycast origin, m.
     pub raycast_offset_m: f64,
     /// The pivot in part space (tracking panels).
