@@ -34,6 +34,10 @@ pub struct SavedVessel {
     /// Experiments still running.
     #[serde(default)]
     pub experiments: Vec<ose_sim::science::Run>,
+    #[serde(default)]
+    pub transmission: Option<ose_sim::science::Transmission>,
+    #[serde(default)]
+    pub pending_transmitted: Vec<ose_data::science::ResearchReport>,
     /// The vessel's parts as they are (lost parts left out, tanks as they were), its crew and docked joints,
     /// so a restored vessel gets its structure back.
     #[serde(default)]
@@ -49,6 +53,8 @@ pub struct SavedVessel {
     /// A Kerbal on EVA (their name) or a planted flag (who planted it).
     #[serde(default)]
     pub eva: Option<String>,
+    #[serde(default = "default_flag_carried")]
+    pub eva_carrying_flag: bool,
     /// Supporting vessel registry id, original part index, and distance along its ladder.
     #[serde(default)]
     pub eva_ladder: Option<(u64, usize, f64)>,
@@ -62,6 +68,10 @@ pub struct SavedBurn {
     pub prograde_mps: f64,
     pub normal_mps: f64,
     pub radial_mps: f64,
+}
+
+fn default_flag_carried() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -177,11 +187,23 @@ pub fn capture(
                 dormant: u.dormant(e).cloned(),
                 science: u.science_carried(e),
                 experiments: u.running_experiments(e),
+                transmission: u.world.get::<ose_sim::science::Transmission>(e).cloned(),
+                pending_transmitted: u
+                    .world
+                    .get_resource::<ose_sim::science::Transmitted>()
+                    .map(|t| {
+                        t.0.iter()
+                            .filter(|(v, _)| *v == e)
+                            .map(|(_, r)| r.clone())
+                            .collect()
+                    })
+                    .unwrap_or_default(),
                 craft: u.current_craft(e),
                 parts: u.saved_parts(e),
                 crew: u.crew(e),
                 docked: u.docked_links(e),
                 eva: u.eva_kerbal(e).map(|k| k.name.clone()),
+                eva_carrying_flag: u.eva_kerbal(e).is_none_or(|k| k.carrying_flag),
                 eva_ladder: u.saved_ladder(e).and_then(|(target, part, along)| {
                     let id = vessels.iter().find(|v| v.0 == target)?.1;
                     Some((id, part, along))
@@ -283,6 +305,18 @@ pub fn restore(
         }
         if let Some(name) = &v.eva {
             u.restore_eva_kerbal(e, name);
+            if let Some(mut k) = u.world.get_mut::<ose_sim::crew::EvaKerbal>(e) {
+                k.carrying_flag = v.eva_carrying_flag;
+            }
+        }
+        if let Some(t) = &v.transmission {
+            u.world.entity_mut(e).insert(t.clone());
+        }
+        if !v.pending_transmitted.is_empty() {
+            u.world
+                .get_resource_or_insert_with(ose_sim::science::Transmitted::default)
+                .0
+                .extend(v.pending_transmitted.iter().cloned().map(|r| (e, r)));
         }
         if let Some(by) = &v.flag {
             u.restore_flag(e, by);
@@ -372,6 +406,200 @@ pub fn migrate(save: &mut SaveFile, defs: &[ose_data::PartDef]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct ServiceFixture {
+        u: Universe,
+        vessel: bevy_ecs::entity::Entity,
+        bodies: Vec<ose_data::CelestialBody>,
+        defs: Vec<ose_data::PartDef>,
+        resources: Vec<ose_data::ResourceDef>,
+    }
+    impl ServiceFixture {
+        fn new() -> Self {
+            let bodies: Vec<ose_data::CelestialBody> =
+                serde_json::from_str(include_str!("../../../assets/own/kerbol-system.json"))
+                    .unwrap();
+            let defs: Vec<ose_data::PartDef> =
+                serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json"))
+                    .unwrap();
+            let resources: Vec<ose_data::ResourceDef> =
+                serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
+            let stock: Vec<ose_data::craft::Craft> =
+                serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+            let mut craft = stock.into_iter().find(|c| c.name == "Kerbal K1").unwrap();
+            craft.parts.truncate(1);
+            craft.stages = vec![vec![]];
+            craft.loose.clear();
+            let mut antenna = craft.parts[0].clone();
+            antenna.guid = "services-antenna".into();
+            antenna.part_id = "antenna_0v_16".into();
+            antenna.parent = Some(0);
+            antenna.local_position = ose_math::DVec3::new(1., 0., 0.);
+            antenna.resources.clear();
+            let mut panel = antenna.clone();
+            panel.guid = "services-panel".into();
+            panel.part_id = "solararray_1v_shielded_1x6".into();
+            panel.local_position.x = -1.;
+            craft.parts.extend([antenna, panel]);
+            let mut u = Universe::with_bodies(&bodies);
+            let body = u.body_entity("Kerbin").unwrap();
+            u.set_ground_station(ose_sim::commnet::GroundStation {
+                body,
+                lat_deg: 0.,
+                lon_deg: 0.,
+                altitude_m: 0.,
+                range_m: ose_sim::commnet::KSC_RANGE_M,
+            });
+            let vessel = u.spawn_powered_on_surface(
+                "Services save",
+                body,
+                ose_sim::flight::FlightSpec {
+                    stages: vec![ose_sim::flight::StageSpec {
+                        start_mass_t: 1.,
+                        ..Default::default()
+                    }],
+                    drag_area_m2: 0.,
+                    drag_cd: 0.,
+                },
+                0.,
+                0.01,
+            );
+            u.set_craft(vessel, craft.clone());
+            u.set_structure(
+                vessel,
+                ose_sim::structure::Structure::build(&craft, &defs, &resources),
+            );
+            u.set_controls(vessel, 0., ose_sim::flight::Attitude::Free);
+            u.deploy_antennas(vessel, true);
+            u.update_commnet();
+            Self {
+                u,
+                vessel,
+                bodies,
+                defs,
+                resources,
+            }
+        }
+        fn restore(&self, saved: &SaveFile) -> (Universe, Vec<VesselEntry>) {
+            let mut u = Universe::with_bodies(&self.bodies);
+            let entries = restore(&mut u, saved, &self.defs, &self.resources);
+            let body = u.body_entity("Kerbin").unwrap();
+            u.set_ground_station(ose_sim::commnet::GroundStation {
+                body,
+                lat_deg: 0.,
+                lon_deg: 0.,
+                altitude_m: 0.,
+                range_m: ose_sim::commnet::KSC_RANGE_M,
+            });
+            u.update_commnet();
+            (u, entries)
+        }
+    }
+
+    #[test]
+    fn services_save_retains_partial_transmission_and_completed_delivery() {
+        let mut f = ServiceFixture::new();
+        let e = f.vessel;
+        let report = ose_data::science::ResearchReport {
+            experiment: "MeasuredPacket".into(),
+            sample: false,
+            location: "Kerbin_Landed".into(),
+            value: 8.,
+        };
+        let mut sample = report.clone();
+        sample.sample = true;
+        f.u.set_science_carried(e, vec![report, sample]);
+        f.u.start_transmission(e).unwrap();
+        for _ in 0..50 {
+            f.u.step();
+        }
+        f.u.world
+            .get_mut::<ose_sim::structure::Structure>(e)
+            .unwrap()
+            .solar_angle_deg[2] = 73.25;
+        let saved = capture(&f.u, &[(e, 42, Some(1))], &Campaign::default(), &[]);
+        let saved: SaveFile =
+            serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+        let (mut u, entries) = f.restore(&saved);
+        let e = entries[0].0;
+        assert_eq!(
+            u.world.get::<ose_sim::science::Transmission>(e),
+            f.u.world.get::<ose_sim::science::Transmission>(f.vessel)
+        );
+        assert_eq!(u.structure(e).unwrap().solar_angle_deg[2], 73.25);
+        for _ in 0..50 {
+            u.step();
+        }
+        // Save between the simulation completion and the server scoring/publication.
+        let pending = capture(&u, &[(e, 42, Some(1))], &Campaign::default(), &[]);
+        assert_eq!(pending.vessels[0].pending_transmitted.len(), 1);
+        let (mut u, entries) = f.restore(&pending);
+        assert_eq!(u.take_transmitted().len(), 1);
+        assert!(u.take_transmitted().is_empty());
+        assert_eq!(u.science_carried(entries[0].0).len(), 1);
+        assert!(u.science_carried(entries[0].0)[0].sample);
+    }
+
+    #[test]
+    fn services_save_retains_consumed_flag_and_native_placement_offset() {
+        let mut f = ServiceFixture::new();
+        let body = f.u.body_entity("Kerbin").unwrap();
+        let eva = f.u.spawn_powered_on_surface(
+            "Flag carrier",
+            body,
+            ose_sim::flight::FlightSpec {
+                stages: vec![ose_sim::flight::StageSpec {
+                    start_mass_t: 0.07,
+                    ..Default::default()
+                }],
+                drag_area_m2: 0.,
+                drag_cd: 0.,
+            },
+            0.,
+            0.02,
+        );
+        f.u.restore_eva_kerbal(eva, "Flag carrier");
+        {
+            let mut p = f.u.world.get_mut::<ose_sim::flight::Powered>(eva).unwrap();
+            p.r = p.r.normalized() * (p.r.length() + 0.55);
+            p.ground_clearance_m = 0.55;
+        }
+        let flag = f.u.plant_flag(eva, "Saved flag").unwrap();
+        let native: serde_json::Value =
+            serde_json::from_str(include_str!("../../ose-sim/tests/data/services-live.json"))
+                .unwrap();
+        let expected = native["flag"]["placement_distance_m"].as_f64().unwrap();
+        assert!((f.u.distance_between(eva, flag).unwrap() - expected).abs() < 0.0001);
+        let saved = capture(
+            &f.u,
+            &[(eva, 71, Some(1)), (flag, 72, Some(1))],
+            &Campaign::default(),
+            &[],
+        );
+        let saved: SaveFile =
+            serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+        let (mut u, entries) = f.restore(&saved);
+        let eva = entries[0].0;
+        let flag = entries[1].0;
+        assert!(!u.eva_kerbal(eva).unwrap().carrying_flag);
+        assert!(u.plant_flag(eva, "Duplicate").is_err());
+        for _ in 0..50 {
+            u.step();
+        }
+        assert!((u.distance_between(eva, flag).unwrap() - expected).abs() < 0.0001);
+        u.take_flag(eva, flag).unwrap();
+        assert!(u.eva_kerbal(eva).unwrap().carrying_flag);
+        assert!(!u.is_flag(flag));
+        assert!(u.plant_flag(eva, "Replanted").is_ok());
+        // Legacy files omitted inventory and tracking: they remain readable with documented defaults.
+        let mut legacy = serde_json::to_value(&saved).unwrap();
+        legacy["vessels"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("eva_carrying_flag");
+        let legacy: SaveFile = serde_json::from_value(legacy).unwrap();
+        assert!(legacy.vessels[0].eva_carrying_flag);
+    }
 
     #[test]
     fn an_eva_handhold_survives_save_restore_with_new_entity_ids() {

@@ -11018,7 +11018,10 @@ impl App {
             ("fh-eva", !f.eva && !f.crew.is_empty()),
             ("fh-board", f.eva),
             ("fh-grab", f.eva),
-            ("fh-flag", f.eva && landed),
+            (
+                "fh-flag",
+                f.eva && landed && f.flag_carried && f.on_ladder.is_none(),
+            ),
             (
                 "fh-takeflag",
                 f.eva && landed && self.flag_candidate().is_some(),
