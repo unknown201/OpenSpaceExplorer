@@ -22,6 +22,7 @@ pub mod authored_particles;
 #[cfg(target_arch = "wasm32")]
 mod authored_sprite_gpu;
 pub mod authored_trails;
+pub mod camera_modes;
 pub mod engine_fx;
 #[cfg(target_arch = "wasm32")]
 mod engine_fx_gpu;
@@ -5421,7 +5422,13 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                     "KeyV" if !ev.repeat() => {
                         #[cfg(target_arch = "wasm32")]
                         {
-                            app.flight3d.mode = app.flight3d.mode.next();
+                            // on EVA near the ground the original steps through fewer modes
+                            let list: &[camera_modes::CameraMode] = if app.surface_eva() {
+                                &camera_modes::SURFACE_EVA_CAMERA_MODES
+                            } else {
+                                &camera_modes::ALL_CAMERA_MODES
+                            };
+                            app.flight3d.mode = app.flight3d.mode.next_in(list);
                             let name = app.flight3d.mode.name();
                             hud::push(&app.doc, &format!("Camera: {name}"), "passive");
                         }
@@ -11264,6 +11271,23 @@ impl App {
     /// (CapsLock for precision), Shift/Ctrl move the throttle at 100% a second, and on the ground W/S/A/D and
     /// B also drive the wheels (the original binds both, `WheelThrottle`/`WheelSteer`/`WheelBrakes`).
     /// True while the flown vessel is a Kerbal on EVA.
+    /// A Kerbal on EVA at or below its body's `navballSwitchAltitudeLow` (`GetCameraModesToUse`).
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    fn surface_eva(&self) -> bool {
+        let Some(v) = self.flying.and_then(|id| self.scene.as_ref()?.vessel(id)) else {
+            return false;
+        };
+        let body = self
+            .scene
+            .as_ref()
+            .and_then(|s| s.bodies.get(v.reference_body as usize))
+            .map(|b| b.id.as_str())
+            .unwrap_or("");
+        v.flight
+            .as_ref()
+            .is_some_and(|f| f.eva && f.altitude_m <= camera_modes::navball_switch_altitude_m(body))
+    }
+
     fn flying_eva(&self) -> bool {
         self.flying
             .and_then(|id| self.scene.as_ref()?.vessel(id))
@@ -11282,8 +11306,9 @@ impl App {
         let (walk, strafe, turn) = (-k.pitch(), k.roll(), k.yaw());
         // On the ground A/D step sideways like Q/E.
         let side = (strafe + turn).clamp(-1.0, 1.0);
-        let shift = k.is("ShiftLeft") || k.is("ShiftRight");
-        let ctrl = k.is("ControlLeft") || k.is("ControlRight");
+        // the original's EVA map: Run and MoveUpDown are left Shift and left Ctrl only
+        let shift = k.is("ShiftLeft");
+        let ctrl = k.is("ControlLeft");
 
         let Some(vessel) = self.flying else { return };
         let landed = self
@@ -12542,7 +12567,7 @@ impl App {
         let k = &self.keys;
         let moving = k.pitch() != 0.0 || k.roll() != 0.0;
         let thrusting = moving || k.is("Space") || k.is("ShiftLeft") || k.is("ControlLeft");
-        let running = k.is("ShiftLeft") || k.is("ShiftRight");
+        let running = k.is("ShiftLeft");
         self.audio.level_loop(
             "jetpack",
             if f.eva && !landed && thrusting {
@@ -14616,6 +14641,7 @@ impl App {
             } else {
                 0.0
             },
+            soi_m: body.soi_radius_m.unwrap_or(f64::INFINITY),
             ut,
             // The server's craft as it flies it (laid out wheels-down for a rover, say) while it still has
             // every part of the launched one, so readout part indices agree; the launched document after
