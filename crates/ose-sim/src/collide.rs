@@ -257,6 +257,14 @@ impl Universe {
                 } else {
                     (pa.r - pb.r).normalized()
                 };
+                // a craft coming down onto the other's hull rests on it through its deck, which follows the
+                // hull's shape, rather than on these rough spheres
+                let rests_on = |p: &flight::Powered, n: DVec3| {
+                    !p.walker && p.deck.is_some() && n.dot(p.r.normalized()) > 0.7
+                };
+                if rests_on(&pa, n) || rests_on(&pb, n * -1.0) {
+                    continue;
+                }
                 // contact point offsets from each centre: where the spheres meet
                 let ra_c = oa - n * (depth * 0.5);
                 let rb_c = ob + n * (depth * 0.5);
@@ -686,6 +694,7 @@ impl Universe {
                         best = Some(flight::Deck {
                             radius_m: z,
                             v: pc.v + spin.cross(pk.r - pc.r),
+                            part_mass_t: 0.0,
                         });
                     }
                 }
@@ -698,7 +707,164 @@ impl Universe {
     }
 }
 
+/// Craft hold one another up only within this height of the ground, m (our own figure: a stage dropped on
+/// the pad, or just above it, is still under what it held).
+const DECK_NEAR_GROUND_M: f64 = 200.0;
+
+/// The highest radius from the body centre at which the column through `at` (inertial, relative to the body
+/// centre) meets the top of one of a craft's hulls facing up enough to rest on, between `hi` and `lo`, and the
+/// part it belongs to.
+fn top_under(
+    hulls: &[Hull],
+    parts: &[usize],
+    at: DVec3,
+    craft_r: DVec3,
+    hi: f64,
+    lo: f64,
+) -> Option<(f64, usize)> {
+    const PROBE_M: f64 = 0.02;
+    let up = at.normalized();
+    let lateral = at - up * at.dot(up);
+    let point = |z: f64| up * z + lateral - craft_r;
+    let mut best: Option<(f64, usize)> = None;
+    for (h, &part) in hulls.iter().zip(parts) {
+        let gap = |z: f64| h.distance(point(z)) - PROBE_M;
+        if gap(hi) <= 0.0 {
+            continue;
+        }
+        let mut z = hi;
+        let mut bracket = None;
+        while z > lo {
+            let next = (z - 0.05).max(lo);
+            if gap(next) <= 0.0 {
+                bracket = Some((next, z));
+                break;
+            }
+            z = next;
+        }
+        let Some((mut a, mut b)) = bracket else {
+            continue;
+        };
+        for _ in 0..30 {
+            let m = 0.5 * (a + b);
+            if gap(m) <= 0.0 {
+                a = m;
+            } else {
+                b = m;
+            }
+        }
+        if h.normal(point(b)).dot(up) < DECK_MIN_UP {
+            continue;
+        }
+        if best.is_none_or(|(x, _)| b > x) {
+            best = Some((b, part));
+        }
+    }
+    best
+}
+
 impl Universe {
+    /// What each craft rests on besides the ground: the top of another craft's hull under its footprint, as
+    /// KSP2's colliders hold one vessel on another (a pod set down on a dropped stage stands on it). The craft's
+    /// lowest point is probed straight down at its centre and at four points round its footprint, within a
+    /// little above it and the fall it can make this step; the highest top found is its deck, which its ground
+    /// contact treats as solid (`flight::Deck`).
+    pub(crate) fn crafts_find_decks(&mut self, dt: f64) {
+        let ut = self.ut();
+        let crafts: Vec<(Entity, Entity)> = {
+            let mut q = self.world.query_filtered::<(
+                Entity,
+                &flight::Powered,
+                &bodies::ReferenceBody,
+            ), With<structure::Structure>>();
+            q.iter(&self.world)
+                .filter(|(_, p, _)| !p.walker && !p.crashed)
+                .map(|(e, _, b)| (e, b.0))
+                .collect()
+        };
+        let mut decks = Vec::new();
+        for &(v, body) in &crafts {
+            let Some(pv) = self.world.get::<flight::Powered>(v) else {
+                continue;
+            };
+            let up = pv.r.normalized();
+            let bottom = pv.r.length() - pv.ground_clearance_m;
+            let (hi, lo) = if pv.landed {
+                (bottom + 0.1, bottom - flight::WALK_OFF_M)
+            } else {
+                (bottom + 0.05, bottom - (pv.v.length() * dt + 1.0))
+            };
+            let e1 = {
+                let t = DVec3::new(0.0, 0.0, 1.0).cross(up);
+                if t.length_squared() > 1e-9 {
+                    t.normalized()
+                } else {
+                    DVec3::new(1.0, 0.0, 0.0)
+                }
+            };
+            let e2 = up.cross(e1);
+            let foot = (pv.footprint_m * 0.7).max(0.1);
+            let samples = [DVec3::ZERO, e1 * foot, e1 * -foot, e2 * foot, e2 * -foot];
+            let mut best: Option<flight::Deck> = None;
+            for &(c, craft_body) in &crafts {
+                if c == v || craft_body != body {
+                    continue;
+                }
+                let (Some(pc), Some(st)) = (
+                    self.world.get::<flight::Powered>(c),
+                    self.world.get::<structure::Structure>(c),
+                ) else {
+                    continue;
+                };
+                // a deck is ground to rest on: only a craft on or near the ground (or the sea) holds another
+                // up; craft meeting higher up or in orbit strike as `collide_vessels` has it
+                let near_ground = pc.landed
+                    || pc.splashed
+                    || self.world.get::<bodies::Body>(body).is_some_and(|b| {
+                        let terrain = self.world.get::<flight::Terrain>(body).map(|t| t.0.clone());
+                        pc.r.length() - flight::ground_radius(b, terrain.as_deref(), pc.r, ut)
+                            < DECK_NEAR_GROUND_M
+                    });
+                if !near_ground {
+                    continue;
+                }
+                let reach = part_spheres(st, pc.facing)
+                    .iter()
+                    .map(|(_, o, r)| o.length() + r)
+                    .fold(0.0, f64::max);
+                if (pv.r - pc.r).length() > reach + foot + pv.ground_clearance_m + 2.0 {
+                    continue;
+                }
+                let shapes = hulls(st, pc.facing);
+                let parts: Vec<usize> = (0..st.rigid.len())
+                    .filter(|&i| st.rigid.present[i])
+                    .collect();
+                for s in samples {
+                    let at = up * bottom + s;
+                    let Some((z, part)) = top_under(&shapes, &parts, at, pc.r, hi, lo) else {
+                        continue;
+                    };
+                    if best.is_none_or(|d| z > d.radius_m) {
+                        let spin = pc.angvel + pc.facing * pc.roll_rate;
+                        best = Some(flight::Deck {
+                            radius_m: z,
+                            v: pc.v + spin.cross(at - pc.r),
+                            part_mass_t: st.rigid.masses_t.get(part).copied().unwrap_or(pc.mass_t),
+                        });
+                    }
+                }
+            }
+            decks.push((v, best));
+        }
+        for (v, deck) in decks {
+            if let Some(mut p) = self.world.get_mut::<flight::Powered>(v) {
+                if p.deck != deck {
+                    p.deck = deck;
+                }
+            }
+        }
+    }
+
     /// A Kerbal on EVA does not pass through a craft: it is pushed out of the parts' boxes, sideways (a hull
     /// is a wall to it, not a floor: it does not come to rest on a fin), and stops going into them. Kerbals
     /// on a ladder are left to the ladder.

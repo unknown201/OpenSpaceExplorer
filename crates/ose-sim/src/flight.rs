@@ -197,6 +197,9 @@ impl Attitude {
 pub struct Deck {
     pub radius_m: f64,
     pub v: DVec3,
+    /// Mass of the part underneath, t (a craft resting on another breaks on it as part on part:
+    /// `collide::crash_breaks`); 0 for a Kerbal's deck.
+    pub part_mass_t: f64,
 }
 
 /// A Kerbal standing on something that drops away more than this under it in one tick walked off an edge
@@ -2267,6 +2270,17 @@ pub fn integrate_with_propulsion(
             );
             // standing on its lowest point (or its side once tipped over)
             let mut ground = ground_radius(body, terrain, p.r, ut + dt) + stand_height(p);
+            // a craft resting on another craft's hull stands on that; it falls once the hull is gone
+            if !p.walker {
+                if let Some(deck) = p.deck {
+                    ground = ground.max(deck.radius_m + stand_height(p));
+                }
+                if p.r.length() - ground > WALK_OFF_M {
+                    p.landed = false;
+                    p.v = omega_v.cross(p.r) + rolling;
+                    return out;
+                }
+            }
             if p.walker {
                 if let Some(deck) = p.deck {
                     // standing on a craft: carried along with it, as KSP2 gives a Kerbal its contact's

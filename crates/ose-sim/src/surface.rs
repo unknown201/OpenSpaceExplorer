@@ -424,6 +424,15 @@ impl Structure {
         if p.crashed || p.ground_anchored || dt <= 0.0 {
             return;
         }
+        // another craft's hull under this one is solid too (`Universe::crafts_find_decks`)
+        let deck = before
+            .deck
+            .filter(|_| !before.walker)
+            .map(|d| d.radius_m)
+            .unwrap_or(f64::NEG_INFINITY);
+        let deck_mass = before.deck.map(|d| d.part_mass_t).unwrap_or(0.0);
+        let on_deck = |r: DVec3, t: f64| deck > solid_radius(body, terrain, r, t);
+        let support = |r: DVec3, t: f64| solid_radius(body, terrain, r, t).max(deck);
         for (i, speed) in std::mem::take(&mut self.water_strikes) {
             out.crashed = true;
             out.impact_mps = out.impact_mps.max(speed);
@@ -448,7 +457,7 @@ impl Structure {
                         - h.z * f.2.dot(up).abs()
                 })
                 .fold(f64::INFINITY, f64::min);
-            let radius = solid_radius(body, terrain, p.r, ut + dt) - lowest;
+            let radius = support(p.r, ut + dt) - lowest;
             if p.r.length() < radius {
                 p.r = up * radius;
             }
@@ -484,8 +493,8 @@ impl Structure {
                 if from.length().min(to.length()) > ceiling + distance {
                     continue;
                 }
-                let from_clearance = from.length() - solid_radius(body, terrain, from, ut) + travel;
-                let to_clearance = to.length() - solid_radius(body, terrain, to, ut + dt) + travel;
+                let from_clearance = from.length() - support(from, ut) + travel;
+                let to_clearance = to.length() - support(to, ut + dt) + travel;
                 if from_clearance < 0.0 && to_clearance > from_clearance + 1e-8 {
                     continue;
                 }
@@ -493,7 +502,7 @@ impl Structure {
                 contacts.push((i, offset, travel));
                 if let Some(t) = crate::contact::sweep(distance, |t| {
                     let r = from + (to - from) * t;
-                    r.length() - solid_radius(body, terrain, r, ut + dt * t) + travel
+                    r.length() - support(r, ut + dt * t) + travel
                 }) {
                     hit = hit.min(t);
                     crossed = true;
@@ -510,7 +519,7 @@ impl Structure {
         frame = flight::vessel_basis(p);
         contacts.retain(|&(_, r, travel)| {
             let at = p.r + world(frame, r);
-            at.length() - solid_radius(body, terrain, at, ut + hit * dt) + travel <= 0.01
+            at.length() - support(at, ut + hit * dt) + travel <= 0.01
         });
         if contacts.is_empty() {
             return;
@@ -528,7 +537,11 @@ impl Structure {
         let mut targets = Vec::new();
         for &(i, r, travel) in &contacts {
             let at = p.r + world(frame, r);
-            let n = local(frame, normal(body, terrain, at, ut + hit * dt));
+            let n = if on_deck(at, ut + hit * dt) {
+                local(frame, at.normalized())
+            } else {
+                local(frame, normal(body, terrain, at, ut + hit * dt))
+            };
             normals.push(n);
             let v = velocity + omega.cross(r);
             normal_impact = normal_impact.max((-v.dot(n)).max(0.0));
@@ -543,7 +556,13 @@ impl Structure {
             } else {
                 flight::CRASH_SPEED_MPS
             };
-            if speed > tolerance {
+            // on another craft's hull a part breaks as part on part (KSP2 `IsSurvivableCrash`)
+            let breaks = if on_deck(at, ut + hit * dt) {
+                crate::collide::crash_breaks(speed, deck_mass, tolerance)
+            } else {
+                speed > tolerance
+            };
+            if breaks {
                 out.crashed = true;
                 if !out.contact_damage.contains(&i) {
                     out.contact_damage.push(i);
@@ -560,8 +579,7 @@ impl Structure {
                 },
             );
             if speed <= tolerance {
-                deepest = deepest
-                    .max(solid_radius(body, terrain, at, ut + hit * dt) - at.length() - travel);
+                deepest = deepest.max(support(at, ut + hit * dt) - at.length() - travel);
             }
         }
         for _ in 0..24 {
@@ -633,7 +651,7 @@ impl Structure {
             })
             .map(|(r, travel)| {
                 let at = p.r + world(end_frame, r);
-                solid_radius(body, terrain, at, ut + dt) - at.length() - travel
+                support(at, ut + dt) - at.length() - travel
             })
             .fold(0.0, f64::max);
         p.r = p.r + p.r.normalized() * penetration;

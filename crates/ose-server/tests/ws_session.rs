@@ -3851,7 +3851,7 @@ async fn a_second_vab_rocket_rolls_out_whole_after_the_pad_is_cleared() {
 }
 
 #[tokio::test]
-async fn a_capsule_decoupled_on_the_pad_comes_down_onto_the_deck() {
+async fn a_capsule_decoupled_on_the_pad_stays_on_the_dropped_stage() {
     let (_server, addr) = spawn_server_with(&["--db", ":memory:", "--save", "none"], None).await;
     let mut ws = connect_ws(&addr).await;
     hello(&mut ws, None, "pilot").await;
@@ -3913,11 +3913,14 @@ async fn a_capsule_decoupled_on_the_pad_comes_down_onto_the_deck() {
         last = wait_for(&mut ws, flight).await;
     }
     assert!(last.stage >= 1, "{last:?}");
+    // as KSP2's colliders hold it: the capsule stays on the dropped stage it sat on (its own centre of mass
+    // stands higher than the whole craft's did), at rest, not sinking through it to the deck
     assert!(
-        last.altitude_m < standing.altitude_m,
-        "the capsule rests on the deck, not where it sat on the tank: {:.2} m -> {:.2} m ({:?})",
+        last.altitude_m >= standing.altitude_m,
+        "the capsule rests on the dropped stage, not inside it: {:.2} m -> {:.2} m ({:?})",
         standing.altitude_m,
         last.altitude_m,
         last.situation
     );
+    assert_eq!(format!("{:?}", last.situation), "Landed");
 }
