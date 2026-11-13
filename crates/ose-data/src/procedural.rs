@@ -1090,13 +1090,20 @@ pub fn evaluate(part_id: &str, shape: &WingShape, mirrored: bool) -> Option<Wing
             // Along the lift axis (the frame's Z, built above).
             let area = flap.cross_section([0.0, 0.0, 1.0]);
             let axis = |j: usize| flip(to_part([rot[0][j], rot[1][j], rot[2][j]]));
-            (
-                k * area,
-                flip(to_part(origin)),
-                axis(0),
-                axis(2),
-                flip(to_part(add(origin, mat_vec(&rot, flap.center)))),
-            )
+            (k * area, flip(to_part(origin)), axis(0), axis(2), {
+                // `CoPressureCtrlSurfaceOffset`: the centre of the flap's renderer bounds, an axis-aligned
+                // box, brought into the part (`CalculateGlobalBounds(...).center`)
+                let mut lo = [f64::INFINITY; 3];
+                let mut hi = [f64::NEG_INFINITY; 3];
+                for q in &ctrl_points {
+                    let v = flip(to_part(add(origin, mat_vec(&rot, *q))));
+                    for k in 0..3 {
+                        lo[k] = lo[k].min(v[k]);
+                        hi[k] = hi[k].max(v[k]);
+                    }
+                }
+                scale3(add(lo, hi), 0.5)
+            })
         }
         _ => (0.0, [0.0; 3], [0.0; 3], [0.0; 3], [0.0; 3]),
     };
@@ -1391,6 +1398,37 @@ mod tests {
             (r.fixed_lift_coeff - 0.02310).abs() < 0.01,
             "{}",
             r.fixed_lift_coeff
+        );
+    }
+
+    /// Where the stock jet's wing lifts in KSP2 (the wing probe's dump): the fixed part at the baked mesh's
+    /// drag cube centre (`CoPOffset` -0.1050, -0.0760, 1.8679), the flap at its renderer bounds' centre
+    /// (`CoPressureCtrlSurfaceOffset` -0.0445, -1.8812, 1.8010).
+    #[test]
+    fn stock_jet_wing_lifts_where_ksp2_does() {
+        let s = shape(&[
+            ("WING_SPAN", 0.2),
+            ("ROOT_LENGTH", 0.33),
+            ("TIP_LENGTH", 0.03),
+            ("WING_ANGLE", 0.36),
+            ("ROOT_THICKNESS", 0.1),
+            ("TIP_THICKNESS", 0.04),
+            ("TIP_ANGLE", 0.9),
+            ("CONTROL_SPAN", 1.0),
+            ("CONTROL_LENGTH", 0.5),
+            ("CONTROL_POSITION", 1.0),
+        ]);
+        let r = evaluate("wing_1v_procedural_light", &s, false).unwrap();
+        let near = |a: [f64; 3], b: [f64; 3]| (0..3).all(|k| (a[k] - b[k]).abs() < 0.02);
+        assert!(
+            near(r.cube.center, [-0.1050, -0.0760, 1.8679]),
+            "{:?}",
+            r.cube.center
+        );
+        assert!(
+            near(r.ctrl_center_m, [-0.0445, -1.8812, 1.8010]),
+            "{:?}",
+            r.ctrl_center_m
         );
     }
 

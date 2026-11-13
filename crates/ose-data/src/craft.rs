@@ -274,6 +274,18 @@ impl CraftPart {
                 result.ctrl_range_deg = actual.range_deg;
             }
         }
+        // A shaped wing's fixed part lifts at its baked mesh's centre (`Module_ControlSurface.MeshDataChanged`
+        // in flight: `CoPOffset` is the drag cube centre of the whole mesh), not at the part's root.
+        if let (Some(shape), Some(lift)) = (
+            self.shape.as_ref().filter(|s| s.valid_for(&def.id)),
+            &mut result.lifting_surface,
+        ) {
+            let mirrored = self.flight.as_ref().is_some_and(|f| f.mirrored);
+            if let Some(r) = crate::procedural::evaluate_cached(&def.id, shape, mirrored) {
+                let c = r.cube.center;
+                lift.pressure_offset_m = DVec3::new(c[0], c[1], c[2]);
+            }
+        }
         // A shaped wing's moving surface turns about its own swept hinge and lifts along its own axis
         // (`Module_ControlSurface` mixes inputs with the pivot bone's posed `CtrlTransformRotAxis`), not the
         // authored default part's. Taken unmirrored: the mirror sign handles the second wing of a pair.

@@ -6495,6 +6495,8 @@ mod tests {
     #[test]
     fn aerodynamic_moment_tracks_fuel_mass_and_retains_each_parts_force() {
         let (mut s, p, wing) = airflow_fixture();
+        // the moment arithmetic about the part's origin (a shaped wing lifts at its mesh centre otherwise)
+        s.lift_defs[wing].as_mut().unwrap().0.pressure_offset_m = DVec3::ZERO;
         let frame = crate::flight::vessel_basis(&p);
         let air = DVec3::new(0.0, 100.0, -10.0);
         let first = s.aerodynamics(0, frame, air, 1.0, 0.3);
@@ -6564,6 +6566,8 @@ mod tests {
     #[test]
     fn local_wing_flow_produces_analytical_damping_and_matching_effects() {
         let (mut s, p, wing) = airflow_fixture();
+        // the moment arithmetic about the part's origin (a shaped wing lifts at its mesh centre otherwise)
+        s.lift_defs[wing].as_mut().unwrap().0.pressure_offset_m = DVec3::ZERO;
         let frame = crate::flight::vessel_basis(&p);
         let r = s.part_box(wing).0 - s.mass_properties().centre_m;
         let axis = DVec3::new(0.0, 0.0, 1.0);
