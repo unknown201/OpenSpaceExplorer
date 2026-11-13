@@ -544,6 +544,41 @@ struct SciencePoints {
     reports: Vec<ose_net::ReportInfo>,
 }
 
+/// The toast a teammate's `AgencyNews` shows, and its tier: the campaign is one agency, so everyone hears
+/// about an unlock, a mission or science scored by anyone.
+fn agency_news_text(
+    by: Option<&str>,
+    event: &ose_net::AgencyEvent,
+    tech: impl Fn(&str) -> String,
+    mission: impl Fn(&str) -> String,
+) -> (String, &'static str) {
+    use ose_net::AgencyEvent as E;
+    let who = by.unwrap_or("The agency");
+    match event {
+        E::TechResearched { node } => (format!("{who} researched {}", tech(node)), "triumph"),
+        E::MissionAccepted { mission: m } => {
+            (format!("{who} accepted mission: {}", mission(m)), "passive")
+        }
+        E::MissionCompleted { mission: m } => {
+            (format!("Mission complete: {}", mission(m)), "triumph")
+        }
+        E::MissionTurnedIn {
+            mission: m,
+            science,
+        } => (
+            format!("{who} turned in {}: +{science:.0} science", mission(m)),
+            "triumph",
+        ),
+        E::ScienceEarned { science, reports } => (
+            format!(
+                "{who} earned {science:.0} science ({reports} report{})",
+                if *reports == 1 { "" } else { "s" }
+            ),
+            "passive",
+        ),
+    }
+}
+
 /// What is being dragged in the VAB staging stack: a group of icons (the parts) or a whole stage.
 #[derive(Clone, Debug, PartialEq)]
 enum StageDrag {
@@ -6220,6 +6255,35 @@ impl App {
                     reason.unwrap_or_else(|| "refused".into())
                 };
                 set_text(&self.doc, "rd-note", &msg);
+            }
+            ServerMessage::AgencyNews { by, event } => {
+                let tech = |id: &str| {
+                    let key = self
+                        .tech
+                        .iter()
+                        .find(|n| n.id == id)
+                        .map(|n| n.name_key.clone())
+                        .unwrap_or_else(|| id.to_string());
+                    rnd::text(&self.loc, &key).into_owned()
+                };
+                let mission = |id: &str| {
+                    let key = self
+                        .science
+                        .as_ref()
+                        .and_then(|sp| sp.missions.iter().find(|m| m.id == id))
+                        .map(|m| m.name_key.clone())
+                        .unwrap_or_else(|| format!("Missions/{id}/Name"));
+                    rnd::text(&self.loc, &key).into_owned()
+                };
+                let (text, tier) = agency_news_text(by.as_deref(), &event, tech, mission);
+                hud::push(&self.doc, &text, tier);
+                if matches!(
+                    event,
+                    ose_net::AgencyEvent::TechResearched { .. }
+                        | ose_net::AgencyEvent::MissionCompleted { .. }
+                ) {
+                    self.audio.play("rd_research");
+                }
             }
             ServerMessage::CrewAck {
                 vessel,
@@ -15716,6 +15780,50 @@ fn xfer_pick_for(picks: &mut Vec<hud::XferPick>, res: String) -> &mut hud::XferP
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn teammates_hear_what_the_agency_did() {
+        use ose_net::AgencyEvent as E;
+        let tech = |id: &str| format!("<{id}>");
+        let mission = |id: &str| format!("[{id}]");
+        let t = |by, e| agency_news_text(by, &e, tech, mission);
+        assert_eq!(
+            t(Some("Val"), E::TechResearched { node: "n1".into() }),
+            ("Val researched <n1>".into(), "triumph")
+        );
+        assert_eq!(
+            t(
+                None,
+                E::MissionCompleted {
+                    mission: "m".into()
+                }
+            )
+            .0,
+            "Mission complete: [m]"
+        );
+        assert_eq!(
+            t(
+                Some("Bob"),
+                E::MissionTurnedIn {
+                    mission: "m".into(),
+                    science: 25.0
+                }
+            )
+            .0,
+            "Bob turned in [m]: +25 science"
+        );
+        assert_eq!(
+            t(
+                Some("Bob"),
+                E::ScienceEarned {
+                    science: 24.4,
+                    reports: 1
+                }
+            )
+            .0,
+            "Bob earned 24 science (1 report)"
+        );
+    }
 
     /// Whether every path point is on a 16:9 screen from where `flight_map_view` puts the camera (Z up,
     /// metres from the body's centre), looking at the vessel with north up.
