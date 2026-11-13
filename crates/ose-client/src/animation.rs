@@ -127,6 +127,16 @@ pub struct Rig {
 }
 
 impl Rig {
+    /// Unity's positive pivot-Y rotation becomes negative Y after the exported Z reflection.
+    /// Return a per-draw override; shared model/rig state is never mutated by a vessel snapshot.
+    pub fn solar_turn(&self, pivot: &str, angle_deg: f32) -> Option<(usize, Quat)> {
+        if !angle_deg.is_finite() {
+            return None;
+        }
+        let node = self.nodes.iter().position(|n| n.name == pivot)?;
+        Some((node, Quat::from_rotation_y(-angle_deg.to_radians())))
+    }
+
     pub fn from_gltf(json: &Value, bin: &[u8]) -> Result<Self, String> {
         let read = Accessors { json, bin };
         let raw = json["nodes"].as_array().cloned().unwrap_or_default();

@@ -1,0 +1,121 @@
+{
+  "reference": {
+    "product_version": "0.2.2.0",
+    "steam_build": "14669105",
+    "unity": "2022.3.5f1",
+    "captured": "2026-11-12",
+    "managed_assembly_sha256": "7589445e23310f4939f053f84f47008ccd7a928168abff05c046b2bfe90dbf4e",
+    "scope": "Controlled running-game module/range/EC observations; flag removal invokes native callback; no claim of pixel parity",
+    "raw_sha256": {
+      "native/events.jsonl": "95bc2c0b45dc05d2a21d811145fa41cc4403da706751326c587713ffabdf60b6",
+      "native/samples.jsonl": "13c70fd4885ba041eb555c501e2e08bcab84a1a5f27eb8aa2a7bb704dcbb172d",
+      "native-flags/events.jsonl": "fa909c3b3d057b250a6125a50c24723076b4cbb2b3fa42590dc14074147e438d",
+      "native-flags/samples.jsonl": "ad058f70905fc595ff5275ee4087072a9eb845db1f7ffa1579b1b6764c85201d",
+      "native-solar/events.jsonl": "1735ab57ae3438c13ac24b56b672085e63ee21948e6d63d1616c617015407234",
+      "native-solar/samples.jsonl": "5dc3546afaf8c01523948477122851bcbffd56e7c7c05c93c71b6d3e7eaac255"
+    }
+  },
+  "transmitter": {
+    "part": "antenna_0v_16",
+    "packet_size": 5.0,
+    "interval_sim_s": 2.0,
+    "ec_per_sim_s": 11.0,
+    "completion_sim_s": 2.0199999548494816,
+    "ec_consumed": 21.99999950826168,
+    "power_stop_sim_s": 0.019999999552965164,
+    "stops": [
+      "OutOfResources",
+      "LostConnection"
+    ],
+    "restoration_alone_restarts": false
+  },
+  "commnet": {
+    "loss_sim_s": [
+      2.9,
+      3.04,
+      2.76
+    ],
+    "return_sim_s": [
+      1.88,
+      2.0,
+      1.72
+    ],
+    "sample_bound_sim_s": 0.06
+  },
+  "flag": {
+    "placement_distance_m": 0.450021589336795,
+    "second_plant_accepted": false,
+    "carried_after_plant": false,
+    "carried_after_pickup": true,
+    "remaining_after_pickup": 0
+  },
+  "eclipse": {
+    "blocker": "Kerbin",
+    "observed_frames": 289,
+    "flow_ec_per_s": 0.0,
+    "illumination_scale": 0.0,
+    "charge_change_bound_ec": 1e-06
+  },
+  "solar_orbit_cases": [
+    {
+      "ut": 477.63998932391405,
+      "r_body_m": [
+        699925.0463486457,
+        -0.00013121078902078587,
+        10242.030847683543
+      ],
+      "star_body_m": [
+        13599829347.52706,
+        0.0,
+        -17225180.981945414
+      ],
+      "illumination_scale": 0.9681658076037635,
+      "blocker": ""
+    },
+    {
+      "ut": 482.4199892170727,
+      "r_body_m": [
+        -10242.030856259918,
+        8.546440719570114e-05,
+        699925.0463612719
+      ],
+      "star_body_m": [
+        13599829403.665016,
+        0.0,
+        -17180801.10507789
+      ],
+      "illumination_scale": 0.9680643384432409,
+      "blocker": ""
+    },
+    {
+      "ut": 487.17998911067843,
+      "r_body_m": [
+        -699925.0463709828,
+        5.418247638355744e-05,
+        -10242.030845700005
+      ],
+      "star_body_m": [
+        13599829459.42417,
+        0.0,
+        -17136606.917896487
+      ],
+      "illumination_scale": 0.0,
+      "blocker": "Kerbin"
+    },
+    {
+      "ut": 491.9599890038371,
+      "r_body_m": [
+        10242.03084175341,
+        5.5502780339278246e-05,
+        -699925.0463853609
+      ],
+      "star_body_m": [
+        13599829515.273085,
+        0.0,
+        -17092227.04066428
+      ],
+      "illumination_scale": 0.968067812626685,
+      "blocker": ""
+    }
+  ]
+}

@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 64;
+pub const PROTOCOL_VERSION: u16 = 65;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -667,6 +667,16 @@ pub enum FlightSituation {
     Splashed,
 }
 
+/// One solar module in its original craft part index and authored pivot frame.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SolarPanelState {
+    pub part: u16,
+    pub pivot_node: Option<String>,
+    pub angle_deg: f32,
+    pub incidence: f32,
+    pub flow_ec_per_s: f32,
+}
+
 /// Powered-flight readout, present on a `VesselState` while the vessel is under the flight model.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FlightReadout {
@@ -742,6 +752,10 @@ pub struct FlightReadout {
     pub panels_deployed: bool,
     /// Each attached deployable panel's command state, by craft part index (animation instances).
     pub panels: Vec<(u16, bool)>,
+    /// Authoritative per-instance tracking, incidence and producer output, including fixed panels.
+    pub solar_panels: Vec<SolarPanelState>,
+    /// An EVA Kerbal's single portable flag. Pickup restores this; planting consumes it.
+    pub flag_carried: bool,
     /// Each attached deployable antenna's state (extended), by craft part index.
     pub antennas: Vec<(u16, bool)>,
     /// The part the vessel is controlled from, when not its root (`ControlFrom`).
