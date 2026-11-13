@@ -1402,7 +1402,8 @@ impl Universe {
     /// vessel that keeps the vessel's position and velocity, pushed 3 m back along the thrust axis at 1.5 m/s.
     pub fn stage(&mut self, e: Entity) -> StageResult {
         let ut = self.ut();
-        // The first stage press lights the first stage of a craft that has not fired yet: nothing is dropped.
+        // The first stage press fires the first stage of a craft that has not fired yet (KSP2's first
+        // `ActivateNextStage`): its engines light, and its decouplers, if it has any, drop what is below them.
         let ignite = |p: &mut flight::Powered| !std::mem::replace(&mut p.ignited, true);
         let first = match self.world.get_mut::<flight::Powered>(e) {
             Some(mut p) => ignite(&mut p),
@@ -1411,7 +1412,12 @@ impl Universe {
                 .get_mut::<flight::Dormant>(e)
                 .is_some_and(|mut d| ignite(&mut d.0)),
         };
-        if first {
+        let first_drops = first
+            && self
+                .world
+                .get::<structure::Structure>(e)
+                .is_some_and(|st| st.first_stage_pending());
+        if first && !first_drops {
             if let Some(mut st) = self.world.get_mut::<structure::Structure>(e) {
                 st.activate_stage(0);
             }
@@ -1420,11 +1426,13 @@ impl Universe {
                 debris: None,
             };
         }
-        // engines burning now, and the propellant they draw on: a piece that comes off keeps both
+        // engines burning now, and the propellant they draw on: a piece that comes off keeps both (nothing
+        // burns yet when the first stage drops its pieces)
         let fire = match (
             self.world.get::<flight::Powered>(e),
             self.world.get::<structure::Structure>(e),
         ) {
+            _ if first_drops => None,
             (Some(p), Some(st)) if p.ignited && !p.crashed => Some(DebrisFire {
                 burning: st.firing_engines(p.stage, p.throttle),
                 throttle: p.throttle,
@@ -1434,10 +1442,24 @@ impl Universe {
         };
         let (outcome, mut r, v, facing, area) =
             if let Some(mut p) = self.world.get_mut::<flight::Powered>(e) {
-                let o = p.stage_next();
+                let o = if first_drops {
+                    flight::StageOutcome {
+                        fired: true,
+                        dropped_t: 0.0,
+                    }
+                } else {
+                    p.stage_next()
+                };
                 (o, p.r, p.v, p.facing, p.spec.drag_area_m2)
             } else if let Some(mut d) = self.world.get_mut::<flight::Dormant>(e) {
-                let o = d.0.stage_next();
+                let o = if first_drops {
+                    flight::StageOutcome {
+                        fired: true,
+                        dropped_t: 0.0,
+                    }
+                } else {
+                    d.0.stage_next()
+                };
                 let (facing, area) = (d.0.facing, d.0.spec.drag_area_m2);
                 let Some(orbit) = self.world.get::<bodies::OnRails>(e).map(|o| o.0) else {
                     return StageResult {
@@ -3611,6 +3633,67 @@ mod tests {
             p.mass_t
         );
         assert!(u.structure(v).unwrap().net.mass_t() - after < 1e-9);
+    }
+
+    #[test]
+    fn the_first_stage_press_fires_a_decoupler_in_the_first_stage() {
+        // KSP2's first `ActivateNextStage` fires whatever is in the first stage, a decoupler too: here the
+        // Start rocket's engine stage is taken out, so the first press drops the tank and engine.
+        let (mut u, body, _, _) = k1_on_real_kerbin();
+        let crafts: Vec<ose_data::craft::Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let defs: Vec<ose_data::PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let res: Vec<ose_data::ResourceDef> =
+            serde_json::from_str(include_str!("../../../assets/own/resources.json")).unwrap();
+        let mut c = crafts
+            .iter()
+            .find(|c| c.name == "Stock12_StartRocket")
+            .unwrap()
+            .clone();
+        c.stages.truncate(2);
+        let report = ose_data::staging::delta_v_by_stage(&c, &defs, &res);
+        let spec = flight::FlightSpec::from_report(&report, &[], &[], 1.5);
+        let v = u.spawn_powered_on_surface("Start", body, spec, 0.0, 0.0);
+        u.set_structure(v, structure::Structure::build(&c, &defs, &res));
+        assert_eq!(
+            u.structure(v)
+                .unwrap()
+                .rigid
+                .present
+                .iter()
+                .filter(|&&x| x)
+                .count(),
+            5,
+            "the whole craft stands on the pad"
+        );
+        let before = u.powered(v).unwrap().mass_t;
+        let r = u.stage(v);
+        assert!(r.fired);
+        let d = r.debris.expect("the first press drops the tank and engine");
+        assert!(
+            u.powered(d).is_some_and(|p| p.mass_t > 0.3),
+            "the dropped stage"
+        );
+        let after = u.powered(v).unwrap().mass_t;
+        assert!(
+            after < before - 0.3,
+            "the pod is lighter: {before} -> {after}"
+        );
+        assert_eq!(
+            u.structure(v)
+                .unwrap()
+                .rigid
+                .present
+                .iter()
+                .filter(|&&x| x)
+                .count(),
+            2,
+            "pod and parachute stay"
+        );
+        // the next press opens the parachute stage's chute, nothing more drops
+        let r = u.stage(v);
+        assert!(r.debris.is_none());
     }
 
     #[test]

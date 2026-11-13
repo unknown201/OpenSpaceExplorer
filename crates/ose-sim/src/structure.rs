@@ -322,6 +322,9 @@ pub struct Structure {
     pub level: bool,
     /// Flight stage the structure was last trimmed to.
     staged_to: usize,
+    /// The first stage holds decouplers and has not fired: the parts they drop are still on the craft (KSP2
+    /// builds the whole craft on the pad, and its first `ActivateNextStage` fires them).
+    first_stage_pending: bool,
 }
 
 pub use ose_data::craft::{level_layout, rotated};
@@ -1290,8 +1293,17 @@ impl Structure {
             resolved_engine_thrust: None,
             resolved_aero_forces: None,
             staged_to: 0,
+            first_stage_pending: false,
         };
-        s.trim_to(0);
+        // what the first stage's decouplers drop stays on until that stage fires
+        s.first_stage_pending = s.stage_parts.first().is_some_and(|alive| {
+            (0..s.rigid.len()).any(|i| {
+                s.rigid.present[i] && !alive.contains(&i) && !s.rigid.launch_clamps.contains(&i)
+            })
+        });
+        if !s.first_stage_pending {
+            s.trim_to(0);
+        }
         s.enclose_shaped_fairings();
         s
     }
@@ -1318,6 +1330,19 @@ impl Structure {
     }
 
     /// Drop the parts that are not attached in flight stage `stage` (they were staged away).
+    /// Whether the parts the first stage's decouplers drop are still on (it has not fired).
+    pub fn first_stage_pending(&self) -> bool {
+        self.first_stage_pending
+    }
+
+    /// Whether the parts on the craft lag `stage`: the stage moved on, or the first stage just fired.
+    fn untrimmed(&self, stage: usize) -> bool {
+        if self.first_stage_pending {
+            return false;
+        }
+        stage != self.staged_to
+    }
+
     pub fn trim_to(&mut self, stage: usize) {
         self.staged_to = stage;
         let Some(alive) = self.stage_parts.get(stage) else {
@@ -2819,7 +2844,12 @@ impl Structure {
     /// Bring a flight state in line with the structure: trimmed to its stage, mass from what the tanks hold,
     /// propellant the engines can reach, thrust from the engines that are attached and fed.
     pub fn sync(&mut self, p: &mut Powered) {
-        if p.stage != self.staged_to {
+        // a lit craft has fired its first stage (also one restored from a save)
+        if self.first_stage_pending && p.ignited {
+            self.first_stage_pending = false;
+            self.trim_to(p.stage);
+        }
+        if self.untrimmed(p.stage) {
             self.trim_to(p.stage);
         }
         if p.control_point
@@ -5376,7 +5406,7 @@ impl Structure {
     }
 
     fn aero_local(&mut self, stage: usize, flow: Airflow) -> f64 {
-        if stage != self.staged_to {
+        if self.untrimmed(stage) {
             self.trim_to(stage);
         }
         self.last_air_speed_mps = flow.velocity.length();
@@ -5478,7 +5508,7 @@ impl Structure {
                 }
             }
         }
-        if p.stage != self.staged_to {
+        if self.untrimmed(p.stage) {
             self.trim_to(p.stage);
         }
         let (bx, by, bz) = crate::flight::vessel_basis(p);
