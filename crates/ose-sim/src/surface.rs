@@ -231,8 +231,12 @@ impl Structure {
                 // Land and built facilities displace the water, too.
                 if solid_radius(body, terrain, at, ut) < water - 1e-5 {
                     // how deep each corner of the part's bounds is (`CollectPartBoundsAndDepths`)
-                    let depths =
-                        corners(half).map(|c| water - (p.r + world(frame, offset + c)).length());
+                    let origin = self.rigid.rest_position(i);
+                    let rotate =
+                        |v| crate::rigid::to_vessel(crate::aero::rotate(self.part_rot[i], v));
+                    let water_corners = self.water_bounds[i].map(rotate);
+                    let depths = water_corners
+                        .map(|c| water - (p.r + world(frame, origin - mass.centre_m + c)).length());
                     let min_depth = depths.iter().copied().fold(f64::INFINITY, f64::min);
                     let max_depth = depths.iter().copied().fold(f64::NEG_INFINITY, f64::max);
                     if max_depth > 0.0 {
@@ -269,20 +273,11 @@ impl Structure {
                             * self.buoyancy[i]
                             * submerged;
                         let buoyancy = up * (displaced_t * gravity);
-                        // where it pushes (`CalculateBuoyantLocalForcePosition`): the part's origin once
-                        // under, the wet corners while it is partly out
-                        let origin = self.rigid.rest_position(i);
-                        let mut at_part = DVec3::ZERO;
-                        if min_depth < 0.0 && min_depth < max_depth {
-                            let (mut sum, mut weight) = (DVec3::ZERO, 0.0);
-                            for (c, d) in corners(half).iter().zip(depths) {
-                                if d > 0.0 {
-                                    sum = sum + (centre + *c - origin) * d;
-                                    weight += d;
-                                }
-                            }
-                            at_part = sum * ((1.0 - submerged) / weight);
-                        }
+                        let at_part = crate::water::force_point(
+                            water_corners,
+                            depths,
+                            rotate(self.buoyancy_center_m[i]),
+                        );
                         let r = origin + at_part - mass.centre_m;
                         let arm = world(frame, r);
                         // the water slows each part as a damping of its own motion
@@ -314,7 +309,8 @@ impl Structure {
                             self.water_drag[i] = state;
                             damping
                         };
-                        let part_arm = world(frame, centre - mass.centre_m);
+                        let part_centre = self.rigid.rest_mass_position(i);
+                        let part_arm = world(frame, part_centre - mass.centre_m);
                         let v_part = v_srf + omega.cross(part_arm);
                         let c = damping.linear;
                         let drag = v_part * (-part_mass * c / (1.0 + c * dt));
@@ -337,7 +333,7 @@ impl Structure {
                         self.surface_loads.push(PartForce {
                             part: i,
                             force_kn: drag,
-                            offset_m: centre - origin,
+                            offset_m: part_centre - origin,
                         });
                     }
                 }
@@ -709,6 +705,7 @@ mod tests {
         // a solid box: it displaces its whole 8 m^3
         def.drag_cubes[0].area = [4.0; 6];
         def.buoyancy = 1.0;
+        def.buoyancy_center_m = DVec3::ZERO;
         if two_parts {
             let mut child = craft.parts[0].clone();
             child.parent = Some(0);
@@ -896,6 +893,57 @@ mod tests {
             ((p.r - r).dot(r.normalized()) - 1.0).abs() < 1e-9,
             "{:?}",
             p.r - r
+        );
+    }
+
+    #[test]
+    fn water_drag_acts_at_the_part_mass_centre_instead_of_the_bounds_centre() {
+        let (mut craft, defs, res) = crate::structure::test_capsule(false);
+        craft.parts.truncate(1);
+        craft.stages.clear();
+        craft.parts[0].local_position = DVec3::ZERO;
+        craft.parts[0].local_rotation = ose_data::craft::Quat {
+            w: 1.,
+            ..Default::default()
+        };
+        let mut st = Structure::build(&craft, &defs, &res);
+        let (_, mut p, mut body) = fixture(false);
+        body.mu = 0.;
+        body.ocean = Some(ose_data::Ocean {
+            altitude_m: 0.,
+            density: 1.,
+        });
+        let terrain = ose_data::terrain::TerrainMap {
+            width: 2,
+            height: 2,
+            scale_m: 0.,
+            offset_m: -100.,
+            has_ocean: true,
+            body_radius_m: body.radius_m,
+            data: vec![0; 4],
+            flats: vec![],
+            max_m: -100.,
+            detail: None,
+            overlay: None,
+        };
+        st.sync(&mut p);
+        let mass = st.mass_properties();
+        p.r = DVec3::new(0., body.radius_m + mass.centre_m.y, 0.);
+        p.v = DVec3::new(5., 0., 0.);
+        let mut engine = st.propulsion(&p, Default::default(), 0.02);
+        st.configure_surface(&mut p, &body, Some(&terrain), 0., 0.02, &mut engine);
+        assert!(
+            engine.environment_force_kn.x < 0.,
+            "water must slow the capsule"
+        );
+        assert!(
+            engine.environment_torque_knm.length() < 1e-10,
+            "single-part linear damping cannot add spin: {:?}",
+            engine.environment_torque_knm
+        );
+        assert!(
+            (st.part_box(0).0 - mass.centre_m).length() > 0.1,
+            "fixture needs separated bounds and mass centres"
         );
     }
 

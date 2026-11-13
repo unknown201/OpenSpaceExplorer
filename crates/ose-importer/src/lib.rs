@@ -960,6 +960,7 @@ pub fn part(v: &Value, cov: &mut Coverage) -> PartDef {
             _ => 1.0,
         },
         buoyancy: d["buoyancy"].as_f64().unwrap_or(1.0),
+        buoyancy_center_m: vec3(&d["coBuoyancy"]),
         angular_drag: d["angularDrag"].as_f64().unwrap_or(1.0),
         exhaust_damage,
         heatshield,
@@ -1295,6 +1296,17 @@ fn chute_safety(o: &serde_json::Value) -> ose_data::ChuteSafety {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn authored_buoyancy_centre_imports_and_legacy_catalogs_keep_the_origin() {
+        let source =
+            serde_json::json!({"data":{"partName":"hull","coBuoyancy":{"x":0.1,"y":0.5,"z":-0.2}}});
+        let imported = part(&source, &mut Coverage::default());
+        assert_eq!(imported.buoyancy_center_m, DVec3::new(0.1, 0.5, -0.2));
+        let mut legacy = serde_json::to_value(imported).unwrap();
+        legacy.as_object_mut().unwrap().remove("buoyancy_center_m");
+        let restored: ose_data::PartDef = serde_json::from_value(legacy).unwrap();
+        assert_eq!(restored.buoyancy_center_m, DVec3::ZERO);
+    }
 
     #[test]
     fn authored_reinforcement_target_survives_slim_catalog_serialization() {

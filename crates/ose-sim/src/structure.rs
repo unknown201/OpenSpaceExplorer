@@ -201,6 +201,8 @@ pub struct Structure {
     pub(crate) water_strikes: Vec<(usize, f64)>,
     /// Each part's `buoyancy` scale and the water it displaces fully under, m^3 (`water::displacement_m3`).
     pub buoyancy: Vec<f64>,
+    pub(crate) buoyancy_center_m: Vec<DVec3>,
+    pub(crate) water_bounds: Vec<[DVec3; 8]>,
     /// Each part's `angularDrag` (`PartData`), which damps its own spin in air.
     pub angular_drag: Vec<f64>,
     pub displacement_m3: Vec<f64>,
@@ -930,6 +932,16 @@ impl Structure {
             water_strikes: Vec::new(),
             buoyancy: (0..n)
                 .map(|i| def_of(i).map(|d| d.buoyancy).unwrap_or(1.0))
+                .collect(),
+            buoyancy_center_m: (0..n)
+                .map(|i| {
+                    def_of(i)
+                        .map(|d| d.buoyancy_center_m)
+                        .unwrap_or(DVec3::ZERO)
+                })
+                .collect(),
+            water_bounds: (0..n)
+                .map(|i| crate::water::bounds_corners(def_of(i)))
                 .collect(),
             angular_drag: (0..n)
                 .map(|i| def_of(i).map(|d| d.angular_drag).unwrap_or(1.0))

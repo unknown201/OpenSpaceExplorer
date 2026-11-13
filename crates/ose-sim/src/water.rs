@@ -5,6 +5,48 @@
 //! the water slows each part as a PhysX linear damping whose strength eases from 4.5 down to 0.15 times the
 //! part's drag-cube drag over the first seconds afloat. The original has no flooding and no waves.
 use ose_data::PartDef;
+use ose_math::DVec3;
+
+/// Part-local bounds corners. Rotate these with the part before testing depths; a craft AABB
+/// changes both immersion and righting moment when the part is mounted at an angle.
+pub(crate) fn bounds_corners(def: Option<&PartDef>) -> [DVec3; 8] {
+    let (centre, half) = def
+        .and_then(|d| d.drag_cubes.first())
+        .map(|c| (c.center, c.size * 0.5))
+        .or_else(|| {
+            def.and_then(|d| d.bounds)
+                .map(|b| (b.center_m, b.size_m * 0.5))
+        })
+        .unwrap_or((DVec3::ZERO, DVec3::new(0.5, 0.5, 0.5)));
+    std::array::from_fn(|i| {
+        centre
+            + DVec3::new(
+                if i & 1 == 0 { -half.x } else { half.x },
+                if i & 2 == 0 { -half.y } else { half.y },
+                if i & 4 == 0 { -half.z } else { half.z },
+            )
+    })
+}
+
+/// Native force position adds the authored CoB even when fully submerged. The corner blend
+/// uses the raw submerged percentage, before the shallow-entry force multiplier.
+pub fn force_point(corners: [DVec3; 8], depths: [f64; 8], cob: DVec3) -> DVec3 {
+    let lo = depths.iter().copied().fold(f64::INFINITY, f64::min);
+    let hi = depths.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    if lo >= 0. || hi <= 0. || lo >= hi {
+        return cob;
+    }
+    let share = hi / (hi - lo);
+    let mut sum = DVec3::ZERO;
+    let mut weight = 0.;
+    for (c, d) in corners.into_iter().zip(depths) {
+        if d > 0. {
+            sum = sum + c * d;
+            weight += d;
+        }
+    }
+    cob + sum * ((1. - share) / weight)
+}
 
 /// Water settings exported from the installed reference's loaded PhysicsSettings JSON.
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -196,6 +238,30 @@ mod tests {
 
     fn catalog() -> Vec<PartDef> {
         serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap()
+    }
+
+    #[test]
+    fn authored_centre_survives_full_immersion_and_shallow_entry_uses_raw_share() {
+        let defs = catalog();
+        let pod = defs.iter().find(|d| d.id == "pod_1v_conical_crew").unwrap();
+        assert_eq!(pod.buoyancy_center_m, DVec3::new(0., 0.5, 0.));
+        let corners = std::array::from_fn(|i| {
+            DVec3::new(
+                if i & 1 == 0 { -1. } else { 1. },
+                if i & 2 == 0 { -1. } else { 1. },
+                if i & 4 == 0 { -1. } else { 1. },
+            )
+        });
+        assert_eq!(
+            force_point(corners, [2.; 8], pod.buoyancy_center_m),
+            pod.buoyancy_center_m
+        );
+        let depths = corners.map(|c| -0.9 - c.y);
+        let point = force_point(corners, depths, pod.buoyancy_center_m);
+        assert!(
+            (point.y + 0.45).abs() < 1e-12,
+            "shallow force ramp must not change the corner blend: {point:?}"
+        );
     }
 
     #[test]
