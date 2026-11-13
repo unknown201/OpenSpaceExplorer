@@ -960,8 +960,7 @@ impl Universe {
     /// A Kerbal standing on the ground plants their flag where they stand (`KerbalBehavior.TryPlantFlag`).
     /// As in `IsPlantFlagAllowed`: only while carrying one (one per Kerbal until a planted flag is taken
     /// down), not while running an experiment, and not while falling, jumping, climbing or swimming. The
-    /// flag goes in at the Kerbal's own spot (`Data_Kerbal.FlagLocalPositionOffset` is 0.45 m straight down,
-    /// to the ground under their feet).
+    /// flag uses the measured/authored local offset: 0.45 m down from the Kerbal's origin.
     pub fn plant_flag(&mut self, kerbal: Entity, label: &str) -> Result<Entity, String> {
         let k = self
             .world
@@ -1012,6 +1011,19 @@ impl Universe {
             drag_cd: flight::DEFAULT_CD,
         };
         let flag = self.spawn_powered_on_surface(label, body, spec, lat, lon);
+        let r = p.r - p.r.normalized() * 0.45;
+        let ground = flight::ground_radius(
+            &b,
+            self.world
+                .get::<flight::Terrain>(body)
+                .map(|t| t.0.as_ref()),
+            r,
+            self.ut(),
+        );
+        if let Some(mut f) = self.world.get_mut::<flight::Powered>(flag) {
+            f.r = r;
+            f.ground_clearance_m = (r.length() - ground).max(0.0);
+        }
         self.world
             .entity_mut(flag)
             .insert(Flag { planted_by: name });

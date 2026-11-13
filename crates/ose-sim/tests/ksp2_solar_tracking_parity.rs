@@ -142,3 +142,40 @@ fn ksp2_a_part_between_a_panel_and_the_sun_shades_it() {
     assert!(lit[0] > 0.99);
     assert_eq!(lit[1], 0.0, "the tank is in the way");
 }
+
+#[test]
+fn native_quaternion_lerp_tracking_matches_large_error_transients() {
+    let (defs, res, k1) = data();
+    let c = craft(&k1, &[("solararray_1v_1x6", DVec3::new(20., -20., 0.))]);
+    let g = defs
+        .iter()
+        .find(|d| d.id == "solararray_1v_1x6")
+        .unwrap()
+        .flight_geometry
+        .solar
+        .as_ref()
+        .unwrap();
+    for error in [30_f64, 90., 150., -120.] {
+        let mut st = Structure::build(&c, &defs, &res);
+        st.deployed[1] = true;
+        let phi = (error - g.alignment_offset_deg).to_radians();
+        let local = DVec3::new(phi.sin(), 0., phi.cos());
+        st.sun_local = Some(ose_sim::aero::rotate(
+            st.part_rot[1],
+            ose_sim::aero::rotate(g.pivot_rotation.unwrap(), local),
+        ));
+        let target = glam::DQuat::from_rotation_y(error.to_radians());
+        let mut expected = glam::DQuat::IDENTITY;
+        for _ in 0..100 {
+            // Independent quaternion calculation of Unity Quaternion.Lerp, not Euler-angle easing.
+            expected = expected.lerp(target, g.tracking_speed * 0.02).normalize();
+            st.update_solar(1., 0.02);
+            let actual = glam::DQuat::from_rotation_y(st.solar_angle_deg[1].to_radians());
+            assert!(
+                actual.dot(expected).abs() > 1. - 1e-12,
+                "tracking error {error}: {}",
+                st.solar_angle_deg[1]
+            );
+        }
+    }
+}

@@ -56,6 +56,7 @@ def solar_entry(nodes, deployable, panel):
         d = inv @ np.array(dot_node.world, dtype=float)
         inc = d[:3, :3] @ incidence
         entry.update({
+            "pivot_node": pivot.name,
             "pivot_m": obj(p[:3, 3]),
             "pivot_rotation": quaternion(p),
             "alignment_offset_deg": float(deployable.get("TrackingAlignmentOffset", 0.0)),

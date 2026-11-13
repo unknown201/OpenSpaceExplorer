@@ -45,6 +45,27 @@ fn fixture(interpolation: &str, rotation: bool) -> (Value, Vec<u8>) {
 }
 
 #[test]
+fn solar_pose_is_authoritative_mirrored_and_independent_for_shared_models() {
+    let (mut json, bytes) = fixture("LINEAR", false);
+    json["nodes"][0]["name"] = json!("bone_rotator");
+    let rig = Rig::from_gltf(&json, &bytes).unwrap();
+    let (_, left) = rig.solar_turn("bone_rotator", 90.).unwrap();
+    let (_, right) = rig.solar_turn("bone_rotator", -90.).unwrap();
+    assert!(
+        (left * Vec3::Z + Vec3::X).length() < 1e-6,
+        "Unity Y turns are reflected in glTF"
+    );
+    assert!((right * Vec3::Z - Vec3::X).length() < 1e-6);
+    assert_eq!(
+        rig.pose(None)[0].rotation,
+        Quat::IDENTITY,
+        "per-instance turn cannot mutate shared rest pose"
+    );
+    assert!(rig.solar_turn("missing-pivot", 30.).is_none());
+    assert!(rig.solar_turn("bone_rotator", f32::NAN).is_none());
+}
+
+#[test]
 fn hierarchy_sampling_looping_and_instance_isolation() {
     let (j, b) = fixture("LINEAR", false);
     let rig = Rig::from_gltf(&j, &b).unwrap();

@@ -793,12 +793,12 @@ fn step_once(sim: &Shared) {
         if !msgs.is_empty() {
             sim.pending.lock().expect("pending lock").extend(msgs);
         }
+        deliver_transmitted(sim);
         // missions look at the agency's vessels once a second
         if ticks.is_multiple_of(ose_sim::TICKS_PER_SECOND) {
             push_roster(sim);
             science::evaluate_missions(sim);
             science::deliver_experiment_events(sim);
-            deliver_transmitted(sim);
             let (required, heat) = {
                 let c = sim.campaign.lock().expect("campaign lock");
                 let get = |id: &str| c.difficulty.iter().find(|d| d.id == id).map(|d| &d.value);
@@ -1417,6 +1417,28 @@ fn flight_readout(
                 (0..st.antenna_deployable.len())
                     .filter(|&i| st.antenna_deployable[i] && st.rigid.present[i])
                     .map(|i| (i as u16, st.deployed[i]))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        flag_carried: u.eva_kerbal(e).is_some_and(|k| k.carrying_flag),
+        solar_panels: u
+            .structure(e)
+            .map(|st| {
+                st.electric
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, d)| st.rigid.present[*i] && d.solar_output > 0.0)
+                    .map(|(i, _)| ose_net::SolarPanelState {
+                        part: i as u16,
+                        pivot_node: defs
+                            .iter()
+                            .find(|d| d.id == st.part_ids[i])
+                            .and_then(|d| d.flight_geometry.solar.as_ref())
+                            .and_then(|g| g.pivot_node.clone()),
+                        angle_deg: st.solar_angle_deg[i] as f32,
+                        incidence: st.solar_incidence(i) as f32,
+                        flow_ec_per_s: st.solar_flow_ec_per_s[i] as f32,
+                    })
                     .collect()
             })
             .unwrap_or_default(),
@@ -2286,9 +2308,6 @@ fn science_request(s: &Shared, player_id: u64, msg: ClientMessage) -> Vec<Server
                             "only a vessel landed or splashed down on Kerbin can be recovered",
                         );
                     }
-                }
-                if !recover {
-                    u.update_commnet();
                 }
                 if !recover && !u.comm_link(e).connected {
                     return fail("no CommNet connection to the KSC");
