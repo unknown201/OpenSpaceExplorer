@@ -93,6 +93,11 @@ pub struct CraftPart {
     /// `minAirPressureToOpen`, `deployAltitude`); `None` keeps the part's defaults.
     #[serde(default)]
     pub chute: Option<ChuteSettings>,
+    /// The part's own control settings as built (`Data_ControlSurface.AuthorityLimiter`, `EnablePitch`,
+    /// `EnableYaw`, `EnableRoll`, `InvertControl`, `Deploy`): the flight starts from them; `None` keeps the
+    /// defaults (every axis, full authority).
+    #[serde(default)]
+    pub control: Option<crate::flight_geometry::PartControl>,
 }
 
 /// When an armed parachute may open (`Data_Parachute.DeployMode`): only when opening is predicted to keep the
@@ -267,6 +272,31 @@ impl CraftPart {
                 surface.speed = actual.speed;
                 result.ctrl_pressure_offset_m = actual.pressure_offset_m;
                 result.ctrl_range_deg = actual.range_deg;
+            }
+        }
+        // A shaped wing's moving surface turns about its own swept hinge and lifts along its own axis
+        // (`Module_ControlSurface` mixes inputs with the pivot bone's posed `CtrlTransformRotAxis`), not the
+        // authored default part's. Taken unmirrored: the mirror sign handles the second wing of a pair.
+        if let (Some(shape), Some(surface)) = (
+            self.shape.as_ref().filter(|s| s.valid_for(&def.id)),
+            &mut result.flight_geometry.surface,
+        ) {
+            if let Some(r) = crate::procedural::evaluate_cached(&def.id, shape, false) {
+                let v = |a: [f64; 3]| DVec3::new(a[0], a[1], a[2]);
+                let aligned = |new: DVec3, old: DVec3| {
+                    if new.length() < 1e-9 {
+                        old
+                    } else if new.dot(old) < 0.0 {
+                        new * -1.0
+                    } else {
+                        new
+                    }
+                };
+                surface.axis = aligned(v(r.ctrl_hinge), surface.axis);
+                surface.normal = aligned(v(r.ctrl_normal), surface.normal);
+                if let Some(d) = surface.deploy.as_mut().filter(|d| !d.separate) {
+                    d.axis = surface.axis;
+                }
             }
         }
         result
@@ -555,5 +585,43 @@ mod guid_tests {
             "first keeps its guid, repeats go past p3"
         );
         assert!(!c.dedupe_guids(), "already unique");
+    }
+}
+
+#[cfg(test)]
+mod hinge_tests {
+    use super::*;
+
+    fn rot(q: Quat, v: DVec3) -> DVec3 {
+        let u = DVec3::new(q.x, q.y, q.z);
+        let t = u.cross(v) * 2.0;
+        v + t * q.w + u.cross(t)
+    }
+
+    /// KSP2 run 22 (Stock04_Jet, `reference/ksp2-run22-jetaero`): the wing elevons deflect 14.38 degrees per
+    /// unit of pitch: `AuthorityLimiter` 15 x dot(pitch axis, the pivot's posed hinge) 0.958. The canted
+    /// stabilizers do not answer pitch at all (`EnablePitch` off).
+    #[test]
+    fn stock_jet_surfaces_answer_pitch_as_in_ksp2() {
+        let crafts: Vec<Craft> =
+            serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
+        let parts: Vec<PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let jet = crafts.iter().find(|c| c.name == "Stock04_Jet").unwrap();
+        for p in jet.parts.iter().filter(|p| p.shape.is_some()) {
+            let def = parts.iter().find(|d| d.id == p.part_id).unwrap();
+            let fd = p.flight_definition(def);
+            let s = fd.flight_geometry.surface.unwrap();
+            let hinge = rot(p.local_rotation.normalized(), s.axis);
+            let c = p.control.expect("the jet's surfaces carry their settings");
+            // the jet's pitch axis is the craft's X as built
+            let per_unit_deg = fd.ctrl_range_deg * c.surface_authority * hinge.x.abs();
+            if p.part_id.starts_with("wing") {
+                assert!(c.surface_axes[0], "wings pitch");
+                assert!((per_unit_deg - 14.38).abs() < 0.3, "{per_unit_deg}");
+            } else {
+                assert!(!c.surface_axes[0], "stabilizers ignore pitch");
+            }
+        }
     }
 }
