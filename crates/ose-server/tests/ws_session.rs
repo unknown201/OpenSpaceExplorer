@@ -1234,6 +1234,10 @@ async fn exploration_science_tech_tree_and_recovery() {
     assert_eq!(obs.location, "Kerbin_Landed_KerbinKSC");
     assert_eq!(carried.len(), new.len());
 
+    // A newly launched vessel joins the periodically refreshed graph; a transmit command must not
+    // force a graph update and bypass the native link-loss/reconnection cadence.
+    service_flight(&mut ws, vessel, |f| f.comm_connected).await;
+
     // transmitting sends the data reports one by one; each scores as it arrives, and the state follows
     send_msg(&mut ws, &ClientMessage::TransmitScience { vessel }).await;
     wait_for(&mut ws, |m| match m {
@@ -1339,6 +1343,275 @@ async fn exploration_science_tech_tree_and_recovery() {
     assert!(tree.as_array().is_some_and(|a| a.len() > 50));
     let missions = http_get_json(&addr, "/missions.json").await;
     assert!(missions.as_array().is_some_and(|a| a.len() > 40));
+}
+
+async fn service_flight(
+    ws: &mut Ws,
+    vessel: u64,
+    mut ready: impl FnMut(&ose_net::FlightReadout) -> bool,
+) -> ose_net::FlightReadout {
+    wait_for(ws, |m| match m {
+        ServerMessage::Vessels { vessels, .. } => vessels
+            .into_iter()
+            .find(|v| v.id == vessel)
+            .and_then(|v| v.flight)
+            .filter(|f| ready(f)),
+        _ => None,
+    })
+    .await
+}
+
+#[tokio::test]
+async fn live_services_packet_charge_and_solar_snapshots_over_websocket() {
+    let (_server, addr) = spawn_server().await;
+    let mut ws = connect_ws(&addr).await;
+    hello(&mut ws, None, "services pilot").await;
+    send_msg(
+        &mut ws,
+        &ClientMessage::CreateSession {
+            name: "Live services".into(),
+            mode: ose_net::SessionMode::Sandbox,
+            difficulty: vec![],
+        },
+    )
+    .await;
+    wait_for(&mut ws, |m| {
+        matches!(m, ServerMessage::CampaignState { .. }).then_some(())
+    })
+    .await;
+    let mut craft = starter_craft();
+    craft.parts.truncate(1);
+    craft.stages = vec![vec![]];
+    let mut antenna = craft.parts[0].clone();
+    antenna.guid = "measured-antenna".into();
+    antenna.part_id = "antenna_0v_16".into();
+    antenna.parent = Some(0);
+    antenna.local_position.x = 1.;
+    craft.parts.push(antenna);
+    send_msg(
+        &mut ws,
+        &ClientMessage::LaunchOnPad {
+            craft: craft.clone(),
+        },
+    )
+    .await;
+    let vessel = wait_for(&mut ws, |m| match m {
+        ServerMessage::CraftLaunched { vessel, reason, .. } => {
+            assert!(reason.is_none(), "{reason:?}");
+            vessel
+        }
+        _ => None,
+    })
+    .await;
+    send_msg(
+        &mut ws,
+        &ClientMessage::SetControls {
+            vessel,
+            throttle: 0.,
+            attitude: ose_net::AttitudeMode::Free,
+        },
+    )
+    .await;
+    send_msg(
+        &mut ws,
+        &ClientMessage::DeployAntennas {
+            vessel,
+            deploy: true,
+        },
+    )
+    .await;
+    let before = service_flight(&mut ws, vessel, |f| {
+        f.comm_connected && f.antennas.iter().any(|a| a.1)
+    })
+    .await;
+    send_msg(&mut ws, &ClientMessage::RunExperiments { vessel }).await;
+    wait_for(&mut ws, |m| match m {
+        ServerMessage::ScienceReports { new, reason, .. } => {
+            assert!(reason.is_none(), "{reason:?}");
+            assert_eq!(new.len(), 1);
+            assert_eq!(new[0].experiment, "CrewObservation");
+            Some(())
+        }
+        _ => None,
+    })
+    .await;
+    send_msg(&mut ws, &ClientMessage::TransmitScience { vessel }).await;
+    wait_for(&mut ws, |m| match m {
+        ServerMessage::ScienceSubmitted {
+            reports, reason, ..
+        } => {
+            assert!(reason.is_none(), "{reason:?}");
+            (!reports.is_empty()).then_some(())
+        }
+        _ => None,
+    })
+    .await;
+    let after = service_flight(&mut ws, vessel, |f| f.transmitting.is_none()).await;
+    assert!(
+        (before.electric_charge - after.electric_charge - 22.).abs() < 0.001,
+        "native 5-unit packet costs 22 EC: {} -> {}",
+        before.electric_charge,
+        after.electric_charge
+    );
+
+    // A second, independently launched instance exposes authored solar nodes and authoritative poses
+    // to the client, including a late join rather than only a local deployment click.
+    send_msg(&mut ws, &ClientMessage::RecoverVessel { vessel }).await;
+    wait_for(&mut ws, |m| match m {
+        ServerMessage::ScienceSubmitted {
+            recovered: true,
+            reason,
+            ..
+        } => {
+            assert!(reason.is_none(), "{reason:?}");
+            Some(())
+        }
+        _ => None,
+    })
+    .await;
+    let mut panel = craft.parts[0].clone();
+    panel.guid = "tracking-panel".into();
+    panel.part_id = "solararray_2v_accordion".into();
+    panel.parent = Some(0);
+    panel.local_position.x = 3.;
+    craft.parts.push(panel);
+    send_msg(&mut ws, &ClientMessage::LaunchOnPad { craft }).await;
+    let solar_vessel = wait_for(&mut ws, |m| match m {
+        ServerMessage::CraftLaunched { vessel, reason, .. } => {
+            assert!(reason.is_none(), "{reason:?}");
+            vessel
+        }
+        _ => None,
+    })
+    .await;
+    send_msg(
+        &mut ws,
+        &ClientMessage::DeployPanels {
+            vessel: solar_vessel,
+            deploy: true,
+        },
+    )
+    .await;
+    let snapshot = service_flight(&mut ws, solar_vessel, |f| {
+        f.solar_panels.iter().any(|p| p.angle_deg.abs() > 0.1)
+    })
+    .await;
+    let p = &snapshot.solar_panels[0];
+    assert_eq!(p.part, 2);
+    assert!(p.pivot_node.as_ref().is_some_and(|s| !s.is_empty()));
+    assert!(p.angle_deg.is_finite() && p.incidence.is_finite() && p.flow_ec_per_s.is_finite());
+    let mut observer = connect_ws(&addr).await;
+    hello(&mut observer, None, "solar observer").await;
+    let late = service_flight(&mut observer, solar_vessel, |f| !f.solar_panels.is_empty()).await;
+    assert_eq!(late.solar_panels[0].pivot_node, p.pivot_node);
+    assert!(late.solar_panels[0].angle_deg.abs() > 0.1);
+}
+
+#[tokio::test]
+async fn live_flag_inventory_survives_quickload_and_transport_reconnect() {
+    let (_server, addr) = spawn_server().await;
+    let mut ws = connect_ws(&addr).await;
+    let (_, token) = hello(&mut ws, None, "flag pilot").await;
+    send_msg(&mut ws, &ClientMessage::JoinCampaign).await;
+    wait_for(&mut ws, |m| {
+        matches!(m, ServerMessage::CampaignState { .. }).then_some(())
+    })
+    .await;
+    send_msg(
+        &mut ws,
+        &ClientMessage::LaunchOnPad {
+            craft: starter_craft(),
+        },
+    )
+    .await;
+    let vessel = wait_for(&mut ws, |m| match m {
+        ServerMessage::CraftLaunched { vessel, reason, .. } => {
+            assert!(reason.is_none(), "{reason:?}");
+            vessel
+        }
+        _ => None,
+    })
+    .await;
+    async fn crew_ack(ws: &mut Ws, accepted: bool) -> Option<u64> {
+        wait_for(ws, |m| match m {
+            ServerMessage::CrewAck {
+                accepted: ok,
+                reason,
+                new_vessel,
+                ..
+            } => {
+                assert_eq!(ok, accepted, "{reason:?}");
+                Some(new_vessel)
+            }
+            _ => None,
+        })
+        .await
+    }
+    send_msg(
+        &mut ws,
+        &ClientMessage::GoEva {
+            vessel,
+            kerbal: None,
+        },
+    )
+    .await;
+    let eva = crew_ack(&mut ws, true).await.unwrap();
+    send_msg(
+        &mut ws,
+        &ClientMessage::EvaControls {
+            vessel: eva,
+            run: false,
+            jump: true,
+            grab: false,
+            climb: 0.,
+        },
+    )
+    .await;
+    service_flight(&mut ws, eva, |f| f.on_ladder.is_none()).await;
+    send_msg(
+        &mut ws,
+        &ClientMessage::EvaControls {
+            vessel: eva,
+            run: false,
+            jump: false,
+            grab: false,
+            climb: 0.,
+        },
+    )
+    .await;
+    service_flight(&mut ws, eva, |f| {
+        f.situation == ose_net::FlightSituation::Landed && f.flag_carried
+    })
+    .await;
+    send_msg(&mut ws, &ClientMessage::PlantFlag { vessel: eva }).await;
+    let flag = crew_ack(&mut ws, true).await.unwrap();
+    service_flight(&mut ws, eva, |f| !f.flag_carried).await;
+    send_msg(&mut ws, &ClientMessage::PlantFlag { vessel: eva }).await;
+    crew_ack(&mut ws, false).await;
+    for command in [ClientMessage::QuickSave, ClientMessage::QuickLoad] {
+        send_msg(&mut ws, &command).await;
+        wait_for(&mut ws, |m| match m {
+            ServerMessage::SaveAck {
+                accepted, reason, ..
+            } => {
+                assert!(accepted, "{reason:?}");
+                Some(())
+            }
+            _ => None,
+        })
+        .await;
+    }
+    ws.close(None).await.unwrap();
+    let mut ws = connect_ws(&addr).await;
+    hello(&mut ws, Some(token), "flag pilot").await;
+    service_flight(&mut ws, eva, |f| !f.flag_carried).await;
+    send_msg(&mut ws, &ClientMessage::PlantFlag { vessel: eva }).await;
+    crew_ack(&mut ws, false).await;
+    send_msg(&mut ws, &ClientMessage::TakeFlag { vessel: eva, flag }).await;
+    crew_ack(&mut ws, true).await;
+    service_flight(&mut ws, eva, |f| f.flag_carried).await;
+    send_msg(&mut ws, &ClientMessage::PlantFlag { vessel: eva }).await;
+    crew_ack(&mut ws, true).await;
 }
 
 #[tokio::test]

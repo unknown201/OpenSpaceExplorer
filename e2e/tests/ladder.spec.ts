@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 // Promoted from the client worktree's ladder capture probe. Screenshots belong to
 // the test run, so this also works outside the original developer's machine.
-test("ground EVA and boarding render without animation errors", async ({ page, baseURL }, testInfo) => {
+test("ground EVA, flag inventory and boarding render without animation errors", async ({ page, baseURL }, testInfo) => {
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));
   await page.goto(baseURL!);
@@ -42,6 +42,15 @@ test("ground EVA and boarding render without animation errors", async ({ page, b
     body: await page.screenshot({ path: testInfo.outputPath("ground-eva.png") }),
     contentType: "image/png",
   });
+  // Release the ladder normally. Planting consumes the authoritative inventory; pickup restores it.
+  await page.keyboard.press("Space");
+  await expect(page.locator("#fh-flag")).toBeVisible({ timeout: 15_000 });
+  await page.locator("#fh-flag").click();
+  await expect(page.locator("#fh-flag")).toBeHidden();
+  await expect(page.locator("#fh-takeflag")).toBeVisible();
+  await page.locator("#fh-takeflag").click();
+  await expect(page.locator("#fh-flag")).toBeVisible();
+  await expect(page.locator("#fh-takeflag")).toBeHidden();
   await page.locator('[data-ose="flight-board"]').click();
   await expect(page.locator('[data-ose="flight-eva"]')).toBeVisible();
   await expect(page.locator('[data-ose="flight-board"]')).toBeHidden();

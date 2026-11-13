@@ -65,3 +65,41 @@ fn ksp2_a_craft_at_the_mun_is_not_shaded_by_kerbin() {
     let mun_night = (m.normalized()) * 250_000.0;
     assert_eq!(u.sunlight(mun, mun_night, ut), 0.0);
 }
+
+#[test]
+fn measured_native_orbital_shadow_and_flux_match_at_four_phases() {
+    let (u, _) = system();
+    let kerbin = u.body_entity("Kerbin").unwrap();
+    let evidence: serde_json::Value =
+        serde_json::from_str(include_str!("data/services-live.json")).unwrap();
+    for case in evidence["solar_orbit_cases"].as_array().unwrap() {
+        let vector = |key: &str| {
+            let a = case[key].as_array().unwrap();
+            DVec3::new(
+                a[0].as_f64().unwrap(),
+                a[1].as_f64().unwrap(),
+                a[2].as_f64().unwrap(),
+            )
+        };
+        let ut = case["ut"].as_f64().unwrap();
+        let native_r = vector("r_body_m");
+        let native_sun = vector("star_body_m").normalized();
+        // Native celestial coordinates and our inertial coordinates differ. Preserve the measured
+        // sunward projection and perpendicular distance, which determine the spherical shadow.
+        let sun = -bodies::star_space_state(&u.world, kerbin, ut)
+            .0
+            .normalized();
+        let across = sun.cross(DVec3::new(0., 0., 1.)).normalized();
+        let along = native_r.dot(native_sun);
+        let r = sun * along + across * (native_r - native_sun * along).length();
+        let measured = case["illumination_scale"].as_f64().unwrap();
+        let actual = u.sunlight(kerbin, r, ut);
+        if case["blocker"] == "Kerbin" {
+            assert_eq!(actual, 0.);
+        } else {
+            // Environment event and terminal sample straddle screenshot capture; do not pretend they
+            // are synchronous or compare native and OSE camera axes.
+            assert!((actual - measured).abs() < 0.0002, "{actual} vs {measured}");
+        }
+    }
+}
