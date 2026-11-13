@@ -559,7 +559,12 @@ impl Universe {
             let Some(mut st) = self.world.entity_mut(e).take::<structure::Structure>() else {
                 continue;
             };
+            let at = bodies::star_space_state(&self.world, body, ut).0 + r;
             if let Some(mut d) = self.world.get_mut::<flight::Dormant>(e) {
+                // Rails retain an inertial craft pose, but the star direction changes along the orbit.
+                // Reusing the final physics tick's direction freezes tracking and incidence during warp.
+                st.sun_local =
+                    (at.length() > 0.0).then(|| st.to_craft_axis(d.0.facing, -at.normalized()));
                 st.electric(&mut d.0, sun, 0.0, dt);
             }
             self.world.entity_mut(e).insert(st);
