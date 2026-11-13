@@ -158,8 +158,8 @@ pub fn submerged_share(min_depth: f64, max_depth: f64) -> f64 {
     }
 }
 
-/// Whether a part entering the water at the vessel's surface speed `speed`, of which `down` is downward,
-/// breaks.
+/// Whether entry breaks a part: `speed` is total surface speed and `down` is its
+/// signed projection against the native reference axis (not necessarily local vertical).
 pub fn breaks_on_entry(speed: f64, down: f64, crash_tolerance: f64) -> bool {
     let s = settings();
     (s.min_crash_mult * speed).max(down) > crash_tolerance * s.crash_tolerance_mult
@@ -216,7 +216,7 @@ pub fn damping_force(
 
 impl WaterDrag {
     /// Advance one step in the water (`CalculateLiquidDrag`). `speed` is the vessel's surface speed,
-    /// `horizontal` its horizontal part, `dot_abs` how vertical its motion is (1 straight up or down),
+    /// `horizontal` its horizontal part, `dot_abs` its absolute reference-axis alignment,
     /// `entering` true on the step the part met the water. `area_drag` gives the part's drag-cube `AreaDrag`
     /// for the motion, `submerged` its wet share, `mass_t` its mass, `density` the water's, t/m^3.
     #[allow(clippy::too_many_arguments)]

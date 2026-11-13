@@ -93,7 +93,7 @@ differences are reported as error; this run does not establish their cause.
 
 ## Validation and scope
 
-Rust regressions cover authored CoB, rotated bounds, force points, mass-center
+Rust regressions cover authored CoB, force points, mass-center
 drag, delayed application, PhysX damping and frame-dependent entry. Python tests
 cover comparator rejection paths, observable bobbing, early errors hidden by a
 long tail, and the baseline adapter. Workspace formatting, Clippy, tests, Python

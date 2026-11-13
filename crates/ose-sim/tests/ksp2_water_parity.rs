@@ -147,7 +147,7 @@ fn splash(c: &ose_data::craft::Craft, h0: f64, down: f64, east: f64, seconds: f6
 
 #[test]
 fn ksp2_splashdowns_break_pods_over_one_point_two_times_their_tolerance() {
-    // Mk1 pod, crashTolerance 15: KSP2 breaks it on entry above 18 m/s straight down (1.2 x 15)
+    // Mk1 pod, crashTolerance 15: an aligned reference axis breaks above 18 m/s (1.2 x 15).
     for (down, survives) in [(10.0, true), (17.0, true), (19.5, false)] {
         // keel 2 cm above the water: it enters at the set speed
         let s = splash(&pod(), 0.02, down, 0.0, 2.0);
