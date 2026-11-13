@@ -5347,9 +5347,7 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                         true
                     }
                     // Held::flight_rotation integrates trim while Alt is held.
-                    "KeyW" | "KeyS" | "KeyA" | "KeyD" | "KeyQ" | "KeyE" | "KeyX"
-                        if ev.alt_key() =>
-                    {
+                    "KeyW" | "KeyS" | "KeyA" | "KeyD" | "KeyQ" | "KeyE" if ev.alt_key() => {
                         ev.prevent_default();
                         true
                     }
@@ -5385,8 +5383,14 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                         app.set_throttle(1.0);
                         true
                     }
-                    "KeyX" if !ev.alt_key() => {
+                    // `OnThrottleCutoff`: X cuts the throttle, and with left Alt (the trim modifier) held also
+                    // zeroes the trim
+                    "KeyX" => {
+                        app.keys.throttle_cutoff_pressed();
                         app.set_throttle(0.0);
+                        if ev.alt_key() {
+                            ev.prevent_default();
+                        }
                         true
                     }
                     "Space" => {
