@@ -205,14 +205,48 @@ namespace OpenSpaceExplorer.Validation
             }
         }
 
+        static bool _partsDumped;
+
         static void Tick(StreamWriter w, VesselComponent v, double ut, double start, string phaseName)
         {
                     var ctrl = v.ControlTransform;
                     var space = G.SpaceSimulation;
-                    Vector3 com = space.UniverseView.PhysicsSpace.PositionToPhysics(v.CenterOfMass);
+                    // the centre of mass from the parts' rigidbodies, in the same Unity world space as their
+                    // transforms (the sim's CenterOfMass came out about 4 m off in run 22)
+                    Vector3 com = Vector3.zero;
+                    double totalMass = 0;
+                    foreach (var part in v.SimulationObject.PartOwner.Parts)
+                    {
+                        if (!space.TryGetViewObject(part.SimulationObject, out var pv)) continue;
+                        var rb = pv.GetComponent<Rigidbody>();
+                        Vector3 at = rb != null ? rb.worldCenterOfMass : pv.transform.position;
+                        double m = rb != null ? rb.mass : part.TotalMass;
+                        com += at * (float)m;
+                        totalMass += m;
+                    }
+                    if (totalMass > 0) com /= (float)totalMass;
                     // the control frame in Unity world axes
                     var rot = space.UniverseView.PhysicsSpace.RotationToPhysics(ctrl.Rotation);
                     Vector3 right = rot * Vector3.right, nose = rot * Vector3.up, fwd = rot * Vector3.forward;
+                    if (!_partsDumped && phaseName == "climb")
+                    {
+                        _partsDumped = true;
+                        using (var pw = new StreamWriter(Path.Combine(Path.GetDirectoryName(((FileStream)w.BaseStream).Name), "jetaero-parts.csv"), false))
+                        {
+                            pw.WriteLine("part,name,mass_t,rx,ry,rz");
+                            int k = 0;
+                            foreach (var part in v.SimulationObject.PartOwner.Parts)
+                            {
+                                int i = k++;
+                                if (!space.TryGetViewObject(part.SimulationObject, out var pv)) continue;
+                                var rb = pv.GetComponent<Rigidbody>();
+                                Vector3 at = (rb != null ? rb.worldCenterOfMass : pv.transform.position) - com;
+                                double m = rb != null ? rb.mass : part.TotalMass;
+                                pw.WriteLine(string.Join(",", new[] { i.ToString(Inv), part.Name, m.ToString("R", Inv),
+                                    Vector3.Dot(at, right).ToString("R", Inv), Vector3.Dot(at, nose).ToString("R", Inv), Vector3.Dot(at, fwd).ToString("R", Inv) }));
+                            }
+                        }
+                    }
                     var moi = v.MOI.vector;
                     var wv = space.UniverseView.PhysicsSpace.AngularVelocityToPhysics(v.AngularVelocityMassAvg);
                     string F(double x) => x.ToString("R", Inv);
