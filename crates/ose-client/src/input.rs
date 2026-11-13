@@ -55,12 +55,18 @@ impl ControlCadence {
 pub struct Held {
     codes: HashSet<String>,
     trim: [f64; 3],
+    /// X was pressed with the trim modifier held (`OnThrottleCutoff` sets `_trimResetTriggered`): the next
+    /// frame zeroes the trim instead of changing it.
+    trim_reset: bool,
     /// CapsLock toggles precision mode (`TogglePrecisionMode`).
     pub precision: bool,
 }
 
 impl Held {
-    /// FlightInputHandler: trim changes by 0.1/s and is added after precision scaling.
+    /// `FlightInputHandler.ApplyManualInputToFlightControlState`: with the trim modifier (left Alt only, the
+    /// original's `TrimModifier` binding) held, each axis's trim moves 0.1/s in the direction its input
+    /// points (by sign, whatever the input's size) and the input itself is zeroed; Alt+X zeroes the trim once.
+    /// Trim is added after precision scaling.
     pub fn flight_rotation(&mut self, dt: f64) -> DVec3 {
         self.flight_axes(dt, DVec3::ZERO).1
     }
@@ -71,12 +77,15 @@ impl Held {
             raw.y.clamp(-1., 1.),
             raw.z.clamp(-1., 1.),
         );
-        let modifier = self.is("AltLeft") || self.is("AltRight");
-        if modifier && self.is("KeyX") {
+        let modifier = self.trim_modifier();
+        if self.trim_reset {
             self.trim = [0.0; 3];
+            self.trim_reset = false;
         } else if modifier {
             for (t, u) in self.trim.iter_mut().zip([raw.x, raw.y, raw.z]) {
-                *t = (*t + u * 0.1 * dt).clamp(-1.0, 1.0);
+                if u != 0.0 {
+                    *t = (*t + u.signum() * 0.1 * dt).clamp(-1.0, 1.0);
+                }
             }
         }
         let scale = if modifier { 0.0 } else { self.scale() };
@@ -88,6 +97,17 @@ impl Held {
                 raw.z * scale + self.trim[2],
             ),
         )
+    }
+    /// `TrimModifier`: `<Keyboard>/leftAlt`.
+    pub fn trim_modifier(&self) -> bool {
+        self.is("AltLeft")
+    }
+    /// The throttle-cutoff key (X) went down: with the trim modifier held it also zeroes the trim, as
+    /// `OnThrottleCutoff` does (the throttle is cut either way).
+    pub fn throttle_cutoff_pressed(&mut self) {
+        if self.trim_modifier() {
+            self.trim_reset = true;
+        }
     }
     pub fn down(&mut self, code: &str) {
         self.codes.insert(code.to_string());
@@ -205,7 +225,49 @@ mod reference_trim_tests {
         assert_eq!(keys.flight_rotation(0.02).x, 0.2);
         keys.down("AltLeft");
         keys.down("KeyX");
+        keys.throttle_cutoff_pressed();
         assert_eq!(keys.flight_rotation(0.02), DVec3::ZERO);
+    }
+
+    /// KSP2 T7 (`FlightInputHandler`, `GameInput` bindings): only left Alt trims; trim moves 0.1/s by the
+    /// input's sign, so half a stick trims as fast as a key; Alt+X zeroes it once and trimming goes on while
+    /// Alt stays held; CapsLock precision scales input by 0.1 but not the trim.
+    #[test]
+    fn ksp2_trim_and_precision_follow_flight_input_handler() {
+        let mut keys = Held::default();
+        keys.down("AltRight");
+        keys.down("KeyS");
+        let r = keys.flight_rotation(1.0);
+        assert_eq!(r.x, 1.0, "right Alt is not the trim modifier: plain input");
+        keys.up("AltRight");
+        keys.up("KeyS");
+        assert_eq!(keys.flight_rotation(1.0).x, 0.0, "and it left no trim");
+        keys.down("AltLeft");
+        let (_, half) = keys.flight_axes(2.0, DVec3::new(0.5, -0.25, 0.0));
+        assert!((half.x - 0.2).abs() < 1e-12, "by sign: {half:?}");
+        assert!((half.y + 0.2).abs() < 1e-12, "by sign: {half:?}");
+        keys.throttle_cutoff_pressed();
+        assert_eq!(keys.flight_rotation(1.0), DVec3::ZERO, "Alt+X zeroes it");
+        keys.down("KeyS");
+        assert!(
+            (keys.flight_rotation(1.0).x - 0.1).abs() < 1e-12,
+            "trims again with Alt held"
+        );
+        keys.up("KeyS");
+        keys.up("AltLeft");
+        keys.precision = true;
+        keys.down("KeyS");
+        assert!(
+            (keys.flight_rotation(0.02).x - 0.2).abs() < 1e-12,
+            "0.1 x input + 0.1 trim"
+        );
+        keys.up("KeyS");
+        keys.down("KeyX");
+        keys.throttle_cutoff_pressed();
+        assert!(
+            (keys.flight_rotation(0.02).x - 0.1).abs() < 1e-12,
+            "X alone keeps the trim"
+        );
     }
 }
 

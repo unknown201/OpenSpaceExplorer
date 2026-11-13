@@ -2489,6 +2489,17 @@ impl FlightView {
                     }
                 }
                 // Wheels roll with the ground speed.
+                if let Some(panel) =
+                    readout.and_then(|f| f.solar_panels.iter().find(|p| p.part as usize == i))
+                {
+                    if let (Some(pivot), Some(model)) =
+                        (panel.pivot_node.as_deref(), gpu.model(&it.model))
+                    {
+                        if let Some(turn) = model.rig.solar_turn(pivot, panel.angle_deg) {
+                            it.node_rotations.push(turn);
+                        }
+                    }
+                }
                 if let Some((bone, radius)) = wheel_spinner(pid) {
                     let turn = (self.wheel_travel / radius) as f32;
                     it.node_turns

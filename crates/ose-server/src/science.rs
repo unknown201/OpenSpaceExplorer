@@ -515,6 +515,7 @@ mod tests {
                 shape: None,
                 fairing: None,
                 chute: None,
+                control: None,
                 symmetry: 0,
                 actions: Vec::new(),
                 flight: None,

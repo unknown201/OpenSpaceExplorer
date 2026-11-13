@@ -25,11 +25,28 @@ pub struct ScienceStorage {
 
 /// Reports going home over the vessel's best antenna, one at a time (`ScienceStorageComponent`): each
 /// with its size and how much of it is sent, science data units.
-#[derive(Component, Clone, Debug, Default, PartialEq)]
+#[derive(Component, Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Transmission {
     pub queue: Vec<(ResearchReport, f64, f64)>,
-    /// Why it is waiting, when it is (no link, no power, no antenna).
-    pub stalled: Option<&'static str>,
+    /// Interrupted reports stay aboard, with their progress, until explicitly restarted.
+    #[serde(default)]
+    pub stopped: Vec<StoppedTransmission>,
+    #[serde(default)]
+    pub antenna: Option<String>,
+    #[serde(default)]
+    pub active: bool,
+    #[serde(default)]
+    pub packet_size: f64,
+    pub stalled: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StoppedTransmission {
+    pub report: ResearchReport,
+    pub size: f64,
+    pub done: f64,
+    pub packet_size: f64,
+    pub reason: String,
 }
 
 /// Reports that finished sending, waiting for the server to score them: (vessel, report).
@@ -452,6 +469,10 @@ impl Universe {
 
     /// Take every report off the vessel (transmitted or recovered).
     pub fn take_science(&mut self, e: Entity) -> Vec<ResearchReport> {
+        self.world.entity_mut(e).remove::<Transmission>();
+        if let Some(mut pending) = self.world.get_resource_mut::<Transmitted>() {
+            pending.0.retain(|(v, _)| *v != e);
+        }
         match self.world.get_mut::<ScienceStorage>(e) {
             Some(mut s) => std::mem::take(&mut s.reports),
             None => Vec::new(),
@@ -484,16 +505,22 @@ impl Universe {
         if self.best_transmitter(e).is_none() {
             return Err("no working antenna (a folded one has to be extended)");
         }
-        let data: Vec<ResearchReport> = match self.world.get_mut::<ScienceStorage>(e) {
-            Some(mut s) => {
-                let (data, samples): (Vec<_>, Vec<_>) = std::mem::take(&mut s.reports)
-                    .into_iter()
-                    .partition(|r| !r.sample);
-                s.reports = samples;
-                data
-            }
-            None => Vec::new(),
-        };
+        let existing = self
+            .world
+            .get::<Transmission>(e)
+            .cloned()
+            .unwrap_or_default();
+        let data: Vec<ResearchReport> = self
+            .science_carried(e)
+            .into_iter()
+            .filter(|r| {
+                !r.sample
+                    && !existing.queue.iter().any(|q| q.0.key() == r.key())
+                    && !self.world.get_resource::<Transmitted>().is_some_and(|t| {
+                        t.0.iter().any(|(v, done)| *v == e && done.key() == r.key())
+                    })
+            })
+            .collect();
         if data.is_empty() {
             return Err("no data reports to send (samples have to be recovered)");
         }
@@ -515,40 +542,161 @@ impl Universe {
             .get::<Transmission>(e)
             .cloned()
             .unwrap_or_default();
+        let (_, packet, _, _) = self.best_transmitter(e).expect("validated antenna");
         t.queue.extend(data.into_iter().map(|r| {
             let size = size_of(&r).max(0.0);
-            (r, size, 0.0)
+            let done = t
+                .stopped
+                .iter()
+                .position(|s| s.report.key() == r.key())
+                .map(|i| t.stopped.remove(i))
+                .map(|old| {
+                    // TransmitData resumes ceil(alreadyCompletedSize / DataPacketSize) packets.
+                    let old_packet = old.packet_size.max(f64::MIN_POSITIVE);
+                    let old_padded = (old.size / old_packet).ceil() * old_packet;
+                    let percentage = if old_padded > 0.0 {
+                        old.done / old_padded
+                    } else {
+                        0.0
+                    };
+                    (size * percentage / packet).ceil() * packet
+                })
+                .unwrap_or(0.0);
+            (r, size, done)
         }));
+        t.stalled = None;
         self.world.entity_mut(e).insert(t);
         Ok(n)
     }
 
     /// What the vessel is sending: the report going now, the share of it sent, how many wait, and why it
     /// is held up if it is.
-    pub fn transmission(
-        &self,
-        e: Entity,
-    ) -> Option<(&ResearchReport, f64, usize, Option<&'static str>)> {
+    pub fn transmission(&self, e: Entity) -> Option<(&ResearchReport, f64, usize, Option<&str>)> {
         let t = self.world.get::<Transmission>(e)?;
-        let (r, size, done) = t.queue.first()?;
-        let share = if *size > 0.0 {
-            (done / size).min(1.0)
+        if let Some((r, size, done)) = t.queue.first() {
+            let packet = if t.packet_size > 0.0 {
+                t.packet_size
+            } else {
+                self.best_transmitter(e).map(|t| t.1).unwrap_or(1.0)
+            };
+            let padded = (size / packet).ceil() * packet;
+            let share = if padded > 0.0 {
+                (done / padded).min(1.0)
+            } else {
+                1.0
+            };
+            Some((r, share, t.queue.len() - 1, t.stalled.as_deref()))
         } else {
-            1.0
-        };
-        Some((r, share, t.queue.len() - 1, t.stalled))
+            let last = t.stopped.last()?;
+            let packet = last.packet_size.max(f64::MIN_POSITIVE);
+            let padded = (last.size / packet).ceil() * packet;
+            let share = if padded > 0.0 {
+                (last.done / padded).min(1.0)
+            } else {
+                1.0
+            };
+            Some((&last.report, share, 0, Some(last.reason.as_str())))
+        }
     }
 
     /// Reports that finished sending since the last call.
     pub fn take_transmitted(&mut self) -> Vec<(Entity, ResearchReport)> {
-        self.world
+        let done = self
+            .world
             .get_resource_mut::<Transmitted>()
             .map(|mut t| std::mem::take(&mut t.0))
-            .unwrap_or_default()
+            .unwrap_or_default();
+        for (e, report) in &done {
+            if let Some(mut storage) = self.world.get_mut::<ScienceStorage>(*e) {
+                storage.reports.retain(|r| r.key() != report.key());
+            }
+        }
+        done
     }
 
-    /// Send for `dt` seconds: a packet each interval while the vessel has its link to the KSC and the
-    /// antenna its power; held up otherwise (it carries on when they come back).
+    /// Stop only the current report, as the native storage dequeues it on failure. Later queued reports
+    /// may start when the link returns; the failed report requires an explicit Transmit command.
+    fn stop_current_transmission(&mut self, e: Entity, reason: &str) {
+        if let Some(mut t) = self.world.get_mut::<Transmission>(e) {
+            if !t.queue.is_empty() {
+                let (report, size, done) = t.queue.remove(0);
+                let packet_size = t.packet_size;
+                t.stopped.push(StoppedTransmission {
+                    report,
+                    size,
+                    done,
+                    packet_size,
+                    reason: reason.into(),
+                });
+            }
+            t.active = false;
+            t.antenna = None;
+            t.stalled = Some(reason.into());
+        }
+    }
+
+    /// A topology change interrupts the native transmitter. Keep every report and its partial progress.
+    pub(crate) fn merge_transmissions(&mut self, a: Entity, b: Entity) {
+        let mut combined = Transmission::default();
+        for e in [a, b] {
+            if let Some(mut t) = self.world.entity_mut(e).take::<Transmission>() {
+                for (report, size, done) in t.queue.drain(..) {
+                    t.stopped.push(StoppedTransmission {
+                        report,
+                        size,
+                        done,
+                        packet_size: t.packet_size,
+                        reason: "vessel changed".into(),
+                    });
+                }
+                combined.stopped.extend(t.stopped);
+            }
+        }
+        if let Some(mut pending) = self.world.get_resource_mut::<Transmitted>() {
+            for (v, _) in &mut pending.0 {
+                if *v == b {
+                    *v = a;
+                }
+            }
+            let mut keys = std::collections::HashSet::new();
+            pending
+                .0
+                .retain(|(v, report)| keys.insert((*v, report.key())));
+            combined.stopped.retain(|s| {
+                !pending
+                    .0
+                    .iter()
+                    .any(|(v, report)| *v == a && report.key() == s.report.key())
+            });
+        }
+        // Both ships may carry the same report. Keep its best partial progress, rather than a ghost
+        // failed entry that would remain visible after the merged report has been delivered.
+        let mut unique: Vec<StoppedTransmission> = Vec::new();
+        let share = |s: &StoppedTransmission| {
+            let packet = s.packet_size.max(f64::MIN_POSITIVE);
+            s.done / ((s.size / packet).ceil() * packet).max(f64::MIN_POSITIVE)
+        };
+        for stopped in combined.stopped.drain(..) {
+            if let Some(old) = unique
+                .iter_mut()
+                .find(|s| s.report.key() == stopped.report.key())
+            {
+                if share(&stopped) > share(old) {
+                    *old = stopped;
+                }
+            } else {
+                unique.push(stopped);
+            }
+        }
+        combined.stopped = unique;
+        if !combined.stopped.is_empty() {
+            combined.stalled = Some("vessel changed".into());
+            self.world.entity_mut(a).insert(combined);
+        }
+    }
+
+    /// Advance the real transmitter in simulation seconds. Progress is fractional packet units; a
+    /// report requires ceil(size / packet) whole intervals. Failed reports never restart implicitly.
     pub(crate) fn run_transmissions(&mut self, dt: f64) {
         let sending: Vec<Entity> = self
             .world
@@ -556,21 +704,74 @@ impl Universe {
             .iter(&self.world)
             .collect();
         for e in sending {
-            // KSP2 stops sending when the vessel has no control (`VesselControlState.NoControl`: no crew
-            // and no powered probe core), as it does without a connection
+            let Some(t) = self.world.get::<Transmission>(e) else {
+                continue;
+            };
+            if t.queue.is_empty() {
+                continue;
+            }
+            let active = t.active;
+            let antenna = t.antenna.clone();
+            if !self.comm_link(e).connected {
+                if active {
+                    self.stop_current_transmission(e, "no CommNet connection to the KSC");
+                } else if let Some(mut t) = self.world.get_mut::<Transmission>(e) {
+                    t.stalled = Some("no CommNet connection to the KSC".into());
+                }
+                continue;
+            }
             let controlled = self
                 .world
                 .get::<flight::Powered>(e)
                 .or_else(|| self.world.get::<flight::Dormant>(e).map(|d| &d.0))
                 .is_none_or(|p| p.controlled);
-            let stalled = if !self.comm_link(e).connected {
-                Some("no CommNet connection to the KSC")
-            } else if !controlled {
-                Some("no control (no crew and no powered probe core)")
-            } else if let Some((part, packet, interval, ec_rate)) = self.best_transmitter(e) {
-                let power = match self.world.get_mut::<structure::Structure>(e) {
-                    Some(mut st) if ec_rate > 0.0 => match st.net.resource("ElectricCharge") {
-                        Some(ec) => st.net.process(
+            if !controlled {
+                self.stop_current_transmission(e, "no control (no crew and no powered probe core)");
+                continue;
+            }
+            let transmitter = if let Some(guid) = antenna {
+                self.world.get::<structure::Structure>(e).and_then(|st| {
+                    let i = st.part_guids.iter().position(|g| *g == guid)?;
+                    let x = st.electric[i];
+                    (st.rigid.present[i] && (!st.antenna_deployable[i] || st.deployed[i]))
+                        .then_some((
+                            i,
+                            x.transmit_packet,
+                            x.transmit_interval_s,
+                            x.transmit_ec_per_s,
+                        ))
+                })
+            } else {
+                self.best_transmitter(e)
+            };
+            let Some((part, packet, interval, ec_rate)) =
+                transmitter.filter(|t| t.1 > 0.0 && t.2 > 0.0)
+            else {
+                self.stop_current_transmission(e, "no working antenna");
+                continue;
+            };
+            let (remaining, guid) = {
+                let t = self.world.get::<Transmission>(e).expect("sending");
+                let first = &t.queue[0];
+                let remaining = ((first.1 / packet).ceil() * packet - first.2).max(0.0);
+                let guid = self.structure(e).expect("antenna").part_guids[part].clone();
+                (remaining, guid)
+            };
+            // A high-warp step must not charge for time beyond this report's completion.
+            let step = dt.min(remaining * interval / packet);
+            self.world
+                .get_mut::<Transmission>(e)
+                .expect("sending")
+                .packet_size = packet;
+            let power = if ec_rate > 0.0 && step > 0.0 {
+                let mut st = self
+                    .world
+                    .get_mut::<structure::Structure>(e)
+                    .expect("antenna");
+                st.net
+                    .resource("ElectricCharge")
+                    .map(|ec| {
+                        st.net.process(
                             &[crate::resources::Request {
                                 part,
                                 instructions: vec![crate::resources::Instruction {
@@ -579,56 +780,50 @@ impl Universe {
                                 }],
                                 priority: 0,
                             }],
-                            dt,
-                        )[0],
-                        None => 0.0,
-                    },
-                    _ => 1.0,
-                };
-                if power < 0.999 {
-                    Some("out of electric charge")
+                            step,
+                        )[0]
+                    })
+                    .unwrap_or(0.0)
+            } else {
+                1.0
+            };
+            if power < 1.0 - 1e-9 {
+                self.stop_current_transmission(e, "out of electric charge");
+                continue;
+            }
+            let completed = {
+                let mut t = self.world.get_mut::<Transmission>(e).expect("sending");
+                t.active = true;
+                t.antenna = Some(guid);
+                t.packet_size = packet;
+                t.stalled = None;
+                t.queue[0].2 += packet * step / interval;
+                if t.queue[0].2 + 1e-9 >= (t.queue[0].1 / packet).ceil() * packet {
+                    t.active = false;
+                    t.antenna = None;
+                    Some(t.queue.remove(0).0)
                 } else {
-                    let mut t = self.world.get_mut::<Transmission>(e).expect("sending");
-                    let mut left = packet * dt / interval;
-                    let mut done = Vec::new();
-                    while left > 0.0 {
-                        let Some(first) = t.queue.first_mut() else {
-                            break;
-                        };
-                        // whole packets: a report of size s takes ceil(s / packet) of them
-                        let need = (first.1 / packet).ceil() * packet - first.2;
-                        if left >= need {
-                            left -= need;
-                            done.push(t.queue.remove(0).0);
-                        } else {
-                            first.2 += left;
-                            left = 0.0;
-                        }
-                    }
-                    if !done.is_empty() {
-                        let mut out = self.world.get_resource_or_insert_with(Transmitted::default);
-                        out.0.extend(done.into_iter().map(|r| (e, r)));
-                    }
                     None
                 }
-            } else {
-                Some("no working antenna")
             };
-            let empty = match self.world.get_mut::<Transmission>(e) {
-                Some(mut t) => {
-                    t.stalled = stalled;
-                    t.queue.is_empty()
-                }
-                None => true,
-            };
-            if empty {
-                self.world.entity_mut(e).remove::<Transmission>();
+            if let Some(report) = completed {
+                // Keep it in storage until the server drains the delivery event, so recovery/save in
+                // between can still find it. start_transmission excludes pending deliveries below.
+                self.world
+                    .get_resource_or_insert_with(Transmitted::default)
+                    .0
+                    .push((e, report));
             }
         }
     }
 
     /// Put reports back on a vessel (a restored save).
     pub fn set_science_carried(&mut self, e: Entity, reports: Vec<ResearchReport>) {
+        let mut keys = std::collections::HashSet::new();
+        let reports = reports
+            .into_iter()
+            .filter(|r| keys.insert(r.key()))
+            .collect();
         self.world.entity_mut(e).insert(ScienceStorage { reports });
     }
 }
@@ -636,6 +831,42 @@ impl Universe {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn docking_preserves_best_partial_report_and_deduplicates_pending_delivery() {
+        let mut u = Universe::new();
+        let a = u.world.spawn_empty().id();
+        let b = u.world.spawn_empty().id();
+        let report = ResearchReport {
+            experiment: "MeasuredPacket".into(),
+            sample: false,
+            location: "Kerbin_Landed".into(),
+            value: 8.,
+        };
+        for (e, done) in [(a, 2.), (b, 7.)] {
+            u.set_science_carried(e, vec![report.clone()]);
+            u.world.entity_mut(e).insert(Transmission {
+                queue: vec![(report.clone(), 10., done)],
+                packet_size: 5.,
+                active: true,
+                ..Default::default()
+            });
+        }
+        u.merge_transmissions(a, b);
+        let t = u.world.get::<Transmission>(a).unwrap();
+        assert!(t.queue.is_empty());
+        assert_eq!(t.stopped.len(), 1);
+        assert_eq!(t.stopped[0].done, 7.);
+        assert!(u.world.get::<Transmission>(b).is_none());
+        u.world
+            .insert_resource(Transmitted(vec![(a, report.clone()), (b, report)]));
+        u.merge_transmissions(a, b);
+        assert!(u.world.get::<Transmission>(a).is_none());
+        let delivered = u.take_transmitted();
+        assert_eq!(delivered.len(), 1);
+        assert_eq!(delivered[0].0, a);
+        assert!(u.science_carried(a).is_empty());
+    }
 
     #[test]
     fn a_vessel_without_control_does_not_send_its_reports() {

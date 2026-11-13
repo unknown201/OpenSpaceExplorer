@@ -454,6 +454,8 @@ pub struct SavedParts {
     pub craft: Craft,
     pub present: Vec<bool>,
     pub deployed: Vec<bool>,
+    #[serde(default)]
+    pub solar_angle_deg: Vec<f64>,
     pub chutes: Vec<structure::Chute>,
     pub chute_open: Vec<f64>,
     pub temperature_k: Vec<f64>,
@@ -586,6 +588,7 @@ impl Universe {
             craft,
             present: st.rigid.present.clone(),
             deployed: st.deployed.clone(),
+            solar_angle_deg: st.solar_angle_deg.clone(),
             chutes: st.chutes.clone(),
             chute_open: st.chute_open.clone(),
             temperature_k: st.temperature_k.clone(),
@@ -629,6 +632,9 @@ impl Universe {
         copy(&mut st.fairing_deployed, &saved.fairing_deployed);
         copy(&mut st.bay_open, &saved.bay_open);
         copy(&mut st.engine_shutdown, &saved.engine_shutdown);
+        if saved.solar_angle_deg.len() == n {
+            st.solar_angle_deg.clone_from(&saved.solar_angle_deg);
+        }
         if saved.chutes.len() == n {
             st.chutes.clone_from(&saved.chutes);
         }
@@ -664,6 +670,7 @@ impl Universe {
                 };
             }
             copy!(deployed);
+            copy!(solar_angle_deg);
             copy!(chutes);
             copy!(chute_open);
             copy!(temperature_k);
@@ -1472,6 +1479,7 @@ impl Universe {
         }
         self.set_docked(l.a, links);
         self.set_science_carried(l.a, science);
+        self.merge_transmissions(l.a, l.b);
         let observers: Vec<_> = self
             .world
             .query::<(Entity, &crate::vessels::Target)>()
@@ -1663,6 +1671,7 @@ mod tests {
             shape: None,
             fairing: None,
             chute: None,
+            control: None,
             symmetry: 0,
             actions: Vec::new(),
             flight: None,

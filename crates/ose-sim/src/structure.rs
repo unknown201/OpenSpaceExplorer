@@ -212,6 +212,8 @@ pub struct Structure {
     pub antenna_deployable: Vec<bool>,
     /// Each part's id and family (like "0010-Probe").
     pub part_ids: Vec<String>,
+    /// Stable source identities used by in-flight services across save and topology changes.
+    pub part_guids: Vec<String>,
     pub families: Vec<String>,
     /// Experiments on the parts: (part, experiment).
     pub experiments: Vec<(usize, ose_data::science::PartExperiment)>,
@@ -234,6 +236,8 @@ pub struct Structure {
     pub chute_heat: Vec<ChuteHeat>,
     /// A chute part's packed drag cube (its stowed shape), blended with the open ones by weight.
     chute_packed: Vec<Option<ose_data::DragCube>>,
+    /// Control settings each part was built with (`CraftPart::control`), given to the flight once.
+    craft_controls: Vec<Option<ose_data::flight_geometry::PartControl>>,
     /// The attach nodes covering each part's faces (`SetExposedArea`), reapplied to a re-weighted shape.
     face_covers: Vec<Vec<(DVec3, f64, usize)>>,
     /// Each part's own faces before any attach node covers them.
@@ -300,6 +304,7 @@ pub struct Structure {
     pub sun_local: Option<DVec3>,
     /// Each tracking panel's turn about its pivot from rest, degrees, and each panel's sun dot this step.
     pub solar_angle_deg: Vec<f64>,
+    pub solar_flow_ec_per_s: Vec<f64>,
     solar_dot: Vec<Option<f64>>,
     /// Each part's lift and drag at the last `aero_torque` call, kN, inertial (the aero overlay).
     pub part_aero_kn: Vec<(DVec3, DVec3)>,
@@ -1018,6 +1023,7 @@ impl Structure {
             crew,
             experiments,
             part_ids: craft.parts.iter().map(|p| p.part_id.clone()).collect(),
+            part_guids: craft.parts.iter().map(|p| p.guid.clone()).collect(),
             families: (0..n)
                 .map(|i| def_of(i).map(|d| d.family.clone()).unwrap_or_default())
                 .collect(),
@@ -1041,6 +1047,11 @@ impl Structure {
             chute_open: vec![0.0; n],
             chute_heat: (0..n)
                 .map(|i| ChuteHeat::new(def_of(i).and_then(|d| d.parachute.as_ref())))
+                .collect(),
+            craft_controls: craft
+                .parts
+                .iter()
+                .map(|p| p.control.filter(|c| c.valid()))
                 .collect(),
             chute_packed: (0..n)
                 .map(|i| {
@@ -1269,6 +1280,7 @@ impl Structure {
             frame_top: DVec3::ZERO,
             sun_local: None,
             solar_angle_deg: vec![0.0; n],
+            solar_flow_ec_per_s: vec![0.0; n],
             solar_dot: vec![None; n],
             part_aero_kn: vec![(DVec3::ZERO, DVec3::ZERO); n],
             ejection_force: (0..n)
@@ -2819,6 +2831,14 @@ impl Structure {
     /// Bring a flight state in line with the structure: trimmed to its stage, mass from what the tanks hold,
     /// propellant the engines can reach, thrust from the engines that are attached and fed.
     pub fn sync(&mut self, p: &mut Powered) {
+        // The craft's own settings, until the player changes them in flight.
+        for (i, c) in self.craft_controls.iter_mut().enumerate() {
+            if let Some(c) = c.take() {
+                if !p.part_controls.iter().any(|(k, _)| *k as usize == i) {
+                    p.part_controls.push((i as u16, c));
+                }
+            }
+        }
         if p.stage != self.staged_to {
             self.trim_to(p.stage);
         }
@@ -2949,8 +2969,13 @@ impl Structure {
                 let phi = s_rest.x.atan2(s_rest.z).to_degrees() - self.solar_angle_deg[i];
                 let num = (g.alignment_offset_deg + phi + 540.0).rem_euclid(360.0) - 180.0;
                 let step = (g.tracking_speed * dt).clamp(0.0, 1.0);
-                self.solar_angle_deg[i] =
-                    (self.solar_angle_deg[i] + num * step + 540.0).rem_euclid(360.0) - 180.0;
+                // Unity Quaternion.Lerp normalizes a linear quaternion blend. Interpolating Euler
+                // angles instead turns 10–36% too quickly for large tracking errors.
+                let half = num.to_radians() * 0.5;
+                let delta = 2.0 * (step * half.sin()).atan2(1.0 - step + step * half.cos());
+                self.solar_angle_deg[i] = (self.solar_angle_deg[i] + delta.to_degrees() + 540.0)
+                    .rem_euclid(360.0)
+                    - 180.0;
             }
             self.solar_dot[i] = Some(dot);
         }
@@ -2958,6 +2983,7 @@ impl Structure {
 
     fn electric_producers(&mut self, sun: f64, dt: f64) {
         self.update_solar(sun, dt);
+        self.solar_flow_ec_per_s.fill(0.0);
         let Some(ec) = self.net.resource("ElectricCharge") else {
             return;
         };
@@ -2973,7 +2999,8 @@ impl Structure {
             let e = self.electric[i];
             let mut made = 0.0;
             if e.solar_output > 0.0 && (!e.solar_deployable || self.deployed[i]) {
-                made += e.solar_output * sun * self.solar_incidence(i);
+                self.solar_flow_ec_per_s[i] = e.solar_output * sun * self.solar_incidence(i);
+                made += self.solar_flow_ec_per_s[i];
             }
             if self.engine_isp[i].is_none() {
                 made += e.generator_output;
@@ -6468,6 +6495,8 @@ mod tests {
     #[test]
     fn aerodynamic_moment_tracks_fuel_mass_and_retains_each_parts_force() {
         let (mut s, p, wing) = airflow_fixture();
+        // the moment arithmetic about the part's origin (a shaped wing lifts at its mesh centre otherwise)
+        s.lift_defs[wing].as_mut().unwrap().0.pressure_offset_m = DVec3::ZERO;
         let frame = crate::flight::vessel_basis(&p);
         let air = DVec3::new(0.0, 100.0, -10.0);
         let first = s.aerodynamics(0, frame, air, 1.0, 0.3);
@@ -6537,6 +6566,8 @@ mod tests {
     #[test]
     fn local_wing_flow_produces_analytical_damping_and_matching_effects() {
         let (mut s, p, wing) = airflow_fixture();
+        // the moment arithmetic about the part's origin (a shaped wing lifts at its mesh centre otherwise)
+        s.lift_defs[wing].as_mut().unwrap().0.pressure_offset_m = DVec3::ZERO;
         let frame = crate::flight::vessel_basis(&p);
         let r = s.part_box(wing).0 - s.mass_properties().centre_m;
         let axis = DVec3::new(0.0, 0.0, 1.0);
