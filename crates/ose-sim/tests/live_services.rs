@@ -72,6 +72,7 @@ fn fixture(size: f64) -> (Universe, bevy_ecs::entity::Entity) {
                     shape: None,
                     fairing: None,
                     chute: None,
+                    control: None,
                 }
             })
             .collect(),

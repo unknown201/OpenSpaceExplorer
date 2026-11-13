@@ -236,6 +236,8 @@ pub struct Structure {
     pub chute_heat: Vec<ChuteHeat>,
     /// A chute part's packed drag cube (its stowed shape), blended with the open ones by weight.
     chute_packed: Vec<Option<ose_data::DragCube>>,
+    /// Control settings each part was built with (`CraftPart::control`), given to the flight once.
+    craft_controls: Vec<Option<ose_data::flight_geometry::PartControl>>,
     /// The attach nodes covering each part's faces (`SetExposedArea`), reapplied to a re-weighted shape.
     face_covers: Vec<Vec<(DVec3, f64, usize)>>,
     /// Each part's own faces before any attach node covers them.
@@ -1045,6 +1047,11 @@ impl Structure {
             chute_open: vec![0.0; n],
             chute_heat: (0..n)
                 .map(|i| ChuteHeat::new(def_of(i).and_then(|d| d.parachute.as_ref())))
+                .collect(),
+            craft_controls: craft
+                .parts
+                .iter()
+                .map(|p| p.control.filter(|c| c.valid()))
                 .collect(),
             chute_packed: (0..n)
                 .map(|i| {
@@ -2824,6 +2831,14 @@ impl Structure {
     /// Bring a flight state in line with the structure: trimmed to its stage, mass from what the tanks hold,
     /// propellant the engines can reach, thrust from the engines that are attached and fed.
     pub fn sync(&mut self, p: &mut Powered) {
+        // The craft's own settings, until the player changes them in flight.
+        for (i, c) in self.craft_controls.iter_mut().enumerate() {
+            if let Some(c) = c.take() {
+                if !p.part_controls.iter().any(|(k, _)| *k as usize == i) {
+                    p.part_controls.push((i as u16, c));
+                }
+            }
+        }
         if p.stage != self.staged_to {
             self.trim_to(p.stage);
         }
@@ -6480,6 +6495,8 @@ mod tests {
     #[test]
     fn aerodynamic_moment_tracks_fuel_mass_and_retains_each_parts_force() {
         let (mut s, p, wing) = airflow_fixture();
+        // the moment arithmetic about the part's origin (a shaped wing lifts at its mesh centre otherwise)
+        s.lift_defs[wing].as_mut().unwrap().0.pressure_offset_m = DVec3::ZERO;
         let frame = crate::flight::vessel_basis(&p);
         let air = DVec3::new(0.0, 100.0, -10.0);
         let first = s.aerodynamics(0, frame, air, 1.0, 0.3);
@@ -6549,6 +6566,8 @@ mod tests {
     #[test]
     fn local_wing_flow_produces_analytical_damping_and_matching_effects() {
         let (mut s, p, wing) = airflow_fixture();
+        // the moment arithmetic about the part's origin (a shaped wing lifts at its mesh centre otherwise)
+        s.lift_defs[wing].as_mut().unwrap().0.pressure_offset_m = DVec3::ZERO;
         let frame = crate::flight::vessel_basis(&p);
         let r = s.part_box(wing).0 - s.mass_properties().centre_m;
         let axis = DVec3::new(0.0, 0.0, 1.0);

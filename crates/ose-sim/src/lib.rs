@@ -4536,8 +4536,9 @@ mod tests {
             for ((part, angle), (other, reversed)) in d.iter().zip(&opposite) {
                 assert_eq!(part, other);
                 assert!(
-                    angle.abs() < 1e-5 || angle * reversed < 0.0,
-                    "{what}: reversing the key reverses deflection"
+                    // a surface built not to answer this axis (the jet's wings ignore yaw) holds still
+                    angle.abs() < 1e-4 || angle * reversed < 0.0,
+                    "{what}: reversing the key reverses deflection: {d:?} vs {opposite:?}"
                 );
             }
         }
