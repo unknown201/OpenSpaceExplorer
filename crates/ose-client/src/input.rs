@@ -142,12 +142,10 @@ impl Held {
     pub fn rotation(&self) -> DVec3 {
         DVec3::new(self.pitch(), self.yaw(), self.roll())
     }
-    /// ThrottleDelta: left Shift up, left Ctrl down (either side accepted).
+    /// ThrottleDelta: `<Keyboard>/leftShift` up, `<Keyboard>/leftCtrl` down, the left keys only as in the
+    /// original (its right Ctrl is the hot-key modifier).
     pub fn throttle(&self) -> f64 {
-        self.axis(
-            &["ControlLeft", "ControlRight"],
-            &["ShiftLeft", "ShiftRight"],
-        )
+        self.axis(&["ControlLeft"], &["ShiftLeft"])
     }
     /// WheelThrottle W (+1) / S and WheelSteer A (-1) / D.
     pub fn wheel_throttle(&self) -> f64 {
@@ -199,6 +197,20 @@ mod reference_trim_tests {
         assert_eq!(raw, DVec3::ZERO);
         assert_eq!(effective.x, 0.1);
     }
+    /// KSP2 T26 (`GameInput` Flight map): `ThrottleDelta` is left Shift / left Ctrl only.
+    #[test]
+    fn ksp2_throttle_keys_are_the_left_shift_and_ctrl() {
+        let mut keys = Held::default();
+        keys.down("ShiftRight");
+        keys.down("ControlRight");
+        assert_eq!(keys.throttle(), 0.0);
+        keys.down("ShiftLeft");
+        assert_eq!(keys.throttle(), 1.0);
+        keys.up("ShiftLeft");
+        keys.down("ControlLeft");
+        assert_eq!(keys.throttle(), -1.0);
+    }
+
     #[test]
     fn trim_rate_precision_and_reset_follow_reference() {
         let mut keys = Held::default();
