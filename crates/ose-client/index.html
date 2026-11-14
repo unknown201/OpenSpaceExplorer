@@ -289,6 +289,11 @@
     #login-form #login:disabled { opacity: .5; cursor: default; }
     #login-form #otp-resend { margin-top: calc(8 * var(--u)); background: transparent; border: 0; color: #9fb0cc; font-size: calc(13 * var(--u)); text-decoration: underline; }
     #screen-login:not(.code-sent) .code-only { display: none; }
+    #login-form #login-status { margin-top: calc(12 * var(--u)); min-height: 1.2em; font-size: calc(13 * var(--u)); color: #9fb0cc; }
+    #login-form #login-status:empty { display: none; }
+    #login-form #login-status.error { color: #f0a070; }
+    /* The form's own status line already says it: no second copy at the foot of the screen. */
+    #menu-card:has(#screen-login.open #login-status:not(:empty)) > .note { display: none; }
     #version, #login-version { position: absolute; left: calc(80 * var(--u)); bottom: calc(24 * var(--u)); font-size: calc(13 * var(--u)); color: #ffffff80; }
     #extras { position: absolute; right: calc(80 * var(--u)); bottom: calc(24 * var(--u)); font-size: calc(13 * var(--u)); color: #ffffff80; }
     #extras a { color: #ffffffb0; text-decoration: none; margin-left: calc(16 * var(--u)); }
@@ -1444,6 +1449,7 @@
           <input id="login-otp" class="code-only" data-ose="login-otp" type="text" maxlength="6" inputmode="numeric" autocomplete="one-time-code" placeholder="000000" />
           <button id="login" data-ose="login" type="submit" disabled>Email me a code</button>
           <button id="otp-resend" class="code-only" data-ose="otp-resend" type="button">Resend code</button>
+          <div id="login-status" data-ose="login-status" role="status" aria-live="polite"></div>
         </form>
         <div id="login-version">OpenSpaceExplorer, a shared Kerbol system in the browser</div>
       </div>

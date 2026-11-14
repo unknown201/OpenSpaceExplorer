@@ -5889,6 +5889,27 @@ impl App {
             .map(|i| i.value().trim().to_string())
             .unwrap_or_default()
     }
+    /// The sign-in form's own line under its buttons: progress, or why a step failed.
+    fn login_status(&self, text: &str, error: bool) {
+        if let Some(el) = self.doc.get_element_by_id("login-status") {
+            el.set_text_content(Some(text));
+            let classes = el.class_list();
+            if error {
+                classes.add_1("error").ok();
+            } else {
+                classes.remove_1("error").ok();
+            }
+        }
+    }
+
+    /// Move the sign-in screen to its code step: the code field, Resend, and Sign in.
+    fn show_code_step(&self) {
+        set_text(&self.doc, "login", "Sign in");
+        if let Some(login) = self.doc.get_element_by_id("screen-login") {
+            login.class_list().add_1("code-sent").ok();
+        }
+    }
+
     fn sign_in(&self, ws: &WebSocket) {
         self.connection_status("authenticating", "Signing in...");
         let msg = if let Some(token) = stored("ose.token") {
@@ -5916,9 +5937,17 @@ impl App {
                         display_name: self.player_name.clone(),
                     }
                 }
-                _ => ClientMessage::RequestEmailOtp { email },
+                _ => {
+                    // Show the code step at once, so the pilot sees where the code goes and any error.
+                    self.show_code_step();
+                    self.login_status(&format!("Sending a code to {email}…"), false);
+                    ClientMessage::RequestEmailOtp { email }
+                }
             }
         };
+        if matches!(msg, ClientMessage::EmailSignIn { .. }) {
+            self.login_status("Checking the code…", false);
+        }
         send(ws, &msg);
     }
 
@@ -6155,11 +6184,11 @@ impl App {
                     "login-otp"
                 };
                 if self.player_id.is_none() {
-                    // The code field shows only once a code is on its way.
-                    set_text(&self.doc, "login", "Sign in");
-                    if let Some(login) = self.doc.get_element_by_id("screen-login") {
-                        login.class_list().add_1("code-sent").ok();
-                    }
+                    self.show_code_step();
+                    self.login_status(
+                        &format!("Code sent to {email}. Check your inbox (and spam) and enter the 6 digits."),
+                        false,
+                    );
                 }
                 if let Some(input) = self
                     .doc
@@ -6178,6 +6207,9 @@ impl App {
             }
             ServerMessage::AuthError { reason } => {
                 self.login_requested = false;
+                if self.player_id.is_none() {
+                    self.login_status(&reason, true);
+                }
                 set_text(&self.doc, "menu-note", &reason);
                 set_text(&self.doc, "account-status", &reason);
             }
