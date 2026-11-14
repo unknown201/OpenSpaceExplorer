@@ -2196,7 +2196,7 @@ impl Universe {
                         if heat.enabled {
                             burned = st.update_heat_in_flow(
                                 flow,
-                                a.temperature_k.evaluate(alt),
+                                thermal::sampled_ambient(&a.temperature_k, alt),
                                 thermal::conductivity(alt, a.depth_m),
                                 &heat,
                                 step_dt,
