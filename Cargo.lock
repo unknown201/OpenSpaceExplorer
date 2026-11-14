@@ -2002,6 +2002,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ose-routes"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "ose-data",
+ "ose-math",
+ "ose-pilot",
+ "ose-sim",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ose-server"
 version = "0.1.0"
 dependencies = [

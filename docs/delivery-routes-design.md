@@ -224,7 +224,12 @@ Colonies, cargo inventory, a funds economy, crew rotation, landed depots (decisi
    tested headless.
 1. **Recording** (`ose-sim`, `ose-server`): proving-flight state machine on launch, dock, transfer,
    undock, recover, destroy and revert; trajectory sampling in the port's frame; depot flag; save fields.
-   Tests on a scripted fuel run.
+   Tests on a scripted fuel run. *The recorder itself is done (`crates/ose-routes`, `recording.rs`): it
+   follows the vessel by its parts through docking and undocking, and marks liftoff, orbit, burns,
+   arrival, docking with both ports, undocking with the payload left behind, deorbit and landing. It
+   keeps fuel and time per phase, what the depot gained, and a 10 Hz / 1 Hz trajectory in the depot's
+   frame near it. The test records a tanker flown from the pad to a depot by the pilot, pumping
+   monopropellant across. Server wiring (launch checkbox, depot flag, save) is next.*
 2. **Route scheduler**: spawned runs and shuttles, windows from rendezvous v2, pad and port checks,
    outcomes, auto-pause, end-of-run modes, warp rules (3.5), restart resume, take control.
 3. **Client**: launch checkbox, routes panel, depot toggle, map tags, toasts.

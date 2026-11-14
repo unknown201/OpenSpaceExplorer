@@ -130,8 +130,8 @@ Findings on the way:
   `Burn` now measures which way the engines push from the first 0.5 m/s and steers by that.
 - `aim` picked an arbitrary half-turn axis each tick when asked to turn an axis to its opposite,
   so the attitude hold chased a new target every step and spun the craft up. It now turns about the
-  control point's top axis. The sim let the spin grow past 600 rad/s and then threw the vessel to
-  385 km/s; that sim robustness issue is reported to the sim thread.
+  control point's top axis. In that state the spin grew past 600 rad/s and a step threw the vessel to
+  385 km/s; a simple flipping-target repro does not reproduce it, so it is noted, not filed.
 
 ## 4. Test matrix (L8)
 
