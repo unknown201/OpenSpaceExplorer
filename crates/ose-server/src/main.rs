@@ -12,6 +12,7 @@
 mod accounts;
 mod campaigns;
 mod crew_docking;
+mod interest;
 mod otp;
 mod packages;
 mod previews;
@@ -417,6 +418,8 @@ struct Shared {
     last_roster: Mutex<Option<ServerMessage>>,
     /// The vessel each player last commanded (`CampaignMember::flying`).
     flying: Mutex<std::collections::HashMap<u64, u64>>,
+    /// The vessel each player's view follows (`ClientMessage::Viewing`), for what they are sent in full.
+    viewing: Mutex<std::collections::HashMap<u64, u64>>,
     /// `--test-probe`: hand each player a probe on connecting (browser test fixtures only).
     test_probe: bool,
     allow_guest_accounts: bool,
@@ -676,6 +679,7 @@ async fn main() -> anyhow::Result<()> {
         kerbals: Arc::new(serde_json::from_str(EMBEDDED_KERBALS)?),
         last_roster: Mutex::new(None),
         flying: Mutex::new(std::collections::HashMap::new()),
+        viewing: Mutex::new(std::collections::HashMap::new()),
         test_probe: args.test_probe,
         allow_guest_accounts: args.allow_guest_accounts,
         steps: std::sync::atomic::AtomicU64::new(0),
@@ -969,6 +973,7 @@ fn vessels_message(s: &Shared, u: &Universe, tick: Tick) -> ServerMessage {
                 }),
                 // the count of parts still on: it changes when a stage drops or a part breaks or docks
                 craft_rev: u.craft_rev(e),
+                brief: None,
                 target: u.target(e).and_then(|t| {
                     let id = match list.iter().find(|x| x.0 == t) {
                         Some(&(_, vid, _)) => ose_net::TargetId::Vessel(vid),
@@ -2171,6 +2176,15 @@ fn snapshot(s: &Shared) -> (ServerMessage, ServerMessage, ServerMessage) {
         ServerMessage::Snapshot { tick, bodies },
         vessels_message(s, &u, tick),
     )
+}
+
+/// A publication's `Vessels` message, encoded once for every player's own assembly (`interest.rs`).
+fn vessel_frames(s: &Shared, msg: ServerMessage) -> Option<interest::VesselFrames> {
+    let ServerMessage::Vessels { tick, vessels } = msg else {
+        return None;
+    };
+    let home = s.catalog.iter().position(|b| b.id == "Kerbin").unwrap_or(0) as u16;
+    interest::VesselFrames::build(tick, &vessels, home)
 }
 
 /// The entity of vessel `id` if `player` owns it.
@@ -3435,6 +3449,25 @@ fn handle_decoded(
     decoded: Result<ClientMessage, String>,
     out: &mut Vec<ServerMessage>,
 ) {
+    let from = out.len();
+    handle_message(s, player_id, decoded, out);
+    // a craft just launched is in the launching player's view: they get it in full straight away
+    for m in &out[from..] {
+        if let ServerMessage::CraftLaunched {
+            vessel: Some(v), ..
+        } = m
+        {
+            interest::set_viewing(s, player_id, Some(*v));
+        }
+    }
+}
+
+fn handle_message(
+    s: &Shared,
+    player_id: u64,
+    decoded: Result<ClientMessage, String>,
+    out: &mut Vec<ServerMessage>,
+) {
     match decoded {
         Ok(ClientMessage::RequestEmailOtp { .. } | ClientMessage::EmailSignIn { .. }) => {}
         Ok(ref msg)
@@ -4594,6 +4627,7 @@ fn handle_decoded(
             };
             out.push((reply).clone());
         }
+        Ok(ClientMessage::Viewing { vessel }) => interest::set_viewing(s, player_id, vessel),
         Ok(ClientMessage::RenameVessel { vessel, name }) => {
             let name = name.trim().to_string();
             let reply = match owned_vessel(s, vessel, player_id) {
@@ -4889,6 +4923,7 @@ async fn session(mut socket: WebSocket, s: AppState, ip: std::net::IpAddr) {
     let mut snapshots = s.streams.snapshots.subscribe();
     let mut predictions = s.streams.trajectories.subscribe();
     let mut subscribed_at = streaming::mark();
+    let mut interest = interest::Interest::default();
     let mut science_rev = s.campaign.lock().expect("campaign lock").science.rev;
     let mut presence_tick = tokio::time::interval(std::time::Duration::from_secs(1));
     let mut last_presence = None;
@@ -4914,7 +4949,8 @@ async fn session(mut socket: WebSocket, s: AppState, ip: std::net::IpAddr) {
                 let Some(frames) = frames else { break; };
                 if !campaigns::live_access(&s, player_id) { continue; }
                 if frames.started < *s.world_changed_at.lock().expect("world change lock") { continue; }
-                if !streaming::send_batch(&mut socket, &frames).await {
+                let focus = interest::focus(&s, player_id);
+                if !streaming::send_batch(&mut socket, &frames, &mut interest, &focus).await {
                     break;
                 }
                 let mine: Vec<ServerMessage> = {
@@ -4945,7 +4981,8 @@ async fn session(mut socket: WebSocket, s: AppState, ip: std::net::IpAddr) {
                 let Some(frames) = frames else { break; };
                 if !campaigns::live_access(&s, player_id) { continue; }
                 if frames.started < *s.world_changed_at.lock().expect("world change lock") { continue; }
-                if !streaming::send_batch(&mut socket, &frames).await { break; }
+                let focus = interest::focus(&s, player_id);
+                if !streaming::send_batch(&mut socket, &frames, &mut interest, &focus).await { break; }
             }
             incoming = socket.recv() => {
                 match incoming {
@@ -5033,6 +5070,7 @@ fn player_left(s: &Shared, player_id: u64) {
         *count -= 1;
         if *count == 0 {
             connections.remove(&player_id);
+            s.viewing.lock().expect("viewing lock").remove(&player_id);
             s.warp_requests
                 .lock()
                 .expect("warp lock")

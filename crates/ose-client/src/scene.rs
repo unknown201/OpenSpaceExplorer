@@ -586,6 +586,7 @@ mod tests {
             craft_rev: 0,
             on_rails: true,
             flight: None,
+            brief: None,
         };
         let kerbin = s.position(1, 0.0);
         let p = s.vessel_position(&v, 0.0);

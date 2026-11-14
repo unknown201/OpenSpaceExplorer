@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 68;
+pub const PROTOCOL_VERSION: u16 = 69;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -431,6 +431,12 @@ pub enum ClientMessage {
         vessel: u64,
         stages: Vec<Vec<u16>>,
     },
+    /// The vessel the player's view follows now (a vessel they ride along in, or picked on the map), or none.
+    /// The server sends the vessels near it, and near the one the player pilots, in full detail; others go
+    /// without their per-part lists.
+    Viewing {
+        vessel: Option<u64>,
+    },
 }
 
 /// A science report (the original's research report).
@@ -543,6 +549,40 @@ pub struct VesselState {
     pub target: Option<TargetReadout>,
     /// Changes whenever the vessel's craft does (parts lost or gained); ask `GetVesselCraft` again then.
     pub craft_rev: u32,
+    /// What is left of the flight readout of a vessel sent far from anything the player views (`flight` is
+    /// then `None`): enough for the map and the tracking station (protocol 69).
+    pub brief: Option<FlightBrief>,
+}
+
+/// A far vessel's flight readout in brief (see `VesselState::brief`).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FlightBrief {
+    pub situation: FlightSituation,
+    pub eva: bool,
+    pub altitude_m: f64,
+}
+
+impl VesselState {
+    /// Its flight situation, from the readout or the brief.
+    pub fn situation(&self) -> Option<FlightSituation> {
+        self.flight
+            .as_ref()
+            .map(|f| f.situation)
+            .or(self.brief.map(|b| b.situation))
+    }
+
+    /// Whether it is a Kerbal on EVA, from the readout or the brief.
+    pub fn is_eva(&self) -> bool {
+        self.flight.as_ref().map(|f| f.eva).unwrap_or(false) || self.brief.is_some_and(|b| b.eva)
+    }
+
+    /// Height above the sea of its body, m, when the server gave it.
+    pub fn altitude_m(&self) -> Option<f64> {
+        self.flight
+            .as_ref()
+            .map(|f| f.altitude_m)
+            .or(self.brief.map(|b| b.altitude_m))
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
