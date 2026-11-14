@@ -1,4 +1,6 @@
-//! A rolling, advisory flight plan. These nodes never become executable server maneuver nodes.
+//! A rolling multi-burn flight plan: transfer, course corrections and a velocity match at a stand-off
+//! gate, rebuilt from actual motion after each burn. The client shows it as advice; its nodes never
+//! become server maneuver nodes by themselves.
 use ose_math::{rendezvous as mechanics, DVec3, Orbit};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

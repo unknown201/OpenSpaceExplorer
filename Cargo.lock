@@ -1931,6 +1931,7 @@ dependencies = [
  "glam 0.34.1",
  "js-sys",
  "ose-data",
+ "ose-guidance",
  "ose-math",
  "ose-net",
  "serde",
@@ -1948,6 +1949,13 @@ dependencies = [
  "ose-math",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "ose-guidance"
+version = "0.1.0"
+dependencies = [
+ "ose-math",
 ]
 
 [[package]]
