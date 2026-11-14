@@ -22,10 +22,22 @@ pub const WS_PATH: &str = "/ws";
 /// Client to server.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ClientMessage {
-    RequestEmailOtp { email: String },
-    EmailSignIn { protocol: u16, email: String, challenge: String, code: String, display_name: String },
-    ShareSession { id: String },
-    JoinSessionCode { code: String },
+    RequestEmailOtp {
+        email: String,
+    },
+    EmailSignIn {
+        protocol: u16,
+        email: String,
+        challenge: String,
+        code: String,
+        display_name: String,
+    },
+    ShareSession {
+        id: String,
+    },
+    JoinSessionCode {
+        code: String,
+    },
     Hello {
         protocol: u16,
         token: Option<String>,
@@ -1018,11 +1030,26 @@ pub struct StageReadout {
 /// Server to client.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ServerMessage {
-    EmailOtpSent { email: String, challenge: String, expires_in_secs: u64, retry_after_secs: u64 },
-    AuthError { reason: String },
-    AccountState { email: Option<String> },
-    SessionShareCode { id: String, code: String },
-    SessionJoined { id: String, name: String },
+    EmailOtpSent {
+        email: String,
+        challenge: String,
+        expires_in_secs: u64,
+        retry_after_secs: u64,
+    },
+    AuthError {
+        reason: String,
+    },
+    AccountState {
+        email: Option<String>,
+    },
+    SessionShareCode {
+        id: String,
+        code: String,
+    },
+    SessionJoined {
+        id: String,
+        name: String,
+    },
     Welcome {
         player_id: u64,
         token: String,

@@ -21,6 +21,7 @@ try {
     page.on('pageerror', error => errors.push(error.message));
     await page.goto(process.env.OSE_BASE_URL || 'http://127.0.0.1:7799');
     await page.locator('[data-ose="player-name"]').fill('vehicle verification');
+    await page.locator('[data-ose="login"]').click();
     await page.locator('[data-ose="play"]').click();
     await page.locator('[data-ose="create-session"] > summary').click();
     await page.locator('[data-ose="create-mode"]').selectOption('Sandbox');

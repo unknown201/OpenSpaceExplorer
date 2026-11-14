@@ -80,7 +80,9 @@ pub fn enter(s: &Shared, player: u64, target: Target) -> Result<AppState, String
     let _gate = s.rooms.gate.lock().expect("rooms gate");
     let current = room_of(s, player);
     if let Target::Shelved(id) = &target {
-        if !crate::campaigns::access(s, player, id) { return Err("join this campaign with a share code first".into()); }
+        if !crate::campaigns::access(s, player, id) {
+            return Err("join this campaign with a share code first".into());
+        }
         if let Some(room) = live(s, id) {
             move_player(s, player, &current, &room);
             return Ok(room);

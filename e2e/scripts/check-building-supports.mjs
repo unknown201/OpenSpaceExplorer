@@ -15,6 +15,7 @@ const shot=async name=>page.screenshot({path:fileURLToPath(new URL(name,out))});
 try {
   await page.goto(base);
   await page.locator('[data-ose="player-name"]').fill('Support test '+Date.now());
+  await page.locator('[data-ose="login"]').click();
   await page.locator('[data-ose="play"]').click();
   await page.locator('[data-ose="session-join"]').first().waitFor();
   if (!await page.locator('#create-name').isVisible()) await page.locator('#create-details > summary').click();

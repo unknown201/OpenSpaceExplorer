@@ -6,6 +6,7 @@ test("the game menu overlays the flight and a revert closes it", async ({ page, 
   page.setDefaultTimeout(20_000);
   await page.goto(baseURL!);
   await page.locator('[data-ose="player-name"]').fill("overlay pilot");
+  await page.locator('[data-ose="login"]').click();
   await page.locator('[data-ose="play"]').click();
   // The live campaign, as the tests after this one join it: creating one here would change theirs.
   await page.locator('[data-ose="session-join"]').first().click();

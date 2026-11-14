@@ -10,9 +10,9 @@
 //! with `--bodies PATH`.
 
 mod accounts;
-mod otp;
 mod campaigns;
 mod crew_docking;
+mod otp;
 mod packages;
 mod previews;
 mod replay;
@@ -674,7 +674,9 @@ async fn main() -> anyhow::Result<()> {
             interval.tick().await;
             loop {
                 interval.tick().await;
-                if let Err(e) = persist(&saver) { tracing::error!(error = %e, "save failed"); }
+                if let Err(e) = persist(&saver) {
+                    tracing::error!(error = %e, "save failed");
+                }
             }
         });
     }
@@ -747,7 +749,11 @@ async fn main() -> anyhow::Result<()> {
     let app = app.layer(web::compression());
     let listener = tokio::net::TcpListener::bind(&args.listen).await?;
     tracing::info!(listen = %args.listen, "server listening");
-    axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }
 
@@ -846,9 +852,24 @@ fn maintain_registry(s: &Shared) {
     list.retain(|&(e, _, _)| u.vessel(e).is_some());
 }
 
-async fn ws_upgrade(ws: WebSocketUpgrade, State(s): State<AppState>, axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>, headers: axum::http::HeaderMap) -> impl IntoResponse {
-    let trusted = std::env::var("OSE_TRUSTED_PROXY").ok().and_then(|s| s.parse::<std::net::IpAddr>().ok());
-    let ip = if trusted == Some(peer.ip()) { headers.get("x-real-ip").and_then(|v| v.to_str().ok()).and_then(|s| s.parse().ok()).unwrap_or(peer.ip()) } else { peer.ip() };
+async fn ws_upgrade(
+    ws: WebSocketUpgrade,
+    State(s): State<AppState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: axum::http::HeaderMap,
+) -> impl IntoResponse {
+    let trusted = std::env::var("OSE_TRUSTED_PROXY")
+        .ok()
+        .and_then(|s| s.parse::<std::net::IpAddr>().ok());
+    let ip = if trusted == Some(peer.ip()) {
+        headers
+            .get("x-real-ip")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(peer.ip())
+    } else {
+        peer.ip()
+    };
     ws.on_upgrade(move |socket| session(socket, s, ip))
 }
 
@@ -2538,7 +2559,11 @@ fn campaign_state(s: &Shared, player_id: u64, join: Option<&String>) -> ServerMe
     let tick = s.universe.lock().expect("sim lock").tick();
     let mut arrived = false;
     let mut c = s.campaign.lock().expect("campaign lock");
-    if !campaigns::can_access(&c, player_id) { return ServerMessage::Rejected { reason: "join this campaign with a share code first".into() }; }
+    if !campaigns::can_access(&c, player_id) {
+        return ServerMessage::Rejected {
+            reason: "join this campaign with a share code first".into(),
+        };
+    }
     if let Some(name) = join {
         if !c.members.iter().any(|m| m.player_id == player_id) {
             c.members.push(save::CampaignMember {
@@ -3091,11 +3116,15 @@ fn push_roster(s: &Shared) {
 }
 
 fn persist(s: &Shared) -> Result<(), String> {
-    let Some(path) = &s.save_path else { return Ok(()) };
+    let Some(path) = &s.save_path else {
+        return Ok(());
+    };
     let _write = s.save_lock.lock().expect("save write lock");
     save::write(path, &rooms::save_file(s)).map_err(|e| format!("could not save campaign: {e}"))
 }
-fn session_list(s: &Shared, player: u64) -> ServerMessage { campaigns::list(s, player) }
+fn session_list(s: &Shared, player: u64) -> ServerMessage {
+    campaigns::list(s, player)
+}
 
 fn craft_summary(
     s: &Shared,
@@ -3372,21 +3401,33 @@ fn handle_decoded(
     out: &mut Vec<ServerMessage>,
 ) {
     match decoded {
-        Ok(ClientMessage::RequestEmailOtp { .. } | ClientMessage::EmailSignIn { .. }) => {},
-        Ok(ref msg) if !matches!(msg,
-            ClientMessage::Hello { .. } | ClientMessage::Ping { .. } | ClientMessage::ListSessions
-            | ClientMessage::CreateSession { .. } | ClientMessage::SelectSession { .. } | ClientMessage::LeaveSession
-            | ClientMessage::ShareSession { .. } | ClientMessage::JoinSessionCode { .. }
-            | ClientMessage::ClaimSession { .. } | ClientMessage::DeleteSession { .. })
-            && !campaigns::live_access(s, player_id) => {
-            out.push(ServerMessage::Rejected { reason: "join this campaign with a share code first".into() });
+        Ok(ClientMessage::RequestEmailOtp { .. } | ClientMessage::EmailSignIn { .. }) => {}
+        Ok(ref msg)
+            if !matches!(
+                msg,
+                ClientMessage::Hello { .. }
+                    | ClientMessage::Ping { .. }
+                    | ClientMessage::ListSessions
+                    | ClientMessage::CreateSession { .. }
+                    | ClientMessage::SelectSession { .. }
+                    | ClientMessage::LeaveSession
+                    | ClientMessage::ShareSession { .. }
+                    | ClientMessage::JoinSessionCode { .. }
+                    | ClientMessage::ClaimSession { .. }
+                    | ClientMessage::DeleteSession { .. }
+            ) && !campaigns::live_access(s, player_id) =>
+        {
+            out.push(ServerMessage::Rejected {
+                reason: "join this campaign with a share code first".into(),
+            });
         }
         Ok(ClientMessage::ShareSession { id }) => {
             let reply = campaigns::share(s, player_id, &id).and_then(|m| persist(s).map(|_| m));
             out.push(reply.unwrap_or_else(|reason| ServerMessage::Rejected { reason }));
         }
         Ok(ClientMessage::JoinSessionCode { code }) => {
-            let reply = campaigns::join_code(s, player_id, &code).and_then(|m| persist(s).map(|_| m));
+            let reply =
+                campaigns::join_code(s, player_id, &code).and_then(|m| persist(s).map(|_| m));
             out.push(reply.unwrap_or_else(|reason| ServerMessage::Rejected { reason }));
             out.push(session_list(s, player_id));
         }
@@ -3551,7 +3592,10 @@ fn handle_decoded(
                 }
                 Err(reason) => ServerMessage::Rejected { reason },
             };
-            let reply = match persist(s) { Ok(()) => reply, Err(reason) => ServerMessage::Rejected { reason } };
+            let reply = match persist(s) {
+                Ok(()) => reply,
+                Err(reason) => ServerMessage::Rejected { reason },
+            };
             out.push(reply);
         }
         Ok(ClientMessage::LeaveSession) => {
@@ -4595,9 +4639,19 @@ fn handle_decoded(
     }
 }
 
-async fn request_otp(s: &Shared, email: &str, target: Option<u64>, ip: std::net::IpAddr) -> ServerMessage {
+async fn request_otp(
+    s: &Shared,
+    email: &str,
+    target: Option<u64>,
+    ip: std::net::IpAddr,
+) -> ServerMessage {
     match s.otp.request(email, target, ip).await {
-        Ok((email, challenge)) => ServerMessage::EmailOtpSent { email, challenge, expires_in_secs: otp::TTL, retry_after_secs: otp::RESEND },
+        Ok((email, challenge)) => ServerMessage::EmailOtpSent {
+            email,
+            challenge,
+            expires_in_secs: otp::TTL,
+            retry_after_secs: otp::RESEND,
+        },
         Err(reason) => ServerMessage::AuthError { reason },
     }
 }
@@ -4612,41 +4666,102 @@ async fn session(mut socket: WebSocket, s: AppState, ip: std::net::IpAddr) {
                 match ose_net::decode::<ClientMessage>(&b) {
                     Ok(ClientMessage::RequestEmailOtp { email }) => {
                         let reply = request_otp(&s, &email, None, ip).await;
-                        if !send(&mut socket, &reply).await { return; }
+                        if !send(&mut socket, &reply).await {
+                            return;
+                        }
                     }
                     Ok(msg @ (ClientMessage::Hello { .. } | ClientMessage::EmailSignIn { .. })) => {
                         let (protocol, display_name) = match &msg {
-                            ClientMessage::Hello { protocol, display_name, .. } | ClientMessage::EmailSignIn { protocol, display_name, .. } => (*protocol, display_name.clone()),
+                            ClientMessage::Hello {
+                                protocol,
+                                display_name,
+                                ..
+                            }
+                            | ClientMessage::EmailSignIn {
+                                protocol,
+                                display_name,
+                                ..
+                            } => (*protocol, display_name.clone()),
                             _ => unreachable!(),
                         };
                         if protocol != PROTOCOL_VERSION {
-                            send(&mut socket, &ServerMessage::Rejected { reason: "Client updated; reload the page.".into() }).await;
+                            send(
+                                &mut socket,
+                                &ServerMessage::Rejected {
+                                    reason: "Client updated; reload the page.".into(),
+                                },
+                            )
+                            .await;
                             return;
                         }
-                        let is_otp = matches!(&msg, ClientMessage::EmailSignIn { .. });
+                        // A failed email code, or a tokenless Hello on a server without guest accounts, leaves
+                        // the socket open so the sign-in screen can ask for (another) code on it.
+                        let is_otp = matches!(
+                            &msg,
+                            ClientMessage::EmailSignIn { .. }
+                                | ClientMessage::Hello { token: None, .. }
+                        );
+                        // Browser test fixtures only (`--test-probe` with guest accounts): a guest pilot joins the
+                        // server's own campaign, as every pilot did before campaigns became private, so the
+                        // browser suite has a world to fly in.
+                        let test_guest = s.test_probe
+                            && s.allow_guest_accounts
+                            && matches!(&msg, ClientMessage::Hello { token: None, .. });
                         let outcome: Result<(u64, String, bool), String> = match msg {
                             ClientMessage::Hello { token, .. } => {
                                 let mut acc = s.accounts.lock().expect("accounts lock");
                                 match token.as_deref() {
-                                    Some(t) => acc.resume(t, &display_name).map_err(|e| e.to_string())
-                                        .and_then(|p| p.map(|p| (p.id, t.to_string(), true)).ok_or("Session expired. Sign in with your email.".into())),
-                                    None if !s.allow_guest_accounts => Err("Sign in using an email code.".into()),
-                                    None => acc.create(&display_name).map(|(p,t)| (p.id,t,false)).map_err(|e| e.to_string()),
+                                    Some(t) => acc
+                                        .resume(t, &display_name)
+                                        .map_err(|e| e.to_string())
+                                        .and_then(|p| {
+                                            p.map(|p| (p.id, t.to_string(), true)).ok_or(
+                                                "Session expired. Sign in with your email.".into(),
+                                            )
+                                        }),
+                                    None if !s.allow_guest_accounts => {
+                                        Err("Enter your email to get a sign-in code.".into())
+                                    }
+                                    None => acc
+                                        .create(&display_name)
+                                        .map(|(p, t)| (p.id, t, false))
+                                        .map_err(|e| e.to_string()),
                                 }
                             }
-                            ClientMessage::EmailSignIn { email, challenge, code, .. } => {
-                                s.otp.verify(&email, &challenge, &code, None).and_then(|email| {
-                                    s.accounts.lock().expect("accounts lock").sign_in_email(&email, &display_name)
-                                        .map(|(p,t)| (p.id,t,true)).map_err(|e| e.to_string())
-                                })
-                            }
+                            ClientMessage::EmailSignIn {
+                                email,
+                                challenge,
+                                code,
+                                ..
+                            } => s
+                                .otp
+                                .verify(&email, &challenge, &code, None)
+                                .and_then(|email| {
+                                    s.accounts
+                                        .lock()
+                                        .expect("accounts lock")
+                                        .sign_in_email(&email, &display_name)
+                                        .map(|(p, t)| (p.id, t, true))
+                                        .map_err(|e| e.to_string())
+                                }),
                             _ => unreachable!(),
                         };
                         let (id, token_out, resumed) = match outcome {
                             Ok(v) => v,
-                            Err(reason) if is_otp => { if !send(&mut socket, &ServerMessage::AuthError { reason }).await { return; } continue; }
-                            Err(reason) => { send(&mut socket, &ServerMessage::Rejected { reason }).await; return; }
+                            Err(reason) if is_otp => {
+                                if !send(&mut socket, &ServerMessage::AuthError { reason }).await {
+                                    return;
+                                }
+                                continue;
+                            }
+                            Err(reason) => {
+                                send(&mut socket, &ServerMessage::Rejected { reason }).await;
+                                return;
+                            }
                         };
+                        if test_guest {
+                            campaigns::admit_test_guest(&s, id);
+                        }
                         tracing::info!(player = id, name = %display_name, resumed, "player joined");
                         let tick: Tick = s.universe.lock().expect("sim lock").tick();
                         let welcome = ServerMessage::Welcome {
@@ -4702,7 +4817,9 @@ async fn session(mut socket: WebSocket, s: AppState, ip: std::net::IpAddr) {
                         );
                         player_joined(&s, id, &display_name);
                         let email = s.accounts.lock().expect("accounts lock").email(id);
-                        if !send(&mut socket, &ServerMessage::AccountState { email }).await { return; }
+                        if !send(&mut socket, &ServerMessage::AccountState { email }).await {
+                            return;
+                        }
                         break id;
                     }
                     Ok(_) => {

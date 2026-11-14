@@ -47,6 +47,7 @@ async function join(page: Page, base: string) {
 async function enterCampaign(page: Page) {
   await expect(page.locator('#status')).toContainText('client loaded');
   await page.locator('[data-ose="player-name"]').fill('loading test');
+  await page.locator('[data-ose="login"]').click();
   await page.locator('[data-ose="play"]').click();
   await page.locator('[data-ose="session-join"]').first().click();
   await expect(page.locator('[data-ose="ksc"]')).toBeVisible();

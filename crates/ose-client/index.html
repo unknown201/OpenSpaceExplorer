@@ -20,7 +20,7 @@
     /* First paint is complete HTML artwork, independent of JavaScript, exported assets or WebGPU. */
     #menu-poster { position: fixed; inset: 0; z-index: 1; pointer-events: none; display: none; background: #06080f; opacity: 1; }
     #menu-poster svg { display: block; width: 100%; height: 100%; }
-    body:has(#menu:not(.hidden) #screen-name.open) #menu-poster,
+    body:has(#menu:not(.hidden) :is(#screen-name, #screen-login).open) #menu-poster,
     body:has(#menu:not(.hidden) #screen-sessions.open) #menu-poster { display: block; transition: opacity .65s ease; }
     body:has(#gpu[data-ose-menu-scene="ready"]) #menu-poster { opacity: 0; }
     #menu-poster .poster-status { position: absolute; right: max(24px, 4vw); bottom: 106px; width: min(300px, calc(100vw - 48px)); color: #c5d5df; font: 12px system-ui, sans-serif; }
@@ -49,7 +49,7 @@
     /* In flight it keeps clear of the KSP2 HUD: under the vessel actions at the top centre. */
     body:has(#flight-hud.open) #asset-downloads { bottom: auto; top: calc(150 * var(--u)); right: auto; left: 50%; transform: translateX(-50%); }
     @media (prefers-reduced-motion: reduce) { .assembly-part, .assembly-fill, .pack-fill, .assembly-flame { transition: none !important; } .assembly-scan { animation: none; } }
-    @media (prefers-reduced-motion: reduce) { body #menu-poster, body #logo img, body #logo .logo-title { transition: none !important; } }
+    @media (prefers-reduced-motion: reduce) { body #menu-poster, body .menu-logo img, body .menu-logo .logo-title { transition: none !important; } }
     #labels { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
     #labels .body { position: absolute; transform: translate(8px, -50%); white-space: nowrap;
       font-size: 12px; color: #9fb0cc; text-shadow: 0 0 3px #000; pointer-events: auto; cursor: pointer; }
@@ -245,39 +245,51 @@
     :root { --u: min(calc(100vh / 1080), calc(100vw / 1920)); --ui-font: "Segoe UI", "Noto Sans", Roboto, system-ui, sans-serif; }
     #menu { font-family: var(--ui-font); }
     /* The HUD stays in the DOM but invisible on the menu screens (#status inside it is a test hook). */
-    body:has(#menu:not(.hidden) #screen-name.open) #hud, body:has(#menu:not(.hidden) #screen-sessions.open) #hud { opacity: 0; pointer-events: none; }
-    body:has(#menu:not(.hidden) #screen-name.open) #hud > *, body:has(#menu:not(.hidden) #screen-sessions.open) #hud > * { pointer-events: none; }
-    body:has(#menu:not(.hidden) #screen-name.open) #crumbs, body:has(#menu:not(.hidden) #screen-sessions.open) #crumbs,
-    body:has(#menu:not(.hidden) #screen-name.open) #help, body:has(#menu:not(.hidden) #screen-sessions.open) #help, body:has(#menu:not(.hidden) #screen-name.open) #labels, body:has(#menu:not(.hidden) #screen-sessions.open) #labels { display: none; }
-    #menu:has(#screen-name.open), #menu:has(#screen-sessions.open) { background: transparent; align-items: stretch; justify-content: stretch; }
-    #menu-card:has(#screen-name.open), #menu-card:has(#screen-sessions.open) { width: auto; max-height: none; overflow: visible;
+    body:has(#menu:not(.hidden) :is(#screen-name, #screen-login).open) #hud, body:has(#menu:not(.hidden) #screen-sessions.open) #hud { opacity: 0; pointer-events: none; }
+    body:has(#menu:not(.hidden) :is(#screen-name, #screen-login).open) #hud > *, body:has(#menu:not(.hidden) #screen-sessions.open) #hud > * { pointer-events: none; }
+    body:has(#menu:not(.hidden) :is(#screen-name, #screen-login).open) #crumbs, body:has(#menu:not(.hidden) #screen-sessions.open) #crumbs,
+    body:has(#menu:not(.hidden) :is(#screen-name, #screen-login).open) #help, body:has(#menu:not(.hidden) #screen-sessions.open) #help, body:has(#menu:not(.hidden) :is(#screen-name, #screen-login).open) #labels, body:has(#menu:not(.hidden) #screen-sessions.open) #labels { display: none; }
+    #menu:has(:is(#screen-name, #screen-login).open), #menu:has(#screen-sessions.open) { background: transparent; align-items: stretch; justify-content: stretch; }
+    #menu-card:has(:is(#screen-name, #screen-login).open), #menu-card:has(#screen-sessions.open) { width: auto; max-height: none; overflow: visible;
       position: fixed; inset: 0; padding: 0; background: none; border: 0; border-radius: 0; }
-    #menu-card:has(#screen-name.open) > h1, #menu-card:has(#screen-name.open) > .sub, #menu-card:has(#screen-name.open) > .info,
+    #menu-card:has(:is(#screen-name, #screen-login).open) > h1, #menu-card:has(:is(#screen-name, #screen-login).open) > .sub, #menu-card:has(:is(#screen-name, #screen-login).open) > .info,
     #menu-card:has(#screen-sessions.open) > h1, #menu-card:has(#screen-sessions.open) > .sub, #menu-card:has(#screen-sessions.open) > .info { display: none; }
-    #menu-card:has(#screen-name.open) > .note, #menu-card:has(#screen-sessions.open) > .note { position: fixed; left: calc(80 * var(--u)); bottom: calc(60 * var(--u)); font-size: calc(16 * var(--u)); }
-    #menu #screen-name.open { display: block; position: fixed; inset: 0; }
-    #logo { position: absolute; left: calc(80 * var(--u)); top: calc(60 * var(--u)); width: calc(485 * var(--u)); height: calc(200 * var(--u));
+    #menu-card:has(:is(#screen-name, #screen-login).open) > .note, #menu-card:has(#screen-sessions.open) > .note { position: fixed; left: calc(80 * var(--u)); bottom: calc(60 * var(--u)); font-size: calc(16 * var(--u)); }
+    #menu :is(#screen-name, #screen-login).open { display: block; position: fixed; inset: 0; }
+    .menu-logo { position: absolute; left: calc(80 * var(--u)); top: calc(60 * var(--u)); width: calc(485 * var(--u)); height: calc(200 * var(--u));
       color: #e6edf5; }
-    #logo .logo-title { position: absolute; inset: 0; font: 600 calc(46 * var(--u))/1.12 system-ui, sans-serif; letter-spacing: .025em; transition: opacity .25s ease; }
-    #logo img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; object-position: left top; opacity: 0; transition: opacity .25s ease; }
-    #logo.logo-ready .logo-title { opacity: 0; visibility: hidden; } #logo.logo-ready img { opacity: 1; }
-    #logo span { position: absolute; left: 0; bottom: calc(-26 * var(--u)); font-size: calc(18 * var(--u)); letter-spacing: 0.35em; text-transform: uppercase; color: #cfd6e6cc; white-space: nowrap; }
+    .menu-logo .logo-title { position: absolute; inset: 0; font: 600 calc(46 * var(--u))/1.12 system-ui, sans-serif; letter-spacing: .025em; transition: opacity .25s ease; }
+    .menu-logo img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; object-position: left top; opacity: 0; transition: opacity .25s ease; }
+    .menu-logo.logo-ready .logo-title { opacity: 0; visibility: hidden; } .menu-logo.logo-ready img { opacity: 1; }
+    .menu-logo span { position: absolute; left: 0; bottom: calc(-26 * var(--u)); font-size: calc(18 * var(--u)); letter-spacing: 0.35em; text-transform: uppercase; color: #cfd6e6cc; white-space: nowrap; }
     #main-items { position: absolute; left: calc(80 * var(--u)); top: calc(279 * var(--u)); display: flex; flex-direction: column; gap: calc(32 * var(--u)); margin: 0; padding: 0; list-style: none; }
     #main-items button { margin: 0; width: calc(400 * var(--u)); height: calc(36 * var(--u)); padding: 0 0 0 calc(10 * var(--u)); text-align: left;
       font: inherit; font-size: calc(24 * var(--u)); color: #fff; background: transparent; border: 0; border-radius: calc(6 * var(--u)); cursor: pointer; letter-spacing: 0.02em; }
     #main-items button:hover, #main-items button:focus-visible { background: #ccedff; color: #0b1020; outline: 0; }
     #main-items button:disabled { color: #ffffff66; cursor: default; background: transparent; }
-    #login-bar { position: absolute; right: 0; top: 0; height: calc(50 * var(--u)); min-width: calc(210 * var(--u)); display: flex; align-items: center; gap: calc(10 * var(--u));
+    #login-bar { position: absolute; right: 0; top: 0; height: calc(50 * var(--u)); display: flex; align-items: center; gap: calc(12 * var(--u));
       padding: 0 calc(16 * var(--u)); background: #000; color: #fff; font-size: calc(15 * var(--u)); }
-    #login-bar label { margin: 0; color: #9fb0cc; font-size: calc(13 * var(--u)); white-space: nowrap; }
-    #login-bar { height: auto; min-height: calc(50 * var(--u)); flex-wrap: wrap; justify-content: flex-end; max-width: 80vw; }
-    #login-bar input[type=email] { width: calc(250 * var(--u)); }
-    #login-bar #login-otp { width: calc(130 * var(--u)); }
-    #login-bar #otp-resend { width: auto; margin: 0; padding: 4px 8px; font-size: calc(13 * var(--u)); }
+    #login-bar .pilot-label { color: #9fb0cc; font-size: calc(13 * var(--u)); }
+    #login-bar #sign-out { width: auto; margin: 0; padding: calc(4 * var(--u)) calc(10 * var(--u)); font-size: calc(13 * var(--u)); background: transparent; border: 1px solid #ffffff40; }
+    #login-bar #sign-out:hover { background: #ccedff; color: #0b1020; }
     #session-share-code, #account-otp, #join-code, #paused-share-code { box-sizing: border-box; width: 100%; font-family: monospace; }
     #sessions .session-actions { flex-wrap: wrap; justify-content: flex-end; }
-    #login-bar input[type=text] { width: calc(160 * var(--u)); padding: calc(4 * var(--u)) calc(8 * var(--u)); font-size: calc(15 * var(--u)); background: #111; border-color: #333; }
-    #version { position: absolute; left: calc(80 * var(--u)); bottom: calc(24 * var(--u)); font-size: calc(13 * var(--u)); color: #ffffff80; }
+    /* The sign-in screen: the main menu's backdrop and logo, with one panel where the menu items sit. */
+    #menu #screen-login.open { display: block; position: fixed; inset: 0; }
+    #login-form { position: absolute; left: calc(80 * var(--u)); top: calc(279 * var(--u)); width: calc(400 * var(--u)); box-sizing: border-box;
+      padding: calc(20 * var(--u)) calc(22 * var(--u)); background: #0b1020d9; border: 1px solid #2c3d63; border-radius: calc(8 * var(--u)); font-size: calc(15 * var(--u)); }
+    #login-form h2 { margin: 0 0 calc(4 * var(--u)); font-size: calc(24 * var(--u)); font-weight: 600; color: #fff; letter-spacing: .02em; }
+    #login-form .lede { margin: 0 0 calc(10 * var(--u)); color: #9fb0cc; font-size: calc(13 * var(--u)); }
+    #login-form label { font-size: calc(13 * var(--u)); margin: calc(12 * var(--u)) 0 calc(4 * var(--u)); }
+    #login-form input { width: 100%; box-sizing: border-box; padding: calc(7 * var(--u)) calc(9 * var(--u)); font: inherit; font-size: calc(15 * var(--u));
+      background: #06080f; color: #e6ecf7; border: 1px solid #2c3d63; border-radius: calc(4 * var(--u)); }
+    #login-form input:focus { outline: 0; border-color: #6fa8dc; }
+    #login-form #login-otp { font-family: monospace; letter-spacing: .3em; }
+    #login-form #login { margin-top: calc(18 * var(--u)); font-size: calc(17 * var(--u)); }
+    #login-form #login:disabled { opacity: .5; cursor: default; }
+    #login-form #otp-resend { margin-top: calc(8 * var(--u)); background: transparent; border: 0; color: #9fb0cc; font-size: calc(13 * var(--u)); text-decoration: underline; }
+    #screen-login:not(.code-sent) .code-only { display: none; }
+    #version, #login-version { position: absolute; left: calc(80 * var(--u)); bottom: calc(24 * var(--u)); font-size: calc(13 * var(--u)); color: #ffffff80; }
     #extras { position: absolute; right: calc(80 * var(--u)); bottom: calc(24 * var(--u)); font-size: calc(13 * var(--u)); color: #ffffff80; }
     #extras a { color: #ffffffb0; text-decoration: none; margin-left: calc(16 * var(--u)); }
 
@@ -1419,8 +1431,24 @@
     <div class="card" id="menu-card">
       <h1>OpenSpaceExplorer</h1>
       <div class="sub">a shared Kerbol system, played in the browser</div>
-      <div class="screen open" id="screen-name" data-ose="menu-name">
-        <div id="logo" title="Kerbal Space Program 2, in the browser"><div class="logo-title">OPENSPACE<br />EXPLORER</div><img src="assets/ui/sno_logo-wht_red_2x.png" alt="Kerbal Space Program 2" fetchpriority="high" onload="this.parentElement.classList.add('logo-ready')" onerror="this.remove()" /></div>
+      <div class="screen open" id="screen-login" data-ose="menu-login">
+        <div id="login-logo" class="menu-logo" title="Kerbal Space Program 2, in the browser"><div class="logo-title">OPENSPACE<br />EXPLORER</div><img src="assets/ui/sno_logo-wht_red_2x.png" alt="Kerbal Space Program 2" fetchpriority="high" onload="this.parentElement.classList.add('logo-ready')" onerror="this.remove()" /></div>
+        <form id="login-form" onsubmit="event.preventDefault()">
+          <h2>Sign in</h2>
+          <p class="lede">We email you a one-time code. Your campaigns follow you to any machine.</p>
+          <label for="player-name">Pilot name</label>
+          <input id="player-name" data-ose="player-name" type="text" maxlength="32" autocomplete="nickname" value="Pilot" disabled />
+          <label for="login-email">Email</label>
+          <input id="login-email" data-ose="login-email" type="email" maxlength="254" autocomplete="email" placeholder="you@example.com" />
+          <label for="login-otp" class="code-only">6-digit code</label>
+          <input id="login-otp" class="code-only" data-ose="login-otp" type="text" maxlength="6" inputmode="numeric" autocomplete="one-time-code" placeholder="000000" />
+          <button id="login" data-ose="login" type="submit" disabled>Email me a code</button>
+          <button id="otp-resend" class="code-only" data-ose="otp-resend" type="button">Resend code</button>
+        </form>
+        <div id="login-version">OpenSpaceExplorer, a shared Kerbol system in the browser</div>
+      </div>
+      <div class="screen" id="screen-name" data-ose="menu-name">
+        <div id="logo" class="menu-logo" title="Kerbal Space Program 2, in the browser"><div class="logo-title">OPENSPACE<br />EXPLORER</div><img src="assets/ui/sno_logo-wht_red_2x.png" alt="Kerbal Space Program 2" fetchpriority="high" onload="this.parentElement.classList.add('logo-ready')" onerror="this.remove()" /></div>
         <ul id="main-items">
           <li><button id="play" data-ose="play" disabled data-loc="Menu/Campaigns/Campaigns">Campaign</button></li>
           <li><button id="main-settings" data-ose="main-settings" data-open-settings title="Controls, interface and sound" data-loc="Menu/Main/Settings">Settings</button></li>
@@ -1428,17 +1456,14 @@
           <li><button id="main-sound" class="sound-toggle" data-ose="sound-toggle">Sound: on</button></li>
         </ul>
         <div id="login-bar">
-          <label for="player-name">Pilot</label>
-          <input id="player-name" data-ose="player-name" type="text" maxlength="32" autocomplete="nickname" value="Pilot" disabled />
-          <label for="login-email">Email</label>
-          <input id="login-email" data-ose="login-email" type="email" maxlength="254" autocomplete="email" placeholder="you@example.com" />
-          <label for="login-otp">Code</label>
-          <input id="login-otp" data-ose="login-otp" type="text" maxlength="6" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code" />
-          <button id="otp-resend" data-ose="otp-resend" type="button">Resend code</button>
+          <span class="pilot-label">Pilot</span>
+          <span id="pilot-chip" data-ose="pilot-chip">Pilot</span>
+          <button id="sign-out" data-ose="sign-out" type="button">Sign out</button>
         </div>
         <div id="version">OpenSpaceExplorer, a shared Kerbol system in the browser</div>
         <div id="extras"><a href="https://github.com/unknown201/OpenSpaceExplorer" target="_blank" rel="noopener">Source</a></div>
       </div>
+      <script>try{if(localStorage.getItem('ose.token')){document.getElementById('screen-login').classList.remove('open');document.getElementById('screen-name').classList.add('open');}}catch(e){}</script>
       <div class="screen" id="screen-sessions" data-ose="menu-sessions">
        <div id="campaign">
         <div id="campaign-left">

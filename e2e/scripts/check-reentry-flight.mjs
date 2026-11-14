@@ -51,6 +51,7 @@ try {
  page.on('pageerror',e=>errors.push(e.message));
  await page.goto(base);
  await page.locator('[data-ose="player-name"]').fill('Reentry pilot');
+ await page.locator('[data-ose="login"]').click();
  await page.locator('[data-ose="play"]').click();
  await page.locator('[data-ose="session-join"]').first().click();
  await page.locator('[data-ose="ksc-tracking"]').click();

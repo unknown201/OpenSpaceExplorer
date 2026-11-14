@@ -96,6 +96,7 @@ try {
   if (flight) {
     await page.goto(baseURL);
     await page.locator('[data-ose="player-name"]').fill('ascent profiler');
+    await page.locator('[data-ose="login"]').click();
     await page.locator('[data-ose="play"]').click();
     await page.locator('[data-ose="session-join"]').first().click();
     await page.locator('[data-ose="ksc-vab"]').first().click();

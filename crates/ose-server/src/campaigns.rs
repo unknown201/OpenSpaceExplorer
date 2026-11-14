@@ -100,7 +100,10 @@ pub fn switch(s: &Shared, player_id: u64, target: Target) -> Result<(), String> 
     let mut c = s.campaign.lock().expect("campaign lock");
     let mut shelf = s.shelf.lock().expect("shelf lock");
     if let Target::Shelved(id) = &target {
-        if !shelf.iter().any(|x| &x.id == id && can_access(&x.save.campaign, player_id)) {
+        if !shelf
+            .iter()
+            .any(|x| &x.id == id && can_access(&x.save.campaign, player_id))
+        {
             return Err("join this campaign with a share code first".into());
         }
     }
@@ -222,13 +225,26 @@ pub fn live_access(s: &Shared, player: u64) -> bool {
     can_access(&s.campaign.lock().expect("campaign lock"), player)
 }
 pub fn access(s: &Shared, player: u64, id: &str) -> bool {
-    if let Some(room) = crate::rooms::live(s, id) { return live_access(&room, player); }
-    s.shelf.lock().expect("shelf lock").iter().any(|x| x.id == id && can_access(&x.save.campaign, player))
+    if let Some(room) = crate::rooms::live(s, id) {
+        return live_access(&room, player);
+    }
+    s.shelf
+        .lock()
+        .expect("shelf lock")
+        .iter()
+        .any(|x| x.id == id && can_access(&x.save.campaign, player))
 }
 fn share_campaign(c: &mut save::Campaign, player: u64) -> Result<ServerMessage, String> {
-    if !can_access(c, player) { return Err("join this campaign with a share code first".into()); }
-    if c.share_code.is_none() { c.share_code = Some(crate::accounts::random_token().map_err(|e| e.to_string())?); }
-    Ok(ServerMessage::SessionShareCode { id: c.id.clone(), code: c.share_code.clone().unwrap() })
+    if !can_access(c, player) {
+        return Err("join this campaign with a share code first".into());
+    }
+    if c.share_code.is_none() {
+        c.share_code = Some(crate::accounts::random_token().map_err(|e| e.to_string())?);
+    }
+    Ok(ServerMessage::SessionShareCode {
+        id: c.id.clone(),
+        code: c.share_code.clone().unwrap(),
+    })
 }
 /// Any member can share any of their games, including games running in other rooms or on the shelf.
 pub fn share(s: &Shared, player: u64, id: &str) -> Result<ServerMessage, String> {
@@ -237,14 +253,41 @@ pub fn share(s: &Shared, player: u64, id: &str) -> Result<ServerMessage, String>
         return share_campaign(&mut room.campaign.lock().expect("campaign lock"), player);
     }
     let mut shelf = s.shelf.lock().expect("shelf lock");
-    let c = &mut shelf.iter_mut().find(|x| x.id == id).ok_or("campaign unavailable")?.save.campaign;
+    let c = &mut shelf
+        .iter_mut()
+        .find(|x| x.id == id)
+        .ok_or("campaign unavailable")?
+        .save
+        .campaign;
     share_campaign(c, player)
 }
-fn add_member(s: &Shared, c: &mut save::Campaign, player: u64, tick: ose_sim::Tick) -> ServerMessage {
+fn add_member(
+    s: &Shared,
+    c: &mut save::Campaign,
+    player: u64,
+    tick: ose_sim::Tick,
+) -> ServerMessage {
     if !can_access(c, player) {
-        c.members.push(save::CampaignMember { player_id: player, display_name: crate::display_name_for(s, player), joined_tick: tick, agency: None });
+        c.members.push(save::CampaignMember {
+            player_id: player,
+            display_name: crate::display_name_for(s, player),
+            joined_tick: tick,
+            agency: None,
+        });
     }
-    ServerMessage::SessionJoined { id: c.id.clone(), name: c.name.clone() }
+    ServerMessage::SessionJoined {
+        id: c.id.clone(),
+        name: c.name.clone(),
+    }
+}
+/// A guest account on a browser-test server (`--test-probe --allow-guest-accounts`) becomes a member of the primary room's
+/// campaign, so browser tests can join the server's own world without a share code.
+pub fn admit_test_guest(s: &Shared, player: u64) {
+    let tick = s.universe.lock().expect("sim lock").tick();
+    let mut c = s.campaign.lock().expect("campaign lock");
+    if !c.id.is_empty() {
+        add_member(s, &mut c, player, tick);
+    }
 }
 /// Redemption grants membership without moving rooms or interrupting anyone's game.
 pub fn join_code(s: &Shared, player: u64, code: &str) -> Result<ServerMessage, String> {
@@ -253,11 +296,21 @@ pub fn join_code(s: &Shared, player: u64, code: &str) -> Result<ServerMessage, S
     for room in s.rooms.all() {
         let tick = room.universe.lock().expect("sim lock").tick();
         let mut c = room.campaign.lock().expect("campaign lock");
-        if c.share_code.as_deref() == Some(code) { return Ok(add_member(s, &mut c, player, tick)); }
+        if c.share_code.as_deref() == Some(code) {
+            return Ok(add_member(s, &mut c, player, tick));
+        }
     }
     let mut shelf = s.shelf.lock().expect("shelf lock");
-    let back = shelf.iter_mut().find(|x| x.save.campaign.share_code.as_deref() == Some(code)).ok_or("invalid share code")?;
-    Ok(add_member(s, &mut back.save.campaign, player, back.save.tick))
+    let back = shelf
+        .iter_mut()
+        .find(|x| x.save.campaign.share_code.as_deref() == Some(code))
+        .ok_or("invalid share code")?;
+    Ok(add_member(
+        s,
+        &mut back.save.campaign,
+        player,
+        back.save.tick,
+    ))
 }
 
 /// Every campaign: the live ones first (the primary room's, then the others), then the shelf, most
@@ -353,7 +406,9 @@ fn manage_in(s: &crate::AppState, player: u64, id: &str, delete: bool) -> Result
             .campaign
     };
     if !delete {
-        if !can_access(campaign, player) { return Err("only a campaign member can claim an unowned session".into()); }
+        if !can_access(campaign, player) {
+            return Err("only a campaign member can claim an unowned session".into());
+        }
         match campaign.owner {
             None => campaign.owner = Some(player),
             Some(owner) if owner == player => {}

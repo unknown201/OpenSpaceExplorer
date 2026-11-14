@@ -104,7 +104,8 @@ use ose_net::{
 const BODY_LABEL_CLASS: &str = "body";
 
 /// The menu's screens (`screen-<name>` in index.html).
-const MENU_SCREENS: [&str; 9] = [
+const MENU_SCREENS: [&str; 10] = [
+    "login",
     "name",
     "sessions",
     "ksc",
@@ -1115,12 +1116,12 @@ pub fn start() -> Result<(), JsValue> {
         log(&format!("initial connection failed: {e:?}"));
         app.borrow().connection_status(
             "disconnected",
-            "Server unavailable. Select Campaign to retry.",
+            &format!("Server unavailable. {} to retry.", retry_action()),
         );
     }
     // Static HTML can arrive before the client starts. Enable the first interaction only after its
     // handlers are attached, so a quick click on a remote load cannot silently disappear.
-    for id in ["play", "player-name"] {
+    for id in ["play", "player-name", "login"] {
         if let Some(element) = app.borrow().doc.get_element_by_id(id) {
             element.remove_attribute("disabled")?;
         }
@@ -2152,7 +2153,58 @@ fn load_part_sizes(app: Shared) {
     });
 }
 
-/// The main menu: a name and Campaign. Campaign signs in over the preconnected socket.
+/// What the pilot selects to (re)connect: Campaign on the main menu once signed in on this machine, the
+/// sign-in button on the sign-in screen otherwise.
+fn retry_action() -> &'static str {
+    if stored("ose.token").is_some() {
+        "Select Campaign"
+    } else {
+        "Sign in"
+    }
+}
+
+/// Connect if needed and sign in: a stored session on Campaign, an email code (or, on a test server
+/// that allows them, a guest account) on the sign-in screen.
+fn request_sign_in(a: &Shared) {
+    if a.borrow().login_requested {
+        return;
+    }
+    let name = a
+        .borrow()
+        .doc
+        .get_element_by_id("player-name")
+        .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+        .map(|i| i.value().trim().to_string())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| "Pilot".into());
+    store("ose.name", &name);
+    {
+        let mut app = a.borrow_mut();
+        set_text(&app.doc, "pilot-chip", &name);
+        app.player_name = name;
+        app.login_requested = true;
+    }
+    if let Err(e) = connect(a) {
+        log(&format!("connection failed: {e:?}"));
+        a.borrow_mut().login_requested = false;
+        a.borrow().connection_status(
+            "disconnected",
+            &format!("Could not connect. {} to retry.", retry_action()),
+        );
+    } else {
+        let app = a.borrow();
+        if let Some(ws) = app
+            .ws
+            .as_ref()
+            .filter(|ws| ws.ready_state() == WebSocket::OPEN)
+        {
+            app.sign_in(ws);
+        }
+    }
+}
+
+/// The front of the game: a sign-in screen first, then the main menu (Campaign, Settings, Extras).
+/// A pilot already signed in on this machine starts on the main menu; Campaign resumes that session.
 fn install_menu(app: &Shared) -> Result<(), JsValue> {
     let doc = app.borrow().doc.clone();
     if let Some(name) = stored("ose.name") {
@@ -2162,73 +2214,40 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         {
             input.set_value(&name);
         }
+        set_text(&doc, "pilot-chip", &name);
     }
-    if let Some(input) = doc.get_element_by_id("login-email")
-        .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok()) {
-        if input.value().is_empty() { input.set_value(&stored("ose.email").unwrap_or_default()); }
+    if let Some(input) = doc
+        .get_element_by_id("login-email")
+        .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+    {
+        if input.value().is_empty() {
+            input.set_value(&stored("ose.email").unwrap_or_default());
+        }
     }
-    if stored("ose.token").is_none() { set_text(&doc, "play", "Send sign-in code"); }
+    app.borrow().menu_screen(if stored("ose.token").is_some() {
+        "name"
+    } else {
+        "login"
+    });
     if let Some(btn) = doc.get_element_by_id("play") {
         let a = app.clone();
         let cb = Closure::<dyn FnMut()>::new(move || {
-            if a.borrow().login_requested {
-                return;
-            }
             if a.borrow().player_id.is_some() {
                 a.borrow_mut().open_sessions_screen();
-                return;
-            }
-            let name = a
-                .borrow()
-                .doc
-                .get_element_by_id("player-name")
-                .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
-                .map(|i| i.value().trim().to_string())
-                .filter(|n| !n.is_empty())
-                .unwrap_or_else(|| "Pilot".into());
-            store("ose.name", &name);
-            {
-                let mut app = a.borrow_mut();
-                app.player_name = name;
-                app.login_requested = true;
-            }
-            if let Err(e) = connect(&a) {
-                log(&format!("connection failed: {e:?}"));
-                a.borrow_mut().login_requested = false;
-                a.borrow().connection_status(
-                    "disconnected",
-                    "Could not connect. Select Campaign to retry.",
-                );
+            } else if stored("ose.token").is_none() {
+                a.borrow().menu_screen("login");
             } else {
-                let app = a.borrow();
-                if let Some(ws) = app
-                    .ws
-                    .as_ref()
-                    .filter(|ws| ws.ready_state() == WebSocket::OPEN)
-                {
-                    app.sign_in(ws);
-                }
+                request_sign_in(&a);
             }
         });
         btn.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
         cb.forget();
     }
-    if let Some(input) = doc.get_element_by_id("player-name") {
+    // A submit button: Enter in any of the sign-in fields presses it too.
+    if let Some(btn) = doc.get_element_by_id("login") {
         let a = app.clone();
-        let cb =
-            Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |ev: web_sys::KeyboardEvent| {
-                if ev.key() == "Enter" {
-                    if let Some(btn) = a
-                        .borrow()
-                        .doc
-                        .get_element_by_id("play")
-                        .and_then(|e| e.dyn_into::<HtmlElement>().ok())
-                    {
-                        btn.click();
-                    }
-                }
-            });
-        input.add_event_listener_with_callback("keydown", cb.as_ref().unchecked_ref())?;
+        let cb = Closure::<dyn FnMut()>::new(move || request_sign_in(&a));
+        btn.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
         cb.forget();
     }
     let wire = |id: &str, f: Box<dyn Fn(&Shared)>| -> Result<(), JsValue> {
@@ -4199,39 +4218,114 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         list.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
         cb.forget();
     }
-    wire("join-code-submit", Box::new(|a| {
-        let app = a.borrow();
-        let code = app.doc.get_element_by_id("join-code")
-            .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
-            .map(|i| i.value().trim().to_string()).unwrap_or_default();
-        if code.is_empty() { set_text(&app.doc, "menu-note", "Enter a game share code first."); return; }
-        if let Some(ws) = &app.ws { send(ws, &ClientMessage::JoinSessionCode { code }); }
-    }))?;
-    wire("share-current", Box::new(|a| {
-        let app = a.borrow();
-        if let Some(ws) = &app.ws { send(ws, &ClientMessage::ShareSession { id: app.campaign_id.clone() }); }
-    }))?;
-    wire("otp-resend", Box::new(|a| {
-        let app = a.borrow();
-        if let Some(input) = app.doc.get_element_by_id("login-otp").and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok()) { input.set_value(""); }
-        if let Some(play) = app.doc.get_element_by_id("play").and_then(|e| e.dyn_into::<HtmlElement>().ok()) { drop(app); play.click(); }
-    }))?;
-    wire("account-send-otp", Box::new(|a| {
-        let app = a.borrow();
-        let email = app.input_value("account-email");
-        if let Some(ws) = &app.ws { send(ws, &ClientMessage::RequestEmailOtp { email }); }
-    }))?;
-    wire("account-verify-otp", Box::new(|a| {
-        let app = a.borrow();
-        let Some((email, challenge)) = &app.otp_challenge else { set_text(&app.doc, "menu-note", "Request an email code first."); return; };
-        if let Some(ws) = &app.ws { send(ws, &ClientMessage::EmailSignIn { protocol: PROTOCOL_VERSION, email: email.clone(), challenge: challenge.clone(), code: app.input_value("account-otp"), display_name: app.player_name.clone() }); }
-    }))?;
-    wire("account-logout", Box::new(|_a| {
-        if let Some(w) = web_sys::window() {
-            if let Ok(Some(storage)) = w.local_storage() { storage.remove_item("ose.token").ok(); }
-            w.location().reload().ok();
-        }
-    }))?;
+    wire(
+        "join-code-submit",
+        Box::new(|a| {
+            let app = a.borrow();
+            let code = app
+                .doc
+                .get_element_by_id("join-code")
+                .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+                .map(|i| i.value().trim().to_string())
+                .unwrap_or_default();
+            if code.is_empty() {
+                set_text(&app.doc, "menu-note", "Enter a game share code first.");
+                return;
+            }
+            if let Some(ws) = &app.ws {
+                send(ws, &ClientMessage::JoinSessionCode { code });
+            }
+        }),
+    )?;
+    wire(
+        "share-current",
+        Box::new(|a| {
+            let app = a.borrow();
+            if let Some(ws) = &app.ws {
+                send(
+                    ws,
+                    &ClientMessage::ShareSession {
+                        id: app.campaign_id.clone(),
+                    },
+                );
+            }
+        }),
+    )?;
+    wire(
+        "otp-resend",
+        Box::new(|a| {
+            let app = a.borrow();
+            if let Some(input) = app
+                .doc
+                .get_element_by_id("login-otp")
+                .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+            {
+                input.set_value("");
+            }
+            if let Some(login) = app
+                .doc
+                .get_element_by_id("login")
+                .and_then(|e| e.dyn_into::<HtmlElement>().ok())
+            {
+                drop(app);
+                login.click();
+            }
+        }),
+    )?;
+    wire(
+        "account-send-otp",
+        Box::new(|a| {
+            let app = a.borrow();
+            let email = app.input_value("account-email");
+            if let Some(ws) = &app.ws {
+                send(ws, &ClientMessage::RequestEmailOtp { email });
+            }
+        }),
+    )?;
+    wire(
+        "account-verify-otp",
+        Box::new(|a| {
+            let app = a.borrow();
+            let Some((email, challenge)) = &app.otp_challenge else {
+                set_text(&app.doc, "menu-note", "Request an email code first.");
+                return;
+            };
+            if let Some(ws) = &app.ws {
+                send(
+                    ws,
+                    &ClientMessage::EmailSignIn {
+                        protocol: PROTOCOL_VERSION,
+                        email: email.clone(),
+                        challenge: challenge.clone(),
+                        code: app.input_value("account-otp"),
+                        display_name: app.player_name.clone(),
+                    },
+                );
+            }
+        }),
+    )?;
+    wire(
+        "sign-out",
+        Box::new(|_a| {
+            if let Some(w) = web_sys::window() {
+                if let Ok(Some(storage)) = w.local_storage() {
+                    storage.remove_item("ose.token").ok();
+                }
+                w.location().reload().ok();
+            }
+        }),
+    )?;
+    wire(
+        "account-logout",
+        Box::new(|_a| {
+            if let Some(w) = web_sys::window() {
+                if let Ok(Some(storage)) = w.local_storage() {
+                    storage.remove_item("ose.token").ok();
+                }
+                w.location().reload().ok();
+            }
+        }),
+    )?;
     wire("create", Box::new(|a| a.borrow_mut().create_session()))?;
     wire("agency-apply", Box::new(|a| a.borrow_mut().send_agency()))?;
     wire(
@@ -4263,7 +4357,9 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
             if action == "session-join" {
                 a.borrow_mut().join_session(&id);
             } else if action == "session-share" {
-                if let Some(ws) = &a.borrow().ws { send(ws, &ClientMessage::ShareSession { id }); }
+                if let Some(ws) = &a.borrow().ws {
+                    send(ws, &ClientMessage::ShareSession { id });
+                }
             } else {
                 if action == "session-delete"
                     && !web_sys::window().is_some_and(|w| {
@@ -4408,8 +4504,11 @@ fn connect(app: &Shared) -> Result<(), JsValue> {
         let app = app.clone();
         let on_close = Closure::<dyn FnMut()>::new(move || {
             let mut a = app.borrow_mut();
-            let rejected_login = a.player_id.is_none() && a.doc.get_element_by_id("menu-note")
-                .and_then(|e| e.text_content()).is_some_and(|s| s.starts_with("rejected:"));
+            let rejected_login = a.player_id.is_none()
+                && a.doc
+                    .get_element_by_id("menu-note")
+                    .and_then(|e| e.text_content())
+                    .is_some_and(|s| s.starts_with("rejected:"));
             a.ws = None;
             a.login_requested = false;
             a.player_id = None;
@@ -4417,12 +4516,19 @@ fn connect(app: &Shared) -> Result<(), JsValue> {
             a.leave_session();
             a.set_status("disconnected; select Campaign to reconnect");
             if !rejected_login {
-                a.connection_status("disconnected", "Connection lost. Select Campaign to reconnect.");
+                a.connection_status(
+                    "disconnected",
+                    &format!("Connection lost. {} to reconnect.", retry_action()),
+                );
             }
             if let Some(m) = a.doc.get_element_by_id("menu") {
                 m.class_list().remove_1("hidden").ok();
             }
-            a.menu_screen("name");
+            a.menu_screen(if stored("ose.token").is_some() {
+                "name"
+            } else {
+                "login"
+            });
         });
         ws.set_onclose(Some(on_close.as_ref().unchecked_ref()));
         on_close.forget();
@@ -5761,20 +5867,39 @@ impl App {
     }
 
     fn input_value(&self, id: &str) -> String {
-        self.doc.get_element_by_id(id).and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
-            .map(|i| i.value().trim().to_string()).unwrap_or_default()
+        self.doc
+            .get_element_by_id(id)
+            .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+            .map(|i| i.value().trim().to_string())
+            .unwrap_or_default()
     }
     fn sign_in(&self, ws: &WebSocket) {
         self.connection_status("authenticating", "Signing in...");
         let msg = if let Some(token) = stored("ose.token") {
-            ClientMessage::Hello { protocol: PROTOCOL_VERSION, token: Some(token), display_name: self.player_name.clone() }
+            ClientMessage::Hello {
+                protocol: PROTOCOL_VERSION,
+                token: Some(token),
+                display_name: self.player_name.clone(),
+            }
         } else {
             let email = self.input_value("login-email").to_ascii_lowercase();
             let code = self.input_value("login-otp");
             match &self.otp_challenge {
-                Some((sent_to, challenge)) if *sent_to == email && !code.is_empty() => ClientMessage::EmailSignIn {
-                    protocol: PROTOCOL_VERSION, email, challenge: challenge.clone(), code, display_name: self.player_name.clone(),
+                // No email: a guest account where the server allows them (test fixtures); a public server asks for one.
+                _ if email.is_empty() => ClientMessage::Hello {
+                    protocol: PROTOCOL_VERSION,
+                    token: None,
+                    display_name: self.player_name.clone(),
                 },
+                Some((sent_to, challenge)) if *sent_to == email && !code.is_empty() => {
+                    ClientMessage::EmailSignIn {
+                        protocol: PROTOCOL_VERSION,
+                        email,
+                        challenge: challenge.clone(),
+                        code,
+                        display_name: self.player_name.clone(),
+                    }
+                }
                 _ => ClientMessage::RequestEmailOtp { email },
             }
         };
@@ -5953,12 +6078,25 @@ impl App {
                     &format!("{} (#{player_id})", self.player_name),
                 );
                 self.connection_status("ready", "");
-                self.open_sessions_screen();
+                if self.screen_open("login") {
+                    // Signed in from the sign-in screen: on to the main menu.
+                    if let Some(login) = self.doc.get_element_by_id("screen-login") {
+                        login.class_list().remove_1("code-sent").ok();
+                    }
+                    set_text(&self.doc, "login", "Email me a code");
+                    self.menu_screen("name");
+                } else {
+                    self.open_sessions_screen();
+                }
             }
             ServerMessage::Rejected { reason } => {
                 if self.player_id.is_none() {
-                    if let Some(w) = web_sys::window() { if let Ok(Some(storage)) = w.local_storage() { storage.remove_item("ose.token").ok(); } }
-                    set_text(&self.doc, "play", "Send sign-in code");
+                    if let Some(w) = web_sys::window() {
+                        if let Ok(Some(storage)) = w.local_storage() {
+                            storage.remove_item("ose.token").ok();
+                        }
+                    }
+                    self.menu_screen("login");
                 }
                 self.set_status(&format!("rejected: {reason}"));
                 set_text(&self.doc, "menu-note", &format!("rejected: {reason}"));
@@ -5989,15 +6127,38 @@ impl App {
                     self.update_warp_holder();
                 }
             }
-            ServerMessage::EmailOtpSent { email, challenge, .. } => {
+            ServerMessage::EmailOtpSent {
+                email, challenge, ..
+            } => {
                 self.login_requested = false;
                 self.otp_challenge = Some((email.clone(), challenge));
                 store("ose.email", &email);
-                let code_id = if self.player_id.is_some() { "account-otp" } else { "login-otp" };
-                if let Some(input) = self.doc.get_element_by_id(code_id).and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok()) { input.set_value(""); input.focus().ok(); }
-                if self.player_id.is_none() { set_text(&self.doc, "play", "Sign in"); }
+                let code_id = if self.player_id.is_some() {
+                    "account-otp"
+                } else {
+                    "login-otp"
+                };
+                if self.player_id.is_none() {
+                    // The code field shows only once a code is on its way.
+                    set_text(&self.doc, "login", "Sign in");
+                    if let Some(login) = self.doc.get_element_by_id("screen-login") {
+                        login.class_list().add_1("code-sent").ok();
+                    }
+                }
+                if let Some(input) = self
+                    .doc
+                    .get_element_by_id(code_id)
+                    .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+                {
+                    input.set_value("");
+                    input.focus().ok();
+                }
                 set_text(&self.doc, "menu-note", &format!("Code sent to {email}. Enter the 6-digit code within 10 minutes. You can resend after 60 seconds."));
-                set_text(&self.doc, "account-status", "Check your inbox for a 6-digit code.");
+                set_text(
+                    &self.doc,
+                    "account-status",
+                    "Check your inbox for a 6-digit code.",
+                );
             }
             ServerMessage::AuthError { reason } => {
                 self.login_requested = false;
@@ -6007,24 +6168,47 @@ impl App {
             ServerMessage::AccountState { email } => {
                 if let Some(email) = email {
                     store("ose.email", &email);
-                    if let Some(input) = self.doc.get_element_by_id("account-email").and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok()) { input.set_value(&email); }
-                    set_text(&self.doc, "account-status", &format!("Verified: {email}. Use email codes to sign in on any machine."));
+                    if let Some(input) = self
+                        .doc
+                        .get_element_by_id("account-email")
+                        .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+                    {
+                        input.set_value(&email);
+                    }
+                    set_text(
+                        &self.doc,
+                        "account-status",
+                        &format!("Verified: {email}. Use email codes to sign in on any machine."),
+                    );
                 } else {
-                    if let Some(details) = self.doc.get_element_by_id("account-details") { details.set_attribute("open", "").ok(); }
-                    set_text(&self.doc, "account-status", "Verify your email to keep these games and sign in on any machine.");
+                    if let Some(details) = self.doc.get_element_by_id("account-details") {
+                        details.set_attribute("open", "").ok();
+                    }
+                    set_text(
+                        &self.doc,
+                        "account-status",
+                        "Verify your email to keep these games and sign in on any machine.",
+                    );
                 }
             }
             ServerMessage::SessionShareCode { code, .. } => {
                 for id in ["session-share-code", "paused-share-code"] {
-                    if let Some(input) = self.doc.get_element_by_id(id)
-                        .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok()) {
+                    if let Some(input) = self
+                        .doc
+                        .get_element_by_id(id)
+                        .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+                    {
                         input.set_value(&code);
                     }
                 }
                 set_text(&self.doc, "menu-note", "Share this game code with a friend. They can enter it under Join with a share code.");
             }
             ServerMessage::SessionJoined { name, .. } => {
-                set_text(&self.doc, "menu-note", &format!("Joined {name}. Choose Resume to play."));
+                set_text(
+                    &self.doc,
+                    "menu-note",
+                    &format!("Joined {name}. Choose Resume to play."),
+                );
             }
             ServerMessage::SessionList { sessions } => {
                 self.render_sessions(&sessions);
@@ -7202,7 +7386,7 @@ impl App {
         if open {
             self.paused_from.set(
                 self.open_menu_screen()
-                    .filter(|s| !matches!(*s, "paused" | "name" | "sessions")),
+                    .filter(|s| !matches!(*s, "paused" | "login" | "name" | "sessions")),
             );
         }
         if let Some(m) = self.doc.get_element_by_id("menu") {
@@ -7215,18 +7399,21 @@ impl App {
         if open {
             self.menu_screen(if self.in_session {
                 "paused"
-            } else if self.ws.is_some() {
+            } else if self.player_id.is_some() {
                 "sessions"
-            } else {
+            } else if stored("ose.token").is_some() {
                 "name"
+            } else {
+                "login"
             });
         }
     }
 
-    /// Show one of the menu screens: "name", "sessions" or "paused".
+    /// Show one of the menu screens: "login", "name", "sessions" or "paused".
     fn menu_screen(&self, which: &str) {
         #[cfg(target_arch = "wasm32")]
-        if matches!(which, "name" | "sessions")
+        if matches!(which, "login" | "name" | "sessions")
+            && !self.screen_open("login")
             && !self.screen_open("name")
             && !self.screen_open("sessions")
         {
@@ -12765,7 +12952,7 @@ impl App {
         let front = self
             .doc
             .query_selector(
-                "#menu:not(.hidden) #screen-name.open, #menu:not(.hidden) #screen-sessions.open",
+                "#menu:not(.hidden) #screen-login.open, #menu:not(.hidden) #screen-name.open, #menu:not(.hidden) #screen-sessions.open",
             )
             .ok()
             .flatten()

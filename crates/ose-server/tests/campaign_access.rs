@@ -569,7 +569,8 @@ async fn public_server_requires_verified_email_for_new_accounts() {
     std::fs::create_dir_all(&dir).unwrap();
     let (server, addr) = start_config(&dir, None, false).await;
     let (_socket, reply) = connect(&addr, None).await;
-    assert!(matches!(reply, S::Rejected { .. }));
+    // Refused with a prompt for an email code; the socket stays open for the sign-in screen to request one.
+    assert!(matches!(reply, S::AuthError { .. }));
     drop(server);
     std::fs::remove_dir_all(dir).unwrap();
 }
