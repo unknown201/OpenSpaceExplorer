@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 68;
+pub const PROTOCOL_VERSION: u16 = 69;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -431,6 +431,15 @@ pub enum ClientMessage {
         vessel: u64,
         stages: Vec<Vec<u16>>,
     },
+    /// Pilot this vessel: only one player pilots a vessel, the one whose last command went to it, while they
+    /// are in the campaign; any other command to it is refused (`FlightAck`/`CrewAck` naming the pilot).
+    /// Other players can still ride along and watch. Answers `FlightAck`; `CampaignMember::flying` shows who
+    /// pilots what and is pushed to everyone when it changes.
+    TakeControl {
+        vessel: u64,
+    },
+    /// Stop piloting (leaving the flight view), so another player can take the vessel.
+    ReleaseControl,
 }
 
 /// A science report (the original's research report).
