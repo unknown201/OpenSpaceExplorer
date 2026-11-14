@@ -4,18 +4,59 @@
 //! striking part's mass, allows) break off. Docking ports facing each other are left
 //! to docking, which stops them at their faces. Our own first model: no reference traces of the original's PhysX contacts yet.
 
+use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
+
 use bevy_ecs::prelude::*;
 use ose_math::DVec3;
+use rapier3d_f64::math::{Pose, Rotation, Vector};
+use rapier3d_f64::parry::shape::{ConvexPolyhedron, Cuboid, Shape};
 
 use crate::{bodies, flight, structure, Universe};
+
+/// A part's model for contacts up close: the convex hull of its meshes in its own frame (Z mirrored, as the
+/// vessel frame is), and the part's turn in the vessel frame.
+#[derive(Clone)]
+pub struct ModelHull {
+    pub shape: Arc<ConvexPolyhedron>,
+    pub turn: Rotation,
+}
+
+/// Every part's model hull, from `assets/own/collision-hulls.json` (`tools/export_collision_hulls.py`: the
+/// hull of each part's exported meshes, Unity part frame). Parts missing there keep their boxes.
+fn model_hulls() -> &'static HashMap<String, Arc<ConvexPolyhedron>> {
+    static HULLS: OnceLock<HashMap<String, Arc<ConvexPolyhedron>>> = OnceLock::new();
+    HULLS.get_or_init(|| {
+        let raw: HashMap<String, Vec<[f64; 3]>> =
+            serde_json::from_str(include_str!("../../../assets/own/collision-hulls.json"))
+                .expect("collision hulls");
+        raw.into_iter()
+            .filter_map(|(id, pts)| {
+                let pts: Vec<Vector> = pts.iter().map(|p| Vector::new(p[0], p[1], -p[2])).collect();
+                let hull = ConvexPolyhedron::from_convex_hull(&pts)?;
+                Some((id, Arc::new(hull)))
+            })
+            .collect()
+    })
+}
+
+/// Part `id`'s model hull as it sits in a craft (`turn`: its authored local rotation).
+pub fn model_hull(id: &str, turn: ose_data::craft::Quat) -> Option<ModelHull> {
+    model_hulls().get(id).map(|shape| ModelHull {
+        shape: shape.clone(),
+        turn: crate::rigid::quat_to_vessel(turn),
+    })
+}
+
+/// Contacts are tested in two steps: every part as a sphere round its whole box while vessels are apart (cheap,
+/// and most pairs end there), then the parts whose spheres overlap as their models (`ModelHull`, or the
+/// part's box without one), which decide whether they touch, how deep, along which normal and where.
+const BOUND_MARGIN_M: f64 = 0.05;
 
 /// Bounce of a part-to-part contact (our own figure).
 pub const RESTITUTION: f64 = 0.2;
 /// Sliding friction of a part-to-part contact (our own figure).
 pub const FRICTION: f64 = 0.5;
-/// How much of a part's box the sphere round it covers (the half diagonal reaches the corners; parts are
-/// rarely their whole box).
-const SPHERE_SHARE: f64 = 0.8;
 
 /// Whether a part struck by another at `speed`, m/s, breaks (`PartBehavior`): faster than its crash tolerance,
 /// and with the speed times the mass of the part that struck it, t, over that tolerance too
@@ -24,7 +65,8 @@ pub fn crash_breaks(speed: f64, other_mass_t: f64, tolerance: f64) -> bool {
     speed > tolerance && speed * other_mass_t > tolerance
 }
 
-/// One part as the contact test sees it: (part, centre inertial offset from the vessel, radius).
+/// One part as the contact test sees it from afar: (part, centre inertial offset from the vessel, radius of a
+/// sphere holding its whole box).
 fn part_spheres(st: &structure::Structure, facing: DVec3) -> Vec<(usize, DVec3, f64)> {
     let c = st.rigid.rest_centre();
     (0..st.rigid.len())
@@ -34,7 +76,7 @@ fn part_spheres(st: &structure::Structure, facing: DVec3) -> Vec<(usize, DVec3, 
             (
                 i,
                 st.offset_inertial(facing, centre - c),
-                (half.length() * SPHERE_SHARE).max(0.1),
+                half.length() + BOUND_MARGIN_M,
             )
         })
         .collect()
@@ -127,6 +169,87 @@ fn boxes_overlap(a: &HullBox, b: &HullBox) -> bool {
         .all(|n| delta.dot(*n).abs() <= radius(a, *n) + radius(b, *n))
 }
 
+/// Vessel `e`'s pose in the inertial frame relative to `origin` (the vessel frame turned to the inertial one).
+fn vessel_pose(st: &structure::Structure, p: &flight::Powered, origin: DVec3) -> Pose {
+    let (x, y, z) = st.frame(p.facing);
+    let m = rapier3d_f64::math::Matrix::from_cols(
+        Vector::new(x.x, x.y, x.z),
+        Vector::new(y.x, y.y, y.z),
+        Vector::new(z.x, z.y, z.z),
+    );
+    let t = p.r - origin;
+    Pose::from_parts(
+        Vector::new(t.x, t.y, t.z),
+        Rotation::from_mat3(&m).normalize(),
+    )
+}
+
+/// A part as the close contact test sees it.
+enum PartShape<'a> {
+    Model(&'a ConvexPolyhedron),
+    Box(Cuboid),
+}
+
+impl PartShape<'_> {
+    fn shape(&self) -> &dyn Shape {
+        match self {
+            PartShape::Model(h) => *h,
+            PartShape::Box(b) => b,
+        }
+    }
+}
+
+/// Part `i` of a vessel as its model (or box) and its pose, given the vessel's pose.
+fn part_shape<'a>(st: &'a structure::Structure, vessel: &Pose, i: usize) -> (PartShape<'a>, Pose) {
+    let c = st.rigid.rest_centre();
+    match st.model_hull(i) {
+        Some(h) => {
+            let o = st.rigid.rest_position(i) - c;
+            (
+                PartShape::Model(&h.shape),
+                *vessel * Pose::from_parts(Vector::new(o.x, o.y, o.z), h.turn),
+            )
+        }
+        None => {
+            let (centre, half) = st.part_box(i);
+            let o = centre - c;
+            (
+                PartShape::Box(Cuboid::new(Vector::new(
+                    half.x.max(0.02),
+                    half.y.max(0.02),
+                    half.z.max(0.02),
+                ))),
+                *vessel * Pose::from_parts(Vector::new(o.x, o.y, o.z), Rotation::IDENTITY),
+            )
+        }
+    }
+}
+
+/// Two parts as their models: (depth, normal from b to a, contact point), both relative to the origin of
+/// the poses; `None` when they do not touch.
+fn model_contact(
+    sta: &structure::Structure,
+    pose_a: &Pose,
+    ia: usize,
+    stb: &structure::Structure,
+    pose_b: &Pose,
+    ib: usize,
+) -> Option<(f64, DVec3, DVec3)> {
+    let (ga, pa) = part_shape(sta, pose_a, ia);
+    let (gb, pb) = part_shape(stb, pose_b, ib);
+    let c = rapier3d_f64::parry::query::contact(&pa, ga.shape(), &pb, gb.shape(), 0.0).ok()??;
+    if c.dist > 0.0 {
+        return None;
+    }
+    let n = -c.normal1;
+    let mid = (c.point1 + c.point2) * 0.5;
+    Some((
+        -c.dist,
+        DVec3::new(n.x, n.y, n.z),
+        DVec3::new(mid.x, mid.y, mid.z),
+    ))
+}
+
 /// What a contact did: the vessels, the parts that touched, and how hard (m/s along the normal).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Contact {
@@ -217,30 +340,43 @@ impl Universe {
                     .0
                     .iter()
                     .any(|&(x, _, y, _)| (x == a && y == b) || (x == b && y == a));
+                // (depth, part a, part b, normal from b to a, contact point from a's centre)
                 let mut best: Option<(f64, usize, usize, DVec3, DVec3)> = None;
+                let sta = self.world.get::<structure::Structure>(a).unwrap();
+                let stb = self.world.get::<structure::Structure>(b).unwrap();
+                // poses relative to a's centre, so the numbers stay small
+                let pose_a = vessel_pose(sta, &pa, pa.r);
+                let pose_b = vessel_pose(stb, &pb, pa.r);
                 for &(ia, oa, ra) in sa {
                     for &(ib, ob, rb) in sb {
                         if aligned.contains(a, ia, b, ib) {
                             continue;
                         }
+                        // far: spheres apart, no contact
                         let d = (pa.r + oa) - (pb.r + ob);
-                        let depth = ra + rb - d.length();
-                        if depth > 0.0 && best.is_none_or(|x| depth > x.0) {
-                            if docking_pair {
-                                let sta = self.world.get::<structure::Structure>(a).unwrap();
-                                let stb = self.world.get::<structure::Structure>(b).unwrap();
-                                if !boxes_overlap(
-                                    &hull_box(sta, pa.facing, pa.r, ia),
-                                    &hull_box(stb, pb.facing, pb.r, ib),
-                                ) {
-                                    continue;
-                                }
-                            }
-                            best = Some((depth, ia, ib, oa, ob));
+                        if ra + rb - d.length() <= 0.0 {
+                            continue;
+                        }
+                        if docking_pair
+                            && !boxes_overlap(
+                                &hull_box(sta, pa.facing, pa.r, ia),
+                                &hull_box(stb, pb.facing, pb.r, ib),
+                            )
+                        {
+                            continue;
+                        }
+                        // near: the parts' models decide
+                        let Some((depth, n, at)) =
+                            model_contact(sta, &pose_a, ia, stb, &pose_b, ib)
+                        else {
+                            continue;
+                        };
+                        if best.is_none_or(|x| depth > x.0) {
+                            best = Some((depth, ia, ib, n, at));
                         }
                     }
                 }
-                let Some((depth, ia, ib, oa, ob)) = best else {
+                let Some((depth, ia, ib, n, at)) = best else {
                     continue;
                 };
                 // ports facing each other meet at their faces in the docking step instead
@@ -251,15 +387,14 @@ impl Universe {
                 {
                     continue;
                 }
-                let d = (pa.r + oa) - (pb.r + ob);
-                let n = if d.length() > 1e-9 {
-                    d.normalized()
+                let n = if n.length_squared() > 1e-18 {
+                    n.normalized()
                 } else {
                     (pa.r - pb.r).normalized()
                 };
-                // contact point offsets from each centre: where the spheres meet
-                let ra_c = oa - n * (depth * 0.5);
-                let rb_c = ob + n * (depth * 0.5);
+                // contact point offsets from each centre: where the models meet
+                let ra_c = at;
+                let rb_c = at - (pb.r - pa.r);
                 let spin = |p: &flight::Powered| p.angvel + p.facing * p.roll_rate;
                 let va = pa.v + spin(&pa).cross(ra_c);
                 let vb = pb.v + spin(&pb).cross(rb_c);
@@ -859,7 +994,7 @@ mod tests {
             axes,
         };
         assert!(
-            a.half.length() * super::SPHERE_SHARE + b.half.length() * super::SPHERE_SHARE > 1.0,
+            a.half.length() * 0.8 + b.half.length() * 0.8 > 1.0,
             "old sphere proxy overlaps"
         );
         assert!(
@@ -954,8 +1089,9 @@ mod tests {
         // may lean on each other afterwards, but never pass through)
         assert!(sep > 0.0, "moving apart at {sep} m/s");
         assert!(sep < 2.0, "and slower than they came: {sep}");
+        // each K1 is about 3.8 m across its boosters: their models meet a little nearer than the old spheres did
         assert!(
-            closest > 4.0,
+            closest > 3.5,
             "the two K1s came within {closest} m of each other's centre"
         );
         let (pa, pb) = (u.powered(a).unwrap(), u.powered(b).unwrap());
@@ -965,6 +1101,77 @@ mod tests {
             "{step_change:?} vs gravity {g_step}"
         );
         assert!(!pa.crashed && !pb.crashed, "a bump breaks nothing");
+    }
+
+    #[test]
+    fn part_models_sit_in_their_authored_bounds() {
+        let defs: Vec<ose_data::PartDef> =
+            serde_json::from_str(include_str!("../../../assets/own/parts-catalog.json")).unwrap();
+        let identity = ose_data::craft::Quat {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+            w: 1.0,
+        };
+        let mut checked = 0;
+        for d in &defs {
+            let (Some(h), Some(b)) = (model_hull(&d.id, identity), d.bounds) else {
+                continue;
+            };
+            let pts = h.shape.points();
+            // the hull is in the vessel's sense (Z mirrored from the part's Unity frame)
+            let lo = |k: usize| pts.iter().map(|p| p[k]).fold(f64::MAX, f64::min);
+            let hi = |k: usize| pts.iter().map(|p| p[k]).fold(f64::MIN, f64::max);
+            let (c, half) = (b.center_m, b.size_m * 0.5);
+            let want = [
+                (c.x - half.x, c.x + half.x),
+                (c.y - half.y, c.y + half.y),
+                (-c.z - half.z, -c.z + half.z),
+            ];
+            let big = b.size_m.x.max(b.size_m.y).max(b.size_m.z);
+            for (k, (wl, wh)) in want.into_iter().enumerate() {
+                assert!(
+                    (lo(k) - wl).abs() < 0.25 * big && (hi(k) - wh).abs() < 0.25 * big,
+                    "{} axis {k}: hull {}..{} bounds {wl}..{wh}",
+                    d.id,
+                    lo(k),
+                    hi(k)
+                );
+            }
+            checked += 1;
+        }
+        assert!(checked > 300, "{checked} part models");
+    }
+
+    #[test]
+    fn up_close_the_part_models_decide_not_their_spheres() {
+        // two Mk1 pods side by side, one standing a pod's height higher less 0.15 m: the narrow top of the
+        // lower pod and the wide base of the upper one are within each other's spheres and boxes, but the
+        // cones only touch once they are closer
+        let (u, a, _) = two_k1s(0.0);
+        let st = u.structure(a).unwrap();
+        assert!(st.model_hull(0).is_some(), "the pod has its model");
+        let (centre, half) = st.part_box(0);
+        let rise = 2.0 * half.y - 0.15;
+        let at = |dx: f64| {
+            let pose_a = Pose::IDENTITY;
+            let pose_b = Pose::from_parts(Vector::new(dx, rise, 0.0), Rotation::IDENTITY);
+            model_contact(st, &pose_a, 0, st, &pose_b, 0)
+        };
+        let sphere = half.length() + BOUND_MARGIN_M;
+        assert!(
+            (DVec3::new(1.1, rise, 0.0)).length() < 2.0 * sphere,
+            "the spheres overlap"
+        );
+        assert!(
+            1.1 < 2.0 * half.x,
+            "and so do the boxes ({half:?} at {centre:?})"
+        );
+        assert!(at(1.1).is_none(), "the cones do not touch at 1.1 m");
+        let (depth, n, _) = at(0.8).expect("they touch at 0.8 m");
+        assert!(depth > 0.0 && depth < 0.3, "{depth}");
+        // the normal pushes the lower pod (a) away from the upper one: down and to the side
+        assert!(n.x < 0.0 && n.y < 0.0, "{n:?}");
     }
 
     #[test]
