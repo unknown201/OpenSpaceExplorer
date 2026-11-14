@@ -180,6 +180,7 @@ fn open(s: &Shared) -> AppState {
         save_lock: s.save_lock.clone(),
         world_changed_at: Mutex::new(crate::streaming::mark()),
         vessels: Mutex::new(Vec::new()),
+        next_vessel_id: s.next_vessel_id.clone(),
         // no id: nothing to shelve when the chosen campaign replaces it
         campaign: Mutex::new(save::Campaign {
             id: String::new(),

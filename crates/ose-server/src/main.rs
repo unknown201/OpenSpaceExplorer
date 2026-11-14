@@ -170,7 +170,7 @@ fn spawn_test_probe(s: &Shared, player_id: u64, name: &str) -> Option<u64> {
     let body = u.body_entity(&home.id)?;
     let e = u.spawn_vessel_in_circular_orbit(&format!("{name} probe"), body, 100_000.0);
     let mut list = s.vessels.lock().expect("vessels lock");
-    let id = list.iter().map(|&(_, id, _)| id).max().unwrap_or(0) + 1;
+    let id = s.new_vessel_id(&list);
     list.push((e, id, Some(player_id)));
     Some(id)
 }
@@ -346,6 +346,33 @@ async fn json_route(body: Arc<String>) -> impl IntoResponse {
 /// Several rooms run side by side, so two players can each play their own campaign (`rooms.rs`). What
 /// every room shares (accounts, saved crafts, the shelf of campaigns waiting to be resumed, the catalogs)
 /// sits behind `Arc`s handed to each room.
+/// A fresh vessel id: past every id handed out so far (`next`) and every id in the registry (a campaign
+/// loaded with larger ones), then `next` moves past it.
+fn fresh_vessel_id(
+    next: &std::sync::atomic::AtomicU64,
+    list: &[(bevy_ecs::entity::Entity, u64, Option<u64>)],
+) -> u64 {
+    use std::sync::atomic::Ordering;
+    let floor = list.iter().map(|&(_, id, _)| id).max().unwrap_or(0) + 1;
+    loop {
+        let current = next.load(Ordering::SeqCst);
+        let id = current.max(floor);
+        if next
+            .compare_exchange(current, id + 1, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            return id;
+        }
+    }
+}
+
+impl Shared {
+    /// The id for a vessel about to join `list` (the registry, held locked by the caller).
+    fn new_vessel_id(&self, list: &[(bevy_ecs::entity::Entity, u64, Option<u64>)]) -> u64 {
+        fresh_vessel_id(&self.next_vessel_id, list)
+    }
+}
+
 struct Shared {
     universe: Mutex<Universe>,
     streams: streaming::Streams,
@@ -364,6 +391,11 @@ struct Shared {
     world_changed_at: Mutex<streaming::Mark>,
     /// Vessel entity -> (vessel id, owner player id).
     vessels: Mutex<Vec<(bevy_ecs::entity::Entity, u64, Option<u64>)>>,
+    /// The next vessel id to hand out. Ids are never reused while the server runs: a vessel recovered or
+    /// destroyed and the next one launched used to get the same id (one past the largest left), and clients
+    /// drew the new rocket with the old one's cached craft, parts and animation state.
+    /// Shared by every room, so a player moving between campaigns never meets a reused id either.
+    next_vessel_id: Arc<std::sync::atomic::AtomicU64>,
     campaign: Mutex<save::Campaign>,
     difficulty: ServerMessage,
     stock_crafts: Arc<Vec<ose_data::craft::Craft>>,
@@ -626,6 +658,9 @@ async fn main() -> anyhow::Result<()> {
             tracing::info!(db = %args.db.display(), players = acc.count()?, "accounts opened");
             acc
         })),
+        next_vessel_id: Arc::new(std::sync::atomic::AtomicU64::new(
+            registry.iter().map(|&(_, id, _)| id).max().unwrap_or(0) + 1,
+        )),
         vessels: Mutex::new(registry),
         campaign: Mutex::new(campaign),
         difficulty: difficulty_message()?,
@@ -846,7 +881,7 @@ fn maintain_registry(s: &Shared) {
     let mut list = s.vessels.lock().expect("vessels lock");
     for (from, debris) in u.take_broken_off() {
         let owner = list.iter().find(|v| v.0 == from).and_then(|v| v.2);
-        let id = list.iter().map(|&(_, id, _)| id).max().unwrap_or(0) + 1;
+        let id = s.new_vessel_id(&list);
         list.push((debris, id, owner));
     }
     list.retain(|&(e, _, _)| u.vessel(e).is_some());
@@ -2064,7 +2099,7 @@ fn launch_on_pad_now(
         return fail(reason);
     }
     let mut list = s.vessels.lock().expect("vessels lock");
-    let id = list.iter().map(|&(_, id, _)| id).max().unwrap_or(0) + 1;
+    let id = s.new_vessel_id(&list);
     list.push((e, id, Some(player_id)));
     tracing::info!(player = player_id, vessel = id, craft = %name, parts, "craft on the pad");
     ServerMessage::CraftLaunched {
@@ -3376,7 +3411,7 @@ fn launch_craft(
         }
     }
     let mut list = s.vessels.lock().expect("vessels lock");
-    let id = list.iter().map(|&(_, id, _)| id).max().unwrap_or(0) + 1;
+    let id = s.new_vessel_id(&list);
     list.push((e, id, Some(player_id)));
     tracing::info!(player = player_id, vessel = id, craft = %name, parts, wet_t = m.wet_t(), dv, "craft launched");
     ServerMessage::CraftLaunched {
@@ -3767,7 +3802,7 @@ fn handle_decoded(
                     let res = s.universe.lock().expect("sim lock").stage(e);
                     if let Some(d) = res.debris {
                         let mut list = s.vessels.lock().expect("vessels lock");
-                        let id = list.iter().map(|&(_, id, _)| id).max().unwrap_or(0) + 1;
+                        let id = s.new_vessel_id(&list);
                         list.push((d, id, Some(player_id)));
                     }
                     let ok = res.fired;

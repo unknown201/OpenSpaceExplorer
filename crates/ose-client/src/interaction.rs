@@ -88,6 +88,12 @@ pub fn throttle_preset(full: bool) -> f64 {
     }
 }
 
+/// A camera drag whose mouseup never reached the page: a mouse move reports no button held (`MouseEvent.buttons`)
+/// while a drag is still open. The button was let go outside the window or while it lost focus.
+pub fn drag_orphaned(buttons: u16, dragging: bool) -> bool {
+    dragging && buttons == 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -100,5 +106,17 @@ mod tests {
         assert!((flight_zoom(100.0, FLIGHT_ZOOM_PER_NOTCH, false) - 93.24).abs() < 0.01);
         assert!((vab_zoom(20.0, VAB_ZOOM_PER_NOTCH, false, false) - 17.9).abs() < 1e-6);
         assert!((map_zoom(1.0, MAP_ZOOM_PER_NOTCH) - 0.7408).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_drag_released_outside_the_window_ends_on_the_next_move() {
+        // left, right or middle still held: the drag goes on
+        for held in [1, 2, 4, 3] {
+            assert!(!drag_orphaned(held, true));
+        }
+        // nothing held while a drag is open: its mouseup was lost
+        assert!(drag_orphaned(0, true));
+        // plain hovering is not a drag
+        assert!(!drag_orphaned(0, false));
     }
 }

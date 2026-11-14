@@ -408,6 +408,8 @@ struct App {
     crash_report_due: std::cell::Cell<Option<(u64, f64)>>,
     /// The flown vessel's records for the flight report.
     flight_records: std::cell::RefCell<Option<hud::FlightRecords>>,
+    /// The records of the other vessels flown this session (a Kerbal's EVA, the craft it left), by vessel.
+    flight_records_shelf: std::cell::RefCell<std::collections::HashMap<u64, hud::FlightRecords>>,
     /// Vessels this client has staged at least once: their first stage is lit, so the next is the one after.
     staged: std::collections::HashSet<u64>,
     roll_sent: f32,
@@ -1037,6 +1039,7 @@ pub fn start() -> Result<(), JsValue> {
         soi_seen: Default::default(),
         crash_report_due: std::cell::Cell::new(None),
         flight_records: std::cell::RefCell::new(None),
+        flight_records_shelf: Default::default(),
         staged: Default::default(),
         roll_sent: 0.0,
         rotation_sent: (0.0, 0.0, 0.0),
@@ -4691,6 +4694,12 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
     let a = app.clone();
     let on_move = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
         let mut app = a.borrow_mut();
+        // A button let go where the page never heard it (outside the window, over another program, after
+        // Alt+Tab) sends no mouseup: with no button held now, the camera drag is over. It kept turning the
+        // camera with the bare mouse until the next click.
+        if interaction::drag_orphaned(ev.buttons(), app.drag.is_some() || app.mnv_drag.is_some()) {
+            app.end_camera_drag();
+        }
         // Mouselook (Tab): the flight camera follows the mouse without a button held.
         #[cfg(target_arch = "wasm32")]
         if app.mouselook && app.flying.is_some() && !app.map_mode && ev.buttons() == 0 {
@@ -5501,7 +5510,9 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                         ev.prevent_default();
                         true
                     }
-                    "Tab" if !ev.repeat() && !app.map_mode => {
+                    // Alt+Tab is the system's window switch, not mouselook: toggled by it, the camera
+                    // followed the bare mouse on coming back.
+                    "Tab" if !ev.repeat() && !app.map_mode && !ev.alt_key() => {
                         app.mouselook = !app.mouselook;
                         hud::push(
                             &app.doc,
@@ -5738,7 +5749,12 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
     on_key_up.forget();
     // A key released while the tab is in the background never sends keyup: forget all held keys.
     let a = app.clone();
-    let on_blur = Closure::<dyn FnMut()>::new(move || a.borrow_mut().keys.clear());
+    let on_blur = Closure::<dyn FnMut()>::new(move || {
+        let mut app = a.borrow_mut();
+        app.keys.clear();
+        // and a camera drag held while the window lost focus never gets its mouseup either
+        app.end_camera_drag();
+    });
     window.add_event_listener_with_callback("blur", on_blur.as_ref().unchecked_ref())?;
     on_blur.forget();
 
@@ -6316,6 +6332,10 @@ impl App {
             } => match (vessel, reason) {
                 (Some(id), _) => {
                     self.revert_vessel = Some(id);
+                    // The last flight's report (a recovery's) must not stay over the new rocket on the pad.
+                    if let Some(e) = self.doc.get_element_by_id("flight-report") {
+                        e.class_list().remove_1("open").ok();
+                    }
                     if let Some(craft_id) = self.pending_launch.take() {
                         self.start_flight(id, Some(craft_id));
                     }
@@ -12496,12 +12516,18 @@ impl App {
         {
             let mut rec = self.flight_records.borrow_mut();
             if rec.as_ref().map(|r| r.vessel) != Some(id) {
-                *rec = Some(hud::FlightRecords {
+                // Going on EVA and boarding again switches vessels and back: each keeps its own records,
+                // or the recovery report said a flight to 900 m peaked at the pad's 112 m.
+                let mut shelf = self.flight_records_shelf.borrow_mut();
+                if let Some(old) = rec.take() {
+                    shelf.insert(old.vessel, old);
+                }
+                *rec = Some(shelf.remove(&id).unwrap_or_else(|| hud::FlightRecords {
                     vessel: id,
                     name: v.name.clone(),
                     launch_ut,
                     ..Default::default()
-                });
+                }));
             }
             if let (Some(r), Some(b)) = (rec.as_mut(), body) {
                 r.note(f.altitude_m, f.surface_speed_mps.max(0.0), &b.id);
@@ -14175,6 +14201,18 @@ impl App {
         self.send_node();
     }
 
+    /// Ends a camera (or maneuver handle) drag whose mouseup never arrived: the camera stops following the
+    /// mouse, and a dragged maneuver node is sent as it stands.
+    fn end_camera_drag(&mut self) {
+        if self.mnv_drag.take().is_some() {
+            self.send_node();
+        }
+        self.drag = None;
+        self.press = None;
+        self.canvas.class_list().remove_1("dragging").ok();
+        self.gpu_canvas.class_list().remove_1("dragging").ok();
+    }
+
     fn send_node(&mut self) {
         let Some(node) = self.node else {
             return;
@@ -14696,7 +14734,7 @@ impl App {
             };
             let parent_pos = positions[p as usize];
             let r_px = orbit.semi_major_axis().abs() / cam.m_per_px;
-            if r_px < 2.0 || r_px > 1.0e5 {
+            if !(2.0..=1.0e5).contains(&r_px) {
                 continue;
             }
             let alpha = if i == cam.focus { 0.9 } else { 0.45 };
