@@ -204,6 +204,14 @@ impl Scene {
         }
     }
 
+    /// The pilot of vessel `id` holds this steering input now (pitch, yaw, roll, each -1..1): its drawn
+    /// attitude starts turning at once and the server's state takes over as it catches up.
+    pub fn steer(&mut self, id: u64, pitch: f64, yaw: f64, roll: f64, now_ms: f64) {
+        if let Some(track) = self.attitudes.get_mut(&id) {
+            track.steer(pitch, yaw, roll, now_ms);
+        }
+    }
+
     pub fn vessel_attitude(&self, id: u64, now_ms: f64) -> Option<(glam::DVec3, glam::DVec3)> {
         let rotation = self.attitudes.get(&id)?.sample(now_ms);
         Some((rotation * glam::DVec3::Y, rotation * glam::DVec3::Z))

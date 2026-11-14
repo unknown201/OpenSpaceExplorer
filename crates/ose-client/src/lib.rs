@@ -11959,6 +11959,16 @@ impl App {
         // Hold manual axis commands server-side; SAS blends them using the reference override rules.
         let s = 1.0_f32;
         let rotation = (pitch_in as f32 * s, yaw_in as f32 * s, roll);
+        // the vessel starts turning on screen now; the server's state takes over as it arrives
+        if let Some(scene) = &mut self.scene {
+            scene.steer(
+                vessel,
+                rotation.0 as f64,
+                rotation.1 as f64,
+                rotation.2 as f64,
+                now,
+            );
+        }
         if rotation != self.rotation_sent {
             // The stability hold follows the keys on the server and stays where they let go: until the
             // client has that hold, its controls must not send the old one back.

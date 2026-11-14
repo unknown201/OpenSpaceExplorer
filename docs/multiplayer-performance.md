@@ -90,6 +90,16 @@ time rewinds, large pose jumps and stale connections reset prediction. Campaign 
 loads/reverts clear the histories, and vanished/on-rails vessels lose their tracks. Game rules and
 authoritative telemetry use the original snapshots.
 
+The pilot's own steering is predicted too (`orientation::Steering`): the craft starts turning on screen the
+frame a key goes down instead of a round trip and a snapshot later. Each attitude track learns, per axis, how fast
+the vessel spins up per unit of input (from how its authoritative spin changed while an input was held) and how
+long an input change takes to show in the server's state. Until a change shows, the track adds the turn it
+would have made by now (the learned acceleration times the input change, integrated from the key press); when
+the server's state catches up, that predicted turn joins the arrival correction and fades out over 50 ms, so the
+handover never jumps. The first steering of a craft is not predicted (nothing learned yet), riders' views are
+not (they send no input), and everything stays within the existing 30-degree prediction bound. The server still
+flies the vessel; nothing of the flight model runs in the browser.
+
 Native tests cover input edges, frame-timing drift, quaternion wraparound, orthonormal axes, jitter,
 stops, bounded prediction and discontinuity resets. The browser regression can be run with:
 
