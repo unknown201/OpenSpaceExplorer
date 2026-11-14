@@ -269,6 +269,9 @@ pub struct Structure {
     /// Each stack part's hull as the frustum between its bottom and top stack nodes (`None` for any other
     /// part, which keeps its box): a Mk1 pod narrows from 1.25 m at its base to 0.625 m at its top.
     hull_taper: Vec<Option<Taper>>,
+    /// Each part's model as a contact sees it up close: the convex hull of its meshes (part frame, Z mirrored
+    /// into the vessel frame's sense) and the part's turn in the vessel frame (`None`: the part keeps its box).
+    model_hulls: Vec<Option<crate::collide::ModelHull>>,
     extended_box: Vec<Option<(DVec3, DVec3)>>,
     /// Landing gear: definition and whether it is out.
     pub gear_defs: Vec<Option<ose_data::LandingGear>>,
@@ -1116,6 +1119,16 @@ impl Structure {
                     let def = def_of(i)?;
                     let half = def.bounds.map(|b| vessel_box(q, b).1)?;
                     part_taper(q, def, half)
+                })
+                .collect(),
+            model_hulls: (0..n)
+                .map(|i| {
+                    let def = def_of(i)?;
+                    // deployables fold and unfold: they keep their boxes
+                    if def.landing_gear.is_some() {
+                        return None;
+                    }
+                    crate::collide::model_hull(&def.id, craft.parts[i].local_rotation)
                 })
                 .collect(),
             extended_box: (0..n)
@@ -2497,6 +2510,11 @@ impl Structure {
             _ => self.stowed_box[i],
         };
         (self.rigid.rest_position(i) + offset, half)
+    }
+
+    /// Part `i`'s model hull, when it has one and is not folded out.
+    pub(crate) fn model_hull(&self, i: usize) -> Option<&crate::collide::ModelHull> {
+        self.model_hulls.get(i)?.as_ref()
     }
 
     /// A stack part's hull between its stack nodes (`None`: the part is its box).

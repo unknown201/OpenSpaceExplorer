@@ -2155,8 +2155,15 @@ mod tests {
             .world
             .get_resource::<AlignedPorts>()
             .is_some_and(|x| x.0.is_empty()));
-        u.step();
-        let hits = u.take_contacts();
+        // within a second their models meet (their spheres overlap from the start)
+        let mut hits = Vec::new();
+        for _ in 0..crate::TICKS_PER_SECOND {
+            u.step();
+            hits.extend(u.take_contacts());
+            if !hits.is_empty() {
+                break;
+            }
+        }
         assert!(
             hits.iter()
                 .any(|h| (h.a == a && h.b == b) || (h.a == b && h.b == a)),
