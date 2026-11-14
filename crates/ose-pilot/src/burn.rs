@@ -1,6 +1,6 @@
 //! A finite burn: coast until shortly before the burn, turn to the burn direction, then fire so the
 //! burn is centred on its planned time, and cut off on measured delta-v (gravity removed).
-use crate::{acceleration, body, stage_if_spent, state, Status};
+use crate::{acceleration, aim, body, stage_if_spent, state, Status};
 use bevy_ecs::entity::Entity;
 use ose_math::{rendezvous, DVec3};
 use ose_sim::{flight::Attitude, Universe};
@@ -68,8 +68,10 @@ impl Burn {
             return Status::Failed("crashed during a burn".into());
         }
         let accel = acceleration(u, e);
+        // Engines push along the craft's own fore axis; steer that onto the burn.
+        let hold = Attitude::Fixed(aim(&p, p.facing, direction));
         if self.phase == Phase::Align {
-            u.set_controls(e, 0.0, Attitude::Fixed(direction));
+            u.set_controls(e, 0.0, hold);
             if accel <= 0.0 && !stage_if_spent(u, e) {
                 return Status::Failed("no engine for the burn".into());
             }
@@ -93,11 +95,11 @@ impl Burn {
         }
         self.last = Some((p.r, p.v, u.ut()));
         if self.left.dot(direction) <= DONE_MPS {
-            u.set_controls(e, 0.0, Attitude::Fixed(direction));
+            u.set_controls(e, 0.0, hold);
             return Status::Done;
         }
         if u.ut() - self.fire_started > 900.0 {
-            u.set_controls(e, 0.0, Attitude::Fixed(direction));
+            u.set_controls(e, 0.0, hold);
             return Status::Failed(format!(
                 "burn took too long, {:.1} m/s left",
                 self.left.length()
@@ -107,7 +109,7 @@ impl Burn {
             return Status::Running;
         }
         if accel <= 0.0 || p.propellant_t <= 0.0 {
-            u.set_controls(e, 0.0, Attitude::Fixed(direction));
+            u.set_controls(e, 0.0, hold);
             return Status::Failed(format!(
                 "out of propellant, {:.1} m/s left",
                 self.left.length()
@@ -118,7 +120,7 @@ impl Burn {
         } else {
             0.0
         };
-        u.set_controls(e, throttle, Attitude::Fixed(direction));
+        u.set_controls(e, throttle, hold);
         Status::Running
     }
 

@@ -1,6 +1,6 @@
 # Rendezvous v2: launch to dock from anywhere
 
-Status: **in progress** (2026-11-14). R1 is done (`crates/ose-guidance`). R2 is done (`crates/ose-pilot`, test T1 passes). This is the prerequisite for [delivery routes](delivery-routes-design.md).
+Status: **in progress** (2026-11-14). R1 is done (`crates/ose-guidance`). R2 and R3 are done (`crates/ose-pilot`; tests T1, T4 and T9 pass, run by CI with `--release`). This is the prerequisite for [delivery routes](delivery-routes-design.md).
 Josh decided that routes, including depot-to-depot routes, are built on a rendezvous system that
 works from launch to dock, from KSC, from stations and depots, and from the Mun, including orbital
 windows. That system has to be well tested before routes depend on it.
@@ -97,7 +97,7 @@ Each one passes only if it docks, survives, and stays within a Δv margin of the
 | T8 | Docked at LKO station | KSC (recover) | Deorbit and landing near KSC |
 | T9 | Two pilots, same port, same window | Station | Collision behaves physically, with no crash or stuck state |
 
-T1, T4 and T9 are fast enough to run in normal CI. The cross-SOI and long ones (T3, T5 to T8) run
+T1, T4 and T9 run in normal CI, optimised (`cargo test --release -p ose-pilot`, about 2.5 min with the build); unoptimised they take about 10 min, so debug builds skip them. The cross-SOI and long ones (T3, T5 to T8) run
 as a separate long job. The flaky `mun_run` test is fixed as part of L7, not relaxed.
 
 ## 5. Delivery order (one PR each, each green before the next)

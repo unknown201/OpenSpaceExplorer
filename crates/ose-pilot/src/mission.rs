@@ -3,24 +3,29 @@
 //!
 //! Same orbit-to-orbit steps the ISS assembly test pilot used, made tick-driven. One central body
 //! for now; departures, SOI changes and launch windows are R3-R5 of `docs/rendezvous-v2-plan.md`.
+use crate::depart::Depart;
 use crate::{
     approach::Approach, ascent::Ascent, ascent::AscentParams, body, burn::Burn, orbit, state,
     Status,
 };
 use bevy_ecs::entity::Entity;
-use ose_data::{PartDef, ResourceDef};
+use ose_data::{craft::Craft, PartDef, ResourceDef};
 use ose_math::rendezvous;
-use ose_sim::Universe;
+use ose_sim::{flight::FlightSpec, Universe};
 
-/// The parts and resources the vessels are built from.
+/// The parts and resources the vessels are built from, and how the server builds a flight spec for
+/// a craft (needed when undocking splits a vessel).
 pub struct Catalog<'a> {
     pub defs: &'a [PartDef],
     pub resources: &'a [ResourceDef],
+    pub spec: &'a dyn Fn(&Craft) -> FlightSpec,
 }
 
 #[derive(Clone, Debug)]
 pub struct MissionParams {
     pub ascent: Option<AscentParams>,
+    /// Start docked: undock at this port of ours first, then back off.
+    pub depart_from_port: Option<String>,
     pub target: Entity,
     pub target_port: String,
     pub own_port: String,
@@ -41,6 +46,7 @@ impl MissionParams {
     pub fn new(target: Entity, target_port: &str, own_port: &str) -> Self {
         Self {
             ascent: None,
+            depart_from_port: None,
             target,
             target_port: target_port.into(),
             own_port: own_port.into(),
@@ -57,6 +63,7 @@ impl MissionParams {
 /// Where the mission is, for logs and the routes panel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Leg {
+    Depart,
     Ascent,
     Plan,
     Transfer,
@@ -67,6 +74,7 @@ pub enum Leg {
 }
 
 enum Phase {
+    Depart(Depart),
     Ascent(Ascent),
     Plan,
     Transfer(Burn, f64),
@@ -78,6 +86,8 @@ enum Phase {
 
 pub struct Mission {
     pub params: MissionParams,
+    /// The vessel being flown. Undocking can make it a new entity.
+    vessel: Entity,
     phase: Phase,
     encounter: Option<f64>,
     corrections: u32,
@@ -86,13 +96,15 @@ pub struct Mission {
 }
 
 impl Mission {
-    pub fn new(params: MissionParams) -> Self {
-        let phase = match &params.ascent {
-            Some(a) => Phase::Ascent(Ascent::new(a.clone())),
-            None => Phase::Plan,
+    pub fn new(vessel: Entity, params: MissionParams) -> Self {
+        let phase = match (&params.depart_from_port, &params.ascent) {
+            (Some(port), _) => Phase::Depart(Depart::new(port)),
+            (None, Some(a)) => Phase::Ascent(Ascent::new(a.clone())),
+            (None, None) => Phase::Plan,
         };
         Self {
             params,
+            vessel,
             phase,
             encounter: None,
             corrections: 0,
@@ -100,8 +112,13 @@ impl Mission {
         }
     }
 
+    pub fn vessel(&self) -> Entity {
+        self.vessel
+    }
+
     pub fn leg(&self) -> Leg {
         match self.phase {
+            Phase::Depart(_) => Leg::Depart,
             Phase::Ascent(_) => Leg::Ascent,
             Phase::Plan => Leg::Plan,
             Phase::Transfer(..) => Leg::Transfer,
@@ -118,11 +135,27 @@ impl Mission {
         Status::Failed(why)
     }
 
-    pub fn update(&mut self, u: &mut Universe, e: Entity, catalog: &Catalog) -> Status {
+    pub fn update(&mut self, u: &mut Universe, catalog: &Catalog) -> Status {
         let t = u.ut();
+        let e = self.vessel;
         match &mut self.phase {
             Phase::Docked => Status::Done,
             Phase::Failed(why) => Status::Failed(why.clone()),
+            Phase::Depart(d) => match d.update(u, e, catalog) {
+                Status::Running => Status::Running,
+                Status::Failed(why) => self.fail(why),
+                Status::Done => {
+                    if let Some(v) = d.vessel {
+                        self.vessel = v;
+                    }
+                    self.log.push(format!("DEPARTED at UT {t:.0}"));
+                    self.phase = match &self.params.ascent {
+                        Some(a) => Phase::Ascent(Ascent::new(a.clone())),
+                        None => Phase::Plan,
+                    };
+                    Status::Running
+                }
+            },
             Phase::Ascent(a) => match a.update(u, e) {
                 Status::Running => Status::Running,
                 Status::Failed(why) => self.fail(why),
@@ -194,6 +227,9 @@ impl Mission {
                 Status::Running => Status::Running,
                 Status::Failed(why) => self.fail(why),
                 Status::Done => {
+                    if let Some(kept) = a.docked(u, e) {
+                        self.vessel = kept;
+                    }
                     self.log.push(format!("DOCKED at UT {t:.0}"));
                     self.phase = Phase::Docked;
                     Status::Done
@@ -212,6 +248,21 @@ impl Mission {
         let Some(craft) = u.current_craft(e) else {
             return self.fail("vessel is gone".into());
         };
+        // Already close and nearly matched (say, parked next to the station): go straight in.
+        if let (Some(a), Some(b)) = (state(u, e), state(u, self.params.target)) {
+            if (a.0 - b.0).length() < self.params.approach_range_m && (a.1 - b.1).length() < 5.0 {
+                self.log.push(format!(
+                    "CLOSE at {:.0} m, approaching",
+                    (a.0 - b.0).length()
+                ));
+                self.phase = Phase::Approach(Approach::new(
+                    self.params.target,
+                    &self.params.target_port,
+                    &self.params.own_port,
+                ));
+                return Status::Running;
+            }
+        }
         let budget = ose_data::staging::delta_v_by_stage(&craft, catalog.defs, catalog.resources)
             .total_vacuum_mps
             * self.params.budget_fraction;
@@ -244,8 +295,10 @@ impl Mission {
     }
 
     /// Ticks per step a headless harness can run at.
-    pub fn suggested_warp(&self, u: &Universe, e: Entity) -> u32 {
+    pub fn suggested_warp(&self, u: &Universe) -> u32 {
+        let e = self.vessel;
         match &self.phase {
+            Phase::Depart(d) => d.suggested_warp(),
             Phase::Ascent(a) => a.suggested_warp(),
             Phase::Transfer(b, _) | Phase::Brake(b) => b.suggested_warp(u, e),
             Phase::Approach(a) => a.suggested_warp(),

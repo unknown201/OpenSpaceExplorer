@@ -1,11 +1,11 @@
 //! Final approach and docking with RCS: fly to a staging point on the target port's axis, then down
 //! the axis at a capped closing speed until the simulation's port capture latches. There is no
 //! collision avoidance: if something else is in the way, the vessel hits it.
-use crate::{body, state, Status};
+use crate::{aim, body, pulsed, state, translation_input, Status};
 use bevy_ecs::entity::Entity;
 use ose_data::PartDef;
 use ose_math::DVec3;
-use ose_sim::{docking, flight, flight::Attitude, Universe};
+use ose_sim::{docking, flight::Attitude, Universe};
 
 /// Distance of the staging point out along the target port's axis (m).
 pub const STAGING_M: f64 = 120.0;
@@ -51,19 +51,30 @@ impl Approach {
         }
     }
 
-    /// Whether the two vessels have become one.
-    fn docked(&self, u: &Universe, e: Entity) -> bool {
-        let gone = |x: Entity| u.world.get_entity(x).is_err() || u.current_craft(x).is_none();
-        if gone(e) || gone(self.target) {
-            return true;
-        }
-        u.current_craft(e)
-            .is_some_and(|c| c.parts.iter().any(|p| p.guid == self.target_port))
+    /// The vessel both halves became, once our port and the target port are in one craft.
+    pub fn docked(&self, u: &Universe, e: Entity) -> Option<Entity> {
+        let holds_both = |x: Entity| {
+            u.world.get_entity(x).is_ok()
+                && u.current_craft(x).is_some_and(|c| {
+                    c.parts.iter().any(|p| p.guid == self.target_port)
+                        && c.parts.iter().any(|p| p.guid == self.own_port)
+                })
+        };
+        [e, self.target].into_iter().find(|x| holds_both(*x))
     }
 
     pub fn update(&mut self, u: &mut Universe, e: Entity, defs: &[PartDef]) -> Status {
-        if self.docked(u, e) {
+        if let Some(kept) = self.docked(u, e) {
+            // Let go of the controls: a held translation would keep firing the merged vessel's RCS.
+            u.set_translate(kept, DVec3::ZERO);
+            u.action_group(kept, ose_sim::ActionGroup::Rcs, Some(false));
             return Status::Done;
+        }
+        if u.world.get_entity(e).is_err() || u.current_craft(e).is_none() {
+            return Status::Failed("vessel is gone".into());
+        }
+        if u.world.get_entity(self.target).is_err() || u.current_craft(self.target).is_none() {
+            return Status::Failed("target is gone".into());
         }
         let started = *self.started.get_or_insert_with(|| {
             u.set_target(e, Some(self.target));
@@ -101,14 +112,7 @@ impl Approach {
             self.final_leg = true;
         }
         // Face our port down the target port's axis.
-        let top = flight::vessel_top(&pc);
-        let right = pc.facing.cross(top);
-        let turn = glam::DQuat::from_rotation_arc(
-            glam::DVec3::new(own_axis.x, own_axis.y, own_axis.z),
-            -glam::DVec3::new(axis.x, axis.y, axis.z),
-        );
-        let face = turn * glam::DVec3::new(pc.facing.x, pc.facing.y, pc.facing.z);
-        u.set_controls(e, 0.0, Attitude::Fixed(DVec3::new(face.x, face.y, face.z)));
+        u.set_controls(e, 0.0, Attitude::Fixed(aim(&pc, own_axis, -axis)));
         let accel = pc.rcs.thrust_kn / pc.mass_t;
         if accel <= 0.001 {
             return Status::Failed("no RCS thrust".into());
@@ -131,23 +135,8 @@ impl Approach {
         } else {
             command
         };
-        // The RCS mixer has a 0.05 input deadband: pulse small inputs like a player tapping keys.
-        let axes = [command.dot(right), command.dot(pc.facing), command.dot(top)];
-        let pulses = &mut self.pulses;
-        let axes: [f64; 3] = std::array::from_fn(|i| {
-            if axes[i].abs() >= 0.05 {
-                return axes[i];
-            }
-            pulses[i] += axes[i];
-            if pulses[i].abs() >= 0.1 {
-                let pulse = pulses[i].signum() * 0.1;
-                pulses[i] -= pulse;
-                pulse
-            } else {
-                0.0
-            }
-        });
-        u.set_translate(e, DVec3::new(axes[0], axes[1], axes[2]));
+        let input = pulsed(&mut self.pulses, translation_input(&pc, command));
+        u.set_translate(e, input);
         if u.ut() - started > self.timeout_s {
             u.set_translate(e, DVec3::ZERO);
             return Status::Failed(format!(

@@ -105,8 +105,11 @@ impl Ascent {
             if self.params.stage_in_orbit {
                 u.stage(e);
             }
-            let facing = u.powered(e).map(|p| p.facing).unwrap_or(p.facing);
-            u.set_controls(e, 0.0, Attitude::Fixed(facing));
+            let fore = u
+                .powered(e)
+                .map(|p| crate::control_axes(p).1)
+                .unwrap_or(p.facing);
+            u.set_controls(e, 0.0, Attitude::Fixed(fore));
             return Status::Done;
         }
         if u.ut() - start > self.params.timeout_s {

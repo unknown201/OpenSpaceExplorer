@@ -36,6 +36,7 @@ right before merging, verify the diff as above, and let CI run on the rebased co
   cargo serialises builds with its lock. A stale wasm build of a crate can fail after a rebase; `cargo clean -p <crate> --target wasm32-unknown-unknown` fixes it.
 - `assets/web` and `e2e/node_modules` live only in the main checkout; serve assets with `--assets-dir D:/Projects/OpenSpaceExplorer/assets/web`.
 - Before pushing run what CI runs: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
-  `cargo test --workspace`, `python -B -m unittest discover -s tools/tests`, `cargo check -p ose-client --target wasm32-unknown-unknown`.
+  `cargo test --workspace`, `python -B -m unittest discover -s tools/tests`, `cargo check -p ose-client --target wasm32-unknown-unknown`,
+  and `cargo test --release -p ose-pilot` (the pilot's flight scenarios, ignored in debug builds).
 - A local `ose-server` left running on a port keeps serving old code and holds `target/debug/ose-server.exe`;
   check `netstat -ano | findstr 779` before benchmarking, and kill only your own process by PID.
