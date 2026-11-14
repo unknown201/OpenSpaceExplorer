@@ -1742,6 +1742,41 @@ async fn in_a_coop_campaign_a_teammate_can_fly_the_pilots_craft() {
     })
     .await;
     assert!(accepted, "{reason:?}");
+    // the teammate pilots it now: the first player rides along, and their commands are refused naming the pilot
+    send_msg(&mut ws, &ClientMessage::TakeControl { vessel }).await;
+    let (accepted, reason) = wait_for(&mut ws, |m| match m {
+        ServerMessage::FlightAck {
+            vessel: v,
+            accepted,
+            reason,
+        } if v == vessel => Some((accepted, reason)),
+        _ => None,
+    })
+    .await;
+    assert!(!accepted);
+    assert_eq!(reason.as_deref(), Some("teammate is piloting it"));
+    // the pilot lets go: the first player takes it back
+    send_msg(&mut mate, &ClientMessage::ReleaseControl).await;
+    let freed = |m: ServerMessage| match m {
+        ServerMessage::CampaignState { members, .. }
+            if members.iter().all(|m| m.flying.is_none()) =>
+        {
+            Some(())
+        }
+        _ => None,
+    };
+    wait_for(&mut ws, freed).await;
+    send_msg(&mut ws, &ClientMessage::TakeControl { vessel }).await;
+    let (accepted, reason) = wait_for(&mut ws, |m| match m {
+        ServerMessage::FlightAck {
+            vessel: v,
+            accepted,
+            reason,
+        } if v == vessel => Some((accepted, reason)),
+        _ => None,
+    })
+    .await;
+    assert!(accepted, "{reason:?}");
 }
 
 #[tokio::test]
