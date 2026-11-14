@@ -419,10 +419,10 @@ impl App {
         let Some(scene) = &self.scene else { return };
         let mut html = "<option value=\"\">Choose an orbiting vessel</option>".to_string();
         for v in &scene.vessels {
+            // far vessels come in brief (`VesselState::brief`), so ask the helpers rather than the readout
             if Some(v.id) == self.flying
-                || v.flight
-                    .as_ref()
-                    .is_none_or(|f| f.eva || f.situation != ose_net::FlightSituation::Orbit)
+                || v.is_eva()
+                || v.situation() != Some(ose_net::FlightSituation::Orbit)
             {
                 continue;
             }
@@ -611,8 +611,14 @@ impl App {
             return;
         }
         let (Some(f), Some(tf)) = (&me.flight, &target.flight) else {
-            self.rdv_phase(Phase::Unavailable);
-            self.rdv_render("Flight instruments unavailable", vec![], "");
+            // a far vessel comes in brief until the server knows it is the target; its instruments follow
+            self.rdv_phase(Phase::Prepare);
+            self.rendezvous.cue = None;
+            self.rdv_render(
+                "Loading flight instruments",
+                vec![],
+                "Planning begins when both vessels' readouts arrive.",
+            );
             return;
         };
         if me.reference_body != target.reference_body {

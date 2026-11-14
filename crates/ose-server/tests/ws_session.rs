@@ -1745,6 +1745,44 @@ async fn in_a_coop_campaign_a_teammate_can_fly_the_pilots_craft() {
 }
 
 #[tokio::test]
+async fn far_vessels_come_in_brief_until_viewed() {
+    let (_server, addr) = spawn_server().await;
+    let mut ws = connect_ws(&addr).await;
+    hello(&mut ws, None, "pilot").await;
+    send_msg(&mut ws, &ClientMessage::JoinCampaign).await;
+    let vessel = launch_to_orbit(&mut ws, 120_000.0).await;
+    let mut mate = connect_ws(&addr).await;
+    hello(&mut mate, None, "teammate").await;
+    send_msg(&mut mate, &ClientMessage::JoinCampaign).await;
+    // a vessel as one player is sent it: (its part resources listed, whether it came in brief)
+    let detail = |m: ServerMessage| match m {
+        ServerMessage::Vessels { vessels, .. } => vessels
+            .into_iter()
+            .find(|v| v.id == vessel)
+            .map(|v| (v.flight.map(|f| f.part_resources.len()), v.brief.is_some())),
+        _ => None,
+    };
+    // the player who launched it sees it in full
+    let (parts, brief) = wait_for(&mut ws, detail).await;
+    assert!(parts.is_some_and(|n| n > 0) && !brief, "{parts:?}");
+    // a teammate elsewhere gets it in brief: still listed, with its orbit and situation
+    let (parts, brief) = wait_for(&mut mate, detail).await;
+    assert!(parts.is_none() && brief, "{parts:?}");
+    // once their view follows it, in full
+    send_msg(
+        &mut mate,
+        &ClientMessage::Viewing {
+            vessel: Some(vessel),
+        },
+    )
+    .await;
+    wait_for(&mut mate, |m| {
+        detail(m).filter(|d| d.0.is_some_and(|n| n > 0))
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn a_pad_launch_lights_while_a_teammate_is_connected() {
     let (_server, addr) = spawn_server().await;
     // a teammate joins the campaign and sits there
@@ -3028,8 +3066,28 @@ async fn multiplayer_streams_share_consistent_world_updates() {
         .keys()
         .find(|tick| worlds.iter().all(|w| w.contains_key(tick)))
         .expect("all peers should receive a common publication");
+    // every player sees the same world; each gets their own craft in full and the others' (far off, in their
+    // own orbits) in brief
+    let seen = |w: &Vec<ose_net::VesselState>| {
+        w.iter()
+            .map(|v| {
+                (
+                    v.id,
+                    v.owner,
+                    v.position_m,
+                    v.velocity_mps,
+                    v.orbit,
+                    v.situation(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
     for world in &worlds[1..] {
-        assert_eq!(world[common], worlds[0][common]);
+        assert_eq!(seen(&world[common]), seen(&worlds[0][common]));
+    }
+    for world in &worlds {
+        let full = world[common].iter().filter(|v| v.flight.is_some()).count();
+        assert_eq!(full, 1, "only their own craft in full");
     }
 }
 
@@ -4138,5 +4196,70 @@ async fn a_relaunch_after_recovery_gets_a_new_vessel_id() {
     assert_ne!(
         ids[0], ids[1],
         "the relaunched rocket reused the recovered one's id"
+    );
+}
+
+/// What interest management saves: eight players, each with a craft in its own orbit (far apart). Each gets
+/// their own vessel in full and the others slim; prints the `Vessels` bytes a player gets against what
+/// sending all eight in full would take.
+/// `cargo test -p ose-server --test ws_session interest_payload_probe -- --ignored --nocapture`
+#[tokio::test]
+#[ignore]
+async fn interest_payload_probe() {
+    let (_server, addr) = spawn_server().await;
+    let mut players = Vec::new();
+    for i in 0..8 {
+        let mut ws = connect_ws(&addr).await;
+        hello(&mut ws, None, &format!("p{i}")).await;
+        send_msg(&mut ws, &ClientMessage::JoinCampaign).await;
+        let k1 = serde_json::from_str::<Vec<ose_data::craft::Craft>>(include_str!(
+            "../../../assets/own/stock-craft.json"
+        ))
+        .unwrap()
+        .into_iter()
+        .find(|c| c.name == "Kerbal K1")
+        .unwrap();
+        send_msg(
+            &mut ws,
+            &ClientMessage::LaunchCraft {
+                craft: k1,
+                altitude_m: 100_000.0 + 10_000.0 * i as f64,
+            },
+        )
+        .await;
+        wait_for(&mut ws, |m| match m {
+            ServerMessage::CraftLaunched { vessel, .. } => vessel,
+            _ => None,
+        })
+        .await;
+        players.push(ws);
+    }
+    let mut got = 0usize;
+    let mut full_estimate = 0usize;
+    let mut n = 0;
+    for ws in &mut players {
+        for _ in 0..5 {
+            let (bytes, vessels) = wait_for(ws, |m| match &m {
+                ServerMessage::Vessels { vessels, .. } if vessels.len() == 8 => {
+                    Some((ose_net::encode(&m).unwrap().len(), vessels.clone()))
+                }
+                _ => None,
+            })
+            .await;
+            let own = vessels
+                .iter()
+                .map(|v| ose_net::encode(v).unwrap().len())
+                .max()
+                .unwrap();
+            got += bytes;
+            full_estimate += own * vessels.len();
+            n += 1;
+        }
+    }
+    eprintln!(
+        "Vessels per player per snapshot: {} bytes with interest, about {} all in full ({:.1}x less)",
+        got / n,
+        full_estimate / n,
+        full_estimate as f64 / got as f64
     );
 }

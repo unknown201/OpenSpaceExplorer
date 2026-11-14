@@ -1,6 +1,7 @@
 //! Encode shared state once per publication. Each connection keeps only the newest pending update;
 //! reliable command replies continue to be sent directly by the session.
 
+use crate::interest::{Interest, VesselFrames};
 use axum::{
     body::Bytes,
     extract::ws::{Message, WebSocket},
@@ -34,6 +35,11 @@ pub struct Batch {
     /// Taken before reading the world, so a joining player can skip work begun before they joined.
     pub(super) started: Mark,
     messages: Box<[Bytes]>,
+    /// The vessel each message is about (trajectories), so a player is sent only what they need
+    /// (`interest.rs`).
+    about: Box<[Option<u64>]>,
+    /// The publication's vessels, assembled for each player after `messages` (`interest.rs`).
+    vessels: Option<Arc<VesselFrames>>,
 }
 
 type Frames = Arc<Batch>;
@@ -49,6 +55,8 @@ impl Default for Streams {
         let empty = Arc::new(Batch {
             started: mark(),
             messages: Box::new([]),
+            about: Box::new([]),
+            vessels: None,
         });
         Self {
             snapshots: watch::channel(empty.clone()).0,
@@ -57,19 +65,28 @@ impl Default for Streams {
     }
 }
 
-fn encode(messages: impl IntoIterator<Item = ServerMessage>) -> Option<Box<[Bytes]>> {
+type Encoded = (Box<[Bytes]>, Box<[Option<u64>]>);
+
+fn encode(messages: impl IntoIterator<Item = ServerMessage>) -> Option<Encoded> {
     messages
         .into_iter()
         .map(|message| {
+            let about = match &message {
+                ServerMessage::Trajectory { vessel, .. } => Some(*vessel),
+                _ => None,
+            };
             ose_net::encode(&message)
-                .map(Bytes::from)
+                .map(|b| (Bytes::from(b), about))
                 .map_err(|error| {
                     tracing::error!(%error, "encode shared stream");
                 })
                 .ok()
         })
         .collect::<Option<Vec<_>>>()
-        .map(Vec::into_boxed_slice)
+        .map(|v| {
+            let (m, a): (Vec<_>, Vec<_>) = v.into_iter().unzip();
+            (m.into_boxed_slice(), a.into_boxed_slice())
+        })
 }
 
 pub fn start(s: super::AppState) {
@@ -88,9 +105,10 @@ pub fn start(s: super::AppState) {
                 _ = snapshots.tick() => {
                     if s.streams.snapshots.receiver_count() > 0 {
                         let started = std::time::Instant::now();
-                        publish(&s.streams.snapshots, || {
+                        publish_with(&s.streams.snapshots, || {
                             let (time, bodies, vessels) = super::snapshot(&s);
-                            [time, bodies, vessels, super::launch_sites_message(&s)]
+                            let vessels = super::vessel_frames(&s, vessels);
+                            ([time, bodies, super::launch_sites_message(&s)], vessels)
                         });
                         tracing::debug!(elapsed_us = started.elapsed().as_micros() as u64,
                             clients = s.streams.snapshots.receiver_count(), "snapshot published");
@@ -113,10 +131,24 @@ fn publish<M: IntoIterator<Item = ServerMessage>>(
     sender: &watch::Sender<Frames>,
     build: impl FnOnce() -> M,
 ) {
+    publish_with(sender, || (build(), None));
+}
+
+/// Publish shared messages and, after them, the vessels each player gets assembled for them.
+fn publish_with<M: IntoIterator<Item = ServerMessage>>(
+    sender: &watch::Sender<Frames>,
+    build: impl FnOnce() -> (M, Option<VesselFrames>),
+) {
     let started = mark();
-    if let Some(messages) = encode(build()) {
+    let (messages, vessels) = build();
+    if let Some((messages, about)) = encode(messages) {
         // send() drops the batch if the last client left while it was being built.
-        let _ = sender.send(Arc::new(Batch { started, messages }));
+        let _ = sender.send(Arc::new(Batch {
+            started,
+            messages,
+            about,
+            vessels: vessels.map(Arc::new),
+        }));
     }
 }
 
@@ -139,12 +171,37 @@ pub async fn send_bytes(socket: &mut WebSocket, bytes: Bytes) -> bool {
     )
 }
 
-pub async fn send_batch(socket: &mut WebSocket, frames: &Frames) -> bool {
+/// Send a publication as this player needs it (`focus`: the vessels they pilot and view): the vessels near
+/// their focus in full and the rest slim, and far vessels' trajectories only now and then (`interest.rs`).
+pub async fn send_batch(
+    socket: &mut WebSocket,
+    frames: &Frames,
+    interest: &mut Interest,
+    focus: &[u64],
+) -> bool {
+    let vessels = frames.vessels.as_ref().map(|v| {
+        interest.near = v.near(focus);
+        v.message(&interest.near)
+    });
+    let is_trajectories = frames.about.iter().any(Option::is_some);
+    let wanted: Vec<bool> = frames
+        .about
+        .iter()
+        .map(|a| a.is_none_or(|v| interest.wants_trajectory(v)))
+        .collect();
+    if is_trajectories {
+        interest.trajectories += 1;
+    }
     // Bound the whole update, including trajectories for a large fleet. On timeout the caller exits
     // and drops the socket: a partially written frame must never be retried on this connection.
     timeout(WRITE_TIMEOUT, async {
-        for bytes in frames.messages.iter() {
+        for (bytes, _) in frames.messages.iter().zip(wanted).filter(|x| x.1) {
             if socket.send(Message::Binary(bytes.clone())).await.is_err() {
+                return false;
+            }
+        }
+        if let Some(bytes) = vessels {
+            if socket.send(Message::Binary(bytes)).await.is_err() {
                 return false;
             }
         }

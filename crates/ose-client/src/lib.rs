@@ -445,6 +445,8 @@ struct App {
     vab_grab_loose: Option<(usize, f64, f64)>,
     /// When the players window last asked for the campaign (what everyone flies is not pushed).
     players_asked_ms: std::cell::Cell<f64>,
+    /// The vessel the server was last told this view follows (`ClientMessage::Viewing`).
+    viewing_sent: Option<Option<u64>>,
     /// R&D: the science archive shows in the info panel instead of the node picked.
     rd_archive: bool,
     /// VAB offset tool (2): arrows and Q/E move the selected part.
@@ -1063,6 +1065,7 @@ pub fn start() -> Result<(), JsValue> {
         vab_offset: false,
         rd_archive: false,
         players_asked_ms: std::cell::Cell::new(0.0),
+        viewing_sent: None,
         vab_grab_loose: None,
         loose_stamps: Vec::new(),
         mouselook: false,
@@ -4545,6 +4548,7 @@ fn connect(app: &Shared) -> Result<(), JsValue> {
         on_error.forget();
     }
     app.borrow_mut().ws = Some(ws);
+    app.borrow_mut().viewing_sent = None;
     Ok(())
 }
 
@@ -6436,6 +6440,7 @@ impl App {
                 self.campaign = Some((name, members));
                 if self.campaign_id != campaign_id {
                     self.requested_warp = 1;
+                    self.viewing_sent = None;
                     if let Some(scene) = &mut self.scene {
                         scene.reset_attitudes();
                     }
@@ -7039,7 +7044,7 @@ impl App {
             };
             let mine = v.owner.is_some() && v.owner == self.player_id;
             // The original's map markers: a Kerbal on EVA, a flag, debris, or a vessel.
-            let kind = if v.flight.as_ref().is_some_and(|f| f.eva) {
+            let kind = if v.is_eva() {
                 " eva"
             } else if v.name.ends_with(" flag") {
                 " flag"
@@ -10289,11 +10294,7 @@ impl App {
             .vessels
             .iter()
             // a wreck is gone (the server removes it shortly after the crash)
-            .filter(|v| {
-                v.flight
-                    .as_ref()
-                    .is_none_or(|f| f.situation != ose_net::FlightSituation::Crashed)
-            })
+            .filter(|v| v.situation() != Some(ose_net::FlightSituation::Crashed))
             .filter_map(|v| {
                 let body = scene.bodies.get(v.reference_body as usize)?;
                 let orbit = scene::orbit_from(body.mu, &v.orbit);
@@ -10308,7 +10309,7 @@ impl App {
                         .as_ref()
                         .and_then(|(_, m)| m.iter().find(|m| m.player_id == o))
                 });
-                let altitude = v.flight.as_ref().map(|f| f.altitude_m).unwrap_or_else(|| {
+                let altitude = v.altitude_m().unwrap_or_else(|| {
                     let rb = v.reference_body as usize;
                     (scene.vessel_position(v, ut) - scene.position(rb, ut)).length() - body.radius_m
                 });
@@ -10329,7 +10330,7 @@ impl App {
                             format!("#{r:02x}{g:02x}{b:02x}")
                         })
                         .unwrap_or_default(),
-                    kind: if v.flight.as_ref().is_some_and(|f| f.eva) {
+                    kind: if v.is_eva() {
                         "eva"
                     } else if v.name.ends_with(" flag") {
                         "flag"
@@ -10723,6 +10724,19 @@ impl App {
             el.class_list().add_1("open").ok();
             el.set_attribute("data-ose-vessel", &vessel.to_string())
                 .ok();
+        }
+    }
+
+    /// Tell the server which vessel this view follows when that changes: the vessels near it come in full
+    /// detail, the rest without their per-part lists.
+    fn sync_viewing(&mut self) {
+        let now = self.flying.or(self.follow);
+        if self.viewing_sent == Some(now) {
+            return;
+        }
+        if let Some(ws) = &self.ws {
+            send(ws, &ClientMessage::Viewing { vessel: now });
+            self.viewing_sent = Some(now);
         }
     }
 
@@ -14443,6 +14457,7 @@ impl App {
         self.update_flight_instruments();
         self.toasts.watch(&self.doc, "fh-note", "alert");
         self.flight_keys_tick(now);
+        self.sync_viewing();
         self.draw_navball();
         // FPS counter, refreshed twice a second while shown.
         self.fps_frames += 1;

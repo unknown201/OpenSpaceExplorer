@@ -32,7 +32,7 @@ pub fn situation(
     atmosphere_m: f64,
     periapsis_m: f64,
 ) -> &'static str {
-    match v.flight.as_ref().map(|f| f.situation) {
+    match v.situation() {
         Some(FlightSituation::Landed) => "Landed",
         Some(FlightSituation::Flying) => "Flying",
         Some(FlightSituation::SubOrbital) => "Sub-orbital",

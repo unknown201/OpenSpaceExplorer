@@ -199,6 +199,7 @@ fn open(s: &Shared) -> AppState {
         kerbals: s.kerbals.clone(),
         last_roster: Mutex::new(None),
         flying: Mutex::new(HashMap::new()),
+        viewing: Mutex::new(HashMap::new()),
         test_probe: s.test_probe,
         allow_guest_accounts: s.allow_guest_accounts,
         steps: std::sync::atomic::AtomicU64::new(0),
