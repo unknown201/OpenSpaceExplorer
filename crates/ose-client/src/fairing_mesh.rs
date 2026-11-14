@@ -122,6 +122,13 @@ fn procedural_fairing_material() -> Value {
                 "metallicRoughnessTexture": {"index": 1},
             },
             "normalTexture": {"index": 2},
+        }, {
+            "name": "FairingsProceduralMat_gutter",
+            "pbrMetallicRoughness": {
+                "baseColorFactor": [GUTTER_GREY, GUTTER_GREY, GUTTER_GREY, 1.0],
+                "metallicFactor": 0.0,
+                "roughnessFactor": 0.8,
+            },
         }],
         "textures": [
             {"sampler": 0, "source": 0},
@@ -135,6 +142,38 @@ fn procedural_fairing_material() -> Value {
         ],
         "samplers": [{"magFilter": 9729, "minFilter": 9987, "wrapS": 10497, "wrapT": 10497}],
     })
+}
+
+/// `_GutterColor` of `FairingsProceduralMat`: the seam lines along a panel's edges.
+const GUTTER_GREY: f64 = 0.36792;
+/// `_FairingGutterWidth`, in texture v (3 m of slant per unit): the seam band's width up the wall.
+const GUTTER_WIDTH_V: f64 = 0.008;
+
+/// The seam rings at the shroud's top and bottom edges (`UpdateMeshGutters` bounds the panel in v; u is
+/// unbounded on a shroud, so no vertical seams): thin bands a hair outside the wall.
+pub fn shroud_gutters(
+    shape: &FairingShape,
+    def: &FairingDef,
+) -> (Vec<[f32; 3]>, Vec<[f32; 2]>, Vec<u32>) {
+    let (lo, hi) = (shape.sections[0], shape.sections[shape.sections.len() - 1]);
+    let slant = ((hi.0 - lo.0).powi(2) + (hi.1 - lo.1).powi(2))
+        .sqrt()
+        .max(1e-6);
+    let f = (GUTTER_WIDTH_V * 3.0 / slant).min(0.5);
+    let at = |t: f64| (lo.0 + (hi.0 - lo.0) * t, (lo.1 + (hi.1 - lo.1) * t) + 0.004);
+    let band = |a: f64, b: f64| FairingShape {
+        sections: vec![at(a), at(b)],
+        capped: false,
+        pieces: 0,
+        ejection_force: 0.0,
+    };
+    let (mut pos, mut uv, mut tris) = piece_mesh(&band(0.0, f), def, 0);
+    let (p2, u2, t2) = piece_mesh(&band(1.0 - f, 1.0), def, 0);
+    let off = pos.len() as u32;
+    pos.extend(p2);
+    uv.extend(u2);
+    tris.extend(t2.iter().map(|i| i + off));
+    (pos, uv, tris)
 }
 
 /// The shroud's texture coordinates as `FairingPanel.SetArcPoints` lays them: u runs a ninth of the texture
@@ -157,23 +196,24 @@ pub fn shroud_uvs(shape: &FairingShape, def: &FairingDef) -> Vec<[f32; 2]> {
 pub fn shroud_glb(shape: &FairingShape, def: &FairingDef) -> Vec<u8> {
     let (pos, _, tris) = piece_mesh(shape, def, 0);
     let uv = shroud_uvs(shape, def);
-    mesh_glb(&pos, &uv, &tris, 0, &procedural_fairing_material())
+    let (gp, gu, gt) = shroud_gutters(shape, def);
+    prims_glb(
+        &[(&pos, &uv, &tris, Some(0)), (&gp, &gu, &gt, Some(1))],
+        0,
+        &procedural_fairing_material(),
+    )
 }
 
 /// One panel's mesh as a GLB, with `src`'s materials, textures, images and samplers.
 fn mesh_glb(pos: &[[f32; 3]], uv: &[[f32; 2]], tris: &[u32], k: usize, src: &Value) -> Vec<u8> {
-    let mut normals = vec![glam::Vec3::ZERO; pos.len()];
-    for t in tris.as_chunks::<3>().0 {
-        let [a, b, c] = t.map(|i| glam::Vec3::from_array(pos[i as usize]));
-        let n = (b - a).cross(c - a);
-        for i in t {
-            normals[*i as usize] += n;
-        }
-    }
-    let normals: Vec<[f32; 3]> = normals
-        .iter()
-        .map(|n| n.normalize_or(glam::Vec3::Y).to_array())
-        .collect();
+    let material = src.get("materials").map(|_| 0);
+    prims_glb(&[(pos, uv, tris, material)], k, src)
+}
+
+/// A GLB of one node whose mesh holds `prims` (positions, uvs, triangles, material index).
+type Prim<'a> = (&'a [[f32; 3]], &'a [[f32; 2]], &'a [u32], Option<usize>);
+
+fn prims_glb(prims: &[Prim], k: usize, src: &Value) -> Vec<u8> {
     let mut bin: Vec<u8> = Vec::new();
     let mut views: Vec<Value> = Vec::new();
     let mut accessors: Vec<Value> = Vec::new();
@@ -189,47 +229,63 @@ fn mesh_glb(pos: &[[f32; 3]], uv: &[[f32; 2]], tris: &[u32], k: usize, src: &Val
         accessors.len() - 1
     };
     let floats = |v: &[f32]| v.iter().flat_map(|f| f.to_le_bytes()).collect::<Vec<u8>>();
-    let mut lo = [f32::INFINITY; 3];
-    let mut hi = [f32::NEG_INFINITY; 3];
-    for p in pos {
-        for i in 0..3 {
-            lo[i] = lo[i].min(p[i]);
-            hi[i] = hi[i].max(p[i]);
+    let mut primitives = Vec::new();
+    for (pos, uv, tris, material) in prims {
+        let mut normals = vec![glam::Vec3::ZERO; pos.len()];
+        for t in tris.as_chunks::<3>().0 {
+            let [a, b, c] = t.map(|i| glam::Vec3::from_array(pos[i as usize]));
+            let n = (b - a).cross(c - a);
+            for i in t {
+                normals[*i as usize] += n;
+            }
         }
+        let normals: Vec<[f32; 3]> = normals
+            .iter()
+            .map(|n| n.normalize_or(glam::Vec3::Y).to_array())
+            .collect();
+        let mut lo = [f32::INFINITY; 3];
+        let mut hi = [f32::NEG_INFINITY; 3];
+        for p in pos.iter() {
+            for i in 0..3 {
+                lo[i] = lo[i].min(p[i]);
+                hi[i] = hi[i].max(p[i]);
+            }
+        }
+        let p = push(
+            floats(pos.as_flattened()),
+            34962,
+            json!({"componentType": 5126, "count": pos.len(), "type": "VEC3", "min": lo, "max": hi}),
+        );
+        let nn = push(
+            floats(normals.as_flattened()),
+            34962,
+            json!({"componentType": 5126, "count": normals.len(), "type": "VEC3"}),
+        );
+        let t = push(
+            floats(uv.as_flattened()),
+            34962,
+            json!({"componentType": 5126, "count": uv.len(), "type": "VEC2"}),
+        );
+        let i = push(
+            tris.iter().flat_map(|i| i.to_le_bytes()).collect(),
+            34963,
+            json!({"componentType": 5125, "count": tris.len(), "type": "SCALAR"}),
+        );
+        let mut prim =
+            json!({"attributes": {"POSITION": p, "NORMAL": nn, "TEXCOORD_0": t}, "indices": i});
+        if let Some(m) = material {
+            prim["material"] = json!(m);
+        }
+        primitives.push(prim);
     }
-    let p = push(
-        floats(pos.as_flattened()),
-        34962,
-        json!({"componentType": 5126, "count": pos.len(), "type": "VEC3", "min": lo, "max": hi}),
-    );
-    let nn = push(
-        floats(normals.as_flattened()),
-        34962,
-        json!({"componentType": 5126, "count": normals.len(), "type": "VEC3"}),
-    );
-    let t = push(
-        floats(uv.as_flattened()),
-        34962,
-        json!({"componentType": 5126, "count": uv.len(), "type": "VEC2"}),
-    );
-    let i = push(
-        tris.iter().flat_map(|i| i.to_le_bytes()).collect(),
-        34963,
-        json!({"componentType": 5125, "count": tris.len(), "type": "SCALAR"}),
-    );
     while !bin.len().is_multiple_of(4) {
         bin.push(0);
-    }
-    let mut prim =
-        json!({"attributes": {"POSITION": p, "NORMAL": nn, "TEXCOORD_0": t}, "indices": i});
-    if src.get("materials").is_some() {
-        prim["material"] = json!(0);
     }
     let mut doc = json!({
         "asset": {"version": "2.0", "generator": "ose fairing_mesh"},
         "scene": 0, "scenes": [{"nodes": [0]}],
         "nodes": [{"name": format!("fairing_panel_{k}"), "mesh": 0}],
-        "meshes": [{"name": format!("fairing_panel_{k}"), "primitives": [prim]}],
+        "meshes": [{"name": format!("fairing_panel_{k}"), "primitives": primitives}],
         "accessors": accessors, "bufferViews": views, "buffers": [{"byteLength": bin.len()}],
     });
     for key in ["materials", "textures", "images", "samplers"] {
@@ -384,5 +440,17 @@ mod tests {
             "../textures/fairing_procedural_d.png"
         );
         assert_eq!(doc["meshes"][0]["primitives"][0]["material"], 0);
+        // seam rings at the top and bottom edges, in the gutter grey
+        assert_eq!(doc["meshes"][0]["primitives"][1]["material"], 1);
+        let (gp, _, gt) = shroud_gutters(&shape, &def);
+        assert!(!gt.is_empty());
+        let ys: Vec<f32> = gp.iter().map(|p| p[1]).collect();
+        assert!(
+            ys.iter().any(|y| (y + 1.0).abs() < 1e-3)
+                && ys.iter().any(|y| (y - 0.6801).abs() < 1e-3)
+        );
+        assert!(ys
+            .iter()
+            .all(|y| (y + 1.0).abs() < 0.03 || (y - 0.6801).abs() < 0.03));
     }
 }
