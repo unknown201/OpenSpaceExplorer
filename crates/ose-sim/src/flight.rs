@@ -1870,6 +1870,8 @@ pub struct Propulsion {
     /// Buoyancy/suspension forces and moments are inertial, unlike mounted engine forces.
     pub environment_force_kn: DVec3,
     pub environment_torque_knm: DVec3,
+    /// Orbital/body-frame convention used by native water entry and drag (not buoyancy gravity).
+    pub water_reference: Option<crate::water::ReferenceFrame>,
     pub per_part_contacts: bool,
     pub thrust_kn: f64,
     pub burned_t: f64,

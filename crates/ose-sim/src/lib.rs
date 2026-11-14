@@ -2259,12 +2259,17 @@ impl Universe {
                 let was_landed = p.landed || p.splashed;
                 let env = flight::EngineEnvironment::at(&p, &body, atmo.as_ref());
                 let step_ut = start_ut + i as f64 * step_dt;
+                let water_reference = self
+                    .world
+                    .get::<bodies::OnRails>(body_e)
+                    .map(|o| water::ReferenceFrame::at(&body, o.0.position_at(step_ut), step_ut));
                 let propulsion = structure.as_mut().map(|st| {
                     if comm_blocked {
                         p.controlled = false;
                         p.throttle = 0.0;
                     }
                     let mut propulsion = st.powered_services(&mut p, sun, env, step_dt);
+                    propulsion.water_reference = water_reference;
                     if comm_blocked {
                         p.controlled = false;
                     }
