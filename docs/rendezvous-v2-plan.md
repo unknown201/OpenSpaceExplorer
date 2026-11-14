@@ -1,6 +1,6 @@
 # Rendezvous v2: launch to dock from anywhere
 
-Status: **plan** (2026-11-14). This is the prerequisite for [delivery routes](delivery-routes-design.md).
+Status: **in progress** (2026-11-14). R1 is done (`crates/ose-guidance`). This is the prerequisite for [delivery routes](delivery-routes-design.md).
 Josh decided that routes, including depot-to-depot routes, are built on a rendezvous system that
 works from launch to dock, from KSC, from stations and depots, and from the Mun, including orbital
 windows. That system has to be well tested before routes depend on it.
