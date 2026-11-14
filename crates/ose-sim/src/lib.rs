@@ -118,6 +118,10 @@ pub struct StageResult {
 }
 
 /// The whole universe.
+/// A piece that comes off within this height of the ground is built from its parts so craft can rest on it,
+/// m (our own figure).
+const NEAR_GROUND_M: f64 = 200.0;
+
 /// How long a crashed craft stays in the world after the crash, s of game time.
 pub const WRECK_LINGER_S: f64 = 30.0;
 
@@ -1651,8 +1655,26 @@ impl Universe {
         let lit = |map: &[Option<usize>]| {
             fire.is_some_and(|f| f.burning.iter().any(|&i| map[i].is_some()))
         };
+        // a piece that comes off on or near the ground may be landed on (or land on what it left), so it is
+        // built to be solid (`crafts_find_decks`)
+        let near_ground = self.world.get::<flight::Powered>(parent).is_some_and(|p| {
+            p.landed
+                || self
+                    .world
+                    .get::<bodies::ReferenceBody>(parent)
+                    .and_then(|b| {
+                        let body = self.world.get::<bodies::Body>(b.0)?;
+                        let terrain = self.world.get::<flight::Terrain>(b.0).map(|t| t.0.clone());
+                        Some(
+                            p.r.length()
+                                - flight::ground_radius(body, terrain.as_deref(), p.r, self.ut())
+                                < NEAR_GROUND_M,
+                        )
+                    })
+                    .unwrap_or(false)
+        });
         let burning = match (&subset, self.world.get_resource::<PartCatalog>()) {
-            (Some((craft, map)), Some(catalog)) if afloat || blasted || lit(map) => {
+            (Some((craft, map)), Some(catalog)) if afloat || blasted || near_ground || lit(map) => {
                 let mut st = structure::Structure::build(craft, &catalog.defs, &catalog.resources);
                 if let Some(tanks) = fire.map(|f| &f.tanks).or(parent_tanks.as_ref()) {
                     st.carry_tanks_from(tanks, map);
@@ -1996,6 +2018,7 @@ impl Universe {
         let dt = 1.0 / TICKS_PER_SECOND as f64;
         // what Kerbals on EVA stand on (a craft's hull) before they move
         self.kerbals_find_decks(ticks.max(1) as f64 * dt);
+        self.crafts_find_decks(ticks.max(1) as f64 * dt);
         let start_ut = now as f64 * dt;
         let mut powered_vessels: Vec<Entity> = {
             let mut q = self.world.query_filtered::<Entity, With<flight::Powered>>();
