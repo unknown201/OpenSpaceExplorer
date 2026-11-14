@@ -6,6 +6,145 @@ const PREDICT_MS: f64 = 100.0;
 const CORRECT_MS: f64 = 50.0;
 const STALE_MS: f64 = 500.0;
 const MAX_PREDICT_ANGLE: f64 = std::f64::consts::PI / 6.0;
+/// How long a steering change takes to show in the authoritative state at first (the round trip and a
+/// snapshot interval), ms; learned from the vessel's response afterwards, within these bounds.
+const STEER_LAG_MS: f64 = 150.0;
+const STEER_LAG_MIN_MS: f64 = 30.0;
+const STEER_LAG_MAX_MS: f64 = 600.0;
+/// How fast learned figures follow new samples (share of each sample).
+const LEARN_RATE: f64 = 0.3;
+
+/// The pilot's steering as the client predicts it until the server's state catches up: how the vessel turns
+/// per unit of input (learned from how it answered earlier input) and the input changes not yet seen in
+/// its state. Presentation only: the server still flies the vessel.
+#[derive(Clone, Copy)]
+struct Steering {
+    /// Angular acceleration per unit input about local X (pitch), Y (roll) and Z (yaw), rad/ms²; zero until
+    /// learned.
+    alpha: DVec3,
+    /// How long an input change takes to show in the authoritative state, ms.
+    lag_ms: f64,
+    /// The input held now, local axes.
+    input: DVec3,
+    /// Input changes not yet in the authoritative state: (change, when), oldest first (at most a few).
+    pending: [(DVec3, f64); 4],
+    pending_len: usize,
+    /// The previous authoritative local spin and when it arrived, for learning.
+    last: Option<(DVec3, f64)>,
+}
+
+impl Default for Steering {
+    fn default() -> Self {
+        Self {
+            alpha: DVec3::ZERO,
+            lag_ms: STEER_LAG_MS,
+            input: DVec3::ZERO,
+            pending: [(DVec3::ZERO, 0.0); 4],
+            pending_len: 0,
+            last: None,
+        }
+    }
+}
+
+impl Steering {
+    fn pending(&self) -> &[(DVec3, f64)] {
+        &self.pending[..self.pending_len]
+    }
+
+    /// The input the authoritative state has been answering: what is held less what it has not seen yet.
+    fn seen_input(&self) -> DVec3 {
+        self.pending()
+            .iter()
+            .fold(self.input, |u, (change, _)| u - *change)
+    }
+
+    fn set_input(&mut self, input: DVec3, now_ms: f64) {
+        let change = input - self.input;
+        if change.length_squared() < 1e-12 {
+            return;
+        }
+        self.input = input;
+        if self.pending_len == self.pending.len() {
+            // fold the oldest into the next: they show together
+            self.pending[1].0 += self.pending[0].0;
+            self.pending.copy_within(1.., 0);
+            self.pending_len -= 1;
+        }
+        self.pending[self.pending_len] = (change, now_ms);
+        self.pending_len += 1;
+    }
+
+    /// A new authoritative spin (local, rad/ms) arrived at `received_ms`: learn from it and drop the input
+    /// changes it now shows.
+    fn observe(&mut self, velocity: DVec3, received_ms: f64) {
+        if let Some((before, at)) = self.last {
+            let dt = received_ms - at;
+            if dt > 1.0 && dt <= STALE_MS {
+                let accel = (velocity - before) / dt;
+                let seen = self.seen_input();
+                let learn = |alpha: f64, a: f64, u: f64| {
+                    if u.abs() >= 0.5 && (a / u).is_finite() {
+                        // the first sample is taken whole, later ones blended in
+                        if alpha == 0.0 {
+                            a / u
+                        } else {
+                            alpha + (a / u - alpha) * LEARN_RATE
+                        }
+                    } else {
+                        alpha
+                    }
+                };
+                // a change showing for the first time: its lag, when the vessel answers it the way it should
+                if let Some(&(change, since)) = self.pending().first() {
+                    let expect = self.alpha * change;
+                    let answered = (0..3).any(|k| {
+                        expect[k].abs() > 1e-12
+                            && accel[k] * expect[k] > 0.0
+                            && (accel[k] - (self.alpha * seen)[k]).abs() > 0.3 * expect[k].abs()
+                    });
+                    if answered {
+                        let lag = (received_ms - since).clamp(STEER_LAG_MIN_MS, STEER_LAG_MAX_MS);
+                        self.lag_ms += (lag - self.lag_ms) * LEARN_RATE;
+                    }
+                }
+                // only while the state answers input held all along (no change in between)
+                if self
+                    .pending()
+                    .first()
+                    .is_none_or(|(_, since)| *since > received_ms)
+                {
+                    self.alpha = DVec3::new(
+                        learn(self.alpha.x, accel.x, seen.x),
+                        learn(self.alpha.y, accel.y, seen.y),
+                        learn(self.alpha.z, accel.z, seen.z),
+                    );
+                }
+            }
+        }
+        self.last = Some((velocity, received_ms));
+        let lag = self.lag_ms;
+        let keep: Vec<(DVec3, f64)> = self
+            .pending()
+            .iter()
+            .copied()
+            .filter(|(_, since)| received_ms < since + lag)
+            .collect();
+        self.pending_len = keep.len();
+        self.pending[..keep.len()].copy_from_slice(&keep);
+    }
+
+    /// The turn the pending input adds by `now_ms`, local rotation vector, rad: each change spins the vessel up
+    /// (at its learned rate) from when it was made until the server's state shows it.
+    fn extra(&self, now_ms: f64) -> DVec3 {
+        self.pending()
+            .iter()
+            .map(|(change, since)| {
+                let t = (now_ms - since).clamp(0.0, self.lag_ms);
+                self.alpha * *change * (0.5 * t * t)
+            })
+            .fold(DVec3::ZERO, |a, b| a + b)
+    }
+}
 
 /// Exported meshes mirror Unity X, while physics mirrors Unity Z. A half-turn
 /// around Y converts the exported craft frame to the physics vessel frame.
@@ -47,6 +186,7 @@ pub struct Track {
     ut: f64,
     received_ms: f64,
     context: Context,
+    steering: Steering,
 }
 
 impl Track {
@@ -58,6 +198,24 @@ impl Track {
         } else {
             DVec3::ZERO
         };
+        if !self.context.grounded {
+            // input changes the state shows now stop being predicted: what they had added on screen joins
+            // the correction and fades out with it
+            let before = self.steering.extra(self.received_ms);
+            self.steering.observe(self.velocity, self.received_ms);
+            let after = self.steering.extra(self.received_ms);
+            self.correction = (DQuat::from_scaled_axis(after).inverse()
+                * DQuat::from_scaled_axis(before)
+                * self.correction)
+                .normalize();
+        }
+    }
+
+    /// The pilot's steering input held now (pitch, yaw, roll, each -1..1), so the vessel starts turning on
+    /// screen before the server's state shows it.
+    pub fn steer(&mut self, pitch: f64, yaw: f64, roll: f64, now_ms: f64) {
+        self.steering
+            .set_input(DVec3::new(pitch, roll, yaw), now_ms);
     }
     pub fn new(rotation: DQuat, ut: f64, received_ms: f64, context: Context) -> Self {
         Self {
@@ -67,6 +225,7 @@ impl Track {
             ut,
             received_ms,
             context,
+            steering: Steering::default(),
         }
     }
 
@@ -84,14 +243,27 @@ impl Track {
             || dt_ms > STALE_MS
             || self.rotation.angle_between(rotation) > std::f64::consts::FRAC_PI_2
         {
+            // what was learned of the vessel carries over; what was pending does not
+            let steering = Steering {
+                pending_len: 0,
+                last: None,
+                ..self.steering
+            };
             *self = Self::new(rotation, ut, received_ms, context);
+            self.steering = steering;
             return;
         }
         let displayed = self.sample(received_ms);
         self.velocity = (self.rotation.inverse() * rotation).to_scaled_axis() / dt_ms;
         self.rotation = rotation;
-        // Preserve the displayed pose at arrival, then remove prediction error over a short window.
-        self.correction = (rotation.inverse() * displayed).normalize();
+        // Preserve the displayed pose at arrival, then remove prediction error over a short window. The
+        // steering still predicted stays on top of the new pose (`sample`), so it is left out here.
+        let steering = if self.context.grounded {
+            DQuat::IDENTITY
+        } else {
+            DQuat::from_scaled_axis(self.steering.extra(received_ms))
+        };
+        self.correction = (steering.inverse() * rotation.inverse() * displayed).normalize();
         self.ut = ut;
         self.received_ms = received_ms;
     }
@@ -99,6 +271,9 @@ impl Track {
     pub fn sample(&self, now_ms: f64) -> DQuat {
         let age = (now_ms - self.received_ms).max(0.0);
         let mut advance = self.velocity * age.min(PREDICT_MS);
+        if !self.context.grounded {
+            advance += self.steering.extra(now_ms);
+        }
         if advance.length() > MAX_PREDICT_ANGLE {
             advance = advance.normalize() * MAX_PREDICT_ANGLE;
         }
@@ -308,6 +483,90 @@ mod tests {
             close(track.sample(now), yaw(20.0));
             close(track.sample(now + 100.0), yaw(20.0));
         }
+    }
+
+    /// A vessel the server turns about yaw at `alpha` rad/s² per unit input, answering input `lag_ms` late,
+    /// published every 100 ms; the pilot holds `input(t)`. Returns the track and the ideal yaw (no lag) by
+    /// time, rad.
+    fn steered(
+        input: impl Fn(f64) -> f64,
+        alpha: f64,
+        lag_ms: f64,
+        until_ms: f64,
+        mut probe: impl FnMut(&Track, f64, f64),
+    ) {
+        let (mut theta, mut omega) = (0.0, 0.0);
+        let (mut ideal, mut ideal_omega) = (0.0, 0.0);
+        let mut track = Track::new(yaw(0.0), 0.0, 0.0, CONTEXT);
+        let mut t = 0.0;
+        while t < until_ms {
+            // 1 ms steps: the server answers late, the ideal at once
+            let u = input(t - lag_ms);
+            omega += alpha * u / 1000.0;
+            theta += omega / 1000.0;
+            ideal_omega += alpha * input(t) / 1000.0;
+            ideal += ideal_omega / 1000.0;
+            t += 1.0;
+            track.steer(0.0, input(t), 0.0, t);
+            if (t as u64).is_multiple_of(100) {
+                track.update(DQuat::from_rotation_z(theta), t / 1000.0, t, CONTEXT);
+                track.set_world_velocity(DVec3::Z * omega);
+            }
+            probe(&track, t, ideal);
+        }
+    }
+
+    #[test]
+    fn the_pilots_steering_shows_at_once_and_hands_over_to_the_server_smoothly() {
+        // yaw left then right to stop (which teaches the client how the craft answers), then yaw again
+        let input = |t: f64| {
+            if (1000.0..1400.0).contains(&t) || (3000.0..3400.0).contains(&t) {
+                1.0
+            } else if (1400.0..1800.0).contains(&t) {
+                -1.0
+            } else {
+                0.0
+            }
+        };
+        let angle = |q: DQuat| q.to_euler(glam::EulerRot::ZYX).0;
+        let mut previous: Option<f64> = None;
+        let mut biggest_step: f64 = 0.0;
+        let mut at_press = (0.0, 0.0);
+        let mut first_press_shown = f64::NAN;
+        steered(input, 0.5, 150.0, 4500.0, |track, t, ideal| {
+            let shown = angle(track.sample(t));
+            if t > 2000.0 {
+                if let Some(p) = previous {
+                    biggest_step = biggest_step.max((shown - p).abs());
+                }
+                previous = Some(shown);
+            }
+            if t == 1000.0 || t == 3000.0 {
+                at_press = (shown, ideal);
+            }
+            if t == 1100.0 {
+                first_press_shown = shown - at_press.0;
+            }
+            if t == 3100.0 {
+                // the server has not answered yet (150 ms), but the craft is already turning on screen,
+                // close to where it would be with no delay at all (0.5 rad/s² for 0.1 s: 2.5 mrad)
+                let (shown, ideal) = (shown - at_press.0, ideal - at_press.1);
+                assert!((ideal - 0.0025).abs() < 1e-4, "{ideal}");
+                assert!(
+                    (shown - ideal).abs() < 0.25 * ideal,
+                    "shown {shown} ideal {ideal}"
+                );
+            }
+        });
+        // before anything was learned the first press showed nothing early
+        assert!(first_press_shown.abs() < 1e-9, "{first_press_shown}");
+        // no jumps as the server's state takes over: never much more than the craft's own fastest turn
+        // (0.2 rad/s, 0.2 mrad per ms)
+        assert!(biggest_step < 0.0005, "{biggest_step} rad in one ms");
+        // without steering nothing is added
+        let mut quiet = Track::new(yaw(0.0), 0.0, 0.0, CONTEXT);
+        quiet.update(yaw(0.0), 0.1, 100.0, CONTEXT);
+        close(quiet.sample(150.0), yaw(0.0));
     }
 
     #[test]
