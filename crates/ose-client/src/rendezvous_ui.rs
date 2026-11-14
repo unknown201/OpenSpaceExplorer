@@ -419,10 +419,10 @@ impl App {
         let Some(scene) = &self.scene else { return };
         let mut html = "<option value=\"\">Choose an orbiting vessel</option>".to_string();
         for v in &scene.vessels {
+            // far vessels come in brief (`VesselState::brief`), so ask the helpers rather than the readout
             if Some(v.id) == self.flying
-                || v.flight
-                    .as_ref()
-                    .is_none_or(|f| f.eva || f.situation != ose_net::FlightSituation::Orbit)
+                || v.is_eva()
+                || v.situation() != Some(ose_net::FlightSituation::Orbit)
             {
                 continue;
             }

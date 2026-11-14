@@ -38,6 +38,8 @@ pub struct Entry {
     position_m: DVec3,
     /// Standing on the home planet (shown at the KSC).
     grounded_home: bool,
+    /// The vessel it targets: a focus vessel's target is sent in full too (rendezvous and docking need it).
+    target: Option<u64>,
     full: Bytes,
     slim: Bytes,
 }
@@ -96,6 +98,10 @@ impl VesselFrames {
                     body: v.reference_body,
                     position_m: v.position_m,
                     grounded_home,
+                    target: v.target.as_ref().and_then(|t| match t.target {
+                        ose_net::TargetId::Vessel(id) => Some(id),
+                        _ => None,
+                    }),
                     full: ose_net::encode(v).ok()?.into(),
                     slim: ose_net::encode(&slim(v)).ok()?.into(),
                 })
@@ -104,8 +110,8 @@ impl VesselFrames {
         Some(VesselFrames { header, entries })
     }
 
-    /// The vessels `view` sees up close: its focus and those near a focus vessel (or standing on the home
-    /// planet, for a player without a focus).
+    /// The vessels `view` sees up close: its focus, their targets and those near a focus vessel (or standing on
+    /// the home planet, for a player without a focus).
     pub fn near(&self, focus: &[u64]) -> HashSet<u64> {
         let anchors: Vec<&Entry> = self
             .entries
@@ -120,6 +126,7 @@ impl VesselFrames {
                 } else {
                     anchors.iter().any(|a| {
                         a.id == e.id
+                            || a.target == Some(e.id)
                             || (a.body == e.body && (a.position_m - e.position_m).length() < NEAR_M)
                     })
                 }
@@ -234,6 +241,16 @@ mod tests {
         );
         // nobody in focus: only vessels standing on the home planet are near
         assert!(frames.near(&[]).is_empty());
+        // a focus vessel's target is near however far it is
+        let mut aiming = list.clone();
+        aiming[0].target = Some(ose_net::TargetReadout {
+            target: ose_net::TargetId::Vessel(3),
+            distance_m: 50_000.0,
+            relative_velocity_mps: DVec3::ZERO,
+            closing_mps: 0.0,
+        });
+        let frames = VesselFrames::build(Tick(7), &aiming, 4).unwrap();
+        assert_eq!(frames.near(&[1]), HashSet::from([1, 2, 3]));
         // many vessels: the count's varint takes two bytes
         let many: Vec<VesselState> = (0..300).map(|i| vessel(i, i as f64)).collect();
         let frames = VesselFrames::build(Tick(8), &many, 4).unwrap();
