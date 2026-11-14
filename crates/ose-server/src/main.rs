@@ -2493,9 +2493,33 @@ fn science_request(s: &Shared, player_id: u64, msg: ClientMessage) -> Vec<Server
 /// How near a Kerbal recovered on EVA a landed craft is recovered with it, m.
 const RECOVER_WITH_KERBAL_M: f64 = 50.0;
 
+/// The other player piloting vessel `id` now, if one is: a player in the campaign whose last command went
+/// to it. Only the pilot commands a vessel; other players can ride along and watch it (`TakeControl` when it
+/// is free, `ReleaseControl` to let go).
+fn pilot_other_than(s: &Shared, id: u64, player: u64) -> Option<u64> {
+    let playing = s.playing.lock().expect("playing lock");
+    s.flying
+        .lock()
+        .expect("flying lock")
+        .iter()
+        .find(|&(&p, &v)| v == id && p != player && playing.contains(&p))
+        .map(|(&p, _)| p)
+}
+
+/// `player` stops piloting whatever they flew; everyone hears who flies what now.
+fn release_control(s: &Shared, player: u64) {
+    let had = s.flying.lock().expect("flying lock").remove(&player);
+    if had.is_some() {
+        push_campaign(s, 0);
+    }
+}
+
 fn owned_vessel(s: &Shared, id: u64, player: u64) -> Option<bevy_ecs::entity::Entity> {
     // A co-op campaign (`Shared_Vessel_Control`, on unless the campaign turns it off) lets every player fly
-    // every agency vessel; otherwise only its owner can.
+    // every agency vessel; otherwise only its owner can. Either way one player pilots a vessel at a time.
+    if pilot_other_than(s, id, player).is_some() {
+        return None;
+    }
     let shared = campaigns::allowed(s, "Shared_Vessel_Control");
     let e = s
         .vessels
@@ -2507,8 +2531,11 @@ fn owned_vessel(s: &Shared, id: u64, player: u64) -> Option<bevy_ecs::entity::En
         })
         .map(|&(e, _, _)| e);
     if e.is_some() {
-        // commanding a vessel is flying it
-        s.flying.lock().expect("flying lock").insert(player, id);
+        // commanding a vessel is flying it (piloting it, while nobody else does)
+        let before = s.flying.lock().expect("flying lock").insert(player, id);
+        if before != Some(id) {
+            push_campaign(s, 0);
+        }
     }
     e
 }
@@ -3430,6 +3457,41 @@ fn launch_craft(
 /// and the replies, pushed to `out` in order. Sessions send `out`; a replay runs the same messages at the
 /// ticks they were recorded at (`replay`).
 fn handle_decoded(
+    s: &Shared,
+    player_id: u64,
+    decoded: Result<ClientMessage, String>,
+    out: &mut Vec<ServerMessage>,
+) {
+    let from = out.len();
+    handle_message(s, player_id, decoded, out);
+    // a command refused because another player pilots the vessel says who does
+    for m in &mut out[from..] {
+        let (vessel, reason) = match m {
+            ServerMessage::FlightAck {
+                vessel,
+                accepted: false,
+                reason: Some(reason),
+            }
+            | ServerMessage::CrewAck {
+                vessel,
+                accepted: false,
+                reason: Some(reason),
+                ..
+            }
+            | ServerMessage::Undocked {
+                vessel,
+                new_vessel: None,
+                reason: Some(reason),
+            } => (*vessel, reason),
+            _ => continue,
+        };
+        if let Some(pilot) = pilot_other_than(s, vessel, player_id) {
+            *reason = format!("{} is piloting it", display_name_for(s, pilot));
+        }
+    }
+}
+
+fn handle_message(
     s: &Shared,
     player_id: u64,
     decoded: Result<ClientMessage, String>,
@@ -4594,6 +4656,15 @@ fn handle_decoded(
             };
             out.push((reply).clone());
         }
+        Ok(ClientMessage::TakeControl { vessel }) => {
+            let ok = owned_vessel(s, vessel, player_id).is_some();
+            out.push(ServerMessage::FlightAck {
+                vessel,
+                accepted: ok,
+                reason: (!ok).then(|| "not your vessel".into()),
+            });
+        }
+        Ok(ClientMessage::ReleaseControl) => release_control(s, player_id),
         Ok(ClientMessage::RenameVessel { vessel, name }) => {
             let name = name.trim().to_string();
             let reply = match owned_vessel(s, vessel, player_id) {

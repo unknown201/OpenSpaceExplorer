@@ -2210,6 +2210,14 @@ impl Universe {
                             step_dt,
                         );
                         let forces = st.aerodynamics_local(p.stage, flow);
+                        // on the ground the contact takes the craft's weight; a lagged canopy pull from the last
+                        // tick of the fall would lift it back off
+                        let forces = if p.landed || p.splashed {
+                            st.forget_last_airflow();
+                            forces
+                        } else {
+                            st.airflow_one_tick_late(flow.frame, forces)
+                        };
                         p.aero_drag_kn = Some(forces.drag_kn);
                         let cda = forces.cda_m2;
                         lift = forces.lift_kn;

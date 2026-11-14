@@ -66,8 +66,16 @@ impl Otp {
                     from,
                 ))
             }
-            Err(_) => None,
+            Err(_) => {
+                tracing::warn!(
+                    "email sign-in disabled: OSE_SMTP_HOST is not set (see /etc/ose-otp.env)"
+                );
+                None
+            }
         };
+        if let Some((_, from)) = &mail {
+            tracing::info!(%from, "email sign-in enabled");
+        }
         Ok(Self {
             state: Mutex::default(),
             mail,
@@ -80,10 +88,10 @@ impl Otp {
         ip: IpAddr,
     ) -> Result<(String, String), String> {
         let email = normalize(email)?;
-        let (mail, from) = self
-            .mail
-            .as_ref()
-            .ok_or("Email sign-in is not configured. Try again later.")?;
+        let (mail, from) = self.mail.as_ref().ok_or_else(|| {
+            tracing::warn!("OTP requested but OSE_SMTP_HOST is not set; see /etc/ose-otp.env");
+            "Email sign-in is not set up on this server yet. Try again later.".to_string()
+        })?;
         let (id, code) = self.issue(&email, target, ip, now())?;
         let message = Message::builder().from(from.parse().map_err(|_| "Email sender unavailable")?)
             .to(email.parse().map_err(|_| "Invalid email address")?)
@@ -92,13 +100,18 @@ impl Otp {
             .map_err(|_| "Could not prepare sign-in email")?;
         let mail = mail.clone();
         let delivered = tokio::task::spawn_blocking(move || mail.send(&message)).await;
-        if !matches!(delivered, Ok(Ok(_))) {
+        let failure = match delivered {
+            Ok(Ok(_)) => None,
+            Ok(Err(e)) => Some(e.to_string()),
+            Err(e) => Some(e.to_string()),
+        };
+        if let Some(error) = failure {
             self.state
                 .lock()
                 .expect("otp lock")
                 .challenges
                 .remove(&email);
-            tracing::warn!("OTP email delivery failed");
+            tracing::warn!(%error, "OTP email delivery failed");
             return Err("Could not send the code. Please try again shortly.".into());
         }
         Ok((email, id))
