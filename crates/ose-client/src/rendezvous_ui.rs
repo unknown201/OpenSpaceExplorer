@@ -611,8 +611,14 @@ impl App {
             return;
         }
         let (Some(f), Some(tf)) = (&me.flight, &target.flight) else {
-            self.rdv_phase(Phase::Unavailable);
-            self.rdv_render("Flight instruments unavailable", vec![], "");
+            // a far vessel comes in brief until the server knows it is the target; its instruments follow
+            self.rdv_phase(Phase::Prepare);
+            self.rendezvous.cue = None;
+            self.rdv_render(
+                "Loading flight instruments",
+                vec![],
+                "Planning begins when both vessels' readouts arrive.",
+            );
             return;
         };
         if me.reference_body != target.reference_body {
