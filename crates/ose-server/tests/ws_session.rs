@@ -3924,3 +3924,197 @@ async fn a_capsule_decoupled_on_the_pad_comes_down_onto_the_deck() {
         last.situation
     );
 }
+
+/// One shared agency: what one member earns, researches or takes on is the whole campaign's, and the other
+/// members see it live (their `ScienceState` follows, and `AgencyNews` says who did it). Guests cannot spend it.
+#[tokio::test]
+async fn science_tech_and_missions_are_shared_by_the_campaign() {
+    let (_server, addr) = spawn_server().await;
+    let mut a = connect_ws(&addr).await;
+    hello(&mut a, None, "alice").await;
+    let mut b = connect_ws(&addr).await;
+    hello(&mut b, None, "bob").await;
+    // alice starts an exploration campaign (rewards raised so the KSC's own reports buy the first node) and
+    // bob joins it
+    send_msg(
+        &mut a,
+        &ClientMessage::CreateSession {
+            name: "Co-op".into(),
+            mode: ose_net::SessionMode::Exploration,
+            difficulty: vec![ose_net::DifficultyOption {
+                id: "ScienceRewards".into(),
+                value: ose_net::DifficultyValue::Number(5.0),
+            }],
+        },
+    )
+    .await;
+    let id = wait_for(&mut a, |m| match m {
+        ServerMessage::CampaignState { id, .. } => Some(id),
+        _ => None,
+    })
+    .await;
+    send_msg(&mut b, &ClientMessage::SelectSession { id }).await;
+    let member = wait_for(&mut b, |m| match m {
+        ServerMessage::CampaignState { you_are_member, .. } => Some(you_are_member),
+        _ => None,
+    })
+    .await;
+    assert!(member);
+    let mut guest = connect_ws(&addr).await;
+    hello(&mut guest, None, "visitor").await;
+
+    // a guest cannot spend the agency's science or take on its missions
+    send_msg(
+        &mut guest,
+        &ClientMessage::UnlockTechNode {
+            id: "tNode_1v_rockets_01".into(),
+        },
+    )
+    .await;
+    let reason = wait_for(&mut guest, |m| match m {
+        ServerMessage::TechUnlock {
+            accepted, reason, ..
+        } => {
+            assert!(!accepted);
+            reason
+        }
+        _ => None,
+    })
+    .await;
+    assert!(reason.contains("join the campaign"), "{reason}");
+    send_msg(
+        &mut guest,
+        &ClientMessage::TurnInMission {
+            id: "Main_Kerbin_01".into(),
+        },
+    )
+    .await;
+    let reason = wait_for(&mut guest, |m| match m {
+        ServerMessage::MissionAck { reason, .. } => reason,
+        _ => None,
+    })
+    .await;
+    assert!(reason.contains("join the campaign"), "{reason}");
+    drop(guest);
+
+    // alice observes the KSC with a starter craft and recovers it: the agency earns the points
+    send_msg(
+        &mut a,
+        &ClientMessage::LaunchOnPad {
+            craft: starter_craft(),
+        },
+    )
+    .await;
+    let vessel = wait_for(&mut a, |m| match m {
+        ServerMessage::CraftLaunched { vessel, reason, .. } => {
+            assert!(reason.is_none(), "{reason:?}");
+            vessel
+        }
+        _ => None,
+    })
+    .await;
+    send_msg(&mut a, &ClientMessage::RunExperiments { vessel }).await;
+    wait_for(&mut a, |m| {
+        matches!(m, ServerMessage::ScienceReports { .. }).then_some(())
+    })
+    .await;
+    send_msg(&mut a, &ClientMessage::RecoverVessel { vessel }).await;
+    let earned = wait_for(&mut a, |m| match m {
+        ServerMessage::ScienceSubmitted { earned, reason, .. } => {
+            assert!(reason.is_none(), "{reason:?}");
+            Some(earned)
+        }
+        _ => None,
+    })
+    .await;
+    assert!(earned > 0.0);
+
+    // bob hears it and gets the agency's new total without asking
+    let mut news = None;
+    let mut capacity = None;
+    for _ in response_window() {
+        match recv(&mut b).await {
+            ServerMessage::AgencyNews { by, event } => news = Some((by, event)),
+            ServerMessage::ScienceState { capacity: c, .. } if c > 0 => capacity = Some(c),
+            _ => {}
+        }
+        if news.is_some() && capacity.is_some() {
+            break;
+        }
+    }
+    let (by, event) = news.expect("bob hears alice's science");
+    assert_eq!(by.as_deref(), Some("alice"));
+    assert!(
+        matches!(event, ose_net::AgencyEvent::ScienceEarned { science, reports } if (science - earned).abs() < 1e-6 && reports > 0),
+        "{event:?}"
+    );
+    let capacity = capacity.expect("bob's science state follows");
+    assert!(
+        (capacity as f64 - earned).abs() < 1e-3,
+        "{capacity} vs {earned}"
+    );
+
+    // bob spends it: the node is researched for alice too, and she is told who did it
+    assert!(capacity >= 10, "the first node costs 10, earned {capacity}");
+    send_msg(
+        &mut b,
+        &ClientMessage::UnlockTechNode {
+            id: "tNode_1v_rockets_01".into(),
+        },
+    )
+    .await;
+    let (accepted, reason) = wait_for(&mut b, |m| match m {
+        ServerMessage::TechUnlock {
+            accepted, reason, ..
+        } => Some((accepted, reason)),
+        _ => None,
+    })
+    .await;
+    assert!(accepted, "{reason:?}");
+    let mut news = None;
+    let mut unlocked = false;
+    for _ in response_window() {
+        match recv(&mut a).await {
+            ServerMessage::AgencyNews {
+                by,
+                event: ose_net::AgencyEvent::TechResearched { node },
+            } => news = Some((by, node)),
+            ServerMessage::ScienceState {
+                unlocked: u,
+                allocated,
+                ..
+            } if u.iter().any(|n| n == "tNode_1v_rockets_01") => {
+                assert_eq!(allocated, 10);
+                unlocked = true;
+            }
+            _ => {}
+        }
+        if news.is_some() && unlocked {
+            break;
+        }
+    }
+    assert_eq!(
+        news,
+        Some((Some("bob".to_string()), "tNode_1v_rockets_01".to_string()))
+    );
+    assert!(unlocked, "alice's tech tree has bob's node");
+    // and it is the agency's, not bob's: alice cannot research it again
+    send_msg(
+        &mut a,
+        &ClientMessage::UnlockTechNode {
+            id: "tNode_1v_rockets_01".into(),
+        },
+    )
+    .await;
+    let reason = wait_for(&mut a, |m| match m {
+        ServerMessage::TechUnlock {
+            accepted, reason, ..
+        } => {
+            assert!(!accepted);
+            reason
+        }
+        _ => None,
+    })
+    .await;
+    assert_eq!(reason, "already unlocked");
+}

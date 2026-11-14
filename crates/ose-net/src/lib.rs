@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 66;
+pub const PROTOCOL_VERSION: u16 = 67;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -446,6 +446,21 @@ pub struct SkippedExperiment {
     pub part: u16,
     pub experiment: String,
     pub reason: String,
+}
+
+/// Something a campaign member did for the shared agency, told to the rest of the campaign (`AgencyNews`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum AgencyEvent {
+    /// A tech node was researched with the agency's science.
+    TechResearched { node: String },
+    /// A mission was taken on at Mission Control.
+    MissionAccepted { mission: String },
+    /// A mission met its last objective (the agency's vessels, nobody in particular).
+    MissionCompleted { mission: String },
+    /// A completed mission was handed in for its reward.
+    MissionTurnedIn { mission: String, science: f64 },
+    /// Reports transmitted or recovered earned the agency this much science.
+    ScienceEarned { science: f64, reports: u32 },
 }
 
 /// One mission's state (texts are the original's localisation keys).
@@ -1231,6 +1246,13 @@ pub enum ServerMessage {
     /// Sent right after `BodyCatalog`: each body's rotation.
     BodyRotation {
         bodies: Vec<BodySpin>,
+    },
+    /// The campaign is one shared agency: what a teammate just did for it (protocol 67), sent to the other
+    /// players in the campaign (the one who did it has their own answer). `by` is their display name, `None`
+    /// for the agency as a whole. The `ScienceState` with the change follows on its own.
+    AgencyNews {
+        by: Option<String>,
+        event: AgencyEvent,
     },
 }
 

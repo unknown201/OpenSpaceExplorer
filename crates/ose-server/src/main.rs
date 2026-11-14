@@ -2359,6 +2359,16 @@ fn science_request(s: &Shared, player_id: u64, msg: ClientMessage) -> Vec<Server
                 let mut c = s.campaign.lock().expect("campaign lock");
                 science::submit(&mut c, reports, player_id, tick)
             };
+            if earned > 0.0 {
+                science::tell_agency(
+                    s,
+                    Some(player_id),
+                    ose_net::AgencyEvent::ScienceEarned {
+                        science: earned,
+                        reports: reports.iter().filter(|r| r.value > 0.0).count() as u32,
+                    },
+                );
+            }
             tracing::info!(
                 player = player_id,
                 vessel,
@@ -2384,7 +2394,9 @@ fn science_request(s: &Shared, player_id: u64, msg: ClientMessage) -> Vec<Server
             let now = s.universe.lock().expect("sim lock").tick().0;
             let res = {
                 let mut c = s.campaign.lock().expect("campaign lock");
-                if accept {
+                if !science::member(&c, player_id) {
+                    Err(NOT_A_MEMBER.to_string())
+                } else if accept {
                     s.science.accept(&mut c, &id, now).map(|_| 0.0)
                 } else {
                     s.science.turn_in(&mut c, &id)
@@ -2392,6 +2404,19 @@ fn science_request(s: &Shared, player_id: u64, msg: ClientMessage) -> Vec<Server
             };
             if let Ok(paid) = res {
                 tracing::info!(player = player_id, mission = %id, accept, paid, "mission");
+                let mission = id.clone();
+                science::tell_agency(
+                    s,
+                    Some(player_id),
+                    if accept {
+                        ose_net::AgencyEvent::MissionAccepted { mission }
+                    } else {
+                        ose_net::AgencyEvent::MissionTurnedIn {
+                            mission,
+                            science: paid,
+                        }
+                    },
+                );
             }
             vec![
                 ServerMessage::MissionAck {
@@ -2406,10 +2431,19 @@ fn science_request(s: &Shared, player_id: u64, msg: ClientMessage) -> Vec<Server
         ClientMessage::UnlockTechNode { id } => {
             let res = {
                 let mut c = s.campaign.lock().expect("campaign lock");
-                s.science.unlock(&mut c, &id)
+                if science::member(&c, player_id) {
+                    s.science.unlock(&mut c, &id)
+                } else {
+                    Err(NOT_A_MEMBER.to_string())
+                }
             };
             if res.is_ok() {
                 tracing::info!(player = player_id, node = %id, "tech node unlocked");
+                science::tell_agency(
+                    s,
+                    Some(player_id),
+                    ose_net::AgencyEvent::TechResearched { node: id.clone() },
+                );
             }
             vec![
                 ServerMessage::TechUnlock {
@@ -2423,6 +2457,9 @@ fn science_request(s: &Shared, player_id: u64, msg: ClientMessage) -> Vec<Server
         _ => Vec::new(),
     }
 }
+
+/// Why a guest cannot spend the shared agency's science or take on its missions.
+const NOT_A_MEMBER: &str = "join the campaign to spend its science and take on its missions";
 
 /// How near a Kerbal recovered on EVA a landed craft is recovered with it, m.
 const RECOVER_WITH_KERBAL_M: f64 = 50.0;
@@ -3020,6 +3057,7 @@ fn deliver_transmitted(s: &Shared) {
     }
     let list = s.vessels.lock().expect("vessels lock").clone();
     let mut out = Vec::new();
+    let mut earned_by: Vec<(Option<u64>, f64, u32)> = Vec::new();
     for (e, report) in done {
         let Some(&(_, vessel, owner)) = list.iter().find(|x| x.0 == e) else {
             continue;
@@ -3030,6 +3068,15 @@ fn deliver_transmitted(s: &Shared) {
             science::submit(&mut c, vec![report], by, tick)
         };
         tracing::info!(player = by, vessel, earned, "science transmitted");
+        if earned > 0.0 {
+            match earned_by.iter_mut().find(|(p, _, _)| *p == owner) {
+                Some(e) => {
+                    e.1 += earned;
+                    e.2 += 1;
+                }
+                None => earned_by.push((owner, earned, 1)),
+            }
+        }
         if let Some(p) = owner {
             out.push((
                 p,
@@ -3051,10 +3098,19 @@ fn deliver_transmitted(s: &Shared) {
         .keys()
         .copied()
         .collect();
-    let mut q = s.pending.lock().expect("pending lock");
-    q.extend(out);
-    for p in players {
-        q.push((p, state.clone()));
+    {
+        let mut q = s.pending.lock().expect("pending lock");
+        q.extend(out);
+        for p in players {
+            q.push((p, state.clone()));
+        }
+    }
+    for (by, science, reports) in earned_by {
+        science::tell_agency(
+            s,
+            by,
+            ose_net::AgencyEvent::ScienceEarned { science, reports },
+        );
     }
 }
 
