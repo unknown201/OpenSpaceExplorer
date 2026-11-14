@@ -13866,25 +13866,10 @@ impl App {
             normal_mps: 0.0,
             radial_mps: 0.0,
         });
-        set_input_value(&self.doc, "node-dt", dt);
+        set_input_value(&self.doc, "node-dt", hud::node_dt_to_slider(dt));
         set_input_value(&self.doc, "node-prograde", 0.0);
         set_input_value(&self.doc, "node-normal", 0.0);
         set_input_value(&self.doc, "node-radial", 0.0);
-        // Let the time slider span one orbit of the vessel.
-        if let Some(scene) = &self.scene {
-            if let Some(v) = scene.vessel(vessel) {
-                let period = scene::orbit_from(scene.bodies[rb].mu, &v.orbit).period;
-                if period.is_finite() {
-                    if let Some(el) = self
-                        .doc
-                        .get_element_by_id("node-dt")
-                        .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
-                    {
-                        el.set_max(&format!("{:.0}", period.max(600.0)));
-                    }
-                }
-            }
-        }
         if let Some(panel) = self.doc.get_element_by_id("node-panel") {
             panel.class_list().add_1("open").ok();
         }
@@ -14022,17 +14007,7 @@ impl App {
         };
         node.ut = t;
         let dt = t - node.anchor_ut;
-        if let Some(el) = self
-            .doc
-            .get_element_by_id("node-dt")
-            .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
-        {
-            let max: f64 = el.max().parse().unwrap_or(600.0);
-            if dt > max {
-                el.set_max(&format!("{:.0}", dt.ceil()));
-            }
-        }
-        set_input_value(&self.doc, "node-dt", dt);
+        set_input_value(&self.doc, "node-dt", hud::node_dt_to_slider(dt));
         let now = now_ms();
         if now - self.mnv_sent_ms > 100.0 {
             self.mnv_sent_ms = now;
@@ -14061,17 +14036,7 @@ impl App {
             node.anchor_ut = self.time.ut_at(now_ms());
             node.ut = t;
             let dt = t - node.anchor_ut;
-            if let Some(el) = self
-                .doc
-                .get_element_by_id("node-dt")
-                .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
-            {
-                let max: f64 = el.max().parse().unwrap_or(600.0);
-                if dt > max {
-                    el.set_max(&format!("{:.0}", dt.ceil()));
-                }
-            }
-            set_input_value(&self.doc, "node-dt", dt);
+            set_input_value(&self.doc, "node-dt", hud::node_dt_to_slider(dt));
         }
         self.send_node();
         true
@@ -14134,17 +14099,7 @@ impl App {
         node.anchor_ut = now;
         self.node = Some(node);
         let dt = node.ut - now;
-        if let Some(el) = self
-            .doc
-            .get_element_by_id("node-dt")
-            .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
-        {
-            let max: f64 = el.max().parse().unwrap_or(600.0);
-            if dt > max {
-                el.set_max(&format!("{:.0}", dt.ceil()));
-            }
-        }
-        set_input_value(&self.doc, "node-dt", dt);
+        set_input_value(&self.doc, "node-dt", hud::node_dt_to_slider(dt));
         set_input_value(&self.doc, "node-prograde", node.prograde_mps);
         set_input_value(&self.doc, "node-normal", node.normal_mps);
         set_input_value(&self.doc, "node-radial", node.radial_mps);
@@ -14185,8 +14140,8 @@ impl App {
         let Some(mut node) = self.node else {
             return;
         };
-        if let Some(dt) = input_value(&self.doc, "node-dt") {
-            node.ut = node.anchor_ut + dt;
+        if let Some(pos) = input_value(&self.doc, "node-dt") {
+            node.ut = node.anchor_ut + hud::node_slider_to_dt(pos);
         }
         if let Some(p) = input_value(&self.doc, "node-prograde") {
             node.prograde_mps = p;
@@ -14269,8 +14224,21 @@ impl App {
         }
     }
 
-    /// Place the node marker on the vessel's current orbit at the burn time and refresh its countdown.
-    fn draw_node(&self, ut: f64, positions: &[ose_math::DVec3], centre: ose_math::DVec3) {
+    /// The node panel's countdown to the node being edited. Every frame, in flight as well as in the map: it used
+    /// to be refreshed only by the map's drawing, so in flight it froze at the value the map last showed.
+    fn update_node_eta(&self) {
+        let Some(node) = self.node else { return };
+        let ut = self.time.ut_at(now_ms());
+        let text = hud::fmt_dt(node.ut - ut);
+        if let Some(el) = self.doc.get_element_by_id("node-dt-text") {
+            if el.text_content().as_deref() != Some(text.as_str()) {
+                el.set_text_content(Some(&text));
+            }
+        }
+    }
+
+    /// Place the node marker on the vessel's current orbit at the burn time.
+    fn draw_node(&self, positions: &[ose_math::DVec3], centre: ose_math::DVec3) {
         let (Some(node), Some(el)) = (self.node, &self.node_el) else {
             return;
         };
@@ -14281,18 +14249,6 @@ impl App {
         let style = el.style();
         style.set_property("left", &format!("{x:.1}px")).ok();
         style.set_property("top", &format!("{y:.1}px")).ok();
-        let remaining = node.ut - ut;
-        let sign = if remaining < 0.0 { "+" } else { "-" };
-        let r = remaining.abs();
-        set_text(
-            &self.doc,
-            "node-dt-text",
-            &format!(
-                "T{sign}{}:{:02}",
-                (r / 60.0).floor() as u64,
-                (r % 60.0) as u64
-            ),
-        );
         let ctx = &self.ctx;
         ctx.set_stroke_style_str("rgba(150,170,255,0.9)");
         ctx.set_line_width(1.0);
@@ -14375,6 +14331,7 @@ impl App {
 
     fn frame(&mut self) {
         self.mnv_hold_tick();
+        self.update_node_eta();
         let t = now_ms();
         if self.frame_at_ms > 0.0 {
             self.frame_dt_s = ((t - self.frame_at_ms) / 1000.0).clamp(0.001, 0.1);
@@ -14807,7 +14764,7 @@ impl App {
             }
         }
         self.draw_vessels(ut, &positions, centre);
-        self.draw_node(ut, &positions, centre);
+        self.draw_node(&positions, centre);
         self.update_breadcrumbs();
     }
 
@@ -15736,18 +15693,6 @@ impl App {
                     style.set_property("left", &format!("{x:.1}px")).ok();
                     style.set_property("top", &format!("{y:.1}px")).ok();
                 }
-                let remaining = node.ut - ut;
-                let sign = if remaining < 0.0 { "+" } else { "-" };
-                let r = remaining.abs();
-                set_text(
-                    &self.doc,
-                    "node-dt-text",
-                    &format!(
-                        "T{sign}{}:{:02}",
-                        (r / 60.0).floor() as u64,
-                        (r % 60.0) as u64
-                    ),
-                );
             }
         }
         self.canvas

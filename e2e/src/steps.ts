@@ -595,9 +595,38 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
         await sleep(1000);
         particles = `; ${authored} authored layers, ${burning} particles, cutoff cleared`;
       }
+      // A maneuver node planned in the map keeps counting down in the flight view (it used to freeze there), and
+      // its time slider reaches years out, read in years and days rather than thousands of minutes.
+      let nodeNote = "";
+      const addNode = page.locator('[data-ose="add-node"]');
+      await page.keyboard.press("m");
+      await sleep(300);
+      if ((await addNode.count()) > 0 && (await addNode.first().isVisible())) {
+        await addNode.first().click();
+        await sleep(300);
+        await page.keyboard.press("m");
+        const eta = page.locator("#node-dt-text");
+        const first = ((await eta.textContent()) ?? "").trim();
+        await sleep(2_500);
+        const second = ((await eta.textContent()) ?? "").trim();
+        if (!/^T-/.test(first) || first === second) {
+          return failed(`the node countdown did not tick in the flight view (${JSON.stringify(first)} then ${JSON.stringify(second)})`);
+        }
+        await page.locator("#node-dt").evaluate((el: HTMLInputElement) => {
+          el.value = el.max;
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+        });
+        await sleep(300);
+        const far = ((await eta.textContent()) ?? "").trim();
+        if (!/^T-\d+y \d+d \d+h \d\dm \d\ds$/.test(far)) return failed(`the node slider's far end reads ${JSON.stringify(far)}, not years out`);
+        await page.locator('[data-ose="clear-node"]').first().click();
+        nodeNote = `; node ${first} -> ${second} in flight, slider end ${far}`;
+      } else {
+        return failed("the map from flight (M) offers no Add node button");
+      }
       if (probe.pageErrors.length) return failed(probe.pageErrors.join("; "));
       if (probe.consoleErrors.length) return failed(probe.consoleErrors.join("; "));
-      return passed(`lifted off: ${before.toFixed(0)} m -> ${after.toFixed(0)} m, ${situation}${particles}`);
+      return passed(`lifted off: ${before.toFixed(0)} m -> ${after.toFixed(0)} m, ${situation}${particles}${nodeNote}`);
     }),
   );
 
