@@ -409,21 +409,58 @@ pub fn fmt_dist(m: f64) -> String {
     }
 }
 
-/// Kerbin time: 6-hour days, as the original's countdowns (`T-` before, `T+` after).
+/// Kerbin time: 6-hour days and 426-day years, as the original's countdowns (`T-` before, `T+` after). Under a
+/// day it reads as a clock (`T-1:02:05`); from a day on it spells the units out down to seconds
+/// (`T-3d 2h 01m 05s`, `T-2y 14d 0h 00m 00s`), so a far node never shows as thousands of minutes.
 pub fn fmt_dt(s: f64) -> String {
     if !s.is_finite() {
         return "--".into();
     }
     let sign = if s < 0.0 { "T+" } else { "T-" };
     let t = s.abs().round() as u64;
-    let (d, h, m, sec) = (t / 21_600, t % 21_600 / 3600, t % 3600 / 60, t % 60);
-    if d > 0 {
-        format!("{sign}{d}d {h}h {m:02}m")
+    let (day, year) = (
+        crate::kerbin_time::DAY_S as u64,
+        crate::kerbin_time::YEAR_S as u64,
+    );
+    let (y, d, h, m, sec) = (
+        t / year,
+        t % year / day,
+        t % day / 3600,
+        t % 3600 / 60,
+        t % 60,
+    );
+    if y > 0 {
+        format!("{sign}{y}y {d}d {h}h {m:02}m {sec:02}s")
+    } else if d > 0 {
+        format!("{sign}{d}d {h}h {m:02}m {sec:02}s")
     } else if h > 0 {
         format!("{sign}{h}:{m:02}:{sec:02}")
     } else {
         format!("{sign}{m}:{sec:02}")
     }
+}
+
+/// The maneuver node panel's time slider is logarithmic: its `0..=NODE_SLIDER_STEPS` positions span from now to
+/// `NODE_DT_MAX_S` ahead, fine (fractions of a second) near now and coarse (hours) years out.
+pub const NODE_SLIDER_STEPS: f64 = 10_000.0;
+/// How far ahead the node time slider reaches: ten Kerbin years.
+pub const NODE_DT_MAX_S: f64 = 10.0 * crate::kerbin_time::YEAR_S;
+/// Below about this many seconds the slider is close to linear; above it, logarithmic.
+const NODE_DT_KNEE_S: f64 = 60.0;
+
+/// Seconds from now for a node time slider position.
+pub fn node_slider_to_dt(pos: f64) -> f64 {
+    let p = (pos / NODE_SLIDER_STEPS).clamp(0.0, 1.0);
+    NODE_DT_KNEE_S * ((1.0 + NODE_DT_MAX_S / NODE_DT_KNEE_S).powf(p) - 1.0)
+}
+
+/// The node time slider position for a node `dt` seconds from now (clamped to the slider's ends).
+pub fn node_dt_to_slider(dt: f64) -> f64 {
+    if !dt.is_finite() {
+        return 0.0;
+    }
+    let p = (1.0 + dt.max(0.0) / NODE_DT_KNEE_S).ln() / (1.0 + NODE_DT_MAX_S / NODE_DT_KNEE_S).ln();
+    (p * NODE_SLIDER_STEPS).clamp(0.0, NODE_SLIDER_STEPS)
 }
 
 /// Fill the SAS column and the action bar with their buttons (icons masked in the text colour, tooltips naming
@@ -2342,8 +2379,55 @@ mod tests {
     fn countdowns_in_kerbin_days() {
         assert_eq!(fmt_dt(65.0), "T-1:05");
         assert_eq!(fmt_dt(3725.0), "T-1:02:05");
-        assert_eq!(fmt_dt(21_600.0 + 7200.0 + 60.0), "T-1d 2h 01m");
+        assert_eq!(fmt_dt(21_600.0 + 7200.0 + 60.0), "T-1d 2h 01m 00s");
         assert_eq!(fmt_dt(-5.0), "T+0:05");
+    }
+
+    /// A node 934 minutes out read `T-934:46` in the node panel; past a day it spells out days down to seconds,
+    /// and past a year, years.
+    #[test]
+    fn long_countdowns_spell_out_years_and_days() {
+        use crate::kerbin_time::{DAY_S, YEAR_S};
+        assert_eq!(fmt_dt(934.0 * 60.0 + 46.0), "T-2d 3h 34m 46s");
+        assert_eq!(fmt_dt(DAY_S - 1.0), "T-5:59:59");
+        assert_eq!(fmt_dt(DAY_S), "T-1d 0h 00m 00s");
+        assert_eq!(
+            fmt_dt(2.0 * YEAR_S + 14.0 * DAY_S + 3.0 * 3600.0 + 7.0),
+            "T-2y 14d 3h 00m 07s"
+        );
+        assert_eq!(fmt_dt(-(YEAR_S + 61.0)), "T+1y 0d 0h 01m 01s");
+    }
+
+    /// The node time slider is logarithmic out to ten Kerbin years, fine near now, and round-trips.
+    #[test]
+    fn node_time_slider_is_log_out_to_years() {
+        assert_eq!(node_slider_to_dt(0.0), 0.0);
+        assert!((node_slider_to_dt(NODE_SLIDER_STEPS) - NODE_DT_MAX_S).abs() < 1.0);
+        // One step near now is under a second; the middle of the slider is hours, not years.
+        assert!(node_slider_to_dt(1.0) < 1.0);
+        let mid = node_slider_to_dt(NODE_SLIDER_STEPS / 2.0);
+        assert!(
+            mid > 3600.0 && mid < crate::kerbin_time::DAY_S * 30.0,
+            "{mid}"
+        );
+        for dt in [0.5, 120.0, 3600.0, 56_086.0, 1.0e6, 5.0e7] {
+            let back = node_slider_to_dt(node_dt_to_slider(dt));
+            assert!((back - dt).abs() / dt < 1e-9, "{dt} -> {back}");
+        }
+        // Monotonic, and clamped past either end.
+        assert!(node_dt_to_slider(200.0) > node_dt_to_slider(100.0));
+        assert_eq!(node_dt_to_slider(-5.0), 0.0);
+        assert_eq!(node_dt_to_slider(1.0e12), NODE_SLIDER_STEPS);
+        assert_eq!(node_dt_to_slider(f64::NAN), 0.0);
+        // The page's slider has the same number of steps.
+        let html = include_str!("../index.html");
+        let input = &html[html.find("<input id=\"node-dt\"").expect("node-dt slider")..];
+        let input = &input[..input.find("/>").unwrap()];
+        assert!(input.contains("min=\"0\""), "{input}");
+        assert!(
+            input.contains(&format!("max=\"{NODE_SLIDER_STEPS:.0}\"")),
+            "{input}"
+        );
     }
 
     #[test]

@@ -1,0 +1,1523 @@
+{
+ "shrouds": {
+  "engine_0v_methalox_ant": {
+   "base_radius": 0.3125,
+   "height": 0.3029,
+   "max_target": -1,
+   "min_target": -1,
+   "node": "bottom",
+   "node_size": 0,
+   "side_count": 24,
+   "start_height": 0.079
+  },
+  "engine_0v_methalox_spark": {
+   "base_radius": 0.3125,
+   "height": 0.3368,
+   "max_target": -1,
+   "min_target": -1,
+   "node": "bottom",
+   "node_size": 0,
+   "side_count": 24,
+   "start_height": 0.124
+  },
+  "engine_0v_xenon_dawn": {
+   "base_radius": 0.3125,
+   "height": 0.394,
+   "max_target": -1,
+   "min_target": 1,
+   "node": "bottom",
+   "node_size": 0,
+   "side_count": 24,
+   "start_height": 0.212
+  },
+  "engine_1v_hydrogen_nerv": {
+   "base_radius": 0.625,
+   "height": 3.69,
+   "max_target": -1,
+   "min_target": 2,
+   "node": "bottom",
+   "node_size": 1,
+   "side_count": 24,
+   "start_height": 1.44
+  },
+  "engine_1v_methalox_cornet": {
+   "base_radius": 0.625,
+   "height": 1.917,
+   "max_target": -1,
+   "min_target": 2,
+   "node": "bottom",
+   "node_size": 1,
+   "side_count": 24,
+   "start_height": 0.893
+  },
+  "engine_1v_methalox_dart": {
+   "base_radius": 0.625,
+   "height": 0.842,
+   "max_target": -1,
+   "min_target": 2,
+   "node": "bottom",
+   "node_size": 1,
+   "side_count": 24,
+   "start_height": 0.148
+  },
+  "engine_1v_methalox_reliant": {
+   "base_radius": 0.625,
+   "height": 1.7889,
+   "max_target": -1,
+   "min_target": 2,
+   "node": "bottom",
+   "node_size": 1,
+   "side_count": 36,
+   "start_height": 0.7889
+  },
+  "engine_1v_methalox_swivel": {
+   "base_radius": 0.625,
+   "height": 1.6801,
+   "max_target": -1,
+   "min_target": 2,
+   "node": "bottom",
+   "node_size": 1,
+   "side_count": 36,
+   "start_height": 0.6801
+  },
+  "engine_1v_methalox_terrier": {
+   "base_radius": 0.625,
+   "height": 0.61,
+   "max_target": -1,
+   "min_target": 2,
+   "node": "bottom",
+   "node_size": 1,
+   "side_count": 24,
+   "start_height": 0.118
+  },
+  "engine_1v_methalox_vector": {
+   "base_radius": 0.625,
+   "height": 1.611,
+   "max_target": -1,
+   "min_target": 2,
+   "node": "bottom",
+   "node_size": 1,
+   "side_count": 24,
+   "start_height": 0.61111
+  },
+  "engine_2v_methalox_mainsail": {
+   "base_radius": 1.25,
+   "height": 3.03000021,
+   "max_target": -1,
+   "min_target": 3,
+   "node": "bottom",
+   "node_size": 2,
+   "side_count": 64,
+   "start_height": 1.065
+  },
+  "engine_2v_methalox_poodle": {
+   "base_radius": 1.25,
+   "height": 1.6178,
+   "max_target": -1,
+   "min_target": 3,
+   "node": "bottom",
+   "node_size": 2,
+   "side_count": 36,
+   "start_height": 0.811
+  },
+  "engine_2v_methalox_skipper": {
+   "base_radius": 1.25,
+   "height": 2.371,
+   "max_target": -1,
+   "min_target": 3,
+   "node": "bottom",
+   "node_size": 2,
+   "side_count": 24,
+   "start_height": 1.0
+  },
+  "engine_2v_methalox_trumpet": {
+   "base_radius": 1.25,
+   "height": 2.997,
+   "max_target": -1,
+   "min_target": 3,
+   "node": "bottom",
+   "node_size": 2,
+   "side_count": 36,
+   "start_height": 1.381
+  },
+  "engine_3v_hydrogen_swerv": {
+   "base_radius": 1.875,
+   "height": 5.74600029,
+   "max_target": -1,
+   "min_target": 4,
+   "node": "bottom",
+   "node_size": 3,
+   "side_count": 36,
+   "start_height": 2.523
+  },
+  "engine_3v_methalox_labradoodle": {
+   "base_radius": 1.875,
+   "height": 2.015,
+   "max_target": -1,
+   "min_target": 4,
+   "node": "bottom",
+   "node_size": 3,
+   "side_count": 36,
+   "start_height": 0.623
+  },
+  "engine_3v_methalox_mammoth": {
+   "base_radius": 1.875,
+   "height": 5.097,
+   "max_target": -1,
+   "min_target": 4,
+   "node": "bottom",
+   "node_size": 3,
+   "side_count": 36,
+   "start_height": 1.937
+  },
+  "engine_3v_methalox_rhino": {
+   "base_radius": 1.875,
+   "height": 4.3789,
+   "max_target": -1,
+   "min_target": 4,
+   "node": "bottom",
+   "node_size": 3,
+   "side_count": 36,
+   "start_height": 1.5509
+  },
+  "engine_3v_methalox_tuba": {
+   "base_radius": 1.875,
+   "height": 3.612,
+   "max_target": -1,
+   "min_target": 4,
+   "node": "bottom",
+   "node_size": 3,
+   "side_count": 36,
+   "start_height": 1.412
+  }
+ },
+ "stack_node_sizes": {
+  "adapter_1v_bullet_methalox_0v-1v": {
+   "bottom01": 1,
+   "top": 0
+  },
+  "adapter_1v_cir-sqr": {
+   "bottom": 1,
+   "top": 1
+  },
+  "adapter_1v_conical_0v-1v": {
+   "bottom": 1,
+   "top": 0
+  },
+  "adapter_1v_flat_0v-1v": {
+   "bottom": 1,
+   "top": 0
+  },
+  "adapter_2v_2point_1v-2v": {
+   "bottom01": 0,
+   "bottom02": 0,
+   "top": 1
+  },
+  "adapter_2v_3point_1v-2v": {
+   "bottom01": 0,
+   "bottom02": 0,
+   "bottom03": 0,
+   "top": 1
+  },
+  "adapter_2v_4point_1v-2v": {
+   "bottom01": 0,
+   "bottom02": 0,
+   "bottom03": 0,
+   "bottom04": 0,
+   "top": 1
+  },
+  "adapter_2v_cir-sqr": {
+   "bottom": 2,
+   "top": 2
+  },
+  "adapter_2v_conical_1v-2v": {
+   "bottom": 2,
+   "top": 1
+  },
+  "adapter_2v_conical_methalox_1v-2v": {
+   "bottom": 2,
+   "top": 1
+  },
+  "adapter_2v_flat_1v-2v": {
+   "bottom": 2,
+   "top": 1
+  },
+  "adapter_2v_m2_1x1_methalox_1v-m2": {
+   "bottom": 2,
+   "top": 1
+  },
+  "adapter_2v_m2_1x2_methalox_1v-m2": {
+   "bottom": 2,
+   "top": 1
+  },
+  "adapter_2v_m2_2point_methalox_1v-m2": {
+   "bottom01": 1,
+   "bottom02": 1,
+   "top": 1
+  },
+  "adapter_2v_m2_methalox_2v-m2": {
+   "bottom": 2,
+   "top": 2
+  },
+  "adapter_2v_rightcone_methalox_1v-2v": {
+   "bottom": 2,
+   "top": 1
+  },
+  "adapter_3v_cir-sqr": {
+   "bottom": 3,
+   "top": 1
+  },
+  "adapter_3v_conical_2v-3v": {
+   "bottom": 3,
+   "top": 2
+  },
+  "adapter_3v_m3_conical_methalox_2v-m3": {
+   "bottom": 3,
+   "top": 2
+  },
+  "adapter_3v_m3_methalox_3v-m3": {
+   "bottom": 3,
+   "top": 3
+  },
+  "adapter_3v_m3_methalox_m2-m3": {
+   "bottom": 3,
+   "top": 2
+  },
+  "adapter_3v_m3_rightcone_methalox_2v-m3": {
+   "bottom": 3,
+   "top": 2
+  },
+  "adapter_3v_methalox_2v-3v": {
+   "bottom": 3,
+   "top": 2
+  },
+  "adapter_4v_3v-4v": {
+   "bottom": 4,
+   "top": 3
+  },
+  "adapter_4v_cir-sqr": {
+   "bottom": 4,
+   "top": 4
+  },
+  "adapter_4v_methalox_3v-4v": {
+   "bottom": 4,
+   "top": 3
+  },
+  "antenna_0v_dish_ra-15": {
+   "bottom": 0
+  },
+  "antenna_0v_dish_ra-2": {
+   "bottom": 0
+  },
+  "antenna_1v_dish_88-88": {
+   "bottom": 0
+  },
+  "antenna_1v_dish_ra-100": {
+   "bottom": 1
+  },
+  "attachpoint_1v_radial": {
+   "top": 1
+  },
+  "booster_1v_solid_flea": {
+   "bottom": 1,
+   "top": 1
+  },
+  "booster_1v_solid_hammer": {
+   "bottom": 1,
+   "top": 1
+  },
+  "booster_1v_solid_kickback": {
+   "bottom": 1,
+   "top": 1
+  },
+  "booster_1v_solid_thumper": {
+   "bottom": 1,
+   "top": 1
+  },
+  "booster_2v_solid_clydesdale": {
+   "bottom": 2,
+   "top": 2
+  },
+  "cabin_1v_m1_crew": {
+   "bottom": 1,
+   "top": 1
+  },
+  "cabin_2v_crew_hitchhiker": {
+   "bottom": 2,
+   "top": 2
+  },
+  "cabin_2v_m2_crew": {
+   "bottom": 1,
+   "top": 1
+  },
+  "cabin_3v_crew": {
+   "bottom": 3,
+   "top": 3
+  },
+  "cabin_3v_m3_crew": {
+   "bottom": 3,
+   "top": 3
+  },
+  "cargobay_1v_1x1": {
+   "bottom": 1,
+   "bottom2": 0,
+   "top": 1,
+   "top2": 0
+  },
+  "cargobay_1v_1x8": {
+   "bottom": 1,
+   "bottom2": 0,
+   "top": 1,
+   "top2": 0
+  },
+  "cargobay_2v_1x1": {
+   "bottom": 1,
+   "bottom2": 0,
+   "top": 1,
+   "top2": 0
+  },
+  "cargobay_2v_1x8": {
+   "bottom": 2,
+   "bottom2": 0,
+   "top": 2,
+   "top2": 0
+  },
+  "cargobay_2v_m2_1x1": {
+   "bottom": 2,
+   "bottom2": 0,
+   "top": 2,
+   "top2": 0
+  },
+  "cargobay_2v_m2_1x2": {
+   "bottom": 2,
+   "bottom2": 1,
+   "top": 2,
+   "top2": 1
+  },
+  "cargobay_2v_nose": {
+   "bottom": 2,
+   "bottom2": 1
+  },
+  "cargobay_3v_1x1": {
+   "bottom": 3,
+   "bottom2": 2,
+   "top": 3,
+   "top2": 2
+  },
+  "cargobay_3v_1x8": {
+   "bottom": 3,
+   "bottom2": 2,
+   "top": 3,
+   "top2": 2
+  },
+  "cargobay_3v_m3_1x1": {
+   "bottom": 3,
+   "bottom2": 2,
+   "top": 3,
+   "top2": 2
+  },
+  "cargobay_3v_m3_1x2": {
+   "bottom": 3,
+   "bottom2": 2,
+   "top": 3,
+   "top2": 2
+  },
+  "cargobay_3v_m3_1x4": {
+   "bottom": 3,
+   "bottom2": 2,
+   "top": 3,
+   "top2": 2
+  },
+  "cargobay_3v_m3_ramp_1x3": {
+   "top": 2,
+   "top2": 3
+  },
+  "cargobay_3v_nose": {
+   "bottom": 3,
+   "bottom2": 2
+  },
+  "cargobay_4v_1x1": {
+   "bottom": 4,
+   "bottom2": 3,
+   "top": 4,
+   "top2": 3
+  },
+  "cargobay_4v_1x4": {
+   "bottom": 4,
+   "bottom2": 3,
+   "top": 4,
+   "top2": 3
+  },
+  "cargobay_4v_nose": {
+   "bottom": 4,
+   "bottom2": 3
+  },
+  "chassis_3v_truck": {
+   "back": 0,
+   "front": 0,
+   "top": 1
+  },
+  "cockpit_1v_m1_crew": {
+   "bottom": 1
+  },
+  "cockpit_1v_m1_inline_crew": {
+   "bottom": 1,
+   "top": 1
+  },
+  "cockpit_2v_m2_crew": {
+   "bottom": 2
+  },
+  "cockpit_2v_m2_inline_crew": {
+   "bottom": 2,
+   "top": 2
+  },
+  "cockpit_3v_m3_crew": {
+   "bottom": 3,
+   "top": 1
+  },
+  "cockpit_3v_truck_crew": {
+   "back": 1,
+   "bottom": 2
+  },
+  "collector_0v_science_atmospheric": {
+   "bottom": 0
+  },
+  "collector_0v_science_radiation": {
+   "bottom": 1,
+   "top": 1
+  },
+  "collector_1v_science_general": {
+   "bottom": 1,
+   "top": 1
+  },
+  "collector_2v_science_atmospheric": {
+   "bottom": 2,
+   "top": 2
+  },
+  "connector_0v_6point": {
+   "back": 0,
+   "bottom": 0,
+   "front": 0,
+   "left": 0,
+   "right": 0,
+   "top": 0
+  },
+  "connector_1v_6point": {
+   "back": 1,
+   "bottom": 1,
+   "front": 1,
+   "left": 1,
+   "right": 1,
+   "top": 1
+  },
+  "coupler_1v_inline_2point": {
+   "bottom01": 1,
+   "bottom02": 1,
+   "top": 1
+  },
+  "coupler_1v_inline_3point": {
+   "bottom01": 1,
+   "bottom02": 1,
+   "bottom03": 1,
+   "top": 1
+  },
+  "coupler_1v_inline_4point": {
+   "bottom01": 1,
+   "bottom02": 1,
+   "bottom03": 1,
+   "bottom04": 1,
+   "top": 1
+  },
+  "decoupler_0v_inline": {
+   "bottom": 0,
+   "top": 0
+  },
+  "decoupler_1v_inline": {
+   "bottom": 1,
+   "top": 1
+  },
+  "decoupler_2v_inline": {
+   "bottom": 2,
+   "top": 2
+  },
+  "decoupler_3v_inline": {
+   "bottom": 3,
+   "top": 3
+  },
+  "decoupler_4v_inline": {
+   "bottom": 4,
+   "top": 4
+  },
+  "dockingport_0v_inline": {
+   "bottom": 0,
+   "top": 0
+  },
+  "dockingport_1v_inline": {
+   "bottom": 1,
+   "top": 1
+  },
+  "dockingport_1v_inline_shielded": {
+   "bottom": 1
+  },
+  "dockingport_1v_inline_sideport": {
+   "bottom": 1,
+   "top": 1
+  },
+  "dockingport_2v_inline": {
+   "bottom": 2,
+   "top": 2
+  },
+  "dockingport_2v_m2_inline_sideport": {
+   "bottom": 2,
+   "docking": 2
+  },
+  "dockingport_3v_inline": {
+   "bottom": 3,
+   "top": 3
+  },
+  "dockingring_4v_inline": {
+   "bottom": 4,
+   "top": 4
+  },
+  "engine_0v_methalox_ant": {
+   "bottom": 0,
+   "top": 0
+  },
+  "engine_0v_methalox_spark": {
+   "bottom": 0,
+   "top": 0
+  },
+  "engine_0v_methane_whittle": {
+   "top": 0
+  },
+  "engine_0v_xenon_dawn": {
+   "bottom": 0,
+   "top": 0
+  },
+  "engine_1v_hydrogen_nerv": {
+   "bottom": 1,
+   "top": 1
+  },
+  "engine_1v_methalox_cornet": {
+   "bottom": 1,
+   "top": 1
+  },
+  "engine_1v_methalox_dart": {
+   "bottom": 1,
+   "top": 1
+  },
+  "engine_1v_methalox_reliant": {
+   "bottom": 1,
+   "top": 1
+  },
+  "engine_1v_methalox_swivel": {
+   "bottom": 1,
+   "top": 1
+  },
+  "engine_1v_methalox_terrier": {
+   "bottom": 1,
+   "top": 1
+  },
+  "engine_1v_methalox_vector": {
+   "bottom": 1,
+   "top": 1
+  },
+  "engine_1v_methane-methalox_rapier": {
+   "bottom": 1,
+   "top": 1
+  },
+  "engine_1v_turbofan_methane_panther": {
+   "top": 1
+  },
+  "engine_1v_turbofan_methane_wheesley": {
+   "top": 1
+  },
+  "engine_1v_turboramjet_methane_whiplash": {
+   "top": 1
+  },
+  "engine_2v_methalox_mainsail": {
+   "bottom": 2,
+   "top": 2
+  },
+  "engine_2v_methalox_poodle": {
+   "bottom": 2,
+   "top": 2
+  },
+  "engine_2v_methalox_skipper": {
+   "bottom": 2,
+   "top": 2
+  },
+  "engine_2v_methalox_trumpet": {
+   "bottom": 2,
+   "top": 2
+  },
+  "engine_3v_hydrogen_swerv": {
+   "bottom": 3,
+   "top": 3
+  },
+  "engine_3v_methalox_labradoodle": {
+   "bottom": 3,
+   "top": 3
+  },
+  "engine_3v_methalox_mammoth": {
+   "bottom": 3,
+   "top": 3
+  },
+  "engine_3v_methalox_rhino": {
+   "bottom": 3,
+   "top": 3
+  },
+  "engine_3v_methalox_tuba": {
+   "bottom": 3,
+   "top": 3
+  },
+  "enginemount_1v_procedural": {
+   "bottom": 1,
+   "top": 1
+  },
+  "enginemount_2v_procedural": {
+   "bottom": 1,
+   "top": 2
+  },
+  "enginemount_3v_m3": {
+   "bottom01": 2,
+   "top": 3
+  },
+  "enginemount_3v_procedural": {
+   "bottom": 2,
+   "top": 3
+  },
+  "enginemount_4v_procedural": {
+   "bottom": 3,
+   "top": 4
+  },
+  "escapesystem_1v_launch": {
+   "bottom": 1
+  },
+  "eva_kerbal": {
+   "bottom": 1,
+   "top": 0
+  },
+  "factory_2v_methalox-monoprop": {
+   "bottom": 2,
+   "top": 2
+  },
+  "fairing_0v_procedural": {
+   "bottom": 0,
+   "top": 0
+  },
+  "fairing_1v_procedural": {
+   "bottom": 1,
+   "top": 1
+  },
+  "fairing_2v_procedural": {
+   "bottom": 2,
+   "top": 2
+  },
+  "fairing_3v_procedural": {
+   "bottom": 3,
+   "top": 3
+  },
+  "fairing_4v_procedural": {
+   "bottom": 4,
+   "top": 4
+  },
+  "fueltank_0v_inline_methalox": {
+   "bottom": 0,
+   "top": 0
+  },
+  "fueltank_0v_inline_methalox_doughnut": {
+   "bottom": 1,
+   "top": 1
+  },
+  "fueltank_0v_inline_monoprop": {
+   "bottom": 0,
+   "top": 0
+  },
+  "fueltank_0v_inline_xenon": {
+   "bottom": 0,
+   "top": 0
+  },
+  "fueltank_0v_m0_inline_methane": {
+   "bottom": 0,
+   "top": 0
+  },
+  "fueltank_1v_inline_hydrogen_long": {
+   "bottom": 1,
+   "top": 1
+  },
+  "fueltank_1v_inline_methalox_1x1": {
+   "bottom": 1,
+   "top": 1
+  },
+  "fueltank_1v_inline_methalox_1x2": {
+   "bottom": 1,
+   "top": 1
+  },
+  "fueltank_1v_inline_methalox_1x4": {
+   "bottom": 1,
+   "top": 1
+  },
+  "fueltank_1v_inline_methalox_1x8": {
+   "bottom": 1,
+   "top": 1
+  },
+  "fueltank_1v_inline_monoprop": {
+   "bottom": 1,
+   "top": 1
+  },
+  "fueltank_1v_inline_xenon_1x1": {
+   "bottom": 1,
+   "top": 1
+  },
+  "fueltank_1v_inline_xenon_1x4": {
+   "bottom": 1,
+   "top": 1
+  },
+  "fueltank_1v_m1_inline_methane": {
+   "bottom": 1,
+   "top": 1
+  },
+  "fueltank_2v_inline_hydrogen_long": {
+   "bottom": 2,
+   "top": 2
+  },
+  "fueltank_2v_inline_hydrogen_short": {
+   "bottom": 2,
+   "top": 2
+  },
+  "fueltank_2v_inline_methalox_1x1": {
+   "bottom": 2,
+   "top": 2
+  },
+  "fueltank_2v_inline_methalox_1x2": {
+   "bottom": 2,
+   "top": 2
+  },
+  "fueltank_2v_inline_methalox_1x4": {
+   "bottom": 2,
+   "top": 2
+  },
+  "fueltank_2v_inline_methalox_1x8": {
+   "bottom": 2,
+   "top": 2
+  },
+  "fueltank_2v_inline_monoprop": {
+   "bottom": 2,
+   "top": 2
+  },
+  "fueltank_2v_m2_inline_methalox_1x1": {
+   "bottom": 1,
+   "top": 1
+  },
+  "fueltank_2v_m2_inline_methalox_1x2": {
+   "bottom": 2,
+   "top": 2
+  },
+  "fueltank_2v_m2_inline_methane_1x1": {
+   "bottom": 2,
+   "top": 2
+  },
+  "fueltank_2v_m2_inline_methane_1x2": {
+   "bottom": 2,
+   "top": 2
+  },
+  "fueltank_2v_m2_inline_monoprop": {
+   "bottom": 1,
+   "top": 1
+  },
+  "fueltank_3v_inline_hydrogen_long": {
+   "bottom": 3,
+   "top": 3
+  },
+  "fueltank_3v_inline_hydrogen_short": {
+   "bottom": 3,
+   "top": 3
+  },
+  "fueltank_3v_inline_methalox_1x1": {
+   "bottom": 3,
+   "top": 3
+  },
+  "fueltank_3v_inline_methalox_1x2": {
+   "bottom": 3,
+   "top": 3
+  },
+  "fueltank_3v_inline_methalox_1x4": {
+   "bottom": 3,
+   "top": 3
+  },
+  "fueltank_3v_inline_methalox_1x8": {
+   "bottom": 3,
+   "top": 3
+  },
+  "fueltank_3v_inline_monoprop": {
+   "bottom": 3,
+   "top": 3
+  },
+  "fueltank_3v_m3_inline_methalox_1x1": {
+   "bottom": 3,
+   "top": 3
+  },
+  "fueltank_3v_m3_inline_methalox_1x2": {
+   "bottom": 3,
+   "top": 3
+  },
+  "fueltank_3v_m3_inline_methalox_1x4": {
+   "bottom": 3,
+   "top": 3
+  },
+  "fueltank_3v_m3_inline_methane_1x1": {
+   "bottom": 3,
+   "top": 3
+  },
+  "fueltank_3v_m3_inline_methane_1x2": {
+   "bottom": 3,
+   "top": 3
+  },
+  "fueltank_3v_m3_inline_methane_1x4": {
+   "bottom": 3,
+   "top": 3
+  },
+  "fueltank_3v_m3_inline_monoprop": {
+   "bottom": 3,
+   "top": 3
+  },
+  "fueltank_4v_inline_hydrogen_long": {
+   "bottom": 4,
+   "top": 4
+  },
+  "fueltank_4v_inline_hydrogen_short": {
+   "bottom": 4,
+   "top": 4
+  },
+  "fueltank_4v_inline_methalox_s1": {
+   "bottom": 4,
+   "top": 4
+  },
+  "fueltank_4v_inline_methalox_s2": {
+   "bottom": 4,
+   "top": 4
+  },
+  "fueltank_4v_inline_methalox_s3": {
+   "bottom": 4,
+   "top": 4
+  },
+  "fueltank_4v_inline_methalox_s4": {
+   "bottom": 4,
+   "top": 4
+  },
+  "fueltank_5v_inline_hydrogen_sphere": {
+   "bottom": 5,
+   "top": 5
+  },
+  "fuselage_1v_m1_structural": {
+   "bottom": 1,
+   "top": 1
+  },
+  "generator_0v_thermoelectric_radioisotope": {
+   "bottom": 0,
+   "top": 0
+  },
+  "generator_1v_fission_reactor": {
+   "bottom": 1
+  },
+  "generator_3v_thermoelectric_radioisotope": {
+   "bottom": 3,
+   "top": 3
+  },
+  "heatshield_0v": {
+   "bottom": 0,
+   "top": 0
+  },
+  "heatshield_1v": {
+   "bottom": 1,
+   "top": 1
+  },
+  "heatshield_2v": {
+   "bottom": 2,
+   "top": 2
+  },
+  "heatshield_2v_inflatable": {
+   "bottom": 2,
+   "top": 2
+  },
+  "heatshield_3v": {
+   "bottom": 3,
+   "top": 3
+  },
+  "heatshield_4v": {
+   "bottom": 4,
+   "top": 4
+  },
+  "ibeam_1v_1x5": {
+   "bottom": 0,
+   "top": 0
+  },
+  "ibeam_2v_1x10": {
+   "bottom": 0,
+   "top": 0
+  },
+  "ibeam_2v_2x3": {
+   "bottom": 0,
+   "top": 0
+  },
+  "intake_0v_circular": {
+   "bottom01": 0
+  },
+  "intake_1v_circular": {
+   "bottom01": 1
+  },
+  "intake_1v_m1_adjustable": {
+   "bottom01": 1
+  },
+  "intake_1v_m1_nacelle_methane": {
+   "bottom": 1,
+   "top": 1
+  },
+  "intake_1v_m1_precooler_methane": {
+   "bottom": 1,
+   "top": 1
+  },
+  "intake_1v_m1_shockcone": {
+   "bottom": 1
+  },
+  "intake_1v_m1_supersonic_diverterless": {
+   "bottom": 1,
+   "top": 1
+  },
+  "junction_0v_square": {
+   "back": 1,
+   "bottom": 1,
+   "front": 1,
+   "left": 1,
+   "right": 1,
+   "top": 1
+  },
+  "junction_0v_square_0-31m": {
+   "back": 1,
+   "bottom": 1,
+   "front": 1,
+   "left": 1,
+   "right": 1,
+   "top": 1
+  },
+  "junction_1v_circular": {
+   "back": 1,
+   "bottom": 1,
+   "front": 1,
+   "left": 1,
+   "right": 1,
+   "top": 1
+  },
+  "junction_1v_square": {
+   "back": 1,
+   "bottom": 1,
+   "front": 1,
+   "left": 1,
+   "right": 1,
+   "top": 1
+  },
+  "junction_2v_circular": {
+   "back": 2,
+   "bottom": 2,
+   "front": 2,
+   "left": 2,
+   "right": 2,
+   "top": 2
+  },
+  "junction_2v_square": {
+   "back": 2,
+   "bottom": 2,
+   "front": 2,
+   "left": 2,
+   "right": 2,
+   "top": 2
+  },
+  "junction_3v_circular": {
+   "back": 3,
+   "bottom": 3,
+   "front": 3,
+   "left": 3,
+   "right": 3,
+   "top": 3
+  },
+  "junction_3v_square": {
+   "back": 3,
+   "bottom": 3,
+   "front": 3,
+   "left": 3,
+   "right": 3,
+   "top": 3
+  },
+  "junction_4v_circular": {
+   "back": 4,
+   "bottom": 4,
+   "front": 4,
+   "left": 4,
+   "right": 4,
+   "top": 4
+  },
+  "junction_4v_square": {
+   "back": 4,
+   "bottom": 4,
+   "front": 4,
+   "left": 4,
+   "right": 4,
+   "top": 4
+  },
+  "lab_2v_science_marine": {
+   "bottom": 1,
+   "top": 2
+  },
+  "lab_2v_science_orbital": {
+   "bottom": 2,
+   "top": 2
+  },
+  "nosecone_0v": {
+   "bottom01": 0
+  },
+  "nosecone_1v_advanced_conical": {
+   "bottom01": 1
+  },
+  "nosecone_1v_advanced_rightcone": {
+   "bottom01": 1
+  },
+  "nosecone_1v_hemisphere": {
+   "bottom01": 1
+  },
+  "nosecone_2v_mk2": {
+   "bottom": 2
+  },
+  "nosecone_2v_protective": {
+   "bottom": 2
+  },
+  "nosecone_3v": {
+   "bottom": 3
+  },
+  "nosecone_4v": {
+   "bottom": 4
+  },
+  "panel_0v_square": {
+   "back": 0,
+   "bottom": 0,
+   "front": 0,
+   "left": 0,
+   "right": 0,
+   "top": 0
+  },
+  "panel_0v_triangle_equilateral": {
+   "bottom": 0,
+   "front": 0,
+   "left": 0,
+   "right": 0,
+   "top": 0
+  },
+  "panel_0v_triangle_right": {
+   "angle": 0,
+   "bottom": 0,
+   "front": 0,
+   "right": 0,
+   "top": 0
+  },
+  "panel_1v_square": {
+   "back": 1,
+   "bottom": 1,
+   "front": 1,
+   "left": 1,
+   "right": 1,
+   "top": 1
+  },
+  "panel_1v_triangle_equilateral": {
+   "bottom": 1,
+   "front": 1,
+   "left": 1,
+   "right": 1,
+   "top": 1
+  },
+  "panel_1v_triangle_right": {
+   "angle": 0,
+   "bottom": 0,
+   "front": 0,
+   "right": 0,
+   "top": 0
+  },
+  "panel_2v_square": {
+   "back": 2,
+   "bottom": 2,
+   "front": 2,
+   "left": 2,
+   "right": 2,
+   "top": 2
+  },
+  "panel_2v_triangle_equilateral": {
+   "bottom": 2,
+   "front": 2,
+   "left": 2,
+   "right": 2,
+   "top": 2
+  },
+  "panel_2v_triangle_right": {
+   "angle": 1,
+   "bottom": 1,
+   "front": 1,
+   "right": 1,
+   "top": 1
+  },
+  "parachute_0v": {
+   "bottom": 0
+  },
+  "parachute_1v": {
+   "bottom": 1
+  },
+  "parachute_1v_drogue": {
+   "bottom": 1
+  },
+  "parachute_1v_eva": {
+   "bottom": 0
+  },
+  "pod_1v_conical_crew": {
+   "bottom": 1,
+   "top": 0
+  },
+  "pod_1v_lander_crew": {
+   "bottom": 1,
+   "top": 1
+  },
+  "pod_2v_conical_crew": {
+   "bottom": 2,
+   "top": 1
+  },
+  "pod_2v_cupola_crew": {
+   "bottom": 2,
+   "top": 1
+  },
+  "pod_2v_lander_crew": {
+   "bottom": 2,
+   "top": 2
+  },
+  "pod_3v_conical_crew": {
+   "bottom": 3,
+   "top": 1
+  },
+  "pod_3v_lander_crew": {
+   "bottom": 3,
+   "top": 2
+  },
+  "probe_0v_hexagonal_electricity": {
+   "bottom": 0,
+   "top": 0
+  },
+  "probe_0v_octagonal_electricity_1x1": {
+   "bottom": 0,
+   "top": 0
+  },
+  "probe_0v_octagonal_electricity_1x3": {
+   "bottom": 0,
+   "top": 0
+  },
+  "probe_0v_rectangular_electricity": {
+   "bottom": 0,
+   "top": 0
+  },
+  "probe_0v_spherical_electricity": {
+   "bottom": 0
+  },
+  "probe_1v_disk_electricity": {
+   "bottom": 1,
+   "top": 1
+  },
+  "probe_1v_hexagonal_electricity": {
+   "bottom": 1,
+   "top": 1
+  },
+  "probe_1v_rover_electricity": {
+   "back": 0,
+   "bottom": 1,
+   "front": 0,
+   "left": 0,
+   "right": 0,
+   "top": 1
+  },
+  "probe_2v_disk_electricity": {
+   "bottom": 2,
+   "top": 2
+  },
+  "probe_2v_m2_electricity": {
+   "bottom": 1,
+   "top": 1
+  },
+  "probe_3v_disk_electricity": {
+   "bottom": 3,
+   "top": 3
+  },
+  "probe_4v_disk_electricity": {
+   "bottom": 4,
+   "top": 4
+  },
+  "resizer_0v_square_0v-0v_0-31m": {
+   "bottom": 0,
+   "top": 0
+  },
+  "resizer_1v_square_1v-0v": {
+   "bottom": 1,
+   "top": 0
+  },
+  "resizer_2v_circular_2v-1v": {
+   "bottom": 2,
+   "top": 1
+  },
+  "resizer_2v_square_2v-1v": {
+   "bottom": 2,
+   "top": 1
+  },
+  "resizer_3v_circular_3v-2v": {
+   "bottom": 3,
+   "top": 2
+  },
+  "resizer_3v_square_3v-2v": {
+   "bottom": 3,
+   "top": 2
+  },
+  "resizer_4v_circular_4v-2v": {
+   "bottom": 4,
+   "top": 2
+  },
+  "resizer_4v_circular_4v-3v": {
+   "bottom": 4,
+   "top": 3
+  },
+  "resizer_4v_square_4v-2v": {
+   "bottom": 4,
+   "top": 2
+  },
+  "resizer_4v_square_4v-3v": {
+   "bottom": 4,
+   "top": 3
+  },
+  "scanner_0v_resources_surface": {
+   "bottom": 0
+  },
+  "scanner_1v_resources_deep": {
+   "top": 1
+  },
+  "scanner_2v_resources_orbital": {
+   "bottom": 1
+  },
+  "separator_0v_inline": {
+   "bottom": 0,
+   "top": 0
+  },
+  "separator_1v_inline": {
+   "bottom": 1,
+   "top": 1
+  },
+  "separator_2v_inline": {
+   "bottom": 2,
+   "top": 2
+  },
+  "separator_3v_inline": {
+   "bottom": 3,
+   "top": 3
+  },
+  "separator_4v_inline": {
+   "bottom": 4,
+   "top": 4
+  },
+  "servicebay_1v": {
+   "bottom": 1,
+   "bottom2": 0,
+   "top": 1,
+   "top2": 0
+  },
+  "servicebay_2v": {
+   "bottom": 2,
+   "bottom2": 1,
+   "top": 2,
+   "top2": 1
+  },
+  "stabilizer_0v_flybywire_aircraft": {
+   "bottom": 0
+  },
+  "stabilizer_0v_reactionwheel": {
+   "bottom": 0,
+   "top": 0
+  },
+  "stabilizer_1v_reactionwheel": {
+   "bottom": 1,
+   "top": 1
+  },
+  "stabilizer_2v_reactionwheel": {
+   "bottom": 2,
+   "top": 2
+  },
+  "stabilizer_3v_reactionwheel": {
+   "bottom": 3,
+   "top": 3
+  },
+  "storage_0v_battery_electricity": {
+   "bottom": 0,
+   "top": 0
+  },
+  "storage_1v_battery_electricity": {
+   "bottom": 1,
+   "top": 1
+  },
+  "storage_2v_battery_electricity": {
+   "bottom": 2,
+   "top": 2
+  },
+  "storage_3v_battery_electricity": {
+   "bottom": 3,
+   "top": 3
+  },
+  "storage_4v_battery_electricity": {
+   "bottom": 4,
+   "top": 4
+  },
+  "tailsection_1v_tapered_conical": {
+   "top": 1
+  },
+  "tailsection_1v_tapered_rightcone": {
+   "bottom": 1
+  },
+  "transport_3v_colony_trunk_large": {
+   "bottom": 0,
+   "top": 0
+  },
+  "transport_3v_colony_trunk_small": {
+   "bottom": 0,
+   "top": 0
+  },
+  "truss_0v_square_1x1": {
+   "bottom": 0,
+   "top": 0
+  },
+  "truss_0v_square_1x1_0-31m": {
+   "bottom": 0,
+   "top": 0
+  },
+  "truss_0v_square_1x4": {
+   "bottom": 0,
+   "top": 0
+  },
+  "truss_0v_square_1x4_0-31m": {
+   "bottom": 0,
+   "top": 0
+  },
+  "truss_1v_circular_1x1": {
+   "bottom": 1,
+   "top": 1
+  },
+  "truss_1v_circular_1x4": {
+   "bottom": 1,
+   "top": 1
+  },
+  "truss_1v_square_1x1": {
+   "bottom": 1,
+   "top": 1
+  },
+  "truss_1v_square_1x4": {
+   "bottom": 1,
+   "top": 1
+  },
+  "truss_2v_circular_1x1": {
+   "bottom": 2,
+   "top": 2
+  },
+  "truss_2v_circular_1x4": {
+   "bottom": 2,
+   "top": 2
+  },
+  "truss_2v_saddle_1x1": {
+   "bottom1": 2,
+   "bottom2": 1,
+   "top1": 2,
+   "top2": 1
+  },
+  "truss_2v_saddle_1x4": {
+   "bottom1": 2,
+   "bottom2": 1,
+   "top1": 2,
+   "top2": 1
+  },
+  "truss_2v_square_1x1": {
+   "bottom": 2,
+   "top": 2
+  },
+  "truss_2v_square_1x4": {
+   "bottom": 2,
+   "top": 2
+  },
+  "truss_3v_circular_1x1": {
+   "bottom": 3,
+   "top": 3
+  },
+  "truss_3v_circular_1x4": {
+   "bottom": 3,
+   "top": 3
+  },
+  "truss_3v_saddle_1x1": {
+   "bottom1": 3,
+   "bottom2": 2,
+   "top1": 3,
+   "top2": 2
+  },
+  "truss_3v_saddle_1x4": {
+   "bottom1": 3,
+   "bottom2": 2,
+   "top1": 3,
+   "top2": 2
+  },
+  "truss_3v_square_1x1": {
+   "bottom": 3,
+   "top": 3
+  },
+  "truss_3v_square_1x4": {
+   "bottom": 3,
+   "top": 3
+  },
+  "truss_4v_circular_1x1": {
+   "bottom": 4,
+   "top": 4
+  },
+  "truss_4v_circular_1x4": {
+   "bottom": 4,
+   "top": 4
+  },
+  "truss_4v_saddle_1x1": {
+   "bottom1": 4,
+   "bottom2": 3,
+   "top1": 4,
+   "top2": 3
+  },
+  "truss_4v_saddle_1x4": {
+   "bottom1": 4,
+   "bottom2": 3,
+   "top1": 4,
+   "top2": 3
+  },
+  "truss_4v_square_1x1": {
+   "bottom": 4,
+   "top": 4
+  },
+  "truss_4v_square_1x4": {
+   "bottom": 4,
+   "top": 4
+  },
+  "tube_0v_procedural": {
+   "bottom": 0
+  },
+  "tube_1v_procedural": {
+   "bottom": 1
+  },
+  "tube_2v_procedural": {
+   "bottom": 2
+  },
+  "tube_3v_procedural": {
+   "bottom": 3
+  },
+  "tube_4v_procedural": {
+   "bottom": 4
+  }
+ }
+}
