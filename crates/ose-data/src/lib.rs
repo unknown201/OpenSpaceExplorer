@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 pub mod craft;
+pub mod engine_shroud;
 pub mod fairing;
 pub mod flight_geometry;
 pub mod missions;
@@ -278,6 +279,9 @@ pub struct PartDef {
     /// adapters that do not float).
     #[serde(default = "one")]
     pub buoyancy: f64,
+    /// Authored `PartData.coBuoyancy`, in Unity part axes. Independent of the rigidbody CoM.
+    #[serde(default)]
+    pub buoyancy_center_m: ose_math::DVec3,
     /// `PartData.angularDrag` (2 on most stock parts, 1 by default): KSP2 damps the part's own spin by
     /// `angularDrag x dynamic pressure (atm) x AngularDragMultiplier` per second (`RigidbodyBehavior`).
     #[serde(default = "one")]

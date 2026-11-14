@@ -30,6 +30,7 @@ mod tests {
             actions: Vec::new(),
             symmetry: 0,
             chute: None,
+            control: None,
             fairing: Default::default(),
             shape: Default::default(),
         }

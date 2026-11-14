@@ -180,6 +180,7 @@ namespace OpenSpaceExplorer.Validation
 
             var scenario = File.ReadAllText(Path.Combine(dir, "run.txt")).Trim();
             Mark("scenario " + scenario);
+            if (scenario == "settings") { Mark(ReentryOrbit.ThermalSettings()); yield return Finish("settings"); yield break; }
             double darkUT = -1, brightUT = -1;
             if (scenario == "visuals")
             {
@@ -210,8 +211,8 @@ namespace OpenSpaceExplorer.Validation
                 yield return new WaitForSecondsRealtime(4f);
                 yield return Shot("v1-ksc-night-before-vab");
             }
-            bool orbital = scenario == "rotation" || scenario == "rcs" || scenario == "docking" || scenario == "thrustwarp" || scenario == "warp" || scenario == "burn" || scenario == "jetpack";
-            var snapshot = IOProvider.FromJsonFile<OABHistoricalSnapshot>(Path.Combine(dir, scenario == "rcs" ? "craft-rcs.json" : (scenario == "jet" || scenario == "jetfly") ? "craft-jet.json" : scenario == "rover" ? "craft-rover.json" : (scenario == "legs" || scenario == "legsrunway") ? "craft-legs.json" : scenario == "fuelline" ? "craft-fuelline.json" : scenario == "crossfeed" ? "craft-crossfeed.json" : scenario == "asparagus" ? "craft-asparagus.json" : scenario == "struts" ? "craft-struts.json" : scenario == "transfer" ? "craft-crossfeed.json" : (scenario == "stack" || scenario == "thrustwarp") ? "craft-stack.json" : scenario == "reentry" ? "craft-reentry.json" : scenario == "docking" ? "craft-docking.json" : scenario.StartsWith("drop ") ? "craft-drop-" + scenario.Split(' ')[1] + ".json" : scenario.StartsWith("sepland ") ? "craft-sepland.json" : orbital ? "craft-rotation.json" : (scenario == "k1" || scenario == "partdump") ? "craft-k1.json" : "craft.json"));
+            bool orbital = scenario == "rotation" || scenario == "rcs" || scenario == "docking" || scenario == "thrustwarp" || scenario == "warp" || scenario == "burn" || scenario == "jetpack" || scenario.StartsWith("reentryorbit ");
+            var snapshot = IOProvider.FromJsonFile<OABHistoricalSnapshot>(Path.Combine(dir, scenario.StartsWith("reentryorbit ") ? ReentryOrbit.Craft(scenario.Split(' ')[1]) : scenario == "rcs" ? "craft-rcs.json" : (scenario == "jet" || scenario == "jetfly") ? "craft-jet.json" : scenario == "rover" ? "craft-rover.json" : (scenario == "legs" || scenario == "legsrunway") ? "craft-legs.json" : scenario == "fuelline" ? "craft-fuelline.json" : scenario == "crossfeed" ? "craft-crossfeed.json" : scenario == "asparagus" ? "craft-asparagus.json" : scenario == "struts" ? "craft-struts.json" : scenario == "transfer" ? "craft-crossfeed.json" : (scenario == "stack" || scenario == "thrustwarp") ? "craft-stack.json" : scenario == "reentry" ? "craft-reentry.json" : scenario == "docking" ? "craft-docking.json" : scenario.StartsWith("drop ") ? "craft-drop-" + scenario.Split(' ')[1] + ".json" : scenario.StartsWith("sepland ") ? "craft-sepland.json" : orbital ? "craft-rotation.json" : (scenario == "k1" || scenario == "partdump") ? "craft-k1.json" : "craft.json"));
             var config = orbital
                 ? new OABConfig(OABVariant.VAB, OABEnvironmentType.Orbital, OABConstructionType.User, null)
                 : new OABConfig(OABVariant.VAB, OABEnvironmentType.Terrestrial, OABConstructionType.User, "Kerbin");
@@ -260,6 +261,7 @@ namespace OpenSpaceExplorer.Validation
                 Application.Quit();
                 yield break;
             }
+            if (scenario.StartsWith("reentryorbit ")) { yield return ReentryOrbit.Run(vessel, dir, Mark, (v, f) => Begin(v, f), Stop, scenario.EndsWith(" free")); yield return Finish("reentryorbit"); yield break; }
             if (scenario == "warp") { yield return OrbitScenarios.Warp(vessel, dir, Mark); yield return Finish("warp"); yield break; }
             if (scenario == "burn") { yield return OrbitScenarios.Burn(vessel, dir, Mark); yield return Finish("burn"); yield break; }
             if (scenario == "jetpack") { yield return OrbitScenarios.Jetpack(vessel, dir, Mark, (v, f) => Begin(v, f), Stop); yield return Finish("jetpack"); yield break; }

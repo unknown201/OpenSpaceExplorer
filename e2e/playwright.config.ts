@@ -72,7 +72,7 @@ export default defineConfig({
   webServer: external
     ? undefined
     : {
-        command: `cargo run -q -p ose-server -- --listen 127.0.0.1:${port} --static-dir target/web --test-probe`,
+        command: `cargo run -q -p ose-server -- --listen 127.0.0.1:${port} --static-dir target/web --test-probe --allow-guest-accounts`,
         cwd: root,
         url: `${baseURL}/health`,
         reuseExistingServer: !process.env.CI,
