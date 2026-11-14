@@ -5,6 +5,7 @@ test("warp requests pass 4x and VAB icons accept clicks", async ({ page, baseURL
   page.on("pageerror", error => errors.push(error.message));
   await page.goto(baseURL!);
   await page.locator('[data-ose="player-name"]').fill("session regression");
+  await page.locator('[data-ose="login"]').click();
   await page.locator('[data-ose="play"]').click();
   await page.locator('[data-ose="session-join"]').first().click();
   await expect(page.locator('[data-ose="ksc-vab"]').first()).toBeVisible({ timeout: 30_000 }); // the boot loading screen can hold the hub for a while on slow runners

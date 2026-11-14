@@ -46,7 +46,12 @@ async function join(page: Page, base: string) {
 
 async function enterCampaign(page: Page) {
   await expect(page.locator('#status')).toContainText('client loaded');
-  await page.locator('[data-ose="player-name"]').fill('loading test');
+  // A reload keeps the stored sign-in and opens on the main menu; a first visit signs in first.
+  await expect(page.locator('#screen-login.open, #screen-name.open')).toHaveCount(1);
+  if (await page.locator('#screen-login.open').count()) {
+    await page.locator('[data-ose="player-name"]').fill('loading test');
+    await page.locator('[data-ose="login"]').click();
+  }
   await page.locator('[data-ose="play"]').click();
   await page.locator('[data-ose="session-join"]').first().click();
   await expect(page.locator('[data-ose="ksc"]')).toBeVisible();
@@ -83,7 +88,8 @@ test('main menu warms both models and previews without blocking setup, even when
   });
   await page.goto(baseURL!);
   await page.locator('[data-ose="player-name"]').fill('ready while typing');
-  await expect(page.locator('[data-ose="play"]')).toBeEnabled();
+  await expect(page.locator('[data-ose="login"]')).toBeEnabled();
+  await page.locator('[data-ose="login"]').click();
   await page.locator('[data-ose="play"]').click();
   await expect(page.locator('[data-ose="session-join"]').first()).toBeVisible();
   await expect(page.locator('[data-ose="gpu"]')).toHaveAttribute('data-ose-preload','ready');

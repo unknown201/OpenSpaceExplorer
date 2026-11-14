@@ -9,6 +9,7 @@ test("map navball follows steering and SAS can be switched off", async ({ page, 
   }));
   await page.goto(baseURL!);
   await page.locator('[data-ose="player-name"]').fill("attitude pilot");
+  await page.locator('[data-ose="login"]').click();
   await page.locator('[data-ose="play"]').click();
   await page.locator('[data-ose="session-join"]').first().click();
   await page.locator('[data-ose="ksc-launchpad"]').click();

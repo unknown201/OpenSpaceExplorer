@@ -147,6 +147,9 @@ export async function runGameplaySession(page: Page, baseURL: string): Promise<S
       if (!(await menu.first().isVisible())) return failed("main menu exists but is not shown at start");
       const name = page.locator('[data-ose="player-name"]');
       if ((await name.count()) > 0) await name.first().fill("e2e pilot");
+      // The sign-in screen comes first (a guest account on the test server), then the main menu's Campaign.
+      const login = page.locator('[data-ose="login"]');
+      if ((await login.count()) > 0 && (await login.first().isVisible())) await login.first().click();
       await page.locator('[data-ose="play"]').first().click();
       // The sessions screen lists what can be joined; join the first entry.
       const join = page.locator('[data-ose="session-join"]');

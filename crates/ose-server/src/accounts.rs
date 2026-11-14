@@ -1,8 +1,8 @@
-//! Lightweight accounts for resume continuity (ADR-0001, decision 2).
+//! Email-verified accounts with private session tokens for remembered devices.
 //!
-//! A player is created on their first `Hello` and handed a random token; a later `Hello` carrying that
-//! token resumes the same player id (and so their vessels and settings). No passwords, no federation: the
-//! server is LAN hosted. Tokens are stored hashed so the file does not hold secrets in clear.
+//! Email ownership is verified by expiring OTPs before sign-in or linking an existing player. Remembered
+//! device tokens stay private in browser storage; signing in on another machine adds a session for the
+//! same player id. Legacy tokens continue working so existing accounts can link an email safely.
 //!
 //! Storage is a small JSON file rewritten on every change (a handful of players), chosen over SQLite so
 //! the server cross-compiles to static Linux from any machine without a C toolchain.
@@ -22,6 +22,10 @@ struct Record {
     id: u64,
     display_name: String,
     token_hash: String,
+    #[serde(default)]
+    sessions: Vec<String>,
+    #[serde(default)]
+    email: Option<String>,
     created_unix: u64,
     last_seen_unix: u64,
 }
@@ -62,22 +66,11 @@ fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
-fn random_token() -> String {
-    // 128 bits from time, process id, a counter and an address, whitened by the token hash. Enough for a
-    // LAN game; swap for `rand` if the server is ever exposed.
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let seed = format!(
-        "{nanos}-{}-{}-{:p}",
-        std::process::id(),
-        COUNTER.fetch_add(1, Ordering::Relaxed),
-        &COUNTER
-    );
-    hash_token(&seed)
+/// Independent 128-bit credentials from the operating system CSPRNG.
+pub fn random_token() -> anyhow::Result<String> {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).map_err(|e| anyhow::anyhow!("random source: {e}"))?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
 impl Accounts {
@@ -118,7 +111,7 @@ impl Accounts {
 
     /// Create a new player and return it with the clear token to hand to the client.
     pub fn create(&mut self, display_name: &str) -> anyhow::Result<(Player, String)> {
-        let token = random_token();
+        let token = random_token()?;
         let id = self.store.next_id;
         self.store.next_id += 1;
         let now = now_unix();
@@ -126,6 +119,8 @@ impl Accounts {
             id,
             display_name: display_name.to_string(),
             token_hash: hash_token(&token),
+            sessions: Vec::new(),
+            email: None,
             created_unix: now,
             last_seen_unix: now,
         });
@@ -142,7 +137,12 @@ impl Accounts {
     /// Resume the player owning `token`, updating their display name and last-seen time.
     pub fn resume(&mut self, token: &str, display_name: &str) -> anyhow::Result<Option<Player>> {
         let h = hash_token(token);
-        let Some(rec) = self.store.players.iter_mut().find(|r| r.token_hash == h) else {
+        let Some(rec) = self
+            .store
+            .players
+            .iter_mut()
+            .find(|r| r.token_hash == h || r.sessions.contains(&h))
+        else {
             return Ok(None);
         };
         rec.display_name = display_name.to_string();
@@ -155,13 +155,71 @@ impl Accounts {
         Ok(Some(p))
     }
 
+    pub fn email(&self, player: u64) -> Option<String> {
+        self.store
+            .players
+            .iter()
+            .find(|r| r.id == player)
+            .and_then(|r| r.email.clone())
+    }
+
+    /// Attach only after ownership of the mailbox has been verified. Never merge two existing accounts.
+    pub fn link_email(&mut self, player: u64, email: &str) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !self
+                .store
+                .players
+                .iter()
+                .any(|r| r.id != player && r.email.as_deref() == Some(email)),
+            "this email is already linked to another account; sign out to use that account"
+        );
+        let rec = self
+            .store
+            .players
+            .iter_mut()
+            .find(|r| r.id == player)
+            .context("account unavailable")?;
+        rec.email = Some(email.into());
+        self.flush()
+    }
+
+    /// A verified mailbox signs in to its existing account, or creates a new one. Other machines stay signed in.
+    pub fn sign_in_email(&mut self, email: &str, name: &str) -> anyhow::Result<(Player, String)> {
+        if let Some(rec) = self
+            .store
+            .players
+            .iter_mut()
+            .find(|r| r.email.as_deref() == Some(email))
+        {
+            let token = random_token()?;
+            rec.sessions.push(hash_token(&token));
+            if rec.sessions.len() > 32 {
+                rec.sessions.remove(0);
+            }
+            rec.last_seen_unix = now_unix();
+            let player = Player {
+                id: rec.id,
+                display_name: rec.display_name.clone(),
+            };
+            self.flush()?;
+            return Ok((player, token));
+        }
+        let (player, token) = self.create(name)?;
+        self.link_email(player.id, email)?;
+        Ok((player, token))
+    }
+
     /// Players not seen for `ttl_s` seconds whose id is not in `keep` (campaign members are never swept).
     pub fn stale(&self, ttl_s: u64, keep: &[u64]) -> Vec<u64> {
         let now = now_unix();
         self.store
             .players
             .iter()
-            .filter(|r| !keep.contains(&r.id) && now.saturating_sub(r.last_seen_unix) >= ttl_s)
+            .filter(|r| {
+                r.email.is_none()
+                    && !keep.contains(&r.id)
+                    && now.saturating_sub(r.last_seen_unix) >= ttl_s
+            })
             .map(|r| r.id)
             .collect()
     }
@@ -205,6 +263,27 @@ mod tests {
         assert_eq!(a.resume("nope", "x").unwrap(), None);
         assert_eq!(a.count().unwrap(), 2);
         assert_eq!(a.resume(&t2, "Guest2").unwrap().map(|p| p.id), Some(p2.id));
+    }
+
+    #[test]
+    fn linking_email_preserves_identity_and_cannot_merge_accounts() {
+        let mut a = Accounts::open(Path::new(":memory:")).unwrap();
+        let (legacy, token) = a.create("Pilot").unwrap();
+        let (other, _) = a.create("Other").unwrap();
+        a.link_email(legacy.id, "pilot@example.com").unwrap();
+        assert!(a.link_email(other.id, "pilot@example.com").is_err());
+        let (signed_in, new_token) = a.sign_in_email("pilot@example.com", "New machine").unwrap();
+        assert_eq!(signed_in.id, legacy.id);
+        assert_ne!(token, new_token);
+        assert_eq!(a.resume(&token, "Pilot").unwrap().unwrap().id, legacy.id);
+        assert_eq!(
+            a.resume(&new_token, "Pilot").unwrap().unwrap().id,
+            legacy.id
+        );
+        assert!(
+            !a.stale(0, &[]).contains(&legacy.id),
+            "verified accounts are never swept as guests"
+        );
     }
 
     #[test]

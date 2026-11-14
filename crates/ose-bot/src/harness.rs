@@ -44,6 +44,8 @@ pub async fn spawn_server(timeout: Duration) -> Result<ServerProcess> {
             "none",
             "--db",
             ":memory:",
+            // The bot signs in without an email: a guest account, which only test servers allow.
+            "--allow-guest-accounts",
         ])
         .current_dir(crate::data::repo_root())
         .stdin(Stdio::null())

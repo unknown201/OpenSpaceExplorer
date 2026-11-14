@@ -12,6 +12,7 @@
 mod accounts;
 mod campaigns;
 mod crew_docking;
+mod otp;
 mod packages;
 mod previews;
 mod replay;
@@ -139,6 +140,9 @@ struct Args {
     /// empty, as the original's does.
     #[arg(long)]
     test_probe: bool,
+    /// Permit anonymous legacy accounts in isolated test fixtures only.
+    #[arg(long)]
+    allow_guest_accounts: bool,
     /// Run a filed replay (`replay.rs`) from its baseline as fast as the simulation goes, write the report
     /// (`--replay-out`, else stdout) and exit; nothing is served or saved.
     #[arg(long)]
@@ -354,6 +358,10 @@ struct Shared {
     parts: Arc<Vec<ose_data::PartDef>>,
     resources: Arc<Vec<ose_data::ResourceDef>>,
     accounts: Arc<Mutex<accounts::Accounts>>,
+    otp: Arc<otp::Otp>,
+    save_path: Option<PathBuf>,
+    save_lock: Arc<Mutex<()>>,
+    world_changed_at: Mutex<streaming::Mark>,
     /// Vessel entity -> (vessel id, owner player id).
     vessels: Mutex<Vec<(bevy_ecs::entity::Entity, u64, Option<u64>)>>,
     campaign: Mutex<save::Campaign>,
@@ -379,6 +387,7 @@ struct Shared {
     flying: Mutex<std::collections::HashMap<u64, u64>>,
     /// `--test-probe`: hand each player a probe on connecting (browser test fixtures only).
     test_probe: bool,
+    allow_guest_accounts: bool,
     /// Simulation steps taken since start (a replay starts it at its recording's).
     steps: std::sync::atomic::AtomicU64,
     /// The rolling recording a bug report files (`replay.rs`).
@@ -603,6 +612,10 @@ async fn main() -> anyhow::Result<()> {
         spins: Arc::new(spins),
         parts: Arc::new(serde_json::from_str(EMBEDDED_PARTS)?),
         resources: Arc::new(serde_json::from_str(EMBEDDED_RESOURCES)?),
+        otp: Arc::new(otp::Otp::from_env()?),
+        save_path: save_path.clone(),
+        save_lock: Arc::new(Mutex::new(())),
+        world_changed_at: Mutex::new(streaming::mark()),
         accounts: Arc::new(Mutex::new({
             let db = if replaying.is_some() {
                 PathBuf::from(":memory:")
@@ -629,6 +642,7 @@ async fn main() -> anyhow::Result<()> {
         last_roster: Mutex::new(None),
         flying: Mutex::new(std::collections::HashMap::new()),
         test_probe: args.test_probe,
+        allow_guest_accounts: args.allow_guest_accounts,
         steps: std::sync::atomic::AtomicU64::new(0),
         recorder: Mutex::new(replay::Recorder::default()),
         rooms: Arc::default(),
@@ -652,7 +666,7 @@ async fn main() -> anyhow::Result<()> {
     }
     start_room(shared.clone());
 
-    if let Some(p) = save_path.clone() {
+    if save_path.is_some() {
         let saver = shared.clone();
         let every = std::time::Duration::from_secs_f64(args.save_interval_s.max(0.2));
         tokio::spawn(async move {
@@ -660,12 +674,8 @@ async fn main() -> anyhow::Result<()> {
             interval.tick().await;
             loop {
                 interval.tick().await;
-                let file = rooms::save_file(&saver);
-                match save::write(&p, &file) {
-                    Ok(()) => {
-                        tracing::debug!(tick = file.tick.0, vessels = file.vessels.len(), "saved")
-                    }
-                    Err(e) => tracing::error!(error = %e, "save failed"),
+                if let Err(e) = persist(&saver) {
+                    tracing::error!(error = %e, "save failed");
                 }
             }
         });
@@ -739,7 +749,11 @@ async fn main() -> anyhow::Result<()> {
     let app = app.layer(web::compression());
     let listener = tokio::net::TcpListener::bind(&args.listen).await?;
     tracing::info!(listen = %args.listen, "server listening");
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }
 
@@ -838,8 +852,25 @@ fn maintain_registry(s: &Shared) {
     list.retain(|&(e, _, _)| u.vessel(e).is_some());
 }
 
-async fn ws_upgrade(ws: WebSocketUpgrade, State(s): State<AppState>) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| session(socket, s))
+async fn ws_upgrade(
+    ws: WebSocketUpgrade,
+    State(s): State<AppState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: axum::http::HeaderMap,
+) -> impl IntoResponse {
+    let trusted = std::env::var("OSE_TRUSTED_PROXY")
+        .ok()
+        .and_then(|s| s.parse::<std::net::IpAddr>().ok());
+    let ip = if trusted == Some(peer.ip()) {
+        headers
+            .get("x-real-ip")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(peer.ip())
+    } else {
+        peer.ip()
+    };
+    ws.on_upgrade(move |socket| session(socket, s, ip))
 }
 
 async fn send(socket: &mut WebSocket, msg: &ServerMessage) -> bool {
@@ -2528,6 +2559,11 @@ fn campaign_state(s: &Shared, player_id: u64, join: Option<&String>) -> ServerMe
     let tick = s.universe.lock().expect("sim lock").tick();
     let mut arrived = false;
     let mut c = s.campaign.lock().expect("campaign lock");
+    if !campaigns::can_access(&c, player_id) {
+        return ServerMessage::Rejected {
+            reason: "join this campaign with a share code first".into(),
+        };
+    }
     if let Some(name) = join {
         if !c.members.iter().any(|m| m.player_id == player_id) {
             c.members.push(save::CampaignMember {
@@ -3079,8 +3115,15 @@ fn push_roster(s: &Shared) {
     }
 }
 
-fn session_list(s: &Shared) -> ServerMessage {
-    campaigns::list(s)
+fn persist(s: &Shared) -> Result<(), String> {
+    let Some(path) = &s.save_path else {
+        return Ok(());
+    };
+    let _write = s.save_lock.lock().expect("save write lock");
+    save::write(path, &rooms::save_file(s)).map_err(|e| format!("could not save campaign: {e}"))
+}
+fn session_list(s: &Shared, player: u64) -> ServerMessage {
+    campaigns::list(s, player)
 }
 
 fn craft_summary(
@@ -3358,6 +3401,36 @@ fn handle_decoded(
     out: &mut Vec<ServerMessage>,
 ) {
     match decoded {
+        Ok(ClientMessage::RequestEmailOtp { .. } | ClientMessage::EmailSignIn { .. }) => {}
+        Ok(ref msg)
+            if !matches!(
+                msg,
+                ClientMessage::Hello { .. }
+                    | ClientMessage::Ping { .. }
+                    | ClientMessage::ListSessions
+                    | ClientMessage::CreateSession { .. }
+                    | ClientMessage::SelectSession { .. }
+                    | ClientMessage::LeaveSession
+                    | ClientMessage::ShareSession { .. }
+                    | ClientMessage::JoinSessionCode { .. }
+                    | ClientMessage::ClaimSession { .. }
+                    | ClientMessage::DeleteSession { .. }
+            ) && !campaigns::live_access(s, player_id) =>
+        {
+            out.push(ServerMessage::Rejected {
+                reason: "join this campaign with a share code first".into(),
+            });
+        }
+        Ok(ClientMessage::ShareSession { id }) => {
+            let reply = campaigns::share(s, player_id, &id).and_then(|m| persist(s).map(|_| m));
+            out.push(reply.unwrap_or_else(|reason| ServerMessage::Rejected { reason }));
+        }
+        Ok(ClientMessage::JoinSessionCode { code }) => {
+            let reply =
+                campaigns::join_code(s, player_id, &code).and_then(|m| persist(s).map(|_| m));
+            out.push(reply.unwrap_or_else(|reason| ServerMessage::Rejected { reason }));
+            out.push(session_list(s, player_id));
+        }
         Ok(ClientMessage::RequestWarp { factor }) => {
             let f = factor.clamp(1, 10_000_000);
             s.warp_requests
@@ -3473,7 +3546,7 @@ fn handle_decoded(
             out.push((reply).clone());
         }
         Ok(ClientMessage::ListSessions) => {
-            let reply = session_list(s);
+            let reply = session_list(s, player_id);
             out.push((reply).clone());
         }
         Ok(ClientMessage::SelectSession { id }) => {
@@ -3519,7 +3592,11 @@ fn handle_decoded(
                 }
                 Err(reason) => ServerMessage::Rejected { reason },
             };
-            out.push((reply).clone());
+            let reply = match persist(s) {
+                Ok(()) => reply,
+                Err(reason) => ServerMessage::Rejected { reason },
+            };
+            out.push(reply);
         }
         Ok(ClientMessage::LeaveSession) => {
             if s.playing.lock().expect("playing lock").remove(&player_id) {
@@ -3527,19 +3604,19 @@ fn handle_decoded(
             }
             apply_warp(s);
             rooms::left_campaign(s, player_id);
-            let reply = session_list(s);
+            let reply = session_list(s, player_id);
             out.push((reply).clone());
         }
         Ok(ClientMessage::ClaimSession { id }) => {
-            let reply = match campaigns::manage(s, player_id, &id, false) {
-                Ok(()) => session_list(s),
+            let reply = match campaigns::manage(s, player_id, &id, false).and_then(|_| persist(s)) {
+                Ok(()) => session_list(s, player_id),
                 Err(reason) => ServerMessage::Rejected { reason },
             };
             out.push((reply).clone());
         }
         Ok(ClientMessage::DeleteSession { id }) => {
-            let reply = match campaigns::manage(s, player_id, &id, true) {
-                Ok(()) => session_list(s),
+            let reply = match campaigns::manage(s, player_id, &id, true).and_then(|_| persist(s)) {
+                Ok(()) => session_list(s, player_id),
                 Err(reason) => ServerMessage::Rejected { reason },
             };
             out.push((reply).clone());
@@ -4562,7 +4639,24 @@ fn handle_decoded(
     }
 }
 
-async fn session(mut socket: WebSocket, s: AppState) {
+async fn request_otp(
+    s: &Shared,
+    email: &str,
+    target: Option<u64>,
+    ip: std::net::IpAddr,
+) -> ServerMessage {
+    match s.otp.request(email, target, ip).await {
+        Ok((email, challenge)) => ServerMessage::EmailOtpSent {
+            email,
+            challenge,
+            expires_in_secs: otp::TTL,
+            retry_after_secs: otp::RESEND,
+        },
+        Err(reason) => ServerMessage::AuthError { reason },
+    }
+}
+
+async fn session(mut socket: WebSocket, s: AppState, ip: std::net::IpAddr) {
     // the room this connection sees and plays in; it follows the player between rooms
     let mut s = s;
     // Handshake.
@@ -4570,37 +4664,104 @@ async fn session(mut socket: WebSocket, s: AppState) {
         match socket.recv().await {
             Some(Ok(Message::Binary(b))) => {
                 match ose_net::decode::<ClientMessage>(&b) {
-                    Ok(ClientMessage::Hello {
-                        protocol,
-                        display_name,
-                        token,
-                    }) => {
-                        if protocol != PROTOCOL_VERSION {
-                            let reason = format!("protocol {protocol} not supported, server speaks {PROTOCOL_VERSION}");
-                            send(&mut socket, &ServerMessage::Rejected { reason }).await;
+                    Ok(ClientMessage::RequestEmailOtp { email }) => {
+                        let reply = request_otp(&s, &email, None, ip).await;
+                        if !send(&mut socket, &reply).await {
                             return;
                         }
-                        let outcome: Result<(u64, String, bool), String> = {
-                            let mut acc = s.accounts.lock().expect("accounts lock");
-                            let resumed = match token.as_deref() {
-                                Some(t) => acc.resume(t, &display_name).ok().flatten(),
-                                None => None,
-                            };
-                            match resumed {
-                                Some(p) => Ok((p.id, token.clone().unwrap_or_default(), true)),
-                                None => acc
-                                    .create(&display_name)
-                                    .map(|(p, t)| (p.id, t, false))
-                                    .map_err(|e| format!("account error: {e}")),
+                    }
+                    Ok(msg @ (ClientMessage::Hello { .. } | ClientMessage::EmailSignIn { .. })) => {
+                        let (protocol, display_name) = match &msg {
+                            ClientMessage::Hello {
+                                protocol,
+                                display_name,
+                                ..
                             }
+                            | ClientMessage::EmailSignIn {
+                                protocol,
+                                display_name,
+                                ..
+                            } => (*protocol, display_name.clone()),
+                            _ => unreachable!(),
+                        };
+                        if protocol != PROTOCOL_VERSION {
+                            send(
+                                &mut socket,
+                                &ServerMessage::Rejected {
+                                    reason: "Client updated; reload the page.".into(),
+                                },
+                            )
+                            .await;
+                            return;
+                        }
+                        // A failed email code, or a tokenless Hello on a server without guest accounts, leaves
+                        // the socket open so the sign-in screen can ask for (another) code on it.
+                        let is_otp = matches!(
+                            &msg,
+                            ClientMessage::EmailSignIn { .. }
+                                | ClientMessage::Hello { token: None, .. }
+                        );
+                        // Browser test fixtures only (`--test-probe` with guest accounts): a guest pilot joins the
+                        // server's own campaign, as every pilot did before campaigns became private, so the
+                        // browser suite has a world to fly in.
+                        let test_guest = s.test_probe
+                            && s.allow_guest_accounts
+                            && matches!(&msg, ClientMessage::Hello { token: None, .. });
+                        let outcome: Result<(u64, String, bool), String> = match msg {
+                            ClientMessage::Hello { token, .. } => {
+                                let mut acc = s.accounts.lock().expect("accounts lock");
+                                match token.as_deref() {
+                                    Some(t) => acc
+                                        .resume(t, &display_name)
+                                        .map_err(|e| e.to_string())
+                                        .and_then(|p| {
+                                            p.map(|p| (p.id, t.to_string(), true)).ok_or(
+                                                "Session expired. Sign in with your email.".into(),
+                                            )
+                                        }),
+                                    None if !s.allow_guest_accounts => {
+                                        Err("Enter your email to get a sign-in code.".into())
+                                    }
+                                    None => acc
+                                        .create(&display_name)
+                                        .map(|(p, t)| (p.id, t, false))
+                                        .map_err(|e| e.to_string()),
+                                }
+                            }
+                            ClientMessage::EmailSignIn {
+                                email,
+                                challenge,
+                                code,
+                                ..
+                            } => s
+                                .otp
+                                .verify(&email, &challenge, &code, None)
+                                .and_then(|email| {
+                                    s.accounts
+                                        .lock()
+                                        .expect("accounts lock")
+                                        .sign_in_email(&email, &display_name)
+                                        .map(|(p, t)| (p.id, t, true))
+                                        .map_err(|e| e.to_string())
+                                }),
+                            _ => unreachable!(),
                         };
                         let (id, token_out, resumed) = match outcome {
                             Ok(v) => v,
+                            Err(reason) if is_otp => {
+                                if !send(&mut socket, &ServerMessage::AuthError { reason }).await {
+                                    return;
+                                }
+                                continue;
+                            }
                             Err(reason) => {
                                 send(&mut socket, &ServerMessage::Rejected { reason }).await;
                                 return;
                             }
                         };
+                        if test_guest {
+                            campaigns::admit_test_guest(&s, id);
+                        }
                         tracing::info!(player = id, name = %display_name, resumed, "player joined");
                         let tick: Tick = s.universe.lock().expect("sim lock").tick();
                         let welcome = ServerMessage::Welcome {
@@ -4655,6 +4816,10 @@ async fn session(mut socket: WebSocket, s: AppState) {
                             },
                         );
                         player_joined(&s, id, &display_name);
+                        let email = s.accounts.lock().expect("accounts lock").email(id);
+                        if !send(&mut socket, &ServerMessage::AccountState { email }).await {
+                            return;
+                        }
                         break id;
                     }
                     Ok(_) => {
@@ -4695,8 +4860,10 @@ async fn session(mut socket: WebSocket, s: AppState) {
     'session: loop {
         tokio::select! {
             _ = presence_tick.tick() => {
-                let ServerMessage::SessionList { sessions } = session_list(&s) else { unreachable!() };
-                let ServerMessage::CampaignState { id, members, .. } = campaign_state(&s, player_id, None) else { unreachable!() };
+                let ServerMessage::SessionList { sessions } = session_list(&s, player_id) else { unreachable!() };
+                let (id, members) = match campaign_state(&s, player_id, None) {
+                    ServerMessage::CampaignState { id, members, .. } => (id, members), _ => (String::new(), Vec::new()),
+                };
                 let presence = ServerMessage::SessionPresence { sessions, campaign_id: id, members };
                 // Clock movement alone does not rebuild the session browser.
                 let mut signature = presence.clone();
@@ -4710,6 +4877,8 @@ async fn session(mut socket: WebSocket, s: AppState) {
             }
             frames = streaming::next_batch(&mut snapshots, subscribed_at) => {
                 let Some(frames) = frames else { break; };
+                if !campaigns::live_access(&s, player_id) { continue; }
+                if frames.started < *s.world_changed_at.lock().expect("world change lock") { continue; }
                 if !streaming::send_batch(&mut socket, &frames).await {
                     break;
                 }
@@ -4739,12 +4908,32 @@ async fn session(mut socket: WebSocket, s: AppState) {
             }
             frames = streaming::next_batch(&mut predictions, subscribed_at) => {
                 let Some(frames) = frames else { break; };
+                if !campaigns::live_access(&s, player_id) { continue; }
+                if frames.started < *s.world_changed_at.lock().expect("world change lock") { continue; }
                 if !streaming::send_batch(&mut socket, &frames).await { break; }
             }
             incoming = socket.recv() => {
                 match incoming {
                     Some(Ok(Message::Binary(b))) => {
                         let decoded = ose_net::decode::<ClientMessage>(&b).map_err(|e| e.to_string());
+                        match &decoded {
+                            Ok(ClientMessage::RequestEmailOtp { email }) => {
+                                let reply = request_otp(&s, email, Some(player_id), ip).await;
+                                if !send(&mut socket, &reply).await { break; }
+                                continue;
+                            }
+                            Ok(ClientMessage::EmailSignIn { email, challenge, code, .. }) => {
+                                let reply = match s.otp.verify(email, challenge, code, Some(player_id)).and_then(|email| {
+                                    s.accounts.lock().expect("accounts lock").link_email(player_id, &email).map(|_| email).map_err(|e| e.to_string())
+                                }) {
+                                    Ok(email) => ServerMessage::AccountState { email: Some(email) },
+                                    Err(reason) => ServerMessage::AuthError { reason },
+                                };
+                                if !send(&mut socket, &reply).await { break; }
+                                continue;
+                            }
+                            _ => {},
+                        }
                         if let Ok(msg) = &decoded {
                             replay::record_event(&s, player_id, replay::Event::Msg(msg.clone()));
                         }

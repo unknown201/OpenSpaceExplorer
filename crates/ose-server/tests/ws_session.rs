@@ -38,7 +38,7 @@ async fn spawn_server_with(extra: &[&str], port: Option<u16>) -> (Server, String
     });
     let addr = format!("127.0.0.1:{port}");
     let child = Command::new(env!("CARGO_BIN_EXE_ose-server"))
-        .args(["--listen", &addr])
+        .args(["--listen", &addr, "--allow-guest-accounts"])
         .args(extra)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -55,6 +55,11 @@ async fn spawn_server_with(extra: &[&str], port: Option<u16>) -> (Server, String
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+    TEST_CAMPAIGNS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap()
+        .remove(&addr);
     (Server(child), addr)
 }
 
@@ -113,6 +118,19 @@ async fn building_supports_persist_and_clamps_release_in_authoritative_snapshots
     let (_server, addr) = spawn_server().await;
     let mut ws = connect_ws(&addr).await;
     hello(&mut ws, None, "support pilot").await;
+    send_msg(
+        &mut ws,
+        &ClientMessage::CreateSession {
+            name: "Support sandbox".into(),
+            mode: ose_net::SessionMode::Sandbox,
+            difficulty: vec![],
+        },
+    )
+    .await;
+    wait_for(&mut ws, |m| {
+        matches!(m, ServerMessage::CampaignState { created: true, .. }).then_some(())
+    })
+    .await;
     let mut craft = starter_craft();
     let mut strut = craft.parts[2].clone();
     strut.guid = "brace".into();
@@ -292,6 +310,7 @@ async fn hello_catalog_and_snapshots() {
         panic!("expected LaunchSites")
     };
     assert!(sites.iter().any(|x| x.runway));
+    establish_test_campaign(&mut ws, &token, "test").await;
     assert!(bodies.len() >= 17, "catalog has {} bodies", bodies.len());
     let kerbin = bodies
         .iter()
@@ -415,7 +434,7 @@ async fn hello_catalog_and_snapshots() {
     for _ in response_window() {
         if let ServerMessage::SessionList { sessions } = recv(&mut ws).await {
             assert_eq!(sessions.len(), 1);
-            assert_eq!(sessions[0].id, "shared");
+            assert_eq!(sessions[0].name, "Shared campaign");
             assert_eq!(sessions[0].players, 0);
             listed = true;
             break;
@@ -934,6 +953,13 @@ async fn hello_catalog_and_snapshots() {
     let ServerMessage::Welcome { player_id: p2, .. } = recv(&mut ws2).await else {
         panic!("expected Welcome 2")
     };
+    send_msg(&mut ws, &ClientMessage::ListSessions).await;
+    let current = wait_for(&mut ws, |m| match m {
+        ServerMessage::SessionList { sessions } => Some(sessions[0].id.clone()),
+        _ => None,
+    })
+    .await;
+    invite(&mut ws, &mut ws2, &current).await;
     // Browsing the menu must not participate in warp arbitration.
     send_msg(&mut ws2, &ClientMessage::JoinCampaign).await;
     wait_for(&mut ws2, |m| {
@@ -1797,6 +1823,19 @@ async fn crafts_with_nothing_staged_launch() {
     let (_server, addr) = spawn_server().await;
     let mut ws = connect_ws(&addr).await;
     hello(&mut ws, None, "driver").await;
+    send_msg(
+        &mut ws,
+        &ClientMessage::CreateSession {
+            name: "Stock craft sandbox".into(),
+            mode: ose_net::SessionMode::Sandbox,
+            difficulty: vec![],
+        },
+    )
+    .await;
+    wait_for(&mut ws, |m| {
+        matches!(m, ServerMessage::CampaignState { created: true, .. }).then_some(())
+    })
+    .await;
     let crafts: Vec<ose_data::craft::Craft> =
         serde_json::from_str(include_str!("../../../assets/own/stock-craft.json")).unwrap();
     for (name, site) in [
@@ -2148,7 +2187,7 @@ async fn resuming_the_shared_campaign_brings_back_its_mode_and_tech_tree() {
     let (_server, addr) = spawn_server_with(&["--db", ":memory:", "--save", "none"], None).await;
     // someone starts a sandbox straight away (nobody ever joined the shared campaign) and leaves
     let mut a = connect_ws(&addr).await;
-    hello(&mut a, None, "a").await;
+    let (_, original_token) = hello(&mut a, None, "a").await;
     send_msg(
         &mut a,
         &ClientMessage::CreateSession {
@@ -2166,7 +2205,7 @@ async fn resuming_the_shared_campaign_brings_back_its_mode_and_tech_tree() {
     tokio::time::sleep(Duration::from_millis(300)).await;
     // a new page resumes the shared campaign and asks for its science
     let mut b = connect_ws(&addr).await;
-    hello(&mut b, None, "b").await;
+    hello(&mut b, Some(original_token), "a").await;
     send_msg(&mut b, &ClientMessage::ListSessions).await;
     let list = wait_for(&mut b, |m| match m {
         ServerMessage::SessionList { sessions } => Some(sessions),
@@ -2615,8 +2654,7 @@ async fn stale_guests_are_swept_but_members_stay() {
     ];
     let (_server, addr) = spawn_server_with(&args, None).await;
     let mut g = connect_ws(&addr).await;
-    let (guest_id, _) = hello(&mut g, None, "e2e pilot").await;
-    launch_to_orbit(&mut g, 100_000.0).await;
+    let (guest_id, guest_token) = raw_hello(&mut g, None, "e2e pilot").await;
     drop(g);
     let mut m = connect_ws(&addr).await;
     let (member_id, _) = hello(&mut m, None, "josh").await;
@@ -2639,7 +2677,21 @@ async fn stale_guests_are_swept_but_members_stay() {
             }
         }
     }
-    assert!(checked, "guest craft was not swept");
+    assert!(checked, "member craft must remain");
+    let mut expired = connect_ws(&addr).await;
+    send_msg(
+        &mut expired,
+        &ClientMessage::Hello {
+            protocol: PROTOCOL_VERSION,
+            token: Some(guest_token),
+            display_name: "expired".into(),
+        },
+    )
+    .await;
+    assert!(matches!(
+        recv(&mut expired).await,
+        ServerMessage::Rejected { .. }
+    ));
 }
 
 #[tokio::test]
@@ -2726,7 +2778,11 @@ async fn campaigns_can_be_left_resumed_and_started_again() {
     let list = wait_for(&mut mate, listed).await;
     let players = |id: &str| list.iter().find(|x| x.id == id).map(|x| x.players);
     assert_eq!(players(&alpha), Some(1), "val still plays Alpha: {list:?}");
-    assert_eq!(players(&gamma), Some(1), "josh plays Gamma: {list:?}");
+    assert_eq!(
+        players(&gamma),
+        None,
+        "val cannot see the unshared Gamma campaign: {list:?}"
+    );
     // val's campaign is untouched
     send_msg(&mut mate, &ClientMessage::CampaignInfo).await;
     let (id, _, _, member) = wait_for(&mut mate, state).await;
@@ -2777,6 +2833,7 @@ async fn two_players_play_two_campaigns_at_once() {
     }
     let _ = (josh_vessel, bot_vessel);
     // the bot can come over to josh's campaign
+    invite(&mut josh, &mut bot, &mine).await;
     send_msg(&mut bot, &ClientMessage::SelectSession { id: mine.clone() }).await;
     let (id, _) = wait_for(&mut bot, state).await;
     assert_eq!(id, mine);
@@ -2800,7 +2857,7 @@ async fn two_players_play_two_campaigns_at_once() {
     assert!(players(&shared).is_some(), "{list:?}");
 }
 
-async fn hello(ws: &mut Ws, token: Option<String>, name: &str) -> (u64, String) {
+async fn raw_hello(ws: &mut Ws, token: Option<String>, name: &str) -> (u64, String) {
     let hello = ClientMessage::Hello {
         protocol: PROTOCOL_VERSION,
         token,
@@ -2814,6 +2871,104 @@ async fn hello(ws: &mut Ws, token: Option<String>, name: &str) -> (u64, String) 
             player_id, token, ..
         } => (player_id, token),
         other => panic!("expected Welcome, got {other:?}"),
+    }
+}
+
+// Gameplay tests explicitly establish a shared test campaign and invite later accounts.
+// Authentication/access tests use raw_hello (or campaign_access.rs) without this fixture.
+type TestCampaigns = std::sync::Mutex<std::collections::HashMap<String, (String, String, String)>>;
+static TEST_CAMPAIGNS: std::sync::OnceLock<TestCampaigns> = std::sync::OnceLock::new();
+async fn hello(ws: &mut Ws, token: Option<String>, name: &str) -> (u64, String) {
+    let identity = raw_hello(ws, token, name).await;
+    establish_test_campaign(ws, &identity.1, name).await;
+    identity
+}
+async fn invite(owner: &mut Ws, guest: &mut Ws, id: &str) {
+    send_msg(owner, &ClientMessage::ShareSession { id: id.into() }).await;
+    let code = wait_for(owner, |m| match m {
+        ServerMessage::SessionShareCode { code, .. } => Some(code),
+        _ => None,
+    })
+    .await;
+    send_msg(guest, &ClientMessage::JoinSessionCode { code }).await;
+    wait_for(guest, |m| {
+        matches!(m, ServerMessage::SessionJoined { .. }).then_some(())
+    })
+    .await;
+    wait_for(guest, |m| {
+        matches!(m, ServerMessage::SessionList { .. }).then_some(())
+    })
+    .await;
+}
+async fn establish_test_campaign(ws: &mut Ws, token: &str, name: &str) {
+    let addr = match ws.get_ref() {
+        tokio_tungstenite::MaybeTlsStream::Plain(stream) => stream.peer_addr().unwrap().to_string(),
+        _ => unreachable!(),
+    };
+    let fixture = TEST_CAMPAIGNS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap()
+        .get(&addr)
+        .cloned();
+    if let Some((owner_token, initial_id, owner_name)) = fixture {
+        let mut owner = connect_ws(&addr).await;
+        raw_hello(&mut owner, Some(owner_token), &owner_name).await;
+        send_msg(&mut owner, &ClientMessage::ListSessions).await;
+        let id = wait_for(&mut owner, |m| match m {
+            ServerMessage::SessionList { sessions } => Some(
+                sessions
+                    .first()
+                    .map(|s| s.id.clone())
+                    .unwrap_or(initial_id.clone()),
+            ),
+            _ => None,
+        })
+        .await;
+        invite(&mut owner, ws, &id).await;
+    } else {
+        send_msg(ws, &ClientMessage::ListSessions).await;
+        let existing = wait_for(ws, |m| match m {
+            ServerMessage::SessionList { sessions } => Some(sessions),
+            _ => None,
+        })
+        .await;
+        if let Some(game) = existing.first() {
+            TEST_CAMPAIGNS
+                .get()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .insert(addr, (token.into(), game.id.clone(), name.into()));
+            return;
+        }
+        send_msg(
+            ws,
+            &ClientMessage::CreateSession {
+                name: "Shared campaign".into(),
+                mode: ose_net::SessionMode::Exploration,
+                difficulty: vec![],
+            },
+        )
+        .await;
+        let id = wait_for(ws, |m| match m {
+            ServerMessage::CampaignState {
+                id, created: true, ..
+            } => Some(id),
+            _ => None,
+        })
+        .await;
+        TEST_CAMPAIGNS
+            .get()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .insert(addr, (token.into(), id, name.into()));
+        send_msg(ws, &ClientMessage::LeaveSession).await;
+        wait_for(ws, |m| {
+            matches!(m, ServerMessage::SessionList { .. }).then_some(())
+        })
+        .await;
     }
 }
 
@@ -3280,12 +3435,18 @@ async fn session_ownership_blocks_other_players_and_occupied_deletion() {
     let (_server, addr) = spawn_server().await;
     let mut owner = connect_ws(&addr).await;
     let (owner_id, _) = hello(&mut owner, None, "session owner").await;
+    send_msg(&mut owner, &ClientMessage::ListSessions).await;
+    let test_shared = wait_for(&mut owner, |m| match m {
+        ServerMessage::SessionList { sessions } => Some(sessions[0].id.clone()),
+        _ => None,
+    })
+    .await;
     let mut other = connect_ws(&addr).await;
     hello(&mut other, None, "visitor").await;
     send_msg(
         &mut owner,
         &ClientMessage::ClaimSession {
-            id: "shared".into(),
+            id: test_shared.clone(),
         },
     )
     .await;
@@ -3298,12 +3459,12 @@ async fn session_ownership_blocks_other_players_and_occupied_deletion() {
         _ => None,
     })
     .await;
-    let shared = list.iter().find(|s| s.id == "shared").unwrap();
+    let shared = list.iter().find(|s| s.id == test_shared).unwrap();
     assert_eq!(shared.owner_name.as_deref(), Some("session owner"));
     send_msg(
         &mut other,
         &ClientMessage::ClaimSession {
-            id: "shared".into(),
+            id: test_shared.clone(),
         },
     )
     .await;
@@ -3353,6 +3514,7 @@ async fn session_ownership_blocks_other_players_and_occupied_deletion() {
         _ => None,
     })
     .await;
+    invite(&mut owner, &mut other, &id).await;
     send_msg(&mut other, &ClientMessage::SelectSession { id: id.clone() }).await;
     wait_for(&mut other, |m| match m {
         ServerMessage::CampaignState {
@@ -3389,7 +3551,7 @@ async fn session_ownership_blocks_other_players_and_occupied_deletion() {
     .await;
     assert!(list
         .iter()
-        .any(|s| s.id == "shared" && s.owner == Some(owner_id)));
+        .any(|s| s.id == test_shared && s.owner == Some(owner_id)));
     // A shelved session can be deleted while another session is being played.
     send_msg(
         &mut owner,
@@ -3410,12 +3572,14 @@ async fn session_ownership_blocks_other_players_and_occupied_deletion() {
     send_msg(
         &mut owner,
         &ClientMessage::DeleteSession {
-            id: "shared".into(),
+            id: test_shared.clone(),
         },
     )
     .await;
     let list = wait_for(&mut owner, |m| match m {
-        ServerMessage::SessionList { sessions } if !sessions.iter().any(|s| s.id == "shared") => {
+        ServerMessage::SessionList { sessions }
+            if !sessions.iter().any(|s| s.id == test_shared) =>
+        {
             Some(sessions)
         }
         _ => None,
@@ -3523,6 +3687,12 @@ async fn session_ownership_presence_and_cleanup() {
     let (_server, addr) = spawn_server().await;
     let mut owner = connect_ws(&addr).await;
     let (owner_id, token) = hello(&mut owner, None, "Owner").await;
+    send_msg(&mut owner, &ClientMessage::ListSessions).await;
+    let test_shared = wait_for(&mut owner, |m| match m {
+        ServerMessage::SessionList { sessions } => Some(sessions[0].id.clone()),
+        _ => None,
+    })
+    .await;
     let mut visitor = connect_ws(&addr).await;
     let (visitor_id, _) = hello(&mut visitor, None, "Visitor").await;
     send_msg(
@@ -3541,17 +3711,6 @@ async fn session_ownership_presence_and_cleanup() {
         _ => None,
     })
     .await;
-    wait_for(&mut visitor, |m| match m {
-        ServerMessage::SessionPresence { sessions, .. }
-            if sessions
-                .iter()
-                .any(|s| s.id == id && s.owner == Some(owner_id) && s.players == 1) =>
-        {
-            Some(())
-        }
-        _ => None,
-    })
-    .await;
     // Menu visitors cannot hold down warp.
     send_msg(&mut owner, &ClientMessage::RequestWarp { factor: 100 }).await;
     wait_for(&mut owner, |m| {
@@ -3565,7 +3724,7 @@ async fn session_ownership_presence_and_cleanup() {
     .await;
     wait_for(&mut visitor, |m| match m {
         ServerMessage::Rejected { reason } => {
-            assert!(reason.contains("owner"));
+            assert!(reason.contains("owner") || reason.contains("member"));
             Some(())
         }
         _ => None,
@@ -3578,12 +3737,13 @@ async fn session_ownership_presence_and_cleanup() {
     .await;
     wait_for(&mut visitor, |m| match m {
         ServerMessage::Rejected { reason } => {
-            assert!(reason.contains("owner"));
+            assert!(reason.contains("owner") || reason.contains("member"));
             Some(())
         }
         _ => None,
     })
     .await;
+    invite(&mut owner, &mut visitor, &id).await;
     send_msg(
         &mut visitor,
         &ClientMessage::SelectSession { id: id.clone() },
@@ -3681,7 +3841,7 @@ async fn session_ownership_presence_and_cleanup() {
     send_msg(
         &mut owner,
         &ClientMessage::ClaimSession {
-            id: "shared".into(),
+            id: test_shared.clone(),
         },
     )
     .await;
@@ -3691,7 +3851,7 @@ async fn session_ownership_presence_and_cleanup() {
     })
     .await;
     assert_eq!(
-        sessions.iter().find(|s| s.id == "shared").unwrap().owner,
+        sessions.iter().find(|s| s.id == test_shared).unwrap().owner,
         Some(owner_id)
     );
     send_msg(
@@ -3710,7 +3870,7 @@ async fn session_ownership_presence_and_cleanup() {
     send_msg(
         &mut owner,
         &ClientMessage::DeleteSession {
-            id: "shared".into(),
+            id: test_shared.clone(),
         },
     )
     .await;
@@ -3719,7 +3879,7 @@ async fn session_ownership_presence_and_cleanup() {
         _ => None,
     })
     .await;
-    assert!(sessions.iter().all(|s| s.id != "shared"));
+    assert!(sessions.iter().all(|s| s.id != test_shared));
 }
 
 #[tokio::test]
