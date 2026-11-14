@@ -220,6 +220,7 @@ struct App {
     ws: Option<WebSocket>,
     /// Campaign was requested; send Hello once the background socket opens.
     login_requested: bool,
+    otp_challenge: Option<(String, String)>,
     player_id: Option<u64>,
     drag: Option<(f64, f64)>,
     dpr: f64,
@@ -891,6 +892,7 @@ pub fn start() -> Result<(), JsValue> {
         camera: Camera::new(0),
         ws: None,
         login_requested: false,
+        otp_challenge: None,
         player_id: None,
         drag: None,
         // Settings > Graphics: render resolution as a share of the screen's pixels.
@@ -2161,10 +2163,11 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
             input.set_value(&name);
         }
     }
-    if let Some(input) = doc.get_element_by_id("login-code")
+    if let Some(input) = doc.get_element_by_id("login-email")
         .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok()) {
-        if input.value().is_empty() { input.set_value(&stored("ose.token").unwrap_or_default()); }
+        if input.value().is_empty() { input.set_value(&stored("ose.email").unwrap_or_default()); }
     }
+    if stored("ose.token").is_none() { set_text(&doc, "play", "Send sign-in code"); }
     if let Some(btn) = doc.get_element_by_id("play") {
         let a = app.clone();
         let cb = Closure::<dyn FnMut()>::new(move || {
@@ -4208,15 +4211,20 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         let app = a.borrow();
         if let Some(ws) = &app.ws { send(ws, &ClientMessage::ShareSession { id: app.campaign_id.clone() }); }
     }))?;
-    wire("account-code-show", Box::new(|a| {
+    wire("otp-resend", Box::new(|a| {
         let app = a.borrow();
-        if let Some(input) = app.doc.get_element_by_id("account-code")
-            .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok()) {
-            let show = input.type_() == "password";
-            input.set_type(if show { "text" } else { "password" });
-            set_text(&app.doc, "account-code-show", if show { "Hide login code" } else { "Show login code" });
-            if show { input.select(); }
-        }
+        if let Some(input) = app.doc.get_element_by_id("login-otp").and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok()) { input.set_value(""); }
+        if let Some(play) = app.doc.get_element_by_id("play").and_then(|e| e.dyn_into::<HtmlElement>().ok()) { drop(app); play.click(); }
+    }))?;
+    wire("account-send-otp", Box::new(|a| {
+        let app = a.borrow();
+        let email = app.input_value("account-email");
+        if let Some(ws) = &app.ws { send(ws, &ClientMessage::RequestEmailOtp { email }); }
+    }))?;
+    wire("account-verify-otp", Box::new(|a| {
+        let app = a.borrow();
+        let Some((email, challenge)) = &app.otp_challenge else { set_text(&app.doc, "menu-note", "Request an email code first."); return; };
+        if let Some(ws) = &app.ws { send(ws, &ClientMessage::EmailSignIn { protocol: PROTOCOL_VERSION, email: email.clone(), challenge: challenge.clone(), code: app.input_value("account-otp"), display_name: app.player_name.clone() }); }
     }))?;
     wire("account-logout", Box::new(|_a| {
         if let Some(w) = web_sys::window() {
@@ -5752,19 +5760,25 @@ impl App {
         set_text(&self.doc, "menu-note", note);
     }
 
+    fn input_value(&self, id: &str) -> String {
+        self.doc.get_element_by_id(id).and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+            .map(|i| i.value().trim().to_string()).unwrap_or_default()
+    }
     fn sign_in(&self, ws: &WebSocket) {
-        self.connection_status("authenticating", "Opening campaigns…");
-        self.set_status("connected, waiting for the server");
-        send(
-            ws,
-            &ClientMessage::Hello {
-                protocol: PROTOCOL_VERSION,
-                token: self.doc.get_element_by_id("login-code")
-                    .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
-                    .map(|i| i.value().trim().to_string()).filter(|s| !s.is_empty()),
-                display_name: self.player_name.clone(),
-            },
-        );
+        self.connection_status("authenticating", "Signing in...");
+        let msg = if let Some(token) = stored("ose.token") {
+            ClientMessage::Hello { protocol: PROTOCOL_VERSION, token: Some(token), display_name: self.player_name.clone() }
+        } else {
+            let email = self.input_value("login-email").to_ascii_lowercase();
+            let code = self.input_value("login-otp");
+            match &self.otp_challenge {
+                Some((sent_to, challenge)) if *sent_to == email && !code.is_empty() => ClientMessage::EmailSignIn {
+                    protocol: PROTOCOL_VERSION, email, challenge: challenge.clone(), code, display_name: self.player_name.clone(),
+                },
+                _ => ClientMessage::RequestEmailOtp { email },
+            }
+        };
+        send(ws, &msg);
     }
 
     fn set_status(&self, s: &str) {
@@ -5931,10 +5945,6 @@ impl App {
                 self.player_id = Some(player_id);
                 self.login_requested = false;
                 store("ose.token", &token);
-                for id in ["login-code", "account-code"] {
-                    if let Some(input) = self.doc.get_element_by_id(id)
-                        .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok()) { input.set_value(&token); }
-                }
                 self.time.update(tick.seconds(), 1, now_ms());
                 self.set_status(&format!("player {player_id}"));
                 set_text(
@@ -5946,6 +5956,10 @@ impl App {
                 self.open_sessions_screen();
             }
             ServerMessage::Rejected { reason } => {
+                if self.player_id.is_none() {
+                    if let Some(w) = web_sys::window() { if let Ok(Some(storage)) = w.local_storage() { storage.remove_item("ose.token").ok(); } }
+                    set_text(&self.doc, "play", "Send sign-in code");
+                }
                 self.set_status(&format!("rejected: {reason}"));
                 set_text(&self.doc, "menu-note", &format!("rejected: {reason}"));
                 if let Some(m) = self.doc.get_element_by_id("menu") {
@@ -5973,6 +5987,31 @@ impl App {
                         *current = members;
                     }
                     self.update_warp_holder();
+                }
+            }
+            ServerMessage::EmailOtpSent { email, challenge, .. } => {
+                self.login_requested = false;
+                self.otp_challenge = Some((email.clone(), challenge));
+                store("ose.email", &email);
+                let code_id = if self.player_id.is_some() { "account-otp" } else { "login-otp" };
+                if let Some(input) = self.doc.get_element_by_id(code_id).and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok()) { input.set_value(""); input.focus().ok(); }
+                if self.player_id.is_none() { set_text(&self.doc, "play", "Sign in"); }
+                set_text(&self.doc, "menu-note", &format!("Code sent to {email}. Enter the 6-digit code within 10 minutes. You can resend after 60 seconds."));
+                set_text(&self.doc, "account-status", "Check your inbox for a 6-digit code.");
+            }
+            ServerMessage::AuthError { reason } => {
+                self.login_requested = false;
+                set_text(&self.doc, "menu-note", &reason);
+                set_text(&self.doc, "account-status", &reason);
+            }
+            ServerMessage::AccountState { email } => {
+                if let Some(email) = email {
+                    store("ose.email", &email);
+                    if let Some(input) = self.doc.get_element_by_id("account-email").and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok()) { input.set_value(&email); }
+                    set_text(&self.doc, "account-status", &format!("Verified: {email}. Use email codes to sign in on any machine."));
+                } else {
+                    if let Some(details) = self.doc.get_element_by_id("account-details") { details.set_attribute("open", "").ok(); }
+                    set_text(&self.doc, "account-status", "Verify your email to keep these games and sign in on any machine.");
                 }
             }
             ServerMessage::SessionShareCode { code, .. } => {

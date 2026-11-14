@@ -26,6 +26,8 @@ futures-util = "0.3"
 tower = { version = "0.5", features = ["util"] }
 
 getrandom = "0.3"
+sha2 = "0.10"
+lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport"] }
 
 [dev-dependencies]
 flate2 = "1"

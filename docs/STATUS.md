@@ -1,5 +1,7 @@
 # Status
 
+Email sign-in uses protocol 68: six-digit email OTP, account linking, expiring single-use codes, and remembered device sessions. Campaign membership stays server-side.
+
 Updated 2026-10-28.
 
 ## What works

@@ -96,10 +96,13 @@ to `Pass` in the same change.
 
 
 
-## Campaign access and cross-machine login
+## Email OTP, campaign access and cross-machine login
 
-`node scripts/check-campaign-access.mjs` checks private campaign lists, sharing from the pause menu,
-joining and sharing as a member, and restoring the owner's account in a fresh browser profile by
-entering the private login code. It defaults to an isolated server at `http://127.0.0.1:7796`; set
-`OSE_BASE_URL` to use another **test** server. It creates accounts and a campaign and writes screenshots
-to `.cache/campaign-sharing.png` and `.cache/campaign-account.png`.
+`node scripts/check-email-otp.mjs` runs a local SMTP inbox and isolated game server, then checks email
+signup, linking an email to an existing account without losing games, sharing, and sign-in from clean
+browser profiles. It sends no external email. Build the client into `target/otp-web` and the server into
+`target/debug` first. Shared builds and this script run from the main checkout's `e2e` directory. The
+browser test waits for the real 60-second resend cooldown. Screenshots go to `.cache/email-otp-*.png`.
+
+The server's `campaign_access` test also covers expiration, replay rejection, account binding, restart
+persistence, and concurrent game isolation. `check-campaign-access.mjs` is a compatibility entry point for the email OTP browser test.

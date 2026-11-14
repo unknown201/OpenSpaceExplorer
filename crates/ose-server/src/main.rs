@@ -10,6 +10,7 @@
 //! with `--bodies PATH`.
 
 mod accounts;
+mod otp;
 mod campaigns;
 mod crew_docking;
 mod packages;
@@ -139,6 +140,9 @@ struct Args {
     /// empty, as the original's does.
     #[arg(long)]
     test_probe: bool,
+    /// Permit anonymous legacy accounts in isolated test fixtures only.
+    #[arg(long)]
+    allow_guest_accounts: bool,
     /// Run a filed replay (`replay.rs`) from its baseline as fast as the simulation goes, write the report
     /// (`--replay-out`, else stdout) and exit; nothing is served or saved.
     #[arg(long)]
@@ -354,6 +358,7 @@ struct Shared {
     parts: Arc<Vec<ose_data::PartDef>>,
     resources: Arc<Vec<ose_data::ResourceDef>>,
     accounts: Arc<Mutex<accounts::Accounts>>,
+    otp: Arc<otp::Otp>,
     save_path: Option<PathBuf>,
     save_lock: Arc<Mutex<()>>,
     world_changed_at: Mutex<streaming::Mark>,
@@ -382,6 +387,7 @@ struct Shared {
     flying: Mutex<std::collections::HashMap<u64, u64>>,
     /// `--test-probe`: hand each player a probe on connecting (browser test fixtures only).
     test_probe: bool,
+    allow_guest_accounts: bool,
     /// Simulation steps taken since start (a replay starts it at its recording's).
     steps: std::sync::atomic::AtomicU64,
     /// The rolling recording a bug report files (`replay.rs`).
@@ -606,6 +612,7 @@ async fn main() -> anyhow::Result<()> {
         spins: Arc::new(spins),
         parts: Arc::new(serde_json::from_str(EMBEDDED_PARTS)?),
         resources: Arc::new(serde_json::from_str(EMBEDDED_RESOURCES)?),
+        otp: Arc::new(otp::Otp::from_env()?),
         save_path: save_path.clone(),
         save_lock: Arc::new(Mutex::new(())),
         world_changed_at: Mutex::new(streaming::mark()),
@@ -635,6 +642,7 @@ async fn main() -> anyhow::Result<()> {
         last_roster: Mutex::new(None),
         flying: Mutex::new(std::collections::HashMap::new()),
         test_probe: args.test_probe,
+        allow_guest_accounts: args.allow_guest_accounts,
         steps: std::sync::atomic::AtomicU64::new(0),
         recorder: Mutex::new(replay::Recorder::default()),
         rooms: Arc::default(),
@@ -739,7 +747,7 @@ async fn main() -> anyhow::Result<()> {
     let app = app.layer(web::compression());
     let listener = tokio::net::TcpListener::bind(&args.listen).await?;
     tracing::info!(listen = %args.listen, "server listening");
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).await?;
     Ok(())
 }
 
@@ -838,8 +846,10 @@ fn maintain_registry(s: &Shared) {
     list.retain(|&(e, _, _)| u.vessel(e).is_some());
 }
 
-async fn ws_upgrade(ws: WebSocketUpgrade, State(s): State<AppState>) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| session(socket, s))
+async fn ws_upgrade(ws: WebSocketUpgrade, State(s): State<AppState>, axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>, headers: axum::http::HeaderMap) -> impl IntoResponse {
+    let trusted = std::env::var("OSE_TRUSTED_PROXY").ok().and_then(|s| s.parse::<std::net::IpAddr>().ok());
+    let ip = if trusted == Some(peer.ip()) { headers.get("x-real-ip").and_then(|v| v.to_str().ok()).and_then(|s| s.parse().ok()).unwrap_or(peer.ip()) } else { peer.ip() };
+    ws.on_upgrade(move |socket| session(socket, s, ip))
 }
 
 async fn send(socket: &mut WebSocket, msg: &ServerMessage) -> bool {
@@ -3362,6 +3372,7 @@ fn handle_decoded(
     out: &mut Vec<ServerMessage>,
 ) {
     match decoded {
+        Ok(ClientMessage::RequestEmailOtp { .. } | ClientMessage::EmailSignIn { .. }) => {},
         Ok(ref msg) if !matches!(msg,
             ClientMessage::Hello { .. } | ClientMessage::Ping { .. } | ClientMessage::ListSessions
             | ClientMessage::CreateSession { .. } | ClientMessage::SelectSession { .. } | ClientMessage::LeaveSession
@@ -4584,7 +4595,14 @@ fn handle_decoded(
     }
 }
 
-async fn session(mut socket: WebSocket, s: AppState) {
+async fn request_otp(s: &Shared, email: &str, target: Option<u64>, ip: std::net::IpAddr) -> ServerMessage {
+    match s.otp.request(email, target, ip).await {
+        Ok((email, challenge)) => ServerMessage::EmailOtpSent { email, challenge, expires_in_secs: otp::TTL, retry_after_secs: otp::RESEND },
+        Err(reason) => ServerMessage::AuthError { reason },
+    }
+}
+
+async fn session(mut socket: WebSocket, s: AppState, ip: std::net::IpAddr) {
     // the room this connection sees and plays in; it follows the player between rooms
     let mut s = s;
     // Handshake.
@@ -4592,35 +4610,42 @@ async fn session(mut socket: WebSocket, s: AppState) {
         match socket.recv().await {
             Some(Ok(Message::Binary(b))) => {
                 match ose_net::decode::<ClientMessage>(&b) {
-                    Ok(ClientMessage::Hello {
-                        protocol,
-                        display_name,
-                        token,
-                    }) => {
+                    Ok(ClientMessage::RequestEmailOtp { email }) => {
+                        let reply = request_otp(&s, &email, None, ip).await;
+                        if !send(&mut socket, &reply).await { return; }
+                    }
+                    Ok(msg @ (ClientMessage::Hello { .. } | ClientMessage::EmailSignIn { .. })) => {
+                        let (protocol, display_name) = match &msg {
+                            ClientMessage::Hello { protocol, display_name, .. } | ClientMessage::EmailSignIn { protocol, display_name, .. } => (*protocol, display_name.clone()),
+                            _ => unreachable!(),
+                        };
                         if protocol != PROTOCOL_VERSION {
-                            let reason = format!("protocol {protocol} not supported, server speaks {PROTOCOL_VERSION}");
-                            send(&mut socket, &ServerMessage::Rejected { reason }).await;
+                            send(&mut socket, &ServerMessage::Rejected { reason: "Client updated; reload the page.".into() }).await;
                             return;
                         }
-                        let outcome: Result<(u64, String, bool), String> = {
-                            let mut acc = s.accounts.lock().expect("accounts lock");
-                            match token.as_deref() {
-                                Some(t) => match acc.resume(t, &display_name) {
-                                    Ok(Some(p)) => Ok((p.id, t.to_string(), true)),
-                                    Ok(None) => Err("invalid login code; enter your private login code or clear it to create an account".into()),
-                                    Err(e) => Err(format!("account error: {e}")),
-                                },
-                                None => acc.create(&display_name)
-                                    .map(|(p, t)| (p.id, t, false))
-                                    .map_err(|e| format!("account error: {e}")),
+                        let is_otp = matches!(&msg, ClientMessage::EmailSignIn { .. });
+                        let outcome: Result<(u64, String, bool), String> = match msg {
+                            ClientMessage::Hello { token, .. } => {
+                                let mut acc = s.accounts.lock().expect("accounts lock");
+                                match token.as_deref() {
+                                    Some(t) => acc.resume(t, &display_name).map_err(|e| e.to_string())
+                                        .and_then(|p| p.map(|p| (p.id, t.to_string(), true)).ok_or("Session expired. Sign in with your email.".into())),
+                                    None if !s.allow_guest_accounts => Err("Sign in using an email code.".into()),
+                                    None => acc.create(&display_name).map(|(p,t)| (p.id,t,false)).map_err(|e| e.to_string()),
+                                }
                             }
+                            ClientMessage::EmailSignIn { email, challenge, code, .. } => {
+                                s.otp.verify(&email, &challenge, &code, None).and_then(|email| {
+                                    s.accounts.lock().expect("accounts lock").sign_in_email(&email, &display_name)
+                                        .map(|(p,t)| (p.id,t,true)).map_err(|e| e.to_string())
+                                })
+                            }
+                            _ => unreachable!(),
                         };
                         let (id, token_out, resumed) = match outcome {
                             Ok(v) => v,
-                            Err(reason) => {
-                                send(&mut socket, &ServerMessage::Rejected { reason }).await;
-                                return;
-                            }
+                            Err(reason) if is_otp => { if !send(&mut socket, &ServerMessage::AuthError { reason }).await { return; } continue; }
+                            Err(reason) => { send(&mut socket, &ServerMessage::Rejected { reason }).await; return; }
                         };
                         tracing::info!(player = id, name = %display_name, resumed, "player joined");
                         let tick: Tick = s.universe.lock().expect("sim lock").tick();
@@ -4676,6 +4701,8 @@ async fn session(mut socket: WebSocket, s: AppState) {
                             },
                         );
                         player_joined(&s, id, &display_name);
+                        let email = s.accounts.lock().expect("accounts lock").email(id);
+                        if !send(&mut socket, &ServerMessage::AccountState { email }).await { return; }
                         break id;
                     }
                     Ok(_) => {
@@ -4772,6 +4799,24 @@ async fn session(mut socket: WebSocket, s: AppState) {
                 match incoming {
                     Some(Ok(Message::Binary(b))) => {
                         let decoded = ose_net::decode::<ClientMessage>(&b).map_err(|e| e.to_string());
+                        match &decoded {
+                            Ok(ClientMessage::RequestEmailOtp { email }) => {
+                                let reply = request_otp(&s, email, Some(player_id), ip).await;
+                                if !send(&mut socket, &reply).await { break; }
+                                continue;
+                            }
+                            Ok(ClientMessage::EmailSignIn { email, challenge, code, .. }) => {
+                                let reply = match s.otp.verify(email, challenge, code, Some(player_id)).and_then(|email| {
+                                    s.accounts.lock().expect("accounts lock").link_email(player_id, &email).map(|_| email).map_err(|e| e.to_string())
+                                }) {
+                                    Ok(email) => ServerMessage::AccountState { email: Some(email) },
+                                    Err(reason) => ServerMessage::AuthError { reason },
+                                };
+                                if !send(&mut socket, &reply).await { break; }
+                                continue;
+                            }
+                            _ => {},
+                        }
                         if let Ok(msg) = &decoded {
                             replay::record_event(&s, player_id, replay::Event::Msg(msg.clone()));
                         }

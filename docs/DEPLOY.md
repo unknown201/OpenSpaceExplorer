@@ -48,11 +48,24 @@ certbot certificate for `ose.jfly.dev` (auto-renewed). The game's `location /` i
 `proxy-defaults.conf` (which enables the house login gate). Validate with `nginx -t` before reload.
 The public root, `/health`, static assets, and `/ws` are reachable without Google SSO.
 
-The game authenticates accounts itself. Campaigns are listed and accessible only to their owner and
-members. **Your account** in the campaign menu reveals a private login code: enter that code at the
-main menu on any other machine to use the same server account. Browser storage merely remembers it
-for convenience; membership and ownership live in the server save. Invalid login codes are rejected
-instead of silently creating a different account. Existing account tokens still work.
+The game authenticates accounts itself with email OTP. Enter an email on the main menu and select
+**Send sign-in code**, then enter the six-digit code and select **Sign in**. Codes expire after ten
+minutes, work once, allow five attempts, and can be resent after sixty seconds. Email, source IP and
+server-wide send quotas limit abuse. OTPs stay in memory as hashes and are excluded from replay logs.
+The browser remembers a private session token for convenience; ownership and membership stay on the
+server. Logging in from a second machine creates another session without invalidating the first.
+
+For existing players, the browser's remembered session continues to work. Open **Your account**,
+verify an email there, and the existing player id, owned campaigns, and memberships stay intact.
+On another machine, sign in with that email. Verified accounts are kept even if they have no games.
+An email cannot be linked to two accounts; no account merges happen implicitly.
+
+Mail configuration lives outside releases in `/etc/ose-otp.env` (see `deploy/ose-otp.env.example`),
+loaded by `ose.service`. The internal mail server at `10.205.25.7:2525` accepts only OSE's address
+`10.205.25.80/32` and envelope sender `ose@customprojects.net`; Postfix sends through the existing
+Google relay with authenticated TLS. Other clients and senders are rejected. No SMTP credentials
+are copied into the game. The OSE nginx host sets `X-Real-IP`; the server trusts that header only
+from `OSE_TRUSTED_PROXY`, so other clients cannot forge their OTP rate-limit address.
 
 Use **Share** beside any campaign, or **Share game** in the pause menu, to get a game invitation.
 A friend enters it under **Join with a share code**. The invitation grants persistent membership

@@ -99,7 +99,7 @@
     #menu h1 { margin: 0 0 4px; font-size: 22px; font-weight: 600; color: #e6ecf7; letter-spacing: 0.5px; }
     #menu .sub { color: #6f7f9c; font-size: 12px; margin-bottom: 18px; }
     #menu label { display: block; font-size: 12px; color: #9fb0cc; margin: 10px 0 4px; }
-    #menu input[type=text], #menu input[type=password] { width: 100%; box-sizing: border-box; padding: 6px 8px; font: inherit;
+    #menu input[type=text], #menu input[type=email] { width: 100%; box-sizing: border-box; padding: 6px 8px; font: inherit;
       background: #06080f; color: #e6ecf7; border: 1px solid #2c3d63; border-radius: 4px; }
     #menu button { margin-top: 16px; width: 100%; padding: 8px; font: inherit; font-size: 15px;
       background: #1f3d6b; color: #fff; border: 1px solid #3b63a8; border-radius: 4px; cursor: pointer; }
@@ -270,8 +270,11 @@
     #login-bar { position: absolute; right: 0; top: 0; height: calc(50 * var(--u)); min-width: calc(210 * var(--u)); display: flex; align-items: center; gap: calc(10 * var(--u));
       padding: 0 calc(16 * var(--u)); background: #000; color: #fff; font-size: calc(15 * var(--u)); }
     #login-bar label { margin: 0; color: #9fb0cc; font-size: calc(13 * var(--u)); white-space: nowrap; }
-    #login-bar input[type=password] { width: calc(210 * var(--u)); font-size: calc(13 * var(--u)); }
-    #session-share-code, #account-code, #join-code, #paused-share-code { box-sizing: border-box; width: 100%; font-family: monospace; }
+    #login-bar { height: auto; min-height: calc(50 * var(--u)); flex-wrap: wrap; justify-content: flex-end; max-width: 80vw; }
+    #login-bar input[type=email] { width: calc(250 * var(--u)); }
+    #login-bar #login-otp { width: calc(130 * var(--u)); }
+    #login-bar #otp-resend { width: auto; margin: 0; padding: 4px 8px; font-size: calc(13 * var(--u)); }
+    #session-share-code, #account-otp, #join-code, #paused-share-code { box-sizing: border-box; width: 100%; font-family: monospace; }
     #sessions .session-actions { flex-wrap: wrap; justify-content: flex-end; }
     #login-bar input[type=text] { width: calc(160 * var(--u)); padding: calc(4 * var(--u)) calc(8 * var(--u)); font-size: calc(15 * var(--u)); background: #111; border-color: #333; }
     #version { position: absolute; left: calc(80 * var(--u)); bottom: calc(24 * var(--u)); font-size: calc(13 * var(--u)); color: #ffffff80; }
@@ -1427,8 +1430,11 @@
         <div id="login-bar">
           <label for="player-name">Pilot</label>
           <input id="player-name" data-ose="player-name" type="text" maxlength="32" autocomplete="nickname" value="Pilot" disabled />
-          <label for="login-code">Login code</label>
-          <input id="login-code" data-ose="login-code" type="password" maxlength="64" autocomplete="current-password" placeholder="Blank for a new account" title="Use your private login code from another machine to access the same account" />
+          <label for="login-email">Email</label>
+          <input id="login-email" data-ose="login-email" type="email" maxlength="254" autocomplete="email" placeholder="you@example.com" />
+          <label for="login-otp">Code</label>
+          <input id="login-otp" data-ose="login-otp" type="text" maxlength="6" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code" />
+          <button id="otp-resend" data-ose="otp-resend" type="button">Resend code</button>
         </div>
         <div id="version">OpenSpaceExplorer, a shared Kerbol system in the browser</div>
         <div id="extras"><a href="https://github.com/unknown201/OpenSpaceExplorer" target="_blank" rel="noopener">Source</a></div>
@@ -1463,10 +1469,13 @@
         <details id="account-details">
           <summary>Your account</summary>
           <div class="create">
-            <label for="account-code">Private login code</label>
-            <input id="account-code" data-ose="account-code" type="password" readonly autocomplete="off" />
-            <button id="account-code-show" data-ose="account-code-show">Show login code</button>
-            <div class="info">Keep this code private. Enter it at the main menu on another machine to log in to this account. Use a game share code to invite friends.</div>
+            <label for="account-email">Your email</label>
+            <input id="account-email" data-ose="account-email" type="email" maxlength="254" autocomplete="email" placeholder="you@example.com" />
+            <button id="account-send-otp" data-ose="account-send-otp">Email me a code</button>
+            <label for="account-otp">One-time code</label>
+            <input id="account-otp" data-ose="account-otp" type="text" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="6-digit code" />
+            <button id="account-verify-otp" data-ose="account-verify-otp">Verify email</button>
+            <div id="account-status" data-ose="account-status" class="info">Verify your email to sign in on any machine and keep your games.</div>
             <button id="account-logout" data-ose="account-logout">Sign out</button>
           </div>
         </details>

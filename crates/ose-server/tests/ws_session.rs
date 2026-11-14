@@ -38,7 +38,7 @@ async fn spawn_server_with(extra: &[&str], port: Option<u16>) -> (Server, String
     });
     let addr = format!("127.0.0.1:{port}");
     let child = Command::new(env!("CARGO_BIN_EXE_ose-server"))
-        .args(["--listen", &addr])
+        .args(["--listen", &addr, "--allow-guest-accounts"])
         .args(extra)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -2831,7 +2831,8 @@ async fn raw_hello(ws: &mut Ws, token: Option<String>, name: &str) -> (u64, Stri
 
 // Gameplay tests explicitly establish a shared test campaign and invite later accounts.
 // Authentication/access tests use raw_hello (or campaign_access.rs) without this fixture.
-static TEST_CAMPAIGNS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, (String, String, String)>>> = std::sync::OnceLock::new();
+type TestCampaigns = std::sync::Mutex<std::collections::HashMap<String, (String, String, String)>>;
+static TEST_CAMPAIGNS: std::sync::OnceLock<TestCampaigns> = std::sync::OnceLock::new();
 async fn hello(ws: &mut Ws, token: Option<String>, name: &str) -> (u64, String) {
     let identity = raw_hello(ws, token, name).await;
     establish_test_campaign(ws, &identity.1, name).await;
