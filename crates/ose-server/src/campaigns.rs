@@ -280,13 +280,22 @@ fn add_member(
         name: c.name.clone(),
     }
 }
-/// A guest account on a browser-test server (`--test-probe --allow-guest-accounts`) becomes a member of the primary room's
-/// campaign, so browser tests can join the server's own world without a share code.
+/// A guest account on a browser-test server (`--test-probe --allow-guest-accounts`) becomes a member of
+/// every campaign the server has, live or shelved, so browser tests see and join the server's own world
+/// (listed by name, as before campaigns were private) without a share code.
 pub fn admit_test_guest(s: &Shared, player: u64) {
-    let tick = s.universe.lock().expect("sim lock").tick();
-    let mut c = s.campaign.lock().expect("campaign lock");
-    if !c.id.is_empty() {
-        add_member(s, &mut c, player, tick);
+    let _gate = s.rooms.gate.lock().expect("rooms gate");
+    for room in s.rooms.all() {
+        let tick = room.universe.lock().expect("sim lock").tick();
+        let mut c = room.campaign.lock().expect("campaign lock");
+        if !c.id.is_empty() {
+            add_member(s, &mut c, player, tick);
+        }
+    }
+    let mut shelf = s.shelf.lock().expect("shelf lock");
+    for back in shelf.iter_mut() {
+        let tick = back.save.tick;
+        add_member(s, &mut back.save.campaign, player, tick);
     }
 }
 /// Redemption grants membership without moving rooms or interrupting anyone's game.
