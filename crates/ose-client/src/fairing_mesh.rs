@@ -304,9 +304,8 @@ pub fn shroud_model_for(
     let (d, target) = ose_data::engine_shroud::shroud_for(craft, i)?;
     let name = shroud_model_name(&craft.parts[i].part_id, target);
     let (shape, def) = shroud_shape(d, target);
-    gpu.request_built_model(&name, BASE_URL, move |base| {
-        piece_glb(base, &shape, &def, 0)
-    });
+    // The base GLB is only fetched to drive the build; the shroud carries its own material.
+    gpu.request_built_model(&name, BASE_URL, move |_| Ok(shroud_glb(&shape, &def)));
     gpu.has_model(&name).then_some(name)
 }
 
