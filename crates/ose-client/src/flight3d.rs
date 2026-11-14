@@ -257,19 +257,20 @@ fn wheel_spinner(part_id: &str) -> Option<(&'static str, f64)> {
     })
 }
 
-/// Whether part `i` is an engine with nothing hanging from its bottom node: the original then leaves its
-/// shroud (the fairing round the bell) off.
-pub(crate) fn bare_engine(craft: &Craft, i: usize) -> bool {
-    craft
-        .parts
-        .get(i)
-        .is_some_and(|p| p.part_id.starts_with("engine_"))
-        && !craft.parts.iter().any(|q| {
-            q.parent == Some(i)
-                && q.parent_node
-                    .as_deref()
-                    .is_some_and(|n| n.contains("bottom"))
-        })
+/// Whether part `i` is an engine whose prefab shroud mesh (mesh names containing "fairing") stays hidden:
+/// always for the engines the original builds a procedural shroud for (`ose_data::engine_shroud`, drawn by
+/// `fairing_mesh::shroud_model_for` once a part hangs below), else when nothing hangs from its bottom node.
+pub(crate) fn hides_prefab_shroud(craft: &Craft, i: usize) -> bool {
+    craft.parts.get(i).is_some_and(|p| {
+        p.part_id.starts_with("engine_")
+            && (ose_data::engine_shroud::def(&p.part_id).is_some()
+                || !craft.parts.iter().any(|q| {
+                    q.parent == Some(i)
+                        && q.parent_node
+                            .as_deref()
+                            .is_some_and(|n| n.contains("bottom"))
+                }))
+    })
 }
 
 /// A lamp part's light in its model frame: where the original's Light node sits and the way it shines
@@ -658,43 +659,7 @@ pub fn jettisoned(craft: &Craft, fired: usize, is_decoupler: &dyn Fn(&str) -> bo
     gone
 }
 
-/// The original's flight camera modes (`KSP.Sim/FlightCameraMode.cs`), cycled with V.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum CameraMode {
-    /// Free near the ground and in the air, orbital above the atmosphere.
-    #[default]
-    Auto,
-    /// Turns with the local horizon: up is away from the body.
-    Free,
-    /// Up is the orbit normal, so the orbit stays level on screen.
-    Orbital,
-    /// Behind the vessel along its velocity.
-    Chase,
-    /// Turns with the vessel.
-    Locked,
-}
-
-impl CameraMode {
-    pub fn next(self) -> CameraMode {
-        match self {
-            CameraMode::Auto => CameraMode::Free,
-            CameraMode::Free => CameraMode::Orbital,
-            CameraMode::Orbital => CameraMode::Chase,
-            CameraMode::Chase => CameraMode::Locked,
-            CameraMode::Locked => CameraMode::Auto,
-        }
-    }
-
-    pub fn name(self) -> &'static str {
-        match self {
-            CameraMode::Auto => "Auto",
-            CameraMode::Free => "Free",
-            CameraMode::Orbital => "Orbital",
-            CameraMode::Chase => "Chase",
-            CameraMode::Locked => "Locked",
-        }
-    }
-}
+pub use crate::camera_modes::{is_stable_orbit, CameraMode};
 
 /// The camera starts south-south-east of the craft looking north (yaw from north toward east): on the pad
 /// that is the side a rocket's top faces (it stands top to the south), so as in the original D turns it to
@@ -713,6 +678,8 @@ pub struct FlightView {
     /// The mode the camera was framed in last frame and the camera's direction from the vessel then: when
     /// Auto switches frames (into orbital above the air) the view carries on from where it was.
     cam_frame: Option<(CameraMode, DVec3)>,
+    /// Chase's lagging vessel frame and the game time it was last moved, s.
+    chase: Option<(DQuat, f64)>,
     pub distance: f64,
     /// The vessel the camera distance was last fitted to, how many of its part models were loaded then and
     /// whether the server's part list had arrived: a new vessel (a launch, a switch) or Home fits the camera
@@ -808,6 +775,8 @@ pub struct FlightInput<'a> {
     pub body_id: &'a str,
     pub body_radius: f64,
     pub atmosphere_m: f64,
+    /// The body's sphere of influence radius, m (infinite for the star).
+    pub soi_m: f64,
     pub ut: f64,
     pub craft: Option<&'a Craft>,
     /// The guids of the parts the server says the vessel still has (its current craft); parts of `craft`
@@ -859,6 +828,7 @@ impl FlightView {
             yaw: DEFAULT_YAW,
             pitch: 0.25,
             cam_frame: None,
+            chase: None,
             distance: 35.0,
             framed: None,
             auto_fit: true,
@@ -1282,31 +1252,37 @@ impl FlightView {
         let east = north.cross(up);
 
         // The camera's frame for the mode: (forward-ish, right-ish, up) axes the yaw and pitch turn around.
-        let alt_m = r.length() - inp.body_radius;
+        let o = &inp.vessel.orbit;
+        let stable = is_stable_orbit(
+            o.semi_major_axis_m,
+            o.eccentricity,
+            inp.body_radius,
+            inp.atmosphere_m,
+            inp.soi_m,
+        );
         let mode = match self.mode {
-            CameraMode::Auto if alt_m > inp.atmosphere_m.max(30_000.0) => CameraMode::Orbital,
-            CameraMode::Auto => CameraMode::Free,
+            CameraMode::Auto if stable => CameraMode::Celestial,
+            CameraMode::Auto => CameraMode::Horizon,
             m => m,
         };
-        let orbit_up = dir_to_model(r, r.cross(v_rel), spin, inp.ut).normalize_or_zero();
-        let v_surf_m = dir_to_model(
-            r,
-            v_rel - DVec3::new(0.0, 0.0, spin.omega()).cross(r),
-            spin,
-            inp.ut,
-        )
-        .normalize_or_zero();
+        // Chase follows the vessel's frame by `Slerp(prev, now, 3 x dt)` in game time (it keeps up at warp)
+        let chase_rot = match self.chase {
+            Some((prev, t)) if mode == CameraMode::Chase => prev
+                .slerp(vessel_rot, (3.0 * (inp.ut - t).max(0.0)).min(1.0))
+                .normalize(),
+            _ => vessel_rot,
+        };
+        self.chase = Some((chase_rot, inp.ut));
         let frame = |b_up: DVec3, hint: DVec3| {
             let b_n = (hint - b_up * b_up.dot(hint)).normalize_or_zero();
             (b_up.length() > 0.5 && b_n.length() > 0.5).then(|| (b_n, b_up.cross(b_n), b_up))
         };
         let (b_n, b_e, b_u) = match mode {
-            // The orbit normal up; yaw measured from straight out from the body, which lies in the orbit plane
-            // (north does not: on a climb from the equator it is nearly the orbit normal itself).
-            CameraMode::Orbital => frame(orbit_up, up),
-            // Behind the vessel: the default yaw looks along the velocity.
-            CameraMode::Chase => frame(up, -v_surf_m).or_else(|| frame(up, -dir)),
-            CameraMode::Locked => frame(vessel_rot * DVec3::Y, vessel_rot * DVec3::Z),
+            // the body's own axes, its north pole up (the model frame turns with the body)
+            CameraMode::Celestial | CameraMode::Capture => frame(DVec3::Y, DVec3::Z),
+            CameraMode::Chase => frame(chase_rot * DVec3::Y, chase_rot * DVec3::Z),
+            CameraMode::Body => frame(vessel_rot * DVec3::Y, vessel_rot * DVec3::Z),
+            // Horizon: straight out from the body up, north ahead
             _ => None,
         }
         .unwrap_or((north, east, up));
@@ -2492,7 +2468,7 @@ impl FlightView {
                     it.color = [0.75, 0.9, 1.2, 1.0];
                     it.ambient = it.ambient.max(0.6);
                 }
-                if bare_engine(craft, i) {
+                if hides_prefab_shroud(craft, i) {
                     it.hide_containing = Some("fairing");
                 }
                 let poses: Vec<_> = readout
@@ -2696,6 +2672,9 @@ impl FlightView {
                             }
                         }
                     }
+                }
+                if let Some(shroud) = crate::fairing_mesh::shroud_model_for(gpu, craft, i) {
+                    items.push(crate::fairing_mesh::shroud_item(&it, shroud));
                 }
                 items.push(it);
                 if let Some((state, open)) = chutes.get(&(i as u16)).filter(|_| !animated_chute) {
@@ -3040,7 +3019,7 @@ impl FlightView {
                         }
                     }
                     let k = placed.len();
-                    let shroud = bare_engine(craft, k).then_some("fairing");
+                    let shroud = hides_prefab_shroud(craft, k).then_some("fairing");
                     placed.push((name, lp, lq, part_paint(craft, k, near.paint), shroud));
                 }
                 // The vessel point is the craft's centre of mass when the server sends it (in physics, on the
@@ -3100,6 +3079,9 @@ impl FlightView {
                     it.fill_dir = up;
                     it.fill = 0.25;
                     it.sun = sun_share;
+                    if let Some(shroud) = crate::fairing_mesh::shroud_model_for(gpu, craft, k) {
+                        items.push(crate::fairing_mesh::shroud_item(&it, shroud));
+                    }
                     items.push(it);
                 }
                 continue;

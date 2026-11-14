@@ -159,6 +159,9 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         }
+        for c in &mut crafts {
+            ose_importer::craft::resolve_control_limits(c, &game.parts);
+        }
         std::fs::write(
             args.out.join("stock-craft.json"),
             serde_json::to_string(&crafts)?,

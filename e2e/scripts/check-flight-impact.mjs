@@ -12,6 +12,7 @@ try {
  await page.goto(process.env.OSE_BASE_URL??'http://127.0.0.1:16922');
  await page.locator('#status').filter({hasText:'client loaded'}).waitFor();
  await page.locator('[data-ose="player-name"]').fill('particle regression');
+ await page.locator('[data-ose="login"]').click();
  await page.locator('[data-ose="play"]').click();
  await page.locator('[data-ose="session-join"]').first().waitFor();
  if(!(await page.locator('#create-name').isVisible()))await page.locator('#create-details > summary').click();

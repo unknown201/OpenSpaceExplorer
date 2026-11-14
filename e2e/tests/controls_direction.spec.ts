@@ -56,6 +56,7 @@ async function start(page: Page, baseURL: string, name: string) {
   }));
   await page.goto(baseURL);
   await page.locator('[data-ose="player-name"]').fill(name);
+  await page.locator('[data-ose="login"]').click();
   await page.locator('[data-ose="play"]').click();
   await page.locator('[data-ose="session-join"]').first().click();
   await page.locator('[data-ose="ksc-launchpad"]').click();
@@ -96,6 +97,7 @@ test("a rocket leaving the pad turns east with D", async ({ page, baseURL }) => 
   // rocket launched beside one is knocked about.
   await page.goto(baseURL!);
   await page.locator('[data-ose="player-name"]').fill("gravity turn pilot");
+  await page.locator('[data-ose="login"]').click();
   await page.locator('[data-ose="play"]').click();
   await page.locator('[data-ose="session-join"]').first().waitFor();
   if (!(await page.locator("#create-name").isVisible())) {

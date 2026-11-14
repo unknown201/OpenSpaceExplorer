@@ -3,6 +3,7 @@ import {expect,test} from '@playwright/test';
 test('optional rendezvous plans preserve manual flight and release the hold on steering',async({page})=>{
   await page.goto('/');
   await page.locator('[data-ose="player-name"]').fill('rendezvous pilot');
+  await page.locator('[data-ose="login"]').click();
   await page.locator('[data-ose="play"]').click();
   await page.locator('[data-ose="session-join"]').first().waitFor();
   if(!await page.locator('#create-name').isVisible())await page.locator('#create-details > summary').click();

@@ -9,11 +9,13 @@ test('static first paint needs no JavaScript or exported assets',async({browser,
     await expect(page.locator('[data-ose="menu-poster"]')).toBeVisible();
     await expect(page.locator('[data-ose="menu-poster"] > svg')).toBeVisible();
     await expect(page.locator('[data-ose="scene-assembly"]')).not.toHaveAttribute('aria-valuenow');
-    await expect(page.locator('.logo-title')).toBeVisible();
-    await expect(page.locator('[data-ose="play"]')).toBeVisible();
+    // A first visit opens on the sign-in screen, over the same artwork as the main menu.
+    await expect(page.locator('#screen-login .logo-title')).toBeVisible();
+    await expect(page.locator('[data-ose="login"]')).toBeVisible();
+    await expect(page.locator('[data-ose="play"]')).toBeHidden();
     await page.screenshot({path:test.info().outputPath('first-paint-desktop.png')});
     await page.setViewportSize({width:390,height:844});
-    await expect(page.locator('[data-ose="play"]')).toBeVisible();
+    await expect(page.locator('[data-ose="login"]')).toBeVisible();
     await page.screenshot({path:test.info().outputPath('first-paint-mobile.png')});
   } finally {await context.close();}
 });
@@ -24,7 +26,7 @@ test('a slow bootstrap cannot block the first-paint artwork',async({page,baseURL
   try {
     await page.goto(baseURL!,{waitUntil:'commit'});
     await expect(page.locator('[data-ose="menu-poster"] > svg')).toBeVisible();
-    await expect(page.locator('[data-ose="play"]')).toBeVisible();
+    await expect(page.locator('[data-ose="login"]')).toBeVisible();
   } finally {release();}
 });
 
@@ -35,6 +37,7 @@ test('Canvas fallback keeps the static menu and removes it when joining a campai
   await expect(page.locator('[data-ose="menu-poster"]')).toBeVisible();
   await expect(page.locator('.poster-status')).toBeHidden();
   await page.locator('[data-ose="player-name"]').fill('static menu pilot');
+  await page.locator('[data-ose="login"]').click();
   await page.locator('[data-ose="play"]').click();
   await expect(page.locator('[data-ose="menu-poster"]')).toBeVisible();
   await page.locator('[data-ose="session-join"]').first().click();
@@ -95,6 +98,7 @@ test('poster covers partial geometry until all visible menu models have previews
     await page.screenshot({path:test.info().outputPath('ship-assembling.png')});
     await expect(page.locator('[data-ose="menu-poster"]')).toHaveCSS('opacity','1');
     await page.locator('[data-ose="player-name"]').fill('typing while scenery loads');
+    await page.locator('[data-ose="login"]').click();
     await page.locator('[data-ose="play"]').click();
     await expect(page.locator('[data-ose="session-join"]').first()).toBeVisible();
     release();

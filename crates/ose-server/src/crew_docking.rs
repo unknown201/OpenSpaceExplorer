@@ -50,7 +50,7 @@ pub fn undock(s: &Shared, e: Entity, port: Option<usize>) -> Result<Entity, Stri
 /// Register a new vessel for `owner`; returns its id.
 pub fn register(s: &Shared, e: Entity, owner: Option<u64>) -> u64 {
     let mut list = s.vessels.lock().expect("vessels lock");
-    let id = list.iter().map(|&(_, id, _)| id).max().unwrap_or(0) + 1;
+    let id = s.new_vessel_id(&list);
     list.push((e, id, owner));
     id
 }

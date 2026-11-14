@@ -32,7 +32,7 @@ pub fn mark() -> Mark {
 
 pub struct Batch {
     /// Taken before reading the world, so a joining player can skip work begun before they joined.
-    started: Mark,
+    pub(super) started: Mark,
     messages: Box<[Bytes]>,
 }
 
