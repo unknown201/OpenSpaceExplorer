@@ -2047,11 +2047,31 @@ pub fn player_rgb(m: &ose_net::CampaignMember) -> [u8; 3] {
 
 /// The players window (multiplayer; the original has none): everyone in the campaign with their colour,
 /// whether they are online and what they fly, and the vessels they own; you first, then who is online.
+/// How far apart two players are in time, as the players window shows it: `2d 3h ahead`, `5m 10s behind`.
+pub fn time_apart(ahead_s: f64) -> String {
+    let t = ahead_s.abs().round() as u64;
+    let (d, h, m, s) = (t / 21_600, t % 21_600 / 3600, t % 3600 / 60, t % 60);
+    let span = if d > 0 {
+        format!("{d}d {h}h")
+    } else if h > 0 {
+        format!("{h}h {m}m")
+    } else if m > 0 {
+        format!("{m}m {s}s")
+    } else {
+        format!("{s}s")
+    };
+    format!("{span} {}", if ahead_s > 0.0 { "ahead" } else { "behind" })
+}
+
+/// `time`: where a player is in time against this one (`ServerMessage::PlayerTimes`: seconds ahead, their
+/// warp), for players in another time; a player ahead gets a Sync button (`data-ose-sync`).
 pub fn players_html(
     members: &[ose_net::CampaignMember],
     me: Option<u64>,
     vessels: &dyn Fn(u64) -> Vec<String>,
     vessel_name: &dyn Fn(u64) -> Option<String>,
+    time: &dyn Fn(u64) -> Option<(f64, u32)>,
+    syncing_to: Option<u64>,
 ) -> String {
     let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;");
     let mut list: Vec<&ose_net::CampaignMember> = members.iter().collect();
@@ -2066,8 +2086,33 @@ pub fn players_html(
     for m in list {
         let [r, g, b] = player_rgb(m);
         let owned = vessels(m.player_id);
+        // players in another time: how far apart, and a way to catch up with one ahead
+        let when = match time(m.player_id).filter(|_| m.online && Some(m.player_id) != me) {
+            _ if syncing_to == Some(m.player_id) => {
+                " <span class=\"pl-time\" data-ose=\"player-time\">catching up\u{2026}</span>"
+                    .to_string()
+            }
+            Some((ahead, warp)) if ahead.abs() >= 1.0 => format!(
+                " <span class=\"pl-time\" data-ose=\"player-time\">{}{}</span>{}",
+                time_apart(ahead),
+                if warp > 1 {
+                    format!(" \u{b7} {warp}x")
+                } else {
+                    String::new()
+                },
+                if ahead > 0.0 {
+                    format!(
+                        "<button class=\"pl-sync\" data-ose-sync=\"{}\" title=\"Catch up with their time\">Sync</button>",
+                        m.player_id
+                    )
+                } else {
+                    String::new()
+                }
+            ),
+            _ => String::new(),
+        };
         html.push_str(&format!(
-            "<div class=\"pl-row{off}\" data-ose=\"player-row\"><i class=\"pl-dot\" style=\"background:#{r:02x}{g:02x}{b:02x}\"></i><b>{}</b>{}<span class=\"pl-state\">{}</span><div class=\"pl-vessels\">{}</div></div>",
+            "<div class=\"pl-row{off}\" data-ose=\"player-row\"><i class=\"pl-dot\" style=\"background:#{r:02x}{g:02x}{b:02x}\"></i><b>{}</b>{}<span class=\"pl-state\">{}</span>{when}<div class=\"pl-vessels\">{}</div></div>",
             esc(&m.display_name),
             if Some(m.player_id) == me { " <span class=\"pl-you\">you</span>" } else { "" },
             match (m.online, m.flying.and_then(vessel_name)) {
@@ -2089,6 +2134,34 @@ pub fn players_html(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn players_in_another_time_show_how_far_and_one_ahead_can_be_synced_to() {
+        let member = |id: u64, name: &str| ose_net::CampaignMember {
+            player_id: id,
+            display_name: name.into(),
+            joined_tick: ose_data::Tick(0),
+            agency: None,
+            online: true,
+            flying: None,
+        };
+        let members = vec![member(1, "me"), member(2, "ahead"), member(3, "behind")];
+        let time = |p: u64| match p {
+            2 => Some((2.0 * 21_600.0 + 3.0 * 3600.0, 100)),
+            3 => Some((-70.0, 1)),
+            _ => None,
+        };
+        let html = players_html(&members, Some(1), &|_| vec![], &|_| None, &time, None);
+        assert!(html.contains("2d 3h ahead \u{b7} 100x"), "{html}");
+        assert!(html.contains("1m 10s behind"), "{html}");
+        assert!(html.contains("data-ose-sync=\"2\""), "{html}");
+        assert!(
+            !html.contains("data-ose-sync=\"3\""),
+            "nothing goes back in time: {html}"
+        );
+        let html = players_html(&members, Some(1), &|_| vec![], &|_| None, &time, Some(2));
+        assert!(html.contains("catching up"), "{html}");
+    }
 
     #[test]
     fn transfer_rows_offer_balance_and_a_part_in_both_lists_shows_as_balancing() {

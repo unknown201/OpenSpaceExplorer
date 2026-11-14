@@ -151,7 +151,7 @@ impl Universe {
                 .world
                 .query::<(Entity, &flight::Powered, &bodies::ReferenceBody)>();
             q.iter(&self.world)
-                .filter(|(_, p, _)| !p.crashed)
+                .filter(|(e, p, _)| !p.crashed && self.here(*e))
                 .map(|(e, _, b)| (e, b.0))
                 .collect()
         };
@@ -629,7 +629,9 @@ impl Universe {
                 Has<crate::crew::Boarding>,
             )>();
             q.iter(&self.world)
-                .filter(|(_, p, _, ladder, boarding)| p.walker && !ladder && !boarding)
+                .filter(|(e, p, _, ladder, boarding)| {
+                    p.walker && !ladder && !boarding && self.here(*e)
+                })
                 .map(|(e, _, b, _, _)| (e, b.0))
                 .collect()
         };
@@ -643,7 +645,7 @@ impl Universe {
                 &bodies::ReferenceBody,
             ), With<structure::Structure>>();
             q.iter(&self.world)
-                .filter(|(_, p, _)| !p.walker && !p.crashed)
+                .filter(|(e, p, _)| !p.walker && !p.crashed && self.here(*e))
                 .map(|(e, _, b)| (e, b.0))
                 .collect()
         };
@@ -713,7 +715,7 @@ impl Universe {
                 Has<structure::Structure>,
             )>();
             q.iter(&self.world)
-                .filter(|(_, p, _, ladder, _)| !p.crashed && !ladder)
+                .filter(|(e, p, _, ladder, _)| !p.crashed && !ladder && self.here(*e))
                 .map(|(e, p, b, _, st)| (e, b.0, p.walker, st))
                 .partition(|&(_, _, walker, _)| walker)
         };

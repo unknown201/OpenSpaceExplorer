@@ -298,6 +298,7 @@ impl Universe {
             .world
             .query::<(Entity, &Transfers)>()
             .iter(&self.world)
+            .filter(|(e, _)| self.here(*e))
             .flat_map(|(e, t)| t.0.iter().map(move |x| (e, x.clone())))
             .collect();
         let mut kept: std::collections::HashMap<Entity, Vec<Transfer>> = Default::default();
@@ -612,7 +613,7 @@ impl Universe {
         if self.world.get::<EvaKerbal>(kerbal).is_none() {
             return Vec::new();
         }
-        self.vessels()
+        self.vessels_here()
             .into_iter()
             .filter(|&v| v != kerbal && self.world.get::<EvaKerbal>(v).is_none())
             .filter(|&v| {
@@ -770,7 +771,7 @@ impl Universe {
         }
         let me = self.position_of(kerbal).ok_or("not a Kerbal on EVA")?;
         let mut best: Option<(f64, Entity, usize, f64)> = None;
-        for v in self.vessels() {
+        for v in self.vessels_here() {
             if v == kerbal || self.world.get::<EvaKerbal>(v).is_some() {
                 continue;
             }
@@ -869,7 +870,7 @@ impl Universe {
             .world
             .query::<(Entity, &Boarding)>()
             .iter(&self.world)
-            .filter(|(_, b)| b.until_ut <= ut)
+            .filter(|(e, b)| b.until_ut <= ut && self.here(*e))
             .map(|(e, _)| e)
             .collect();
         for e in done {
@@ -879,6 +880,7 @@ impl Universe {
             .world
             .query::<(Entity, &OnLadder)>()
             .iter(&self.world)
+            .filter(|(e, _)| self.here(*e))
             .map(|(e, l)| (e, *l))
             .collect();
         for (k, mut l) in holding {

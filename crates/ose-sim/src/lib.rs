@@ -27,6 +27,7 @@ pub mod structure;
 pub mod struts;
 pub mod surface;
 pub mod thermal;
+pub mod timelines;
 pub mod trajectory;
 pub mod vessels;
 pub mod water;
@@ -263,7 +264,7 @@ impl Universe {
         };
         if factor > flight::MAX_PHYSICS_WARP {
             let ut = self.ut();
-            for e in self.vessels() {
+            for e in self.vessels_here() {
                 let Some(p) = self.powered(e) else { continue };
                 let Some(body) = self.body_of(e) else {
                     continue;
@@ -549,7 +550,7 @@ impl Universe {
             let mut q = self
                 .world
                 .query_filtered::<Entity, (With<structure::Structure>, With<flight::Dormant>)>();
-            q.iter(&self.world).collect()
+            q.iter(&self.world).filter(|e| self.here(*e)).collect()
         };
         for e in on_rails {
             let (Some(body), Some(r)) = (self.body_of(e), self.position_of(e)) else {
@@ -1110,7 +1111,7 @@ impl Universe {
     pub fn warp_holders(&mut self) -> Vec<Entity> {
         let mut q = self.world.query::<(Entity, &flight::Powered)>();
         q.iter(&self.world)
-            .filter(|(_, p)| !p.crashed && !flight::resting(p))
+            .filter(|(e, p)| !p.crashed && !flight::resting(p) && self.here(*e))
             .map(|(e, _)| e)
             .collect()
     }
@@ -1215,7 +1216,7 @@ impl Universe {
         let flying: Vec<Entity> = {
             let mut q = self.world.query::<(Entity, &flight::Powered)>();
             q.iter(&self.world)
-                .filter(|(_, p)| !p.crashed && !flight::resting(p))
+                .filter(|(e, p)| !p.crashed && !flight::resting(p) && self.here(*e))
                 .map(|(e, _)| e)
                 .collect()
         };
@@ -1256,9 +1257,9 @@ impl Universe {
     /// A vessel in physics that holds time warp to physics speeds: not a wreck, and not at rest on the
     /// ground or the sea (`flight::resting`).
     pub fn has_powered(&mut self) -> bool {
-        let mut q = self.world.query::<&flight::Powered>();
+        let mut q = self.world.query::<(Entity, &flight::Powered)>();
         q.iter(&self.world)
-            .any(|p| !p.crashed && !flight::resting(p))
+            .any(|(e, p)| !p.crashed && !flight::resting(p) && self.here(e))
     }
 
     /// Give a vessel a part structure so flight loads its joints and pieces can break off.
@@ -1772,9 +1773,16 @@ impl Universe {
         }
     }
 
+    /// Every vessel, in every timeline.
     pub fn vessels(&mut self) -> Vec<Entity> {
         let mut q = self.world.query_filtered::<Entity, With<vessels::Vessel>>();
         q.iter(&self.world).collect()
+    }
+
+    /// The vessels in the timeline shown now (all of them without timelines, see `timelines`).
+    pub fn vessels_here(&mut self) -> Vec<Entity> {
+        let mut q = self.world.query_filtered::<Entity, With<vessels::Vessel>>();
+        q.iter(&self.world).filter(|e| self.here(*e)).collect()
     }
 
     pub fn vessel(&self, e: Entity) -> Option<(&vessels::Vessel, Entity, Orbit)> {
@@ -1954,11 +1962,20 @@ impl Universe {
     /// vessel skips over its next SOI transition (the original's timescale override at SOI crossings); the
     /// crossing then lands on the step boundary and the handoff happens exactly there.
     pub fn step(&mut self) {
+        if self.timelines_enabled() {
+            self.step_timelines();
+        } else {
+            self.step_here();
+        }
+    }
+
+    /// Step the timeline shown now (the whole universe, without timelines).
+    pub(crate) fn step_here(&mut self) {
         let docking_neighbours = self.docking_neighbours();
         for &e in &docking_neighbours {
             self.wake(e);
         }
-        for e in self.vessels() {
+        for e in self.vessels_here() {
             if self.rails_reentry(e).is_some_and(|t| t <= self.ut()) {
                 self.wake(e);
             }
@@ -1969,7 +1986,10 @@ impl Universe {
         }
         let now = self.tick().0;
         let mut ticks = warp;
-        for e in self.vessels() {
+        if let Some(stop) = self.catch_up_stop() {
+            ticks = ticks.min(stop.0.saturating_sub(now));
+        }
+        for e in self.vessels_here() {
             let mut stops = Vec::new();
             if let Some(reentry) = self.rails_reentry(e) {
                 stops.push(reentry);
@@ -1999,7 +2019,7 @@ impl Universe {
         let start_ut = now as f64 * dt;
         let mut powered_vessels: Vec<Entity> = {
             let mut q = self.world.query_filtered::<Entity, With<flight::Powered>>();
-            q.iter(&self.world).collect()
+            q.iter(&self.world).filter(|e| self.here(*e)).collect()
         };
         let mut to_rails = Vec::new();
         let heat = self
@@ -2610,7 +2630,7 @@ impl Universe {
                 Option<&vessels::CrashedAt>,
             )>();
             q.iter(&self.world)
-                .filter(|(_, p, _, _)| p.crashed)
+                .filter(|(e, p, _, _)| p.crashed && self.here(*e))
                 .map(|(e, _, debris, at)| (e, debris, at.map(|a| a.0)))
                 .collect()
         };
@@ -2675,7 +2695,7 @@ impl Universe {
 mod tests {
     use super::*;
 
-    fn kerbin_def() -> ose_data::CelestialBody {
+    pub(crate) fn kerbin_def() -> ose_data::CelestialBody {
         use ose_data::{CelestialBody as BodyDef, BIG_G, G0};
         let mu = 1.00034160493135 * G0 * 600_000.0 * 600_000.0;
         BodyDef {
