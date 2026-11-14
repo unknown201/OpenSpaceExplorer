@@ -783,7 +783,12 @@ async fn main() -> anyhow::Result<()> {
 
     let app = app.layer(web::compression());
     let listener = tokio::net::TcpListener::bind(&args.listen).await?;
-    tracing::info!(listen = %args.listen, "server listening");
+    // The bound address, so `--listen 127.0.0.1:0` reports the port the OS picked.
+    let bound = listener
+        .local_addr()
+        .map(|a| a.to_string())
+        .unwrap_or_else(|_| args.listen.to_string());
+    tracing::info!(listen = %bound, "server listening");
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),

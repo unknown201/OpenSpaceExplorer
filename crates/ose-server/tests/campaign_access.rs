@@ -21,13 +21,13 @@ async fn start(dir: &Path) -> (Server, String) {
 async fn start_with_mail(dir: &Path, mail: Option<u16>) -> (Server, String) {
     start_config(dir, mail, true).await
 }
+/// Start a server on a port the OS picks, and wait for it to log the address it bound.
+///
+/// Picking a free port first and polling it raced in two ways: a parallel test (or its mail sink)
+/// could take the port, and polling a port in the ephemeral range can connect the probe to itself.
+/// Either looked like a ready server, and the test's first real connection was then refused.
 async fn start_config(dir: &Path, mail: Option<u16>, allow_guests: bool) -> (Server, String) {
-    let port = std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
-    let addr = format!("127.0.0.1:{port}");
+    use std::io::BufRead;
     let mut command = Command::new(env!("CARGO_BIN_EXE_ose-server"));
     if allow_guests {
         command.arg("--allow-guest-accounts");
@@ -38,23 +38,45 @@ async fn start_config(dir: &Path, mail: Option<u16>, allow_guests: bool) -> (Ser
             .env("OSE_SMTP_PORT", port.to_string())
             .env("OSE_SMTP_FROM", "OpenSpaceExplorer <ose@example.com>");
     }
-    let child = command
-        .args(["--listen", &addr, "--save-interval-s", "3600", "--db"])
+    let mut child = command
+        .args([
+            "--listen",
+            "127.0.0.1:0",
+            "--save-interval-s",
+            "3600",
+            "--db",
+        ])
         .arg(dir.join("accounts.json"))
         .arg("--save")
         .arg(dir.join("save.json"))
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
+    let stdout = child.stdout.take().unwrap();
     let server = Server(child);
-    for _ in 0..200 {
-        if tokio::net::TcpStream::connect(&addr).await.is_ok() {
-            return (server, addr);
+    let (tx, rx) = std::sync::mpsc::channel();
+    // Keep draining the log after the address is found, so the server never blocks on a full pipe.
+    std::thread::spawn(move || {
+        for line in std::io::BufReader::new(stdout)
+            .lines()
+            .map_while(Result::ok)
+        {
+            if line.contains("server listening") {
+                let listen = serde_json::from_str::<serde_json::Value>(&line)
+                    .ok()
+                    .and_then(|v| v["fields"]["listen"].as_str().map(str::to_owned));
+                let _ = tx.send(listen);
+            }
         }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    panic!("server did not start");
+    });
+    let addr = tokio::task::spawn_blocking(move || rx.recv_timeout(Duration::from_secs(20)))
+        .await
+        .unwrap()
+        .ok()
+        .flatten()
+        .expect("server did not start");
+    (server, addr)
 }
 async fn connect(addr: &str, token: Option<String>) -> (Ws, S) {
     let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws"))
