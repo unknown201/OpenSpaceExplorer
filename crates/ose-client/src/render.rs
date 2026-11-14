@@ -733,6 +733,32 @@ impl DrawItem {
             haze: None,
         }
     }
+
+    /// Another model drawn at this item's pose with its look (light, paint, editor highlight), without its
+    /// animation or node turns: an engine's procedural shroud beside the engine.
+    pub fn companion(&self, model: String) -> DrawItem {
+        DrawItem {
+            emissive: self.emissive,
+            color: self.color,
+            fill_dir: self.fill_dir,
+            fill: self.fill,
+            ambient: self.ambient,
+            sun: self.sun,
+            glow: self.glow,
+            exposure: self.exposure,
+            true_metal: self.true_metal,
+            highlight: self.highlight,
+            paint: self.paint,
+            haze: self.haze,
+            ..DrawItem::lit(
+                model,
+                self.rel_pos_km,
+                self.rotation,
+                self.scale,
+                self.light_dir,
+            )
+        }
+    }
 }
 
 pub struct LineItem {

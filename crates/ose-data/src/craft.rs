@@ -45,7 +45,7 @@ impl Quat {
 /// Base and accent colours, sRGB bytes (the VAB's Colors tool).
 pub type Paint = ([u8; 3], [u8; 3]);
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct CraftPart {
     /// Stable id within the craft (the original part GUID when imported).
     pub guid: String,

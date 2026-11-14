@@ -104,18 +104,116 @@ pub fn piece_glb(
 ) -> Result<Vec<u8>, String> {
     let (pos, uv, tris) = piece_mesh(shape, def, k);
     let src = crate::wing_mesh::read_json(base)?;
-    let mut normals = vec![glam::Vec3::ZERO; pos.len()];
-    for t in tris.as_chunks::<3>().0 {
-        let [a, b, c] = t.map(|i| glam::Vec3::from_array(pos[i as usize]));
-        let n = (b - a).cross(c - a);
-        for i in t {
-            normals[*i as usize] += n;
-        }
-    }
-    let normals: Vec<[f32; 3]> = normals
-        .iter()
-        .map(|n| n.normalize_or(glam::Vec3::Y).to_array())
-        .collect();
+    Ok(mesh_glb(&pos, &uv, &tris, k, &src))
+}
+
+/// KSP2's `FairingsProceduralMat` (proceduralparts-shared_assets_all, shader OAB_Procedural_Fairings) as a
+/// glTF material: near-white albedo, fully metallic with smoothness from its gloss map, flat normals. Its
+/// paint mask is full on both channels; the base colour tint comes from `shroud_item`.
+fn procedural_fairing_material() -> Value {
+    json!({
+        "materials": [{
+            "name": "FairingsProceduralMat",
+            "pbrMetallicRoughness": {
+                "baseColorFactor": [1.0, 1.0, 1.0, 1.0],
+                "baseColorTexture": {"index": 0},
+                "metallicFactor": 1.0,
+                "roughnessFactor": 0.8,
+                "metallicRoughnessTexture": {"index": 1},
+            },
+            "normalTexture": {"index": 2},
+        }, {
+            "name": "FairingsProceduralMat_gutter",
+            "pbrMetallicRoughness": {
+                "baseColorFactor": [GUTTER_GREY, GUTTER_GREY, GUTTER_GREY, 1.0],
+                "metallicFactor": 0.0,
+                "roughnessFactor": 0.8,
+            },
+        }],
+        "textures": [
+            {"sampler": 0, "source": 0},
+            {"sampler": 0, "source": 1},
+            {"sampler": 0, "source": 2},
+        ],
+        "images": [
+            {"uri": "../textures/fairing_procedural_d.png", "name": "fairing_procedural_d"},
+            {"uri": "../textures/fairing_procedural_m.png", "name": "fairing_procedural_m"},
+            {"uri": "../textures/fairing_procedural_n.png", "name": "fairing_procedural_n"},
+        ],
+        "samplers": [{"magFilter": 9729, "minFilter": 9987, "wrapS": 10497, "wrapT": 10497}],
+    })
+}
+
+/// `_GutterColor` of `FairingsProceduralMat`: the seam lines along a panel's edges.
+const GUTTER_GREY: f64 = 0.36792;
+/// `_FairingGutterWidth`, in texture v (3 m of slant per unit): the seam band's width up the wall.
+const GUTTER_WIDTH_V: f64 = 0.008;
+
+/// The seam rings at the shroud's top and bottom edges (`UpdateMeshGutters` bounds the panel in v; u is
+/// unbounded on a shroud, so no vertical seams): thin bands a hair outside the wall.
+pub fn shroud_gutters(
+    shape: &FairingShape,
+    def: &FairingDef,
+) -> (Vec<[f32; 3]>, Vec<[f32; 2]>, Vec<u32>) {
+    let (lo, hi) = (shape.sections[0], shape.sections[shape.sections.len() - 1]);
+    let slant = ((hi.0 - lo.0).powi(2) + (hi.1 - lo.1).powi(2))
+        .sqrt()
+        .max(1e-6);
+    let f = (GUTTER_WIDTH_V * 3.0 / slant).min(0.5);
+    let at = |t: f64| (lo.0 + (hi.0 - lo.0) * t, (lo.1 + (hi.1 - lo.1) * t) + 0.004);
+    let band = |a: f64, b: f64| FairingShape {
+        sections: vec![at(a), at(b)],
+        capped: false,
+        pieces: 0,
+        ejection_force: 0.0,
+    };
+    let (mut pos, mut uv, mut tris) = piece_mesh(&band(0.0, f), def, 0);
+    let (p2, u2, t2) = piece_mesh(&band(1.0 - f, 1.0), def, 0);
+    let off = pos.len() as u32;
+    pos.extend(p2);
+    uv.extend(u2);
+    tris.extend(t2.iter().map(|i| i + off));
+    (pos, uv, tris)
+}
+
+/// The shroud's texture coordinates as `FairingPanel.SetArcPoints` lays them: u runs a ninth of the texture
+/// round the panel (`(panel + t) * 0.11111`), v is the slant length up the wall in metres over 3.
+pub fn shroud_uvs(shape: &FairingShape, def: &FairingDef) -> Vec<[f32; 2]> {
+    let (pos, uv, _) = piece_mesh(shape, def, 0);
+    let (lo, hi) = (shape.sections[0], shape.sections[shape.sections.len() - 1]);
+    let slant = ((hi.0 - lo.0).powi(2) + (hi.1 - lo.1).powi(2)).sqrt() as f32;
+    let height = (hi.0 - lo.0).max(1e-6) as f32;
+    pos.iter()
+        .zip(uv)
+        .map(|(p, t)| {
+            let up = (p[1] - (def.base_height + lo.0) as f32) / height;
+            [t[0] / 9.0, up * slant / 3.0]
+        })
+        .collect()
+}
+
+/// An engine's shroud as a GLB in KSP2's procedural fairing material.
+pub fn shroud_glb(shape: &FairingShape, def: &FairingDef) -> Vec<u8> {
+    let (pos, _, tris) = piece_mesh(shape, def, 0);
+    let uv = shroud_uvs(shape, def);
+    let (gp, gu, gt) = shroud_gutters(shape, def);
+    prims_glb(
+        &[(&pos, &uv, &tris, Some(0)), (&gp, &gu, &gt, Some(1))],
+        0,
+        &procedural_fairing_material(),
+    )
+}
+
+/// One panel's mesh as a GLB, with `src`'s materials, textures, images and samplers.
+fn mesh_glb(pos: &[[f32; 3]], uv: &[[f32; 2]], tris: &[u32], k: usize, src: &Value) -> Vec<u8> {
+    let material = src.get("materials").map(|_| 0);
+    prims_glb(&[(pos, uv, tris, material)], k, src)
+}
+
+/// A GLB of one node whose mesh holds `prims` (positions, uvs, triangles, material index).
+type Prim<'a> = (&'a [[f32; 3]], &'a [[f32; 2]], &'a [u32], Option<usize>);
+
+fn prims_glb(prims: &[Prim], k: usize, src: &Value) -> Vec<u8> {
     let mut bin: Vec<u8> = Vec::new();
     let mut views: Vec<Value> = Vec::new();
     let mut accessors: Vec<Value> = Vec::new();
@@ -131,47 +229,63 @@ pub fn piece_glb(
         accessors.len() - 1
     };
     let floats = |v: &[f32]| v.iter().flat_map(|f| f.to_le_bytes()).collect::<Vec<u8>>();
-    let mut lo = [f32::INFINITY; 3];
-    let mut hi = [f32::NEG_INFINITY; 3];
-    for p in &pos {
-        for i in 0..3 {
-            lo[i] = lo[i].min(p[i]);
-            hi[i] = hi[i].max(p[i]);
+    let mut primitives = Vec::new();
+    for (pos, uv, tris, material) in prims {
+        let mut normals = vec![glam::Vec3::ZERO; pos.len()];
+        for t in tris.as_chunks::<3>().0 {
+            let [a, b, c] = t.map(|i| glam::Vec3::from_array(pos[i as usize]));
+            let n = (b - a).cross(c - a);
+            for i in t {
+                normals[*i as usize] += n;
+            }
         }
+        let normals: Vec<[f32; 3]> = normals
+            .iter()
+            .map(|n| n.normalize_or(glam::Vec3::Y).to_array())
+            .collect();
+        let mut lo = [f32::INFINITY; 3];
+        let mut hi = [f32::NEG_INFINITY; 3];
+        for p in pos.iter() {
+            for i in 0..3 {
+                lo[i] = lo[i].min(p[i]);
+                hi[i] = hi[i].max(p[i]);
+            }
+        }
+        let p = push(
+            floats(pos.as_flattened()),
+            34962,
+            json!({"componentType": 5126, "count": pos.len(), "type": "VEC3", "min": lo, "max": hi}),
+        );
+        let nn = push(
+            floats(normals.as_flattened()),
+            34962,
+            json!({"componentType": 5126, "count": normals.len(), "type": "VEC3"}),
+        );
+        let t = push(
+            floats(uv.as_flattened()),
+            34962,
+            json!({"componentType": 5126, "count": uv.len(), "type": "VEC2"}),
+        );
+        let i = push(
+            tris.iter().flat_map(|i| i.to_le_bytes()).collect(),
+            34963,
+            json!({"componentType": 5125, "count": tris.len(), "type": "SCALAR"}),
+        );
+        let mut prim =
+            json!({"attributes": {"POSITION": p, "NORMAL": nn, "TEXCOORD_0": t}, "indices": i});
+        if let Some(m) = material {
+            prim["material"] = json!(m);
+        }
+        primitives.push(prim);
     }
-    let p = push(
-        floats(pos.as_flattened()),
-        34962,
-        json!({"componentType": 5126, "count": pos.len(), "type": "VEC3", "min": lo, "max": hi}),
-    );
-    let nn = push(
-        floats(normals.as_flattened()),
-        34962,
-        json!({"componentType": 5126, "count": normals.len(), "type": "VEC3"}),
-    );
-    let t = push(
-        floats(uv.as_flattened()),
-        34962,
-        json!({"componentType": 5126, "count": uv.len(), "type": "VEC2"}),
-    );
-    let i = push(
-        tris.iter().flat_map(|i| i.to_le_bytes()).collect(),
-        34963,
-        json!({"componentType": 5125, "count": tris.len(), "type": "SCALAR"}),
-    );
     while !bin.len().is_multiple_of(4) {
         bin.push(0);
-    }
-    let mut prim =
-        json!({"attributes": {"POSITION": p, "NORMAL": nn, "TEXCOORD_0": t}, "indices": i});
-    if src.get("materials").is_some() {
-        prim["material"] = json!(0);
     }
     let mut doc = json!({
         "asset": {"version": "2.0", "generator": "ose fairing_mesh"},
         "scene": 0, "scenes": [{"nodes": [0]}],
         "nodes": [{"name": format!("fairing_panel_{k}"), "mesh": 0}],
-        "meshes": [{"name": format!("fairing_panel_{k}"), "primitives": [prim]}],
+        "meshes": [{"name": format!("fairing_panel_{k}"), "primitives": primitives}],
         "accessors": accessors, "bufferViews": views, "buffers": [{"byteLength": bin.len()}],
     });
     for key in ["materials", "textures", "images", "samplers"] {
@@ -179,7 +293,7 @@ pub fn piece_glb(
             doc[key] = v.clone();
         }
     }
-    Ok(crate::wing_mesh::glb_bytes(&doc, &bin))
+    crate::wing_mesh::glb_bytes(&doc, &bin)
 }
 
 /// Ask for every panel of part `p`'s shaped fairing; their names, once all are loaded.
@@ -198,6 +312,70 @@ pub fn models_for(
         gpu.request_built_model(name, BASE_URL, move |base| piece_glb(base, &s, &d, k));
     }
     names.iter().all(|n| gpu.has_model(n)).then_some(names)
+}
+
+/// An engine's shroud as the original builds it (`ose_data::engine_shroud`): one panel, a lathe from the
+/// bottom ring (`target_radius`) up to the top ring, in the part's frame.
+pub fn shroud_shape(
+    d: &ose_data::engine_shroud::ShroudDef,
+    target_radius: f64,
+) -> (FairingShape, FairingDef) {
+    let [lo, hi] = d.rings(target_radius);
+    let shape = FairingShape {
+        sections: vec![(0.0, lo.1), (hi.0 - lo.0, hi.1)],
+        capped: false,
+        pieces: 0,
+        ejection_force: 0.0,
+    };
+    let def = FairingDef {
+        mass_t: 0.0,
+        base_radius: d.base_radius,
+        cap_radius: 0.0,
+        max_radius: d.base_radius.max(target_radius),
+        mass_area_ratio: 0.0,
+        height_min: 0.0,
+        height_max: d.height,
+        side_count: d.side_count,
+        length_snap: 0.0,
+        radius_snap: 0.0,
+        ejection_force: 0.0,
+        pieces: 0,
+        base_height: lo.0,
+    };
+    (shape, def)
+}
+
+/// The model name of `part_id`'s shroud flaring to `target_radius`.
+pub fn shroud_model_name(part_id: &str, target_radius: f64) -> String {
+    format!("shroud:{part_id}:{:.4}", target_radius)
+}
+
+/// Part `i`'s engine shroud model, when a part hangs from its shroud node, once it is loaded.
+#[cfg(target_arch = "wasm32")]
+pub fn shroud_model_for(
+    gpu: &mut crate::render::Renderer,
+    craft: &ose_data::craft::Craft,
+    i: usize,
+) -> Option<String> {
+    let (d, target) = ose_data::engine_shroud::shroud_for(craft, i)?;
+    let name = shroud_model_name(&craft.parts[i].part_id, target);
+    let (shape, def) = shroud_shape(d, target);
+    // The base GLB is only fetched to drive the build; the shroud carries its own material.
+    gpu.request_built_model(&name, BASE_URL, move |_| Ok(shroud_glb(&shape, &def)));
+    gpu.has_model(&name).then_some(name)
+}
+
+/// The shroud drawn beside its engine's draw item: the engine's pose and look, the wall tinted in the vessel's
+/// base colour (`Module_Color` paints `FairingsProceduralMat`, whose paint mask covers the whole wall).
+#[cfg(target_arch = "wasm32")]
+pub fn shroud_item(engine: &crate::render::DrawItem, model: String) -> crate::render::DrawItem {
+    let mut it = engine.companion(model);
+    if let Some((base, _)) = engine.paint {
+        for (c, b) in it.color.iter_mut().zip(base) {
+            *c *= b;
+        }
+    }
+    it
 }
 
 #[cfg(test)]
@@ -220,5 +398,59 @@ mod tests {
         let shroud = FairingShape { pieces: 0, ..s };
         assert_eq!(piece_count(&shroud), 1);
         assert_eq!(piece_direction(&shroud, 0), glam::Vec3::Y);
+    }
+
+    #[test]
+    fn swivel_shroud_mesh_wraps_the_engine_between_its_nodes() {
+        let d = ose_data::engine_shroud::def("engine_1v_methalox_swivel").unwrap();
+        let (shape, def) = shroud_shape(d, 0.625);
+        let (pos, _, tris) = piece_mesh(&shape, &def, 0);
+        assert!(!tris.is_empty());
+        let ys: Vec<f32> = pos.iter().map(|p| p[1]).collect();
+        let lo = ys.iter().copied().fold(f32::INFINITY, f32::min);
+        let hi = ys.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        // KSP2's saved Swivel shroud: y 0.680 down to -1.000 (the bottom node). The prefab's static mesh,
+        // drawn before, spanned -1.868..-0.133 and left the engine's top bare.
+        assert!(
+            (hi - 0.680).abs() < 2e-3 && (lo + 1.0).abs() < 2e-3,
+            "{lo}..{hi}"
+        );
+        let r = pos
+            .iter()
+            .map(|p| (p[0] * p[0] + p[2] * p[2]).sqrt())
+            .fold(0.0, f32::max);
+        assert!((r - 0.625).abs() < 1e-3);
+    }
+
+    #[test]
+    fn shroud_uses_ksp2_procedural_fairing_material_and_uvs() {
+        let d = ose_data::engine_shroud::def("engine_1v_methalox_swivel").unwrap();
+        let (shape, def) = shroud_shape(d, 0.625);
+        let uv = shroud_uvs(&shape, &def);
+        // u spans a ninth of the texture round the shroud, v the 1.68 m slant over 3
+        let umax = uv.iter().map(|t| t[0]).fold(0.0, f32::max);
+        let vmax = uv.iter().map(|t| t[1]).fold(0.0, f32::max);
+        assert!((umax - 1.0 / 9.0).abs() < 1e-5, "{umax}");
+        assert!((vmax - 1.6801 / 3.0).abs() < 1e-3, "{vmax}");
+        let glb = shroud_glb(&shape, &def);
+        let doc = crate::wing_mesh::read_json(&glb).unwrap();
+        assert_eq!(doc["materials"][0]["name"], "FairingsProceduralMat");
+        assert_eq!(
+            doc["images"][0]["uri"],
+            "../textures/fairing_procedural_d.png"
+        );
+        assert_eq!(doc["meshes"][0]["primitives"][0]["material"], 0);
+        // seam rings at the top and bottom edges, in the gutter grey
+        assert_eq!(doc["meshes"][0]["primitives"][1]["material"], 1);
+        let (gp, _, gt) = shroud_gutters(&shape, &def);
+        assert!(!gt.is_empty());
+        let ys: Vec<f32> = gp.iter().map(|p| p[1]).collect();
+        assert!(
+            ys.iter().any(|y| (y + 1.0).abs() < 1e-3)
+                && ys.iter().any(|y| (y - 0.6801).abs() < 1e-3)
+        );
+        assert!(ys
+            .iter()
+            .all(|y| (y + 1.0).abs() < 0.03 || (y - 0.6801).abs() < 0.03));
     }
 }
