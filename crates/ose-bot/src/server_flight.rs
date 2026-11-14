@@ -218,13 +218,14 @@ pub async fn warp_until_around(
 
 /// Warp until the vessel has flown its planned burn at `burn_ut` (the server flies nodes with the engines,
 /// at physics warp, from half the burn time before): its time is past the node and its trajectory has no
-/// maneuver left. Then drop back to real time.
+/// maneuver left. Then drop back to real time. Returns the server's prediction from the orbit actually
+/// flown: an engine burn never lands exactly on the impulsive node it was planned as.
 pub async fn warp_until_flown(
     c: &mut Client,
     vessel: u64,
     burn_ut: f64,
     timeout: Duration,
-) -> Result<()> {
+) -> Result<Vec<TrajectoryPatch>> {
     c.request_warp(COAST_WARP).await?;
     let result = c
         .wait_for(timeout, "the planned burn to be flown", |l, m| match m {
@@ -237,7 +238,7 @@ pub async fn warp_until_flown(
                     .and_then(|v| v.flight.as_ref())
                     .is_none_or(|f| f.burn_left_mps.is_none()) =>
             {
-                Some(())
+                Some(patches.clone())
             }
             _ => None,
         })

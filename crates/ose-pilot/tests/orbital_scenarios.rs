@@ -3,80 +3,13 @@
 //! - T4: a shuttle docked at one station undocks, transfers to a depot at another altitude, and docks.
 //! - T9: two craft go for the same port at the same time. No traffic control: one wins, the other
 //!   fails cleanly, and nothing panics or gets stuck.
-use bevy_ecs::entity::Entity;
-use ose_data::craft::Craft;
 use ose_pilot::{
-    mission::{Catalog, Mission, MissionParams},
+    mission::{Mission, MissionParams},
     Status,
 };
-use serde::Deserialize;
 
 mod common;
-use common::{in_orbit, spec, world, World};
-
-#[derive(Deserialize)]
-struct Modules {
-    zarya: Craft,
-    unity: Craft,
-    zvezda: Craft,
-}
-
-fn modules() -> Modules {
-    serde_json::from_str(include_str!("data/orbital-modules.json")).unwrap()
-}
-
-/// A copy of a craft whose part identities don't collide with the original's.
-fn renamed(c: &Craft, suffix: &str) -> Craft {
-    let mut c = c.clone();
-    c.name = format!("{}{suffix}", c.name);
-    for p in &mut c.parts {
-        p.guid = format!("{}{suffix}", p.guid);
-    }
-    c
-}
-
-/// Fly the missions together until each one ends, or the time runs out.
-fn fly(w: &mut World, missions: &mut [Mission], limit_s: f64) -> Vec<Status> {
-    let (defs, res) = (w.defs.clone(), w.resources.clone());
-    let spec_for = |c: &Craft| spec(c, &defs, &res);
-    let catalog = Catalog {
-        defs: &defs,
-        resources: &res,
-        spec: &spec_for,
-    };
-    let start = w.u.ut();
-    let mut results = vec![Status::Running; missions.len()];
-    while results.contains(&Status::Running) {
-        for (m, result) in missions.iter_mut().zip(results.iter_mut()) {
-            if *result == Status::Running {
-                *result = m.update(&mut w.u, &catalog);
-            }
-        }
-        assert!(
-            w.u.ut() - start < limit_s,
-            "missions still running after {limit_s} s: {:?}",
-            missions
-                .iter()
-                .map(|m| (m.leg(), m.log.clone()))
-                .collect::<Vec<_>>()
-        );
-        let warp = missions
-            .iter()
-            .zip(&results)
-            .filter(|(_, r)| **r == Status::Running)
-            .map(|(m, _)| m.suggested_warp(&w.u))
-            .min()
-            .unwrap_or(1);
-        w.u.set_warp(warp);
-        w.u.step();
-        w.u.dock_latched(&defs, &res, &spec_for);
-    }
-    results
-}
-
-fn links(w: &World, e: Entity) -> usize {
-    w.u.docked_links(e).len()
-}
+use common::{fly, in_orbit, links, modules, renamed, world};
 
 #[test]
 #[cfg_attr(

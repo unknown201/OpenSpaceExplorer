@@ -15,6 +15,7 @@ pub mod ascent;
 pub mod burn;
 pub mod depart;
 pub mod mission;
+pub mod soi;
 
 /// Attitude commands and RCS translation are in the control point's axes, which differ from the
 /// craft's own axes after "control from here" or undocking (a shuttle can come away controlled

@@ -3,10 +3,15 @@
 use bevy_ecs::entity::Entity;
 use ose_data::{craft::Craft, CelestialBody, PartDef, ResourceDef, ResourceKind};
 use ose_math::DVec3;
+use ose_pilot::{
+    mission::{Catalog, Mission},
+    Status,
+};
 use ose_sim::{
     flight::{FlightSpec, StageInertia},
     Universe,
 };
+use serde::Deserialize;
 
 pub struct World {
     pub u: Universe,
@@ -130,9 +135,21 @@ pub fn spec(c: &Craft, defs: &[PartDef], resources: &[ResourceDef]) -> FlightSpe
 /// Test setup only: place a craft in a circular equatorial orbit at `altitude_m`, `phase_deg` around
 /// from +x, facing prograde. The pilot never places vessels; it flies them.
 pub fn in_orbit(w: &mut World, craft: &Craft, altitude_m: f64, phase_deg: f64) -> Entity {
+    let kerbin = w.kerbin;
+    in_orbit_around(w, kerbin, craft, altitude_m, phase_deg)
+}
+
+/// [`in_orbit`] around any body, e.g. the Mun.
+pub fn in_orbit_around(
+    w: &mut World,
+    around: Entity,
+    craft: &Craft,
+    altitude_m: f64,
+    phase_deg: f64,
+) -> Entity {
     let body =
         w.u.world
-            .get::<ose_sim::bodies::Body>(w.kerbin)
+            .get::<ose_sim::bodies::Body>(around)
             .unwrap()
             .clone();
     let radius = body.radius_m + altitude_m;
@@ -140,10 +157,87 @@ pub fn in_orbit(w: &mut World, craft: &Craft, altitude_m: f64, phase_deg: f64) -
     let r = DVec3::new(c, s, 0.0) * radius;
     let speed = (body.mu / radius).sqrt();
     let v = DVec3::new(-s, c, 0.0) * speed;
-    let e = w.u.spawn_vessel(&craft.name, w.kerbin, r, v);
+    let e = w.u.spawn_vessel(&craft.name, around, r, v);
     let (defs, res) = (w.defs.clone(), w.resources.clone());
     w.u.rebuild_vessel(e, craft, r, v, v.normalized(), vec![], &defs, &res, &|c| {
         spec(c, &defs, &res)
     });
+    e
+}
+
+#[derive(Deserialize)]
+pub struct Modules {
+    pub zarya: Craft,
+    pub unity: Craft,
+    pub zvezda: Craft,
+}
+
+pub fn modules() -> Modules {
+    serde_json::from_str(include_str!("../data/orbital-modules.json")).unwrap()
+}
+
+/// A copy of a craft whose part identities don't collide with the original's.
+pub fn renamed(c: &Craft, suffix: &str) -> Craft {
+    let mut c = c.clone();
+    c.name = format!("{}{suffix}", c.name);
+    for p in &mut c.parts {
+        p.guid = format!("{}{suffix}", p.guid);
+    }
+    c
+}
+
+/// Fly the missions together until each one ends, or the time runs out.
+pub fn fly(w: &mut World, missions: &mut [Mission], limit_s: f64) -> Vec<Status> {
+    let (defs, res) = (w.defs.clone(), w.resources.clone());
+    let spec_for = |c: &Craft| spec(c, &defs, &res);
+    let catalog = Catalog {
+        defs: &defs,
+        resources: &res,
+        spec: &spec_for,
+    };
+    let start = w.u.ut();
+    let mut results = vec![Status::Running; missions.len()];
+    while results.contains(&Status::Running) {
+        for (m, result) in missions.iter_mut().zip(results.iter_mut()) {
+            if *result == Status::Running {
+                *result = m.update(&mut w.u, &catalog);
+            }
+        }
+        assert!(
+            w.u.ut() - start < limit_s,
+            "missions still running after {limit_s} s: {:?}",
+            missions
+                .iter()
+                .map(|m| (m.leg(), m.log.clone()))
+                .collect::<Vec<_>>()
+        );
+        let warp = missions
+            .iter()
+            .zip(&results)
+            .filter(|(_, r)| **r == Status::Running)
+            .map(|(m, _)| m.suggested_warp(&w.u))
+            .min()
+            .unwrap_or(1);
+        w.u.set_warp(warp);
+        w.u.step();
+        w.u.dock_latched(&defs, &res, &spec_for);
+    }
+    results
+}
+
+pub fn links(w: &World, e: Entity) -> usize {
+    w.u.docked_links(e).len()
+}
+
+/// Test setup only: stand a craft on the KSC pad.
+pub fn on_pad(w: &mut World, craft: &Craft) -> Entity {
+    let s = spec(craft, &w.defs, &w.resources);
+    let e =
+        w.u.spawn_powered_on_surface(&craft.name, w.kerbin, s, -0.6836, -74.8198);
+    w.u.set_craft(e, craft.clone());
+    w.u.set_structure(
+        e,
+        ose_sim::structure::Structure::build(craft, &w.defs, &w.resources),
+    );
     e
 }

@@ -1,9 +1,12 @@
 //! A whole delivery flight: optional ascent, a fuel-budgeted transfer to the target with course
 //! corrections, braking at the encounter, then the RCS approach and docking.
 //!
-//! Same orbit-to-orbit steps the ISS assembly test pilot used, made tick-driven. One central body
-//! for now; departures, SOI changes and launch windows are R3-R5 of `docs/rendezvous-v2-plan.md`.
+//! Same orbit-to-orbit steps the ISS assembly test pilot used, made tick-driven. When the target
+//! orbits another body (a Mun station from LKO, or back), the pilot first moves into the target's
+//! sphere of influence with [`SoiTransfer`], one hop at a time, then rendezvouses there.
+//! Launch windows are R5 of `docs/rendezvous-v2-plan.md`.
 use crate::depart::Depart;
+use crate::soi::{parent, SoiTransfer};
 use crate::{
     approach::Approach, ascent::Ascent, ascent::AscentParams, body, burn::Burn, orbit, state,
     Status,
@@ -29,8 +32,9 @@ pub struct MissionParams {
     pub target: Entity,
     pub target_port: String,
     pub own_port: String,
-    /// Transfers must keep periapsis above this altitude (m), e.g. the top of the atmosphere.
-    pub safe_altitude_m: f64,
+    /// Transfers must keep periapsis above this altitude (m). `None`: just above the atmosphere, or
+    /// 10 km over an airless body.
+    pub safe_altitude_m: Option<f64>,
     /// Fraction of the vessel's vacuum delta-v a plan may spend.
     pub budget_fraction: f64,
     /// Lead time between planning and the transfer burn (s).
@@ -50,7 +54,7 @@ impl MissionParams {
             target,
             target_port: target_port.into(),
             own_port: own_port.into(),
-            safe_altitude_m: 71_000.0,
+            safe_altitude_m: None,
             budget_fraction: 0.9,
             plan_lead_s: 360.0,
             accept_miss_m: 1_500.0,
@@ -66,6 +70,7 @@ pub enum Leg {
     Depart,
     Ascent,
     Plan,
+    SoiTransfer,
     Transfer,
     Brake,
     Approach,
@@ -77,6 +82,7 @@ enum Phase {
     Depart(Depart),
     Ascent(Ascent),
     Plan,
+    Soi(SoiTransfer),
     Transfer(Burn, f64),
     Brake(Burn),
     Approach(Approach),
@@ -121,6 +127,7 @@ impl Mission {
             Phase::Depart(_) => Leg::Depart,
             Phase::Ascent(_) => Leg::Ascent,
             Phase::Plan => Leg::Plan,
+            Phase::Soi(_) => Leg::SoiTransfer,
             Phase::Transfer(..) => Leg::Transfer,
             Phase::Brake(_) => Leg::Brake,
             Phase::Approach(_) => Leg::Approach,
@@ -172,6 +179,26 @@ impl Mission {
                 }
             },
             Phase::Plan => self.plan(u, e, catalog),
+            Phase::Soi(s) => {
+                let status = s.update(u, e);
+                self.log.append(&mut s.log);
+                match status {
+                    Status::Running => Status::Running,
+                    Status::Failed(why) => self.fail(why),
+                    Status::Done => {
+                        if let (Some(o), Some((_, _, radius))) = (orbit(u, e), body(u, e)) {
+                            self.log.push(format!(
+                                "CAPTURED {:.0} x {:.0} km at UT {t:.0}",
+                                (o.periapsis() - radius) / 1000.0,
+                                (o.apoapsis() - radius) / 1000.0
+                            ));
+                        }
+                        self.encounter = None;
+                        self.phase = Phase::Plan;
+                        Status::Running
+                    }
+                }
+            }
             Phase::Transfer(burn, arrival) => {
                 let arrival = *arrival;
                 match burn.update(u, e) {
@@ -238,7 +265,59 @@ impl Mission {
         }
     }
 
+    /// The next sphere-of-influence hop toward the target's body, if it orbits another one: down to
+    /// a moon of this body, up to this body's parent, or up first on the way to a sibling moon.
+    /// Returns the body to go to, the circular altitude to end at, and the orbit sense to match.
+    fn hop(
+        &self,
+        u: &Universe,
+        e: Entity,
+    ) -> Result<Option<(Entity, f64, ose_math::DVec3)>, String> {
+        let (Some((here, _, _)), Some((there, _, there_radius))) =
+            (body(u, e), body(u, self.params.target))
+        else {
+            return Err("lost the target".into());
+        };
+        if here == there {
+            return Ok(None);
+        }
+        let target = orbit(u, self.params.target).ok_or("lost the target")?;
+        if parent(u, there) == Some(here) || parent(u, here) == Some(there) {
+            return Ok(Some((
+                there,
+                target.semi_major_axis() - there_radius,
+                target.frame.z,
+            )));
+        }
+        let Some(up) = parent(u, here) else {
+            return Err("no route between these bodies".into());
+        };
+        // Park in a low orbit of the parent, the way the planet's other moons orbit.
+        let sense = u
+            .world
+            .get::<ose_sim::bodies::OnRails>(here)
+            .map(|r| r.0.frame.z)
+            .unwrap_or(target.frame.z);
+        Ok(Some((up, safe_altitude(u, up) + 30_000.0, sense)))
+    }
+
     fn plan(&mut self, u: &mut Universe, e: Entity, catalog: &Catalog) -> Status {
+        match self.hop(u, e) {
+            Err(why) => return self.fail(why),
+            Ok(Some((to, alt, sense))) => {
+                let name = |b| {
+                    u.world
+                        .get::<ose_sim::bodies::Body>(b)
+                        .map(|b| b.id.clone())
+                        .unwrap_or_default()
+                };
+                self.log
+                    .push(format!("SOI to {} at {:.0} km", name(to), alt / 1000.0));
+                self.phase = Phase::Soi(SoiTransfer::new(to, alt, sense));
+                return Status::Running;
+            }
+            Ok(None) => {}
+        }
         self.corrections += 1;
         let (Some(own), Some(target), Some((_, _, radius))) =
             (orbit(u, e), orbit(u, self.params.target), body(u, e))
@@ -267,7 +346,11 @@ impl Mission {
             .total_vacuum_mps
             * self.params.budget_fraction;
         let depart = u.ut() + self.params.plan_lead_s;
-        let floor = radius + self.params.safe_altitude_m;
+        let floor = radius
+            + self
+                .params
+                .safe_altitude_m
+                .unwrap_or_else(|| safe_altitude(u, body(u, e).unwrap().0));
         let plan = self
             .encounter
             .and_then(|arrival| rendezvous::correction(own, target, depart, arrival, floor, budget))
@@ -302,7 +385,16 @@ impl Mission {
             Phase::Ascent(a) => a.suggested_warp(),
             Phase::Transfer(b, _) | Phase::Brake(b) => b.suggested_warp(u, e),
             Phase::Approach(a) => a.suggested_warp(),
+            Phase::Soi(s) => s.suggested_warp(u, e),
             _ => 1,
         }
     }
+}
+
+/// The lowest altitude a transfer may pass at: just above the atmosphere, or 10 km over an airless
+/// body (clear of the Mun's highest peaks).
+pub fn safe_altitude(u: &Universe, b: Entity) -> f64 {
+    u.atmosphere(b)
+        .map(|a| a.depth_m + 1_000.0)
+        .unwrap_or(10_000.0)
 }
