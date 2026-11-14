@@ -87,7 +87,7 @@ impl Universe {
         let (r_site, _) =
             flight::surface_state_at(&b, station.lat_deg, station.lon_deg, station.altitude_m, ut);
         let ksc = bodies::star_space_state(&self.world, station.body, ut).0 + r_site;
-        let vessels = self.vessels();
+        let vessels = self.vessels_here();
         let mut nodes: Vec<(Option<Entity>, DVec3, f64)> = vec![(None, ksc, station.range_m)];
         for &e in &vessels {
             if self.world.get::<crew::EvaKerbal>(e).is_some() {

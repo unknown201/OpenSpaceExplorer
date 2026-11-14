@@ -2,8 +2,8 @@
 //!
 //! - `/health`: plain text with the current tick.
 //! - `/ws`: the protocol session (`ose-net`): `Hello` -> `Welcome` + `BodyCatalog`, then `TimeState` and
-//!   `Snapshot` streamed at `SNAPSHOT_HZ`; `RequestWarp` sets the shared warp factor (lowest-wins arbitration
-//!   comes with multiplayer in Phase 4).
+//!   `Snapshot` streamed at `SNAPSHOT_HZ`; `RequestWarp` sets the player's warp (each player's own:
+//!   `timelines.rs`).
 //! - With `--static-dir`, also serves the built web client so one process is the whole deployment.
 //!
 //! The Kerbol system is embedded from `assets/own/kerbol-system.json` (bodies only) and can be overridden
@@ -21,6 +21,7 @@ mod rooms;
 mod save;
 mod science;
 mod streaming;
+mod timelines;
 mod web;
 
 use axum::{
@@ -403,7 +404,7 @@ struct Shared {
     crafts: Arc<Mutex<Vec<save::SavedCraft>>>,
     /// Display names by player id for this process lifetime.
     names: Arc<Mutex<std::collections::HashMap<u64, String>>>,
-    /// Warp each connected player is willing to run at; the universe runs at the minimum (lowest wins).
+    /// Warp each connected player asks for; players sharing a time run at their lowest (`timelines.rs`).
     warp_requests: Mutex<std::collections::HashMap<u64, u32>>,
     connections: Arc<Mutex<std::collections::HashMap<u64, usize>>>,
     /// What a new campaign's universe is built from, the campaigns waiting to be resumed (shared by every
@@ -431,51 +432,94 @@ struct Shared {
     rooms: Arc<rooms::Rooms>,
     /// Set when the room is put away (its campaign shelved): its clock and streams stop.
     closed: std::sync::atomic::AtomicBool,
+    /// Held while a player's time is shown for their message, or a step runs through the timelines one by one
+    /// (`timelines.rs`): nothing else switches the time shown meanwhile.
+    turn: Mutex<()>,
 }
 
-/// Apply lowest-wins warp arbitration. Returns (effective warp, the player holding it down, if any).
+/// Apply lowest-wins warp arbitration. Returns (effective warp, the player holding it down, if any), for the
+/// time shown now.
 fn apply_warp(s: &Shared) -> (u32, Option<u64>) {
+    let mut all = apply_warps(s);
+    let u = s.universe.lock().expect("sim lock");
+    let t = u.active_timeline();
+    drop(u);
+    all.remove(&t).unwrap_or((1, None))
+}
+
+/// Apply lowest-wins warp arbitration in each time among the players sharing it (`timelines.rs`; one for
+/// everyone in a room where nobody has warped apart). Returns each timeline's (effective warp, the player
+/// holding it down, if any).
+fn apply_warps(s: &Shared) -> std::collections::HashMap<u32, (u32, Option<u64>)> {
+    timelines::settle(s);
     let playing = s.playing.lock().expect("playing lock").clone();
-    let reqs = s.warp_requests.lock().expect("warp lock");
-    let (warp, holder) = match reqs
+    let reqs: Vec<(u64, u32)> = s
+        .warp_requests
+        .lock()
+        .expect("warp lock")
         .iter()
         .filter(|(p, _)| playing.contains(p))
-        .min_by_key(|(_, &w)| w)
-    {
-        Some((&p, &w)) => (w, Some(p)),
-        None => (1, None),
-    };
-    let max = reqs
-        .iter()
-        .filter(|(p, _)| playing.contains(p))
-        .map(|(_, &w)| w)
-        .max()
-        .unwrap_or(1);
-    drop(reqs);
-    let requested = warp;
+        .map(|(&p, &w)| (p, w))
+        .collect();
     // the vessels players are flying set KSP2's height limit on warp (the active vessel there)
-    let flown: Vec<u64> = s
+    let flown: Vec<(u64, u64)> = s
         .flying
         .lock()
         .expect("flying lock")
         .iter()
         .filter(|(p, _)| playing.contains(p))
-        .map(|(_, &id)| id)
+        .map(|(&p, &id)| (p, id))
         .collect();
-    let focus: Vec<bevy_ecs::entity::Entity> = s
+    let entities: std::collections::HashMap<u64, bevy_ecs::entity::Entity> = s
         .vessels
         .lock()
         .expect("vessels lock")
         .iter()
-        .filter(|(_, id, _)| flown.contains(id))
-        .map(|&(e, _, _)| e)
+        .map(|&(e, id, _)| (id, e))
         .collect();
     let mut u = s.universe.lock().expect("sim lock");
-    u.set_warp_focus(focus);
-    u.set_warp(warp);
-    let warp = u.warp();
-    // only another player's lower request counts as "holding warp down"; the physics cap does not
-    (warp, if max > requested { holder } else { None })
+    let mut out = std::collections::HashMap::new();
+    let back = u.active_timeline();
+    let groups: Vec<(u32, Vec<u64>)> = if u.timelines_enabled() {
+        let mut by: std::collections::BTreeMap<u32, Vec<u64>> = u
+            .timeline_ids()
+            .into_iter()
+            .map(|t| (t, Vec::new()))
+            .collect();
+        for &p in &playing {
+            by.entry(timelines::of(&mut u, p)).or_default().push(p);
+        }
+        by.into_iter().collect()
+    } else {
+        vec![(0, playing.iter().copied().collect())]
+    };
+    for (t, members) in groups {
+        if !u.enter(t) {
+            continue;
+        }
+        // a time catching up with another runs as fast as it can (`ose_sim::timelines`)
+        if u.timeline_clock(t).is_some_and(|c| c.catching_up.is_some()) {
+            out.insert(t, (u.warp(), None));
+            continue;
+        }
+        let mine: Vec<&(u64, u32)> = reqs.iter().filter(|(p, _)| members.contains(p)).collect();
+        let (warp, holder) = match mine.iter().min_by_key(|(_, w)| *w) {
+            Some(&&(p, w)) => (w, Some(p)),
+            None => (1, None),
+        };
+        let max = mine.iter().map(|(_, w)| *w).max().unwrap_or(1);
+        let focus: Vec<bevy_ecs::entity::Entity> = flown
+            .iter()
+            .filter(|(p, _)| members.contains(p))
+            .filter_map(|(_, id)| entities.get(id).copied())
+            .collect();
+        u.set_warp_focus(focus);
+        u.set_warp(warp);
+        // only another player's lower request counts as "holding warp down"; the physics cap does not
+        out.insert(t, (u.warp(), if max > warp { holder } else { None }));
+    }
+    u.enter(back);
+    out
 }
 
 fn elements(o: &ose_math::Orbit) -> OrbitElements {
@@ -686,6 +730,7 @@ async fn main() -> anyhow::Result<()> {
         recorder: Mutex::new(replay::Recorder::default()),
         rooms: Arc::default(),
         closed: std::sync::atomic::AtomicBool::new(false),
+        turn: Mutex::new(()),
     });
     shared.rooms.set_primary(shared.clone());
 
@@ -839,17 +884,49 @@ fn start_room(room: AppState) {
 /// and the campaign's settings), then the replay recorder. Live and in a replay alike.
 fn step_once(sim: &Shared) {
     {
-        sim.universe.lock().expect("sim lock").step();
-        let ticks = sim.steps.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-        // docking ports pull together and latch every tick, as the original's run in each physics step
-        let msgs = crew_docking::dock_latched(sim);
-        if !msgs.is_empty() {
-            sim.pending.lock().expect("pending lock").extend(msgs);
+        let split = sim.universe.lock().expect("sim lock").timelines_enabled();
+        if split {
+            // each time steps at its own warp, its docking ports latching in it (`timelines.rs`)
+            let _turn = sim.turn.lock().expect("turn lock");
+            let (ids, back) = {
+                let u = sim.universe.lock().expect("sim lock");
+                (u.timeline_ids(), u.active_timeline())
+            };
+            let mut joined = Vec::new();
+            for id in ids {
+                let (to, movers) = {
+                    let mut u = sim.universe.lock().expect("sim lock");
+                    let movers: Vec<u64> = u.timeline_members(id).collect();
+                    (u.step_timeline(id), movers)
+                };
+                if let Some(to) = to {
+                    joined.push((id, to));
+                    timelines::joined(sim, &movers, to);
+                    tracing::info!(timeline = id, joined = to, "caught up in time");
+                }
+                let msgs = crew_docking::dock_latched(sim);
+                if !msgs.is_empty() {
+                    sim.pending.lock().expect("pending lock").extend(msgs);
+                }
+            }
+            sim.universe
+                .lock()
+                .expect("sim lock")
+                .finish_step(&joined, back);
+        } else {
+            sim.universe.lock().expect("sim lock").step();
+            // docking ports pull together and latch every tick, as the original's run in each physics step
+            let msgs = crew_docking::dock_latched(sim);
+            if !msgs.is_empty() {
+                sim.pending.lock().expect("pending lock").extend(msgs);
+            }
         }
+        let ticks = sim.steps.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
         deliver_transmitted(sim);
         // missions look at the agency's vessels once a second
         if ticks.is_multiple_of(ose_sim::TICKS_PER_SECOND) {
             push_roster(sim);
+            timelines::push_times(sim);
             science::evaluate_missions(sim);
             science::deliver_experiment_events(sim);
             let (required, heat) = {
@@ -935,7 +1012,8 @@ fn vessels_message(s: &Shared, u: &Universe, tick: Tick) -> ServerMessage {
         .filter_map(|&(e, id, owner)| {
             let (v, body, orbit) = u.vessel(e)?;
             let (bp, bv) = ose_sim::bodies::star_space_state(&u.world, body, ut);
-            let (rp, rv) = orbit.state_at(ut);
+            // a vessel in another time is seen where it is at this one (`timelines.rs`)
+            let (rp, rv) = u.seen_state(e, &orbit);
             Some(VesselState {
                 id,
                 name: v.name.clone(),
@@ -2120,7 +2198,16 @@ fn launch_on_pad_now(
 }
 
 fn trajectories(s: &Shared) -> Vec<ServerMessage> {
-    let u = s.universe.lock().expect("sim lock");
+    let t = s.universe.lock().expect("sim lock").active_timeline();
+    trajectories_in(s, t)
+}
+
+/// Every vessel's trajectory as seen from timeline `timeline` (`timelines.rs`).
+fn trajectories_in(s: &Shared, timeline: u32) -> Vec<ServerMessage> {
+    timelines::within(s, timeline, |u| trajectories_here(s, u))
+}
+
+fn trajectories_here(s: &Shared, u: &Universe) -> Vec<ServerMessage> {
     let tick = u.tick();
     let list = s.vessels.lock().expect("vessels lock");
     list.iter()
@@ -2129,7 +2216,7 @@ fn trajectories(s: &Shared) -> Vec<ServerMessage> {
                 .predict(e)
                 .iter()
                 .map(|p| TrajectoryPatch {
-                    body: catalog_index(s, &u, p.body),
+                    body: catalog_index(s, u, p.body),
                     orbit: elements(&p.orbit),
                     start_ut: p.start_ut,
                     end_ut: p.end_ut,
@@ -2151,9 +2238,21 @@ fn trajectories(s: &Shared) -> Vec<ServerMessage> {
         .collect()
 }
 
-fn snapshot(s: &Shared) -> (ServerMessage, ServerMessage, ServerMessage) {
-    let (warp, warp_limited_by) = apply_warp(s);
-    let u = s.universe.lock().expect("sim lock");
+/// The time, bodies and vessels as seen from timeline `timeline` (`timelines.rs`), at its (warp, holder).
+fn snapshot_in(
+    s: &Shared,
+    timeline: u32,
+    (warp, warp_limited_by): (u32, Option<u64>),
+) -> (ServerMessage, ServerMessage, ServerMessage) {
+    timelines::within(s, timeline, |u| snapshot_here(s, u, warp, warp_limited_by))
+}
+
+fn snapshot_here(
+    s: &Shared,
+    u: &Universe,
+    warp: u32,
+    warp_limited_by: Option<u64>,
+) -> (ServerMessage, ServerMessage, ServerMessage) {
     let tick = u.tick();
     let ut = tick.seconds();
     let bodies = s
@@ -2174,7 +2273,7 @@ fn snapshot(s: &Shared) -> (ServerMessage, ServerMessage, ServerMessage) {
             warp_limited_by,
         },
         ServerMessage::Snapshot { tick, bodies },
-        vessels_message(s, &u, tick),
+        vessels_message(s, u, tick),
     )
 }
 
@@ -2520,6 +2619,18 @@ fn owned_vessel(s: &Shared, id: u64, player: u64) -> Option<bevy_ecs::entity::En
             vid == id && (owner == Some(player) || (shared && owner.is_some()))
         })
         .map(|&(e, _, _)| e);
+    // a vessel in another time is out of reach unless it can come forward to the player's (`timelines.rs`)
+    if let Some(v) = e {
+        let mut u = s.universe.lock().expect("sim lock");
+        if let Err(reason) = timelines::reach(s, &mut u, player, v) {
+            drop(u);
+            s.pending
+                .lock()
+                .expect("pending lock")
+                .push((player, ServerMessage::Rejected { reason }));
+            return None;
+        }
+    }
     if e.is_some() {
         // commanding a vessel is flying it
         s.flying.lock().expect("flying lock").insert(player, id);
@@ -3450,6 +3561,9 @@ fn handle_decoded(
     out: &mut Vec<ServerMessage>,
 ) {
     let from = out.len();
+    // everything a player does happens at their own time (`timelines.rs`)
+    let _turn = s.turn.lock().expect("turn lock");
+    timelines::enter_for(s, player_id);
     handle_message(s, player_id, decoded, out);
     // a craft just launched is in the launching player's view: they get it in full straight away
     for m in &out[from..] {
@@ -3501,10 +3615,9 @@ fn handle_message(
         }
         Ok(ClientMessage::RequestWarp { factor }) => {
             let f = factor.clamp(1, 10_000_000);
-            s.warp_requests
-                .lock()
-                .expect("warp lock")
-                .insert(player_id, f);
+            // warp is each player's own: warping faster than others sharing this time takes a time of one's own
+            timelines::request_warp(s, player_id, f);
+            timelines::enter_for(s, player_id);
             let (eff, _) = apply_warp(s);
             tracing::info!(
                 player = player_id,
@@ -3512,6 +3625,12 @@ fn handle_message(
                 effective = eff,
                 "warp request"
             );
+        }
+        Ok(ClientMessage::SyncTime { player }) => {
+            if let Err(reason) = timelines::sync(s, player_id, player) {
+                out.push(ServerMessage::Rejected { reason });
+            }
+            apply_warp(s);
         }
         Ok(ClientMessage::Ping { sent_tick }) => {
             out.push((ServerMessage::Pong { sent_tick }).clone());
@@ -4950,7 +5069,7 @@ async fn session(mut socket: WebSocket, s: AppState, ip: std::net::IpAddr) {
                 if !campaigns::live_access(&s, player_id) { continue; }
                 if frames.started < *s.world_changed_at.lock().expect("world change lock") { continue; }
                 let focus = interest::focus(&s, player_id);
-                if !streaming::send_batch(&mut socket, &frames, &mut interest, &focus).await {
+                if !streaming::send_batch(&mut socket, &frames, &mut interest, &focus, player_id).await {
                     break;
                 }
                 let mine: Vec<ServerMessage> = {
@@ -4982,7 +5101,7 @@ async fn session(mut socket: WebSocket, s: AppState, ip: std::net::IpAddr) {
                 if !campaigns::live_access(&s, player_id) { continue; }
                 if frames.started < *s.world_changed_at.lock().expect("world change lock") { continue; }
                 let focus = interest::focus(&s, player_id);
-                if !streaming::send_batch(&mut socket, &frames, &mut interest, &focus).await { break; }
+                if !streaming::send_batch(&mut socket, &frames, &mut interest, &focus, player_id).await { break; }
             }
             incoming = socket.recv() => {
                 match incoming {
