@@ -2,9 +2,11 @@
 //! near 1.5 g low in the atmosphere, coast to apoapsis, then a circularization burn.
 //!
 //! The profile is the one the ISS assembly test pilot (`ose-sim/examples/iss_assembly.rs`) flew ten
-//! deliveries with. Airless ascents (from the Mun) are R5.
-use crate::{acceleration, body, orbit, stage_if_spent, Status};
+//! deliveries with. On airless bodies (the Mun) [`AscentParams::airless`] pitches over almost at once
+//! and keeps full throttle.
+use crate::{acceleration, body, orbit, stage_if_spent, window::LaunchProfile, Status};
 use bevy_ecs::entity::Entity;
+use ose_math::DVec3;
 use ose_sim::{flight::Attitude, Universe};
 
 #[derive(Clone, Debug)]
@@ -17,8 +19,12 @@ pub struct AscentParams {
     pub apoapsis_m: f64,
     /// The ascent is done once periapsis is above this altitude (m).
     pub periapsis_m: f64,
-    /// Compass heading (degrees, 90 = east).
+    /// Compass heading (degrees, 90 = east), when no `plane` is given.
     pub heading_deg: f64,
+    /// Fly into the orbital plane with this normal (a target's angular momentum direction): the
+    /// heading steers the missing orbital velocity, which allows for the ground's rotation and
+    /// trims the plane on the way up.
+    pub plane: Option<ose_math::DVec3>,
     /// Below this altitude the throttle holds a thrust-to-weight of `max_twr` (m).
     pub throttle_limit_below_m: f64,
     pub max_twr: f64,
@@ -36,10 +42,26 @@ impl Default for AscentParams {
             apoapsis_m: 140_000.0,
             periapsis_m: 85_000.0,
             heading_deg: 90.0,
+            plane: None,
             throttle_limit_below_m: 20_000.0,
             max_twr: 1.5,
             stage_in_orbit: false,
             timeout_s: 1_500.0,
+        }
+    }
+}
+
+impl AscentParams {
+    /// An ascent from an airless body to a low orbit at about `orbit_alt_m`: rise clear of the
+    /// ground, pitch over by `orbit_alt_m / 3`, no throttle limit.
+    pub fn airless(orbit_alt_m: f64) -> Self {
+        Self {
+            turn_start_m: 150.0,
+            turn_end_m: orbit_alt_m / 3.0,
+            apoapsis_m: orbit_alt_m,
+            periapsis_m: orbit_alt_m * 0.6,
+            throttle_limit_below_m: 0.0,
+            ..Self::default()
         }
     }
 }
@@ -56,6 +78,10 @@ pub fn pitch_deg(p: &AscentParams, alt_m: f64) -> f64 {
 pub struct Ascent {
     pub params: AscentParams,
     started: Option<f64>,
+    /// Lift-off position (inertial), for the measured profile.
+    site: Option<DVec3>,
+    profile: Option<LaunchProfile>,
+    heading_deg: Option<f64>,
     coasting: bool,
     /// When the engines were cut in orbit, before dropping the launcher.
     cutoff: Option<f64>,
@@ -67,6 +93,9 @@ impl Ascent {
         Self {
             params,
             started: None,
+            site: None,
+            profile: None,
+            heading_deg: None,
             coasting: false,
             cutoff: None,
             tick: 0,
@@ -85,6 +114,7 @@ impl Ascent {
             u.stage(e);
             u.ut()
         });
+        let site = *self.site.get_or_insert(p.r);
         let (Some(o), Some((_, mu, radius))) = (orbit(u, e), body(u, e)) else {
             return Status::Failed("no orbit".into());
         };
@@ -99,6 +129,14 @@ impl Ascent {
                 u.set_controls(e, 0.0, Attitude::OrbitPrograde);
                 u.ut()
             });
+            if self.profile.is_none() {
+                let h = p.r.cross(p.v).normalized();
+                let downrange = site.cross(p.r).dot(h).atan2(site.dot(p.r)).to_degrees();
+                self.profile = Some(LaunchProfile {
+                    duration_s: u.ut() - start,
+                    downrange_deg: downrange.rem_euclid(360.0),
+                });
+            }
             if u.ut() - cut < 2.0 || p.throttle > 0.0 {
                 return Status::Running;
             }
@@ -144,11 +182,18 @@ impl Ascent {
             } else {
                 1.0
             };
+            let heading_deg = match self.params.plane {
+                Some(n) => plane_heading(n, p.r, p.v, mu)
+                    .or(self.heading_deg)
+                    .unwrap_or(self.params.heading_deg),
+                None => self.params.heading_deg,
+            };
+            self.heading_deg = Some(heading_deg);
             (
                 throttle,
                 Attitude::PitchHeading {
                     pitch_deg: pitch_deg(&self.params, alt),
-                    heading_deg: self.params.heading_deg,
+                    heading_deg,
                 },
             )
         } else {
@@ -169,6 +214,35 @@ impl Ascent {
     pub fn suggested_warp(&self) -> u32 {
         4
     }
+
+    /// How this ascent flew (duration and downrange angle), once it reached orbit. Feed it to
+    /// [`crate::window`] to time the next launch of the same rocket.
+    pub fn profile(&self) -> Option<LaunchProfile> {
+        self.profile
+    }
+}
+
+/// Compass heading (degrees) that steers the missing horizontal velocity toward a circular orbit in
+/// the plane with normal `n`. `None` once the vessel is nearly there (keep the last heading).
+pub fn plane_heading(n: DVec3, r: DVec3, v: DVec3, mu: f64) -> Option<f64> {
+    let up = r.normalized();
+    let n = n.normalized();
+    let along = n.cross(up).normalized();
+    let goal = along * (mu / r.length()).sqrt();
+    let missing = goal - v;
+    let horizontal = missing - up * missing.dot(up);
+    if horizontal.length() < 30.0 {
+        return None;
+    }
+    // Spin axis +z: north is +z flattened onto the horizon, east is north x up.
+    let north = (DVec3::new(0.0, 0.0, 1.0) - up * up.z).normalized();
+    let east = north.cross(up);
+    Some(
+        horizontal
+            .dot(east)
+            .atan2(horizontal.dot(north))
+            .to_degrees(),
+    )
 }
 
 #[cfg(test)]

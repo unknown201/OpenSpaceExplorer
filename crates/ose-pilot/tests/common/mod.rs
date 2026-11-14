@@ -147,6 +147,20 @@ pub fn in_orbit_around(
     altitude_m: f64,
     phase_deg: f64,
 ) -> Entity {
+    in_orbit_inclined(w, around, craft, altitude_m, phase_deg, 0.0)
+}
+
+/// [`in_orbit_around`], tilted `inclination_deg` about +x (the ascending node is at +x).
+pub fn in_orbit_inclined(
+    w: &mut World,
+    around: Entity,
+    craft: &Craft,
+    altitude_m: f64,
+    phase_deg: f64,
+    inclination_deg: f64,
+) -> Entity {
+    let (si, ci) = inclination_deg.to_radians().sin_cos();
+    let tilt = |v: DVec3| DVec3::new(v.x, ci * v.y - si * v.z, si * v.y + ci * v.z);
     let body =
         w.u.world
             .get::<ose_sim::bodies::Body>(around)
@@ -154,9 +168,9 @@ pub fn in_orbit_around(
             .clone();
     let radius = body.radius_m + altitude_m;
     let (s, c) = phase_deg.to_radians().sin_cos();
-    let r = DVec3::new(c, s, 0.0) * radius;
+    let r = tilt(DVec3::new(c, s, 0.0) * radius);
     let speed = (body.mu / radius).sqrt();
-    let v = DVec3::new(-s, c, 0.0) * speed;
+    let v = tilt(DVec3::new(-s, c, 0.0) * speed);
     let e = w.u.spawn_vessel(&craft.name, around, r, v);
     let (defs, res) = (w.defs.clone(), w.resources.clone());
     w.u.rebuild_vessel(e, craft, r, v, v.normalized(), vec![], &defs, &res, &|c| {
@@ -231,9 +245,21 @@ pub fn links(w: &World, e: Entity) -> usize {
 
 /// Test setup only: stand a craft on the KSC pad.
 pub fn on_pad(w: &mut World, craft: &Craft) -> Entity {
+    let kerbin = w.kerbin;
+    on_surface(w, kerbin, craft, -0.6836, -74.8198)
+}
+
+/// Test setup only: stand a craft on the ground of any body.
+pub fn on_surface(
+    w: &mut World,
+    body: Entity,
+    craft: &Craft,
+    lat_deg: f64,
+    lon_deg: f64,
+) -> Entity {
     let s = spec(craft, &w.defs, &w.resources);
     let e =
-        w.u.spawn_powered_on_surface(&craft.name, w.kerbin, s, -0.6836, -74.8198);
+        w.u.spawn_powered_on_surface(&craft.name, body, s, lat_deg, lon_deg);
     w.u.set_craft(e, craft.clone());
     w.u.set_structure(
         e,

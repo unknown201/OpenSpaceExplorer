@@ -7,6 +7,7 @@
 //! Launch windows are R5 of `docs/rendezvous-v2-plan.md`.
 use crate::depart::Depart;
 use crate::soi::{parent, SoiTransfer};
+use crate::window::LaunchProfile;
 use crate::{
     approach::Approach, ascent::Ascent, ascent::AscentParams, body, burn::Burn, orbit, state,
     Status,
@@ -27,6 +28,13 @@ pub struct Catalog<'a> {
 #[derive(Clone, Debug)]
 pub struct MissionParams {
     pub ascent: Option<AscentParams>,
+    /// Wait on the ground for a launch window, from this measured ascent profile, before the
+    /// ascent. The ascent then flies into the target's plane. Only for a target around the same body.
+    pub launch_profile: Option<LaunchProfile>,
+    /// Where the target should be at orbit insertion, ahead of the vessel (degrees).
+    pub launch_lead_deg: f64,
+    /// How far ahead to look for a launch window (s).
+    pub launch_horizon_s: f64,
     /// Start docked: undock at this port of ours first, then back off.
     pub depart_from_port: Option<String>,
     pub target: Entity,
@@ -50,6 +58,9 @@ impl MissionParams {
     pub fn new(target: Entity, target_port: &str, own_port: &str) -> Self {
         Self {
             ascent: None,
+            launch_profile: None,
+            launch_lead_deg: 2.0,
+            launch_horizon_s: 2.0 * 86_400.0,
             depart_from_port: None,
             target,
             target_port: target_port.into(),
@@ -68,6 +79,7 @@ impl MissionParams {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Leg {
     Depart,
+    Wait,
     Ascent,
     Plan,
     SoiTransfer,
@@ -80,6 +92,8 @@ pub enum Leg {
 
 enum Phase {
     Depart(Depart),
+    /// On the ground until the launch window (computed on the first tick).
+    Wait(Option<f64>),
     Ascent(Ascent),
     Plan,
     Soi(SoiTransfer),
@@ -97,6 +111,7 @@ pub struct Mission {
     phase: Phase,
     encounter: Option<f64>,
     corrections: u32,
+    flown_profile: Option<LaunchProfile>,
     /// One line per notable event, for logs and tests.
     pub log: Vec<String>,
 }
@@ -105,6 +120,7 @@ impl Mission {
     pub fn new(vessel: Entity, params: MissionParams) -> Self {
         let phase = match (&params.depart_from_port, &params.ascent) {
             (Some(port), _) => Phase::Depart(Depart::new(port)),
+            (None, Some(_)) if params.launch_profile.is_some() => Phase::Wait(None),
             (None, Some(a)) => Phase::Ascent(Ascent::new(a.clone())),
             (None, None) => Phase::Plan,
         };
@@ -114,6 +130,7 @@ impl Mission {
             phase,
             encounter: None,
             corrections: 0,
+            flown_profile: None,
             log: Vec::new(),
         }
     }
@@ -122,9 +139,15 @@ impl Mission {
         self.vessel
     }
 
+    /// How this mission's ascent flew, once it reached orbit.
+    pub fn flown_profile(&self) -> Option<LaunchProfile> {
+        self.flown_profile
+    }
+
     pub fn leg(&self) -> Leg {
         match self.phase {
             Phase::Depart(_) => Leg::Depart,
+            Phase::Wait(_) => Leg::Wait,
             Phase::Ascent(_) => Leg::Ascent,
             Phase::Plan => Leg::Plan,
             Phase::Soi(_) => Leg::SoiTransfer,
@@ -163,15 +186,51 @@ impl Mission {
                     Status::Running
                 }
             },
+            Phase::Wait(until) => {
+                let until = match until {
+                    Some(t) => *t,
+                    None => {
+                        let profile = self.params.launch_profile.expect("set for a wait");
+                        let Some(w) = crate::window::for_vessel(
+                            u,
+                            e,
+                            self.params.target,
+                            profile,
+                            self.params.launch_lead_deg,
+                            self.params.launch_horizon_s,
+                        ) else {
+                            return self.fail("no launch window".into());
+                        };
+                        self.log.push(format!(
+                            "WINDOW lift off in {:.0} s, {:.2} deg out of plane, phase off by {:.1} deg",
+                            w.ut - t,
+                            w.plane_deg,
+                            w.phase_error_deg
+                        ));
+                        *until = Some(w.ut);
+                        w.ut
+                    }
+                };
+                if t + 1e-6 >= until {
+                    let mut a = self.params.ascent.clone().expect("set for a wait");
+                    if a.plane.is_none() {
+                        a.plane = orbit(u, self.params.target).map(|o| o.frame.z);
+                    }
+                    self.phase = Phase::Ascent(Ascent::new(a));
+                }
+                Status::Running
+            }
             Phase::Ascent(a) => match a.update(u, e) {
                 Status::Running => Status::Running,
                 Status::Failed(why) => self.fail(why),
                 Status::Done => {
+                    self.flown_profile = a.profile();
                     if let (Some(o), Some((_, _, radius))) = (orbit(u, e), body(u, e)) {
                         self.log.push(format!(
-                            "ORBIT {:.0} x {:.0} km at UT {t:.0}",
+                            "ORBIT {:.0} x {:.0} km at UT {t:.0}, {:?}",
                             (o.periapsis() - radius) / 1000.0,
-                            (o.apoapsis() - radius) / 1000.0
+                            (o.apoapsis() - radius) / 1000.0,
+                            self.flown_profile
                         ));
                     }
                     self.phase = Phase::Plan;
@@ -382,6 +441,10 @@ impl Mission {
         let e = self.vessel;
         match &self.phase {
             Phase::Depart(d) => d.suggested_warp(),
+            Phase::Wait(Some(until)) => {
+                // ticks are 1/50 s; land on the window, not past it
+                (((until - u.ut()) * 50.0 / 2.0) as u32).clamp(1, 1000)
+            }
             Phase::Ascent(a) => a.suggested_warp(),
             Phase::Transfer(b, _) | Phase::Brake(b) => b.suggested_warp(u, e),
             Phase::Approach(a) => a.suggested_warp(),

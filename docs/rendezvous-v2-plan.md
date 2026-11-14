@@ -1,6 +1,6 @@
 # Rendezvous v2: launch to dock from anywhere
 
-Status: **in progress** (2026-11-14). R1 is done (`crates/ose-guidance`). R2 and R3 are done (`crates/ose-pilot`; tests T1, T4 and T9 pass, run by CI with `--release`). R4 is done: `ose_pilot::soi` moves between spheres of influence, and T3, T5 and T6 pass. This is the prerequisite for [delivery routes](delivery-routes-design.md).
+Status: **in progress** (2026-11-14). R1 is done (`crates/ose-guidance`). R2 and R3 are done (`crates/ose-pilot`; tests T1, T4 and T9 pass, run by CI with `--release`). R4 is done: `ose_pilot::soi` moves between spheres of influence, and T3, T5 and T6 pass. R5 is done: `ose_pilot::window` times launches from any landed site, and T2 and T7 pass. This is the prerequisite for [delivery routes](delivery-routes-design.md).
 Josh decided that routes, including depot-to-depot routes, are built on a rendezvous system that
 works from launch to dock, from KSC, from stations and depots, and from the Mun, including orbital
 windows. That system has to be well tested before routes depend on it.
@@ -96,6 +96,22 @@ UT 49 946 s. T5 LKO station → Mun station, 837 + 26 m/s, docked at UT 31 974 s
 station, 252 m/s out, 833 m/s capture, docked at UT 35 208 s. Low-thrust captures land a little off
 circular (T6 captured 82 × 204 km), and the same-SOI phase then corrects for it.
 
+### 3.6 How launch windows work (R5, done)
+
+A rocket's ascent is described by a `LaunchProfile`: time to orbit and the downrange angle from the
+site to the insertion point. It is measured from a real flight (`Ascent::profile`, kept by the
+mission as `flown_profile`), which is exactly what a route's proving flight provides.
+`window::search` rotates the site with its body over the next two days and scores each lift-off time
+by how far the site is out of the target's plane (40 per degree, about the Δv cost of fixing it) and
+how far the target will be from 2° ahead at insertion (0.5 per degree, since phasing only costs time),
+plus an hour of waiting per point. The mission waits on the ground at warp, then the ascent steers its
+heading toward the missing orbital velocity in the target's plane, which allows for the ground's
+rotation. Airless bodies use `AscentParams::airless` (pitch over at 150 m, no throttle limit).
+
+Measured: T7 (Mun surface to a 30 km station) needs 9.5 + 1.9 + 0.7 m/s of rendezvous burns and 2 m/s of
+braking with the window, against 76 m/s, eight plans and 94 m/s of braking without it. T2 (KSC to a 20°
+station) lifts off 0.03° from the plane and docks after two plans.
+
 ## 4. Test matrix (L8)
 
 Every scenario runs headless on the server sim, with stock craft, ordinary controls, and no teleports.
@@ -113,7 +129,7 @@ Each one passes only if it docks, survives, and stays within a Δv margin of the
 | T8 | Docked at LKO station | KSC (recover) | Deorbit and landing near KSC |
 | T9 | Two pilots, same port, same window | Station | Collision behaves physically, with no crash or stuck state |
 
-T1, T3 to T6 and T9 run in normal CI, optimised (`cargo test --release -p ose-pilot`, about 3 min with the build); unoptimised they take far longer, so debug builds skip them. The flaky `mun_run` test is fixed as part of L7, not relaxed.
+T1 to T7 and T9 run in normal CI, optimised (`cargo test --release -p ose-pilot`, about 3 min with the build); unoptimised they take far longer, so debug builds skip them. The flaky `mun_run` test is fixed as part of L7, not relaxed.
 
 ## 5. Delivery order (one PR each, each green before the next)
 
