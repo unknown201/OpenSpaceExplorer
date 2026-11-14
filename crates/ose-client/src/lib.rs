@@ -6434,6 +6434,7 @@ impl App {
                     }
                 }
                 self.campaign = Some((name, members));
+                self.take_control_if_free();
                 if self.campaign_id != campaign_id {
                     self.requested_warp = 1;
                     if let Some(scene) = &mut self.scene {
@@ -10696,6 +10697,7 @@ impl App {
         self.lesson_event("VesselCreatedMessage");
         self.lesson_event("LaunchSequenceInitiatedMessage");
         self.flying = Some(vessel);
+        self.take_control_if_free();
         self.rdv_start(vessel);
         // The server keeps a target per vessel; the one picked carries over to the vessel flown now.
         if self.target == Some(ose_net::TargetId::Vessel(vessel)) {
@@ -10726,8 +10728,58 @@ impl App {
         }
     }
 
+    /// The other player piloting `vessel` now (only one player pilots a vessel; the others ride along).
+    fn pilot_of(&self, vessel: u64) -> Option<&str> {
+        let (_, members) = self.campaign.as_ref()?;
+        members
+            .iter()
+            .find(|m| m.online && m.flying == Some(vessel) && Some(m.player_id) != self.player_id)
+            .map(|m| m.display_name.as_str())
+    }
+
+    /// Pilot the vessel in view when nobody else does (when it is entered, and when its pilot lets go), and
+    /// say who does otherwise.
+    fn take_control_if_free(&mut self) {
+        let Some(vessel) = self.flying else { return };
+        let pilot = self.pilot_of(vessel).map(str::to_string);
+        set_text(
+            &self.doc,
+            "fh-pilot",
+            &pilot
+                .as_ref()
+                .map(|p| format!("Riding along: {p} is piloting"))
+                .unwrap_or_default(),
+        );
+        if let Some(el) = self.doc.get_element_by_id("flight-hud") {
+            if pilot.is_some() {
+                el.set_attribute("data-ose-passenger", "true").ok();
+            } else {
+                el.remove_attribute("data-ose-passenger").ok();
+            }
+        }
+        if pilot.is_some() {
+            return;
+        }
+        let mine = self.campaign.as_ref().and_then(|(_, members)| {
+            members
+                .iter()
+                .find(|m| Some(m.player_id) == self.player_id)
+                .and_then(|m| m.flying)
+        });
+        if mine != Some(vessel) {
+            if let Some(ws) = &self.ws {
+                send(ws, &ClientMessage::TakeControl { vessel });
+            }
+        }
+    }
+
     fn end_flight(&mut self) {
         self.rdv_release();
+        if self.flying.is_some() {
+            if let Some(ws) = &self.ws {
+                send(ws, &ClientMessage::ReleaseControl);
+            }
+        }
         self.flying = None;
         self.crash_report_due.set(None);
         self.flight_craft = None;
@@ -10738,6 +10790,10 @@ impl App {
 
     fn send_controls(&mut self) {
         let Some(vessel) = self.flying else { return };
+        if self.pilot_of(vessel).is_some() {
+            self.controls_dirty = false;
+            return;
+        }
         if let Some(ws) = &self.ws {
             self.controls_dirty = false;
             send(
@@ -11858,6 +11914,20 @@ impl App {
                     self.attitude = att;
                 }
             }
+        }
+        // Riding along while another player pilots: show what they set, send nothing.
+        if self.pilot_of(vessel).is_some() {
+            if let Some(f) = self
+                .scene
+                .as_ref()
+                .and_then(|s| s.vessel(vessel))
+                .and_then(|v| v.flight.as_ref())
+            {
+                self.attitude = f.attitude;
+                self.throttle = f.throttle;
+            }
+            self.controls_dirty = false;
+            return;
         }
         if self.flying_eva() {
             self.eva_keys_tick(now, dt);
