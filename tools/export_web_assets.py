@@ -501,8 +501,8 @@ class Exporter:
                 name = go_name.get(go_id, "")
                 if name.startswith("col_") or renderer_material.get(go_id) == -1:
                     continue
-                # An engine's fairing (the shroud round its bell) shows in the original only when a part hangs
-                # below the engine; the client hides it otherwise (mesh names containing "fairing").
+                # An engine's static "fairing" mesh is a leftover the original never shows: it builds the shroud
+                # procedurally (tools/export_engine_shrouds.py); the client hides meshes named "fairing".
                 # Exhaust plume meshes (exh_*, vfx_*) are effect geometry the original only shows while the
                 # engine burns; static, they stand as 20 m white cones under every engine.
                 if name.lower().startswith(("exh_", "vfx_")):
