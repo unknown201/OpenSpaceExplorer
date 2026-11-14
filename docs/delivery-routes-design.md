@@ -1,7 +1,7 @@
 # Delivery routes: design draft
 
-Status: **draft, round 3** (2026-11-14). Nothing is built yet. Section 2 records what Josh has decided;
-the questions still open are in section 7 (**Q13-Q14**). The draft assumes the recommended answer to each.
+Status: **agreed** (2026-11-14). Nothing is built yet. Section 2 records what Josh decided. The
+first step is [rendezvous v2](rendezvous-v2-plan.md), which routes are built on.
 
 ## 1. What KSP2 had
 
@@ -42,8 +42,11 @@ timer: in OSE every run is a real vessel.
    player chooses between staying, coming home, or being left as space junk is designed in 3.10.
 9. **Payload is "whatever stays docked"** for now (3.6).
 10. **Players can take control of a route vessel mid-run** (3.11).
-11. **Depot to depot:** Josh asked what it costs. The answer is in 3.12, and the decision is Q14.
+11. **Depot to depot is in the first version.** It is built by expanding the rendezvous system to work
+    from launch to dock, from KSC, from stations and depots, and from the Mun, including orbital
+    windows. That comes first and must be well tested ([rendezvous-v2-plan.md](rendezvous-v2-plan.md)).
 12. **Landed depots wait for colonies.**
+13. **End-of-run modes** (3.10) are agreed. Rotate is the default for routes that stay docked.
 
 ## 3. Design
 
@@ -51,7 +54,7 @@ timer: in OSE every run is a real vessel.
 
 A depot is any vessel a player marks as one in its info panel (map, tracking station, or flight), such
 as an orbital station or a parked tank. Endpoints are `Endpoint::Ksc | Vessel(id)`, and later
-`Colony(id)`. A route can also start at a depot (depot to depot); see 3.12 and Q14.
+`Colony(id)`. A route can also start at a depot (depot to depot); see 3.12.
 
 ### 3.2 The proving flight (recording)
 
@@ -186,9 +189,8 @@ It needs a different model:
   and no landing. If they are in different SOIs (Mun station to LKO), the pilot needs a transfer back
   from the Mun and an encounter that targets a station rather than a planet, which is new work.
 
-None of this changes the KSC-route code. The route keeps an `origin: Endpoint` and a
-`vessel_source: Spawn | Shuttle(id)` from day one, so depot-to-depot slots in later without reworking
-it. Rough size: same-SOI shuttles are a medium follow-up, and cross-SOI is a large one.
+Depot to depot is in the first version (decision 11). None of this changes the KSC-route code. The route keeps an `origin: Endpoint` and a
+`vessel_source: Spawn | Shuttle(id)` from day one, from day one. The guidance and flying come from rendezvous v2 (R3 for the same SOI, R4 across SOIs).
 
 ### 3.7 UI
 
@@ -213,20 +215,21 @@ so a run in progress resumes after a server restart. All are `#[serde(default)]`
 
 ## 4. Out of scope for the MVP
 
-Colonies, cargo inventory, a funds economy, crew rotation, landed depots (decision 12), depot-to-depot
-routes (Q14), and traffic control.
+Colonies, cargo inventory, a funds economy, crew rotation, landed depots (decision 12), and traffic control.
 
-## 5. Build plan (once the design is agreed)
+## 5. Build plan
 
+0. **Rendezvous v2** first ([rendezvous-v2-plan.md](rendezvous-v2-plan.md), R1-R7): a shared guidance
+   crate, a pilot library, departures, cross-SOI windows, launch windows, and return home, each one
+   tested headless.
 1. **Recording** (`ose-sim`, `ose-server`): proving-flight state machine on launch, dock, transfer,
    undock, recover, destroy and revert; trajectory sampling in the port's frame; depot flag; save fields.
    Tests on a scripted fuel run.
-2. **Route pilot** (server): move the bot's ascent and landing programs into a crate the server can run.
-   Add the approach follower and docking. Test headless: a station in LKO, one route, one Delivered run.
-3. **Route scheduler**: windows, pad-clear wait, outcomes, auto-pause, warp rules (3.5), restart resume.
-4. **Client**: launch checkbox, routes panel, depot toggle, map tags, toasts.
-5. **Browser e2e** against a local server, never prod: record a run with the bot, create the route, and
-   watch two runs. Plus a collision test: two routes into one port at the same window.
+2. **Route scheduler**: spawned runs and shuttles, windows from rendezvous v2, pad and port checks,
+   outcomes, auto-pause, end-of-run modes, warp rules (3.5), restart resume, take control.
+3. **Client**: launch checkbox, routes panel, depot toggle, map tags, toasts.
+4. **Browser e2e** against a local server, never prod: record a run with the bot, create the route,
+   and watch two runs. Plus a collision test: two routes into one port at the same window.
 
 ## 6. Risks
 
@@ -238,11 +241,6 @@ routes (Q14), and traffic control.
 - **Determinism.** The same route won't play out the same way twice, because of other traffic and the
   station's attitude. That is the intent, but tests should check outcomes, not exact paths.
 
-## 7. Open questions for Josh
+## 7. Open questions
 
-- **Q13 Rotate.** Is Rotate (3.10) the right default for routes that stay, and are Send home, Let go
-  and Keep the right cleanup actions?
-- **Q14 Depot to depot.** Leave it out of the MVP but keep the data model ready (recommended), add
-  same-SOI shuttles to the MVP, or include cross-SOI as well?
-
-Answered in round 2: Q7-Q12 (see decisions 7-12).
+None. All questions were answered on 2026-11-14 (decisions 1-13).
