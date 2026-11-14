@@ -4084,3 +4084,59 @@ async fn a_capsule_decoupled_on_the_pad_comes_down_onto_the_deck() {
         last.situation
     );
 }
+
+#[tokio::test]
+async fn a_relaunch_after_recovery_gets_a_new_vessel_id() {
+    // The second launch took the recovered rocket's id (one past the largest left), and the client drew it
+    // with the first rocket's cached craft and animation state: parts missing or out of place.
+    let (_server, addr) = spawn_server_with(&["--db", ":memory:", "--save", "none"], None).await;
+    let mut ws = connect_ws(&addr).await;
+    hello(&mut ws, None, "pilot").await;
+    send_msg(
+        &mut ws,
+        &ClientMessage::CreateSession {
+            name: "Relaunch".into(),
+            mode: ose_net::SessionMode::Sandbox,
+            difficulty: Vec::new(),
+        },
+    )
+    .await;
+    wait_for(&mut ws, |m| {
+        matches!(m, ServerMessage::CampaignState { .. }).then_some(())
+    })
+    .await;
+    let mut ids = Vec::new();
+    for _ in 0..2 {
+        send_msg(
+            &mut ws,
+            &ClientMessage::LaunchOnPad {
+                craft: starter_craft(),
+            },
+        )
+        .await;
+        let vessel = wait_for(&mut ws, |m| match m {
+            ServerMessage::CraftLaunched { vessel, reason, .. } => {
+                assert!(reason.is_none(), "{reason:?}");
+                vessel
+            }
+            _ => None,
+        })
+        .await;
+        ids.push(vessel);
+        send_msg(&mut ws, &ClientMessage::RecoverVessel { vessel }).await;
+        wait_for(&mut ws, |m| match m {
+            ServerMessage::ScienceSubmitted {
+                recovered, reason, ..
+            } => {
+                assert!(reason.is_none() && recovered, "{reason:?}");
+                Some(())
+            }
+            _ => None,
+        })
+        .await;
+    }
+    assert_ne!(
+        ids[0], ids[1],
+        "the relaunched rocket reused the recovered one's id"
+    );
+}
