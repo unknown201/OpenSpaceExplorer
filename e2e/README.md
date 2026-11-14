@@ -93,3 +93,16 @@ to `Pass` in the same change.
 | `[data-ose="vessel"]` also carries `data-ose-id` (vessel id); the player's own vessel has class `mine` and the camera follows it; a click follows that vessel |
 | `canvas[data-ose-scale]` | metres per CSS pixel of the map camera, refreshed every frame |
 | `canvas[data-ose-focus]` | id and star-space x y of the focused body, refreshed every frame |
+
+
+
+## Email OTP, campaign access and cross-machine login
+
+`node scripts/check-email-otp.mjs` runs a local SMTP inbox and isolated game server, then checks email
+signup, linking an email to an existing account without losing games, sharing, and sign-in from clean
+browser profiles. It sends no external email. Build the client into `target/otp-web` and the server into
+`target/debug` first. Shared builds and this script run from the main checkout's `e2e` directory. The
+browser test waits for the real 60-second resend cooldown. Screenshots go to `.cache/email-otp-*.png`.
+
+The server's `campaign_access` test also covers expiration, replay rejection, account binding, restart
+persistence, and concurrent game isolation. `check-campaign-access.mjs` is a compatibility entry point for the email OTP browser test.

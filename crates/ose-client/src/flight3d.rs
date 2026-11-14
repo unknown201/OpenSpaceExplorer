@@ -257,19 +257,20 @@ fn wheel_spinner(part_id: &str) -> Option<(&'static str, f64)> {
     })
 }
 
-/// Whether part `i` is an engine with nothing hanging from its bottom node: the original then leaves its
-/// shroud (the fairing round the bell) off.
-pub(crate) fn bare_engine(craft: &Craft, i: usize) -> bool {
-    craft
-        .parts
-        .get(i)
-        .is_some_and(|p| p.part_id.starts_with("engine_"))
-        && !craft.parts.iter().any(|q| {
-            q.parent == Some(i)
-                && q.parent_node
-                    .as_deref()
-                    .is_some_and(|n| n.contains("bottom"))
-        })
+/// Whether part `i` is an engine whose prefab shroud mesh (mesh names containing "fairing") stays hidden:
+/// always for the engines the original builds a procedural shroud for (`ose_data::engine_shroud`, drawn by
+/// `fairing_mesh::shroud_model_for` once a part hangs below), else when nothing hangs from its bottom node.
+pub(crate) fn hides_prefab_shroud(craft: &Craft, i: usize) -> bool {
+    craft.parts.get(i).is_some_and(|p| {
+        p.part_id.starts_with("engine_")
+            && (ose_data::engine_shroud::def(&p.part_id).is_some()
+                || !craft.parts.iter().any(|q| {
+                    q.parent == Some(i)
+                        && q.parent_node
+                            .as_deref()
+                            .is_some_and(|n| n.contains("bottom"))
+                }))
+    })
 }
 
 /// A lamp part's light in its model frame: where the original's Light node sits and the way it shines
@@ -2467,7 +2468,7 @@ impl FlightView {
                     it.color = [0.75, 0.9, 1.2, 1.0];
                     it.ambient = it.ambient.max(0.6);
                 }
-                if bare_engine(craft, i) {
+                if hides_prefab_shroud(craft, i) {
                     it.hide_containing = Some("fairing");
                 }
                 let poses: Vec<_> = readout
@@ -2671,6 +2672,9 @@ impl FlightView {
                             }
                         }
                     }
+                }
+                if let Some(shroud) = crate::fairing_mesh::shroud_model_for(gpu, craft, i) {
+                    items.push(crate::fairing_mesh::shroud_item(&it, shroud));
                 }
                 items.push(it);
                 if let Some((state, open)) = chutes.get(&(i as u16)).filter(|_| !animated_chute) {
@@ -3015,7 +3019,7 @@ impl FlightView {
                         }
                     }
                     let k = placed.len();
-                    let shroud = bare_engine(craft, k).then_some("fairing");
+                    let shroud = hides_prefab_shroud(craft, k).then_some("fairing");
                     placed.push((name, lp, lq, part_paint(craft, k, near.paint), shroud));
                 }
                 // The vessel point is the craft's centre of mass when the server sends it (in physics, on the
@@ -3075,6 +3079,9 @@ impl FlightView {
                     it.fill_dir = up;
                     it.fill = 0.25;
                     it.sun = sun_share;
+                    if let Some(shroud) = crate::fairing_mesh::shroud_model_for(gpu, craft, k) {
+                        items.push(crate::fairing_mesh::shroud_item(&it, shroud));
+                    }
                     items.push(it);
                 }
                 continue;

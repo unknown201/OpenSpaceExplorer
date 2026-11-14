@@ -70,6 +70,7 @@ test(`flight smoothness with ${delayMs} ms one-way delay and ${jitterMs} ms jitt
   try {
     await page.goto(legacy ? `${baseURL}/?netsmooth=0` : baseURL!);
     await page.locator('[data-ose="player-name"]').fill(`smoothness ${label}`.trim());
+    await page.locator('[data-ose="login"]').click();
     await page.locator('[data-ose="play"]').click();
     // A campaign of its own, as controls_direction does: the shared one's pads fill with other tests'
     // vessels, and then Launch has nowhere to roll out to.

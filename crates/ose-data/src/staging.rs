@@ -435,6 +435,7 @@ mod tests {
             parachute: None,
             thermal_mass_modifier: 1.0,
             buoyancy: 1.0,
+            buoyancy_center_m: DVec3::ZERO,
             angular_drag: 1.0,
             exhaust_damage: None,
             heatshield: None,

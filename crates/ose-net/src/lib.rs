@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 67;
+pub const PROTOCOL_VERSION: u16 = 69;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -22,6 +22,22 @@ pub const WS_PATH: &str = "/ws";
 /// Client to server.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ClientMessage {
+    RequestEmailOtp {
+        email: String,
+    },
+    EmailSignIn {
+        protocol: u16,
+        email: String,
+        challenge: String,
+        code: String,
+        display_name: String,
+    },
+    ShareSession {
+        id: String,
+    },
+    JoinSessionCode {
+        code: String,
+    },
     Hello {
         protocol: u16,
         token: Option<String>,
@@ -1029,6 +1045,26 @@ pub struct StageReadout {
 /// Server to client.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ServerMessage {
+    EmailOtpSent {
+        email: String,
+        challenge: String,
+        expires_in_secs: u64,
+        retry_after_secs: u64,
+    },
+    AuthError {
+        reason: String,
+    },
+    AccountState {
+        email: Option<String>,
+    },
+    SessionShareCode {
+        id: String,
+        code: String,
+    },
+    SessionJoined {
+        id: String,
+        name: String,
+    },
     Welcome {
         player_id: u64,
         token: String,
@@ -1247,7 +1283,7 @@ pub enum ServerMessage {
     BodyRotation {
         bodies: Vec<BodySpin>,
     },
-    /// The campaign is one shared agency: what a teammate just did for it (protocol 67), sent to the other
+    /// The campaign is one shared agency: what a teammate just did for it (protocol 69), sent to the other
     /// players in the campaign (the one who did it has their own answer). `by` is their display name, `None`
     /// for the agency as a whole. The `ScienceState` with the change follows on its own.
     AgencyNews {

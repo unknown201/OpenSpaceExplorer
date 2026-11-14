@@ -93,6 +93,9 @@ pub struct Campaign {
     pub members: Vec<CampaignMember>,
     #[serde(default)]
     pub owner: Option<u64>,
+    /// Persistent game invitation; independent of account credentials.
+    #[serde(default)]
+    pub share_code: Option<String>,
     #[serde(default = "default_mode")]
     pub mode: ose_net::SessionMode,
     #[serde(default)]
@@ -126,6 +129,7 @@ impl Default for Campaign {
             started_tick: Tick(0),
             members: Vec::new(),
             owner: None,
+            share_code: None,
             mode: default_mode(),
             difficulty: Vec::new(),
             last_played_unix: 0,

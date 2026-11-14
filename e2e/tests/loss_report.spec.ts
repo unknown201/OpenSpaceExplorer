@@ -7,6 +7,7 @@ test("a lost vessel's report offers the reverts and Revert to Launch flies again
   page.setDefaultTimeout(30_000);
   await page.goto(baseURL!);
   await page.locator('[data-ose="player-name"]').fill("crash pilot");
+  await page.locator('[data-ose="login"]').click();
   await page.locator('[data-ose="play"]').click();
   // A Sandbox campaign of its own: every part, and nobody else online to block the reverts.
   await page.locator('[data-ose="session-join"]').first().waitFor();

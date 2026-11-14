@@ -104,7 +104,8 @@ use ose_net::{
 const BODY_LABEL_CLASS: &str = "body";
 
 /// The menu's screens (`screen-<name>` in index.html).
-const MENU_SCREENS: [&str; 9] = [
+const MENU_SCREENS: [&str; 10] = [
+    "login",
     "name",
     "sessions",
     "ksc",
@@ -220,6 +221,7 @@ struct App {
     ws: Option<WebSocket>,
     /// Campaign was requested; send Hello once the background socket opens.
     login_requested: bool,
+    otp_challenge: Option<(String, String)>,
     player_id: Option<u64>,
     drag: Option<(f64, f64)>,
     dpr: f64,
@@ -406,6 +408,8 @@ struct App {
     crash_report_due: std::cell::Cell<Option<(u64, f64)>>,
     /// The flown vessel's records for the flight report.
     flight_records: std::cell::RefCell<Option<hud::FlightRecords>>,
+    /// The records of the other vessels flown this session (a Kerbal's EVA, the craft it left), by vessel.
+    flight_records_shelf: std::cell::RefCell<std::collections::HashMap<u64, hud::FlightRecords>>,
     /// Vessels this client has staged at least once: their first stage is lit, so the next is the one after.
     staged: std::collections::HashSet<u64>,
     roll_sent: f32,
@@ -926,6 +930,7 @@ pub fn start() -> Result<(), JsValue> {
         camera: Camera::new(0),
         ws: None,
         login_requested: false,
+        otp_challenge: None,
         player_id: None,
         drag: None,
         // Settings > Graphics: render resolution as a share of the screen's pixels.
@@ -1069,6 +1074,7 @@ pub fn start() -> Result<(), JsValue> {
         soi_seen: Default::default(),
         crash_report_due: std::cell::Cell::new(None),
         flight_records: std::cell::RefCell::new(None),
+        flight_records_shelf: Default::default(),
         staged: Default::default(),
         roll_sent: 0.0,
         rotation_sent: (0.0, 0.0, 0.0),
@@ -1148,12 +1154,12 @@ pub fn start() -> Result<(), JsValue> {
         log(&format!("initial connection failed: {e:?}"));
         app.borrow().connection_status(
             "disconnected",
-            "Server unavailable. Select Campaign to retry.",
+            &format!("Server unavailable. {} to retry.", retry_action()),
         );
     }
     // Static HTML can arrive before the client starts. Enable the first interaction only after its
     // handlers are attached, so a quick click on a remote load cannot silently disappear.
-    for id in ["play", "player-name"] {
+    for id in ["play", "player-name", "login"] {
         if let Some(element) = app.borrow().doc.get_element_by_id(id) {
             element.remove_attribute("disabled")?;
         }
@@ -2185,7 +2191,58 @@ fn load_part_sizes(app: Shared) {
     });
 }
 
-/// The main menu: a name and Campaign. Campaign signs in over the preconnected socket.
+/// What the pilot selects to (re)connect: Campaign on the main menu once signed in on this machine, the
+/// sign-in button on the sign-in screen otherwise.
+fn retry_action() -> &'static str {
+    if stored("ose.token").is_some() {
+        "Select Campaign"
+    } else {
+        "Sign in"
+    }
+}
+
+/// Connect if needed and sign in: a stored session on Campaign, an email code (or, on a test server
+/// that allows them, a guest account) on the sign-in screen.
+fn request_sign_in(a: &Shared) {
+    if a.borrow().login_requested {
+        return;
+    }
+    let name = a
+        .borrow()
+        .doc
+        .get_element_by_id("player-name")
+        .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+        .map(|i| i.value().trim().to_string())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| "Pilot".into());
+    store("ose.name", &name);
+    {
+        let mut app = a.borrow_mut();
+        set_text(&app.doc, "pilot-chip", &name);
+        app.player_name = name;
+        app.login_requested = true;
+    }
+    if let Err(e) = connect(a) {
+        log(&format!("connection failed: {e:?}"));
+        a.borrow_mut().login_requested = false;
+        a.borrow().connection_status(
+            "disconnected",
+            &format!("Could not connect. {} to retry.", retry_action()),
+        );
+    } else {
+        let app = a.borrow();
+        if let Some(ws) = app
+            .ws
+            .as_ref()
+            .filter(|ws| ws.ready_state() == WebSocket::OPEN)
+        {
+            app.sign_in(ws);
+        }
+    }
+}
+
+/// The front of the game: a sign-in screen first, then the main menu (Campaign, Settings, Extras).
+/// A pilot already signed in on this machine starts on the main menu; Campaign resumes that session.
 fn install_menu(app: &Shared) -> Result<(), JsValue> {
     let doc = app.borrow().doc.clone();
     if let Some(name) = stored("ose.name") {
@@ -2195,68 +2252,40 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         {
             input.set_value(&name);
         }
+        set_text(&doc, "pilot-chip", &name);
     }
+    if let Some(input) = doc
+        .get_element_by_id("login-email")
+        .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+    {
+        if input.value().is_empty() {
+            input.set_value(&stored("ose.email").unwrap_or_default());
+        }
+    }
+    app.borrow().menu_screen(if stored("ose.token").is_some() {
+        "name"
+    } else {
+        "login"
+    });
     if let Some(btn) = doc.get_element_by_id("play") {
         let a = app.clone();
         let cb = Closure::<dyn FnMut()>::new(move || {
-            if a.borrow().login_requested {
-                return;
-            }
             if a.borrow().player_id.is_some() {
                 a.borrow_mut().open_sessions_screen();
-                return;
-            }
-            let name = a
-                .borrow()
-                .doc
-                .get_element_by_id("player-name")
-                .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
-                .map(|i| i.value().trim().to_string())
-                .filter(|n| !n.is_empty())
-                .unwrap_or_else(|| "Pilot".into());
-            store("ose.name", &name);
-            {
-                let mut app = a.borrow_mut();
-                app.player_name = name;
-                app.login_requested = true;
-            }
-            if let Err(e) = connect(&a) {
-                log(&format!("connection failed: {e:?}"));
-                a.borrow_mut().login_requested = false;
-                a.borrow().connection_status(
-                    "disconnected",
-                    "Could not connect. Select Campaign to retry.",
-                );
+            } else if stored("ose.token").is_none() {
+                a.borrow().menu_screen("login");
             } else {
-                let app = a.borrow();
-                if let Some(ws) = app
-                    .ws
-                    .as_ref()
-                    .filter(|ws| ws.ready_state() == WebSocket::OPEN)
-                {
-                    app.sign_in(ws);
-                }
+                request_sign_in(&a);
             }
         });
         btn.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
         cb.forget();
     }
-    if let Some(input) = doc.get_element_by_id("player-name") {
+    // A submit button: Enter in any of the sign-in fields presses it too.
+    if let Some(btn) = doc.get_element_by_id("login") {
         let a = app.clone();
-        let cb =
-            Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |ev: web_sys::KeyboardEvent| {
-                if ev.key() == "Enter" {
-                    if let Some(btn) = a
-                        .borrow()
-                        .doc
-                        .get_element_by_id("play")
-                        .and_then(|e| e.dyn_into::<HtmlElement>().ok())
-                    {
-                        btn.click();
-                    }
-                }
-            });
-        input.add_event_listener_with_callback("keydown", cb.as_ref().unchecked_ref())?;
+        let cb = Closure::<dyn FnMut()>::new(move || request_sign_in(&a));
+        btn.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
         cb.forget();
     }
     let wire = |id: &str, f: Box<dyn Fn(&Shared)>| -> Result<(), JsValue> {
@@ -4227,6 +4256,114 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         list.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
         cb.forget();
     }
+    wire(
+        "join-code-submit",
+        Box::new(|a| {
+            let app = a.borrow();
+            let code = app
+                .doc
+                .get_element_by_id("join-code")
+                .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+                .map(|i| i.value().trim().to_string())
+                .unwrap_or_default();
+            if code.is_empty() {
+                set_text(&app.doc, "menu-note", "Enter a game share code first.");
+                return;
+            }
+            if let Some(ws) = &app.ws {
+                send(ws, &ClientMessage::JoinSessionCode { code });
+            }
+        }),
+    )?;
+    wire(
+        "share-current",
+        Box::new(|a| {
+            let app = a.borrow();
+            if let Some(ws) = &app.ws {
+                send(
+                    ws,
+                    &ClientMessage::ShareSession {
+                        id: app.campaign_id.clone(),
+                    },
+                );
+            }
+        }),
+    )?;
+    wire(
+        "otp-resend",
+        Box::new(|a| {
+            let app = a.borrow();
+            if let Some(input) = app
+                .doc
+                .get_element_by_id("login-otp")
+                .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+            {
+                input.set_value("");
+            }
+            if let Some(login) = app
+                .doc
+                .get_element_by_id("login")
+                .and_then(|e| e.dyn_into::<HtmlElement>().ok())
+            {
+                drop(app);
+                login.click();
+            }
+        }),
+    )?;
+    wire(
+        "account-send-otp",
+        Box::new(|a| {
+            let app = a.borrow();
+            let email = app.input_value("account-email");
+            if let Some(ws) = &app.ws {
+                send(ws, &ClientMessage::RequestEmailOtp { email });
+            }
+        }),
+    )?;
+    wire(
+        "account-verify-otp",
+        Box::new(|a| {
+            let app = a.borrow();
+            let Some((email, challenge)) = &app.otp_challenge else {
+                set_text(&app.doc, "menu-note", "Request an email code first.");
+                return;
+            };
+            if let Some(ws) = &app.ws {
+                send(
+                    ws,
+                    &ClientMessage::EmailSignIn {
+                        protocol: PROTOCOL_VERSION,
+                        email: email.clone(),
+                        challenge: challenge.clone(),
+                        code: app.input_value("account-otp"),
+                        display_name: app.player_name.clone(),
+                    },
+                );
+            }
+        }),
+    )?;
+    wire(
+        "sign-out",
+        Box::new(|_a| {
+            if let Some(w) = web_sys::window() {
+                if let Ok(Some(storage)) = w.local_storage() {
+                    storage.remove_item("ose.token").ok();
+                }
+                w.location().reload().ok();
+            }
+        }),
+    )?;
+    wire(
+        "account-logout",
+        Box::new(|_a| {
+            if let Some(w) = web_sys::window() {
+                if let Ok(Some(storage)) = w.local_storage() {
+                    storage.remove_item("ose.token").ok();
+                }
+                w.location().reload().ok();
+            }
+        }),
+    )?;
     wire("create", Box::new(|a| a.borrow_mut().create_session()))?;
     wire("agency-apply", Box::new(|a| a.borrow_mut().send_agency()))?;
     wire(
@@ -4257,6 +4394,10 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
             let action = button.get_attribute("data-ose").unwrap_or_default();
             if action == "session-join" {
                 a.borrow_mut().join_session(&id);
+            } else if action == "session-share" {
+                if let Some(ws) = &a.borrow().ws {
+                    send(ws, &ClientMessage::ShareSession { id });
+                }
             } else {
                 if action == "session-delete"
                     && !web_sys::window().is_some_and(|w| {
@@ -4401,20 +4542,31 @@ fn connect(app: &Shared) -> Result<(), JsValue> {
         let app = app.clone();
         let on_close = Closure::<dyn FnMut()>::new(move || {
             let mut a = app.borrow_mut();
+            let rejected_login = a.player_id.is_none()
+                && a.doc
+                    .get_element_by_id("menu-note")
+                    .and_then(|e| e.text_content())
+                    .is_some_and(|s| s.starts_with("rejected:"));
             a.ws = None;
             a.login_requested = false;
             a.player_id = None;
             // Clear the previous campaign/flight before a retry receives fresh server state.
             a.leave_session();
             a.set_status("disconnected; select Campaign to reconnect");
-            a.connection_status(
-                "disconnected",
-                "Connection lost. Select Campaign to reconnect.",
-            );
+            if !rejected_login {
+                a.connection_status(
+                    "disconnected",
+                    &format!("Connection lost. {} to reconnect.", retry_action()),
+                );
+            }
             if let Some(m) = a.doc.get_element_by_id("menu") {
                 m.class_list().remove_1("hidden").ok();
             }
-            a.menu_screen("name");
+            a.menu_screen(if stored("ose.token").is_some() {
+                "name"
+            } else {
+                "login"
+            });
         });
         ws.set_onclose(Some(on_close.as_ref().unchecked_ref()));
         on_close.forget();
@@ -4577,6 +4729,12 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
     let a = app.clone();
     let on_move = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
         let mut app = a.borrow_mut();
+        // A button let go where the page never heard it (outside the window, over another program, after
+        // Alt+Tab) sends no mouseup: with no button held now, the camera drag is over. It kept turning the
+        // camera with the bare mouse until the next click.
+        if interaction::drag_orphaned(ev.buttons(), app.drag.is_some() || app.mnv_drag.is_some()) {
+            app.end_camera_drag();
+        }
         // Mouselook (Tab): the flight camera follows the mouse without a button held.
         #[cfg(target_arch = "wasm32")]
         if app.mouselook && app.flying.is_some() && !app.map_mode && ev.buttons() == 0 {
@@ -5387,7 +5545,9 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                         ev.prevent_default();
                         true
                     }
-                    "Tab" if !ev.repeat() && !app.map_mode => {
+                    // Alt+Tab is the system's window switch, not mouselook: toggled by it, the camera
+                    // followed the bare mouse on coming back.
+                    "Tab" if !ev.repeat() && !app.map_mode && !ev.alt_key() => {
                         app.mouselook = !app.mouselook;
                         hud::push(
                             &app.doc,
@@ -5624,7 +5784,12 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
     on_key_up.forget();
     // A key released while the tab is in the background never sends keyup: forget all held keys.
     let a = app.clone();
-    let on_blur = Closure::<dyn FnMut()>::new(move || a.borrow_mut().keys.clear());
+    let on_blur = Closure::<dyn FnMut()>::new(move || {
+        let mut app = a.borrow_mut();
+        app.keys.clear();
+        // and a camera drag held while the window lost focus never gets its mouseup either
+        app.end_camera_drag();
+    });
     window.add_event_listener_with_callback("blur", on_blur.as_ref().unchecked_ref())?;
     on_blur.forget();
 
@@ -5752,17 +5917,44 @@ impl App {
         set_text(&self.doc, "menu-note", note);
     }
 
+    fn input_value(&self, id: &str) -> String {
+        self.doc
+            .get_element_by_id(id)
+            .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+            .map(|i| i.value().trim().to_string())
+            .unwrap_or_default()
+    }
     fn sign_in(&self, ws: &WebSocket) {
-        self.connection_status("authenticating", "Opening campaigns…");
-        self.set_status("connected, waiting for the server");
-        send(
-            ws,
-            &ClientMessage::Hello {
+        self.connection_status("authenticating", "Signing in...");
+        let msg = if let Some(token) = stored("ose.token") {
+            ClientMessage::Hello {
                 protocol: PROTOCOL_VERSION,
-                token: stored("ose.token"),
+                token: Some(token),
                 display_name: self.player_name.clone(),
-            },
-        );
+            }
+        } else {
+            let email = self.input_value("login-email").to_ascii_lowercase();
+            let code = self.input_value("login-otp");
+            match &self.otp_challenge {
+                // No email: a guest account where the server allows them (test fixtures); a public server asks for one.
+                _ if email.is_empty() => ClientMessage::Hello {
+                    protocol: PROTOCOL_VERSION,
+                    token: None,
+                    display_name: self.player_name.clone(),
+                },
+                Some((sent_to, challenge)) if *sent_to == email && !code.is_empty() => {
+                    ClientMessage::EmailSignIn {
+                        protocol: PROTOCOL_VERSION,
+                        email,
+                        challenge: challenge.clone(),
+                        code,
+                        display_name: self.player_name.clone(),
+                    }
+                }
+                _ => ClientMessage::RequestEmailOtp { email },
+            }
+        };
+        send(ws, &msg);
     }
 
     fn set_status(&self, s: &str) {
@@ -5937,9 +6129,26 @@ impl App {
                     &format!("{} (#{player_id})", self.player_name),
                 );
                 self.connection_status("ready", "");
-                self.open_sessions_screen();
+                if self.screen_open("login") {
+                    // Signed in from the sign-in screen: on to the main menu.
+                    if let Some(login) = self.doc.get_element_by_id("screen-login") {
+                        login.class_list().remove_1("code-sent").ok();
+                    }
+                    set_text(&self.doc, "login", "Email me a code");
+                    self.menu_screen("name");
+                } else {
+                    self.open_sessions_screen();
+                }
             }
             ServerMessage::Rejected { reason } => {
+                if self.player_id.is_none() {
+                    if let Some(w) = web_sys::window() {
+                        if let Ok(Some(storage)) = w.local_storage() {
+                            storage.remove_item("ose.token").ok();
+                        }
+                    }
+                    self.menu_screen("login");
+                }
                 self.set_status(&format!("rejected: {reason}"));
                 set_text(&self.doc, "menu-note", &format!("rejected: {reason}"));
                 if let Some(m) = self.doc.get_element_by_id("menu") {
@@ -5968,6 +6177,89 @@ impl App {
                     }
                     self.update_warp_holder();
                 }
+            }
+            ServerMessage::EmailOtpSent {
+                email, challenge, ..
+            } => {
+                self.login_requested = false;
+                self.otp_challenge = Some((email.clone(), challenge));
+                store("ose.email", &email);
+                let code_id = if self.player_id.is_some() {
+                    "account-otp"
+                } else {
+                    "login-otp"
+                };
+                if self.player_id.is_none() {
+                    // The code field shows only once a code is on its way.
+                    set_text(&self.doc, "login", "Sign in");
+                    if let Some(login) = self.doc.get_element_by_id("screen-login") {
+                        login.class_list().add_1("code-sent").ok();
+                    }
+                }
+                if let Some(input) = self
+                    .doc
+                    .get_element_by_id(code_id)
+                    .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+                {
+                    input.set_value("");
+                    input.focus().ok();
+                }
+                set_text(&self.doc, "menu-note", &format!("Code sent to {email}. Enter the 6-digit code within 10 minutes. You can resend after 60 seconds."));
+                set_text(
+                    &self.doc,
+                    "account-status",
+                    "Check your inbox for a 6-digit code.",
+                );
+            }
+            ServerMessage::AuthError { reason } => {
+                self.login_requested = false;
+                set_text(&self.doc, "menu-note", &reason);
+                set_text(&self.doc, "account-status", &reason);
+            }
+            ServerMessage::AccountState { email } => {
+                if let Some(email) = email {
+                    store("ose.email", &email);
+                    if let Some(input) = self
+                        .doc
+                        .get_element_by_id("account-email")
+                        .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+                    {
+                        input.set_value(&email);
+                    }
+                    set_text(
+                        &self.doc,
+                        "account-status",
+                        &format!("Verified: {email}. Use email codes to sign in on any machine."),
+                    );
+                } else {
+                    if let Some(details) = self.doc.get_element_by_id("account-details") {
+                        details.set_attribute("open", "").ok();
+                    }
+                    set_text(
+                        &self.doc,
+                        "account-status",
+                        "Verify your email to keep these games and sign in on any machine.",
+                    );
+                }
+            }
+            ServerMessage::SessionShareCode { code, .. } => {
+                for id in ["session-share-code", "paused-share-code"] {
+                    if let Some(input) = self
+                        .doc
+                        .get_element_by_id(id)
+                        .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+                    {
+                        input.set_value(&code);
+                    }
+                }
+                set_text(&self.doc, "menu-note", "Share this game code with a friend. They can enter it under Join with a share code.");
+            }
+            ServerMessage::SessionJoined { name, .. } => {
+                set_text(
+                    &self.doc,
+                    "menu-note",
+                    &format!("Joined {name}. Choose Resume to play."),
+                );
             }
             ServerMessage::SessionList { sessions } => {
                 self.render_sessions(&sessions);
@@ -6075,6 +6367,10 @@ impl App {
             } => match (vessel, reason) {
                 (Some(id), _) => {
                     self.revert_vessel = Some(id);
+                    // The last flight's report (a recovery's) must not stay over the new rocket on the pad.
+                    if let Some(e) = self.doc.get_element_by_id("flight-report") {
+                        e.class_list().remove_1("open").ok();
+                    }
                     if let Some(craft_id) = self.pending_launch.take() {
                         self.start_flight(id, Some(craft_id));
                     }
@@ -7174,7 +7470,7 @@ impl App {
         if open {
             self.paused_from.set(
                 self.open_menu_screen()
-                    .filter(|s| !matches!(*s, "paused" | "name" | "sessions")),
+                    .filter(|s| !matches!(*s, "paused" | "login" | "name" | "sessions")),
             );
         }
         if let Some(m) = self.doc.get_element_by_id("menu") {
@@ -7187,18 +7483,21 @@ impl App {
         if open {
             self.menu_screen(if self.in_session {
                 "paused"
-            } else if self.ws.is_some() {
+            } else if self.player_id.is_some() {
                 "sessions"
-            } else {
+            } else if stored("ose.token").is_some() {
                 "name"
+            } else {
+                "login"
             });
         }
     }
 
-    /// Show one of the menu screens: "name", "sessions" or "paused".
+    /// Show one of the menu screens: "login", "name", "sessions" or "paused".
     fn menu_screen(&self, which: &str) {
         #[cfg(target_arch = "wasm32")]
-        if matches!(which, "name" | "sessions")
+        if matches!(which, "login" | "name" | "sessions")
+            && !self.screen_open("login")
             && !self.screen_open("name")
             && !self.screen_open("sessions")
         {
@@ -12281,12 +12580,18 @@ impl App {
         {
             let mut rec = self.flight_records.borrow_mut();
             if rec.as_ref().map(|r| r.vessel) != Some(id) {
-                *rec = Some(hud::FlightRecords {
+                // Going on EVA and boarding again switches vessels and back: each keeps its own records,
+                // or the recovery report said a flight to 900 m peaked at the pad's 112 m.
+                let mut shelf = self.flight_records_shelf.borrow_mut();
+                if let Some(old) = rec.take() {
+                    shelf.insert(old.vessel, old);
+                }
+                *rec = Some(shelf.remove(&id).unwrap_or_else(|| hud::FlightRecords {
                     vessel: id,
                     name: v.name.clone(),
                     launch_ut,
                     ..Default::default()
-                });
+                }));
             }
             if let (Some(r), Some(b)) = (rec.as_mut(), body) {
                 r.note(f.altitude_m, f.surface_speed_mps.max(0.0), &b.id);
@@ -12737,7 +13042,7 @@ impl App {
         let front = self
             .doc
             .query_selector(
-                "#menu:not(.hidden) #screen-name.open, #menu:not(.hidden) #screen-sessions.open",
+                "#menu:not(.hidden) #screen-login.open, #menu:not(.hidden) #screen-name.open, #menu:not(.hidden) #screen-sessions.open",
             )
             .ok()
             .flatten()
@@ -13309,7 +13614,7 @@ impl App {
             html.push_str(&format!(
                 "<li data-ose=\"session\" data-ose-id=\"{id}\" class=\"has-thumb\"><i class=\"sess-thumb\" style=\"background-image:url(assets/loading/{art}.jpg)\"></i><div><div class=\"name\">{name}</div>\
                  <div class=\"meta\">{mode} \u{b7} {ut} \u{b7} {players} {pl} online \u{b7} {ownership}</div></div>\
-                 <div class=\"session-actions\"><button data-ose=\"session-join\" data-ose-session=\"{id}\">Resume</button>{manage}</div></li>",
+                 <div class=\"session-actions\"><button data-ose=\"session-join\" data-ose-session=\"{id}\">Resume</button><button data-ose=\"session-share\" data-ose-session=\"{id}\">Share</button>{manage}</div></li>",
                 ownership = esc(&ownership),
                 id = esc(&s.id),
                 name = esc(&s.name),
@@ -13625,25 +13930,10 @@ impl App {
             normal_mps: 0.0,
             radial_mps: 0.0,
         });
-        set_input_value(&self.doc, "node-dt", dt);
+        set_input_value(&self.doc, "node-dt", hud::node_dt_to_slider(dt));
         set_input_value(&self.doc, "node-prograde", 0.0);
         set_input_value(&self.doc, "node-normal", 0.0);
         set_input_value(&self.doc, "node-radial", 0.0);
-        // Let the time slider span one orbit of the vessel.
-        if let Some(scene) = &self.scene {
-            if let Some(v) = scene.vessel(vessel) {
-                let period = scene::orbit_from(scene.bodies[rb].mu, &v.orbit).period;
-                if period.is_finite() {
-                    if let Some(el) = self
-                        .doc
-                        .get_element_by_id("node-dt")
-                        .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
-                    {
-                        el.set_max(&format!("{:.0}", period.max(600.0)));
-                    }
-                }
-            }
-        }
         if let Some(panel) = self.doc.get_element_by_id("node-panel") {
             panel.class_list().add_1("open").ok();
         }
@@ -13781,17 +14071,7 @@ impl App {
         };
         node.ut = t;
         let dt = t - node.anchor_ut;
-        if let Some(el) = self
-            .doc
-            .get_element_by_id("node-dt")
-            .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
-        {
-            let max: f64 = el.max().parse().unwrap_or(600.0);
-            if dt > max {
-                el.set_max(&format!("{:.0}", dt.ceil()));
-            }
-        }
-        set_input_value(&self.doc, "node-dt", dt);
+        set_input_value(&self.doc, "node-dt", hud::node_dt_to_slider(dt));
         let now = now_ms();
         if now - self.mnv_sent_ms > 100.0 {
             self.mnv_sent_ms = now;
@@ -13820,17 +14100,7 @@ impl App {
             node.anchor_ut = self.time.ut_at(now_ms());
             node.ut = t;
             let dt = t - node.anchor_ut;
-            if let Some(el) = self
-                .doc
-                .get_element_by_id("node-dt")
-                .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
-            {
-                let max: f64 = el.max().parse().unwrap_or(600.0);
-                if dt > max {
-                    el.set_max(&format!("{:.0}", dt.ceil()));
-                }
-            }
-            set_input_value(&self.doc, "node-dt", dt);
+            set_input_value(&self.doc, "node-dt", hud::node_dt_to_slider(dt));
         }
         self.send_node();
         true
@@ -13893,17 +14163,7 @@ impl App {
         node.anchor_ut = now;
         self.node = Some(node);
         let dt = node.ut - now;
-        if let Some(el) = self
-            .doc
-            .get_element_by_id("node-dt")
-            .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
-        {
-            let max: f64 = el.max().parse().unwrap_or(600.0);
-            if dt > max {
-                el.set_max(&format!("{:.0}", dt.ceil()));
-            }
-        }
-        set_input_value(&self.doc, "node-dt", dt);
+        set_input_value(&self.doc, "node-dt", hud::node_dt_to_slider(dt));
         set_input_value(&self.doc, "node-prograde", node.prograde_mps);
         set_input_value(&self.doc, "node-normal", node.normal_mps);
         set_input_value(&self.doc, "node-radial", node.radial_mps);
@@ -13944,8 +14204,8 @@ impl App {
         let Some(mut node) = self.node else {
             return;
         };
-        if let Some(dt) = input_value(&self.doc, "node-dt") {
-            node.ut = node.anchor_ut + dt;
+        if let Some(pos) = input_value(&self.doc, "node-dt") {
+            node.ut = node.anchor_ut + hud::node_slider_to_dt(pos);
         }
         if let Some(p) = input_value(&self.doc, "node-prograde") {
             node.prograde_mps = p;
@@ -13958,6 +14218,18 @@ impl App {
         }
         self.node = Some(node);
         self.send_node();
+    }
+
+    /// Ends a camera (or maneuver handle) drag whose mouseup never arrived: the camera stops following the
+    /// mouse, and a dragged maneuver node is sent as it stands.
+    fn end_camera_drag(&mut self) {
+        if self.mnv_drag.take().is_some() {
+            self.send_node();
+        }
+        self.drag = None;
+        self.press = None;
+        self.canvas.class_list().remove_1("dragging").ok();
+        self.gpu_canvas.class_list().remove_1("dragging").ok();
     }
 
     fn send_node(&mut self) {
@@ -14016,8 +14288,21 @@ impl App {
         }
     }
 
-    /// Place the node marker on the vessel's current orbit at the burn time and refresh its countdown.
-    fn draw_node(&self, ut: f64, positions: &[ose_math::DVec3], centre: ose_math::DVec3) {
+    /// The node panel's countdown to the node being edited. Every frame, in flight as well as in the map: it used
+    /// to be refreshed only by the map's drawing, so in flight it froze at the value the map last showed.
+    fn update_node_eta(&self) {
+        let Some(node) = self.node else { return };
+        let ut = self.time.ut_at(now_ms());
+        let text = hud::fmt_dt(node.ut - ut);
+        if let Some(el) = self.doc.get_element_by_id("node-dt-text") {
+            if el.text_content().as_deref() != Some(text.as_str()) {
+                el.set_text_content(Some(&text));
+            }
+        }
+    }
+
+    /// Place the node marker on the vessel's current orbit at the burn time.
+    fn draw_node(&self, positions: &[ose_math::DVec3], centre: ose_math::DVec3) {
         let (Some(node), Some(el)) = (self.node, &self.node_el) else {
             return;
         };
@@ -14028,18 +14313,6 @@ impl App {
         let style = el.style();
         style.set_property("left", &format!("{x:.1}px")).ok();
         style.set_property("top", &format!("{y:.1}px")).ok();
-        let remaining = node.ut - ut;
-        let sign = if remaining < 0.0 { "+" } else { "-" };
-        let r = remaining.abs();
-        set_text(
-            &self.doc,
-            "node-dt-text",
-            &format!(
-                "T{sign}{}:{:02}",
-                (r / 60.0).floor() as u64,
-                (r % 60.0) as u64
-            ),
-        );
         let ctx = &self.ctx;
         ctx.set_stroke_style_str("rgba(150,170,255,0.9)");
         ctx.set_line_width(1.0);
@@ -14122,6 +14395,7 @@ impl App {
 
     fn frame(&mut self) {
         self.mnv_hold_tick();
+        self.update_node_eta();
         let t = now_ms();
         if self.frame_at_ms > 0.0 {
             self.frame_dt_s = ((t - self.frame_at_ms) / 1000.0).clamp(0.001, 0.1);
@@ -14481,7 +14755,7 @@ impl App {
             };
             let parent_pos = positions[p as usize];
             let r_px = orbit.semi_major_axis().abs() / cam.m_per_px;
-            if r_px < 2.0 || r_px > 1.0e5 {
+            if !(2.0..=1.0e5).contains(&r_px) {
                 continue;
             }
             let alpha = if i == cam.focus { 0.9 } else { 0.45 };
@@ -14554,7 +14828,7 @@ impl App {
             }
         }
         self.draw_vessels(ut, &positions, centre);
-        self.draw_node(ut, &positions, centre);
+        self.draw_node(&positions, centre);
         self.update_breadcrumbs();
     }
 
@@ -15483,18 +15757,6 @@ impl App {
                     style.set_property("left", &format!("{x:.1}px")).ok();
                     style.set_property("top", &format!("{y:.1}px")).ok();
                 }
-                let remaining = node.ut - ut;
-                let sign = if remaining < 0.0 { "+" } else { "-" };
-                let r = remaining.abs();
-                set_text(
-                    &self.doc,
-                    "node-dt-text",
-                    &format!(
-                        "T{sign}{}:{:02}",
-                        (r / 60.0).floor() as u64,
-                        (r % 60.0) as u64
-                    ),
-                );
             }
         }
         self.canvas
