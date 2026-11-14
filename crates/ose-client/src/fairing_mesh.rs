@@ -200,6 +200,72 @@ pub fn models_for(
     names.iter().all(|n| gpu.has_model(n)).then_some(names)
 }
 
+/// An engine's shroud as the original builds it (`ose_data::engine_shroud`): one panel, a lathe from the
+/// bottom ring (`target_radius`) up to the top ring, in the part's frame.
+pub fn shroud_shape(
+    d: &ose_data::engine_shroud::ShroudDef,
+    target_radius: f64,
+) -> (FairingShape, FairingDef) {
+    let [lo, hi] = d.rings(target_radius);
+    let shape = FairingShape {
+        sections: vec![(0.0, lo.1), (hi.0 - lo.0, hi.1)],
+        capped: false,
+        pieces: 0,
+        ejection_force: 0.0,
+    };
+    let def = FairingDef {
+        mass_t: 0.0,
+        base_radius: d.base_radius,
+        cap_radius: 0.0,
+        max_radius: d.base_radius.max(target_radius),
+        mass_area_ratio: 0.0,
+        height_min: 0.0,
+        height_max: d.height,
+        side_count: d.side_count,
+        length_snap: 0.0,
+        radius_snap: 0.0,
+        ejection_force: 0.0,
+        pieces: 0,
+        base_height: lo.0,
+    };
+    (shape, def)
+}
+
+/// The model name of `part_id`'s shroud flaring to `target_radius`.
+pub fn shroud_model_name(part_id: &str, target_radius: f64) -> String {
+    format!("shroud:{part_id}:{:.4}", target_radius)
+}
+
+/// Part `i`'s engine shroud model, when a part hangs from its shroud node, once it is loaded.
+#[cfg(target_arch = "wasm32")]
+pub fn shroud_model_for(
+    gpu: &mut crate::render::Renderer,
+    craft: &ose_data::craft::Craft,
+    i: usize,
+) -> Option<String> {
+    let (d, target) = ose_data::engine_shroud::shroud_for(craft, i)?;
+    let name = shroud_model_name(&craft.parts[i].part_id, target);
+    let (shape, def) = shroud_shape(d, target);
+    gpu.request_built_model(&name, BASE_URL, move |base| {
+        piece_glb(base, &shape, &def, 0)
+    });
+    gpu.has_model(&name).then_some(name)
+}
+
+/// The shroud drawn beside its engine's draw item: the engine's pose and look, the wall tinted in the vessel's
+/// base colour (the original paints `FairingsProceduralMat` with `Module_Color`'s base and accent; the
+/// stand-in material here has no paint mask).
+#[cfg(target_arch = "wasm32")]
+pub fn shroud_item(engine: &crate::render::DrawItem, model: String) -> crate::render::DrawItem {
+    let mut it = engine.companion(model);
+    if let Some((base, _)) = engine.paint {
+        for (c, b) in it.color.iter_mut().zip(base) {
+            *c *= b;
+        }
+    }
+    it
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -220,5 +286,27 @@ mod tests {
         let shroud = FairingShape { pieces: 0, ..s };
         assert_eq!(piece_count(&shroud), 1);
         assert_eq!(piece_direction(&shroud, 0), glam::Vec3::Y);
+    }
+
+    #[test]
+    fn swivel_shroud_mesh_wraps_the_engine_between_its_nodes() {
+        let d = ose_data::engine_shroud::def("engine_1v_methalox_swivel").unwrap();
+        let (shape, def) = shroud_shape(d, 0.625);
+        let (pos, _, tris) = piece_mesh(&shape, &def, 0);
+        assert!(!tris.is_empty());
+        let ys: Vec<f32> = pos.iter().map(|p| p[1]).collect();
+        let lo = ys.iter().copied().fold(f32::INFINITY, f32::min);
+        let hi = ys.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        // KSP2's saved Swivel shroud: y 0.680 down to -1.000 (the bottom node). The prefab's static mesh,
+        // drawn before, spanned -1.868..-0.133 and left the engine's top bare.
+        assert!(
+            (hi - 0.680).abs() < 2e-3 && (lo + 1.0).abs() < 2e-3,
+            "{lo}..{hi}"
+        );
+        let r = pos
+            .iter()
+            .map(|p| (p[0] * p[0] + p[2] * p[2]).sqrt())
+            .fold(0.0, f32::max);
+        assert!((r - 0.625).abs() < 1e-3);
     }
 }

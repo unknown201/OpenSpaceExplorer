@@ -726,7 +726,7 @@ impl VabView {
             let mut item = DrawItem::lit(name, wpos - cam_pos, wrot, 1.0, light);
             item.ambient = 0.45;
             item.paint = crate::flight3d::part_paint(craft, i, self.paint);
-            if crate::flight3d::bare_engine(craft, i) {
+            if crate::flight3d::hides_prefab_shroud(craft, i) {
                 item.hide_containing = Some("fairing");
             }
             item.fill_dir = -forward;
@@ -746,6 +746,9 @@ impl VabView {
                 item.color = [1.0, 1.0, 0.75, 1.0];
                 item.ambient = 0.6;
                 item.highlight = 0.3;
+            }
+            if let Some(shroud) = crate::fairing_mesh::shroud_model_for(gpu, craft, i) {
+                items.push(crate::fairing_mesh::shroud_item(&item, shroud));
             }
             items.push(item);
         }
