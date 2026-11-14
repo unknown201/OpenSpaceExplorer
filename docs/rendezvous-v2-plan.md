@@ -1,6 +1,6 @@
 # Rendezvous v2: launch to dock from anywhere
 
-Status: **in progress** (2026-11-14). R1 is done (`crates/ose-guidance`). R2 and R3 are done (`crates/ose-pilot`; tests T1, T4 and T9 pass, run by CI with `--release`). R4 is done: `ose_pilot::soi` moves between spheres of influence, and T3, T5 and T6 pass. R5 is done: `ose_pilot::window` times launches from any landed site, and T2 and T7 pass. This is the prerequisite for [delivery routes](delivery-routes-design.md).
+Status: **in progress** (2026-11-14). R1 is done (`crates/ose-guidance`). R2 and R3 are done (`crates/ose-pilot`; tests T1, T4 and T9 pass, run by CI with `--release`). R4 is done: `ose_pilot::soi` moves between spheres of influence, and T3, T5 and T6 pass. R5 is done: `ose_pilot::window` times launches from any landed site, and T2 and T7 pass. R6 is done: `ose_pilot::descent` brings a vessel home near KSC, and T8 passes. All nine scenarios pass. This is the prerequisite for [delivery routes](delivery-routes-design.md).
 Josh decided that routes, including depot-to-depot routes, are built on a rendezvous system that
 works from launch to dock, from KSC, from stations and depots, and from the Mun, including orbital
 windows. That system has to be well tested before routes depend on it.
@@ -112,6 +112,27 @@ Measured: T7 (Mun surface to a 30 km station) needs 9.5 + 1.9 + 0.7 m/s of rende
 braking with the window, against 76 m/s, eight plans and 94 m/s of braking without it. T2 (KSC to a 20°
 station) lifts off 0.03° from the plane and docks after two plans.
 
+### 3.7 How coming home works (R6, done)
+
+`ose_pilot::descent::Descent` plans the deorbit burn on the vacuum orbit: over two orbits of burn
+times it lowers periapsis to 45 km and picks the burn whose landing point, taken as a fixed angle
+along the track from the vacuum periapsis, falls closest to the site. That angle depends on the craft
+and entry, so it is measured from a real flight (`flown_past_periapsis_deg`), like a launch profile:
+the proving descent of the T8 lifeboat came down 13.3° short of its vacuum periapsis, and the run
+aimed with that landed 18 km from the KSC pad. Reentry holds no attitude: the lifeboat's heat shield
+and heavy service tank are both at its aft end, so the air turns it shield first. Parachutes are armed
+below 250 m/s and 40 km. The run ends when the vessel rests on the ground or in the water.
+
+Findings on the way:
+- The T8 lifeboat (Zvezda with a heat shield in place of its aft port and four radial chutes) burned
+  up without the shield, and with the shield at the wrong end it tumbled.
+- After undocking by its forward port, Zvezda's frame comes out reversed relative to its engines.
+  `Burn` now measures which way the engines push from the first 0.5 m/s and steers by that.
+- `aim` picked an arbitrary half-turn axis each tick when asked to turn an axis to its opposite,
+  so the attitude hold chased a new target every step and spun the craft up. It now turns about the
+  control point's top axis. The sim let the spin grow past 600 rad/s and then threw the vessel to
+  385 km/s; that sim robustness issue is reported to the sim thread.
+
 ## 4. Test matrix (L8)
 
 Every scenario runs headless on the server sim, with stock craft, ordinary controls, and no teleports.
@@ -129,7 +150,7 @@ Each one passes only if it docks, survives, and stays within a Δv margin of the
 | T8 | Docked at LKO station | KSC (recover) | Deorbit and landing near KSC |
 | T9 | Two pilots, same port, same window | Station | Collision behaves physically, with no crash or stuck state |
 
-T1 to T7 and T9 run in normal CI, optimised (`cargo test --release -p ose-pilot`, about 3 min with the build); unoptimised they take far longer, so debug builds skip them. The flaky `mun_run` test is fixed as part of L7, not relaxed.
+All nine scenarios run in normal CI, optimised (`cargo test --release -p ose-pilot`, about 3 min with the build); unoptimised they take far longer, so debug builds skip them. The flaky `mun_run` test is fixed as part of L7, not relaxed.
 
 ## 5. Delivery order (one PR each, each green before the next)
 

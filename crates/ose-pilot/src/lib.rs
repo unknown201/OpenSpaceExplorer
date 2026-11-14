@@ -14,6 +14,7 @@ pub mod approach;
 pub mod ascent;
 pub mod burn;
 pub mod depart;
+pub mod descent;
 pub mod mission;
 pub mod soi;
 pub mod window;
@@ -27,9 +28,29 @@ pub fn control_axes(p: &ose_sim::flight::Powered) -> (DVec3, DVec3, DVec3) {
 
 /// The direction to hold (`Attitude::Fixed`, which steers the control point's fore axis) so that
 /// the craft axis `axis` (inertial, now) turns to point along `want`.
+///
+/// When `axis` points nearly opposite to `want`, any half turn would do; it turns about the control
+/// point's top axis (made square to `axis`), so the answer does not jump from tick to tick and set
+/// the attitude hold chasing a different target every step.
 pub fn aim(p: &ose_sim::flight::Powered, axis: DVec3, want: DVec3) -> DVec3 {
     let g = |v: DVec3| glam::DVec3::new(v.x, v.y, v.z);
-    let turn = glam::DQuat::from_rotation_arc(g(axis.normalized()), g(want.normalized()));
+    let (from, to) = (g(axis.normalized()), g(want.normalized()));
+    let turn = if from.dot(to) < -0.999 {
+        let (right, _, top) = control_axes(p);
+        let pick = if top.dot(axis).abs() < 0.9 {
+            top
+        } else {
+            right
+        };
+        let k = g(pick) - from * from.dot(g(pick));
+        glam::DQuat::from_axis_angle(k.normalize(), std::f64::consts::PI)
+            * glam::DQuat::from_rotation_arc(
+                from,
+                glam::DQuat::from_axis_angle(k.normalize(), -std::f64::consts::PI) * to,
+            )
+    } else {
+        glam::DQuat::from_rotation_arc(from, to)
+    };
     let fore = turn * g(control_axes(p).1);
     DVec3::new(fore.x, fore.y, fore.z)
 }

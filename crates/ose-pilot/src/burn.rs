@@ -1,5 +1,10 @@
 //! A finite burn: coast until shortly before the burn, turn to the burn direction, then fire so the
 //! burn is centred on its planned time, and cut off on measured delta-v (gravity removed).
+//!
+//! The engines are assumed to push along the craft's fore axis until the first half metre per second
+//! shows whether they push forward or backward along it. After a vessel splits, its frame can come out reversed relative to
+//! its engines (a module undocked by its forward port), and the pilot then steers by what it measured,
+//! as a player would after watching the navball.
 use crate::{acceleration, aim, body, stage_if_spent, state, Status};
 use bevy_ecs::entity::Entity;
 use ose_math::{rendezvous, DVec3};
@@ -25,6 +30,21 @@ pub struct Burn {
     left: DVec3,
     last: Option<(DVec3, DVec3, f64)>,
     fire_started: f64,
+    /// Delta-v delivered while firing so far, inertial, and the measured thrust axis in the craft's
+    /// own (right, fore, top) axes.
+    delivered: DVec3,
+    thrust_axis: Option<DVec3>,
+}
+
+/// Where the engines push, inertial: the craft's fore axis, or the measured axis.
+fn thrust_direction(p: &ose_sim::flight::Powered, measured: Option<DVec3>) -> DVec3 {
+    match measured {
+        None => p.facing,
+        Some(a) => {
+            let (x, y, z) = ose_sim::flight::vessel_basis(p);
+            (x * a.x + y * a.y + z * a.z).normalized()
+        }
+    }
 }
 
 impl Burn {
@@ -36,6 +56,8 @@ impl Burn {
             left: delta_v,
             last: None,
             fire_started: 0.0,
+            delivered: DVec3::ZERO,
+            thrust_axis: None,
         }
     }
 
@@ -68,8 +90,9 @@ impl Burn {
             return Status::Failed("crashed during a burn".into());
         }
         let accel = acceleration(u, e);
-        // Engines push along the craft's own fore axis; steer that onto the burn.
-        let hold = Attitude::Fixed(aim(&p, p.facing, direction));
+        // Steer the engines' thrust axis onto the burn.
+        let axis = thrust_direction(&p, self.thrust_axis);
+        let hold = Attitude::Fixed(aim(&p, axis, direction));
         if self.phase == Phase::Align {
             u.set_controls(e, 0.0, hold);
             if accel <= 0.0 && !stage_if_spent(u, e) {
@@ -89,8 +112,19 @@ impl Burn {
             (self.last, state(u, e), body(u, e))
         {
             if u.ut() > t0 {
-                self.left =
-                    self.left - rendezvous::delivered_delta_v(mu, r0, v0, r1, v1, u.ut() - t0);
+                let got = rendezvous::delivered_delta_v(mu, r0, v0, r1, v1, u.ut() - t0);
+                self.left = self.left - got;
+                self.delivered = self.delivered + got;
+                if self.thrust_axis.is_none() && self.delivered.length() > 0.5 {
+                    // Only the sign is taken: RCS holding attitude adds a little sideways push, and
+                    // engines that sit off the axis are not something a stock craft does.
+                    let fore = if self.delivered.dot(p.facing) < 0.0 {
+                        -1.0
+                    } else {
+                        1.0
+                    };
+                    self.thrust_axis = Some(DVec3::new(0.0, fore, 0.0));
+                }
             }
         }
         self.last = Some((p.r, p.v, u.ut()));
@@ -115,7 +149,7 @@ impl Burn {
                 self.left.length()
             ));
         }
-        let throttle = if p.facing.dot(direction) > 0.999 {
+        let throttle = if axis.dot(direction) > 0.999 {
             (self.left.dot(direction) / accel / 0.5).clamp(0.0, 1.0)
         } else {
             0.0
