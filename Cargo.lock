@@ -1989,6 +1989,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ose-pilot"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "glam 0.34.1",
+ "ose-data",
+ "ose-math",
+ "ose-sim",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ose-server"
 version = "0.1.0"
 dependencies = [

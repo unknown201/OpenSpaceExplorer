@@ -14,6 +14,7 @@ ose-data = { path = "crates/ose-data" }
 ose-sim = { path = "crates/ose-sim" }
 ose-net = { path = "crates/ose-net" }
 ose-guidance = { path = "crates/ose-guidance" }
+ose-pilot = { path = "crates/ose-pilot" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 json5 = "0.4"
