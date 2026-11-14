@@ -460,10 +460,10 @@ pub async fn run_mun_campaign(cfg: &BotConfig) -> Vec<StepResult> {
                 &flight.tuned,
             ) {
                 // the engines fly the transfer burn; then a small correction puts the Mun periapsis back
-                // in the band and is flown on the way
-                let t = &match server_flight::warp_until_flown(c, id, t.burn_ut, COAST_TIMEOUT).await {
+                // in the band
+                let corr = match server_flight::warp_until_flown(c, id, t.burn_ut, COAST_TIMEOUT).await {
                     Err(e) => return Outcome::failed(e),
-                    Ok(()) => match server_flight::correct_course(
+                    Ok(_) => match server_flight::correct_course(
                         c,
                         b,
                         id,
@@ -472,11 +472,28 @@ pub async fn run_mun_campaign(cfg: &BotConfig) -> Vec<StepResult> {
                     )
                     .await
                     {
-                        Ok(corr) => TunedBurn {
+                        Ok(corr) => corr,
+                        Err(e) => return Outcome::failed(e),
+                    },
+                };
+                // The handoff is checked against the server's prediction from the orbit the engines
+                // actually flew. A finite correction burn ends a few cm/s off its impulsive node, which
+                // moves the Mun periapsis by kilometres; comparing with the node's own prediction made
+                // this step flaky (rendezvous v2, limit L7), while the handoff itself lands within ~5 km.
+                let t = &match server_flight::warp_until_flown(c, id, corr.burn_ut, COAST_TIMEOUT).await {
+                    Err(e) => return Outcome::failed(e),
+                    Ok(patches) => match server_flight::mun_patch(&patches, b) {
+                        Some((alt, enc, _)) => TunedBurn {
                             burn_ut: t.burn_ut,
+                            predicted_periapsis_alt_m: alt,
+                            predicted_encounter_ut: enc,
                             ..corr
                         },
-                        Err(e) => return Outcome::failed(e),
+                        None => {
+                            return Outcome::failed(
+                                "the flown correction left no Mun encounter in the server's prediction",
+                            )
+                        }
                     },
                 };
                 let v = match server_flight::warp_until_around(c, id, b.mun, COAST_TIMEOUT).await {
