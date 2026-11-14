@@ -104,6 +104,64 @@ pub fn piece_glb(
 ) -> Result<Vec<u8>, String> {
     let (pos, uv, tris) = piece_mesh(shape, def, k);
     let src = crate::wing_mesh::read_json(base)?;
+    Ok(mesh_glb(&pos, &uv, &tris, k, &src))
+}
+
+/// KSP2's `FairingsProceduralMat` (proceduralparts-shared_assets_all, shader OAB_Procedural_Fairings) as a
+/// glTF material: near-white albedo, fully metallic with smoothness from its gloss map, flat normals. Its
+/// paint mask is full on both channels; the base colour tint comes from `shroud_item`.
+fn procedural_fairing_material() -> Value {
+    json!({
+        "materials": [{
+            "name": "FairingsProceduralMat",
+            "pbrMetallicRoughness": {
+                "baseColorFactor": [1.0, 1.0, 1.0, 1.0],
+                "baseColorTexture": {"index": 0},
+                "metallicFactor": 1.0,
+                "roughnessFactor": 0.8,
+                "metallicRoughnessTexture": {"index": 1},
+            },
+            "normalTexture": {"index": 2},
+        }],
+        "textures": [
+            {"sampler": 0, "source": 0},
+            {"sampler": 0, "source": 1},
+            {"sampler": 0, "source": 2},
+        ],
+        "images": [
+            {"uri": "../textures/fairing_procedural_d.png", "name": "fairing_procedural_d"},
+            {"uri": "../textures/fairing_procedural_m.png", "name": "fairing_procedural_m"},
+            {"uri": "../textures/fairing_procedural_n.png", "name": "fairing_procedural_n"},
+        ],
+        "samplers": [{"magFilter": 9729, "minFilter": 9987, "wrapS": 10497, "wrapT": 10497}],
+    })
+}
+
+/// The shroud's texture coordinates as `FairingPanel.SetArcPoints` lays them: u runs a ninth of the texture
+/// round the panel (`(panel + t) * 0.11111`), v is the slant length up the wall in metres over 3.
+pub fn shroud_uvs(shape: &FairingShape, def: &FairingDef) -> Vec<[f32; 2]> {
+    let (pos, uv, _) = piece_mesh(shape, def, 0);
+    let (lo, hi) = (shape.sections[0], shape.sections[shape.sections.len() - 1]);
+    let slant = ((hi.0 - lo.0).powi(2) + (hi.1 - lo.1).powi(2)).sqrt() as f32;
+    let height = (hi.0 - lo.0).max(1e-6) as f32;
+    pos.iter()
+        .zip(uv)
+        .map(|(p, t)| {
+            let up = (p[1] - (def.base_height + lo.0) as f32) / height;
+            [t[0] / 9.0, up * slant / 3.0]
+        })
+        .collect()
+}
+
+/// An engine's shroud as a GLB in KSP2's procedural fairing material.
+pub fn shroud_glb(shape: &FairingShape, def: &FairingDef) -> Vec<u8> {
+    let (pos, _, tris) = piece_mesh(shape, def, 0);
+    let uv = shroud_uvs(shape, def);
+    mesh_glb(&pos, &uv, &tris, 0, &procedural_fairing_material())
+}
+
+/// One panel's mesh as a GLB, with `src`'s materials, textures, images and samplers.
+fn mesh_glb(pos: &[[f32; 3]], uv: &[[f32; 2]], tris: &[u32], k: usize, src: &Value) -> Vec<u8> {
     let mut normals = vec![glam::Vec3::ZERO; pos.len()];
     for t in tris.as_chunks::<3>().0 {
         let [a, b, c] = t.map(|i| glam::Vec3::from_array(pos[i as usize]));
@@ -133,7 +191,7 @@ pub fn piece_glb(
     let floats = |v: &[f32]| v.iter().flat_map(|f| f.to_le_bytes()).collect::<Vec<u8>>();
     let mut lo = [f32::INFINITY; 3];
     let mut hi = [f32::NEG_INFINITY; 3];
-    for p in &pos {
+    for p in pos {
         for i in 0..3 {
             lo[i] = lo[i].min(p[i]);
             hi[i] = hi[i].max(p[i]);
@@ -179,7 +237,7 @@ pub fn piece_glb(
             doc[key] = v.clone();
         }
     }
-    Ok(crate::wing_mesh::glb_bytes(&doc, &bin))
+    crate::wing_mesh::glb_bytes(&doc, &bin)
 }
 
 /// Ask for every panel of part `p`'s shaped fairing; their names, once all are loaded.
@@ -253,8 +311,7 @@ pub fn shroud_model_for(
 }
 
 /// The shroud drawn beside its engine's draw item: the engine's pose and look, the wall tinted in the vessel's
-/// base colour (the original paints `FairingsProceduralMat` with `Module_Color`'s base and accent; the
-/// stand-in material here has no paint mask).
+/// base colour (`Module_Color` paints `FairingsProceduralMat`, whose paint mask covers the whole wall).
 #[cfg(target_arch = "wasm32")]
 pub fn shroud_item(engine: &crate::render::DrawItem, model: String) -> crate::render::DrawItem {
     let mut it = engine.companion(model);
@@ -308,5 +365,25 @@ mod tests {
             .map(|p| (p[0] * p[0] + p[2] * p[2]).sqrt())
             .fold(0.0, f32::max);
         assert!((r - 0.625).abs() < 1e-3);
+    }
+
+    #[test]
+    fn shroud_uses_ksp2_procedural_fairing_material_and_uvs() {
+        let d = ose_data::engine_shroud::def("engine_1v_methalox_swivel").unwrap();
+        let (shape, def) = shroud_shape(d, 0.625);
+        let uv = shroud_uvs(&shape, &def);
+        // u spans a ninth of the texture round the shroud, v the 1.68 m slant over 3
+        let umax = uv.iter().map(|t| t[0]).fold(0.0, f32::max);
+        let vmax = uv.iter().map(|t| t[1]).fold(0.0, f32::max);
+        assert!((umax - 1.0 / 9.0).abs() < 1e-5, "{umax}");
+        assert!((vmax - 1.6801 / 3.0).abs() < 1e-3, "{vmax}");
+        let glb = shroud_glb(&shape, &def);
+        let doc = crate::wing_mesh::read_json(&glb).unwrap();
+        assert_eq!(doc["materials"][0]["name"], "FairingsProceduralMat");
+        assert_eq!(
+            doc["images"][0]["uri"],
+            "../textures/fairing_procedural_d.png"
+        );
+        assert_eq!(doc["meshes"][0]["primitives"][0]["material"], 0);
     }
 }
