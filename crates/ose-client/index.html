@@ -99,7 +99,7 @@
     #menu h1 { margin: 0 0 4px; font-size: 22px; font-weight: 600; color: #e6ecf7; letter-spacing: 0.5px; }
     #menu .sub { color: #6f7f9c; font-size: 12px; margin-bottom: 18px; }
     #menu label { display: block; font-size: 12px; color: #9fb0cc; margin: 10px 0 4px; }
-    #menu input[type=text] { width: 100%; box-sizing: border-box; padding: 6px 8px; font: inherit;
+    #menu input[type=text], #menu input[type=password] { width: 100%; box-sizing: border-box; padding: 6px 8px; font: inherit;
       background: #06080f; color: #e6ecf7; border: 1px solid #2c3d63; border-radius: 4px; }
     #menu button { margin-top: 16px; width: 100%; padding: 8px; font: inherit; font-size: 15px;
       background: #1f3d6b; color: #fff; border: 1px solid #3b63a8; border-radius: 4px; cursor: pointer; }
@@ -113,7 +113,10 @@
       padding: 8px 10px; margin-bottom: 6px; border: 1px solid #2c3d63; border-radius: 6px; background: #06080f; }
     #sessions .name { color: #e6ecf7; font-size: 14px; }
     #sessions .meta { color: #6f7f9c; font-size: 12px; margin-top: 2px; }
-    #sessions .session-actions { display: flex; gap: 6px; }
+    #sessions .session-actions { display: flex; flex-wrap: wrap; gap: 6px; grid-column: 1 / -1; justify-content: flex-end; }
+    #sessions li > div { min-width: 0; overflow-wrap: anywhere; }
+    #sessions li.empty { display: block; }
+    #sessions li.empty::before { display: none; }
     #sessions button:disabled { opacity: 0.45; cursor: default; }
     #sessions button { margin: 0; width: auto; padding: 6px 14px; font-size: 13px; }
     #sessions .empty { color: #6f7f9c; font-size: 12px; padding: 8px 0; }
@@ -267,6 +270,9 @@
     #login-bar { position: absolute; right: 0; top: 0; height: calc(50 * var(--u)); min-width: calc(210 * var(--u)); display: flex; align-items: center; gap: calc(10 * var(--u));
       padding: 0 calc(16 * var(--u)); background: #000; color: #fff; font-size: calc(15 * var(--u)); }
     #login-bar label { margin: 0; color: #9fb0cc; font-size: calc(13 * var(--u)); white-space: nowrap; }
+    #login-bar input[type=password] { width: calc(210 * var(--u)); font-size: calc(13 * var(--u)); }
+    #session-share-code, #account-code, #join-code, #paused-share-code { box-sizing: border-box; width: 100%; font-family: monospace; }
+    #sessions .session-actions { flex-wrap: wrap; justify-content: flex-end; }
     #login-bar input[type=text] { width: calc(160 * var(--u)); padding: calc(4 * var(--u)) calc(8 * var(--u)); font-size: calc(15 * var(--u)); background: #111; border-color: #333; }
     #version { position: absolute; left: calc(80 * var(--u)); bottom: calc(24 * var(--u)); font-size: calc(13 * var(--u)); color: #ffffff80; }
     #extras { position: absolute; right: calc(80 * var(--u)); bottom: calc(24 * var(--u)); font-size: calc(13 * var(--u)); color: #ffffff80; }
@@ -292,7 +298,7 @@
     #campaign .list-title::before, #campaign .list-title::after { content: ""; height: calc(10 * var(--u)); background: #2e3340; flex: 1; }
     #campaign .list-title::before { flex: 0 0 calc(16 * var(--u)); }
     #sessions { margin: 0; padding: calc(10 * var(--u)) calc(24 * var(--u)) calc(10 * var(--u)) calc(10 * var(--u)); overflow: auto; flex: 1; min-height: 0; }
-    #sessions li { grid-template-columns: calc(75 * var(--u)) 1fr auto; min-height: calc(72 * var(--u)); margin-bottom: calc(5 * var(--u)); padding: calc(8 * var(--u)) calc(10 * var(--u)); background: #000; border: 0; border-bottom: calc(6 * var(--u)) solid transparent; border-radius: 0;
+    #sessions li { grid-template-columns: calc(75 * var(--u)) minmax(0, 1fr); min-height: calc(72 * var(--u)); margin-bottom: calc(5 * var(--u)); padding: calc(8 * var(--u)) calc(10 * var(--u)); background: #000; border: 0; border-bottom: calc(6 * var(--u)) solid transparent; border-radius: 0;
       border-image: repeating-linear-gradient(90deg, #f2f2f233 0 calc(4 * var(--u)), transparent calc(4 * var(--u)) calc(8 * var(--u))) 0 0 1 0 / 0 0 calc(6 * var(--u)) 0; }
     #sessions li::before { content: ""; width: calc(75 * var(--u)); height: calc(40 * var(--u)); background: url(assets/ui/ELE-Placeholder-Flag.png) center / contain no-repeat; }
     #sessions li.has-thumb::before { display: none; }
@@ -306,7 +312,10 @@
     #sessions .sess-thumb { width: calc(75 * var(--u)); height: calc(46 * var(--u)); background: center / cover no-repeat; border: 1px solid #ffffff33; }
     #sessions .name { font-size: calc(18 * var(--u)); font-weight: 600; color: #f2f2f2; }
     #sessions .meta { font-size: calc(12 * var(--u)); color: #ffffff99; }
-    #sessions .session-actions { display: flex; gap: 6px; }
+    #sessions .session-actions { display: flex; flex-wrap: wrap; gap: 6px; grid-column: 1 / -1; justify-content: flex-end; }
+    #sessions li > div { min-width: 0; overflow-wrap: anywhere; }
+    #sessions li.empty { display: block; }
+    #sessions li.empty::before { display: none; }
     #sessions button:disabled { opacity: 0.45; cursor: default; }
     #sessions button { padding: calc(6 * var(--u)) calc(14 * var(--u)); font-size: calc(14 * var(--u)); }
     #sessions .empty { color: #ffffff80; padding: calc(8 * var(--u)); }
@@ -1418,6 +1427,8 @@
         <div id="login-bar">
           <label for="player-name">Pilot</label>
           <input id="player-name" data-ose="player-name" type="text" maxlength="32" autocomplete="nickname" value="Pilot" disabled />
+          <label for="login-code">Login code</label>
+          <input id="login-code" data-ose="login-code" type="password" maxlength="64" autocomplete="current-password" placeholder="Blank for a new account" title="Use your private login code from another machine to access the same account" />
         </div>
         <div id="version">OpenSpaceExplorer, a shared Kerbol system in the browser</div>
         <div id="extras"><a href="https://github.com/unknown201/OpenSpaceExplorer" target="_blank" rel="noopener">Source</a></div>
@@ -1430,7 +1441,9 @@
           <div class="subtitle"><b>##</b>Shared server</div>
           <div class="divider"></div>
           <div class="options">
-            <div class="list-title">all campaigns</div>
+            <div class="list-title">your campaigns</div>
+            <label for="session-share-code">Game share code</label>
+            <input id="session-share-code" data-ose="session-share-code" type="text" readonly placeholder="Choose Share on a game" />
             <ul id="sessions" data-ose="session-list"><li class="empty">asking the server...</li></ul>
           </div>
           <div class="row">
@@ -1438,6 +1451,25 @@
           </div>
         </div>
         <div id="campaign-right">
+        <details id="join-details" open>
+          <summary>Join with a share code</summary>
+          <div class="create">
+            <label for="join-code">Game share code</label>
+            <input id="join-code" data-ose="join-code" type="text" maxlength="64" autocomplete="off" spellcheck="false" />
+            <button id="join-code-submit" data-ose="join-code-submit">Join game</button>
+            <div class="info">A shared game stays in your account on every machine. Resume it from your campaigns.</div>
+          </div>
+        </details>
+        <details id="account-details">
+          <summary>Your account</summary>
+          <div class="create">
+            <label for="account-code">Private login code</label>
+            <input id="account-code" data-ose="account-code" type="password" readonly autocomplete="off" />
+            <button id="account-code-show" data-ose="account-code-show">Show login code</button>
+            <div class="info">Keep this code private. Enter it at the main menu on another machine to log in to this account. Use a game share code to invite friends.</div>
+            <button id="account-logout" data-ose="account-logout">Sign out</button>
+          </div>
+        </details>
         <details id="create-details" data-ose="create-session">
           <summary data-loc="Menu/Campaigns/Start New Campaign">Start a new campaign</summary>
           <div class="create">
@@ -1604,6 +1636,8 @@
         <button id="to-quicksave" class="secondary" data-ose="to-quicksave" data-save-action="QuickSave" title="F5" data-loc="Menu/Main/Quicksave">Quicksave</button>
         <button id="to-quickload" class="secondary" data-ose="to-quickload" data-save-action="QuickLoad" title="F9">Quickload</button>
         <button id="to-settings" class="secondary" data-ose="to-settings" data-open-settings data-loc="Menu/Main/Settings">Settings</button>
+        <button id="share-current" data-ose="share-current">Share game</button>
+        <input id="paused-share-code" data-ose="paused-share-code" type="text" readonly aria-label="Game share code" placeholder="Share code appears here" />
         <button id="to-sessions" class="secondary" data-ose="to-sessions">Exit to Main Menu</button>
         <button id="report-bug" class="secondary" data-ose="report-bug" title="File a bug report with a replay of the last few minutes">Report a bug</button>
         <button id="sound-toggle" class="secondary sound-toggle" data-ose="sound-toggle">Sound: on</button>

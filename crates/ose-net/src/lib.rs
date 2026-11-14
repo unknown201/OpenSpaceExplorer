@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 66;
+pub const PROTOCOL_VERSION: u16 = 67;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -22,6 +22,8 @@ pub const WS_PATH: &str = "/ws";
 /// Client to server.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ClientMessage {
+    ShareSession { id: String },
+    JoinSessionCode { code: String },
     Hello {
         protocol: u16,
         token: Option<String>,
@@ -1014,6 +1016,8 @@ pub struct StageReadout {
 /// Server to client.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ServerMessage {
+    SessionShareCode { id: String, code: String },
+    SessionJoined { id: String, name: String },
     Welcome {
         player_id: u64,
         token: String,

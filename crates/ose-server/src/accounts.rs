@@ -2,7 +2,7 @@
 //!
 //! A player is created on their first `Hello` and handed a random token; a later `Hello` carrying that
 //! token resumes the same player id (and so their vessels and settings). No passwords, no federation: the
-//! server is LAN hosted. Tokens are stored hashed so the file does not hold secrets in clear.
+//! login code works on any machine. Tokens are stored hashed so the file does not hold secrets in clear.
 //!
 //! Storage is a small JSON file rewritten on every change (a handful of players), chosen over SQLite so
 //! the server cross-compiles to static Linux from any machine without a C toolchain.
@@ -62,22 +62,11 @@ fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
-fn random_token() -> String {
-    // 128 bits from time, process id, a counter and an address, whitened by the token hash. Enough for a
-    // LAN game; swap for `rand` if the server is ever exposed.
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let seed = format!(
-        "{nanos}-{}-{}-{:p}",
-        std::process::id(),
-        COUNTER.fetch_add(1, Ordering::Relaxed),
-        &COUNTER
-    );
-    hash_token(&seed)
+/// Independent 128-bit credentials from the operating system CSPRNG.
+pub fn random_token() -> anyhow::Result<String> {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).map_err(|e| anyhow::anyhow!("random source: {e}"))?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
 impl Accounts {
@@ -118,7 +107,7 @@ impl Accounts {
 
     /// Create a new player and return it with the clear token to hand to the client.
     pub fn create(&mut self, display_name: &str) -> anyhow::Result<(Player, String)> {
-        let token = random_token();
+        let token = random_token()?;
         let id = self.store.next_id;
         self.store.next_id += 1;
         let now = now_unix();

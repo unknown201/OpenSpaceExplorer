@@ -354,6 +354,9 @@ struct Shared {
     parts: Arc<Vec<ose_data::PartDef>>,
     resources: Arc<Vec<ose_data::ResourceDef>>,
     accounts: Arc<Mutex<accounts::Accounts>>,
+    save_path: Option<PathBuf>,
+    save_lock: Arc<Mutex<()>>,
+    world_changed_at: Mutex<streaming::Mark>,
     /// Vessel entity -> (vessel id, owner player id).
     vessels: Mutex<Vec<(bevy_ecs::entity::Entity, u64, Option<u64>)>>,
     campaign: Mutex<save::Campaign>,
@@ -603,6 +606,9 @@ async fn main() -> anyhow::Result<()> {
         spins: Arc::new(spins),
         parts: Arc::new(serde_json::from_str(EMBEDDED_PARTS)?),
         resources: Arc::new(serde_json::from_str(EMBEDDED_RESOURCES)?),
+        save_path: save_path.clone(),
+        save_lock: Arc::new(Mutex::new(())),
+        world_changed_at: Mutex::new(streaming::mark()),
         accounts: Arc::new(Mutex::new({
             let db = if replaying.is_some() {
                 PathBuf::from(":memory:")
@@ -652,7 +658,7 @@ async fn main() -> anyhow::Result<()> {
     }
     start_room(shared.clone());
 
-    if let Some(p) = save_path.clone() {
+    if save_path.is_some() {
         let saver = shared.clone();
         let every = std::time::Duration::from_secs_f64(args.save_interval_s.max(0.2));
         tokio::spawn(async move {
@@ -660,13 +666,7 @@ async fn main() -> anyhow::Result<()> {
             interval.tick().await;
             loop {
                 interval.tick().await;
-                let file = rooms::save_file(&saver);
-                match save::write(&p, &file) {
-                    Ok(()) => {
-                        tracing::debug!(tick = file.tick.0, vessels = file.vessels.len(), "saved")
-                    }
-                    Err(e) => tracing::error!(error = %e, "save failed"),
-                }
+                if let Err(e) = persist(&saver) { tracing::error!(error = %e, "save failed"); }
             }
         });
     }
@@ -2528,6 +2528,7 @@ fn campaign_state(s: &Shared, player_id: u64, join: Option<&String>) -> ServerMe
     let tick = s.universe.lock().expect("sim lock").tick();
     let mut arrived = false;
     let mut c = s.campaign.lock().expect("campaign lock");
+    if !campaigns::can_access(&c, player_id) { return ServerMessage::Rejected { reason: "join this campaign with a share code first".into() }; }
     if let Some(name) = join {
         if !c.members.iter().any(|m| m.player_id == player_id) {
             c.members.push(save::CampaignMember {
@@ -3079,9 +3080,12 @@ fn push_roster(s: &Shared) {
     }
 }
 
-fn session_list(s: &Shared) -> ServerMessage {
-    campaigns::list(s)
+fn persist(s: &Shared) -> Result<(), String> {
+    let Some(path) = &s.save_path else { return Ok(()) };
+    let _write = s.save_lock.lock().expect("save write lock");
+    save::write(path, &rooms::save_file(s)).map_err(|e| format!("could not save campaign: {e}"))
 }
+fn session_list(s: &Shared, player: u64) -> ServerMessage { campaigns::list(s, player) }
 
 fn craft_summary(
     s: &Shared,
@@ -3358,6 +3362,23 @@ fn handle_decoded(
     out: &mut Vec<ServerMessage>,
 ) {
     match decoded {
+        Ok(ref msg) if !matches!(msg,
+            ClientMessage::Hello { .. } | ClientMessage::Ping { .. } | ClientMessage::ListSessions
+            | ClientMessage::CreateSession { .. } | ClientMessage::SelectSession { .. } | ClientMessage::LeaveSession
+            | ClientMessage::ShareSession { .. } | ClientMessage::JoinSessionCode { .. }
+            | ClientMessage::ClaimSession { .. } | ClientMessage::DeleteSession { .. })
+            && !campaigns::live_access(s, player_id) => {
+            out.push(ServerMessage::Rejected { reason: "join this campaign with a share code first".into() });
+        }
+        Ok(ClientMessage::ShareSession { id }) => {
+            let reply = campaigns::share(s, player_id, &id).and_then(|m| persist(s).map(|_| m));
+            out.push(reply.unwrap_or_else(|reason| ServerMessage::Rejected { reason }));
+        }
+        Ok(ClientMessage::JoinSessionCode { code }) => {
+            let reply = campaigns::join_code(s, player_id, &code).and_then(|m| persist(s).map(|_| m));
+            out.push(reply.unwrap_or_else(|reason| ServerMessage::Rejected { reason }));
+            out.push(session_list(s, player_id));
+        }
         Ok(ClientMessage::RequestWarp { factor }) => {
             let f = factor.clamp(1, 10_000_000);
             s.warp_requests
@@ -3473,7 +3494,7 @@ fn handle_decoded(
             out.push((reply).clone());
         }
         Ok(ClientMessage::ListSessions) => {
-            let reply = session_list(s);
+            let reply = session_list(s, player_id);
             out.push((reply).clone());
         }
         Ok(ClientMessage::SelectSession { id }) => {
@@ -3519,7 +3540,8 @@ fn handle_decoded(
                 }
                 Err(reason) => ServerMessage::Rejected { reason },
             };
-            out.push((reply).clone());
+            let reply = match persist(s) { Ok(()) => reply, Err(reason) => ServerMessage::Rejected { reason } };
+            out.push(reply);
         }
         Ok(ClientMessage::LeaveSession) => {
             if s.playing.lock().expect("playing lock").remove(&player_id) {
@@ -3527,19 +3549,19 @@ fn handle_decoded(
             }
             apply_warp(s);
             rooms::left_campaign(s, player_id);
-            let reply = session_list(s);
+            let reply = session_list(s, player_id);
             out.push((reply).clone());
         }
         Ok(ClientMessage::ClaimSession { id }) => {
-            let reply = match campaigns::manage(s, player_id, &id, false) {
-                Ok(()) => session_list(s),
+            let reply = match campaigns::manage(s, player_id, &id, false).and_then(|_| persist(s)) {
+                Ok(()) => session_list(s, player_id),
                 Err(reason) => ServerMessage::Rejected { reason },
             };
             out.push((reply).clone());
         }
         Ok(ClientMessage::DeleteSession { id }) => {
-            let reply = match campaigns::manage(s, player_id, &id, true) {
-                Ok(()) => session_list(s),
+            let reply = match campaigns::manage(s, player_id, &id, true).and_then(|_| persist(s)) {
+                Ok(()) => session_list(s, player_id),
                 Err(reason) => ServerMessage::Rejected { reason },
             };
             out.push((reply).clone());
@@ -4582,14 +4604,13 @@ async fn session(mut socket: WebSocket, s: AppState) {
                         }
                         let outcome: Result<(u64, String, bool), String> = {
                             let mut acc = s.accounts.lock().expect("accounts lock");
-                            let resumed = match token.as_deref() {
-                                Some(t) => acc.resume(t, &display_name).ok().flatten(),
-                                None => None,
-                            };
-                            match resumed {
-                                Some(p) => Ok((p.id, token.clone().unwrap_or_default(), true)),
-                                None => acc
-                                    .create(&display_name)
+                            match token.as_deref() {
+                                Some(t) => match acc.resume(t, &display_name) {
+                                    Ok(Some(p)) => Ok((p.id, t.to_string(), true)),
+                                    Ok(None) => Err("invalid login code; enter your private login code or clear it to create an account".into()),
+                                    Err(e) => Err(format!("account error: {e}")),
+                                },
+                                None => acc.create(&display_name)
                                     .map(|(p, t)| (p.id, t, false))
                                     .map_err(|e| format!("account error: {e}")),
                             }
@@ -4695,8 +4716,10 @@ async fn session(mut socket: WebSocket, s: AppState) {
     'session: loop {
         tokio::select! {
             _ = presence_tick.tick() => {
-                let ServerMessage::SessionList { sessions } = session_list(&s) else { unreachable!() };
-                let ServerMessage::CampaignState { id, members, .. } = campaign_state(&s, player_id, None) else { unreachable!() };
+                let ServerMessage::SessionList { sessions } = session_list(&s, player_id) else { unreachable!() };
+                let (id, members) = match campaign_state(&s, player_id, None) {
+                    ServerMessage::CampaignState { id, members, .. } => (id, members), _ => (String::new(), Vec::new()),
+                };
                 let presence = ServerMessage::SessionPresence { sessions, campaign_id: id, members };
                 // Clock movement alone does not rebuild the session browser.
                 let mut signature = presence.clone();
@@ -4710,6 +4733,8 @@ async fn session(mut socket: WebSocket, s: AppState) {
             }
             frames = streaming::next_batch(&mut snapshots, subscribed_at) => {
                 let Some(frames) = frames else { break; };
+                if !campaigns::live_access(&s, player_id) { continue; }
+                if frames.started < *s.world_changed_at.lock().expect("world change lock") { continue; }
                 if !streaming::send_batch(&mut socket, &frames).await {
                     break;
                 }
@@ -4739,6 +4764,8 @@ async fn session(mut socket: WebSocket, s: AppState) {
             }
             frames = streaming::next_batch(&mut predictions, subscribed_at) => {
                 let Some(frames) = frames else { break; };
+                if !campaigns::live_access(&s, player_id) { continue; }
+                if frames.started < *s.world_changed_at.lock().expect("world change lock") { continue; }
                 if !streaming::send_batch(&mut socket, &frames).await { break; }
             }
             incoming = socket.recv() => {

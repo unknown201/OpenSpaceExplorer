@@ -2161,6 +2161,10 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
             input.set_value(&name);
         }
     }
+    if let Some(input) = doc.get_element_by_id("login-code")
+        .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok()) {
+        if input.value().is_empty() { input.set_value(&stored("ose.token").unwrap_or_default()); }
+    }
     if let Some(btn) = doc.get_element_by_id("play") {
         let a = app.clone();
         let cb = Closure::<dyn FnMut()>::new(move || {
@@ -4192,6 +4196,34 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
         list.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
         cb.forget();
     }
+    wire("join-code-submit", Box::new(|a| {
+        let app = a.borrow();
+        let code = app.doc.get_element_by_id("join-code")
+            .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+            .map(|i| i.value().trim().to_string()).unwrap_or_default();
+        if code.is_empty() { set_text(&app.doc, "menu-note", "Enter a game share code first."); return; }
+        if let Some(ws) = &app.ws { send(ws, &ClientMessage::JoinSessionCode { code }); }
+    }))?;
+    wire("share-current", Box::new(|a| {
+        let app = a.borrow();
+        if let Some(ws) = &app.ws { send(ws, &ClientMessage::ShareSession { id: app.campaign_id.clone() }); }
+    }))?;
+    wire("account-code-show", Box::new(|a| {
+        let app = a.borrow();
+        if let Some(input) = app.doc.get_element_by_id("account-code")
+            .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok()) {
+            let show = input.type_() == "password";
+            input.set_type(if show { "text" } else { "password" });
+            set_text(&app.doc, "account-code-show", if show { "Hide login code" } else { "Show login code" });
+            if show { input.select(); }
+        }
+    }))?;
+    wire("account-logout", Box::new(|_a| {
+        if let Some(w) = web_sys::window() {
+            if let Ok(Some(storage)) = w.local_storage() { storage.remove_item("ose.token").ok(); }
+            w.location().reload().ok();
+        }
+    }))?;
     wire("create", Box::new(|a| a.borrow_mut().create_session()))?;
     wire("agency-apply", Box::new(|a| a.borrow_mut().send_agency()))?;
     wire(
@@ -4222,6 +4254,8 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
             let action = button.get_attribute("data-ose").unwrap_or_default();
             if action == "session-join" {
                 a.borrow_mut().join_session(&id);
+            } else if action == "session-share" {
+                if let Some(ws) = &a.borrow().ws { send(ws, &ClientMessage::ShareSession { id }); }
             } else {
                 if action == "session-delete"
                     && !web_sys::window().is_some_and(|w| {
@@ -4366,16 +4400,17 @@ fn connect(app: &Shared) -> Result<(), JsValue> {
         let app = app.clone();
         let on_close = Closure::<dyn FnMut()>::new(move || {
             let mut a = app.borrow_mut();
+            let rejected_login = a.player_id.is_none() && a.doc.get_element_by_id("menu-note")
+                .and_then(|e| e.text_content()).is_some_and(|s| s.starts_with("rejected:"));
             a.ws = None;
             a.login_requested = false;
             a.player_id = None;
             // Clear the previous campaign/flight before a retry receives fresh server state.
             a.leave_session();
             a.set_status("disconnected; select Campaign to reconnect");
-            a.connection_status(
-                "disconnected",
-                "Connection lost. Select Campaign to reconnect.",
-            );
+            if !rejected_login {
+                a.connection_status("disconnected", "Connection lost. Select Campaign to reconnect.");
+            }
             if let Some(m) = a.doc.get_element_by_id("menu") {
                 m.class_list().remove_1("hidden").ok();
             }
@@ -5724,7 +5759,9 @@ impl App {
             ws,
             &ClientMessage::Hello {
                 protocol: PROTOCOL_VERSION,
-                token: stored("ose.token"),
+                token: self.doc.get_element_by_id("login-code")
+                    .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+                    .map(|i| i.value().trim().to_string()).filter(|s| !s.is_empty()),
                 display_name: self.player_name.clone(),
             },
         );
@@ -5894,6 +5931,10 @@ impl App {
                 self.player_id = Some(player_id);
                 self.login_requested = false;
                 store("ose.token", &token);
+                for id in ["login-code", "account-code"] {
+                    if let Some(input) = self.doc.get_element_by_id(id)
+                        .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok()) { input.set_value(&token); }
+                }
                 self.time.update(tick.seconds(), 1, now_ms());
                 self.set_status(&format!("player {player_id}"));
                 set_text(
@@ -5933,6 +5974,18 @@ impl App {
                     }
                     self.update_warp_holder();
                 }
+            }
+            ServerMessage::SessionShareCode { code, .. } => {
+                for id in ["session-share-code", "paused-share-code"] {
+                    if let Some(input) = self.doc.get_element_by_id(id)
+                        .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok()) {
+                        input.set_value(&code);
+                    }
+                }
+                set_text(&self.doc, "menu-note", "Share this game code with a friend. They can enter it under Join with a share code.");
+            }
+            ServerMessage::SessionJoined { name, .. } => {
+                set_text(&self.doc, "menu-note", &format!("Joined {name}. Choose Resume to play."));
             }
             ServerMessage::SessionList { sessions } => {
                 self.render_sessions(&sessions);
@@ -13245,7 +13298,7 @@ impl App {
             html.push_str(&format!(
                 "<li data-ose=\"session\" data-ose-id=\"{id}\" class=\"has-thumb\"><i class=\"sess-thumb\" style=\"background-image:url(assets/loading/{art}.jpg)\"></i><div><div class=\"name\">{name}</div>\
                  <div class=\"meta\">{mode} \u{b7} {ut} \u{b7} {players} {pl} online \u{b7} {ownership}</div></div>\
-                 <div class=\"session-actions\"><button data-ose=\"session-join\" data-ose-session=\"{id}\">Resume</button>{manage}</div></li>",
+                 <div class=\"session-actions\"><button data-ose=\"session-join\" data-ose-session=\"{id}\">Resume</button><button data-ose=\"session-share\" data-ose-session=\"{id}\">Share</button>{manage}</div></li>",
                 ownership = esc(&ownership),
                 id = esc(&s.id),
                 name = esc(&s.name),

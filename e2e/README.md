@@ -93,3 +93,13 @@ to `Pass` in the same change.
 | `[data-ose="vessel"]` also carries `data-ose-id` (vessel id); the player's own vessel has class `mine` and the camera follows it; a click follows that vessel |
 | `canvas[data-ose-scale]` | metres per CSS pixel of the map camera, refreshed every frame |
 | `canvas[data-ose-focus]` | id and star-space x y of the focused body, refreshed every frame |
+
+
+
+## Campaign access and cross-machine login
+
+`node scripts/check-campaign-access.mjs` checks private campaign lists, sharing from the pause menu,
+joining and sharing as a member, and restoring the owner's account in a fresh browser profile by
+entering the private login code. It defaults to an isolated server at `http://127.0.0.1:7796`; set
+`OSE_BASE_URL` to use another **test** server. It creates accounts and a campaign and writes screenshots
+to `.cache/campaign-sharing.png` and `.cache/campaign-account.png`.

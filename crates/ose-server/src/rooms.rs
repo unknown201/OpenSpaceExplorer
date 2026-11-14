@@ -21,7 +21,7 @@ pub struct Rooms {
     /// The room each player is in. A player not listed is in the primary room.
     of: Mutex<HashMap<u64, AppState>>,
     /// Held while players move between rooms and rooms open or close, so two of those never interleave.
-    gate: Mutex<()>,
+    pub(super) gate: Mutex<()>,
 }
 
 impl Rooms {
@@ -80,6 +80,7 @@ pub fn enter(s: &Shared, player: u64, target: Target) -> Result<AppState, String
     let _gate = s.rooms.gate.lock().expect("rooms gate");
     let current = room_of(s, player);
     if let Target::Shelved(id) = &target {
+        if !crate::campaigns::access(s, player, id) { return Err("join this campaign with a share code first".into()); }
         if let Some(room) = live(s, id) {
             move_player(s, player, &current, &room);
             return Ok(room);
@@ -172,6 +173,9 @@ fn open(s: &Shared) -> AppState {
         parts: s.parts.clone(),
         resources: s.resources.clone(),
         accounts: s.accounts.clone(),
+        save_path: s.save_path.clone(),
+        save_lock: s.save_lock.clone(),
+        world_changed_at: Mutex::new(crate::streaming::mark()),
         vessels: Mutex::new(Vec::new()),
         // no id: nothing to shelve when the chosen campaign replaces it
         campaign: Mutex::new(save::Campaign {
@@ -258,6 +262,7 @@ fn close(s: &Shared, room: &AppState) {
 /// The save file: the primary room's campaign live, with the saved crafts and the shelf; the other live
 /// rooms' campaigns are saved on the shelf (after a restart they are resumed from the session list).
 pub fn save_file(s: &Shared) -> save::SaveFile {
+    let _gate = s.rooms.gate.lock().expect("rooms gate");
     let rooms = s.rooms.all();
     let mut file = {
         let p = &rooms[0];

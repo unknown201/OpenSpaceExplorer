@@ -2,8 +2,9 @@
 
 Live since 2026-10-23. The same shape as Lost In Time and PrivateCoPilot: a build is shipped by scp
 to a container on the house Proxmox host (piper) and runs there under systemd; nginx with certbot on
-prod-prox fronts it as `ose.jfly.dev`; the DNS record is DNS-only and points at prod-prox's LAN
-address, so the site is reachable on the home network and over Tailscale. No Docker, no registry.
+prod-prox fronts it as `ose.jfly.dev`. Public DNS points at the internet-facing address; split DNS
+uses prod-prox's LAN address. The OSE virtual host serves the game without the house SSO gate.
+No Docker, no registry.
 
 ```
  push to main ──► .github/workflows/deploy.yml (build on GitHub) ──scp──► ose container (CT 120 on piper)
@@ -42,14 +43,27 @@ pct exec 120 -- ls -l /opt/ose/releases          # rollback: ln -sfn <one of the
 ## prod-prox
 
 Made with the house helper (`/root/proxy.sh ose ose.lan:7777`): `/etc/nginx/sites-enabled/ose`,
-certbot certificate for `ose.jfly.dev` (auto-renewed), the default SSO-or-LAN gate
-(`whitelist-auth.conf`). To open it to people outside the house, swap that include for
-`proxy-no-auth.conf` as the Lost In Time `/play/` site does.
+certbot certificate for `ose.jfly.dev` (auto-renewed). The game's `location /` includes
+`/etc/nginx/snippets/proxy-no-auth.conf`; it must not include `whitelist-auth.conf` or
+`proxy-defaults.conf` (which enables the house login gate). Validate with `nginx -t` before reload.
+The public root, `/health`, static assets, and `/ws` are reachable without Google SSO.
 
-Guests sign in with Google: their email goes in `/etc/oauth2/emails.cfg` (who may sign in at all;
-oauth2-proxy reloads it by itself) and in the `ose.jfly.dev` entry of
-`/etc/nginx/conf.d/01-authz-emails.conf` (who may reach this site), then `nginx -t && systemctl
-reload nginx`. One guest was added this way on 2026-10-24.
+The game authenticates accounts itself. Campaigns are listed and accessible only to their owner and
+members. **Your account** in the campaign menu reveals a private login code: enter that code at the
+main menu on any other machine to use the same server account. Browser storage merely remembers it
+for convenience; membership and ownership live in the server save. Invalid login codes are rejected
+instead of silently creating a different account. Existing account tokens still work.
+
+Use **Share** beside any campaign, or **Share game** in the pause menu, to get a game invitation.
+A friend enters it under **Join with a share code**. The invitation grants persistent membership
+without changing ownership or switching the live game. Members can invite others too. Game codes and
+private login codes are independent. Invitations survive shelving, quickload, and server restarts;
+sharing, joining, creating, claiming and deleting are saved before success is acknowledged.
+
+The production server runs campaigns in independent rooms. Players can run separate games at the
+same time, and redeem invitations while anyone is playing. All room saves share the persistent account
+store. The public release is based on production commit `6d1c6d7` (save format 2), on branch
+`codex/campaign-access-public`; the older working checkout uses save format 1 and cannot replace it.
 
 ## How a deploy happens
 
@@ -64,11 +78,6 @@ reload nginx`. One guest was added this way on 2026-10-24.
   tarball through piper (`pct push`, `pct exec`). This is how the first release went out.
 
 ## Local check
-
-Release builds and asset uploads prepare gzip sidecars with `tools/precompress.py`; the server also
-compresses older exports while streaming. Material PNG previews are generated and cached on the server,
-so existing asset installations benefit without a re-export. See [remote loading](loading-performance.md)
-for bandwidth measurements, browser caching and reproduction commands.
 
 ```
 cd crates/ose-client && trunk build --release --dist ../../target/web && cd ../..
