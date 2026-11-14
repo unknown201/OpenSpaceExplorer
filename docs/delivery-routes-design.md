@@ -1,7 +1,7 @@
 # Delivery routes: design draft
 
-Status: **draft, round 2** (2026-11-14). Nothing is built yet. Section 2 records what Josh has decided;
-the questions still open are in section 7 (**Q7-Q12**). The draft assumes the recommended answer to each.
+Status: **draft, round 3** (2026-11-14). Nothing is built yet. Section 2 records what Josh has decided;
+the questions still open are in section 7 (**Q13-Q14**). The draft assumes the recommended answer to each.
 
 ## 1. What KSP2 had
 
@@ -35,7 +35,15 @@ timer: in OSE every run is a real vessel.
 5. **A real vessel flies each run on server time, with no abstract fast-forward.** Whether a route
    vessel should follow the players' time warp, or do something else, is still open (Q7).
 6. **Fuel versus payload.** Fuel goes through a docking port, which is easy. Payload may need a feature of
-   its own (section 3.6, Q9).
+   its own (section 3.6, decision 9).
+
+7. **Warp: route vessels never block warp** (3.5 as drafted).
+8. **A run may stay docked at the depot.** When every port is taken, no new runs are scheduled. How a
+   player chooses between staying, coming home, or being left as space junk is designed in 3.10.
+9. **Payload is "whatever stays docked"** for now (3.6).
+10. **Players can take control of a route vessel mid-run** (3.11).
+11. **Depot to depot:** Josh asked what it costs. The answer is in 3.12, and the decision is Q14.
+12. **Landed depots wait for colonies.**
 
 ## 3. Design
 
@@ -43,7 +51,7 @@ timer: in OSE every run is a real vessel.
 
 A depot is any vessel a player marks as one in its info panel (map, tracking station, or flight), such
 as an orbital station or a parked tank. Endpoints are `Endpoint::Ksc | Vessel(id)`, and later
-`Colony(id)`. A route can also start at a depot (depot to depot); see Q11.
+`Colony(id)`. A route can also start at a depot (depot to depot); see 3.12 and Q14.
 
 ### 3.2 The proving flight (recording)
 
@@ -59,7 +67,7 @@ dialog. It can also be started on any vessel that is still on the pad or runway.
 - the **fuel used per phase** and the **time per phase**.
 
 The flight completes either when it is recovered at KSC (a round trip) or when the vessel stays docked at
-the depot (one-way; see Q8). Then any campaign member can **Create route** from it. The route panel shows
+the depot (one-way; see 3.10). Then any campaign member can **Create route** from it. The route panel shows
 the proving flight's totals: fuel used, delivered, duration and Δv per phase. Those numbers are the
 route's **budget**.
 
@@ -130,7 +138,57 @@ open question is how a route vessel interacts with the players' shared warp (Q7)
   leaves the same subassembly behind, so stations grow one module per run. This uses only docking and
   undocking, which already exist.
 - **Payload, later: cargo.** Inventory items, containers, or colony resources such as construction
-  materials need a cargo system of their own (KSP2 never had one). This should be its own design (Q9).
+  materials need a cargo system of their own (KSP2 never had one). This should be its own design.
+
+### 3.10 End of run: return, stay, rotate, or let go
+
+Every route has a **When delivered** setting, chosen at Create route and changeable at any time:
+
+- **Return home** (the default for round-trip recordings): undock and fly home as recorded.
+- **Stay docked**: the vessel becomes part of the depot. Each stay uses up one port.
+- **Rotate**: stay docked until the next run arrives. When the next run reaches its hold point, the
+  pilot undocks the oldest stayed vessel from this route and sends it home, which frees the port for the
+  arriving one. This works like a crew-capsule swap at a station: one port can serve the route forever.
+  Recommended default for one-way recordings.
+- **Let go**: undock and park about 1 km away, which leaves space junk. Useful for spent tanks, and fun
+  to clean up.
+
+**Port check at launch.** Before each launch the scheduler counts the depot's free ports that fit the
+recorded port size. Routes set to **Rotate** count their own oldest stayed vessel as freeable. With
+nothing free, the route waits in the "Waiting: no free port at Station Alpha" state and launches
+nothing. This only looks at ports that are already occupied. Two runs in flight for the same free port
+still race for it and collide (decision 4).
+
+**Cleaning up by hand.** The routes panel lists each route's stayed vessels with **Send home**,
+**Let go**, and **Keep** (detach it from the route, so it is just part of the station and the route no
+longer counts it). Send home and Let go hand the vessel to the route pilot for one last leg.
+
+### 3.11 Taking control
+
+Any member can **Take control** of a route vessel from its map or route-panel entry. The pilot stops,
+and the vessel behaves like any of that player's vessels. The run is marked **Manual**. Whatever it
+delivers before the player docks counts, and the log shows who flew it. **Hand back** returns it to the
+pilot, which replans from wherever the vessel is. If the vessel is nowhere near the route any more, the
+pilot gives up and the run ends as Missed. A run under manual control does not hold up the next window.
+
+### 3.12 Depot to depot: what it adds
+
+A depot-to-depot route can't spawn a fresh craft, because there is no launch pad at a station.
+It needs a different model:
+
+- **A shuttle, not copies.** One persistent vessel cycles between two depots and refuels at the origin
+  each time. That takes a "refuel from origin" step, a stay-at-origin state, and an answer to "the
+  shuttle was destroyed, now what?" (the route stops until someone flies a new proving flight or
+  launches a replacement from KSC).
+- **The origin pays.** Fuel and payload come out of the origin depot's tanks, so the route can run dry
+  (the "Waiting: origin short of LF" state).
+- **Guidance.** If both depots are in the same SOI, the rendezvous planner covers it with no ascent
+  and no landing. If they are in different SOIs (Mun station to LKO), the pilot needs a transfer back
+  from the Mun and an encounter that targets a station rather than a planet, which is new work.
+
+None of this changes the KSC-route code. The route keeps an `origin: Endpoint` and a
+`vessel_source: Spawn | Shuttle(id)` from day one, so depot-to-depot slots in later without reworking
+it. Rough size: same-SOI shuttles are a medium follow-up, and cross-SOI is a large one.
 
 ### 3.7 UI
 
@@ -145,8 +203,7 @@ open question is how a route vessel interacts with the players' shared warp (Q7)
 ### 3.8 Multiplayer and ownership
 
 Routes, recordings and depots belong to the shared campaign. Any member can create, pause or delete a
-route, and the panel shows who created it. Route vessels are owned by the server, not by a player. Whether a
-player may take control of a route vessel mid-run is Q10.
+route, and the panel shows who created it. Route vessels are owned by the server, not by a player, until someone takes control (3.11).
 
 ### 3.9 Save format
 
@@ -156,7 +213,8 @@ so a run in progress resumes after a server restart. All are `#[serde(default)]`
 
 ## 4. Out of scope for the MVP
 
-Colonies, cargo inventory, a funds economy, crew rotation, landed depots (Q12), and traffic control.
+Colonies, cargo inventory, a funds economy, crew rotation, landed depots (decision 12), depot-to-depot
+routes (Q14), and traffic control.
 
 ## 5. Build plan (once the design is agreed)
 
@@ -182,15 +240,9 @@ Colonies, cargo inventory, a funds economy, crew rotation, landed depots (Q12), 
 
 ## 7. Open questions for Josh
 
-- **Q7 Warp.** Should a route vessel never block warp and only fly physics phases at 1x (draft), hold
-  everyone's warp down while it is in physics like another player, or something else?
-- **Q8 One-way runs.** Should a run be allowed to stay docked at the depot for good (it becomes part of
-  the station), or must every route come home?
-- **Q9 Payload.** Is "whatever stays docked when it undocks" enough payload for now, with a cargo system
-  as a later design of its own?
-- **Q10 Take control.** Can a player take control of a route vessel mid-run (for example to rescue a
-  missed docking)? If so, does that run still count?
-- **Q11 Depot to depot.** Should routes from one station to another (say a Mun station to an LKO tank)
-  be in the MVP, or only routes from KSC?
-- **Q12 Landed depots.** Ground bases need landing guidance next to a target and a way to transfer on
-  the ground. Should those wait for colonies?
+- **Q13 Rotate.** Is Rotate (3.10) the right default for routes that stay, and are Send home, Let go
+  and Keep the right cleanup actions?
+- **Q14 Depot to depot.** Leave it out of the MVP but keep the data model ready (recommended), add
+  same-SOI shuttles to the MVP, or include cross-SOI as well?
+
+Answered in round 2: Q7-Q12 (see decisions 7-12).
