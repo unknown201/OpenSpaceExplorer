@@ -22,37 +22,50 @@ async fn start_with_mail(dir: &Path, mail: Option<u16>) -> (Server, String) {
     start_config(dir, mail, true).await
 }
 async fn start_config(dir: &Path, mail: Option<u16>, allow_guests: bool) -> (Server, String) {
-    let port = std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
-    let addr = format!("127.0.0.1:{port}");
-    let mut command = Command::new(env!("CARGO_BIN_EXE_ose-server"));
-    if allow_guests {
-        command.arg("--allow-guest-accounts");
-    }
-    if let Some(port) = mail {
-        command
-            .env("OSE_SMTP_HOST", "127.0.0.1")
-            .env("OSE_SMTP_PORT", port.to_string())
-            .env("OSE_SMTP_FROM", "OpenSpaceExplorer <ose@example.com>");
-    }
-    let child = command
-        .args(["--listen", &addr, "--save-interval-s", "3600", "--db"])
-        .arg(dir.join("accounts.json"))
-        .arg("--save")
-        .arg(dir.join("save.json"))
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    let server = Server(child);
-    for _ in 0..200 {
-        if tokio::net::TcpStream::connect(&addr).await.is_ok() {
-            return (server, addr);
+    // A port picked free can be taken by another test's server before this one binds it: then this server
+    // exits and a bare TCP probe would connect to the other one. Probe until this server answers and is
+    // still running, and pick another port if it exited.
+    for _ in 0..5 {
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let addr = format!("127.0.0.1:{port}");
+        let mut command = Command::new(env!("CARGO_BIN_EXE_ose-server"));
+        if allow_guests {
+            command.arg("--allow-guest-accounts");
         }
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        if let Some(port) = mail {
+            command
+                .env("OSE_SMTP_HOST", "127.0.0.1")
+                .env("OSE_SMTP_PORT", port.to_string())
+                .env("OSE_SMTP_FROM", "OpenSpaceExplorer <ose@example.com>");
+        }
+        let child = command
+            .args(["--listen", &addr, "--save-interval-s", "3600", "--db"])
+            .arg(dir.join("accounts.json"))
+            .arg("--save")
+            .arg(dir.join("save.json"))
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut server = Server(child);
+        for _ in 0..200 {
+            if server.0.try_wait().ok().flatten().is_some() {
+                break;
+            }
+            if tokio::net::TcpStream::connect(&addr).await.is_ok() {
+                // still ours a moment later (a server that lost the port has exited by now)
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                if server.0.try_wait().ok().flatten().is_none() {
+                    return (server, addr);
+                }
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
     panic!("server did not start");
 }
