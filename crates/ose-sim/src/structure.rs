@@ -201,11 +201,14 @@ pub struct Structure {
     pub(crate) water_strikes: Vec<(usize, f64)>,
     /// Each part's `buoyancy` scale and the water it displaces fully under, m^3 (`water::displacement_m3`).
     pub buoyancy: Vec<f64>,
+    pub(crate) buoyancy_center_m: Vec<DVec3>,
+    pub(crate) water_bounds: Vec<[DVec3; 8]>,
     /// Each part's `angularDrag` (`PartData`), which damps its own spin in air.
     pub angular_drag: Vec<f64>,
     pub displacement_m3: Vec<f64>,
     /// Each part's water drag state.
     pub(crate) water_drag: Vec<crate::water::WaterDrag>,
+    pub(crate) water_pending: Vec<crate::water::PendingWater>,
     /// Deployable solar panels (and antennas) folded out.
     pub deployed: Vec<bool>,
     /// Antennas that extend and retract (`Data_Deployable` beside `Data_Transmitter`); they start retracted.
@@ -236,6 +239,8 @@ pub struct Structure {
     pub chute_heat: Vec<ChuteHeat>,
     /// A chute part's packed drag cube (its stowed shape), blended with the open ones by weight.
     chute_packed: Vec<Option<ose_data::DragCube>>,
+    /// Control settings each part was built with (`CraftPart::control`), given to the flight once.
+    craft_controls: Vec<Option<ose_data::flight_geometry::PartControl>>,
     /// The attach nodes covering each part's faces (`SetExposedArea`), reapplied to a re-weighted shape.
     face_covers: Vec<Vec<(DVec3, f64, usize)>>,
     /// Each part's own faces before any attach node covers them.
@@ -929,8 +934,19 @@ impl Structure {
             surface_loads: Vec::new(),
             in_water: vec![false; n],
             water_strikes: Vec::new(),
+            water_pending: vec![crate::water::PendingWater::default(); n],
             buoyancy: (0..n)
                 .map(|i| def_of(i).map(|d| d.buoyancy).unwrap_or(1.0))
+                .collect(),
+            buoyancy_center_m: (0..n)
+                .map(|i| {
+                    def_of(i)
+                        .map(|d| d.buoyancy_center_m)
+                        .unwrap_or(DVec3::ZERO)
+                })
+                .collect(),
+            water_bounds: (0..n)
+                .map(|i| crate::water::bounds_corners(def_of(i)))
                 .collect(),
             angular_drag: (0..n)
                 .map(|i| def_of(i).map(|d| d.angular_drag).unwrap_or(1.0))
@@ -1048,6 +1064,11 @@ impl Structure {
             chute_open: vec![0.0; n],
             chute_heat: (0..n)
                 .map(|i| ChuteHeat::new(def_of(i).and_then(|d| d.parachute.as_ref())))
+                .collect(),
+            craft_controls: craft
+                .parts
+                .iter()
+                .map(|p| p.control.filter(|c| c.valid()))
                 .collect(),
             chute_packed: (0..n)
                 .map(|i| {
@@ -1695,6 +1716,26 @@ impl Structure {
             }
         }
         out
+    }
+
+    pub(crate) fn part_own_inertia(&self, i: usize) -> crate::dynamics::Inertia {
+        let mass = self.rigid.masses_t[i];
+        let axes = self.part_axes(i);
+        let mut own = crate::dynamics::Inertia::default();
+        if let Some(tensor) = self.geometry[i].inertia_per_t {
+            let factor =
+                self.rigid
+                    .inertia_factor(i, self.geometry[i].inertia_mode, mass.max(0.001));
+            own.add_tensor(
+                mass,
+                tensor.map(|v| v * factor),
+                [axes[0], axes[1], -axes[2]],
+                DVec3::ZERO,
+            );
+        } else {
+            own.add_box(mass, self.rigid.sizes_m[i], axes, DVec3::ZERO);
+        }
+        own
     }
 
     /// The vessel's mass in flight: every part's dry, stored and occupied-seat mass, physicsless parts
@@ -2853,6 +2894,14 @@ impl Structure {
         if self.first_stage_pending && p.ignited {
             self.first_stage_pending = false;
             self.trim_to(p.stage);
+        }
+        // The craft's own settings, until the player changes them in flight.
+        for (i, c) in self.craft_controls.iter_mut().enumerate() {
+            if let Some(c) = c.take() {
+                if !p.part_controls.iter().any(|(k, _)| *k as usize == i) {
+                    p.part_controls.push((i as u16, c));
+                }
+            }
         }
         if self.untrimmed(p.stage) {
             self.trim_to(p.stage);
@@ -6510,6 +6559,8 @@ mod tests {
     #[test]
     fn aerodynamic_moment_tracks_fuel_mass_and_retains_each_parts_force() {
         let (mut s, p, wing) = airflow_fixture();
+        // the moment arithmetic about the part's origin (a shaped wing lifts at its mesh centre otherwise)
+        s.lift_defs[wing].as_mut().unwrap().0.pressure_offset_m = DVec3::ZERO;
         let frame = crate::flight::vessel_basis(&p);
         let air = DVec3::new(0.0, 100.0, -10.0);
         let first = s.aerodynamics(0, frame, air, 1.0, 0.3);
@@ -6579,6 +6630,8 @@ mod tests {
     #[test]
     fn local_wing_flow_produces_analytical_damping_and_matching_effects() {
         let (mut s, p, wing) = airflow_fixture();
+        // the moment arithmetic about the part's origin (a shaped wing lifts at its mesh centre otherwise)
+        s.lift_defs[wing].as_mut().unwrap().0.pressure_offset_m = DVec3::ZERO;
         let frame = crate::flight::vessel_basis(&p);
         let r = s.part_box(wing).0 - s.mass_properties().centre_m;
         let axis = DVec3::new(0.0, 0.0, 1.0);

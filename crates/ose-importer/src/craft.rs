@@ -116,6 +116,75 @@ fn part_fairing(v: &Value) -> Option<ose_data::fairing::FairingShape> {
     })
 }
 
+/// A control surface's settings as built (`Data_ControlSurface`): the authority limit, in degrees of its
+/// range, the axes it answers, inversion and deployment.
+fn part_control(v: &Value) -> Option<ose_data::flight_geometry::PartControl> {
+    fn find(v: &Value) -> Option<&Value> {
+        match v {
+            Value::Object(m) => {
+                if m.get("Name").and_then(|n| n.as_str()) == Some("Data_ControlSurface") {
+                    return m.get("DataObject");
+                }
+                m.values().find_map(find)
+            }
+            Value::Array(a) => a.iter().find_map(find),
+            _ => None,
+        }
+    }
+    let d = find(v)?;
+    let stored = |k: &str| d[k].get("storedValue").cloned().unwrap_or(Value::Null);
+    let flag = |k: &str| stored(k).as_bool();
+    let range = d["CtrlSurfaceRange"].as_f64().filter(|r| *r > 0.0);
+    let mut c = ose_data::flight_geometry::PartControl::default();
+    let mut any = false;
+    if let Some(limit) = stored("AuthorityLimiter")
+        .as_f64()
+        .filter(|l| l.is_finite())
+    {
+        // The limit is in degrees of the part's range; a craft file rarely carries the range, so an unresolved
+        // limit is kept negative until `resolve_control_limits` reads it from the part definition.
+        c.surface_authority = match range {
+            Some(range) => (limit / range).clamp(0.0, 1.0),
+            None => -limit.max(0.0),
+        };
+        any = true;
+    }
+    // PartControl::surface_axes is (pitch, roll, yaw)
+    for (k, key) in [(0, "EnablePitch"), (1, "EnableRoll"), (2, "EnableYaw")] {
+        if let Some(on) = flag(key) {
+            c.surface_axes[k] = on;
+            any |= !on;
+        }
+    }
+    if let Some(on) = flag("InvertControl") {
+        c.surface_invert = on;
+        any |= on;
+    }
+    if let Some(on) = flag("Deploy") {
+        c.surface_deploy = on;
+        any |= on;
+    }
+    any.then_some(c)
+}
+
+/// Turn the authority limits `part_control` left in degrees into fractions of each part's range
+/// (`PartDef::ctrl_range_deg`, `Data_ControlSurface.CtrlSurfaceRange`).
+pub fn resolve_control_limits(craft: &mut Craft, parts: &[ose_data::PartDef]) {
+    for p in &mut craft.parts {
+        let Some(c) = p.control.as_mut() else {
+            continue;
+        };
+        if c.surface_authority < 0.0 {
+            let range = parts
+                .iter()
+                .find(|d| d.id == p.part_id)
+                .map(|d| d.ctrl_range_deg)
+                .filter(|r| *r > 0.0);
+            c.surface_authority = range.map_or(1.0, |r| (-c.surface_authority / r).clamp(0.0, 1.0));
+        }
+    }
+}
+
 /// The part at the far end of a two-anchor part (fuel line, strut): `Data_CompoundPart.OtherEndAnchor`.
 fn compound_other_end(v: &Value) -> Option<String> {
     match v {
@@ -251,6 +320,7 @@ pub fn craft_from_value(v: &Value) -> anyhow::Result<Craft> {
         parts.push(CraftPart {
             shape: part_shape(p).filter(|sh| sh.valid_for(&s(p, "partName"))),
             fairing: part_fairing(p).filter(|f| f.valid_for(&s(p, "partName"))),
+            control: part_control(p),
             chute: None,
             symmetry: 0,
             actions: Vec::new(),

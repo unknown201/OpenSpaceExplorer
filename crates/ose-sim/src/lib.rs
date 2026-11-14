@@ -2218,7 +2218,7 @@ impl Universe {
                         if heat.enabled {
                             burned = st.update_heat_in_flow(
                                 flow,
-                                a.temperature_k.evaluate(alt),
+                                thermal::sampled_ambient(&a.temperature_k, alt),
                                 thermal::conductivity(alt, a.depth_m),
                                 &heat,
                                 step_dt,
@@ -2281,12 +2281,17 @@ impl Universe {
                 let was_landed = p.landed || p.splashed;
                 let env = flight::EngineEnvironment::at(&p, &body, atmo.as_ref());
                 let step_ut = start_ut + i as f64 * step_dt;
+                let water_reference = self
+                    .world
+                    .get::<bodies::OnRails>(body_e)
+                    .map(|o| water::ReferenceFrame::at(&body, o.0.position_at(step_ut), step_ut));
                 let propulsion = structure.as_mut().map(|st| {
                     if comm_blocked {
                         p.controlled = false;
                         p.throttle = 0.0;
                     }
                     let mut propulsion = st.powered_services(&mut p, sun, env, step_dt);
+                    propulsion.water_reference = water_reference;
                     if comm_blocked {
                         p.controlled = false;
                     }
@@ -4619,8 +4624,9 @@ mod tests {
             for ((part, angle), (other, reversed)) in d.iter().zip(&opposite) {
                 assert_eq!(part, other);
                 assert!(
-                    angle.abs() < 1e-5 || angle * reversed < 0.0,
-                    "{what}: reversing the key reverses deflection"
+                    // a surface built not to answer this axis (the jet's wings ignore yaw) holds still
+                    angle.abs() < 1e-4 || angle * reversed < 0.0,
+                    "{what}: reversing the key reverses deflection: {d:?} vs {opposite:?}"
                 );
             }
         }

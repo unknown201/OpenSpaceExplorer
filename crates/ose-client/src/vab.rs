@@ -287,6 +287,7 @@ impl Editor {
         if self.craft.parts.is_empty() {
             self.craft.parts.push(CraftPart {
                 chute: None,
+                control: None,
                 shape: None,
                 fairing: None,
                 symmetry: 0,
@@ -383,6 +384,7 @@ impl Editor {
         let guid = self.next_guid();
         self.craft.parts.push(CraftPart {
             chute: None,
+            control: None,
             shape: None,
             fairing: None,
             symmetry: 0,
@@ -911,6 +913,7 @@ impl Editor {
         };
         let mut p = CraftPart {
             chute: None,
+            control: None,
             shape: None,
             fairing: None,
             symmetry: 0,
@@ -1816,6 +1819,7 @@ impl Editor {
             out.push(self.craft.parts.len());
             self.craft.parts.push(CraftPart {
                 chute: None,
+                control: None,
                 shape: None,
                 fairing: None,
                 symmetry: 0,
@@ -3902,6 +3906,7 @@ mod tests {
                     .zip(&before)
                     .map(|(&i, q)| CraftPart {
                         chute: None,
+                        control: None,
                         local_rotation: *q,
                         ..e.craft.parts[i].clone()
                     })

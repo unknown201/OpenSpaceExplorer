@@ -33,6 +33,7 @@ test("held flight controls with 30 ms added round-trip delay", async ({ page, ba
   try {
     await page.goto(baseURL!);
     await page.locator('[data-ose="player-name"]').fill("latency pilot");
+    await page.locator('[data-ose="login"]').click();
     await page.locator('[data-ose="play"]').click();
     // A campaign of its own, as controls_direction does: the shared one's pads fill with other tests'
     // vessels, and then Launch has nowhere to roll out to.

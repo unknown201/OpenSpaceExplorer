@@ -47,6 +47,7 @@ try {
       await page.goto(base);
       await page.locator('body.webgpu').waitFor();
       await page.locator('[data-ose="player-name"]').fill('loading profiler');
+      await page.locator('[data-ose="login"]').click();
       await page.locator('[data-ose="play"]').click();
       if (menuWait === 'ready') await page.locator('[data-ose="gpu"][data-ose-preload="ready"]').waitFor();
       else if (Number(menuWait) > 0) await page.waitForTimeout(Number(menuWait));
