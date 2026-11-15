@@ -60,6 +60,9 @@ pub struct SavedVessel {
     pub eva_ladder: Option<(u64, usize, f64)>,
     #[serde(default)]
     pub flag: Option<String>,
+    /// The player's own time it is in (`SaveFile::timelines`).
+    #[serde(default)]
+    pub timeline: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -160,6 +163,10 @@ pub struct SaveFile {
     /// The campaigns not being played, each as its own save.
     #[serde(default)]
     pub shelf: Vec<ShelvedCampaign>,
+    /// Players' own times, once they have warped apart (`timelines.rs`): `tick` and `warp` are the time shown
+    /// when saved.
+    #[serde(default)]
+    pub timelines: Option<ose_sim::timelines::SavedTimelines>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -213,6 +220,11 @@ pub fn capture(
                     Some((id, part, along))
                 }),
                 flag: u.flag_planter(e),
+                timeline: if u.timelines_enabled() {
+                    u.timeline_of(e)
+                } else {
+                    0
+                },
                 later_burns: u
                     .scheduled_burns(e)
                     .iter()
@@ -241,6 +253,7 @@ pub fn capture(
         campaign: campaign.clone(),
         crafts: crafts.to_vec(),
         shelf: Vec::new(),
+        timelines: u.saved_timelines(),
     }
 }
 
@@ -339,7 +352,13 @@ pub fn restore(
         if !burns.is_empty() {
             u.schedule_burns(e, burns);
         }
+        if save.timelines.is_some() {
+            u.set_timeline(e, v.timeline);
+        }
         registry.push((e, v.id, v.owner));
+    }
+    if let Some(t) = &save.timelines {
+        u.restore_timelines(t);
     }
     for v in &save.vessels {
         if let Some((target, part, along)) = v.eva_ladder {
@@ -701,6 +720,7 @@ mod tests {
             vessels: Vec::new(),
             campaign: Campaign::default(),
             shelf: Vec::new(),
+            timelines: None,
         };
         save.shelf.push(ShelvedCampaign {
             id: "old".into(),
@@ -978,5 +998,34 @@ mod control_settings_tests {
         assert_eq!(entries.len(), 1);
         assert!(restored.powered(entries[0].0).is_some());
         assert!(restored.structure(entries[0].0).is_none());
+    }
+
+    #[test]
+    fn players_times_survive_a_save() {
+        let bodies: Vec<ose_data::CelestialBody> =
+            serde_json::from_str(include_str!("../../../assets/own/kerbol-system.json")).unwrap();
+        let mut u = Universe::with_bodies(&bodies);
+        let kerbin = u.body_entity("Kerbin").unwrap();
+        let a = u.spawn_vessel_in_circular_orbit("a", kerbin, 100_000.0);
+        let b = u.spawn_vessel_in_circular_orbit("b", kerbin, 150_000.0);
+        u.enable_timelines();
+        let t = u.split().unwrap();
+        u.move_to_timeline(&[b], t);
+        u.set_member_timeline(7, t);
+        u.set_timeline_warp(t, 1000);
+        for _ in 0..5 {
+            u.step();
+        }
+        let list = vec![(a, 1, None), (b, 2, None)];
+        let file = capture(&u, &list, &Campaign::default(), &[]);
+        let file: SaveFile = serde_json::from_str(&serde_json::to_string(&file).unwrap()).unwrap();
+        let mut nu = Universe::with_bodies(&bodies);
+        let reg = restore(&mut nu, &file, &[], &[]);
+        let nb = reg.iter().find(|x| x.1 == 2).unwrap().0;
+        assert_eq!(nu.timeline_of(nb), t);
+        assert_eq!(nu.member_timeline(7), Some(t));
+        assert_eq!(nu.tick(), u.tick());
+        assert_eq!(nu.timeline_tick(t), u.timeline_tick(t));
+        assert_eq!(nu.timeline_clock(t).unwrap().warp, 1000);
     }
 }

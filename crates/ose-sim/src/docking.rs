@@ -484,7 +484,7 @@ impl Universe {
     /// do not prevent normal high warp, and the bubble disappears when the target is cleared.
     pub(crate) fn docking_neighbours(&mut self) -> std::collections::HashSet<Entity> {
         let mut local = std::collections::HashSet::new();
-        for e in self.vessels() {
+        for e in self.vessels_here() {
             let Some(t) = self.target(e) else { continue };
             if self.world.get::<CraftDoc>(e).is_none()
                 || self.world.get::<CraftDoc>(t).is_none()
@@ -1047,7 +1047,7 @@ impl Universe {
             let mut q = self
                 .world
                 .query_filtered::<Entity, (With<CraftDoc>, With<flight::Powered>)>();
-            q.iter(&self.world).collect()
+            q.iter(&self.world).filter(|e| self.here(*e)).collect()
         };
         vessels.sort_by_key(|e| e.to_bits());
         let mut out = Vec::new();
@@ -1138,6 +1138,7 @@ impl Universe {
         let blocked: Vec<(Entity, Vec<Disengaged>)> = {
             let mut q = self.world.query::<(Entity, &Undocked)>();
             q.iter(&self.world)
+                .filter(|(e, _)| self.here(*e))
                 .map(|(e, u)| (e, u.from.clone()))
                 .collect()
         };

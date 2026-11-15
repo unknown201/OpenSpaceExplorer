@@ -34,6 +34,14 @@ pub fn mark() -> Mark {
 pub struct Batch {
     /// Taken before reading the world, so a joining player can skip work begun before they joined.
     pub(super) started: Mark,
+    /// The publication as each time sees it (`timelines.rs`; one part while everyone shares one time).
+    parts: Box<[Part]>,
+}
+
+/// One time's view of a publication.
+pub struct Part {
+    /// The players in that time (a player in none of the parts gets the first).
+    members: Box<[u64]>,
     messages: Box<[Bytes]>,
     /// The vessel each message is about (trajectories), so a player is sent only what they need
     /// (`interest.rs`).
@@ -54,9 +62,7 @@ impl Default for Streams {
     fn default() -> Self {
         let empty = Arc::new(Batch {
             started: mark(),
-            messages: Box::new([]),
-            about: Box::new([]),
-            vessels: None,
+            parts: Box::new([]),
         });
         Self {
             snapshots: watch::channel(empty.clone()).0,
@@ -106,9 +112,17 @@ pub fn start(s: super::AppState) {
                     if s.streams.snapshots.receiver_count() > 0 {
                         let started = std::time::Instant::now();
                         publish_with(&s.streams.snapshots, || {
-                            let (time, bodies, vessels) = super::snapshot(&s);
-                            let vessels = super::vessel_frames(&s, vessels);
-                            ([time, bodies, super::launch_sites_message(&s)], vessels)
+                            let mut warps = super::apply_warps(&s);
+                            let sites = super::launch_sites_message(&s);
+                            super::timelines::parts(&s)
+                                .into_iter()
+                                .map(|(t, members)| {
+                                    let warp = warps.remove(&t).unwrap_or((1, None));
+                                    let (time, bodies, vessels) = super::snapshot_in(&s, t, warp);
+                                    let vessels = super::vessel_frames(&s, vessels);
+                                    (members, [time, bodies, sites.clone()], vessels)
+                                })
+                                .collect()
                         });
                         tracing::debug!(elapsed_us = started.elapsed().as_micros() as u64,
                             clients = s.streams.snapshots.receiver_count(), "snapshot published");
@@ -117,7 +131,12 @@ pub fn start(s: super::AppState) {
                 _ = predictions.tick() => {
                     if s.streams.trajectories.receiver_count() > 0 {
                         let started = std::time::Instant::now();
-                        publish(&s.streams.trajectories, || super::trajectories(&s));
+                        publish_with(&s.streams.trajectories, || {
+                            super::timelines::parts(&s)
+                                .into_iter()
+                                .map(|(t, members)| (members, super::trajectories_in(&s, t), None))
+                                .collect()
+                        });
                         tracing::debug!(elapsed_us = started.elapsed().as_micros() as u64,
                             clients = s.streams.trajectories.receiver_count(), "trajectories published");
                     }
@@ -127,27 +146,38 @@ pub fn start(s: super::AppState) {
     });
 }
 
+#[cfg(test)]
 fn publish<M: IntoIterator<Item = ServerMessage>>(
     sender: &watch::Sender<Frames>,
     build: impl FnOnce() -> M,
 ) {
-    publish_with(sender, || (build(), None));
+    publish_with(sender, || vec![(Vec::new(), build(), None)]);
 }
 
-/// Publish shared messages and, after them, the vessels each player gets assembled for them.
+/// Publish shared messages and, after them, the vessels each player gets assembled for them: one part for
+/// each time players are in (its players, its messages and vessels).
 fn publish_with<M: IntoIterator<Item = ServerMessage>>(
     sender: &watch::Sender<Frames>,
-    build: impl FnOnce() -> (M, Option<VesselFrames>),
+    build: impl FnOnce() -> Vec<(Vec<u64>, M, Option<VesselFrames>)>,
 ) {
     let started = mark();
-    let (messages, vessels) = build();
-    if let Some((messages, about)) = encode(messages) {
+    let parts = build()
+        .into_iter()
+        .map(|(members, messages, vessels)| {
+            let (messages, about) = encode(messages)?;
+            Some(Part {
+                members: members.into_boxed_slice(),
+                messages,
+                about,
+                vessels: vessels.map(Arc::new),
+            })
+        })
+        .collect::<Option<Vec<_>>>();
+    if let Some(parts) = parts {
         // send() drops the batch if the last client left while it was being built.
         let _ = sender.send(Arc::new(Batch {
             started,
-            messages,
-            about,
-            vessels: vessels.map(Arc::new),
+            parts: parts.into_boxed_slice(),
         }));
     }
 }
@@ -178,7 +208,17 @@ pub async fn send_batch(
     frames: &Frames,
     interest: &mut Interest,
     focus: &[u64],
+    player: u64,
 ) -> bool {
+    // the publication as this player's time sees it
+    let Some(frames) = frames
+        .parts
+        .iter()
+        .find(|p| p.members.contains(&player))
+        .or(frames.parts.first())
+    else {
+        return true;
+    };
     let vessels = frames.vessels.as_ref().map(|v| {
         interest.near = v.near(focus);
         v.message(&interest.near)
@@ -241,7 +281,7 @@ mod tests {
         });
         let frames = next.await.unwrap();
         assert!(matches!(
-            ose_net::decode::<ServerMessage>(&frames.messages[0]).unwrap(),
+            ose_net::decode::<ServerMessage>(&frames.parts[0].messages[0]).unwrap(),
             ServerMessage::Snapshot { tick: Tick(2), .. }
         ));
     }
@@ -272,14 +312,14 @@ mod tests {
         let newest = slow.borrow_and_update().clone();
         assert!(Arc::ptr_eq(&newest, &fast.borrow()));
         assert!(matches!(
-            ose_net::decode::<ServerMessage>(&newest.messages[0]).unwrap(),
+            ose_net::decode::<ServerMessage>(&newest.parts[0].messages[0]).unwrap(),
             ServerMessage::TimeState {
                 tick: Tick(100),
                 ..
             }
         ));
         assert!(matches!(
-            ose_net::decode::<ServerMessage>(&newest.messages[1]).unwrap(),
+            ose_net::decode::<ServerMessage>(&newest.parts[0].messages[1]).unwrap(),
             ServerMessage::Snapshot {
                 tick: Tick(100),
                 ..

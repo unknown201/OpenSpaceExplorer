@@ -206,6 +206,7 @@ fn open(s: &Shared) -> AppState {
         recorder: Mutex::new(crate::replay::Recorder::default()),
         rooms: s.rooms.clone(),
         closed: std::sync::atomic::AtomicBool::new(false),
+        turn: Mutex::new(()),
     });
     s.rooms.list.lock().expect("rooms lock").push(room.clone());
     // a replay steps its one room itself, with no runtime to run clocks on

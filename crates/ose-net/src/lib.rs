@@ -11,7 +11,7 @@ use ose_data::Tick;
 use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 69;
+pub const PROTOCOL_VERSION: u16 = 70;
 /// Trajectory messages per second the server streams for each vessel.
 pub const TRAJECTORY_HZ: u32 = 1;
 /// Snapshots per second the server streams to each client.
@@ -436,6 +436,14 @@ pub enum ClientMessage {
     /// without their per-part lists.
     Viewing {
         vessel: Option<u64>,
+    },
+    /// Catch up with `player`'s time (protocol 70): time warp is each player's own, so players drift apart in
+    /// time; this runs the sender's time (and the vessel they pilot) forward at the fastest warp their vessels
+    /// allow until it reaches `player`'s, and from then on they share one clock. Nothing goes back in time, so
+    /// a player behind the sender is refused (they sync to the sender instead). Answered by `Rejected` when
+    /// refused; `PlayerTimes` shows the progress.
+    SyncTime {
+        player: u64,
     },
 }
 
@@ -1308,6 +1316,23 @@ pub enum ServerMessage {
     BodyRotation {
         bodies: Vec<BodySpin>,
     },
+    /// Where the other players are in time (protocol 70), once a second while anyone is in another time
+    /// than the receiver: time warp is each player's own. Empty once everyone shares one clock again.
+    PlayerTimes {
+        players: Vec<PlayerTime>,
+        /// Catching up with this player's time now (`ClientMessage::SyncTime`).
+        syncing_to: Option<u64>,
+    },
+}
+
+/// Another player's time, against the receiver's.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlayerTime {
+    pub player: u64,
+    /// Seconds ahead of the receiver (negative: behind). Zero: the same clock.
+    pub ahead_s: f64,
+    /// Their time warp now.
+    pub warp: u32,
 }
 
 pub fn encode<T: Serialize>(msg: &T) -> Result<Vec<u8>, postcard::Error> {
