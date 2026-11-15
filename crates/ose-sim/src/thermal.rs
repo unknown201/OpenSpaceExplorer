@@ -22,6 +22,21 @@ pub const REENTRY_DENSITY_EXPONENT: f64 = 0.53;
 pub const THERMAL_SKIN_FRICTION: f64 = 0.3;
 const ATMOSPHERIC_CONDUCTIVITY: f64 = 0.026;
 const THERMAL_WINDOW_SMOOTHING_M: f64 = 500.0;
+/// A part whose outline is at least this much inside an upstream part's counts as wholly behind it
+/// (`ThermalOcclusionData.GetShockStats`), so a craft a hair off its flow keeps its shadowed parts shadowed.
+const FULLY_OCCLUDED: f64 = 0.99;
+/// Share of a wholly shadowed part's area the airflow still reaches (`OccludeConvectionAreaMultiplier`).
+const OCCLUDED_AREA: f64 = 0.0;
+
+/// How much of a part the airflow reaches behind one upstream part that covers `overlap` of its outline.
+fn exposed_behind(overlap: f64) -> f64 {
+    let overlap = if overlap >= FULLY_OCCLUDED {
+        1.0
+    } else {
+        overlap.max(0.0)
+    };
+    1.0 - overlap + overlap * OCCLUDED_AREA
+}
 
 /// The heat difficulty options (`HeatEnabled`, `HeatScaling`, `HeatPartDestruction`).
 #[derive(bevy_ecs::prelude::Resource, Clone, Copy, Debug, PartialEq)]
@@ -39,6 +54,23 @@ impl Default for HeatSettings {
             part_destruction: true,
         }
     }
+}
+
+/// The air temperature the parts' heat works against at `alt_m` (`IterationJob`): KSP2's thermal job reads the
+/// body's temperature curve from a 256-point table over the curve's span (`FloatCurveStruct`), taking the
+/// nearest point, not the smooth curve. Through Kerbin's cold layer near 10 km that is a step of 17 K
+/// at 9.6 km, which a part cooling there steps past instead of settling onto the air temperature.
+pub fn sampled_ambient(curve: &ose_data::Curve, alt_m: f64) -> f64 {
+    let Some(last) = curve.keys.last() else {
+        return 0.0;
+    };
+    let max = last.t as f32;
+    if max <= 0.0 {
+        return curve.evaluate(alt_m);
+    }
+    let x = ((alt_m as f32) / max * 255.0).clamp(0.0, 255.0);
+    let i = x.round_ties_even();
+    curve.evaluate(((i / 255.0) * max).clamp(0.0, max) as f64)
 }
 
 /// How well the air carries heat away at `alt_m` (`GetThermalConductivity`): full inside the atmosphere,
@@ -153,7 +185,7 @@ pub fn exposed_proportions(boxes: &[(DVec3, DVec3)], travel: DVec3, mach: f64) -
             } else {
                 0.0
             };
-            e = e.min(1.0 - overlap.min(1.0));
+            e = e.min(exposed_behind(overlap.min(1.0)));
             if e >= 0.999 {
                 e = 1.0;
             }
@@ -211,7 +243,7 @@ pub fn exposed_proportion_at(
             }
             let width = (hi[0].min(bhi[0]) - lo[0].max(blo[0])).max(0.0);
             let height = (hi[1].min(bhi[1]) - lo[1].max(blo[1])).max(0.0);
-            exposed.min(1.0 - (width * height / area).min(1.0))
+            exposed.min(exposed_behind((width * height / area).min(1.0)))
         })
 }
 
@@ -231,6 +263,30 @@ mod tests {
         let side = [(DVec3::ZERO, unit), (DVec3::new(0.5, 1.0, 0.0), unit)];
         let e = exposed_proportions(&side, -up, 5.0);
         assert!((e[1] - 0.5).abs() < 1e-9, "{e:?}");
+        // 99% behind counts as wholly behind (a craft a hair off its flow)
+        let tilted = [(DVec3::ZERO, unit), (DVec3::new(0.005, 1.0, 0.0), unit)];
+        assert_eq!(exposed_proportions(&tilted, -up, 5.0), vec![1.0, 0.0]);
+        assert_eq!(exposed_proportion_at(&tilted, 1, -up, 5.0), 0.0);
+        // the thermal job's air temperature: the nearest of 256 points along the curve
+        let curve = ose_data::Curve {
+            keys: vec![
+                ose_data::CurveKey {
+                    t: 0.0,
+                    v: 300.0,
+                    in_tangent: 0.0,
+                    out_tangent: 0.0,
+                },
+                ose_data::CurveKey {
+                    t: 255.0,
+                    v: 45.0,
+                    in_tangent: -1.0,
+                    out_tangent: -1.0,
+                },
+            ],
+        };
+        assert_eq!(sampled_ambient(&curve, 10.4), curve.evaluate(10.0));
+        assert_eq!(sampled_ambient(&curve, 10.6), curve.evaluate(11.0));
+        assert_eq!(sampled_ambient(&curve, 900.0), curve.evaluate(255.0));
         // subsonic: nothing heats
         assert_eq!(exposed_proportions(&stack, -up, 0.8), vec![0.0, 0.0]);
     }
