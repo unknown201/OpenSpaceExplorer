@@ -16,6 +16,23 @@ use ose_math::DVec3;
 use serde::{Deserialize, Serialize};
 
 pub const IDEAL_GAS_CONSTANT: f64 = 8.31447;
+/// The fastest a craft spins, rad/s: KSP2 gives every part's rigidbody `maxAngularVelocity =
+/// PhysicsSettings.MaxAngularVelocity` (`RigidbodyBehavior`; 50, read live), and PhysX clamps the solved spin
+/// to it each tick. Without it an attitude hold chasing a target that jumps every tick could spin the wheels'
+/// craft up without end.
+pub const MAX_ANGULAR_VELOCITY: f64 = 50.0;
+
+/// A spin no faster than `MAX_ANGULAR_VELOCITY` (a NaN spin is stopped).
+pub fn cap_spin(w: DVec3) -> DVec3 {
+    let s = w.length();
+    if !s.is_finite() {
+        DVec3::ZERO
+    } else if s > MAX_ANGULAR_VELOCITY {
+        w * (MAX_ANGULAR_VELOCITY / s)
+    } else {
+        w
+    }
+}
 /// Relative impact speed above this counts as a crash (wheel touchdown uses sink speed).
 pub const CRASH_SPEED_MPS: f64 = 12.0;
 /// How far over its crash tolerance a part must be struck for the craft behind it to carry on at full speed
@@ -197,6 +214,9 @@ impl Attitude {
 pub struct Deck {
     pub radius_m: f64,
     pub v: DVec3,
+    /// Mass of the part underneath, t (a craft resting on another breaks on it as part on part:
+    /// `collide::crash_breaks`); 0 for a Kerbal's deck.
+    pub part_mass_t: f64,
 }
 
 /// A Kerbal standing on something that drops away more than this under it in one tick walked off an edge
@@ -1733,6 +1753,8 @@ fn turn_with_parts(
                     inertia.solve(t - w.cross(lever.apply(w)) - engine.angular_damping.apply(w));
                 next = w1 + (x * a.x + facing * a.y + top * a.z) * h;
             }
+            // PhysX clamps the solved spin before it moves the pose
+            let next = cap_spin(next);
             facing = rotate(facing, next, h);
             top = rotate(top, next, h);
             w1 = next;
@@ -1767,6 +1789,7 @@ fn turn_with_parts(
         ));
         w1 = x * local_w.x + facing * local_w.y + top * local_w.z;
     }
+    let w1 = cap_spin(w1);
     p.facing = facing;
     set_vessel_top(p, top);
     if p.rotation_input.length_squared() > 1e-6 && matches!(p.attitude, Attitude::Fixed(_)) {
@@ -2269,6 +2292,17 @@ pub fn integrate_with_propulsion(
             );
             // standing on its lowest point (or its side once tipped over)
             let mut ground = ground_radius(body, terrain, p.r, ut + dt) + stand_height(p);
+            // a craft resting on another craft's hull stands on that; it falls once the hull is gone
+            if !p.walker {
+                if let Some(deck) = p.deck {
+                    ground = ground.max(deck.radius_m + stand_height(p));
+                }
+                if p.r.length() - ground > WALK_OFF_M {
+                    p.landed = false;
+                    p.v = omega_v.cross(p.r) + rolling;
+                    return out;
+                }
+            }
             if p.walker {
                 if let Some(deck) = p.deck {
                     // standing on a craft: carried along with it, as KSP2 gives a Kerbal its contact's
