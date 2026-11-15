@@ -1363,6 +1363,7 @@ mod tests {
             k.deck = Some(flight::Deck {
                 radius_m: deck.radius_m,
                 v: deck.v + east * 2.0,
+                part_mass_t: 0.0,
             });
             let b = u
                 .world
