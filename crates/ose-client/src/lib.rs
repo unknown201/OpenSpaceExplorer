@@ -1630,7 +1630,7 @@ fn install_rnd_nav(doc: &Document) -> Result<(), JsValue> {
             if !open {
                 return;
             }
-            let (dx, dy) = match ev.code().as_str() {
+            let (dx, dy) = match event_code(&ev).as_str() {
                 "ArrowLeft" => (-80, 0),
                 "ArrowRight" => (80, 0),
                 "ArrowUp" => (0, -80),
@@ -2189,6 +2189,24 @@ fn load_part_sizes(app: Shared) {
             Err(e) => log(&format!("parts.json: {e}")),
         }
     });
+}
+
+/// `KeyboardEvent.code`, or "" when the browser leaves it out. Chrome's autofill (seen on macOS when it
+/// fills the sign-in email) dispatches keydown events with no `code` or `key`; web-sys's getters then
+/// throw inside the handler while the app is borrowed, and every later handler panics on that borrow.
+fn event_code(ev: &web_sys::KeyboardEvent) -> String {
+    js_sys::Reflect::get(ev, &JsValue::from_str("code"))
+        .ok()
+        .and_then(|v| v.as_string())
+        .unwrap_or_default()
+}
+
+/// `KeyboardEvent.key`, or "" when the browser leaves it out (see [`event_code`]).
+fn event_key(ev: &web_sys::KeyboardEvent) -> String {
+    js_sys::Reflect::get(ev, &JsValue::from_str("key"))
+        .ok()
+        .and_then(|v| v.as_string())
+        .unwrap_or_default()
 }
 
 /// Reload the page to pick up a newer client, unless this tab already did so in the last minute.
@@ -5352,7 +5370,7 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
             // Settings > Input waits for a key: this one is the new binding (Esc keeps the old one).
             if let Some(default) = app.rebinding.take() {
                 ev.prevent_default();
-                let raw = ev.code();
+                let raw = event_code(&ev);
                 if raw != "Escape" {
                     app.remap.bind(&default, &raw);
                     store("ose.keys", &app.remap.to_stored());
@@ -5361,7 +5379,7 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                 return;
             }
             // The client acts on the original's default keys; a rebound key stands in for its action's.
-            let code = app.remap.translate(&ev.code()).unwrap_or_default();
+            let code = app.remap.translate(&event_code(&ev)).unwrap_or_default();
             if let Some(x) = app
                 .doc
                 .get_element_by_id("credits")
@@ -5766,7 +5784,7 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                 }
                 _ => {}
             }
-            match ev.key().as_str() {
+            match event_key(&ev).as_str() {
                 "f" | "F" => app.frame_focus(),
                 "Escape" => match esc_action(app.in_session, app.open_menu_screen()) {
                     EscAction::Pause => {
@@ -5798,7 +5816,7 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
     let on_key_up =
         Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |ev: web_sys::KeyboardEvent| {
             let mut app = a.borrow_mut();
-            let code = app.remap.translate(&ev.code()).unwrap_or_default();
+            let code = app.remap.translate(&event_code(&ev)).unwrap_or_default();
             app.keys.up(&code);
         });
     window.add_event_listener_with_callback("keyup", on_key_up.as_ref().unchecked_ref())?;

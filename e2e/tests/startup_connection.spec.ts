@@ -113,3 +113,20 @@ test('a refused sign-in shows its reason in the sign-in form',async({page,baseUR
   await expect(page.locator('[data-ose="login-status"]')).toHaveClass(/error/);
   await expect(page.locator('[data-ose="login-status"]')).not.toBeEmpty();
 });
+
+test('keydown events without a key or code (browser autofill) do not break sign-in',async({page,baseURL})=>{
+  const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));
+  await page.goto(baseURL!);
+  await expect(page.locator('[data-ose="menu"]')).toHaveAttribute('data-ose-connection','open');
+  // Chrome's autofill dispatches keydown events like these when it fills a field.
+  await page.locator('[data-ose="login-email"]').evaluate(el=>{
+    el.dispatchEvent(new Event('keydown',{bubbles:true}));
+    el.dispatchEvent(new KeyboardEvent('keydown',{bubbles:true}));
+    document.dispatchEvent(new Event('keydown'));
+    window.dispatchEvent(new Event('keydown'));
+  });
+  await page.locator('[data-ose="player-name"]').fill('autofilled pilot');
+  await page.locator('[data-ose="login"]').click();
+  await expect(page.locator('#screen-name')).toHaveClass(/open/);
+  expect(errors).toEqual([]);
+});
