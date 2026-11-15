@@ -87,3 +87,18 @@ test('a lost connection can retry Campaign without reloading or losing the pilot
   await expect(page.locator('[data-ose="ksc"]')).toBeVisible();
   expect(connections).toBe(3);
 });
+
+test('an email code request moves to the code step at once and shows a failed send in the form',async({page,baseURL})=>{
+  await page.goto(baseURL!);
+  await expect(page.locator('[data-ose="menu"]')).toHaveAttribute('data-ose-connection','open');
+  await page.locator('[data-ose="login-email"]').fill('pilot@example.com');
+  await page.locator('[data-ose="login"]').click();
+  // The code field and Resend show before the server answers.
+  await expect(page.locator('[data-ose="login-otp"]')).toBeVisible();
+  await expect(page.locator('[data-ose="otp-resend"]')).toBeVisible();
+  await expect(page.locator('[data-ose="login"]')).toHaveText('Sign in');
+  // The test server has no mail relay: the reason appears in the form, and the pilot stays on the sign-in screen.
+  await expect(page.locator('[data-ose="login-status"]')).toHaveClass(/error/);
+  await expect(page.locator('[data-ose="login-status"]')).toContainText('not set up');
+  await expect(page.locator('#screen-login')).toHaveClass(/open/);
+});
