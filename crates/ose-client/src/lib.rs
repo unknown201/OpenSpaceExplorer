@@ -203,6 +203,10 @@ struct App {
     difficulty_presets: Vec<DifficultyPreset>,
     agency_sent: bool,
     warp_holder: Option<u64>,
+    /// Where the other players are in time (`ServerMessage::PlayerTimes`): warp is each player's own.
+    player_times: Vec<ose_net::PlayerTime>,
+    /// Catching up with this player's time (`ClientMessage::SyncTime`).
+    syncing_to: Option<u64>,
     requested_warp: u32,
     /// Breadcrumb text last rendered, to rebuild the DOM only on change.
     crumbs: String,
@@ -445,6 +449,8 @@ struct App {
     vab_grab_loose: Option<(usize, f64, f64)>,
     /// When the players window last asked for the campaign (what everyone flies is not pushed).
     players_asked_ms: std::cell::Cell<f64>,
+    /// The vessel the server was last told this view follows (`ClientMessage::Viewing`).
+    viewing_sent: Option<Option<u64>>,
     /// R&D: the science archive shows in the info panel instead of the node picked.
     rd_archive: bool,
     /// VAB offset tool (2): arrows and Q/E move the selected part.
@@ -917,6 +923,8 @@ pub fn start() -> Result<(), JsValue> {
         difficulty_presets: Vec::new(),
         agency_sent: false,
         warp_holder: None,
+        player_times: Vec::new(),
+        syncing_to: None,
         requested_warp: 1,
         crumbs: String::new(),
         ut_el: get("ut")?,
@@ -1098,6 +1106,7 @@ pub fn start() -> Result<(), JsValue> {
         vab_offset: false,
         rd_archive: false,
         players_asked_ms: std::cell::Cell::new(0.0),
+        viewing_sent: None,
         vab_grab_loose: None,
         loose_stamps: Vec::new(),
         mouselook: false,
@@ -2516,6 +2525,30 @@ fn install_menu(app: &Shared) -> Result<(), JsValue> {
                 app.render_kerbal_manager();
             }),
         )?;
+    }
+    // Sync in the players window: catch up with a player ahead in time.
+    if let Some(el) = doc.get_element_by_id("fh-players-list") {
+        let a = app.clone();
+        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |ev: MouseEvent| {
+            let Some(t) = ev.target().and_then(|t| t.dyn_into::<Element>().ok()) else {
+                return;
+            };
+            let Some(player) = t
+                .get_attribute("data-ose-sync")
+                .and_then(|p| p.parse::<u64>().ok())
+            else {
+                return;
+            };
+            let mut app = a.borrow_mut();
+            if let Some(ws) = &app.ws {
+                send(ws, &ClientMessage::SyncTime { player });
+            }
+            app.syncing_to = Some(player);
+            app.update_warp_holder();
+            app.render_players();
+        });
+        el.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
     }
     // Clicks in the resource manager's transfer section and in the Kerbal Manager.
     for list in ["fh-res-list", "fh-km-list"] {
@@ -4619,6 +4652,7 @@ fn connect(app: &Shared) -> Result<(), JsValue> {
         on_error.forget();
     }
     app.borrow_mut().ws = Some(ws);
+    app.borrow_mut().viewing_sent = None;
     Ok(())
 }
 
@@ -6550,6 +6584,7 @@ impl App {
                 self.take_control_if_free();
                 if self.campaign_id != campaign_id {
                     self.requested_warp = 1;
+                    self.viewing_sent = None;
                     if let Some(scene) = &mut self.scene {
                         scene.reset_attitudes();
                     }
@@ -6901,6 +6936,15 @@ impl App {
                     self.update_warp_holder();
                 }
             }
+            ServerMessage::PlayerTimes {
+                players,
+                syncing_to,
+            } => {
+                self.player_times = players;
+                self.syncing_to = syncing_to;
+                self.update_warp_holder();
+                self.render_players();
+            }
             ServerMessage::Snapshot { bodies, .. } => {
                 if let Some(scene) = &mut self.scene {
                     scene.snapshot = bodies;
@@ -7182,7 +7226,7 @@ impl App {
             };
             let mine = v.owner.is_some() && v.owner == self.player_id;
             // The original's map markers: a Kerbal on EVA, a flag, debris, or a vessel.
-            let kind = if v.flight.as_ref().is_some_and(|f| f.eva) {
+            let kind = if v.is_eva() {
                 " eva"
             } else if v.name.ends_with(" flag") {
                 " flag"
@@ -10432,11 +10476,7 @@ impl App {
             .vessels
             .iter()
             // a wreck is gone (the server removes it shortly after the crash)
-            .filter(|v| {
-                v.flight
-                    .as_ref()
-                    .is_none_or(|f| f.situation != ose_net::FlightSituation::Crashed)
-            })
+            .filter(|v| v.situation() != Some(ose_net::FlightSituation::Crashed))
             .filter_map(|v| {
                 let body = scene.bodies.get(v.reference_body as usize)?;
                 let orbit = scene::orbit_from(body.mu, &v.orbit);
@@ -10451,7 +10491,7 @@ impl App {
                         .as_ref()
                         .and_then(|(_, m)| m.iter().find(|m| m.player_id == o))
                 });
-                let altitude = v.flight.as_ref().map(|f| f.altitude_m).unwrap_or_else(|| {
+                let altitude = v.altitude_m().unwrap_or_else(|| {
                     let rb = v.reference_body as usize;
                     (scene.vessel_position(v, ut) - scene.position(rb, ut)).length() - body.radius_m
                 });
@@ -10472,7 +10512,7 @@ impl App {
                             format!("#{r:02x}{g:02x}{b:02x}")
                         })
                         .unwrap_or_default(),
-                    kind: if v.flight.as_ref().is_some_and(|f| f.eva) {
+                    kind: if v.is_eva() {
                         "eva"
                     } else if v.name.ends_with(" flag") {
                         "flag"
@@ -10867,6 +10907,19 @@ impl App {
             el.class_list().add_1("open").ok();
             el.set_attribute("data-ose-vessel", &vessel.to_string())
                 .ok();
+        }
+    }
+
+    /// Tell the server which vessel this view follows when that changes: the vessels near it come in full
+    /// detail, the rest without their per-part lists.
+    fn sync_viewing(&mut self) {
+        let now = self.flying.or(self.follow);
+        if self.viewing_sent == Some(now) {
+            return;
+        }
+        if let Some(ws) = &self.ws {
+            send(ws, &ClientMessage::Viewing { vessel: now });
+            self.viewing_sent = Some(now);
         }
     }
 
@@ -11363,7 +11416,20 @@ impl App {
                 .unwrap_or_default()
         };
         let vessel_name = |id: u64| self.scene.as_ref()?.vessel(id).map(|v| v.name.clone());
-        let html = hud::players_html(members, self.player_id, &vessels, &vessel_name);
+        let time = |p: u64| {
+            self.player_times
+                .iter()
+                .find(|t| t.player == p)
+                .map(|t| (t.ahead_s, t.warp))
+        };
+        let html = hud::players_html(
+            members,
+            self.player_id,
+            &vessels,
+            &vessel_name,
+            &time,
+            self.syncing_to,
+        );
         // What each player flies is not pushed: ask again every few seconds while the window is open.
         if now_ms() - self.players_asked_ms.get() > 3000.0 {
             self.players_asked_ms.set(now_ms());
@@ -13987,12 +14053,24 @@ impl App {
     }
 
     /// "warp held by X" when another player's lower warp request wins the lowest-wins arbitration.
+    /// Or, with players in other times (warp is each player's own): catching up with one, or how many are
+    /// in another time.
     fn update_warp_holder(&self) {
+        let apart = self
+            .player_times
+            .iter()
+            .filter(|t| t.ahead_s.abs() >= 1.0)
+            .count();
         let text = match self.warp_holder {
             Some(p) if Some(p) != self.player_id => {
                 format!("warp held by {}", self.player_name_of(p))
             }
-            _ => String::new(),
+            _ => match self.syncing_to {
+                Some(p) => format!("catching up with {}\u{2026}", self.player_name_of(p)),
+                None if apart == 1 => "1 player in another time".to_string(),
+                None if apart > 1 => format!("{apart} players in another time"),
+                None => String::new(),
+            },
         };
         set_text(&self.doc, "warp-holder", &text);
     }
@@ -14622,6 +14700,7 @@ impl App {
         self.update_flight_instruments();
         self.toasts.watch(&self.doc, "fh-note", "alert");
         self.flight_keys_tick(now);
+        self.sync_viewing();
         self.draw_navball();
         // FPS counter, refreshed twice a second while shown.
         self.fps_frames += 1;

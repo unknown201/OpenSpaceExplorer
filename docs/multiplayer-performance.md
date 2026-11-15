@@ -19,6 +19,28 @@ The producer skips snapshot construction and trajectory prediction when nobody i
 registry maintenance still runs, including registering debris that belongs to a disconnected player.
 New connections wait for a fresh publication after their handshake instead of replaying cached state.
 
+## Interest management (protocol 69)
+
+Each player is sent in full only the vessels they can see up close: those in their focus (the vessel they
+pilot, and the one their view follows: `ClientMessage::Viewing`, sent by the client when the vessel it flies or
+follows changes, and set by the server when the player launches a craft) and every vessel within 10 km of one
+(the client draws vessels within 5 km in full). A player with no focus (at the KSC, in the VAB) gets the vessels
+standing on Kerbin in full. Every other vessel comes in brief: its flight readout is replaced by
+`VesselState::brief` (situation, EVA, height), which is what the map and the tracking station use. Far vessels'
+trajectories are sent on every fifth trajectory publication (every 5 s) instead of every one.
+
+The work stays shared (`crates/ose-server/src/interest.rs`): each publication encodes every vessel once in full
+and once in brief, and each player's `Vessels` message is assembled from those bytes (postcard writes a list as
+its length and its elements back to back), so its wire format and meaning are unchanged: every vessel, every
+snapshot. `streaming.rs` carries the encoded vessels and the trajectory tags alongside its shared messages and
+assembles each connection's copy in `send_batch`.
+
+`interest_payload_probe` (ignored; `cargo test -p ose-server --test ws_session interest_payload_probe -- --ignored --nocapture`)
+puts eight players' Kerbal K1s in eight orbits 10 km apart in height. Each player's `Vessels` message came to
+2,904 bytes per snapshot against about 14,400 with every vessel in full (4.9x less) on 2026-11-14; the saving
+grows with the number of players and the size of their crafts, since a far vessel costs about 150 bytes
+whatever it carries.
+
 ## Validation and local load probe
 
 Run the protocol tests and the optional timing probe:
