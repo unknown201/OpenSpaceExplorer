@@ -67,7 +67,7 @@ mod reentry_gpu;
 #[cfg(target_arch = "wasm32")]
 pub mod render;
 pub mod rendezvous;
-pub mod rendezvous_plan;
+pub use ose_guidance::plan as rendezvous_plan;
 mod rendezvous_ui;
 pub mod rnd;
 pub mod scene;

@@ -21,61 +21,62 @@ async fn start(dir: &Path) -> (Server, String) {
 async fn start_with_mail(dir: &Path, mail: Option<u16>) -> (Server, String) {
     start_config(dir, mail, true).await
 }
+/// Start a server on a port the OS picks, and wait for it to log the address it bound.
+///
+/// Picking a free port first and polling it raced in two ways: a parallel test (or its mail sink)
+/// could take the port, and polling a port in the ephemeral range can connect the probe to itself.
+/// Either looked like a ready server, and the test's first real connection was then refused.
 async fn start_config(dir: &Path, mail: Option<u16>, allow_guests: bool) -> (Server, String) {
-    // A port picked free can be taken by another test's server before this one binds it: then this server
-    // exits, while a TCP probe (or the next connection) reaches the other test's server, which goes away when
-    // that test ends ("connection refused" later on). So wait for this server's own "server listening" log
-    // line, which it writes only once it holds the port, and pick another port if it exits first.
-    for _ in 0..5 {
-        let port = std::net::TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
-        let addr = format!("127.0.0.1:{port}");
-        let mut command = Command::new(env!("CARGO_BIN_EXE_ose-server"));
-        if allow_guests {
-            command.arg("--allow-guest-accounts");
-        }
-        if let Some(port) = mail {
-            command
-                .env("OSE_SMTP_HOST", "127.0.0.1")
-                .env("OSE_SMTP_PORT", port.to_string())
-                .env("OSE_SMTP_FROM", "OpenSpaceExplorer <ose@example.com>");
-        }
-        let mut child = command
-            .args(["--listen", &addr, "--save-interval-s", "3600", "--db"])
-            .arg(dir.join("accounts.json"))
-            .arg("--save")
-            .arg(dir.join("save.json"))
-            .env("RUST_LOG", "info")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
-        // keep draining the log so the server never blocks on a full pipe
-        let log = child.stdout.take().unwrap();
-        let (bound_tx, bound) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            use std::io::BufRead;
-            for line in std::io::BufReader::new(log).lines().map_while(Result::ok) {
-                if line.contains("server listening") {
-                    let _ = bound_tx.send(());
-                }
-            }
-        });
-        let mut server = Server(child);
-        for _ in 0..400 {
-            if bound.try_recv().is_ok() {
-                return (server, addr);
-            }
-            if server.0.try_wait().ok().flatten().is_some() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
+    use std::io::BufRead;
+    let mut command = Command::new(env!("CARGO_BIN_EXE_ose-server"));
+    if allow_guests {
+        command.arg("--allow-guest-accounts");
     }
-    panic!("server did not start");
+    if let Some(port) = mail {
+        command
+            .env("OSE_SMTP_HOST", "127.0.0.1")
+            .env("OSE_SMTP_PORT", port.to_string())
+            .env("OSE_SMTP_FROM", "OpenSpaceExplorer <ose@example.com>");
+    }
+    let mut child = command
+        .args([
+            "--listen",
+            "127.0.0.1:0",
+            "--save-interval-s",
+            "3600",
+            "--db",
+        ])
+        .arg(dir.join("accounts.json"))
+        .arg("--save")
+        .arg(dir.join("save.json"))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let server = Server(child);
+    let (tx, rx) = std::sync::mpsc::channel();
+    // Keep draining the log after the address is found, so the server never blocks on a full pipe.
+    std::thread::spawn(move || {
+        for line in std::io::BufReader::new(stdout)
+            .lines()
+            .map_while(Result::ok)
+        {
+            if line.contains("server listening") {
+                let listen = serde_json::from_str::<serde_json::Value>(&line)
+                    .ok()
+                    .and_then(|v| v["fields"]["listen"].as_str().map(str::to_owned));
+                let _ = tx.send(listen);
+            }
+        }
+    });
+    let addr = tokio::task::spawn_blocking(move || rx.recv_timeout(Duration::from_secs(20)))
+        .await
+        .unwrap()
+        .ok()
+        .flatten()
+        .expect("server did not start");
+    (server, addr)
 }
 async fn connect(addr: &str, token: Option<String>) -> (Ws, S) {
     let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws"))
