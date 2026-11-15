@@ -5924,6 +5924,27 @@ impl App {
             .map(|i| i.value().trim().to_string())
             .unwrap_or_default()
     }
+    /// The sign-in form's own line under its buttons: progress, or why a step failed.
+    fn login_status(&self, text: &str, error: bool) {
+        if let Some(el) = self.doc.get_element_by_id("login-status") {
+            el.set_text_content(Some(text));
+            let classes = el.class_list();
+            if error {
+                classes.add_1("error").ok();
+            } else {
+                classes.remove_1("error").ok();
+            }
+        }
+    }
+
+    /// Move the sign-in screen to its code step: the code field, Resend, and Sign in.
+    fn show_code_step(&self) {
+        set_text(&self.doc, "login", "Sign in");
+        if let Some(login) = self.doc.get_element_by_id("screen-login") {
+            login.class_list().add_1("code-sent").ok();
+        }
+    }
+
     fn sign_in(&self, ws: &WebSocket) {
         self.connection_status("authenticating", "Signing in...");
         let msg = if let Some(token) = stored("ose.token") {
@@ -5951,9 +5972,17 @@ impl App {
                         display_name: self.player_name.clone(),
                     }
                 }
-                _ => ClientMessage::RequestEmailOtp { email },
+                _ => {
+                    // Show the code step at once, so the pilot sees where the code goes and any error.
+                    self.show_code_step();
+                    self.login_status(&format!("Sending a code to {email}…"), false);
+                    ClientMessage::RequestEmailOtp { email }
+                }
             }
         };
+        if matches!(msg, ClientMessage::EmailSignIn { .. }) {
+            self.login_status("Checking the code…", false);
+        }
         send(ws, &msg);
     }
 
@@ -6190,11 +6219,11 @@ impl App {
                     "login-otp"
                 };
                 if self.player_id.is_none() {
-                    // The code field shows only once a code is on its way.
-                    set_text(&self.doc, "login", "Sign in");
-                    if let Some(login) = self.doc.get_element_by_id("screen-login") {
-                        login.class_list().add_1("code-sent").ok();
-                    }
+                    self.show_code_step();
+                    self.login_status(
+                        &format!("Code sent to {email}. Check your inbox (and spam) and enter the 6 digits."),
+                        false,
+                    );
                 }
                 if let Some(input) = self
                     .doc
@@ -6213,6 +6242,9 @@ impl App {
             }
             ServerMessage::AuthError { reason } => {
                 self.login_requested = false;
+                if self.player_id.is_none() {
+                    self.login_status(&reason, true);
+                }
                 set_text(&self.doc, "menu-note", &reason);
                 set_text(&self.doc, "account-status", &reason);
             }
@@ -6469,6 +6501,7 @@ impl App {
                     }
                 }
                 self.campaign = Some((name, members));
+                self.take_control_if_free();
                 if self.campaign_id != campaign_id {
                     self.requested_warp = 1;
                     if let Some(scene) = &mut self.scene {
@@ -10760,6 +10793,7 @@ impl App {
         self.lesson_event("VesselCreatedMessage");
         self.lesson_event("LaunchSequenceInitiatedMessage");
         self.flying = Some(vessel);
+        self.take_control_if_free();
         self.rdv_start(vessel);
         // The server keeps a target per vessel; the one picked carries over to the vessel flown now.
         if self.target == Some(ose_net::TargetId::Vessel(vessel)) {
@@ -10790,8 +10824,58 @@ impl App {
         }
     }
 
+    /// The other player piloting `vessel` now (only one player pilots a vessel; the others ride along).
+    fn pilot_of(&self, vessel: u64) -> Option<&str> {
+        let (_, members) = self.campaign.as_ref()?;
+        members
+            .iter()
+            .find(|m| m.online && m.flying == Some(vessel) && Some(m.player_id) != self.player_id)
+            .map(|m| m.display_name.as_str())
+    }
+
+    /// Pilot the vessel in view when nobody else does (when it is entered, and when its pilot lets go), and
+    /// say who does otherwise.
+    fn take_control_if_free(&mut self) {
+        let Some(vessel) = self.flying else { return };
+        let pilot = self.pilot_of(vessel).map(str::to_string);
+        set_text(
+            &self.doc,
+            "fh-pilot",
+            &pilot
+                .as_ref()
+                .map(|p| format!("Riding along: {p} is piloting"))
+                .unwrap_or_default(),
+        );
+        if let Some(el) = self.doc.get_element_by_id("flight-hud") {
+            if pilot.is_some() {
+                el.set_attribute("data-ose-passenger", "true").ok();
+            } else {
+                el.remove_attribute("data-ose-passenger").ok();
+            }
+        }
+        if pilot.is_some() {
+            return;
+        }
+        let mine = self.campaign.as_ref().and_then(|(_, members)| {
+            members
+                .iter()
+                .find(|m| Some(m.player_id) == self.player_id)
+                .and_then(|m| m.flying)
+        });
+        if mine != Some(vessel) {
+            if let Some(ws) = &self.ws {
+                send(ws, &ClientMessage::TakeControl { vessel });
+            }
+        }
+    }
+
     fn end_flight(&mut self) {
         self.rdv_release();
+        if self.flying.is_some() {
+            if let Some(ws) = &self.ws {
+                send(ws, &ClientMessage::ReleaseControl);
+            }
+        }
         self.flying = None;
         self.crash_report_due.set(None);
         self.flight_craft = None;
@@ -10802,6 +10886,10 @@ impl App {
 
     fn send_controls(&mut self) {
         let Some(vessel) = self.flying else { return };
+        if self.pilot_of(vessel).is_some() {
+            self.controls_dirty = false;
+            return;
+        }
         if let Some(ws) = &self.ws {
             self.controls_dirty = false;
             send(
@@ -11922,6 +12010,20 @@ impl App {
                     self.attitude = att;
                 }
             }
+        }
+        // Riding along while another player pilots: show what they set, send nothing.
+        if self.pilot_of(vessel).is_some() {
+            if let Some(f) = self
+                .scene
+                .as_ref()
+                .and_then(|s| s.vessel(vessel))
+                .and_then(|v| v.flight.as_ref())
+            {
+                self.attitude = f.attitude;
+                self.throttle = f.throttle;
+            }
+            self.controls_dirty = false;
+            return;
         }
         if self.flying_eva() {
             self.eva_keys_tick(now, dt);

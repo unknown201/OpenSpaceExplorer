@@ -431,6 +431,15 @@ pub enum ClientMessage {
         vessel: u64,
         stages: Vec<Vec<u16>>,
     },
+    /// Pilot this vessel: only one player pilots a vessel, the one whose last command went to it, while they
+    /// are in the campaign; any other command to it is refused (`FlightAck`/`CrewAck` naming the pilot).
+    /// Other players can still ride along and watch. Answers `FlightAck`; `CampaignMember::flying` shows who
+    /// pilots what and is pushed to everyone when it changes.
+    TakeControl {
+        vessel: u64,
+    },
+    /// Stop piloting (leaving the flight view), so another player can take the vessel.
+    ReleaseControl,
 }
 
 /// A science report (the original's research report).
