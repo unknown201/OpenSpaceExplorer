@@ -228,6 +228,8 @@ pub struct Structure {
     resolved_engine_thrust: Option<Vec<f64>>,
     /// Per-part airflow force in inertial axes, with a craft-frame application offset.
     resolved_aero_forces: Option<Vec<PartForce>>,
+    /// Last tick's airflow forces in the craft's own axes, applied this tick (`airflow_one_tick_late`).
+    airflow_last_tick: Option<Vec<PartForce>>,
     /// Parts each flight stage activates (the craft's staging list for it).
     pub stage_activations: Vec<Vec<usize>>,
     /// Parachutes: definition, state and how far open (0..1).
@@ -269,6 +271,9 @@ pub struct Structure {
     /// Each stack part's hull as the frustum between its bottom and top stack nodes (`None` for any other
     /// part, which keeps its box): a Mk1 pod narrows from 1.25 m at its base to 0.625 m at its top.
     hull_taper: Vec<Option<Taper>>,
+    /// Each part's model as a contact sees it up close: the convex hull of its meshes (part frame, Z mirrored
+    /// into the vessel frame's sense) and the part's turn in the vessel frame (`None`: the part keeps its box).
+    model_hulls: Vec<Option<crate::collide::ModelHull>>,
     extended_box: Vec<Option<(DVec3, DVec3)>>,
     /// Landing gear: definition and whether it is out.
     pub gear_defs: Vec<Option<ose_data::LandingGear>>,
@@ -330,6 +335,9 @@ pub struct Structure {
     pub level: bool,
     /// Flight stage the structure was last trimmed to.
     staged_to: usize,
+    /// The first stage holds decouplers and has not fired: the parts they drop are still on the craft (KSP2
+    /// builds the whole craft on the pad, and its first `ActivateNextStage` fires them).
+    first_stage_pending: bool,
 }
 
 pub use ose_data::craft::{level_layout, rotated};
@@ -1118,6 +1126,16 @@ impl Structure {
                     part_taper(q, def, half)
                 })
                 .collect(),
+            model_hulls: (0..n)
+                .map(|i| {
+                    let def = def_of(i)?;
+                    // deployables fold and unfold: they keep their boxes
+                    if def.landing_gear.is_some() {
+                        return None;
+                    }
+                    crate::collide::model_hull(&def.id, craft.parts[i].local_rotation)
+                })
+                .collect(),
             extended_box: (0..n)
                 .map(|i| {
                     let q = craft.parts[i].local_rotation;
@@ -1315,9 +1333,19 @@ impl Structure {
             engine_load_target_kn: vec![0.0; n],
             resolved_engine_thrust: None,
             resolved_aero_forces: None,
+            airflow_last_tick: None,
             staged_to: 0,
+            first_stage_pending: false,
         };
-        s.trim_to(0);
+        // what the first stage's decouplers drop stays on until that stage fires
+        s.first_stage_pending = s.stage_parts.first().is_some_and(|alive| {
+            (0..s.rigid.len()).any(|i| {
+                s.rigid.present[i] && !alive.contains(&i) && !s.rigid.launch_clamps.contains(&i)
+            })
+        });
+        if !s.first_stage_pending {
+            s.trim_to(0);
+        }
         s.enclose_shaped_fairings();
         s
     }
@@ -1344,6 +1372,19 @@ impl Structure {
     }
 
     /// Drop the parts that are not attached in flight stage `stage` (they were staged away).
+    /// Whether the parts the first stage's decouplers drop are still on (it has not fired).
+    pub fn first_stage_pending(&self) -> bool {
+        self.first_stage_pending
+    }
+
+    /// Whether the parts on the craft lag `stage`: the stage moved on, or the first stage just fired.
+    fn untrimmed(&self, stage: usize) -> bool {
+        if self.first_stage_pending {
+            return false;
+        }
+        stage != self.staged_to
+    }
+
     pub fn trim_to(&mut self, stage: usize) {
         self.staged_to = stage;
         let Some(alive) = self.stage_parts.get(stage) else {
@@ -2499,6 +2540,11 @@ impl Structure {
         (self.rigid.rest_position(i) + offset, half)
     }
 
+    /// Part `i`'s model hull, when it has one and is not folded out.
+    pub(crate) fn model_hull(&self, i: usize) -> Option<&crate::collide::ModelHull> {
+        self.model_hulls.get(i)?.as_ref()
+    }
+
     /// A stack part's hull between its stack nodes (`None`: the part is its box).
     pub fn hull_taper(&self, i: usize) -> Option<Taper> {
         self.hull_taper[i]
@@ -2865,6 +2911,11 @@ impl Structure {
     /// Bring a flight state in line with the structure: trimmed to its stage, mass from what the tanks hold,
     /// propellant the engines can reach, thrust from the engines that are attached and fed.
     pub fn sync(&mut self, p: &mut Powered) {
+        // a lit craft has fired its first stage (also one restored from a save)
+        if self.first_stage_pending && p.ignited {
+            self.first_stage_pending = false;
+            self.trim_to(p.stage);
+        }
         // The craft's own settings, until the player changes them in flight.
         for (i, c) in self.craft_controls.iter_mut().enumerate() {
             if let Some(c) = c.take() {
@@ -2873,7 +2924,7 @@ impl Structure {
                 }
             }
         }
-        if p.stage != self.staged_to {
+        if self.untrimmed(p.stage) {
             self.trim_to(p.stage);
         }
         if p.control_point
@@ -5107,8 +5158,13 @@ impl Structure {
         let (x, y, z) = flow.frame;
         flow.velocity + flow.angular_velocity.cross(x * r.x + y * r.y + z * r.z)
     }
+    /// The air past part `i` as `Module_Drag` sees it: the part's own velocity
+    /// (`PartBehavior.VelocityRelativeToSOIBodyFrame`, its rigidbody's centre of mass), not the velocity at
+    /// its centre of pressure. A part spinning about its own centre of mass gets no damping from its drag.
     fn part_air_velocity(&self, i: usize, flow: Airflow, centre: DVec3) -> DVec3 {
-        self.air_at_offset(i, self.drag_offset(i), flow, centre)
+        let r = self.rigid.rest_mass_position(i) - centre;
+        let (x, y, z) = flow.frame;
+        flow.velocity + flow.angular_velocity.cross(x * r.x + y * r.y + z * r.z)
     }
 
     pub fn lifting_fx_local(&self, flow: Airflow) -> Vec<(u16, f32, f32)> {
@@ -5260,7 +5316,7 @@ impl Structure {
             let fixed_lift = self.lifting_at(i, flow, centre, false);
             let moving_lift = self.lifting_at(i, flow, centre, true);
             let lift = fixed_lift + moving_lift;
-            let body_v = self.air_at_offset(i, self.body_lift_offset(i), flow, centre);
+            let body_v = self.part_air_velocity(i, flow, centre);
             let body_speed = body_v.length();
             let body_lift = if body_speed > 0.0 {
                 self.body_lifting_force(
@@ -5298,6 +5354,68 @@ impl Structure {
             });
         }
         out.torque_knm = self.airflow_moment(flow.frame, &forces);
+        self.resolved_aero_forces = Some(forces);
+        out
+    }
+
+    /// Drop the airflow kept for the next tick (`airflow_one_tick_late`).
+    pub fn forget_last_airflow(&mut self) {
+        self.airflow_last_tick = None;
+    }
+
+    /// The airflow forces of `aerodynamics_local` as KSP2 applies them in flight: each part's drag and lift
+    /// are worked out in the part's own frame (`Module_Drag` sets an `IForce`'s `RelativeForce`) after
+    /// `RigidbodyBehavior` has already pushed this tick's forces into PhysX, so a tick flies on the forces of
+    /// the tick before, turned with the craft. Traced on a free-falling Mk1 pod: KSP2's spin follows
+    /// torque(previous pose) / inertia exactly, and that one-tick lag is what keeps a capsule tumbling
+    /// through reentry instead of settling. `now` is this tick's result (from `aerodynamics_local`).
+    pub fn airflow_one_tick_late(
+        &mut self,
+        frame: (DVec3, DVec3, DVec3),
+        now: AeroForces,
+    ) -> AeroForces {
+        let (x, y, z) = frame;
+        let local = |v: DVec3| DVec3::new(v.dot(x), v.dot(y), v.dot(z));
+        let world = |v: DVec3| x * v.x + y * v.y + z * v.z;
+        let current: Vec<PartForce> = self
+            .resolved_aero_forces
+            .as_deref()
+            .unwrap_or(&[])
+            .iter()
+            .map(|f| PartForce {
+                force_kn: local(f.force_kn),
+                ..*f
+            })
+            .collect();
+        let last = self.airflow_last_tick.replace(current);
+        let Some(last) = last.filter(|l| {
+            l.iter()
+                .all(|f| f.part < self.rigid.len() && self.rigid.present[f.part])
+        }) else {
+            return now;
+        };
+        let forces: Vec<PartForce> = last
+            .iter()
+            .map(|f| PartForce {
+                force_kn: world(f.force_kn),
+                ..*f
+            })
+            .collect();
+        // `aerodynamics_local` lists each part's drag, then its fixed, moving and body lift
+        let (mut drag_kn, mut lift_kn) = (DVec3::ZERO, DVec3::ZERO);
+        for (k, f) in forces.iter().enumerate() {
+            if k % 4 == 0 {
+                drag_kn = drag_kn + f.force_kn;
+            } else {
+                lift_kn = lift_kn + f.force_kn;
+            }
+        }
+        let out = AeroForces {
+            cda_m2: now.cda_m2,
+            lift_kn,
+            drag_kn,
+            torque_knm: self.airflow_moment(frame, &forces),
+        };
         self.resolved_aero_forces = Some(forces);
         out
     }
@@ -5437,7 +5555,7 @@ impl Structure {
     }
 
     fn aero_local(&mut self, stage: usize, flow: Airflow) -> f64 {
-        if stage != self.staged_to {
+        if self.untrimmed(stage) {
             self.trim_to(stage);
         }
         self.last_air_speed_mps = flow.velocity.length();
@@ -5539,7 +5657,7 @@ impl Structure {
                 }
             }
         }
-        if p.stage != self.staged_to {
+        if self.untrimmed(p.stage) {
             self.trim_to(p.stage);
         }
         let (bx, by, bz) = crate::flight::vessel_basis(p);
@@ -5771,6 +5889,8 @@ impl Structure {
     /// Take the groups no longer joined to the root out of the structure as pieces (`bx`..`bz`: the vessel
     /// frame in inertial axes).
     fn split_off(&mut self, bx: DVec3, by: DVec3, bz: DVec3) -> Vec<Piece> {
+        // last tick's airflow belonged to the craft before it came apart
+        self.airflow_last_tick = None;
         let groups = self.rigid.groups();
         let Some(keep) = groups.iter().find(|g| g.contains(&self.root)).cloned() else {
             return Vec::new();
@@ -6008,6 +6128,16 @@ mod tests {
             angular_velocity: DVec3::new(0.0, 0.0, 10.0),
             density: 1.0,
             speed_of_sound: 1.0,
+        };
+        // spinning about its own centre of mass the part has no airspeed of its own (`PartMach` comes from
+        // the part's rigidbody velocity, not the velocity at its pressure point): no re-entry heat
+        s.update_heat_in_flow(flow, 288.0, 0.0, &thermal::HeatSettings::default(), 0.02);
+        assert_eq!(s.reentry_flux_kw[wing], 0.0);
+        // moving at Mach 20 along its own +x it heats, however it is rolled
+        let flow = Airflow {
+            velocity: flow.frame.0 * 20.0,
+            angular_velocity: DVec3::ZERO,
+            ..flow
         };
         s.update_heat_in_flow(flow, 288.0, 0.0, &thermal::HeatSettings::default(), 0.02);
         let expected = thermal::reentry_flux(20.0, 1.0, 1.0, 1.0, 1.0);
@@ -6448,10 +6578,12 @@ mod tests {
             speed_of_sound: 100.0,
         };
         let out = s.aerodynamics_local(0, flow);
-        // Point speeds are 2 m/s for body drag and 1 m/s for the wing.
-        assert!((out.drag_kn - DVec3::new(0.0, -0.0096, 0.0)).length() < 1e-12);
+        // The wing's lifting surface sees the air at its own pressure point (1 m/s); body drag sees the
+        // part's own velocity (`Module_Drag`: its rigidbody), still here since it spins about its own
+        // centre of mass, so there is no body drag.
+        assert_eq!(out.drag_kn, DVec3::ZERO);
         assert!((out.lift_kn - DVec3::new(0.0, -0.018, 0.0)).length() < 1e-12);
-        assert!((out.torque_knm - DVec3::new(0.0, 0.0, -0.0372)).length() < 1e-12);
+        assert!((out.torque_knm - DVec3::new(0.0, 0.0, -0.018)).length() < 1e-12);
     }
 
     #[test]

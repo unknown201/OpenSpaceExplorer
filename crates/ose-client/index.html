@@ -289,6 +289,11 @@
     #login-form #login:disabled { opacity: .5; cursor: default; }
     #login-form #otp-resend { margin-top: calc(8 * var(--u)); background: transparent; border: 0; color: #9fb0cc; font-size: calc(13 * var(--u)); text-decoration: underline; }
     #screen-login:not(.code-sent) .code-only { display: none; }
+    #login-form #login-status { margin-top: calc(12 * var(--u)); min-height: 1.2em; font-size: calc(13 * var(--u)); color: #9fb0cc; }
+    #login-form #login-status:empty { display: none; }
+    #login-form #login-status.error { color: #f0a070; }
+    /* The form's own status line already says it: no second copy at the foot of the screen. */
+    #menu-card:has(#screen-login.open #login-status:not(:empty)) > .note { display: none; }
     #version, #login-version { position: absolute; left: calc(80 * var(--u)); bottom: calc(24 * var(--u)); font-size: calc(13 * var(--u)); color: #ffffff80; }
     #extras { position: absolute; right: calc(80 * var(--u)); bottom: calc(24 * var(--u)); font-size: calc(13 * var(--u)); color: #ffffff80; }
     #extras a { color: #ffffffb0; text-decoration: none; margin-left: calc(16 * var(--u)); }
@@ -1444,6 +1449,7 @@
           <input id="login-otp" class="code-only" data-ose="login-otp" type="text" maxlength="6" inputmode="numeric" autocomplete="one-time-code" placeholder="000000" />
           <button id="login" data-ose="login" type="submit" disabled>Email me a code</button>
           <button id="otp-resend" class="code-only" data-ose="otp-resend" type="button">Resend code</button>
+          <div id="login-status" data-ose="login-status" role="status" aria-live="polite"></div>
         </form>
         <div id="login-version">OpenSpaceExplorer, a shared Kerbol system in the browser</div>
       </div>
@@ -1754,7 +1760,7 @@
     </details>
     <div id="rdv-world" class="rdv-world" hidden><span>⊕</span><b id="rdv-world-label">Port staging point</b></div>
     <div id="rdv-axis" class="rdv-world rdv-port" hidden><span>□</span><b>Selected docking port</b></div>
-    <div class="fh-top"><div id="fh-recoverable" data-ose="flight-recoverable" title="Landed on Kerbin: Recover brings the crew, parts and science home">// <span data-loc="HUD/VesselStatus/Recoverable">RECOVERABLE</span> //</div><div id="fh-situation" class="fh-small">--</div><div id="fh-met" class="fh-small" data-ose="flight-met" title="Mission elapsed time" data-loc-title="HUD/Tooltips/MissionElapsedTime"></div><div id="fh-note" class="fh-small" style="color:#f0a070"></div><div id="fh-running" class="fh-small" data-ose="flight-running" style="color:#8fd08f"></div><div id="fh-control" data-ose="flight-control" style="color:#ff6a5a;font-weight:700"></div><div id="fh-thermal" data-ose="flight-thermal" data-level="off" title="Hottest part as a fraction of its maximum temperature"><span id="fh-thermal-text"></span><div class="fh-thermal-track"><div id="fh-thermal-fill"></div></div></div></div>
+    <div class="fh-top"><div id="fh-recoverable" data-ose="flight-recoverable" title="Landed on Kerbin: Recover brings the crew, parts and science home">// <span data-loc="HUD/VesselStatus/Recoverable">RECOVERABLE</span> //</div><div id="fh-situation" class="fh-small">--</div><div id="fh-met" class="fh-small" data-ose="flight-met" title="Mission elapsed time" data-loc-title="HUD/Tooltips/MissionElapsedTime"></div><div id="fh-note" class="fh-small" style="color:#f0a070"></div><div id="fh-pilot" class="fh-small" data-ose="flight-pilot" style="color:#9fd0ff"></div><div id="fh-running" class="fh-small" data-ose="flight-running" style="color:#8fd08f"></div><div id="fh-control" data-ose="flight-control" style="color:#ff6a5a;font-weight:700"></div><div id="fh-thermal" data-ose="flight-thermal" data-level="off" title="Hottest part as a fraction of its maximum temperature"><span id="fh-thermal-text"></span><div class="fh-thermal-track"><div id="fh-thermal-fill"></div></div></div></div>
     <div class="fh-bottom">
       <div class="fh-thr-col"><button id="fh-full" class="fh-thr-btn" data-ose="flight-throttle-full" title="Full throttle (Z)">&#9650;</button><div class="fh-throttle" title="Throttle: hold Shift / Ctrl, Z full, X cut"><div id="fh-throttle-fill"></div><span>THR</span><span id="fh-throttle-pct">0%</span></div><button id="fh-cut" class="fh-thr-btn" data-ose="flight-throttle-cut" title="Cut the throttle (X)">&#9660;</button></div>
       <div class="fh-ball">
@@ -1815,7 +1821,7 @@
   </div>
   <div id="fh-map-info" data-ose="map-info"><button id="fh-map-info-toggle" data-ose="map-info-toggle" title="Information panel: the object in focus">i</button><div id="fh-map-info-body"></div></div>
   <div id="node-panel" data-ose="node-panel">
-    <label>time <input id="node-dt" type="range" min="60" max="600" step="1" value="120" /><span id="node-dt-text">T-2:00</span></label>
+    <label>time <input id="node-dt" type="range" min="0" max="10000" step="1" value="771" title="Time to the node: logarithmic, from now out to ten Kerbin years" /><span id="node-dt-text">T-2:00</span></label>
     <label>prograde <input id="node-prograde" type="range" min="-1500" max="1500" step="1" value="0" /><span id="node-prograde-text">0 m/s</span></label>
     <label>normal <input id="node-normal" type="range" min="-1500" max="1500" step="1" value="0" /><span id="node-normal-text">0 m/s</span></label>
     <label>radial <input id="node-radial" type="range" min="-1500" max="1500" step="1" value="0" /><span id="node-radial-text">0 m/s</span></label>
