@@ -834,7 +834,13 @@ impl Universe {
         group: ActionGroup,
         on: Option<bool>,
     ) -> Option<bool> {
-        let mut p = self.world.get_mut::<flight::Powered>(e)?;
+        let mut p = if self.world.get::<flight::Powered>(e).is_some() {
+            self.world.get_mut::<flight::Powered>(e)?
+        } else {
+            self.world
+                .get_mut::<flight::Dormant>(e)?
+                .map_unchanged(|d| &mut d.0)
+        };
         let g = &mut p.groups;
         let slot = match group {
             ActionGroup::Lights => &mut g.lights,
@@ -1855,6 +1861,15 @@ impl Universe {
         ))
     }
 
+    /// Hide settled debris from the tracking UI while retaining its collision/support structure.
+    pub fn is_surface_debris(&self, e: Entity) -> bool {
+        self.world.get::<vessels::Debris>(e).is_some()
+            && self
+                .powered(e)
+                .or_else(|| self.dormant(e))
+                .is_some_and(|p| p.landed || p.splashed || p.crashed)
+    }
+
     /// Schedule an impulsive burn for a vessel at universal time `ut` (seconds, must be in the future).
     pub fn schedule_burn(&mut self, e: Entity, burn: vessels::ScheduledBurn) -> bool {
         if burn.ut < self.ut() || self.vessel(e).is_none() {
@@ -2691,21 +2706,8 @@ impl Universe {
         self.run_transfers(ticks.max(1) as f64 * dt);
         self.run_transmissions(ticks.max(1) as f64 * dt);
         self.run_ladders(ticks.max(1) as f64 * dt);
-        // Surface debris is no longer tracked, including soft landings and splashdowns.
-        let surface_debris: Vec<Entity> = {
-            let mut q = self.world.query_filtered::<(Entity, Option<&flight::Powered>, Option<&flight::Dormant>), With<vessels::Debris>>();
-            q.iter(&self.world)
-                .filter(|(e, p, d)| {
-                    self.here(*e)
-                        && p.or(d.map(|d| &d.0))
-                            .is_some_and(|p| p.landed || p.splashed || p.crashed)
-                })
-                .map(|(e, _, _)| e)
-                .collect()
-        };
-        for e in surface_debris {
-            self.despawn_vessel(e);
-        }
+        // Landed debris is hidden from tracking by the server, but its physical structure remains:
+        // it may hold up another vessel or float in the sea. Destroying it here removes those supports.
         // crashed debris is gone at once; a crashed craft stays for `WRECK_LINGER_S` (its pilot sees the crash
         // and its report) and then is gone too, as the original destroys it
         let wrecks: Vec<(Entity, bool, Option<f64>)> = {
@@ -2948,7 +2950,7 @@ mod tests {
     }
 
     #[test]
-    fn landed_and_crashed_debris_are_removed_but_landed_craft_remain() {
+    fn surface_debris_is_untracked_without_destroying_physical_supports() {
         let mut u = Universe::with_bodies(&[kerbin_def()]);
         let body = u.body_entity("Kerbin").unwrap();
         let craft = u.spawn_powered_on_surface("craft", body, upper_stage(), 0.0, 0.0);
@@ -2964,10 +2966,13 @@ mod tests {
         u.set_dormant(dormant, p);
         u.world.entity_mut(dormant).insert(vessels::Debris);
         u.step();
-        assert!(u.vessel(landed).is_none());
+        assert!(u.is_surface_debris(landed));
+        assert!(u.vessel(landed).is_some());
         assert!(u.vessel(crashed).is_none());
-        assert!(u.vessel(dormant).is_none());
+        assert!(u.is_surface_debris(dormant));
+        assert!(u.vessel(dormant).is_some());
         assert!(u.vessel(craft).is_some());
+        assert!(!u.is_surface_debris(craft));
     }
 
     #[test]

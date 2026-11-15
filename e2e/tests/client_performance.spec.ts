@@ -2,14 +2,17 @@ import { expect, test } from '@playwright/test';
 
 test('graphics frame cap persists and idle views batch uploads without refraction copies', async ({ page, browserName }) => {
   test.skip(browserName !== 'chromium', 'The WebGPU probe uses Chromium GPUQueue instrumentation.');
+  const assets = await page.request.get('/assets/menu/scene.json');
+  test.skip(!assets.ok() || !(assets.headers()['content-type'] || '').includes('json'),
+    'Batching verification requires the exported menu models (serve with --assets-dir assets/web).');
   await page.addInitScript(() => {
-    const { GPUQueue, GPUCommandEncoder } = window as any;
+    const { GPUDevice, GPUQueue, GPUCommandEncoder } = window as any;
     const probe = { frames: 0, writes: 0, copies: 0 };
     (window as any).renderProbe = probe;
-    const submit = GPUQueue.prototype.submit;
-    GPUQueue.prototype.submit = function (...args: any[]) {
-      probe.frames++;
-      return submit.apply(this, args);
+    const encoder = GPUDevice.prototype.createCommandEncoder;
+    GPUDevice.prototype.createCommandEncoder = function (descriptor: any) {
+      if (descriptor?.label === 'frame') probe.frames++;
+      return encoder.call(this, descriptor);
     };
     const write = GPUQueue.prototype.writeBuffer;
     GPUQueue.prototype.writeBuffer = function (buffer: any, ...args: any[]) {
@@ -32,6 +35,7 @@ test('graphics frame cap persists and idle views batch uploads without refractio
   await expect(page.locator('body')).toHaveClass(/webgpu/);
   await expect(page.locator('[data-ose="gpu"]')).toHaveAttribute('data-ose-menu-vessel', /.+/);
   await expect(page.locator('#settings-frame-limit')).toHaveValue('60');
+  await page.locator('[data-ose="login"]').click();
   // Open Graphics through the real menu and change the live render cadence.
   await page.locator('#main-settings').click();
   await page.locator('#settings-tabs [data-tab="graphics"]').click();
@@ -110,4 +114,12 @@ test('held flight controls still flush on press and release with the 30 FPS rend
   }
   await expect.poll(() => rotations.length).toBe(before + 2);
   expect(errors).toEqual([]);
+  await page.keyboard.press('Escape');
+  await page.locator('[data-ose="to-recover"]').click();
+  await page.locator('#fr-close').click();
+  await page.locator('[data-ose="ksc-sessions"]').click();
+  const session = page.locator('[data-ose="session"]').filter({ hasText: 'Render cap controls' });
+  page.once('dialog', dialog => dialog.accept());
+  await session.locator('[data-ose="session-delete"]').click();
+  await expect(session).toHaveCount(0);
 });

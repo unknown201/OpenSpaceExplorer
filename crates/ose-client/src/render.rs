@@ -2645,8 +2645,8 @@ impl Renderer {
         if self.fixture_grid {
             self.post.reference_grid(&mut encoder);
         }
-        self.post.snapshot(&mut encoder);
-        {
+        if self.engine_fx.has_draws() {
+            self.post.snapshot(&mut encoder);
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("authored engine effects"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {

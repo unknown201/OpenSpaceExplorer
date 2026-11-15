@@ -3462,9 +3462,14 @@ async fn deployment_snapshots_identify_panel_and_gear_instances() {
     })
     .await;
     let mut craft = starter_craft();
-    for (i, id) in ["solararray_1v_1x6", "solararray_1v_1x6", "landingleg_0v"]
-        .iter()
-        .enumerate()
+    // Shielded panels retract; the exposed OX-4L intentionally cannot (covered by part_controls).
+    for (i, id) in [
+        "solararray_1v_shielded_1x6",
+        "solararray_1v_shielded_1x6",
+        "landingleg_0v",
+    ]
+    .iter()
+    .enumerate()
     {
         let mut part = craft.parts[0].clone();
         part.guid = format!("rig-{i}");

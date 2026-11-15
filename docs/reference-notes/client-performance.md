@@ -2,6 +2,13 @@
 
 ## Conditions and observations
 
+The measurements below were captured on the earlier protocol-47 checkout. The changes have since
+been integrated onto production's newer renderer and protocol 72; these historical timings do not
+establish performance of that combined build. Its browser regression measures render command
+encoders (post-processing can submit additional command buffers), and verifies one object upload
+per rendered menu frame with no idle effects copy. See [ongoing diagnostics](../performance-diagnostics.md)
+for client reports and correlated server timings in the combined release.
+
 The report is high CPU/GPU use around 100 FPS, followed by jumpy craft controls and occasional
 multi-second stalls after playing for a while. An FPS average alone cannot distinguish a blocked
 browser from a browser continuing to render while authoritative vessel updates stop arriving.

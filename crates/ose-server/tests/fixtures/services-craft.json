@@ -1,0 +1,136 @@
+{
+  "name": "Services validation",
+  "description": "Matched part list; controlled runtime fixture",
+  "parts": [
+    {
+      "guid": "services-0",
+      "part_id": "pod_1v_conical_crew",
+      "parent": null,
+      "own_node": null,
+      "parent_node": null,
+      "local_position": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0
+      },
+      "local_rotation": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 1.0
+      },
+      "stage_index": 0,
+      "fuel_crossfeed": true,
+      "resources": [
+        {
+          "resource": "ElectricCharge",
+          "stored_units": 10.0,
+          "capacity_units": 50.0
+        },
+        {
+          "resource": "MonoPropellant",
+          "stored_units": 0.008,
+          "capacity_units": 0.04
+        }
+      ],
+      "fuel_line_target": null
+    },
+    {
+      "guid": "services-1",
+      "part_id": "fueltank_1v_inline_methalox_1x2",
+      "parent": 0,
+      "own_node": null,
+      "parent_node": null,
+      "local_position": {
+        "x": 0.0,
+        "y": -1.2775,
+        "z": 0.0
+      },
+      "local_rotation": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 1.0
+      },
+      "stage_index": 0,
+      "fuel_crossfeed": true,
+      "resources": [
+        {
+          "resource": "Methalox",
+          "stored_units": 0.2,
+          "capacity_units": 1.0
+        }
+      ],
+      "fuel_line_target": null
+    },
+    {
+      "guid": "services-2",
+      "part_id": "solararray_0v_flat",
+      "parent": 1,
+      "own_node": null,
+      "parent_node": null,
+      "local_position": {
+        "x": 1.0,
+        "y": -1.0,
+        "z": 0.0
+      },
+      "local_rotation": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 1.0
+      },
+      "stage_index": 0,
+      "fuel_crossfeed": true,
+      "resources": [],
+      "fuel_line_target": null
+    },
+    {
+      "guid": "services-3",
+      "part_id": "solararray_1v_shielded_1x6",
+      "parent": 1,
+      "own_node": null,
+      "parent_node": null,
+      "local_position": {
+        "x": -1.0,
+        "y": -1.0,
+        "z": 0.0
+      },
+      "local_rotation": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 1.0
+      },
+      "stage_index": 0,
+      "fuel_crossfeed": true,
+      "resources": [],
+      "fuel_line_target": null
+    },
+    {
+      "guid": "services-4",
+      "part_id": "antenna_0v_16",
+      "parent": 1,
+      "own_node": null,
+      "parent_node": null,
+      "local_position": {
+        "x": 0.0,
+        "y": -1.0,
+        "z": 1.0
+      },
+      "local_rotation": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 1.0
+      },
+      "stage_index": 0,
+      "fuel_crossfeed": true,
+      "resources": [],
+      "fuel_line_target": null
+    }
+  ],
+  "stages": [
+    []
+  ]
+}

@@ -99,7 +99,15 @@ async fn capture_services_over_live_websocket() {
     let _server = Process(
         Command::new(env!("CARGO_BIN_EXE_ose-server"))
             .current_dir(&root)
-            .args(["--listen", &addr, "--db", ":memory:", "--save", "none"])
+            .args([
+                "--listen",
+                &addr,
+                "--db",
+                ":memory:",
+                "--save",
+                "none",
+                "--allow-guest-accounts",
+            ])
             .stdout(Stdio::null())
             .stderr(Stdio::from(server_log))
             .spawn()
@@ -136,10 +144,8 @@ async fn capture_services_over_live_websocket() {
             }
         })
         .await;
-    let base: ose_data::craft::Craft = serde_json::from_slice(
-        &std::fs::read(out.join("ose-craft.json")).expect("Run services_probe first"),
-    )
-    .unwrap();
+    let base: ose_data::craft::Craft =
+        serde_json::from_str(include_str!("fixtures/services-craft.json")).unwrap();
     let mut results = vec![];
     for fraction in [1., 0.] {
         cap.send(
@@ -160,7 +166,7 @@ async fn capture_services_over_live_websocket() {
         craft.parts[2].parent = Some(1);
         let mut sampler = craft.parts[2].clone();
         sampler.guid = "services-sampler".into();
-        sampler.part_id = "collector_0v_radial_science_sampler".into();
+        sampler.part_id = "collector_0v_radial_science_general".into();
         sampler.local_position = ose_math::DVec3::new(-1., -1., 0.);
         sampler.resources.clear();
         craft.parts.push(sampler);
@@ -194,19 +200,6 @@ async fn capture_services_over_live_websocket() {
         cap.send(&mut ws, C::RunExperiments { vessel }).await;
         cap.wait(&mut ws, |m| {
             matches!(m, S::ScienceReports { .. }).then_some(())
-        })
-        .await;
-        cap.wait(&mut ws, |m| {
-            if let S::ExperimentFinished {
-                experiment,
-                interrupted,
-                ..
-            } = m
-            {
-                (experiment == "SurfaceSurvey" && !interrupted).then_some(())
-            } else {
-                None
-            }
         })
         .await;
         let before_tx = cap.flight(&mut ws, vessel).await;
@@ -281,6 +274,48 @@ async fn capture_services_over_live_websocket() {
             }
         })
         .await;
+    cap.send(
+        &mut ws,
+        C::EvaControls {
+            vessel: eva,
+            run: false,
+            jump: true,
+            grab: false,
+            climb: 0.,
+        },
+    )
+    .await;
+    cap.wait(&mut ws, |m| match m {
+        S::Vessels { vessels, .. } => vessels
+            .into_iter()
+            .find(|v| v.id == eva)
+            .and_then(|v| v.flight)
+            .filter(|f| f.on_ladder.is_none())
+            .map(|_| ()),
+        _ => None,
+    })
+    .await;
+    cap.send(
+        &mut ws,
+        C::EvaControls {
+            vessel: eva,
+            run: false,
+            jump: false,
+            grab: false,
+            climb: 0.,
+        },
+    )
+    .await;
+    cap.wait(&mut ws, |m| match m {
+        S::Vessels { vessels, .. } => vessels
+            .into_iter()
+            .find(|v| v.id == eva)
+            .and_then(|v| v.flight)
+            .filter(|f| f.situation == ose_net::FlightSituation::Landed)
+            .map(|_| ()),
+        _ => None,
+    })
+    .await;
     let mut flags = vec![];
     for trial in 0..2 {
         let start = Instant::now();

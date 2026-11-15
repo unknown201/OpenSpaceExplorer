@@ -75,8 +75,10 @@ pub fn handle(s: &Shared, player: u64, msg: &ClientMessage) -> ServerMessage {
         ClientMessage::SetDepot { vessel, depot } => match owned_vessel(s, vessel, player) {
             None => Err("not your vessel".into()),
             Some(e) => {
-                let u = s.universe.lock().expect("sim lock");
+                let mut u = s.universe.lock().expect("sim lock");
                 let mut c = s.campaign.lock().expect("campaign lock");
+                // A reload clears entity handles; resolve them before changing a depot flag.
+                c.routes.follow_depots(&mut u);
                 c.routes.set_depot(&u, e, player, depot).map(|changed| {
                     if changed {
                         tracing::info!(player, vessel, depot, "depot flag");

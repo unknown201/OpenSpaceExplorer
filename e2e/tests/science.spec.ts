@@ -57,4 +57,12 @@ test("science buttons glow for available experiments and stop after diminishing 
   await expect(textButton).toBeDisabled();
   expect(await science.evaluate(el => getComputedStyle(el).boxShadow)).toBe("none");
   expect(errors).toEqual([]);
+  await page.keyboard.press('Escape');
+  await page.locator('[data-ose="to-recover"]').click();
+  await page.locator('#fr-close').click();
+  await page.locator('[data-ose="ksc-sessions"]').click();
+  const session = page.locator('[data-ose="session"]').filter({ hasText: 'Science availability regression' });
+  page.once('dialog', dialog => dialog.accept());
+  await session.locator('[data-ose="session-delete"]').click();
+  await expect(session).toHaveCount(0);
 });

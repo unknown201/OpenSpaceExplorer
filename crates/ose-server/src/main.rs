@@ -1037,6 +1037,9 @@ fn vessels_message(s: &Shared, u: &Universe, tick: Tick) -> ServerMessage {
     let vessels = list
         .iter()
         .filter_map(|&(e, id, owner)| {
+            if u.is_surface_debris(e) {
+                return None;
+            }
             let (v, body, orbit) = u.vessel(e)?;
             let (bp, bv) = ose_sim::bodies::star_space_state(&u.world, body, ut);
             // a vessel in another time is seen where it is at this one (`timelines.rs`)
@@ -2259,6 +2262,7 @@ fn trajectories_here(s: &Shared, u: &Universe) -> Vec<ServerMessage> {
     let tick = u.tick();
     let list = s.vessels.lock().expect("vessels lock");
     list.iter()
+        .filter(|(e, _, _)| !u.is_surface_debris(*e))
         .map(|&(e, id, _)| {
             let patches = u
                 .predict(e)

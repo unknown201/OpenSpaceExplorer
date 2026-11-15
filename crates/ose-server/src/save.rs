@@ -304,14 +304,6 @@ pub fn restore(
         let debris = v.debris
             || v.parts.as_ref().is_some_and(|p| p.debris)
             || (v.craft.is_none() && v.name.ends_with(" debris"));
-        if debris
-            && v.flight
-                .as_ref()
-                .or(v.dormant.as_ref())
-                .is_some_and(|p| p.landed || p.splashed || p.crashed)
-        {
-            continue;
-        }
         let Some(body) = u.body_entity(&v.body) else {
             tracing::warn!(vessel = v.id, body = %v.body, "saved vessel's body is unknown; dropped");
             continue;
@@ -545,6 +537,22 @@ mod tests {
             u.update_commnet();
             (u, entries)
         }
+    }
+
+    #[test]
+    fn settled_debris_survives_reload_as_untracked_physical_support() {
+        let mut f = ServiceFixture::new();
+        let e = f.vessel;
+        f.u.world.entity_mut(e).insert(ose_sim::vessels::Debris);
+        assert!(f.u.is_surface_debris(e));
+        let saved = capture(&f.u, &[(e, 42, None)], &Campaign::default(), &[]);
+        let saved: SaveFile =
+            serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+        let (u, entries) = f.restore(&saved);
+        assert_eq!(entries.len(), 1);
+        let e = entries[0].0;
+        assert!(u.structure(e).is_some());
+        assert!(u.is_surface_debris(e));
     }
 
     #[test]

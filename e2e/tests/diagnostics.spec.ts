@@ -3,6 +3,7 @@ import { expect, test } from '@playwright/test';
 test('manual and automatic stall reports reach the authenticated server', async ({ page }) => {
   await page.goto('/');
   await page.locator('[data-ose="player-name"]').fill('Diagnostics pilot');
+  await page.locator('[data-ose="login"]').click();
   await page.locator('[data-ose="play"]').click();
   await page.locator('#screen-sessions.open').waitFor();
   await page.locator('#create-details > summary').click();
@@ -41,4 +42,11 @@ test('manual and automatic stall reports reach the authenticated server', async 
   expect(stall.status()).toBe(200);
   expect(stall.request().postDataJSON().session).toBe(report.session);
   expect(stall.request().postDataJSON().sequence).toBeGreaterThan(report.sequence);
+  await page.locator('#settings-close').click();
+  await page.keyboard.press('Escape');
+  await page.locator('[data-ose="ksc-sessions"]').click();
+  const session = page.locator('[data-ose="session"]').filter({ hasText: 'Diagnostics check' });
+  page.once('dialog', dialog => dialog.accept());
+  await session.locator('[data-ose="session-delete"]').click();
+  await expect(session).toHaveCount(0);
 });
