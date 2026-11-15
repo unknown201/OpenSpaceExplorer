@@ -29,7 +29,8 @@ namespace OpenSpaceExplorer.Validation
         {
             string F(double x) => x.ToString("R", Inv);
             return "thermal settings: background epsilon " + F(PhysicsSettings.GLOBAL_BACKGROUND_PART_TEMPERATURE_EPSILON)
-                + " occlude area " + F(PhysicsSettings.OccludeConvectionAreaMultiplier);
+                + " occlude area " + F(PhysicsSettings.OccludeConvectionAreaMultiplier)
+                + " max angular velocity " + F(PhysicsSettings.MaxAngularVelocity);
         }
 
         public const double ApoapsisRadius = 680000, PeriapsisRadius = 630000, StartRadius = 674000;
