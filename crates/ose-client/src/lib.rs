@@ -15891,16 +15891,16 @@ impl App {
                         }
                     }
                     Some(map_prediction::Approach {
-                        vessel: to_km(mine.position_at(best.1)) * 1000.0,
-                        target: to_km(theirs.position_at(best.1)) * 1000.0,
+                        vessel: mine.position_at(best.1),
+                        target: theirs.position_at(best.1),
                         distance: best.0,
                         ut: best.1,
                     })
                 },
             )?;
             Some((
-                to_km(positions[bi]) + cached.vessel / 1000.0,
-                to_km(positions[bi]) + cached.target / 1000.0,
+                to_km(positions[bi] + cached.vessel),
+                to_km(positions[bi] + cached.target),
                 format!(
                     "Closest {} {}",
                     hud::fmt_dist(cached.distance),

@@ -1,5 +1,5 @@
 //! Cache map-only encounter searches independently of camera animation.
-use glam::DVec3;
+use ose_math::DVec3;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Key {
