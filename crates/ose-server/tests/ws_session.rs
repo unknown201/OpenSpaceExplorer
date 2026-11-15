@@ -4584,6 +4584,26 @@ async fn a_route_is_recorded_from_the_pad_and_survives_revert_to_launch() {
             _ => None,
         }
     };
+    // the first `Routes` that `want` accepts: a push from the recorder can still be on its way when the
+    // answer to a request comes
+    async fn until(ws: &mut Ws, want: fn(&Routes) -> bool) -> Routes {
+        let mut last = None;
+        for _ in 0..400 {
+            if let ServerMessage::Routes {
+                depots,
+                recordings,
+                reason,
+            } = recv(ws).await
+            {
+                let r = (depots, recordings, reason);
+                if want(&r) {
+                    return r;
+                }
+                last = Some(r);
+            }
+        }
+        panic!("never came; last routes: {last:?}");
+    }
     // a depot in orbit, built from the same craft as the rocket (the same part names)
     let depot = launch_to_orbit(&mut ws, 100_000.0).await;
     send_msg(
@@ -4594,13 +4614,11 @@ async fn a_route_is_recorded_from_the_pad_and_survives_revert_to_launch() {
         },
     )
     .await;
-    let (depots, _, reason) = wait_for(&mut ws, routes).await;
-    assert!(reason.is_none(), "{reason:?}");
-    assert_eq!(depots.len(), 1);
+    let (depots, _, _) = until(&mut ws, |r| r.0.len() == 1 && r.2.is_none()).await;
     assert_eq!(depots[0].owner, me);
     // a depot cannot record its own route
     send_msg(&mut ws, &ClientMessage::RecordRoute { vessel: depot }).await;
-    assert!(wait_for(&mut ws, routes).await.2.is_some());
+    until(&mut ws, |r| r.2.is_some()).await;
 
     send_msg(
         &mut ws,
@@ -4618,8 +4636,7 @@ async fn a_route_is_recorded_from_the_pad_and_survives_revert_to_launch() {
     })
     .await;
     send_msg(&mut ws, &ClientMessage::RecordRoute { vessel: rocket }).await;
-    let (depots, recs, reason) = wait_for(&mut ws, routes).await;
-    assert!(reason.is_none(), "{reason:?}");
+    let (depots, recs, _) = until(&mut ws, |r| r.1.len() == 1 && r.2.is_none()).await;
     assert_eq!(
         depots[0].vessel,
         Some(depot),
@@ -4633,7 +4650,7 @@ async fn a_route_is_recorded_from_the_pad_and_survives_revert_to_launch() {
     assert_eq!(recs[0].vessel, Some(rocket));
     // one recording at a time
     send_msg(&mut ws, &ClientMessage::RecordRoute { vessel: rocket }).await;
-    assert!(wait_for(&mut ws, routes).await.2.is_some());
+    until(&mut ws, |r| r.2.is_some()).await;
 
     // lift off: the recorder tells the pilot
     send_msg(
@@ -4663,23 +4680,21 @@ async fn a_route_is_recorded_from_the_pad_and_survives_revert_to_launch() {
     .await;
     assert!(ok.0, "{:?}", ok.1);
     send_msg(&mut ws, &ClientMessage::RoutesInfo).await;
-    let (depots, recs, _) = wait_for(&mut ws, routes).await;
+    let (depots, recs, _) = until(&mut ws, |r| {
+        r.1.iter()
+            .all(|x| x.phase == "Pad" && x.state == "Recording")
+    })
+    .await;
     assert_eq!(depots.len(), 1);
     assert_eq!(recs.len(), 1);
-    assert_eq!(
-        (recs[0].state.as_str(), recs[0].phase.as_str()),
-        ("Recording", "Pad")
-    );
 
     // stopping away from the depot drops it, and a dropped recording can be forgotten
     send_msg(&mut ws, &ClientMessage::StopRecording).await;
-    let (_, recs, reason) = wait_for(&mut ws, routes).await;
-    assert!(reason.is_none(), "{reason:?}");
-    assert_eq!(recs[0].state, "Dropped");
+    let (_, recs, _) = until(&mut ws, |r| r.1.iter().any(|x| x.state == "Dropped")).await;
     assert_eq!(recs[0].dropped.as_deref(), Some("stopped"));
     let id = recs[0].id;
     send_msg(&mut ws, &ClientMessage::ForgetRecording { id }).await;
-    assert!(wait_for(&mut ws, routes).await.1.is_empty());
+    until(&mut ws, |r| r.1.is_empty()).await;
     send_msg(
         &mut ws,
         &ClientMessage::SetDepot {
@@ -4688,5 +4703,5 @@ async fn a_route_is_recorded_from_the_pad_and_survives_revert_to_launch() {
         },
     )
     .await;
-    assert!(wait_for(&mut ws, routes).await.0.is_empty());
+    until(&mut ws, |r| r.0.is_empty()).await;
 }
