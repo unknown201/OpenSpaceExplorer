@@ -417,6 +417,8 @@ struct Shared {
     playing: Mutex<std::collections::HashSet<u64>>,
     /// The last pad launch, for revert.
     revert: Mutex<Option<campaigns::RevertPoint>>,
+    /// The pilots flying delivery-route runs (`routes.rs`); not saved.
+    route_pilots: Mutex<ose_routes::route::Pilots>,
     /// The original's Kerbals (veterans first), and the roster last pushed to the players.
     kerbals: Arc<Vec<ose_data::KerbalDef>>,
     last_roster: Mutex<Option<ServerMessage>>,
@@ -724,6 +726,7 @@ async fn main() -> anyhow::Result<()> {
         shelf: Arc::new(Mutex::new(shelf)),
         playing: Mutex::new(std::collections::HashSet::new()),
         revert: Mutex::new(None),
+        route_pilots: Mutex::new(Default::default()),
         kerbals: Arc::new(serde_json::from_str(EMBEDDED_KERBALS)?),
         last_roster: Mutex::new(None),
         flying: Mutex::new(std::collections::HashMap::new()),
@@ -978,7 +981,7 @@ fn step_once(sim: &Shared) {
         }
     }
     maintain_registry(sim);
-    routes::after_step(sim);
+    routes::after_step(sim, sim.steps.load(std::sync::atomic::Ordering::SeqCst));
     replay::after_step(sim, sim.steps.load(std::sync::atomic::Ordering::SeqCst));
 }
 
@@ -4947,7 +4950,10 @@ fn handle_message(
             | ClientMessage::RecordRoute { .. }
             | ClientMessage::StopRecording
             | ClientMessage::ForgetRecording { .. }
-            | ClientMessage::RoutesInfo),
+            | ClientMessage::RoutesInfo
+            | ClientMessage::CreateRoute { .. }
+            | ClientMessage::PauseRoute { .. }
+            | ClientMessage::DeleteRoute { .. }),
         ) => out.push(routes::handle(s, player_id, &msg)),
         Ok(ClientMessage::Viewing { vessel }) => interest::set_viewing(s, player_id, vessel),
         Ok(ClientMessage::TakeControl { vessel }) => {
