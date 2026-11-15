@@ -1,8 +1,9 @@
 //! Rendezvous v2 orbital scenarios for the pilot (setup places vessels in orbit; the pilot then flies
 //! everything with ordinary controls):
 //! - T4: a shuttle docked at one station undocks, transfers to a depot at another altitude, and docks.
-//! - T9: two craft go for the same port at the same time. No traffic control: one wins, the other
-//!   fails cleanly, and nothing panics or gets stuck.
+//! - T9: two craft go for the same port at the same time. No traffic control ("timing is everything,
+//!   failure is fun"): at most one docks, they may well hit each other on the way in, and every run
+//!   ends cleanly, docked or failed with a reason, without a panic or a stuck pilot.
 use ose_pilot::{
     mission::{Mission, MissionParams},
     Status,
@@ -54,7 +55,7 @@ fn t4_shuttle_undocks_from_one_station_and_docks_at_a_depot_at_another_altitude(
     debug_assertions,
     ignore = "a full flight takes minutes unoptimised; CI runs it with --release"
 )]
-fn t9_two_craft_race_for_one_port_and_exactly_one_docks() {
+fn t9_two_craft_race_for_one_port_and_at_most_one_docks() {
     let m = modules();
     let mut w = world();
     let station = in_orbit(&mut w, &m.zarya, 100_000.0, 0.0);
@@ -74,8 +75,15 @@ fn t9_two_craft_race_for_one_port_and_exactly_one_docks() {
     for (i, m) in missions.iter().enumerate() {
         println!("craft {i}: {:?} {:?}", results[i], m.log);
     }
+    // Since vessels collide as part models up close, the two usually meet at the hold point and
+    // knock each other off (or apart); before that, one docked and the other found the port taken.
     let docked = results.iter().filter(|r| **r == Status::Done).count();
-    assert_eq!(docked, 1, "{results:?}");
-    let winner = missions[results.iter().position(|r| *r == Status::Done).unwrap()].vessel();
-    assert_eq!(links(&w, winner), 1);
+    assert!(docked <= 1, "{results:?}");
+    for (r, m) in results.iter().zip(&missions) {
+        match r {
+            Status::Done => assert_eq!(links(&w, m.vessel()), 1),
+            Status::Failed(why) => assert!(!why.is_empty()),
+            Status::Running => unreachable!("fly runs every mission to its end"),
+        }
+    }
 }

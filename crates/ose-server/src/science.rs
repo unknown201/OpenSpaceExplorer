@@ -3,7 +3,7 @@
 
 use ose_data::missions::{AgencyFacts, MissionDef, MissionProgress};
 use ose_data::science::{ResearchReport, TechNode};
-use ose_net::{DifficultyValue, MissionInfo, ReportInfo, ServerMessage, SessionMode};
+use ose_net::{AgencyEvent, DifficultyValue, MissionInfo, ReportInfo, ServerMessage, SessionMode};
 use serde::{Deserialize, Serialize};
 
 use crate::save::Campaign;
@@ -332,6 +332,36 @@ pub fn submit(
     (out, earned)
 }
 
+/// Tell everyone else playing this campaign what `by` (or the agency, `None`) just did for it. The one who did
+/// it already has their own answer; the `ScienceState` with the change reaches everyone on its own.
+pub fn tell_agency(s: &Shared, by: Option<u64>, event: AgencyEvent) {
+    let name = by.map(|p| crate::display_name_for(s, p));
+    // the players connected to this campaign's room
+    let players: Vec<u64> = s
+        .warp_requests
+        .lock()
+        .expect("warp lock")
+        .keys()
+        .copied()
+        .filter(|&p| Some(p) != by)
+        .collect();
+    let mut q = s.pending.lock().expect("pending lock");
+    for p in players {
+        q.push((
+            p,
+            ServerMessage::AgencyNews {
+                by: name.clone(),
+                event: event.clone(),
+            },
+        ));
+    }
+}
+
+/// Whether `player` is a member of the campaign: only members spend its science and take on its missions.
+pub fn member(c: &Campaign, player: u64) -> bool {
+    c.members.iter().any(|m| m.player_id == player)
+}
+
 /// Hand finished and interrupted experiments to their vessel owners' connections.
 pub fn deliver_experiment_events(s: &Shared) {
     let ev = s
@@ -399,6 +429,7 @@ pub fn evaluate_missions(s: &Shared) -> bool {
         last_destroyed_hit: last.body,
     };
     let mut changed = false;
+    let mut completed = Vec::new();
     for def in &s.science.missions {
         if !s.science.available(def, &c.science) {
             continue;
@@ -437,11 +468,18 @@ pub fn evaluate_missions(s: &Shared) -> bool {
         if moved {
             m.stage_started_tick = now;
             changed = true;
+            if m.progress.complete {
+                completed.push(def.id.clone());
+            }
             tracing::info!(mission = %def.id, stage = m.progress.stage, complete = m.progress.complete, "mission advanced");
         }
     }
     if changed {
         c.science.rev += 1;
+    }
+    drop((c, vessels, u));
+    for mission in completed {
+        tell_agency(s, None, AgencyEvent::MissionCompleted { mission });
     }
     changed
 }

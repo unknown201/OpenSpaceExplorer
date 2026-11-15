@@ -2430,6 +2430,16 @@ fn science_request(s: &Shared, player_id: u64, msg: ClientMessage) -> Vec<Server
                 let mut c = s.campaign.lock().expect("campaign lock");
                 science::submit(&mut c, reports, player_id, tick)
             };
+            if earned > 0.0 {
+                science::tell_agency(
+                    s,
+                    Some(player_id),
+                    ose_net::AgencyEvent::ScienceEarned {
+                        science: earned,
+                        reports: reports.iter().filter(|r| r.value > 0.0).count() as u32,
+                    },
+                );
+            }
             tracing::info!(
                 player = player_id,
                 vessel,
@@ -2455,7 +2465,9 @@ fn science_request(s: &Shared, player_id: u64, msg: ClientMessage) -> Vec<Server
             let now = s.universe.lock().expect("sim lock").tick().0;
             let res = {
                 let mut c = s.campaign.lock().expect("campaign lock");
-                if accept {
+                if !science::member(&c, player_id) {
+                    Err(NOT_A_MEMBER.to_string())
+                } else if accept {
                     s.science.accept(&mut c, &id, now).map(|_| 0.0)
                 } else {
                     s.science.turn_in(&mut c, &id)
@@ -2463,6 +2475,19 @@ fn science_request(s: &Shared, player_id: u64, msg: ClientMessage) -> Vec<Server
             };
             if let Ok(paid) = res {
                 tracing::info!(player = player_id, mission = %id, accept, paid, "mission");
+                let mission = id.clone();
+                science::tell_agency(
+                    s,
+                    Some(player_id),
+                    if accept {
+                        ose_net::AgencyEvent::MissionAccepted { mission }
+                    } else {
+                        ose_net::AgencyEvent::MissionTurnedIn {
+                            mission,
+                            science: paid,
+                        }
+                    },
+                );
             }
             vec![
                 ServerMessage::MissionAck {
@@ -2477,10 +2502,19 @@ fn science_request(s: &Shared, player_id: u64, msg: ClientMessage) -> Vec<Server
         ClientMessage::UnlockTechNode { id } => {
             let res = {
                 let mut c = s.campaign.lock().expect("campaign lock");
-                s.science.unlock(&mut c, &id)
+                if science::member(&c, player_id) {
+                    s.science.unlock(&mut c, &id)
+                } else {
+                    Err(NOT_A_MEMBER.to_string())
+                }
             };
             if res.is_ok() {
                 tracing::info!(player = player_id, node = %id, "tech node unlocked");
+                science::tell_agency(
+                    s,
+                    Some(player_id),
+                    ose_net::AgencyEvent::TechResearched { node: id.clone() },
+                );
             }
             vec![
                 ServerMessage::TechUnlock {
@@ -2495,12 +2529,39 @@ fn science_request(s: &Shared, player_id: u64, msg: ClientMessage) -> Vec<Server
     }
 }
 
+/// Why a guest cannot spend the shared agency's science or take on its missions.
+const NOT_A_MEMBER: &str = "join the campaign to spend its science and take on its missions";
+
 /// How near a Kerbal recovered on EVA a landed craft is recovered with it, m.
 const RECOVER_WITH_KERBAL_M: f64 = 50.0;
 
+/// The other player piloting vessel `id` now, if one is: a player in the campaign whose last command went
+/// to it. Only the pilot commands a vessel; other players can ride along and watch it (`TakeControl` when it
+/// is free, `ReleaseControl` to let go).
+fn pilot_other_than(s: &Shared, id: u64, player: u64) -> Option<u64> {
+    let playing = s.playing.lock().expect("playing lock");
+    s.flying
+        .lock()
+        .expect("flying lock")
+        .iter()
+        .find(|&(&p, &v)| v == id && p != player && playing.contains(&p))
+        .map(|(&p, _)| p)
+}
+
+/// `player` stops piloting whatever they flew; everyone hears who flies what now.
+fn release_control(s: &Shared, player: u64) {
+    let had = s.flying.lock().expect("flying lock").remove(&player);
+    if had.is_some() {
+        push_campaign(s, 0);
+    }
+}
+
 fn owned_vessel(s: &Shared, id: u64, player: u64) -> Option<bevy_ecs::entity::Entity> {
     // A co-op campaign (`Shared_Vessel_Control`, on unless the campaign turns it off) lets every player fly
-    // every agency vessel; otherwise only its owner can.
+    // every agency vessel; otherwise only its owner can. Either way one player pilots a vessel at a time.
+    if pilot_other_than(s, id, player).is_some() {
+        return None;
+    }
     let shared = campaigns::allowed(s, "Shared_Vessel_Control");
     let e = s
         .vessels
@@ -2512,8 +2573,11 @@ fn owned_vessel(s: &Shared, id: u64, player: u64) -> Option<bevy_ecs::entity::En
         })
         .map(|&(e, _, _)| e);
     if e.is_some() {
-        // commanding a vessel is flying it
-        s.flying.lock().expect("flying lock").insert(player, id);
+        // commanding a vessel is flying it (piloting it, while nobody else does)
+        let before = s.flying.lock().expect("flying lock").insert(player, id);
+        if before != Some(id) {
+            push_campaign(s, 0);
+        }
     }
     e
 }
@@ -3096,6 +3160,7 @@ fn deliver_transmitted(s: &Shared) {
     }
     let list = s.vessels.lock().expect("vessels lock").clone();
     let mut out = Vec::new();
+    let mut earned_by: Vec<(Option<u64>, f64, u32)> = Vec::new();
     for (e, report) in done {
         let Some(&(_, vessel, owner)) = list.iter().find(|x| x.0 == e) else {
             continue;
@@ -3106,6 +3171,15 @@ fn deliver_transmitted(s: &Shared) {
             science::submit(&mut c, vec![report], by, tick)
         };
         tracing::info!(player = by, vessel, earned, "science transmitted");
+        if earned > 0.0 {
+            match earned_by.iter_mut().find(|(p, _, _)| *p == owner) {
+                Some(e) => {
+                    e.1 += earned;
+                    e.2 += 1;
+                }
+                None => earned_by.push((owner, earned, 1)),
+            }
+        }
         if let Some(p) = owner {
             out.push((
                 p,
@@ -3127,10 +3201,19 @@ fn deliver_transmitted(s: &Shared) {
         .keys()
         .copied()
         .collect();
-    let mut q = s.pending.lock().expect("pending lock");
-    q.extend(out);
-    for p in players {
-        q.push((p, state.clone()));
+    {
+        let mut q = s.pending.lock().expect("pending lock");
+        q.extend(out);
+        for p in players {
+            q.push((p, state.clone()));
+        }
+    }
+    for (by, science, reports) in earned_by {
+        science::tell_agency(
+            s,
+            by,
+            ose_net::AgencyEvent::ScienceEarned { science, reports },
+        );
     }
 }
 
@@ -3435,6 +3518,41 @@ fn launch_craft(
 /// and the replies, pushed to `out` in order. Sessions send `out`; a replay runs the same messages at the
 /// ticks they were recorded at (`replay`).
 fn handle_decoded(
+    s: &Shared,
+    player_id: u64,
+    decoded: Result<ClientMessage, String>,
+    out: &mut Vec<ServerMessage>,
+) {
+    let from = out.len();
+    handle_message(s, player_id, decoded, out);
+    // a command refused because another player pilots the vessel says who does
+    for m in &mut out[from..] {
+        let (vessel, reason) = match m {
+            ServerMessage::FlightAck {
+                vessel,
+                accepted: false,
+                reason: Some(reason),
+            }
+            | ServerMessage::CrewAck {
+                vessel,
+                accepted: false,
+                reason: Some(reason),
+                ..
+            }
+            | ServerMessage::Undocked {
+                vessel,
+                new_vessel: None,
+                reason: Some(reason),
+            } => (*vessel, reason),
+            _ => continue,
+        };
+        if let Some(pilot) = pilot_other_than(s, vessel, player_id) {
+            *reason = format!("{} is piloting it", display_name_for(s, pilot));
+        }
+    }
+}
+
+fn handle_message(
     s: &Shared,
     player_id: u64,
     decoded: Result<ClientMessage, String>,
@@ -4599,6 +4717,15 @@ fn handle_decoded(
             };
             out.push((reply).clone());
         }
+        Ok(ClientMessage::TakeControl { vessel }) => {
+            let ok = owned_vessel(s, vessel, player_id).is_some();
+            out.push(ServerMessage::FlightAck {
+                vessel,
+                accepted: ok,
+                reason: (!ok).then(|| "not your vessel".into()),
+            });
+        }
+        Ok(ClientMessage::ReleaseControl) => release_control(s, player_id),
         Ok(ClientMessage::RenameVessel { vessel, name }) => {
             let name = name.trim().to_string();
             let reply = match owned_vessel(s, vessel, player_id) {
