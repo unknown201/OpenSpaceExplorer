@@ -548,6 +548,41 @@ struct SciencePoints {
     reports: Vec<ose_net::ReportInfo>,
 }
 
+/// The toast a teammate's `AgencyNews` shows, and its tier: the campaign is one agency, so everyone hears
+/// about an unlock, a mission or science scored by anyone.
+fn agency_news_text(
+    by: Option<&str>,
+    event: &ose_net::AgencyEvent,
+    tech: impl Fn(&str) -> String,
+    mission: impl Fn(&str) -> String,
+) -> (String, &'static str) {
+    use ose_net::AgencyEvent as E;
+    let who = by.unwrap_or("The agency");
+    match event {
+        E::TechResearched { node } => (format!("{who} researched {}", tech(node)), "triumph"),
+        E::MissionAccepted { mission: m } => {
+            (format!("{who} accepted mission: {}", mission(m)), "passive")
+        }
+        E::MissionCompleted { mission: m } => {
+            (format!("Mission complete: {}", mission(m)), "triumph")
+        }
+        E::MissionTurnedIn {
+            mission: m,
+            science,
+        } => (
+            format!("{who} turned in {}: +{science:.0} science", mission(m)),
+            "triumph",
+        ),
+        E::ScienceEarned { science, reports } => (
+            format!(
+                "{who} earned {science:.0} science ({reports} report{})",
+                if *reports == 1 { "" } else { "s" }
+            ),
+            "passive",
+        ),
+    }
+}
+
 /// What is being dragged in the VAB staging stack: a group of icons (the parts) or a whole stage.
 #[derive(Clone, Debug, PartialEq)]
 enum StageDrag {
@@ -5889,6 +5924,27 @@ impl App {
             .map(|i| i.value().trim().to_string())
             .unwrap_or_default()
     }
+    /// The sign-in form's own line under its buttons: progress, or why a step failed.
+    fn login_status(&self, text: &str, error: bool) {
+        if let Some(el) = self.doc.get_element_by_id("login-status") {
+            el.set_text_content(Some(text));
+            let classes = el.class_list();
+            if error {
+                classes.add_1("error").ok();
+            } else {
+                classes.remove_1("error").ok();
+            }
+        }
+    }
+
+    /// Move the sign-in screen to its code step: the code field, Resend, and Sign in.
+    fn show_code_step(&self) {
+        set_text(&self.doc, "login", "Sign in");
+        if let Some(login) = self.doc.get_element_by_id("screen-login") {
+            login.class_list().add_1("code-sent").ok();
+        }
+    }
+
     fn sign_in(&self, ws: &WebSocket) {
         self.connection_status("authenticating", "Signing in...");
         let msg = if let Some(token) = stored("ose.token") {
@@ -5916,9 +5972,17 @@ impl App {
                         display_name: self.player_name.clone(),
                     }
                 }
-                _ => ClientMessage::RequestEmailOtp { email },
+                _ => {
+                    // Show the code step at once, so the pilot sees where the code goes and any error.
+                    self.show_code_step();
+                    self.login_status(&format!("Sending a code to {email}…"), false);
+                    ClientMessage::RequestEmailOtp { email }
+                }
             }
         };
+        if matches!(msg, ClientMessage::EmailSignIn { .. }) {
+            self.login_status("Checking the code…", false);
+        }
         send(ws, &msg);
     }
 
@@ -6155,11 +6219,11 @@ impl App {
                     "login-otp"
                 };
                 if self.player_id.is_none() {
-                    // The code field shows only once a code is on its way.
-                    set_text(&self.doc, "login", "Sign in");
-                    if let Some(login) = self.doc.get_element_by_id("screen-login") {
-                        login.class_list().add_1("code-sent").ok();
-                    }
+                    self.show_code_step();
+                    self.login_status(
+                        &format!("Code sent to {email}. Check your inbox (and spam) and enter the 6 digits."),
+                        false,
+                    );
                 }
                 if let Some(input) = self
                     .doc
@@ -6178,6 +6242,9 @@ impl App {
             }
             ServerMessage::AuthError { reason } => {
                 self.login_requested = false;
+                if self.player_id.is_none() {
+                    self.login_status(&reason, true);
+                }
                 set_text(&self.doc, "menu-note", &reason);
                 set_text(&self.doc, "account-status", &reason);
             }
@@ -6434,6 +6501,7 @@ impl App {
                     }
                 }
                 self.campaign = Some((name, members));
+                self.take_control_if_free();
                 if self.campaign_id != campaign_id {
                     self.requested_warp = 1;
                     if let Some(scene) = &mut self.scene {
@@ -6516,6 +6584,35 @@ impl App {
                     reason.unwrap_or_else(|| "refused".into())
                 };
                 set_text(&self.doc, "rd-note", &msg);
+            }
+            ServerMessage::AgencyNews { by, event } => {
+                let tech = |id: &str| {
+                    let key = self
+                        .tech
+                        .iter()
+                        .find(|n| n.id == id)
+                        .map(|n| n.name_key.clone())
+                        .unwrap_or_else(|| id.to_string());
+                    rnd::text(&self.loc, &key).into_owned()
+                };
+                let mission = |id: &str| {
+                    let key = self
+                        .science
+                        .as_ref()
+                        .and_then(|sp| sp.missions.iter().find(|m| m.id == id))
+                        .map(|m| m.name_key.clone())
+                        .unwrap_or_else(|| format!("Missions/{id}/Name"));
+                    rnd::text(&self.loc, &key).into_owned()
+                };
+                let (text, tier) = agency_news_text(by.as_deref(), &event, tech, mission);
+                hud::push(&self.doc, &text, tier);
+                if matches!(
+                    event,
+                    ose_net::AgencyEvent::TechResearched { .. }
+                        | ose_net::AgencyEvent::MissionCompleted { .. }
+                ) {
+                    self.audio.play("rd_research");
+                }
             }
             ServerMessage::CrewAck {
                 vessel,
@@ -10696,6 +10793,7 @@ impl App {
         self.lesson_event("VesselCreatedMessage");
         self.lesson_event("LaunchSequenceInitiatedMessage");
         self.flying = Some(vessel);
+        self.take_control_if_free();
         self.rdv_start(vessel);
         // The server keeps a target per vessel; the one picked carries over to the vessel flown now.
         if self.target == Some(ose_net::TargetId::Vessel(vessel)) {
@@ -10726,8 +10824,58 @@ impl App {
         }
     }
 
+    /// The other player piloting `vessel` now (only one player pilots a vessel; the others ride along).
+    fn pilot_of(&self, vessel: u64) -> Option<&str> {
+        let (_, members) = self.campaign.as_ref()?;
+        members
+            .iter()
+            .find(|m| m.online && m.flying == Some(vessel) && Some(m.player_id) != self.player_id)
+            .map(|m| m.display_name.as_str())
+    }
+
+    /// Pilot the vessel in view when nobody else does (when it is entered, and when its pilot lets go), and
+    /// say who does otherwise.
+    fn take_control_if_free(&mut self) {
+        let Some(vessel) = self.flying else { return };
+        let pilot = self.pilot_of(vessel).map(str::to_string);
+        set_text(
+            &self.doc,
+            "fh-pilot",
+            &pilot
+                .as_ref()
+                .map(|p| format!("Riding along: {p} is piloting"))
+                .unwrap_or_default(),
+        );
+        if let Some(el) = self.doc.get_element_by_id("flight-hud") {
+            if pilot.is_some() {
+                el.set_attribute("data-ose-passenger", "true").ok();
+            } else {
+                el.remove_attribute("data-ose-passenger").ok();
+            }
+        }
+        if pilot.is_some() {
+            return;
+        }
+        let mine = self.campaign.as_ref().and_then(|(_, members)| {
+            members
+                .iter()
+                .find(|m| Some(m.player_id) == self.player_id)
+                .and_then(|m| m.flying)
+        });
+        if mine != Some(vessel) {
+            if let Some(ws) = &self.ws {
+                send(ws, &ClientMessage::TakeControl { vessel });
+            }
+        }
+    }
+
     fn end_flight(&mut self) {
         self.rdv_release();
+        if self.flying.is_some() {
+            if let Some(ws) = &self.ws {
+                send(ws, &ClientMessage::ReleaseControl);
+            }
+        }
         self.flying = None;
         self.crash_report_due.set(None);
         self.flight_craft = None;
@@ -10738,6 +10886,10 @@ impl App {
 
     fn send_controls(&mut self) {
         let Some(vessel) = self.flying else { return };
+        if self.pilot_of(vessel).is_some() {
+            self.controls_dirty = false;
+            return;
+        }
         if let Some(ws) = &self.ws {
             self.controls_dirty = false;
             send(
@@ -11858,6 +12010,20 @@ impl App {
                     self.attitude = att;
                 }
             }
+        }
+        // Riding along while another player pilots: show what they set, send nothing.
+        if self.pilot_of(vessel).is_some() {
+            if let Some(f) = self
+                .scene
+                .as_ref()
+                .and_then(|s| s.vessel(vessel))
+                .and_then(|v| v.flight.as_ref())
+            {
+                self.attitude = f.attitude;
+                self.throttle = f.throttle;
+            }
+            self.controls_dirty = false;
+            return;
         }
         if self.flying_eva() {
             self.eva_keys_tick(now, dt);
@@ -15978,6 +16144,50 @@ fn xfer_pick_for(picks: &mut Vec<hud::XferPick>, res: String) -> &mut hud::XferP
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn teammates_hear_what_the_agency_did() {
+        use ose_net::AgencyEvent as E;
+        let tech = |id: &str| format!("<{id}>");
+        let mission = |id: &str| format!("[{id}]");
+        let t = |by, e| agency_news_text(by, &e, tech, mission);
+        assert_eq!(
+            t(Some("Val"), E::TechResearched { node: "n1".into() }),
+            ("Val researched <n1>".into(), "triumph")
+        );
+        assert_eq!(
+            t(
+                None,
+                E::MissionCompleted {
+                    mission: "m".into()
+                }
+            )
+            .0,
+            "Mission complete: [m]"
+        );
+        assert_eq!(
+            t(
+                Some("Bob"),
+                E::MissionTurnedIn {
+                    mission: "m".into(),
+                    science: 25.0
+                }
+            )
+            .0,
+            "Bob turned in [m]: +25 science"
+        );
+        assert_eq!(
+            t(
+                Some("Bob"),
+                E::ScienceEarned {
+                    science: 24.4,
+                    reports: 1
+                }
+            )
+            .0,
+            "Bob earned 24 science (1 report)"
+        );
+    }
 
     /// Whether every path point is on a 16:9 screen from where `flight_map_view` puts the camera (Z up,
     /// metres from the body's centre), looking at the vessel with north up.

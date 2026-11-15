@@ -68,6 +68,7 @@ namespace OpenSpaceExplorer.Validation
             double ut0 = G.UniverseModel.UniverseTime;
             using (var w = new StreamWriter(Path.Combine(dir, "out", "reentryorbit-parts.csv"), false))
             using (var ev = new StreamWriter(Path.Combine(dir, "out", "reentryorbit-events.csv"), false) { AutoFlush = true })
+            using (var fw = free ? new StreamWriter(Path.Combine(dir, "out", "reentryorbit-forces.csv"), false) : null)
             {
                 w.WriteLine("t,alt_m,srf_speed,mach,density,part,index,temp_k,max_temp_k,reentry_flux,ablator_units,exposed,env_flux,atm_flux,local_flux,surface_flux,thermal_mass,wetted_m2");
                 mark("PhysicsSettings occlude area " + PhysicsSettings.OccludeConvectionAreaMultiplier.ToString("R", Inv) + " temp " + PhysicsSettings.OccludeConvectionTemperatureMultiplier.ToString("R", Inv)
@@ -89,6 +90,7 @@ namespace OpenSpaceExplorer.Validation
                     if (free && v.Autopilot != null && v.Autopilot.Enabled && v.AltitudeFromSeaLevel < 70500) { v.SetAutopilotEnableDisable(false); mark("SAS off at " + t.ToString("F2", Inv)); }
                     if (ut <= lastLogged) continue;
                     lastLogged = ut;
+                    if (fw != null) LogForces(v, fw, t);
                     string head = t.ToString("F3", Inv) + "," + v.AltitudeFromSeaLevel.ToString("R", Inv) + "," + v.SrfSpeedMagnitude.ToString("R", Inv) + "," + v.MachNumber.ToString("R", Inv);
                     var now = new List<string>();
                     int i = 0;
@@ -119,6 +121,41 @@ namespace OpenSpaceExplorer.Validation
                 }
             }
             stop();
+        }
+
+        // T11 tumble: every aerodynamic force on each part this tick in the part's own frame (KSP2's IForce lists:
+        // force and where it acts), with the part's spin, airflow, mass, centre of mass, inertia and angular drag
+        // as PhysX has them (Unity frame, part-local).
+        static bool forcesHeader;
+        static void LogForces(VesselComponent v, StreamWriter w, float t)
+        {
+            string F(double x) => x.ToString("R", Inv);
+            string V(Vector3 x) => F(x.x) + "," + F(x.y) + "," + F(x.z);
+            if (!forcesHeader)
+            {
+                w.WriteLine("t,alt_m,mach,q_kpa,density,part,ax,ay,az,wx,wy,wz,mass,comx,comy,comz,ix,iy,iz,irx,iry,irz,irw,angular_drag,kind,fx,fy,fz,px,py,pz");
+                forcesHeader = true;
+            }
+            foreach (var part in v.SimulationObject.PartOwner.Parts)
+            {
+                if (!G.SpaceSimulation.TryGetViewObject(part.SimulationObject, out var view)) continue;
+                var pb = view.GetComponent<PartBehavior>();
+                var body = pb?.Rigidbody?.activeRigidBody;
+                var rb = pb?.Rigidbody?.Model;
+                if (body == null || rb == null) { w.WriteLine("# " + part.Name + " no rigidbody (behaviour " + (pb != null) + ", rigidbody " + (pb?.Rigidbody != null) + ", model " + (rb != null) + ")"); continue; }
+                var tr = body.transform;
+                var air = tr.InverseTransformDirection(body.velocity);
+                var spin = tr.InverseTransformDirection(body.angularVelocity);
+                var r = body.inertiaTensorRotation;
+                string head = t.ToString("F3", Inv) + "," + F(v.AltitudeFromSeaLevel) + "," + F(v.MachNumber) + "," + F(v.DynamicPressure_kPa) + "," + F(v.AtmDensity) + "," + part.Name + ","
+                    + V(air) + "," + V(spin) + "," + F(body.mass) + "," + V(body.centerOfMass) + "," + V(body.inertiaTensor) + "," + F(r.x) + "," + F(r.y) + "," + F(r.z) + "," + F(r.w) + "," + F(body.angularDrag);
+                foreach (var list in new[] { rb.Forces, rb.SingleFrameForces })
+                    foreach (var f in list)
+                    {
+                        var P = f.RelativePosition; var Fo = f.RelativeForce;
+                        w.WriteLine(head + "," + f.GetType().Name + "," + F(Fo.x) + "," + F(Fo.y) + "," + F(Fo.z) + "," + F(P.x) + "," + F(P.y) + "," + F(P.z));
+                    }
+            }
         }
 
         static IEnumerator Shot(string dir, string name)
