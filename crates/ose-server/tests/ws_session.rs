@@ -1338,7 +1338,8 @@ async fn exploration_science_tech_tree_and_recovery() {
     .await;
     assert!(!accepted && reason.is_some());
 
-    // the same report again is worth nothing
+    let first_earned = earned;
+    // The same subject can be repeated for a reduced reward.
     send_msg(&mut ws, &ClientMessage::RunExperiments { vessel }).await;
     wait_for(&mut ws, |m| {
         matches!(m, ServerMessage::ScienceReports { .. }).then_some(())
@@ -1358,7 +1359,10 @@ async fn exploration_science_tech_tree_and_recovery() {
         _ => None,
     })
     .await;
-    assert!(recovered && earned == 0.0, "{earned}");
+    assert!(
+        recovered && earned > 0.0 && earned < first_earned,
+        "repeat {earned} vs first {first_earned}"
+    );
     // the recovered vessel is gone
     for _ in response_window() {
         if let ServerMessage::Vessels { vessels, .. } = recv(&mut ws).await {

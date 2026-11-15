@@ -1022,6 +1022,7 @@ fn vessels_message(s: &Shared, u: &Universe, tick: Tick) -> ServerMessage {
             // a vessel in another time is seen where it is at this one (`timelines.rs`)
             let (rp, rv) = u.seen_state(e, &orbit);
             Some(VesselState {
+                science_available: u.experiments_available(e),
                 id,
                 name: v.name.clone(),
                 owner,
@@ -1577,6 +1578,26 @@ fn flight_readout(
             })
             .unwrap_or_default(),
         flag_carried: u.eva_kerbal(e).is_some_and(|k| k.carrying_flag),
+        non_retractable: u
+            .structure(e)
+            .map(|st| {
+                (0..st.deployed.len())
+                    .filter(|&i| {
+                        st.rigid.present[i] && st.deploy_defs[i].is_some_and(|d| !d.retractable)
+                    })
+                    .map(|i| i as u16)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        part_lights: u
+            .structure(e)
+            .map(|st| {
+                (0..st.light_defs.len())
+                    .filter(|&i| st.rigid.present[i] && st.light_defs[i].is_some())
+                    .map(|i| (i as u16, st.light_powered[i]))
+                    .collect()
+            })
+            .unwrap_or_default(),
         solar_panels: u
             .structure(e)
             .map(|st| {
@@ -2542,8 +2563,11 @@ fn science_request(s: &Shared, player_id: u64, msg: ClientMessage) -> Vec<Server
                     .retain(|&(v, _, _)| !gone.contains(&v));
             }
             let (reports, earned) = {
+                let mut u = s.universe.lock().expect("sim lock");
                 let mut c = s.campaign.lock().expect("campaign lock");
-                science::submit(&mut c, reports, player_id, tick)
+                let result = science::submit(&mut c, reports, player_id, tick);
+                u.set_science_credited(c.science.submitted.iter().map(|s| s.report.clone()));
+                result
             };
             if earned > 0.0 {
                 science::tell_agency(
@@ -3294,8 +3318,11 @@ fn deliver_transmitted(s: &Shared) {
         };
         let by = owner.unwrap_or(0);
         let (reports, earned) = {
+            let mut u = s.universe.lock().expect("sim lock");
             let mut c = s.campaign.lock().expect("campaign lock");
-            science::submit(&mut c, vec![report], by, tick)
+            let result = science::submit(&mut c, vec![report], by, tick);
+            u.set_science_credited(c.science.submitted.iter().map(|s| s.report.clone()));
+            result
         };
         tracing::info!(player = by, vessel, earned, "science transmitted");
         if earned > 0.0 {
@@ -4583,6 +4610,23 @@ fn handle_message(
                 },
             };
             out.push((reply).clone());
+        }
+        Ok(ClientMessage::SetPartDeployment {
+            vessel,
+            part,
+            deploy,
+        }) => {
+            let accepted = owned_vessel(s, vessel, player_id).is_some_and(|e| {
+                s.universe
+                    .lock()
+                    .expect("sim lock")
+                    .deploy_part(e, part, deploy)
+            });
+            out.push(ServerMessage::FlightAck {
+                vessel,
+                accepted,
+                reason: (!accepted).then(|| "part cannot deploy here".into()),
+            });
         }
         Ok(ClientMessage::DeployAntennas { vessel, deploy }) => {
             let reply = match owned_vessel(s, vessel, player_id) {

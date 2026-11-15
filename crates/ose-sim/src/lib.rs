@@ -1102,6 +1102,24 @@ impl Universe {
         }
     }
 
+    pub fn deploy_part(&mut self, e: Entity, part: u16, out: bool) -> bool {
+        let Some(mut st) = self.world.get_mut::<structure::Structure>(e) else {
+            return false;
+        };
+        let i = part as usize;
+        if i >= st.deployed.len()
+            || !st.rigid.present[i]
+            || !st.can_deploy(i, out)
+            || !(st.deploy_defs[i].is_some_and(|d| d.antenna && d.extendable)
+                || st.electric[i].solar_output > 0.0 && st.electric[i].solar_deployable)
+            || st.deployed[i] == out
+        {
+            return false;
+        }
+        st.deployed[i] = out;
+        true
+    }
+
     /// Fold a vessel's deployable solar panels out or in; how many moved, `None` without a structure.
     pub fn deploy_panels(&mut self, e: Entity, out: bool) -> Option<usize> {
         self.world
@@ -2673,6 +2691,21 @@ impl Universe {
         self.run_transfers(ticks.max(1) as f64 * dt);
         self.run_transmissions(ticks.max(1) as f64 * dt);
         self.run_ladders(ticks.max(1) as f64 * dt);
+        // Surface debris is no longer tracked, including soft landings and splashdowns.
+        let surface_debris: Vec<Entity> = {
+            let mut q = self.world.query_filtered::<(Entity, Option<&flight::Powered>, Option<&flight::Dormant>), With<vessels::Debris>>();
+            q.iter(&self.world)
+                .filter(|(e, p, d)| {
+                    self.here(*e)
+                        && p.or(d.map(|d| &d.0))
+                            .is_some_and(|p| p.landed || p.splashed || p.crashed)
+                })
+                .map(|(e, _, _)| e)
+                .collect()
+        };
+        for e in surface_debris {
+            self.despawn_vessel(e);
+        }
         // crashed debris is gone at once; a crashed craft stays for `WRECK_LINGER_S` (its pilot sees the crash
         // and its report) and then is gone too, as the original destroys it
         let wrecks: Vec<(Entity, bool, Option<f64>)> = {
@@ -2912,6 +2945,29 @@ mod tests {
             "powered state re-expressed around Kerbol"
         );
         assert!(p.r.length() > 1.0e10, "now relative to the star");
+    }
+
+    #[test]
+    fn landed_and_crashed_debris_are_removed_but_landed_craft_remain() {
+        let mut u = Universe::with_bodies(&[kerbin_def()]);
+        let body = u.body_entity("Kerbin").unwrap();
+        let craft = u.spawn_powered_on_surface("craft", body, upper_stage(), 0.0, 0.0);
+        let landed = u.spawn_powered_on_surface("soft landing", body, upper_stage(), 0.0, 1.0);
+        u.world.entity_mut(landed).insert(vessels::Debris);
+        let crashed = u.spawn_powered_on_surface("wreck", body, upper_stage(), 0.0, 2.0);
+        u.world.entity_mut(crashed).insert(vessels::Debris);
+        let mut p = u.powered(crashed).unwrap().clone();
+        p.crashed = true;
+        u.set_powered(crashed, p);
+        let dormant = u.spawn_powered_on_surface("dormant debris", body, upper_stage(), 0.0, 3.0);
+        let p = u.powered(dormant).unwrap().clone();
+        u.set_dormant(dormant, p);
+        u.world.entity_mut(dormant).insert(vessels::Debris);
+        u.step();
+        assert!(u.vessel(landed).is_none());
+        assert!(u.vessel(crashed).is_none());
+        assert!(u.vessel(dormant).is_none());
+        assert!(u.vessel(craft).is_some());
     }
 
     #[test]

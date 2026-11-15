@@ -213,6 +213,9 @@ pub struct Structure {
     pub deployed: Vec<bool>,
     /// Antennas that extend and retract (`Data_Deployable` beside `Data_Transmitter`); they start retracted.
     pub antenna_deployable: Vec<bool>,
+    pub deploy_defs: Vec<Option<ose_data::Deployable>>,
+    pub light_defs: Vec<Option<ose_data::PartLight>>,
+    pub light_powered: Vec<bool>,
     /// Each part's id and family (like "0010-Probe").
     pub part_ids: Vec<String>,
     /// Stable source identities used by in-flight services across save and topology changes.
@@ -1036,7 +1039,18 @@ impl Structure {
                 })
                 .collect(),
             gimbal_range_rad,
-            deployed: vec![false; n],
+            deployed: (0..n)
+                .map(|i| {
+                    def_of(i)
+                        .and_then(|d| d.deployable)
+                        .is_some_and(|d| d.starts_extended)
+                })
+                .collect(),
+            deploy_defs: (0..n)
+                .map(|i| def_of(i).and_then(|d| d.deployable))
+                .collect(),
+            light_defs: (0..n).map(|i| def_of(i).and_then(|d| d.light)).collect(),
+            light_powered: vec![false; n],
             crash_tolerance: (0..n)
                 .map(|i| def_of(i).map(|d| d.crash_tolerance).unwrap_or(0.0))
                 .collect(),
@@ -3207,7 +3221,31 @@ impl Structure {
             });
             requests.len() - 1
         });
+        self.light_powered.fill(false);
+        let mut lamps = Vec::new();
+        if p.groups.lights {
+            for i in 0..self.light_defs.len() {
+                if !self.rigid.present[i] {
+                    continue;
+                }
+                if let Some(light) = self.light_defs[i] {
+                    if light.use_per_s > 0.0 {
+                        lamps.push((requests.len(), i));
+                        requests.push(Request {
+                            part: i,
+                            instructions: vec![instruction(light.use_per_s)],
+                            priority: 5,
+                        });
+                    } else {
+                        self.light_powered[i] = true;
+                    }
+                }
+            }
+        }
         let fractions = self.net.process(&requests, dt);
+        for (r, i) in lamps {
+            self.light_powered[i] = fractions[r] >= 0.1;
+        }
         p.drive.powered = match motors {
             Some(r) => fractions[r],
             None => {
@@ -4899,10 +4937,24 @@ impl Structure {
     }
 
     /// Extend all deployable antennas (or retract them); returns how many changed.
+    pub fn can_deploy(&self, i: usize, out: bool) -> bool {
+        self.deploy_defs[i].is_none_or(|d| {
+            if out {
+                d.extendable && !(d.shielded_extension && self.shielded[i])
+            } else {
+                d.retractable
+            }
+        })
+    }
+
     pub fn deploy_antennas(&mut self, out: bool) -> usize {
         let mut n = 0;
-        for i in 0..self.antenna_deployable.len() {
-            if self.antenna_deployable[i] && self.rigid.present[i] && self.deployed[i] != out {
+        for i in 0..self.deployed.len() {
+            if self.rigid.present[i]
+                && self.deploy_defs[i].is_some_and(|d| d.antenna && d.extendable)
+                && self.can_deploy(i, out)
+                && self.deployed[i] != out
+            {
                 self.deployed[i] = out;
                 n += 1;
             }
@@ -4917,6 +4969,7 @@ impl Structure {
             if self.electric[i].solar_deployable
                 && self.electric[i].solar_output > 0.0
                 && self.rigid.present[i]
+                && self.can_deploy(i, out)
                 && self.deployed[i] != out
             {
                 self.deployed[i] = out;

@@ -1,5 +1,7 @@
 # Status
 
+Current wire protocol: **72**. Science availability and diminishing returns, per-part deployment permissions, and powered light outputs require matching client and server builds.
+
 Email sign-in uses protocol 68: six-digit email OTP, account linking, expiring single-use codes, and remembered device sessions. Campaign membership stays server-side.
 
 Updated 2026-10-28.

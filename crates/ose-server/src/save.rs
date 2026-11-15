@@ -17,6 +17,8 @@ pub struct SavedVessel {
     pub id: u64,
     pub name: String,
     pub owner: Option<u64>,
+    #[serde(default)]
+    pub debris: bool,
     pub body: String,
     pub elements: Elements,
     pub burn: Option<SavedBurn>,
@@ -196,6 +198,7 @@ pub fn capture(
                 id,
                 name: v.name.clone(),
                 owner,
+                debris: u.world.get::<ose_sim::vessels::Debris>(e).is_some(),
                 body: u.body_id(body)?.to_string(),
                 elements: orbit.elements,
                 flight: u.powered(e).cloned(),
@@ -288,14 +291,35 @@ pub fn restore(
     resources: &[ose_data::ResourceDef],
 ) -> Vec<VesselEntry> {
     u.set_tick(save.tick);
+    u.set_science_credited(
+        save.campaign
+            .science
+            .submitted
+            .iter()
+            .map(|r| r.report.clone()),
+    );
     u.set_warp(save.warp);
     let mut registry = Vec::new();
     for v in &save.vessels {
+        let debris = v.debris
+            || v.parts.as_ref().is_some_and(|p| p.debris)
+            || (v.craft.is_none() && v.name.ends_with(" debris"));
+        if debris
+            && v.flight
+                .as_ref()
+                .or(v.dormant.as_ref())
+                .is_some_and(|p| p.landed || p.splashed || p.crashed)
+        {
+            continue;
+        }
         let Some(body) = u.body_entity(&v.body) else {
             tracing::warn!(vessel = v.id, body = %v.body, "saved vessel's body is unknown; dropped");
             continue;
         };
         let e = u.spawn_vessel_with_elements(&v.name, body, v.elements);
+        if debris {
+            u.world.entity_mut(e).insert(ose_sim::vessels::Debris);
+        }
         if let Some(f) = &v.flight {
             u.set_powered(e, f.clone());
         } else if let Some(d) = &v.dormant {
@@ -528,6 +552,7 @@ mod tests {
         let mut f = ServiceFixture::new();
         let e = f.vessel;
         let report = ose_data::science::ResearchReport {
+            base_value: 0.0,
             experiment: "MeasuredPacket".into(),
             sample: false,
             location: "Kerbin_Landed".into(),

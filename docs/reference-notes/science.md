@@ -32,9 +32,18 @@ From reading `KSP.Game.Science` (`ScienceManager`, `ScienceRegionsDataProvider`,
 - A report's value (`CreateScienceReports`): `DataValue` (or `SampleValue`) x body scalar x situation scalar
   x region scalar when the matching valid location requires the region.
 - Report key: `{ExperimentID}_{DataType|SampleType}_{ResearchLocationId}`, location id `{Body}_{Situation}`
-  plus `_{Region}` when the region is required. A key already submitted is worth 0 (`GetPotentialReportValueBase`).
+  plus `_{Region}` when the region is required. KSP 2 pays each key once (`GetPotentialReportValueBase`).
   The original always builds the location with the region the vessel is over (`RefreshLocationsValidity` uses
   `requiresRegion: true`), so orbital and atmospheric reports count once per region; we do the same.
+- Gameplay uses the requested KSP 1-style diminishing returns instead of KSP 2's one-time payout.
+  The [KSP 1 subject-value formula](https://kspmoddinglibs.github.io/KSPDocsSite/class_research_and_development.html)
+  scales rewards by the fraction of the subject's science cap still unclaimed.
+  A subject's next value is `base * max(0, 1 - credited / cap)`, with `cap = 2 * base` because the imported
+  KSP 2 definitions have no per-experiment caps. This gives 100%, 50%, 25%, etc. until the yield rounds to
+  zero whole science points, at which point it cannot run. The ledger is shared across vessels/timelines,
+  survives saves and campaign switching, and submission revalues stale reports against current progress.
+  Collection and the flight HUD's subtle green availability glow use the same crew, charge, location,
+  running, storage and remaining-value checks; timed completions recheck remaining science too.
 - Science points: capacity is the sum of submitted reports rounded, times the `ScienceRewards` difficulty
   option, plus turned-in missions' science rewards (`MissionRewards`); allocated is the sum of unlocked nodes'
   `RequiredSciencePoints`; a node can be unlocked when every `RequiredTechNodeIDs` entry is unlocked and the
@@ -43,5 +52,9 @@ From reading `KSP.Game.Science` (`ScienceManager`, `ScienceRegionsDataProvider`,
 Run times: an experiment with `TimeToComplete` runs that long where it started, drawing its `ResourcesCost`
 per second (waiting without it) and is interrupted if the vessel's situation or region changes.
 
-Not modelled yet: deploy animations, transmission time and antennas (CommNet), EVA
-experiments, `TierToUnlock` gating, the original's flavour texts.
+CommNet and timed EVA experiments now exist. Transmission is still instantaneous,
+draws no EC and submits samples as well as data; the live full/empty-battery server
+measurements are in [the services audit](services-live-parity.md). Packet timing,
+transmitter power interruptions, `TierToUnlock` gating and the original's flavour
+texts remain gaps. Experiment-specific deployment presentation is separate from
+generic part deployment animation.

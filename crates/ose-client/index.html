@@ -522,6 +522,7 @@
     #flight-hud .fh-sas button i, #flight-hud .fh-actions button i { width: 70%; height: 70%; background: currentColor; -webkit-mask: var(--ico) center / contain no-repeat; mask: var(--ico) center / contain no-repeat; }
     #flight-hud .fh-sas button.on, #flight-hud .fh-actions button.on { color: #7dff8a; border-color: #7dff8a99; background: #17321ce6; }
     #flight-hud .fh-sas button:disabled, #flight-hud .fh-actions button:disabled { opacity: 0.35; cursor: default; }
+    #flight-hud button.science-ready { color: #b2f4d2; border-color: #77dfad99; box-shadow: 0 0 calc(10 * var(--u)) #66dba04d, inset 0 0 calc(5 * var(--u)) #66dba026; }
     /* Crew portraits above the action bar, as the original's bottom-right Kerbal portraits. */
     .fh-crewbox { position: absolute; right: calc(16 * var(--u)); bottom: calc(138 * var(--u)); display: flex; gap: calc(6 * var(--u)); pointer-events: auto; }
     .fh-kerbal { width: calc(124 * var(--u)); background: #10141bd9; border: 1px solid #ffffff22; border-radius: calc(6 * var(--u)); overflow: hidden; }
@@ -1111,6 +1112,7 @@
     #menu #screen-paused #resume { color: #4f8f1f; }
     body:not(:has(#flight-hud.open)) #screen-paused .pm-flight { display: none; }
     #flight-hud .fh-crew button.hidden { display: none; }
+    #fh-stages.hidden, #fh-stage.hidden, #fh-stage-btn.hidden, #fh-full.hidden, #fh-cut.hidden { display: none; }
     #flight-hud .fh-crew:not(:has(button:not(.hidden))) { display: none; }
     #menu #screen-paused #leave { color: #b03a2e; margin-top: calc(12 * var(--u)); }
     /* KSP2's flight layout (after Josh's screenshots of the original): the navball cluster bottom left, time warp
@@ -1729,6 +1731,7 @@
           <label class="set-row"><span>Show key hints on screen</span><input id="settings-hints" data-ose="settings-hints" type="checkbox" checked /></label>
         </section>
         <section data-tab="graphics">
+          <label class="set-row"><span>Frame rate limit</span><select id="settings-frame-limit" data-ose="settings-frame-limit"><option value="30">30 FPS</option><option value="60" selected>60 FPS</option><option value="120">120 FPS</option><option value="0">Unlimited</option></select></label>
           <label class="set-row"><span>Render resolution</span><input id="settings-res" data-ose="settings-res" type="range" min="50" max="100" step="5" value="100" /><b id="settings-res-text">100%</b></label>
           <label class="set-row"><span data-loc="Menu/Settings/Show FPS">Show FPS</span><input id="settings-fps" data-ose="settings-fps" type="checkbox" /></label>
           <label class="set-row"><span>Planet detail</span><select id="settings-quality" data-ose="settings-quality"><option value="low" data-loc="Menu/Graphics/Low">Low</option><option value="medium" data-loc="Menu/Graphics/Medium">Medium</option><option value="high" selected data-loc="Menu/Graphics/High">High</option></select></label>

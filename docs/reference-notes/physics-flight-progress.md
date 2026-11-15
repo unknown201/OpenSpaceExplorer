@@ -9,7 +9,7 @@ The previous flight path derived one thrust and Isp estimate from the stage repo
 The server now resolves the engines independently before integrating motion:
 
 1. Evaluate each attached, activated stage engine's vacuum Isp and its full pressure curve at the vessel's atmospheric pressure.
-2. Compute its requested mass flow from vacuum thrust / (vacuum Isp Ã— standard gravity), throttle, and that engine's air multiplier.
+2. Compute its requested mass flow from vacuum thrust / (vacuum Isp × standard gravity), throttle, and that engine's air multiplier.
 3. Request its mixture through the existing resource graph. A missing ingredient reduces all ingredients and thrust by the same delivered fraction.
 4. Sum delivered thrust and subtract the actual tank mass change exactly once from the flight state.
 5. Pass each engine's delivered thrust to structural load targets, including a partial step that empties its tank.
@@ -24,7 +24,7 @@ requested thrust    = requested mass flow * Isp(pressure) * g0
 delivered thrust    = requested thrust * delivered resource fraction
 ```
 
-The existing cubic-Hermite curve evaluator is used, without the old 0â€“1 atmosphere clamp. Solid engines retain their throttle lock. The default imported engine mode remains the selected mode. The legacy stage estimate is retained only for flight states without a part structure, such as simplified probes/EVA and old state.
+The existing cubic-Hermite curve evaluator is used, without the old 0–1 atmosphere clamp. Solid engines retain their throttle lock. The default imported engine mode remains the selected mode. The legacy stage estimate is retained only for flight states without a part structure, such as simplified probes/EVA and old state.
 
 Code: [per-engine demands and resolution](../../crates/ose-sim/src/structure.rs), [integration](../../crates/ose-sim/src/flight.rs), [universe loop](../../crates/ose-sim/src/lib.rs), [flight readout](../../crates/ose-server/src/main.rs).
 
@@ -45,7 +45,7 @@ Run the focused checks with `cargo test -p ose-sim propulsion --lib` and `cargo 
 
 ## Completed: mounted forces and rotational dynamics
 
-The second increment removes the assumption that every engine pushes along the vessel axis. Each engine's delivered thrust is rotated from its part-local +Y axis into the right-handed craft frame. Net force is the vector sum; net torque is the sum of `(part origin - mass centre) Ã— force`. Craft roll participates in the conversion to inertial space. On the pad, an attitude command no longer redirects part-backed thrust before the craft has physically turned.
+The second increment removes the assumption that every engine pushes along the vessel axis. Each engine's delivered thrust is rotated from its part-local +Y axis into the right-handed craft frame. Net force is the vector sum; net torque is the sum of `(part origin - mass centre) × force`. Craft roll participates in the conversion to inertial space. On the pad, an attitude command no longer redirects part-backed thrust before the craft has physically turned.
 
 Mass properties are rebuilt from attached dry masses and current tank contents before each propulsion step. The flight inertia tensor includes oriented box inertia and the parallel-axis contribution from each part. Fuel drainage and detachment therefore change both the mass centre and resistance to rotation.
 
@@ -55,7 +55,7 @@ Structural engine loads use the mounted directions. Actuator torque is passed se
 
 Six additional analytical tests cover rotated-box inertia, balanced and angled engine mounts, mass-centre shifts from fuel drainage and detachment, roll-dependent force and angular impulse, limited SAS authority against roll torque, and conservation of momentum/energy during asymmetric tumbling. The existing SAS-free integration test now checks angular momentum with engines off; the maneuver-hold fixture explicitly provides wheel torque instead of depending on zero-inertia instant steering.
 
-This is not a complete rigid-body/contact replacement. The force application point remains the part origin and direction remains local +Y, pending import of the original `Module_Engine` thrust transforms and weights. Flight inertia uses the structure's existing box proxies (dimensions clamped to 0.1â€“5 m), with fuel distributed across its tank box; exact collider inertia and internal mass offsets are unavailable. Control authority is still a scalar stage estimate, including approximate gimbal authority on each axis. The structural solver still has its original mass/inertia approximations and thrust lag. These limits require further work before claiming reference parity.
+This is not a complete rigid-body/contact replacement. The force application point remains the part origin and direction remains local +Y, pending import of the original `Module_Engine` thrust transforms and weights. Flight inertia uses the structure's existing box proxies (dimensions clamped to 0.1–5 m), with fuel distributed across its tank box; exact collider inertia and internal mass offsets are unavailable. Control authority is still a scalar stage estimate, including approximate gimbal authority on each axis. The structural solver still has its original mass/inertia approximations and thrust lag. These limits require further work before claiming reference parity.
 
 ## Completed: roll-aware airflow and per-part loads
 

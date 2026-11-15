@@ -203,6 +203,7 @@ mod tests {
                 id,
                 name: format!("v{id}"),
                 owner: Some(1),
+                science_available: false,
                 reference_body: 4,
                 position_m: DVec3::new(x, 0.0, 0.0),
                 velocity_mps: DVec3::ZERO,

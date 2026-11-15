@@ -70,6 +70,8 @@ EVENTS: dict[str, tuple[str, object, bool, float, str | None]] = {
     "reentry": ("Play_reentry_on", "first", True, 0.6, None),
     "sonic_boom": ("Play_sonic_boom", "first", False, 0.8, None),
     "overheat": ("Play_overheat_part_start", "first", False, 0.6, None),
+    "light_on": ("Play_light_ON", "first", False, 0.6, None),
+    "light_off": ("Play_light_OFF", "first", False, 0.6, None),
     "leg_deploy": ("Play_An_Landing_Leg_Small_Extensible_LT_1_deploy_1", "first", False, 0.6, None),
     "leg_retract": ("Play_An_Landing_Leg_Small_Extensible_LT_1_retract_1", "first", False, 0.6, None),
     "panel_open": ("Play_An_SolarArray_1x6_Shielded_open_1", "first", False, 0.5, None),
@@ -339,6 +341,16 @@ def main() -> None:
 
     OUT.mkdir(parents=True, exist_ok=True)
     manifest = {}
+    # The imported deployment clips retain their own timed Wwise cues.
+    for model in (ROOT / "assets/web/parts").glob("*.glb"):
+        raw = model.read_bytes()
+        n = struct.unpack_from("<I", raw, 12)[0]
+        gltf = json.loads(raw[20:20+n])
+        if gltf.get("extras",{}).get("ose_deployment",{}).get("control") not in ("gear", "panels", "antennas"):
+            continue
+        for clip in gltf.get("animations",[]):
+            for cue in clip.get("extras",{}).get("ose_audio_events",[]):
+                EVENTS[cue["sound"]] = (cue["sound"], "first", False, 0.6, None)
     for key, (event, pick, loop, gain, states_from) in EVENTS.items():
         wems = [int(event[4:])] if event.startswith("wem:") else banks.event_wems(event, states_from)
         if not wems:

@@ -29,6 +29,7 @@ mod engine_fx_gpu;
 pub mod fairing_mesh;
 #[cfg(target_arch = "wasm32")]
 pub mod flight3d;
+mod frame_pacing;
 pub mod ftue;
 #[cfg(target_arch = "wasm32")]
 mod fx_fixture;
@@ -45,6 +46,7 @@ pub mod kerbin_time;
 pub mod ksc3d;
 #[cfg(target_arch = "wasm32")]
 pub mod lens_flare;
+pub mod map_prediction;
 #[cfg(target_arch = "wasm32")]
 pub mod menu3d;
 pub mod missions;
@@ -388,6 +390,11 @@ struct App {
     /// Frames counted since `fps_since_ms`, for the FPS counter (Settings > Graphics).
     fps_frames: u32,
     fps_since_ms: f64,
+    /// Text readouts refresh at 20 Hz; camera, navball and controls run every frame.
+    hud_since_ms: f64,
+    frame_pacer: frame_pacing::FramePacer,
+    render_timings: frame_pacing::FrameTimings,
+    state_timings: frame_pacing::FrameTimings,
     /// Flight HUD: speed readout in orbit (true) or surface mode, brakes latched from the action bar.
     speed_orbit: bool,
     brakes_latched: bool,
@@ -515,8 +522,8 @@ struct App {
     orbit_yaw: f64,
     orbit_pitch: f64,
     orbit_dist_km: f64,
-    /// Line keys for trajectory strips, versioned so a new prediction replaces the old buffers.
-    traj_version: u64,
+    #[cfg(target_arch = "wasm32")]
+    map_approach: map_prediction::Cache,
 }
 
 type Shared = Rc<RefCell<App>>;
@@ -845,7 +852,9 @@ fn set_html_changed(el: &Element, html: &str) {
 
 fn set_text(doc: &Document, id: &str, text: &str) {
     if let Some(el) = doc.get_element_by_id(id) {
-        el.set_text_content(Some(text));
+        if el.text_content().as_deref() != Some(text) {
+            el.set_text_content(Some(text));
+        }
     }
 }
 
@@ -1068,6 +1077,12 @@ pub fn start() -> Result<(), JsValue> {
         drive_sent: (0.0, 0.0, false),
         fps_frames: 0,
         fps_since_ms: 0.0,
+        hud_since_ms: f64::NEG_INFINITY,
+        frame_pacer: frame_pacing::FramePacer::new(settings::frame_limit(
+            stored("ose.frameLimit").as_deref(),
+        )),
+        render_timings: frame_pacing::FrameTimings::default(),
+        state_timings: frame_pacing::FrameTimings::default(),
         speed_orbit: false,
         brakes_latched: false,
         target: None,
@@ -1146,7 +1161,8 @@ pub fn start() -> Result<(), JsValue> {
         orbit_yaw: 0.6,
         orbit_pitch: 0.5,
         orbit_dist_km: 5.0e7,
-        traj_version: 0,
+        #[cfg(target_arch = "wasm32")]
+        map_approach: map_prediction::Cache::default(),
         doc,
         canvas,
         ctx,
@@ -1366,6 +1382,24 @@ fn install_audio(app: &Shared) -> Result<(), JsValue> {
     // Graphics: render resolution (applied at once) and the FPS counter.
     {
         let doc = app.borrow().doc.clone();
+        if let Some(input) = doc
+            .get_element_by_id("settings-frame-limit")
+            .and_then(|e| e.dyn_into::<web_sys::HtmlSelectElement>().ok())
+        {
+            input
+                .set_value(&settings::frame_limit(stored("ose.frameLimit").as_deref()).to_string());
+            let a = app.clone();
+            let i2 = input.clone();
+            let cb = Closure::<dyn FnMut()>::new(move || {
+                let value = i2.value();
+                store("ose.frameLimit", &value);
+                a.borrow_mut()
+                    .frame_pacer
+                    .set_limit(settings::frame_limit(Some(&value)));
+            });
+            input.add_event_listener_with_callback("change", cb.as_ref().unchecked_ref())?;
+            cb.forget();
+        }
         let scale = settings::render_scale(stored("ose.renderScale").as_deref());
         set_text(&doc, "settings-res-text", &format!("{:.0}%", scale * 100.0));
         if let Some(input) = doc
@@ -1882,8 +1916,7 @@ fn stand_of(roster: &[ose_net::KerbalInfo], v: &ose_net::VesselState) -> flight3
 struct FlightSoundState {
     vessel: u64,
     supersonic: bool,
-    gear_out: bool,
-    panels: bool,
+    lights: bool,
     hot: Vec<u16>,
     chutes: Vec<(u16, ose_net::ChuteState)>,
     /// Parachute canopies burned away.
@@ -5649,7 +5682,7 @@ fn install_input(app: &Shared) -> Result<(), JsValue> {
                         true
                     }
                     "KeyZ" => {
-                        app.set_throttle(1.0);
+                        app.set_throttle(interaction::throttle_preset(true));
                         true
                     }
                     // `OnThrottleCutoff`: X cuts the throttle, and with left Alt (the trim modifier) held also
@@ -5967,7 +6000,17 @@ fn animate(app: Shared) {
     let f: FrameCallback = Rc::new(RefCell::new(None));
     let g = f.clone();
     *g.borrow_mut() = Some(Closure::new(move || {
-        app.borrow_mut().frame();
+        {
+            let mut app = app.borrow_mut();
+            let now = now_ms();
+            app.flight_keys_tick(now);
+            if app.doc.hidden() {
+                app.render_timings.pause();
+                app.state_timings.pause();
+            } else if app.frame_pacer.should_render(now) {
+                app.frame();
+            }
+        }
         request_frame(f.borrow().as_ref().unwrap());
     }));
     request_frame(g.borrow().as_ref().unwrap());
@@ -6223,6 +6266,7 @@ impl App {
                 self.player_id = Some(player_id);
                 self.login_requested = false;
                 store("ose.token", &token);
+
                 self.time.update(tick.seconds(), 1, now_ms());
                 self.set_status(&format!("player {player_id}"));
                 set_text(
@@ -6733,6 +6777,10 @@ impl App {
                                 let craft = stored(&self.craft_link_key(target))
                                     .and_then(|s| s.parse::<u64>().ok());
                                 self.start_flight(target, craft);
+                                #[cfg(target_arch = "wasm32")]
+                                {
+                                    self.flight3d.distance = 35.0;
+                                }
                                 set_text(&self.doc, "fh-note", "boarded");
                             }
                         }
@@ -6951,6 +6999,7 @@ impl App {
                 }
             }
             ServerMessage::Vessels { vessels, tick } => {
+                self.state_timings.record(now_ms());
                 self.rendezvous.snapshot_ms = now_ms();
                 if let (Some(own), Some(old)) = (self.flying, self.rendezvous.destination) {
                     if !vessels.iter().any(|v| v.id == old) {
@@ -6998,9 +7047,8 @@ impl App {
                 vessel, patches, ..
             } => {
                 if let Some(scene) = &mut self.scene {
-                    scene.trajectories.insert(vessel, patches);
+                    scene.update_trajectory(vessel, patches);
                 }
-                self.traj_version = self.traj_version.wrapping_add(1);
             }
             ServerMessage::BurnState {
                 vessel,
@@ -8204,8 +8252,8 @@ impl App {
         }
     }
 
-    /// W/S pitch, A/D yaw, Q/E roll the held part: 90 degrees a press with angle snap, 15 without (5 with
-    /// Shift), as the original's rotate keys; Space puts it back upright.
+    /// W/S pitch, A/D yaw, Q/E roll the held part; Space puts it back upright.
+    /// The parity probe tracks the current snap-off difference from KSP2.
     fn vab_turn_held(&mut self, code: &str, fine: bool) {
         let step = interaction::rotation_step_degrees(self.vab_snap, fine);
         let (axis, sign) = match code {
@@ -12215,7 +12263,7 @@ impl App {
             k.brakes() || self.brakes_latched,
         );
         if thr_in != 0.0 {
-            self.throttle = (self.throttle + thr_in * input::THROTTLE_RATE * dt).clamp(0.0, 1.0);
+            self.throttle = interaction::throttle_step(self.throttle, thr_in, dt);
             self.controls_dirty = true;
         }
         // Throttle changes are coalesced at 20 Hz; rotation intents below send on key edges.
@@ -12514,6 +12562,27 @@ impl App {
             .as_ref()
             .and_then(|s| s.vessel(vessel))
             .and_then(|v| v.flight.clone());
+        if let Some(part) = id
+            .strip_prefix("fh-part-deploy-")
+            .and_then(|n| n.parse::<u16>().ok())
+        {
+            if let Some((_, out)) = f
+                .as_ref()
+                .and_then(|f| f.panels.iter().chain(&f.antennas).find(|p| p.0 == part))
+            {
+                if let Some(ws) = &self.ws {
+                    send(
+                        ws,
+                        &ClientMessage::SetPartDeployment {
+                            vessel,
+                            part,
+                            deploy: !out,
+                        },
+                    );
+                }
+            }
+            return;
+        }
         let msg = match id {
             "fh-act-gear" => {
                 self.toggle_gear();
@@ -13142,8 +13211,7 @@ impl App {
         let now = FlightSoundState {
             vessel: id,
             supersonic: f.surface_speed_mps > 343.0 && f.dynamic_pressure_kpa > 1.0,
-            gear_out: f.gear.iter().any(|g| g.1),
-            panels: f.panels_deployed,
+            lights: f.lights,
             hot: f
                 .heat
                 .iter()
@@ -13197,19 +13265,9 @@ impl App {
             if now.supersonic && !was.supersonic {
                 self.audio.play("sonic_boom");
             }
-            if now.gear_out != was.gear_out {
-                self.audio.play(if now.gear_out {
-                    "leg_deploy"
-                } else {
-                    "leg_retract"
-                });
-            }
-            if now.panels != was.panels {
-                self.audio.play(if now.panels {
-                    "panel_open"
-                } else {
-                    "panel_close"
-                });
+            if now.lights != was.lights && !f.part_lights.is_empty() {
+                self.audio
+                    .play(if now.lights { "light_on" } else { "light_off" });
             }
             if now.hot.iter().any(|p| !was.hot.contains(p)) {
                 self.audio.play("overheat");
@@ -13524,6 +13582,18 @@ impl App {
                 let out = (d - up * along).length();
                 el.set_attribute("data-ose-ladder", &format!("{along:.2},{out:.2}"))
                     .ok();
+            }
+        }
+        for button in ["fh-science", "fh-act-science"] {
+            if let Some(el) = self.doc.get_element_by_id(button) {
+                el.class_list()
+                    .toggle_with_force("science-ready", v.science_available)
+                    .ok();
+                if v.science_available {
+                    el.remove_attribute("disabled").ok();
+                } else {
+                    el.set_attribute("disabled", "").ok();
+                }
             }
         }
         let Some(f) = &v.flight else {
@@ -14598,7 +14668,7 @@ impl App {
             }
         }
         let title = if self.requested_warp > self.time.warp {
-            format!("Requested {}×; running at {}×. Physics flight is limited to 4× until vessels can coast safely on rails; other players may also hold warp down.", self.requested_warp, self.time.warp)
+            format!("Requested {}×; running at {}×. Physics flight is limited to 4× until vessels can coast safely on rails; this limit applies to the selected fleet.", self.requested_warp, self.time.warp)
         } else {
             "Increase time warp".to_string()
         };
@@ -14687,19 +14757,29 @@ impl App {
             }
         }
         let now = now_ms();
+        self.render_timings.record(now);
         let ut = self.time.ut_at(now);
         self.sample_smoothness(now, ut);
         self.update_tracking(now);
         self.update_audio(now);
-        if self.time.have_time {
-            self.update_hud(ut);
+        if now - self.hud_since_ms >= 50.0 {
+            self.hud_since_ms = now;
+            if self.time.have_time {
+                self.update_hud(ut);
+            }
+            self.update_flight_hud();
+            self.update_flight_instruments();
+            self.toasts.watch(&self.doc, "fh-note", "alert");
+            if self.flight_pam.is_some() {
+                if self.flying.is_none() {
+                    self.flight_open_pam(None, 0.0, 0.0);
+                } else {
+                    self.flight_pam_refresh();
+                }
+            }
         }
-        self.update_flight_hud();
         self.rendezvous_tick(now);
         self.update_mission_tracker();
-        self.update_flight_instruments();
-        self.toasts.watch(&self.doc, "fh-note", "alert");
-        self.flight_keys_tick(now);
         self.sync_viewing();
         self.draw_navball();
         // FPS counter, refreshed twice a second while shown.
@@ -14708,20 +14788,23 @@ impl App {
             let fps = self.fps_frames as f64 * 1000.0 / (now - self.fps_since_ms).max(1.0);
             self.fps_frames = 0;
             self.fps_since_ms = now;
-            set_text(&self.doc, "fps", &format!("{fps:.0} FPS"));
+            let mut text = format!(
+                "{fps:.0} FPS · frame max {:.0} ms",
+                self.render_timings.worst_ms
+            );
+            if self.in_session {
+                text.push_str(&format!(
+                    " · state max {:.0} ms",
+                    self.state_timings.worst_at(now)
+                ));
+            }
+            set_text(&self.doc, "fps", &text);
         }
         self.warp_to_tick(now);
         self.node_tick();
         self.lesson_tick();
         if self.in_session && self.vab_active() {
             self.vab_report_tick(now);
-        }
-        if self.flight_pam.is_some() {
-            if self.flying.is_none() {
-                self.flight_open_pam(None, 0.0, 0.0);
-            } else {
-                self.flight_pam_refresh();
-            }
         }
         #[cfg(target_arch = "wasm32")]
         if let (Some(p), Some(gpu)) = (self.planet_preview.as_mut(), self.gpu.as_mut()) {
@@ -14738,13 +14821,6 @@ impl App {
         if self.flight_visible() && self.frame_flight(ut) {
             return;
         }
-        let dpr = self.dpr;
-        let (w, h) = (self.camera.width, self.camera.height);
-        let ctx = &self.ctx;
-        ctx.set_transform(dpr, 0.0, 0.0, dpr, 0.0, 0.0).ok();
-        ctx.set_fill_style_str("#06080f");
-        ctx.fill_rect(0.0, 0.0, w, h);
-
         // The KSC hub screen shows the campus in 3D; elsewhere its tooltip must not linger.
         #[cfg(target_arch = "wasm32")]
         if !(self.in_session && self.ksc_active()) && self.ksc3d.hovered.is_some() {
@@ -14970,6 +15046,13 @@ impl App {
             self.frame_3d(ut, &positions, centre);
             return;
         }
+        // The map canvas is hidden under WebGPU views. Clear it only when it is actually being drawn.
+        let dpr = self.dpr;
+        let (w, h) = (self.camera.width, self.camera.height);
+        let ctx = &self.ctx;
+        ctx.set_transform(dpr, 0.0, 0.0, dpr, 0.0, 0.0).ok();
+        ctx.set_fill_style_str("#06080f");
+        ctx.fill_rect(0.0, 0.0, w, h);
         // Exposed for tests and debugging: current scale and the star-space position of the focus body.
         self.canvas
             .set_attribute("data-ose-scale", &format!("{:.3e}", cam.m_per_px))
@@ -15268,6 +15351,9 @@ impl App {
         // The part whose window is open stays lit while the window is.
         self.flight3d.selected = self.flight_pam;
         let drawn = self.flight3d.frame(gpu, &inp);
+        for cue in self.flight3d.audio_events.drain(..) {
+            self.audio.play(&cue);
+        }
         // The aero overlay's arrows, drawn over the view.
         if let Some(svg) = self.doc.get_element_by_id("aero-svg") {
             let mut html = String::new();
@@ -15401,14 +15487,19 @@ impl App {
                 });
             }
             if let (Some(orbit), Some(p)) = (scene.orbit(i), b.parent) {
-                let n = 256;
-                let pts: Vec<GV> = (0..=n)
-                    .map(|k| {
-                        let nu = k as f64 / n as f64 * std::f64::consts::TAU;
-                        let (rel, _) = orbit.state_at_true_anomaly(nu);
-                        to_km(rel)
-                    })
-                    .collect();
+                let key = format!("orbit:{}", b.id);
+                let pts = if gpu.has_line(&key) {
+                    Vec::new()
+                } else {
+                    let n = 256;
+                    (0..=n)
+                        .map(|k| {
+                            let nu = k as f64 / n as f64 * std::f64::consts::TAU;
+                            let (rel, _) = orbit.state_at_true_anomaly(nu);
+                            to_km(rel)
+                        })
+                        .collect()
+                };
                 let origin = to_km(positions[p as usize]) - cam_km;
                 let focus = i == self.camera.focus;
                 lines.push(render::LineItem::new(
@@ -15440,30 +15531,35 @@ impl App {
             .ok();
         let mut traj: Vec<render::LineItem> = Vec::new();
         for v in &scene.vessels {
-            let mine = v.owner.is_some() && v.owner == self.player_id;
+            let mine = v.owner == self.player_id;
             if let Some(patches) = scene.trajectories.get(&v.id) {
                 for (pi, patch) in patches.iter().enumerate() {
                     let Some(body) = scene.bodies.get(patch.body as usize) else {
                         continue;
                     };
-                    let orbit = scene::orbit_from(body.mu, &patch.orbit);
-                    let end_ut = if patch.end_ut.is_finite() {
-                        patch.end_ut
-                    } else if orbit.period.is_finite() {
-                        patch.start_ut + orbit.period
-                    } else {
-                        patch.start_ut + 6.0 * 3600.0
-                    };
-                    let soi = body.soi_radius_m.unwrap_or(f64::INFINITY);
-                    let n = 240;
-                    let mut pts = Vec::with_capacity(n + 1);
-                    for s in 0..=n {
-                        let t = patch.start_ut + (end_ut - patch.start_ut) * s as f64 / n as f64;
-                        let rel = orbit.position_at(t);
-                        if rel.length() > soi * 1.02 {
-                            break;
+                    let key = format!("traj:{}:{}:{}", v.id, pi, scene.trajectory_version(v.id));
+                    let mut pts = Vec::new();
+                    if !gpu.has_line(&key) {
+                        let orbit = scene::orbit_from(body.mu, &patch.orbit);
+                        let end_ut = if patch.end_ut.is_finite() {
+                            patch.end_ut
+                        } else if orbit.period.is_finite() {
+                            patch.start_ut + orbit.period
+                        } else {
+                            patch.start_ut + 6.0 * 3600.0
+                        };
+                        let soi = body.soi_radius_m.unwrap_or(f64::INFINITY);
+                        let n = 240;
+                        pts.reserve(n + 1);
+                        for s in 0..=n {
+                            let t =
+                                patch.start_ut + (end_ut - patch.start_ut) * s as f64 / n as f64;
+                            let rel = orbit.position_at(t);
+                            if rel.length() > soi * 1.02 {
+                                break;
+                            }
+                            pts.push(to_km(rel));
                         }
-                        pts.push(to_km(rel));
                     }
                     let colour = match patch.end {
                         PatchEnd::Final => [0.47, 0.86, 0.63, 0.95],
@@ -15493,13 +15589,7 @@ impl App {
                         2.25
                     };
                     let origin = to_km(positions[patch.body as usize]) - cam_km;
-                    traj.push(render::LineItem::new(
-                        format!("traj:{}:{}:{}", v.id, pi, self.traj_version),
-                        pts,
-                        origin,
-                        colour,
-                        width,
-                    ));
+                    traj.push(render::LineItem::new(key, pts, origin, colour, width));
                 }
             }
         }
@@ -15678,19 +15768,42 @@ impl App {
             if !(span.is_finite() && span > 0.0) {
                 return None;
             }
-            let mut best = (f64::INFINITY, ut);
-            for k in 0..=720 {
-                let when = ut + span * k as f64 / 720.0;
-                let d = (mine.position_at(when) - theirs.position_at(when)).length();
-                if d < best.0 {
-                    best = (d, when);
-                }
-            }
-            let (d, when) = best;
+            let cached = self.map_approach.sample(
+                map_prediction::Key {
+                    vessel: me.id,
+                    target: t.id,
+                    body: bi as u16,
+                    warp: self.time.warp,
+                    vessel_prediction: scene.trajectory_version(me.id),
+                    target_prediction: scene.trajectory_version(t.id),
+                },
+                now_ms(),
+                ut,
+                || {
+                    let mut best = (f64::INFINITY, ut);
+                    for k in 0..=720 {
+                        let when = ut + span * k as f64 / 720.0;
+                        let d = (mine.position_at(when) - theirs.position_at(when)).length();
+                        if d < best.0 {
+                            best = (d, when);
+                        }
+                    }
+                    Some(map_prediction::Approach {
+                        vessel: to_km(mine.position_at(best.1)) * 1000.0,
+                        target: to_km(theirs.position_at(best.1)) * 1000.0,
+                        distance: best.0,
+                        ut: best.1,
+                    })
+                },
+            )?;
             Some((
-                to_km(positions[bi] + mine.position_at(when)),
-                to_km(positions[bi] + theirs.position_at(when)),
-                format!("Closest {} {}", hud::fmt_dist(d), hud::fmt_dt(when - ut)),
+                to_km(positions[bi]) + cached.vessel / 1000.0,
+                to_km(positions[bi]) + cached.target / 1000.0,
+                format!(
+                    "Closest {} {}",
+                    hud::fmt_dist(cached.distance),
+                    hud::fmt_dt(cached.ut - ut)
+                ),
             ))
         })();
         for (k, id) in ["map-ca-me", "map-ca-target"].iter().enumerate() {

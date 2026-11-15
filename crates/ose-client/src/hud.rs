@@ -155,6 +155,18 @@ pub fn sas_lit(att: &AttitudeMode) -> &'static str {
 }
 
 /// Action bar buttons (`ActionBar.cs`): id, icon, tooltip, enabled.
+pub fn deploy_target(parts: &[(u16, bool)], non_retractable: &[u16]) -> bool {
+    let reversible: Vec<_> = parts
+        .iter()
+        .filter(|p| !non_retractable.contains(&p.0))
+        .collect();
+    if reversible.is_empty() {
+        !parts.iter().any(|p| p.1)
+    } else {
+        !reversible.iter().any(|p| p.1)
+    }
+}
+
 pub const ACTIONS: &[(&str, &str, &str, bool)] = &[
     (
         "fh-act-gear",
@@ -179,6 +191,12 @@ pub const ACTIONS: &[(&str, &str, &str, bool)] = &[
         "fh-act-solar",
         "ICO-Action-Solar-24x24",
         "Solar panels",
+        true,
+    ),
+    (
+        "fh-act-antennas",
+        "ICO-Flight-Cluster-Commnet",
+        "Radio antennas",
         true,
     ),
     (
@@ -598,6 +616,11 @@ pub fn update(doc: &Document, s: &HudState) {
     };
     set(doc, "fh-aero", &aero);
     lit(doc, "fh-act-solar", f.panels_deployed);
+    lit(
+        doc,
+        "fh-act-antennas",
+        f.antennas.iter().any(|(_, out)| *out),
+    );
     lit(doc, "fh-act-lights", f.lights);
     lit(doc, "fh-act-rcs", f.rcs);
     lit(doc, "fh-act-abort", f.abort);
@@ -1086,19 +1109,22 @@ pub fn flight_pam_html(
             }
         ));
     }
-    if is_solar {
+    if is_solar && !f.panels.iter().any(|p| p.0 == i) {
+        rows.push_str(&row("Panels", "fixed".into()));
+    }
+    if let Some((_, deployed)) = f.panels.iter().find(|p| p.0 == i) {
         rows.push_str(&row(
             &l("PartModules/SolarPanel/Name", "Panels"),
-            if f.panels_deployed {
-                "deployed"
-            } else {
-                "folded"
-            }
-            .into(),
+            if *deployed { "deployed" } else { "folded" }.into(),
         ));
         acts.push_str(&format!(
-            "<button data-act=\"fh-act-solar\">{}</button>",
-            if f.panels_deployed {
+            "<button data-act=\"fh-part-deploy-{i}\" {}>{}</button>",
+            if *deployed && f.non_retractable.contains(&i) {
+                "disabled"
+            } else {
+                ""
+            },
+            if *deployed {
                 l(
                     "PartModules/Deployable/ToggleExtended/RetractPanels",
                     "Retract panels",
@@ -1110,6 +1136,25 @@ pub fn flight_pam_html(
                 )
             }
         ));
+    }
+    if let Some((_, out)) = f.antennas.iter().find(|a| a.0 == i) {
+        rows.push_str(&row(
+            "Antenna",
+            if *out { "extended" } else { "retracted" }.into(),
+        ));
+        acts.push_str(&format!(
+            "<button data-act=\"fh-part-deploy-{i}\" {}>{} antenna</button>",
+            if *out && f.non_retractable.contains(&i) {
+                "disabled"
+            } else {
+                ""
+            },
+            if *out { "Retract" } else { "Extend" }
+        ));
+    }
+    if let Some((_, on)) = f.part_lights.iter().find(|a| a.0 == i) {
+        rows.push_str(&row("Light", if *on { "on" } else { "off" }.into()));
+        acts.push_str("<button data-act=\"fh-act-lights\">Toggle lights (U)</button>");
     }
     // Fairings and cargo bays (protocol 35): jettison, open or close; parts they enclose say so.
     if let Some((_, gone)) = f.fairings.iter().find(|x| x.0 == i) {
