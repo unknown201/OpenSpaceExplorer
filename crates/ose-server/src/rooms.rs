@@ -199,12 +199,14 @@ fn open(s: &Shared) -> AppState {
         kerbals: s.kerbals.clone(),
         last_roster: Mutex::new(None),
         flying: Mutex::new(HashMap::new()),
+        viewing: Mutex::new(HashMap::new()),
         test_probe: s.test_probe,
         allow_guest_accounts: s.allow_guest_accounts,
         steps: std::sync::atomic::AtomicU64::new(0),
         recorder: Mutex::new(crate::replay::Recorder::default()),
         rooms: s.rooms.clone(),
         closed: std::sync::atomic::AtomicBool::new(false),
+        turn: Mutex::new(()),
     });
     s.rooms.list.lock().expect("rooms lock").push(room.clone());
     // a replay steps its one room itself, with no runtime to run clocks on

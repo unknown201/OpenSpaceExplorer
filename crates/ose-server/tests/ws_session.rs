@@ -939,8 +939,8 @@ async fn hello_catalog_and_snapshots() {
     }
     assert!(seen, "physics-warp cap never streamed");
 
-    // A second player who has not asked for warp holds it at 1 (lowest wins) and is named as the limiter;
-    // when they leave, warp returns to 100.
+    // A second player who has not asked for warp does not hold it down: warp is each player's own, so the
+    // first keeps warping in a time of their own (`timelines.rs`), and nobody is named as the limiter.
     let mut ws2 = connect_ws(&addr).await;
     let hello2 = ClientMessage::Hello {
         protocol: PROTOCOL_VERSION,
@@ -966,23 +966,17 @@ async fn hello_catalog_and_snapshots() {
         matches!(m, ServerMessage::CampaignState { .. }).then_some(())
     })
     .await;
-    let mut limited = false;
+    let mut second_at_1 = false;
     for _ in response_window() {
-        if let ServerMessage::TimeState {
-            warp,
-            warp_limited_by,
-            ..
-        } = recv(&mut ws).await
-        {
-            if warp == 1 && warp_limited_by == Some(p2) {
-                limited = true;
+        if let ServerMessage::TimeState { warp, .. } = recv(&mut ws2).await {
+            if warp == 1 {
+                second_at_1 = true;
                 break;
             }
         }
     }
-    assert!(limited, "second player did not hold warp down");
-    drop(ws2);
-    let mut restored = false;
+    assert!(second_at_1, "the second player's own time runs at 1x");
+    let mut kept = false;
     for _ in response_window() {
         if let ServerMessage::TimeState {
             warp,
@@ -990,16 +984,22 @@ async fn hello_catalog_and_snapshots() {
             ..
         } = recv(&mut ws).await
         {
+            assert_ne!(
+                warp_limited_by,
+                Some(p2),
+                "the second player held warp down"
+            );
             if warp == 4 && warp_limited_by.is_none() {
-                restored = true;
+                kept = true;
                 break;
             }
         }
     }
     assert!(
-        restored,
-        "warp did not return to the physics cap after the second player left"
+        kept,
+        "warp did not stay at the physics cap with a second player in"
     );
+    drop(ws2);
 
     // Resume: a new connection with the token is the same player and keeps the same single probe.
     drop(ws);
@@ -1777,6 +1777,44 @@ async fn in_a_coop_campaign_a_teammate_can_fly_the_pilots_craft() {
     })
     .await;
     assert!(accepted, "{reason:?}");
+}
+
+#[tokio::test]
+async fn far_vessels_come_in_brief_until_viewed() {
+    let (_server, addr) = spawn_server().await;
+    let mut ws = connect_ws(&addr).await;
+    hello(&mut ws, None, "pilot").await;
+    send_msg(&mut ws, &ClientMessage::JoinCampaign).await;
+    let vessel = launch_to_orbit(&mut ws, 120_000.0).await;
+    let mut mate = connect_ws(&addr).await;
+    hello(&mut mate, None, "teammate").await;
+    send_msg(&mut mate, &ClientMessage::JoinCampaign).await;
+    // a vessel as one player is sent it: (its part resources listed, whether it came in brief)
+    let detail = |m: ServerMessage| match m {
+        ServerMessage::Vessels { vessels, .. } => vessels
+            .into_iter()
+            .find(|v| v.id == vessel)
+            .map(|v| (v.flight.map(|f| f.part_resources.len()), v.brief.is_some())),
+        _ => None,
+    };
+    // the player who launched it sees it in full
+    let (parts, brief) = wait_for(&mut ws, detail).await;
+    assert!(parts.is_some_and(|n| n > 0) && !brief, "{parts:?}");
+    // a teammate elsewhere gets it in brief: still listed, with its orbit and situation
+    let (parts, brief) = wait_for(&mut mate, detail).await;
+    assert!(parts.is_none() && brief, "{parts:?}");
+    // once their view follows it, in full
+    send_msg(
+        &mut mate,
+        &ClientMessage::Viewing {
+            vessel: Some(vessel),
+        },
+    )
+    .await;
+    wait_for(&mut mate, |m| {
+        detail(m).filter(|d| d.0.is_some_and(|n| n > 0))
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -3063,8 +3101,28 @@ async fn multiplayer_streams_share_consistent_world_updates() {
         .keys()
         .find(|tick| worlds.iter().all(|w| w.contains_key(tick)))
         .expect("all peers should receive a common publication");
+    // every player sees the same world; each gets their own craft in full and the others' (far off, in their
+    // own orbits) in brief
+    let seen = |w: &Vec<ose_net::VesselState>| {
+        w.iter()
+            .map(|v| {
+                (
+                    v.id,
+                    v.owner,
+                    v.position_m,
+                    v.velocity_mps,
+                    v.orbit,
+                    v.situation(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
     for world in &worlds[1..] {
-        assert_eq!(world[common], worlds[0][common]);
+        assert_eq!(seen(&world[common]), seen(&worlds[0][common]));
+    }
+    for world in &worlds {
+        let full = world[common].iter().filter(|v| v.flight.is_some()).count();
+        assert_eq!(full, 1, "only their own craft in full");
     }
 }
 
@@ -4338,4 +4396,157 @@ async fn a_relaunch_after_recovery_gets_a_new_vessel_id() {
         ids[0], ids[1],
         "the relaunched rocket reused the recovered one's id"
     );
+}
+
+/// What interest management saves: eight players, each with a craft in its own orbit (far apart). Each gets
+/// their own vessel in full and the others slim; prints the `Vessels` bytes a player gets against what
+/// sending all eight in full would take.
+/// `cargo test -p ose-server --test ws_session interest_payload_probe -- --ignored --nocapture`
+#[tokio::test]
+#[ignore]
+async fn interest_payload_probe() {
+    let (_server, addr) = spawn_server().await;
+    let mut players = Vec::new();
+    for i in 0..8 {
+        let mut ws = connect_ws(&addr).await;
+        hello(&mut ws, None, &format!("p{i}")).await;
+        send_msg(&mut ws, &ClientMessage::JoinCampaign).await;
+        let k1 = serde_json::from_str::<Vec<ose_data::craft::Craft>>(include_str!(
+            "../../../assets/own/stock-craft.json"
+        ))
+        .unwrap()
+        .into_iter()
+        .find(|c| c.name == "Kerbal K1")
+        .unwrap();
+        send_msg(
+            &mut ws,
+            &ClientMessage::LaunchCraft {
+                craft: k1,
+                altitude_m: 100_000.0 + 10_000.0 * i as f64,
+            },
+        )
+        .await;
+        wait_for(&mut ws, |m| match m {
+            ServerMessage::CraftLaunched { vessel, .. } => vessel,
+            _ => None,
+        })
+        .await;
+        players.push(ws);
+    }
+    let mut got = 0usize;
+    let mut full_estimate = 0usize;
+    let mut n = 0;
+    for ws in &mut players {
+        for _ in 0..5 {
+            let (bytes, vessels) = wait_for(ws, |m| match &m {
+                ServerMessage::Vessels { vessels, .. } if vessels.len() == 8 => {
+                    Some((ose_net::encode(&m).unwrap().len(), vessels.clone()))
+                }
+                _ => None,
+            })
+            .await;
+            let own = vessels
+                .iter()
+                .map(|v| ose_net::encode(v).unwrap().len())
+                .max()
+                .unwrap();
+            got += bytes;
+            full_estimate += own * vessels.len();
+            n += 1;
+        }
+    }
+    eprintln!(
+        "Vessels per player per snapshot: {} bytes with interest, about {} all in full ({:.1}x less)",
+        got / n,
+        full_estimate / n,
+        full_estimate as f64 / got as f64
+    );
+}
+
+#[tokio::test]
+async fn each_player_warps_on_their_own_and_can_sync_up() {
+    let (_server, addr) = spawn_server().await;
+    let mut ws = connect_ws(&addr).await;
+    let (pilot, _) = hello(&mut ws, None, "pilot").await;
+    send_msg(&mut ws, &ClientMessage::JoinCampaign).await;
+    let vessel = launch_to_orbit(&mut ws, 120_000.0).await;
+    let mut mate = connect_ws(&addr).await;
+    let (mate_id, _) = hello(&mut mate, None, "teammate").await;
+    send_msg(&mut mate, &ClientMessage::JoinCampaign).await;
+    // the pilot warps; the teammate at the space center does not, and does not hold the pilot down
+    send_msg(&mut ws, &ClientMessage::RequestWarp { factor: 50 }).await;
+    wait_for(&mut ws, |m| match m {
+        ServerMessage::TimeState {
+            warp: 50,
+            warp_limited_by,
+            ..
+        } => {
+            assert_eq!(warp_limited_by, None);
+            Some(())
+        }
+        _ => None,
+    })
+    .await;
+    let ahead = wait_for(&mut mate, |m| match m {
+        ServerMessage::PlayerTimes { players, .. } => players
+            .iter()
+            .find(|p| p.player == pilot && p.ahead_s > 2.0)
+            .map(|p| {
+                assert_eq!(p.warp, 50);
+                p.ahead_s
+            }),
+        ServerMessage::TimeState { warp, .. } => {
+            assert_eq!(warp, 1, "the teammate's own time runs at 1x");
+            None
+        }
+        _ => None,
+    })
+    .await;
+    assert!(ahead > 2.0);
+    // the teammate still sees the pilot's craft, where its orbit puts it at the teammate's time
+    wait_for(&mut mate, |m| match m {
+        ServerMessage::Vessels { vessels, .. } => {
+            vessels.iter().find(|v| v.id == vessel).map(|_| ())
+        }
+        _ => None,
+    })
+    .await;
+    // nothing goes back in time: the pilot cannot sync to the teammate behind them
+    send_msg(&mut ws, &ClientMessage::SyncTime { player: mate_id }).await;
+    wait_for(&mut ws, |m| match m {
+        ServerMessage::Rejected { reason } => {
+            assert!(reason.contains("behind"), "{reason}");
+            Some(())
+        }
+        _ => None,
+    })
+    .await;
+    // the pilot stops warping; the teammate catches up and they share one time again
+    send_msg(&mut ws, &ClientMessage::RequestWarp { factor: 1 }).await;
+    wait_for(&mut ws, |m| {
+        matches!(m, ServerMessage::TimeState { warp: 1, .. }).then_some(())
+    })
+    .await;
+    send_msg(&mut mate, &ClientMessage::SyncTime { player: pilot }).await;
+    wait_for(&mut mate, |m| match m {
+        ServerMessage::PlayerTimes { players, .. } => players
+            .iter()
+            .any(|p| p.player == pilot && p.ahead_s == 0.0)
+            .then_some(()),
+        ServerMessage::Rejected { reason } => panic!("{reason}"),
+        _ => None,
+    })
+    .await;
+    // together: the same clock in both streams
+    let t1 = wait_for(&mut ws, |m| match m {
+        ServerMessage::Snapshot { tick, .. } => Some(tick),
+        _ => None,
+    })
+    .await;
+    let t2 = wait_for(&mut mate, |m| match m {
+        ServerMessage::Snapshot { tick, .. } if tick >= t1 => Some(tick),
+        _ => None,
+    })
+    .await;
+    assert!(t2.0 - t1.0 < 200, "{t1:?} {t2:?}");
 }

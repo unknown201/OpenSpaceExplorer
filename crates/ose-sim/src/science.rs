@@ -319,7 +319,7 @@ impl Universe {
             let mut q = self
                 .world
                 .query_filtered::<Entity, With<RunningExperiments>>();
-            q.iter(&self.world).collect()
+            q.iter(&self.world).filter(|e| self.here(*e)).collect()
         };
         for e in vessels {
             let Some(mut runs) = self.world.get::<RunningExperiments>(e).cloned() else {
@@ -702,6 +702,7 @@ impl Universe {
             .world
             .query_filtered::<Entity, With<Transmission>>()
             .iter(&self.world)
+            .filter(|e| self.here(*e))
             .collect();
         for e in sending {
             let Some(t) = self.world.get::<Transmission>(e) else {
