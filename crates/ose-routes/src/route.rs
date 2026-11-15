@@ -16,6 +16,8 @@ use ose_data::craft::Craft;
 use ose_math::DVec3;
 use ose_pilot::{
     ascent::AscentParams,
+    depart::Depart,
+    descent::{Descent, DescentParams},
     mission::{Catalog, Leg, Mission, MissionParams},
     window::{self, LaunchProfile},
     Status,
@@ -32,6 +34,20 @@ pub const ROLLOUT_S: f64 = 30.0;
 pub const PUMP_STALL_S: f64 = 10.0;
 /// How far ahead the scheduler looks for a launch window (s).
 pub const WINDOW_HORIZON_S: f64 = 2.0 * 86_400.0;
+
+/// What a run does once it has pumped its cargo (design 3.10).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WhenDelivered {
+    /// Stay docked for good: each run takes a port.
+    Stay,
+    /// Stay docked until the next run is in orbit, then undock and fly home, freeing the port for it.
+    #[default]
+    Rotate,
+    /// Undock and fly home: deorbit for KSC, and the vessel is recovered where it comes to rest.
+    Return,
+    /// Undock, back off, and leave it there.
+    LetGo,
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Outcome {
@@ -53,6 +69,9 @@ pub struct RunLog {
     pub ended_ut: f64,
     pub outcome: Outcome,
     pub delivered: BTreeMap<String, f64>,
+    /// After delivering: "docked", "let go", "flying home", "recovered" or what went wrong.
+    #[serde(default)]
+    pub after: Option<String>,
 }
 
 /// The run in flight now, as saved.
@@ -91,6 +110,11 @@ pub struct Route {
     pub next_launch: Option<f64>,
     pub active: Option<ActiveRun>,
     pub runs: Vec<RunLog>,
+    #[serde(default)]
+    pub when_delivered: WhenDelivered,
+    /// The run left docked at the depot port (Stay and Rotate).
+    #[serde(default)]
+    pub stayed: Option<u32>,
 }
 
 /// The server should launch this route's craft on the pad now.
@@ -113,10 +137,25 @@ enum Stage {
     },
 }
 
+/// A delivered run leaving the depot.
+enum Leave {
+    Undock(Box<Depart>, Entity),
+    Descend(Box<Descent>, Entity),
+}
+
+struct Homebound {
+    route: u64,
+    n: u32,
+    /// Fly home after backing off (otherwise let it go).
+    home: bool,
+    leave: Leave,
+}
+
 /// The route pilots, by route. Not saved.
 #[derive(Default)]
 pub struct Pilots {
     runs: BTreeMap<u64, Stage>,
+    homebound: Vec<Homebound>,
 }
 
 impl Pilots {
@@ -144,12 +183,17 @@ impl Pilots {
                 Stage::Flying(m) => m.suggested_warp(u),
                 Stage::Pumping { .. } => 1,
             })
+            .chain(self.homebound.iter().map(|h| match &h.leave {
+                Leave::Undock(d, _) => d.suggested_warp(),
+                Leave::Descend(d, e) => d.suggested_warp(u, *e),
+            }))
             .min()
     }
 
     /// Forget every pilot (the universe was replaced).
     pub fn clear(&mut self) {
         self.runs.clear();
+        self.homebound.clear();
     }
 }
 
@@ -244,6 +288,8 @@ impl Routes {
             next_launch: None,
             active: None,
             runs: Vec::new(),
+            when_delivered: WhenDelivered::Rotate,
+            stayed: None,
         };
         let id = self.fresh_route_id();
         self.routes.push(Route { id, ..route });
@@ -255,6 +301,14 @@ impl Routes {
             .iter_mut()
             .find(|r| r.id == id)
             .ok_or_else(|| "no such route".to_string())
+    }
+
+    /// What the route's runs do once delivered.
+    pub fn set_when_delivered(&mut self, id: u64, when: WhenDelivered) -> Result<(), String> {
+        let r = self.route_mut(id)?;
+        r.when_delivered = when;
+        r.next_launch = None;
+        Ok(())
     }
 
     /// Pause a route (its run in flight carries on) or resume it.
@@ -293,6 +347,7 @@ impl Routes {
                         ended_ut: ut,
                         outcome: Outcome::Missed("the pilot was interrupted".into()),
                         delivered: BTreeMap::new(),
+                        after: None,
                     });
                     r.active = None;
                 } else {
@@ -312,7 +367,9 @@ impl Routes {
                 r.status = format!("Waiting: {} cannot be found", d.name);
                 continue;
             };
-            if !port_free(u, d, dv, &r.depot_port) {
+            // a rotating route frees the port of its own run that stayed
+            let freeable = r.when_delivered == WhenDelivered::Rotate && r.stayed.is_some();
+            if !freeable && !port_free(u, d, dv, &r.depot_port) {
                 r.status = format!("Waiting: no free port at {}", d.name);
                 r.next_launch = None;
                 continue;
@@ -397,6 +454,7 @@ impl Routes {
         let ut = u.ut();
         let mut out = Vec::new();
         let depots = self.depots.clone();
+        let mut leaving: Vec<Homebound> = Vec::new();
         for r in &mut self.routes {
             let Some(stage) = pilots.runs.get_mut(&r.id) else {
                 continue;
@@ -418,6 +476,31 @@ impl Routes {
                         });
                     }
                     r.status = format!("Run {}: {:?}", active.n, m.leg());
+                    // in orbit: the run that stayed makes way for this one
+                    let in_orbit = matches!(
+                        m.leg(),
+                        Leg::Plan | Leg::Transfer | Leg::SoiTransfer | Leg::Brake | Leg::Approach
+                    );
+                    if in_orbit && r.when_delivered == WhenDelivered::Rotate {
+                        if let (Some(n), Some(d)) = (r.stayed, depot) {
+                            r.stayed = None;
+                            let after = match send_off(u, d, &r.depot_port) {
+                                Ok((depart, dv)) => {
+                                    leaving.push(Homebound {
+                                        route: r.id,
+                                        n,
+                                        home: true,
+                                        leave: Leave::Undock(Box::new(depart), dv),
+                                    });
+                                    "undocking to fly home".to_string()
+                                }
+                                Err(why) => format!("could not undock: {why}"),
+                            };
+                            if let Some(x) = r.runs.iter_mut().find(|x| x.n == n) {
+                                x.after = Some(after);
+                            }
+                        }
+                    }
                     match status {
                         Status::Running if ut - active.launched_ut > RUN_TIME_LIMIT_S => {
                             ended = Some((Outcome::Missed("out of time".into()), BTreeMap::new()));
@@ -487,6 +570,32 @@ impl Routes {
                     // don't keep sending craft into the same wreck (design 3.4)
                     r.paused = Some(format!("run {} was lost: {why}", active.n));
                 }
+                let docked = matches!(outcome, Outcome::Delivered | Outcome::Short);
+                let mut after = None;
+                if docked {
+                    after = Some(match r.when_delivered {
+                        WhenDelivered::Stay | WhenDelivered::Rotate => {
+                            r.stayed = Some(active.n);
+                            "docked".to_string()
+                        }
+                        WhenDelivered::Return | WhenDelivered::LetGo => {
+                            let home = r.when_delivered == WhenDelivered::Return;
+                            match depot.map(|d| send_off(u, d, &r.depot_port)) {
+                                Some(Ok((depart, dv))) => {
+                                    leaving.push(Homebound {
+                                        route: r.id,
+                                        n: active.n,
+                                        home,
+                                        leave: Leave::Undock(Box::new(depart), dv),
+                                    });
+                                    "undocking".to_string()
+                                }
+                                Some(Err(why)) => format!("could not undock: {why}"),
+                                None => "the depot is gone".to_string(),
+                            }
+                        }
+                    });
+                }
                 r.runs.push(RunLog {
                     n: active.n,
                     vessel_name: active.vessel_name,
@@ -494,6 +603,7 @@ impl Routes {
                     ended_ut: ut,
                     outcome,
                     delivered,
+                    after,
                 });
                 r.active = None;
                 r.status = "Run ended".into();
@@ -504,12 +614,92 @@ impl Routes {
                 });
             }
         }
+        pilots.homebound.extend(leaving);
+        self.fly_home(u, pilots, catalog, &mut out);
         out
+    }
+
+    /// The runs leaving the depot: back off, then fly home or drift.
+    fn fly_home(
+        &mut self,
+        u: &mut Universe,
+        pilots: &mut Pilots,
+        catalog: &Catalog,
+        out: &mut Vec<RouteChange>,
+    ) {
+        let mut keep = Vec::new();
+        for mut h in std::mem::take(&mut pilots.homebound) {
+            let (note, done) = match &mut h.leave {
+                Leave::Undock(d, docked) => match d.update(u, *docked, catalog) {
+                    Status::Running => (None, false),
+                    Status::Done if h.home => match d.vessel {
+                        Some(e) => {
+                            h.leave =
+                                Leave::Descend(Box::new(Descent::new(DescentParams::ksc())), e);
+                            (Some("flying home".to_string()), false)
+                        }
+                        None => (Some("lost after undocking".to_string()), true),
+                    },
+                    Status::Done => (Some("let go".to_string()), true),
+                    Status::Failed(why) => (Some(format!("could not undock: {why}")), true),
+                },
+                Leave::Descend(d, e) => match d.update(u, *e) {
+                    Status::Running => (None, false),
+                    Status::Done => {
+                        // recovered where it came to rest
+                        u.despawn_vessel(*e);
+                        (Some("recovered".to_string()), true)
+                    }
+                    Status::Failed(why) => (Some(format!("lost on the way home: {why}")), true),
+                },
+            };
+            if let Some(note) = note {
+                if let Some(r) = self.routes.iter_mut().find(|r| r.id == h.route) {
+                    if let Some(x) = r.runs.iter_mut().find(|x| x.n == h.n) {
+                        x.after = Some(note);
+                    }
+                    out.push(RouteChange {
+                        owner: r.owner,
+                        route: r.id,
+                    });
+                }
+            }
+            if !done {
+                keep.push(h);
+            }
+        }
+        pilots.homebound = keep;
     }
 
     fn fresh_route_id(&mut self) -> u64 {
         self.bump_id()
     }
+}
+
+/// Undock what is docked at the depot's recorded port: a pilot that backs it off, and the depot's vessel.
+fn send_off(u: &Universe, d: &Depot, port: &str) -> Result<(Depart, Entity), String> {
+    let dv = d.vessel().ok_or("the depot cannot be found")?;
+    let name = d.current_name(port).ok_or("the depot's port is gone")?;
+    let craft = u.current_craft(dv).ok_or("the depot has no parts")?;
+    let i = craft
+        .parts
+        .iter()
+        .position(|p| p.guid == name)
+        .ok_or("the depot's port is gone")?;
+    let other = u
+        .docked_links(dv)
+        .into_iter()
+        .find_map(|(a, b)| {
+            if a == i {
+                Some(b)
+            } else if b == i {
+                Some(a)
+            } else {
+                None
+            }
+        })
+        .ok_or("nothing is docked there")?;
+    Ok((Depart::new(&craft.parts[other].guid), dv))
 }
 
 /// Whether the depot's recorded port has nothing docked to it.

@@ -12,12 +12,12 @@ use ose_pilot::{
     Status,
 };
 use ose_routes::recording::{Event, Phase, Recording, State};
-use ose_routes::route::{Outcome, Pilots};
+use ose_routes::route::{Outcome, Pilots, WhenDelivered};
 use ose_routes::Routes;
 
 #[path = "../../ose-pilot/tests/common/mod.rs"]
 mod common;
-use common::{in_orbit, modules, on_pad, spec, world};
+use common::{in_orbit, modules, on_pad, spec, world, World};
 
 /// Name the parts `p0`, `p1`, ... as the editor does, all but `keep` (the ports and tanks the test uses).
 fn editor_names(c: &mut Craft, keep: &[&str]) {
@@ -242,22 +242,104 @@ fn records_a_one_way_fuel_run_to_a_depot_and_runs_it_as_a_route() {
     w.u.despawn_vessel(away);
 
     let mut pilots = Pilots::default();
+    drive(&mut w, &mut book, &mut pilots, &catalog, &|b| {
+        !b.routes[0].runs.is_empty()
+    });
+    let r0 = &book.routes[0];
+    println!("{:?} {}", r0.runs, r0.status);
+    assert_eq!(r0.runs[0].outcome, Outcome::Delivered, "{:?}", r0.runs);
+    let got = r0.runs[0]
+        .delivered
+        .get("MonoPropellant")
+        .copied()
+        .unwrap_or(0.0);
+    assert!((got - mono).abs() < 0.02 * mono, "{got} vs {mono}");
+    // Stay: the run stays docked on the recorded port, so the next one waits for it
+    book.set_when_delivered(route, WhenDelivered::Stay).unwrap();
+    book.tick(&mut w.u);
+    book.schedule(&mut w.u, &pilots);
+    assert!(
+        book.routes[0].status.contains("no free port"),
+        "{}",
+        book.routes[0].status
+    );
+
+    // Rotate: the next run launches, and once it is in orbit the first one undocks and heads home. The
+    // player makes room in the depot's tank first, into the docked run's.
+    book.set_when_delivered(route, WhenDelivered::Rotate)
+        .unwrap();
+    let dv = book.depots[0].vessel().unwrap();
+    let craft = w.u.current_craft(dv).unwrap();
+    let tank = |guid: &str| {
+        craft
+            .parts
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.guid.starts_with(guid) || p.guid == guid)
+            .map(|(i, _)| i)
+            .collect::<Vec<_>>()
+    };
+    let depot_tank: Vec<usize> = tank("iss-zarya-service-tank");
+    let run_tank: Vec<usize> = craft
+        .parts
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| {
+            !book.depots[0].parts.contains(&p.guid)
+                && p.resources.iter().any(|r| r.resource == "MonoPropellant")
+        })
+        .map(|(i, _)| i)
+        .collect();
+    w.u.wake(dv);
+    w.u.transfer_resource(dv, "MonoPropellant", &depot_tank, &run_tank)
+        .expect("make room");
+    for _ in 0..(60 * 50) {
+        w.u.set_warp(1);
+        w.u.step();
+    }
+    w.u.transfer_resource(dv, "MonoPropellant", &[], &[])
+        .unwrap();
+    let after = |b: &Routes| b.routes[0].runs[0].after.clone().unwrap_or_default();
+    drive(&mut w, &mut book, &mut pilots, &catalog, &|b| {
+        b.routes[0].runs.len() == 2
+            && !["docked", "undocking to fly home", "flying home"].contains(&after(b).as_str())
+    });
+    let r0 = &book.routes[0];
+    println!("{:?} {}", r0.runs, r0.status);
+    assert!(
+        matches!(r0.runs[1].outcome, Outcome::Delivered),
+        "{:?}",
+        r0.runs
+    );
+    assert_ne!(after(&book), "docked", "the first run made way");
+    assert_eq!(book.routes[0].stayed, Some(2));
+}
+
+/// Run the routes, launching what they ask for, until `done`.
+fn drive(
+    w: &mut World,
+    book: &mut Routes,
+    pilots: &mut Pilots,
+    catalog: &Catalog,
+    done: &dyn Fn(&Routes) -> bool,
+) {
     let start = w.u.ut();
     let mut ticks = 0u64;
-    while book.routes[0].runs.is_empty() {
+    while !done(book) {
         book.tick(&mut w.u);
         if ticks.is_multiple_of(50) {
-            for req in book.schedule(&mut w.u, &pilots) {
-                let e = on_pad(&mut w, &req.craft);
-                book.launched(&w.u, &mut pilots, req.route, e, &req.vessel_name)
+            for req in book.schedule(&mut w.u, pilots) {
+                let e = on_pad(w, &req.craft);
+                book.launched(&w.u, pilots, req.route, e, &req.vessel_name)
                     .unwrap();
             }
         }
-        book.fly(&mut w.u, &mut pilots, &catalog);
+        book.fly(&mut w.u, pilots, catalog);
         assert!(
             w.u.ut() - start < 3.0 * 86_400.0,
-            "{}",
-            book.routes[0].status
+            "{} {:?}",
+            book.routes[0].status,
+            book.routes[0].runs
         );
         let warp = match pilots.suggested_warp(&w.u) {
             Some(x) => x,
@@ -268,25 +350,7 @@ fn records_a_one_way_fuel_run_to_a_depot_and_runs_it_as_a_route() {
         };
         w.u.set_warp(warp);
         w.u.step();
-        w.u.dock_latched(&defs, &res, &spec_for);
+        w.u.dock_latched(&w.defs, &w.resources, catalog.spec);
         ticks += 1;
     }
-    let r0 = &book.routes[0];
-    println!("{:?} {}", r0.runs, r0.status);
-    assert_eq!(r0.runs[0].outcome, Outcome::Delivered, "{:?}", r0.runs);
-    let got = r0.runs[0]
-        .delivered
-        .get("MonoPropellant")
-        .copied()
-        .unwrap_or(0.0);
-    assert!((got - mono).abs() < 0.02 * mono, "{got} vs {mono}");
-    // the run stays docked on the recorded port, so the next one waits for it
-    book.tick(&mut w.u);
-    book.schedule(&mut w.u, &pilots);
-    assert!(
-        book.routes[0].status.contains("no free port"),
-        "{}",
-        book.routes[0].status
-    );
-    let _ = route;
 }
