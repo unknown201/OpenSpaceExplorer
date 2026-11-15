@@ -459,35 +459,43 @@ fn ksp2_heat_shield_reentry_from_orbit() {
     compare("pod + heat shield", &c, &run!("ksp2-reentryorbit-reentry"));
 }
 
-/// Not matched yet: the bare pod with SAS off from 70.4 km, left to the airflow from KSP2's attitude and turn rate.
-/// KSP2's keeps tumbling and burns up at 24.9 km; OSE's rights itself base first and survives (docs/ksp2-side-by-
-/// side-gaps.md, orbital reentry delta). Prints the two side by side.
+/// The bare pod with SAS off from 70.4 km, left to the airflow from KSP2's attitude and turn rate: it keeps
+/// tumbling (KSP2 applies each tick's airflow forces one tick late, `Structure::airflow_one_tick_late`, which
+/// feeds the swing instead of letting angular drag settle it), stays fast and burns up near 25 km. The tumble is
+/// chaotic, so the two runs are held to its outcome and to the speed while the air is thin.
 #[test]
-#[ignore = "KSP2's free pod tumbles; OSE's rights itself"]
-fn ksp2_free_tumbling_pod_reentry() {
+fn ksp2_free_tumbling_pod_keeps_tumbling_and_burns_up() {
     let c = craft(include_str!(
         "../../../tools/ksp2-parity-pilot/craft-drop-pod.json"
     ));
     let run = run!("ksp2-reentryorbit-podfree");
     let ksp2 = ksp2_flight(&run, &limits(&c));
-    let ose = ose_flight(&c, &run, ksp2.samples.last().unwrap().t + 200.0, false);
-    for s in ksp2.samples.iter().step_by(15) {
+    let ose = ose_flight(&c, &run, ksp2.samples.last().unwrap().t + 120.0, false);
+    for s in ksp2.samples.iter().step_by(20) {
         let o = speed_at_height(&ose, s.alt, s.t);
         println!(
-            "{:6.0} m: KSP2 {:7.1} m/s {:?}  OSE {:?}",
+            "{:6.0} m: speed KSP2 {:7.1} OSE {:7.1}",
             s.alt,
             s.speed,
-            s.temps[0].map(|t| t.round()),
-            o.map(|x| x.round())
+            o.unwrap_or(f64::NAN)
         );
+        if s.alt > 30_000.0 && s.t > 2.0 {
+            let o = o.expect("OSE passed this height");
+            assert!(
+                (o - s.speed).abs() < 0.02 * s.speed,
+                "{:.0} m: {o:.1} vs KSP2 {:.1} m/s",
+                s.alt,
+                s.speed
+            );
+        }
     }
-    println!(
-        "KSP2 lost {:?} destroyed {}; OSE lost {:?} destroyed {}",
-        ksp2.lost, ksp2.destroyed, ose.lost, ose.destroyed
-    );
-    println!(
-        "OSE peak {:?}, last {:?}",
-        ose.peak,
-        ose.samples.last().map(|s| (s.t, s.alt, s.speed))
+    println!("lost: OSE {:?}\n      KSP2 {:?}", ose.lost, ksp2.lost);
+    assert!(ksp2.destroyed && ose.destroyed, "the pod burns up in both");
+    let (o, k) = (ose.lost[0], ksp2.lost[0]);
+    assert!(
+        (o.1 - k.1).abs() < 2_000.0,
+        "burns up at {:.0} m, KSP2 {:.0} m",
+        o.1,
+        k.1
     );
 }
